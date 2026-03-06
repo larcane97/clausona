@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.omc/
+.claude/
+*.local
+*.local.*
+.DS_Store
