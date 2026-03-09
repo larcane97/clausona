@@ -14,6 +14,7 @@ import {
   removeProfile,
   repairProfile,
   setActiveProfileByName,
+  updateProfileConfig,
   shellInit,
   uninstallClausona,
 } from "./lib/service.js";
@@ -30,13 +31,14 @@ function helpFlag(args: string[]) {
 }
 
 const commandFlags: Record<string, { flags: string[]; prefixes?: string[] }> = {
-  init: { flags: ["--auto"] },
-  add: { flags: ["--from"] },
+  init: { flags: ["--auto", "--merge-sessions"] },
+  add: { flags: ["--from", "--merge-sessions"] },
   use: { flags: [] },
   list: { flags: ["--json"] },
   usage: { flags: ["--json"], prefixes: ["--period="] },
   current: { flags: ["--json"] },
   doctor: { flags: ["--json"] },
+  config: { flags: ["--merge-sessions", "--separate-sessions"] },
   repair: { flags: [] },
   login: { flags: [] },
   remove: { flags: [] },
@@ -69,10 +71,11 @@ function subcommandHelpText(command: string): string | undefined {
         `  ${accent("clausona init")} ${dim("— Discover accounts interactively")}`,
         "",
         `  ${bold("USAGE")}`,
-        helpUsage("clausona init [--auto]"),
+        helpUsage("clausona init [--auto] [--merge-sessions]"),
         "",
         `  ${bold("OPTIONS")}`,
-        `    ${accent("--auto".padEnd(12))}${dim("Run non-interactively (skip TUI)")}`,
+        `    ${accent("--auto".padEnd(18))}${dim("Run non-interactively (skip TUI)")}`,
+        `    ${accent("--merge-sessions".padEnd(18))}${dim("Share session history across profiles (default: separated)")}`,
         "",
       ].join("\n");
 
@@ -82,13 +85,14 @@ function subcommandHelpText(command: string): string | undefined {
         `  ${accent("clausona add")} ${dim("— Add a new profile")}`,
         "",
         `  ${bold("USAGE")}`,
-        helpUsage("clausona add <name> [--from <path>]"),
+        helpUsage("clausona add <name> [--from <path>] [--merge-sessions]"),
         "",
         `  ${bold("ARGUMENTS")}`,
-        `    ${accent("name".padEnd(12))}${dim("Profile name to create")}`,
+        `    ${accent("name".padEnd(18))}${dim("Profile name to create")}`,
         "",
         `  ${bold("OPTIONS")}`,
-        `    ${accent("--from".padEnd(12))}${dim("Import configuration from an existing path")}`,
+        `    ${accent("--from".padEnd(18))}${dim("Import configuration from an existing path")}`,
+        `    ${accent("--merge-sessions".padEnd(18))}${dim("Share session history across profiles (default: separated)")}`,
         "",
       ].join("\n");
 
@@ -158,6 +162,23 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("OPTIONS")}`,
         `    ${accent("--json".padEnd(12))}${dim("Output as JSON")}`,
+        "",
+      ].join("\n");
+
+    case "config":
+      return [
+        "",
+        `  ${accent("clausona config")} ${dim("— Configure profile settings")}`,
+        "",
+        `  ${bold("USAGE")}`,
+        helpUsage("clausona config <name> --merge-sessions | --separate-sessions"),
+        "",
+        `  ${bold("ARGUMENTS")}`,
+        `    ${accent("name".padEnd(12))}${dim("Profile name to configure")}`,
+        "",
+        `  ${bold("OPTIONS")}`,
+        `    ${accent("--merge-sessions".padEnd(22))}${dim("Share sessions with primary profile")}`,
+        `    ${accent("--separate-sessions".padEnd(22))}${dim("Keep sessions isolated (default)")}`,
         "",
       ].join("\n");
 
@@ -275,6 +296,7 @@ function usageText() {
       ["list", "Show profiles with usage"],
       ["usage [name]", "Show usage summary"],
       ["current", "Show active profile details"],
+      ["config <name>", "Configure profile settings"],
       ["doctor", "Check profile health"],
       ["repair <name>", "Repair shared links"],
       ["login <name>", "Re-authenticate a profile"],
@@ -333,6 +355,7 @@ export async function runCommand(command: string, args: string[]) {
         ...(current.orgName ? [`${secondary("Org".padEnd(12))}${current.orgName}`] : []),
         `${secondary("Config".padEnd(12))}${dim(configPath)}`,
         `${secondary("Keychain".padEnd(12))}${current.keychainService} ${keychainStatus}`,
+        ...(!current.isPrimary ? [`${secondary("Sessions".padEnd(12))}${current.mergeSessions ? "merged" : "separated"}`] : []),
         "",
         `${secondary("Today".padEnd(12))}${styledCost(current.usage.today.cost)}  ${dim(localTimezoneLabel())}`,
         `${secondary("Total".padEnd(12))}${styledCost(current.usage.total.cost)}`,
@@ -381,6 +404,21 @@ export async function runCommand(command: string, args: string[]) {
       return success(`Token refreshed for ${bold(profile.email)}`);
     }
 
+    case "config": {
+      const mergeSessions = args.includes("--merge-sessions");
+      const separateSessions = args.includes("--separate-sessions");
+      if (mergeSessions === separateSessions) {
+        throw new Error("Usage: clausona config <name> --merge-sessions | --separate-sessions");
+      }
+      const [name] = args.filter((a) => !a.startsWith("--"));
+      if (!name) {
+        throw new Error("Usage: clausona config <name> --merge-sessions | --separate-sessions");
+      }
+      const result = await updateProfileConfig(name, { mergeSessions });
+      if (!result.changed) return dim(`${name} is already ${mergeSessions ? "merged" : "separated"}`);
+      return success(`${bold(name)} sessions set to ${result.mergeSessions ? "merged" : "separated"}`);
+    }
+
     case "remove": {
       const [name] = args.filter((arg) => !arg.startsWith("--"));
       if (!name) {
@@ -394,11 +432,12 @@ export async function runCommand(command: string, args: string[]) {
       const fromIndex = args.findIndex((arg) => arg === "--from");
       const fromPath = fromIndex >= 0 ? args[fromIndex + 1] : undefined;
       const fromValueIndex = fromIndex >= 0 ? fromIndex + 1 : -1;
+      const mergeSessions = args.includes("--merge-sessions");
       const [name] = args.filter((arg, i) => !arg.startsWith("--") && i !== fromValueIndex);
       if (!name) {
-        throw new Error("Usage: clausona add <name> [--from <path>]");
+        throw new Error("Usage: clausona add <name> [--from <path>] [--merge-sessions]");
       }
-      const added = await addProfile({ name, fromPath });
+      const added = await addProfile({ name, fromPath, mergeSessions: mergeSessions || undefined });
       return success(`Added ${bold(added.name)} ${dim(`(${added.email})`)}`);
     }
 
@@ -416,9 +455,10 @@ export async function runCommand(command: string, args: string[]) {
         [
           "",
           `  ${bold("This will completely uninstall clausona:")}`,
-          `    ${dim("• Remove all non-primary profiles (restore imported, delete created)")}`,
+          `    ${dim("• Strip symlinks and restore backups for all non-primary profiles")}`,
+          `    ${dim("• Profile directories at ~/.claude-<name> are preserved (data intact)")}`,
           `    ${dim("• Remove shell integration from rc files")}`,
-          `    ${dim("• Delete ~/.clausona/ data directory")}`,
+          `    ${dim("• Delete ~/.clausona/ directory (registry, usage, backups)")}`,
           `    ${dim("• Delete app files and launcher binary")}`,
           "",
         ].join("\n") + "\n",
@@ -458,9 +498,10 @@ export async function runCommand(command: string, args: string[]) {
       if (accounts.length === 0) {
         throw new Error("No Claude Code accounts found. Run `claude login` first.");
       }
+      const mergeSessions = args.includes("--merge-sessions") || undefined;
       const profileNames = Object.fromEntries(accounts.map((account) => [account.configDir, account.isPrimary ? "default" : path.basename(account.configDir).replace(/^\.claude-/, "")]));
       const defaultProfile = Object.values(profileNames)[0] ?? "default";
-      await initializeRegistry({ accounts, profileNames, defaultProfile });
+      await initializeRegistry({ accounts, profileNames, defaultProfile, mergeSessions });
       return success(`Initialized ${bold(String(accounts.length))} profile(s)`);
     }
 
