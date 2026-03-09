@@ -6,8 +6,13 @@ import { spawn } from "node:child_process";
 import { evaluateSymlinkHealth } from "../core/doctor.js";
 import { seedSeenSessions } from "../core/track-usage.js";
 
-/** Items that should not be shared via symlink between profiles (runtime-generated) */
-const SHARED_LINK_SKIP = new Set([".claude.json", "image-cache", "statsig"]);
+/** Items that should never be shared via symlink between profiles */
+const BASE_SHARED_LINK_SKIP = new Set([".claude.json", "image-cache", "statsig"]);
+
+function sharedLinkSkipSet(mergeSessions: boolean): Set<string> {
+  if (!mergeSessions) return new Set([...BASE_SHARED_LINK_SKIP, "projects"]);
+  return BASE_SHARED_LINK_SKIP;
+}
 import { claudeJsonPathForConfigDir, keychainServiceForConfigDir } from "../core/paths.js";
 import { setActiveProfile } from "../core/registry.js";
 import { renderShellInit } from "../core/shell.js";
@@ -186,16 +191,26 @@ async function mergeSessionFiles(sourceDir: string, primarySource: string) {
   return merged;
 }
 
-async function setupSharedLinks(profileDir: string, primarySource: string) {
+async function setupSharedLinks(profileDir: string, primarySource: string, mergeSessions = false) {
   const items = await readdir(primarySource, { withFileTypes: true });
+  const skipSet = sharedLinkSkipSet(mergeSessions);
   let linked = 0;
 
   for (const item of items) {
-    if (SHARED_LINK_SKIP.has(item.name)) {
+    const source = path.join(primarySource, item.name);
+
+    if (skipSet.has(item.name)) {
+      // Remove symlinks to primary for skipped items (e.g. projects/ when separated)
+      const target = path.join(profileDir, item.name);
+      const targetStats = await lstat(target).catch(() => null);
+      if (targetStats?.isSymbolicLink()) {
+        const linkTarget = await readlink(target);
+        if (linkTarget === source) {
+          await rm(target);
+        }
+      }
       continue;
     }
-
-    const source = path.join(primarySource, item.name);
     const target = path.join(profileDir, item.name);
     const targetExists = await exists(target);
     if (targetExists) {
@@ -290,6 +305,8 @@ export async function initializeRegistry(options: {
   accounts: DiscoveredAccount[];
   profileNames: Record<string, string>;
   defaultProfile: string;
+  mergeSessions?: boolean;
+  mergeSessionsMap?: Record<string, boolean>;
 }) {
   await ensureStorage();
 
@@ -301,20 +318,27 @@ export async function initializeRegistry(options: {
 
   for (const account of options.accounts) {
     const profileName = options.profileNames[account.configDir] ?? defaultProfileNameForConfigDir(account.configDir);
+    const mergeSessions = account.isPrimary
+      ? undefined
+      : (options.mergeSessionsMap?.[account.configDir] ?? options.mergeSessions ?? false);
     registry.profiles[profileName] = {
       configDir: account.configDir,
       email: account.email,
       orgName: account.orgName,
       isPrimary: account.isPrimary,
+      mergeSessions,
     };
 
     if (!account.isPrimary) {
+      const merge = mergeSessions ?? false;
       const backupDir = path.join(CLAUSONA_DIR, "backups", profileName);
       if (!(await exists(backupDir))) {
         await cp(account.configDir, backupDir, { recursive: true });
       }
-      await mergeSessionFiles(account.configDir, PRIMARY_SOURCE);
-      await setupSharedLinks(account.configDir, PRIMARY_SOURCE);
+      if (merge) {
+        await mergeSessionFiles(account.configDir, PRIMARY_SOURCE);
+      }
+      await setupSharedLinks(account.configDir, PRIMARY_SOURCE, merge);
     }
   }
 
@@ -349,6 +373,7 @@ export async function listProfiles(): Promise<ProfileListItem[]> {
       configDir: profile.configDir,
       isPrimary: Boolean(profile.isPrimary),
       isActive: registry.activeProfile === name,
+      mergeSessions: profile.mergeSessions,
       today: summarizeUsage({ now, period: "today", records }),
       week: summarizeUsage({ now, period: "week", records }),
       month: summarizeUsage({ now, period: "month", records }),
@@ -448,12 +473,25 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
     }
 
     const dirEntries = await readdir(profile.configDir, { withFileTypes: true }).catch(() => []);
-    const symlinkItems: Array<{ name: string; isSymlink: boolean; targetExists: boolean; existsInPrimary: boolean }> = [];
+    const skipSet = sharedLinkSkipSet(profile.mergeSessions ?? false);
+    const symlinkItems: Array<{ name: string; isSymlink: boolean; pointsToPrimary: boolean; targetExists: boolean; existsInPrimary: boolean }> = [];
     for (const entry of dirEntries) {
-      if (SHARED_LINK_SKIP.has(entry.name)) continue;
       const targetPath = path.join(profile.configDir, entry.name);
       const stats = await lstat(targetPath);
       const isSymlink = stats.isSymbolicLink();
+      const pointsToPrimary = isSymlink && (await readlink(targetPath)) === path.join(registry.primarySource, entry.name);
+
+      if (skipSet.has(entry.name)) {
+        // Items in skip set should NOT be symlinked to primary
+        if (!profile.isPrimary && pointsToPrimary) {
+          issues.push({
+            kind: "stale_symlink",
+            message: `${entry.name} is symlinked to primary but should not be shared`,
+          });
+        }
+        continue;
+      }
+
       if (isSymlink) {
         const targetExists = await exists(await realpath(targetPath).catch(() => ""));
         if (!targetExists) {
@@ -464,6 +502,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
       symlinkItems.push({
         name: entry.name,
         isSymlink,
+        pointsToPrimary,
         targetExists: true,
         existsInPrimary: primaryEntries.has(entry.name),
       });
@@ -500,11 +539,78 @@ export async function repairProfile(name: string) {
     return { repaired: 0 };
   }
 
-  const repaired = await setupSharedLinks(profile.configDir, registry.primarySource);
+  const repaired = await setupSharedLinks(profile.configDir, registry.primarySource, profile.mergeSessions ?? false);
+
+  // Restore skip-set items from backup if they were stale symlinks that got removed
+  // Skip if the backup item is a symlink pointing to primary (stale)
+  const backupDir = path.join(CLAUSONA_DIR, "backups", name);
+  if (await exists(backupDir)) {
+    const skipSet = sharedLinkSkipSet(profile.mergeSessions ?? false);
+    for (const itemName of skipSet) {
+      const target = path.join(profile.configDir, itemName);
+      const backupItem = path.join(backupDir, itemName);
+      if (!(await exists(target)) && (await exists(backupItem))) {
+        const backupStats = await lstat(backupItem).catch(() => null);
+        if (backupStats?.isSymbolicLink()) {
+          const linkTarget = await readlink(backupItem);
+          if (linkTarget === path.join(registry.primarySource, itemName)) continue;
+        }
+        await cp(backupItem, target, { recursive: true });
+      }
+    }
+  }
+
   return { repaired };
 }
 
-export async function addProfile(options: { name: string; fromPath?: string }) {
+export async function updateProfileConfig(name: string, options: { mergeSessions: boolean }) {
+  const registry = await loadRegistry();
+  if (!registry || !registry.profiles[name]) {
+    throw new Error(`Profile '${name}' not found.`);
+  }
+  const profile = registry.profiles[name];
+  if (profile.isPrimary) {
+    throw new Error("Cannot change session mode for the primary profile.");
+  }
+
+  const prev = profile.mergeSessions ?? false;
+  const next = options.mergeSessions;
+  if (prev === next) return { name, mergeSessions: next, changed: false };
+
+  // separated → merged: merge session files before symlinking
+  if (next) {
+    await mergeSessionFiles(profile.configDir, registry.primarySource);
+  }
+
+  profile.mergeSessions = next;
+  await saveRegistry(registry);
+  await setupSharedLinks(profile.configDir, registry.primarySource, next);
+
+  // merged → separated: restore skip-set items from backup
+  // Skip if the backup item is a symlink pointing to primary (stale)
+  if (!next) {
+    const backupDir = path.join(CLAUSONA_DIR, "backups", name);
+    if (await exists(backupDir)) {
+      const skipSet = sharedLinkSkipSet(false);
+      for (const itemName of skipSet) {
+        const target = path.join(profile.configDir, itemName);
+        const backupItem = path.join(backupDir, itemName);
+        if (!(await exists(target)) && (await exists(backupItem))) {
+          const backupStats = await lstat(backupItem).catch(() => null);
+          if (backupStats?.isSymbolicLink()) {
+            const linkTarget = await readlink(backupItem);
+            if (linkTarget === path.join(registry.primarySource, itemName)) continue;
+          }
+          await cp(backupItem, target, { recursive: true });
+        }
+      }
+    }
+  }
+
+  return { name, mergeSessions: next, changed: true };
+}
+
+export async function addProfile(options: { name: string; fromPath?: string; mergeSessions?: boolean }) {
   const registry = await loadRegistry();
   if (!registry) {
     throw new Error("clausona is not initialized.");
@@ -527,15 +633,23 @@ export async function addProfile(options: { name: string; fromPath?: string }) {
     const backupDir = path.join(CLAUSONA_DIR, "backups", options.name);
     await rm(backupDir, { force: true, recursive: true });
     await cp(configDir, backupDir, { recursive: true });
-    await mergeSessionFiles(configDir, registry.primarySource);
-    await setupSharedLinks(configDir, registry.primarySource);
-    registry.profiles[options.name] = { configDir, email, orgName };
+    const mergeSessions = options.mergeSessions ?? false;
+    if (mergeSessions) {
+      await mergeSessionFiles(configDir, registry.primarySource);
+    }
+    await setupSharedLinks(configDir, registry.primarySource, mergeSessions);
+    registry.profiles[options.name] = { configDir, email, orgName, mergeSessions };
     await saveRegistry(registry);
     await seedSeenSessions(options.name, configDir);
     return { name: options.name, email, configDir, backupDir };
   }
 
-  const configDir = path.join(CLAUSONA_DIR, "profiles", options.name);
+  const configDir = path.join(homedir(), `.claude-${options.name}`);
+  if (await exists(configDir)) {
+    throw new Error(
+      `${configDir.replace(homedir(), "~")} already exists. Use --from ${configDir.replace(homedir(), "~")} to import it instead.`,
+    );
+  }
   await mkdir(configDir, { recursive: true });
 
   // Check if credentials already exist (e.g. from a previous removed profile)
@@ -576,11 +690,18 @@ export async function addProfile(options: { name: string; fromPath?: string }) {
     throw new Error("Login succeeded but account metadata is missing.");
   }
 
-  await setupSharedLinks(configDir, registry.primarySource);
+  // Backup before setupSharedLinks replaces files with symlinks
+  const backupDir = path.join(CLAUSONA_DIR, "backups", options.name);
+  await rm(backupDir, { force: true, recursive: true });
+  await cp(configDir, backupDir, { recursive: true });
+
+  const mergeSessions = options.mergeSessions ?? false;
+  await setupSharedLinks(configDir, registry.primarySource, mergeSessions);
   registry.profiles[options.name] = {
     configDir,
     email,
     orgName: claudeJson.oauthAccount?.organizationName,
+    mergeSessions,
   };
   await saveRegistry(registry);
   await seedSeenSessions(options.name, configDir);
@@ -604,29 +725,21 @@ export async function loginProfile(name: string) {
 async function cleanupProfile(name: string, profile: { configDir: string; isPrimary?: boolean }) {
   if (profile.isPrimary) return;
 
-  const isManaged = profile.configDir.startsWith(path.join(CLAUSONA_DIR, "profiles"));
+  // 1. Strip all symlinks from profile directory
+  const entries = await readdir(profile.configDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    const p = path.join(profile.configDir, entry.name);
+    const stats = await lstat(p);
+    if (stats.isSymbolicLink()) {
+      await rm(p);
+    }
+  }
 
-  if (isManaged) {
-    // Managed: clausona created this directory — delete keychain + directory
-    const resolvedDir = await realpath(profile.configDir).catch(() => profile.configDir);
-    const service = keychainServiceForConfigDir({ homeDir: homedir(), configDir: resolvedDir });
-    await execCommand("security", ["delete-generic-password", "-s", service], { quiet: true });
-    await rm(profile.configDir, { force: true, recursive: true });
-  } else {
-    // Unmanaged: external directory — remove symlinks, restore backup if available
-    const entries = await readdir(profile.configDir, { withFileTypes: true });
-    for (const entry of entries) {
-      const p = path.join(profile.configDir, entry.name);
-      const stats = await lstat(p);
-      if (stats.isSymbolicLink()) {
-        await rm(p);
-      }
-    }
-    const backupDir = path.join(CLAUSONA_DIR, "backups", name);
-    if (await exists(backupDir)) {
-      await cp(backupDir, profile.configDir, { recursive: true });
-      await rm(backupDir, { force: true, recursive: true });
-    }
+  // 2. Restore backup if available (original files before clausona setup)
+  const backupDir = path.join(CLAUSONA_DIR, "backups", name);
+  if (await exists(backupDir)) {
+    await cp(backupDir, profile.configDir, { recursive: true });
+    await rm(backupDir, { force: true, recursive: true });
   }
 }
 
@@ -676,15 +789,14 @@ export async function uninstallClausona() {
   const removed: string[] = [];
   const home = homedir();
 
-  // 1. Restore imported profiles from backup, clean up created profiles
+  // 1. Strip symlinks, restore backups for all non-primary profiles
   const registry = await loadRegistry();
   if (registry) {
     for (const [name, profile] of Object.entries(registry.profiles)) {
       if (profile.isPrimary) continue;
       try {
-        const hasBackup = await exists(path.join(CLAUSONA_DIR, "backups", name));
         await cleanupProfile(name, profile);
-        removed.push(`profile: ${name} (${hasBackup ? "restored from backup" : "deleted"})`);
+        removed.push(`profile: ${name} (symlinks stripped, data preserved at ${profile.configDir.replace(home, "~")})`);
       } catch {
         // best-effort
       }

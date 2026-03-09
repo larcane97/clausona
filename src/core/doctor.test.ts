@@ -7,8 +7,8 @@ describe("evaluateSymlinkHealth", () => {
     const issues = evaluateSymlinkHealth({
       isPrimary: false,
       items: [
-        { name: "cache", isSymlink: true, targetExists: false, existsInPrimary: true },
-        { name: "statsig", isSymlink: false, targetExists: true, existsInPrimary: true },
+        { name: "cache", isSymlink: true, pointsToPrimary: true, targetExists: false, existsInPrimary: true },
+        { name: "statsig", isSymlink: false, pointsToPrimary: false, targetExists: true, existsInPrimary: true },
       ],
     });
 
