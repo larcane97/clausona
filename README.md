@@ -57,13 +57,14 @@ clausona             # open the interactive dashboard
 |---------|-------------|
 | `clausona` | Interactive TUI dashboard |
 | `clausona init` | Discover and register Claude Code accounts |
-| `clausona add <name> [--from <path>]` | Add a profile manually |
+| `clausona add <name> [--from <path>] [--merge-sessions]` | Add a profile manually |
 | `clausona remove <name>` | Remove a profile |
 | `clausona use [name]` | Switch active profile |
 | `clausona run <profile> [-- claude-args...]` | Run Claude Code with a specific profile |
 | `clausona list [--json]` | List all profiles with usage |
 | `clausona usage [name] [--period=today\|week\|month\|all]` | View cost and token usage |
 | `clausona current [--json]` | Show active profile |
+| `clausona config <name> --merge-sessions \| --separate-sessions` | Configure session mode |
 | `clausona doctor [--json]` | Check profile health |
 | `clausona repair <name>` | Fix broken shared links |
 | `clausona login <name>` | Re-authenticate a profile |
@@ -93,6 +94,7 @@ When you register a new profile, clausona symlinks shared resources from your pr
 ```
 ~/.claude-work/            (new profile)
 ├── .claude.json           ← own auth credentials (NOT shared)
+├── projects/              ← own session history (NOT shared by default)
 ├── mcp-servers/  →  ~/.claude/mcp-servers    (symlink to primary)
 ├── plugins/      →  ~/.claude/plugins        (symlink to primary)
 ├── settings.json →  ~/.claude/settings.json  (symlink to primary)
@@ -100,6 +102,8 @@ When you register a new profile, clausona symlinks shared resources from your pr
 ```
 
 Only `.claude.json` stays profile-specific. Everything else is shared automatically.
+
+**Session separation** is the default: each profile keeps its own `projects/` directory, so `/resume` only shows that profile's conversations. To share session history across profiles, pass `--merge-sessions` when adding or initializing.
 
 ### Data Storage
 
@@ -109,8 +113,9 @@ All data stays local on your machine.
 ~/.clausona/
 ├── profiles.json    # registered profiles and active selection
 ├── usage.json       # per-profile usage history
-├── profiles/        # config directories for created profiles
 └── backups/         # backups of imported profile directories
+
+~/.claude-<name>/        # profile config directories (created by `clausona add`)
 ```
 
 ## Contributing
