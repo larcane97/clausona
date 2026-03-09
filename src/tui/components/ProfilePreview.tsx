@@ -86,6 +86,9 @@ export function ProfilePreview({
         <Row label="Account" value={profile.email} />
         {profile.orgName && <Row label="Org" value={profile.orgName} />}
         <Row label="Config" value={profile.configDir.replace(/^\/Users\/[^/]+/, "~")} valueColor={color.muted} />
+        {!profile.isPrimary && (
+          <Row label="Sessions" value={profile.mergeSessions ? "merged" : "separated"} valueColor={profile.mergeSessions ? color.warning : color.secondary} />
+        )}
       </Box>
 
       <Separator />

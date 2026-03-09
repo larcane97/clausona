@@ -14,7 +14,9 @@ import {
   listProfiles,
   loginProfile,
   removeProfile,
+  repairProfile,
   setActiveProfileByName,
+  updateProfileConfig,
   validateConfigDir,
 } from "../lib/service.js";
 import { Chrome } from "./components/Chrome.js";
@@ -42,6 +44,8 @@ type InitState = {
   nameIndex: number;
   nameDraft: string;
   defaultProfile: string;
+  mergeSessionsMap: Record<string, boolean>;
+  nameField: 0 | 1;
   message?: string;
 };
 
@@ -60,13 +64,17 @@ type AddState = {
   importError: string | null;
   importAccount: { configDir: string; email: string; orgName?: string } | null;
   cursor: number;
+  mergeSessions: boolean;
+  mergeSessionsMap: Record<string, boolean>;
+  nameField: 0 | 1;
   message?: string;
 };
 
 type OverlayState =
   | null
   | { kind: "remove"; profileName: string; email: string; isPrimary: boolean }
-  | { kind: "login"; profileName: string; email: string };
+  | { kind: "login"; profileName: string; email: string }
+  | { kind: "sessions"; profileName: string; currentMerge: boolean };
 
 const INIT_STEPS = [
   { label: "Select" },
@@ -83,7 +91,7 @@ const dashboardHints = [
   { keys: "esc", action: "quit" },
 ];
 
-const doctorHints = [
+const doctorHintsBase = [
   { keys: "↑↓", action: "navigate" },
   { keys: "esc", action: "back" },
 ];
@@ -116,6 +124,12 @@ const addDiscoverHints = [
 
 const addInputHints = [
   { keys: "enter", action: "confirm" },
+  { keys: "esc", action: "back" },
+];
+
+const initNameHints = [
+  { keys: "enter", action: "confirm" },
+  { keys: "↑↓", action: "switch field" },
   { keys: "esc", action: "back" },
 ];
 
@@ -167,6 +181,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     nameIndex: 0,
     nameDraft: "",
     defaultProfile: "default",
+    mergeSessionsMap: {},
+    nameField: 0,
   });
 
   const [addState, setAddState] = useState<AddState | null>(null);
@@ -204,6 +220,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       importError: null,
       importAccount: null,
       cursor: 0,
+      mergeSessions: false,
+      mergeSessionsMap: {},
+      nameField: 0,
     });
     try {
       const discovered = await discoverAccounts();
@@ -273,6 +292,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             nameIndex: 0,
             nameDraft: firstSelected ? state.profileNames[firstSelected] ?? "" : "",
             defaultProfile: state.defaultProfile,
+            mergeSessionsMap: {},
+    nameField: 0,
           });
         } catch (error) {
           setInitState({
@@ -284,6 +305,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             nameIndex: 0,
             nameDraft: "",
             defaultProfile: "default",
+            mergeSessionsMap: {},
+    nameField: 0,
             message: error instanceof Error ? error.message : String(error),
           });
         }
@@ -402,6 +425,19 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                 setMessage(`${symbol.cross} ${error instanceof Error ? error.message : String(error)}`);
               }
             })();
+          } else if (overlay.kind === "sessions") {
+            void (async () => {
+              try {
+                const newMerge = !overlay.currentMerge;
+                await updateProfileConfig(overlay.profileName, { mergeSessions: newMerge });
+                setOverlay(null);
+                setMessage(`${symbol.check} ${overlay.profileName} sessions set to ${newMerge ? "merged" : "separated"}`);
+                await refreshDashboard();
+              } catch (error) {
+                setOverlay(null);
+                setMessage(`${symbol.cross} ${error instanceof Error ? error.message : String(error)}`);
+              }
+            })();
           }
         }
         return;
@@ -466,6 +502,27 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           return;
         }
 
+        // Add name steps: up/down to switch field, space to toggle sessions
+        if ((addState.step === "discover-name" || addState.step === "login-name" || addState.step === "import-name") && (key.upArrow || key.downArrow)) {
+          setAddState((prev) => prev ? { ...prev, nameField: prev.nameField === 0 ? 1 : 0 } : null);
+          return;
+        }
+
+        if ((addState.step === "discover-name" || addState.step === "login-name" || addState.step === "import-name") && addState.nameField === 1 && input === " ") {
+          if (addState.step === "discover-name") {
+            const currentDir = addState.selectedAccounts[addState.nameIndex];
+            if (currentDir) {
+              setAddState((prev) => prev ? {
+                ...prev,
+                mergeSessionsMap: { ...prev.mergeSessionsMap, [currentDir]: !prev.mergeSessionsMap[currentDir] },
+              } : null);
+            }
+          } else {
+            setAddState((prev) => prev ? { ...prev, mergeSessions: !prev.mergeSessions } : null);
+          }
+          return;
+        }
+
         // Discover name each
         if (addState.step === "discover-name" && key.return) {
           const currentDir = addState.selectedAccounts[addState.nameIndex];
@@ -484,7 +541,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             void (async () => {
               try {
                 for (const [dir, name] of Object.entries(nextNames)) {
-                  await addProfile({ name, fromPath: dir });
+                  const merge = addState.mergeSessionsMap[dir] || undefined;
+                  await addProfile({ name, fromPath: dir, mergeSessions: merge });
                 }
                 setAddState((prev) => prev ? { ...prev, step: "done", message: `Added ${Object.keys(nextNames).length} profile(s)` } : null);
                 await refreshDashboard();
@@ -496,7 +554,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             const nextDir = addState.selectedAccounts[nextIndex];
             const nextAccount = addState.discoveredAccounts.find((a) => a.configDir === nextDir);
             const nextDefault = nextAccount ? (path.basename(nextAccount.configDir).replace(/^\.claude-?/, "") || "profile") : "profile";
-            setAddState((prev) => prev ? { ...prev, profileNames: nextNames, nameIndex: nextIndex, nameDraft: nextDefault, message: undefined } : null);
+            setAddState((prev) => prev ? { ...prev, profileNames: nextNames, nameIndex: nextIndex, nameField: 0, nameDraft: nextDefault, message: undefined } : null);
           }
           return;
         }
@@ -512,7 +570,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           setAddState((prev) => prev ? { ...prev, step: "applying" } : null);
           void (async () => {
             try {
-              const result = await suspendTuiAndRun(() => addProfile({ name }));
+              const result = await suspendTuiAndRun(() => addProfile({ name, mergeSessions: addState.mergeSessions || undefined }));
               setAddState((prev) => prev ? { ...prev, step: "done", message: `Added ${result.name} (${result.email})` } : null);
               await refreshDashboard();
             } catch (error) {
@@ -555,7 +613,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           setAddState((prev) => prev ? { ...prev, step: "applying" } : null);
           void (async () => {
             try {
-              const result = await addProfile({ name, fromPath: addState.importAccount!.configDir });
+              const result = await addProfile({ name, fromPath: addState.importAccount!.configDir, mergeSessions: addState.mergeSessions || undefined });
               setAddState((prev) => prev ? { ...prev, step: "done", message: `Added ${result.name} (${result.email})` } : null);
               await refreshDashboard();
             } catch (error) {
@@ -611,6 +669,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         if (!p.isPrimary) {
           setOverlay({ kind: "login", profileName: p.name, email: p.email });
         }
+      } else if (input === "s" && profiles[cursor] && !profiles[cursor].isPrimary) {
+        const p = profiles[cursor];
+        setOverlay({ kind: "sessions", profileName: p.name, currentMerge: p.mergeSessions ?? false });
       }
       return;
     }
@@ -631,6 +692,21 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         setCursor((prev) => (prev - 1 + doctor.length) % Math.max(1, doctor.length));
       } else if (key.downArrow) {
         setCursor((prev) => (prev + 1) % Math.max(1, doctor.length));
+      } else if (input === "r" && doctor[cursor] && !doctor[cursor].healthy && !doctor[cursor].isPrimary) {
+        const d = doctor[cursor];
+        void (async () => {
+          try {
+            await repairProfile(d.name);
+            const freshDoctor = await doctorProfiles();
+            setDoctor(freshDoctor);
+            const fixed = freshDoctor.find((dd) => dd.name === d.name);
+            setMessage(fixed?.healthy
+              ? `${symbol.check} ${d.name} repaired — all issues resolved`
+              : `${symbol.diamond} ${d.name} repaired — ${fixed?.issues.length ?? 0} issue(s) remaining`);
+          } catch (error) {
+            setMessage(`${symbol.cross} ${error instanceof Error ? error.message : String(error)}`);
+          }
+        })();
       }
       return;
     }
@@ -668,6 +744,29 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         return;
       }
 
+      if (initState.step === "name" && (key.upArrow || key.downArrow)) {
+        const currentConfig = initState.selected[initState.nameIndex];
+        const account = initState.accounts.find((a) => a.configDir === currentConfig);
+        if (account && !account.isPrimary) {
+          setInitState((prev) => ({ ...prev, nameField: prev.nameField === 0 ? 1 : 0 }));
+        }
+        return;
+      }
+
+      if (initState.step === "name" && initState.nameField === 1 && input === " ") {
+        const currentConfig = initState.selected[initState.nameIndex];
+        if (currentConfig) {
+          setInitState((prev) => ({
+            ...prev,
+            mergeSessionsMap: {
+              ...prev.mergeSessionsMap,
+              [currentConfig]: !prev.mergeSessionsMap[currentConfig],
+            },
+          }));
+        }
+        return;
+      }
+
       if (initState.step === "name" && key.return) {
         const currentConfig = initState.selected[initState.nameIndex];
         if (!currentConfig) return;
@@ -690,6 +789,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             ...prev,
             profileNames: nextNames,
             nameIndex: nextIndex,
+            nameField: 0,
             nameDraft: nextNames[nextConfig] ?? "",
           }));
         }
@@ -730,6 +830,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               accounts: selectedAccounts,
               profileNames: initState.profileNames,
               defaultProfile: initState.defaultProfile,
+              mergeSessionsMap: initState.mergeSessionsMap,
             });
             setInitState((prev) => ({ ...prev, step: "done" }));
             setMessage(`${symbol.check} Profiles initialized`);
@@ -910,19 +1011,20 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       if (addState.step === "discover-name") {
         const currentDir = addState.selectedAccounts[addState.nameIndex];
         const account = addState.discoveredAccounts.find((a) => a.configDir === currentDir);
+        const isMerged = addState.mergeSessionsMap[currentDir ?? ""];
         return (
-          <Chrome title="Add Profile" subtitle="Name" hints={addInputHints}>
+          <Chrome title="Add Profile" subtitle="Name" hints={initNameHints}>
             <Box flexDirection="column" gap={1} borderStyle="round" borderColor={color.dim} paddingX={2} paddingY={1}>
               <Text color={color.secondary}>
                 Profile {addState.nameIndex + 1} of {addState.selectedAccounts.length}
               </Text>
               <Box flexDirection="column">
                 <Box gap={1}>
-                  <Text color={color.muted}>Account</Text>
+                  <Text color={color.muted}>Account </Text>
                   <Text color={color.text}>{account?.email}</Text>
                 </Box>
                 <Box gap={1}>
-                  <Text color={color.muted}>Config </Text>
+                  <Text color={color.muted}>Config  </Text>
                   <Text color={color.secondary}>{currentDir?.replace(homedir(), "~")}</Text>
                 </Box>
               </Box>
@@ -933,12 +1035,19 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                 </Box>
               )}
               <Box gap={1}>
-                <Text color={color.cursor}>{symbol.cursor}</Text>
+                <Text color={addState.nameField === 0 ? color.cursor : color.dim}>{addState.nameField === 0 ? symbol.cursor : " "}</Text>
                 <Text color={color.text}>Name: </Text>
                 <TextInput
                   value={addState.nameDraft}
                   onChange={(value) => setAddState((prev) => prev ? { ...prev, nameDraft: value, message: undefined } : null)}
+                  focus={addState.nameField === 0}
                 />
+              </Box>
+              <Box gap={1}>
+                <Text color={addState.nameField === 1 ? color.cursor : color.dim}>{addState.nameField === 1 ? symbol.cursor : " "}</Text>
+                <Text color={color.text}>Sessions: </Text>
+                <Text color={isMerged ? color.warning : color.text}>{isMerged ? "merged" : "separated"}</Text>
+                {addState.nameField === 1 && <Text color={color.muted}> (space to toggle)</Text>}
               </Box>
             </Box>
           </Chrome>
@@ -947,7 +1056,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
 
       if (addState.step === "login-name") {
         return (
-          <Chrome title="Add Profile" subtitle="Login as new account" hints={addInputHints}>
+          <Chrome title="Add Profile" subtitle="Login as new account" hints={initNameHints}>
             <Box flexDirection="column" gap={1} borderStyle="round" borderColor={color.dim} paddingX={2} paddingY={1}>
               <Text color={color.secondary}>Enter a name for the new profile. OAuth login will open in your browser.</Text>
               {addState.message && (
@@ -957,12 +1066,19 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                 </Box>
               )}
               <Box gap={1}>
-                <Text color={color.cursor}>{symbol.cursor}</Text>
+                <Text color={addState.nameField === 0 ? color.cursor : color.dim}>{addState.nameField === 0 ? symbol.cursor : " "}</Text>
                 <Text color={color.text}>Name: </Text>
                 <TextInput
                   value={addState.nameDraft}
                   onChange={(value) => setAddState((prev) => prev ? { ...prev, nameDraft: value, message: undefined } : null)}
+                  focus={addState.nameField === 0}
                 />
+              </Box>
+              <Box gap={1}>
+                <Text color={addState.nameField === 1 ? color.cursor : color.dim}>{addState.nameField === 1 ? symbol.cursor : " "}</Text>
+                <Text color={color.text}>Sessions: </Text>
+                <Text color={addState.mergeSessions ? color.warning : color.text}>{addState.mergeSessions ? "merged" : "separated"}</Text>
+                {addState.nameField === 1 && <Text color={color.muted}> (space to toggle)</Text>}
               </Box>
             </Box>
           </Chrome>
@@ -997,15 +1113,15 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
 
       if (addState.step === "import-name") {
         return (
-          <Chrome title="Add Profile" subtitle="Name the imported profile" hints={addInputHints}>
+          <Chrome title="Add Profile" subtitle="Name the imported profile" hints={initNameHints}>
             <Box flexDirection="column" gap={1} borderStyle="round" borderColor={color.dim} paddingX={2} paddingY={1}>
               <Box flexDirection="column">
                 <Box gap={1}>
-                  <Text color={color.muted}>Account</Text>
+                  <Text color={color.muted}>Account </Text>
                   <Text color={color.text}>{addState.importAccount?.email}</Text>
                 </Box>
                 <Box gap={1}>
-                  <Text color={color.muted}>Config </Text>
+                  <Text color={color.muted}>Config  </Text>
                   <Text color={color.secondary}>{addState.importAccount?.configDir.replace(homedir(), "~")}</Text>
                 </Box>
               </Box>
@@ -1016,12 +1132,19 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                 </Box>
               )}
               <Box gap={1}>
-                <Text color={color.cursor}>{symbol.cursor}</Text>
+                <Text color={addState.nameField === 0 ? color.cursor : color.dim}>{addState.nameField === 0 ? symbol.cursor : " "}</Text>
                 <Text color={color.text}>Name: </Text>
                 <TextInput
                   value={addState.nameDraft}
                   onChange={(value) => setAddState((prev) => prev ? { ...prev, nameDraft: value, message: undefined } : null)}
+                  focus={addState.nameField === 0}
                 />
+              </Box>
+              <Box gap={1}>
+                <Text color={addState.nameField === 1 ? color.cursor : color.dim}>{addState.nameField === 1 ? symbol.cursor : " "}</Text>
+                <Text color={color.text}>Sessions: </Text>
+                <Text color={addState.mergeSessions ? color.warning : color.text}>{addState.mergeSessions ? "merged" : "separated"}</Text>
+                {addState.nameField === 1 && <Text color={color.muted}> (space to toggle)</Text>}
               </Box>
             </Box>
           </Chrome>
@@ -1036,7 +1159,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       { keys: "enter", action: "switch" },
       { keys: "a", action: "add" },
       ...(selectedProfile && !selectedProfile.isPrimary
-        ? [{ keys: "d", action: "remove" }, { keys: "l", action: "re-login" }]
+        ? [{ keys: "d", action: "remove" }, { keys: "l", action: "re-login" }, { keys: "s", action: "sessions" }]
         : []),
       { keys: "esc", action: "back" },
     ];
@@ -1100,6 +1223,26 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             </Box>
           </Box>
         )}
+        {overlay?.kind === "sessions" && (
+          <Box flexDirection="column" borderStyle="round" borderColor={color.brand} paddingX={2} paddingY={1} marginTop={1}>
+            <Text color={color.text} bold>Change sessions for &quot;{overlay.profileName}&quot;?</Text>
+            <Text color={color.secondary}>
+              {overlay.currentMerge
+                ? "Sessions will be isolated from the primary profile."
+                : "Sessions will be shared with the primary profile."}
+            </Text>
+            <Box gap={1}>
+              <Text color={color.muted}>Current:</Text>
+              <Text color={overlay.currentMerge ? color.warning : color.text}>{overlay.currentMerge ? "merged" : "separated"}</Text>
+              <Text color={color.muted}>{symbol.arrow}</Text>
+              <Text color={!overlay.currentMerge ? color.warning : color.text}>{overlay.currentMerge ? "separated" : "merged"}</Text>
+            </Box>
+            <Box marginTop={1} gap={2}>
+              <Text color={color.brand}>y confirm</Text>
+              <Text color={color.muted}>esc cancel</Text>
+            </Box>
+          </Box>
+        )}
       </Chrome>
     );
   }
@@ -1107,6 +1250,12 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   // ── Doctor ──
   if (screen === "doctor") {
     const currentDoctor = doctor[cursor];
+    const doctorHints = [
+      ...doctorHintsBase,
+      ...(currentDoctor && !currentDoctor.healthy && !currentDoctor.isPrimary
+        ? [{ keys: "r", action: "repair" }]
+        : []),
+    ];
     return (
       <Chrome
         title="Health Check"
@@ -1159,6 +1308,11 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             )}
           </Box>
         </Box>
+        {message && (
+          <Box marginTop={1} gap={1}>
+            <Text color={color.secondary}>{message}</Text>
+          </Box>
+        )}
       </Chrome>
     );
   }
@@ -1336,7 +1490,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     return (
       <Chrome
         title="Initialize"
-        hints={addInputHints}
+        hints={account?.isPrimary ? addInputHints : initNameHints}
       >
         <Box flexDirection="column" gap={1}>
           <StepIndicator steps={INIT_STEPS} current={1} />
@@ -1346,22 +1500,33 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             </Text>
             <Box flexDirection="column">
               <Box gap={1}>
-                <Text color={color.muted}>Account</Text>
+                <Text color={color.muted}>Account </Text>
                 <Text color={color.text}>{account?.email}</Text>
               </Box>
               <Box gap={1}>
-                <Text color={color.muted}>Config </Text>
+                <Text color={color.muted}>Config  </Text>
                 <Text color={color.secondary}>{currentConfig?.replace(homedir(), "~")}</Text>
               </Box>
             </Box>
             <Box gap={1}>
-              <Text color={color.cursor}>{symbol.cursor}</Text>
+              <Text color={initState.nameField === 0 ? color.cursor : color.dim}>{initState.nameField === 0 ? symbol.cursor : " "}</Text>
               <Text color={color.text}>Name: </Text>
               <TextInput
                 value={initState.nameDraft}
                 onChange={(value) => setInitState((prev) => ({ ...prev, nameDraft: value }))}
+                focus={initState.nameField === 0}
               />
             </Box>
+            {!account?.isPrimary && (
+              <Box gap={1}>
+                <Text color={initState.nameField === 1 ? color.cursor : color.dim}>{initState.nameField === 1 ? symbol.cursor : " "}</Text>
+                <Text color={color.text}>Sessions: </Text>
+                <Text color={initState.mergeSessionsMap[currentConfig ?? ""] ? color.warning : color.text}>
+                  {initState.mergeSessionsMap[currentConfig ?? ""] ? "merged" : "separated"}
+                </Text>
+                {initState.nameField === 1 && <Text color={color.muted}> (space to toggle)</Text>}
+              </Box>
+            )}
           </Box>
         </Box>
       </Chrome>
@@ -1414,6 +1579,11 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                   <Text color={color.secondary}>{account?.email}</Text>
                   {isDefault && (
                     <Text color={color.brandLight}> {symbol.dot} default</Text>
+                  )}
+                  {!account?.isPrimary && (
+                    <Text color={color.muted}>
+                      {" "}{symbol.dot} {initState.mergeSessionsMap[configDir] ? "merged" : "separated"}
+                    </Text>
                   )}
                 </Box>
               );
