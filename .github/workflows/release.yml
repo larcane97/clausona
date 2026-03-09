@@ -27,12 +27,16 @@ jobs:
       - run: pnpm test
       - run: cp dist/index.js dist/clausona.js
 
-      - name: Create Release
+      - name: Create or update Release
         run: |
           gh release create ${{ github.ref_name }} \
             dist/clausona.js \
             install.sh \
             --title "${{ github.ref_name }}" \
-            --generate-notes
+            --generate-notes || \
+          gh release upload ${{ github.ref_name }} \
+            dist/clausona.js \
+            install.sh \
+            --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
