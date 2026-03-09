@@ -19,6 +19,7 @@ export type Profile = {
   email: string;
   orgName?: string;
   isPrimary?: boolean;
+  mergeSessions?: boolean;
 };
 
 export type Registry = {
@@ -43,6 +44,7 @@ export type ProfileListItem = {
   configDir: string;
   isPrimary: boolean;
   isActive: boolean;
+  mergeSessions?: boolean;
   today: UsageSummary;
   week: UsageSummary;
   month: UsageSummary;
@@ -50,7 +52,7 @@ export type ProfileListItem = {
 };
 
 export type DoctorIssue = {
-  kind: "missing_json" | "missing_oauth" | "missing_keychain" | "broken_symlink" | "local_override";
+  kind: "missing_json" | "missing_oauth" | "missing_keychain" | "broken_symlink" | "local_override" | "stale_symlink";
   message: string;
 };
 
