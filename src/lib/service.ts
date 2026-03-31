@@ -532,7 +532,7 @@ export async function discoverAccounts(): Promise<DiscoveredAccount[]> {
       configDir: resolvedConfig,
     });
 
-    if (!(await checkKeychain(keychainService))) {
+    if (process.platform === "darwin" && !(await checkKeychain(keychainService))) {
       continue;
     }
 
@@ -730,7 +730,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
       homeDir: homedir(),
       configDir: resolvedDir,
     });
-    if (!(await checkKeychain(keychainService))) {
+    if (process.platform === "darwin" && !(await checkKeychain(keychainService))) {
       issues.push({ kind: "missing_keychain", message: `${keychainService} not found in Keychain` });
     }
 
