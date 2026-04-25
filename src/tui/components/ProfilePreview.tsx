@@ -1,7 +1,7 @@
 import { Box, Text } from "ink";
-import { color, symbol } from "../theme.js";
 import { formatCurrency, localTimezoneLabel } from "../../lib/format.js";
 import type { DoctorProfileResult, ProfileListItem } from "../../types.js";
+import { color, symbol } from "../theme.js";
 
 function Row({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
   return (
@@ -26,13 +26,7 @@ function Separator() {
   );
 }
 
-export function ProfilePreview({
-  profile,
-  doctor,
-}: {
-  profile?: ProfileListItem;
-  doctor?: DoctorProfileResult;
-}) {
+export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem; doctor?: DoctorProfileResult }) {
   if (!profile) {
     return (
       <Box
@@ -49,11 +43,7 @@ export function ProfilePreview({
     );
   }
 
-  const healthColor = doctor
-    ? doctor.healthy
-      ? color.healthy
-      : color.warning
-    : color.muted;
+  const healthColor = doctor ? (doctor.healthy ? color.healthy : color.warning) : color.muted;
 
   const healthLabel = doctor
     ? doctor.healthy
@@ -73,10 +63,14 @@ export function ProfilePreview({
     >
       {/* Header */}
       <Box gap={1} marginBottom={1} justifyContent="space-between" flexShrink={0}>
-        <Text color={color.text} bold wrap="truncate-end">{profile.name}</Text>
+        <Text color={color.text} bold wrap="truncate-end">
+          {profile.name}
+        </Text>
         {profile.isActive && (
           <Box backgroundColor={color.brand} paddingX={1} flexShrink={0}>
-            <Text color="#ffffff" bold>ACTIVE</Text>
+            <Text color="#ffffff" bold>
+              ACTIVE
+            </Text>
           </Box>
         )}
       </Box>
@@ -87,7 +81,11 @@ export function ProfilePreview({
         {profile.orgName && <Row label="Org" value={profile.orgName} />}
         <Row label="Config" value={profile.configDir.replace(/^\/Users\/[^/]+/, "~")} valueColor={color.muted} />
         {!profile.isPrimary && (
-          <Row label="Sessions" value={profile.mergeSessions ? "merged" : "separated"} valueColor={profile.mergeSessions ? color.warning : color.secondary} />
+          <Row
+            label="Sessions"
+            value={profile.mergeSessions ? "merged" : "separated"}
+            valueColor={profile.mergeSessions ? color.warning : color.secondary}
+          />
         )}
       </Box>
 
@@ -98,14 +96,26 @@ export function ProfilePreview({
         <Box gap={1}>
           <Text color={color.dim}>{localTimezoneLabel()}</Text>
         </Box>
-        <Row label="Today" value={formatCurrency(profile.today.cost)} valueColor={profile.today.cost > 0 ? color.text : color.muted} />
-        <Row label="This Week" value={formatCurrency(profile.week.cost)} valueColor={profile.week.cost > 0 ? color.text : color.muted} />
-        <Row label="Total" value={formatCurrency(profile.total.cost)} valueColor={profile.total.cost > 0 ? color.brandLight : color.muted} />
+        <Row
+          label="Today"
+          value={formatCurrency(profile.today.cost)}
+          valueColor={profile.today.cost > 0 ? color.text : color.muted}
+        />
+        <Row
+          label="This Week"
+          value={formatCurrency(profile.week.cost)}
+          valueColor={profile.week.cost > 0 ? color.text : color.muted}
+        />
+        <Row
+          label="Total"
+          value={formatCurrency(profile.total.cost)}
+          valueColor={profile.total.cost > 0 ? color.brandLight : color.muted}
+        />
       </Box>
 
       {/* Health */}
       {doctor && (
-      <Box flexDirection="column" flexShrink={0}>
+        <Box flexDirection="column" flexShrink={0}>
           <Separator />
           <Row label="Health" value={healthLabel} valueColor={healthColor} />
           {doctor.issues.map((issue) => (

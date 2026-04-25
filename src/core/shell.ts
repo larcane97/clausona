@@ -24,10 +24,10 @@ try {
   }
 } catch {}
 " 2>/dev/null)
-  if [[ "\$result" == "__PRIMARY__" ]]; then
+  if [[ "$result" == "__PRIMARY__" ]]; then
     unset CLAUDE_CONFIG_DIR
-  elif [[ -n "\$result" ]]; then
-    export CLAUDE_CONFIG_DIR="\$result"
+  elif [[ -n "$result" ]]; then
+    export CLAUDE_CONFIG_DIR="$result"
   fi
 }
 
@@ -37,11 +37,11 @@ claude() {
     _clausona_resolve_config
   fi
   clausona _sync-plugins 2>/dev/null
-  command claude "\$@"
-  local rc=\$?
+  command claude "$@"
+  local rc=$?
   unset CLAUDE_CONFIG_DIR
   clausona _track-usage 2>/dev/null
-  return \$rc
+  return $rc
 }
 
 alias csn=clausona

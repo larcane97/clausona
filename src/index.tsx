@@ -1,9 +1,10 @@
-import { render } from "ink";
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { render } from "ink";
 
 import { runCommand } from "./commands.js";
 import { trackUsage } from "./core/track-usage.js";
-import { fail as xMark, accent } from "./lib/cli-style.js";
+import { accent, fail as xMark } from "./lib/cli-style.js";
 import { resolveProfileEnv } from "./lib/service.js";
 import { App } from "./tui/App.js";
 import type { ParsedCommand } from "./types.js";
@@ -30,7 +31,7 @@ const TUI_SCREENS = new Set(["dashboard", "use", "doctor", "init"]);
 
 async function main() {
   const parsed = parseCommand(process.argv.slice(2));
-  
+
   // Create a proper input stream that won't throw Raw mode errors when piped
   const renderOptions = {
     stdout: process.stdout,
@@ -42,18 +43,18 @@ async function main() {
     process.stdout.write("Run 'clausona --help' for usage. The interactive TUI requires a terminal.\n");
     return;
   }
-  
+
   if (parsed.kind === "tui") {
     // Clear initial state
     if (process.stdout.isTTY) {
-      process.stdout.write('\x1bc'); // FULL reset
+      process.stdout.write("\x1bc"); // FULL reset
     }
-    
-    const { waitUntilExit, clear } = render(<App initialScreen="dashboard" />, renderOptions);
+
+    const { waitUntilExit } = render(<App initialScreen="dashboard" />, renderOptions);
 
     await waitUntilExit();
     if (process.stdout.isTTY) {
-      process.stdout.write('\x1bc'); // Full clear on exit
+      process.stdout.write("\x1bc"); // Full clear on exit
     }
     return;
   }
@@ -84,20 +85,25 @@ async function main() {
           process.stdout.write("Operation successful. (Interactive TUI skipped due to non-TTY environment)\n");
           return;
         }
-        
+
         if (process.stdout.isTTY) {
-          process.stdout.write('\x1bc'); // FULL reset
+          process.stdout.write("\x1bc"); // FULL reset
         }
-        
-        const { waitUntilExit, clear } = render(<App initialScreen={screen as "dashboard" | "use" | "doctor" | "init"} />, renderOptions);
+
+        const { waitUntilExit } = render(
+          <App initialScreen={screen as "dashboard" | "use" | "doctor" | "init"} />,
+          renderOptions,
+        );
 
         await waitUntilExit();
         if (process.stdout.isTTY) {
-          process.stdout.write('\x1bc'); // Full clear on exit
+          process.stdout.write("\x1bc"); // Full clear on exit
         }
         return;
       }
-      process.stderr.write(`  ${xMark} This command requires an argument.\n    Run ${accent(`clausona ${parsed.command} --help`)} for usage.\n`);
+      process.stderr.write(
+        `  ${xMark} This command requires an argument.\n    Run ${accent(`clausona ${parsed.command} --help`)} for usage.\n`,
+      );
       process.exitCode = 1;
       return;
     }
@@ -109,9 +115,10 @@ async function main() {
   }
 }
 
-import { realpathSync } from "node:fs";
-
-const entryReal = realpathSync(process.argv[1]!);
-if (import.meta.url === `file://${entryReal}`) {
-  void main();
+const entryPath = process.argv[1];
+if (entryPath) {
+  const entryReal = realpathSync(entryPath);
+  if (import.meta.url === `file://${entryReal}`) {
+    void main();
+  }
 }

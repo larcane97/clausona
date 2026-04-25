@@ -62,7 +62,13 @@ export function box(title: string, lines: string[]) {
     return `${v}  ${line}${" ".repeat(pad)}${v}`;
   });
 
-  return ["  " + titleLine, "  " + emptyLine, ...contentLines.map((l) => "  " + l), "  " + emptyLine, "  " + bottomLine].join("\n");
+  return [
+    `  ${titleLine}`,
+    `  ${emptyLine}`,
+    ...contentLines.map((l) => `  ${l}`),
+    `  ${emptyLine}`,
+    `  ${bottomLine}`,
+  ].join("\n");
 }
 
 export function helpSection(title: string, items: [string, string][]) {
@@ -77,6 +83,7 @@ export function helpUsage(text: string) {
 
 /** Strip ANSI escape codes to get visible length */
 export function stripAnsi(str: string) {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC (\x1b) is required to match ANSI escape sequences
   return str.replace(/\x1b\[[0-9;]*m/g, "");
 }
 

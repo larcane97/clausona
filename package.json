@@ -11,7 +11,9 @@
     "build": "rm -rf dist && node build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "lint": "biome check",
+    "lint:fix": "biome check --write"
   },
   "dependencies": {
     "@inkjs/ui": "2.0.0",
@@ -22,6 +24,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.13",
     "@types/node": "20.12.7",
     "@types/react": "19.2.2",
     "@types/react-test-renderer": "19.1.0",

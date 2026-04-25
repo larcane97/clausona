@@ -4,27 +4,27 @@
 
 export const color = {
   // Core palette
-  brand: "#6366f1",       // indigo-500  — primary brand (backgrounds/accents)
-  brandLight: "#818cf8",  // indigo-400  — primary text highlights
-  accent: "#ec4899",      // pink-500    — secondary accent (cursors)
-  surface: "#18181b",     // zinc-900    — panel backgrounds
+  brand: "#6366f1", // indigo-500  — primary brand (backgrounds/accents)
+  brandLight: "#818cf8", // indigo-400  — primary text highlights
+  accent: "#ec4899", // pink-500    — secondary accent (cursors)
+  surface: "#18181b", // zinc-900    — panel backgrounds
 
   // Text hierarchy
-  text: "#f4f4f5",        // zinc-100  — primary text
-  secondary: "#a1a1aa",   // zinc-400  — secondary text
-  muted: "#71717a",       // zinc-500  — tertiary / dimmed
-  dim: "#3f3f46",         // zinc-700  — borders, separators
+  text: "#f4f4f5", // zinc-100  — primary text
+  secondary: "#a1a1aa", // zinc-400  — secondary text
+  muted: "#71717a", // zinc-500  — tertiary / dimmed
+  dim: "#3f3f46", // zinc-700  — borders, separators
 
   // Semantic status
-  healthy: "#10b981",     // emerald-500
-  warning: "#f59e0b",     // amber-500
-  error: "#ef4444",       // red-500
-  info: "#3b82f6",        // blue-500
+  healthy: "#10b981", // emerald-500
+  warning: "#f59e0b", // amber-500
+  error: "#ef4444", // red-500
+  info: "#3b82f6", // blue-500
 
   // Interactive
-  active: "#818cf8",      // matches brandLight
-  cursor: "#ec4899",      // pink-500
-  selected: "#818cf8",    // indigo-400
+  active: "#818cf8", // matches brandLight
+  cursor: "#ec4899", // pink-500
+  selected: "#818cf8", // indigo-400
 } as const;
 
 export const symbol = {

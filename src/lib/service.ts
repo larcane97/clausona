@@ -1,7 +1,7 @@
-import { cp, lstat, mkdir, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { cp, lstat, mkdir, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
 
 import { evaluateSymlinkHealth } from "../core/doctor.js";
 import { seedSeenSessions } from "../core/track-usage.js";
@@ -19,6 +19,7 @@ function sharedLinkSkipSet(mergeSessions: boolean): Set<string> {
   if (!mergeSessions) return new Set([...BASE_SHARED_LINK_SKIP, "projects"]);
   return BASE_SHARED_LINK_SKIP;
 }
+
 import { claudeJsonPathForConfigDir, keychainServiceForConfigDir } from "../core/paths.js";
 import { setActiveProfile } from "../core/registry.js";
 import { renderShellInit } from "../core/shell.js";
@@ -304,7 +305,7 @@ export async function syncPluginsJson(configDir: string, primarySource: string):
           path.join(primarySource, "plugins", "marketplaces", name, ".git", "config"),
           "utf8",
         );
-        const remoteSection = gitConfig.match(/\[remote "origin"\][^\[]*url\s*=\s*(.+)/);
+        const remoteSection = gitConfig.match(/\[remote "origin"\][^[]*url\s*=\s*(.+)/);
         if (remoteSection) {
           const url = remoteSection[1].trim();
           const ghMatch = url.match(/github\.com[:/](.+?)(?:\.git)?$/);
@@ -333,10 +334,10 @@ export async function syncPluginsJson(configDir: string, primarySource: string):
     type InstalledPlugins = { version?: number; plugins?: Record<string, PluginEntry[]> };
     let installedJson = await readJson<InstalledPlugins | null>(installedPath, null);
     if (installedJson === null) {
-      installedJson = await readJson<InstalledPlugins>(
-        path.join(primarySource, "plugins", "installed_plugins.json"),
-        { version: 2, plugins: {} },
-      );
+      installedJson = await readJson<InstalledPlugins>(path.join(primarySource, "plugins", "installed_plugins.json"), {
+        version: 2,
+        plugins: {},
+      });
     }
 
     const syncedPlugins: Record<string, PluginEntry[]> = {};
@@ -430,10 +431,9 @@ async function mergePluginFiles(profilePluginsDir: string, primaryPluginsDir: st
   try {
     type PluginEntry = Record<string, unknown> & { installPath?: string };
     type InstalledPlugins = { version?: number; plugins?: Record<string, PluginEntry[]> };
-    const srcInstalled = await readJson<InstalledPlugins>(
-      path.join(profilePluginsDir, "installed_plugins.json"),
-      { plugins: {} },
-    );
+    const srcInstalled = await readJson<InstalledPlugins>(path.join(profilePluginsDir, "installed_plugins.json"), {
+      plugins: {},
+    });
     const dstInstalledPath = path.join(primaryPluginsDir, "installed_plugins.json");
     const dstInstalled = await readJson<InstalledPlugins>(dstInstalledPath, { version: 2, plugins: {} });
     const dstPlugins = dstInstalled.plugins ?? {};
@@ -444,7 +444,9 @@ async function mergePluginFiles(profilePluginsDir: string, primaryPluginsDir: st
         if (entry.installPath) {
           const pluginsIdx = entry.installPath.indexOf("/plugins/");
           const newInstallPath =
-            pluginsIdx !== -1 ? path.join(primaryPluginsDir, entry.installPath.slice(pluginsIdx + "/plugins/".length)) : entry.installPath;
+            pluginsIdx !== -1
+              ? path.join(primaryPluginsDir, entry.installPath.slice(pluginsIdx + "/plugins/".length))
+              : entry.installPath;
           return { ...entry, installPath: newInstallPath };
         }
         return entry;
@@ -646,7 +648,7 @@ export async function listProfiles(): Promise<ProfileListItem[]> {
 
 export async function setActiveProfileByName(name: string) {
   const registry = await loadRegistry();
-  if (!registry || !registry.profiles[name]) {
+  if (!registry?.profiles[name]) {
     throw new Error(`Profile '${name}' not found.`);
   }
 
@@ -657,7 +659,7 @@ export async function setActiveProfileByName(name: string) {
 
 export async function getCurrentProfile() {
   const registry = await loadRegistry();
-  if (!registry || !registry.activeProfile || !registry.profiles[registry.activeProfile]) {
+  if (!registry?.activeProfile || !registry.profiles[registry.activeProfile]) {
     return null;
   }
 
@@ -711,7 +713,9 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
     return [];
   }
 
-  const primaryEntries = new Set((await readdir(registry.primarySource, { withFileTypes: true })).map((entry) => entry.name));
+  const primaryEntries = new Set(
+    (await readdir(registry.primarySource, { withFileTypes: true })).map((entry) => entry.name),
+  );
   const results: DoctorProfileResult[] = [];
 
   for (const [name, profile] of Object.entries(registry.profiles)) {
@@ -736,12 +740,19 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
 
     const dirEntries = await readdir(profile.configDir, { withFileTypes: true }).catch(() => []);
     const skipSet = sharedLinkSkipSet(profile.mergeSessions ?? false);
-    const symlinkItems: Array<{ name: string; isSymlink: boolean; pointsToPrimary: boolean; targetExists: boolean; existsInPrimary: boolean }> = [];
+    const symlinkItems: Array<{
+      name: string;
+      isSymlink: boolean;
+      pointsToPrimary: boolean;
+      targetExists: boolean;
+      existsInPrimary: boolean;
+    }> = [];
     for (const entry of dirEntries) {
       const targetPath = path.join(profile.configDir, entry.name);
       const stats = await lstat(targetPath);
       const isSymlink = stats.isSymbolicLink();
-      const pointsToPrimary = isSymlink && (await readlink(targetPath)) === path.join(registry.primarySource, entry.name);
+      const pointsToPrimary =
+        isSymlink && (await readlink(targetPath)) === path.join(registry.primarySource, entry.name);
 
       if (skipSet.has(entry.name)) {
         // Items in skip set should NOT be symlinked to primary
@@ -786,16 +797,24 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
           path.join(profilePlugins, "known_marketplaces.json"),
           {},
         );
-        const marketplaceDirs = await readdir(path.join(profilePlugins, "marketplaces"), { withFileTypes: true }).catch(() => []);
+        const marketplaceDirs = await readdir(path.join(profilePlugins, "marketplaces"), { withFileTypes: true }).catch(
+          () => [],
+        );
         const onDisk = new Set(marketplaceDirs.filter((e) => e.isDirectory()).map((e) => e.name));
 
         let pluginsOutOfSync = false;
         for (const name of onDisk) {
-          if (!knownJson[name]) { pluginsOutOfSync = true; break; }
+          if (!knownJson[name]) {
+            pluginsOutOfSync = true;
+            break;
+          }
         }
         if (!pluginsOutOfSync) {
           for (const [name, entry] of Object.entries(knownJson)) {
-            if (!onDisk.has(name)) { pluginsOutOfSync = true; break; }
+            if (!onDisk.has(name)) {
+              pluginsOutOfSync = true;
+              break;
+            }
             const e = entry as Record<string, unknown>;
             if (e.installLocation !== path.join(profile.configDir, "plugins", "marketplaces", name)) {
               pluginsOutOfSync = true;
@@ -805,7 +824,10 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
         }
 
         if (pluginsOutOfSync) {
-          issues.push({ kind: "plugins_out_of_sync", message: "plugins/ marketplaces and known_marketplaces.json are out of sync" });
+          issues.push({
+            kind: "plugins_out_of_sync",
+            message: "plugins/ marketplaces and known_marketplaces.json are out of sync",
+          });
         }
       }
     }
@@ -825,7 +847,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
 
 export async function repairProfile(name: string) {
   const registry = await loadRegistry();
-  if (!registry || !registry.profiles[name]) {
+  if (!registry?.profiles[name]) {
     throw new Error(`Profile '${name}' not found.`);
   }
 
@@ -835,7 +857,12 @@ export async function repairProfile(name: string) {
   }
 
   const backupDir = path.join(CLAUSONA_DIR, "backups", name);
-  const repaired = await setupSharedLinks(profile.configDir, registry.primarySource, profile.mergeSessions ?? false, backupDir);
+  const repaired = await setupSharedLinks(
+    profile.configDir,
+    registry.primarySource,
+    profile.mergeSessions ?? false,
+    backupDir,
+  );
   await setupPluginsDir(profile.configDir, registry.primarySource);
 
   // Restore skip-set items from backup if they were stale symlinks that got removed
@@ -861,7 +888,7 @@ export async function repairProfile(name: string) {
 
 export async function updateProfileConfig(name: string, options: { mergeSessions: boolean }) {
   const registry = await loadRegistry();
-  if (!registry || !registry.profiles[name]) {
+  if (!registry?.profiles[name]) {
     throw new Error(`Profile '${name}' not found.`);
   }
   const profile = registry.profiles[name];
@@ -1010,7 +1037,7 @@ export async function addProfile(options: { name: string; fromPath?: string; mer
 
 export async function loginProfile(name: string) {
   const registry = await loadRegistry();
-  if (!registry || !registry.profiles[name]) {
+  if (!registry?.profiles[name]) {
     throw new Error(`Profile '${name}' not found.`);
   }
 
@@ -1059,7 +1086,7 @@ async function cleanupProfile(name: string, profile: { configDir: string; isPrim
 
 export async function removeProfile(name: string) {
   const registry = await loadRegistry();
-  if (!registry || !registry.profiles[name]) {
+  if (!registry?.profiles[name]) {
     throw new Error(`Profile '${name}' not found.`);
   }
 
@@ -1079,7 +1106,7 @@ export async function removeProfile(name: string) {
 
 export async function resolveProfileEnv(name: string): Promise<{ configDir: string; env: NodeJS.ProcessEnv }> {
   const registry = await loadRegistry();
-  if (!registry || !registry.profiles[name]) {
+  if (!registry?.profiles[name]) {
     throw new Error(`Profile '${name}' not found.`);
   }
 

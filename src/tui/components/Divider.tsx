@@ -7,20 +7,18 @@ export function Divider({ title, cols }: { title?: string; cols?: number }) {
 
   if (!title) {
     return (
-    <Box width="100%" flexDirection="row" overflow="hidden" height={1}>
-      <Box flexGrow={1} flexShrink={1} minWidth={1}>
-        <Text color={color.dim}>{symbol.lineH.repeat(w)}</Text>
+      <Box width="100%" flexDirection="row" overflow="hidden" height={1}>
+        <Box flexGrow={1} flexShrink={1} minWidth={1}>
+          <Text color={color.dim}>{symbol.lineH.repeat(w)}</Text>
+        </Box>
       </Box>
-    </Box>
     );
   }
 
   return (
     <Box width="100%" flexDirection="row" alignItems="center" overflow="hidden" height={1}>
       <Box flexGrow={1} flexShrink={1} minWidth={1}>
-        <Text color={color.dim}>
-          {symbol.lineH.repeat(w)}
-        </Text>
+        <Text color={color.dim}>{symbol.lineH.repeat(w)}</Text>
       </Box>
       <Box paddingX={1} flexShrink={0}>
         <Text color={color.secondary} bold wrap="truncate-end">
@@ -28,9 +26,7 @@ export function Divider({ title, cols }: { title?: string; cols?: number }) {
         </Text>
       </Box>
       <Box flexGrow={1} flexShrink={1} minWidth={1}>
-        <Text color={color.dim}>
-          {symbol.lineH.repeat(w)}
-        </Text>
+        <Text color={color.dim}>{symbol.lineH.repeat(w)}</Text>
       </Box>
     </Box>
   );

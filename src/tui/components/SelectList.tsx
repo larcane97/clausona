@@ -37,9 +37,7 @@ export function SelectList({
           <Box key={item.id} gap={1}>
             {/* Cursor */}
             <Box width={2}>
-              <Text color={focused ? color.cursor : color.dim}>
-                {focused ? symbol.cursor : " "}
-              </Text>
+              <Text color={focused ? color.cursor : color.dim}>{focused ? symbol.cursor : " "}</Text>
             </Box>
 
             {/* Checkbox for multi */}

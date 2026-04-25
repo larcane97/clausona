@@ -1,5 +1,5 @@
-import { type PropsWithChildren } from "react";
 import { Box, Text } from "ink";
+import type { PropsWithChildren } from "react";
 import { color, symbol } from "../theme.js";
 import { KeyHints } from "./KeyHint.js";
 
@@ -12,7 +12,7 @@ type ChromeProps = PropsWithChildren<{
   hints?: KeyHint[];
 }>;
 
-// Use fixed long width that flex container shrinks down gracefully 
+// Use fixed long width that flex container shrinks down gracefully
 // to prevent ink size recalculation bugs and nested redraws on resize
 export function Chrome({ title, subtitle, footer, hints, children }: ChromeProps) {
   const lineWidth = 150;
@@ -23,24 +23,35 @@ export function Chrome({ title, subtitle, footer, hints, children }: ChromeProps
       <Box flexDirection="column" marginBottom={1}>
         <Box gap={1} alignItems="center" width="100%">
           <Box backgroundColor={color.brand} paddingX={1} flexShrink={0}>
-            <Text color="#ffffff" bold> CLAUSONA </Text>
+            <Text color="#ffffff" bold>
+              {" "}
+              CLAUSONA{" "}
+            </Text>
           </Box>
-          <Box flexShrink={0}><Text color={color.dim}>{symbol.sep}</Text></Box>
-          <Box flexShrink={0}><Text color={color.text} bold>{title}</Text></Box>
+          <Box flexShrink={0}>
+            <Text color={color.dim}>{symbol.sep}</Text>
+          </Box>
+          <Box flexShrink={0}>
+            <Text color={color.text} bold>
+              {title}
+            </Text>
+          </Box>
           {subtitle ? (
             <>
-              <Box flexShrink={0}><Text color={color.dim}>{symbol.sep}</Text></Box>
+              <Box flexShrink={0}>
+                <Text color={color.dim}>{symbol.sep}</Text>
+              </Box>
               <Box flexGrow={1} flexShrink={1} overflow="hidden">
-                <Text color={color.secondary} wrap="truncate-end">{subtitle}</Text>
+                <Text color={color.secondary} wrap="truncate-end">
+                  {subtitle}
+                </Text>
               </Box>
             </>
           ) : null}
         </Box>
         <Box marginTop={1} width="100%" flexDirection="row" overflow="hidden" height={1}>
           <Box flexGrow={1} flexShrink={1} minWidth={1}>
-            <Text color={color.dim}>
-              {symbol.lineH.repeat(lineWidth)}
-            </Text>
+            <Text color={color.dim}>{symbol.lineH.repeat(lineWidth)}</Text>
           </Box>
         </Box>
       </Box>
@@ -55,14 +66,14 @@ export function Chrome({ title, subtitle, footer, hints, children }: ChromeProps
         <Box marginTop={1} flexDirection="column">
           <Box flexDirection="row" width="100%" overflow="hidden" height={1}>
             <Box flexGrow={1} flexShrink={1} minWidth={1}>
-              <Text color={color.dim}>
-                {symbol.lineH.repeat(lineWidth)}
-              </Text>
+              <Text color={color.dim}>{symbol.lineH.repeat(lineWidth)}</Text>
             </Box>
           </Box>
           {footer ? (
             <Box marginTop={1}>
-              <Text color={color.muted} wrap="truncate-end">{footer}</Text>
+              <Text color={color.muted} wrap="truncate-end">
+                {footer}
+              </Text>
             </Box>
           ) : null}
           {hints && hints.length > 0 ? (

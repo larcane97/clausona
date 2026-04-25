@@ -1,10 +1,8 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { realpath } from "node:fs/promises";
-
-import { claudeJsonPathForConfigDir } from "./paths.js";
 import type { Registry, UsageStore } from "../types.js";
+import { claudeJsonPathForConfigDir } from "./paths.js";
 
 const CLAUSONA_DIR = path.join(homedir(), ".clausona");
 const REGISTRY_PATH = path.join(CLAUSONA_DIR, "profiles.json");
@@ -133,7 +131,8 @@ export async function seedSeenSessions(profileName: string, configDir: string): 
   if (!usage[profileName]) {
     usage[profileName] = { records: [], seenSessions: {} };
   }
-  const seen = usage[profileName].seenSessions ??= {};
+  usage[profileName].seenSessions ??= {};
+  const seen = usage[profileName].seenSessions;
 
   let changed = false;
   for (const [projPath, projData] of Object.entries(projects)) {

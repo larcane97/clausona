@@ -1,6 +1,19 @@
 import path from "node:path";
 import { createInterface } from "node:readline";
-
+import { trackUsage } from "./core/track-usage.js";
+import {
+  accent,
+  bold,
+  box,
+  dim,
+  green,
+  helpSection,
+  helpUsage,
+  secondary,
+  styledCost,
+  success,
+} from "./lib/cli-style.js";
+import { localTimezoneLabel, renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
 import {
   addProfile,
   discoverAccounts,
@@ -14,14 +27,11 @@ import {
   removeProfile,
   repairProfile,
   setActiveProfileByName,
-  syncPluginsJson,
-  updateProfileConfig,
   shellInit,
+  syncPluginsJson,
   uninstallClausona,
+  updateProfileConfig,
 } from "./lib/service.js";
-import { trackUsage } from "./core/track-usage.js";
-import { accent, bold, box, dim, green, helpSection, helpUsage, secondary, styledCost, success } from "./lib/cli-style.js";
-import { localTimezoneLabel, renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
 
 function jsonFlag(args: string[]) {
   return args.includes("--json");
@@ -356,7 +366,9 @@ export async function runCommand(command: string, args: string[]) {
         ...(current.orgName ? [`${secondary("Org".padEnd(12))}${current.orgName}`] : []),
         `${secondary("Config".padEnd(12))}${dim(configPath)}`,
         `${secondary("Keychain".padEnd(12))}${current.keychainService} ${keychainStatus}`,
-        ...(!current.isPrimary ? [`${secondary("Sessions".padEnd(12))}${current.mergeSessions ? "merged" : "separated"}`] : []),
+        ...(!current.isPrimary
+          ? [`${secondary("Sessions".padEnd(12))}${current.mergeSessions ? "merged" : "separated"}`]
+          : []),
         "",
         `${secondary("Today".padEnd(12))}${styledCost(current.usage.today.cost)}  ${dim(localTimezoneLabel())}`,
         `${secondary("Total".padEnd(12))}${styledCost(current.usage.total.cost)}`,
@@ -430,7 +442,7 @@ export async function runCommand(command: string, args: string[]) {
     }
 
     case "add": {
-      const fromIndex = args.findIndex((arg) => arg === "--from");
+      const fromIndex = args.indexOf("--from");
       const fromPath = fromIndex >= 0 ? args[fromIndex + 1] : undefined;
       const fromValueIndex = fromIndex >= 0 ? fromIndex + 1 : -1;
       const mergeSessions = args.includes("--merge-sessions");
@@ -461,7 +473,7 @@ export async function runCommand(command: string, args: string[]) {
 
     case "uninstall": {
       process.stdout.write(
-        [
+        `${[
           "",
           `  ${bold("This will completely uninstall clausona:")}`,
           `    ${dim("• Strip symlinks and restore backups for all non-primary profiles")}`,
@@ -470,7 +482,7 @@ export async function runCommand(command: string, args: string[]) {
           `    ${dim("• Delete ~/.clausona/ directory (registry, usage, backups)")}`,
           `    ${dim("• Delete app files and launcher binary")}`,
           "",
-        ].join("\n") + "\n",
+        ].join("\n")}\n`,
       );
 
       const confirmed = await new Promise<boolean>((resolve) => {
@@ -508,7 +520,12 @@ export async function runCommand(command: string, args: string[]) {
         throw new Error("No Claude Code accounts found. Run `claude login` first.");
       }
       const mergeSessions = args.includes("--merge-sessions") || undefined;
-      const profileNames = Object.fromEntries(accounts.map((account) => [account.configDir, account.isPrimary ? "default" : path.basename(account.configDir).replace(/^\.claude-/, "")]));
+      const profileNames = Object.fromEntries(
+        accounts.map((account) => [
+          account.configDir,
+          account.isPrimary ? "default" : path.basename(account.configDir).replace(/^\.claude-/, ""),
+        ]),
+      );
       const defaultProfile = Object.values(profileNames)[0] ?? "default";
       await initializeRegistry({ accounts, profileNames, defaultProfile, mergeSessions });
       return success(`Initialized ${bold(String(accounts.length))} profile(s)`);
@@ -533,9 +550,6 @@ export async function bootstrapInitFromCurrentState() {
   return {
     accounts,
     profileNames,
-    defaultProfile:
-      existing?.activeProfile ??
-      Object.values(profileNames)[0] ??
-      "default",
+    defaultProfile: existing?.activeProfile ?? Object.values(profileNames)[0] ?? "default",
   };
 }

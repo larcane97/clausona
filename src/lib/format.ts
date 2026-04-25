@@ -1,7 +1,21 @@
 import { symbol } from "../tui/theme.js";
 import type { DoctorProfileResult, ProfileListItem, UsageSummary } from "../types.js";
 
-import { accent, bold, dim, dimmer, green, heading, ok, padEnd as pad, red, secondary, styledCost, styledCount, fail as xMark } from "./cli-style.js";
+import {
+  accent,
+  bold,
+  dim,
+  dimmer,
+  green,
+  heading,
+  ok,
+  padEnd as pad,
+  red,
+  secondary,
+  styledCost,
+  styledCount,
+  fail as xMark,
+} from "./cli-style.js";
 
 // ─── Timezone ────────────────────────────────────────────────────────
 export function localTimezoneLabel(): string {
@@ -41,8 +55,8 @@ export function renderList(items: ProfileListItem[]) {
     { label: "INPUT", w: 14 },
     { label: "OUTPUT", w: 10 },
   ];
-  const headerLine = "    " + cols.map((c) => secondary(c.label.padEnd(c.w))).join("");
-  const sep = "    " + dimmer("─".repeat(cols.reduce((s, c) => s + c.w, 0)));
+  const headerLine = `    ${cols.map((c) => secondary(c.label.padEnd(c.w))).join("")}`;
+  const sep = `    ${dimmer("─".repeat(cols.reduce((s, c) => s + c.w, 0)))}`;
 
   const rows = items.map((item) => {
     const marker = item.isActive ? accent("▸") : " ";
@@ -58,8 +72,13 @@ export function renderList(items: ProfileListItem[]) {
 }
 
 // ─── Usage Summary ──────────────────────────────────────────────────
-export function renderUsageSummary(data: Record<string, UsageSummary> | UsageSummary, profileName?: string, period?: string) {
-  const periodLabel = period === "today" ? "Today" : period === "week" ? "This week" : period === "month" ? "This month" : "All time";
+export function renderUsageSummary(
+  data: Record<string, UsageSummary> | UsageSummary,
+  profileName?: string,
+  period?: string,
+) {
+  const periodLabel =
+    period === "today" ? "Today" : period === "week" ? "This week" : period === "month" ? "This month" : "All time";
   const tzLabel = localTimezoneLabel();
 
   // Single profile
@@ -84,8 +103,8 @@ export function renderUsageSummary(data: Record<string, UsageSummary> | UsageSum
     { label: "INPUT", w: 14 },
     { label: "OUTPUT", w: 14 },
   ];
-  const headerLine = "    " + cols.map((c) => secondary(c.label.padEnd(c.w))).join("");
-  const sep = "    " + dimmer("─".repeat(cols.reduce((s, c) => s + c.w, 0)));
+  const headerLine = `    ${cols.map((c) => secondary(c.label.padEnd(c.w))).join("")}`;
+  const sep = `    ${dimmer("─".repeat(cols.reduce((s, c) => s + c.w, 0)))}`;
 
   const rows = Object.entries(entries).map(([name, s]) => {
     return `    ${name.padEnd(cols[0].w)}${pad(styledCost(s.cost), cols[1].w)}${pad(styledCount(s.inputTokens), cols[2].w)}${styledCount(s.outputTokens)}`;
@@ -97,7 +116,17 @@ export function renderUsageSummary(data: Record<string, UsageSummary> | UsageSum
 
   const totalRow = `    ${pad(bold("Total"), cols[0].w)}${pad(bold(styledCost(totalCost)), cols[1].w)}${pad(styledCount(totalIn), cols[2].w)}${styledCount(totalOut)}`;
 
-  return ["", heading(`${periodLabel}${period !== "all" ? ` ${dim(`(${tzLabel})`)}` : ""}`), "", headerLine, sep, ...rows, sep, totalRow, ""].join("\n");
+  return [
+    "",
+    heading(`${periodLabel}${period !== "all" ? ` ${dim(`(${tzLabel})`)}` : ""}`),
+    "",
+    headerLine,
+    sep,
+    ...rows,
+    sep,
+    totalRow,
+    "",
+  ].join("\n");
 }
 
 // ─── Doctor ─────────────────────────────────────────────────────────
@@ -116,7 +145,7 @@ export function renderDoctor(results: DoctorProfileResult[]) {
     });
 
     // Add repair suggestion for the last issue
-    const suggestion = `       ${dim(`Run ${accent("clausona repair " + result.name)} to fix`)}`;
+    const suggestion = `       ${dim(`Run ${accent(`clausona repair ${result.name}`)} to fix`)}`;
 
     return [title, statusLine, ...issueLines, suggestion].join("\n");
   });

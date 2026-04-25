@@ -9,7 +9,9 @@ export function KeyHints({ hints }: { hints: Hint[] }) {
       {hints.map((hint, i) => (
         <Box key={hint.keys}>
           {i > 0 && <Text color={color.dim}>{symbol.sep} </Text>}
-          <Text color={color.muted} bold>{hint.keys}</Text>
+          <Text color={color.muted} bold>
+            {hint.keys}
+          </Text>
           <Text color={color.dim}> {hint.action}</Text>
         </Box>
       ))}

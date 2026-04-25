@@ -5,7 +5,13 @@ export function evaluateSymlinkHealth({
   items,
 }: {
   isPrimary: boolean;
-  items: Array<{ name: string; isSymlink: boolean; pointsToPrimary: boolean; targetExists: boolean; existsInPrimary: boolean }>;
+  items: Array<{
+    name: string;
+    isSymlink: boolean;
+    pointsToPrimary: boolean;
+    targetExists: boolean;
+    existsInPrimary: boolean;
+  }>;
 }): DoctorIssue[] {
   if (isPrimary) {
     return [];
