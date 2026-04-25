@@ -31,6 +31,7 @@ try {
   fi
 }
 
+unalias claude 2>/dev/null
 claude() {
   if [[ -z "\${CLAUDE_CONFIG_DIR:-}" ]]; then
     _clausona_resolve_config

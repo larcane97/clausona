@@ -7,6 +7,7 @@ describe("renderShellInit", () => {
     const shellInit = renderShellInit();
 
     expect(shellInit).toContain("claude()");
+    expect(shellInit).toContain("unalias claude");
     expect(shellInit).toContain("alias csn=clausona");
     expect(shellInit).toContain("CLAUDE_CONFIG_DIR");
     expect(shellInit).toContain("_clausona_resolve_config");
