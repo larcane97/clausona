@@ -6,23 +6,19 @@ import path from "node:path";
 import { evaluateSymlinkHealth } from "../core/doctor.js";
 import { seedSeenSessions } from "../core/track-usage.js";
 
-/** Items that should never be shared via symlink between profiles */
-// plugins/ is excluded because installed_plugins.json and known_marketplaces.json contain
-// absolute installPath/installLocation values that must be per-profile; setupPluginsDir
-// creates a real dir with inner symlinks instead of a wholesale symlink.
-const BASE_SHARED_LINK_SKIP = new Set([".claude.json", "image-cache", "statsig", "plugins"]);
-
 /** Files inside plugins/ that contain absolute paths and must be per-profile */
 const PLUGINS_PATH_FILES = new Set(["known_marketplaces.json", "installed_plugins.json"]);
 
-function sharedLinkSkipSet(mergeSessions: boolean): Set<string> {
-  if (!mergeSessions) return new Set([...BASE_SHARED_LINK_SKIP, "projects"]);
-  return BASE_SHARED_LINK_SKIP;
+function shouldSkipShare(adapter: ToolAdapter, name: string, mergeSessions: boolean): boolean {
+  if (adapter.sharedSkipSet(mergeSessions).has(name)) return true;
+  if (adapter.shouldSkipName?.(name, mergeSessions)) return true;
+  return false;
 }
 
 import { claudeJsonPathForConfigDir, keychainServiceForConfigDir } from "../core/paths.js";
 import { setActiveProfile } from "../core/registry.js";
-import { allAdapters } from "../tools/registry.js";
+import { allAdapters, getAdapter } from "../tools/registry.js";
+import type { ToolAdapter } from "../tools/types.js";
 import { renderShellInit } from "../core/shell.js";
 import { summarizeUsage } from "../core/usage.js";
 import type {
@@ -194,15 +190,14 @@ async function mergeSessionFiles(sourceDir: string, primarySource: string) {
   return merged;
 }
 
-async function setupSharedLinks(profileDir: string, primarySource: string, mergeSessions = false, backupDir?: string) {
+async function setupSharedLinks(adapter: ToolAdapter, profileDir: string, primarySource: string, mergeSessions = false, backupDir?: string) {
   const items = await readdir(primarySource, { withFileTypes: true });
-  const skipSet = sharedLinkSkipSet(mergeSessions);
   let linked = 0;
 
   for (const item of items) {
     const source = path.join(primarySource, item.name);
 
-    if (skipSet.has(item.name)) {
+    if (shouldSkipShare(adapter, item.name, mergeSessions)) {
       // Remove symlinks to primary for skipped items (e.g. projects/ when separated)
       const target = path.join(profileDir, item.name);
       const targetStats = await lstat(target).catch(() => null);
@@ -599,7 +594,7 @@ export async function initializeRegistry(options: {
       if (merge) {
         await mergeSessionFiles(account.configDir, PRIMARY_SOURCE);
       }
-      await setupSharedLinks(account.configDir, PRIMARY_SOURCE, merge, backupDir);
+      await setupSharedLinks(getAdapter(account.tool), account.configDir, PRIMARY_SOURCE, merge, backupDir);
       await mergePluginFiles(path.join(account.configDir, "plugins"), path.join(PRIMARY_SOURCE, "plugins"));
       await setupPluginsDir(account.configDir, PRIMARY_SOURCE);
     }
@@ -738,7 +733,8 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
     }
 
     const dirEntries = await readdir(profile.configDir, { withFileTypes: true }).catch(() => []);
-    const skipSet = sharedLinkSkipSet(profile.mergeSessions ?? false);
+    const adapter = getAdapter(profile.tool);
+    const isSkipped = (n: string) => shouldSkipShare(adapter, n, profile.mergeSessions ?? false);
     const symlinkItems: Array<{
       name: string;
       isSymlink: boolean;
@@ -753,7 +749,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
       const pointsToPrimary =
         isSymlink && (await readlink(targetPath)) === path.join(registry.primarySource, entry.name);
 
-      if (skipSet.has(entry.name)) {
+      if (isSkipped(entry.name)) {
         // Items in skip set should NOT be symlinked to primary
         if (!profile.isPrimary && pointsToPrimary) {
           issues.push({
@@ -856,7 +852,9 @@ export async function repairProfile(name: string) {
   }
 
   const backupDir = path.join(CLAUSONA_DIR, "backups", name);
+  const profileAdapter = getAdapter(profile.tool);
   const repaired = await setupSharedLinks(
+    profileAdapter,
     profile.configDir,
     registry.primarySource,
     profile.mergeSessions ?? false,
@@ -867,7 +865,7 @@ export async function repairProfile(name: string) {
   // Restore skip-set items from backup if they were stale symlinks that got removed
   // Skip if the backup item is a symlink pointing to primary (stale)
   if (await exists(backupDir)) {
-    const skipSet = sharedLinkSkipSet(profile.mergeSessions ?? false);
+    const skipSet = profileAdapter.sharedSkipSet(profile.mergeSessions ?? false);
     for (const itemName of skipSet) {
       const target = path.join(profile.configDir, itemName);
       const backupItem = path.join(backupDir, itemName);
@@ -907,14 +905,15 @@ export async function updateProfileConfig(name: string, options: { mergeSessions
   profile.mergeSessions = next;
   await saveRegistry(registry);
   const backupDir = path.join(CLAUSONA_DIR, "backups", name);
-  await setupSharedLinks(profile.configDir, registry.primarySource, next, backupDir);
+  const updateAdapter = getAdapter(profile.tool);
+  await setupSharedLinks(updateAdapter, profile.configDir, registry.primarySource, next, backupDir);
   await setupPluginsDir(profile.configDir, registry.primarySource);
 
   // merged → separated: restore skip-set items from backup
   // Skip if the backup item is a symlink pointing to primary (stale)
   if (!next) {
     if (await exists(backupDir)) {
-      const skipSet = sharedLinkSkipSet(false);
+      const skipSet = updateAdapter.sharedSkipSet(false);
       for (const itemName of skipSet) {
         const target = path.join(profile.configDir, itemName);
         const backupItem = path.join(backupDir, itemName);
@@ -960,7 +959,7 @@ export async function addProfile(options: { name: string; fromPath?: string; mer
     if (mergeSessions) {
       await mergeSessionFiles(configDir, registry.primarySource);
     }
-    await setupSharedLinks(configDir, registry.primarySource, mergeSessions, backupDir);
+    await setupSharedLinks(getAdapter("claude"), configDir, registry.primarySource, mergeSessions, backupDir); // T11: thread tool through
     await mergePluginFiles(path.join(configDir, "plugins"), path.join(registry.primarySource, "plugins"));
     await setupPluginsDir(configDir, registry.primarySource);
     registry.profiles[options.name] = { configDir, email, orgName, mergeSessions };
@@ -1021,7 +1020,7 @@ export async function addProfile(options: { name: string; fromPath?: string; mer
   await cp(configDir, backupDir, { recursive: true });
 
   const mergeSessions = options.mergeSessions ?? false;
-  await setupSharedLinks(configDir, registry.primarySource, mergeSessions, backupDir);
+  await setupSharedLinks(getAdapter("claude"), configDir, registry.primarySource, mergeSessions, backupDir); // T11: thread tool through
   await setupPluginsDir(configDir, registry.primarySource);
   registry.profiles[options.name] = {
     configDir,
