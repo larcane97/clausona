@@ -741,25 +741,27 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
     const issues: DoctorIssue[] = [];
 
     const primarySource = registry.primarySources[profile.tool];
+    const adapter = getAdapter(profile.tool);
 
-    // Only run claude-specific JSON/keychain checks for claude profiles
-    if (profile.tool === "claude") {
-      const jsonPath = claudeJsonPathForConfigDir({ homeDir: homedir(), configDir: profile.configDir });
-      const claudeJson = await parseClaudeJson(jsonPath);
-
-      if (!claudeJson) {
-        issues.push({ kind: "missing_json", message: ".claude.json is missing" });
-      } else if (!claudeJson.oauthAccount?.emailAddress) {
-        issues.push({ kind: "missing_oauth", message: ".claude.json is missing oauthAccount.emailAddress" });
+    // Run tool-aware account/keychain checks
+    {
+      const accountInfo = await adapter.readAccountInfo(profile.configDir);
+      if (!accountInfo) {
+        issues.push({
+          kind: "missing_json",
+          message:
+            profile.tool === "claude"
+              ? ".claude.json is missing or missing oauthAccount.emailAddress"
+              : "auth.json is missing or id_token is unparseable",
+        });
       }
 
-      const resolvedDir = await realpath(profile.configDir).catch(() => profile.configDir);
-      const keychainService = keychainServiceForConfigDir({
-        homeDir: homedir(),
-        configDir: resolvedDir,
-      });
-      if (process.platform === "darwin" && !(await checkKeychain(keychainService))) {
-        issues.push({ kind: "missing_keychain", message: `${keychainService} not found in Keychain` });
+      if (adapter.keychainServiceName && adapter.hasKeychainCredential) {
+        const resolvedDir = await realpath(profile.configDir).catch(() => profile.configDir);
+        const keychainService = adapter.keychainServiceName({ homeDir: homedir(), configDir: resolvedDir });
+        if (!(await adapter.hasKeychainCredential(keychainService))) {
+          issues.push({ kind: "missing_keychain", message: `${keychainService} not found in Keychain` });
+        }
       }
     }
 
@@ -769,7 +771,6 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
       );
 
       const dirEntries = await readdir(profile.configDir, { withFileTypes: true }).catch(() => []);
-      const adapter = getAdapter(profile.tool);
       const isSkipped = (n: string) => shouldSkipShare(adapter, n, profile.mergeSessions ?? false);
       const symlinkItems: Array<{
         name: string;
