@@ -651,6 +651,7 @@ export async function listProfiles(): Promise<ProfileListItem[]> {
     const records = usage[id]?.records ?? [];
     return {
       name: id,
+      tool: profile.tool,
       email: profile.email,
       orgName: profile.orgName,
       configDir: profile.configDir,

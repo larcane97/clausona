@@ -48,8 +48,15 @@ export function renderList(items: ProfileListItem[]) {
   const fmt = (d: Date) => `${d.getMonth() + 1}/${d.getDate()}`;
   const range = `${fmt(weekAgo)} – ${fmt(now)}`;
 
+  // Sort: claude before codex, primary first within tool, then name ascending
+  const sorted = [...items].sort((a, b) => {
+    if (a.tool !== b.tool) return a.tool === "claude" ? -1 : 1;
+    if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
   const cols = [
-    { label: "PROFILE", w: 14 },
+    { label: "PROFILE", w: 20 },
     { label: "ACCOUNT", w: 32 },
     { label: "COST", w: 12 },
     { label: "INPUT", w: 14 },
@@ -58,17 +65,32 @@ export function renderList(items: ProfileListItem[]) {
   const headerLine = `    ${cols.map((c) => secondary(c.label.padEnd(c.w))).join("")}`;
   const sep = `    ${dimmer("─".repeat(cols.reduce((s, c) => s + c.w, 0)))}`;
 
-  const rows = items.map((item) => {
+  const hasCodex = sorted.some((item) => item.tool === "codex");
+
+  const rows = sorted.map((item) => {
     const marker = item.isActive ? accent("▸") : " ";
     const name = item.isActive ? pad(accent(item.name), cols[0].w) : item.name.padEnd(cols[0].w);
     const email = pad(item.isActive ? item.email : secondary(item.email), cols[1].w);
-    const cost = pad(styledCost(item.week.cost), cols[2].w);
-    const input = pad(styledCount(item.week.inputTokens), cols[3].w);
-    const output = styledCount(item.week.outputTokens);
+    let cost: string;
+    let input: string;
+    let output: string;
+    if (item.tool === "codex") {
+      cost = pad(dim("—"), cols[2].w);
+      input = pad(dim("—"), cols[3].w);
+      output = `${dim("—")}  *`;
+    } else {
+      cost = pad(styledCost(item.week.cost), cols[2].w);
+      input = pad(styledCount(item.week.inputTokens), cols[3].w);
+      output = styledCount(item.week.outputTokens);
+    }
     return `  ${marker} ${name}${email}${cost}${input}${output}`;
   });
 
-  return ["", `  ${dim(range)}  ${dim(localTimezoneLabel())}`, "", headerLine, sep, ...rows, ""].join("\n");
+  const footnote = hasCodex
+    ? [`  ${dim("* usage tracking not supported for codex")}`]
+    : [];
+
+  return ["", `  ${dim(range)}  ${dim(localTimezoneLabel())}`, "", headerLine, sep, ...rows, ...footnote, ""].join("\n");
 }
 
 // ─── Usage Summary ──────────────────────────────────────────────────

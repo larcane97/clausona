@@ -56,6 +56,7 @@ export type DiscoveredAccount = {
 
 export type ProfileListItem = {
   name: string;
+  tool: ToolName;
   email: string;
   orgName?: string;
   configDir: string;
