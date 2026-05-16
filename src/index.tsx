@@ -5,8 +5,8 @@ import { render } from "ink";
 import { runCommand } from "./commands.js";
 import { trackUsage } from "./core/track-usage.js";
 import { accent, fail as xMark } from "./lib/cli-style.js";
-import { loadRegistry, resolveProfileEnv } from "./lib/service.js";
 import { parseProfileRef } from "./lib/profile-ref.js";
+import { loadRegistry, resolveProfileEnv } from "./lib/service.js";
 import { App } from "./tui/App.js";
 import type { ParsedCommand } from "./types.js";
 

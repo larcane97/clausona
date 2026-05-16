@@ -1,6 +1,6 @@
 {
   "name": "clausona",
-  "version": "0.0.4-beta",
+  "version": "0.1.0",
   "private": true,
   "description": "Ink-based rewrite of clausona",
   "type": "module",

@@ -86,11 +86,11 @@ export function renderList(items: ProfileListItem[]) {
     return `  ${marker} ${name}${email}${cost}${input}${output}`;
   });
 
-  const footnote = hasCodex
-    ? [`  ${dim("* usage tracking not supported for codex")}`]
-    : [];
+  const footnote = hasCodex ? [`  ${dim("* usage tracking not supported for codex")}`] : [];
 
-  return ["", `  ${dim(range)}  ${dim(localTimezoneLabel())}`, "", headerLine, sep, ...rows, ...footnote, ""].join("\n");
+  return ["", `  ${dim(range)}  ${dim(localTimezoneLabel())}`, "", headerLine, sep, ...rows, ...footnote, ""].join(
+    "\n",
+  );
 }
 
 // ─── Usage Summary ──────────────────────────────────────────────────

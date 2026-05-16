@@ -67,9 +67,7 @@ async function readCodexAccount(configDir: string): Promise<AccountInfo | null> 
   if (!payload) return null;
 
   const email = typeof payload.email === "string" ? payload.email : null;
-  const oai = (payload["https://api.openai.com/auth"] ?? null) as
-    | { organizations?: Array<{ title?: string }> }
-    | null;
+  const oai = (payload["https://api.openai.com/auth"] ?? null) as { organizations?: Array<{ title?: string }> } | null;
   const orgName = oai?.organizations?.[0]?.title;
 
   if (email) return { email, orgName };

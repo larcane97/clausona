@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { migrateRegistryV1toV2, setActiveProfile } from "./registry.js";
 import type { Registry, RegistryV1 } from "../types.js";
+import { migrateRegistryV1toV2, setActiveProfile } from "./registry.js";
 
 describe("migrateRegistryV1toV2", () => {
   it("rewrites a v1 registry into v2 form with prefixed keys", () => {
@@ -9,7 +9,7 @@ describe("migrateRegistryV1toV2", () => {
       activeProfile: "work",
       profiles: {
         default: { configDir: "/home/x/.claude", email: "a@x", isPrimary: true },
-        work:    { configDir: "/home/x/.claude-work", email: "b@x", mergeSessions: false },
+        work: { configDir: "/home/x/.claude-work", email: "b@x", mergeSessions: false },
       },
     };
 
@@ -21,7 +21,7 @@ describe("migrateRegistryV1toV2", () => {
       activeProfiles: { claude: "claude:work" },
       profiles: {
         "claude:default": { tool: "claude", configDir: "/home/x/.claude", email: "a@x", isPrimary: true },
-        "claude:work":    { tool: "claude", configDir: "/home/x/.claude-work", email: "b@x", mergeSessions: false },
+        "claude:work": { tool: "claude", configDir: "/home/x/.claude-work", email: "b@x", mergeSessions: false },
       },
     } satisfies Registry);
   });
@@ -45,8 +45,8 @@ describe("setActiveProfile (v2)", () => {
       activeProfiles: { claude: "claude:default", codex: "codex:default" },
       profiles: {
         "claude:default": { tool: "claude", configDir: "/x/.claude", email: "a@x", isPrimary: true },
-        "claude:work":    { tool: "claude", configDir: "/x/.claude-work", email: "b@x" },
-        "codex:default":  { tool: "codex",  configDir: "/x/.codex", email: "c@x", isPrimary: true },
+        "claude:work": { tool: "claude", configDir: "/x/.claude-work", email: "b@x" },
+        "codex:default": { tool: "codex", configDir: "/x/.codex", email: "c@x", isPrimary: true },
       },
     };
     const next = setActiveProfile(reg, "claude:work");

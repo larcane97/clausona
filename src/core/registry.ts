@@ -12,10 +12,15 @@ export function migrateRegistryV1toV2(input: Registry | RegistryV1): Registry {
     profiles[newKey] = { tool: "claude", ...profile };
     if (oldName === v1.activeProfile) activeKey = newKey;
   }
+  // If activeProfile wasn't found in profiles, fall back to first profile or empty
+  if (!activeKey) {
+    const firstKey = Object.keys(profiles)[0];
+    activeKey = firstKey ?? "";
+  }
   return {
     version: 2,
     primarySources: { claude: v1.primarySource },
-    activeProfiles: { claude: activeKey || `claude:${v1.activeProfile}` },
+    activeProfiles: activeKey ? { claude: activeKey } : {},
     profiles,
   };
 }

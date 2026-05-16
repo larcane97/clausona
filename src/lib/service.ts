@@ -1,15 +1,26 @@
 import { spawn } from "node:child_process";
-import { cp, lstat, mkdir, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  cp,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  readlink,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
 import { evaluateSymlinkHealth } from "../core/doctor.js";
 import { backupDirFor, claudeJsonPathForConfigDir, keychainServiceForConfigDir } from "../core/paths.js";
-import { setActiveProfile } from "../core/registry.js";
-import { seedSeenSessions } from "../core/track-usage.js";
+import { isV1Registry, migrateRegistryV1toV2, setActiveProfile } from "../core/registry.js";
 import { renderShellInit } from "../core/shell.js";
+import { seedSeenSessions } from "../core/track-usage.js";
 import { summarizeUsage } from "../core/usage.js";
-import { profileId } from "./profile-ref.js";
 import { allAdapters, getAdapter } from "../tools/registry.js";
 import type { ToolAdapter } from "../tools/types.js";
 import type {
@@ -19,10 +30,12 @@ import type {
   Profile,
   ProfileListItem,
   Registry,
+  RegistryV1,
   ToolName,
   UsagePeriod,
   UsageStore,
 } from "../types.js";
+import { profileId } from "./profile-ref.js";
 
 /** Files inside plugins/ that contain absolute paths and must be per-profile */
 const PLUGINS_PATH_FILES = new Set(["known_marketplaces.json", "installed_plugins.json"]);
@@ -182,7 +195,13 @@ async function mergeSessionFiles(sourceDir: string, primarySource: string) {
   return merged;
 }
 
-async function setupSharedLinks(adapter: ToolAdapter, profileDir: string, primarySource: string, mergeSessions = false, backupDir?: string) {
+async function setupSharedLinks(
+  adapter: ToolAdapter,
+  profileDir: string,
+  primarySource: string,
+  mergeSessions = false,
+  backupDir?: string,
+) {
   const items = await readdir(primarySource, { withFileTypes: true });
   let linked = 0;
 
@@ -506,7 +525,9 @@ export async function discoverAccounts(): Promise<DiscoveredAccount[]> {
       if (!account) continue;
 
       const resolvedConfig = await realpath(configDir).catch(() => configDir);
-      const resolvedPrimary = await realpath(adapter.defaultConfigDir(home)).catch(() => adapter.defaultConfigDir(home));
+      const resolvedPrimary = await realpath(adapter.defaultConfigDir(home)).catch(() =>
+        adapter.defaultConfigDir(home),
+      );
       const isPrimary = resolvedConfig === resolvedPrimary;
 
       // Per-tool credential gate (Claude requires Keychain on macOS)
@@ -537,8 +558,47 @@ export async function discoverAccounts(): Promise<DiscoveredAccount[]> {
   return out;
 }
 
-export async function loadRegistry() {
-  return readJson<Registry | null>(REGISTRY_PATH, null);
+export async function loadRegistry(): Promise<Registry | null> {
+  const raw = await readJson<unknown>(REGISTRY_PATH, null);
+  if (raw === null) return null;
+  if (!isV1Registry(raw)) return raw as Registry;
+
+  // Migrate v1 → v2 in place with backups
+
+  // 1. Backup the v1 profiles.json
+  await cp(REGISTRY_PATH, `${REGISTRY_PATH}.v1.bak`).catch(() => {});
+
+  const v1 = raw as RegistryV1;
+  const migrated = migrateRegistryV1toV2(v1);
+  await writeJson(REGISTRY_PATH, migrated);
+
+  // 2. Backup directory layout migration: backups/<name>/ → backups/claude/<name>/
+  const backupsDir = path.join(CLAUSONA_DIR, "backups");
+  const backupEntries = await readdir(backupsDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of backupEntries) {
+    if (!entry.isDirectory()) continue;
+    if (entry.name === "claude" || entry.name === "codex") continue; // already-new layout
+    const src = path.join(backupsDir, entry.name);
+    const dst = path.join(backupsDir, "claude", entry.name);
+    await mkdir(path.dirname(dst), { recursive: true });
+    await rename(src, dst).catch(() => {});
+  }
+
+  // 3. Usage store key rename: <name> → claude:<name>
+  const usageRaw = await readJson<Record<string, unknown> | null>(USAGE_PATH, null);
+  if (usageRaw && Object.keys(usageRaw).some((k) => !k.includes(":"))) {
+    await cp(USAGE_PATH, `${USAGE_PATH}.v1.bak`).catch(() => {});
+    const renamed: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(usageRaw)) {
+      renamed[k.includes(":") ? k : `claude:${k}`] = v;
+    }
+    await writeJson(USAGE_PATH, renamed);
+  }
+
+  process.stderr.write(
+    "  clausona migrated registry to v2 (codex support enabled). Open a new terminal to activate the codex() wrapper.\n",
+  );
+  return migrated;
 }
 
 export async function saveRegistry(registry: Registry) {
@@ -614,12 +674,14 @@ export async function initializeRegistry(options: {
   const claudeAccounts = options.accounts.filter((a) => a.tool === "claude");
   const codexAccounts = options.accounts.filter((a) => a.tool === "codex");
   if (claudeAccounts.length > 0) {
-    const fallback = options.profileNames[claudeAccounts[0].configDir] ?? defaultProfileNameForConfigDir(claudeAccounts[0].configDir);
+    const fallback =
+      options.profileNames[claudeAccounts[0].configDir] ?? defaultProfileNameForConfigDir(claudeAccounts[0].configDir);
     const wanted = profileId("claude", options.defaultProfile);
     registry.activeProfiles.claude = registry.profiles[wanted] ? wanted : profileId("claude", fallback);
   }
   if (codexAccounts.length > 0) {
-    const fallback = options.profileNames[codexAccounts[0].configDir] ?? defaultProfileNameForConfigDir(codexAccounts[0].configDir);
+    const fallback =
+      options.profileNames[codexAccounts[0].configDir] ?? defaultProfileNameForConfigDir(codexAccounts[0].configDir);
     registry.activeProfiles.codex = profileId("codex", fallback);
   }
 
@@ -784,8 +846,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
         const targetPath = path.join(profile.configDir, entry.name);
         const stats = await lstat(targetPath);
         const isSymlink = stats.isSymbolicLink();
-        const pointsToPrimary =
-          isSymlink && (await readlink(targetPath)) === path.join(primarySource, entry.name);
+        const pointsToPrimary = isSymlink && (await readlink(targetPath)) === path.join(primarySource, entry.name);
 
         if (isSkipped(entry.name)) {
           // Items in skip set should NOT be symlinked to primary
@@ -1016,7 +1077,12 @@ async function cleanupProfile(name: string, profile: Profile) {
   }
 }
 
-export async function addProfile(options: { tool: ToolName; name: string; fromPath?: string; mergeSessions?: boolean }) {
+export async function addProfile(options: {
+  tool: ToolName;
+  name: string;
+  fromPath?: string;
+  mergeSessions?: boolean;
+}) {
   const registry = await loadRegistry();
   if (!registry) throw new Error("clausona is not initialized.");
 
@@ -1171,7 +1237,9 @@ export async function removeProfile(id: string) {
   await saveRegistry(registry);
 }
 
-export async function resolveProfileEnv(id: string): Promise<{ tool: ToolName; binary: string; configDir: string; env: NodeJS.ProcessEnv }> {
+export async function resolveProfileEnv(
+  id: string,
+): Promise<{ tool: ToolName; binary: string; configDir: string; env: NodeJS.ProcessEnv }> {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
   const profile = registry.profiles[id];

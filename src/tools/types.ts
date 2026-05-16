@@ -11,7 +11,7 @@ export type ToolAdapter = {
   configEnvVar: string;
 
   defaultConfigDir(homeDir: string): string;
-  configDirPattern: RegExp;        // e.g. /^\.claude(-.+)?$/
+  configDirPattern: RegExp; // e.g. /^\.claude(-.+)?$/
 
   readAccountInfo(configDir: string): Promise<AccountInfo | null>;
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseProfileRef, profileId } from "./profile-ref.js";
 import type { Registry } from "../types.js";
+import { parseProfileRef, profileId } from "./profile-ref.js";
 
 const REG: Registry = {
   version: 2,
@@ -8,9 +8,9 @@ const REG: Registry = {
   activeProfiles: { claude: "claude:default", codex: "codex:default" },
   profiles: {
     "claude:default": { tool: "claude", configDir: "/h/.claude", email: "a", isPrimary: true },
-    "claude:work":    { tool: "claude", configDir: "/h/.claude-work", email: "b" },
-    "codex:default":  { tool: "codex",  configDir: "/h/.codex", email: "c", isPrimary: true },
-    "codex:personal": { tool: "codex",  configDir: "/h/.codex-personal", email: "d" },
+    "claude:work": { tool: "claude", configDir: "/h/.claude-work", email: "b" },
+    "codex:default": { tool: "codex", configDir: "/h/.codex", email: "c", isPrimary: true },
+    "codex:personal": { tool: "codex", configDir: "/h/.codex-personal", email: "d" },
   },
 };
 

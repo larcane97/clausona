@@ -1671,7 +1671,11 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     return (
       <Chrome title="Initialize" hints={[]}>
         <Spinner
-          label={initState.step === "loading" ? "Scanning for Claude and Codex accounts..." : "Writing registry and symlinks..."}
+          label={
+            initState.step === "loading"
+              ? "Scanning for Claude and Codex accounts..."
+              : "Writing registry and symlinks..."
+          }
         />
       </Chrome>
     );

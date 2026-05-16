@@ -35,13 +35,16 @@ export type Registry = {
 export type RegistryV1 = {
   primarySource: string;
   activeProfile: string;
-  profiles: Record<string, {
-    configDir: string;
-    email: string;
-    orgName?: string;
-    isPrimary?: boolean;
-    mergeSessions?: boolean;
-  }>;
+  profiles: Record<
+    string,
+    {
+      configDir: string;
+      email: string;
+      orgName?: string;
+      isPrimary?: boolean;
+      mergeSessions?: boolean;
+    }
+  >;
 };
 
 export type DiscoveredAccount = {
