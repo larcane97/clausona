@@ -45,6 +45,7 @@ export type RegistryV1 = {
 };
 
 export type DiscoveredAccount = {
+  tool: ToolName;
   configDir: string;
   jsonPath: string;
   email: string;

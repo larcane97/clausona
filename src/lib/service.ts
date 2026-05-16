@@ -22,6 +22,7 @@ function sharedLinkSkipSet(mergeSessions: boolean): Set<string> {
 
 import { claudeJsonPathForConfigDir, keychainServiceForConfigDir } from "../core/paths.js";
 import { setActiveProfile } from "../core/registry.js";
+import { allAdapters } from "../tools/registry.js";
 import { renderShellInit } from "../core/shell.js";
 import { summarizeUsage } from "../core/usage.js";
 import type {
@@ -156,18 +157,6 @@ async function ensureStorage() {
   await mkdir(CLAUSONA_DIR, { recursive: true });
 }
 
-async function listConfigCandidates() {
-  const home = homedir();
-  const entries = await readdir(home, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(home, entry.name))
-    .filter((dir) => {
-      const base = path.basename(dir);
-      return base === ".claude" || base.startsWith(".claude-");
-    })
-    .sort();
-}
 
 async function mergeSessionFiles(sourceDir: string, primarySource: string) {
   const srcProjects = path.join(sourceDir, "projects");
@@ -516,39 +505,49 @@ export async function validateConfigDir(
 
 export async function discoverAccounts(): Promise<DiscoveredAccount[]> {
   const home = homedir();
-  const dirs = await listConfigCandidates();
-  const discovered: DiscoveredAccount[] = [];
+  const out: DiscoveredAccount[] = [];
 
-  for (const configDir of dirs) {
-    const jsonPath = claudeJsonPathForConfigDir({ homeDir: home, configDir });
-    const claudeJson = await parseClaudeJson(jsonPath);
-    const email = claudeJson?.oauthAccount?.emailAddress;
-    if (!email) {
-      continue;
+  const entries = await readdir(home, { withFileTypes: true });
+  for (const adapter of allAdapters()) {
+    const matchingDirs = entries
+      .filter((e) => e.isDirectory() && adapter.configDirPattern.test(e.name))
+      .map((e) => path.join(home, e.name))
+      .sort();
+
+    for (const configDir of matchingDirs) {
+      const account = await adapter.readAccountInfo(configDir);
+      if (!account) continue;
+
+      const resolvedConfig = await realpath(configDir).catch(() => configDir);
+      const resolvedPrimary = await realpath(adapter.defaultConfigDir(home)).catch(() => adapter.defaultConfigDir(home));
+      const isPrimary = resolvedConfig === resolvedPrimary;
+
+      // Per-tool credential gate (Claude requires Keychain on macOS)
+      if (adapter.keychainServiceName && adapter.hasKeychainCredential) {
+        const service = adapter.keychainServiceName({ homeDir: home, configDir: resolvedConfig });
+        if (process.platform === "darwin" && !(await adapter.hasKeychainCredential(service))) {
+          continue;
+        }
+      }
+
+      const jsonPath =
+        adapter.name === "claude"
+          ? claudeJsonPathForConfigDir({ homeDir: home, configDir })
+          : path.join(configDir, "auth.json");
+
+      out.push({
+        tool: adapter.name,
+        configDir,
+        jsonPath,
+        email: account.email,
+        orgName: account.orgName,
+        keychainService: adapter.keychainServiceName?.({ homeDir: home, configDir: resolvedConfig }) ?? "",
+        isPrimary,
+      });
     }
-
-    const resolvedConfig = await realpath(configDir).catch(() => configDir);
-    const resolvedPrimary = await realpath(path.join(home, ".claude")).catch(() => path.join(home, ".claude"));
-    const keychainService = keychainServiceForConfigDir({
-      homeDir: home,
-      configDir: resolvedConfig,
-    });
-
-    if (process.platform === "darwin" && !(await checkKeychain(keychainService))) {
-      continue;
-    }
-
-    discovered.push({
-      configDir,
-      jsonPath,
-      email,
-      orgName: claudeJson.oauthAccount?.organizationName,
-      keychainService,
-      isPrimary: resolvedConfig === resolvedPrimary,
-    });
   }
 
-  return discovered;
+  return out;
 }
 
 export async function loadRegistry() {
