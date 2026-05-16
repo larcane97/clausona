@@ -16,7 +16,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import { evaluateSymlinkHealth } from "../core/doctor.js";
-import { backupDirFor, claudeJsonPathForConfigDir, keychainServiceForConfigDir } from "../core/paths.js";
+import { backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
 import { isV1Registry, migrateRegistryV1toV2, setActiveProfile } from "../core/registry.js";
 import { renderShellInit } from "../core/shell.js";
 import { seedSeenSessions } from "../core/track-usage.js";
@@ -130,14 +130,6 @@ async function execCommand(
       resolve({ code: 1, stdout, stderr });
     });
   });
-}
-
-async function checkKeychain(service: string) {
-  if (process.platform !== "darwin") {
-    return false;
-  }
-  const result = await execCommand("security", ["find-generic-password", "-s", service], { quiet: true });
-  return result.code === 0;
 }
 
 function defaultProfileNameForConfigDir(configDir: string) {
@@ -737,37 +729,6 @@ export async function setActiveProfileByName(id: string) {
   const next = setActiveProfile(registry, id);
   await saveRegistry(next);
   return next.profiles[id];
-}
-
-export async function getCurrentProfile() {
-  const registry = await loadRegistry();
-  if (!registry) return null;
-
-  // T13: list both tools' active profiles in the CLI current command
-  // For now: prefer claude's active, fall back to codex's, then null
-  const activeId = registry.activeProfiles.claude ?? registry.activeProfiles.codex;
-  if (!activeId || !registry.profiles[activeId]) return null;
-
-  const profile = registry.profiles[activeId];
-  const now = new Date().toISOString(); // summarizeUsage interprets cutoffs in the runtime's local timezone
-  const usage = await loadUsageStore();
-  const records = usage[activeId]?.records ?? [];
-  const resolvedConfigDir = await realpath(profile.configDir).catch(() => profile.configDir);
-  const keychainService = keychainServiceForConfigDir({
-    homeDir: homedir(),
-    configDir: resolvedConfigDir,
-  });
-
-  return {
-    name: activeId,
-    ...profile,
-    keychainService,
-    hasKeychain: await checkKeychain(keychainService),
-    usage: {
-      today: summarizeUsage({ now, period: "today", records }),
-      total: summarizeUsage({ now, period: "all", records }),
-    },
-  };
 }
 
 export async function getUsageSummary(profileId_: string | null, period: UsagePeriod) {

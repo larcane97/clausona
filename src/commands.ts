@@ -19,7 +19,6 @@ import {
   addProfile,
   discoverAccounts,
   doctorProfiles,
-  getCurrentProfile,
   getUsageSummary,
   initializeRegistry,
   listProfiles,
@@ -528,7 +527,7 @@ export async function runCommand(command: string, args: string[]) {
     case "_sync-plugins": {
       const registry = await loadRegistry();
       if (!registry) return "";
-      const claudePrimary = (registry.primarySources.claude ?? process.env.HOME) ? `${process.env.HOME}/.claude` : "";
+      const claudePrimary = registry.primarySources.claude ?? path.join(process.env.HOME ?? "", ".claude");
       const configDir = process.env.CLAUDE_CONFIG_DIR ?? claudePrimary;
       await syncPluginsJson(configDir, claudePrimary).catch(() => {});
       return "";
