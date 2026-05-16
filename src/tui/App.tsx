@@ -581,7 +581,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               try {
                 for (const [dir, name] of Object.entries(nextNames)) {
                   const merge = addState.mergeSessionsMap[dir] || undefined;
-                  await addProfile({ name, fromPath: dir, mergeSessions: merge });
+                  await addProfile({ tool: "claude", name, fromPath: dir, mergeSessions: merge }); // T17: thread tool through TUI
                 }
                 setAddState((prev) =>
                   prev ? { ...prev, step: "done", message: `Added ${Object.keys(nextNames).length} profile(s)` } : null,
@@ -629,7 +629,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           void (async () => {
             try {
               const result = await suspendTuiAndRun(() =>
-                addProfile({ name, mergeSessions: addState.mergeSessions || undefined }),
+                addProfile({ tool: "claude", name, mergeSessions: addState.mergeSessions || undefined }), // T17: thread tool through TUI
               );
               setAddState((prev) =>
                 prev ? { ...prev, step: "done", message: `Added ${result.name} (${result.email})` } : null,
@@ -687,6 +687,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           void (async () => {
             try {
               const result = await addProfile({
+                tool: "claude", // T17: thread tool through TUI
                 name,
                 fromPath: addState.importAccount?.configDir,
                 mergeSessions: addState.mergeSessions || undefined,

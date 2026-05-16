@@ -450,7 +450,7 @@ export async function runCommand(command: string, args: string[]) {
       if (!name) {
         throw new Error("Usage: clausona add <name> [--from <path>] [--merge-sessions]");
       }
-      const added = await addProfile({ name, fromPath, mergeSessions: mergeSessions || undefined });
+      const added = await addProfile({ tool: "claude", name, fromPath, mergeSessions: mergeSessions || undefined }); // T13: parse tool prefix from name
       return success(`Added ${bold(added.name)} ${dim(`(${added.email})`)}`);
     }
 
@@ -461,8 +461,9 @@ export async function runCommand(command: string, args: string[]) {
     case "_sync-plugins": {
       const registry = await loadRegistry();
       if (!registry) return "";
-      const configDir = process.env.CLAUDE_CONFIG_DIR ?? registry.primarySource;
-      await syncPluginsJson(configDir, registry.primarySource).catch(() => {});
+      const claudePrimary = registry.primarySources.claude ?? process.env.HOME ? `${process.env.HOME}/.claude` : "";
+      const configDir = process.env.CLAUDE_CONFIG_DIR ?? claudePrimary;
+      await syncPluginsJson(configDir, claudePrimary).catch(() => {});
       return "";
     }
 
@@ -550,6 +551,6 @@ export async function bootstrapInitFromCurrentState() {
   return {
     accounts,
     profileNames,
-    defaultProfile: existing?.activeProfile ?? Object.values(profileNames)[0] ?? "default",
+    defaultProfile: existing?.activeProfiles?.claude ?? Object.values(profileNames)[0] ?? "default",
   };
 }

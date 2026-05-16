@@ -31,7 +31,7 @@ export async function trackUsage(profileName?: string): Promise<void> {
   const registry = await readJson<Registry | null>(REGISTRY_PATH, null);
   if (!registry) return;
 
-  const name = profileName ?? registry.activeProfile;
+  const name = profileName ?? registry.activeProfiles?.claude ?? registry.activeProfiles?.codex;
   if (!name || !registry.profiles[name]) return;
 
   const profile = registry.profiles[name];
