@@ -5,7 +5,8 @@ import { render } from "ink";
 import { runCommand } from "./commands.js";
 import { trackUsage } from "./core/track-usage.js";
 import { accent, fail as xMark } from "./lib/cli-style.js";
-import { resolveProfileEnv } from "./lib/service.js";
+import { loadRegistry, resolveProfileEnv } from "./lib/service.js";
+import { parseProfileRef } from "./lib/profile-ref.js";
 import { App } from "./tui/App.js";
 import type { ParsedCommand } from "./types.js";
 
@@ -61,13 +62,15 @@ async function main() {
 
   if (parsed.kind === "exec") {
     try {
-      const { env } = await resolveProfileEnv(parsed.profile);
-      const result = spawnSync("claude", parsed.args, {
-        stdio: "inherit",
-        env,
-      });
+      const registry = await loadRegistry();
+      if (!registry) throw new Error("clausona is not initialized.");
+      const ref = parseProfileRef(parsed.profile, registry);
+      const { binary, env } = await resolveProfileEnv(ref.id);
+      const result = spawnSync(binary, parsed.args, { stdio: "inherit", env });
       process.exitCode = result.status ?? 1;
-      await trackUsage(parsed.profile).catch(() => {});
+      if (ref.tool === "claude") {
+        await trackUsage(ref.id).catch(() => {});
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       process.stderr.write(`  ${xMark} ${message}\n`);
