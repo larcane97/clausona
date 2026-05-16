@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { claudeJsonPathForConfigDir, keychainServiceForConfigDir } from "./paths.js";
+import { backupDirFor, claudeJsonPathForConfigDir, keychainServiceForConfigDir } from "./paths.js";
 
 describe("paths", () => {
   it("uses ~/.claude.json for the primary config dir", () => {
@@ -37,5 +37,12 @@ describe("paths", () => {
         configDir: "/Users/test/.claude-work",
       }),
     ).toMatch(/^Claude Code-credentials-[a-f0-9]{8}$/);
+  });
+});
+
+describe("backupDirFor", () => {
+  it("nests by tool then name", () => {
+    expect(backupDirFor("/h/.clausona", "claude", "work")).toBe("/h/.clausona/backups/claude/work");
+    expect(backupDirFor("/h/.clausona", "codex", "personal")).toBe("/h/.clausona/backups/codex/personal");
   });
 });
