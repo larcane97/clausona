@@ -20,7 +20,7 @@ import {
   updateProfileConfig,
   validateConfigDir,
 } from "../lib/service.js";
-import type { DiscoveredAccount, DoctorProfileResult, ProfileListItem } from "../types.js";
+import type { DiscoveredAccount, DoctorProfileResult, ProfileListItem, ToolName } from "../types.js";
 import { Chrome } from "./components/Chrome.js";
 import { Divider } from "./components/Divider.js";
 import { ProfilePreview } from "./components/ProfilePreview.js";
@@ -72,11 +72,12 @@ type AddState = {
   nameIndex: number;
   importPath: string;
   importError: string | null;
-  importAccount: { configDir: string; email: string; orgName?: string } | null;
+  importAccount: { configDir: string; email: string; orgName?: string; tool: ToolName } | null;
   cursor: number;
   mergeSessions: boolean;
   mergeSessionsMap: Record<string, boolean>;
   nameField: 0 | 1;
+  selectedTool: import("../types.js").ToolName;
   message?: string;
 };
 
@@ -227,6 +228,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       mergeSessions: false,
       mergeSessionsMap: {},
       nameField: 0,
+      selectedTool: "claude",
     });
     try {
       const discovered = await discoverAccounts();
@@ -581,7 +583,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               try {
                 for (const [dir, name] of Object.entries(nextNames)) {
                   const merge = addState.mergeSessionsMap[dir] || undefined;
-                  await addProfile({ tool: "claude", name, fromPath: dir, mergeSessions: merge }); // T17: thread tool through TUI
+                  const account = addState.discoveredAccounts.find((a) => a.configDir === dir);
+                  const tool = account?.tool ?? "claude";
+                  await addProfile({ tool, name, fromPath: dir, mergeSessions: merge });
                 }
                 setAddState((prev) =>
                   prev ? { ...prev, step: "done", message: `Added ${Object.keys(nextNames).length} profile(s)` } : null,
@@ -629,7 +633,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           void (async () => {
             try {
               const result = await suspendTuiAndRun(() =>
-                addProfile({ tool: "claude", name, mergeSessions: addState.mergeSessions || undefined }), // T17: thread tool through TUI
+                addProfile({ tool: addState.selectedTool, name, mergeSessions: addState.mergeSessions || undefined }),
               );
               setAddState((prev) =>
                 prev ? { ...prev, step: "done", message: `Added ${result.name} (${result.email})` } : null,
@@ -664,7 +668,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                   ? {
                       ...prev,
                       step: "import-name",
-                      importAccount: result.account,
+                      importAccount: { ...result.account, tool: prev.selectedTool },
                       nameDraft: defaultName,
                       importError: null,
                     }
@@ -687,7 +691,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           void (async () => {
             try {
               const result = await addProfile({
-                tool: "claude", // T17: thread tool through TUI
+                tool: addState.importAccount?.tool ?? "claude",
                 name,
                 fromPath: addState.importAccount?.configDir,
                 mergeSessions: addState.mergeSessions || undefined,
@@ -1342,7 +1346,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             <SelectList
               items={profiles.map((p) => ({
                 id: p.name,
-                label: p.name,
+                label: `${p.tool}:${p.name}`,
                 detail: p.email,
                 badge: p.isActive ? "active" : undefined,
                 badgeVariant: p.isActive ? ("active" as const) : undefined,
@@ -1667,7 +1671,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     return (
       <Chrome title="Initialize" hints={[]}>
         <Spinner
-          label={initState.step === "loading" ? "Scanning for Claude accounts..." : "Writing registry and symlinks..."}
+          label={initState.step === "loading" ? "Scanning for Claude and Codex accounts..." : "Writing registry and symlinks..."}
         />
       </Chrome>
     );
@@ -1707,7 +1711,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               multi
               items={initState.accounts.map((account) => ({
                 id: account.configDir,
-                label: account.configDir.replace(homedir(), "~"),
+                label: `[${account.tool}] ${account.configDir.replace(homedir(), "~")}`,
                 detail: account.email,
                 selected: initState.selected.includes(account.configDir),
               }))}

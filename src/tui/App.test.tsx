@@ -13,6 +13,7 @@ vi.mock("../lib/service", () => ({
   listProfiles: vi.fn(async () => [
     {
       name: "default",
+      tool: "claude" as const,
       email: "default@example.com",
       configDir: "/Users/test/.claude",
       isPrimary: true,
