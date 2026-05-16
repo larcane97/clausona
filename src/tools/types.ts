@@ -22,6 +22,10 @@ export type ToolAdapter = {
   // Files/dirs under the profile's config dir that must NOT be symlinked to primary.
   sharedSkipSet(mergeSessions: boolean): Set<string>;
 
+  // Optional per-name predicate for skip patterns the Set can't express
+  // (e.g. sqlite WAL/SHM siblings of state_*.sqlite).
+  shouldSkipName?(name: string, mergeSessions: boolean): boolean;
+
   // Per-tool post-link setup (e.g. Claude's plugins JSON path-rewrite).
   postSetup?(profileDir: string, primaryDir: string): Promise<void>;
 

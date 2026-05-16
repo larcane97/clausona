@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { codexAdapter, shouldSkipForCodex } from "./codex.js";
+import { codexAdapter } from "./codex.js";
 
 function makeJwt(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
@@ -71,9 +71,9 @@ describe("codexAdapter.sharedSkipSet", () => {
     ]) {
       expect(skip.has(item), `expected skip.has("${item}") to be true`).toBe(true);
     }
-    // Prefix-pattern members — checked via shouldSkipForCodex
-    expect(shouldSkipForCodex("state_5.sqlite", false)).toBe(true);
-    expect(shouldSkipForCodex("logs_2.sqlite", false)).toBe(true);
+    // Prefix-pattern members — checked via shouldSkipName
+    expect(codexAdapter.shouldSkipName?.("state_5.sqlite", false)).toBe(true);
+    expect(codexAdapter.shouldSkipName?.("logs_2.sqlite", false)).toBe(true);
   });
 
   it("with mergeSessions=true, removes sessions/history from skip", () => {

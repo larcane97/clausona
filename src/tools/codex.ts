@@ -46,19 +46,6 @@ function buildSkipSet(mergeSessions: boolean): Set<string> {
   return set;
 }
 
-/**
- * Returns true if `name` should be isolated (not symlinked to primary) for a codex profile.
- * Handles both literal set membership and prefix-based patterns.
- */
-export function shouldSkipForCodex(name: string, mergeSessions: boolean): boolean {
-  const skip = codexAdapter.sharedSkipSet(mergeSessions);
-  if (skip.has(name)) return true;
-  for (const prefix of SKIP_PREFIXES) {
-    if (name.startsWith(prefix)) return true;
-  }
-  return false;
-}
-
 async function readCodexAccount(configDir: string): Promise<AccountInfo | null> {
   const authPath = path.join(configDir, "auth.json");
   let raw: string;
@@ -110,5 +97,6 @@ export const codexAdapter: ToolAdapter = {
   configDirPattern: /^\.codex(-.+)?$/,
   readAccountInfo: readCodexAccount,
   sharedSkipSet: buildSkipSet,
+  shouldSkipName: (name, _mergeSessions) => SKIP_PREFIXES.some((p) => name.startsWith(p)),
   runLogin: runCodexLogin,
 };
