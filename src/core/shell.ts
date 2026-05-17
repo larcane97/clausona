@@ -7,6 +7,7 @@ _clausona_resolve() {
 
   local result
   result=$(node -e "
+(function() {
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -14,11 +15,11 @@ try {
   const d = JSON.parse(fs.readFileSync('$pfile', 'utf8'));
   const tool = '$tool';
   const id = (d.activeProfiles || {})[tool] || '';
-  if (!id) { return; }
+  if (id === '') { return; }
   const profile = (d.profiles || {})[id];
-  if (!profile) { return; }
+  if (profile === undefined) { return; }
   const configDir = profile.configDir || '';
-  const isPrimary = profile.isPrimary || false;
+  const isPrimary = profile.isPrimary === true;
   const defaultDir = tool === 'claude'
     ? path.join(os.homedir(), '.claude')
     : path.join(os.homedir(), '.codex');
@@ -30,6 +31,7 @@ try {
     console.log(configDir);
   }
 } catch {}
+})();
 " 2>/dev/null)
   echo "$result"
 }

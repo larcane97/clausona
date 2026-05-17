@@ -30,4 +30,15 @@ describe("renderShellInit", () => {
   it("retains csn alias", () => {
     expect(out).toMatch(/alias csn=clausona/);
   });
+
+  it("does not use ! operator in inline node script (zsh history-expansion safe)", () => {
+    // The inline node script in _clausona_resolve must not use `!` operators
+    // because zsh history-expands them inside double-quoted strings at function
+    // definition time, corrupting the script.
+    // Extract the node -e "..." script directly from the full output.
+    // The script starts after `node -e "` and ends before `" 2>/dev/null`.
+    const nodeMatch = out.match(/node -e "([\s\S]*?)" 2>\/dev\/null/);
+    expect(nodeMatch).not.toBeNull();
+    expect(nodeMatch![1]).not.toMatch(/!/);
+  });
 });
