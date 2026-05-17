@@ -559,8 +559,11 @@ export async function loadRegistry(): Promise<Registry | null> {
 
   // Migrate v1 → v2 in place with backups
 
-  // 1. Backup the v1 profiles.json
-  await cp(REGISTRY_PATH, `${REGISTRY_PATH}.v1.bak`).catch(() => {});
+  // 1. Backup the v1 profiles.json (only if backup doesn't already exist)
+  const regBak = `${REGISTRY_PATH}.v1.bak`;
+  if (!(await exists(regBak))) {
+    await cp(REGISTRY_PATH, regBak).catch(() => {});
+  }
 
   const v1 = raw as RegistryV1;
   const migrated = migrateRegistryV1toV2(v1);
@@ -581,7 +584,10 @@ export async function loadRegistry(): Promise<Registry | null> {
   // 3. Usage store key rename: <name> → claude:<name>
   const usageRaw = await readJson<Record<string, unknown> | null>(USAGE_PATH, null);
   if (usageRaw && Object.keys(usageRaw).some((k) => !k.includes(":"))) {
-    await cp(USAGE_PATH, `${USAGE_PATH}.v1.bak`).catch(() => {});
+    const usageBak = `${USAGE_PATH}.v1.bak`;
+    if (!(await exists(usageBak))) {
+      await cp(USAGE_PATH, usageBak).catch(() => {});
+    }
     const renamed: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(usageRaw)) {
       renamed[k.includes(":") ? k : `claude:${k}`] = v;

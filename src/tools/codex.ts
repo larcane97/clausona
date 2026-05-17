@@ -61,18 +61,21 @@ async function readCodexAccount(configDir: string): Promise<AccountInfo | null> 
     return null;
   }
   const idToken = parsed.tokens?.id_token;
-  if (!idToken) return null;
+  const accountId = parsed.tokens?.account_id;
 
-  const payload = decodeJwtPayload(idToken);
-  if (!payload) return null;
+  // Try JWT id_token path first
+  if (idToken) {
+    const payload = decodeJwtPayload(idToken);
+    if (payload) {
+      const email = typeof payload.email === "string" ? payload.email : null;
+      const oai = (payload["https://api.openai.com/auth"] ?? null) as { organizations?: Array<{ title?: string }> } | null;
+      const orgName = oai?.organizations?.[0]?.title;
+      if (email) return { email, orgName };
+    }
+  }
 
-  const email = typeof payload.email === "string" ? payload.email : null;
-  const oai = (payload["https://api.openai.com/auth"] ?? null) as { organizations?: Array<{ title?: string }> } | null;
-  const orgName = oai?.organizations?.[0]?.title;
-
-  if (email) return { email, orgName };
-  // Fallback so list output is not blank.
-  if (parsed.tokens?.account_id) return { email: parsed.tokens.account_id, orgName: undefined };
+  // Fallback: use account_id (API-key auth, or JWT-without-email edge case)
+  if (accountId) return { email: accountId, orgName: undefined };
   return null;
 }
 

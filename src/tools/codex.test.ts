@@ -47,6 +47,21 @@ describe("codexAdapter.readAccountInfo", () => {
     expect(info).toBeNull();
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it("returns account_id when id_token is missing entirely (API-key auth)", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-test-"));
+    writeFileSync(
+      path.join(dir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "ApiKey",
+        OPENAI_API_KEY: "sk-...",
+        tokens: { account_id: "uuid-api-key-456" },
+      }),
+    );
+    const info = await codexAdapter.readAccountInfo(dir);
+    expect(info).toEqual({ email: "uuid-api-key-456", orgName: undefined });
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe("codexAdapter.sharedSkipSet", () => {

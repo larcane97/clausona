@@ -23,8 +23,10 @@ try {
   const defaultDir = tool === 'claude'
     ? path.join(os.homedir(), '.claude')
     : path.join(os.homedir(), '.codex');
-  const resolved = fs.realpathSync(configDir);
-  const defaultResolved = fs.realpathSync(defaultDir);
+  let resolved = configDir;
+  try { resolved = fs.realpathSync(configDir); } catch {}
+  let defaultResolved = defaultDir;
+  try { defaultResolved = fs.realpathSync(defaultDir); } catch {}
   if (isPrimary || resolved === defaultResolved) {
     console.log('__PRIMARY__');
   } else {
