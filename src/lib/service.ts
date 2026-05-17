@@ -73,9 +73,15 @@ async function readJson<T>(targetPath: string, fallback: T): Promise<T> {
   }
 }
 
+function warn(message: string): void {
+  process.stderr.write(`  warn: ${message}\n`);
+}
+
 async function writeJson(targetPath: string, value: unknown) {
   await mkdir(path.dirname(targetPath), { recursive: true });
-  await writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  const tmpPath = `${targetPath}.tmp.${process.pid}`;
+  await writeFile(tmpPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await rename(tmpPath, targetPath);
 }
 
 async function parseClaudeJson(jsonPath: string): Promise<ClaudeJson | null> {
@@ -176,8 +182,8 @@ async function mergeSessionFiles(sourceDir: string, primarySource: string) {
       try {
         await cp(path.join(srcSlug, item.name), dstItem, { recursive: true });
         merged++;
-      } catch {
-        // best-effort: skip failed items, backup has the originals
+      } catch (e) {
+        warn(`mergeSessionFiles: could not copy ${item.name}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
 
@@ -562,7 +568,9 @@ export async function loadRegistry(): Promise<Registry | null> {
   // 1. Backup the v1 profiles.json (only if backup doesn't already exist)
   const regBak = `${REGISTRY_PATH}.v1.bak`;
   if (!(await exists(regBak))) {
-    await cp(REGISTRY_PATH, regBak).catch(() => {});
+    await cp(REGISTRY_PATH, regBak).catch((e) =>
+      warn(`migration: could not backup profiles.json: ${e instanceof Error ? e.message : String(e)}`),
+    );
   }
 
   const v1 = raw as RegistryV1;
@@ -578,7 +586,9 @@ export async function loadRegistry(): Promise<Registry | null> {
     const src = path.join(backupsDir, entry.name);
     const dst = path.join(backupsDir, "claude", entry.name);
     await mkdir(path.dirname(dst), { recursive: true });
-    await rename(src, dst).catch(() => {});
+    await rename(src, dst).catch((e) =>
+      warn(`migration: could not move backup ${entry.name}: ${e instanceof Error ? e.message : String(e)}`),
+    );
   }
 
   // 3. Usage store key rename: <name> → claude:<name>
@@ -586,7 +596,9 @@ export async function loadRegistry(): Promise<Registry | null> {
   if (usageRaw && Object.keys(usageRaw).some((k) => !k.includes(":"))) {
     const usageBak = `${USAGE_PATH}.v1.bak`;
     if (!(await exists(usageBak))) {
-      await cp(USAGE_PATH, usageBak).catch(() => {});
+      await cp(USAGE_PATH, usageBak).catch((e) =>
+        warn(`migration: could not backup usage.json: ${e instanceof Error ? e.message : String(e)}`),
+      );
     }
     const renamed: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(usageRaw)) {
@@ -1052,6 +1064,10 @@ export async function addProfile(options: {
   fromPath?: string;
   mergeSessions?: boolean;
 }) {
+  if (options.name === "" || options.name.includes(":")) {
+    throw new Error(`Invalid profile name '${options.name}': must be non-empty and not contain ':'.`);
+  }
+
   const registry = await loadRegistry();
   if (!registry) throw new Error("clausona is not initialized.");
 
@@ -1072,13 +1088,22 @@ export async function addProfile(options: {
     await mkdir(backupDir, { recursive: true });
     // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
     const mergeSessions = options.mergeSessions ?? false;
-    if (mergeSessions && options.tool === "claude") {
-      await mergeSessionFiles(configDir, primarySource);
-    }
-    await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
-    if (options.tool === "claude") {
-      await mergePluginFiles(path.join(configDir, "plugins"), path.join(primarySource, "plugins"));
-      await setupPluginsDir(configDir, primarySource);
+    try {
+      if (mergeSessions && options.tool === "claude") {
+        await mergeSessionFiles(configDir, primarySource);
+      }
+      await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
+      if (options.tool === "claude") {
+        await mergePluginFiles(path.join(configDir, "plugins"), path.join(primarySource, "plugins"));
+        await setupPluginsDir(configDir, primarySource);
+      }
+    } catch (error) {
+      await cleanupProfile(options.name, { tool: options.tool, configDir, email: "", isPrimary: false }).catch(
+        () => {},
+      );
+      throw new Error(
+        `Failed to set up profile '${options.name}': ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     registry.profiles[id] = {
       tool: options.tool,
@@ -1155,9 +1180,17 @@ export async function addProfile(options: {
   // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
 
   const mergeSessions = options.mergeSessions ?? false;
-  await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
-  if (options.tool === "claude") {
-    await setupPluginsDir(configDir, primarySource);
+  try {
+    await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
+    if (options.tool === "claude") {
+      await setupPluginsDir(configDir, primarySource);
+    }
+  } catch (error) {
+    await cleanupProfile(options.name, { tool: options.tool, configDir, email: "", isPrimary: false }).catch(() => {});
+    await rm(configDir, { force: true, recursive: true }).catch(() => {});
+    throw new Error(
+      `Failed to set up profile '${options.name}': ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   registry.profiles[id] = {
     tool: options.tool,
@@ -1203,6 +1236,11 @@ export async function removeProfile(id: string) {
       delete registry.activeProfiles[profile.tool];
     }
   }
+  // Clean primarySources if no profile of this tool remains
+  const anyLeftForTool = Object.values(registry.profiles).some((p) => p.tool === profile.tool);
+  if (!anyLeftForTool) {
+    delete registry.primarySources[profile.tool];
+  }
   await saveRegistry(registry);
 }
 
@@ -1221,7 +1259,9 @@ export async function resolveProfileEnv(
   }
   if (profile.tool === "claude") {
     const primary = registry.primarySources.claude ?? adapter.defaultConfigDir(homedir());
-    await syncPluginsJson(profile.configDir, primary).catch(() => {});
+    await syncPluginsJson(profile.configDir, primary).catch((e) =>
+      warn(`syncPluginsJson: ${e instanceof Error ? e.message : String(e)}`),
+    );
   }
   return { tool: profile.tool, binary: adapter.binary, configDir: profile.configDir, env };
 }
@@ -1243,8 +1283,8 @@ export async function uninstallClausona() {
         const name = id.split(":").slice(1).join(":");
         await cleanupProfile(name, profile);
         removed.push(`profile: ${id} (symlinks stripped, data preserved at ${profile.configDir.replace(home, "~")})`);
-      } catch {
-        // best-effort
+      } catch (e) {
+        warn(`uninstall: could not clean up profile ${id}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
   }

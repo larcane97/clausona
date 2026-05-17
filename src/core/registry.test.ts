@@ -53,3 +53,69 @@ describe("setActiveProfile (v2)", () => {
     expect(next.activeProfiles).toEqual({ claude: "claude:work", codex: "codex:default" });
   });
 });
+
+describe("removeProfile primarySources cleanup (F2)", () => {
+  it("clears primarySources[tool] when the last profile of that tool is removed", () => {
+    // Simulate the registry mutation logic from removeProfile
+    const registry: Registry = {
+      version: 2,
+      primarySources: { claude: "/x/.claude", codex: "/x/.codex" },
+      activeProfiles: { claude: "claude:default", codex: "codex:personal" },
+      profiles: {
+        "claude:default": { tool: "claude", configDir: "/x/.claude", email: "a@x", isPrimary: true },
+        "codex:personal": { tool: "codex", configDir: "/x/.codex-personal", email: "b@x" },
+      },
+    };
+
+    const id = "codex:personal";
+    const profile = registry.profiles[id];
+    delete registry.profiles[id];
+    if (registry.activeProfiles[profile.tool] === id) {
+      const otherKey = Object.keys(registry.profiles).find((k) => registry.profiles[k].tool === profile.tool);
+      if (otherKey) {
+        registry.activeProfiles[profile.tool] = otherKey;
+      } else {
+        delete registry.activeProfiles[profile.tool];
+      }
+    }
+    const anyLeftForTool = Object.values(registry.profiles).some((p) => p.tool === profile.tool);
+    if (!anyLeftForTool) {
+      delete registry.primarySources[profile.tool];
+    }
+
+    expect(registry.primarySources).not.toHaveProperty("codex");
+    expect(registry.primarySources).toHaveProperty("claude");
+    expect(registry.activeProfiles).not.toHaveProperty("codex");
+  });
+
+  it("keeps primarySources[tool] when another profile of that tool remains", () => {
+    const registry: Registry = {
+      version: 2,
+      primarySources: { claude: "/x/.claude" },
+      activeProfiles: { claude: "claude:work" },
+      profiles: {
+        "claude:default": { tool: "claude", configDir: "/x/.claude", email: "a@x", isPrimary: true },
+        "claude:work": { tool: "claude", configDir: "/x/.claude-work", email: "b@x" },
+      },
+    };
+
+    const id = "claude:work";
+    const profile = registry.profiles[id];
+    delete registry.profiles[id];
+    if (registry.activeProfiles[profile.tool] === id) {
+      const otherKey = Object.keys(registry.profiles).find((k) => registry.profiles[k].tool === profile.tool);
+      if (otherKey) {
+        registry.activeProfiles[profile.tool] = otherKey;
+      } else {
+        delete registry.activeProfiles[profile.tool];
+      }
+    }
+    const anyLeftForTool = Object.values(registry.profiles).some((p) => p.tool === profile.tool);
+    if (!anyLeftForTool) {
+      delete registry.primarySources[profile.tool];
+    }
+
+    expect(registry.primarySources).toHaveProperty("claude");
+    expect(registry.activeProfiles.claude).toBe("claude:default");
+  });
+});

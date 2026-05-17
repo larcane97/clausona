@@ -1,19 +1,8 @@
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { trackUsage } from "./core/track-usage.js";
-import {
-  accent,
-  bold,
-  box,
-  dim,
-  green,
-  helpSection,
-  helpUsage,
-  secondary,
-  styledCost,
-  success,
-} from "./lib/cli-style.js";
-import { localTimezoneLabel, renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
+import { accent, bold, box, dim, helpSection, helpUsage, secondary, success } from "./lib/cli-style.js";
+import { renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
 import { parseProfileRef, profileId } from "./lib/profile-ref.js";
 import {
   addProfile,
@@ -410,7 +399,14 @@ export async function runCommand(command: string, args: string[]) {
     case "usage": {
       const [input] = args.filter((arg) => !arg.startsWith("--"));
       const periodArg = args.find((arg) => arg.startsWith("--period="));
-      const period = (periodArg?.split("=")[1] as "today" | "week" | "month" | "all" | undefined) ?? "today";
+      const periodValue = periodArg?.split("=")[1];
+      const period: "today" | "week" | "month" | "all" = (() => {
+        if (!periodValue) return "today";
+        if (periodValue === "today" || periodValue === "week" || periodValue === "month" || periodValue === "all") {
+          return periodValue;
+        }
+        throw new Error(`Invalid --period value '${periodValue}'. Use: today | week | month | all.`);
+      })();
 
       let id: string | null = null;
       if (input) {
@@ -514,6 +510,13 @@ export async function runCommand(command: string, args: string[]) {
         }
         tool = configured[0];
         name = input;
+      }
+
+      if (!name) {
+        throw new Error("Profile name cannot be empty.");
+      }
+      if (name.includes(":")) {
+        throw new Error(`Profile name '${name}' cannot contain ':'.`);
       }
 
       const added = await addProfile({ tool, name, fromPath, mergeSessions: mergeSessions || undefined });

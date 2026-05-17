@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Registry } from "../types.js";
 import { parseProfileRef, profileId } from "./profile-ref.js";
+import { addProfile } from "./service.js";
 
 const REG: Registry = {
   version: 2,
@@ -46,5 +47,15 @@ describe("parseProfileRef", () => {
 describe("profileId", () => {
   it("composes tool:name", () => {
     expect(profileId("codex", "work")).toBe("codex:work");
+  });
+});
+
+describe("addProfile name validation (F3)", () => {
+  it("rejects a name containing ':'", async () => {
+    await expect(addProfile({ tool: "claude", name: "foo:bar" })).rejects.toThrow(/invalid profile name/i);
+  });
+
+  it("rejects an empty name", async () => {
+    await expect(addProfile({ tool: "claude", name: "" })).rejects.toThrow(/invalid profile name.*non-empty/i);
   });
 });
