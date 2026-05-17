@@ -367,10 +367,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           resetAddState();
         } else if (addState.step === "login-tool") {
           setAddState((prev) => (prev ? { ...prev, step: "method", cursor: 0 } : null));
-        } else if (
-          addState.step === "discover-select" ||
-          addState.step === "import-path"
-        ) {
+        } else if (addState.step === "discover-select" || addState.step === "import-path") {
           setAddState((prev) => (prev ? { ...prev, step: "method", cursor: 0 } : null));
         } else if (addState.step === "login-name") {
           setAddState((prev) => (prev ? { ...prev, step: "login-tool", cursor: 0 } : null));
@@ -578,7 +575,10 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           const currentAccount = addState.discoveredAccounts.find((a) => a.configDir === currentDir);
           const currentTool = currentAccount?.tool ?? "claude";
           const newDiscoverId = profileId(currentTool, trimmed);
-          if (profiles.some((p) => p.name === newDiscoverId) || Object.values(addState.profileNames).includes(trimmed)) {
+          if (
+            profiles.some((p) => p.name === newDiscoverId) ||
+            Object.values(addState.profileNames).includes(trimmed)
+          ) {
             setAddState((prev) => (prev ? { ...prev, message: `Profile "${trimmed}" already exists` } : null));
             return;
           }
@@ -633,9 +633,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         if (addState.step === "login-tool") {
           const tools = ["claude", "codex"] as const;
           if (key.upArrow) {
-            setAddState((prev) =>
-              prev ? { ...prev, cursor: (prev.cursor - 1 + tools.length) % tools.length } : null,
-            );
+            setAddState((prev) => (prev ? { ...prev, cursor: (prev.cursor - 1 + tools.length) % tools.length } : null));
           } else if (key.downArrow) {
             setAddState((prev) => (prev ? { ...prev, cursor: (prev.cursor + 1) % tools.length } : null));
           } else if (key.return) {

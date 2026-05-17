@@ -1,7 +1,7 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 import { renderShellInit } from "./shell.js";
@@ -46,10 +46,7 @@ describeIfZsh("_clausona_resolve (real zsh integration)", () => {
     mkdirSync(claudeDir, { recursive: true });
     mkdirSync(workDir, { recursive: true });
 
-    const script = renderShellInit().replace(
-      '"$HOME/.clausona/profiles.json"',
-      `"${profilesPath}"`,
-    );
+    const script = renderShellInit().replace('"$HOME/.clausona/profiles.json"', `"${profilesPath}"`);
     const result = runZsh(`${script}\nHOME=${tmpDir} _clausona_resolve claude`);
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(workDir);
@@ -77,10 +74,7 @@ describeIfZsh("_clausona_resolve (real zsh integration)", () => {
 
     mkdirSync(claudeDir, { recursive: true });
 
-    const script = renderShellInit().replace(
-      '"$HOME/.clausona/profiles.json"',
-      `"${profilesPath}"`,
-    );
+    const script = renderShellInit().replace('"$HOME/.clausona/profiles.json"', `"${profilesPath}"`);
     const result = runZsh(`${script}\nHOME=${tmpDir} _clausona_resolve claude`);
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("__PRIMARY__");
@@ -98,10 +92,7 @@ describeIfZsh("_clausona_resolve (real zsh integration)", () => {
       profiles: {},
     });
 
-    const script = renderShellInit().replace(
-      '"$HOME/.clausona/profiles.json"',
-      `"${profilesPath}"`,
-    );
+    const script = renderShellInit().replace('"$HOME/.clausona/profiles.json"', `"${profilesPath}"`);
     const result = runZsh(`${script}\nHOME=${tmpDir} _clausona_resolve codex`);
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("");
@@ -133,10 +124,7 @@ describeIfZsh("_clausona_resolve (real zsh integration)", () => {
     mkdirSync(codexDir, { recursive: true });
     mkdirSync(codexWorkDir, { recursive: true });
 
-    const script = renderShellInit().replace(
-      '"$HOME/.clausona/profiles.json"',
-      `"${profilesPath}"`,
-    );
+    const script = renderShellInit().replace('"$HOME/.clausona/profiles.json"', `"${profilesPath}"`);
     const result = runZsh(`${script}\nHOME=${tmpDir} _clausona_resolve codex`);
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(codexWorkDir);

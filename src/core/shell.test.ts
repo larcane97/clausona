@@ -39,6 +39,6 @@ describe("renderShellInit", () => {
     // The script starts after `node -e "` and ends before `" 2>/dev/null`.
     const nodeMatch = out.match(/node -e "([\s\S]*?)" 2>\/dev\/null/);
     expect(nodeMatch).not.toBeNull();
-    expect(nodeMatch![1]).not.toMatch(/!/);
+    expect(nodeMatch?.[1]).not.toMatch(/!/);
   });
 });

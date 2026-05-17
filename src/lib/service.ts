@@ -44,17 +44,6 @@ const CLAUSONA_DIR = path.join(homedir(), ".clausona");
 const REGISTRY_PATH = path.join(CLAUSONA_DIR, "profiles.json");
 const USAGE_PATH = path.join(CLAUSONA_DIR, "usage.json");
 
-type ClaudeJson = {
-  oauthAccount?: {
-    emailAddress?: string;
-    organizationName?: string;
-    displayName?: string;
-  };
-  lastCost?: number;
-  lastTotalInputTokens?: number;
-  lastTotalOutputTokens?: number;
-};
-
 async function exists(targetPath: string) {
   try {
     await lstat(targetPath);
@@ -82,14 +71,6 @@ async function writeJson(targetPath: string, value: unknown) {
   const tmpPath = `${targetPath}.tmp.${process.pid}`;
   await writeFile(tmpPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   await rename(tmpPath, targetPath);
-}
-
-async function parseClaudeJson(jsonPath: string): Promise<ClaudeJson | null> {
-  if (!(await exists(jsonPath))) {
-    return null;
-  }
-
-  return readJson<ClaudeJson | null>(jsonPath, null);
 }
 
 async function execCommand(
@@ -669,7 +650,10 @@ export async function initializeRegistry(options: {
         // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
       }
       const adapter = getAdapter(account.tool);
-      const primary = primarySources[account.tool]!;
+      const primary = primarySources[account.tool];
+      if (!primary) {
+        throw new Error(`primarySource for ${account.tool} not set — registry build invariant violated`);
+      }
       if (merge && account.tool === "claude") {
         await mergeSessionFiles(account.configDir, primary);
       }
