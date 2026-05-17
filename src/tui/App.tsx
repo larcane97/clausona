@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { bootstrapInitFromCurrentState } from "../commands.js";
 import { formatCount, formatCurrency, localTimezoneLabel } from "../lib/format.js";
+import { profileId } from "../lib/profile-ref.js";
 import {
   addProfile,
   discoverAccounts,
@@ -574,7 +575,10 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           if (!currentDir) return;
           const trimmed = addState.nameDraft.trim() || "profile";
           // Check for duplicate name
-          if (profiles.some((p) => p.name === trimmed) || Object.values(addState.profileNames).includes(trimmed)) {
+          const currentAccount = addState.discoveredAccounts.find((a) => a.configDir === currentDir);
+          const currentTool = currentAccount?.tool ?? "claude";
+          const newDiscoverId = profileId(currentTool, trimmed);
+          if (profiles.some((p) => p.name === newDiscoverId) || Object.values(addState.profileNames).includes(trimmed)) {
             setAddState((prev) => (prev ? { ...prev, message: `Profile "${trimmed}" already exists` } : null));
             return;
           }
@@ -645,7 +649,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         if (addState.step === "login-name" && key.return) {
           const name = addState.nameDraft.trim();
           if (!name) return;
-          if (profiles.some((p) => p.name === name)) {
+          const newLoginId = profileId(addState.selectedTool, name);
+          if (profiles.some((p) => p.name === newLoginId)) {
             setAddState((prev) => (prev ? { ...prev, message: `Profile "${name}" already exists` } : null));
             return;
           }
@@ -703,7 +708,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         if (addState.step === "import-name" && key.return) {
           const name = addState.nameDraft.trim();
           if (!name || !addState.importAccount) return;
-          if (profiles.some((p) => p.name === name)) {
+          const newImportId = profileId(addState.importAccount.tool, name);
+          if (profiles.some((p) => p.name === newImportId)) {
             setAddState((prev) => (prev ? { ...prev, message: `Profile "${name}" already exists` } : null));
             return;
           }
@@ -1385,7 +1391,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             <SelectList
               items={profiles.map((p) => ({
                 id: p.name,
-                label: `${p.tool}:${p.name}`,
+                label: p.name,
                 detail: p.email,
                 badge: p.isActive ? "active" : undefined,
                 badgeVariant: p.isActive ? ("active" as const) : undefined,
