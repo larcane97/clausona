@@ -647,8 +647,8 @@ export async function initializeRegistry(options: {
       const merge = mergeSessions ?? false;
       const backupDir = backupDirFor(CLAUSONA_DIR, account.tool, baseName);
       if (!(await exists(backupDir))) {
-        await mkdir(path.dirname(backupDir), { recursive: true });
-        await cp(account.configDir, backupDir, { recursive: true });
+        await mkdir(backupDir, { recursive: true });
+        // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
       }
       const adapter = getAdapter(account.tool);
       const primary = primarySources[account.tool]!;
@@ -1063,8 +1063,8 @@ export async function addProfile(options: {
 
     const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);
     await rm(backupDir, { force: true, recursive: true });
-    await mkdir(path.dirname(backupDir), { recursive: true });
-    await cp(configDir, backupDir, { recursive: true });
+    await mkdir(backupDir, { recursive: true });
+    // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
     const mergeSessions = options.mergeSessions ?? false;
     if (mergeSessions && options.tool === "claude") {
       await mergeSessionFiles(configDir, primarySource);
@@ -1145,8 +1145,8 @@ export async function addProfile(options: {
 
   const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);
   await rm(backupDir, { force: true, recursive: true });
-  await mkdir(path.dirname(backupDir), { recursive: true });
-  await cp(configDir, backupDir, { recursive: true });
+  await mkdir(backupDir, { recursive: true });
+  // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
 
   const mergeSessions = options.mergeSessions ?? false;
   await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
