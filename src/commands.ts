@@ -226,18 +226,19 @@ function subcommandHelpText(command: string): string | undefined {
     case "run":
       return [
         "",
-        `  ${accent("clausona run")} ${dim("— Run Claude Code with a specific profile")}`,
+        `  ${accent("clausona run")} ${dim("— Run the CLI with a specific profile")}`,
         "",
         `  ${bold("USAGE")}`,
-        helpUsage("clausona run <profile> [claude-args...]"),
+        helpUsage("clausona run <profile> [-- args...]"),
         "",
         `  ${bold("ARGUMENTS")}`,
         `    ${accent("profile".padEnd(14))}${dim("Profile to use (overrides shell-init env)")}`,
-        `    ${accent("claude-args".padEnd(14))}${dim("Arguments passed through to claude")}`,
+        `    ${accent("args".padEnd(14))}${dim("Arguments passed through to the tool's CLI")}`,
         "",
         `  ${bold("EXAMPLES")}`,
-        `    ${dim("clausona run work")}`,
-        `    ${dim("clausona run personal -p /path/to/project")}`,
+        `    ${dim("clausona run claude:work")}`,
+        `    ${dim("clausona run claude:personal -p /path/to/project")}`,
+        `    ${dim("clausona run codex:personal -- 'review this'")}`,
         "",
       ].join("\n");
 
@@ -285,13 +286,13 @@ function subcommandHelpText(command: string): string | undefined {
 function usageText() {
   return [
     "",
-    `  ${bold("clausona")} ${dim("— Claude Code profile manager")}`,
+    `  ${bold("clausona")} ${dim("— Claude Code and Codex CLI profile manager")}`,
     "",
     `  ${bold("USAGE")}`,
     `    clausona ${accent("[command]")}`,
     "",
     helpSection("COMMANDS", [
-      ["run <profile>", "Run Claude Code with a specific profile"],
+      ["run <profile>", "Run the CLI with a specific profile"],
       ["init", "Discover accounts interactively"],
       ["add <profile>", "Add a new profile"],
       ["use [profile]", "Switch active profile"],

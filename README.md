@@ -8,15 +8,16 @@
 
 ## Why
 
-You have multiple Claude Code accounts (personal, work, different orgs), but switching between them on a single machine is tedious:
+You have multiple Claude Code or OpenAI Codex CLI accounts (personal, work, different orgs), but switching between them on a single machine is tedious:
 
-- **Switching is manual.** You need to log out, log back in, or juggle `CLAUDE_CONFIG_DIR` yourself.
+- **Switching is manual.** You need to log out, log back in, or juggle `CLAUDE_CONFIG_DIR` (Claude) or `CODEX_HOME` (Codex) yourself.
 - **Settings don't carry over.** Each account gets its own config directory, so your MCP servers, plugins, permissions, and settings have to be set up from scratch — every time.
 
 clausona fixes both. Switch profiles with one command — your entire environment carries over.
 
 ```bash
-csn use work     # switch to work account — done
+csn use work             # switch to work account — done
+csn use codex:personal   # switch to your personal codex account too
 ```
 
 No re-login. No reinstalling plugins. Just switch and go.
@@ -26,15 +27,17 @@ No re-login. No reinstalling plugins. Just switch and go.
 ## Features
 
 - **One-command switching** — `clausona use <name>` and you're on a different account
-- **Shared environment** — MCP servers, plugins, permissions, and settings are symlinked across all profiles. Set up once, use everywhere.
-- **Pure Claude Code** — no wrapping, no proxying, no background process. Claude Code runs directly and unmodified. Fully compatible with oh-my-claudecode, Cline, and any other tool in your stack.
+- **Shared environment** — MCP servers, plugins, permissions, settings (Claude) and config.toml, skills, hooks (Codex) are symlinked across profiles within each tool. Set up once, use everywhere.
+- **Pure CLI passthrough** — no wrapping, no proxying, no background process. `claude` and `codex` run directly and unmodified. Compatible with oh-my-claudecode, Cline, codex plugins, and any other tool in your stack.
 - **Lightweight** — a single shell hook and a few symlinks. No daemon, no server, no runtime overhead.
-- **Usage tracking** — per-profile cost and token usage, tracked locally
+- **Usage tracking** — per-profile cost and token usage, tracked locally (Claude only in v0.1)
 - **Interactive dashboard** — TUI for managing profiles, viewing usage, and running health checks
 
 ## Install
 
-**Requirements:** Node.js >= 20, [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
+**Requirements:** Node.js >= 20, and at least one of:
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
+- [OpenAI Codex CLI](https://github.com/openai/codex)
 
 **Platform:** macOS, zsh
 
@@ -98,10 +101,12 @@ codex              ← wrapper sets CODEX_HOME, then runs codex
 
 ### Shared Environment
 
-When you register a new profile, clausona symlinks shared resources from your primary `~/.claude` into the new profile's config directory:
+When you register a new profile, clausona symlinks shared resources from your primary config directory into the new profile's config directory.
+
+**Claude profile** (`clausona add claude:work`):
 
 ```
-~/.claude-work/            (new profile)
+~/.claude-work/            (new claude profile)
 ├── .claude.json           ← own auth credentials (NOT shared)
 ├── projects/              ← own session history (NOT shared by default)
 ├── mcp-servers/  →  ~/.claude/mcp-servers    (symlink to primary)
@@ -110,15 +115,23 @@ When you register a new profile, clausona symlinks shared resources from your pr
 └── ...
 ```
 
-Only `.claude.json` stays profile-specific. Everything else is shared automatically.
+**Codex profile** (`clausona add codex:work`):
 
-**Session separation** is the default: each profile keeps its own `projects/` directory, so `/resume` only shows that profile's conversations. To share session history across profiles, pass `--merge-sessions` when adding or initializing.
+```
+~/.codex-work/             (new codex profile)
+├── auth.json              ← own credentials (NOT shared)
+├── sessions/              ← own conversation history (NOT shared)
+├── history.jsonl          ← own input history (NOT shared)
+├── state_*.sqlite         ← own state DB (NOT shared)
+├── config.toml  →  ~/.codex/config.toml      (symlink to primary)
+├── skills/      →  ~/.codex/skills           (symlink to primary)
+├── plugins/cache/ → ~/.codex/plugins/cache   (symlink to primary)
+└── ...
+```
 
-### Codex Support
+The private set is larger for codex (state DB, input history, logs) but the principle is the same: credentials and session data stay profile-specific; everything else is shared.
 
-clausona also manages OpenAI Codex CLI profiles. Codex uses `CODEX_HOME` (analogous to Claude's `CLAUDE_CONFIG_DIR`) and stores credentials in `<configDir>/auth.json`. The `codex()` shell wrapper applies the active codex profile before each `codex` invocation. Each profile preserves its own conversation history (`codex resume` shows only that profile's sessions).
-
-Usage tracking is currently Claude-only.
+**Session separation** is the default: each profile keeps its own session directory, so `/resume` (Claude) and `codex resume` (Codex) only show that profile's conversations. To share session history across claude profiles, pass `--merge-sessions` when adding or initializing.
 
 ### Data Storage
 
