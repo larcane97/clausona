@@ -484,21 +484,23 @@ async function setupPluginsDir(profileDir: string, primarySource: string): Promi
 export async function validateConfigDir(
   inputPath: string,
   registeredDirs: string[],
-): Promise<{ error: string } | { account: { configDir: string; email: string; orgName?: string } }> {
+): Promise<{ error: string } | { account: { tool: ToolName; configDir: string; email: string; orgName?: string } }> {
   const configDir = inputPath.replace(/^~(?=$|\/)/, homedir());
   if (!(await exists(configDir))) {
     return { error: "Directory not found" };
   }
-  const jsonPath = claudeJsonPathForConfigDir({ homeDir: homedir(), configDir });
-  const claudeJson = await parseClaudeJson(jsonPath);
-  const email = claudeJson?.oauthAccount?.emailAddress;
-  if (!email) {
-    return { error: "No valid .claude.json with oauthAccount found" };
-  }
   if (registeredDirs.includes(configDir)) {
     return { error: "This directory is already registered" };
   }
-  return { account: { configDir, email, orgName: claudeJson.oauthAccount?.organizationName } };
+
+  for (const adapter of allAdapters()) {
+    const account = await adapter.readAccountInfo(configDir);
+    if (account) {
+      return { account: { tool: adapter.name, configDir, email: account.email, orgName: account.orgName } };
+    }
+  }
+
+  return { error: "No valid Claude or Codex account found at this path" };
 }
 
 export async function discoverAccounts(): Promise<DiscoveredAccount[]> {

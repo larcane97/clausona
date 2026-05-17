@@ -56,6 +56,7 @@ type AddStep =
   | "method"
   | "discover-select"
   | "discover-name"
+  | "login-tool"
   | "login-name"
   | "import-path"
   | "import-name"
@@ -363,12 +364,15 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       if (screen === "use" && addState) {
         if (addState.step === "method" || addState.step === "done" || addState.step === "error") {
           resetAddState();
+        } else if (addState.step === "login-tool") {
+          setAddState((prev) => (prev ? { ...prev, step: "method", cursor: 0 } : null));
         } else if (
           addState.step === "discover-select" ||
-          addState.step === "login-name" ||
           addState.step === "import-path"
         ) {
           setAddState((prev) => (prev ? { ...prev, step: "method", cursor: 0 } : null));
+        } else if (addState.step === "login-name") {
+          setAddState((prev) => (prev ? { ...prev, step: "login-tool", cursor: 0 } : null));
         } else if (addState.step === "discover-name") {
           setAddState((prev) => (prev ? { ...prev, step: "discover-select", cursor: 0 } : null));
         } else if (addState.step === "import-name") {
@@ -484,7 +488,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                 );
               }
             } else if (selected === "login") {
-              setAddState((prev) => (prev ? { ...prev, step: "login-name", nameDraft: "" } : null));
+              setAddState((prev) => (prev ? { ...prev, step: "login-tool", cursor: 0 } : null));
             } else if (selected === "import") {
               setAddState((prev) =>
                 prev ? { ...prev, step: "import-path", importPath: "", importError: null } : null,
@@ -621,6 +625,22 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           return;
         }
 
+        // Login tool picker
+        if (addState.step === "login-tool") {
+          const tools = ["claude", "codex"] as const;
+          if (key.upArrow) {
+            setAddState((prev) =>
+              prev ? { ...prev, cursor: (prev.cursor - 1 + tools.length) % tools.length } : null,
+            );
+          } else if (key.downArrow) {
+            setAddState((prev) => (prev ? { ...prev, cursor: (prev.cursor + 1) % tools.length } : null));
+          } else if (key.return) {
+            const tool = tools[addState.cursor];
+            setAddState((prev) => (prev ? { ...prev, selectedTool: tool, step: "login-name", nameDraft: "" } : null));
+          }
+          return;
+        }
+
         // Login name
         if (addState.step === "login-name" && key.return) {
           const name = addState.nameDraft.trim();
@@ -668,7 +688,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                   ? {
                       ...prev,
                       step: "import-name",
-                      importAccount: { ...result.account, tool: prev.selectedTool },
+                      importAccount: result.account,
                       nameDraft: defaultName,
                       importError: null,
                     }
@@ -1185,6 +1205,25 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                 <Text color={isMerged ? color.warning : color.text}>{isMerged ? "merged" : "separated"}</Text>
                 {addState.nameField === 1 && <Text color={color.muted}> (space to toggle)</Text>}
               </Box>
+            </Box>
+          </Chrome>
+        );
+      }
+
+      if (addState.step === "login-tool") {
+        const tools = ["claude", "codex"] as const;
+        return (
+          <Chrome title="Add Profile" subtitle="Choose tool" hints={selectHints}>
+            <Box flexDirection="column" borderStyle="round" borderColor={color.dim} paddingX={2} paddingY={1}>
+              <SelectList
+                items={tools.map((tool, i) => ({
+                  id: tool,
+                  label: tool,
+                  detail: tool === "claude" ? "Claude by Anthropic" : "Codex by OpenAI",
+                  selected: i === addState.cursor,
+                }))}
+                index={addState.cursor}
+              />
             </Box>
           </Chrome>
         );
