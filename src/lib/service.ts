@@ -193,7 +193,7 @@ async function mergeSessionFiles(sourceDir: string, primarySource: string) {
   return merged;
 }
 
-async function setupSharedLinks(
+export async function setupSharedLinks(
   adapter: ToolAdapter,
   profileDir: string,
   primarySource: string,
