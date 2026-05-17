@@ -151,7 +151,7 @@ All data stays local on your machine.
 
 ## Migration from 0.0.x
 
-clausona 0.1.0 introduces multi-tool support. On first launch, the registry at `~/.clausona/profiles.json` is automatically migrated to v2 format:
+clausona 0.1.0-beta introduces multi-tool support. On first launch, the registry at `~/.clausona/profiles.json` is automatically migrated to v2 format:
 
 - Profile names are prefixed with their tool: `work` → `claude:work`
 - Per-tool active profiles, per-tool primary sources

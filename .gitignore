@@ -1,7 +1,9 @@
 node_modules/
+node_modules
 dist/
 .omc/
 .claude/
+docs/superpowers/
 *.local
 *.local.*
 .DS_Store
