@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { renderShellInit } from "./shell.js";
+import { renderPosixShellInit, renderPowerShellInit, renderShellInit } from "./shell.js";
 
 describe("renderShellInit", () => {
-  const out = renderShellInit();
+  const out = renderPosixShellInit();
 
   it("defines _clausona_resolve helper that takes a tool argument", () => {
     expect(out).toMatch(/_clausona_resolve\(\)\s*\{/);
@@ -40,5 +40,32 @@ describe("renderShellInit", () => {
     const nodeMatch = out.match(/node -e "([\s\S]*?)" 2>\/dev\/null/);
     expect(nodeMatch).not.toBeNull();
     expect(nodeMatch?.[1]).not.toMatch(/!/);
+  });
+
+  it("selects PowerShell integration on Windows", () => {
+    expect(renderShellInit("win32")).toBe(renderPowerShellInit());
+  });
+});
+
+describe("renderPowerShellInit", () => {
+  const out = renderPowerShellInit();
+
+  it("defines wrappers for Claude and Codex with their profile environment variables", () => {
+    expect(out).toMatch(/function global:claude/);
+    expect(out).toMatch(/CLAUDE_CONFIG_DIR/);
+    expect(out).toMatch(/function global:codex/);
+    expect(out).toMatch(/CODEX_HOME/);
+  });
+
+  it("resolves active profiles from the clausona registry", () => {
+    expect(out).toContain('Join-Path $HOME ".clausona\\profiles.json"');
+    expect(out).toMatch(/Get-ClausonaProfileDir -Tool claude/);
+    expect(out).toMatch(/Get-ClausonaProfileDir -Tool codex/);
+  });
+
+  it("restores pre-existing environment variables and keeps the csn alias", () => {
+    expect(out).toMatch(/\$previousConfig = \$env:CLAUDE_CONFIG_DIR/);
+    expect(out).toMatch(/\$env:CLAUDE_CONFIG_DIR = \$previousConfig/);
+    expect(out).toMatch(/Set-Alias -Name csn -Value clausona -Scope Global/);
   });
 });

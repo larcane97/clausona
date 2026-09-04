@@ -1,24 +1,13 @@
-import { spawn } from "node:child_process";
-import {
-  cp,
-  lstat,
-  mkdir,
-  readdir,
-  readFile,
-  readlink,
-  realpath,
-  rename,
-  rm,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
+import { cp, lstat, mkdir, readdir, readFile, readlink, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
 import { evaluateSymlinkHealth } from "../core/doctor.js";
 import { backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
+import { spawnCommand } from "../core/process.js";
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
 import { isV1Registry, migrateRegistryV1toV2, setActiveProfile } from "../core/registry.js";
+import { createSharedLink, inspectSharedLink } from "../core/shared-links.js";
 import { renderShellInit } from "../core/shell.js";
 import { seedSeenSessions } from "../core/track-usage.js";
 import { summarizeUsage } from "../core/usage.js";
@@ -82,7 +71,7 @@ async function execCommand(
 ) {
   return new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
     if (options?.interactive) {
-      const child = spawn(command, args, {
+      const child = spawnCommand(command, args, {
         env: { ...process.env, ...options.env },
         stdio: "inherit",
       });
@@ -91,7 +80,7 @@ async function execCommand(
       return;
     }
 
-    const child = spawn(command, args, {
+    const child = spawnCommand(command, args, {
       env: { ...process.env, ...options?.env },
       stdio: ["inherit", "pipe", "pipe"],
     });
@@ -99,13 +88,13 @@ async function execCommand(
     let stdout = "";
     let stderr = "";
 
-    child.stdout.on("data", (chunk) => {
+    child.stdout?.on("data", (chunk) => {
       stdout += chunk.toString();
       if (!options?.quiet) {
         process.stdout.write(chunk);
       }
     });
-    child.stderr.on("data", (chunk) => {
+    child.stderr?.on("data", (chunk) => {
       stderr += chunk.toString();
       if (!options?.quiet) {
         process.stderr.write(chunk);
@@ -192,26 +181,21 @@ export async function setupSharedLinks(
     if (shouldSkipShare(adapter, item.name, mergeSessions)) {
       // Remove symlinks to primary for skipped items (e.g. projects/ when separated)
       const target = path.join(profileDir, item.name);
-      const targetStats = await lstat(target).catch(() => null);
-      if (targetStats?.isSymbolicLink()) {
-        const linkTarget = await readlink(target);
-        if (linkTarget === source) {
-          await rm(target);
-        }
+      const linkInfo = await inspectSharedLink(target, source);
+      if (linkInfo.isSharedLink && linkInfo.pointsToSource) {
+        await rm(target, { force: true, recursive: true });
       }
       continue;
     }
     const target = path.join(profileDir, item.name);
     const targetExists = await exists(target);
     if (targetExists) {
-      const stats = await lstat(target);
-      if (stats.isSymbolicLink()) {
-        const currentTarget = await readlink(target);
-        if (currentTarget === source) {
-          linked += 1;
-          continue;
-        }
-      } else if (backupDir) {
+      const linkInfo = await inspectSharedLink(target, source);
+      if (linkInfo.isSharedLink && linkInfo.pointsToSource && linkInfo.targetExists) {
+        linked += 1;
+        continue;
+      }
+      if (!linkInfo.isSharedLink && backupDir) {
         // Real data — save to backup before removing
         const backupTarget = path.join(backupDir, item.name);
         if (!(await exists(backupTarget))) {
@@ -221,7 +205,7 @@ export async function setupSharedLinks(
       await rm(target, { force: true, recursive: true });
     }
 
-    await symlink(source, target);
+    await createSharedLink(source, target, { isDirectory: item.isDirectory() });
     linked += 1;
   }
 
@@ -457,14 +441,11 @@ async function setupPluginsDir(profileDir: string, primarySource: string): Promi
     const target = path.join(profilePlugins, item.name);
     const targetExists = await exists(target);
     if (targetExists) {
-      const stats = await lstat(target);
-      if (stats.isSymbolicLink()) {
-        const currentTarget = await readlink(target);
-        if (currentTarget === source) continue;
-      }
+      const linkInfo = await inspectSharedLink(target, source);
+      if (linkInfo.isSharedLink && linkInfo.pointsToSource && linkInfo.targetExists) continue;
       await rm(target, { force: true, recursive: true });
     }
-    await symlink(source, target);
+    await createSharedLink(source, target, { isDirectory: item.isDirectory() });
   }
 
   await syncPluginsJson(profileDir, primarySource);
@@ -474,7 +455,7 @@ export async function validateConfigDir(
   inputPath: string,
   registeredDirs: string[],
 ): Promise<{ error: string } | { account: { tool: ToolName; configDir: string; email: string; orgName?: string } }> {
-  const configDir = inputPath.replace(/^~(?=$|\/)/, homedir());
+  const configDir = inputPath.replace(/^~(?=$|[\\/])/, homedir());
   if (!(await exists(configDir))) {
     return { error: "Directory not found" };
   }
@@ -838,18 +819,18 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
 
       const dirEntries = await readdir(profile.configDir, { withFileTypes: true }).catch(() => []);
       const isSkipped = (n: string) => shouldSkipShare(adapter, n, profile.mergeSessions ?? false);
-      const symlinkItems: Array<{
+      const sharedLinkItems: Array<{
         name: string;
-        isSymlink: boolean;
+        isSharedLink: boolean;
         pointsToPrimary: boolean;
         targetExists: boolean;
         existsInPrimary: boolean;
       }> = [];
       for (const entry of dirEntries) {
         const targetPath = path.join(profile.configDir, entry.name);
-        const stats = await lstat(targetPath);
-        const isSymlink = stats.isSymbolicLink();
-        const pointsToPrimary = isSymlink && (await readlink(targetPath)) === path.join(primarySource, entry.name);
+        const sourcePath = path.join(primarySource, entry.name);
+        const linkInfo = await inspectSharedLink(targetPath, sourcePath);
+        const pointsToPrimary = linkInfo.pointsToSource;
 
         if (isSkipped(entry.name)) {
           // Items in skip set should NOT be symlinked to primary
@@ -862,16 +843,15 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
           continue;
         }
 
-        if (isSymlink) {
-          const targetExists = await exists(await realpath(targetPath).catch(() => ""));
-          if (!targetExists) {
+        if (linkInfo.isSharedLink) {
+          if (!linkInfo.targetExists) {
             await rm(targetPath, { force: true });
             continue;
           }
         }
-        symlinkItems.push({
+        sharedLinkItems.push({
           name: entry.name,
-          isSymlink,
+          isSharedLink: linkInfo.isSharedLink,
           pointsToPrimary,
           targetExists: true,
           existsInPrimary: primaryEntries.has(entry.name),
@@ -881,7 +861,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
       issues.push(
         ...evaluateSymlinkHealth({
           isPrimary: Boolean(profile.isPrimary),
-          items: symlinkItems,
+          items: sharedLinkItems,
         }),
       );
     }
@@ -1045,7 +1025,7 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
   return { name: id, mergeSessions: next, changed: true };
 }
 
-async function cleanupProfile(name: string, profile: Profile) {
+async function cleanupProfile(name: string, profile: Profile, primarySource: string) {
   if (profile.isPrimary) return;
 
   // 1a. Strip inner symlinks from plugins/ dir (real dir with inner symlinks)
@@ -1055,9 +1035,10 @@ async function cleanupProfile(name: string, profile: Profile) {
     const pluginEntries = await readdir(profilePlugins, { withFileTypes: true }).catch(() => []);
     for (const entry of pluginEntries) {
       const p = path.join(profilePlugins, entry.name);
-      const stats = await lstat(p);
-      if (stats.isSymbolicLink()) {
-        await rm(p);
+      const source = path.join(primarySource, "plugins", entry.name);
+      const linkInfo = await inspectSharedLink(p, source);
+      if (linkInfo.isSharedLink) {
+        await rm(p, { force: true, recursive: true });
       }
     }
   }
@@ -1066,9 +1047,10 @@ async function cleanupProfile(name: string, profile: Profile) {
   const entries = await readdir(profile.configDir, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
     const p = path.join(profile.configDir, entry.name);
-    const stats = await lstat(p);
-    if (stats.isSymbolicLink()) {
-      await rm(p);
+    const source = path.join(primarySource, entry.name);
+    const linkInfo = await inspectSharedLink(p, source);
+    if (linkInfo.isSharedLink) {
+      await rm(p, { force: true, recursive: true });
     }
   }
 
@@ -1101,7 +1083,7 @@ export async function addProfile(options: {
   const primarySource = registry.primarySources[options.tool] ?? adapter.defaultConfigDir(home);
 
   if (options.fromPath) {
-    const configDir = options.fromPath.replace(/^~(?=$|\/)/, home);
+    const configDir = options.fromPath.replace(/^~(?=$|[\\/])/, home);
     const accountInfo = await adapter.readAccountInfo(configDir);
     if (!accountInfo) throw new Error("Could not read account info from config dir.");
 
@@ -1120,9 +1102,11 @@ export async function addProfile(options: {
         await setupPluginsDir(configDir, primarySource);
       }
     } catch (error) {
-      await cleanupProfile(options.name, { tool: options.tool, configDir, email: "", isPrimary: false }).catch(
-        () => {},
-      );
+      await cleanupProfile(
+        options.name,
+        { tool: options.tool, configDir, email: "", isPrimary: false },
+        primarySource,
+      ).catch(() => {});
       throw new Error(
         `Failed to set up profile '${options.name}': ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -1208,7 +1192,11 @@ export async function addProfile(options: {
       await setupPluginsDir(configDir, primarySource);
     }
   } catch (error) {
-    await cleanupProfile(options.name, { tool: options.tool, configDir, email: "", isPrimary: false }).catch(() => {});
+    await cleanupProfile(
+      options.name,
+      { tool: options.tool, configDir, email: "", isPrimary: false },
+      primarySource,
+    ).catch(() => {});
     await rm(configDir, { force: true, recursive: true }).catch(() => {});
     throw new Error(
       `Failed to set up profile '${options.name}': ${error instanceof Error ? error.message : String(error)}`,
@@ -1246,7 +1234,8 @@ export async function removeProfile(id: string) {
   if (profile.isPrimary) throw new Error("Cannot remove the primary profile.");
 
   const name = id.split(":").slice(1).join(":");
-  await cleanupProfile(name, profile);
+  const primarySource = registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
+  await cleanupProfile(name, profile, primarySource);
 
   delete registry.profiles[id];
   // If the removed profile was the active one for its tool, pick another or clear
@@ -1303,7 +1292,9 @@ export async function uninstallClausona() {
       if (profile.isPrimary) continue;
       try {
         const name = id.split(":").slice(1).join(":");
-        await cleanupProfile(name, profile);
+        const primarySource =
+          registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
+        await cleanupProfile(name, profile, primarySource);
         removed.push(`profile: ${id} (symlinks stripped, data preserved at ${profile.configDir.replace(home, "~")})`);
       } catch (e) {
         warn(`uninstall: could not clean up profile ${id}: ${e instanceof Error ? e.message : String(e)}`);
@@ -1312,7 +1303,12 @@ export async function uninstallClausona() {
   }
 
   // 2. Remove shell integration from rc files
-  const rcFiles = [path.join(home, ".zshrc")];
+  const rcFiles = [
+    path.join(home, ".zshrc"),
+    path.join(home, ".bashrc"),
+    path.join(home, "Documents", "WindowsPowerShell", "profile.ps1"),
+    path.join(home, "Documents", "PowerShell", "profile.ps1"),
+  ];
   for (const rcFile of rcFiles) {
     try {
       const content = await readFile(rcFile, "utf8");
@@ -1336,22 +1332,39 @@ export async function uninstallClausona() {
   }
 
   // 4. Remove app directory
-  const appDir = path.join(process.env.XDG_DATA_HOME ?? path.join(home, ".local", "share"), "clausona");
+  const appDir =
+    process.platform === "win32"
+      ? path.join(process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local"), "clausona")
+      : path.join(process.env.XDG_DATA_HOME ?? path.join(home, ".local", "share"), "clausona");
   if (await exists(appDir)) {
     await rm(appDir, { force: true, recursive: true });
     removed.push(`app: ${appDir}`);
   }
 
-  // 5. Remove launcher binary (find via which)
-  const which = await execCommand("which", ["clausona"], { quiet: true });
-  const launcherPath = which.stdout.trim();
-  if (launcherPath && (await exists(launcherPath))) {
-    try {
-      await rm(launcherPath, { force: true });
-      removed.push(`launcher: ${launcherPath}`);
-    } catch {
-      // may need sudo — report to user
-      removed.push(`launcher: ${launcherPath} (manual removal required — needs sudo)`);
+  // 5. Remove launcher binaries
+  if (process.platform === "win32") {
+    for (const launcherName of ["clausona.cmd", "csn.cmd"]) {
+      const launcherPath = path.join(home, ".local", "bin", launcherName);
+      if (await exists(launcherPath)) {
+        try {
+          await rm(launcherPath, { force: true });
+          removed.push(`launcher: ${launcherPath}`);
+        } catch {
+          removed.push(`launcher: ${launcherPath} (manual removal required — file is in use)`);
+        }
+      }
+    }
+  } else {
+    const which = await execCommand("which", ["clausona"], { quiet: true });
+    const launcherPath = which.stdout.trim();
+    if (launcherPath && (await exists(launcherPath))) {
+      try {
+        await rm(launcherPath, { force: true });
+        removed.push(`launcher: ${launcherPath}`);
+      } catch {
+        // may need sudo — report to user
+        removed.push(`launcher: ${launcherPath} (manual removal required — needs sudo)`);
+      }
     }
   }
 

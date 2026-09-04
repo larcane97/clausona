@@ -106,7 +106,8 @@ describe("codexAdapter wiring", () => {
     expect(codexAdapter.configEnvVar).toBe("CODEX_HOME");
   });
   it("default dir is ~/.codex", () => {
-    expect(codexAdapter.defaultConfigDir("/h")).toBe("/h/.codex");
+    const homeDir = path.join(path.parse(process.cwd()).root, "h");
+    expect(codexAdapter.defaultConfigDir(homeDir)).toBe(path.join(homeDir, ".codex"));
   });
   it("matches ~/.codex and ~/.codex-foo via configDirPattern", () => {
     expect(codexAdapter.configDirPattern.test(".codex")).toBe(true);

@@ -7,7 +7,7 @@ export function evaluateSymlinkHealth({
   isPrimary: boolean;
   items: Array<{
     name: string;
-    isSymlink: boolean;
+    isSharedLink: boolean;
     pointsToPrimary: boolean;
     targetExists: boolean;
     existsInPrimary: boolean;
@@ -19,18 +19,18 @@ export function evaluateSymlinkHealth({
 
   const issues: DoctorIssue[] = [];
   for (const item of items) {
-    if (item.isSymlink && !item.targetExists) {
+    if (item.isSharedLink && !item.targetExists) {
       issues.push({
         kind: "broken_symlink",
-        message: `${item.name} points to a missing target`,
+        message: `${item.name} shared link points to a missing target`,
       });
     }
 
-    // Should be a symlink to primary but isn't
+    // Should be a shared link to primary but isn't
     if (!item.pointsToPrimary && item.existsInPrimary) {
       issues.push({
         kind: "local_override",
-        message: `${item.name} replaced an expected shared symlink`,
+        message: `${item.name} replaced an expected shared link`,
       });
     }
   }

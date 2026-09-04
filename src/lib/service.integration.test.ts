@@ -2,7 +2,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-
+import { inspectSharedLink } from "../core/shared-links.js";
 import { claudeAdapter } from "../tools/claude.js";
 import { setupSharedLinks } from "./service.js";
 
@@ -23,10 +23,11 @@ describe("setupSharedLinks (real fs integration)", () => {
 
     await setupSharedLinks(claudeAdapter, profile, primary, false, backup);
 
-    // settings.json → symlink to primary
-    const settingsStat = lstatSync(path.join(profile, "settings.json"));
-    expect(settingsStat.isSymbolicLink()).toBe(true);
-    // mcp-servers → symlink
+    // settings.json → shared link to primary (hard link fallback on Windows)
+    expect(
+      await inspectSharedLink(path.join(profile, "settings.json"), path.join(primary, "settings.json")),
+    ).toMatchObject({ isSharedLink: true, pointsToSource: true });
+    // mcp-servers → directory symlink/junction
     const mcpStat = lstatSync(path.join(profile, "mcp-servers"));
     expect(mcpStat.isSymbolicLink()).toBe(true);
     // .claude.json → NOT in profile (skipped)
@@ -76,8 +77,10 @@ describe("setupSharedLinks (real fs integration)", () => {
     // Original local file backed up
     const backupContent = readFileSync(path.join(backup, "settings.json"), "utf8");
     expect(backupContent).toContain("localData");
-    // Now a symlink to primary
-    expect(lstatSync(path.join(profile, "settings.json")).isSymbolicLink()).toBe(true);
+    // Now a shared link to primary
+    expect(
+      await inspectSharedLink(path.join(profile, "settings.json"), path.join(primary, "settings.json")),
+    ).toMatchObject({ isSharedLink: true, pointsToSource: true });
 
     rmSync(tmp, { recursive: true, force: true });
   });

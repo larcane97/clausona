@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { homedir, userInfo } from "node:os";
 import path from "node:path";
 
 import { claudeJsonPathForConfigDir } from "../core/paths.js";
+import { spawnCommand } from "../core/process.js";
 import { parseClaudeQuota, QuotaHttpError } from "../core/quota.js";
 import type { QuotaWindows } from "../types.js";
 import type { ToolAdapter, ToolCredential } from "./types.js";
@@ -27,14 +27,14 @@ function keychainService(args: { homeDir: string; configDir: string }): string {
 async function hasKeychain(service: string): Promise<boolean> {
   if (process.platform !== "darwin") return false;
   return new Promise<boolean>((resolve) => {
-    const child = spawn("security", ["find-generic-password", "-s", service], { stdio: "ignore" });
+    const child = spawnCommand("security", ["find-generic-password", "-s", service], { stdio: "ignore" });
     child.on("close", (code) => resolve(code === 0));
     child.on("error", () => resolve(false));
   });
 }
 
 async function readAccount(configDir: string): Promise<{ email: string; orgName?: string } | null> {
-  const jsonPath = claudeJsonPathForConfigDir({ homeDir: process.env.HOME ?? "", configDir });
+  const jsonPath = claudeJsonPathForConfigDir({ homeDir: homedir(), configDir });
   try {
     const raw = await readFile(jsonPath, "utf8");
     const parsed = JSON.parse(raw) as { oauthAccount?: { emailAddress?: string; organizationName?: string } };
@@ -81,9 +81,11 @@ function toCredential(stored: StoredCredentials | null): ToolCredential | null {
 
 function runSecurity(args: string[]): Promise<{ code: number; stdout: string }> {
   return new Promise((resolve) => {
-    const child = spawn("security", args, { stdio: ["ignore", "pipe", "ignore"] });
+    const child = spawnCommand("security", args, { stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
-    child.stdout.on("data", (chunk) => {
+    // spawnCommand widens stdout to nullable; an absent pipe just leaves `out` empty,
+    // which parseStored already treats as "no credential".
+    child.stdout?.on("data", (chunk) => {
       out += chunk;
     });
     child.on("close", (code) => resolve({ code: code ?? 1, stdout: out }));
@@ -104,7 +106,7 @@ async function readKeychainBlob(service: string): Promise<StoredCredentials | nu
 async function keychainAccount(service: string): Promise<string> {
   const { code, stdout } = await runSecurity(["find-generic-password", "-s", service]);
   const match = code === 0 ? /"acct"<blob>="([^"]*)"/.exec(stdout) : null;
-  return match?.[1] || os.userInfo().username;
+  return match?.[1] || userInfo().username;
 }
 
 const credentialsFilePath = (configDir: string) => path.join(configDir, ".credentials.json");
@@ -119,7 +121,7 @@ async function readFileBlob(configDir: string): Promise<StoredCredentials | null
 
 async function readStoredBlob(configDir: string): Promise<StoredCredentials | null> {
   if (process.platform === "darwin") {
-    return readKeychainBlob(keychainService({ homeDir: process.env.HOME ?? "", configDir }));
+    return readKeychainBlob(keychainService({ homeDir: homedir(), configDir }));
   }
   return readFileBlob(configDir);
 }
@@ -133,7 +135,7 @@ async function writeStoredBlob(configDir: string, blob: StoredCredentials): Prom
   const serialized = JSON.stringify(blob);
 
   if (process.platform === "darwin") {
-    const service = keychainService({ homeDir: process.env.HOME ?? "", configDir });
+    const service = keychainService({ homeDir: homedir(), configDir });
     const account = await keychainAccount(service);
     const { code } = await runSecurity(["add-generic-password", "-U", "-s", service, "-a", account, "-w", serialized]);
     if (code !== 0) throw new Error(`could not write Keychain item '${service}'`);
@@ -250,7 +252,7 @@ async function renewClaudeCredential(
 
 async function runLoginInteractive(configDir: string): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
-    const child = spawn("claude", ["auth", "login"], {
+    const child = spawnCommand("claude", ["auth", "login"], {
       env: { ...process.env, CLAUDE_CONFIG_DIR: configDir },
       stdio: "inherit",
     });

@@ -8,7 +8,7 @@
     "clausona": "dist/index.js"
   },
   "scripts": {
-    "build": "rm -rf dist && node build.mjs",
+    "build": "node build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

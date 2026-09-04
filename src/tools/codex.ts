@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { spawnCommand } from "../core/process.js";
 import { parseCodexQuota, QuotaHttpError } from "../core/quota.js";
 import type { QuotaWindows } from "../types.js";
 import { decodeJwtPayload } from "./codex-jwt.js";
@@ -207,7 +207,7 @@ async function fetchCodexQuota(credential: ToolCredential, signal: AbortSignal):
 
 async function runCodexLogin(configDir: string): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
-    const child = spawn("codex", ["login"], {
+    const child = spawnCommand("codex", ["login"], {
       env: { ...process.env, CODEX_HOME: configDir },
       stdio: "inherit",
     });

@@ -1,31 +1,34 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { backupDirFor, claudeJsonPathForConfigDir, keychainServiceForConfigDir } from "./paths.js";
 
 describe("paths", () => {
+  const homeDir = path.join(path.parse(process.cwd()).root, "Users", "test");
+
   it("uses ~/.claude.json for the primary config dir", () => {
     expect(
       claudeJsonPathForConfigDir({
-        homeDir: "/Users/test",
-        configDir: "/Users/test/.claude",
+        homeDir,
+        configDir: path.join(homeDir, ".claude"),
       }),
-    ).toBe("/Users/test/.claude.json");
+    ).toBe(path.join(homeDir, ".claude.json"));
   });
 
   it("uses config-local .claude.json for custom config dirs", () => {
     expect(
       claudeJsonPathForConfigDir({
-        homeDir: "/Users/test",
-        configDir: "/Users/test/.claude-work",
+        homeDir,
+        configDir: path.join(homeDir, ".claude-work"),
       }),
-    ).toBe("/Users/test/.claude-work/.claude.json");
+    ).toBe(path.join(homeDir, ".claude-work", ".claude.json"));
   });
 
   it("uses the default keychain service for the primary config dir", () => {
     expect(
       keychainServiceForConfigDir({
-        homeDir: "/Users/test",
-        configDir: "/Users/test/.claude",
+        homeDir,
+        configDir: path.join(homeDir, ".claude"),
       }),
     ).toBe("Claude Code-credentials");
   });
@@ -33,8 +36,8 @@ describe("paths", () => {
   it("uses a hashed keychain service for custom config dirs", () => {
     expect(
       keychainServiceForConfigDir({
-        homeDir: "/Users/test",
-        configDir: "/Users/test/.claude-work",
+        homeDir,
+        configDir: path.join(homeDir, ".claude-work"),
       }),
     ).toMatch(/^Claude Code-credentials-[a-f0-9]{8}$/);
   });
@@ -42,7 +45,8 @@ describe("paths", () => {
 
 describe("backupDirFor", () => {
   it("nests by tool then name", () => {
-    expect(backupDirFor("/h/.clausona", "claude", "work")).toBe("/h/.clausona/backups/claude/work");
-    expect(backupDirFor("/h/.clausona", "codex", "personal")).toBe("/h/.clausona/backups/codex/personal");
+    const clausonaDir = path.join(path.parse(process.cwd()).root, "h", ".clausona");
+    expect(backupDirFor(clausonaDir, "claude", "work")).toBe(path.join(clausonaDir, "backups", "claude", "work"));
+    expect(backupDirFor(clausonaDir, "codex", "personal")).toBe(path.join(clausonaDir, "backups", "codex", "personal"));
   });
 });

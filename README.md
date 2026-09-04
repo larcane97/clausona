@@ -37,13 +37,22 @@ No re-login. No reinstalling plugins. Just switch and go.
 ## Install
 
 **Requirements:** Node.js >= 20, and at least one of:
+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
 - [OpenAI Codex CLI](https://github.com/openai/codex)
 
-**Platform:** macOS, zsh
+**Platforms:** macOS/Linux (zsh or bash) and Windows (PowerShell 5.1+)
+
+macOS/Linux:
 
 ```bash
 curl -fsSL https://github.com/larcane97/clausona/releases/latest/download/install.sh | bash
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex
 ```
 
 ## Quick Start
@@ -127,28 +136,29 @@ being blanked out.
 
 `<profile>` accepts either a bare name (e.g. `work`) when it is unique across all tools, or a `tool:name` prefix (e.g. `claude:work`, `codex:work`) when disambiguation is needed.
 
-| Command | Description |
-|---------|-------------|
-| `clausona` | Interactive TUI dashboard |
-| `clausona init` | Discover and register Claude Code and Codex accounts |
-| `clausona add <profile> [--from <path>] [--merge-sessions]` | Add a profile manually |
-| `clausona remove <profile>` | Remove a profile |
-| `clausona use [profile]` | Switch active profile |
-| `clausona run <profile> [-- args...]` | Run the tool's CLI with a specific profile |
-| `clausona list [--json] [--refresh] [--no-quota] [--no-renew]` | List all profiles with plan quota and usage |
-| `clausona usage [profile] [--period=today\|week\|month\|all]` | View cost and token usage |
-| `clausona current [--json]` | Show active profile |
-| `clausona config <profile> --merge-sessions \| --separate-sessions` | Configure session mode |
-| `clausona doctor [--json]` | Check profile health |
-| `clausona repair <profile>` | Fix broken shared links |
-| `clausona login <profile>` | Re-authenticate a profile |
-| `clausona uninstall` | Uninstall clausona completely |
+| Command                                                             | Description                                          |
+| ------------------------------------------------------------------- | ---------------------------------------------------- |
+| `clausona`                                                          | Interactive TUI dashboard                            |
+| `clausona init`                                                     | Discover and register Claude Code and Codex accounts |
+| `clausona add <profile> [--from <path>] [--merge-sessions]`         | Add a profile manually                               |
+| `clausona remove <profile>`                                         | Remove a profile                                     |
+| `clausona use [profile]`                                            | Switch active profile                                |
+| `clausona run <profile> [-- args...]`                               | Run the tool's CLI with a specific profile           |
+| `clausona list [--json] [--refresh] [--no-quota] [--no-renew]`      | List all profiles with plan quota and usage          |
+| `clausona usage [profile] [--period=today\|week\|month\|all]`       | View cost and token usage                            |
+| `clausona current [--json]`                                         | Show active profile                                  |
+| `clausona config <profile> --merge-sessions \| --separate-sessions` | Configure session mode                               |
+| `clausona doctor [--json]`                                          | Check profile health                                 |
+| `clausona repair <profile>`                                         | Fix broken shared links                              |
+| `clausona login <profile>`                                          | Re-authenticate a profile                            |
+| `clausona uninstall`                                                | Uninstall clausona completely                        |
 
 ## How It Works
 
 ### Profile Switching
 
-Shell wrappers for `claude` and `codex` are registered via `eval "$(clausona shell-init)"`:
+Shell wrappers for `claude` and `codex` are registered via `eval "$(clausona shell-init)"` on zsh/bash or
+`Invoke-Expression (& clausona shell-init | Out-String)` on PowerShell:
 
 1. **Before** each invocation — reads `~/.clausona/profiles.json` and sets the appropriate env var (`CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME` for codex) to the active profile's config directory
 2. **After** each `claude` invocation — detects usage changes via fingerprint comparison and records cost/token usage per profile
@@ -196,6 +206,10 @@ When you register a new profile, clausona symlinks shared resources from your pr
 ```
 
 The private set is larger for codex (state DB, input history, logs) but the principle is the same: credentials and session data stay profile-specific; everything else is shared.
+
+On Windows, shared directories use junctions. Shared files use symbolic links when Windows Developer Mode is enabled and
+otherwise fall back to same-volume hard links. If a profile is imported from another drive, enable Developer Mode so
+clausona can create file symbolic links across volumes.
 
 **Session separation** is the default: each profile keeps its own session directory, so `/resume` (Claude) and `codex resume` (Codex) only show that profile's conversations. To share session history across claude profiles, pass `--merge-sessions` when adding or initializing.
 

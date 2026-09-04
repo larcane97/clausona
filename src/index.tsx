@@ -1,8 +1,9 @@
-import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { render } from "ink";
 
 import { runCommand } from "./commands.js";
+import { spawnCommandSync } from "./core/process.js";
 import { trackUsage } from "./core/track-usage.js";
 import { accent, fail as xMark } from "./lib/cli-style.js";
 import { parseProfileRef } from "./lib/profile-ref.js";
@@ -66,7 +67,7 @@ async function main() {
       if (!registry) throw new Error("clausona is not initialized.");
       const ref = parseProfileRef(parsed.profile, registry);
       const { binary, env } = await resolveProfileEnv(ref.id);
-      const result = spawnSync(binary, parsed.args, { stdio: "inherit", env });
+      const result = spawnCommandSync(binary, parsed.args, { stdio: "inherit", env });
       process.exitCode = result.status ?? 1;
       if (ref.tool === "claude") {
         await trackUsage(ref.id).catch(() => {});
@@ -118,10 +119,10 @@ async function main() {
   }
 }
 
-const entryPath = process.argv[1];
-if (entryPath) {
-  const entryReal = realpathSync(entryPath);
-  if (import.meta.url === `file://${entryReal}`) {
-    void main();
-  }
+export function isMainModule(moduleUrl: string, entryPath: string | undefined): boolean {
+  return Boolean(entryPath && moduleUrl === pathToFileURL(realpathSync(entryPath)).href);
+}
+
+if (isMainModule(import.meta.url, process.argv[1])) {
+  void main();
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands.js";
-import { parseCommand } from "./index.js";
+import { isMainModule, parseCommand } from "./index.js";
 
 describe("parseCommand", () => {
   it("defaults to interactive mode with no args", () => {
@@ -29,6 +29,17 @@ describe("parseCommand", () => {
       command: "run",
       args: ["--help"],
     });
+  });
+});
+
+describe("isMainModule", () => {
+  it("recognizes a canonical file URL for the current platform", async () => {
+    const { realpathSync } = await import("node:fs");
+    const { pathToFileURL } = await import("node:url");
+    const entryPath = process.argv[1];
+
+    expect(entryPath).toBeTruthy();
+    expect(isMainModule(pathToFileURL(realpathSync(entryPath)).href, entryPath)).toBe(true);
   });
 });
 

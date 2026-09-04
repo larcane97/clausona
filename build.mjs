@@ -1,8 +1,9 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { build } from "esbuild";
 
 // Stub out react-devtools-core — ink imports it but it's unnecessary for CLI
+rmSync("dist", { recursive: true, force: true });
 const stubDir = "node_modules/.clausona-stubs";
 mkdirSync(stubDir, { recursive: true });
 writeFileSync(path.join(stubDir, "react-devtools-core.js"), "export default undefined;\n");

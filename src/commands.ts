@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { trackUsage } from "./core/track-usage.js";
@@ -375,7 +376,12 @@ export async function runCommand(command: string, args: string[]) {
         if (!activeId) continue;
         const profile = registry.profiles[activeId];
         if (!profile) continue;
-        const configPath = profile.configDir.replace(path.join(process.env.HOME ?? "", "/"), "~/");
+        const home = homedir();
+        const relativeConfigPath = path.relative(home, profile.configDir);
+        const configPath =
+          relativeConfigPath && !relativeConfigPath.startsWith("..")
+            ? path.join("~", relativeConfigPath)
+            : profile.configDir;
         blocks.push(
           box(activeId, [
             `${secondary("Account".padEnd(12))}${profile.email}`,
@@ -538,7 +544,7 @@ export async function runCommand(command: string, args: string[]) {
     case "_sync-plugins": {
       const registry = await loadRegistry();
       if (!registry) return "";
-      const claudePrimary = registry.primarySources.claude ?? path.join(process.env.HOME ?? "", ".claude");
+      const claudePrimary = registry.primarySources.claude ?? path.join(homedir(), ".claude");
       const configDir = process.env.CLAUDE_CONFIG_DIR ?? claudePrimary;
       await syncPluginsJson(configDir, claudePrimary).catch(() => {});
       return "";

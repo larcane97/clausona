@@ -35,9 +35,9 @@ fi
 
 echo -e "  Using node: $NODE_BIN (v$($NODE_BIN -e "console.log(process.version)"))"
 
-if ! command -v claude &>/dev/null; then
-  echo -e "  ${RED}✗${RESET} claude CLI is required but not found."
-  echo -e "  ${CYAN}Install: https://docs.anthropic.com/en/docs/claude-code${RESET}"
+if ! command -v claude &>/dev/null && ! command -v codex &>/dev/null; then
+  echo -e "  ${RED}✗${RESET} Claude Code CLI or OpenAI Codex CLI is required but neither was found."
+  echo -e "  ${CYAN}Install one of the supported CLIs, then retry.${RESET}"
   exit 1
 fi
 

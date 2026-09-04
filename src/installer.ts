@@ -27,3 +27,12 @@ set -euo pipefail
 exec "${nodeBin}" "${appDir}/index.js" "$@"
 `;
 }
+
+function escapeCmdValue(value: string): string {
+  return value.replaceAll("%", "%%").replaceAll('"', '""');
+}
+
+export function renderWindowsLauncher({ appDir, nodeBin = "node" }: { appDir: string; nodeBin?: string }) {
+  const entryPoint = path.win32.join(appDir, "index.js");
+  return `@echo off\r\n"${escapeCmdValue(nodeBin)}" "${escapeCmdValue(entryPoint)}" %*\r\n`;
+}
