@@ -1,17 +1,30 @@
 import { Box, Text } from "ink";
 import { truncate } from "../../lib/cli-style.js";
-import { formatAge, formatCurrency, formatQuotaPercent, formatResetIn, localTimezoneLabel } from "../../lib/format.js";
+import { fitQuotaValue, formatAge, formatCurrency, localTimezoneLabel } from "../../lib/format.js";
 import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot, QuotaWindow } from "../../types.js";
 import { color, symbol } from "../theme.js";
 
-function Row({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
+function Row({
+  label,
+  value,
+  valueColor,
+  singleLine = false,
+}: {
+  label: string;
+  value: string;
+  valueColor?: string;
+  /** Keep the value on one line. Prevents character-by-character wrapping in a narrow panel. */
+  singleLine?: boolean;
+}) {
   return (
     <Box gap={1} width="100%" flexDirection="row">
       <Box width={12} flexShrink={0}>
         <Text color={color.muted}>{label}</Text>
       </Box>
-      <Box flexGrow={1} flexShrink={1}>
-        <Text color={valueColor ?? color.text}>{value}</Text>
+      <Box flexGrow={1} flexShrink={1} minWidth={0} overflow={singleLine ? "hidden" : undefined}>
+        <Text color={valueColor ?? color.text} wrap={singleLine ? "truncate-end" : undefined}>
+          {value}
+        </Text>
       </Box>
     </Box>
   );
@@ -46,30 +59,34 @@ function quotaColor(window: QuotaWindow, live: boolean): string {
   return color.text;
 }
 
-/** A 10-cell bar reads faster than a number when scanning several accounts. */
-function bar(usedPercent: number): string {
-  const filled = Math.min(10, Math.max(0, Math.round(usedPercent / 10)));
-  return `${"\u2588".repeat(filled)}${"\u2591".repeat(10 - filled)}`;
+// The detail panel is a fraction of the terminal, and ink gives no width back during
+// render, so the space a Row's value gets is derived from the same layout constants.
+const PREVIEW_PANEL_FRACTION = 0.45; // layout.previewPanelWidth
+const PANEL_CHROME = 10; // outer + inner borders and padding
+const LABEL_COLUMN = 13; // Row's label box plus its gap
+
+function valueWidth(columns: number): number {
+  return Math.max(0, Math.floor(columns * PREVIEW_PANEL_FRACTION) - PANEL_CHROME - LABEL_COLUMN);
 }
 
 function QuotaRow({ label, window, live }: { label: string; window?: QuotaWindow; live: boolean }) {
   if (!window) {
-    return <Row label={label} value={EM_DASH} valueColor={color.muted} />;
+    return <Row label={label} value={EM_DASH} valueColor={color.muted} singleLine />;
   }
-  const reset = formatResetIn(window.resetsAt);
-  const suffix = reset === EM_DASH ? "" : `  resets in ${reset}`;
+
   return (
     <Row
       label={label}
-      value={`${bar(window.usedPercent)} ${formatQuotaPercent(window).padStart(4)}${suffix}`}
+      value={fitQuotaValue(window, valueWidth(process.stdout.columns ?? 100))}
       valueColor={quotaColor(window, live)}
+      singleLine
     />
   );
 }
 
 function QuotaSection({ quota }: { quota?: QuotaSnapshot }) {
   if (!quota) {
-    return <Row label="Quota" value="loading\u2026" valueColor={color.muted} />;
+    return <Row label="Quota" value="loading\u2026" valueColor={color.muted} singleLine />;
   }
 
   const live = quota.state === "ok";
@@ -89,6 +106,7 @@ function QuotaSection({ quota }: { quota?: QuotaSnapshot }) {
               : QUOTA_STATE_NOTE[quota.state]
           }
           valueColor={color.warning}
+          singleLine
         />
       )}
     </>

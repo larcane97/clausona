@@ -64,14 +64,19 @@ clausona                  # open the interactive dashboard
 already spent, so you can pick a profile that still has headroom.
 
 ```
-PROFILE             ACCOUNT                      5H     7D
-claude:work         you@example.com              6%     46%
-claude:personal     you@personal.com             0%     100%
-codex:work          you@example.com              —      12%
+PROFILE             ACCOUNT                      5H         7D
+claude:work         you@example.com              6% 23m     46% 13h
+claude:personal     you@personal.com             0%         100% 4d
+codex:work          you@example.com              —          12% 5d
 ```
 
-`5H` is the rolling session window, `7D` the weekly one. The dashboard additionally
-shows the reset time and the most-consumed per-model limit.
+`5H` is the rolling session window, `7D` the weekly one, each followed by how long
+until it resets. The dashboard shows the same reading with a gauge and the precise
+reset time, plus the most-consumed per-model limit.
+
+The table adapts to the terminal: as it narrows, token counts give way first, then
+cost, then the reset times — the quota columns and the profile name are the last things
+to go, so the row never wraps into itself.
 
 Readings come from each tool's own usage endpoint, authenticated with the credential
 that tool already stored for that profile — clausona never asks for or stores a token

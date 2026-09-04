@@ -117,6 +117,49 @@ export function formatAge(fetchedAt: number, now: Date = new Date()): string {
   return `${minutes}m ago`;
 }
 
+/** Coarsest useful "time until reset" — one unit, for table cells. */
+export function formatResetShort(resetsAt: string | null | undefined, now: Date = new Date()): string {
+  if (!resetsAt) return "";
+  const ms = Date.parse(resetsAt) - now.getTime();
+  if (Number.isNaN(ms)) return "";
+  if (ms <= 0) return "now";
+
+  const minutes = Math.floor(ms / 60000);
+  if (minutes >= 1440) return `${Math.floor(minutes / 1440)}d`;
+  if (minutes >= 60) return `${Math.floor(minutes / 60)}h`;
+  return `${Math.max(1, minutes)}m`;
+}
+
+/** A 10-cell gauge reads faster than a number when scanning several accounts. */
+export function quotaBar(usedPercent: number): string {
+  const filled = Math.min(10, Math.max(0, Math.round(usedPercent / 10)));
+  return `${"\u2588".repeat(filled)}${"\u2591".repeat(10 - filled)}`;
+}
+
+/**
+ * Most detailed rendering of a window that fits `width`, shedding the gauge, then the
+ * wording, then the reset time. The percentage is never dropped, so a value can still
+ * exceed `width` when even that does not fit.
+ */
+export function fitQuotaValue(window: QuotaWindow, width: number, now: Date = new Date()): string {
+  const percent = formatQuotaPercent(window).padStart(4);
+  const long = formatResetIn(window.resetsAt, now);
+  const short = formatResetShort(window.resetsAt, now);
+  const gauge = quotaBar(window.usedPercent);
+
+  const candidates = short
+    ? [
+        `${gauge} ${percent}  resets in ${long}`,
+        `${percent}  resets in ${long}`,
+        `${gauge} ${percent} ${short}`,
+        `${percent} ${short}`,
+        percent,
+      ]
+    : [`${gauge} ${percent}`, percent];
+
+  return candidates.find((candidate) => candidate.length <= width) ?? percent;
+}
+
 const QUOTA_NOTES: Record<Exclude<QuotaSnapshot["state"], "ok">, string> = {
   expired: "sign-in has lapsed — run `clausona login <profile>`",
   missing: "no stored credential for this profile",
@@ -135,7 +178,110 @@ export function quotaNotes(items: ProfileListItem[]): string[] {
 }
 
 // ─── List ───────────────────────────────────────────────────────────
-export function renderList(items: ProfileListItem[]) {
+type ColumnKey = "profile" | "account" | "session" | "weekly" | "cost" | "input" | "output";
+
+const QUOTA_WIDTH_WITH_RESET = 11;
+const QUOTA_WIDTH_PLAIN = 7;
+
+type Layout = {
+  keys: ColumnKey[];
+  /** Whether quota cells carry their reset time. */
+  reset: boolean;
+  profileWidth: number;
+  accountWidth: number;
+};
+
+const LABELS: Record<ColumnKey, string> = {
+  profile: "PROFILE",
+  account: "ACCOUNT",
+  session: "5H",
+  weekly: "7D",
+  cost: "COST",
+  input: "INPUT",
+  output: "OUTPUT",
+};
+
+const FIXED_WIDTHS = { cost: 12, input: 14, output: 10 } as const;
+
+function columnWidth(key: ColumnKey, layout: Layout): number {
+  switch (key) {
+    case "profile":
+      return layout.profileWidth;
+    case "account":
+      return layout.accountWidth;
+    case "session":
+    case "weekly":
+      return layout.reset ? QUOTA_WIDTH_WITH_RESET : QUOTA_WIDTH_PLAIN;
+    default:
+      return FIXED_WIDTHS[key];
+  }
+}
+
+const INDENT = 4;
+
+function layoutWidth(layout: Layout): number {
+  return INDENT + layout.keys.reduce((sum, key) => sum + columnWidth(key, layout), 0);
+}
+
+/**
+ * Progressively narrower fallbacks, widest first. Cost and token counts give way
+ * before the quota pair does: quota is why you run the command, and the spend figures
+ * are still available in full from `clausona usage`.
+ */
+function candidateLayouts(showQuota: boolean): Layout[] {
+  const base = { profileWidth: 20, accountWidth: 32 };
+  const tail: ColumnKey[][] = [["cost", "input", "output"], ["cost", "input"], ["cost"], []];
+
+  if (!showQuota) {
+    return [
+      ...tail.map((extra) => ({ keys: ["profile", "account", ...extra] as ColumnKey[], reset: false, ...base })),
+      { keys: ["profile", "account", "cost"], reset: false, profileWidth: 14, accountWidth: 22 },
+    ];
+  }
+
+  const quota: ColumnKey[] = ["session", "weekly"];
+  return [
+    ...tail.map((extra) => ({
+      keys: ["profile", "account", ...quota, ...extra] as ColumnKey[],
+      reset: true,
+      ...base,
+    })),
+    { keys: ["profile", "account", ...quota], reset: false, ...base },
+    { keys: ["profile", "account", ...quota], reset: false, profileWidth: 14, accountWidth: 22 },
+  ];
+}
+
+/** Widest layout that fits; the narrowest is used when even that overflows. */
+export function pickLayout(showQuota: boolean, available: number): Layout {
+  const layouts = candidateLayouts(showQuota);
+  return layouts.find((layout) => layoutWidth(layout) <= available) ?? layouts[layouts.length - 1];
+}
+
+/**
+ * Narrowest terminal the table is guaranteed to fit. Below this there is nothing left
+ * to drop, so rows are allowed to overflow rather than losing the profile name.
+ */
+export const LIST_MIN_WIDTH = Math.max(
+  ...[true, false].map((showQuota) => {
+    const layouts = candidateLayouts(showQuota);
+    return layoutWidth(layouts[layouts.length - 1]);
+  }),
+);
+
+function quotaCell(
+  window: QuotaWindow | undefined,
+  state: QuotaSnapshot["state"] | undefined,
+  withReset: boolean,
+  now: Date,
+): string {
+  const percent = styledQuota(window, state);
+  if (!withReset || !window) return percent;
+
+  const reset = formatResetShort(window.resetsAt, now);
+  return reset ? `${percent} ${dimmer(reset)}` : percent;
+}
+
+export function renderList(items: ProfileListItem[], options: { width?: number } = {}) {
   const now = new Date();
   const weekAgo = new Date(now);
   weekAgo.setDate(weekAgo.getDate() - 7);
@@ -151,53 +297,52 @@ export function renderList(items: ProfileListItem[]) {
 
   // Quota columns are only worth their width once something has been fetched.
   const showQuota = sorted.some((item) => item.quota);
+  const available = options.width ?? process.stdout.columns ?? 120;
+  const layout = pickLayout(showQuota, available);
 
-  const cols = [
-    { label: "PROFILE", w: 20 },
-    { label: "ACCOUNT", w: 32 },
-    ...(showQuota
-      ? [
-          { label: "5H", w: 7 },
-          { label: "7D", w: 7 },
-        ]
-      : []),
-    { label: "COST", w: 12 },
-    { label: "INPUT", w: 14 },
-    { label: "OUTPUT", w: 10 },
-  ];
-  const headerLine = `    ${cols.map((c) => secondary(c.label.padEnd(c.w))).join("")}`;
-  const sep = `    ${dimmer("─".repeat(cols.reduce((s, c) => s + c.w, 0)))}`;
+  const widths = layout.keys.map((key) => columnWidth(key, layout));
+  const headerLine = `    ${layout.keys.map((key, i) => secondary(LABELS[key].padEnd(widths[i]))).join("")}`;
+  const sep = `    ${dimmer("─".repeat(widths.reduce((a, b) => a + b, 0)))}`;
 
+  // The footnote only earns its line while a column it explains is on screen.
+  const spendShown = layout.keys.some((key) => key === "cost" || key === "input" || key === "output");
   const hasCodex = sorted.some((item) => item.tool === "codex");
 
   const rows = sorted.map((item) => {
     const marker = item.isActive ? accent("▸") : " ";
-    // Truncate before styling so the ellipsis lands inside the column, not after it.
-    const rawName = truncate(item.name, 19);
-    const rawEmail = truncate(item.email, 31);
-    const name = pad(item.isActive ? accent(rawName) : rawName, 20);
-    const email = pad(item.isActive ? rawEmail : secondary(rawEmail), 32);
-    const quota = showQuota
-      ? pad(styledQuota(item.quota?.session, item.quota?.state), 7) +
-        pad(styledQuota(item.quota?.weekly, item.quota?.state), 7)
-      : "";
-    let cost: string;
-    let input: string;
-    let output: string;
-    if (item.tool === "codex") {
-      cost = pad(dim("—"), 12);
-      input = pad(dim("—"), 14);
-      output = `${dim("—")}  *`;
-    } else {
-      cost = pad(styledCost(item.week.cost), 12);
-      input = pad(styledCount(item.week.inputTokens), 14);
-      output = styledCount(item.week.outputTokens);
-    }
-    return `  ${marker} ${name}${email}${quota}${cost}${input}${output}`;
+    const isCodex = item.tool === "codex";
+
+    const cell = (key: ColumnKey): string => {
+      switch (key) {
+        case "profile": {
+          // Truncate before styling so the ellipsis lands inside the column.
+          const name = truncate(item.name, layout.profileWidth - 1);
+          return item.isActive ? accent(name) : name;
+        }
+        case "account": {
+          const email = truncate(item.email, layout.accountWidth - 1);
+          return item.isActive ? email : secondary(email);
+        }
+        case "session":
+          return quotaCell(item.quota?.session, item.quota?.state, layout.reset, now);
+        case "weekly":
+          return quotaCell(item.quota?.weekly, item.quota?.state, layout.reset, now);
+        case "cost":
+          return isCodex ? dim("—") : styledCost(item.week.cost);
+        case "input":
+          return isCodex ? dim("—") : styledCount(item.week.inputTokens);
+        case "output":
+          return isCodex ? dim("—") : styledCount(item.week.outputTokens);
+      }
+    };
+
+    const cells = layout.keys.map((key, i) => (i === layout.keys.length - 1 ? cell(key) : pad(cell(key), widths[i])));
+    const suffix = isCodex && spendShown ? `  ${dim("*")}` : "";
+    return `  ${marker} ${cells.join("")}${suffix}`;
   });
 
   const footnotes = [
-    ...(hasCodex ? ["* cost and token tracking are not available for codex"] : []),
+    ...(hasCodex && spendShown ? ["* cost and token tracking are not available for codex"] : []),
     ...quotaNotes(sorted),
   ].map((note) => `  ${dim(note)}`);
 
