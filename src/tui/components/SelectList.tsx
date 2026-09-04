@@ -8,6 +8,9 @@ export type SelectListItem = {
   selected?: boolean;
   badge?: string;
   badgeVariant?: "active" | "healthy" | "warning" | "error" | "muted" | "primary";
+  /** Short status text shown after the badge, coloured by metaVariant. */
+  meta?: string;
+  metaVariant?: "healthy" | "warning" | "error" | "muted";
 };
 
 const badgeColorMap: Record<string, string> = {
@@ -60,6 +63,10 @@ export function SelectList({
                   <Text color={badgeColorMap[item.badgeVariant ?? "muted"] ?? color.muted}>
                     {symbol.dot} {item.badge}
                   </Text>
+                ) : null}
+
+                {item.meta ? (
+                  <Text color={badgeColorMap[item.metaVariant ?? "muted"] ?? color.muted}>{item.meta}</Text>
                 ) : null}
               </Box>
 

@@ -87,6 +87,13 @@ export function stripAnsi(str: string) {
   return str.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
+/** Shorten plain text to fit a column, marking the cut with an ellipsis. */
+export function truncate(str: string, width: number) {
+  if (width <= 0) return "";
+  if (str.length <= width) return str;
+  return width === 1 ? symbol.ellipsis : `${str.slice(0, width - 1)}${symbol.ellipsis}`;
+}
+
 /** Pad a string that may contain ANSI codes to a visible width */
 export function padEnd(str: string, width: number) {
   const visible = stripAnsi(str).length;

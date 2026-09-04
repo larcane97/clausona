@@ -1,6 +1,7 @@
 import { Box, Text } from "ink";
-import { formatCurrency, localTimezoneLabel } from "../../lib/format.js";
-import type { DoctorProfileResult, ProfileListItem } from "../../types.js";
+import { truncate } from "../../lib/cli-style.js";
+import { formatAge, formatCurrency, formatQuotaPercent, formatResetIn, localTimezoneLabel } from "../../lib/format.js";
+import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot, QuotaWindow } from "../../types.js";
 import { color, symbol } from "../theme.js";
 
 function Row({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
@@ -23,6 +24,74 @@ function Separator() {
         <Text color={color.dim}>{symbol.lineH.repeat(300)}</Text>
       </Box>
     </Box>
+  );
+}
+
+const EM_DASH = "\u2014";
+
+const QUOTA_CRITICAL = 90;
+const QUOTA_WARNING = 75;
+
+const QUOTA_STATE_NOTE: Record<Exclude<QuotaSnapshot["state"], "ok">, string> = {
+  expired: "sign-in lapsed \u2014 clausona login",
+  missing: "no stored credential",
+  cooldown: "rate limited, retrying later",
+  error: "lookup failed",
+};
+
+function quotaColor(window: QuotaWindow, live: boolean): string {
+  if (!live) return color.muted;
+  if (window.usedPercent >= QUOTA_CRITICAL) return color.error;
+  if (window.usedPercent >= QUOTA_WARNING) return color.warning;
+  return color.text;
+}
+
+/** A 10-cell bar reads faster than a number when scanning several accounts. */
+function bar(usedPercent: number): string {
+  const filled = Math.min(10, Math.max(0, Math.round(usedPercent / 10)));
+  return `${"\u2588".repeat(filled)}${"\u2591".repeat(10 - filled)}`;
+}
+
+function QuotaRow({ label, window, live }: { label: string; window?: QuotaWindow; live: boolean }) {
+  if (!window) {
+    return <Row label={label} value={EM_DASH} valueColor={color.muted} />;
+  }
+  const reset = formatResetIn(window.resetsAt);
+  const suffix = reset === EM_DASH ? "" : `  resets in ${reset}`;
+  return (
+    <Row
+      label={label}
+      value={`${bar(window.usedPercent)} ${formatQuotaPercent(window).padStart(4)}${suffix}`}
+      valueColor={quotaColor(window, live)}
+    />
+  );
+}
+
+function QuotaSection({ quota }: { quota?: QuotaSnapshot }) {
+  if (!quota) {
+    return <Row label="Quota" value="loading\u2026" valueColor={color.muted} />;
+  }
+
+  const live = quota.state === "ok";
+  const hasWindows = Boolean(quota.session ?? quota.weekly ?? quota.scoped);
+  return (
+    <>
+      <QuotaRow label="Session" window={quota.session} live={live} />
+      <QuotaRow label="Weekly" window={quota.weekly} live={live} />
+      {quota.scoped && <QuotaRow label={truncate(quota.scoped.label, 12)} window={quota.scoped} live={live} />}
+      {quota.state !== "ok" && (
+        <Row
+          label=""
+          // Numbers shown for a failed lookup are a last-known reading, so say how old.
+          value={
+            hasWindows
+              ? `${QUOTA_STATE_NOTE[quota.state]} \u00b7 ${formatAge(quota.fetchedAt)}`
+              : QUOTA_STATE_NOTE[quota.state]
+          }
+          valueColor={color.warning}
+        />
+      )}
+    </>
   );
 }
 
@@ -87,6 +156,13 @@ export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem;
             valueColor={profile.mergeSessions ? color.warning : color.secondary}
           />
         )}
+      </Box>
+
+      <Separator />
+
+      {/* Plan quota */}
+      <Box flexDirection="column" gap={0} marginBottom={1} flexShrink={0}>
+        <QuotaSection quota={profile.quota} />
       </Box>
 
       <Separator />

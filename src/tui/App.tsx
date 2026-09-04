@@ -6,12 +6,13 @@ import TextInput from "ink-text-input";
 import { useEffect, useRef, useState } from "react";
 
 import { bootstrapInitFromCurrentState } from "../commands.js";
-import { formatCount, formatCurrency, localTimezoneLabel } from "../lib/format.js";
+import { formatCount, formatCurrency, formatQuotaInline, localTimezoneLabel, quotaSeverity } from "../lib/format.js";
 import { profileId } from "../lib/profile-ref.js";
 import {
   addProfile,
   discoverAccounts,
   doctorProfiles,
+  fetchProfileQuotas,
   initializeRegistry,
   listProfiles,
   loginProfile,
@@ -21,7 +22,7 @@ import {
   updateProfileConfig,
   validateConfigDir,
 } from "../lib/service.js";
-import type { DiscoveredAccount, DoctorProfileResult, ProfileListItem, ToolName } from "../types.js";
+import type { DiscoveredAccount, DoctorProfileResult, ProfileListItem, QuotaSnapshot, ToolName } from "../types.js";
 import { Chrome } from "./components/Chrome.js";
 import { Divider } from "./components/Divider.js";
 import { ProfilePreview } from "./components/ProfilePreview.js";
@@ -281,6 +282,23 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   useEffect(() => {
     void refreshDashboard();
   }, []);
+
+  // Quota comes from the network, so it is fetched after the dashboard paints and
+  // merged in. Keyed on the profile set, not the array, so merging does not re-trigger.
+  const profileKey = profiles.map((p) => p.name).join("\u0000");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: profiles is read via profileKey to avoid a merge loop
+  useEffect(() => {
+    if (profiles.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const quotas = await fetchProfileQuotas(profiles).catch((): Record<string, QuotaSnapshot> => ({}));
+      if (cancelled) return;
+      setProfiles((prev) => prev.map((p) => (quotas[p.name] ? { ...p, quota: quotas[p.name] } : p)));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [profileKey]);
 
   useEffect(() => {
     if (screen === "init") {
@@ -1393,6 +1411,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                 detail: p.email,
                 badge: p.isActive ? "active" : undefined,
                 badgeVariant: p.isActive ? ("active" as const) : undefined,
+                meta: formatQuotaInline(p.quota),
+                metaVariant: quotaSeverity(p.quota),
               }))}
               index={cursor}
             />

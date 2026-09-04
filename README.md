@@ -30,6 +30,7 @@ No re-login. No reinstalling plugins. Just switch and go.
 - **Shared environment** — MCP servers, plugins, permissions, settings (Claude) and config.toml, skills, hooks (Codex) are symlinked across profiles within each tool. Set up once, use everywhere.
 - **Pure CLI passthrough** — no wrapping, no proxying, no background process. `claude` and `codex` run directly and unmodified. Compatible with oh-my-claudecode, Cline, codex plugins, and any other tool in your stack.
 - **Lightweight** — a single shell hook and a few symlinks. No daemon, no server, no runtime overhead.
+- **Plan quota at a glance** — session and weekly limit usage for every account, read live from each tool's own usage endpoint (Claude and Codex)
 - **Usage tracking** — per-profile cost and token usage, tracked locally (Claude only in v0.1)
 - **Interactive dashboard** — TUI for managing profiles, viewing usage, and running health checks
 
@@ -53,9 +54,69 @@ clausona use work         # switch to a profile (bare name if unique)
 clausona use claude:work  # switch claude account (use prefix when both tools have "work")
 clausona add codex:work   # add a codex profile
 clausona use codex:personal  # switch codex account
-clausona list             # see all profiles with weekly usage
+clausona list             # see all profiles with plan quota and weekly usage
 clausona                  # open the interactive dashboard
 ```
+
+## Plan quota
+
+`clausona list` and the dashboard show how much of each account's plan limits are
+already spent, so you can pick a profile that still has headroom.
+
+```
+PROFILE             ACCOUNT                      5H     7D
+claude:work         you@example.com              6%     46%
+claude:personal     you@personal.com             0%     100%
+codex:work          you@example.com              —      12%
+```
+
+`5H` is the rolling session window, `7D` the weekly one. The dashboard additionally
+shows the reset time and the most-consumed per-model limit.
+
+Readings come from each tool's own usage endpoint, authenticated with the credential
+that tool already stored for that profile — clausona never asks for or stores a token
+of its own. Results are cached for 5 minutes; `--refresh` forces a re-read and
+`--no-quota` skips the network entirely.
+
+### Profiles you have not used recently
+
+An access token lasts 8 hours, so a profile you have not touched today would otherwise
+show nothing. clausona renews it on demand using the stored refresh token, which lasts
+about 14 days — so every account you have used in the last two weeks reports its quota,
+whether or not you have switched to it lately.
+
+Renewal is lazy: a token is only renewed once it has actually lapsed (or if the endpoint
+rejects it), never pre-emptively, so each profile rotates at most once per 8 hours.
+`--no-renew` turns it off.
+
+Two details make this safe to do on your behalf, and both are worth knowing if you touch
+this code:
+
+- **The refresh token rotates with no grace period.** The moment the provider answers,
+  the previous refresh token is rejected. The renewed credential is therefore written
+  and read back before the call returns; a write that cannot be verified is an error,
+  never a silent fallback.
+- **Renewal is locked per profile**, so two clausona processes cannot both rotate the
+  same credential and leave one of them holding a token the provider has already
+  invalidated.
+
+Claude credentials stay in the macOS Keychain (or `.credentials.json` elsewhere) and
+Codex credentials in `auth.json`, in place — unrelated contents of those stores, such as
+Claude's `mcpOAuth` block, are preserved.
+
+### When a reading is unavailable
+
+A dash means the reading could not be taken, and the reason is printed below the table:
+
+| State | Meaning |
+| --- | --- |
+| `expired` | The sign-in has lapsed past renewal (refresh token older than ~14 days, or revoked). Run `clausona login <profile>`. |
+| `missing` | No credential is stored for the profile. Run `clausona login <profile>`. |
+| `cooldown` | The endpoint returned 429. clausona pauses that tool until the window lifts. |
+| `error` | Network failure, timeout, or an unreadable response. |
+
+Where numbers are already known, they stay on screen dimmed with their age, rather than
+being blanked out.
 
 ## Commands
 
@@ -69,7 +130,7 @@ clausona                  # open the interactive dashboard
 | `clausona remove <profile>` | Remove a profile |
 | `clausona use [profile]` | Switch active profile |
 | `clausona run <profile> [-- args...]` | Run the tool's CLI with a specific profile |
-| `clausona list [--json]` | List all profiles with usage |
+| `clausona list [--json] [--refresh] [--no-quota] [--no-renew]` | List all profiles with plan quota and usage |
 | `clausona usage [profile] [--period=today\|week\|month\|all]` | View cost and token usage |
 | `clausona current [--json]` | Show active profile |
 | `clausona config <profile> --merge-sessions \| --separate-sessions` | Configure session mode |
@@ -135,12 +196,20 @@ The private set is larger for codex (state DB, input history, logs) but the prin
 
 ### Data Storage
 
-All data stays local on your machine.
+All data stays local on your machine. clausona has no telemetry and no server of its
+own, and nothing is sent to a third party.
+
+The one thing that leaves your machine is the plan-quota lookup: each profile's own
+credential is sent to that profile's own provider endpoint (`api.anthropic.com` for
+Claude, `chatgpt.com` for Codex) to read its limits, and to renew a lapsed token.
+Nothing else is transmitted, and `clausona list --no-quota` skips it entirely.
 
 ```
 ~/.clausona/
 ├── profiles.json    # registered profiles and active selection
 ├── usage.json       # per-profile usage history
+├── quota.json       # cached plan-quota readings (5-minute freshness)
+├── locks/           # short-lived per-profile credential renewal locks
 └── backups/
     ├── claude/      # backups of imported claude profile directories
     └── codex/       # backups of imported codex profile directories

@@ -36,7 +36,7 @@ const commandFlags: Record<string, { flags: string[]; prefixes?: string[] }> = {
   init: { flags: ["--auto", "--merge-sessions"] },
   add: { flags: ["--from", "--merge-sessions"] },
   use: { flags: [] },
-  list: { flags: ["--json"] },
+  list: { flags: ["--json", "--no-quota", "--no-renew", "--refresh"] },
   usage: { flags: ["--json"], prefixes: ["--period="] },
   current: { flags: ["--json"] },
   doctor: { flags: ["--json"] },
@@ -114,13 +114,16 @@ function subcommandHelpText(command: string): string | undefined {
     case "list":
       return [
         "",
-        `  ${accent("clausona list")} ${dim("— Show profiles with usage")}`,
+        `  ${accent("clausona list")} ${dim("— Show profiles with quota and usage")}`,
         "",
         `  ${bold("USAGE")}`,
-        helpUsage("clausona list [--json]"),
+        helpUsage("clausona list [--json] [--refresh] [--no-quota] [--no-renew]"),
         "",
         `  ${bold("OPTIONS")}`,
-        `    ${accent("--json".padEnd(12))}${dim("Output as JSON")}`,
+        `    ${accent("--json".padEnd(14))}${dim("Output as JSON")}`,
+        `    ${accent("--refresh".padEnd(14))}${dim("Bypass the 5-minute quota cache")}`,
+        `    ${accent("--no-quota".padEnd(14))}${dim("Skip the plan-quota lookup (no network access)")}`,
+        `    ${accent("--no-renew".padEnd(14))}${dim("Never renew a lapsed token; report it as expired")}`,
         "",
       ].join("\n");
 
@@ -296,7 +299,7 @@ function usageText() {
       ["init", "Discover accounts interactively"],
       ["add <profile>", "Add a new profile"],
       ["use [profile]", "Switch active profile"],
-      ["list", "Show profiles with usage"],
+      ["list", "Show profiles with quota and usage"],
       ["usage [profile]", "Show usage summary"],
       ["current", "Show active profile details"],
       ["config <profile>", "Configure profile settings"],
@@ -339,7 +342,11 @@ export async function runCommand(command: string, args: string[]) {
       return shellInit();
 
     case "list": {
-      const items = await listProfiles();
+      const items = await listProfiles({
+        quota: !args.includes("--no-quota"),
+        refresh: args.includes("--refresh"),
+        renew: !args.includes("--no-renew"),
+      });
       return jsonFlag(args) ? JSON.stringify(items, null, 2) : renderList(items);
     }
 

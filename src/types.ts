@@ -14,6 +14,40 @@ export type UsageSummary = {
   outputTokens: number;
 };
 
+export type QuotaWindow = {
+  /** Consumed share of the window, 0-100. */
+  usedPercent: number;
+  /** ISO 8601 instant the window rolls over, or null when the API omits it. */
+  resetsAt: string | null;
+};
+
+export type QuotaWindows = {
+  /** Short rolling window: Claude's 5-hour session, Codex's sub-day window. */
+  session?: QuotaWindow;
+  /** Seven-day window. */
+  weekly?: QuotaWindow;
+  /** Most-consumed model-scoped weekly limit, when the tool reports one. */
+  scoped?: QuotaWindow & { label: string };
+};
+
+/**
+ * Anything other than `ok` means the numbers (if any) are a last-known reading rather
+ * than a current one; `fetchedAt` says how old they are.
+ *
+ * `ok`      - fetched just now, or cached and still within the freshness window
+ * `expired` - credential exists but the API rejected it (401/403)
+ * `missing` - no credential on disk for this profile
+ * `cooldown`- the endpoint returned 429; requests are paused until it lifts
+ * `error`   - network, timeout, or unparseable response
+ */
+export type QuotaState = "ok" | "expired" | "missing" | "cooldown" | "error";
+
+export type QuotaSnapshot = QuotaWindows & {
+  state: QuotaState;
+  /** ms epoch of the fetch that produced these windows. */
+  fetchedAt: number;
+};
+
 export type ToolName = "claude" | "codex";
 
 export type Profile = {
@@ -66,6 +100,7 @@ export type ProfileListItem = {
   isPrimary: boolean;
   isActive: boolean;
   mergeSessions?: boolean;
+  quota?: QuotaSnapshot;
   today: UsageSummary;
   week: UsageSummary;
   month: UsageSummary;

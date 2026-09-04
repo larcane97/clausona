@@ -34,6 +34,7 @@ vi.mock("../lib/service", () => ({
       issues: [],
     },
   ]),
+  fetchProfileQuotas: vi.fn(async () => ({})),
   initializeRegistry: vi.fn(async () => ({})),
   setActiveProfileByName: vi.fn(async () => ({})),
 }));
