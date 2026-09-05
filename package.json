@@ -1,6 +1,6 @@
 {
   "name": "clausona",
-  "version": "0.1.0-beta",
+  "version": "0.2.0-beta",
   "private": true,
   "description": "Switch between multiple Claude Code and OpenAI Codex CLI accounts on one machine",
   "type": "module",

@@ -1,6 +1,8 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { build } from "esbuild";
+
+const { version } = JSON.parse(readFileSync("package.json", "utf8"));
 
 // Stub out react-devtools-core — ink imports it but it's unnecessary for CLI
 rmSync("dist", { recursive: true, force: true });
@@ -23,6 +25,8 @@ await build({
     ].join("\n"),
   },
   jsx: "automatic",
+  // Single source of truth: `clausona --version` must not drift from package.json.
+  define: { __CLAUSONA_VERSION__: JSON.stringify(version) },
   alias: {
     "react-devtools-core": `./${stubDir}/react-devtools-core.js`,
   },

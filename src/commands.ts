@@ -337,7 +337,7 @@ export async function runCommand(command: string, args: string[]) {
     case "version":
     case "-v":
     case "--version":
-      return `  ${accent("clausona")} ${dim("v0.1.0-beta")}`;
+      return `  ${accent("clausona")} ${dim(`v${__CLAUSONA_VERSION__}`)}`;
 
     case "shell-init":
       return shellInit();
