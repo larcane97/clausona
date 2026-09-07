@@ -17,19 +17,47 @@ Write-Host ""
 Write-Host "  clausona installer" -ForegroundColor Cyan
 Write-Host ""
 
-$NodeCommand = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $NodeCommand) {
-  throw "Node.js >= 20 is required but was not found."
+# Every node on PATH is considered, not just the first one. With an older node earlier
+# in PATH the installer used to reject the machine even though a supported version was
+# installed further along; install.sh walks all candidates the same way.
+$NodeBin = $null
+$NodeFound = $null
+foreach ($candidate in @(Get-Command node -CommandType Application -All -ErrorAction SilentlyContinue)) {
+  $major = 0
+  try { $major = [int](& $candidate.Source -p "process.versions.node.split('.')[0]") } catch { $major = 0 }
+  if ($major -ge 20) {
+    $NodeBin = $candidate.Source
+    break
+  }
+  # Remember the first too-old install so the failure can name what it found.
+  if ((-not $NodeFound) -and ($major -gt 0)) {
+    $NodeFound = "$(& $candidate.Source --version) at $($candidate.Source)"
+  }
 }
 
-$NodeMajor = [int](& $NodeCommand.Source -p "process.versions.node.split('.')[0]")
-if ($NodeMajor -lt 20) {
-  throw "Node.js >= 20 is required. Found: $(& $NodeCommand.Source --version)"
+if (-not $NodeBin) {
+  $reported = if ($NodeFound) { $NodeFound } else { "no node on PATH" }
+  throw @"
+Node.js >= 20 is required but not found.
+Found: $reported
+
+Install Node 20 or newer, then re-run this installer:
+  winget install OpenJS.NodeJS.LTS
+  https://nodejs.org/en/download
+"@
 }
+
+Write-Host "  Using node: $NodeBin ($(& $NodeBin --version))"
 
 $SupportedCli = Get-Command -Name claude, codex -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $SupportedCli) {
-  throw "Install Claude Code CLI or OpenAI Codex CLI before installing clausona."
+  throw @"
+Claude Code CLI or OpenAI Codex CLI is required but neither was found.
+
+Install one of them, then re-run this installer:
+  Claude Code  https://docs.anthropic.com/en/docs/claude-code
+  Codex CLI    https://github.com/openai/codex
+"@
 }
 
 $DownloadUrl = if ($Version -eq "latest") {

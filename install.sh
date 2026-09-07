@@ -17,27 +17,55 @@ echo ""
 echo -e "  ${BOLD}clausona installer${RESET}"
 echo ""
 
-# Find Node >= 20
+# Find Node >= 20.
+# PATH is walked directly rather than through `which -a`: `which` is an external
+# command under bash and is absent from minimal Linux images (Debian ships it in
+# debianutils), while busybox's does not accept -a. Either way the lookup returned
+# nothing and the installer reported a missing Node on machines that had one.
 NODE_BIN=""
-for candidate in $(which -a node 2>/dev/null); do
+NODE_FOUND=""
+IFS=: read -ra path_dirs <<< "$PATH"
+for dir in "${path_dirs[@]}"; do
+  [[ -n "$dir" ]] || continue
+  candidate="$dir/node"
+  [[ -f "$candidate" && -x "$candidate" ]] || continue
   ver=$("$candidate" -e "console.log(process.versions.node.split('.')[0])" 2>/dev/null || echo "0")
+  [[ "$ver" =~ ^[0-9]+$ ]] || ver="0"
   if [[ "$ver" -ge 20 ]]; then
     NODE_BIN="$candidate"
     break
+  fi
+  # Remember the first too-old install so the failure can name what it found.
+  if [[ -z "$NODE_FOUND" && "$ver" -gt 0 ]]; then
+    NODE_FOUND="$("$candidate" --version 2>/dev/null) at $candidate"
   fi
 done
 
 if [[ -z "$NODE_BIN" ]]; then
   echo -e "  ${RED}✗${RESET} Node.js >= 20 is required but not found."
-  echo -e "  ${CYAN}Found: $(node --version 2>/dev/null || echo 'none')${RESET}"
+  echo -e "  ${CYAN}Found: ${NODE_FOUND:-no node on PATH}${RESET}"
+  echo ""
+  echo -e "  Install Node 20 or newer, then re-run this installer:"
+  echo -e "    macOS    ${CYAN}brew install node${RESET}"
+  echo -e "    Linux    ${CYAN}https://github.com/nodesource/distributions${RESET}"
+  echo -e "    any OS   ${CYAN}https://nodejs.org/en/download${RESET}"
+  echo ""
+  echo -e "  Using nvm, fnm or asdf? ${CYAN}curl ... | bash${RESET} does not read your shell"
+  echo -e "  profile, so activate the version manager before running this."
   exit 1
 fi
 
-echo -e "  Using node: $NODE_BIN (v$($NODE_BIN -e "console.log(process.version)"))"
+echo -e "  Using node: $NODE_BIN ($($NODE_BIN --version))"
 
 if ! command -v claude &>/dev/null && ! command -v codex &>/dev/null; then
   echo -e "  ${RED}✗${RESET} Claude Code CLI or OpenAI Codex CLI is required but neither was found."
-  echo -e "  ${CYAN}Install one of the supported CLIs, then retry.${RESET}"
+  echo ""
+  echo -e "  Install one of them, then re-run this installer:"
+  echo -e "    Claude Code  ${CYAN}https://docs.anthropic.com/en/docs/claude-code${RESET}"
+  echo -e "    Codex CLI    ${CYAN}https://github.com/openai/codex${RESET}"
+  echo ""
+  echo -e "  Already installed? It must be a real executable on PATH - a shell alias"
+  echo -e "  or function is not visible to ${CYAN}curl ... | bash${RESET}."
   exit 1
 fi
 

@@ -29,3 +29,34 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+
+      # The installers ship as release assets and are never exercised by the unit
+      # tests, so a broken one only surfaces when a user runs it.
+      - name: Check installer (POSIX)
+        if: runner.os == 'Linux'
+        run: |
+          bash -n install.sh
+          # Node must be found without `which`, which minimal images do not ship.
+          mkdir -p /tmp/minbin
+          ln -sf "$(command -v node)" /tmp/minbin/node
+          out="$(env PATH=/tmp/minbin /bin/bash install.sh 2>&1 || true)"
+          printf '%s\n' "$out"
+          case "$out" in
+            *"Using node:"*) echo "node detection OK" ;;
+            *) echo "::error::install.sh did not detect node on a PATH without which"; exit 1 ;;
+          esac
+
+      - name: Check installer (PowerShell)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path install.ps1).Path, [ref]$null, [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Host $_.ToString() }
+            throw "install.ps1 has parse errors"
+          }
+          $out = (pwsh -NoProfile -File install.ps1 2>&1 | Out-String)
+          Write-Host $out
+          if ($out -notmatch 'Using node:') { throw "install.ps1 did not detect node" }
