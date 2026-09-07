@@ -115,6 +115,7 @@ export type DoctorIssue = {
     | "broken_symlink"
     | "local_override"
     | "stale_symlink"
+    | "missing_shared_link"
     | "plugins_out_of_sync";
   message: string;
 };

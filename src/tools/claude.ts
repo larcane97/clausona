@@ -11,6 +11,14 @@ import type { ToolAdapter, ToolCredential } from "./types.js";
 
 const BASE_SHARED_LINK_SKIP = new Set([".claude.json", "image-cache", "statsig", "plugins"]);
 
+// State keyed by session id. `jobs/` holds the background-session records that the
+// background list reads (state, respawn flags, resume target) and `teams/` holds team
+// membership; both are addressed by the same session id as the transcripts under
+// `projects/`, and the tool derives all three from one CLAUDE_CONFIG_DIR. Sharing them
+// out of step with `projects/` splits a record from its transcript and resume breaks,
+// so they follow the session-separation choice rather than being shared unconditionally.
+const SESSION_SCOPED = ["projects", "jobs", "teams"] as const;
+
 // Undocumented endpoint that backs Claude Code's own /usage view. Anonymous requests
 // are rejected with a flat one-hour Retry-After, so it is never called without a token.
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
@@ -271,7 +279,7 @@ export const claudeAdapter: ToolAdapter = {
   keychainServiceName: keychainService,
   hasKeychainCredential: hasKeychain,
   sharedSkipSet: (mergeSessions) =>
-    mergeSessions ? new Set(BASE_SHARED_LINK_SKIP) : new Set([...BASE_SHARED_LINK_SKIP, "projects"]),
+    mergeSessions ? new Set(BASE_SHARED_LINK_SKIP) : new Set([...BASE_SHARED_LINK_SKIP, ...SESSION_SCOPED]),
   // postSetup is left undefined here — service.ts's syncPluginsJson is wired into the
   // Claude code path explicitly because it has cross-cutting plugin marketplace state.
   // We will keep that wiring during Task 11 refactor; the adapter is not the place for it.
