@@ -49,6 +49,9 @@ macOS/Linux:
 curl -fsSL https://github.com/larcane97/clausona/releases/latest/download/install.sh | bash
 ```
 
+Piping to `bash` does not read your shell profile, so if Node comes from a version
+manager (nvm, fnm, asdf), activate it before running the command.
+
 Windows PowerShell:
 
 ```powershell
