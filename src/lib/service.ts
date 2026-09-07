@@ -165,6 +165,76 @@ async function mergeSessionFiles(sourceDir: string, primarySource: string) {
   return merged;
 }
 
+/**
+ * Move session-keyed record directories (`jobs/`, `teams/`) into the primary.
+ *
+ * Unlike `projects/`, these hold one self-contained directory per session id and no
+ * index to rebuild, so a merge is a plain per-record move. Records are addressed by the
+ * session id (`jobs/` uses its first 8 characters), which makes collisions across
+ * accounts effectively impossible; where one does occur the primary's copy wins rather
+ * than being overwritten.
+ */
+async function mergeRecordDirs(sourceDir: string, primarySource: string, kind: "jobs" | "teams") {
+  const src = path.join(sourceDir, kind);
+  const dst = path.join(primarySource, kind);
+
+  const srcStats = await lstat(src).catch(() => null);
+  if (!srcStats || srcStats.isSymbolicLink()) return 0;
+  if (!(await exists(dst))) return 0;
+
+  const entries = await readdir(src, { withFileTypes: true });
+  let merged = 0;
+
+  for (const entry of entries) {
+    // Loose files at this level (jobs/pins.json) are whole-store state, not records;
+    // merging them would mean merging their contents, so the primary's copy stands.
+    if (!entry.isDirectory()) continue;
+
+    const target = path.join(dst, entry.name);
+    if (await exists(target)) continue;
+    try {
+      await cp(path.join(src, entry.name), target, { recursive: true });
+      if (kind === "jobs") await rebaseJobTranscriptPath(target, sourceDir, primarySource);
+      merged++;
+    } catch (e) {
+      warn(`mergeRecordDirs(${kind}): could not copy ${entry.name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  return merged;
+}
+
+/**
+ * A job record stores the absolute path of its transcript, written against the config
+ * dir it was created under. That path still resolves while the profile exists — its
+ * `projects/` is a shared link to the primary — but it breaks the moment the profile
+ * directory goes away, so the merged copy is rebased onto the primary.
+ */
+async function rebaseJobTranscriptPath(jobDir: string, sourceDir: string, primarySource: string) {
+  const statePath = path.join(jobDir, "state.json");
+  const state = await readJson<Record<string, unknown>>(statePath, {});
+  const recorded = state.linkScanPath;
+  if (typeof recorded !== "string") return;
+
+  const prefix = sourceDir.endsWith(path.sep) ? sourceDir : sourceDir + path.sep;
+  if (!recorded.startsWith(prefix)) return;
+
+  state.linkScanPath = path.join(primarySource, recorded.slice(prefix.length));
+  await writeJson(statePath, state);
+}
+
+/**
+ * Fold a profile's own session state into the primary ahead of replacing it with shared
+ * links. `setupSharedLinks` backs a local directory up and then deletes it, and a
+ * backup under ~/.clausona is invisible to the tool — so anything not merged here is
+ * gone from the user's session and background lists.
+ */
+export async function mergeSessionState(sourceDir: string, primarySource: string) {
+  await mergeSessionFiles(sourceDir, primarySource);
+  await mergeRecordDirs(sourceDir, primarySource, "jobs");
+  await mergeRecordDirs(sourceDir, primarySource, "teams");
+}
+
 export async function setupSharedLinks(
   adapter: ToolAdapter,
   profileDir: string,
@@ -638,7 +708,7 @@ export async function initializeRegistry(options: {
         throw new Error(`primarySource for ${account.tool} not set — registry build invariant violated`);
       }
       if (merge && account.tool === "claude") {
-        await mergeSessionFiles(account.configDir, primary);
+        await mergeSessionState(account.configDir, primary);
       }
       await setupSharedLinks(adapter, account.configDir, primary, merge, backupDir);
       if (account.tool === "claude") {
@@ -813,9 +883,8 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
     }
 
     if (primarySource) {
-      const primaryEntries = new Set(
-        (await readdir(primarySource, { withFileTypes: true }).catch(() => [])).map((entry) => entry.name),
-      );
+      const primaryDirents = await readdir(primarySource, { withFileTypes: true }).catch(() => []);
+      const primaryEntries = new Set(primaryDirents.map((entry) => entry.name));
 
       const dirEntries = await readdir(profile.configDir, { withFileTypes: true }).catch(() => []);
       const isSkipped = (n: string) => shouldSkipShare(adapter, n, profile.mergeSessions ?? false);
@@ -858,10 +927,24 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
         });
       }
 
+      // The loop above can only see what the profile already has, so a directory the
+      // primary gained after this profile was set up is invisible to it — the case that
+      // let split background-session state read as healthy. Walk the primary too.
+      const missingSharedDirs: string[] = [];
+      if (!profile.isPrimary) {
+        for (const entry of primaryDirents) {
+          if (!entry.isDirectory()) continue;
+          if (isSkipped(entry.name)) continue;
+          if (await exists(path.join(profile.configDir, entry.name))) continue;
+          missingSharedDirs.push(entry.name);
+        }
+      }
+
       issues.push(
         ...evaluateSymlinkHealth({
           isPrimary: Boolean(profile.isPrimary),
           items: sharedLinkItems,
+          missingSharedDirs,
         }),
       );
     }
@@ -938,13 +1021,16 @@ export async function repairProfile(id: string) {
   const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
   const profileAdapter = getAdapter(profile.tool);
   const primarySource = registry.primarySources[profile.tool] ?? profileAdapter.defaultConfigDir(homedir());
-  const repaired = await setupSharedLinks(
-    profileAdapter,
-    profile.configDir,
-    primarySource,
-    profile.mergeSessions ?? false,
-    backupDir,
-  );
+  const mergeSessions = profile.mergeSessions ?? false;
+
+  // A profile that shares sessions may hold session state the primary has never seen —
+  // that is the whole point of repairing a profile whose links predate a directory the
+  // tool added later. Fold it in before setupSharedLinks deletes it.
+  if (mergeSessions && profile.tool === "claude") {
+    await mergeSessionState(profile.configDir, primarySource);
+  }
+
+  const repaired = await setupSharedLinks(profileAdapter, profile.configDir, primarySource, mergeSessions, backupDir);
   if (profile.tool === "claude") {
     await setupPluginsDir(profile.configDir, primarySource);
   }
@@ -952,7 +1038,7 @@ export async function repairProfile(id: string) {
   // Restore skip-set items from backup if they were stale symlinks that got removed
   // Skip if the backup item is a symlink pointing to primary (stale)
   if (await exists(backupDir)) {
-    const skipSet = profileAdapter.sharedSkipSet(profile.mergeSessions ?? false);
+    const skipSet = profileAdapter.sharedSkipSet(mergeSessions);
     for (const itemName of skipSet) {
       const target = path.join(profile.configDir, itemName);
       const backupItem = path.join(backupDir, itemName);
@@ -988,7 +1074,7 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
 
   // separated → merged: merge session files before symlinking
   if (next && profile.tool === "claude") {
-    await mergeSessionFiles(profile.configDir, primarySource);
+    await mergeSessionState(profile.configDir, primarySource);
   }
 
   profile.mergeSessions = next;
@@ -1094,7 +1180,7 @@ export async function addProfile(options: {
     const mergeSessions = options.mergeSessions ?? false;
     try {
       if (mergeSessions && options.tool === "claude") {
-        await mergeSessionFiles(configDir, primarySource);
+        await mergeSessionState(configDir, primarySource);
       }
       await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
       if (options.tool === "claude") {

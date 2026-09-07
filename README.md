@@ -185,6 +185,8 @@ When you register a new profile, clausona symlinks shared resources from your pr
 ~/.claude-work/            (new claude profile)
 ├── .claude.json           ← own auth credentials (NOT shared)
 ├── projects/              ← own session history (NOT shared by default)
+├── jobs/                  ← own background sessions (follows projects/)
+├── teams/                 ← own team records (follows projects/)
 ├── mcp-servers/  →  ~/.claude/mcp-servers    (symlink to primary)
 ├── plugins/      →  ~/.claude/plugins        (symlink to primary)
 ├── settings.json →  ~/.claude/settings.json  (symlink to primary)
@@ -212,6 +214,19 @@ otherwise fall back to same-volume hard links. If a profile is imported from ano
 clausona can create file symbolic links across volumes.
 
 **Session separation** is the default: each profile keeps its own session directory, so `/resume` (Claude) and `codex resume` (Codex) only show that profile's conversations. To share session history across claude profiles, pass `--merge-sessions` when adding or initializing.
+
+For claude profiles this covers background sessions and team records too. A background
+session is stored as a record in `jobs/` keyed by the same session id as its transcript
+under `projects/`, so the two are shared or separated together — sharing one without the
+other would leave a record whose transcript cannot be resumed. `clausona repair` folds a
+profile's own records into the primary before re-linking, so nothing is lost when a
+profile switches to shared sessions or has its links rebuilt.
+
+Shared links are created from the primary's contents at the time a profile is set up, so
+a directory the tool introduces in a later version does not reach profiles that already
+exist — the tool creates it locally instead, and the accounts silently stop sharing that
+state. `clausona doctor` reports these as `missing_shared_link`; `clausona repair
+<profile>` links them.
 
 ### Data Storage
 
