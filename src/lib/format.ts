@@ -1,5 +1,12 @@
 import { symbol } from "../tui/theme.js";
-import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot, QuotaWindow, UsageSummary } from "../types.js";
+import type {
+  DoctorIssue,
+  DoctorProfileResult,
+  ProfileListItem,
+  QuotaSnapshot,
+  QuotaWindow,
+  UsageSummary,
+} from "../types.js";
 
 import {
   accent,
@@ -410,6 +417,9 @@ export function renderUsageSummary(
 }
 
 // ─── Doctor ─────────────────────────────────────────────────────────
+/** Issues that describe a missing credential, which only signing in can resolve. */
+const CREDENTIAL_ISSUE_KINDS = new Set<DoctorIssue["kind"]>(["missing_json", "missing_keychain", "missing_oauth"]);
+
 export function renderDoctor(results: DoctorProfileResult[]) {
   const sections = results.map((result) => {
     const title = `  ${bold(result.name)} ${dim(`(${result.email})`)}`;
@@ -424,10 +434,17 @@ export function renderDoctor(results: DoctorProfileResult[]) {
       return `    ${dim(connector + symbol.lineH)} ${issue.message}`;
     });
 
-    // Add repair suggestion for the last issue
-    const suggestion = `       ${dim(`Run ${accent(`clausona repair ${result.name}`)} to fix`)}`;
+    // repair rebuilds shared links, folds in session state and re-runs the plugins
+    // setup. It cannot produce a credential, so a profile that only needs one has to be
+    // pointed at login instead of at a command that would report success and change
+    // nothing. A profile carrying both classes of issue needs both steps.
+    const needsLogin = result.issues.some((issue) => CREDENTIAL_ISSUE_KINDS.has(issue.kind));
+    const needsRepair = result.issues.some((issue) => !CREDENTIAL_ISSUE_KINDS.has(issue.kind));
+    const suggestions: string[] = [];
+    if (needsRepair) suggestions.push(`       ${dim(`Run ${accent(`clausona repair ${result.name}`)} to fix`)}`);
+    if (needsLogin) suggestions.push(`       ${dim(`Run ${accent(`clausona login ${result.name}`)} to sign in`)}`);
 
-    return [title, statusLine, ...issueLines, suggestion].join("\n");
+    return [title, statusLine, ...issueLines, ...suggestions].join("\n");
   });
 
   return ["", ...sections, ""].join("\n\n");

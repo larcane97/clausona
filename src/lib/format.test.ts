@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ProfileListItem, QuotaSnapshot } from "../types.js";
+import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot } from "../types.js";
 import { stripAnsi } from "./cli-style.js";
 import {
   fitQuotaValue,
@@ -14,6 +14,7 @@ import {
   quotaBar,
   quotaNotes,
   quotaSeverity,
+  renderDoctor,
   renderList,
 } from "./format.js";
 
@@ -283,5 +284,70 @@ describe("fitQuotaValue", () => {
 
     expect(fitQuotaValue(noReset, 40, now)).toBe("░░░░░░░░░░   0%");
     expect(fitQuotaValue(noReset, 5, now)).toBe("  0%");
+  });
+});
+
+describe("renderDoctor next-step hint", () => {
+  function result(issues: DoctorProfileResult["issues"]): DoctorProfileResult {
+    return {
+      name: "claude:work",
+      email: "work@example.com",
+      configDir: "/h/.claude-work",
+      isPrimary: false,
+      healthy: issues.length === 0,
+      issues,
+    };
+  }
+
+  it("suggests repair for issues repair can resolve", () => {
+    const out = stripAnsi(renderDoctor([result([{ kind: "stale_symlink", message: "x" }])]));
+
+    expect(out).toContain("clausona repair claude:work");
+    expect(out).not.toContain("clausona login");
+  });
+
+  it("suggests login instead when the profile only needs credentials", () => {
+    // repair rebuilds links and merges session state; it cannot produce a credential,
+    // so pointing at it here sends the user to a command that changes nothing.
+    const out = stripAnsi(renderDoctor([result([{ kind: "missing_oauth", message: "x" }])]));
+
+    expect(out).toContain("clausona login claude:work");
+    expect(out).not.toContain("clausona repair");
+  });
+
+  it("suggests login for a missing keychain item", () => {
+    const out = stripAnsi(renderDoctor([result([{ kind: "missing_keychain", message: "x" }])]));
+
+    expect(out).toContain("clausona login claude:work");
+    expect(out).not.toContain("clausona repair");
+  });
+
+  it("suggests login for an unreadable account file", () => {
+    const out = stripAnsi(renderDoctor([result([{ kind: "missing_json", message: "x" }])]));
+
+    expect(out).toContain("clausona login claude:work");
+    expect(out).not.toContain("clausona repair");
+  });
+
+  it("suggests both when the profile has both classes of issue", () => {
+    const out = stripAnsi(
+      renderDoctor([
+        result([
+          { kind: "missing_oauth", message: "x" },
+          { kind: "broken_symlink", message: "y" },
+        ]),
+      ]),
+    );
+
+    expect(out).toContain("clausona repair claude:work");
+    expect(out).toContain("clausona login claude:work");
+  });
+
+  it("suggests nothing for a healthy profile", () => {
+    const out = stripAnsi(renderDoctor([result([])]));
+
+    expect(out).toContain("healthy");
+    expect(out).not.toContain("clausona repair");
+    expect(out).not.toContain("clausona login");
   });
 });

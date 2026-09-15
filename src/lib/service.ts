@@ -31,6 +31,24 @@ import { profileId } from "./profile-ref.js";
 /** Files inside plugins/ that contain absolute paths and must be per-profile */
 const PLUGINS_PATH_FILES = new Set(["known_marketplaces.json", "installed_plugins.json"]);
 
+/**
+ * True when a known_marketplaces.json entry describes a marketplace clausona manages —
+ * a directory under the profile's plugins/marketplaces.
+ *
+ * Claude Code also registers marketplaces straight from a path the user picked, and
+ * those keep that path as their installLocation. They are the user's own registrations:
+ * clausona never created them and has nowhere to relocate them to, so they are neither
+ * drift to report nor state to rewrite. Treating them as managed made every profile
+ * holding one permanently unhealthy, and made the suggested repair delete them.
+ */
+function isManagedMarketplace(entry: unknown, configDir: string): boolean {
+  const location = (entry as Record<string, unknown> | null | undefined)?.installLocation;
+  // An entry with no location at all is malformed rather than user-registered, so it
+  // stays in scope and gets reported and rewritten as before.
+  if (typeof location !== "string") return true;
+  return location.startsWith(path.join(configDir, "plugins", "marketplaces") + path.sep);
+}
+
 const CLAUSONA_DIR = path.join(homedir(), ".clausona");
 const REGISTRY_PATH = path.join(CLAUSONA_DIR, "profiles.json");
 const USAGE_PATH = path.join(CLAUSONA_DIR, "usage.json");
@@ -294,8 +312,12 @@ export async function syncPluginsJson(configDir: string, primarySource: string):
     // Sync known_marketplaces.json
     const syncedKnown: Record<string, unknown> = {};
     for (const [name, entry] of Object.entries(knownJson)) {
-      if (!onDisk.has(name)) continue; // in JSON but not on disk → drop
       const e = entry as Record<string, unknown>;
+      if (!isManagedMarketplace(e, configDir)) {
+        syncedKnown[name] = e; // registered by the user from their own path — carry through
+        continue;
+      }
+      if (!onDisk.has(name)) continue; // in JSON but not on disk → drop
       syncedKnown[name] = {
         ...e,
         installLocation: path.join(configDir, "plugins", "marketplaces", name),
@@ -983,6 +1005,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
         }
         if (!pluginsOutOfSync) {
           for (const [name, entry] of Object.entries(knownJson)) {
+            if (!isManagedMarketplace(entry, profile.configDir)) continue;
             if (!onDisk.has(name)) {
               pluginsOutOfSync = true;
               break;

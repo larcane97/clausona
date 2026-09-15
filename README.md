@@ -237,7 +237,12 @@ to the primary's credential; `clausona doctor` reports it as `stale_symlink` and
 `clausona doctor` checks whichever store the platform uses: the Keychain item on macOS
 (`missing_keychain`) and the credential file everywhere else (`missing_oauth`). A profile
 that has just had a stale credential link removed reports `missing_oauth` until it signs
-in — that one is cleared by running the tool in that profile, not by `clausona repair`.
+in, so doctor points those findings at `clausona login <profile>` rather than at
+`clausona repair`, which rebuilds shared links and cannot produce a credential.
+
+A marketplace registered from a path of your own — rather than installed under
+`plugins/marketplaces/` — is left alone. clausona neither reports it as drift nor
+rewrites its location, so `clausona repair` keeps the registration intact.
 
 Shared links are created from the primary's contents at the time a profile is set up, so
 a directory the tool introduces in a later version does not reach profiles that already
