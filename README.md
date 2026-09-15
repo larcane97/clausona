@@ -186,7 +186,8 @@ When you register a new profile, clausona symlinks shared resources from your pr
 
 ```
 ~/.claude-work/            (new claude profile)
-├── .claude.json           ← own auth credentials (NOT shared)
+├── .claude.json           ← own account metadata (NOT shared)
+├── .credentials.json      ← own OAuth tokens outside macOS (NOT shared)
 ├── projects/              ← own session history (NOT shared by default)
 ├── jobs/                  ← own background sessions (follows projects/)
 ├── teams/                 ← own team records (follows projects/)
@@ -224,6 +225,14 @@ under `projects/`, so the two are shared or separated together — sharing one w
 other would leave a record whose transcript cannot be resumed. `clausona repair` folds a
 profile's own records into the primary before re-linking, so nothing is lost when a
 profile switches to shared sessions or has its links rebuilt.
+
+**Credentials are never shared.** On macOS Claude Code keeps its OAuth tokens in the
+Keychain under a service name derived from the config directory, so each profile is
+isolated by the tool itself. Everywhere else the tokens are a plain
+`.credentials.json` next to the config, and clausona keeps that file profile-local.
+Profiles created by clausona 0.2.2-beta or earlier on Linux and Windows may hold a link
+to the primary's credential; `clausona doctor` reports it as `stale_symlink` and
+`clausona repair <profile>` removes it, after which that profile signs in on its own.
 
 Shared links are created from the primary's contents at the time a profile is set up, so
 a directory the tool introduces in a later version does not reach profiles that already
