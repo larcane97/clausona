@@ -9,7 +9,13 @@ import { parseClaudeQuota, QuotaHttpError } from "../core/quota.js";
 import type { QuotaWindows } from "../types.js";
 import type { ToolAdapter, ToolCredential } from "./types.js";
 
-const BASE_SHARED_LINK_SKIP = new Set([".claude.json", "image-cache", "statsig", "plugins"]);
+// `.credentials.json` is the OAuth token store Claude Code uses wherever there is no
+// system keychain — on macOS the tokens live in the Keychain under a per-config-dir
+// service name instead, so the primary has no such file and nothing was ever linked.
+// That is why sharing it went unnoticed: on Linux and Windows a shared link makes every
+// profile read the primary's token, so all accounts authenticate and spend quota as the
+// primary no matter what `/status` reports.
+const BASE_SHARED_LINK_SKIP = new Set([".claude.json", ".credentials.json", "image-cache", "statsig", "plugins"]);
 
 // State keyed by session id. `jobs/` holds the background-session records that the
 // background list reads (state, respawn flags, resume target) and `teams/` holds team
