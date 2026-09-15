@@ -873,11 +873,22 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
         });
       }
 
+      // The Keychain only exists on macOS, and the probe returns false everywhere else
+      // no matter what the profile holds — so running it unconditionally reported every
+      // Linux and Windows profile as broken while never saying anything about the store
+      // those platforms actually use. Check whichever store the platform keeps tokens in.
       if (adapter.keychainServiceName && adapter.hasKeychainCredential) {
-        const resolvedDir = await realpath(profile.configDir).catch(() => profile.configDir);
-        const keychainService = adapter.keychainServiceName({ homeDir: homedir(), configDir: resolvedDir });
-        if (!(await adapter.hasKeychainCredential(keychainService))) {
-          issues.push({ kind: "missing_keychain", message: `${keychainService} not found in Keychain` });
+        if (process.platform === "darwin") {
+          const resolvedDir = await realpath(profile.configDir).catch(() => profile.configDir);
+          const keychainService = adapter.keychainServiceName({ homeDir: homedir(), configDir: resolvedDir });
+          if (!(await adapter.hasKeychainCredential(keychainService))) {
+            issues.push({ kind: "missing_keychain", message: `${keychainService} not found in Keychain` });
+          }
+        } else if (adapter.readCredential && !(await adapter.readCredential(profile.configDir))) {
+          issues.push({
+            kind: "missing_oauth",
+            message: ".credentials.json is missing or has no access token - sign in from this profile",
+          });
         }
       }
     }

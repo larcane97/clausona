@@ -234,6 +234,11 @@ Profiles created by clausona 0.2.2-beta or earlier on Linux and Windows may hold
 to the primary's credential; `clausona doctor` reports it as `stale_symlink` and
 `clausona repair <profile>` removes it, after which that profile signs in on its own.
 
+`clausona doctor` checks whichever store the platform uses: the Keychain item on macOS
+(`missing_keychain`) and the credential file everywhere else (`missing_oauth`). A profile
+that has just had a stale credential link removed reports `missing_oauth` until it signs
+in — that one is cleared by running the tool in that profile, not by `clausona repair`.
+
 Shared links are created from the primary's contents at the time a profile is set up, so
 a directory the tool introduces in a later version does not reach profiles that already
 exist — the tool creates it locally instead, and the accounts silently stop sharing that
