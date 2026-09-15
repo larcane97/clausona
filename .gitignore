@@ -3,6 +3,7 @@ node_modules
 dist/
 .omc/
 .claude/
+.serena/
 docs/superpowers/
 *.local
 *.local.*
