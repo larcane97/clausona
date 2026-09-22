@@ -245,15 +245,29 @@ for (const shell of ["zsh", "bash"] as const) {
       const userDir = "/tmp/clausona-test-user-dir";
       const harness = makeHarness({ claude: { CLAUDE_CONFIG_DIR: "/tmp/clausona-test-claude-work" } });
 
-      const result = runShell(shell, harness, ["claude", reportParent("CLAUDE_CONFIG_DIR")].join("\n"), {
-        CLAUDE_CONFIG_DIR: userDir,
-      });
+      const result = runShell(
+        shell,
+        harness,
+        ["claude", 'printf "aside rc=%s\\n" "$?"', reportParent("CLAUDE_CONFIG_DIR")].join("\n"),
+        { CLAUDE_CONFIG_DIR: userDir, CLAUSONA_TEST_TOOL_EXIT: "9" },
+      );
 
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(`CLAUDE_CONFIG_DIR=${userDir}`);
+      // This branch is `command claude "$@"; return $?` - a regression that swallowed the
+      // status here would still pass a test run against a tool that exits 0.
+      expect(result.stdout).toContain("aside rc=9");
       // The old hook unset the user's variable on the way out; this one must not.
       expect(result.stdout).toContain(`parent CLAUDE_CONFIG_DIR=${userDir}`);
       expect(harness.log()).toEqual([]);
+
+      // The function's own return value, not just the echoed number.
+      const chained = runShell(shell, harness, 'claude && printf "SHOULD_NOT_RUN\\n"', {
+        CLAUDE_CONFIG_DIR: userDir,
+        CLAUSONA_TEST_TOOL_EXIT: "9",
+      });
+      expect(chained.stdout).not.toContain("SHOULD_NOT_RUN");
+      expect(chained.status).toBe(9);
     });
 
     it("sets nothing at all when the profile resolves to an empty environment", () => {
@@ -282,6 +296,20 @@ for (const shell of ["zsh", "bash"] as const) {
       expect(harness.log()).toEqual(["shell-env codex"]);
     });
 
+    it("steps aside for codex too, exit code intact", () => {
+      const userDir = "/tmp/clausona-test-codex-user-dir";
+      const harness = makeHarness({ codex: { CODEX_HOME: "/tmp/clausona-test-codex-work" } });
+
+      const result = runShell(shell, harness, ["codex", 'printf "aside rc=%s\\n" "$?"'].join("\n"), {
+        CODEX_HOME: userDir,
+        CLAUSONA_TEST_TOOL_EXIT: "9",
+      });
+
+      expect(result.stdout).toContain(`CODEX_HOME=${userDir}`);
+      expect(result.stdout).toContain("aside rc=9");
+      expect(harness.log()).toEqual([]);
+    });
+
     it("forwards arguments containing shell metacharacters verbatim", () => {
       const harness = makeHarness();
 
@@ -294,9 +322,18 @@ for (const shell of ["zsh", "bash"] as const) {
   });
 }
 
-describeIfZsh("posix shell integration (zsh history expansion)", () => {
-  // A `!` inside a double-quoted string is expanded when the function is *defined*, so a
-  // bad hook breaks at shell startup for everyone. Sourcing it interactively is the check.
+describeIfZsh("posix shell integration (interactive zsh)", () => {
+  /**
+   * A smoke test, and only that: it establishes that the emitted script parses under `-i`
+   * and that both wrappers end up defined as functions.
+   *
+   * It does NOT catch the bug it looks like it catches. A `!` inside a double-quoted string
+   * is history-expanded when the function is *defined*, which breaks `source ~/.zshrc` for
+   * every user - but zsh does not history-expand a `-c` script, with or without `-i`. Adding
+   * `command claude "$@!version"` to the script and running it here yields status 0, empty
+   * stderr, and a function body that still holds `"$@!version"` verbatim. The static scan in
+   * shell.test.ts ("does not use ! inside double-quoted strings") is the guard for that class.
+   */
   it("sources cleanly in an interactive zsh", () => {
     const harness = makeHarness({ claude: { CLAUDE_CONFIG_DIR: "/tmp/clausona-test-claude-work" } });
 
@@ -323,32 +360,73 @@ const describeIfPowerShell = process.platform === "win32" ? describe : describe.
  * the generated script's shape is also pinned statically in shell.test.ts.
  */
 describeIfPowerShell("PowerShell wrapper integration", () => {
-  function makeWindowsHarness(env: Record<string, string>): { binDir: string; root: string } {
+  type WindowsHarness = { binDir: string; logPath: string; log(): string[] };
+
+  /**
+   * `echo` is the only way to emit the payload from a .cmd, and cmd.exe reads these as
+   * operators inside one. `^` has to come first, or it would double the carets the later
+   * replacements introduce; `%` escapes as `%%` rather than with a caret, because a batch
+   * file would otherwise read `%NAME%` as a variable to expand.
+   *
+   * No value used below contains any of them today - this is here so that one which does
+   * fails on its own assertion rather than inside cmd.exe.
+   */
+  function escapeForCmdEcho(text: string): string {
+    return text
+      .replaceAll("^", "^^")
+      .replaceAll("&", "^&")
+      .replaceAll("|", "^|")
+      .replaceAll("<", "^<")
+      .replaceAll(">", "^>")
+      .replaceAll("%", "%%");
+  }
+
+  function makeWindowsHarness(env: Record<string, string>): WindowsHarness {
     const root = mkdtempSync(path.join(tmpdir(), "clausona-shell-ps-"));
     tmpDirs.push(root);
     const binDir = path.join(root, "bin");
     mkdirSync(binDir, { recursive: true });
+    const logPath = path.join(root, "calls.log");
+    writeFileSync(logPath, "");
 
-    // `_shell-env <tool> --json` is the only thing the hook asks clausona for.
-    const payload = JSON.stringify(env).replaceAll("^", "^^").replaceAll("|", "^|").replaceAll(">", "^>");
+    // Logs every subcommand the hook asks for, so the call sequence can be asserted the way
+    // the POSIX harness does; `_shell-env <tool> --json` is the only one that answers.
     writeFileSync(
       path.join(binDir, "clausona.cmd"),
-      ["@echo off", 'if "%1"=="_shell-env" echo %1 | findstr /b _shell-env >nul', `echo ${payload}`, "exit /b 0"].join(
-        "\r\n",
-      ),
-    );
-    writeFileSync(
-      path.join(binDir, "claude.cmd"),
       [
         "@echo off",
-        `node -e "const v=n=>process.env[n]===undefined?'<unset>':process.env[n];process.stdout.write([v('CLAUDE_CONFIG_DIR'),v('ANTHROPIC_BASE_URL'),JSON.stringify(v('ANTHROPIC_AUTH_TOKEN')),process.argv[1]||''].join('|'))" %*`,
-        `exit /b %CLAUSONA_TEST_TOOL_EXIT%`,
+        '>>"%CLAUSONA_TEST_LOG%" echo %1',
+        'if not "%1"=="_shell-env" exit /b 0',
+        `echo ${escapeForCmdEcho(JSON.stringify(env))}`,
+        "exit /b 0",
       ].join("\r\n"),
     );
-    return { binDir, root };
+    for (const [tool, configVar] of [
+      ["claude", "CLAUDE_CONFIG_DIR"],
+      ["codex", "CODEX_HOME"],
+    ]) {
+      writeFileSync(
+        path.join(binDir, `${tool}.cmd`),
+        [
+          "@echo off",
+          `node -e "const v=n=>process.env[n]===undefined?'<unset>':process.env[n];process.stdout.write([v('${configVar}'),v('ANTHROPIC_BASE_URL'),JSON.stringify(v('ANTHROPIC_AUTH_TOKEN')),process.argv[1]||''].join('|'))" %*`,
+          `exit /b %CLAUSONA_TEST_TOOL_EXIT%`,
+        ].join("\r\n"),
+      );
+    }
+
+    return {
+      binDir,
+      logPath,
+      log: () =>
+        readFileSync(logPath, "utf8")
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line !== ""),
+    };
   }
 
-  function runPowerShell(binDir: string, body: string, extraEnv: Record<string, string> = {}) {
+  function runPowerShell(harness: WindowsHarness, body: string, extraEnv: Record<string, string> = {}) {
     return spawnSync(
       "powershell.exe",
       ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `${renderPowerShellInit()}\n${body}`],
@@ -358,7 +436,8 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
           ...process.env,
           CLAUSONA_TEST_TOOL_EXIT: "0",
           ...extraEnv,
-          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+          CLAUSONA_TEST_LOG: harness.logPath,
+          PATH: `${harness.binDir}${path.delimiter}${process.env.PATH ?? ""}`,
         },
         timeout: POWERSHELL_SPAWN_TIMEOUT_MS,
       },
@@ -369,13 +448,13 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
     "applies the profile environment and preserves metacharacters in arguments",
     () => {
       const workDir = "C:\\clausona-test\\work";
-      const { binDir } = makeWindowsHarness({
+      const harness = makeWindowsHarness({
         CLAUDE_CONFIG_DIR: workDir,
         ANTHROPIC_BASE_URL: LOCAL_BASE_URL,
         ANTHROPIC_AUTH_TOKEN: AWKWARD_TOKEN,
       });
 
-      const result = runPowerShell(binDir, `claude 'hello & echo INJECTED'`);
+      const result = runPowerShell(harness, `claude 'hello & echo INJECTED'`);
 
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(workDir);
@@ -383,6 +462,8 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       // A value carrying a single quote and a newline must survive ConvertFrom-Json.
       expect(result.stdout).toContain(JSON.stringify(AWKWARD_TOKEN));
       expect(result.stdout).toContain("hello & echo INJECTED");
+      // The same call sequence the POSIX tests pin, in the same order.
+      expect(harness.log()).toEqual(["_shell-env", "_sync-plugins", "_track-usage"]);
     },
     // Cold powershell.exe startup on a CI runner took 5.4s, over vitest's 5s default, so
     // the test was killed before it could assert. Must exceed the spawn timeout above.
@@ -392,10 +473,10 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
   it(
     "restores a previously unset variable to unset, not to an empty string",
     () => {
-      const { binDir } = makeWindowsHarness({ ANTHROPIC_BASE_URL: LOCAL_BASE_URL });
+      const harness = makeWindowsHarness({ ANTHROPIC_BASE_URL: LOCAL_BASE_URL });
 
       const result = runPowerShell(
-        binDir,
+        harness,
         [
           "claude | Out-Null",
           `if (Test-Path Env:ANTHROPIC_BASE_URL) { 'STILL_SET' } else { 'REMOVED' }`,
@@ -410,6 +491,9 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       expect(result.stdout).not.toContain("STILL_SET");
       // A variable the user set is restored to its own value, never blanked.
       expect(result.stdout).toContain("C:\\mine");
+      // Three calls from the first invocation and none from the second: once the user has
+      // set CLAUDE_CONFIG_DIR the wrapper steps aside and asks clausona for nothing.
+      expect(harness.log()).toEqual(["_shell-env", "_sync-plugins", "_track-usage"]);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );
@@ -417,14 +501,31 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
   it(
     "propagates a non-zero exit code through LASTEXITCODE",
     () => {
-      const { binDir } = makeWindowsHarness({ CLAUDE_CONFIG_DIR: "C:\\clausona-test\\work" });
+      const harness = makeWindowsHarness({ CLAUDE_CONFIG_DIR: "C:\\clausona-test\\work" });
 
-      const result = runPowerShell(binDir, "claude | Out-Null\n$LASTEXITCODE", {
+      const result = runPowerShell(harness, "claude | Out-Null\n$LASTEXITCODE", {
         CLAUSONA_TEST_TOOL_EXIT: "42",
       });
 
       expect(result.status).toBe(0);
       expect(result.stdout.trim()).toBe("42");
+    },
+    POWERSHELL_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "drives codex on the same helper, without plugin sync or usage tracking",
+    () => {
+      const codexHome = "C:\\clausona-test\\codex";
+      const harness = makeWindowsHarness({ CODEX_HOME: codexHome });
+
+      const result = runPowerShell(harness, "codex exec");
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(codexHome);
+      expect(result.stdout).toContain("exec");
+      // _sync-plugins and _track-usage are claude-only on this platform too.
+      expect(harness.log()).toEqual(["_shell-env"]);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );

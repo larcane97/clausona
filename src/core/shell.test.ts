@@ -54,8 +54,25 @@ describe("renderShellInit", () => {
     expect(out).toMatch(/alias csn=clausona/);
   });
 
+  /**
+   * This scan is the only effective guard against the history-expansion class of bug: the
+   * interactive-zsh smoke test cannot catch it, because zsh does not history-expand a `-c`
+   * script whether or not `-i` is passed.
+   *
+   * It pairs double quotes left-to-right within a line, which is exact only while the script
+   * holds no `"` outside a double-quoted region and no such region spanning a newline. Both
+   * assumptions are asserted rather than assumed: an odd total means some `"` is a literal
+   * inside single quotes and the pairing has slipped, and a fragment count below half the
+   * total means a region was skipped - each fails loudly instead of silently narrowing what
+   * the `!` check below looks at.
+   */
   it("does not use ! inside double-quoted strings (zsh history expansion)", () => {
+    const quotes = (out.match(/"/g) ?? []).length;
+    expect(quotes % 2, `odd number of double quotes (${quotes}): the pairing below is unreliable`).toBe(0);
+
     const doubleQuoted = out.match(/"[^"\n]*"/g) ?? [];
+    expect(doubleQuoted.length, "a double-quoted region spans a newline and is not scanned").toBe(quotes / 2);
+
     for (const fragment of doubleQuoted) expect(fragment).not.toMatch(/!/);
   });
 
