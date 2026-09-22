@@ -102,9 +102,24 @@ function global:Invoke-ClausonaTool {
   # exactly as it does on POSIX. stderr cannot be merged into stdout, which carries the
   # JSON, and 5.1 cannot split a native command's streams inline; so stderr goes to a temp
   # file and is replayed to the console afterwards.
-  $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ("clausona-" + [System.IO.Path]::GetRandomFileName())
+  #
+  # Creating that file is the one step that can fail before the lookup runs, so it is
+  # guarded and the lookup has a branch for each outcome. Losing the warnings is bad;
+  # running the tool against the default account without saying so would be worse, and
+  # that is what a lookup skipped over a temp file would cause. Exactly one branch runs,
+  # so a run still makes exactly one _shell-env call.
+  $stderrPath = $null
   try {
-    $raw = & clausona _shell-env $Tool --json 2>$stderrPath
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+  } catch {
+    $stderrPath = $null
+  }
+  try {
+    if ($stderrPath) {
+      $raw = & clausona _shell-env $Tool --json 2>$stderrPath
+    } else {
+      $raw = & clausona _shell-env $Tool --json 2>$null
+    }
     if ($raw) {
       $parsed = $raw | ConvertFrom-Json
       foreach ($property in $parsed.PSObject.Properties) {
@@ -116,18 +131,26 @@ function global:Invoke-ClausonaTool {
   } catch {
     # A failed lookup must never stop the tool from starting.
   } finally {
-    # Neither must reporting one, hence the second try. [Console]::Error keeps the warning
+    # Neither must reporting one, hence the inner try. [Console]::Error keeps the warning
     # on stderr, where Write-Host would put it on stdout and corrupt a piped run.
+    #
+    # -LiteralPath throughout: a temp directory under a user name containing [ or ] would
+    # otherwise read as a wildcard, and the file would be neither reported nor deleted.
     try {
-      # -LiteralPath throughout: a temp directory under a user name containing [ or ] would
-      # otherwise read as a wildcard, and the file would be neither reported nor deleted.
-      if (Test-Path -LiteralPath $stderrPath) {
-        $warning = Get-Content -LiteralPath $stderrPath -Raw
-        if ($warning) { [Console]::Error.Write($warning) }
-        Remove-Item -LiteralPath $stderrPath -Force
+      if ($stderrPath) {
+        if (Test-Path -LiteralPath $stderrPath) {
+          $warning = Get-Content -LiteralPath $stderrPath -Raw
+          if ($warning) { [Console]::Error.Write($warning) }
+        }
       }
     } catch {
       # Nothing left to do about a warning that cannot be printed.
+    }
+    # Its own try, so a read that threw above still deletes the file it read from.
+    try {
+      if ($stderrPath) { Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue }
+    } catch {
+      # Nothing left to do about a temp file that cannot be deleted.
     }
   }
 

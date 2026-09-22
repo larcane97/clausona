@@ -100,11 +100,13 @@ describe("renderPowerShellInit", () => {
     expect(out).not.toContain("?");
   });
 
+  const helper = out.split("function global:Invoke-ClausonaTool")[1]?.split("function global:claude")[0] ?? "";
+
   // Task 4 emits a warning on every _shell-env run so a broken profile keeps announcing
   // itself. Merging stderr into stdout would corrupt the JSON, so it is captured and
-  // replayed instead - and discarding it, as `2>$null` did, voided the contract on Windows.
+  // replayed instead - and discarding it, as `2>$null` alone did, voided the contract on
+  // Windows.
   it("replays _shell-env warnings to stderr instead of discarding them", () => {
-    expect(out).not.toMatch(/_shell-env \$Tool --json 2>\$null/);
     expect(out).toMatch(/_shell-env \$Tool --json 2>\$stderrPath/);
     // Not Write-Host: that writes to stdout and would corrupt `claude | Something`.
     expect(out).toMatch(/\[Console\]::Error\.Write\(\$warning\)/);
@@ -113,12 +115,47 @@ describe("renderPowerShellInit", () => {
     expect(out).not.toMatch(/2>&1/);
   });
 
+  /**
+   * The rule: the diagnostic path must never be able to break the env-application path.
+   * Creating the capture file is the one step that can fail before the lookup runs, so a
+   * failure there degrades to the old behaviour - environment applied, warnings lost -
+   * never to no environment at all, which would launch the tool against the default
+   * account with nothing said.
+   */
+  it("still applies the environment when the capture file cannot be created", () => {
+    // Creating it cannot throw out of the lookup, and leaves $stderrPath falsy if it fails.
+    expect(helper).toMatch(
+      /\$stderrPath = \$null\s*\n\s*try \{\s*\n\s*\$stderrPath = \[System\.IO\.Path\]::GetTempFileName\(\)\s*\n\s*\} catch \{\s*\n\s*\$stderrPath = \$null\s*\n\s*\}/,
+    );
+    // Exactly two spellings of the lookup, one per branch, and every one assigns $raw - so
+    // no path through this block leaves the profile environment unread.
+    const lookups = helper.match(/.*clausona _shell-env \$Tool --json.*/g) ?? [];
+    expect(lookups).toEqual([
+      "      $raw = & clausona _shell-env $Tool --json 2>$stderrPath",
+      "      $raw = & clausona _shell-env $Tool --json 2>$null",
+    ]);
+    // ...and they are the two arms of one if/else, so a run makes exactly one call. Fix 2
+    // cut this command's cost in half; a second invocation would hand it straight back.
+    expect(helper).toMatch(
+      /if \(\$stderrPath\) \{\s*\n\s*\$raw = & clausona _shell-env \$Tool --json 2>\$stderrPath\s*\n\s*\} else \{\s*\n\s*\$raw = & clausona _shell-env \$Tool --json 2>\$null\s*\n\s*\}/,
+    );
+  });
+
   it("cannot let the diagnostic path stop the tool from launching", () => {
     // Both the lookup and the replay of its warnings are wrapped, and the replay runs in a
     // finally so the temp file is cleaned up even when the lookup threw.
-    const helper = out.split("function global:Invoke-ClausonaTool")[1]?.split("function global:claude")[0] ?? "";
     expect(helper).toMatch(/catch \{[\s\S]*?\} finally \{[\s\S]*?Test-Path -LiteralPath \$stderrPath/);
-    expect(helper).toMatch(/try \{[\s\S]*?Remove-Item -LiteralPath \$stderrPath -Force[\s\S]*?\} catch \{/);
+    // The read and the delete are separate try blocks, in that order, so a read that threw
+    // still deletes the file it was reading.
+    expect(helper).toMatch(
+      /Get-Content -LiteralPath \$stderrPath[\s\S]*?\} catch \{[\s\S]*?\}[\s\S]*?try \{[\s\S]*?Remove-Item -LiteralPath \$stderrPath -Force/,
+    );
+    // Both file blocks sit under `if ($stderrPath)`, so the fallback branch - which has no
+    // capture file - touches no file at all.
+    expect(helper).toMatch(
+      /if \(\$stderrPath\) \{\s*\n\s*if \(Test-Path -LiteralPath \$stderrPath\) \{\s*\n\s*\$warning = Get-Content -LiteralPath \$stderrPath -Raw/,
+    );
+    expect(helper).toMatch(/if \(\$stderrPath\) \{ Remove-Item -LiteralPath \$stderrPath -Force/);
   });
 
   // 5.1 has no `?:` either, and `[Environment]::GetEnvironmentVariable` is the only
