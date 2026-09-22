@@ -63,10 +63,24 @@ describe("buildProfileEnv", () => {
     const profile = apiProfile({
       env: { ANTHROPIC_BASE_URL: "http://override:8080", ANTHROPIC_MODEL: "glm-5.3", CLAUDE_CONFIG_DIR: "/evil" },
     });
-    const { env } = await buildProfileEnv("claude:glm", profile, deps);
+    const { env, warnings } = await buildProfileEnv("claude:glm", profile, deps);
     expect(env.ANTHROPIC_BASE_URL).toBe("http://override:8080");
     expect(env.ANTHROPIC_MODEL).toBe("glm-5.3");
     expect(env.CLAUDE_CONFIG_DIR).toBe("/home/u/.claude-glm");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("claude:glm");
+    expect(warnings[0]).toContain("CLAUDE_CONFIG_DIR");
+  });
+
+  it("omits the config variable when a non-primary profile points at the tool default", async () => {
+    const profile: Profile = { tool: "claude", configDir: "/home/u/.claude", email: "you@example.com" };
+    const { env, warnings } = await buildProfileEnv("claude:default", profile, {
+      ...deps,
+      homedir: () => "/home/u",
+    });
+    expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(env).toEqual({});
+    expect(warnings).toEqual([]);
   });
 
   it("warns and omits the credential when the secret cannot be resolved", async () => {

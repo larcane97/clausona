@@ -17,6 +17,7 @@ export type BuiltEnv = { env: Record<string, string>; warnings: string[] };
 type Deps = {
   resolveSecret?: typeof resolveSecret;
   realpath?: (target: string) => Promise<string>;
+  homedir?: () => string;
 };
 
 /**
@@ -29,6 +30,7 @@ type Deps = {
 export async function buildProfileEnv(id: string, profile: Profile, deps: Deps = {}): Promise<BuiltEnv> {
   const resolve = deps.resolveSecret ?? resolveSecret;
   const realpath = deps.realpath ?? ((target: string) => fsRealpath(target));
+  const home = deps.homedir ?? homedir;
   const adapter = getAdapter(profile.tool);
   const env: Record<string, string> = {};
   const warnings: string[] = [];
@@ -36,7 +38,7 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
   // A profile that points at the tool's own default directory must not set the variable:
   // the tool already reads that directory, and setting it changes nothing but noise.
   const resolvedConfig = await realpath(profile.configDir).catch(() => profile.configDir);
-  const defaultDir = adapter.defaultConfigDir(homedir());
+  const defaultDir = adapter.defaultConfigDir(home());
   const resolvedDefault = await realpath(defaultDir).catch(() => defaultDir);
   if (!profile.isPrimary && resolvedConfig !== resolvedDefault) {
     env[adapter.configEnvVar] = profile.configDir;
@@ -55,7 +57,12 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
   }
 
   for (const [key, value] of Object.entries(profile.env ?? {})) {
-    if (RESERVED_ENV_KEYS.has(key)) continue;
+    if (RESERVED_ENV_KEYS.has(key)) {
+      // Honouring the override would break profile isolation, so drop it - but say so,
+      // since a hand-edited profiles.json is the usual way to land here.
+      warnings.push(`${id}: ignoring ${key} from the env map - clausona sets it per profile`);
+      continue;
+    }
     env[key] = value;
   }
 
