@@ -36,7 +36,12 @@ export function isReservedEnvKey(key: string): boolean {
  * - the four file-descriptor sources Claude Code reads a token or key from;
  * - workload identity federation: the identity token or its file, and the rule-id and
  *   organization-id pair that switches it on;
- * - a host's credentials: the variable naming them, and the file holding them.
+ * - a host's credentials: the variable naming them, and the file holding them;
+ * - a remote session's token, which the worker path sends to
+ *   `${ANTHROPIC_BASE_URL}/v1/code/sessions/...`, and the file it can be read from;
+ * - the background handoff snapshot, a file holding an OAuth access or gateway token that
+ *   startup consumes when CLAUDE_CODE_OAUTH_TOKEN is absent, which is the state clausona
+ *   leaves an API profile in.
  *
  * Taken from the Claude Code 2.1.278 binary (its credential and scrub lists and the auth
  * code that reads them), and only names that supply a credential or turn an auth flow on -
@@ -59,6 +64,9 @@ export const CREDENTIAL_ENV_KEYS = [
   "ANTHROPIC_ORGANIZATION_ID",
   "CLAUDE_CODE_HOST_AUTH_ENV_VAR",
   "CLAUDE_CODE_HOST_CREDS_FILE",
+  "CLAUDE_CODE_SESSION_ACCESS_TOKEN",
+  "CLAUDE_SESSION_INGRESS_TOKEN_FILE",
+  "CLAUDE_BG_AUTH_SNAPSHOT_PATH",
 ] as const;
 
 /**
