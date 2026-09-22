@@ -29,7 +29,7 @@ import type {
   UsageStore,
 } from "../types.js";
 import { buildProfileEnv } from "./profile-env.js";
-import { defaultProfileName, profileId, validateProfileName } from "./profile-ref.js";
+import { defaultProfileName, foldProfileName, parseProfileRef, profileId, validateProfileName } from "./profile-ref.js";
 import { deleteSecret, storeSecret } from "./secrets.js";
 
 /** Files inside plugins/ that contain absolute paths and must be per-profile */
@@ -1200,11 +1200,16 @@ export async function updateProfileSecret(id: string, secret: SecretSource, valu
   }
 }
 
-async function cleanupProfile(name: string, profile: Profile, primarySource: string) {
+async function cleanupProfile(
+  name: string,
+  profile: Profile,
+  primarySource: string,
+  options: { keepBackup?: boolean } = {},
+) {
   if (profile.isPrimary) return;
 
-  // Resolved before anything is touched: for a name that escapes the backups directory,
-  // backupDirFor throws, and the profile should be left exactly as it was.
+  // Resolved before anything is touched: for a name that is not a directory of its own
+  // under the backups, backupDirFor throws, and the profile should be left exactly as it was.
   const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
 
   // The registry entry is about to go; a credential outliving it is a credential nothing
@@ -1238,8 +1243,9 @@ async function cleanupProfile(name: string, profile: Profile, primarySource: str
     }
   }
 
-  // 2. Restore backup if available (original files before clausona setup)
-  if (await exists(backupDir)) {
+  // 2. Restore backup if available (original files before clausona setup), unless the
+  // caller found another profile keeping its backup in the same directory.
+  if (!options.keepBackup && (await exists(backupDir))) {
     await cp(backupDir, profile.configDir, { recursive: true });
     await rm(backupDir, { force: true, recursive: true });
   }
@@ -1256,6 +1262,45 @@ function assertProfileIdAvailable(registry: Registry, id: string) {
   const folded = id.toLowerCase();
   const clash = Object.keys(registry.profiles).find((existing) => existing.toLowerCase() === folded);
   if (clash) throw new Error(`Profile '${clash}' already exists (names are compared without case).`);
+}
+
+/**
+ * A new profile's backup directory must not exist yet. Whatever is there belongs to someone
+ * else - a profile whose name differs only by case on a case-insensitive filesystem, or one
+ * that outlived its registry entry and may hold the user's original files - and the add
+ * paths used to clear it before use.
+ */
+function backupDirTaken(backupDir: string, id: string): Error {
+  return new Error(
+    `${backupDir.replace(homedir(), "~")} already exists, so '${id}' cannot use it as its backup directory. It may hold another profile's original files: move it somewhere else (or delete it once you are sure nothing in it is needed), then try again.`,
+  );
+}
+
+/** Creates a new profile's backup directory, and refuses rather than reuse one that exists. */
+async function claimBackupDir(backupDir: string, id: string) {
+  await mkdir(path.dirname(backupDir), { recursive: true });
+  await mkdir(backupDir).catch((error: NodeJS.ErrnoException) => {
+    throw error.code === "EEXIST" ? backupDirTaken(backupDir, id) : error;
+  });
+}
+
+/**
+ * Another registered profile of the same tool whose backup directory is this profile's or
+ * lies inside it: a name that differs only by case (one directory on a case-insensitive
+ * filesystem), or a name from before the name rule that normalizes to this one (`work/`)
+ * or nests under it (`work/x`). Which files in a shared directory belong to which profile
+ * cannot be told apart, so it is not this profile's alone to restore from and delete.
+ */
+function backupDirSharer(registry: Registry, id: string): string | undefined {
+  const { tool, name } = parseProfileRef(id, registry);
+  const base = path.join(CLAUSONA_DIR, "backups", tool);
+  const own = foldProfileName(path.join(base, name));
+  return Object.keys(registry.profiles).find((other) => {
+    const profile = registry.profiles[other];
+    if (other === id || profile.tool !== tool || profile.isPrimary) return false;
+    const theirs = foldProfileName(path.join(base, parseProfileRef(other, registry).name));
+    return theirs === own || theirs.startsWith(own + path.sep);
+  });
 }
 
 export async function addProfile(options: {
@@ -1283,8 +1328,7 @@ export async function addProfile(options: {
     if (!accountInfo) throw new Error("Could not read account info from config dir.");
 
     const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);
-    await rm(backupDir, { force: true, recursive: true });
-    await mkdir(backupDir, { recursive: true });
+    await claimBackupDir(backupDir, id);
     // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
     const mergeSessions = options.mergeSessions ?? false;
     try {
@@ -1329,6 +1373,9 @@ export async function addProfile(options: {
       `${configDir.replace(home, "~")} already exists. Use --from ${configDir.replace(home, "~")} to import it instead.`,
     );
   }
+  // Checked here as well as where it is created, so a refusal does not come after a sign-in.
+  const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);
+  if (await exists(backupDir)) throw backupDirTaken(backupDir, id);
   await mkdir(configDir, { recursive: true });
 
   // Check if credentials already exist for this dir
@@ -1375,9 +1422,10 @@ export async function addProfile(options: {
     throw new Error("Login succeeded but account metadata is missing.");
   }
 
-  const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);
-  await rm(backupDir, { force: true, recursive: true });
-  await mkdir(backupDir, { recursive: true });
+  await claimBackupDir(backupDir, id).catch(async (error) => {
+    await rm(configDir, { force: true, recursive: true });
+    throw error;
+  });
   // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
 
   const mergeSessions = options.mergeSessions ?? false;
@@ -1514,8 +1562,10 @@ export async function addApiProfile(options: {
 
   const mergeSessions = options.mergeSessions ?? false;
   const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);
-  await mkdir(configDir, { recursive: true });
+  // The first side effect, so a backup directory that is already there changes nothing.
+  await claimBackupDir(backupDir, id);
   try {
+    await mkdir(configDir, { recursive: true });
     // Carry the primary's onboarding state across. An API profile has no login step, so an
     // onboarding wizard on first launch is even more jarring than it is for a new account.
     const primaryJsonPath = claudeJsonPathForConfigDir({ homeDir: home, configDir: primarySource });
@@ -1527,8 +1577,6 @@ export async function addApiProfile(options: {
     }
     await writeJson(jsonPath, profileJson);
 
-    await rm(backupDir, { force: true, recursive: true });
-    await mkdir(backupDir, { recursive: true });
     await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
     await setupPluginsDir(configDir, primarySource);
     if (toStore !== null) await storeSecret(id, toStore);
@@ -1580,9 +1628,17 @@ export async function removeProfile(id: string) {
   const profile = registry.profiles[id];
   if (profile.isPrimary) throw new Error("Cannot remove the primary profile.");
 
-  const name = id.split(":").slice(1).join(":");
+  const { name } = parseProfileRef(id, registry);
   const primarySource = registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
-  await cleanupProfile(name, profile, primarySource);
+  const sharer = backupDirSharer(registry, id);
+  await cleanupProfile(name, profile, primarySource, { keepBackup: sharer !== undefined });
+  if (sharer) {
+    const home = homedir();
+    const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
+    warn(
+      `${id}: left ${backupDir.replace(home, "~")} in place because '${sharer}' keeps its backup there too. Nothing from it was restored into ${profile.configDir.replace(home, "~")}; copy back anything you need from it by hand.`,
+    );
+  }
 
   delete registry.profiles[id];
   // If the removed profile was the active one for its tool, pick another or clear

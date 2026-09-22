@@ -56,16 +56,34 @@ describe("backupDirFor", () => {
     const clausonaDir = path.join(path.parse(process.cwd()).root, "h", ".clausona");
     for (const name of ["..", ".", "", "a/../..", "a/..", "../codex", "../../x"]) {
       expect(() => backupDirFor(clausonaDir, "claude", name), JSON.stringify(name)).toThrow(
-        /does not map to a directory inside .*refusing to use it as a backup directory/,
+        /does not map to a directory of its own inside .*refusing to use it as a backup directory/,
       );
     }
   });
 
-  it("accepts any name that stays strictly inside the tool's backups directory", () => {
+  // Inside the tool's directory is not enough: these all land in the directory `work` or `a`
+  // owns, so a recursive rm meant for the legacy profile would take the other one's backup.
+  it("refuses a name that normalizes to another name or nests under one", () => {
+    const clausonaDir = path.join(path.parse(process.cwd()).root, "h", ".clausona");
+    for (const name of ["work/", "./work", "work/.", "/work", "x/../work", "../claude/work", "a/b", "a/../b"]) {
+      expect(() => backupDirFor(clausonaDir, "claude", name), JSON.stringify(name)).toThrow(
+        /does not map to a directory of its own inside .*refusing to use it as a backup directory/,
+      );
+    }
+  });
+
+  it("tells the user how to get rid of a profile it refuses", () => {
+    const clausonaDir = path.join(path.parse(process.cwd()).root, "h", ".clausona");
+    expect(() => backupDirFor(clausonaDir, "claude", "..")).toThrow(
+      `To recover, remove the 'claude:..' entry from ${path.join(clausonaDir, "profiles.json")} by hand.`,
+    );
+  });
+
+  it("accepts a name that is one path segment directly under the tool's backups directory", () => {
     const clausonaDir = path.join(path.parse(process.cwd()).root, "h", ".clausona");
     const base = path.join(clausonaDir, "backups", "claude");
     // A leading `..` that is part of a longer segment is an ordinary name, not a parent step.
-    for (const name of ["work", "..work", "a/b", "a/../b"]) {
+    for (const name of ["work", "Work", "..work", "glm-5.3", ".codex-work"]) {
       expect(backupDirFor(clausonaDir, "claude", name), name).toBe(path.join(base, name));
     }
   });

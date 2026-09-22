@@ -152,6 +152,38 @@ function seedBackupSentinel(home: string) {
   return sentinel;
 }
 
+/** A file in backups/claude/<name>, wherever that name resolves to. */
+function seedBackupFile(home: string, name: string) {
+  const sentinel = path.join(home, ".clausona", "backups", "claude", name, "sentinel.json");
+  mkdirSync(path.dirname(sentinel), { recursive: true });
+  writeFileSync(sentinel, '{"original":true}');
+  return sentinel;
+}
+
+type Harness = Awaited<ReturnType<typeof harness>>;
+
+/** A claude profile written straight into profiles.json, as the code before the name rule accepted it. */
+function registerLegacy(h: Harness, name: string, configDir: string) {
+  mkdirSync(configDir, { recursive: true });
+  const registry = h.registry();
+  registry.profiles[`claude:${name}`] = { tool: "claude", configDir, email: "legacy@example.com" };
+  writeFileSync(h.registryPath, JSON.stringify(registry));
+}
+
+function captureStderr() {
+  const lines: string[] = [];
+  vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+    lines.push(String(chunk));
+    return true;
+  });
+  return () => lines.join("");
+}
+
+/** How an error names a backup directory: under ~, as the user would type it. */
+function shownBackupDir(name: string) {
+  return path.join("~", ".clausona", "backups", "claude", name);
+}
+
 const KEY = "sk-test-glm-0001";
 
 /** A keychain-backed API profile; tests override what they are about. */
@@ -271,6 +303,26 @@ describe("profile names that differ only by case", () => {
     expect(h.snapshot()).toEqual(before);
   });
 
+  it("adding a name whose case variant's backup outlived its profile leaves that backup alone", async () => {
+    const h = await harness();
+    const sentinel = seedBackupFile(h.home, "Work");
+    const caseInsensitive = existsSync(path.join(h.home, ".clausona", "backups", "claude", "work"));
+    const fromPath = seedAccountDir(h.home, "work-account", "work@example.com");
+    const before = h.snapshot();
+
+    const outcome = await h.service.addProfile({ tool: "claude", name: "work", fromPath }).catch((e: Error) => e);
+
+    expect(existsSync(sentinel), "the other name's backup was deleted").toBe(true);
+    // Only on a case-insensitive filesystem are the two names one directory.
+    if (caseInsensitive) {
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toMatch(/^~.*backups.claude.work already exists/);
+      expect(h.snapshot()).toEqual(before);
+    } else {
+      expect(outcome).not.toBeInstanceOf(Error);
+    }
+  });
+
   it("still allows the same name under the other tool", async () => {
     const { h } = await withWork();
     mkdirSync(path.join(h.home, ".codex"), { recursive: true });
@@ -283,6 +335,178 @@ describe("profile names that differ only by case", () => {
     await expect(h.service.addProfile({ tool: "codex", name: "Work", fromPath: codexDir })).resolves.toMatchObject({
       name: "Work",
     });
+  });
+});
+
+describe("legacy names that share another profile's backup directory", () => {
+  // Before the name rule, `add` accepted any name free of ':'. Each legacy name below stays
+  // inside backups/claude/ but resolves to the directory another name owns - the same one
+  // (`work/`, `./work`, ...) or one nested inside it (`a/b` under `a`) - and add and remove
+  // both run a recursive rm on a profile's backup directory.
+  const aliases = ["work/", "./work", "work/.", "/work", "x/../work"];
+  const pairs: Array<[legacy: string, name: string]> = [
+    ...aliases.map((a): [string, string] => [a, "work"]),
+    ["a/b", "a"],
+  ];
+
+  for (const [legacy, name] of pairs) {
+    it(`addProfile '${name}' refuses while legacy '${legacy}' keeps a backup there`, async () => {
+      const h = await harness();
+      registerLegacy(h, legacy, path.join(h.home, ".claude-legacy"));
+      const sentinel = seedBackupFile(h.home, legacy);
+      const fromPath = seedAccountDir(h.home, "import-me", "import@example.com");
+      const before = h.snapshot();
+
+      const outcome = await h.service.addProfile({ tool: "claude", name, fromPath }).catch((e: Error) => e);
+
+      expect(existsSync(sentinel), "the legacy profile's backup was deleted").toBe(true);
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toContain(`${shownBackupDir(name)} already exists`);
+      expect(h.snapshot()).toEqual(before);
+    });
+
+    it(`addApiProfile '${name}' refuses while legacy '${legacy}' keeps a backup there`, async () => {
+      const h = await harness();
+      registerLegacy(h, legacy, path.join(h.home, ".claude-legacy"));
+      const sentinel = seedBackupFile(h.home, legacy);
+      const before = h.snapshot();
+
+      const outcome = await h.service.addApiProfile(apiOptions({ name })).catch((e: Error) => e);
+
+      expect(existsSync(sentinel), "the legacy profile's backup was deleted").toBe(true);
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toContain(`${shownBackupDir(name)} already exists`);
+      expect(h.storedSecrets(), "a key was stored").toEqual({});
+      expect(h.snapshot()).toEqual(before);
+    });
+
+    it(`removeProfile '${name}' leaves the backup directory legacy '${legacy}' shares with it in place`, async () => {
+      const h = await harness();
+      const ownDir = seedAccountDir(h.home, `${name}-account`, `${name}@example.com`);
+      await h.service.addProfile({ tool: "claude", name, fromPath: ownDir });
+      registerLegacy(h, legacy, path.join(h.home, ".claude-legacy"));
+      const sentinel = seedBackupFile(h.home, legacy);
+      const stderr = captureStderr();
+
+      await h.service.removeProfile(`claude:${name}`);
+
+      expect(existsSync(sentinel), "the legacy profile's backup was deleted").toBe(true);
+      expect(existsSync(path.join(ownDir, "sentinel.json")), "another profile's backup was restored here").toBe(false);
+      expect(Object.keys(h.registry().profiles).sort()).toEqual(["claude:default", `claude:${legacy}`].sort());
+      expect(stderr()).toContain(`because 'claude:${legacy}' keeps its backup there too`);
+    });
+  }
+
+  for (const legacy of aliases) {
+    it(`removeProfile refuses legacy '${legacy}' and leaves the backup of 'work' alone`, async () => {
+      const h = await harness();
+      await h.service.addProfile({
+        tool: "claude",
+        name: "work",
+        fromPath: seedAccountDir(h.home, "work-account", "work@example.com"),
+      });
+      const sentinel = seedBackupFile(h.home, "work");
+      const legacyDir = path.join(h.home, ".claude-legacy");
+      registerLegacy(h, legacy, legacyDir);
+      const before = h.snapshot();
+
+      const outcome = await h.service.removeProfile(`claude:${legacy}`).catch((e: Error) => e);
+
+      expect(existsSync(sentinel), "the backup of 'work' was deleted").toBe(true);
+      expect(existsSync(path.join(legacyDir, "sentinel.json")), "the backup of 'work' was restored here").toBe(false);
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toMatch(/refusing to use it as a backup directory/);
+      expect((outcome as Error).message).toContain(`remove the 'claude:${legacy}' entry from`);
+      expect(h.snapshot()).toEqual(before);
+    });
+  }
+});
+
+describe("a legacy pair of names that differ only by case", () => {
+  // Ruling B stops a new pair, but a registry can already hold one. On a case-insensitive
+  // filesystem the two share one backup directory, and whichever is removed first used to
+  // restore that directory into its own config dir and then delete it.
+  async function withPair() {
+    const h = await harness();
+    const workDir = seedAccountDir(h.home, "work-account", "work@example.com");
+    await h.service.addProfile({ tool: "claude", name: "work", fromPath: workDir });
+    const sentinel = seedBackupFile(h.home, "work");
+    const legacyDir = path.join(h.home, ".claude-Work-legacy");
+    registerLegacy(h, "Work", legacyDir);
+    return { h, sentinel, workDir, legacyDir };
+  }
+
+  it("removing the legacy one leaves the backup directory in place", async () => {
+    const { h, sentinel, legacyDir } = await withPair();
+    const stderr = captureStderr();
+
+    await h.service.removeProfile("claude:Work");
+
+    expect(existsSync(sentinel), "the backup of 'work' was deleted").toBe(true);
+    expect(existsSync(path.join(legacyDir, "sentinel.json")), "the backup of 'work' was restored here").toBe(false);
+    expect(Object.keys(h.registry().profiles).sort()).toEqual(["claude:default", "claude:work"]);
+    expect(stderr()).toContain("because 'claude:work' keeps its backup there too");
+  });
+
+  it("removing the other one does too", async () => {
+    const { h, sentinel, workDir } = await withPair();
+    const stderr = captureStderr();
+
+    await h.service.removeProfile("claude:work");
+
+    expect(existsSync(sentinel), "the shared backup was deleted").toBe(true);
+    expect(existsSync(path.join(workDir, "sentinel.json")), "the shared backup was restored here").toBe(false);
+    expect(Object.keys(h.registry().profiles).sort()).toEqual(["claude:Work", "claude:default"]);
+    expect(stderr()).toContain("because 'claude:Work' keeps its backup there too");
+  });
+});
+
+describe("adding a profile over a backup directory that outlived its profile", () => {
+  // An interrupted removal, or a re-init that renamed an account, can leave
+  // backups/<tool>/<name> behind with the only copy of someone's original config in it.
+  // Adding that name again used to clear it before use.
+  const refusal = `${shownBackupDir("work")} already exists, so 'claude:work' cannot use it as its backup directory.`;
+
+  it("addProfile --from refuses and leaves it alone", async () => {
+    const h = await harness();
+    const orphan = seedBackupFile(h.home, "work");
+    const fromPath = seedAccountDir(h.home, "work-account", "work@example.com");
+    const before = h.snapshot();
+
+    const outcome = await h.service.addProfile({ tool: "claude", name: "work", fromPath }).catch((e: Error) => e);
+
+    expect(existsSync(orphan), "the orphaned backup was deleted").toBe(true);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toContain(refusal);
+    expect((outcome as Error).message).toMatch(/move it somewhere else/);
+    expect(h.snapshot()).toEqual(before);
+  });
+
+  it("addProfile without --from refuses before it creates a config dir or starts a login", async () => {
+    const h = await harness();
+    const orphan = seedBackupFile(h.home, "work");
+    const before = h.snapshot();
+
+    const outcome = await h.service.addProfile({ tool: "claude", name: "work" }).catch((e: Error) => e);
+
+    expect(existsSync(orphan), "the orphaned backup was deleted").toBe(true);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toContain(refusal);
+    expect(h.snapshot()).toEqual(before);
+  });
+
+  it("addApiProfile refuses and leaves it alone", async () => {
+    const h = await harness();
+    const orphan = seedBackupFile(h.home, "work");
+    const before = h.snapshot();
+
+    const outcome = await h.service.addApiProfile(apiOptions({ name: "work" })).catch((e: Error) => e);
+
+    expect(existsSync(orphan), "the orphaned backup was deleted").toBe(true);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toContain(refusal);
+    expect(h.storedSecrets(), "a key was stored").toEqual({});
+    expect(h.snapshot()).toEqual(before);
   });
 });
 

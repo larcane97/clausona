@@ -20,6 +20,15 @@ export function profileId(tool: ToolName, name: string): string {
  */
 const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/**
+ * The form in which two names are compared. A case-insensitive filesystem (macOS and Windows
+ * by default) treats `Work` and `work` as one directory, and APFS folds more than ASCII
+ * case - `ſ` (U+017F) is `s` to it - which NFKC normalization covers.
+ */
+export function foldProfileName(name: string): string {
+  return name.normalize("NFKC").toLowerCase();
+}
+
 export function validateProfileName(name: string): { ok: true } | { ok: false; error: string } {
   // RegExp#test stringifies its argument, and "undefined" would pass.
   if (typeof name === "string" && PROFILE_NAME.test(name)) return { ok: true };
