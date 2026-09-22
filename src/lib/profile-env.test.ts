@@ -6,8 +6,8 @@ import {
   buildProfileEnv,
   CREDENTIAL_ENV_KEYS,
   displayName,
-  PROVIDER_SWITCH_ENV_KEYS,
   RESERVED_ENV_KEYS,
+  ROUTING_ENV_KEYS,
 } from "./profile-env.js";
 
 /** Written out rather than imported, so the constants are pinned rather than echoed. */
@@ -16,8 +16,19 @@ const CREDENTIALS = [
   "ANTHROPIC_AUTH_TOKEN",
   "CLAUDE_CODE_OAUTH_TOKEN",
   "ANTHROPIC_CUSTOM_HEADERS",
+  "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR",
+  "ANTHROPIC_IDENTITY_TOKEN",
+  "ANTHROPIC_IDENTITY_TOKEN_FILE",
+  "ANTHROPIC_FEDERATION_RULE_ID",
+  "ANTHROPIC_ORGANIZATION_ID",
+  "CLAUDE_CODE_HOST_AUTH_ENV_VAR",
+  "CLAUDE_CODE_HOST_CREDS_FILE",
 ];
-const PROVIDER_SWITCHES = [
+const ROUTING = [
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_VERTEX",
   "CLAUDE_CODE_USE_GATEWAY",
@@ -25,7 +36,11 @@ const PROVIDER_SWITCHES = [
   "CLAUDE_CODE_USE_FOUNDRY",
   "CLAUDE_CODE_USE_ANTHROPIC_AWS",
   "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+  "ANTHROPIC_UNIX_SOCKET",
+  "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+  "CLAUDE_CODE_CUSTOM_OAUTH_URL",
 ];
+const except = (list: string[], ...keys: string[]) => list.filter((key) => !keys.includes(key));
 
 const identityRealpath = async (p: string) => p;
 const fakeSecret = async () => "sk-test";
@@ -146,28 +161,18 @@ describe("buildProfileEnv", () => {
    * inherited provider switch would send the tool somewhere else entirely.
    */
   describe("unset", () => {
-    it("clears every credential but the profile's own, and every provider switch, for bearer", async () => {
+    it("clears every credential but the profile's own, and every routing variable, for bearer", async () => {
       const { env, unset } = await buildProfileEnv("claude:glm", apiProfile(), deps);
-      expect(unset).toEqual([
-        "ANTHROPIC_API_KEY",
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "ANTHROPIC_CUSTOM_HEADERS",
-        ...PROVIDER_SWITCHES,
-      ]);
+      expect(unset).toEqual([...except(CREDENTIALS, "ANTHROPIC_AUTH_TOKEN"), ...ROUTING]);
       expect(env.ANTHROPIC_AUTH_TOKEN).toBe("sk-test");
     });
 
-    it("clears every credential but the profile's own, and every provider switch, for api-key", async () => {
+    it("clears every credential but the profile's own, and every routing variable, for api-key", async () => {
       const profile = apiProfile({
         api: { baseUrl: "https://openrouter.ai/api", authScheme: "api-key", secret: { source: "keychain" } },
       });
       const { env, unset } = await buildProfileEnv("claude:or", profile, deps);
-      expect(unset).toEqual([
-        "ANTHROPIC_AUTH_TOKEN",
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "ANTHROPIC_CUSTOM_HEADERS",
-        ...PROVIDER_SWITCHES,
-      ]);
+      expect(unset).toEqual([...except(CREDENTIALS, "ANTHROPIC_API_KEY"), ...ROUTING]);
       expect(env.ANTHROPIC_API_KEY).toBe("sk-test");
     });
 
@@ -176,11 +181,16 @@ describe("buildProfileEnv", () => {
         ANTHROPIC_API_KEY: "sk-explicit",
         CLAUDE_CODE_OAUTH_TOKEN: "oat-explicit",
         ANTHROPIC_CUSTOM_HEADERS: "X-Team: platform",
+        ANTHROPIC_IDENTITY_TOKEN_FILE: "/run/secrets/oidc",
         CLAUDE_CODE_USE_BEDROCK: "1",
+        ANTHROPIC_UNIX_SOCKET: "/run/proxy.sock",
       };
       const { env, unset } = await buildProfileEnv("claude:glm", apiProfile({ env: explicit }), deps);
       expect(env).toMatchObject(explicit);
-      expect(unset).toEqual(PROVIDER_SWITCHES.filter((key) => key !== "CLAUDE_CODE_USE_BEDROCK"));
+      expect(unset).toEqual([
+        ...except(CREDENTIALS, "ANTHROPIC_AUTH_TOKEN", ...Object.keys(explicit)),
+        ...except(ROUTING, ...Object.keys(explicit)),
+      ]);
     });
 
     // The profile's own variable is cleared too: an inherited one of the same name would
@@ -196,7 +206,7 @@ describe("buildProfileEnv", () => {
             throw new Error("no stored secret");
           },
         });
-        expect(unset).toEqual([...CREDENTIALS, ...PROVIDER_SWITCHES]);
+        expect(unset).toEqual([...CREDENTIALS, ...ROUTING]);
         expect(env).not.toHaveProperty("ANTHROPIC_API_KEY");
         expect(env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
       });
@@ -234,14 +244,22 @@ describe("buildProfileEnv", () => {
   });
 
   // Narrowing either list reopens, for whatever is dropped, what it exists to prevent.
-  it("treats every variable Claude Code authenticates with as a credential", () => {
+  it("treats every variable Claude Code 2.1.278 takes a credential from as a credential", () => {
     expect([...CREDENTIAL_ENV_KEYS]).toEqual(CREDENTIALS);
+    // OAuth client configuration carries no secret, and clearing it would only break login.
+    for (const key of [
+      "CLAUDE_CODE_OAUTH_SCOPES",
+      "CLAUDE_CODE_OAUTH_CLIENT_ID",
+      "CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH",
+    ]) {
+      expect(CREDENTIAL_ENV_KEYS, key).not.toContain(key);
+    }
   });
 
-  it("treats every variable that routes Claude Code to another provider as a switch", () => {
-    expect([...PROVIDER_SWITCH_ENV_KEYS]).toEqual(PROVIDER_SWITCHES);
+  it("treats every variable that routes Claude Code 2.1.278 away from the base URL as routing", () => {
+    expect([...ROUTING_ENV_KEYS]).toEqual(ROUTING);
     // A USE_ flag that routes nothing is not one of them.
-    expect(PROVIDER_SWITCH_ENV_KEYS).not.toContain("CLAUDE_CODE_USE_POWERSHELL_TOOL");
+    expect(ROUTING_ENV_KEYS).not.toContain("CLAUDE_CODE_USE_POWERSHELL_TOOL");
   });
 
   it("reserves the tool config variables", () => {

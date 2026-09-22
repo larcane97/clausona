@@ -1848,7 +1848,7 @@ export async function resolveProfileEnv(
   const env: NodeJS.ProcessEnv = { ...process.env, ...profileEnv };
   // buildProfileEnv omits the config variable for a primary profile; an inherited value
   // from the surrounding shell would otherwise survive and point at the wrong profile.
-  if (!(adapter.configEnvVar in profileEnv)) deleteEnvVar(env, adapter.configEnvVar, platform);
+  if (!Object.hasOwn(profileEnv, adapter.configEnvVar)) deleteEnvVar(env, adapter.configEnvVar, platform);
   // A credential the caller exported for something else, which the tool would otherwise
   // send to this profile's endpoint alongside the profile's own, or a provider switch that
   // would route around it. The shell hooks unset the same list.

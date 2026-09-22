@@ -35,6 +35,7 @@ const SENTINELS = {
   CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-parent-sentinel-OAT",
   ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer sk-ant-parent-sentinel-HDR",
   CLAUDE_CODE_USE_BEDROCK: "1",
+  ANTHROPIC_IDENTITY_TOKEN: "parent-sentinel-identity-token",
 };
 
 async function harness(secretResolves: boolean) {

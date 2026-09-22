@@ -10,36 +10,66 @@ import { resolveSecret } from "./secrets.js";
 export const RESERVED_ENV_KEYS = new Set(["CLAUDE_CONFIG_DIR", "CODEX_HOME"]);
 
 /**
- * Every variable Claude Code authenticates with. For an API profile each one comes from
- * the profile or not at all: whatever the profile does not set is unset for the run.
+ * The variables Claude Code takes a credential from, or that switch on an auth flow. For an
+ * API profile each one comes from the profile or not at all: whatever the profile does not
+ * set is unset for the run.
  *
  * Applying the profile on top of the caller's environment is not enough. Claude Code reads
  * ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN independently and sends X-Api-Key and
  * Authorization together when both are set, so a key the user exported for some other
  * purpose would go to this profile's endpoint - a third party, often - next to the
- * profile's own, or in its place when the profile's key did not resolve. A subscription
- * OAuth token is never wanted either, and Claude Code ranks it as an auth source.
- * ANTHROPIC_CUSTOM_HEADERS is here because it can carry an Authorization header of its own.
- * Dropping a name from this list reopens that leak for it.
+ * profile's own, or in its place when the profile's key did not resolve. The same holds
+ * for every other source here: with the profile's key missing, Claude Code falls through
+ * to the next one it finds, and workload identity federation would POST the caller's
+ * identity token to `${ANTHROPIC_BASE_URL}/v1/oauth/token`.
+ *
+ * - the three auth variables, and ANTHROPIC_CUSTOM_HEADERS, which can carry an
+ *   Authorization header of its own;
+ * - a subscription's OAuth refresh token;
+ * - the four file-descriptor sources Claude Code reads a token or key from;
+ * - workload identity federation: the identity token or its file, and the rule-id and
+ *   organization-id pair that switches it on;
+ * - a host's credentials: the variable naming them, and the file holding them.
+ *
+ * Taken from the Claude Code 2.1.278 binary (its credential and scrub lists and the auth
+ * code that reads them), and only names that supply a credential or turn an auth flow on -
+ * not OAuth client configuration such as scopes or client ids. Re-check it whenever Claude
+ * Code adds an auth source. Dropping a name reopens the leak for it.
  */
 export const CREDENTIAL_ENV_KEYS = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
   "CLAUDE_CODE_OAUTH_TOKEN",
   "ANTHROPIC_CUSTOM_HEADERS",
+  "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR",
+  "ANTHROPIC_IDENTITY_TOKEN",
+  "ANTHROPIC_IDENTITY_TOKEN_FILE",
+  "ANTHROPIC_FEDERATION_RULE_ID",
+  "ANTHROPIC_ORGANIZATION_ID",
+  "CLAUDE_CODE_HOST_AUTH_ENV_VAR",
+  "CLAUDE_CODE_HOST_CREDS_FILE",
 ] as const;
 
 /**
- * Every variable that routes Claude Code to a provider other than ANTHROPIC_BASE_URL. An
- * inherited one sends an API profile's run to Bedrock, Vertex and the like with the
- * profile's base URL silently ignored - not a leak, but a profile that does not do what it
- * says. Cleared on the same terms as the credentials.
+ * The variables that send Claude Code's traffic somewhere other than ANTHROPIC_BASE_URL.
+ * An inherited one routes an API profile's run to Bedrock, Vertex, a local socket or a
+ * host-managed provider with the profile's base URL silently ignored - a profile that does
+ * not do what it says. Cleared on the same terms as the credentials.
  *
- * Taken from the strings in the Claude Code 2.1.278 binary, routing flags only - the
- * other CLAUDE_CODE_USE_* flags (CLAUDE_CODE_USE_POWERSHELL_TOOL and the like) choose
- * features, not providers. Re-check this list whenever Claude Code adds a provider.
+ * - the provider switches, CLAUDE_CODE_USE_*: routing flags only. The other USE_ flags
+ *   (CLAUDE_CODE_USE_POWERSHELL_TOOL and the like) choose features, not providers;
+ * - ANTHROPIC_UNIX_SOCKET, which carries every API request over a socket instead;
+ * - CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST, which hands provider selection to the host;
+ * - CLAUDE_CODE_CUSTOM_OAUTH_URL, which moves the API and OAuth endpoints elsewhere.
+ *
+ * Taken from the Claude Code 2.1.278 binary. Re-check it whenever Claude Code adds a
+ * provider or another way to route around the base URL.
  */
-export const PROVIDER_SWITCH_ENV_KEYS = [
+export const ROUTING_ENV_KEYS = [
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_VERTEX",
   "CLAUDE_CODE_USE_GATEWAY",
@@ -47,6 +77,9 @@ export const PROVIDER_SWITCH_ENV_KEYS = [
   "CLAUDE_CODE_USE_FOUNDRY",
   "CLAUDE_CODE_USE_ANTHROPIC_AWS",
   "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+  "ANTHROPIC_UNIX_SOCKET",
+  "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+  "CLAUDE_CODE_CUSTOM_OAUTH_URL",
 ] as const;
 
 export function displayName(profile: Pick<Profile, "email" | "label">): string {
@@ -123,7 +156,7 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
   // in env and so kept; everything else - an unresolved key's variable included - is cleared.
   const unset =
     profile.kind === "api" && profile.api
-      ? [...CREDENTIAL_ENV_KEYS, ...PROVIDER_SWITCH_ENV_KEYS].filter((key) => !(key in env))
+      ? [...CREDENTIAL_ENV_KEYS, ...ROUTING_ENV_KEYS].filter((key) => !Object.hasOwn(env, key))
       : [];
   return { env, unset, warnings };
 }

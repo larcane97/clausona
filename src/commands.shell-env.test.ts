@@ -94,8 +94,22 @@ function parseExports(out: string): Record<string, string | null> {
   return parsed;
 }
 
-/** Every provider switch an API profile clears, as `--json` names them. */
-const CLEARED_SWITCHES = {
+/**
+ * Everything an API profile clears beyond the three auth variables and custom headers, as
+ * `--json` names it: the other credential sources, then every routing variable.
+ */
+const CLEARED_REST = {
+  CLAUDE_CODE_OAUTH_REFRESH_TOKEN: null,
+  CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: null,
+  CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: null,
+  CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR: null,
+  CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR: null,
+  ANTHROPIC_IDENTITY_TOKEN: null,
+  ANTHROPIC_IDENTITY_TOKEN_FILE: null,
+  ANTHROPIC_FEDERATION_RULE_ID: null,
+  ANTHROPIC_ORGANIZATION_ID: null,
+  CLAUDE_CODE_HOST_AUTH_ENV_VAR: null,
+  CLAUDE_CODE_HOST_CREDS_FILE: null,
   CLAUDE_CODE_USE_BEDROCK: null,
   CLAUDE_CODE_USE_VERTEX: null,
   CLAUDE_CODE_USE_GATEWAY: null,
@@ -103,6 +117,9 @@ const CLEARED_SWITCHES = {
   CLAUDE_CODE_USE_FOUNDRY: null,
   CLAUDE_CODE_USE_ANTHROPIC_AWS: null,
   CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD: null,
+  ANTHROPIC_UNIX_SOCKET: null,
+  CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: null,
+  CLAUDE_CODE_CUSTOM_OAUTH_URL: null,
 };
 
 describe("_shell-env", () => {
@@ -188,7 +205,7 @@ describe("_shell-env", () => {
       ANTHROPIC_AUTH_TOKEN: null,
       CLAUDE_CODE_OAUTH_TOKEN: null,
       ANTHROPIC_CUSTOM_HEADERS: null,
-      ...CLEARED_SWITCHES,
+      ...CLEARED_REST,
       CLAUDE_CONFIG_DIR: h.workDir,
       ANTHROPIC_BASE_URL: "http://localhost:8000",
       ANTHROPIC_MODEL: "m",
@@ -249,7 +266,7 @@ describe("_shell-env", () => {
       ANTHROPIC_AUTH_TOKEN: null,
       CLAUDE_CODE_OAUTH_TOKEN: null,
       ANTHROPIC_CUSTOM_HEADERS: null,
-      ...CLEARED_SWITCHES,
+      ...CLEARED_REST,
       CLAUDE_CONFIG_DIR: h.workDir,
       ANTHROPIC_BASE_URL: "http://localhost:8000",
       ANTHROPIC_API_KEY: "sk-not-a-real-key",
@@ -288,7 +305,7 @@ describe("_shell-env", () => {
       ANTHROPIC_API_KEY: null,
       CLAUDE_CODE_OAUTH_TOKEN: null,
       ANTHROPIC_CUSTOM_HEADERS: null,
-      ...CLEARED_SWITCHES,
+      ...CLEARED_REST,
       CLAUDE_CONFIG_DIR: h.workDir,
       ANTHROPIC_BASE_URL: "https://openrouter.ai/api",
       ANTHROPIC_AUTH_TOKEN: "sk-or-not-a-real-key",
@@ -550,10 +567,17 @@ describe("_shell-env", () => {
           ")",
           `printf 'parent ${ownVar}=%s\\n' "$${ownVar}"`,
         ].join("\n");
+        // With every key cleared, workload identity federation is next in line in Claude
+        // Code, and it would exchange the parent's identity token at this profile's URL.
+        const federation = {
+          ANTHROPIC_FEDERATION_RULE_ID: "fdrl_parent_sentinel",
+          ANTHROPIC_ORGANIZATION_ID: "org-parent-sentinel",
+          ANTHROPIC_IDENTITY_TOKEN: "parent-sentinel-identity-token",
+        };
         const result = spawnSync("/bin/sh", ["-c", script], {
           encoding: "utf8",
           timeout: 5000,
-          env: { PATH: process.env.PATH ?? "", [ownVar]: parentValue },
+          env: { PATH: process.env.PATH ?? "", [ownVar]: parentValue, ...federation },
         });
 
         expect(result.stderr).toBe("");
@@ -566,6 +590,9 @@ describe("_shell-env", () => {
         expect(childText).toContain("ANTHROPIC_BASE_URL=https://openrouter.ai/api");
         expect(childText).not.toMatch(new RegExp(`^${ownVar}=`, "m"));
         expect(childText).not.toContain(parentValue);
+        for (const [key, value] of Object.entries(federation)) {
+          expect(childText, key).not.toContain(value);
+        }
         // ...while the parent shell keeps its own.
         expect(result.stdout).toBe(`parent ${ownVar}=${parentValue}\n`);
       },
