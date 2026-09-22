@@ -323,6 +323,66 @@ describe("re-running init with an API profile registered", () => {
   });
 });
 
+describe("init and a backup directory left over from an earlier profile", () => {
+  // Init used to take such a directory as the new profile's backup. setupSharedLinks backs an
+  // item up only if the backup does not have one yet, so an item the leftover already had
+  // was deleted from the account without being saved.
+  function seedLeftover(home: string) {
+    writeFileSync(path.join(home, ".claude", "settings.json"), '{"from":"primary"}');
+    writeFileSync(path.join(home, ".claude-work", "settings.json"), '{"from":"work account"}');
+    const leftover = path.join(home, ".clausona", "backups", "claude", "work", "settings.json");
+    mkdirSync(path.dirname(leftover), { recursive: true });
+    writeFileSync(leftover, '{"from":"an earlier profile"}');
+    return leftover;
+  }
+
+  it("init --auto names the account around a leftover that holds something", async () => {
+    const h = await harness();
+    const leftover = seedLeftover(h.home);
+
+    await h.commands.runCommand("init", ["--auto"]);
+
+    const saved = path.join(h.home, ".clausona", "backups", "claude", "work-2", "settings.json");
+    expect(existsSync(saved) && readFileSync(saved, "utf8"), "the account's own settings.json was lost").toBe(
+      '{"from":"work account"}',
+    );
+    expect(readFileSync(leftover, "utf8"), "the leftover was changed").toBe('{"from":"an earlier profile"}');
+    expect(h.ids()).toEqual(["claude:default", "claude:work-2", "codex:default", "codex:work"]);
+  });
+
+  it("TUI init offers the numbered name", async () => {
+    const h = await harness();
+    seedLeftover(h.home);
+
+    const state = await h.commands.bootstrapInitFromCurrentState();
+
+    expect(state.profileNames[path.join(h.home, ".claude-work")]).toBe("work-2");
+  });
+
+  it("refuses a name the user typed that lands on a leftover, before writing anything", async () => {
+    const h = await harness();
+    const leftover = seedLeftover(h.home);
+    const accounts = await h.service.discoverAccounts();
+    const profileNames = { [path.join(h.home, ".claude-work")]: "work" };
+
+    await expect(h.service.initializeRegistry({ accounts, profileNames, defaultProfile: "default" })).rejects.toThrow(
+      `${path.join("~", ".clausona", "backups", "claude", "work")} already exists, so 'claude:work' cannot use it as its backup directory.`,
+    );
+    expect(readFileSync(leftover, "utf8")).toBe('{"from":"an earlier profile"}');
+    expect(readFileSync(path.join(h.home, ".claude-work", "settings.json"), "utf8")).toBe('{"from":"work account"}');
+    expect(existsSync(path.join(h.home, ".clausona", "profiles.json")), "the registry was written").toBe(false);
+  });
+
+  it("clears an empty leftover and uses the name", async () => {
+    const h = await harness();
+    mkdirSync(path.join(h.home, ".clausona", "backups", "claude", "work"), { recursive: true });
+
+    await h.commands.runCommand("init", ["--auto"]);
+
+    expect(h.ids()).toEqual(EXPECTED_IDS);
+  });
+});
+
 describe("init --auto when an API profile holds the primary's usual name", () => {
   // Reachable when TUI init left the claude primary out, which let an API profile take `default`.
   it("names the primary default-2 instead of giving up", async () => {

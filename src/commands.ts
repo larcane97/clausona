@@ -6,7 +6,7 @@ import { trackUsage } from "./core/track-usage.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import { renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
 import { buildProfileEnv } from "./lib/profile-env.js";
-import { initProfileNames, parseProfileRef, profileId } from "./lib/profile-ref.js";
+import { parseProfileRef, profileId } from "./lib/profile-ref.js";
 import {
   addProfile,
   discoverAccounts,
@@ -16,6 +16,7 @@ import {
   listProfiles,
   loadRegistry,
   loginProfile,
+  proposeInitProfileNames,
   removeProfile,
   repairProfile,
   setActiveProfileByName,
@@ -621,7 +622,7 @@ export async function runCommand(command: string, args: string[]) {
         throw new Error("No Claude Code accounts found. Run `claude login` first.");
       }
       const mergeSessions = args.includes("--merge-sessions") || undefined;
-      const profileNames = initProfileNames(accounts, await loadRegistry());
+      const profileNames = await proposeInitProfileNames(accounts, await loadRegistry());
       // No default: nobody was asked, so each tool keeps the profile that was active.
       await initializeRegistry({ accounts, profileNames, mergeSessions });
       return success(`Initialized ${bold(String(accounts.length))} profile(s)`);
@@ -635,7 +636,7 @@ export async function runCommand(command: string, args: string[]) {
 export async function bootstrapInitFromCurrentState() {
   const accounts = await discoverAccounts();
   const existing = await loadRegistry();
-  const profileNames = initProfileNames(accounts, existing);
+  const profileNames = await proposeInitProfileNames(accounts, existing);
   // Registry keys are ids (`claude:work`), but init takes bare names and adds the tool
   // itself - an id passed through would come back as `claude:claude:work`.
   const active = existing?.activeProfiles?.claude;

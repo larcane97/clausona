@@ -701,14 +701,14 @@ export async function initializeRegistry(options: {
   // An account found in an API profile's own directory is that profile, not a new one.
   const accounts = options.accounts.filter((account) => !carriedDirs.has(path.resolve(account.configDir)));
   // An account the caller left unnamed is named exactly as the init command names it.
-  const names = initProfileNames(accounts, existing, options.profileNames);
+  const names = await proposeInitProfileNames(accounts, existing, options.profileNames);
 
   // Every name is checked before anything is written. A new name gets the same rules as
   // `add`: the name rule, and no two ids of one tool that differ only by case - they would
   // share a backup directory on a case-insensitive filesystem. An account re-registered
   // under the name it already has creates nothing, so a name from before the rules keeps
   // working: renaming it would strand its backup and everything keyed by its id.
-  const planned: Array<{ account: DiscoveredAccount; id: string; backupDir: string | null }> = [];
+  const planned: Array<{ account: DiscoveredAccount; id: string; backupDir: string | null; kept: boolean }> = [];
   const initIds = new Map<string, { id: string; kept: boolean; api?: boolean }>(
     carried.map(([id]) => [foldProfileName(id), { id, kept: false, api: true }]),
   );
@@ -733,7 +733,11 @@ export async function initializeRegistry(options: {
     initIds.set(foldProfileName(id), { id, kept });
     // Resolved now, so a kept name the containment guard refuses stops init before it writes.
     const backupDir = account.isPrimary ? null : backupDirFor(CLAUSONA_DIR, account.tool, name);
-    planned.push({ account, id, backupDir });
+    // A re-registered profile goes on using its own backup. A new name gets the add paths'
+    // rule: a directory already there that holds something belongs to someone else. Derived
+    // names are steered around those, so only a name the caller chose can land on one.
+    if (backupDir && !kept && (await backupDirOccupied(backupDir))) throw backupDirTaken(backupDir, id);
+    planned.push({ account, id, backupDir, kept });
   }
 
   await ensureStorage();
@@ -754,7 +758,7 @@ export async function initializeRegistry(options: {
     profiles: {},
   };
 
-  for (const { account, id, backupDir } of planned) {
+  for (const { account, id, backupDir, kept } of planned) {
     const mergeSessions = account.isPrimary
       ? undefined
       : (options.mergeSessionsMap?.[account.configDir] ?? options.mergeSessions ?? false);
@@ -769,10 +773,12 @@ export async function initializeRegistry(options: {
 
     if (backupDir) {
       const merge = mergeSessions ?? false;
-      if (!(await exists(backupDir))) {
+      if (!kept) {
+        await claimBackupDir(backupDir, id);
+      } else if (!(await exists(backupDir))) {
         await mkdir(backupDir, { recursive: true });
-        // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
       }
+      // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
       const adapter = getAdapter(account.tool);
       const primary = primarySources[account.tool];
       if (!primary) {
@@ -1321,6 +1327,35 @@ async function clearBackupDir(backupDir: string, id: string) {
     }
     throw error;
   });
+}
+
+/** Whether a backup directory holds anything - or is something other than a directory. */
+async function backupDirOccupied(backupDir: string): Promise<boolean> {
+  const stats = await lstat(backupDir).catch(() => null);
+  if (!stats) return false;
+  if (!stats.isDirectory()) return true;
+  return (await readdir(backupDir)).length > 0;
+}
+
+/**
+ * The names init proposes for these accounts: initProfileNames, with derived names kept clear
+ * of every backup directory that already holds something. Taking one would make it the new
+ * profile's backup, and an item it already has would then be deleted from the account
+ * without being saved.
+ */
+export async function proposeInitProfileNames(
+  accounts: DiscoveredAccount[],
+  registry: Registry | null,
+  chosen: Record<string, string> = {},
+): Promise<Record<string, string>> {
+  const occupied = new Set<string>();
+  for (const tool of ALL_TOOLS) {
+    const base = path.join(CLAUSONA_DIR, "backups", tool);
+    for (const name of await readdir(base).catch((): string[] => [])) {
+      if (await backupDirOccupied(path.join(base, name))) occupied.add(foldProfileName(profileId(tool, name)));
+    }
+  }
+  return initProfileNames(accounts, registry, chosen, occupied);
 }
 
 /** Creates a new profile's backup directory, and refuses rather than reuse one that holds anything. */

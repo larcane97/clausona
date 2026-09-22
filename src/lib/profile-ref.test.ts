@@ -252,6 +252,22 @@ describe("initProfileNames", () => {
     expect(byDir(initProfileNames(found, existing))).toEqual({ ".claude": "default-2" });
   });
 
+  it("numbers a derived name whose backup directory already holds something", () => {
+    // The primary has no backup directory, so an occupied `default` does not move it.
+    const found = [
+      account("claude", ".claude", true),
+      account("claude", ".claude-work"),
+      account("codex", ".codex-work"),
+    ];
+    const occupied = new Set(["claude:default", "claude:work"]);
+
+    expect(byDir(initProfileNames(found, null, {}, occupied))).toEqual({
+      ".claude": "default",
+      ".claude-work": "work-2",
+      ".codex-work": "work",
+    });
+  });
+
   it("only derives names the rule accepts", () => {
     const found = [
       account("claude", ".claude-a b"),

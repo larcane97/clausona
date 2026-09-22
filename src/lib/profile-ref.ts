@@ -68,14 +68,17 @@ function directoryName(dir: string): string {
  * it is the primary, or defaultProfileName otherwise. A derived name is clausona's choice,
  * so rather than fail init over a clash it takes the first free `-2`, `-3`, ... suffix;
  * a directory that spells the name exactly keeps it ahead of one whose name was fitted.
- * Every account steers clear of an API profile's name, since init keeps those, and a
- * non-primary account of every registered name: a profile init drops still has a backup
- * directory under it.
+ * Every account steers clear of an API profile's name, since init keeps those. A
+ * non-primary account also steers clear of every registered name, since a profile init
+ * drops still has a backup directory under it, and of every name in `occupied`, whose
+ * backup directory already holds something.
  */
 export function initProfileNames(
   accounts: DiscoveredAccount[],
   registry: Registry | null,
   chosen: Record<string, string> = {},
+  /** Folded ids (`tool:name`) whose backup directory already holds something. */
+  occupied: ReadonlySet<string> = new Set(),
 ): Record<string, string> {
   const profiles = registry?.profiles ?? {};
   const registeredName = (account: DiscoveredAccount) => {
@@ -112,7 +115,7 @@ export function initProfileNames(
     const base = account.isPrimary ? "default" : defaultProfileName(account.configDir);
     const taken = (name: string) => {
       const folded = foldProfileName(profileId(account.tool, name));
-      return assigned.has(folded) || (!account.isPrimary && registered.has(folded));
+      return assigned.has(folded) || (!account.isPrimary && (registered.has(folded) || occupied.has(folded)));
     };
     let name = base;
     for (let n = 2; taken(name); n++) name = `${base}-${n}`;
