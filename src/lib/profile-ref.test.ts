@@ -81,6 +81,65 @@ describe("validateProfileName", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/start with a letter or digit.*letters, digits, '\.', '_' and '-'/);
   });
+
+  /**
+   * A key is letters, digits and dashes, so it passes the allowlist above. Without this it
+   * becomes a profile id in profiles.json, a directory name under the home directory, and
+   * a line of stdout. The check lives here rather than in the CLI so that the TUI, init
+   * and every service entry point inherit it.
+   */
+  describe("a name that is really an API key", () => {
+    const PROBE = "sk-ant-api03-FAKE-0123456789abcdef";
+
+    it("refuses the key prefixes, whatever their case", () => {
+      for (const name of [PROBE, "sk-ant-api02-FAKE", "sk-ant-admin-FAKE", "sk-proj-FAKE", "SK-ANT-FAKE", "sk-"]) {
+        expect(validateProfileName(name), name).toMatchObject({ ok: false });
+      }
+    });
+
+    it("refuses a name too long to be one", () => {
+      expect(validateProfileName("a".repeat(65))).toMatchObject({ ok: false });
+      expect(validateProfileName("a".repeat(64))).toEqual({ ok: true });
+    });
+
+    it("never repeats the key back", () => {
+      const result = validateProfileName(PROBE);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).not.toContain(PROBE);
+        expect(result.error).not.toContain("0123456789abcdef");
+        // And says how a key is actually supplied, or the next try is the same.
+        expect(result.error).toContain("--key-from env:NAME");
+      }
+    });
+
+    it("leaves ordinary names alone, including ones that merely start with s or k", () => {
+      for (const name of ["sk", "skywalker", "s-k", "keys", "sk_ant", "work"]) {
+        expect(validateProfileName(name), name).toEqual({ ok: true });
+      }
+    });
+
+    it("refuses one where a profile ref is expected, without echoing it", () => {
+      expect(() => parseProfileRef(PROBE, REG)).toThrow(/looks like an API key/);
+      try {
+        parseProfileRef(PROBE, REG);
+      } catch (error) {
+        expect((error as Error).message).not.toContain(PROBE);
+      }
+    });
+
+    // The ceiling is a creation-time rule. A profile registered before it - or by hand -
+    // still has to resolve, or it could never be removed.
+    it("still resolves a registered name the ceiling would refuse", () => {
+      const long = "a".repeat(80);
+      const registry: Registry = {
+        ...REG,
+        profiles: { ...REG.profiles, [`claude:${long}`]: REG.profiles["claude:default"] },
+      };
+
+      expect(parseProfileRef(`claude:${long}`, registry).name).toBe(long);
+    });
+  });
 });
 
 describe("defaultProfileName", () => {

@@ -21,6 +21,33 @@ export function profileId(tool: ToolName, name: string): string {
 const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
+ * A name a profile may not take, because it is how an API key is spelled.
+ *
+ * A key passes the allowlist above - it is letters, digits and dashes - so without this a
+ * key typed into the positional slot becomes a profile id in profiles.json, a directory
+ * name under the home directory, and a line of stdout. That is the one slip that puts a
+ * credential in the file this feature promises never holds one.
+ *
+ * Two tests, because a prefix list dates: `sk-`, which every Anthropic and OpenAI key
+ * starts with (`sk-ant-api03`, `sk-ant-api02`, `sk-ant-admin`) and no profile sensibly
+ * does, and a length ceiling, since a key is around a hundred characters and a name a
+ * person types is not. Neither echoes what it refused.
+ */
+const MAX_PROFILE_NAME_LENGTH = 64;
+
+export function looksLikeCredential(value: string): boolean {
+  return typeof value === "string" && (value.toLowerCase().startsWith("sk-") || value.length > MAX_PROFILE_NAME_LENGTH);
+}
+
+/**
+ * Said instead of the name, wherever a name that looks like a key would be printed. It
+ * names the two ways a key is meant to arrive, since being told "no" without being told
+ * "here is how" is what makes someone try the argument again.
+ */
+export const CREDENTIAL_AS_NAME_ERROR =
+  "That looks like an API key, not a profile name - a profile name is at most 64 characters and never starts with 'sk-'. A key is never an argument, because `ps` shows every process's arguments to every user on the machine: pipe it in (printf %s \"$KEY\" | clausona add <profile> --api …) or point at it with --key-from env:NAME.";
+
+/**
  * The form in which two names are compared. A case-insensitive filesystem (macOS and Windows
  * by default) treats `Work` and `work` as one directory, and APFS folds more than ASCII
  * case - `ſ` (U+017F) is `s` to it - which NFKC normalization covers.
@@ -30,6 +57,8 @@ export function foldProfileName(name: string): string {
 }
 
 export function validateProfileName(name: string): { ok: true } | { ok: false; error: string } {
+  // Checked first, so the message below never echoes something key-shaped.
+  if (looksLikeCredential(name)) return { ok: false, error: CREDENTIAL_AS_NAME_ERROR };
   // RegExp#test stringifies its argument, and "undefined" would pass.
   if (typeof name === "string" && PROFILE_NAME.test(name)) return { ok: true };
   return {
@@ -130,14 +159,27 @@ function isToolName(value: string): value is ToolName {
 }
 
 export function parseProfileRef(input: string, registry: Registry): ParsedProfileRef {
+  /**
+   * Said instead of the message that would have quoted the input, when the input is
+   * key-shaped - which is what reaches this slot when a key is passed as a profile.
+   *
+   * Only on the paths that fail. A ref that resolves is a registered profile, not a
+   * credential, and a legacy name long enough to trip the ceiling has to stay removable.
+   */
+  const refuseIfKeyShaped = () => {
+    if (looksLikeCredential(input)) throw new Error(CREDENTIAL_AS_NAME_ERROR);
+  };
+
   if (input.includes(":")) {
     const [maybeTool, ...rest] = input.split(":");
     const name = rest.join(":");
     if (!isToolName(maybeTool)) {
+      refuseIfKeyShaped();
       throw new Error(`Unknown tool '${maybeTool}'. Use one of: ${ALL_TOOLS.join(", ")}.`);
     }
     const id = profileId(maybeTool, name);
     if (!registry.profiles[id]) {
+      refuseIfKeyShaped();
       throw new Error(`Profile '${id}' not found.`);
     }
     return { tool: maybeTool, name, id };
@@ -148,7 +190,10 @@ export function parseProfileRef(input: string, registry: Registry): ParsedProfil
     const id = profileId(tool, input);
     if (registry.profiles[id]) candidates.push({ tool, name: input, id });
   }
-  if (candidates.length === 0) throw new Error(`Profile '${input}' not found.`);
+  if (candidates.length === 0) {
+    refuseIfKeyShaped();
+    throw new Error(`Profile '${input}' not found.`);
+  }
   if (candidates.length > 1) {
     const list = candidates.map((c) => `'${c.id}'`).join(" or ");
     throw new Error(`'${input}' exists in both claude and codex. Use ${list}.`);
