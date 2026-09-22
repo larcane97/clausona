@@ -422,4 +422,33 @@ describe("renderDoctor next-step hint", () => {
     expect(out).not.toContain("clausona repair");
     expect(out).not.toContain("clausona login");
   });
+
+  it.each([
+    "missing_api_secret",
+    "invalid_api_config",
+    "shared_api_key_helper",
+    "plaintext_env_secret",
+  ] as const)("suggests neither for %s, which carries its own fix", (kind) => {
+    // repair rebuilds shared links and login signs a subscription in. An API profile has
+    // neither problem: what it needs is in the message, and offering a command that
+    // reports success and changes nothing is worse than offering none.
+    const out = stripAnsi(renderDoctor([result([{ kind, message: "x" }])]));
+
+    expect(out).not.toContain("clausona repair");
+    expect(out).not.toContain("clausona login");
+  });
+
+  it("still suggests repair when an API profile's shared links are broken too", () => {
+    const out = stripAnsi(
+      renderDoctor([
+        result([
+          { kind: "missing_api_secret", message: "x" },
+          { kind: "broken_symlink", message: "y" },
+        ]),
+      ]),
+    );
+
+    expect(out).toContain("clausona repair claude:work");
+    expect(out).not.toContain("clausona login");
+  });
 });

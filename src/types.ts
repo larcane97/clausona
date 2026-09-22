@@ -139,7 +139,13 @@ export type DoctorIssue = {
     | "local_override"
     | "stale_symlink"
     | "missing_shared_link"
-    | "plugins_out_of_sync";
+    | "plugins_out_of_sync"
+    // API profiles only. The first two are the profile's own configuration; the last two
+    // are a second key reaching the profile's endpoint by a route clausona does not clear.
+    | "missing_api_secret"
+    | "invalid_api_config"
+    | "shared_api_key_helper"
+    | "plaintext_env_secret";
   message: string;
 };
 

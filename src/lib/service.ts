@@ -14,7 +14,7 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { evaluateSymlinkHealth } from "../core/doctor.js";
+import { evaluateApiHealth, evaluateSymlinkHealth } from "../core/doctor.js";
 import { backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
@@ -40,9 +40,15 @@ import type {
   UsagePeriod,
   UsageStore,
 } from "../types.js";
-import { buildProfileEnv, envKeyCaseTwin, envKeyCaseTwinError } from "./profile-env.js";
+import {
+  buildProfileEnv,
+  CREDENTIAL_ENV_KEYS,
+  displayName,
+  envKeyCaseTwin,
+  envKeyCaseTwinError,
+} from "./profile-env.js";
 import { foldProfileName, initProfileNames, parseProfileRef, profileId, validateProfileName } from "./profile-ref.js";
-import { deleteSecret, storeSecret } from "./secrets.js";
+import { deleteSecret, resolveSecret, storeSecret } from "./secrets.js";
 
 /** Files inside plugins/ that contain absolute paths and must be per-profile */
 const PLUGINS_PATH_FILES = new Set(["known_marketplaces.json", "installed_plugins.json"]);
@@ -939,6 +945,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
   }
 
   const results: DoctorProfileResult[] = [];
+  const home = homedir();
 
   for (const [id, profile] of Object.entries(registry.profiles)) {
     const issues: DoctorIssue[] = [];
@@ -946,8 +953,32 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
     const primarySource = registry.primarySources[profile.tool];
     const adapter = getAdapter(profile.tool);
 
-    // Run tool-aware account/keychain checks
-    {
+    if (profile.kind === "api") {
+      // An API profile has no account JSON and no Claude Code credential, by design, so
+      // the checks below would report every healthy one as broken. These take their place.
+      // Everything after this branch - shared links, plugins - applies to it unchanged.
+      const settingsPath = path.join(profile.configDir, "settings.json");
+      issues.push(
+        ...evaluateApiHealth({
+          id,
+          profile,
+          // The outcome, and nothing else. resolveSecret returns the key itself: it is
+          // awaited and dropped in the same expression so no binding ever holds it.
+          secret: profile.api
+            ? await resolveSecret(id, profile.api.secret)
+                .then(() => ({ ok: true }) as const)
+                .catch((error: unknown) => ({
+                  ok: false as const,
+                  error: error instanceof Error ? error.message : String(error),
+                }))
+            : undefined,
+          settings: await readJson<Record<string, unknown>>(settingsPath, {}),
+          settingsPath: settingsPath.replace(home, "~"),
+          credentialEnvKeys: CREDENTIAL_ENV_KEYS,
+        }),
+      );
+    } else {
+      // Run tool-aware account/keychain checks
       const accountInfo = await adapter.readAccountInfo(profile.configDir);
       if (!accountInfo) {
         issues.push({
@@ -1093,7 +1124,10 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
 
     results.push({
       name: id,
-      email: profile.email,
+      // An API profile has no account email; its label stands in, exactly as it does in
+      // `list` and `config --show`. A subscription profile has no label, so its title is
+      // the email it always was.
+      email: displayName(profile),
       configDir: profile.configDir,
       isPrimary: Boolean(profile.isPrimary),
       healthy: issues.length === 0,

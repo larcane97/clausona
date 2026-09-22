@@ -993,6 +993,24 @@ describe("help", () => {
     expect(help).toContain("label rather than an account email");
   });
 
+  it("tells `doctor` readers what it checks on an API profile, and what it does not", async () => {
+    const h = await harness();
+
+    const help = await h.run("doctor", "--help");
+
+    // Every finding a user can hit has to be readable from this page alone.
+    expect(help).toContain("API PROFILES");
+    expect(help).toContain("base URL");
+    expect(help).toContain("apiKeyHelper");
+    expect(help).toContain("plain text");
+    // Two promises worth making explicit: the key is never printed, and a command key
+    // source is executed - doctor is not a read-only inspection of the registry.
+    expect(help).toContain("never prints the key");
+    expect(help).toContain("is run");
+    // And what it does not do, so a healthy report is not read as "the endpoint answered".
+    expect(help).toContain("No request is made");
+  });
+
   it("points at add --api from the top-level usage", async () => {
     const h = await harness();
 

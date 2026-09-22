@@ -424,6 +424,19 @@ export function renderUsageSummary(
 /** Issues that describe a missing credential, which only signing in can resolve. */
 const CREDENTIAL_ISSUE_KINDS = new Set<DoctorIssue["kind"]>(["missing_json", "missing_keychain", "missing_oauth"]);
 
+/**
+ * Issues whose message already names what to do. Every one of them belongs to an API
+ * profile, which has neither a login to renew nor shared links that could be at fault —
+ * so offering `repair` or `login` here would point at a command that reports success and
+ * changes nothing.
+ */
+const SELF_DIRECTED_ISSUE_KINDS = new Set<DoctorIssue["kind"]>([
+  "missing_api_secret",
+  "invalid_api_config",
+  "shared_api_key_helper",
+  "plaintext_env_secret",
+]);
+
 export function renderDoctor(results: DoctorProfileResult[]) {
   const sections = results.map((result) => {
     const title = `  ${bold(result.name)} ${dim(`(${result.email})`)}`;
@@ -443,7 +456,9 @@ export function renderDoctor(results: DoctorProfileResult[]) {
     // pointed at login instead of at a command that would report success and change
     // nothing. A profile carrying both classes of issue needs both steps.
     const needsLogin = result.issues.some((issue) => CREDENTIAL_ISSUE_KINDS.has(issue.kind));
-    const needsRepair = result.issues.some((issue) => !CREDENTIAL_ISSUE_KINDS.has(issue.kind));
+    const needsRepair = result.issues.some(
+      (issue) => !CREDENTIAL_ISSUE_KINDS.has(issue.kind) && !SELF_DIRECTED_ISSUE_KINDS.has(issue.kind),
+    );
     const suggestions: string[] = [];
     if (needsRepair) suggestions.push(`       ${dim(`Run ${accent(`clausona repair ${result.name}`)} to fix`)}`);
     if (needsLogin) suggestions.push(`       ${dim(`Run ${accent(`clausona login ${result.name}`)} to sign in`)}`);
