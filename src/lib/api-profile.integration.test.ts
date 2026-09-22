@@ -206,11 +206,11 @@ describe("legacy profiles whose name escapes the backup directory", () => {
   // Names are checked at creation now, but a registry written before that can still hold
   // one - and removing it restores and then deletes backups/<tool>/<name>. The guard in
   // backupDirFor has to refuse, since the name itself can no longer be refused.
-  for (const name of ["..", "."]) {
+  for (const name of ["..", ".", "a/../.."]) {
     it(`removeProfile refuses 'claude:${name}' and leaves existing backups alone`, async () => {
       const h = await harness();
       const sentinel = seedBackupSentinel(h.home);
-      const legacyDir = path.join(h.home, `.claude-${name}`);
+      const legacyDir = path.join(h.home, ".claude-legacy");
       mkdirSync(legacyDir, { recursive: true });
       const registry = h.registry();
       registry.profiles[`claude:${name}`] = { tool: "claude", configDir: legacyDir, email: "legacy@example.com" };
