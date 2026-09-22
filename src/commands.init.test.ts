@@ -102,6 +102,15 @@ describe("init --auto", () => {
 
     expect(h.ids()).toEqual(EXPECTED_IDS);
   });
+
+  it("names an account whose directory name breaks the rule, rather than giving up", async () => {
+    const h = await harness();
+    seedClaudeAccount(h.home, ".claude-my work", "mine@example.com");
+
+    await h.commands.runCommand("init", ["--auto"]);
+
+    expect(h.ids()).toEqual([...EXPECTED_IDS, "claude:my-work"].sort());
+  });
 });
 
 describe("bootstrapInitFromCurrentState", () => {

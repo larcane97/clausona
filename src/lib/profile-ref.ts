@@ -40,12 +40,19 @@ export function validateProfileName(name: string): { ok: true } | { ok: false; e
 
 /**
  * The name offered for an account found at `dir`: the directory's name without the
- * `.claude` or `.codex` prefix, or "profile" when nothing is left. A directory can be
- * named anything, so the result can still fail validateProfileName; whatever creates the
- * profile checks it.
+ * `.claude` or `.codex` prefix. A directory can be named anything, but a derived name is
+ * clausona's choice rather than the user's - `init --auto` has nobody to ask for another -
+ * so one the rule rejects is made to fit it: each run of other characters becomes `-`, and
+ * whatever cannot start a name is dropped. "profile" is what is left when nothing else is.
  */
 export function defaultProfileName(dir: string): string {
-  return path.basename(dir).replace(/^\.(?:claude|codex)-?/, "") || "profile";
+  const name = path.basename(dir).replace(/^\.(?:claude|codex)-?/, "");
+  if (validateProfileName(name).ok) return name;
+  const fitted = name
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^[^A-Za-z0-9]+/, "")
+    .replace(/-+$/, "");
+  return fitted || "profile";
 }
 
 function isToolName(value: string): value is ToolName {

@@ -94,10 +94,30 @@ describe("defaultProfileName", () => {
     expect(defaultProfileName(path.join(home, "backups", "old-claude"))).toBe("old-claude");
   });
 
-  it("can still produce a name the rule rejects, which creation then refuses", () => {
-    const name = defaultProfileName(path.join(home, ".claude-my work"));
-    expect(name).toBe("my work");
-    expect(validateProfileName(name)).toMatchObject({ ok: false });
+  // A derived name is clausona's choice, not the user's, so it has to follow the rule:
+  // `init --auto` has nobody to ask for another one.
+  it("turns a directory name the rule rejects into one it accepts", () => {
+    const cases: Array<[string, string]> = [
+      [".claude-my work", "my-work"],
+      [".claude-a  b\tc", "a-b-c"],
+      [".claude-.x", "x"],
+      [".codex--x", "x"],
+      [".claude-work:2", "work-2"],
+      [".claude-work!", "work"],
+      [".claude-日本", "profile"],
+      [".claude-...", "profile"],
+    ];
+    for (const [dir, expected] of cases) {
+      const name = defaultProfileName(path.join(home, dir));
+      expect(name, dir).toBe(expected);
+      expect(validateProfileName(name), dir).toEqual({ ok: true });
+    }
+  });
+
+  it("leaves a name the rule already accepts exactly as it is", () => {
+    for (const name of ["work", "glm-5.3", "a_b", "work-", "x."]) {
+      expect(defaultProfileName(path.join(home, `.claude-${name}`))).toBe(name);
+    }
   });
 });
 
