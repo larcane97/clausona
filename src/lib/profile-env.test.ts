@@ -338,6 +338,66 @@ describe("buildProfileEnv", () => {
       expect(warnings).toEqual([]);
     });
 
+    /**
+     * The invariant the whole scheme rests on, over every shape that could break it: each
+     * case variant of each name an API profile sets or clears, put in through the env map,
+     * on both schemes, with the key resolving and failing. The variant is dropped before
+     * `unset` is computed, so nothing cleared is another spelling of something set - and
+     * the real name is still cleared, so dropping the variant never reopens the leak.
+     */
+    it("never clears a name that is another spelling of one it sets, and still clears the real one", async () => {
+      const variants = (name: string) => [
+        name.toLowerCase(),
+        name
+          .toLowerCase()
+          .split("_")
+          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+          .join("_"),
+      ];
+      const failing = async () => {
+        throw new Error("no stored secret");
+      };
+      let checked = 0;
+      for (const authScheme of ["bearer", "api-key"] as const) {
+        const ownVar = authScheme === "bearer" ? "ANTHROPIC_AUTH_TOKEN" : "ANTHROPIC_API_KEY";
+        for (const resolves of [true, false]) {
+          for (const managed of ["ANTHROPIC_BASE_URL", ...CREDENTIALS, ...ROUTING]) {
+            for (const variant of variants(managed)) {
+              const profile = apiProfile({
+                api: { baseUrl: "https://openrouter.ai/api", authScheme, secret: { source: "keychain" } },
+                env: { [variant]: "value-that-must-not-leak" },
+              });
+              const { env, unset, warnings } = await buildProfileEnv("claude:glm", profile, {
+                ...deps,
+                ...(resolves ? {} : { resolveSecret: failing }),
+              });
+              const label = `${authScheme} ${resolves ? "resolved" : "failing"} ${variant}`;
+
+              const setNames = new Set(Object.keys(env).map((key) => key.toUpperCase()));
+              expect(
+                unset.filter((key) => setNames.has(key.toUpperCase())),
+                label,
+              ).toEqual([]);
+              expect(env, label).not.toHaveProperty(variant);
+              expect(
+                warnings.filter((w) => w.includes(`'${variant}'`)),
+                label,
+              ).toHaveLength(1);
+              expect(warnings.join("\n"), label).not.toContain("value-that-must-not-leak");
+              // The real name is where it belongs: set by the profile, or cleared.
+              if (managed === "ANTHROPIC_BASE_URL" || (managed === ownVar && resolves)) {
+                expect(env, label).toHaveProperty(managed);
+              } else {
+                expect(unset, label).toContain(managed);
+              }
+              checked++;
+            }
+          }
+        }
+      }
+      expect(checked).toBe(2 * 2 * (1 + CREDENTIALS.length + ROUTING.length) * 2);
+    });
+
     it("never produces two names, set or cleared, that are one variable on Windows", async () => {
       const profiles: Profile[] = [
         apiProfile({ env: { anthropic_custom_headers: "x", ANTHROPIC_MODEL: "a", anthropic_model: "b" } }),

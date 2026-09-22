@@ -1382,6 +1382,18 @@ describe("updateProfileEnv", () => {
     });
   }
 
+  it("names the spelling to use and never echoes the value it refuses", async () => {
+    const h = await withApiProfile();
+
+    const error = await h.service
+      .updateProfileEnv("claude:glm", { set: { anthropic_custom_headers: "Authorization: Bearer sk-must-not-echo" } })
+      .catch((e: Error) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("Did you mean ANTHROPIC_CUSTOM_HEADERS?");
+    expect((error as Error).message).not.toContain("sk-must-not-echo");
+  });
+
   it("still lets a key be changed, or renamed in case within one call", async () => {
     const h = await withApiProfile();
 

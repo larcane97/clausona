@@ -111,7 +111,7 @@ export function envKeyCaseTwin(key: string, others: Iterable<string>, kind: Prof
 }
 
 export function envKeyCaseTwinError(key: string, twin: string): string {
-  return `'${key}' differs from ${twin} only in case, and Windows treats the two as one variable. Use ${twin}.`;
+  return `'${key}' differs from ${twin} only in case, and Windows treats the two as one variable. Did you mean ${twin}?`;
 }
 
 export function displayName(profile: Pick<Profile, "email" | "label">): string {
@@ -194,9 +194,10 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
   // For an API profile the endpoint and every credential come from the profile or not at
   // all. A set difference, taken last: the resolved key and any explicit env-map entry are
   // in env and so kept; everything else - an unresolved key's variable included - is cleared.
-  // It matches names exactly on purpose: the loop above has already dropped any env-map key
-  // that is a case variant of one of these, so no name here is another spelling of one in
-  // env - and matching case-insensitively would, on POSIX, keep the caller's real variable.
+  // It has to stay after the loop above, which drops any env-map key that is a case variant
+  // of one of these; that is what keeps every name here from being another spelling of one
+  // in env. And it matches names exactly on purpose: excluding case-insensitively would, on
+  // POSIX, let a lowercase key the tool never reads keep the caller's real variable alive.
   const unset =
     profile.kind === "api" && profile.api
       ? [...CREDENTIAL_ENV_KEYS, ...ROUTING_ENV_KEYS].filter((key) => !Object.hasOwn(env, key))
