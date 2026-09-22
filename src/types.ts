@@ -140,11 +140,14 @@ export type DoctorIssue = {
     | "stale_symlink"
     | "missing_shared_link"
     | "plugins_out_of_sync"
-    // API profiles only. The first two are the profile's own configuration; the last two
-    // are a second key reaching the profile's endpoint by a route clausona does not clear.
+    // API profiles only. The first three are the profile's own configuration; the last
+    // three are about a second key reaching the profile's endpoint by a route clausona
+    // does not clear, or about not being able to tell.
+    | "missing_config_dir"
     | "missing_api_secret"
     | "invalid_api_config"
     | "shared_api_key_helper"
+    | "unreadable_settings"
     | "plaintext_env_secret";
   message: string;
   /**

@@ -127,8 +127,10 @@ describe("evaluateApiHealth", () => {
     it("reports a malformed base URL", () => {
       const issues = health({ profile: withApi("gpu-box:30000") });
 
+      // A bare host:port parses as a URL whose scheme is the host, so this is the scheme
+      // rule speaking. What it must not do is repeat the value back.
       expect(issues[0].kind).toBe("invalid_api_config");
-      expect(issues[0].message).toContain("gpu-box:30000");
+      expect(issues[0].message).not.toContain("gpu-box:30000");
     });
 
     it("reports a scheme the tool cannot call", () => {
@@ -138,13 +140,21 @@ describe("evaluateApiHealth", () => {
       expect(issues[0].message).toContain("http");
     });
 
-    it("reports credentials in the base URL without printing them", () => {
-      const issues = health({ profile: withApi("https://admin-name:sk-in-the-url@gpu-box/api") });
+    it.each([
+      ["a URL that is refused for its credentials", "https://admin-name:sk-in-the-url@gpu-box/api"],
+      ["a URL refused for its scheme first", "ftp://admin-name:sk-in-the-url@gpu-box/api"],
+      ["a URL that does not parse at all", "//admin-name:sk-in-the-url@gpu-box/api"],
+      ["a URL refused for both", "gpu-box:30000?k=sk-in-the-url"],
+    ])("reports %s without printing what it carries", (_label, baseUrl) => {
+      const issues = health({ profile: withApi(baseUrl) });
 
+      // A password in the URL is a credential like any other, and it is reported by
+      // whichever branch rejects the URL first - so no branch may quote the URL back.
+      // doctor --help promises the output is safe to paste into a bug report.
       expect(issues[0].kind).toBe("invalid_api_config");
-      // The password is a credential like any other: naming the problem must not repeat it.
       expect(issues[0].message).not.toContain("sk-in-the-url");
       expect(issues[0].message).not.toContain("admin-name");
+      expect(issues[0].message).not.toContain(baseUrl);
     });
 
     it("points at the file that holds the endpoint, since no command edits it", () => {
@@ -153,8 +163,9 @@ describe("evaluateApiHealth", () => {
     });
 
     it("flags every base URL that add --api would have refused", async () => {
-      // doctor cannot import parseBaseUrl (core must not reach into lib), so the two
-      // rule sets are checked against each other instead of drifting apart silently.
+      // Both sides now read the same rule out of core/api-url.ts, so they cannot disagree
+      // about what is valid - only about how to word it. This checks that end to end, and
+      // would fail again the moment either side grew a private rule of its own.
       const { parseBaseUrl } = await import("../lib/service.js");
       const refused = ["", "gpu-box:30000", "ftp://gpu-box/api", "https://u:p@gpu-box/api", "/api/v1"];
 
@@ -183,6 +194,7 @@ describe("evaluateApiHealth", () => {
       const issues = health({
         settings: { apiKeyHelper: "op read op://vault/key" },
         settingsPath: "~/.claude-glm/settings.json",
+        settingsShared: true,
       });
 
       expect(issues).toHaveLength(1);
@@ -193,6 +205,33 @@ describe("evaluateApiHealth", () => {
       // profile too, and its key goes to this profile's endpoint.
       expect(issues[0].message).toContain("http://gpu-box:30000");
       expect(issues[0].message).toContain("shared with the primary");
+    });
+
+    it("does not claim the settings are shared when they are the profile's own", () => {
+      // The file may be a local override - which doctor reports separately - and saying it
+      // is shared with the primary would be the one thing that is not true about it.
+      const issues = health({ settings: { apiKeyHelper: "cat ~/key" }, settingsPath: "~/.claude-glm/settings.json" });
+
+      expect(issues[0].kind).toBe("shared_api_key_helper");
+      expect(issues[0].message).not.toContain("shared with the primary");
+      expect(issues[0].message).toContain("runs for this profile");
+    });
+
+    it("reports settings it could not read instead of passing over them", () => {
+      const issues = health({ settings: null, settingsPath: "~/.claude-glm/settings.json" });
+
+      expect(issues.map((issue) => [issue.kind, issue.severity])).toEqual([["unreadable_settings", "warning"]]);
+      expect(issues[0].message).toContain("apiKeyHelper");
+      expect(issues[0].message).toContain("~/.claude-glm/settings.json");
+    });
+
+    it("warns about the helper whatever auth scheme the profile uses", () => {
+      // The scheme decides which variable clausona sets, not whether the helper runs.
+      const apiKey: Profile = { ...apiProfile, api: { ...endpoint, authScheme: "api-key" } };
+
+      expect(health({ profile: apiKey, settings: { apiKeyHelper: "cat ~/key" } })[0].kind).toBe(
+        "shared_api_key_helper",
+      );
     });
 
     it("does not repeat the helper command itself", () => {
@@ -246,12 +285,14 @@ describe("evaluateApiHealth", () => {
   it("reports every problem a profile has, worst configuration first", () => {
     const issues = health({
       profile: { ...withApi(""), env: { ANTHROPIC_API_KEY: "sk-plain" } },
+      configDirExists: false,
       secret: { ok: false, error: "no stored secret" },
       settings: { apiKeyHelper: "op read op://vault/key" },
       credentialEnvKeys: ["ANTHROPIC_API_KEY"],
     });
 
     expect(issues.map((issue) => issue.kind)).toEqual([
+      "missing_config_dir",
       "invalid_api_config",
       "missing_api_secret",
       "shared_api_key_helper",

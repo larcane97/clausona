@@ -433,9 +433,11 @@ const CREDENTIAL_ISSUE_KINDS = new Set<DoctorIssue["kind"]>(["missing_json", "mi
  * changes nothing.
  */
 const SELF_DIRECTED_ISSUE_KINDS = new Set<DoctorIssue["kind"]>([
+  "missing_config_dir",
   "missing_api_secret",
   "invalid_api_config",
   "shared_api_key_helper",
+  "unreadable_settings",
   "plaintext_env_secret",
 ]);
 
@@ -483,9 +485,16 @@ export function renderDoctor(results: DoctorProfileResult[]) {
     // pointed at login instead of at a command that would report success and change
     // nothing. A profile carrying both classes of issue needs both steps.
     const needsLogin = result.issues.some((issue) => CREDENTIAL_ISSUE_KINDS.has(issue.kind));
-    const needsRepair = result.issues.some(
-      (issue) => !CREDENTIAL_ISSUE_KINDS.has(issue.kind) && !SELF_DIRECTED_ISSUE_KINDS.has(issue.kind),
-    );
+    // repair symlinks into the config directory; it cannot create one. With the directory
+    // gone, every shared-link finding is a consequence of that, and repair fails with
+    // ENOENT instead of fixing anything - so the profile is left with the one instruction
+    // that works, which its own message carries.
+    const configDirGone = result.issues.some((issue) => issue.kind === "missing_config_dir");
+    const needsRepair =
+      !configDirGone &&
+      result.issues.some(
+        (issue) => !CREDENTIAL_ISSUE_KINDS.has(issue.kind) && !SELF_DIRECTED_ISSUE_KINDS.has(issue.kind),
+      );
     const suggestions: string[] = [];
     if (needsRepair) suggestions.push(`       ${dim(`Run ${accent(`clausona repair ${result.name}`)} to fix`)}`);
     if (needsLogin) suggestions.push(`       ${dim(`Run ${accent(`clausona login ${result.name}`)} to sign in`)}`);

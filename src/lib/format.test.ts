@@ -496,6 +496,22 @@ describe("renderDoctor next-step hint", () => {
     expect(out).not.toContain("clausona login");
   });
 
+  it("does not suggest repair for a profile whose config directory is gone", () => {
+    // Every shared-link finding there is a consequence of the missing directory, and
+    // repair symlinks into a directory it does not create - it fails with ENOENT.
+    const out = stripAnsi(
+      renderDoctor([
+        result([
+          { kind: "missing_config_dir", message: "config directory ~/.claude-glm is missing" },
+          { kind: "missing_shared_link", message: "commands/ is shared in primary but missing here" },
+        ]),
+      ]),
+    );
+
+    expect(out).not.toContain("clausona repair");
+    expect(out).toContain("config directory ~/.claude-glm is missing");
+  });
+
   it("still suggests repair when an API profile's shared links are broken too", () => {
     const out = stripAnsi(
       renderDoctor([

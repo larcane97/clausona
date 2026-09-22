@@ -14,6 +14,7 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 
+import { checkBaseUrl } from "../core/api-url.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth } from "../core/doctor.js";
 import { backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
@@ -81,6 +82,31 @@ async function exists(targetPath: string) {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * A profile's settings.json for the doctor: the parsed object, `{}` when there is no such
+ * file, and null when there is one that cannot be used.
+ *
+ * `readJson`'s single fallback cannot tell those last two apart, and here they mean opposite
+ * things: no file means nothing is configured, while a file that does not parse means the
+ * apiKeyHelper check could not run - which is not the same as finding no helper.
+ */
+async function readSettings(targetPath: string): Promise<Record<string, unknown> | null> {
+  let raw: string;
+  try {
+    raw = await readFile(targetPath, "utf8");
+  } catch (error) {
+    // A broken shared link reads as ENOENT too; it has its own finding already.
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? {} : null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
   }
 }
 
@@ -962,6 +988,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
         ...evaluateApiHealth({
           id,
           profile,
+          configDirExists: await exists(profile.configDir),
           // The outcome, and nothing else. resolveSecret returns the key itself: it is
           // awaited and dropped in the same expression so no binding ever holds it.
           secret: profile.api
@@ -972,8 +999,14 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
                   error: error instanceof Error ? error.message : String(error),
                 }))
             : undefined,
-          settings: await readJson<Record<string, unknown>>(settingsPath, {}),
+          settings: await readSettings(settingsPath),
           settingsPath: settingsPath.replace(home, "~"),
+          // Whether the helper the profile reads is the primary's or its own, which is the
+          // difference between "someone else's helper also runs here" and "this profile has
+          // one". A local override is reported separately, by its own check.
+          settingsShared: primarySource
+            ? (await inspectSharedLink(settingsPath, path.join(primarySource, "settings.json"))).pointsToSource
+            : false,
           credentialEnvKeys: CREDENTIAL_ENV_KEYS,
         }),
       );
@@ -1681,21 +1714,24 @@ function checkSecretSource(
  * copy: `addApiProfile` calls the same function, and the caller gets the same message.
  */
 export function parseBaseUrl(baseUrl: string): URL {
-  let url: URL;
-  try {
-    url = new URL(baseUrl);
-  } catch {
-    throw new Error("Invalid base URL: must be an absolute http:// or https:// URL.");
+  // The rules live in core/api-url.ts, which the doctor reads too; only the wording is
+  // here. Neither message repeats the URL: profiles.json holds references to secrets,
+  // never secrets, and a password in the URL would be persisted and exported with it.
+  const checked = checkBaseUrl(baseUrl);
+  if (!checked.ok) {
+    switch (checked.problem.reason) {
+      case "empty":
+      case "unparseable":
+        throw new Error("Invalid base URL: must be an absolute http:// or https:// URL.");
+      case "scheme":
+        throw new Error(`Invalid base URL: the scheme must be http or https, not '${checked.problem.scheme}'.`);
+      default:
+        throw new Error(
+          "Invalid base URL: it must not carry credentials. Supply the key through the key source instead.",
+        );
+    }
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(`Invalid base URL: the scheme must be http or https, not '${url.protocol.slice(0, -1)}'.`);
-  }
-  // profiles.json holds references to secrets, never secrets, and a password in the URL
-  // would be persisted and exported in plain text alongside it.
-  if (url.username !== "" || url.password !== "") {
-    throw new Error("Invalid base URL: it must not carry credentials. Supply the key through the key source instead.");
-  }
-  return url;
+  return checked.url;
 }
 
 export async function addApiProfile(options: {

@@ -50,6 +50,12 @@ type HarnessOptions = {
   settings?: Record<string, unknown>;
   /** Leave the primary out of the registry entirely. */
   withoutPrimary?: boolean;
+  /**
+   * Directories to create in the primary. The default is one ordinary shared directory;
+   * `[]` gives a primary that holds nothing a profile could be missing, which is what
+   * makes the shared-link checks say nothing at all.
+   */
+  primaryDirs?: string[];
 };
 
 async function harness(options: HarnessOptions = {}) {
@@ -59,7 +65,8 @@ async function harness(options: HarnessOptions = {}) {
   // What an initialised install has: a primary that has been through onboarding and holds
   // a login, plus one directory for profiles to share.
   const primary = path.join(home, ".claude");
-  mkdirSync(path.join(primary, "commands"), { recursive: true });
+  mkdirSync(primary, { recursive: true });
+  for (const dir of options.primaryDirs ?? ["commands"]) mkdirSync(path.join(primary, dir), { recursive: true });
   mkdirSync(path.join(home, ".clausona"), { recursive: true });
   writeFileSync(path.join(primary, "settings.json"), JSON.stringify(options.settings ?? { theme: "dark" }));
   writeFileSync(path.join(primary, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "P" } }));
@@ -117,6 +124,8 @@ async function harness(options: HarnessOptions = {}) {
     primary,
     service,
     secrets,
+    /** The config dir `addApi` creates, so a test can break it after the fact. */
+    apiConfigDir: path.join(home, ".claude-glm"),
     /** Paths under the temp HOME are replaced with `~`, so output can be compared literally. */
     normalize: (text: string) => text.split(home).join("~"),
     doctor: () => service.doctorProfiles(),
@@ -240,7 +249,8 @@ describe("doctor on an API profile", () => {
     const issues = issuesFor(await h.doctor(), "claude:bad");
 
     expect(issues.map((i) => i.kind)).toContain("invalid_api_config");
-    expect(issues[0].message).toContain("profiles.json");
+    // Nothing in the CLI rewrites api.baseUrl, so the message has to name the file.
+    expect(issues.find((i) => i.kind === "invalid_api_config")?.message).toContain("profiles.json");
   });
 
   it("reports apiKeyHelper in the settings the profile shares with the primary", async () => {
@@ -257,6 +267,48 @@ describe("doctor on an API profile", () => {
     expect(kinds(results, "claude:default")).toEqual([]);
   });
 
+  it("does not call the settings shared when the profile has its own copy", async () => {
+    const h = await harness();
+    await h.addApi();
+    // A local override: the shared link replaced by a real file. doctor reports that
+    // separately as `local_override`; the helper message must not also claim the file is
+    // shared with the primary, which is the one thing it is not.
+    const own = path.join(h.apiConfigDir, "settings.json");
+    rmSync(own, { force: true });
+    writeFileSync(own, JSON.stringify({ apiKeyHelper: "cat ~/key" }));
+
+    const results = await h.doctor();
+
+    expect(kinds(results, "claude:glm")).toContain("shared_api_key_helper");
+    const helper = issuesFor(results, "claude:glm").find((i) => i.kind === "shared_api_key_helper");
+    expect(helper?.message).not.toContain("shared with the primary");
+    expect(helper?.message).toContain("http://gpu-box:30000");
+  });
+
+  it("says when it could not read the settings, rather than passing over them", async () => {
+    const h = await harness();
+    await h.addApi();
+    // The primary's file, which this profile reads through its shared link - so the only
+    // finding is the one about not being able to read it.
+    writeFileSync(path.join(h.primary, "settings.json"), '{"apiKeyHelper": "op read op://vault/anthropic"');
+
+    const issues = issuesFor(await h.doctor(), "claude:glm");
+
+    // Falling back to `{}` made a helper in a malformed file silently unreported: a check
+    // that fails closed and says nothing is worse than one that says it could not run.
+    expect(issues.map((i) => i.kind)).toEqual(["unreadable_settings"]);
+    expect(issues[0].severity).toBe("warning");
+    expect(issues[0].message).toContain("apiKeyHelper");
+  });
+
+  it("warns about the helper whatever auth scheme the profile uses", async () => {
+    const h = await harness({ settings: { apiKeyHelper: "op read op://vault/anthropic" } });
+    await h.addApi({ authScheme: "api-key" });
+
+    // The scheme decides which variable clausona sets, not whether the helper runs.
+    expect(kinds(await h.doctor(), "claude:glm")).toEqual(["shared_api_key_helper"]);
+  });
+
   it("reports a credential parked in the profile's plain-text env map", async () => {
     const h = await harness();
     await h.addApi({ env: { ANTHROPIC_AUTH_TOKEN: "sk-in-the-registry-0002" } });
@@ -266,6 +318,41 @@ describe("doctor on an API profile", () => {
     expect(kinds(results, "claude:glm")).toEqual(["plaintext_env_secret"]);
     expect(issuesFor(results, "claude:glm")[0].message).toContain("ANTHROPIC_AUTH_TOKEN");
     expect(JSON.stringify(results)).not.toContain("sk-in-the-registry-0002");
+  });
+});
+
+describe("a profile whose config directory is gone", () => {
+  /**
+   * The config dir is the one thing every other check assumes. Nothing else looks for it:
+   * the subscription checks that happened to notice are skipped for an API profile, and
+   * the shared-link checks only speak when the primary holds a directory to be missing -
+   * so with a primary that holds none, a profile pointing at nothing looked healthy.
+   */
+  it("says so, even when the primary has no shared directory to miss", async () => {
+    const h = await harness({ primaryDirs: [] });
+    await h.addApi();
+    rmSync(h.apiConfigDir, { recursive: true, force: true });
+
+    const results = await h.doctor();
+
+    expect(kinds(results, "claude:glm")).toContain("missing_config_dir");
+    expect(results.find((r) => r.name === "claude:glm")?.healthy).toBe(false);
+    expect(issuesFor(results, "claude:glm")[0].message).toContain(".claude-glm");
+  });
+
+  it("says so when the primary does have one, alongside what repair would rebuild", async () => {
+    const h = await harness();
+    await h.addApi();
+    rmSync(h.apiConfigDir, { recursive: true, force: true });
+
+    expect(kinds(await h.doctor(), "claude:glm")).toEqual(["missing_config_dir", "missing_shared_link"]);
+  });
+
+  it("is quiet about it for a profile whose directory is there", async () => {
+    const h = await harness({ primaryDirs: [] });
+    await h.addApi();
+
+    expect(kinds(await h.doctor(), "claude:glm")).toEqual([]);
   });
 });
 
@@ -303,6 +390,32 @@ describe("a warning is not breakage", () => {
 });
 
 describe("doctor and the key itself", () => {
+  it.each([
+    ["the scheme is wrong too", "ftp://admin-name:sk-SECRET-IN-URL@gpu-box/api"],
+    ["the URL does not parse", "//admin-name:sk-SECRET-IN-URL@gpu-box/api"],
+  ])("keeps a password hand-edited into the base URL out of both output forms when %s", async (_label, baseUrl) => {
+    const h = await harness({
+      profiles: {
+        "claude:bad": {
+          tool: "claude",
+          kind: "api",
+          configDir: path.join("/does-not-matter"),
+          email: "",
+          label: "bad",
+          api: { baseUrl, authScheme: "bearer", secret: { source: "env", name: "SET_BELOW" } },
+        },
+      },
+    });
+    vi.stubEnv("SET_BELOW", STORED_KEY);
+
+    const results = await h.doctor();
+
+    expect(kinds(results, "claude:bad")).toContain("invalid_api_config");
+    // Whichever branch rejects the URL first, it must not quote it back: this value is a
+    // credential, and `doctor --help` says the output is safe to paste into a bug report.
+    expect(`${JSON.stringify(results)}\n${h.render(results)}`).not.toContain("sk-SECRET-IN-URL");
+  });
+
   it("never puts the key in its output, however many other things are wrong", async () => {
     const h = await harness({ settings: { apiKeyHelper: "op read op://vault/anthropic" } });
     await h.addApi({ env: { ANTHROPIC_API_KEY: STORED_KEY } });

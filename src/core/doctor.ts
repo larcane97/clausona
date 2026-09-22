@@ -1,4 +1,5 @@
 import type { DoctorIssue, Profile } from "../types.js";
+import { checkBaseUrl } from "./api-url.js";
 
 export function evaluateSymlinkHealth({
   isPrimary,
@@ -93,12 +94,16 @@ export type SecretResolution = { ok: true } | { ok: false; error: string };
 export type ApiHealthInput = {
   id: string;
   profile: Profile;
+  /** False when the profile's config directory is not there at all. */
+  configDirExists?: boolean;
   /** Absent when there is no endpoint to resolve a key for, so nothing was attempted. */
   secret?: SecretResolution;
-  /** The parsed settings.json this profile reads; `{}` when it has none. */
-  settings?: Record<string, unknown>;
+  /** The parsed settings.json this profile reads: `{}` when it has none, null when it could not be read. */
+  settings?: Record<string, unknown> | null;
   /** That file's path, as it should appear in a message. */
   settingsPath?: string;
+  /** Whether that file is the primary's, reached through a shared link, rather than this profile's own. */
+  settingsShared?: boolean;
   /**
    * CREDENTIAL_ENV_KEYS. Passed in rather than imported: it lives in src/lib, and core is
    * the layer lib is built on. The caller holds the one true list; this holds the rule.
@@ -109,29 +114,29 @@ export type ApiHealthInput = {
 /**
  * The problem with a base URL, phrased for a user, or undefined when there is none.
  *
- * The rules are `parseBaseUrl`'s, which `add --api` enforces on the way in - a profile
- * only reaches this state through a hand-edited profiles.json. They are restated here
- * rather than imported for the layering reason above, and src/core/doctor.test.ts checks
- * the two against each other so they cannot drift apart unnoticed.
+ * The rules come from `checkBaseUrl`, the same function `add --api` enforces on the way in,
+ * so a URL the command would refuse cannot be reported healthy here. Only the wording is
+ * local.
+ *
+ * Nothing in these messages repeats the URL. A hand-edited one can carry `user:password@`,
+ * which is a credential like any other - and it is reported by whichever rule rejects the
+ * URL first, not only by the rule that is about credentials, so no branch may quote it.
+ * `doctor --help` promises this output is safe to paste into a bug report.
  */
 function baseUrlProblem(baseUrl: string): string | undefined {
-  if (baseUrl.trim() === "") return `no base URL configured for this API profile - ${FIX_IN_REGISTRY}`;
-
-  let url: URL;
-  try {
-    url = new URL(baseUrl);
-  } catch {
-    return `base URL '${baseUrl}' is not a valid absolute URL - ${FIX_IN_REGISTRY}`;
+  const checked = checkBaseUrl(baseUrl);
+  if (checked.ok) return undefined;
+  switch (checked.problem.reason) {
+    case "empty":
+      return `no base URL configured for this API profile - ${FIX_IN_REGISTRY}`;
+    case "unparseable":
+      return `the base URL is not an absolute http:// or https:// URL - ${FIX_IN_REGISTRY}`;
+    case "scheme":
+      // A scheme cannot contain userinfo, so naming it gives nothing away.
+      return `the base URL's scheme is '${checked.problem.scheme}', not http or https - ${FIX_IN_REGISTRY}`;
+    default:
+      return `the base URL carries a username or password - put the key in the key source instead, and ${FIX_IN_REGISTRY}`;
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    return `base URL '${baseUrl}' must be http or https - ${FIX_IN_REGISTRY}`;
-  }
-  // Quoting this one back would print the password. `add --api` refuses a URL that
-  // carries credentials for the same reason: profiles.json is not a credential store.
-  if (url.username !== "" || url.password !== "") {
-    return `base URL carries a username or password - put the key in the key source instead, and ${FIX_IN_REGISTRY}`;
-  }
-  return undefined;
 }
 
 /**
@@ -139,10 +144,10 @@ function baseUrlProblem(baseUrl: string): string | undefined {
  *
  * An API profile has no account JSON and no Claude Code Keychain item by design, so the
  * subscription checks are not run for it at all (see `doctorProfiles`); these take their
- * place. Two of the four are about a second key reaching the profile's endpoint: clearing
- * the credential variables stopped an exported key from being forwarded, but a key can
- * still arrive through the settings.json every profile shares with the primary, or sit in
- * the profile's own plain-text env map.
+ * place. Two of them are about a second key reaching the profile's endpoint: clearing the
+ * credential variables stopped an exported key from being forwarded, but a key can still
+ * arrive through the settings.json a profile shares with the primary, or sit in the
+ * profile's own plain-text env map.
  *
  * Pure: the caller resolves the key and reads the settings file, so a test needs neither
  * a credential store nor a filesystem.
@@ -150,9 +155,11 @@ function baseUrlProblem(baseUrl: string): string | undefined {
 export function evaluateApiHealth({
   id,
   profile,
+  configDirExists = true,
   secret,
   settings = {},
   settingsPath = "settings.json",
+  settingsShared = false,
   credentialEnvKeys = [],
 }: ApiHealthInput): DoctorIssue[] {
   // `kind` is tri-state: undefined means subscription, and a subscription profile's
@@ -160,6 +167,18 @@ export function evaluateApiHealth({
   if (profile.kind !== "api") return [];
 
   const issues: DoctorIssue[] = [];
+
+  if (!configDirExists) {
+    // Nothing else looks for it. The account-file check noticed in passing, and it is not
+    // run for an API profile; the shared-link checks only speak when the primary holds a
+    // directory this profile could be missing, so a primary that holds none left a profile
+    // pointing at nothing looking healthy. `repair` cannot help - it symlinks into a
+    // directory it does not create - so the remedy is to add the profile again.
+    issues.push({
+      kind: "missing_config_dir",
+      message: `config directory ${profile.configDir} is missing - remove and re-add the profile`,
+    });
+  }
 
   const baseUrl = profile.api?.baseUrl ?? "";
   const urlProblem = baseUrlProblem(baseUrl);
@@ -177,19 +196,37 @@ export function evaluateApiHealth({
   // password.
   const endpoint = urlProblem ? "this profile's endpoint" : baseUrl;
 
-  const helper = settings.apiKeyHelper;
-  if (typeof helper === "string" && helper.trim() !== "") {
-    // Claude Code runs apiKeyHelper and sends what it prints. settings.json is a shared
-    // link into the primary, so a helper written for the primary's account also runs for
-    // this profile - and hands that key to whatever endpoint this profile points at.
-    // The helper's own command line is not repeated: it can name the secret.
-    // A warning: the profile works, and whether a second key reaching this endpoint is a
-    // problem is the user's call, not doctor's.
+  if (settings === null) {
+    // Falling back to an empty object hid a helper sitting in a file that does not parse:
+    // a check that cannot run must say so rather than read as "nothing found here".
     issues.push({
-      kind: "shared_api_key_helper",
+      kind: "unreadable_settings",
       severity: "warning",
-      message: `apiKeyHelper in ${settingsPath} (shared with the primary) also runs for this profile, so the key it prints can reach ${endpoint}`,
+      message: `${settingsPath} could not be read, so apiKeyHelper was not checked - fix or remove it`,
     });
+  } else {
+    const helper = settings.apiKeyHelper;
+    if (typeof helper === "string" && helper.trim() !== "") {
+      // Claude Code runs apiKeyHelper and sends what it prints, and settings.json is
+      // normally a shared link into the primary - so a helper written for the primary's
+      // account also runs for this profile, and hands that key to whatever endpoint this
+      // profile points at. The helper's own command line is not repeated: it can name the
+      // secret.
+      //
+      // Independent of authScheme, deliberately. The scheme decides which variable clausona
+      // sets, not whether the helper runs: Claude Code sends X-Api-Key and Authorization
+      // together when it has both, so the helper's key reaches the endpoint either way.
+      // Do not narrow this to `bearer` later.
+      //
+      // A warning: the profile works, and whether a second key reaching this endpoint is a
+      // problem is the user's call, not doctor's.
+      const where = settingsShared ? `${settingsPath} (shared with the primary)` : settingsPath;
+      issues.push({
+        kind: "shared_api_key_helper",
+        severity: "warning",
+        message: `apiKeyHelper in ${where} ${settingsShared ? "also runs" : "runs"} for this profile, so the key it prints can reach ${endpoint}`,
+      });
+    }
   }
 
   // Sorted, so two runs over the same profile read the same way.
