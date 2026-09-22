@@ -365,7 +365,7 @@ describe("_shell-env", () => {
 
   // On POSIX the profile must be able to set its own names as well as clear the others, so
   // the guard covers both. Windows has no readonly variables, so --json is unaffected.
-  it("guards every name it clears and every managed name it sets, in one probe", async () => {
+  it("guards every name it clears and every name it sets, in one probe", async () => {
     const h = await harness((home, workDir) =>
       registryWith(
         {
@@ -398,9 +398,10 @@ describe("_shell-env", () => {
       "ANTHROPIC_BASE_URL",
       "ANTHROPIC_AUTH_TOKEN",
       "ANTHROPIC_CUSTOM_HEADERS",
+      // An entry of the user's own is guarded too: a stuck one silently drops every export
+      // after it in zsh, leaving the tool on a half-applied profile.
+      "ANTHROPIC_MODEL",
     ]);
-    // The user's own name is theirs to break; clausona does not refuse to launch over it.
-    expect(guarded).not.toContain("ANTHROPIC_MODEL");
     // One probe for all of them, before anything is unset or exported.
     expect(lines.filter((line) => guardedNames(line) !== undefined)).toHaveLength(1);
     expect(lines[1]).toMatch(/^unset /);
@@ -926,6 +927,48 @@ describe.skipIf(HOOK_SHELLS.length === 0)(
           expect(result.stderr).not.toContain(PROFILE_TOKEN);
         });
       }
+
+      /**
+       * An env-map name of the user's own. zsh abandons the eval at the failed export, so
+       * every later entry is dropped and the tool launches on a half-applied profile; bash
+       * applies the rest and launches with the caller's value in place of the profile's.
+       */
+      it(`refuses to launch in ${shell} when an env-map name of the user's own is readonly`, async () => {
+        const h = await harness((home, workDir) =>
+          registryWith(
+            {
+              tool: "claude",
+              kind: "api",
+              configDir: workDir,
+              email: "",
+              label: "router",
+              api: {
+                baseUrl: "https://openrouter.ai/api",
+                authScheme: "bearer",
+                secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
+              },
+              // MY_FLAG is exported first, so zsh used to drop ANTHROPIC_MODEL with it.
+              env: { MY_FLAG: "from-the-profile", ANTHROPIC_MODEL: "glm-5.3" },
+            },
+            home,
+          ),
+        );
+        vi.stubEnv("CLAUSONA_TEST_SECRET", PROFILE_TOKEN);
+        const run = hookRunner(h, await h.run("claude"));
+
+        const result = run(
+          shell,
+          ["readonly MY_FLAG", "claude", 'printf "rc=%s\n" "$?"', `printf "parent MY_FLAG=[%s]\n" "$MY_FLAG"`].join(
+            "\n",
+          ),
+          { MY_FLAG: PARENT },
+        );
+
+        expect(result.stdout).not.toContain("TOOL STARTED");
+        expect(result.stdout).toContain("rc=1");
+        expect(result.stderr).toContain("clausona: MY_FLAG is read-only in this shell");
+        expect(result.stdout).toContain(`parent MY_FLAG=[${PARENT}]`);
+      });
 
       it(`launches as usual in ${shell} when nothing is readonly`, async () => {
         const h = await harness(apiRegistry("bearer"));

@@ -123,17 +123,20 @@ export function envKeyCaseTwinError(key: string, twin: string): string {
 }
 
 /**
- * Every name an API profile's run must control: the ones it clears, and the ones it sets
- * that are clausona's to set - the endpoint, the credential, the config variable, and any
- * managed name its env map carries. The POSIX renderer refuses to launch when one of them
- * cannot be set or unset, because the profile would then only half apply: a `readonly`
- * ANTHROPIC_API_KEY, for instance, would keep the caller's key next to the profile's
- * endpoint. Empty for every other profile, whose output is what it always was.
+ * Every name an API profile's run must control: the ones it clears, and every one it sets.
+ * The POSIX renderer refuses to launch when one of them can be neither unset nor exported,
+ * because the profile would then only half apply - and how it half applies depends on the
+ * shell. A `readonly` ANTHROPIC_API_KEY would leave the caller's key next to the profile's
+ * endpoint; a `readonly` copy of any other exported name stops bash from applying that one
+ * entry, and stops zsh from applying that entry and every one after it, silently. So the
+ * rule is the same for all of them: the profile launches only if every variable it sets
+ * lands exactly as it says.
+ *
+ * Empty for every other profile, whose output is what it always was.
  */
 export function controlledEnvKeys(profile: Profile, built: BuiltEnv): string[] {
   if (profile.kind !== "api" || !profile.api) return [];
-  const managed = new Set<string>([...API_MANAGED_ENV_KEYS, ...RESERVED_ENV_KEYS]);
-  return [...built.unset, ...Object.keys(built.env).filter((key) => managed.has(key))];
+  return [...built.unset, ...Object.keys(built.env)];
 }
 
 export function displayName(profile: Pick<Profile, "email" | "label">): string {

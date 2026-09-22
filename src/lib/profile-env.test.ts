@@ -425,21 +425,15 @@ describe("buildProfileEnv", () => {
    * clears, and refuses to launch when any of them is stuck.
    */
   describe("controlledEnvKeys", () => {
-    it("covers what an API profile clears and every managed name it sets", async () => {
+    it("covers what an API profile clears and everything it sets", async () => {
       const profile = apiProfile({ env: { ANTHROPIC_MODEL: "glm-5.3", ANTHROPIC_CUSTOM_HEADERS: "X-Team: platform" } });
       const built = await buildProfileEnv("claude:glm", profile, deps);
 
       const controlled = controlledEnvKeys(profile, built);
 
-      expect(controlled).toEqual([
-        ...built.unset,
-        "CLAUDE_CONFIG_DIR",
-        "ANTHROPIC_BASE_URL",
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_CUSTOM_HEADERS",
-      ]);
-      // A name of the user's own is not clausona's to insist on.
-      expect(controlled).not.toContain("ANTHROPIC_MODEL");
+      expect(controlled).toEqual([...built.unset, ...Object.keys(built.env)]);
+      // An entry of the user's own is in there too: a stuck one drops every later export.
+      expect(controlled).toContain("ANTHROPIC_MODEL");
       expect(new Set(controlled).size).toBe(controlled.length);
     });
 
