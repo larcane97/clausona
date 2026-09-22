@@ -1105,6 +1105,9 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
   if (prev === next) return { name: id, mergeSessions: next, changed: false };
 
   const primarySource = registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
+  // Resolved before the registry changes, so a name backupDirFor refuses changes nothing.
+  const name = id.split(":").slice(1).join(":");
+  const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
 
   // separated → merged: merge session files before symlinking
   if (next && profile.tool === "claude") {
@@ -1114,8 +1117,6 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
   profile.mergeSessions = next;
   await saveRegistry(registry);
 
-  const name = id.split(":").slice(1).join(":");
-  const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
   const updateAdapter = getAdapter(profile.tool);
   await setupSharedLinks(updateAdapter, profile.configDir, primarySource, next, backupDir);
   if (profile.tool === "claude") {
@@ -1148,6 +1149,10 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
 async function cleanupProfile(name: string, profile: Profile, primarySource: string) {
   if (profile.isPrimary) return;
 
+  // Resolved before anything is touched: for a name that escapes the backups directory,
+  // backupDirFor throws, and the profile should be left exactly as it was.
+  const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
+
   // 1a. Strip inner symlinks from plugins/ dir (real dir with inner symlinks)
   const profilePlugins = path.join(profile.configDir, "plugins");
   const pluginsStats = await lstat(profilePlugins).catch(() => null);
@@ -1175,7 +1180,6 @@ async function cleanupProfile(name: string, profile: Profile, primarySource: str
   }
 
   // 2. Restore backup if available (original files before clausona setup)
-  const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
   if (await exists(backupDir)) {
     await cp(backupDir, profile.configDir, { recursive: true });
     await rm(backupDir, { force: true, recursive: true });
