@@ -3,6 +3,7 @@ import { countIssues } from "../core/doctor.js";
 import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot } from "../types.js";
 import { stripAnsi } from "./cli-style.js";
 import {
+  doctorSeverity,
   doctorSummary,
   fitQuotaValue,
   formatAge,
@@ -371,6 +372,21 @@ function result(issues: DoctorProfileResult["issues"]): DoctorProfileResult {
     issues,
   };
 }
+
+describe("doctorSeverity", () => {
+  const warning = { kind: "plaintext_env_secret", message: "x", severity: "warning" } as const;
+
+  it("grades a result the way every surface has to grade it", () => {
+    // Written out by hand in two places, this rule disagreed with itself: the doctor list
+    // coloured a profile reading "2 warnings" emerald, while the preview panel for the same
+    // profile went amber. A rendered ink frame carries no colour, so nothing in a test
+    // could catch that - one definition can.
+    expect(doctorSeverity([])).toBe("healthy");
+    expect(doctorSeverity([warning])).toBe("warning");
+    expect(doctorSeverity([{ kind: "broken_symlink", message: "x" }])).toBe("error");
+    expect(doctorSeverity([warning, { kind: "broken_symlink", message: "x" }])).toBe("error");
+  });
+});
 
 describe("doctorSummary", () => {
   it("names what a profile has", () => {

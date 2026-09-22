@@ -448,6 +448,19 @@ const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ?
  * `1 issue`, or `1 issue, 2 warnings`. Shared with the TUI, which has one column for it
  * and would otherwise label a profile carrying only warnings "healthy" and show nothing.
  */
+/**
+ * Which of the three states a doctor result is in, for anything that colours by it - the
+ * same shape as `quotaSeverity`, and the same reason: two surfaces writing this rule out by
+ * hand disagreed about a profile that had only warnings, one painting it green and the other
+ * amber. Colour cannot be asserted through a rendered ink frame, so the guarantee has to be
+ * that there is one rule rather than that each surface was checked.
+ */
+export function doctorSeverity(issues: DoctorIssue[]): "healthy" | "warning" | "error" {
+  const { errors, warnings } = countIssues(issues);
+  if (errors > 0) return "error";
+  return warnings > 0 ? "warning" : "healthy";
+}
+
 export function doctorSummary(issues: DoctorIssue[]): string {
   const { errors, warnings } = countIssues(issues);
   if (errors > 0) {

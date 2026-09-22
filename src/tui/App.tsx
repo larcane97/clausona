@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { bootstrapInitFromCurrentState } from "../commands.js";
 import {
+  doctorSeverity,
   doctorSummary,
   formatCount,
   formatCurrency,
@@ -1550,9 +1551,10 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                 label: r.name,
                 detail: r.email,
                 // A warning leaves the profile healthy, but "healthy" alone would hide it
-                // from the only column this list has.
+                // from the only column this list has - and colouring by `healthy` painted a
+                // profile reading "2 warnings" emerald green. Both come from the one rule.
                 badge: doctorSummary(r.issues),
-                badgeVariant: r.healthy ? ("healthy" as const) : ("warning" as const),
+                badgeVariant: doctorSeverity(r.issues),
               }))}
               index={cursor}
             />

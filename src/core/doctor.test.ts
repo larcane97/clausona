@@ -318,9 +318,19 @@ describe("severity", () => {
   });
 
   it("leaves the severity key off a finding that stops the profile working", () => {
-    const issues = health({ profile: withApi(""), secret: { ok: false, error: "no stored secret" } });
+    const issues = health({
+      profile: withApi(""),
+      configDirExists: false,
+      secret: { ok: false, error: "no stored secret" },
+    });
 
-    expect(issues.map((issue) => issue.kind)).toEqual(["invalid_api_config", "missing_api_secret"]);
+    // A missing config directory in particular: as a warning it would leave the profile
+    // `healthy: true`, which is the bug the check was added to close.
+    expect(issues.map((issue) => issue.kind)).toEqual([
+      "missing_config_dir",
+      "invalid_api_config",
+      "missing_api_secret",
+    ]);
     // Absent, not "error": a key that is never written cannot change the JSON a registry
     // without warnings produces.
     for (const issue of issues) expect(Object.hasOwn(issue, "severity"), issue.kind).toBe(false);

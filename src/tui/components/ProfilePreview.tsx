@@ -1,6 +1,13 @@
 import { Box, Text } from "ink";
 import { truncate } from "../../lib/cli-style.js";
-import { doctorSummary, fitQuotaValue, formatAge, formatCurrency, localTimezoneLabel } from "../../lib/format.js";
+import {
+  doctorSeverity,
+  doctorSummary,
+  fitQuotaValue,
+  formatAge,
+  formatCurrency,
+  localTimezoneLabel,
+} from "../../lib/format.js";
 import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot, QuotaWindow } from "../../types.js";
 import { color, symbol } from "../theme.js";
 
@@ -130,10 +137,11 @@ export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem;
     );
   }
 
-  // Any finding at all, warning included, is something to look at - so the icon and the
-  // colour follow the issue list, while `healthy` decides only what the phrase says.
+  // Any finding at all, warning included, is something to look at - so the icon follows the
+  // issue list rather than `healthy`, and the colour comes from the rule the doctor list
+  // uses too, which is what keeps the two surfaces from grading the same profile differently.
   const clean = doctor?.issues.length === 0;
-  const healthColor = doctor ? (clean ? color.healthy : color.warning) : color.muted;
+  const healthColor = doctor ? color[doctorSeverity(doctor.issues)] : color.muted;
 
   const healthLabel = doctor
     ? `${clean ? symbol.check : symbol.diamond} ${doctorSummary(doctor.issues)}`

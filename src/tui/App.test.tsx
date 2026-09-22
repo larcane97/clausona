@@ -1,6 +1,8 @@
 import { render } from "ink-testing-library";
 import { describe, expect, it, vi } from "vitest";
 
+import type { DoctorProfileResult } from "../types.js";
+
 vi.mock("../commands", () => ({
   bootstrapInitFromCurrentState: vi.fn(async () => ({
     accounts: [],
@@ -85,5 +87,62 @@ describe("App", () => {
     expect(frame).toContain("codex:default");
     expect(frame).not.toMatch(/claude:claude:/);
     expect(frame).not.toMatch(/codex:codex:/);
+  });
+});
+
+/**
+ * The doctor screen, for the two things the API-profile work changed there: the badge a
+ * profile gets in the list, and the claim that every check passed.
+ *
+ * Text only - ink-testing-library's frames carry no ANSI, so which colour a badge takes
+ * cannot be asserted from here. Both surfaces read `doctorSeverity` for that instead of
+ * writing the rule out, and src/lib/format.test.ts pins the rule.
+ */
+describe("App doctor screen", () => {
+  async function doctorFrame(issues: DoctorProfileResult["issues"]) {
+    const { doctorProfiles } = await import("../lib/service.js");
+    vi.mocked(doctorProfiles).mockResolvedValueOnce([
+      {
+        name: "claude:glm",
+        email: "gpu-box",
+        configDir: "/Users/test/.claude-glm",
+        isPrimary: false,
+        healthy: !issues.some((issue) => issue.severity !== "warning"),
+        issues,
+      },
+    ]);
+    const { lastFrame } = render(<App initialScreen="doctor" />);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return lastFrame() ?? "";
+  }
+
+  it("badges a profile with nothing to report as healthy, and says every check passed", async () => {
+    const frame = await doctorFrame([]);
+
+    expect(frame).toContain("healthy");
+    expect(frame).toContain("All checks passed");
+  });
+
+  it("badges a warnings-only profile with its warnings, and does not claim every check passed", async () => {
+    // It is `healthy: true` - the profile works - but "healthy" in the badge would hide the
+    // warning, and "All checks passed" directly above a list of findings is a contradiction.
+    const frame = await doctorFrame([
+      { kind: "shared_api_key_helper", message: "apiKeyHelper also runs here", severity: "warning" },
+      { kind: "plaintext_env_secret", message: "a key sits in the env map", severity: "warning" },
+    ]);
+
+    expect(frame).toContain("2 warnings");
+    expect(frame).not.toContain("All checks passed");
+    expect(frame).toContain("apiKeyHelper also runs here");
+  });
+
+  it("badges a mixed profile with both counts", async () => {
+    const frame = await doctorFrame([
+      { kind: "missing_api_secret", message: "no stored key" },
+      { kind: "plaintext_env_secret", message: "a key sits in the env map", severity: "warning" },
+    ]);
+
+    expect(frame).toContain("1 issue, 1 warning");
+    expect(frame).not.toContain("All checks passed");
   });
 });
