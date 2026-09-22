@@ -726,7 +726,7 @@ export async function initializeRegistry(options: {
   await ensureStorage();
 
   const home = homedir();
-  // Build per-tool primary sources from the adapter defaults; only include tools with at least one account
+  // Build per-tool primary sources from the adapter defaults; only include tools with at least one profile
   const primarySources: Registry["primarySources"] = {};
   for (const { tool } of [...accounts, ...carried.map(([, profile]) => profile)]) {
     if (!primarySources[tool]) {
@@ -1089,7 +1089,7 @@ export async function repairProfile(id: string) {
     return { repaired: 0 };
   }
 
-  const name = id.split(":").slice(1).join(":");
+  const { name } = parseProfileRef(id, registry);
   const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
   const profileAdapter = getAdapter(profile.tool);
   const primarySource = registry.primarySources[profile.tool] ?? profileAdapter.defaultConfigDir(homedir());
@@ -1144,7 +1144,7 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
 
   const primarySource = registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
   // Resolved before the registry changes, so a name backupDirFor refuses changes nothing.
-  const name = id.split(":").slice(1).join(":");
+  const { name } = parseProfileRef(id, registry);
   const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
 
   // separated → merged: merge session files before symlinking
@@ -1738,7 +1738,7 @@ export async function uninstallClausona() {
     for (const [id, profile] of Object.entries(registry.profiles)) {
       if (profile.isPrimary) continue;
       try {
-        const name = id.split(":").slice(1).join(":");
+        const { name } = parseProfileRef(id, registry);
         const primarySource =
           registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
         await cleanupProfile(name, profile, primarySource);
