@@ -29,7 +29,9 @@ describe("displayName", () => {
 });
 
 describe("buildProfileEnv", () => {
-  const deps = { resolveSecret: fakeSecret, realpath: identityRealpath };
+  // homedir is pinned so the tool's default config dir - and therefore the branch that
+  // suppresses the config variable - is the same on every machine.
+  const deps = { resolveSecret: fakeSecret, realpath: identityRealpath, homedir: () => "/home/u" };
 
   it("emits only CLAUDE_CONFIG_DIR for a subscription profile", async () => {
     const profile: Profile = { tool: "claude", configDir: "/home/u/.claude-work", email: "you@example.com" };
@@ -38,7 +40,7 @@ describe("buildProfileEnv", () => {
   });
 
   it("emits nothing for a primary profile", async () => {
-    const profile: Profile = { tool: "claude", configDir: "/home/u/.claude", email: "a@b.c", isPrimary: true };
+    const profile: Profile = { tool: "claude", configDir: "/home/u/.claude-main", email: "a@b.c", isPrimary: true };
     const { env } = await buildProfileEnv("claude:main", profile, deps);
     expect(env).toEqual({});
   });
@@ -74,10 +76,7 @@ describe("buildProfileEnv", () => {
 
   it("omits the config variable when a non-primary profile points at the tool default", async () => {
     const profile: Profile = { tool: "claude", configDir: "/home/u/.claude", email: "you@example.com" };
-    const { env, warnings } = await buildProfileEnv("claude:default", profile, {
-      ...deps,
-      homedir: () => "/home/u",
-    });
+    const { env, warnings } = await buildProfileEnv("claude:default", profile, deps);
     expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
     expect(env).toEqual({});
     expect(warnings).toEqual([]);
