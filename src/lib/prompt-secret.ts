@@ -48,6 +48,9 @@ const MAX_ESCAPE_LENGTH = 32;
 const UNREADABLE_INPUT =
   'Could not read the key: this terminal sent something the prompt cannot interpret, and a key read from it might be incomplete. Pipe the key in instead: printf %s "$KEY" | clausona … , or point at it with --key-from env:NAME.';
 
+const TRUNCATED_PASTE =
+  'Could not read the key: the input ended in the middle of a paste, so only part of the key arrived. Nothing was saved. Try again, or pipe the key in: printf %s "$KEY" | clausona … .';
+
 type EscapeScan =
   | { consumed: number; kind: "paste-start" | "paste-end" | "skip" }
   /** The sequence has not finished arriving; wait for the next read. */
@@ -64,18 +67,16 @@ type EscapeScan =
  *
  * - ESC `[` or ESC `O` begins a CSI or SS3 sequence, which runs to the first byte in the
  *   range `@`-`~`. That covers the arrow keys and both paste markers.
- * - ESC before a printable character is an Alt-combo: two bytes, neither part of a key.
- * - ESC before a control character is a standalone Escape keypress. Only the ESC is
- *   dropped, so the character after it - an Enter, most importantly - is still acted on.
- *   Consuming that byte as part of a sequence is what would swallow the Enter and hang
- *   the prompt.
+ * - Any other ESC is a standalone Escape keypress, and only the ESC is dropped. The byte
+ *   after it is real input and is acted on: an Enter still submits, and the first
+ *   character of a key typed after a stray Escape is still part of the key. Taking that
+ *   byte as the second half of an Alt-combo would lose one or the other, and nothing at
+ *   this prompt is bound to Alt.
  */
 function scanEscape(buffer: string): EscapeScan {
   if (buffer.length < 2) return "incomplete";
   const second = buffer[1];
-  if (second !== "[" && second !== "O") {
-    return { consumed: second < " " || second === "\u007f" ? 1 : 2, kind: "skip" };
-  }
+  if (second !== "[" && second !== "O") return { consumed: 1, kind: "skip" };
   for (let i = 2; i < buffer.length; i++) {
     const code = buffer.charCodeAt(i);
     if (code >= 0x40 && code <= 0x7e) {
@@ -250,6 +251,14 @@ function readTypedSecret(prompt: string, input: SecretInputStream, output: Secre
     const onEnd = () => {
       finish(() => {
         output.write("\n");
+        // Input ran out between a paste's brackets: the terminal was still sending the
+        // paste, so what arrived is the front of the key and not the key. Returning it
+        // would be the silent truncation this reader exists to stop - a fragment stored
+        // and reported as success, then a 401 that points at nothing.
+        if (pasting) {
+          reject(new Error(TRUNCATED_PASTE));
+          return;
+        }
         resolve(typed.trim());
       });
     };

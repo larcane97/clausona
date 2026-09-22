@@ -115,6 +115,17 @@ describe("promptSecret on a terminal", () => {
     await expect(answer).resolves.toBe(`ab${KEY}`);
   });
 
+  it("keeps the character typed after a lone Escape keypress", async () => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    // Taking this as the second half of an Alt-combo would eat the key's first
+    // character, and nothing at this prompt is bound to Alt.
+    tty.type(`\u001b${KEY}\r`);
+
+    await expect(answer).resolves.toBe(KEY);
+  });
+
   it("acts on an Enter that follows a lone Escape keypress", async () => {
     const tty = fakeTerminal();
 
@@ -212,6 +223,18 @@ describe("promptSecret and a pasted key", () => {
     tty.type("\r");
 
     await expect(answer).resolves.toBe(`${KEY}more`);
+  });
+
+  it("refuses a paste the input ends in the middle of, rather than returning its front", async () => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type(`\u001b[200~${KEY.slice(0, 8)}`);
+    tty.close();
+
+    // The alternative is a fragment, stored and reported as `✔ Added`.
+    await expect(answer).rejects.toThrow(/middle of a paste/);
+    expect(tty.rawModeCalls).toEqual([true, false]);
   });
 
   it("still lets ctrl-c out of a paste whose closing marker never arrives", async () => {
