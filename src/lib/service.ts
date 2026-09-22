@@ -1325,6 +1325,26 @@ function backupDirSharer(registry: Registry, id: string): string | undefined {
   });
 }
 
+/**
+ * `add --from` moves each entry the primary shares into a backup and links it to the
+ * primary's. Run on the primary itself, that replaces each entry with a link to itself; run
+ * on another profile's directory, it gives two profiles one directory. Both are compared by
+ * where they resolve, so a trailing separator or a link cannot slip past.
+ */
+async function assertImportable(registry: Registry, tool: ToolName, configDir: string, primarySource: string) {
+  const resolve = (dir: string) => realpath(dir).catch(() => path.resolve(dir));
+  const target = await resolve(configDir);
+  const shown = configDir.replace(homedir(), "~");
+  if (target === (await resolve(primarySource))) {
+    throw new Error(`Cannot add ${shown}: it is ${tool}'s primary config directory, which every profile shares.`);
+  }
+  for (const [id, profile] of Object.entries(registry.profiles)) {
+    if (target === (await resolve(profile.configDir))) {
+      throw new Error(`Cannot add ${shown}: it is already registered as '${id}'.`);
+    }
+  }
+}
+
 export async function addProfile(options: {
   tool: ToolName;
   name: string;
@@ -1346,6 +1366,7 @@ export async function addProfile(options: {
 
   if (options.fromPath) {
     const configDir = options.fromPath.replace(/^~(?=$|[\\/])/, home);
+    await assertImportable(registry, options.tool, configDir, primarySource);
     const accountInfo = await adapter.readAccountInfo(configDir);
     if (!accountInfo) throw new Error("Could not read account info from config dir.");
 

@@ -7,6 +7,7 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -749,6 +750,61 @@ describe("addApiProfile", () => {
       expect(error.message).not.toContain(KEY);
     });
   }
+});
+
+describe("add --from a directory clausona already manages", () => {
+  // `add --from` backs up each entry the primary shares, then replaces it with a link into
+  // the primary. Run on the primary itself, that turned its commands/ into a link to itself.
+  const fromPaths: Array<[string, (h: Harness) => string]> = [
+    ["the primary config dir", (h) => h.primary],
+    ["the primary config dir with a trailing separator", (h) => `${h.primary}${path.sep}`],
+    ["the primary config dir written with ~", () => path.join("~", ".claude")],
+    [
+      "a link to the primary config dir",
+      (h) => {
+        const link = path.join(h.home, "claude-link");
+        symlinkSync(h.primary, link);
+        return link;
+      },
+    ],
+  ];
+  for (const [label, fromPath] of fromPaths) {
+    it(`refuses ${label} and leaves the primary alone`, async () => {
+      const h = await harness();
+      const from = fromPath(h);
+      const before = h.snapshot();
+
+      const outcome = await h.service
+        .addProfile({ tool: "claude", name: "mirror", fromPath: from })
+        .catch((e: Error) => e);
+
+      expect(lstatSync(path.join(h.primary, "commands")).isDirectory(), "the primary's commands/ was replaced").toBe(
+        true,
+      );
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toMatch(
+        /^Cannot add .*: it is claude's primary config directory, which every profile shares\.$/,
+      );
+      expect(h.snapshot()).toEqual(before);
+    });
+  }
+
+  it("refuses a directory another profile already uses", async () => {
+    const h = await harness();
+    const shared = seedAccountDir(h.home, "work-account", "work@example.com");
+    await h.service.addProfile({ tool: "claude", name: "work", fromPath: shared });
+    const before = h.snapshot();
+
+    const outcome = await h.service
+      .addProfile({ tool: "claude", name: "again", fromPath: shared })
+      .catch((e: Error) => e);
+
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toBe(
+      `Cannot add ${path.join("~", "work-account")}: it is already registered as 'claude:work'.`,
+    );
+    expect(h.snapshot()).toEqual(before);
+  });
 });
 
 describe("updateProfileEnv", () => {
