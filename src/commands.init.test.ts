@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { SecretSource } from "./types.js";
+
 /**
  * The names init derives must pass the rule `add` enforces, since initializeRegistry now
  * refuses any that do not - and codex is the tool whose directory prefix the derivation
@@ -13,7 +15,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * HOME is the seam, as in src/commands.shell-env.test.ts. process.js is mocked: on macOS
  * discovery asks the Keychain whether each claude account has a credential, and that one
  * lookup is answered "yes" by a fake child that never runs `security`. Any other spawn
- * throws and fails the test, so nothing here reaches the real Keychain or the real home.
+ * throws and fails the test. secrets.js is mocked onto the real file backend, as in
+ * src/lib/api-profile.integration.test.ts, so an API profile's key lands in the temp
+ * HOME. Nothing here reaches the real Keychain or the real home.
  */
 
 const temps: string[] = [];
@@ -23,6 +27,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.doUnmock("./core/process.js");
+  vi.doUnmock("./lib/secrets.js");
   vi.resetModules();
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
   const unexpected = spawned;
@@ -78,6 +83,15 @@ async function harness() {
       throw new Error(`test attempted to spawn '${command}'`);
     };
     return { ...actual, spawnCommand, spawnCommandSync: refuse };
+  });
+  vi.doMock("./lib/secrets.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./lib/secrets.js")>();
+    return {
+      ...actual,
+      storeSecret: (id: string, value: string) => actual.storeSecret(id, value, "file"),
+      deleteSecret: (id: string) => actual.deleteSecret(id, "file"),
+      resolveSecret: (id: string, source: SecretSource) => actual.resolveSecret(id, source, "file"),
+    };
   });
   vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   const commands = await import("./commands.js");
@@ -215,6 +229,96 @@ describe("derived names that collide", () => {
     // The directory that already spells the name keeps it.
     expect(profiles["claude:my-work"].configDir).toBe(path.join(h.home, ".claude-my-work"));
     expect(profiles["claude:my-work-2"].configDir).toBe(path.join(h.home, ".claude-my work"));
+  });
+});
+
+describe("re-running init with an API profile registered", () => {
+  // init rebuilds the registry from the accounts it discovers, and an API profile is not
+  // one of them. Dropping it orphaned its stored key, config dir and backup.
+  const KEY = "sk-test-glm-0001";
+  async function withApiProfile(options: { active: boolean }) {
+    const h = await harness();
+    await h.commands.runCommand("init", ["--auto"]);
+    await h.service.addApiProfile({
+      tool: "claude",
+      name: "glm",
+      baseUrl: "http://gpu-box:30000",
+      authScheme: "bearer",
+      secret: { source: "keychain" },
+      secretValue: KEY,
+      env: { ANTHROPIC_MODEL: "glm-5.3" },
+    });
+    if (options.active) await h.service.setActiveProfileByName("claude:glm");
+    const entry = h.registry().profiles["claude:glm"];
+    const storedKeys = () => JSON.parse(readFileSync(path.join(h.home, ".clausona", "secrets.json"), "utf8"));
+    return { h, entry, storedKeys };
+  }
+
+  it("init --auto keeps it, its key, and its place as the active profile", async () => {
+    const { h, entry, storedKeys } = await withApiProfile({ active: true });
+
+    await h.commands.runCommand("init", ["--auto"]);
+
+    expect(h.registry().profiles["claude:glm"], "the API profile was dropped").toEqual(entry);
+    expect(storedKeys()).toEqual({ "claude:glm": KEY });
+    expect(h.registry().activeProfiles.claude).toBe("claude:glm");
+    expect(h.ids()).toEqual([...EXPECTED_IDS, "claude:glm"].sort());
+  });
+
+  it("TUI init keeps it, its key, and its place as the active profile", async () => {
+    const { h, entry, storedKeys } = await withApiProfile({ active: true });
+
+    const state = await h.commands.bootstrapInitFromCurrentState();
+    await h.service.initializeRegistry(state);
+
+    expect(h.registry().profiles["claude:glm"], "the API profile was dropped").toEqual(entry);
+    expect(storedKeys()).toEqual({ "claude:glm": KEY });
+    expect(h.registry().activeProfiles.claude).toBe("claude:glm");
+    expect(h.ids()).toEqual([...EXPECTED_IDS, "claude:glm"].sort());
+  });
+
+  it("keeps an active one active even when the caller names another default", async () => {
+    // TUI init's default step only lists the accounts it found, so it cannot offer this one.
+    const { h } = await withApiProfile({ active: true });
+
+    const state = await h.commands.bootstrapInitFromCurrentState();
+    await h.service.initializeRegistry({ ...state, defaultProfile: "work" });
+
+    expect(h.registry().activeProfiles.claude).toBe("claude:glm");
+  });
+
+  it("keeps an inactive one without making it active", async () => {
+    const { h, entry } = await withApiProfile({ active: false });
+
+    await h.commands.runCommand("init", ["--auto"]);
+
+    expect(h.registry().profiles["claude:glm"]).toEqual(entry);
+    expect(h.registry().activeProfiles.claude).toBe("claude:default");
+  });
+
+  it("does not register its config dir a second time if an account turns up in it", async () => {
+    // A `/login` inside the API profile would leave an account behind in its directory.
+    const { h, entry } = await withApiProfile({ active: false });
+    seedClaudeAccount(h.home, ".claude-glm", "signed-in@example.com");
+
+    await h.commands.runCommand("init", ["--auto"]);
+
+    expect(h.registry().profiles["claude:glm"]).toEqual(entry);
+    expect(h.ids()).toEqual([...EXPECTED_IDS, "claude:glm"].sort());
+  });
+
+  it("refuses to give a found account the API profile's name", async () => {
+    const { h } = await withApiProfile({ active: false });
+    const state = await h.commands.bootstrapInitFromCurrentState();
+    const before = readFileSync(path.join(h.home, ".clausona", "profiles.json"), "utf8");
+
+    await expect(
+      h.service.initializeRegistry({
+        ...state,
+        profileNames: { ...state.profileNames, [path.join(h.home, ".claude-work")]: "GLM" },
+      }),
+    ).rejects.toThrow("'claude:glm' is an API profile, which init keeps. Give 'claude:GLM' another name.");
+    expect(readFileSync(path.join(h.home, ".clausona", "profiles.json"), "utf8")).toBe(before);
   });
 });
 

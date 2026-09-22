@@ -680,8 +680,15 @@ export async function initializeRegistry(options: {
   mergeSessionsMap?: Record<string, boolean>;
 }) {
   const existing = await loadRegistry();
+  // API profiles are not discovered, so a registry rebuilt from what init found would drop
+  // them, and with them the only reference to their stored key, config dir and backup.
+  // They are carried over exactly as they are.
+  const carried = Object.entries(existing?.profiles ?? {}).filter(([, profile]) => profile.kind === "api");
+  const carriedDirs = new Set(carried.map(([, profile]) => path.resolve(profile.configDir)));
+  // An account found in an API profile's own directory is that profile, not a new one.
+  const accounts = options.accounts.filter((account) => !carriedDirs.has(path.resolve(account.configDir)));
   // An account the caller left unnamed is named exactly as the init command names it.
-  const names = initProfileNames(options.accounts, existing, options.profileNames);
+  const names = initProfileNames(accounts, existing, options.profileNames);
 
   // Every name is checked before anything is written. A new name gets the same rules as
   // `add`: the name rule, and no two ids of one tool that differ only by case - they would
@@ -689,8 +696,10 @@ export async function initializeRegistry(options: {
   // under the name it already has creates nothing, so a name from before the rules keeps
   // working: renaming it would strand its backup and everything keyed by its id.
   const planned: Array<{ account: DiscoveredAccount; id: string; backupDir: string | null }> = [];
-  const initIds = new Map<string, { id: string; kept: boolean }>();
-  for (const account of options.accounts) {
+  const initIds = new Map<string, { id: string; kept: boolean; api?: boolean }>(
+    carried.map(([id]) => [foldProfileName(id), { id, kept: false, api: true }]),
+  );
+  for (const account of accounts) {
     const name = names[account.configDir];
     const id = profileId(account.tool, name);
     const registered = existing?.profiles[id];
@@ -701,6 +710,7 @@ export async function initializeRegistry(options: {
       if (!nameCheck.ok) throw new Error(nameCheck.error);
     }
     const clash = initIds.get(foldProfileName(id));
+    if (clash?.api) throw new Error(`'${clash.id}' is an API profile, which init keeps. Give '${id}' another name.`);
     if (clash?.id === id) throw new Error(`Two accounts are both named '${id}'. Give each account its own name.`);
     if (clash && !(clash.kept && kept)) {
       throw new Error(
@@ -718,9 +728,9 @@ export async function initializeRegistry(options: {
   const home = homedir();
   // Build per-tool primary sources from the adapter defaults; only include tools with at least one account
   const primarySources: Registry["primarySources"] = {};
-  for (const account of options.accounts) {
-    if (!primarySources[account.tool]) {
-      primarySources[account.tool] = getAdapter(account.tool).defaultConfigDir(home);
+  for (const { tool } of [...accounts, ...carried.map(([, profile]) => profile)]) {
+    if (!primarySources[tool]) {
+      primarySources[tool] = getAdapter(tool).defaultConfigDir(home);
     }
   }
 
@@ -766,6 +776,8 @@ export async function initializeRegistry(options: {
     }
   }
 
+  for (const [id, profile] of carried) registry.profiles[id] = profile;
+
   // Determine activeProfiles map from options.defaultProfile (per-tool)
   // defaultProfile is a bare name from CLI; resolve to claude:<name> for backwards compat.
   const firstId = (tool: ToolName) => planned.find((p) => p.account.tool === tool)?.id;
@@ -777,13 +789,20 @@ export async function initializeRegistry(options: {
   const codexFallback = firstId("codex");
   if (codexFallback) registry.activeProfiles.codex = codexFallback;
 
+  // An active API profile stays active. Init does not discover it, so no default chosen
+  // among the accounts it found was a choice against it.
+  for (const [id, profile] of carried) {
+    if (existing?.activeProfiles[profile.tool] === id) registry.activeProfiles[profile.tool] = id;
+  }
+
   await saveRegistry(registry);
   await writeJson(USAGE_PATH, {});
 
-  // Seed seenSessions for each registered profile (claude only — codex usage tracking is v1 OOS)
-  for (const { account, id } of planned) {
-    if (account.tool === "claude") {
-      await seedSeenSessions(id, account.configDir);
+  // Seed seenSessions for each registered profile (claude only — codex usage tracking is v1 OOS).
+  // usage.json was just reset, so a carried API profile needs it as much as any other.
+  for (const [id, { tool, configDir }] of [...planned.map((p) => [p.id, p.account] as const), ...carried]) {
+    if (tool === "claude") {
+      await seedSeenSessions(id, configDir);
     }
   }
 
