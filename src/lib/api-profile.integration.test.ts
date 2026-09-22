@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { DiscoveredAccount, SecretSource } from "../types.js";
+import type { DiscoveredAccount, Profile, SecretSource } from "../types.js";
 
 /**
  * Drives the service functions against a real filesystem under a temp HOME.
@@ -164,10 +164,10 @@ function seedBackupFile(home: string, name: string) {
 type Harness = Awaited<ReturnType<typeof harness>>;
 
 /** A claude profile written straight into profiles.json, as the code before the name rule accepted it. */
-function registerLegacy(h: Harness, name: string, configDir: string) {
+function registerLegacy(h: Harness, name: string, configDir: string, extra: Partial<Profile> = {}) {
   mkdirSync(configDir, { recursive: true });
   const registry = h.registry();
-  registry.profiles[`claude:${name}`] = { tool: "claude", configDir, email: "legacy@example.com" };
+  registry.profiles[`claude:${name}`] = { tool: "claude", configDir, email: "legacy@example.com", ...extra };
   writeFileSync(h.registryPath, JSON.stringify(registry));
 }
 
@@ -388,6 +388,52 @@ describe("profile names that differ only by case", () => {
       name: "Work",
     });
   });
+});
+
+describe("the other commands that work in a legacy profile's backup directory", () => {
+  // Repair and a session-mode change both restore from the backup directory, and both
+  // used to merge sessions (and the mode change to save the registry) before resolving it.
+  // A name the guard refuses must leave everything as it was.
+  function seedLegacyWithSessions(h: Harness, name: string, mergeSessions: boolean) {
+    mkdirSync(path.join(h.primary, "projects"), { recursive: true });
+    const legacyDir = path.join(h.home, ".claude-legacy");
+    const session = path.join(legacyDir, "projects", "-some-project", "session.jsonl");
+    mkdirSync(path.dirname(session), { recursive: true });
+    writeFileSync(session, "{}\n");
+    registerLegacy(h, name, legacyDir, { mergeSessions });
+  }
+
+  for (const name of ["..", "work/"]) {
+    it(`updateProfileConfig refuses 'claude:${name}' before it merges sessions or saves the registry`, async () => {
+      const h = await harness();
+      const sentinel = seedBackupSentinel(h.home);
+      seedLegacyWithSessions(h, name, false);
+      const before = h.snapshot();
+
+      const outcome = await h.service
+        .updateProfileConfig(`claude:${name}`, { mergeSessions: true })
+        .catch((e: Error) => e);
+
+      expect(existsSync(sentinel), "a pre-clausona backup was deleted").toBe(true);
+      expect(h.snapshot()).toEqual(before);
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toMatch(/refusing to use it as a backup directory\. To recover, remove/);
+    });
+
+    it(`repairProfile refuses 'claude:${name}' before it merges sessions or relinks anything`, async () => {
+      const h = await harness();
+      const sentinel = seedBackupSentinel(h.home);
+      seedLegacyWithSessions(h, name, true);
+      const before = h.snapshot();
+
+      const outcome = await h.service.repairProfile(`claude:${name}`).catch((e: Error) => e);
+
+      expect(existsSync(sentinel), "a pre-clausona backup was deleted").toBe(true);
+      expect(h.snapshot()).toEqual(before);
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toMatch(/refusing to use it as a backup directory\. To recover, remove/);
+    });
+  }
 });
 
 describe("legacy names that share another profile's backup directory", () => {
@@ -811,6 +857,55 @@ describe("addApiProfile", () => {
       expect(error.message).not.toContain(KEY);
     });
   }
+});
+
+describe("addApiProfile when a step after its first write fails", () => {
+  // Everything after the backup directory is claimed runs inside a try whose catch undoes
+  // it all, key included, so a failure there must leave nothing of the profile behind.
+  const configDir = (h: Harness) => path.join(h.home, ".claude-glm");
+  const backupDir = (h: Harness) => path.join(h.home, ".clausona", "backups", "claude", "glm");
+
+  it("undoes everything when the registry cannot be saved", async () => {
+    const h = await harness();
+    // The registry is written to <path>.tmp.<pid> and renamed; a directory there fails the write.
+    mkdirSync(`${h.registryPath}.tmp.${process.pid}`);
+    const registryBefore = h.registryText();
+
+    const outcome = await h.service.addApiProfile(apiOptions()).catch((e: Error) => e);
+
+    expect(existsSync(configDir(h)), "config dir left behind").toBe(false);
+    expect(existsSync(backupDir(h)), "backup dir left behind").toBe(false);
+    expect(h.storedSecrets(), "the key was left in the store").toEqual({});
+    expect(h.registryText()).toBe(registryBefore);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toMatch(/^Failed to set up profile 'glm': EISDIR/);
+    expect((outcome as Error).message).not.toContain(KEY);
+  });
+
+  it("undoes everything when the key cannot be stored", async () => {
+    const h = await harness();
+    const secretsPath = path.join(h.home, ".clausona", "secrets.json");
+    writeFileSync(secretsPath, "{ not json");
+    const registryBefore = h.registryText();
+    const before = h.snapshot();
+
+    const outcome = await h.service.addApiProfile(apiOptions()).catch((e: Error) => e);
+
+    expect(existsSync(configDir(h)), "config dir left behind").toBe(false);
+    expect(existsSync(backupDir(h)), "backup dir left behind").toBe(false);
+    expect(readFileSync(secretsPath, "utf8"), "the key store was rewritten").toBe("{ not json");
+    expect(h.registryText()).toBe(registryBefore);
+    // The shared parents of every backup directory may stay behind; nothing of this profile's does.
+    const after = h.snapshot();
+    for (const parent of [path.join(".clausona", "backups"), path.join(".clausona", "backups", "claude")]) {
+      expect(after[parent] ?? "dir").toBe("dir");
+      delete after[parent];
+    }
+    expect(after).toEqual(before);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toMatch(/^Failed to set up profile 'glm': .*secrets\.json is not valid JSON/);
+    expect((outcome as Error).message).not.toContain(KEY);
+  });
 });
 
 describe("a key pasted with whitespace around it", () => {
