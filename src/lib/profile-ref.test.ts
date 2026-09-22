@@ -1,5 +1,7 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DiscoveredAccount, Profile, Registry, ToolName } from "../types.js";
 import {
   defaultProfileName,
@@ -9,7 +11,6 @@ import {
   profileId,
   validateProfileName,
 } from "./profile-ref.js";
-import { addProfile } from "./service.js";
 
 const REG: Registry = {
   version: 2,
@@ -266,11 +267,40 @@ describe("foldProfileName", () => {
 });
 
 describe("addProfile name validation (F3)", () => {
+  // service.ts takes its ~/.clausona from HOME at import time. It is imported under a temp
+  // HOME with every spawn refused, so a regression in the validator reaches neither the
+  // real registry nor a real `claude auth login`.
+  const temps: string[] = [];
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.doUnmock("../core/process.js");
+    vi.resetModules();
+    for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function isolatedAddProfile() {
+    const home = mkdtempSync(path.join(tmpdir(), "clausona-profile-ref-"));
+    temps.push(home);
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+    vi.resetModules();
+    vi.doMock("../core/process.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../core/process.js")>();
+      const refuse = (command: string): never => {
+        throw new Error(`test attempted to spawn '${command}'`);
+      };
+      return { ...actual, spawnCommand: refuse, spawnCommandSync: refuse };
+    });
+    return (await import("./service.js")).addProfile;
+  }
+
   it("rejects a name containing ':'", async () => {
+    const addProfile = await isolatedAddProfile();
     await expect(addProfile({ tool: "claude", name: "foo:bar" })).rejects.toThrow(/invalid profile name/i);
   });
 
   it("rejects an empty name", async () => {
+    const addProfile = await isolatedAddProfile();
     await expect(addProfile({ tool: "claude", name: "" })).rejects.toThrow(/invalid profile name.*non-empty/i);
   });
 });
