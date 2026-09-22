@@ -1186,6 +1186,19 @@ async function cleanupProfile(name: string, profile: Profile, primarySource: str
   }
 }
 
+/**
+ * A new profile's id must differ from every existing one by more than case. Its backup
+ * directory is backups/<tool>/<name>, which both add paths clear before use, and on a
+ * case-insensitive filesystem - macOS and Windows by default - `Work` names the directory
+ * `work` already owns.
+ */
+function assertProfileIdAvailable(registry: Registry, id: string) {
+  if (registry.profiles[id]) throw new Error(`Profile '${id}' already exists.`);
+  const folded = id.toLowerCase();
+  const clash = Object.keys(registry.profiles).find((existing) => existing.toLowerCase() === folded);
+  if (clash) throw new Error(`Profile '${clash}' already exists (names are compared without case).`);
+}
+
 export async function addProfile(options: {
   tool: ToolName;
   name: string;
@@ -1199,7 +1212,7 @@ export async function addProfile(options: {
   if (!registry) throw new Error("clausona is not initialized.");
 
   const id = profileId(options.tool, options.name);
-  if (registry.profiles[id]) throw new Error(`Profile '${id}' already exists.`);
+  assertProfileIdAvailable(registry, id);
 
   const adapter = getAdapter(options.tool);
   const home = homedir();

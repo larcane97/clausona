@@ -198,3 +198,50 @@ describe("legacy profiles whose name escapes the backup directory", () => {
     });
   }
 });
+
+describe("profile names that differ only by case", () => {
+  // backups/claude/Work and backups/claude/work are one directory on APFS and NTFS, and
+  // both add paths clear the backup directory before use. The assertions are on the
+  // rejection itself, so they hold on a case-sensitive filesystem as well.
+  async function withWork() {
+    const h = await harness();
+    await h.service.addProfile({
+      tool: "claude",
+      name: "work",
+      fromPath: seedAccountDir(h.home, "work-account", "work@example.com"),
+    });
+    const sentinel = path.join(h.home, ".clausona", "backups", "claude", "work", "sentinel.json");
+    writeFileSync(sentinel, '{"original":true}');
+    return { h, sentinel };
+  }
+
+  it("addProfile refuses 'Work' when 'work' exists", async () => {
+    const { h, sentinel } = await withWork();
+    const fromPath = seedAccountDir(h.home, "other-account", "other@example.com");
+    const before = h.snapshot();
+
+    const outcome = await h.service
+      .addProfile({ tool: "claude", name: "Work", fromPath })
+      .catch((error: Error) => error);
+
+    // On a case-insensitive filesystem a regression shows up here first, as lost data.
+    expect(existsSync(sentinel), "the existing profile's backup was deleted").toBe(true);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toBe("Profile 'claude:work' already exists (names are compared without case).");
+    expect(h.snapshot()).toEqual(before);
+  });
+
+  it("still allows the same name under the other tool", async () => {
+    const { h } = await withWork();
+    mkdirSync(path.join(h.home, ".codex"), { recursive: true });
+    const codexDir = path.join(h.home, "codex-account");
+    mkdirSync(codexDir, { recursive: true });
+    // An id_token whose payload carries an email is all the codex adapter reads.
+    const payload = Buffer.from(JSON.stringify({ email: "codex@example.com" })).toString("base64url");
+    writeFileSync(path.join(codexDir, "auth.json"), JSON.stringify({ tokens: { id_token: `h.${payload}.s` } }));
+
+    await expect(h.service.addProfile({ tool: "codex", name: "Work", fromPath: codexDir })).resolves.toMatchObject({
+      name: "Work",
+    });
+  });
+});
