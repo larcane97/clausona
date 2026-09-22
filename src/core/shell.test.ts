@@ -173,18 +173,23 @@ describe("renderPowerShellInit", () => {
       .split("\n")
       .filter((line) => !/^\s*#/.test(line))
       .flatMap((line) => {
-        if (/^\s*\$ErrorActionPreference = "Continue"/.test(line)) return ["Continue"];
-        if (/^\s*\$ErrorActionPreference = \$callerErrorAction/.test(line)) return ["caller's"];
-        if (/\$ErrorActionPreference =/.test(line)) return [`other: ${line.trim()}`];
+        if (/^\s*\$callerErrorAction = \$ErrorActionPreference\s*$/.test(line)) return ["save"];
+        if (/^\s*\$ErrorActionPreference = "Continue"\s*$/.test(line)) return ["Continue"];
+        if (/^\s*\$ErrorActionPreference = \$callerErrorAction\s*$/.test(line)) return ["caller's"];
+        // Any other mention - a scope-qualified `$global:ErrorActionPreference`, a Set-Variable,
+        // an assignment tucked inside a block - is a stray step that fails the list below.
+        if (/ErrorActionPreference/.test(line)) return [`other: ${line.trim()}`];
         if (/clausona _shell-env/.test(line)) return ["_shell-env"];
         if (/clausona _sync-plugins/.test(line)) return ["_sync-plugins"];
         if (/\$command = Get-Command/.test(line)) return ["Get-Command"];
         if (/& \$command\.Source @ToolArgs/.test(line)) return ["tool"];
+        if (/^\s*\$exitCode = \$LASTEXITCODE\s*$/.test(line)) return ["exitCode"];
         if (/clausona _track-usage/.test(line)) return ["_track-usage"];
         if (/\$global:LASTEXITCODE = \$exitCode/.test(line)) return ["LASTEXITCODE"];
         return [];
       });
     expect(steps).toEqual([
+      "save",
       "Continue",
       // The two arms of the lookup's if/else.
       "_shell-env",
@@ -194,6 +199,8 @@ describe("renderPowerShellInit", () => {
       "caller's",
       "Get-Command",
       "tool",
+      // Captured before _track-usage, which is itself a native call and resets $LASTEXITCODE.
+      "exitCode",
       "Continue",
       "_track-usage",
       "LASTEXITCODE",
