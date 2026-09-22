@@ -304,6 +304,57 @@ describe("profile names that differ only by case", () => {
     expect(h.snapshot()).toEqual(before);
   });
 
+  // APFS treats U+017F (long s) as `s`, which lower-casing alone does not.
+  it("addProfile refuses 'swork' when legacy '\u017Fwork' exists", async () => {
+    const h = await harness();
+    registerLegacy(h, "\u017Fwork", path.join(h.home, ".claude-legacy"));
+    const sentinel = seedBackupFile(h.home, "\u017Fwork");
+    const fromPath = seedAccountDir(h.home, "other-account", "other@example.com");
+    const before = h.snapshot();
+
+    const outcome = await h.service
+      .addProfile({ tool: "claude", name: "swork", fromPath })
+      .catch((error: Error) => error);
+
+    expect(existsSync(sentinel), "the legacy profile's backup was deleted").toBe(true);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toBe(
+      "Profile 'claude:\u017Fwork' already exists (names are compared without case).",
+    );
+    expect(h.snapshot()).toEqual(before);
+  });
+
+  it("addApiProfile refuses 'swork' when legacy '\u017Fwork' exists", async () => {
+    const h = await harness();
+    registerLegacy(h, "\u017Fwork", path.join(h.home, ".claude-legacy"));
+    const before = h.snapshot();
+
+    const outcome = await h.service.addApiProfile(apiOptions({ name: "swork" })).catch((error: Error) => error);
+
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toBe(
+      "Profile 'claude:\u017Fwork' already exists (names are compared without case).",
+    );
+    expect(h.snapshot()).toEqual(before);
+  });
+
+  it("removing legacy '\u017Fwork' leaves the backup of 'swork' in place", async () => {
+    const h = await harness();
+    await h.service.addProfile({
+      tool: "claude",
+      name: "swork",
+      fromPath: seedAccountDir(h.home, "swork-account", "swork@example.com"),
+    });
+    const sentinel = seedBackupFile(h.home, "swork");
+    registerLegacy(h, "\u017Fwork", path.join(h.home, ".claude-legacy"));
+    const stderr = captureStderr();
+
+    await h.service.removeProfile("claude:\u017Fwork");
+
+    expect(existsSync(sentinel), "the backup of 'swork' was deleted").toBe(true);
+    expect(stderr()).toContain("because 'claude:swork' keeps its backup there too");
+  });
+
   it("adding a name whose case variant's backup outlived its profile leaves that backup alone", async () => {
     const h = await harness();
     const sentinel = seedBackupFile(h.home, "Work");
@@ -710,7 +761,17 @@ describe("addApiProfile", () => {
       { baseUrl: `https://u:${KEY}@openrouter.ai/api` },
       /must not carry credentials/,
     ],
-    ["an unknown auth scheme", { authScheme: "basic" as "bearer" }, /Invalid auth scheme 'basic'/],
+    [
+      "an unknown auth scheme",
+      { authScheme: "basic" as "bearer" },
+      "Invalid auth scheme: must be 'bearer' or 'api-key'.",
+    ],
+    // Arguments passed in the wrong order put the key here, and the error must not print it.
+    [
+      "the key passed as the auth scheme",
+      { authScheme: KEY as "bearer" },
+      "Invalid auth scheme: must be 'bearer' or 'api-key'.",
+    ],
     ["a blank label", { label: "   " }, /Label cannot be blank/],
     ["a keychain source with no key", { secretValue: undefined }, "no API key supplied for the keychain source"],
     ["a keychain source with a blank key", { secretValue: "  " }, "no API key supplied for the keychain source"],
@@ -750,6 +811,28 @@ describe("addApiProfile", () => {
       expect(error.message).not.toContain(KEY);
     });
   }
+});
+
+describe("a key pasted with whitespace around it", () => {
+  // The Keychain and secret-tool reads trim, but the file backend's does not, so the
+  // newline a paste often brings along would become part of the token.
+  it("addApiProfile stores the key without it", async () => {
+    const h = await harness();
+
+    await h.service.addApiProfile(apiOptions({ secretValue: `  ${KEY}\n` }));
+
+    expect(h.storedSecrets()).toEqual({ "claude:glm": KEY });
+    expect((await h.service.resolveProfileEnv("claude:glm")).env.ANTHROPIC_AUTH_TOKEN).toBe(KEY);
+  });
+
+  it("updateProfileSecret stores the key without it", async () => {
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions());
+
+    await h.service.updateProfileSecret("claude:glm", { source: "keychain" }, "sk-test-rotated \r\n");
+
+    expect(h.storedSecrets()).toEqual({ "claude:glm": "sk-test-rotated" });
+  });
 });
 
 describe("add --from a directory clausona already manages", () => {

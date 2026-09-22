@@ -1275,14 +1275,13 @@ async function cleanupProfile(
 
 /**
  * A new profile's id must differ from every existing one by more than case. Its backup
- * directory is backups/<tool>/<name>, which both add paths clear before use, and on a
- * case-insensitive filesystem - macOS and Windows by default - `Work` names the directory
- * `work` already owns.
+ * directory is backups/<tool>/<name>, and on a case-insensitive filesystem - macOS and
+ * Windows by default - `Work` names the directory `work` already owns.
  */
 function assertProfileIdAvailable(registry: Registry, id: string) {
   if (registry.profiles[id]) throw new Error(`Profile '${id}' already exists.`);
-  const folded = id.toLowerCase();
-  const clash = Object.keys(registry.profiles).find((existing) => existing.toLowerCase() === folded);
+  const folded = foldProfileName(id);
+  const clash = Object.keys(registry.profiles).find((existing) => foldProfileName(existing) === folded);
   if (clash) throw new Error(`Profile '${clash}' already exists (names are compared without case).`);
 }
 
@@ -1516,7 +1515,8 @@ function checkSecretSource(
   switch (secret.source) {
     case "keychain":
       if (value === undefined || value.trim() === "") throw new Error("no API key supplied for the keychain source");
-      return { source: { source: "keychain" }, toStore: value };
+      // A pasted key often brings a newline along, and the file backend reads back what it stored.
+      return { source: { source: "keychain" }, toStore: value.trim() };
     case "env":
       // Not echoed: a key pasted where the variable name belongs would land in the error.
       if (typeof secret.name !== "string" || !isPosixEnvName(secret.name)) {
@@ -1575,7 +1575,8 @@ export async function addApiProfile(options: {
   const baseUrl = options.baseUrl.trim();
   const url = parseBaseUrl(baseUrl);
   if (options.authScheme !== "bearer" && options.authScheme !== "api-key") {
-    throw new Error(`Invalid auth scheme '${options.authScheme}': must be 'bearer' or 'api-key'.`);
+    // Not echoed: arguments passed in the wrong order would put the key here.
+    throw new Error("Invalid auth scheme: must be 'bearer' or 'api-key'.");
   }
   // A blank label would render the profile as an empty row; absent means "use the host".
   if (options.label !== undefined && options.label.trim() === "") {
