@@ -1493,6 +1493,30 @@ describe("resolveProfileEnv", () => {
     expect(pinned.ANTHROPIC_AUTH_TOKEN).toBe("explicit");
   });
 
+  // With the key unresolved, the profile's own variable is missing from what it sets - so an
+  // inherited one of the same name would authenticate the tool against this endpoint.
+  for (const [authScheme, ownVar] of [
+    ["bearer", "ANTHROPIC_AUTH_TOKEN"],
+    ["api-key", "ANTHROPIC_API_KEY"],
+  ] as const) {
+    it(`drops an inherited ${ownVar} when a ${authScheme} profile's key will not resolve`, async () => {
+      const h = await harness();
+      await h.service.addApiProfile(
+        apiOptions({ authScheme, secret: { source: "env", name: "GLM_KEY_UNSET" }, secretValue: undefined }),
+      );
+      vi.stubEnv("GLM_KEY_UNSET", "");
+      vi.stubEnv(ownVar, "sk-ant-parent-sentinel");
+      const stderr = captureStderr();
+
+      const { env } = await h.service.resolveProfileEnv("claude:glm");
+
+      expect(env.ANTHROPIC_BASE_URL).toBe("http://gpu-box:30000");
+      expect(ownVar in env).toBe(false);
+      expect(Object.values(env)).not.toContain("sk-ant-parent-sentinel");
+      expect(stderr()).toMatch(/claude:glm: environment variable GLM_KEY_UNSET is unset or empty/);
+    });
+  }
+
   it("leaves a subscription profile's inherited credentials alone", async () => {
     const h = await harness();
     const fromPath = seedAccountDir(h.home, ".claude-work", "work@example.com");

@@ -9,6 +9,24 @@ import { resolveSecret } from "./secrets.js";
 /** Variables clausona owns; a profile's env map may not redefine them. */
 export const RESERVED_ENV_KEYS = new Set(["CLAUDE_CONFIG_DIR", "CODEX_HOME"]);
 
+/**
+ * Every variable Claude Code authenticates with. For an API profile each one comes from
+ * the profile or not at all: whatever the profile does not set is unset for the run.
+ *
+ * Applying the profile on top of the caller's environment is not enough. Claude Code reads
+ * ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN independently and sends X-Api-Key and
+ * Authorization together when both are set, so a key the user exported for some other
+ * purpose would go to this profile's endpoint - a third party, often - next to the
+ * profile's own, or in its place when the profile's key did not resolve. A subscription
+ * OAuth token is never wanted either, and Claude Code ranks it as an auth source.
+ * Dropping a name from this list reopens that leak for it.
+ */
+export const API_CREDENTIAL_ENV_KEYS = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+] as const;
+
 export function displayName(profile: Pick<Profile, "email" | "label">): string {
   return profile.label ?? profile.email;
 }
@@ -38,7 +56,6 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
   const home = deps.homedir ?? homedir;
   const adapter = getAdapter(profile.tool);
   const env: Record<string, string> = {};
-  const unset: string[] = [];
   const warnings: string[] = [];
 
   // A profile that points at the tool's own default directory must not set the variable:
@@ -52,13 +69,6 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
 
   if (profile.kind === "api" && profile.api) {
     env.ANTHROPIC_BASE_URL = profile.api.baseUrl;
-    // Setting the profile's credential is not enough. Claude Code reads ANTHROPIC_API_KEY
-    // and ANTHROPIC_AUTH_TOKEN independently and sends X-Api-Key and Authorization together
-    // when both are set, so a key the user exported for something else would go to this
-    // endpoint next to the profile's own. A subscription OAuth token is never wanted here
-    // either, and Claude Code ranks it as an auth source.
-    unset.push(profile.api.authScheme === "bearer" ? "ANTHROPIC_API_KEY" : "ANTHROPIC_AUTH_TOKEN");
-    unset.push("CLAUDE_CODE_OAUTH_TOKEN");
     try {
       const secret = await resolve(id, profile.api.secret);
       env[profile.api.authScheme === "bearer" ? "ANTHROPIC_AUTH_TOKEN" : "ANTHROPIC_API_KEY"] = secret;
@@ -86,6 +96,8 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
     env[key] = value;
   }
 
-  // An explicit env-map entry is the user asking for that variable, so it is set, not cleared.
-  return { env, unset: unset.filter((key) => !(key in env)), warnings };
+  // A set difference, taken last: the resolved key and any explicit env-map entry are in
+  // env and so kept; everything else - an unresolved key's variable included - is cleared.
+  const unset = profile.kind === "api" && profile.api ? API_CREDENTIAL_ENV_KEYS.filter((key) => !(key in env)) : [];
+  return { env, unset, warnings };
 }

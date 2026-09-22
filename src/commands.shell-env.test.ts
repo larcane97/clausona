@@ -174,6 +174,7 @@ describe("_shell-env", () => {
 
     expect(parseExports(out)).toEqual({
       ANTHROPIC_API_KEY: null,
+      ANTHROPIC_AUTH_TOKEN: null,
       CLAUDE_CODE_OAUTH_TOKEN: null,
       CLAUDE_CONFIG_DIR: h.workDir,
       ANTHROPIC_BASE_URL: "http://localhost:8000",
@@ -486,4 +487,71 @@ describe("_shell-env", () => {
       );
     },
   );
+
+  /**
+   * The same leak through the warning path: when the profile's key will not resolve, its
+   * own variable is missing from the output - and an inherited one of the same name would
+   * authenticate the tool against the third-party endpoint in its place. Every credential
+   * variable comes from the profile or not at all, so the tool reports its own auth error.
+   */
+  for (const [authScheme, ownVar] of [
+    ["bearer", "ANTHROPIC_AUTH_TOKEN"],
+    ["api-key", "ANTHROPIC_API_KEY"],
+  ] as const) {
+    it.skipIf(process.platform === "win32")(
+      `keeps an inherited ${ownVar} from a ${authScheme} profile whose key will not resolve`,
+      async () => {
+        const parentValue = "sk-ant-parent-sentinel";
+        const h = await harness((home, workDir) =>
+          registryWith(
+            {
+              tool: "claude",
+              kind: "api",
+              configDir: workDir,
+              email: "",
+              label: "router",
+              api: {
+                baseUrl: "https://openrouter.ai/api",
+                authScheme,
+                secret: { source: "env", name: "CLAUSONA_TEST_ABSENT_SECRET" },
+              },
+            },
+            home,
+          ),
+        );
+        vi.stubEnv(ownVar, parentValue);
+
+        const out = await h.run("claude");
+        const outPath = path.join(h.home, "shell-env.sh");
+        const childEnvPath = path.join(h.home, "child.env");
+        writeFileSync(outPath, out);
+
+        const script = [
+          "(",
+          `  eval "$(cat '${outPath}')"`,
+          `  env > '${childEnvPath}'`,
+          ")",
+          `printf 'parent ${ownVar}=%s\\n' "$${ownVar}"`,
+        ].join("\n");
+        const result = spawnSync("/bin/sh", ["-c", script], {
+          encoding: "utf8",
+          timeout: 5000,
+          env: { PATH: process.env.PATH ?? "", [ownVar]: parentValue },
+        });
+
+        expect(result.stderr).toBe("");
+        expect(result.status).toBe(0);
+        // The key did not resolve, and said so...
+        expect(h.warnings).toHaveLength(1);
+        expect(h.warnings[0]).toContain("CLAUSONA_TEST_ABSENT_SECRET");
+        // ...so the tool gets the endpoint and no credential at all, not the parent's...
+        const childText = readFileSync(childEnvPath, "utf8");
+        expect(childText).toContain("ANTHROPIC_BASE_URL=https://openrouter.ai/api");
+        expect(childText).not.toMatch(new RegExp(`^${ownVar}=`, "m"));
+        expect(childText).not.toContain(parentValue);
+        // ...while the parent shell keeps its own.
+        expect(result.stdout).toBe(`parent ${ownVar}=${parentValue}\n`);
+      },
+    );
+  }
 });

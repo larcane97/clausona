@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { isPosixEnvName } from "../core/shell.js";
 import type { Profile } from "../types.js";
-import { buildProfileEnv, displayName, RESERVED_ENV_KEYS } from "./profile-env.js";
+import { API_CREDENTIAL_ENV_KEYS, buildProfileEnv, displayName, RESERVED_ENV_KEYS } from "./profile-env.js";
 
 const identityRealpath = async (p: string) => p;
 const fakeSecret = async () => "sk-test";
@@ -147,17 +147,24 @@ describe("buildProfileEnv", () => {
       expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("oat-explicit");
     });
 
-    it("still clears the competing credential when the profile's own will not resolve", async () => {
-      const { env, unset } = await buildProfileEnv("claude:glm", apiProfile(), {
-        ...deps,
-        resolveSecret: async () => {
-          throw new Error("no stored secret");
-        },
+    // The profile's own variable is cleared too: an inherited one of the same name would
+    // otherwise authenticate the tool against this endpoint with somebody else's key.
+    for (const authScheme of ["bearer", "api-key"] as const) {
+      it(`clears every credential variable when a ${authScheme} profile's key will not resolve`, async () => {
+        const profile = apiProfile({
+          api: { baseUrl: "https://openrouter.ai/api", authScheme, secret: { source: "keychain" } },
+        });
+        const { env, unset } = await buildProfileEnv("claude:glm", profile, {
+          ...deps,
+          resolveSecret: async () => {
+            throw new Error("no stored secret");
+          },
+        });
+        expect(unset).toEqual(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]);
+        expect(env).not.toHaveProperty("ANTHROPIC_API_KEY");
+        expect(env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
       });
-      expect(unset).toContain("ANTHROPIC_API_KEY");
-      expect(unset).toContain("CLAUDE_CODE_OAUTH_TOKEN");
-      expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
-    });
+    }
 
     it("clears nothing for any profile that is not an API profile", async () => {
       const profiles: Profile[] = [
@@ -188,6 +195,15 @@ describe("buildProfileEnv", () => {
         for (const key of unset) expect(env, key).not.toHaveProperty(key);
       }
     });
+  });
+
+  // Narrowing this list reopens the leak for whichever variable is dropped from it.
+  it("treats every variable Claude Code authenticates with as a credential", () => {
+    expect([...API_CREDENTIAL_ENV_KEYS]).toEqual([
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+    ]);
   });
 
   it("reserves the tool config variables", () => {
