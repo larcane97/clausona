@@ -303,14 +303,27 @@ describe("renderPosixExports", () => {
     expect(out).toBe("export OK_KEY='1'");
   });
 
-  // An API profile clears a credential the caller exported for something else. The hook
-  // evals this inside its subshell, so the parent shell keeps its own value.
-  it("emits unset lines ahead of the exports", () => {
-    expect(renderPosixExports({ A: "1", B: "2" }, ["C", "D"])).toBe("unset C\nunset D\nexport A='1'\nexport B='2'");
+  /**
+   * An API profile clears a credential the caller exported for something else. The hook
+   * evals this inside its subshell, so the parent shell keeps its own value.
+   *
+   * A `readonly` variable cannot be unset, and a plain `unset` then fails the wrong way in
+   * both shells: bash carries on and the tool gets the caller's credential next to the
+   * profile's; zsh abandons the rest of the eval and the tool runs on the default account.
+   * So each unset is probed in a throwaway subshell first, and a variable that will not go
+   * stops the run - fail closed, with the name on stderr.
+   */
+  const guarded = (key: string) =>
+    `if ( unset ${key} ) 2>/dev/null; then unset ${key}; else printf '%s\\n' 'clausona: ${key} is read-only in this shell, so clausona cannot clear it for this profile. Not starting the tool.' >&2; exit 1; fi`;
+
+  it("emits a guarded unset for each variable, ahead of the exports", () => {
+    expect(renderPosixExports({ A: "1", B: "2" }, ["C", "D"])).toBe(
+      `${guarded("C")}\n${guarded("D")}\nexport A='1'\nexport B='2'`,
+    );
   });
 
-  it("emits only unset lines when nothing is exported", () => {
-    expect(renderPosixExports({}, ["C"])).toBe("unset C");
+  it("emits only the guarded unsets when nothing is exported", () => {
+    expect(renderPosixExports({}, ["C"])).toBe(guarded("C"));
   });
 
   it("is unchanged when nothing is unset", () => {
@@ -321,8 +334,17 @@ describe("renderPosixExports", () => {
   // Same last line of defence as the exports: `unset A; touch /tmp/pwned` would run twice.
   it("omits an unset key that is not a POSIX environment variable name", () => {
     expect(renderPosixExports({ OK: "1" }, ["A; touch /tmp/clausona-pwned; B", "A $(id)", "", "GONE"])).toBe(
-      "unset GONE\nexport OK='1'",
+      `${guarded("GONE")}\nexport OK='1'`,
     );
+  });
+
+  // The guard is eval'd at run time, in whatever shell the user has: it must not rely on
+  // anything a strict POSIX sh lacks, and it must not carry a `!` a zsh might expand.
+  it("keeps the guard to plain POSIX syntax", () => {
+    const line = guarded("C");
+    expect(line).not.toContain("!");
+    expect(line).not.toContain('"');
+    expect(line).not.toMatch(/\[\[|\$\(|`/);
   });
 });
 

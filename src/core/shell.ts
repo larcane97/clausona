@@ -13,9 +13,17 @@ export function isPosixEnvName(key: string): boolean {
 }
 
 /**
- * Emits `unset KEY` lines for the variables a run must not inherit, then `export
+ * Emits one guarded unset for each variable a run must not inherit, then `export
  * KEY='VALUE'` lines. The hook evals both inside its subshell, so an unset hides the
  * caller's own value from the tool without touching the caller's shell.
+ *
+ * The guard is for a variable the user made `readonly`, which no unset can remove. A plain
+ * `unset` then fails the wrong way in both shells: bash carries on and the tool gets the
+ * caller's credential next to the profile's; zsh abandons the rest of the eval and the tool
+ * runs on the default account. So each unset is first tried in a throwaway subshell, and a
+ * variable that will not go ends the hook's subshell before the tool starts - fail closed,
+ * with the name (never the value) on stderr. Plain POSIX, and no `!`, since this is eval'd
+ * in whatever shell the user has.
  *
  * Single quotes are the only POSIX form in which no character is special, so a value can
  * carry `$`, backticks, and newlines untouched; an embedded quote is closed, escaped, and
@@ -28,7 +36,12 @@ export function isPosixEnvName(key: string): boolean {
  * it too, though today they are constants.
  */
 export function renderPosixExports(env: Record<string, string>, unset: readonly string[] = []): string {
-  const unsets = unset.filter((key) => isPosixEnvName(key)).map((key) => `unset ${key}`);
+  const unsets = unset
+    .filter((key) => isPosixEnvName(key))
+    .map(
+      (key) =>
+        `if ( unset ${key} ) 2>/dev/null; then unset ${key}; else printf '%s\\n' 'clausona: ${key} is read-only in this shell, so clausona cannot clear it for this profile. Not starting the tool.' >&2; exit 1; fi`,
+    );
   const exports = Object.entries(env)
     .filter(([key]) => isPosixEnvName(key))
     .map(([key, value]) => `export ${key}='${value.replace(/'/g, "'\\''")}'`);

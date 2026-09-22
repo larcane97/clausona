@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -75,14 +75,16 @@ function registryWith(profile: Record<string, unknown>, home: string, id = "clau
 }
 
 /**
- * Reverses renderPosixExports for values that carry no newline. An unset line reads back
- * as null, which is how `--json` names the same variable.
+ * Reverses renderPosixExports for values that carry no newline. A guarded unset line reads
+ * back as null, which is how `--json` names the same variable.
  */
 function parseExports(out: string): Record<string, string | null> {
   const parsed: Record<string, string | null> = {};
   for (const line of out.split("\n")) {
     if (line === "") continue;
-    const unset = line.match(/^unset ([A-Za-z_][A-Za-z0-9_]*)$/);
+    const unset = line.match(
+      /^if \( unset ([A-Za-z_][A-Za-z0-9_]*) \) 2>\/dev\/null; then unset \1; else printf .* >&2; exit 1; fi$/,
+    );
     if (unset) {
       parsed[unset[1] as string] = null;
       continue;
@@ -598,6 +600,57 @@ describe("_shell-env", () => {
       },
     );
   }
+
+  // A readonly credential cannot be unset, so the eval stops the run rather than leak it.
+  it.skipIf(process.platform === "win32")(
+    "stops the run in a real shell when a credential it must clear is read-only",
+    async () => {
+      const parentKey = "sk-ant-parent-sentinel";
+      const h = await harness((home, workDir) =>
+        registryWith(
+          {
+            tool: "claude",
+            kind: "api",
+            configDir: workDir,
+            email: "",
+            label: "router",
+            api: {
+              baseUrl: "https://openrouter.ai/api",
+              authScheme: "bearer",
+              secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
+            },
+          },
+          home,
+        ),
+      );
+      vi.stubEnv("CLAUSONA_TEST_SECRET", "sk-or-profile-token");
+      const out = await h.run("claude");
+      const outPath = path.join(h.home, "shell-env.sh");
+      const childEnvPath = path.join(h.home, "child.env");
+      writeFileSync(outPath, out);
+
+      const script = [
+        "readonly ANTHROPIC_API_KEY",
+        "(",
+        `  eval "$(cat '${outPath}')"`,
+        `  env > '${childEnvPath}'`,
+        ")",
+        `printf 'rc=%s parent=%s\\n' "$?" "$ANTHROPIC_API_KEY"`,
+      ].join("\n");
+      const result = spawnSync("/bin/sh", ["-c", script], {
+        encoding: "utf8",
+        timeout: 5000,
+        env: { PATH: process.env.PATH ?? "", ANTHROPIC_API_KEY: parentKey },
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(`rc=1 parent=${parentKey}\n`);
+      expect(result.stderr).toContain("clausona: ANTHROPIC_API_KEY is read-only in this shell");
+      expect(result.stderr).not.toContain(parentKey);
+      // Nothing was launched in the subshell at all.
+      expect(existsSync(childEnvPath)).toBe(false);
+    },
+  );
 
   /**
    * An inherited ANTHROPIC_CUSTOM_HEADERS can carry an Authorization header to the profile's

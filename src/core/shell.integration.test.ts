@@ -251,6 +251,44 @@ for (const shell of ["zsh", "bash"] as const) {
       expect(result.stdout.split(parentKey)).toHaveLength(2);
     });
 
+    /**
+     * A variable the user made `readonly` cannot be unset. A plain `unset` fails the wrong
+     * way in both shells - bash carries on and the tool gets the caller's credential; zsh
+     * abandons the eval and the tool runs on the default account - so the run has to stop
+     * instead, and say which variable stopped it.
+     */
+    it("refuses to start the tool when a variable the profile clears is read-only", () => {
+      const parentKey = "sk-ant-parent-sentinel";
+      const harness = makeHarness({
+        claude: {
+          ANTHROPIC_API_KEY: null,
+          CLAUDE_CONFIG_DIR: "/tmp/clausona-test-claude-work",
+          ANTHROPIC_BASE_URL: LOCAL_BASE_URL,
+          ANTHROPIC_AUTH_TOKEN: "placeholder-token",
+        },
+      });
+
+      const result = runShell(
+        shell,
+        harness,
+        ["readonly ANTHROPIC_API_KEY", "claude", 'printf "rc=%s\\n" "$?"', reportParent("ANTHROPIC_API_KEY")].join(
+          "\n",
+        ),
+        { ANTHROPIC_API_KEY: parentKey },
+      );
+
+      expect(result.status).toBe(0);
+      // The tool never started, and the wrapper reports the failure...
+      expect(result.stdout).not.toContain("args=");
+      expect(result.stdout).toContain("rc=1");
+      // ...with the variable's name on stderr, and nothing of its value.
+      expect(result.stderr).toContain("clausona: ANTHROPIC_API_KEY is read-only in this shell");
+      expect(result.stderr).not.toContain(parentKey);
+      expect(result.stdout).toContain(`parent ANTHROPIC_API_KEY=${parentKey}`);
+      // The plugin sync inside the subshell never ran; usage tracking after it still did.
+      expect(harness.log()).toEqual(["shell-env claude", `track-usage CLAUDE_CONFIG_DIR=${UNSET}`]);
+    });
+
     it("propagates a non-zero exit code out of the subshell", () => {
       const harness = makeHarness({ claude: { CLAUDE_CONFIG_DIR: "/tmp/clausona-test-claude-work" } });
 
