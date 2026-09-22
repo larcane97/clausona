@@ -1,4 +1,16 @@
-import { cp, lstat, mkdir, readdir, readFile, readlink, realpath, rename, rm, writeFile } from "node:fs/promises";
+import {
+  cp,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  readlink,
+  realpath,
+  rename,
+  rm,
+  rmdir,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -1295,9 +1307,27 @@ function backupDirTaken(backupDir: string, id: string): Error {
   );
 }
 
-/** Creates a new profile's backup directory, and refuses rather than reuse one that exists. */
+/**
+ * Clears the way for a new profile's backup directory. An empty directory left there holds
+ * nothing to lose, and rmdir removes a directory only while it is empty; anything else at
+ * that path - a directory with something in it, or not a directory at all - is refused.
+ */
+async function clearBackupDir(backupDir: string, id: string) {
+  await rmdir(backupDir).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return;
+    // POSIX allows EEXIST as well as ENOTEMPTY for a directory that is not empty.
+    if (error.code === "ENOTEMPTY" || error.code === "EEXIST" || error.code === "ENOTDIR") {
+      throw backupDirTaken(backupDir, id);
+    }
+    throw error;
+  });
+}
+
+/** Creates a new profile's backup directory, and refuses rather than reuse one that holds anything. */
 async function claimBackupDir(backupDir: string, id: string) {
+  await clearBackupDir(backupDir, id);
   await mkdir(path.dirname(backupDir), { recursive: true });
+  // Not recursive: one that appeared since it was cleared is refused, not adopted.
   await mkdir(backupDir).catch((error: NodeJS.ErrnoException) => {
     throw error.code === "EEXIST" ? backupDirTaken(backupDir, id) : error;
   });
@@ -1413,9 +1443,9 @@ export async function addProfile(options: {
       `${configDir.replace(home, "~")} already exists. Use --from ${configDir.replace(home, "~")} to import it instead.`,
     );
   }
-  // Checked here as well as where it is created, so a refusal does not come after a sign-in.
+  // Cleared here as well as where it is created, so a refusal does not come after a sign-in.
   const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);
-  if (await exists(backupDir)) throw backupDirTaken(backupDir, id);
+  await clearBackupDir(backupDir, id);
   await mkdir(configDir, { recursive: true });
 
   // Check if credentials already exist for this dir

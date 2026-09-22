@@ -593,6 +593,45 @@ describe("adding a profile over a backup directory that outlived its profile", (
     expect(h.snapshot()).toEqual(before);
   });
 
+  // An empty one holds nothing to lose, so it is cleared - rmdir removes only an empty directory.
+  it("addProfile --from clears an empty one and goes ahead", async () => {
+    const h = await harness();
+    const orphan = path.join(h.home, ".clausona", "backups", "claude", "work");
+    mkdirSync(orphan, { recursive: true });
+    const fromPath = seedAccountDir(h.home, "work-account", "work@example.com");
+
+    await expect(h.service.addProfile({ tool: "claude", name: "work", fromPath })).resolves.toMatchObject({
+      name: "work",
+      backupDir: orphan,
+    });
+    expect(h.registry().profiles["claude:work"]).toMatchObject({ configDir: fromPath });
+  });
+
+  it("addApiProfile clears an empty one and goes ahead", async () => {
+    const h = await harness();
+    mkdirSync(path.join(h.home, ".clausona", "backups", "claude", "work"), { recursive: true });
+
+    await h.service.addApiProfile(apiOptions({ name: "work" }));
+
+    expect(h.registry().profiles["claude:work"]).toMatchObject({ kind: "api" });
+    expect(h.storedSecrets()).toEqual({ "claude:work": KEY });
+  });
+
+  it("refuses a file where the directory would go, and leaves it alone", async () => {
+    const h = await harness();
+    const stray = path.join(h.home, ".clausona", "backups", "claude", "work");
+    mkdirSync(path.dirname(stray), { recursive: true });
+    writeFileSync(stray, "not a directory");
+    const before = h.snapshot();
+
+    const outcome = await h.service.addApiProfile(apiOptions({ name: "work" })).catch((e: Error) => e);
+
+    expect(readFileSync(stray, "utf8")).toBe("not a directory");
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toContain(refusal);
+    expect(h.snapshot()).toEqual(before);
+  });
+
   it("addApiProfile refuses and leaves it alone", async () => {
     const h = await harness();
     const orphan = seedBackupFile(h.home, "work");
