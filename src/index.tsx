@@ -109,12 +109,24 @@ async function main() {
       process.exitCode = 1;
       return;
     }
-    process.stdout.write(`${result}\n`);
+    writeCommandResult(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`  ${xMark} ${message}\n`);
     process.exitCode = 1;
   }
+}
+
+/**
+ * Prints a command's result. An empty result prints nothing: the internal commands the
+ * shell hooks call around every launch (`_sync-plugins`, `_track-usage`) return "", and
+ * the hooks silence only their stderr, so a bare newline here was a blank line above and
+ * below every wrapped `claude` run. `_shell-env` is unaffected either way: `$(...)` strips
+ * the newline, and PowerShell reads no output and an empty line alike as falsy.
+ */
+export function writeCommandResult(result: string, out: { write(chunk: string): unknown } = process.stdout) {
+  if (result === "") return;
+  out.write(`${result}\n`);
 }
 
 export function isMainModule(moduleUrl: string, entryPath: string | undefined): boolean {

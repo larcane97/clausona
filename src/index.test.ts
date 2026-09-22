@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands.js";
-import { isMainModule, parseCommand } from "./index.js";
+import { isMainModule, parseCommand, writeCommandResult } from "./index.js";
 
 describe("parseCommand", () => {
   it("defaults to interactive mode with no args", () => {
@@ -29,6 +29,32 @@ describe("parseCommand", () => {
       command: "run",
       args: ["--help"],
     });
+  });
+});
+
+/**
+ * The shell hooks run `clausona _sync-plugins` and `clausona _track-usage` with only stderr
+ * silenced, around every wrapped launch. Both return "", which used to print as a bare
+ * newline - a blank line above and below every `claude` run.
+ */
+describe("writeCommandResult", () => {
+  function sink() {
+    const chunks: string[] = [];
+    return { chunks, out: { write: (chunk: string) => chunks.push(chunk) > 0 } };
+  }
+
+  it("writes nothing at all for an empty result", () => {
+    const { chunks, out } = sink();
+    writeCommandResult("", out);
+    expect(chunks).toEqual([]);
+  });
+
+  it("writes any other result followed by exactly one newline", () => {
+    for (const result of ["export A='1'", "{}", " ", "\n", "line one\nline two"]) {
+      const { chunks, out } = sink();
+      writeCommandResult(result, out);
+      expect(chunks, JSON.stringify(result)).toEqual([`${result}\n`]);
+    }
   });
 });
 
