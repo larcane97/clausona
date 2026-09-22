@@ -21,7 +21,8 @@ export function profileId(tool: ToolName, name: string): string {
 const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export function validateProfileName(name: string): { ok: true } | { ok: false; error: string } {
-  if (PROFILE_NAME.test(name)) return { ok: true };
+  // RegExp#test stringifies its argument, and "undefined" would pass.
+  if (typeof name === "string" && PROFILE_NAME.test(name)) return { ok: true };
   return {
     ok: false,
     error: `Invalid profile name '${name}': must be non-empty, start with a letter or digit, and use only letters, digits, '.', '_' and '-'.`,

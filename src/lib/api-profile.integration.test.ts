@@ -431,7 +431,12 @@ describe("addApiProfile", () => {
       { name: "Default" },
       "Profile 'claude:default' already exists (names are compared without case).",
     ],
-    ["a base URL that does not parse", { baseUrl: "gpu-box:30000/v1 x" }, /Invalid base URL/],
+    ["a base URL that does not parse", { baseUrl: "not a url" }, /Invalid base URL: must be an absolute http/],
+    [
+      "a base URL missing its scheme",
+      { baseUrl: "gpu-box:30000" },
+      "Invalid base URL: the scheme must be http or https, not 'gpu-box'.",
+    ],
     ["a relative base URL", { baseUrl: "/v1" }, /Invalid base URL: must be an absolute http/],
     [
       "a non-http base URL",

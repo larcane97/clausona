@@ -64,6 +64,10 @@ describe("validateProfileName", () => {
     }
   });
 
+  it("rejects a missing name from an untyped caller", () => {
+    expect(validateProfileName(undefined as unknown as string)).toMatchObject({ ok: false });
+  });
+
   it("states the rule so the name can be corrected", () => {
     const result = validateProfileName("..");
     expect(result.ok).toBe(false);
