@@ -189,9 +189,11 @@ shell: it applies no profile environment, skips plugin sync and usage tracking, 
 variable untouched. Unset it to hand control back to clausona.
 
 If a profile cannot be applied in full — a credential command that fails, an environment
-variable name a shell cannot export — the wrapper prints a warning to stderr and still runs the
-tool, on every platform and before every invocation. The warning repeats until the profile is
-fixed; it is not a one-off notice.
+variable name a shell cannot export — the wrapper applies the rest of the profile, prints a
+warning to stderr before every invocation, and still runs the tool. The warning repeats until the
+profile is fixed; it is not a one-off notice. The one exception is Windows when PowerShell cannot
+create a temp file to capture it: the warning is dropped, but the tool still launches with the
+right account.
 
 ### Shared Environment
 
