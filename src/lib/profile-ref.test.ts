@@ -244,6 +244,14 @@ describe("initProfileNames", () => {
     expect(byDir(initProfileNames(found, existing))).toEqual({ ".claude": "default" });
   });
 
+  it("numbers the primary's 'default' when an API profile holds it", () => {
+    // Init keeps API profiles as they are, so their names are not free to take.
+    const found = [account("claude", ".claude", true)];
+    const existing = registry({ "claude:default": { tool: "claude", configDir: ".claude-default", kind: "api" } });
+
+    expect(byDir(initProfileNames(found, existing))).toEqual({ ".claude": "default-2" });
+  });
+
   it("only derives names the rule accepts", () => {
     const found = [
       account("claude", ".claude-a b"),

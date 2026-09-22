@@ -323,6 +323,34 @@ describe("re-running init with an API profile registered", () => {
   });
 });
 
+describe("init --auto when an API profile holds the primary's usual name", () => {
+  // Reachable when TUI init left the claude primary out, which let an API profile take `default`.
+  it("names the primary default-2 instead of giving up", async () => {
+    const h = await harness();
+    const found = await h.service.discoverAccounts();
+    await h.service.initializeRegistry({
+      accounts: found.filter((account) => !(account.tool === "claude" && account.isPrimary)),
+      profileNames: {},
+    });
+    await h.service.addApiProfile({
+      tool: "claude",
+      name: "default",
+      baseUrl: "http://gpu-box:30000",
+      authScheme: "bearer",
+      secret: { source: "env", name: "GLM_KEY" },
+    });
+    const entry = h.registry().profiles["claude:default"];
+
+    await h.commands.runCommand("init", ["--auto"]);
+
+    expect(h.registry().profiles["claude:default"], "the API profile changed").toEqual(entry);
+    expect(h.registry().profiles["claude:default-2"]).toMatchObject({
+      configDir: path.join(h.home, ".claude"),
+      isPrimary: true,
+    });
+  });
+});
+
 describe("re-running init --auto leaves the active profiles alone", () => {
   // `init --auto` never asks which profile should be active, so it has no business changing
   // it. It used to make the first account of each tool active on every run.

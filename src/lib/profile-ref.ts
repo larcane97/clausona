@@ -68,8 +68,9 @@ function directoryName(dir: string): string {
  * it is the primary, or defaultProfileName otherwise. A derived name is clausona's choice,
  * so rather than fail init over a clash it takes the first free `-2`, `-3`, ... suffix;
  * a directory that spells the name exactly keeps it ahead of one whose name was fitted.
- * A non-primary account also steers clear of every registered name: a profile init drops
- * still has a backup directory under it.
+ * Every account steers clear of an API profile's name, since init keeps those, and a
+ * non-primary account of every registered name: a profile init drops still has a backup
+ * directory under it.
  */
 export function initProfileNames(
   accounts: DiscoveredAccount[],
@@ -87,7 +88,12 @@ export function initProfileNames(
   };
 
   const names = new Map<string, string>();
-  const assigned = new Set<string>();
+  // Init carries API profiles over as they are, so their names are taken before anything else.
+  const assigned = new Set(
+    Object.entries(profiles)
+      .filter(([, profile]) => profile.kind === "api")
+      .map(([id]) => foldProfileName(id)),
+  );
   const assign = (account: DiscoveredAccount, name: string) => {
     names.set(account.configDir, name);
     assigned.add(foldProfileName(profileId(account.tool, name)));
