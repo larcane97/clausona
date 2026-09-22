@@ -7,9 +7,11 @@ import { ProfilePreview } from "./ProfilePreview.js";
 /**
  * The Health row, which is the only part of this panel the API-profile work touched.
  *
- * Text only: ink-testing-library's frames carry no ANSI, so the colour a surface picks
- * cannot be asserted here. That is why both surfaces read `doctorSeverity` instead of
- * writing the rule out - src/lib/format.test.ts pins the rule itself.
+ * Text only. chalk is level 0 under a plain `vitest run`, so the frames here carry no ANSI
+ * and the colour a surface picks is not visible to an assertion in this file - it is
+ * asserted in src/tui/doctor-colour.test.tsx, which sets FORCE_COLOR before the modules
+ * load. Both surfaces read `doctorSeverity` rather than writing the rule out, and
+ * src/lib/format.test.ts pins the rule itself.
  */
 const profile: ProfileListItem = {
   name: "claude:glm",

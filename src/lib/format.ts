@@ -452,8 +452,9 @@ const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ?
  * Which of the three states a doctor result is in, for anything that colours by it - the
  * same shape as `quotaSeverity`, and the same reason: two surfaces writing this rule out by
  * hand disagreed about a profile that had only warnings, one painting it green and the other
- * amber. Colour cannot be asserted through a rendered ink frame, so the guarantee has to be
- * that there is one rule rather than that each surface was checked.
+ * amber. The guarantee is that there is one rule rather than that each surface was reviewed;
+ * a colour is only visible to a test with FORCE_COLOR set, which no ordinary render
+ * assertion in this repo has.
  */
 export function doctorSeverity(issues: DoctorIssue[]): "healthy" | "warning" | "error" {
   const { errors, warnings } = countIssues(issues);

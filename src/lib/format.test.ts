@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { countIssues } from "../core/doctor.js";
-import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot } from "../types.js";
+import { type ApiHealthInput, countIssues, evaluateApiHealth, evaluateSymlinkHealth } from "../core/doctor.js";
+import type {
+  ApiEndpoint,
+  DoctorIssue,
+  DoctorProfileResult,
+  Profile,
+  ProfileListItem,
+  QuotaSnapshot,
+} from "../types.js";
 import { stripAnsi } from "./cli-style.js";
 import {
   doctorSeverity,
@@ -361,6 +368,54 @@ describe("fitQuotaValue", () => {
   });
 });
 
+/**
+ * Issues built by the function that builds them in production, keyed by kind.
+ *
+ * Not paraphrases. A fixture that shortens a message is a fixture that can pass while the
+ * real message says the opposite: the config-directory test below asserted no "clausona
+ * repair" appeared while its own shortened `missing_shared_link` message had the real
+ * suffix - "run 'clausona repair'" - deleted from it.
+ */
+const API_ENDPOINT: ApiEndpoint = {
+  baseUrl: "http://gpu-box:30000",
+  authScheme: "bearer",
+  secret: { source: "keychain" },
+};
+
+const API_PROFILE: Profile = {
+  tool: "claude",
+  kind: "api",
+  configDir: "/home/u/.claude-glm",
+  email: "",
+  label: "gpu-box",
+  api: API_ENDPOINT,
+};
+
+const API_ISSUE_INPUTS = {
+  missing_config_dir: { profile: API_PROFILE, configDirExists: false },
+  missing_api_secret: { profile: API_PROFILE, secret: { ok: false, error: "no stored secret" } },
+  invalid_api_config: { profile: { ...API_PROFILE, api: { ...API_ENDPOINT, baseUrl: "" } } },
+  shared_api_key_helper: { profile: API_PROFILE, settings: { apiKeyHelper: "op read op://vault/key" } },
+  plaintext_env_secret: {
+    profile: { ...API_PROFILE, env: { ANTHROPIC_API_KEY: "sk-plain" } },
+    credentialEnvKeys: ["ANTHROPIC_API_KEY"],
+  },
+} satisfies Record<string, Omit<ApiHealthInput, "id">>;
+
+/**
+ * The three credential messages and this one are written inline in `doctorProfiles`, so no
+ * function can be asked for them here. Their real text is pinned end to end instead, by the
+ * byte-identity tests in src/lib/doctor-api.integration.test.ts, which assert the whole
+ * rendered report for a profile carrying all three.
+ */
+const STALE_SYMLINK_MESSAGE = "projects is symlinked to primary but should not be shared";
+
+function realApiIssue(kind: keyof typeof API_ISSUE_INPUTS): DoctorIssue {
+  const issue = evaluateApiHealth({ id: "claude:work", ...API_ISSUE_INPUTS[kind] }).find((i) => i.kind === kind);
+  if (!issue) throw new Error(`evaluateApiHealth produced no ${kind}`);
+  return issue;
+}
+
 function result(issues: DoctorProfileResult["issues"]): DoctorProfileResult {
   return {
     name: "claude:work",
@@ -379,8 +434,9 @@ describe("doctorSeverity", () => {
   it("grades a result the way every surface has to grade it", () => {
     // Written out by hand in two places, this rule disagreed with itself: the doctor list
     // coloured a profile reading "2 warnings" emerald, while the preview panel for the same
-    // profile went amber. A rendered ink frame carries no colour, so nothing in a test
-    // could catch that - one definition can.
+    // profile went amber. Ordinary render assertions never saw it - chalk is level 0 under
+    // `vitest run` - so the rule is pinned here and the colours in
+    // src/tui/doctor-colour.test.tsx, which forces chalk on.
     expect(doctorSeverity([])).toBe("healthy");
     expect(doctorSeverity([warning])).toBe("warning");
     expect(doctorSeverity([{ kind: "broken_symlink", message: "x" }])).toBe("error");
@@ -409,7 +465,15 @@ describe("doctorSummary", () => {
 });
 
 describe("renderDoctor severity", () => {
-  const warning = { kind: "plaintext_env_secret", message: "a key sits in the env map", severity: "warning" } as const;
+  // Both real: an assertion that a word is absent is only as strong as the text it is
+  // absent from.
+  const warning = realApiIssue("plaintext_env_secret");
+  const brokenLink = evaluateSymlinkHealth({
+    isPrimary: false,
+    items: [
+      { name: "commands", isSharedLink: true, pointsToPrimary: true, targetExists: false, existsInPrimary: true },
+    ],
+  })[0];
 
   it("reports a profile that has only warnings as working, with the warnings shown", () => {
     const out = stripAnsi(renderDoctor([result([warning])]));
@@ -418,23 +482,24 @@ describe("renderDoctor severity", () => {
     // subscription-only checks used to raise on every API profile.
     expect(out).toContain("1 warning");
     expect(out).not.toContain("issue");
-    expect(out).toContain("a key sits in the env map");
+    expect(out).toContain(warning.message);
     expect(out).not.toContain("clausona repair");
     expect(out).not.toContain("clausona login");
   });
 
   it("leads with what is actually broken when a profile has both", () => {
-    const out = stripAnsi(renderDoctor([result([{ kind: "broken_symlink", message: "a link dangles" }, warning])]));
+    const out = stripAnsi(renderDoctor([result([brokenLink, warning])]));
 
     expect(out).toContain("1 issue, 1 warning");
     expect(out).toContain("clausona repair claude:work");
   });
 
   it("marks the warning line itself, so a mixed list can be read at a glance", () => {
-    const lines = stripAnsi(renderDoctor([result([{ kind: "broken_symlink", message: "a link dangles" }, warning])]))
+    const lines = stripAnsi(renderDoctor([result([brokenLink, warning])]))
       .split("\n")
-      .filter((line) => line.includes("dangles") || line.includes("env map"));
+      .filter((line) => line.includes(brokenLink.message) || line.includes(warning.message));
 
+    expect(lines).toHaveLength(2);
     expect(lines[0]).not.toContain("⚠");
     expect(lines[1]).toContain("⚠");
   });
@@ -446,7 +511,7 @@ describe("renderDoctor severity", () => {
 
 describe("renderDoctor next-step hint", () => {
   it("suggests repair for issues repair can resolve", () => {
-    const out = stripAnsi(renderDoctor([result([{ kind: "stale_symlink", message: "x" }])]));
+    const out = stripAnsi(renderDoctor([result([{ kind: "stale_symlink", message: STALE_SYMLINK_MESSAGE }])]));
 
     expect(out).toContain("clausona repair claude:work");
     expect(out).not.toContain("clausona login");
@@ -497,35 +562,39 @@ describe("renderDoctor next-step hint", () => {
     expect(out).not.toContain("clausona login");
   });
 
-  it.each([
-    "missing_api_secret",
-    "invalid_api_config",
-    "shared_api_key_helper",
-    "plaintext_env_secret",
-  ] as const)("suggests neither for %s, which carries its own fix", (kind) => {
+  it.each(
+    Object.keys(API_ISSUE_INPUTS) as (keyof typeof API_ISSUE_INPUTS)[],
+  )("suggests neither for %s, which carries its own fix", (kind) => {
     // repair rebuilds shared links and login signs a subscription in. An API profile has
     // neither problem: what it needs is in the message, and offering a command that
     // reports success and changes nothing is worse than offering none.
-    const out = stripAnsi(renderDoctor([result([{ kind, message: "x" }])]));
+    const out = stripAnsi(renderDoctor([result([realApiIssue(kind)])]));
 
     expect(out).not.toContain("clausona repair");
     expect(out).not.toContain("clausona login");
   });
 
   it("does not suggest repair for a profile whose config directory is gone", () => {
-    // Every shared-link finding there is a consequence of the missing directory, and
-    // repair symlinks into a directory it does not create - it fails with ENOENT.
-    const out = stripAnsi(
-      renderDoctor([
-        result([
-          { kind: "missing_config_dir", message: "config directory ~/.claude-glm is missing" },
-          { kind: "missing_shared_link", message: "commands/ is shared in primary but missing here" },
-        ]),
-      ]),
-    );
+    // repair symlinks into a directory it does not create; in this state it fails with
+    // ENOENT. doctorProfiles no longer emits the shared-link findings alongside this one
+    // for that reason, so the real report is this issue by itself.
+    const out = stripAnsi(renderDoctor([result([realApiIssue("missing_config_dir")])]));
 
     expect(out).not.toContain("clausona repair");
-    expect(out).toContain("config directory ~/.claude-glm is missing");
+    expect(out).toContain("config directory /home/u/.claude-glm is missing");
+  });
+
+  it("keeps the footer off even if a shared-link finding reached it anyway", () => {
+    // The renderer's own guard, checked against the message `evaluateSymlinkHealth` really
+    // produces rather than a paraphrase of it. That message ends in "run 'clausona repair'"
+    // - which is why this asserts the absence of the suggestion FOOTER, in its exact
+    // wording, and the body-level promise is pinned end to end in
+    // src/lib/doctor-api.integration.test.ts where the finding is not produced at all.
+    const sharedLink = evaluateSymlinkHealth({ isPrimary: false, items: [], missingSharedDirs: ["commands"] })[0];
+    const out = stripAnsi(renderDoctor([result([realApiIssue("missing_config_dir"), sharedLink])]));
+
+    expect(sharedLink.message).toContain("clausona repair");
+    expect(out).not.toContain("Run clausona repair claude:work");
   });
 
   it("still suggests repair when an API profile's shared links are broken too", () => {

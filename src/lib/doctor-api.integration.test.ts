@@ -340,12 +340,36 @@ describe("a profile whose config directory is gone", () => {
     expect(issuesFor(results, "claude:glm")[0].message).toContain(".claude-glm");
   });
 
-  it("says so when the primary does have one, alongside what repair would rebuild", async () => {
+  it("says only that, and never repeats advice that would fail in this state", async () => {
     const h = await harness();
     await h.addApi();
     rmSync(h.apiConfigDir, { recursive: true, force: true });
 
-    expect(kinds(await h.doctor(), "claude:glm")).toEqual(["missing_config_dir", "missing_shared_link"]);
+    const results = await h.doctor();
+    const rendered = h.render(results);
+
+    // Every shared-link and plugin finding here is a consequence of the one absence, and
+    // each carries "run 'clausona repair'" in its own text - a command that fails with
+    // ENOENT in exactly this state. Suppressing the footer was not enough: the advice was
+    // still printed inside the message body, which is what a user reads.
+    expect(kinds(results, "claude:glm")).toEqual(["missing_config_dir"]);
+    expect(rendered).not.toContain("clausona repair");
+    expect(rendered).toContain("remove and re-add the profile");
+  });
+
+  it("leaves a subscription profile in the same state reporting exactly what it always did", async () => {
+    // The advice is misleading there too, but a registry without API profiles has to
+    // produce the report it produced before they existed. Changing that is a decision
+    // about subscription behaviour, not a consequence of this feature.
+    const h = await harness({
+      profiles: { "claude:work": { tool: "claude", configDir: path.join("/deleted-by-hand"), email: "w@example.com" } },
+    });
+
+    const kindsFor = kinds(await h.doctor(), "claude:work");
+
+    expect(kindsFor).toContain("missing_json");
+    expect(kindsFor).toContain("missing_oauth");
+    expect(kindsFor).toContain("missing_shared_link");
   });
 
   it("is quiet about it for a profile whose directory is there", async () => {

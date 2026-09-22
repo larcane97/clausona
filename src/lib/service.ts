@@ -979,16 +979,31 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
     const primarySource = registry.primarySources[profile.tool];
     const adapter = getAdapter(profile.tool);
 
+    /**
+     * An API profile pointing at a directory that is not there. Everything the shared-link
+     * and plugins checks would say about it is a consequence of that one absence, and each
+     * of those findings carries "run 'clausona repair'" in its own text - a command that
+     * fails with ENOENT in exactly this state, because it symlinks into a directory it does
+     * not create. So they are skipped and the profile is left with the one instruction that
+     * works.
+     *
+     * Only for an API profile, and deliberately: a subscription profile in the same state
+     * reports the same findings it always has, because a registry without API profiles has
+     * to produce the report it produced before they existed. The same misleading advice is
+     * reachable there; closing it is a change to subscription behaviour, and belongs to
+     * whoever can decide that.
+     */
+    const configDirMissing = profile.kind === "api" && !(await exists(profile.configDir));
+
     if (profile.kind === "api") {
       // An API profile has no account JSON and no Claude Code credential, by design, so
       // the checks below would report every healthy one as broken. These take their place.
-      // Everything after this branch - shared links, plugins - applies to it unchanged.
       const settingsPath = path.join(profile.configDir, "settings.json");
       issues.push(
         ...evaluateApiHealth({
           id,
           profile,
-          configDirExists: await exists(profile.configDir),
+          configDirExists: !configDirMissing,
           // The outcome, and nothing else. resolveSecret returns the key itself: it is
           // awaited and dropped in the same expression so no binding ever holds it.
           secret: profile.api
@@ -1043,7 +1058,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
       }
     }
 
-    if (primarySource) {
+    if (primarySource && !configDirMissing) {
       const primaryDirents = await readdir(primarySource, { withFileTypes: true }).catch(() => []);
       const primaryEntries = new Set(primaryDirents.map((entry) => entry.name));
 
@@ -1111,7 +1126,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
     }
 
     // Check plugins/ consistency for non-primary claude profiles with a real plugins/ dir
-    if (!profile.isPrimary && profile.tool === "claude") {
+    if (!profile.isPrimary && profile.tool === "claude" && !configDirMissing) {
       const profilePlugins = path.join(profile.configDir, "plugins");
       const pluginsStats = await lstat(profilePlugins).catch(() => null);
       if (pluginsStats && !pluginsStats.isSymbolicLink()) {

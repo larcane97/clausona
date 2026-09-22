@@ -94,9 +94,10 @@ describe("App", () => {
  * The doctor screen, for the two things the API-profile work changed there: the badge a
  * profile gets in the list, and the claim that every check passed.
  *
- * Text only - ink-testing-library's frames carry no ANSI, so which colour a badge takes
- * cannot be asserted from here. Both surfaces read `doctorSeverity` for that instead of
- * writing the rule out, and src/lib/format.test.ts pins the rule.
+ * Text only. chalk is level 0 under a plain `vitest run`, so the frames here carry no ANSI
+ * and a colour is not visible to an assertion in this file. It is assertable with
+ * FORCE_COLOR set before the modules load, which src/tui/doctor-colour.test.tsx does; the
+ * rule both surfaces read is pinned in src/lib/format.test.ts.
  */
 describe("App doctor screen", () => {
   async function doctorFrame(issues: DoctorProfileResult["issues"]) {
