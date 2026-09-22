@@ -114,6 +114,20 @@ export function envKeyCaseTwinError(key: string, twin: string): string {
   return `'${key}' differs from ${twin} only in case, and Windows treats the two as one variable. Did you mean ${twin}?`;
 }
 
+/**
+ * Every name an API profile's run must control: the ones it clears, and the ones it sets
+ * that are clausona's to set - the endpoint, the credential, the config variable, and any
+ * managed name its env map carries. The POSIX renderer refuses to launch when one of them
+ * cannot be set or unset, because the profile would then only half apply: a `readonly`
+ * ANTHROPIC_API_KEY, for instance, would keep the caller's key next to the profile's
+ * endpoint. Empty for every other profile, whose output is what it always was.
+ */
+export function controlledEnvKeys(profile: Profile, built: BuiltEnv): string[] {
+  if (profile.kind !== "api" || !profile.api) return [];
+  const managed = new Set<string>([...API_MANAGED_ENV_KEYS, ...RESERVED_ENV_KEYS]);
+  return [...built.unset, ...Object.keys(built.env).filter((key) => managed.has(key))];
+}
+
 export function displayName(profile: Pick<Profile, "email" | "label">): string {
   return profile.label ?? profile.email;
 }

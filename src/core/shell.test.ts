@@ -304,47 +304,59 @@ describe("renderPosixExports", () => {
   });
 
   /**
-   * An API profile clears a credential the caller exported for something else. The hook
-   * evals this inside its subshell, so the parent shell keeps its own value.
+   * An API profile clears a credential the caller exported for something else, and sets its
+   * own endpoint and key. The hook evals all of it inside its subshell, so the parent shell
+   * keeps its own values.
    *
-   * A `readonly` variable cannot be unset, and a plain `unset` then fails the wrong way in
-   * both shells: bash carries on and the tool gets the caller's credential next to the
-   * profile's; zsh abandons the rest of the eval and the tool runs on the default account.
-   * So each unset is probed in a throwaway subshell first, and a variable that will not go
-   * stops the run - fail closed, with the name on stderr.
+   * A `readonly` variable can be neither unset nor exported, and without a guard both shells
+   * fail the wrong way: bash carries on, so the tool gets the caller's credential next to
+   * the profile's endpoint; zsh abandons the rest of the eval, so the tool runs on the
+   * default account. So every name the profile must control is probed first, in a single
+   * throwaway subshell, and one that will not move stops the run - fail closed, with the
+   * names (never the values) on stderr.
    */
-  const guarded = (key: string) =>
-    `if ( unset ${key} ) 2>/dev/null; then unset ${key}; else printf '%s\\n' 'clausona: ${key} is read-only in this shell, so clausona cannot clear it for this profile. Not starting the tool.' >&2; exit 1; fi`;
+  const guard = (...names: string[]) =>
+    `if ( unset ${names.join(" ")} ) 2>/dev/null; then :; else for _clausona_name in ${names.join(" ")}; do ( unset $_clausona_name ) 2>/dev/null || printf 'clausona: %s is read-only in this shell, so clausona cannot set or clear it for this profile. Not starting the tool.\\n' $_clausona_name >&2; done; exit 1; fi`;
 
-  it("emits a guarded unset for each variable, ahead of the exports", () => {
+  it("probes every name it clears, in one subshell, ahead of the unsets and exports", () => {
     expect(renderPosixExports({ A: "1", B: "2" }, ["C", "D"])).toBe(
-      `${guarded("C")}\n${guarded("D")}\nexport A='1'\nexport B='2'`,
+      `${guard("C", "D")}\nunset C D\nexport A='1'\nexport B='2'`,
     );
   });
 
-  it("emits only the guarded unsets when nothing is exported", () => {
-    expect(renderPosixExports({}, ["C"])).toBe(guarded("C"));
+  it("probes the names it sets as well, when the caller names them", () => {
+    expect(renderPosixExports({ A: "1" }, ["C"], ["C", "A"])).toBe(`${guard("C", "A")}\nunset C\nexport A='1'`);
   });
 
-  it("is unchanged when nothing is unset", () => {
-    expect(renderPosixExports({ A: "1" }, [])).toBe("export A='1'");
-    expect(renderPosixExports({}, [])).toBe("");
+  it("emits only the guard and the unsets when nothing is exported", () => {
+    expect(renderPosixExports({}, ["C"])).toBe(`${guard("C")}\nunset C`);
+  });
+
+  it("is unchanged when there is nothing to control", () => {
+    expect(renderPosixExports({ A: "1" }, [], [])).toBe("export A='1'");
+    expect(renderPosixExports({}, [], [])).toBe("");
   });
 
   // Same last line of defence as the exports: `unset A; touch /tmp/pwned` would run twice.
-  it("omits an unset key that is not a POSIX environment variable name", () => {
-    expect(renderPosixExports({ OK: "1" }, ["A; touch /tmp/clausona-pwned; B", "A $(id)", "", "GONE"])).toBe(
-      `${guarded("GONE")}\nexport OK='1'`,
-    );
+  it("omits a name that is not a POSIX environment variable name", () => {
+    expect(
+      renderPosixExports({ OK: "1" }, ["A; touch /tmp/clausona-pwned; B", "A $(id)", "", "GONE"], ["A `id`"]),
+    ).toBe(`${guard("GONE")}\nunset GONE\nexport OK='1'`);
+  });
+
+  it("probes a name it both clears and sets only once", () => {
+    expect(renderPosixExports({}, ["C"], ["C", "C"])).toBe(`${guard("C")}\nunset C`);
   });
 
   // The guard is eval'd at run time, in whatever shell the user has: it must not rely on
   // anything a strict POSIX sh lacks, and it must not carry a `!` a zsh might expand.
   it("keeps the guard to plain POSIX syntax", () => {
-    const line = guarded("C");
+    const line = guard("C", "D");
     expect(line).not.toContain("!");
     expect(line).not.toContain('"');
     expect(line).not.toMatch(/\[\[|\$\(|`/);
+    // One fork on the common path: the per-name probes sit behind the `else`.
+    expect(line.split("( unset")[0]).toBe("if ");
   });
 });
 

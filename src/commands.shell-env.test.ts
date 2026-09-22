@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { renderPosixShellInit } from "./core/shell.js";
+
 /**
  * `_shell-env` is the one command whose stdout the user's shell runs:
  * `eval "$(clausona _shell-env claude)"`. Everything here drives the command case end to
@@ -74,19 +76,21 @@ function registryWith(profile: Record<string, unknown>, home: string, id = "clau
   };
 }
 
+const NAMES = "[A-Za-z_][A-Za-z0-9_]*(?: [A-Za-z_][A-Za-z0-9_]*)*";
+
 /**
- * Reverses renderPosixExports for values that carry no newline. A guarded unset line reads
- * back as null, which is how `--json` names the same variable.
+ * Reverses renderPosixExports for values that carry no newline. An unset reads back as
+ * null, which is how `--json` names the same variable. The guard line is checked for shape
+ * and skipped: `guardedNames` reads the names out of it instead.
  */
 function parseExports(out: string): Record<string, string | null> {
   const parsed: Record<string, string | null> = {};
   for (const line of out.split("\n")) {
     if (line === "") continue;
-    const unset = line.match(
-      /^if \( unset ([A-Za-z_][A-Za-z0-9_]*) \) 2>\/dev\/null; then unset \1; else printf .* >&2; exit 1; fi$/,
-    );
+    if (guardedNames(line) !== undefined) continue;
+    const unset = line.match(new RegExp(`^unset (${NAMES})$`));
     if (unset) {
-      parsed[unset[1] as string] = null;
+      for (const name of (unset[1] as string).split(" ")) parsed[name] = null;
       continue;
     }
     const match = line.match(/^export ([A-Za-z_][A-Za-z0-9_]*)='([\s\S]*)'$/);
@@ -94,6 +98,16 @@ function parseExports(out: string): Record<string, string | null> {
     if (match) parsed[match[1] as string] = (match[2] as string).replaceAll("'\\''", "'");
   }
   return parsed;
+}
+
+/** The names one guard line probes, or undefined when the line is not a guard. */
+function guardedNames(line: string): string[] | undefined {
+  const match = line.match(
+    new RegExp(
+      `^if \\( unset (${NAMES}) \\) 2>/dev/null; then :; else for _clausona_name in \\1; do \\( unset \\$_clausona_name \\) 2>/dev/null \\|\\| printf '[^']*' \\$_clausona_name >&2; done; exit 1; fi$`,
+    ),
+  );
+  return match ? (match[1] as string).split(" ") : undefined;
 }
 
 /**
@@ -344,6 +358,49 @@ describe("_shell-env", () => {
     expect(keys).toContain("ANTHROPIC_CUSTOM_HEADERS");
     expect(keys).toContain("MY_FLAG");
     expect(h.warnings).toHaveLength(3);
+  });
+
+  // On POSIX the profile must be able to set its own names as well as clear the others, so
+  // the guard covers both. Windows has no readonly variables, so --json is unaffected.
+  it("guards every name it clears and every managed name it sets, in one probe", async () => {
+    const h = await harness((home, workDir) =>
+      registryWith(
+        {
+          tool: "claude",
+          kind: "api",
+          configDir: workDir,
+          email: "",
+          label: "router",
+          api: {
+            baseUrl: "https://openrouter.ai/api",
+            authScheme: "bearer",
+            secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
+          },
+          env: { ANTHROPIC_CUSTOM_HEADERS: "X-Team: platform", ANTHROPIC_MODEL: "glm-5.3" },
+        },
+        home,
+      ),
+    );
+    vi.stubEnv("CLAUSONA_TEST_SECRET", "sk-or-not-a-real-key");
+
+    const lines = (await h.run("claude")).split("\n");
+    const guarded = guardedNames(lines[0] as string);
+
+    const cleared = Object.entries(parseExports(await h.run("claude")))
+      .filter(([, value]) => value === null)
+      .map(([key]) => key);
+    expect(guarded).toEqual([
+      ...cleared,
+      "CLAUDE_CONFIG_DIR",
+      "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_CUSTOM_HEADERS",
+    ]);
+    // The user's own name is theirs to break; clausona does not refuse to launch over it.
+    expect(guarded).not.toContain("ANTHROPIC_MODEL");
+    // One probe for all of them, before anything is unset or exported.
+    expect(lines.filter((line) => guardedNames(line) !== undefined)).toHaveLength(1);
+    expect(lines[1]).toMatch(/^unset /);
   });
 
   /**
@@ -754,3 +811,140 @@ describe("_shell-env", () => {
     });
   }
 });
+
+/**
+ * The three cases the review found, driven through the real hook in real shells: a variable
+ * the output has to set - the profile's own credential, or its base URL - that the caller
+ * made `readonly`. The export then fails, and without a guard bash runs the tool with the
+ * caller's credential and the profile's endpoint, while zsh runs it on the default account.
+ *
+ * Everything here is the real path: the real `_shell-env` output, the real emitted hook, a
+ * `clausona` that replays that output, and a stand-in tool that says what it was launched
+ * with.
+ */
+const HOOK_SHELLS = (["zsh", "bash"] as const).filter((shell) => spawnSync("which", [shell]).status === 0);
+
+function hookRunner(h: Harness, out: string) {
+  const bin = path.join(h.home, "bin");
+  mkdirSync(bin, { recursive: true });
+  const outPath = path.join(h.home, "shell-env.sh");
+  writeFileSync(outPath, out);
+  writeFileSync(
+    path.join(bin, "clausona"),
+    ["#!/bin/sh", 'case "$1" in', "  _shell-env)", `    cat '${outPath}'`, "    ;;", "esac", "exit 0", ""].join("\n"),
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    path.join(bin, "claude"),
+    [
+      "#!/bin/sh",
+      'printf "TOOL STARTED\\n"',
+      ...["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"].map(
+        (name) => `printf "tool ${name}=[%s]\\n" "\${${name}:-<unset>}"`,
+      ),
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  return (shell: "zsh" | "bash", body: string, env: Record<string, string>) => {
+    const args = shell === "zsh" ? ["-f"] : ["--noprofile", "--norc"];
+    return spawnSync(shell, [...args, "-c", `${renderPosixShellInit()}\n${body}\n`], {
+      encoding: "utf8",
+      timeout: 15_000,
+      env: { PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, HOME: h.home, ...env },
+    });
+  };
+}
+
+function apiRegistry(authScheme: "bearer" | "api-key") {
+  return (home: string, workDir: string) =>
+    registryWith(
+      {
+        tool: "claude",
+        kind: "api",
+        configDir: workDir,
+        email: "",
+        label: "router",
+        api: {
+          baseUrl: "https://openrouter.ai/api",
+          authScheme,
+          secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
+        },
+      },
+      home,
+    );
+}
+
+const PARENT = "sk-ant-parent-sentinel";
+const PROFILE_TOKEN = "sk-or-profile-token";
+
+describe.skipIf(HOOK_SHELLS.length === 0)(
+  "the real hook, with a variable the profile must control made readonly",
+  () => {
+    const cases = [
+      // The name the profile exports as its own credential, under each scheme.
+      { label: "the api-key profile's own ANTHROPIC_API_KEY", scheme: "api-key", readonly: ["ANTHROPIC_API_KEY"] },
+      { label: "the bearer profile's own ANTHROPIC_AUTH_TOKEN", scheme: "bearer", readonly: ["ANTHROPIC_AUTH_TOKEN"] },
+      // The endpoint: with it stuck, bash sent the profile's key to the caller's URL.
+      { label: "the endpoint the profile sets", scheme: "bearer", readonly: ["ANTHROPIC_BASE_URL"] },
+      // The name the profile clears, which the earlier round already guarded.
+      { label: "a credential the profile clears", scheme: "bearer", readonly: ["ANTHROPIC_API_KEY"] },
+      { label: "two of them at once", scheme: "bearer", readonly: ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"] },
+    ] as const;
+
+    for (const shell of HOOK_SHELLS) {
+      for (const { label, scheme, readonly } of cases) {
+        it(`refuses to launch in ${shell} when ${label} is readonly`, async () => {
+          const h = await harness(apiRegistry(scheme));
+          vi.stubEnv("CLAUSONA_TEST_SECRET", PROFILE_TOKEN);
+          const run = hookRunner(h, await h.run("claude"));
+          const parentEnv = Object.fromEntries(readonly.map((name) => [name, PARENT]));
+
+          const result = run(
+            shell,
+            [
+              ...readonly.map((name) => `readonly ${name}`),
+              "claude",
+              'printf "rc=%s\\n" "$?"',
+              ...readonly.map((name) => `printf "parent ${name}=[%s]\\n" "\${${name}:-<unset>}"`),
+            ].join("\n"),
+            parentEnv,
+          );
+
+          // The tool never started...
+          expect(result.stdout).not.toContain("TOOL STARTED");
+          expect(result.stdout).toContain("rc=1");
+          // ...every stuck variable was named, with no value...
+          for (const name of readonly) {
+            expect(result.stderr).toContain(`clausona: ${name} is read-only in this shell`);
+            expect(result.stdout).toContain(`parent ${name}=[${PARENT}]`);
+          }
+          expect(result.stderr).not.toContain(PARENT);
+          expect(result.stderr).not.toContain(PROFILE_TOKEN);
+        });
+      }
+
+      it(`launches as usual in ${shell} when nothing is readonly`, async () => {
+        const h = await harness(apiRegistry("bearer"));
+        vi.stubEnv("CLAUSONA_TEST_SECRET", PROFILE_TOKEN);
+        const run = hookRunner(h, await h.run("claude"));
+
+        const result = run(
+          shell,
+          ["claude", 'printf "rc=%s\\n" "$?"', `printf "parent ANTHROPIC_API_KEY=[%s]\\n" "$ANTHROPIC_API_KEY"`].join(
+            "\n",
+          ),
+          { ANTHROPIC_API_KEY: PARENT },
+        );
+
+        expect(result.stderr).toBe("");
+        expect(result.stdout).toContain("TOOL STARTED");
+        expect(result.stdout).toContain("rc=0");
+        expect(result.stdout).toContain(`tool ANTHROPIC_AUTH_TOKEN=[${PROFILE_TOKEN}]`);
+        expect(result.stdout).toContain("tool ANTHROPIC_BASE_URL=[https://openrouter.ai/api]");
+        expect(result.stdout).toContain("tool ANTHROPIC_API_KEY=[<unset>]");
+        expect(result.stdout).toContain(`parent ANTHROPIC_API_KEY=[${PARENT}]`);
+      });
+    }
+  },
+);

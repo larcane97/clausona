@@ -5,7 +5,7 @@ import { renderPosixExports } from "./core/shell.js";
 import { trackUsage } from "./core/track-usage.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import { renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
-import { buildProfileEnv } from "./lib/profile-env.js";
+import { buildProfileEnv, controlledEnvKeys } from "./lib/profile-env.js";
 import { parseProfileRef, profileId } from "./lib/profile-ref.js";
 import {
   addProfile,
@@ -552,11 +552,15 @@ export async function runCommand(command: string, args: string[]) {
       const profile = id ? registry.profiles[id] : undefined;
       if (!id || !profile) return "";
 
-      const { env, unset, warnings } = await buildProfileEnv(id, profile);
+      const built = await buildProfileEnv(id, profile);
+      const { env, unset, warnings } = built;
       // Repeated on every launch on purpose: a warning here means a persistent
       // misconfiguration, and it should keep showing until the profile is fixed.
       for (const warning of warnings) process.stderr.write(`  ${warnIcon} ${warning}\n`);
-      if (!jsonFlag(args)) return renderPosixExports(env, unset);
+      // The guard list covers what the profile sets as well as what it clears: on POSIX a
+      // name it cannot export is as bad as one it cannot unset. Windows has no readonly
+      // variables, so the JSON form below is unchanged.
+      if (!jsonFlag(args)) return renderPosixExports(env, unset, controlledEnvKeys(profile, built));
       // null is how the PowerShell hook learns to remove a variable: it hands the value to
       // SetEnvironmentVariable, which deletes the variable for $null. With nothing to clear
       // this is JSON.stringify(env) exactly, so a subscription profile's output is unchanged.

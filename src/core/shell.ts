@@ -13,17 +13,21 @@ export function isPosixEnvName(key: string): boolean {
 }
 
 /**
- * Emits one guarded unset for each variable a run must not inherit, then `export
- * KEY='VALUE'` lines. The hook evals both inside its subshell, so an unset hides the
- * caller's own value from the tool without touching the caller's shell.
+ * Emits the environment one run needs: a guard over every name the profile must control,
+ * then the `unset`s, then `export KEY='VALUE'` lines. The hook evals all of it inside its
+ * subshell, so the caller's own shell is untouched.
  *
- * The guard is for a variable the user made `readonly`, which no unset can remove. A plain
- * `unset` then fails the wrong way in both shells: bash carries on and the tool gets the
- * caller's credential next to the profile's; zsh abandons the rest of the eval and the tool
- * runs on the default account. So each unset is first tried in a throwaway subshell, and a
- * variable that will not go ends the hook's subshell before the tool starts - fail closed,
- * with the name (never the value) on stderr. Plain POSIX, and no `!`, since this is eval'd
- * in whatever shell the user has.
+ * The guard is for a variable the user made `readonly`, which can be neither unset nor
+ * exported. Without it both shells fail the wrong way: bash reports the error and carries
+ * on, so the tool runs with the caller's credential next to the profile's endpoint, while
+ * zsh abandons the rest of the eval, so the tool runs on the default account. An API
+ * profile launches only if every name it sets or clears ends up exactly as it says, so the
+ * guard probes them all first and, on failure, names each stuck one and ends the hook's
+ * subshell before the tool starts.
+ *
+ * One `unset` of every name in one throwaway subshell is the whole cost on the common path
+ * - one fork per launch, not one per name. A failure re-probes each name on its own, which
+ * only happens on the run that is about to refuse anyway.
  *
  * Single quotes are the only POSIX form in which no character is special, so a value can
  * carry `$`, backticks, and newlines untouched; an embedded quote is closed, escaped, and
@@ -32,20 +36,29 @@ export function isPosixEnvName(key: string): boolean {
  * The key has no such escape - it is interpolated bare - so a key carrying `;` or `$(...)`
  * would turn into extra commands in the `eval` that consumes this output. Callers validate
  * keys before they get here; this filter is the last line of defence for one that did not,
- * and it drops silently because a renderer has nowhere to report to. Unset keys go through
- * it too, though today they are constants.
+ * and it applies to the guarded and unset names too, though today they are constants.
  */
-export function renderPosixExports(env: Record<string, string>, unset: readonly string[] = []): string {
-  const unsets = unset
-    .filter((key) => isPosixEnvName(key))
-    .map(
-      (key) =>
-        `if ( unset ${key} ) 2>/dev/null; then unset ${key}; else printf '%s\\n' 'clausona: ${key} is read-only in this shell, so clausona cannot clear it for this profile. Not starting the tool.' >&2; exit 1; fi`,
+export function renderPosixExports(
+  env: Record<string, string>,
+  unset: readonly string[] = [],
+  guard: readonly string[] = [],
+): string {
+  const cleared = unset.filter((key) => isPosixEnvName(key));
+  // Everything the profile must control: what it clears, and what the caller passed as also
+  // needing to be settable. Duplicates would only make the message repeat.
+  const controlled = [...new Set([...cleared, ...guard.filter((key) => isPosixEnvName(key))])];
+  const lines: string[] = [];
+  if (controlled.length > 0) {
+    const names = controlled.join(" ");
+    lines.push(
+      `if ( unset ${names} ) 2>/dev/null; then :; else for _clausona_name in ${names}; do ( unset $_clausona_name ) 2>/dev/null || printf 'clausona: %s is read-only in this shell, so clausona cannot set or clear it for this profile. Not starting the tool.\\n' $_clausona_name >&2; done; exit 1; fi`,
     );
-  const exports = Object.entries(env)
-    .filter(([key]) => isPosixEnvName(key))
-    .map(([key, value]) => `export ${key}='${value.replace(/'/g, "'\\''")}'`);
-  return [...unsets, ...exports].join("\n");
+  }
+  if (cleared.length > 0) lines.push(`unset ${cleared.join(" ")}`);
+  for (const [key, value] of Object.entries(env)) {
+    if (isPosixEnvName(key)) lines.push(`export ${key}='${value.replace(/'/g, "'\\''")}'`);
+  }
+  return lines.join("\n");
 }
 
 /**

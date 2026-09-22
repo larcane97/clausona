@@ -5,6 +5,7 @@ import type { Profile } from "../types.js";
 import {
   buildProfileEnv,
   CREDENTIAL_ENV_KEYS,
+  controlledEnvKeys,
   displayName,
   RESERVED_ENV_KEYS,
   ROUTING_ENV_KEYS,
@@ -411,6 +412,56 @@ describe("buildProfileEnv", () => {
         const { env, unset } = await buildProfileEnv("claude:glm", profile, deps);
         const names = folded([...Object.keys(env), ...unset]);
         expect(new Set(names).size, JSON.stringify(profile.env)).toBe(names.length);
+      }
+    });
+  });
+
+  /**
+   * On POSIX a name the profile cannot export is as bad as one it cannot unset: the run
+   * would half apply. So the renderer is given the names it sets as well as the ones it
+   * clears, and refuses to launch when any of them is stuck.
+   */
+  describe("controlledEnvKeys", () => {
+    it("covers what an API profile clears and every managed name it sets", async () => {
+      const profile = apiProfile({ env: { ANTHROPIC_MODEL: "glm-5.3", ANTHROPIC_CUSTOM_HEADERS: "X-Team: platform" } });
+      const built = await buildProfileEnv("claude:glm", profile, deps);
+
+      const controlled = controlledEnvKeys(profile, built);
+
+      expect(controlled).toEqual([
+        ...built.unset,
+        "CLAUDE_CONFIG_DIR",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_CUSTOM_HEADERS",
+      ]);
+      // A name of the user's own is not clausona's to insist on.
+      expect(controlled).not.toContain("ANTHROPIC_MODEL");
+      expect(new Set(controlled).size).toBe(controlled.length);
+    });
+
+    it("still covers the profile's own credential name when the key will not resolve", async () => {
+      const profile = apiProfile();
+      const built = await buildProfileEnv("claude:glm", profile, {
+        ...deps,
+        resolveSecret: async () => {
+          throw new Error("no stored secret");
+        },
+      });
+
+      // Cleared rather than set, but controlled either way.
+      expect(controlledEnvKeys(profile, built)).toContain("ANTHROPIC_AUTH_TOKEN");
+    });
+
+    it("is empty for every profile that is not an API profile", async () => {
+      for (const profile of [
+        { tool: "claude", configDir: "/home/u/.claude-work", email: "a@b.c" },
+        { tool: "claude", kind: "subscription", configDir: "/home/u/.claude-work", email: "a@b.c" },
+        { tool: "claude", configDir: "/home/u/.claude", email: "a@b.c", isPrimary: true },
+        { tool: "claude", kind: "api", configDir: "/home/u/.claude-glm", email: "", label: "half-written" },
+      ] as Profile[]) {
+        const built = await buildProfileEnv("claude:x", profile, deps);
+        expect(controlledEnvKeys(profile, built), JSON.stringify(profile)).toEqual([]);
       }
     });
   });
