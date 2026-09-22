@@ -114,11 +114,11 @@ function global:Invoke-ClausonaTool {
   } catch {
     $stderrPath = $null
   }
-  # A caller's $ErrorActionPreference = 'Stop' must not cut the lookup short. 5.1 turns each
-  # line a native command writes to a redirected stderr into an error record, so under Stop
-  # the first warning would throw before $raw is assigned; 7.3+ can do the same to a non-zero
-  # exit. Continue covers the lookup alone: the finally hands the caller's value back before
-  # anything else, so the tool itself runs under the caller's own preference.
+  # A caller's $ErrorActionPreference = 'Stop' must not let a clausona step cut the run short.
+  # 5.1 turns each line a native command writes to a redirected stderr into an error record,
+  # so under Stop the first warning would throw - here, before $raw is assigned; 7.3+ can do
+  # the same to a non-zero exit. Every clausona call below runs under Continue; only the tool
+  # itself gets the caller's own preference back.
   $callerErrorAction = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
   try {
@@ -138,7 +138,6 @@ function global:Invoke-ClausonaTool {
   } catch {
     # A failed lookup must never stop the tool from starting.
   } finally {
-    $ErrorActionPreference = $callerErrorAction
     # Neither must reporting one, hence the inner try. [Console]::Error keeps the warning
     # on stderr, where Write-Host would put it on stdout and corrupt a piped run.
     #
@@ -163,13 +162,27 @@ function global:Invoke-ClausonaTool {
   }
 
   try {
-    if ($Tool -eq "claude") { clausona _sync-plugins *> $null }
+    # Still under Continue, and caught, so neither a warning from the sync nor a clausona that
+    # has gone from PATH can stop the tool from starting.
+    if ($Tool -eq "claude") {
+      try { clausona _sync-plugins *> $null } catch { }
+    }
+    # The tool runs under the caller's own preference, exactly as it would without clausona.
+    $ErrorActionPreference = $callerErrorAction
     $command = Get-Command $Tool -CommandType Application -ErrorAction Stop | Select-Object -First 1
     & $command.Source @ToolArgs
     $exitCode = $LASTEXITCODE
-    if ($Tool -eq "claude") { clausona _track-usage *> $null }
+    # Continue again, and caught, for the bookkeeping: a throw here would skip the line below
+    # and hand the caller an error, or clausona's exit code, in place of the tool's.
+    $ErrorActionPreference = "Continue"
+    if ($Tool -eq "claude") {
+      try { clausona _track-usage *> $null } catch { }
+    }
     $global:LASTEXITCODE = $exitCode
   } finally {
+    # The override is function-local and dies with this scope anyway; this makes it explicit
+    # that no way out of the block - a Ctrl-C during the bookkeeping included - keeps it.
+    $ErrorActionPreference = $callerErrorAction
     foreach ($name in $applied.Keys) {
       [Environment]::SetEnvironmentVariable($name, $applied[$name], "Process")
     }

@@ -160,24 +160,62 @@ describe("renderPowerShellInit", () => {
 
   /**
    * Under a caller's `$ErrorActionPreference = 'Stop'`, 5.1 makes the first line of a
-   * redirected native stderr a terminating error - the lookup would die on the very warning
-   * it exists to replay, before `$raw` is assigned. Continue is scoped to the lookup, and the
-   * tool must still run under the caller's preference, not under ours.
+   * redirected native stderr a terminating error. Every clausona step redirects stderr: the
+   * lookup would die on the very warning it exists to replay, a failing sync would stop the
+   * tool from starting, and a failing usage record would replace the tool's exit code with an
+   * error. So each clausona step runs under Continue, and only the tool runs under the
+   * caller's own preference.
    */
-  it("runs the lookup under Continue and hands the caller's preference back before the tool", () => {
-    // One override and one restore, and no other statement touches the preference.
-    const assignments = (helper.match(/^\s*\$ErrorActionPreference = .*/gm) ?? []).map((line) => line.trim());
-    expect(assignments).toEqual(['$ErrorActionPreference = "Continue"', "$ErrorActionPreference = $callerErrorAction"]);
+  it("runs every clausona step under Continue and only the tool under the caller's preference", () => {
+    // Every statement that touches the preference or does real work, in order. Comments are
+    // skipped - they name these steps too.
+    const steps = helper
+      .split("\n")
+      .filter((line) => !/^\s*#/.test(line))
+      .flatMap((line) => {
+        if (/^\s*\$ErrorActionPreference = "Continue"/.test(line)) return ["Continue"];
+        if (/^\s*\$ErrorActionPreference = \$callerErrorAction/.test(line)) return ["caller's"];
+        if (/\$ErrorActionPreference =/.test(line)) return [`other: ${line.trim()}`];
+        if (/clausona _shell-env/.test(line)) return ["_shell-env"];
+        if (/clausona _sync-plugins/.test(line)) return ["_sync-plugins"];
+        if (/\$command = Get-Command/.test(line)) return ["Get-Command"];
+        if (/& \$command\.Source @ToolArgs/.test(line)) return ["tool"];
+        if (/clausona _track-usage/.test(line)) return ["_track-usage"];
+        if (/\$global:LASTEXITCODE = \$exitCode/.test(line)) return ["LASTEXITCODE"];
+        return [];
+      });
+    expect(steps).toEqual([
+      "Continue",
+      // The two arms of the lookup's if/else.
+      "_shell-env",
+      "_shell-env",
+      // No restore in between: the sync still runs under Continue.
+      "_sync-plugins",
+      "caller's",
+      "Get-Command",
+      "tool",
+      "Continue",
+      "_track-usage",
+      "LASTEXITCODE",
+      // The finally below.
+      "caller's",
+    ]);
+
     // Saved and overridden immediately before the try that holds the lookup...
     expect(helper).toMatch(
       /\$callerErrorAction = \$ErrorActionPreference\s*\n\s*\$ErrorActionPreference = "Continue"\s*\n\s*try \{\s*\n\s*if \(\$stderrPath\) \{\s*\n\s*\$raw = & clausona _shell-env/,
     );
-    // ...restored as the first statement of a finally, so a lookup that threw restores too...
-    expect(helper).toMatch(/\} finally \{\s*\n\s*\$ErrorActionPreference = \$callerErrorAction\s*\n/);
-    // ...and that finally is the lookup's, not the tool's: it closes before the tool starts.
-    const restore = helper.indexOf("$ErrorActionPreference = $callerErrorAction");
-    expect(restore).toBeGreaterThan(helper.lastIndexOf("clausona _shell-env $Tool --json"));
-    expect(restore).toBeLessThan(helper.indexOf("& $command.Source @ToolArgs"));
+    // ...handed back on the line before the tool is looked up...
+    expect(helper).toMatch(/\$ErrorActionPreference = \$callerErrorAction\s*\n\s*\$command = Get-Command/);
+    // ...and handed back again as the first statement of the finally that restores the
+    // environment, so no way out of the block leaves Continue behind.
+    expect(helper).toMatch(
+      /\} finally \{\s*\n(?:\s*#.*\n)*\s*\$ErrorActionPreference = \$callerErrorAction\s*\n\s*foreach \(\$name in \$applied\.Keys\)/,
+    );
+    // Continue alone does not cover a clausona that is no longer on PATH, so each helper call
+    // is also caught - neither can stop the tool from starting or skip LASTEXITCODE.
+    expect(helper).toMatch(/try \{ clausona _sync-plugins \*> \$null \} catch \{ \}/);
+    expect(helper).toMatch(/try \{ clausona _track-usage \*> \$null \} catch \{ \}/);
   });
 
   // 5.1 has no `?:` either, and `[Environment]::GetEnvironmentVariable` is the only
@@ -194,8 +232,8 @@ describe("renderPowerShellInit", () => {
   });
 
   it("keeps _sync-plugins and _track-usage claude-only and preserves the exit code", () => {
-    expect(out).toMatch(/if \(\$Tool -eq "claude"\) \{ clausona _sync-plugins/);
-    expect(out).toMatch(/if \(\$Tool -eq "claude"\) \{ clausona _track-usage/);
+    expect(out).toMatch(/if \(\$Tool -eq "claude"\) \{\s*\n\s*try \{ clausona _sync-plugins/);
+    expect(out).toMatch(/if \(\$Tool -eq "claude"\) \{\s*\n\s*try \{ clausona _track-usage/);
     expect(out).toMatch(/\$global:LASTEXITCODE = \$exitCode/);
   });
 

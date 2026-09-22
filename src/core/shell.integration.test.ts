@@ -393,12 +393,14 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
     // can be asserted the way the POSIX harness does; `_shell-env <tool> --json` is the only
     // one that answers. The redirect leads the line so `echo` never ends in a bare digit that
     // cmd.exe would read as a handle to redirect. The hook only ever passes fixed words here,
-    // so the arguments need no escaping.
+    // so the arguments need no escaping. With CLAUSONA_TEST_WARN set, every subcommand also
+    // writes that word to stderr, the way a real profile warning does.
     writeFileSync(
       path.join(binDir, "clausona.cmd"),
       [
         "@echo off",
         '>>"%CLAUSONA_TEST_LOG%" echo %1 %2',
+        "if defined CLAUSONA_TEST_WARN echo %CLAUSONA_TEST_WARN% 1>&2",
         'if not "%1"=="_shell-env" exit /b 0',
         `echo ${escapeForCmdEcho(JSON.stringify(env))}`,
         "exit /b 0",
@@ -512,6 +514,35 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout.trim()).toBe("42");
+    },
+    POWERSHELL_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "survives a caller's ErrorActionPreference of Stop when every clausona step warns",
+    () => {
+      // 5.1 turns a redirected native stderr line into a terminating error under Stop. Each
+      // clausona call redirects stderr, so without the Continue override the lookup would
+      // die before applying the profile, and the sync would stop the tool from starting.
+      const workDir = "C:\\clausona-test\\work";
+      const warning = "clausona-test-warning";
+      const harness = makeWindowsHarness({ CLAUDE_CONFIG_DIR: workDir });
+
+      const result = runPowerShell(
+        harness,
+        ["$ErrorActionPreference = 'Stop'", "claude", '"rc=$LASTEXITCODE"', '"pref=$ErrorActionPreference"'].join("\n"),
+        { CLAUSONA_TEST_WARN: warning, CLAUSONA_TEST_TOOL_EXIT: "7" },
+      );
+
+      // The tool started, with the profile applied...
+      expect(result.stdout).toContain(workDir);
+      // ...the lookup's warning was replayed rather than thrown...
+      expect(result.stderr).toContain(warning);
+      // ...the one from _track-usage after the tool neither threw nor replaced its exit code...
+      expect(result.stdout).toContain("rc=7");
+      // ...and the caller's own preference is what it was.
+      expect(result.stdout).toContain("pref=Stop");
+      expect(harness.log()).toEqual(["_shell-env claude", "_sync-plugins", "_track-usage"]);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );
