@@ -640,21 +640,25 @@ export async function runCommand(command: string, args: string[]) {
 export async function bootstrapInitFromCurrentState() {
   const accounts = await discoverAccounts();
   const existing = await loadRegistry();
-  // Registry keys are ids (`claude:work`); init takes bare names and adds the tool itself.
-  const nameOf = (id: string) => id.split(":").slice(1).join(":");
+  // Registry keys are ids (`claude:work`), but init takes bare names and adds the tool
+  // itself - an id passed through would come back as `claude:claude:work`.
+  const bareName = (id: string | undefined) =>
+    existing && id && existing.profiles[id] ? parseProfileRef(id, existing).name : undefined;
   const profileNames = Object.fromEntries(
     accounts.map((account) => {
-      const registered = Object.entries(existing?.profiles ?? {}).find(
-        ([, profile]) => profile.configDir === account.configDir,
-      )?.[0];
-      if (registered) return [account.configDir, nameOf(registered)];
-      return [account.configDir, account.isPrimary ? "default" : defaultProfileName(account.configDir)];
+      const registered = Object.keys(existing?.profiles ?? {}).find(
+        (id) => existing?.profiles[id].configDir === account.configDir,
+      );
+      return [
+        account.configDir,
+        bareName(registered) ?? (account.isPrimary ? "default" : defaultProfileName(account.configDir)),
+      ];
     }),
   );
 
   return {
     accounts,
     profileNames,
-    defaultProfile: existing?.activeProfiles?.claude ?? Object.values(profileNames)[0] ?? "default",
+    defaultProfile: bareName(existing?.activeProfiles?.claude) ?? Object.values(profileNames)[0] ?? "default",
   };
 }

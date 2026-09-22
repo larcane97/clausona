@@ -132,15 +132,6 @@ async function execCommand(
   });
 }
 
-function defaultProfileNameForConfigDir(configDir: string) {
-  const base = path.basename(configDir);
-  if (base === ".claude" || base === ".codex") {
-    return "default";
-  }
-
-  return defaultProfileName(configDir);
-}
-
 async function ensureStorage() {
   await mkdir(CLAUSONA_DIR, { recursive: true });
 }
@@ -688,12 +679,16 @@ export async function initializeRegistry(options: {
   mergeSessions?: boolean;
   mergeSessionsMap?: Record<string, boolean>;
 }) {
+  // The same default the init command itself uses, for an account the caller left unnamed.
+  const nameFor = (account: DiscoveredAccount) =>
+    options.profileNames[account.configDir] ?? (account.isPrimary ? "default" : defaultProfileName(account.configDir));
+
   // Every name is checked before anything is written. These are new profiles, so they get
   // the same rules as `add`: the name rule, and no two ids of one tool that differ only by
   // case - they would share a backup directory on a case-insensitive filesystem.
   const initIds = new Map<string, string>();
   for (const account of options.accounts) {
-    const name = options.profileNames[account.configDir] ?? defaultProfileNameForConfigDir(account.configDir);
+    const name = nameFor(account);
     const nameCheck = validateProfileName(name);
     if (!nameCheck.ok) throw new Error(nameCheck.error);
     const id = profileId(account.tool, name);
@@ -726,7 +721,7 @@ export async function initializeRegistry(options: {
   };
 
   for (const account of options.accounts) {
-    const baseName = options.profileNames[account.configDir] ?? defaultProfileNameForConfigDir(account.configDir);
+    const baseName = nameFor(account);
     const id = profileId(account.tool, baseName);
     const mergeSessions = account.isPrimary
       ? undefined
@@ -768,14 +763,12 @@ export async function initializeRegistry(options: {
   const claudeAccounts = options.accounts.filter((a) => a.tool === "claude");
   const codexAccounts = options.accounts.filter((a) => a.tool === "codex");
   if (claudeAccounts.length > 0) {
-    const fallback =
-      options.profileNames[claudeAccounts[0].configDir] ?? defaultProfileNameForConfigDir(claudeAccounts[0].configDir);
+    const fallback = nameFor(claudeAccounts[0]);
     const wanted = profileId("claude", options.defaultProfile);
     registry.activeProfiles.claude = registry.profiles[wanted] ? wanted : profileId("claude", fallback);
   }
   if (codexAccounts.length > 0) {
-    const fallback =
-      options.profileNames[codexAccounts[0].configDir] ?? defaultProfileNameForConfigDir(codexAccounts[0].configDir);
+    const fallback = nameFor(codexAccounts[0]);
     registry.activeProfiles.codex = profileId("codex", fallback);
   }
 
@@ -784,7 +777,7 @@ export async function initializeRegistry(options: {
 
   // Seed seenSessions for each registered profile (claude only — codex usage tracking is v1 OOS)
   for (const account of options.accounts) {
-    const baseName = options.profileNames[account.configDir] ?? defaultProfileNameForConfigDir(account.configDir);
+    const baseName = nameFor(account);
     const id = profileId(account.tool, baseName);
     if (account.tool === "claude") {
       await seedSeenSessions(id, account.configDir);
