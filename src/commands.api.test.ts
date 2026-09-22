@@ -980,6 +980,19 @@ describe("help", () => {
     expect(help).toContain("the shell that runs claude");
   });
 
+  it("tells `list` readers why an API profile's quota columns are a dash", async () => {
+    const h = await harness();
+
+    const help = await h.run("list", "--help");
+
+    // Without this the dash is indistinguishable from a quota lookup that failed.
+    expect(help).toContain("API PROFILES");
+    expect(help).toContain("show a dash");
+    expect(help).toContain("subscription window to report");
+    expect(help).toContain("It is not queried");
+    expect(help).toContain("label rather than an account email");
+  });
+
   it("points at add --api from the top-level usage", async () => {
     const h = await harness();
 

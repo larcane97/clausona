@@ -40,6 +40,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.doUnmock("./secrets.js");
   vi.doUnmock("../core/process.js");
+  vi.doUnmock("../core/quota-store.js");
   vi.resetModules();
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
   const unexpected = spawned;
@@ -1490,6 +1491,73 @@ describe("removing an API profile", () => {
 
     expect(h.registry().profiles["claude:glm"]).toBeUndefined();
     expect(h.storedSecrets()).toEqual({ "claude:other": "sk-test-other" });
+  });
+});
+
+describe("listProfiles with an API profile", () => {
+  /** Records what listProfiles hands the quota collector, and keeps it off the network. */
+  function recordQuotaTargets() {
+    const targets: { id: string }[] = [];
+    vi.doMock("../core/quota-store.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../core/quota-store.js")>();
+      return {
+        ...actual,
+        collectQuotas: async (given: { id: string }[]) => {
+          targets.push(...given);
+          return {};
+        },
+      };
+    });
+    return targets;
+  }
+
+  // An API profile has no plan limits and no OAuth credential. Left as a target it costs
+  // a credential read - the macOS Keychain, for claude - and comes back `missing`, which
+  // in the table reads exactly like a subscription whose sign-in has lapsed.
+  it("never makes an API profile a quota target", async () => {
+    const targets = recordQuotaTargets();
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions());
+
+    await h.service.listProfiles({ quota: true });
+
+    expect(targets.map((target) => target.id)).toEqual(["claude:default"]);
+  });
+
+  it("leaves an API profile with no quota, so no state and no footnote", async () => {
+    recordQuotaTargets();
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions());
+
+    const items = await h.service.listProfiles({ quota: true });
+
+    expect(items.find((item) => item.name === "claude:glm")?.quota).toBeUndefined();
+  });
+
+  it("carries kind and label, and no key, into the listing", async () => {
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions());
+
+    const items = await h.service.listProfiles();
+    const api = items.find((item) => item.name === "claude:glm");
+
+    expect(api).toMatchObject({ kind: "api", label: "gpu-box:30000", email: "" });
+    // `list --json` is JSON.stringify of exactly this array. The api block holds a
+    // reference, not a value, but neither belongs in a listing.
+    const json = JSON.stringify(items);
+    expect(json).not.toContain(KEY);
+    expect(json).not.toContain("secret");
+    expect(json).not.toContain("keychain");
+  });
+
+  it("leaves a subscription profile's listed fields untouched", async () => {
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions());
+
+    const items = await h.service.listProfiles();
+    const subscription = items.find((item) => item.name === "claude:default");
+
+    expect(subscription).toMatchObject({ kind: undefined, label: undefined, email: "primary@example.com" });
   });
 });
 

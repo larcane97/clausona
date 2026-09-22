@@ -25,6 +25,7 @@ import {
   fail as xMark,
   yellow,
 } from "./cli-style.js";
+import { displayName } from "./profile-env.js";
 
 // ─── Timezone ────────────────────────────────────────────────────────
 export function localTimezoneLabel(): string {
@@ -327,8 +328,11 @@ export function renderList(items: ProfileListItem[], options: { width?: number }
           return item.isActive ? accent(name) : name;
         }
         case "account": {
-          const email = truncate(item.email, layout.accountWidth - 1);
-          return item.isActive ? email : secondary(email);
+          // An API profile has no account email; its label stands in, exactly as it does
+          // in `config --show`. The dash is for a hand-edited profiles.json that carries
+          // neither — a blank cell there reads as a bug rather than as "nothing to show".
+          const account = truncate(displayName(item).trim() || "—", layout.accountWidth - 1);
+          return item.isActive ? account : secondary(account);
         }
         case "session":
           return quotaCell(item.quota?.session, item.quota?.state, layout.reset, now);

@@ -113,7 +113,11 @@ export type DiscoveredAccount = {
 export type ProfileListItem = {
   name: string;
   tool: ToolName;
+  /** undefined means "subscription", as on Profile. */
+  kind?: "subscription" | "api";
   email: string;
+  /** Display name for profiles that have no account email. */
+  label?: string;
   orgName?: string;
   configDir: string;
   isPrimary: boolean;

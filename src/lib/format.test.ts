@@ -248,6 +248,78 @@ describe("renderList width", () => {
   });
 });
 
+describe("renderList with API profiles", () => {
+  const zero = { cost: 0, inputTokens: 0, outputTokens: 0 };
+
+  const subscription: ProfileListItem = {
+    name: "claude:work",
+    tool: "claude",
+    email: "you@example.com",
+    configDir: "/home/u/.claude-work",
+    isPrimary: false,
+    isActive: true,
+    today: zero,
+    week: { cost: 12.5, inputTokens: 1234, outputTokens: 567 },
+    month: zero,
+    total: zero,
+    quota: snapshot({ session: { usedPercent: 6, resetsAt: null }, weekly: { usedPercent: 41, resetsAt: null } }),
+  };
+
+  const api: ProfileListItem = {
+    name: "claude:glm",
+    tool: "claude",
+    kind: "api",
+    email: "",
+    label: "gpu-box",
+    configDir: "/home/u/.claude-glm",
+    isPrimary: false,
+    isActive: false,
+    today: zero,
+    week: zero,
+    month: zero,
+    total: zero,
+  };
+
+  const render = (items: ProfileListItem[]) => stripAnsi(renderList(items, { width: 120 }));
+  const rowFor = (out: string, name: string) => out.split("\n").find((line) => line.includes(name)) ?? "";
+
+  it("shows the label in the account column for an API profile", () => {
+    expect(rowFor(render([subscription, api]), "claude:glm")).toBe(
+      "    claude:glm          gpu-box                         —          —          —           —             —",
+    );
+  });
+
+  // Pinned rather than matched loosely: the account column is shared with every
+  // subscription profile, so a change made for API profiles must not move a single
+  // column of the output a subscription user already reads.
+  it("leaves a subscription row and the header exactly as they were", () => {
+    const lines = render([subscription, api]).split("\n");
+
+    expect(lines[3]).toBe(
+      "    PROFILE             ACCOUNT                         5H         7D         COST        INPUT         OUTPUT    ",
+    );
+    expect(rowFor(lines.join("\n"), "claude:work")).toBe(
+      "  ▸ claude:work         you@example.com                 6%         41%        $12.50      1,234         567",
+    );
+  });
+
+  it("does not render a quota state or a quota footnote for an API profile", () => {
+    const out = render([subscription, api]);
+
+    expect(rowFor(out, "claude:glm")).not.toMatch(/missing|expired|error|cooldown/);
+    expect(out).not.toContain("no stored credential");
+  });
+
+  // addApiProfile and `config --label` both refuse a blank label, so only a hand-edited
+  // profiles.json gets here. An empty cell reads as a rendering bug; a dash reads as
+  // "nothing to show", which is what every other empty cell in this table says.
+  it("falls back to a dash when a profile carries neither label nor email", () => {
+    expect(rowFor(render([subscription, { ...api, label: "  " }]), "claude:glm")).toBe(
+      "    claude:glm          —                               —          —          —           —             —",
+    );
+  });
+});
+
 describe("quotaBar", () => {
   it("fills proportionally and always spans ten cells", () => {
     expect(quotaBar(0)).toBe("░░░░░░░░░░");

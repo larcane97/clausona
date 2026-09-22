@@ -489,6 +489,13 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${accent("--no-quota".padEnd(14))}${dim("Skip the plan-quota lookup (no network access)")}`,
         `    ${accent("--no-renew".padEnd(14))}${dim("Never renew a lapsed token; report it as expired")}`,
         "",
+        `  ${bold("API PROFILES")}`,
+        `    ${dim("ACCOUNT shows the profile's label rather than an account email, and the 5H")}`,
+        `    ${dim("and 7D columns show a dash: an API endpoint bills per token and has no")}`,
+        `    ${dim("subscription window to report. It is not queried, so --refresh and")}`,
+        `    ${dim("--no-quota change nothing for it. COST and INPUT/OUTPUT still count what")}`,
+        `    ${dim("clausona recorded locally.")}`,
+        "",
       ].join("\n");
 
     case "usage":

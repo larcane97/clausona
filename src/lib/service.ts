@@ -847,11 +847,15 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
 
   let quotas: Record<string, QuotaSnapshot> = {};
   if (options.quota) {
-    const targets: QuotaTarget[] = entries.map(([id, profile]) => ({
-      id,
-      tool: profile.tool,
-      configDir: profile.configDir,
-    }));
+    // An API profile has no plan limits and no OAuth credential. Left in, readCredential
+    // returns null and the row renders as `missing`, which reads like an expired account.
+    const targets: QuotaTarget[] = entries
+      .filter(([, profile]) => profile.kind !== "api")
+      .map(([id, profile]) => ({
+        id,
+        tool: profile.tool,
+        configDir: profile.configDir,
+      }));
     quotas = await collectQuotas(targets, { refresh: options.refresh, renew: options.renew });
   }
 
@@ -860,7 +864,9 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
     return {
       name: id,
       tool: profile.tool,
+      kind: profile.kind,
       email: profile.email,
+      label: profile.label,
       orgName: profile.orgName,
       configDir: profile.configDir,
       isPrimary: Boolean(profile.isPrimary),
@@ -880,11 +886,15 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
  * can paint immediately and fill quota in once the network settles.
  */
 export async function fetchProfileQuotas(
-  items: Pick<ProfileListItem, "name" | "tool" | "configDir">[],
+  items: Pick<ProfileListItem, "name" | "tool" | "kind" | "configDir">[],
   options: { refresh?: boolean; renew?: boolean } = {},
 ): Promise<Record<string, QuotaSnapshot>> {
   return collectQuotas(
-    items.map((item) => ({ id: item.name, tool: item.tool, configDir: item.configDir })),
+    // Same exclusion as listProfiles: an API profile has no plan quota to read, so
+    // asking for one costs a credential lookup and answers `missing`.
+    items
+      .filter((item) => item.kind !== "api")
+      .map((item) => ({ id: item.name, tool: item.tool, configDir: item.configDir })),
     options,
   );
 }
