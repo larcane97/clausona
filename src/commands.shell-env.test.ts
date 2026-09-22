@@ -1,0 +1,310 @@
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * `_shell-env` is the one command whose stdout the user's shell runs:
+ * `eval "$(clausona _shell-env claude)"`. Everything here drives the command case end to
+ * end rather than the renderer alone, because the interesting failures (a hostile key in
+ * a hand-edited profiles.json, a secret that will not resolve, a registry that is not
+ * there) live in the path between loading the registry and printing a line.
+ *
+ * The seam is HOME: service.ts derives its ~/.clausona path from homedir() at import
+ * time, so stubbing HOME and re-importing the module graph points the whole command at a
+ * temp directory. Same pattern as src/lib/secrets.test.ts.
+ */
+
+const temps: string[] = [];
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  vi.resetModules();
+  for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+type Harness = {
+  home: string;
+  /** Directory the fixture profiles point at. */
+  workDir: string;
+  /** stderr chunks the command wrote, one per warning. */
+  warnings: string[];
+  run: (...args: string[]) => Promise<string>;
+};
+
+/**
+ * `makeRegistry` returns the profiles.json contents; returning undefined writes no file
+ * at all, which is the "clausona was never initialised" case.
+ */
+async function harness(makeRegistry: (home: string, workDir: string) => unknown): Promise<Harness> {
+  const home = mkdtempSync(path.join(tmpdir(), "clausona-shell-env-"));
+  temps.push(home);
+  const workDir = path.join(home, ".claude-work");
+  mkdirSync(path.join(home, ".clausona"), { recursive: true });
+  mkdirSync(path.join(home, ".claude"), { recursive: true });
+  mkdirSync(workDir, { recursive: true });
+
+  const registry = makeRegistry(home, workDir);
+  if (registry !== undefined) {
+    writeFileSync(path.join(home, ".clausona", "profiles.json"), JSON.stringify(registry));
+  }
+
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("USERPROFILE", home);
+  vi.resetModules();
+  const { runCommand } = await import("./commands.js");
+
+  const warnings: string[] = [];
+  vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+    warnings.push(String(chunk));
+    return true;
+  });
+
+  return { home, workDir, warnings, run: (...args: string[]) => runCommand("_shell-env", args) };
+}
+
+function registryWith(profile: Record<string, unknown>, home: string, id = "claude:work") {
+  return {
+    version: 2,
+    primarySources: { claude: path.join(home, ".claude") },
+    activeProfiles: { claude: id },
+    profiles: { [id]: profile },
+  };
+}
+
+/** Reverses renderPosixExports for values that carry no newline. */
+function parseExports(out: string): Record<string, string> {
+  const parsed: Record<string, string> = {};
+  for (const line of out.split("\n")) {
+    if (line === "") continue;
+    const match = line.match(/^export ([A-Za-z_][A-Za-z0-9_]*)='([\s\S]*)'$/);
+    expect(match, line).not.toBeNull();
+    if (match) parsed[match[1] as string] = (match[2] as string).replaceAll("'\\''", "'");
+  }
+  return parsed;
+}
+
+describe("_shell-env", () => {
+  // Regression test for a shell-injection hole: keys used to be interpolated bare, so
+  // `export A; touch /tmp/clausona-pwned; B='x'` came out of a hand-edited profiles.json
+  // and the shell's eval ran it as three commands.
+  it("never emits a key carrying shell metacharacters, and names each one on stderr", async () => {
+    const hostile = {
+      "A; touch /tmp/clausona-pwned; B": "x",
+      "A $(id)": "x",
+      "A `id`": "x",
+      "A B": "x",
+      "A=B": "x",
+      "9LEADING": "x",
+    };
+    const h = await harness((home, workDir) =>
+      registryWith(
+        { tool: "claude", configDir: workDir, email: "you@example.com", env: { ...hostile, ANTHROPIC_MODEL: "m" } },
+        home,
+      ),
+    );
+
+    const out = await h.run("claude");
+
+    for (const line of out.split("\n")) expect(line).toMatch(/^export [A-Za-z_][A-Za-z0-9_]*='/);
+    expect(out).not.toContain("touch");
+    expect(out).not.toContain("$(id)");
+    expect(out).not.toContain("`id`");
+    expect(parseExports(out)).toEqual({ CLAUDE_CONFIG_DIR: h.workDir, ANTHROPIC_MODEL: "m" });
+
+    expect(h.warnings).toHaveLength(Object.keys(hostile).length);
+    for (const key of Object.keys(hostile)) {
+      expect(
+        h.warnings.some((w) => w.includes(key)),
+        key,
+      ).toBe(true);
+    }
+    expect(h.warnings.every((w) => w.includes("not a valid environment variable name"))).toBe(true);
+  });
+
+  // kind: undefined means subscription, and those profiles must keep behaving exactly as
+  // they did before API profiles existed - one export, or none at all.
+  it("emits only the config-dir export for a subscription profile", async () => {
+    const h = await harness((home, workDir) =>
+      registryWith({ tool: "claude", configDir: workDir, email: "you@example.com" }, home),
+    );
+    expect(await h.run("claude")).toBe(`export CLAUDE_CONFIG_DIR='${h.workDir}'`);
+    expect(h.warnings).toEqual([]);
+  });
+
+  it("emits nothing for a primary subscription profile", async () => {
+    const h = await harness((home) =>
+      registryWith({ tool: "claude", configDir: path.join(home, ".claude"), email: "a@b.c", isPrimary: true }, home),
+    );
+    expect(await h.run("claude")).toBe("");
+    expect(h.warnings).toEqual([]);
+  });
+
+  it("keeps the other variables and warns once when the secret will not resolve", async () => {
+    const h = await harness((home, workDir) =>
+      registryWith(
+        {
+          tool: "claude",
+          kind: "api",
+          configDir: workDir,
+          email: "",
+          label: "local",
+          api: {
+            baseUrl: "http://localhost:8000",
+            authScheme: "bearer",
+            secret: { source: "env", name: "CLAUSONA_TEST_ABSENT_SECRET" },
+          },
+          env: { ANTHROPIC_MODEL: "m" },
+        },
+        home,
+      ),
+    );
+
+    const out = await h.run("claude");
+
+    expect(parseExports(out)).toEqual({
+      CLAUDE_CONFIG_DIR: h.workDir,
+      ANTHROPIC_BASE_URL: "http://localhost:8000",
+      ANTHROPIC_MODEL: "m",
+    });
+    expect(h.warnings).toHaveLength(1);
+    expect(h.warnings[0]).toContain("CLAUSONA_TEST_ABSENT_SECRET");
+  });
+
+  it("drops a reserved key from the env map without duplicating the export", async () => {
+    const h = await harness((home, workDir) =>
+      registryWith(
+        {
+          tool: "claude",
+          configDir: workDir,
+          email: "you@example.com",
+          env: { CLAUDE_CONFIG_DIR: "/evil", ANTHROPIC_MODEL: "m" },
+        },
+        home,
+      ),
+    );
+
+    const out = await h.run("claude");
+
+    expect(out.match(/^export CLAUDE_CONFIG_DIR=/gm)).toHaveLength(1);
+    expect(out).not.toContain("/evil");
+    expect(parseExports(out)).toEqual({ CLAUDE_CONFIG_DIR: h.workDir, ANTHROPIC_MODEL: "m" });
+    expect(h.warnings).toHaveLength(1);
+    expect(h.warnings[0]).toContain("CLAUDE_CONFIG_DIR");
+  });
+
+  // The PowerShell hook reads --json, so the two paths must describe the same environment.
+  it("describes the same environment through --json as through the export lines", async () => {
+    const h = await harness((home, workDir) =>
+      registryWith(
+        {
+          tool: "claude",
+          kind: "api",
+          configDir: workDir,
+          email: "",
+          label: "local",
+          api: {
+            baseUrl: "http://localhost:8000",
+            authScheme: "api-key",
+            secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
+          },
+          env: { ANTHROPIC_MODEL: "m", "A B": "dropped", API_TIMEOUT_MS: "600000" },
+        },
+        home,
+      ),
+    );
+    vi.stubEnv("CLAUSONA_TEST_SECRET", "sk-not-a-real-key");
+
+    const posix = parseExports(await h.run("claude"));
+    const json = JSON.parse(await h.run("claude", "--json")) as Record<string, string>;
+
+    expect(json).toEqual(posix);
+    expect(json).toEqual({
+      CLAUDE_CONFIG_DIR: h.workDir,
+      ANTHROPIC_BASE_URL: "http://localhost:8000",
+      ANTHROPIC_API_KEY: "sk-not-a-real-key",
+      ANTHROPIC_MODEL: "m",
+      API_TIMEOUT_MS: "600000",
+    });
+  });
+
+  describe("degenerate input", () => {
+    it("returns nothing when no tool is named", async () => {
+      const h = await harness((home, workDir) =>
+        registryWith({ tool: "claude", configDir: workDir, email: "a@b.c" }, home),
+      );
+      await expect(h.run()).resolves.toBe("");
+      await expect(h.run("--json")).resolves.toBe("");
+    });
+
+    it("returns nothing for a tool clausona does not manage", async () => {
+      const h = await harness((home, workDir) =>
+        registryWith({ tool: "claude", configDir: workDir, email: "a@b.c" }, home),
+      );
+      await expect(h.run("gemini")).resolves.toBe("");
+    });
+
+    it("returns nothing when there is no registry at all", async () => {
+      const h = await harness(() => undefined);
+      await expect(h.run("claude")).resolves.toBe("");
+    });
+
+    it("returns nothing when the tool has no active profile", async () => {
+      const h = await harness(() => ({
+        version: 2,
+        primarySources: {},
+        activeProfiles: {},
+        profiles: {},
+      }));
+      await expect(h.run("claude")).resolves.toBe("");
+    });
+
+    it("returns nothing when the active id is not in the registry", async () => {
+      const h = await harness((home) => ({
+        version: 2,
+        primarySources: { claude: path.join(home, ".claude") },
+        activeProfiles: { claude: "claude:ghost" },
+        profiles: {},
+      }));
+      await expect(h.run("claude")).resolves.toBe("");
+    });
+  });
+
+  // The end of the real path: what the shell function actually does with this stdout.
+  it.skipIf(process.platform === "win32")("survives eval in a real shell with a hostile secret", async () => {
+    const secret = "a'b$c`d\ne;f\\g";
+    const h = await harness((home, workDir) =>
+      registryWith(
+        {
+          tool: "claude",
+          kind: "api",
+          configDir: workDir,
+          email: "",
+          label: "local",
+          api: {
+            baseUrl: "http://localhost:8000",
+            authScheme: "bearer",
+            secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
+          },
+        },
+        home,
+      ),
+    );
+    vi.stubEnv("CLAUSONA_TEST_SECRET", secret);
+
+    const out = await h.run("claude");
+    const outPath = path.join(h.home, "shell-env.sh");
+    writeFileSync(outPath, out);
+
+    const result = spawnSync("/bin/sh", ["-c", `eval "$(cat '${outPath}')"\nprintf %s "$ANTHROPIC_AUTH_TOKEN"`], {
+      encoding: "utf8",
+      timeout: 5000,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(secret);
+  });
+});
