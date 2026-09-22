@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -70,6 +70,57 @@ describe("file backend (forced via the backend override)", () => {
 
     await deleteSecret("claude:file-test", "file");
     await expect(resolveSecretFresh("claude:file-test", { source: "keychain" }, "file")).rejects.toThrow(
+      /no stored secret/,
+    );
+  });
+
+  // Regression test for a data-loss bug: readSecretsFile used to collapse every read
+  // failure (corrupt file, EACCES, ...) into `{}`, and storeSecret/deleteSecret do a
+  // read-modify-write over that result — so a corrupt file made the next store/delete
+  // silently rewrite secrets.json with only the entry being touched, destroying every
+  // other profile's credential with no error. The corruption here appends garbage after
+  // valid JSON (a truncated/partial-write is a realistic way this happens), which keeps
+  // "secret-a" present in the raw bytes but makes the file fail to parse - so this test
+  // can tell "rejected without touching the file" apart from "silently lost the data".
+  it("does not destroy existing secrets when the file is corrupt", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "clausona-secrets-home-"));
+    temps.push(home);
+    vi.stubEnv("HOME", home);
+    vi.resetModules();
+    const { storeSecret } = await import("./secrets.js");
+
+    await storeSecret("claude:a", "secret-a", "file");
+
+    const secretsPath = path.join(home, ".clausona", "secrets.json");
+    const validContent = readFileSync(secretsPath, "utf8");
+    writeFileSync(secretsPath, `${validContent.trimEnd()}not json`);
+
+    await expect(storeSecret("claude:b", "secret-b", "file")).rejects.toThrow();
+    expect(readFileSync(secretsPath, "utf8")).toContain("secret-a");
+  });
+
+  it("rejects when the stored JSON is not an object", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "clausona-secrets-home-"));
+    temps.push(home);
+    vi.stubEnv("HOME", home);
+    vi.resetModules();
+    const { resolveSecret: resolveSecretFresh } = await import("./secrets.js");
+
+    const secretsPath = path.join(home, ".clausona", "secrets.json");
+    mkdirSync(path.dirname(secretsPath), { recursive: true });
+    writeFileSync(secretsPath, "[]");
+
+    await expect(resolveSecretFresh("claude:x", { source: "keychain" }, "file")).rejects.toThrow(secretsPath);
+  });
+
+  it("treats a missing file as no stored secret, not a read error", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "clausona-secrets-home-"));
+    temps.push(home);
+    vi.stubEnv("HOME", home);
+    vi.resetModules();
+    const { resolveSecret: resolveSecretFresh } = await import("./secrets.js");
+
+    await expect(resolveSecretFresh("claude:missing", { source: "keychain" }, "file")).rejects.toThrow(
       /no stored secret/,
     );
   });

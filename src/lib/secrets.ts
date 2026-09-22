@@ -38,12 +38,32 @@ export async function detectBackend(platform: NodeJS.Platform = process.platform
   return "file";
 }
 
+/**
+ * Only a missing file means "no secrets yet". Every other failure — unreadable
+ * (EACCES), truncated, or otherwise not a JSON object — throws instead of being
+ * treated as empty: storeSecret/deleteSecret read-modify-write this result, so
+ * silently returning `{}` for a corrupt or unreadable file would make the next
+ * write replace it with only the entry being touched, destroying every other
+ * profile's stored credential without any error surfacing.
+ */
 async function readSecretsFile(): Promise<Record<string, string>> {
+  let raw: string;
   try {
-    return JSON.parse(await readFile(SECRETS_PATH, "utf8")) as Record<string, string>;
-  } catch {
-    return {};
+    raw = await readFile(SECRETS_PATH, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw new Error(`could not read ${SECRETS_PATH}: ${(error as Error).message}`);
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`${SECRETS_PATH} is not valid JSON - fix or remove it`);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${SECRETS_PATH} must contain a JSON object`);
+  }
+  return parsed as Record<string, string>;
 }
 
 async function writeSecretsFile(values: Record<string, string>): Promise<void> {
