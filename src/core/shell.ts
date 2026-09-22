@@ -13,20 +13,26 @@ export function isPosixEnvName(key: string): boolean {
 }
 
 /**
- * Emits `export KEY='VALUE'` lines. Single quotes are the only POSIX form in which no
- * character is special, so a value can carry `$`, backticks, and newlines untouched; an
- * embedded quote is closed, escaped, and reopened.
+ * Emits `unset KEY` lines for the variables a run must not inherit, then `export
+ * KEY='VALUE'` lines. The hook evals both inside its subshell, so an unset hides the
+ * caller's own value from the tool without touching the caller's shell.
+ *
+ * Single quotes are the only POSIX form in which no character is special, so a value can
+ * carry `$`, backticks, and newlines untouched; an embedded quote is closed, escaped, and
+ * reopened.
  *
  * The key has no such escape - it is interpolated bare - so a key carrying `;` or `$(...)`
  * would turn into extra commands in the `eval` that consumes this output. Callers validate
  * keys before they get here; this filter is the last line of defence for one that did not,
- * and it drops silently because a renderer has nowhere to report to.
+ * and it drops silently because a renderer has nowhere to report to. Unset keys go through
+ * it too, though today they are constants.
  */
-export function renderPosixExports(env: Record<string, string>): string {
-  return Object.entries(env)
+export function renderPosixExports(env: Record<string, string>, unset: readonly string[] = []): string {
+  const unsets = unset.filter((key) => isPosixEnvName(key)).map((key) => `unset ${key}`);
+  const exports = Object.entries(env)
     .filter(([key]) => isPosixEnvName(key))
-    .map(([key, value]) => `export ${key}='${value.replace(/'/g, "'\\''")}'`)
-    .join("\n");
+    .map(([key, value]) => `export ${key}='${value.replace(/'/g, "'\\''")}'`);
+  return [...unsets, ...exports].join("\n");
 }
 
 /**

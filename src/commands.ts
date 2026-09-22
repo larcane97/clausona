@@ -552,11 +552,16 @@ export async function runCommand(command: string, args: string[]) {
       const profile = id ? registry.profiles[id] : undefined;
       if (!id || !profile) return "";
 
-      const { env, warnings } = await buildProfileEnv(id, profile);
+      const { env, unset, warnings } = await buildProfileEnv(id, profile);
       // Repeated on every launch on purpose: a warning here means a persistent
       // misconfiguration, and it should keep showing until the profile is fixed.
       for (const warning of warnings) process.stderr.write(`  ${warnIcon} ${warning}\n`);
-      return jsonFlag(args) ? JSON.stringify(env) : renderPosixExports(env);
+      if (!jsonFlag(args)) return renderPosixExports(env, unset);
+      // null is how the PowerShell hook learns to remove a variable: it hands the value to
+      // SetEnvironmentVariable, which deletes the variable for $null. With nothing to clear
+      // this is JSON.stringify(env) exactly, so a subscription profile's output is unchanged.
+      const cleared = Object.fromEntries(unset.map((key) => [key, null]));
+      return JSON.stringify({ ...cleared, ...env });
     }
 
     case "_sync-plugins": {

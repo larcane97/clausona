@@ -1827,12 +1827,16 @@ export async function resolveProfileEnv(
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
   const profile = registry.profiles[id];
   const adapter = getAdapter(profile.tool);
-  const { env: profileEnv, warnings } = await buildProfileEnv(id, profile);
+  const { env: profileEnv, unset, warnings } = await buildProfileEnv(id, profile);
   for (const warning of warnings) warn(warning);
   const env: NodeJS.ProcessEnv = { ...process.env, ...profileEnv };
   // buildProfileEnv omits the config variable for a primary profile; an inherited value
   // from the surrounding shell would otherwise survive and point at the wrong profile.
   if (!(adapter.configEnvVar in profileEnv)) delete env[adapter.configEnvVar];
+  // A credential the caller exported for something else, which the tool would otherwise
+  // send to this profile's endpoint alongside the profile's own. The shell hooks unset
+  // the same list.
+  for (const key of unset) delete env[key];
   if (profile.tool === "claude") {
     const primary = registry.primarySources.claude ?? adapter.defaultConfigDir(homedir());
     await syncPluginsJson(profile.configDir, primary).catch((e) =>

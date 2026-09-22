@@ -1458,6 +1458,52 @@ describe("resolveProfileEnv", () => {
     });
   });
 
+  // `clausona run` spawns the tool with this env directly, so it has to drop what the shell
+  // hook unsets: Claude Code sends X-Api-Key and Authorization together when both are set,
+  // and an inherited key would go to a bearer profile's endpoint next to the profile's own.
+  it("drops a competing credential the caller's environment carries", async () => {
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions());
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-parent-sentinel");
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-parent-sentinel");
+
+    const { env } = await h.service.resolveProfileEnv("claude:glm");
+
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe(KEY);
+    expect("ANTHROPIC_API_KEY" in env).toBe(false);
+    expect("CLAUDE_CODE_OAUTH_TOKEN" in env).toBe(false);
+    expect(Object.values(env)).not.toContain("sk-ant-parent-sentinel");
+    // A copy was edited, not clausona's own environment.
+    expect(process.env.ANTHROPIC_API_KEY).toBe("sk-ant-parent-sentinel");
+  });
+
+  it("drops an inherited auth token for the api-key scheme, unless the env map sets one", async () => {
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions({ authScheme: "api-key" }));
+    await h.service.addApiProfile(
+      apiOptions({ name: "pinned", authScheme: "api-key", env: { ANTHROPIC_AUTH_TOKEN: "explicit" } }),
+    );
+    vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "parent-bearer-sentinel");
+
+    const plain = (await h.service.resolveProfileEnv("claude:glm")).env;
+    const pinned = (await h.service.resolveProfileEnv("claude:pinned")).env;
+
+    expect(plain.ANTHROPIC_API_KEY).toBe(KEY);
+    expect("ANTHROPIC_AUTH_TOKEN" in plain).toBe(false);
+    expect(pinned.ANTHROPIC_AUTH_TOKEN).toBe("explicit");
+  });
+
+  it("leaves a subscription profile's inherited credentials alone", async () => {
+    const h = await harness();
+    const fromPath = seedAccountDir(h.home, ".claude-work", "work@example.com");
+    await h.service.addProfile({ tool: "claude", name: "work", fromPath });
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-parent-sentinel");
+
+    const { env } = await h.service.resolveProfileEnv("claude:work");
+
+    expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-parent-sentinel");
+  });
+
   it("still resolves when the key cannot be, and warns without the key", async () => {
     const h = await harness();
     await h.service.addApiProfile(

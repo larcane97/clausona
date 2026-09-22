@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -74,11 +74,19 @@ function registryWith(profile: Record<string, unknown>, home: string, id = "clau
   };
 }
 
-/** Reverses renderPosixExports for values that carry no newline. */
-function parseExports(out: string): Record<string, string> {
-  const parsed: Record<string, string> = {};
+/**
+ * Reverses renderPosixExports for values that carry no newline. An unset line reads back
+ * as null, which is how `--json` names the same variable.
+ */
+function parseExports(out: string): Record<string, string | null> {
+  const parsed: Record<string, string | null> = {};
   for (const line of out.split("\n")) {
     if (line === "") continue;
+    const unset = line.match(/^unset ([A-Za-z_][A-Za-z0-9_]*)$/);
+    if (unset) {
+      parsed[unset[1] as string] = null;
+      continue;
+    }
     const match = line.match(/^export ([A-Za-z_][A-Za-z0-9_]*)='([\s\S]*)'$/);
     expect(match, line).not.toBeNull();
     if (match) parsed[match[1] as string] = (match[2] as string).replaceAll("'\\''", "'");
@@ -165,6 +173,8 @@ describe("_shell-env", () => {
     const out = await h.run("claude");
 
     expect(parseExports(out)).toEqual({
+      ANTHROPIC_API_KEY: null,
+      CLAUDE_CODE_OAUTH_TOKEN: null,
       CLAUDE_CONFIG_DIR: h.workDir,
       ANTHROPIC_BASE_URL: "http://localhost:8000",
       ANTHROPIC_MODEL: "m",
@@ -218,15 +228,105 @@ describe("_shell-env", () => {
     vi.stubEnv("CLAUSONA_TEST_SECRET", "sk-not-a-real-key");
 
     const posix = parseExports(await h.run("claude"));
-    const json = JSON.parse(await h.run("claude", "--json")) as Record<string, string>;
+    const json = JSON.parse(await h.run("claude", "--json")) as Record<string, string | null>;
 
     expect(json).toEqual(posix);
     expect(json).toEqual({
+      ANTHROPIC_AUTH_TOKEN: null,
+      CLAUDE_CODE_OAUTH_TOKEN: null,
       CLAUDE_CONFIG_DIR: h.workDir,
       ANTHROPIC_BASE_URL: "http://localhost:8000",
       ANTHROPIC_API_KEY: "sk-not-a-real-key",
       ANTHROPIC_MODEL: "m",
       API_TIMEOUT_MS: "600000",
+    });
+  });
+
+  // The PowerShell hook hands each value to SetEnvironmentVariable, which removes a
+  // variable it is given $null for - so null is how --json says "must not be inherited".
+  it("names each variable an API profile clears with a JSON null", async () => {
+    const h = await harness((home, workDir) =>
+      registryWith(
+        {
+          tool: "claude",
+          kind: "api",
+          configDir: workDir,
+          email: "",
+          label: "router",
+          api: {
+            baseUrl: "https://openrouter.ai/api",
+            authScheme: "bearer",
+            secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
+          },
+        },
+        home,
+      ),
+    );
+    vi.stubEnv("CLAUSONA_TEST_SECRET", "sk-or-not-a-real-key");
+
+    const raw = await h.run("claude", "--json");
+
+    expect(raw).toContain('"ANTHROPIC_API_KEY":null');
+    expect(raw).toContain('"CLAUDE_CODE_OAUTH_TOKEN":null');
+    expect(JSON.parse(raw)).toEqual({
+      ANTHROPIC_API_KEY: null,
+      CLAUDE_CODE_OAUTH_TOKEN: null,
+      CLAUDE_CONFIG_DIR: h.workDir,
+      ANTHROPIC_BASE_URL: "https://openrouter.ai/api",
+      ANTHROPIC_AUTH_TOKEN: "sk-or-not-a-real-key",
+    });
+  });
+
+  /**
+   * kind: undefined means subscription, and a subscription profile clears nothing: its
+   * output, in both forms, is pinned byte for byte as it was before API profiles could
+   * clear a variable. JSON.stringify on the path keeps the expectation right on Windows,
+   * where the separators are backslashes JSON has to escape.
+   */
+  describe("subscription output, byte for byte", () => {
+    const cases: [string, (home: string, workDir: string) => Record<string, unknown>][] = [
+      ["no kind", (_home, workDir) => ({ tool: "claude", configDir: workDir, email: "you@example.com" })],
+      [
+        "an explicit subscription kind",
+        (_home, workDir) => ({ tool: "claude", kind: "subscription", configDir: workDir, email: "you@example.com" }),
+      ],
+    ];
+    for (const [name, make] of cases) {
+      it(`emits one export and one JSON key for ${name}`, async () => {
+        const h = await harness((home, workDir) => registryWith(make(home, workDir), home));
+        expect(await h.run("claude")).toBe(`export CLAUDE_CONFIG_DIR='${h.workDir}'`);
+        expect(await h.run("claude", "--json")).toBe(`{"CLAUDE_CONFIG_DIR":${JSON.stringify(h.workDir)}}`);
+      });
+    }
+
+    it("emits an env map in order, with nothing cleared ahead of it", async () => {
+      const h = await harness((home, workDir) =>
+        registryWith(
+          {
+            tool: "claude",
+            configDir: workDir,
+            email: "you@example.com",
+            // Credential names on purpose: on a subscription profile they are the user's
+            // own choice and are exported like any other entry.
+            env: { ANTHROPIC_MODEL: "m", ANTHROPIC_API_KEY: "sk-mine" },
+          },
+          home,
+        ),
+      );
+      expect(await h.run("claude")).toBe(
+        `export CLAUDE_CONFIG_DIR='${h.workDir}'\nexport ANTHROPIC_MODEL='m'\nexport ANTHROPIC_API_KEY='sk-mine'`,
+      );
+      expect(await h.run("claude", "--json")).toBe(
+        `{"CLAUDE_CONFIG_DIR":${JSON.stringify(h.workDir)},"ANTHROPIC_MODEL":"m","ANTHROPIC_API_KEY":"sk-mine"}`,
+      );
+    });
+
+    it("emits nothing at all for a primary profile", async () => {
+      const h = await harness((home) =>
+        registryWith({ tool: "claude", configDir: path.join(home, ".claude"), email: "a@b.c", isPrimary: true }, home),
+      );
+      expect(await h.run("claude")).toBe("");
+      expect(await h.run("claude", "--json")).toBe("{}");
     });
   });
 
@@ -307,4 +407,83 @@ describe("_shell-env", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toBe(secret);
   });
+
+  /**
+   * The leak this guards against, end to end: Claude Code sends X-Api-Key and
+   * Authorization together when both variables are set, so an ANTHROPIC_API_KEY the user
+   * exported in their rc file would go to a bearer profile's third-party endpoint on every
+   * request. The script has the hook's own shape - eval inside a subshell, launch a
+   * process there, return - and `env` stands in for the tool, reporting exactly the
+   * environment a process launched in that subshell inherits.
+   */
+  it.skipIf(process.platform === "win32")(
+    "keeps a credential the parent shell exported away from a bearer profile's tool",
+    async () => {
+      const parentKey = "sk-ant-parent-sentinel";
+      const parentOauth = "sk-ant-oat-parent-sentinel";
+      const profileToken = "sk-or-profile-token";
+      const h = await harness((home, workDir) =>
+        registryWith(
+          {
+            tool: "claude",
+            kind: "api",
+            configDir: workDir,
+            email: "",
+            label: "router",
+            api: {
+              baseUrl: "https://openrouter.ai/api",
+              authScheme: "bearer",
+              secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
+            },
+          },
+          home,
+        ),
+      );
+      // clausona itself runs in the same shell, so it sees the parent's variables too.
+      vi.stubEnv("ANTHROPIC_API_KEY", parentKey);
+      vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", parentOauth);
+      vi.stubEnv("CLAUSONA_TEST_SECRET", profileToken);
+
+      const out = await h.run("claude");
+      const outPath = path.join(h.home, "shell-env.sh");
+      const childEnvPath = path.join(h.home, "child.env");
+      writeFileSync(outPath, out);
+
+      const script = [
+        "(",
+        `  eval "$(cat '${outPath}')"`,
+        `  env > '${childEnvPath}'`,
+        ")",
+        `printf 'parent ANTHROPIC_API_KEY=%s\\n' "$ANTHROPIC_API_KEY"`,
+        `printf 'parent CLAUDE_CODE_OAUTH_TOKEN=%s\\n' "$CLAUDE_CODE_OAUTH_TOKEN"`,
+      ].join("\n");
+      const result = spawnSync("/bin/sh", ["-c", script], {
+        encoding: "utf8",
+        timeout: 5000,
+        env: { PATH: process.env.PATH ?? "", ANTHROPIC_API_KEY: parentKey, CLAUDE_CODE_OAUTH_TOKEN: parentOauth },
+      });
+
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+
+      const childText = readFileSync(childEnvPath, "utf8");
+      const child = Object.fromEntries(
+        childText
+          .split("\n")
+          .filter((line) => line.includes("="))
+          .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+      );
+      // The tool sees the profile's own credential and nothing that competes with it...
+      expect(child.ANTHROPIC_AUTH_TOKEN).toBe(profileToken);
+      expect(child.ANTHROPIC_BASE_URL).toBe("https://openrouter.ai/api");
+      expect(child).not.toHaveProperty("ANTHROPIC_API_KEY");
+      expect(child).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
+      expect(childText).not.toContain(parentKey);
+      expect(childText).not.toContain(parentOauth);
+      // ...and the parent shell, which the subshell cannot touch, still has both of its own.
+      expect(result.stdout).toBe(
+        `parent ANTHROPIC_API_KEY=${parentKey}\nparent CLAUDE_CODE_OAUTH_TOKEN=${parentOauth}\n`,
+      );
+    },
+  );
 });

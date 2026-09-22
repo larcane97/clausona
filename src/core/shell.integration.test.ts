@@ -81,12 +81,27 @@ function fakeTool(configVar: string): string {
     `printf "${configVar}=%s\\n" "${expand(configVar, UNSET)}"`,
     `printf "ANTHROPIC_BASE_URL=%s\\n" "${expand("ANTHROPIC_BASE_URL", UNSET)}"`,
     `printf "ANTHROPIC_AUTH_TOKEN=[%s]\\n" "${expand("ANTHROPIC_AUTH_TOKEN", UNSET)}"`,
+    `printf "ANTHROPIC_API_KEY=[%s]\\n" "${expand("ANTHROPIC_API_KEY", UNSET)}"`,
     `exit ${expand("CLAUSONA_TEST_TOOL_EXIT", "0")}`,
     "",
   ].join("\n");
 }
 
-function makeHarness(env: { claude?: Record<string, string>; codex?: Record<string, string> } = {}): Harness {
+/** A tool's `_shell-env` payload, as `--json` spells it: null means "must not be inherited". */
+type ToolEnv = Record<string, string | null>;
+
+/** Splits a payload the way `_shell-env` does, and renders it through the real renderer. */
+function renderToolEnv(env: ToolEnv = {}): string {
+  const exports: Record<string, string> = {};
+  const unset: string[] = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (value === null) unset.push(key);
+    else exports[key] = value;
+  }
+  return renderPosixExports(exports, unset);
+}
+
+function makeHarness(env: { claude?: ToolEnv; codex?: ToolEnv } = {}): Harness {
   const root = mkdtempSync(path.join(tmpdir(), "clausona-shell-"));
   tmpDirs.push(root);
   const home = path.join(root, "home");
@@ -100,8 +115,8 @@ function makeHarness(env: { claude?: Record<string, string>; codex?: Record<stri
 
   // Written through the real renderer, so the eval in the hook consumes exactly the
   // bytes `clausona _shell-env` would have produced.
-  writeFileSync(path.join(envDir, "claude.env"), renderPosixExports(env.claude ?? {}));
-  writeFileSync(path.join(envDir, "codex.env"), renderPosixExports(env.codex ?? {}));
+  writeFileSync(path.join(envDir, "claude.env"), renderToolEnv(env.claude));
+  writeFileSync(path.join(envDir, "codex.env"), renderToolEnv(env.codex));
 
   const logPath = path.join(root, "calls.log");
   writeFileSync(logPath, "");
@@ -207,6 +222,33 @@ for (const shell of ["zsh", "bash"] as const) {
       expect(result.stdout).toContain(`ANTHROPIC_BASE_URL=${LOCAL_BASE_URL}`);
       // ...and the user's own value is intact afterwards.
       expect(result.stdout).toContain(`parent ANTHROPIC_BASE_URL=${userBaseUrl}`);
+    });
+
+    // An API profile clears a credential the user exported for something else, because
+    // Claude Code would send it to the profile's endpoint next to the profile's own. The
+    // unset runs inside the hook's subshell, so it lasts exactly as long as the tool.
+    it("keeps a credential the profile clears from the tool, and only from the tool", () => {
+      const parentKey = "sk-ant-parent-sentinel";
+      const harness = makeHarness({
+        claude: {
+          ANTHROPIC_API_KEY: null,
+          ANTHROPIC_BASE_URL: LOCAL_BASE_URL,
+          ANTHROPIC_AUTH_TOKEN: AWKWARD_TOKEN,
+        },
+      });
+
+      const result = runShell(shell, harness, ["claude", reportParent("ANTHROPIC_API_KEY")].join("\n"), {
+        ANTHROPIC_API_KEY: parentKey,
+      });
+
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      // The tool gets the profile's own credential and not the parent's...
+      expect(result.stdout).toContain(`ANTHROPIC_AUTH_TOKEN=[${AWKWARD_TOKEN}]`);
+      expect(result.stdout).toContain(`ANTHROPIC_API_KEY=[${UNSET}]`);
+      // ...and the parent's is back, untouched, once the tool has returned.
+      expect(result.stdout).toContain(`parent ANTHROPIC_API_KEY=${parentKey}`);
+      expect(result.stdout.split(parentKey)).toHaveLength(2);
     });
 
     it("propagates a non-zero exit code out of the subshell", () => {
@@ -381,7 +423,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       .replaceAll("%", "%%");
   }
 
-  function makeWindowsHarness(env: Record<string, string>): WindowsHarness {
+  function makeWindowsHarness(env: ToolEnv): WindowsHarness {
     const root = mkdtempSync(path.join(tmpdir(), "clausona-shell-ps-"));
     tmpDirs.push(root);
     const binDir = path.join(root, "bin");
@@ -414,7 +456,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
         path.join(binDir, `${tool}.cmd`),
         [
           "@echo off",
-          `node -e "const v=n=>process.env[n]===undefined?'<unset>':process.env[n];process.stdout.write([v('${configVar}'),v('ANTHROPIC_BASE_URL'),JSON.stringify(v('ANTHROPIC_AUTH_TOKEN')),process.argv[1]||''].join('|'))" %*`,
+          `node -e "const v=n=>process.env[n]===undefined?'<unset>':process.env[n];process.stdout.write([v('${configVar}'),v('ANTHROPIC_BASE_URL'),JSON.stringify(v('ANTHROPIC_AUTH_TOKEN')),'key='+v('ANTHROPIC_API_KEY'),'oauth='+v('CLAUDE_CODE_OAUTH_TOKEN'),process.argv[1]||''].join('|'))" %*`,
           `exit /b %CLAUSONA_TEST_TOOL_EXIT%`,
         ].join("\r\n"),
       );
@@ -499,6 +541,49 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       // Three calls from the first invocation and none from the second: once the user has
       // set CLAUDE_CONFIG_DIR the wrapper steps aside and asks clausona for nothing.
       expect(harness.log()).toEqual(["_shell-env claude", "_sync-plugins", "_track-usage"]);
+    },
+    POWERSHELL_TEST_TIMEOUT_MS,
+  );
+
+  /**
+   * `_shell-env --json` gives a credential the run must not inherit the value null. The
+   * hook hands that straight to SetEnvironmentVariable, which removes the variable, and
+   * the restore in its finally puts back the caller's own value - or, for a variable that
+   * was absent, removes it again rather than leaving an empty one behind.
+   */
+  it(
+    "removes a variable _shell-env names with null, for the run only",
+    () => {
+      const parentKey = "sk-ant-parent-sentinel";
+      const harness = makeWindowsHarness({
+        ANTHROPIC_BASE_URL: LOCAL_BASE_URL,
+        ANTHROPIC_AUTH_TOKEN: "placeholder-token",
+        ANTHROPIC_API_KEY: null,
+        CLAUDE_CODE_OAUTH_TOKEN: null,
+      });
+
+      const result = runPowerShell(
+        harness,
+        [
+          "Remove-Item Env:CLAUDE_CODE_OAUTH_TOKEN -ErrorAction SilentlyContinue",
+          "claude",
+          '"after key=$env:ANTHROPIC_API_KEY"',
+          "if (Test-Path Env:CLAUDE_CODE_OAUTH_TOKEN) { 'OAUTH_SET' } else { 'OAUTH_ABSENT' }",
+        ].join("\n"),
+        { ANTHROPIC_API_KEY: parentKey },
+      );
+
+      expect(result.status).toBe(0);
+      // The tool ran with the profile's credential and neither of the others...
+      expect(result.stdout).toContain(JSON.stringify("placeholder-token"));
+      expect(result.stdout).toContain(`key=${UNSET}`);
+      expect(result.stdout).toContain(`oauth=${UNSET}`);
+      // ...the caller's key is back afterwards, and appears nowhere else...
+      expect(result.stdout).toContain(`after key=${parentKey}`);
+      expect(result.stdout.split(parentKey)).toHaveLength(2);
+      // ...and a variable that was absent before the run is absent after it.
+      expect(result.stdout).toContain("OAUTH_ABSENT");
+      expect(result.stdout).not.toContain("OAUTH_SET");
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );

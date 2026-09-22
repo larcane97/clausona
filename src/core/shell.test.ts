@@ -225,6 +225,24 @@ describe("renderPowerShellInit", () => {
     expect(helper).toMatch(/try \{ clausona _track-usage \*> \$null \} catch \{ \}/);
   });
 
+  /**
+   * `_shell-env --json` gives a variable the run must not inherit - a credential the caller
+   * exported for something else - the value null. ConvertFrom-Json turns that into $null,
+   * and SetEnvironmentVariable removes a variable it is handed $null (or "") for. So the
+   * removal works only while every property takes the same unfiltered path: previous value
+   * captured, new value applied as is. A `where Value` filter, or an `if ($property.Value)`,
+   * would skip exactly the properties that exist to remove something.
+   */
+  it("applies every property as is, so a null removes the variable for the run", () => {
+    expect(helper).toMatch(
+      /foreach \(\$property in \$parsed\.PSObject\.Properties\) \{\s*\n\s*\$name = \$property\.Name\s*\n\s*\$applied\[\$name\] = \[Environment\]::GetEnvironmentVariable\(\$name, "Process"\)\s*\n\s*\[Environment\]::SetEnvironmentVariable\(\$name, \$property\.Value, "Process"\)\s*\n\s*\}/,
+    );
+    // ...and the restore hands back whatever was captured: the caller's value, or its absence.
+    expect(helper).toMatch(
+      /foreach \(\$name in \$applied\.Keys\) \{\s*\n\s*\[Environment\]::SetEnvironmentVariable\(\$name, \$applied\[\$name\], "Process"\)\s*\n\s*\}/,
+    );
+  });
+
   // 5.1 has no `?:` either, and `[Environment]::GetEnvironmentVariable` is the only
   // accessor that reports an unset variable as $null rather than "".
   it("restores an unset variable to unset rather than empty", () => {
@@ -283,6 +301,28 @@ describe("renderPosixExports", () => {
       OK_KEY: "1",
     });
     expect(out).toBe("export OK_KEY='1'");
+  });
+
+  // An API profile clears a credential the caller exported for something else. The hook
+  // evals this inside its subshell, so the parent shell keeps its own value.
+  it("emits unset lines ahead of the exports", () => {
+    expect(renderPosixExports({ A: "1", B: "2" }, ["C", "D"])).toBe("unset C\nunset D\nexport A='1'\nexport B='2'");
+  });
+
+  it("emits only unset lines when nothing is exported", () => {
+    expect(renderPosixExports({}, ["C"])).toBe("unset C");
+  });
+
+  it("is unchanged when nothing is unset", () => {
+    expect(renderPosixExports({ A: "1" }, [])).toBe("export A='1'");
+    expect(renderPosixExports({}, [])).toBe("");
+  });
+
+  // Same last line of defence as the exports: `unset A; touch /tmp/pwned` would run twice.
+  it("omits an unset key that is not a POSIX environment variable name", () => {
+    expect(renderPosixExports({ OK: "1" }, ["A; touch /tmp/clausona-pwned; B", "A $(id)", "", "GONE"])).toBe(
+      "unset GONE\nexport OK='1'",
+    );
   });
 });
 

@@ -13,7 +13,11 @@ export function displayName(profile: Pick<Profile, "email" | "label">): string {
   return profile.label ?? profile.email;
 }
 
-export type BuiltEnv = { env: Record<string, string>; warnings: string[] };
+/**
+ * `unset` lists variables that must be absent from the tool's environment, whatever the
+ * caller's shell holds. It never names a key that is also in `env`.
+ */
+export type BuiltEnv = { env: Record<string, string>; unset: string[]; warnings: string[] };
 
 type Deps = {
   resolveSecret?: typeof resolveSecret;
@@ -34,6 +38,7 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
   const home = deps.homedir ?? homedir;
   const adapter = getAdapter(profile.tool);
   const env: Record<string, string> = {};
+  const unset: string[] = [];
   const warnings: string[] = [];
 
   // A profile that points at the tool's own default directory must not set the variable:
@@ -47,6 +52,13 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
 
   if (profile.kind === "api" && profile.api) {
     env.ANTHROPIC_BASE_URL = profile.api.baseUrl;
+    // Setting the profile's credential is not enough. Claude Code reads ANTHROPIC_API_KEY
+    // and ANTHROPIC_AUTH_TOKEN independently and sends X-Api-Key and Authorization together
+    // when both are set, so a key the user exported for something else would go to this
+    // endpoint next to the profile's own. A subscription OAuth token is never wanted here
+    // either, and Claude Code ranks it as an auth source.
+    unset.push(profile.api.authScheme === "bearer" ? "ANTHROPIC_API_KEY" : "ANTHROPIC_AUTH_TOKEN");
+    unset.push("CLAUDE_CODE_OAUTH_TOKEN");
     try {
       const secret = await resolve(id, profile.api.secret);
       env[profile.api.authScheme === "bearer" ? "ANTHROPIC_AUTH_TOKEN" : "ANTHROPIC_API_KEY"] = secret;
@@ -74,5 +86,6 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
     env[key] = value;
   }
 
-  return { env, warnings };
+  // An explicit env-map entry is the user asking for that variable, so it is set, not cleared.
+  return { env, unset: unset.filter((key) => !(key in env)), warnings };
 }

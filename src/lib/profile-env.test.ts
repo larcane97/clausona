@@ -36,8 +36,9 @@ describe("buildProfileEnv", () => {
 
   it("emits only CLAUDE_CONFIG_DIR for a subscription profile", async () => {
     const profile: Profile = { tool: "claude", configDir: "/home/u/.claude-work", email: "you@example.com" };
-    const { env } = await buildProfileEnv("claude:work", profile, deps);
+    const { env, unset } = await buildProfileEnv("claude:work", profile, deps);
     expect(env).toEqual({ CLAUDE_CONFIG_DIR: "/home/u/.claude-work" });
+    expect(unset).toEqual([]);
   });
 
   it("emits nothing for a primary profile", async () => {
@@ -112,6 +113,81 @@ describe("buildProfileEnv", () => {
     expect(warnings[0]).toContain("claude:glm");
     expect(warnings[0]).toContain(hostile);
     expect(warnings[0]).toMatch(/not a valid environment variable name/);
+  });
+
+  /**
+   * Claude Code reads ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN independently and sends
+   * X-Api-Key and Authorization together when both are set. Applying a profile on top of
+   * the caller's environment is therefore not enough: a key the user exported for some
+   * other purpose would travel to this profile's endpoint next to the profile's own.
+   */
+  describe("unset", () => {
+    it("clears the API key and the OAuth token for the bearer scheme", async () => {
+      const { env, unset } = await buildProfileEnv("claude:glm", apiProfile(), deps);
+      expect(unset).toEqual(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]);
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBe("sk-test");
+    });
+
+    it("clears the auth token and the OAuth token for the api-key scheme", async () => {
+      const profile = apiProfile({
+        api: { baseUrl: "https://openrouter.ai/api", authScheme: "api-key", secret: { source: "keychain" } },
+      });
+      const { env, unset } = await buildProfileEnv("claude:or", profile, deps);
+      expect(unset).toEqual(["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]);
+      expect(env.ANTHROPIC_API_KEY).toBe("sk-test");
+    });
+
+    it("leaves alone a credential the env map sets explicitly", async () => {
+      const profile = apiProfile({
+        env: { ANTHROPIC_API_KEY: "sk-explicit", CLAUDE_CODE_OAUTH_TOKEN: "oat-explicit" },
+      });
+      const { env, unset } = await buildProfileEnv("claude:glm", profile, deps);
+      expect(unset).toEqual([]);
+      expect(env.ANTHROPIC_API_KEY).toBe("sk-explicit");
+      expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("oat-explicit");
+    });
+
+    it("still clears the competing credential when the profile's own will not resolve", async () => {
+      const { env, unset } = await buildProfileEnv("claude:glm", apiProfile(), {
+        ...deps,
+        resolveSecret: async () => {
+          throw new Error("no stored secret");
+        },
+      });
+      expect(unset).toContain("ANTHROPIC_API_KEY");
+      expect(unset).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    });
+
+    it("clears nothing for any profile that is not an API profile", async () => {
+      const profiles: Profile[] = [
+        { tool: "claude", configDir: "/home/u/.claude-work", email: "you@example.com" },
+        { tool: "claude", kind: "subscription", configDir: "/home/u/.claude-work", email: "you@example.com" },
+        { tool: "claude", configDir: "/home/u/.claude", email: "a@b.c", isPrimary: true },
+        { tool: "codex", configDir: "/home/u/.codex-work", email: "you@example.com" },
+        // No endpoint to protect, so nothing to clear for it.
+        { tool: "claude", kind: "api", configDir: "/home/u/.claude-glm", email: "", label: "half-written" },
+      ];
+      for (const profile of profiles) {
+        const { unset } = await buildProfileEnv("claude:x", profile, deps);
+        expect(unset, JSON.stringify(profile)).toEqual([]);
+      }
+    });
+
+    it("never lists a variable it also sets", async () => {
+      const profiles = [
+        apiProfile(),
+        apiProfile({ env: { ANTHROPIC_API_KEY: "sk-explicit" } }),
+        apiProfile({
+          api: { baseUrl: "https://openrouter.ai/api", authScheme: "api-key", secret: { source: "keychain" } },
+          env: { ANTHROPIC_AUTH_TOKEN: "explicit" },
+        }),
+      ];
+      for (const profile of profiles) {
+        const { env, unset } = await buildProfileEnv("claude:glm", profile, deps);
+        for (const key of unset) expect(env, key).not.toHaveProperty(key);
+      }
+    });
   });
 
   it("reserves the tool config variables", () => {
