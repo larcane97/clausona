@@ -1,10 +1,30 @@
 /**
+ * The one definition of a name a shell can export. Every layer that puts a profile's
+ * free-form env map onto a command line checks a key against this: `validateEnvEntry`
+ * refuses it at set time, `buildProfileEnv` drops it with a warning at build time.
+ *
+ * Refusing is the only option - quoting does not help, because `export 'A B'='x'` is not
+ * valid POSIX either.
+ */
+const POSIX_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+export function isPosixEnvName(key: string): boolean {
+  return POSIX_ENV_NAME.test(key);
+}
+
+/**
  * Emits `export KEY='VALUE'` lines. Single quotes are the only POSIX form in which no
  * character is special, so a value can carry `$`, backticks, and newlines untouched; an
  * embedded quote is closed, escaped, and reopened.
+ *
+ * The key has no such escape - it is interpolated bare - so a key carrying `;` or `$(...)`
+ * would turn into extra commands in the `eval` that consumes this output. Callers validate
+ * keys before they get here; this filter is the last line of defence for one that did not,
+ * and it drops silently because a renderer has nowhere to report to.
  */
 export function renderPosixExports(env: Record<string, string>): string {
   return Object.entries(env)
+    .filter(([key]) => isPosixEnvName(key))
     .map(([key, value]) => `export ${key}='${value.replace(/'/g, "'\\''")}'`)
     .join("\n");
 }

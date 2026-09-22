@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { isPosixEnvName } from "../core/shell.js";
 import type { Profile } from "../types.js";
 import { buildProfileEnv, displayName, RESERVED_ENV_KEYS } from "./profile-env.js";
 
@@ -94,6 +95,23 @@ describe("buildProfileEnv", () => {
     expect(env.ANTHROPIC_BASE_URL).toBe("http://gpu-box:30000");
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatch(/no stored secret/);
+  });
+
+  it("drops an env-map key that no shell could export, and says which", async () => {
+    // A hand-edited profiles.json is the way this lands, and the POSIX renderer
+    // interpolates keys bare - so the key has to die here rather than downstream.
+    const hostile = "A; touch /tmp/clausona-pwned; B";
+    const profile = apiProfile({
+      env: { [hostile]: "x", "A $(id)": "x", "A B": "x", "A=B": "x", "9LEADING": "x", ANTHROPIC_MODEL: "glm-5.3" },
+    });
+    const { env, warnings } = await buildProfileEnv("claude:glm", profile, deps);
+
+    expect(env.ANTHROPIC_MODEL).toBe("glm-5.3");
+    for (const key of Object.keys(env)) expect(isPosixEnvName(key), key).toBe(true);
+    expect(warnings).toHaveLength(5);
+    expect(warnings[0]).toContain("claude:glm");
+    expect(warnings[0]).toContain(hostile);
+    expect(warnings[0]).toMatch(/not a valid environment variable name/);
   });
 
   it("reserves the tool config variables", () => {

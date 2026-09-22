@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { renderPosixExports, renderPosixShellInit, renderPowerShellInit, renderShellInit } from "./shell.js";
+import {
+  isPosixEnvName,
+  renderPosixExports,
+  renderPosixShellInit,
+  renderPowerShellInit,
+  renderShellInit,
+} from "./shell.js";
 
 describe("renderShellInit", () => {
   const out = renderPosixShellInit();
@@ -87,5 +93,36 @@ describe("renderPosixExports", () => {
   it("does not expand $, backticks, or newlines", () => {
     const out = renderPosixExports({ K: "$HOME `id`\nx" });
     expect(out).toBe("export K='$HOME `id`\nx'");
+  });
+
+  // The key is interpolated bare, so `export A; touch /tmp/pwned; B='1'` would run as
+  // three commands inside the caller's eval. Quoting the key is not an available fix -
+  // `export 'A B'='1'` is not valid POSIX - so such a key is simply not emitted.
+  it("omits a key that is not a POSIX environment variable name", () => {
+    const out = renderPosixExports({
+      "A; touch /tmp/clausona-pwned; B": "1",
+      "A $(id)": "1",
+      "A `id`": "1",
+      "A B": "1",
+      "A=B": "1",
+      "9LEADING": "1",
+      "": "1",
+      OK_KEY: "1",
+    });
+    expect(out).toBe("export OK_KEY='1'");
+  });
+});
+
+describe("isPosixEnvName", () => {
+  it("accepts names a shell can export", () => {
+    for (const key of ["A", "_", "_A9", "ANTHROPIC_BASE_URL", "a_b_c"]) {
+      expect(isPosixEnvName(key), key).toBe(true);
+    }
+  });
+
+  it("rejects anything else", () => {
+    for (const key of ["", "9A", "A B", "A=B", "A;B", "A$(id)", "A-B", "A\nB", "ünïcode"]) {
+      expect(isPosixEnvName(key), JSON.stringify(key)).toBe(false);
+    }
   });
 });

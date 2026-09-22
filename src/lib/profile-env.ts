@@ -1,6 +1,7 @@
 import { realpath as fsRealpath } from "node:fs/promises";
 import { homedir } from "node:os";
 
+import { isPosixEnvName } from "../core/shell.js";
 import { getAdapter } from "../tools/registry.js";
 import type { Profile } from "../types.js";
 import { resolveSecret } from "./secrets.js";
@@ -57,6 +58,13 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
   }
 
   for (const [key, value] of Object.entries(profile.env ?? {})) {
+    if (!isPosixEnvName(key)) {
+      // No shell can export this name, and the POSIX path interpolates keys bare - so a
+      // key carrying `;` or `$(...)` would become extra commands inside the `eval` around
+      // _shell-env's output. Drop it, loudly, wherever it came from.
+      warnings.push(`${id}: ignoring '${key}' from the env map - not a valid environment variable name`);
+      continue;
+    }
     if (RESERVED_ENV_KEYS.has(key)) {
       // Honouring the override would break profile isolation, so drop it - but say so,
       // since a hand-edited profiles.json is the usual way to land here.

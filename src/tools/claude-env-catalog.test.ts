@@ -93,6 +93,24 @@ describe("validateEnvEntry", () => {
     expect(error).toBe("CLAUDE_CODE_EXTRA_BODY expects a JSON object, got array");
   });
 
+  it("rejects a key that is not a POSIX environment variable name", () => {
+    for (const key of ["A; touch /tmp/clausona-pwned; B", "A $(id)", "A B", "A=B", "9LEADING", "", "ANTHROPIC-MODEL"]) {
+      const result = validateEnvEntry(key, "1");
+      expect(result.ok, key).toBe(false);
+      const error = result.ok ? "" : result.error;
+      // The message has to describe the shape, since the catalog is not a whitelist and
+      // "unknown key" would be the wrong thing to tell the user.
+      expect(error, key).toMatch(/not a valid environment variable name/);
+      expect(error, key).toMatch(/letters, digits and underscores/);
+    }
+  });
+
+  it("rejects a malformed key before the reserved-key check", () => {
+    const result = validateEnvEntry("CLAUDE_CONFIG_DIR; touch /tmp/clausona-pwned", "1");
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error).toMatch(/not a valid environment variable name/);
+  });
+
   it("accepts 1 and 0 for a bool entry", () => {
     expect(validateEnvEntry("DISABLE_PROMPT_CACHING", "1")).toEqual({ ok: true });
     expect(validateEnvEntry("DISABLE_PROMPT_CACHING", "yes").ok).toBe(false);

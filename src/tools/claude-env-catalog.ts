@@ -1,3 +1,4 @@
+import { isPosixEnvName } from "../core/shell.js";
 import { RESERVED_ENV_KEYS } from "../lib/profile-env.js";
 
 export type EnvGroup = "model" | "context" | "limits" | "timeouts" | "compat" | "transport";
@@ -14,7 +15,9 @@ export type EnvCatalogEntry = {
  * The advanced settings clausona surfaces with a label and validation. This is a
  * convenience layer, never a whitelist: `validateEnvEntry` accepts keys that are absent
  * here, so a variable introduced by a future Claude Code release works without a
- * clausona release.
+ * clausona release. Key *format* is checked even though key *membership* is not - a key
+ * that is not a POSIX environment variable name is rejected however the catalog reads,
+ * because no shell could export it.
  *
  * Verified against Claude Code 2.1.278.
  */
@@ -175,6 +178,13 @@ function jsonTypeName(value: unknown): string {
 }
 
 export function validateEnvEntry(key: string, value: string): { ok: true } | { ok: false; error: string } {
+  if (!isPosixEnvName(key)) {
+    return {
+      ok: false,
+      error: `'${key}' is not a valid environment variable name - use letters, digits and underscores, starting with a letter or underscore`,
+    };
+  }
+
   if (RESERVED_ENV_KEYS.has(key)) {
     return { ok: false, error: `${key} is managed by clausona and cannot be set on a profile` };
   }
