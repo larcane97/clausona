@@ -1,3 +1,4 @@
+import { rmSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -8,7 +9,13 @@ import { trackUsage } from "./core/track-usage.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import { renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
 import { buildProfileEnv, CREDENTIAL_ENV_KEYS, controlledEnvKeys } from "./lib/profile-env.js";
-import { parseProfileRef, profileId, validateProfileName } from "./lib/profile-ref.js";
+import {
+  CREDENTIAL_AS_NAME_ERROR,
+  looksLikeCredential,
+  parseProfileRef,
+  profileId,
+  validateProfileName,
+} from "./lib/profile-ref.js";
 import { promptSecret } from "./lib/prompt-secret.js";
 import {
   addApiProfile,
@@ -20,6 +27,7 @@ import {
   listProfiles,
   loadRegistry,
   loginProfile,
+  parseBaseUrl,
   proposeInitProfileNames,
   removeProfile,
   repairProfile,
@@ -89,7 +97,11 @@ function validateFlags(command: string, args: string[]) {
     if (!arg.startsWith("-")) continue;
     if (known.includes(arg)) continue;
     if (prefixes.some((p) => arg.startsWith(p))) continue;
-    throw new Error(`Unknown option: ${arg}\nRun \`clausona ${command} --help\` for usage.`);
+    // The name only, never what follows `=`. `--key` takes no value, so `--key=<the key>`
+    // lands here, and quoting the whole token would print the key into the window and the
+    // scrollback. Cutting at the `=` covers every option that will ever be misspelled
+    // this way, rather than special-casing the ones next to a credential today.
+    throw new Error(`Unknown option: ${arg.split("=")[0]}\nRun \`clausona ${command} --help\` for usage.`);
   }
 }
 
@@ -105,6 +117,16 @@ const ADD_API_USAGE =
 
 const CONFIG_USAGE =
   "Usage: clausona config <profile> [--set KEY=VALUE] [--unset KEY] [--key] [--edit] [--show] [--merge-sessions | --separate-sessions]";
+
+/**
+ * An argument nobody asked for is usually a key someone expected an option to take.
+ * Neither message repeats it, and both say where a key actually goes.
+ */
+const ADD_EXTRA_ARGUMENT =
+  'clausona add takes one profile name and nothing else. If that was an API key: it is never an argument, so pipe it in (printf %s "$KEY" | clausona add <profile> --api …) or point at it with --key-from env:NAME.';
+
+const CONFIG_EXTRA_ARGUMENT =
+  'clausona config takes one profile and nothing else. --key takes no value: the key is read from a prompt that does not echo it, or from stdin (printf %s "$KEY" | clausona config <profile> --key).';
 
 /** Never says what was read: the answer is the key, or what the user meant to be one. */
 const NO_KEY_SUPPLIED =
@@ -133,15 +155,19 @@ function optionValue(args: string[], flag: string): string | undefined {
 }
 
 /**
- * The first bare argument, skipping whatever follows a value-carrying option - otherwise
+ * The bare arguments, skipping whatever follows a value-carrying option - otherwise
  * `clausona add --base-url https://… work` would read the URL as the profile name.
+ *
+ * Both callers take the first and refuse the rest. A dropped extra argument is how
+ * `config <profile> --key <the key>` used to succeed while quietly ignoring the key and
+ * prompting anyway, leaving the user sure they had supplied one.
  */
-function positionalArg(args: string[], valueFlags: string[]): string | undefined {
+function positionalArgs(args: string[], valueFlags: string[]): string[] {
   const consumed = new Set<number>();
   for (let i = 0; i < args.length; i++) {
     if (valueFlags.includes(args[i]) && args[i + 1] !== undefined) consumed.add(i + 1);
   }
-  return args.find((arg, i) => !arg.startsWith("--") && !consumed.has(i));
+  return args.filter((arg, i) => !arg.startsWith("--") && !consumed.has(i));
 }
 
 /** Splits `KEY=VALUE`, rejecting a bare key so a typo never silently clears a setting. */
@@ -185,15 +211,6 @@ function parseSecretSource(input: string): SecretSource {
 function isAnthropicHost(hostname: string): boolean {
   const host = hostname.toLowerCase();
   return host === "anthropic.com" || host.endsWith(".anthropic.com");
-}
-
-/** Parses for the two cosmetic decisions below; addApiProfile owns the rule itself. */
-function tryParseUrl(input: string): URL | undefined {
-  try {
-    return new URL(input);
-  } catch {
-    return undefined;
-  }
 }
 
 /**
@@ -331,7 +348,9 @@ function parseEditedEnv(raw: string): Record<string, string> {
  * 0600. A fixed name in the shared temp directory would be world-readable and something
  * anyone on the machine could point at another file with a symlink first - and this file
  * can hold an ANTHROPIC_CUSTOM_HEADERS value. The directory goes on every way out: a
- * failed editor, an unparseable edit, and a successful save.
+ * failed editor, an unparseable edit, a successful save, and a Ctrl-C while the editor is
+ * open, which reaches clausona too (the editor shares its process group) and would
+ * otherwise kill it before any `finally` ran.
  */
 async function editProfileEnv(id: string, current: Record<string, string>): Promise<string> {
   // A blank $VISUAL is as good as an unset one; `??` would take "" and stop there.
@@ -341,6 +360,22 @@ async function editProfileEnv(id: string, current: Record<string, string>): Prom
 
   const dir = await mkdtemp(path.join(tmpdir(), "clausona-env-"));
   const scratchPath = path.join(dir, "env.json");
+
+  const onSignal = (signal: NodeJS.Signals) => {
+    // Synchronous: the process is on its way out and an awaited rm would not finish.
+    rmSync(dir, { force: true, recursive: true });
+    detachSignals();
+    // Re-raised with our listener gone, so the signal decides the exit status as it would
+    // have. A handler that just returned would swallow the Ctrl-C instead.
+    process.kill(process.pid, signal);
+  };
+  const detachSignals = () => {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+
   try {
     await writeFile(scratchPath, `${JSON.stringify(current, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     // No env is passed, so the editor inherits this process's own - the spawn helpers
@@ -358,6 +393,7 @@ async function editProfileEnv(id: string, current: Record<string, string>): Prom
     warnPlaintextEnv(id, Object.keys(edited));
     return success(`Updated ${bold(id)} ${dim(`(${Object.keys(edited).length} setting(s))`)}`);
   } finally {
+    detachSignals();
     await rm(dir, { force: true, recursive: true }).catch(() => {});
   }
 }
@@ -387,7 +423,7 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("USAGE")}`,
         helpUsage("clausona add <profile> [--from <path>] [--merge-sessions]"),
-        helpUsage("clausona add <profile> --api --base-url <url> [--model <id>] [--auth <scheme>]"),
+        helpUsage("clausona add <profile> --api --base-url <url> [--model <id>] [--auth <scheme>] [--merge-sessions]"),
         "",
         `  ${bold("ARGUMENTS")}`,
         `    ${accent("profile".padEnd(18))}${dim("Profile to create (e.g. work or claude:work)")}`,
@@ -404,7 +440,9 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${accent("--auth".padEnd(18))}${dim("bearer | api-key (default: api-key for anthropic.com, else bearer)")}`,
         `    ${accent("--key-from".padEnd(18))}${dim('keychain (default) | env:NAME | command:"<shell command>"')}`,
         `    ${accent("--label".padEnd(18))}${dim("Display name shown in list (default: the endpoint host)")}`,
-        `    ${accent("--set".padEnd(18))}${dim("Advanced setting KEY=VALUE; repeatable")}`,
+        `    ${accent("--set".padEnd(18))}${dim("Advanced setting KEY=VALUE; repeatable. For example")}`,
+        `    ${" ".repeat(18)}${dim("--set CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144 or --set API_TIMEOUT_MS=600000.")}`,
+        `    ${" ".repeat(18)}${dim("`clausona config <profile> --show --json` lists every key and its type.")}`,
         "",
         `  ${bold("EXAMPLES")}`,
         helpUsage("clausona add claude:gw --api --base-url https://openrouter.ai/api --model z-ai/glm-5.3"),
@@ -416,6 +454,11 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("With --key-from keychain (the default) the key is read from a prompt that does")}`,
         `    ${dim("not echo it, or from stdin when something is piped in. Never pass a key as an")}`,
         `    ${dim("argument: `ps` shows every process's arguments to every user on the machine.")}`,
+        "",
+        `    ${dim('env:NAME and command:"..." store a reference, not the key. Each one is resolved')}`,
+        `    ${dim("again every time the profile is used, in the shell that runs claude - so the")}`,
+        `    ${dim("variable has to be exported there, not only in the shell that ran this command.")}`,
+        `    ${dim("keychain stores the key itself, so it needs nothing set up afterwards.")}`,
         "",
       ].join("\n");
 
@@ -529,6 +572,10 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("is not: it belongs in the credential store, set with --key or read from")}`,
         `    ${dim("--key-from. Do not put it in --set ANTHROPIC_API_KEY=... or in an")}`,
         `    ${dim("Authorization header under ANTHROPIC_CUSTOM_HEADERS.")}`,
+        "",
+        `    ${dim('--key-from env:NAME and command:"..." store a reference. Each is resolved again')}`,
+        `    ${dim("every time the profile is used, in the shell that runs claude, so the variable")}`,
+        `    ${dim("has to be exported there. --key stores the key itself and needs nothing set up.")}`,
         "",
       ].join("\n");
 
@@ -819,8 +866,9 @@ export async function runCommand(command: string, args: string[]) {
       const changeEnv = setPairs.length > 0 || unsetKeys.length > 0;
       const changeSessions = mergeSessions || separateSessions;
 
-      const input = positionalArg(args, CONFIG_VALUE_FLAGS);
+      const [input, ...extraArgs] = positionalArgs(args, CONFIG_VALUE_FLAGS);
       if (!input) throw new Error(CONFIG_USAGE);
+      if (extraArgs.length > 0) throw new Error(CONFIG_EXTRA_ARGUMENT);
 
       const registry = await loadRegistry();
       if (!registry) throw new Error("clausona is not initialized.");
@@ -901,10 +949,15 @@ export async function runCommand(command: string, args: string[]) {
         if (stray) throw new Error(`${stray} only applies to an API profile. Add --api, or leave it out.`);
       }
 
-      const input = positionalArg(args, ADD_VALUE_FLAGS);
+      const [input, ...extraArgs] = positionalArgs(args, ADD_VALUE_FLAGS);
       if (!input) {
         throw new Error(api ? ADD_API_USAGE : "Usage: clausona add <profile> [--from <path>] [--merge-sessions]");
       }
+      // Checked before the tool is resolved, because the two messages that resolution can
+      // produce both quote the input, and a key in this slot would otherwise end up as a
+      // profile id, a directory name and a line of stdout.
+      if (looksLikeCredential(input)) throw new Error(CREDENTIAL_AS_NAME_ERROR);
+      if (extraArgs.length > 0) throw new Error(ADD_EXTRA_ARGUMENT);
 
       const registry = await loadRegistry();
       if (!registry) throw new Error("clausona is not initialized.");
@@ -935,16 +988,17 @@ export async function runCommand(command: string, args: string[]) {
       if (api) {
         const baseUrl = optionValue(args, "--base-url");
         if (!baseUrl) throw new Error(ADD_API_USAGE);
-        // Parsed only to pick the default auth scheme and to name the endpoint in the
-        // success line. addApiProfile owns what a base URL may be, so an unparseable one
-        // falls through to it rather than collecting a second, different rule here.
-        const url = tryParseUrl(baseUrl);
+        // `parseBaseUrl` is addApiProfile's own check, exported and called here so that a
+        // URL it will refuse is refused before the key prompt rather than after it. Same
+        // function, same message - not a second rule. It also gives the host for the
+        // default auth scheme and for the success line.
+        const url = parseBaseUrl(baseUrl.trim());
 
         const authArg = optionValue(args, "--auth");
         if (authArg !== undefined && authArg !== "bearer" && authArg !== "api-key") {
           throw new Error("Invalid --auth: use bearer or api-key.");
         }
-        const authScheme = authArg ?? (url && isAnthropicHost(url.hostname) ? "api-key" : "bearer");
+        const authScheme = authArg ?? (isAnthropicHost(url.hostname) ? "api-key" : "bearer");
 
         // Built before the key is asked for: a rejected setting should not cost the user
         // a typed key. This is the same validator addApiProfile runs, not a second rule.
@@ -983,9 +1037,7 @@ export async function runCommand(command: string, args: string[]) {
         });
         const id = profileId(tool, result.name);
         warnPlaintextEnv(id, Object.keys(env));
-        return success(
-          `Added ${bold(id)} ${dim(`(${url?.host ?? baseUrl})`)}\n  ${dim(`Config: ${result.configDir}`)}`,
-        );
+        return success(`Added ${bold(id)} ${dim(`(${url.host})`)}\n  ${dim(`Config: ${result.configDir}`)}`);
       }
 
       // addProfile enforces the name rule before it touches anything.

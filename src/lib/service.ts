@@ -1629,7 +1629,12 @@ function checkSecretSource(
   }
 }
 
-function parseBaseUrl(baseUrl: string): URL {
+/**
+ * Exported so the CLI can apply this rule before it asks for a key, rather than after -
+ * a rejected base URL should not cost the user a typed key. It is the definition, not a
+ * copy: `addApiProfile` calls the same function, and the caller gets the same message.
+ */
+export function parseBaseUrl(baseUrl: string): URL {
   let url: URL;
   try {
     url = new URL(baseUrl);

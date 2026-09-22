@@ -355,13 +355,25 @@ describe("add --api", () => {
       expect(existsSync(path.join(h.home, ".claude-gw"))).toBe(false);
     });
 
-    it("leaves the base-URL rule to the service rather than repeating it differently", async () => {
+    it("leaves the base-URL rule to the service, and applies it before the prompt", async () => {
       const h = await harness();
-      promptAnswers.push(KEY);
 
       const message = await failure(h.run("add", "claude:gw", "--api", "--base-url", "localhost:8000"));
 
+      // addApiProfile's own message, from its own exported function - not a second rule.
       expect(message).toBe("Invalid base URL: the scheme must be http or https, not 'localhost'.");
+      // And it runs first, so a URL that was going to be refused costs no typed key.
+      expect(promptCalls).toEqual([]);
+    });
+
+    it("refuses a base URL carrying credentials before the prompt too", async () => {
+      const h = await harness();
+
+      const message = await failure(h.run("add", "claude:gw", "--api", "--base-url", "https://u:p@example.com"));
+
+      expect(message).toContain("must not carry credentials");
+      expect(message).not.toContain("u:p");
+      expect(promptCalls).toEqual([]);
     });
 
     it("refuses a bad profile name with the service's rule, before asking for a key", async () => {
@@ -408,6 +420,27 @@ describe("add --api", () => {
       });
     }
 
+    // `--key` and `--api` are boolean flags, so `--key=<key>` is not an option at all and
+    // falls through to the unknown-option message, which used to quote the whole token.
+    // The fix is in validateFlags, so it covers every flag there will ever be.
+    const attached: [string, string[]][] = [
+      ["config --key=", ["config", "claude:gw", `--key=${KEY}`]],
+      ["add --key=", ["add", "claude:gw", "--api", "--base-url", "http://localhost:8000", `--key=${KEY}`]],
+      ["a misspelled option", ["add", "claude:gw", "--api", `--base-urll=${KEY}`]],
+    ];
+
+    for (const [label, args] of attached) {
+      it(`never prints it back from ${label}`, async () => {
+        const h = await harness({ "claude:gw": API_PROFILE });
+
+        const message = await failure(h.run(args[0], ...args.slice(1)));
+
+        expect(message).not.toContain(KEY);
+        expect(message).toContain("Unknown option: --");
+        expect(message).not.toContain("=");
+      });
+    }
+
     it("never prints it back from config --unset", async () => {
       const h = await harness({ "claude:gw": API_PROFILE });
 
@@ -415,6 +448,83 @@ describe("add --api", () => {
 
       expect(message).not.toContain(KEY);
       expect(message).toContain("--unset");
+    });
+  });
+
+  // A key in the positional slot would otherwise become a profile id in profiles.json, a
+  // directory name under HOME, and a line of stdout - the one slip that puts a credential
+  // in the file this feature promises never holds one.
+  describe("a key passed where the profile name belongs", () => {
+    it("refuses it on add, without creating anything or echoing it", async () => {
+      const h = await harness();
+
+      const message = await failure(h.run("add", "--api", "--base-url", "http://localhost:8000", KEY));
+
+      expect(message).not.toContain(KEY);
+      expect(message).toContain("looks like an API key");
+      expect(message).toContain("--key-from env:NAME");
+      expect(Object.keys(h.registry().profiles)).toEqual(["claude:default"]);
+      expect(existsSync(path.join(h.home, `.claude-${KEY}`))).toBe(false);
+      expect(promptCalls).toEqual([]);
+    });
+
+    it("refuses it wherever a profile is named", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      for (const args of [
+        ["config", KEY, "--key"],
+        ["remove", KEY],
+        ["use", KEY],
+        ["repair", KEY],
+      ]) {
+        const message = await failure(h.run(args[0], ...args.slice(1)));
+        expect(message, args.join(" ")).not.toContain(KEY);
+        expect(message, args.join(" ")).toContain("looks like an API key");
+      }
+      expect(promptCalls).toEqual([]);
+    });
+
+    it("refuses a name too long to be one, whatever it starts with", async () => {
+      const h = await harness();
+
+      const message = await failure(h.run("add", "a".repeat(65), "--api", "--base-url", "http://localhost:8000"));
+
+      expect(message).toContain("at most 64 characters");
+      expect(Object.keys(h.registry().profiles)).toEqual(["claude:default"]);
+    });
+
+    it("still accepts an ordinary name of that shape's length", async () => {
+      const h = await harness();
+      promptAnswers.push(KEY);
+
+      await h.run("add", "a".repeat(64), "--api", "--base-url", "http://localhost:8000");
+
+      expect(Object.keys(h.registry().profiles)).toContain(`claude:${"a".repeat(64)}`);
+    });
+  });
+
+  // The other shape of the same slip: the key is passed as if an option took it, and the
+  // command used to ignore it and prompt anyway, leaving the user sure they had supplied one.
+  describe("a key passed as an extra argument", () => {
+    it("refuses it on config --key rather than prompting anyway", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      const message = await failure(h.run("config", "claude:gw", "--key", KEY));
+
+      expect(message).not.toContain(KEY);
+      expect(message).toContain("--key takes no value");
+      expect(promptCalls).toEqual([]);
+    });
+
+    it("refuses it on add", async () => {
+      const h = await harness();
+
+      const message = await failure(h.run("add", "claude:gw", "--api", "--base-url", "http://localhost:8000", KEY));
+
+      expect(message).not.toContain(KEY);
+      expect(message).toContain("one profile name and nothing else");
+      expect(Object.keys(h.registry().profiles)).toEqual(["claude:default"]);
+      expect(promptCalls).toEqual([]);
     });
   });
 
@@ -731,6 +841,51 @@ describe("config --edit", () => {
 
     expect(message).toContain("Set $EDITOR");
   });
+
+  // Ctrl-C while the editor is open reaches clausona too - the editor runs in the same
+  // process group - so the `finally` never gets to run. A signal handler is what takes the
+  // scratch file with it.
+  it("takes the scratch file away on a signal, and stops listening afterwards", async () => {
+    const h = await harness({
+      "claude:gw": { ...API_PROFILE, env: { ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer sk-fake-hdr-0003" } },
+    });
+    vi.stubEnv("EDITOR", "fake-editor");
+    const before = process.listeners("SIGINT");
+    let duringEditor: { installed: NodeJS.SignalsListener[]; fileExisted: boolean } | undefined;
+
+    // process.kill would take the test runner with it, so the handler's re-raise is stubbed.
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const seen = fakeEditor((file) => {
+      const installed = process.listeners("SIGINT").filter((listener) => !before.includes(listener));
+      duringEditor = { installed, fileExisted: existsSync(file) };
+      // What SIGINT would do, run directly: this is the handler's real body.
+      for (const listener of installed) listener("SIGINT");
+    });
+
+    await failure(h.run("config", "claude:gw", "--edit"));
+
+    expect(duringEditor?.fileExisted).toBe(true);
+    expect(duringEditor?.installed).toHaveLength(1);
+    expect(existsSync(seen[0].dir)).toBe(false);
+    expect(kill).toHaveBeenCalledWith(process.pid, "SIGINT");
+    // Nothing is left listening once the command is done.
+    expect(process.listeners("SIGINT")).toEqual(before);
+  });
+
+  it("stops listening for a signal after an ordinary edit too", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+    vi.stubEnv("EDITOR", "fake-editor");
+    const before = process.listeners("SIGINT").length;
+    let during = 0;
+    fakeEditor(() => {
+      during = process.listeners("SIGINT").length;
+    });
+
+    await h.run("config", "claude:gw", "--edit");
+
+    expect(during).toBe(before + 1);
+    expect(process.listeners("SIGINT").length).toBe(before);
+  });
 });
 
 describe("config, the parts that were already there", () => {
@@ -802,6 +957,14 @@ describe("help", () => {
     expect(help).toContain("/^[A-Za-z0-9][A-Za-z0-9._-]*$/");
     expect(help).toContain("compared without case");
     expect(help).toContain("api-key for anthropic.com");
+    // --set has to be usable from this page alone: a real key, and where the rest live.
+    expect(help).toContain("CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144");
+    expect(help).toContain("--show --json");
+    // When a referenced key is read, which is the difference between a profile that works
+    // now and one that works in the shell someone runs claude in tomorrow.
+    expect(help).toContain("every time the profile is used");
+    expect(help).toContain("the shell that runs claude");
+    expect(help).toContain("[--merge-sessions]");
   });
 
   it("tells `config` readers where the env map and the key each live", async () => {
@@ -813,6 +976,8 @@ describe("help", () => {
     expect(help).toContain("--key");
     expect(help).toContain("--show --json");
     expect(help).toContain("--edit");
+    expect(help).toContain("every time the profile is used");
+    expect(help).toContain("the shell that runs claude");
   });
 
   it("points at add --api from the top-level usage", async () => {
