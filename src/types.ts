@@ -55,13 +55,27 @@ export type SecretSource =
   | { source: "env"; name: string }
   | { source: "command"; run: string };
 
+export type ApiEndpoint = {
+  baseUrl: string;
+  /** bearer -> ANTHROPIC_AUTH_TOKEN, api-key -> ANTHROPIC_API_KEY */
+  authScheme: "bearer" | "api-key";
+  secret: SecretSource;
+};
+
 export type Profile = {
   tool: ToolName;
+  /** undefined means "subscription" — existing registries carry no kind. */
+  kind?: "subscription" | "api";
   configDir: string;
   email: string;
+  /** Display name for profiles that have no account email. */
+  label?: string;
   orgName?: string;
   isPrimary?: boolean;
   mergeSessions?: boolean;
+  api?: ApiEndpoint;
+  /** Free-form environment overrides. The advanced UI is a view over this map. */
+  env?: Record<string, string>;
 };
 
 export type Registry = {
