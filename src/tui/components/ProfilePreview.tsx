@@ -8,8 +8,10 @@ import {
   formatCurrency,
   localTimezoneLabel,
 } from "../../lib/format.js";
-import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot, QuotaWindow } from "../../types.js";
+import { displayName } from "../../lib/profile-env.js";
+import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot, QuotaWindow, SecretSource } from "../../types.js";
 import { color, symbol } from "../theme.js";
+import { Badge } from "./Badge.js";
 
 function Row({
   label,
@@ -120,6 +122,42 @@ function QuotaSection({ quota }: { quota?: QuotaSnapshot }) {
   );
 }
 
+/**
+ * Where the key is read from, and nothing else about it.
+ *
+ * A `command` source is named without its command line, unlike `config --show`: that panel
+ * is a deliberate read of one profile, while this one paints whatever the cursor passes
+ * over, and a command carrying a vault path or an inline argument does not belong on a
+ * screen somebody is scrolling past. `keychain` and `env:NAME` say everything they have.
+ */
+function describeSecretSource(secret: SecretSource): string {
+  if (secret.source === "env") return `env:${secret.name}`;
+  if (secret.source === "command") return "command";
+  return "keychain";
+}
+
+/**
+ * What an API profile is: where it points, what it asks for, and where its key comes from.
+ * Never the key - `api.secret` is a reference, and the registry has never held anything else.
+ */
+function ApiSection({ profile }: { profile: ProfileListItem }) {
+  const api = profile.api;
+  if (!api) return null;
+  const model = profile.env?.ANTHROPIC_MODEL;
+  // The model has a row of its own; the rest are counted rather than listed, because the
+  // panel is a column and there can be twenty of them.
+  const others = Object.keys(profile.env ?? {}).filter((key) => key !== "ANTHROPIC_MODEL").length;
+  return (
+    <>
+      <Row label="Endpoint" value={api.baseUrl} singleLine />
+      <Row label="Auth" value={api.authScheme} valueColor={color.secondary} />
+      <Row label="Key" value={describeSecretSource(api.secret)} valueColor={color.secondary} />
+      <Row label="Model" value={model ?? EM_DASH} valueColor={model ? color.text : color.muted} singleLine />
+      {others > 0 && <Row label="Settings" value={`${others} set`} valueColor={color.secondary} />}
+    </>
+  );
+}
+
 export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem; doctor?: DoctorProfileResult }) {
   if (!profile) {
     return (
@@ -137,15 +175,7 @@ export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem;
     );
   }
 
-  // Any finding at all, warning included, is something to look at - so the icon follows the
-  // issue list rather than `healthy`, and the colour comes from the rule the doctor list
-  // uses too, which is what keeps the two surfaces from grading the same profile differently.
-  const clean = doctor?.issues.length === 0;
-  const healthColor = doctor ? color[doctorSeverity(doctor.issues)] : color.muted;
-
-  const healthLabel = doctor
-    ? `${clean ? symbol.check : symbol.diamond} ${doctorSummary(doctor.issues)}`
-    : `${symbol.circle} unknown`;
+  const isApi = profile.kind === "api";
 
   return (
     <Box
@@ -162,18 +192,24 @@ export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem;
         <Text color={color.text} bold wrap="truncate-end">
           {profile.name}
         </Text>
-        {profile.isActive && (
-          <Box backgroundColor={color.brand} paddingX={1} flexShrink={0}>
-            <Text color="#ffffff" bold>
-              ACTIVE
-            </Text>
-          </Box>
-        )}
+        <Box gap={1} flexShrink={0}>
+          {isApi && <Badge label="API" variant="info" />}
+          {profile.isActive && (
+            <Box backgroundColor={color.brand} paddingX={1} flexShrink={0}>
+              <Text color="#ffffff" bold>
+                ACTIVE
+              </Text>
+            </Box>
+          )}
+        </Box>
       </Box>
 
       {/* Details */}
       <Box flexDirection="column" gap={0} marginBottom={1} flexShrink={0}>
-        <Row label="Account" value={profile.email} />
+        {/* An API profile has no account email; its label stands in, exactly as it does in
+            `list` and in the doctor. Blank-aware, so a hand-edited blank label does not
+            hide a real email behind whitespace. */}
+        <Row label="Account" value={displayName(profile)} />
         {profile.orgName && <Row label="Org" value={profile.orgName} />}
         <Row label="Config" value={profile.configDir.replace(/^\/Users\/[^/]+/, "~")} valueColor={color.muted} />
         {!profile.isPrimary && (
@@ -187,9 +223,10 @@ export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem;
 
       <Separator />
 
-      {/* Plan quota */}
+      {/* An endpoint has no plan quota, and nothing ever fetches one for it - so the quota
+          rows would sit on "loading…" forever. What it is replaces what it does not have. */}
       <Box flexDirection="column" gap={0} marginBottom={1} flexShrink={0}>
-        <QuotaSection quota={profile.quota} />
+        {isApi ? <ApiSection profile={profile} /> : <QuotaSection quota={profile.quota} />}
       </Box>
 
       <Separator />
@@ -216,11 +253,21 @@ export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem;
         />
       </Box>
 
-      {/* Health */}
+      {/* Health. The whole section waits for a result rather than guessing at one, so
+          there is no "unknown" state to render: until the doctor has run, the panel says
+          nothing about health at all. */}
       {doctor && (
         <Box flexDirection="column" flexShrink={0}>
           <Separator />
-          <Row label="Health" value={healthLabel} valueColor={healthColor} />
+          {/* Any finding at all, warning included, is something to look at - so the icon
+              follows the issue list rather than `healthy`, and the colour comes from the
+              rule the doctor list uses too, which is what keeps the two surfaces from
+              grading the same profile differently. */}
+          <Row
+            label="Health"
+            value={`${doctor.issues.length === 0 ? symbol.check : symbol.diamond} ${doctorSummary(doctor.issues)}`}
+            valueColor={color[doctorSeverity(doctor.issues)]}
+          />
           {doctor.issues.map((issue) => (
             <Box key={issue.message} gap={1} marginTop={1}>
               <Text color={color.warning}>{symbol.arrow}</Text>

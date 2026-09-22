@@ -1,7 +1,7 @@
 import { render } from "ink-testing-library";
 import { describe, expect, it } from "vitest";
 
-import type { DoctorProfileResult, ProfileListItem } from "../../types.js";
+import type { DoctorProfileResult, ProfileListItem, SecretSource } from "../../types.js";
 import { ProfilePreview } from "./ProfilePreview.js";
 
 /**
@@ -41,6 +41,91 @@ function doctor(issues: DoctorProfileResult["issues"]): DoctorProfileResult {
 
 const frameFor = (result?: DoctorProfileResult) =>
   render(<ProfilePreview profile={profile} doctor={result} />).lastFrame() ?? "";
+
+/** A subscription profile, for the rows that must not have changed for one. */
+const subscription: ProfileListItem = {
+  name: "claude:work",
+  tool: "claude",
+  email: "you@example.com",
+  configDir: "/h/.claude-work",
+  isPrimary: false,
+  isActive: false,
+  today: { cost: 0, inputTokens: 0, outputTokens: 0 },
+  week: { cost: 0, inputTokens: 0, outputTokens: 0 },
+  month: { cost: 0, inputTokens: 0, outputTokens: 0 },
+  total: { cost: 0, inputTokens: 0, outputTokens: 0 },
+};
+
+/** The same endpoint, with the key read from wherever the caller says. */
+function apiProfile(secret: SecretSource = { source: "keychain" }): ProfileListItem {
+  return {
+    ...profile,
+    api: { baseUrl: "https://gateway.example.com", authScheme: "bearer", secret },
+    env: { ANTHROPIC_MODEL: "glm-4.6", CLAUDE_CODE_MAX_CONTEXT_TOKENS: "262144" },
+  };
+}
+
+const endpoint = apiProfile();
+
+const panelFor = (item: ProfileListItem) => render(<ProfilePreview profile={item} />).lastFrame() ?? "";
+
+describe("ProfilePreview for an API profile", () => {
+  it("says what kind of profile it is", () => {
+    expect(panelFor(endpoint)).toContain("API");
+    expect(panelFor(subscription)).not.toMatch(/●\s+API/);
+  });
+
+  it("names the endpoint, the scheme, and the model", () => {
+    const frame = panelFor(endpoint);
+
+    expect(frame).toContain("https://gateway.example.com");
+    expect(frame).toContain("bearer");
+    expect(frame).toContain("glm-4.6");
+  });
+
+  it("counts the settings it carries beyond the model", () => {
+    expect(panelFor(endpoint)).toContain("1 set");
+  });
+
+  it("titles it by its label, since an API profile has no account email", () => {
+    expect(panelFor(endpoint)).toContain("gpu-box");
+  });
+
+  it("does not sit on a quota that nothing will ever fetch for it", () => {
+    // `listProfiles` and `fetchProfileQuotas` both skip an API profile, so the quota rows
+    // would read "loading…" for as long as the panel is open.
+    expect(panelFor(endpoint)).not.toContain("loading");
+    expect(panelFor(subscription)).toContain("loading");
+  });
+
+  it("leaves the panel standing for an API profile whose endpoint is missing", () => {
+    // A hand-edited registry can carry `kind: "api"` with no block under it; the doctor
+    // reports that, and the panel has nothing to say about it rather than throwing.
+    expect(panelFor(profile)).toContain("claude:glm");
+  });
+
+  describe("the key row", () => {
+    it("names the credential store, never a key", () => {
+      expect(panelFor(endpoint)).toContain("keychain");
+    });
+
+    it("names the variable an env source reads", () => {
+      const frame = panelFor(apiProfile({ source: "env", name: "GW_TOKEN" }));
+
+      expect(frame).toContain("env:GW_TOKEN");
+    });
+
+    it("says only that a command source is a command, not what the command is", () => {
+      // Unlike `config --show`, which is a deliberate read of one profile. This panel
+      // paints whatever the cursor passes over, and a command line can carry a vault path
+      // or an argument that is itself the secret.
+      const frame = panelFor(apiProfile({ source: "command", run: "op read op://vault/key" }));
+
+      expect(frame).toContain("command");
+      expect(frame).not.toContain("op://vault/key");
+    });
+  });
+});
 
 describe("ProfilePreview health", () => {
   it("says healthy when there is nothing to report", () => {
