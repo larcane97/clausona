@@ -520,6 +520,82 @@ describe("legacy names that share another profile's backup directory", () => {
   }
 });
 
+describe("the removal check for a shared backup directory", () => {
+  /** A codex account importable with `add --from`, and the codex primary it links to. */
+  function seedCodexAccount(h: Harness, dirName: string) {
+    mkdirSync(path.join(h.home, ".codex"), { recursive: true });
+    const dir = path.join(h.home, dirName);
+    mkdirSync(dir, { recursive: true });
+    // An id_token whose payload carries an email is all the codex adapter reads.
+    const payload = Buffer.from(JSON.stringify({ email: "codex@example.com" })).toString("base64url");
+    writeFileSync(path.join(dir, "auth.json"), JSON.stringify({ tokens: { id_token: `h.${payload}.s` } }));
+    return dir;
+  }
+
+  // A legacy `claude:../codex/work` resolves to backups/codex/work, the directory
+  // `codex:work` owns, though the two are registered under different tools.
+  it("sees a legacy name of another tool that resolves to this profile's backup", async () => {
+    const h = await harness();
+    const codexDir = seedCodexAccount(h, "codex-account");
+    await h.service.addProfile({ tool: "codex", name: "work", fromPath: codexDir });
+    const sentinel = path.join(h.home, ".clausona", "backups", "codex", "work", "sentinel.json");
+    writeFileSync(sentinel, '{"original":true}');
+    registerLegacy(h, "../codex/work", path.join(h.home, ".claude-legacy"));
+    const stderr = captureStderr();
+
+    await h.service.removeProfile("codex:work");
+
+    expect(existsSync(sentinel), "the backup another profile resolves to was deleted").toBe(true);
+    expect(existsSync(path.join(codexDir, "sentinel.json")), "that backup was restored here").toBe(false);
+    expect(stderr()).toContain("because 'claude:../codex/work' keeps its backup there too");
+  });
+
+  // `claude:.` resolves to backups/claude itself, which holds every claude backup.
+  it("sees a legacy name whose backup directory holds this profile's", async () => {
+    const h = await harness();
+    await h.service.addProfile({
+      tool: "claude",
+      name: "work",
+      fromPath: seedAccountDir(h.home, "work-account", "work@example.com"),
+    });
+    const sentinel = seedBackupFile(h.home, "work");
+    registerLegacy(h, ".", path.join(h.home, ".claude-legacy"));
+    const stderr = captureStderr();
+
+    await h.service.removeProfile("claude:work");
+
+    expect(existsSync(sentinel), "the backup was deleted").toBe(true);
+    expect(stderr()).toContain("because 'claude:.' keeps its backup there too");
+  });
+
+  // Keys are only ever written as `tool:name`, but profiles.json can be edited by hand.
+  it("does not let a malformed registry entry stop another profile's removal", async () => {
+    const h = await harness();
+    await h.service.addProfile({
+      tool: "claude",
+      name: "work",
+      fromPath: seedAccountDir(h.home, "work-account", "work@example.com"),
+    });
+    const registry = h.registry();
+    const stray = { tool: "claude", configDir: path.join(h.home, "stray"), email: "stray@example.com" };
+    registry.profiles["no-tool-prefix"] = stray;
+    registry.profiles["gemini:work"] = stray;
+    registry.profiles["claude:broken"] = { configDir: path.join(h.home, "stray") };
+    registry.profiles["claude:null"] = null;
+    writeFileSync(h.registryPath, JSON.stringify(registry));
+
+    await h.service.removeProfile("claude:work");
+
+    expect(Object.keys(h.registry().profiles).sort()).toEqual([
+      "claude:broken",
+      "claude:default",
+      "claude:null",
+      "gemini:work",
+      "no-tool-prefix",
+    ]);
+  });
+});
+
 describe("a legacy pair of names that differ only by case", () => {
   // Ruling B stops a new pair, but a registry can already hold one. On a case-insensitive
   // filesystem the two share one backup directory, and whichever is removed first used to

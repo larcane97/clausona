@@ -1334,22 +1334,36 @@ async function claimBackupDir(backupDir: string, id: string) {
 }
 
 /**
- * Another registered profile of the same tool whose backup directory is this profile's or
- * lies inside it: a name that differs only by case (one directory on a case-insensitive
- * filesystem), or a name from before the name rule that normalizes to this one (`work/`)
- * or nests under it (`work/x`). Which files in a shared directory belong to which profile
- * cannot be told apart, so it is not this profile's alone to restore from and delete.
+ * Another registered profile whose backup directory is this profile's, holds it, or lies
+ * inside it. Which files in a shared directory belong to which profile cannot be told apart,
+ * so it is not this profile's alone to restore from and delete. A registry can hold such a
+ * pair from before the name rule: names that differ only by case (one directory on a
+ * case-insensitive filesystem), a name that normalizes to this one (`work/`) or nests under
+ * it (`work/x`), or one that reaches into another tool's backups (`claude:../codex/work`).
+ *
+ * Each other profile's directory is worked out with the plain path math that placed it -
+ * joined onto its own tool's backups, as backupDirFor did before it refused such names -
+ * and not through backupDirFor: an entry that is malformed or refused must not make this
+ * profile's removal fail.
  */
-function backupDirSharer(registry: Registry, id: string): string | undefined {
-  const { tool, name } = parseProfileRef(id, registry);
-  const base = path.join(CLAUSONA_DIR, "backups", tool);
-  const own = foldProfileName(path.join(base, name));
-  return Object.keys(registry.profiles).find((other) => {
-    const profile = registry.profiles[other];
-    if (other === id || profile.tool !== tool || profile.isPrimary) return false;
-    const theirs = foldProfileName(path.join(base, parseProfileRef(other, registry).name));
-    return theirs === own || theirs.startsWith(own + path.sep);
-  });
+function backupDirSharer(registry: Registry, id: string, tool: ToolName, name: string): string | undefined {
+  const backups = path.join(CLAUSONA_DIR, "backups");
+  const where = (entryTool: string, entryName: string) =>
+    foldProfileName(path.resolve(path.join(backups, entryTool, entryName)));
+  const within = (parent: string, child: string) => {
+    const relative = path.relative(parent, child);
+    return (
+      relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+    );
+  };
+  const own = where(tool, name);
+  return Object.entries(registry.profiles).find(([other, profile]) => {
+    if (other === id || typeof profile !== "object" || profile === null || profile.isPrimary) return false;
+    const separator = other.indexOf(":");
+    if (separator < 0 || typeof profile.tool !== "string") return false;
+    const theirs = where(profile.tool, other.slice(separator + 1));
+    return within(own, theirs) || within(theirs, own);
+  })?.[0];
 }
 
 /**
@@ -1702,7 +1716,7 @@ export async function removeProfile(id: string) {
 
   const { name } = parseProfileRef(id, registry);
   const primarySource = registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
-  const sharer = backupDirSharer(registry, id);
+  const sharer = backupDirSharer(registry, id, profile.tool, name);
   await cleanupProfile(name, profile, primarySource, { keepBackup: sharer !== undefined });
   if (sharer) {
     const home = homedir();
