@@ -1,13 +1,17 @@
-import { homedir } from "node:os";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { renderPosixExports } from "./core/shell.js";
+import { spawnCommandSync } from "./core/process.js";
+import { isPosixEnvName, renderPosixExports } from "./core/shell.js";
 import { trackUsage } from "./core/track-usage.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import { renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
-import { buildProfileEnv, controlledEnvKeys } from "./lib/profile-env.js";
+import { buildProfileEnv, CREDENTIAL_ENV_KEYS, controlledEnvKeys } from "./lib/profile-env.js";
 import { parseProfileRef, profileId } from "./lib/profile-ref.js";
+import { promptSecret } from "./lib/prompt-secret.js";
 import {
+  addApiProfile,
   addProfile,
   discoverAccounts,
   doctorProfiles,
@@ -24,9 +28,12 @@ import {
   syncPluginsJson,
   uninstallClausona,
   updateProfileConfig,
+  updateProfileEnv,
+  updateProfileSecret,
 } from "./lib/service.js";
+import { CLAUDE_ENV_CATALOG, validateEnvEntry } from "./tools/claude-env-catalog.js";
 import { ALL_TOOLS } from "./tools/registry.js";
-import type { ToolName } from "./types.js";
+import type { Profile, SecretSource, ToolName } from "./types.js";
 
 function jsonFlag(args: string[]) {
   return args.includes("--json");
@@ -36,15 +43,33 @@ function helpFlag(args: string[]) {
   return args.includes("--help") || args.includes("-h");
 }
 
+/**
+ * Options that take a value. Each one is listed under `flags` for the `--opt value` form
+ * and under `prefixes` with its `=` for the `--opt=value` form, so a misspelling such as
+ * `--base-urls` is still refused - a bare `--base-url` prefix would accept it.
+ */
+const ADD_VALUE_FLAGS = ["--from", "--base-url", "--model", "--auth", "--key-from", "--label", "--set"];
+const CONFIG_VALUE_FLAGS = ["--set", "--unset", "--key-from"];
+
+/** Every `add` option that only means anything for an API profile. */
+const API_ONLY_FLAGS = ["--base-url", "--model", "--auth", "--key-from", "--label", "--set"];
+
+function valuePrefixes(flags: string[]): string[] {
+  return flags.map((flag) => `${flag}=`);
+}
+
 const commandFlags: Record<string, { flags: string[]; prefixes?: string[] }> = {
   init: { flags: ["--auto", "--merge-sessions"] },
-  add: { flags: ["--from", "--merge-sessions"] },
+  add: { flags: ["--merge-sessions", "--api", ...ADD_VALUE_FLAGS], prefixes: valuePrefixes(ADD_VALUE_FLAGS) },
   use: { flags: [] },
   list: { flags: ["--json", "--no-quota", "--no-renew", "--refresh"] },
   usage: { flags: ["--json"], prefixes: ["--period="] },
   current: { flags: ["--json"] },
   doctor: { flags: ["--json"] },
-  config: { flags: ["--merge-sessions", "--separate-sessions"] },
+  config: {
+    flags: ["--merge-sessions", "--separate-sessions", "--key", "--edit", "--show", "--json", ...CONFIG_VALUE_FLAGS],
+    prefixes: valuePrefixes(CONFIG_VALUE_FLAGS),
+  },
   repair: { flags: [] },
   login: { flags: [] },
   remove: { flags: [] },
@@ -65,6 +90,275 @@ function validateFlags(command: string, args: string[]) {
     if (known.includes(arg)) continue;
     if (prefixes.some((p) => arg.startsWith(p))) continue;
     throw new Error(`Unknown option: ${arg}\nRun \`clausona ${command} --help\` for usage.`);
+  }
+}
+
+// ─── Option parsing ─────────────────────────────────────────────────
+//
+// One rule runs through every message below: an option's *value* is never echoed back.
+// `--key-from sk-ant-…` is one keystroke away from the option that takes the key, and an
+// error that quotes what it was given would print the key to the terminal and into the
+// scrollback. Variable *names* are echoed, because they are validated identifiers.
+
+const ADD_API_USAGE =
+  "Usage: clausona add <profile> --api --base-url <url> [--model <id>] [--auth bearer|api-key] [--key-from <source>]";
+
+const CONFIG_USAGE =
+  "Usage: clausona config <profile> [--set KEY=VALUE] [--unset KEY] [--key] [--edit] [--show] [--merge-sessions | --separate-sessions]";
+
+/** Never says what was read: the answer is the key, or what the user meant to be one. */
+const NO_KEY_SUPPLIED =
+  'No API key supplied. Type it at the prompt, pipe it in (printf %s "$KEY" | clausona …), or read it from elsewhere with --key-from env:NAME.';
+
+/** Reads `--flag value` and `--flag=value`, returning every occurrence in order. */
+function optionValues(args: string[], flag: string): string[] {
+  const values: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === flag && args[i + 1] !== undefined) {
+      values.push(args[i + 1]);
+      i++;
+    } else if (arg.startsWith(`${flag}=`)) {
+      values.push(arg.slice(flag.length + 1));
+    }
+  }
+  return values;
+}
+
+/** The one value of an option, refusing a repeat rather than silently keeping the first. */
+function optionValue(args: string[], flag: string): string | undefined {
+  const values = optionValues(args, flag);
+  if (values.length > 1) throw new Error(`${flag} was given more than once. Pass it at most once.`);
+  return values[0];
+}
+
+/**
+ * The first bare argument, skipping whatever follows a value-carrying option - otherwise
+ * `clausona add --base-url https://… work` would read the URL as the profile name.
+ */
+function positionalArg(args: string[], valueFlags: string[]): string | undefined {
+  const consumed = new Set<number>();
+  for (let i = 0; i < args.length; i++) {
+    if (valueFlags.includes(args[i]) && args[i + 1] !== undefined) consumed.add(i + 1);
+  }
+  return args.find((arg, i) => !arg.startsWith("--") && !consumed.has(i));
+}
+
+/** Splits `KEY=VALUE`, rejecting a bare key so a typo never silently clears a setting. */
+function parseAssignment(input: string, flag: string): [string, string] {
+  const index = input.indexOf("=");
+  if (index <= 0) throw new Error(`Expected ${flag} KEY=VALUE, for example ${flag} ANTHROPIC_MODEL=my-model.`);
+  return [input.slice(0, index), input.slice(index + 1)];
+}
+
+/** An environment variable name given on the command line, for `--unset`. */
+function parseEnvName(input: string, flag: string): string {
+  if (!isPosixEnvName(input)) {
+    throw new Error(`Expected ${flag} to name an environment variable, for example ${flag} ANTHROPIC_MODEL.`);
+  }
+  return input;
+}
+
+function parseSecretSource(input: string): SecretSource {
+  if (input === "keychain") return { source: "keychain" };
+  if (input.startsWith("env:")) {
+    const name = input.slice(4);
+    if (!name) throw new Error("Usage: --key-from env:VARIABLE_NAME");
+    return { source: "env", name };
+  }
+  if (input.startsWith("command:")) {
+    const run = input.slice(8);
+    if (!run) throw new Error('Usage: --key-from command:"<shell command>"');
+    return { source: "command", run };
+  }
+  throw new Error('Invalid --key-from: use keychain, env:NAME, or command:"<shell command>".');
+}
+
+/**
+ * Anthropic's own API authenticates with x-api-key; gateways and self-hosted servers
+ * overwhelmingly take a Bearer token.
+ *
+ * Matched on the hostname, exactly: `URL.host` carries the port, and a plain
+ * `endsWith("anthropic.com")` would also accept `evilanthropic.com` - which would hand
+ * that host a key in the header Anthropic's own API expects.
+ */
+function isAnthropicHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === "anthropic.com" || host.endsWith(".anthropic.com");
+}
+
+/** Parses for the two cosmetic decisions below; addApiProfile owns the rule itself. */
+function tryParseUrl(input: string): URL | undefined {
+  try {
+    return new URL(input);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The env map is stored in plain text in profiles.json. That is deliberate - the map is
+ * how a user reaches a Claude Code variable clausona has no flag for - but these names
+ * are the ones whose value is a credential, and a key pasted into one is a key in a file
+ * that nothing treats as a secret. Warn, never block: a legitimate non-secret header
+ * override goes through the same map.
+ */
+const CREDENTIAL_ENV_KEY_SET = new Set<string>(CREDENTIAL_ENV_KEYS);
+
+function warnPlaintextEnv(id: string, keys: string[]) {
+  for (const key of keys) {
+    if (!CREDENTIAL_ENV_KEY_SET.has(key)) continue;
+    process.stderr.write(
+      `  ${warnIcon} ${key} is stored in plain text in ~/.clausona/profiles.json.\n` +
+        `    If it carries this profile's API key, put the key in the credential store instead: clausona config ${id} --key\n`,
+    );
+  }
+}
+
+function describeSecretSource(secret: SecretSource): string {
+  if (secret.source === "env") return `env:${secret.name}`;
+  if (secret.source === "command") return `command:${secret.run}`;
+  return "keychain";
+}
+
+/**
+ * `config --show`: what this profile is and what it sets. The JSON form also carries the
+ * advanced-settings catalog, so a caller who has only `--help` and this command can find
+ * out which keys exist and what each one expects.
+ *
+ * A value under one of the credential names is reported as present but not printed.
+ * Nothing here should make `--show` a way to read a key out of a profile - not on a
+ * shared terminal, and not into a log. The credential itself is never in the registry at
+ * all; only its source is, and that is shown.
+ */
+function showProfile(id: string, profile: Profile, asJson: boolean): string {
+  const env = profile.env ?? {};
+  const hiddenEnvKeys = Object.keys(env).filter((key) => CREDENTIAL_ENV_KEY_SET.has(key));
+
+  if (asJson) {
+    const shown = Object.fromEntries(
+      Object.entries(env).map(([key, value]) => [key, CREDENTIAL_ENV_KEY_SET.has(key) ? "<hidden>" : value]),
+    );
+    return JSON.stringify(
+      {
+        profile: {
+          id,
+          kind: profile.kind ?? "subscription",
+          label: profile.label,
+          email: profile.email,
+          configDir: profile.configDir,
+          isPrimary: profile.isPrimary ?? false,
+          mergeSessions: profile.mergeSessions ?? false,
+          // The key's VALUE is deliberately absent; only where it is read from.
+          api: profile.api
+            ? { baseUrl: profile.api.baseUrl, authScheme: profile.api.authScheme, secret: profile.api.secret }
+            : undefined,
+          env: shown,
+          /** Names whose value `env` reports as "<hidden>" rather than printing. */
+          hiddenEnvKeys,
+        },
+        catalog: CLAUDE_ENV_CATALOG,
+      },
+      null,
+      2,
+    );
+  }
+
+  const lines = [
+    `${secondary("Kind".padEnd(12))}${profile.kind ?? "subscription"}`,
+    `${secondary("Account".padEnd(12))}${profile.label ?? profile.email}`,
+    `${secondary("Config".padEnd(12))}${dim(profile.configDir)}`,
+  ];
+  if (profile.api) {
+    lines.push(`${secondary("Endpoint".padEnd(12))}${profile.api.baseUrl}`);
+    lines.push(`${secondary("Auth".padEnd(12))}${profile.api.authScheme}`);
+    lines.push(`${secondary("Key".padEnd(12))}${describeSecretSource(profile.api.secret)}`);
+  }
+  if (!profile.isPrimary) {
+    lines.push(`${secondary("Sessions".padEnd(12))}${profile.mergeSessions ? "merged" : "separated"}`);
+  }
+  const keys = Object.keys(env).sort();
+  lines.push(`${secondary("Settings".padEnd(12))}${keys.length === 0 ? dim("none") : ""}`);
+  for (const key of keys) {
+    lines.push(
+      CREDENTIAL_ENV_KEY_SET.has(key)
+        ? `  ${accent(key)} ${dim("(set; not shown - it can hold a credential)")}`
+        : `  ${accent(key)}=${env[key]}`,
+    );
+  }
+  lines.push("", dim("Run `clausona config <profile> --show --json` for the full advanced-settings catalog."));
+  return box(id, lines);
+}
+
+/**
+ * Splits $EDITOR into a command and its arguments. `code -w` and `emacsclient -nw` are
+ * ordinary values for it, and the whole string as one command name would look for a
+ * program called "code -w". Quotes group a path with spaces in it; nothing else is
+ * interpreted, because this is not a shell and the value is never handed to one.
+ */
+function splitCommandLine(input: string): string[] {
+  const parts: string[] = [];
+  for (const match of input.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)) {
+    parts.push(match[1] ?? match[2] ?? match[3]);
+  }
+  return parts;
+}
+
+/** The edited file, checked to be what the env map is: a flat object of strings. */
+function parseEditedEnv(raw: string): Record<string, string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("The edited file is not valid JSON, so nothing was changed.");
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error('The edited file must hold a JSON object of "KEY": "value" pairs, so nothing was changed.');
+  }
+  const entries = Object.entries(parsed as Record<string, unknown>);
+  for (const [key, value] of entries) {
+    if (typeof value !== "string") {
+      throw new Error(`${key} must be a string in quotes, so nothing was changed.`);
+    }
+  }
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
+/**
+ * `config --edit`: the env map in $EDITOR, applied on a clean exit.
+ *
+ * The scratch file lives in a directory of its own made by mkdtemp (0700) and is written
+ * 0600. A fixed name in the shared temp directory would be world-readable and something
+ * anyone on the machine could point at another file with a symlink first - and this file
+ * can hold an ANTHROPIC_CUSTOM_HEADERS value. The directory goes on every way out: a
+ * failed editor, an unparseable edit, and a successful save.
+ */
+async function editProfileEnv(id: string, current: Record<string, string>): Promise<string> {
+  // A blank $VISUAL is as good as an unset one; `??` would take "" and stop there.
+  const editor = [process.env.VISUAL, process.env.EDITOR].find((value) => (value ?? "").trim() !== "");
+  const [command, ...editorArgs] = splitCommandLine(editor ?? "");
+  if (!command) throw new Error("Set $EDITOR (or $VISUAL) to use --edit.");
+
+  const dir = await mkdtemp(path.join(tmpdir(), "clausona-env-"));
+  const scratchPath = path.join(dir, "env.json");
+  try {
+    await writeFile(scratchPath, `${JSON.stringify(current, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    // No env is passed, so the editor inherits this process's own - the spawn helpers
+    // treat a given env as a replacement, and a partial one would start the editor
+    // without a PATH, a HOME or a TERM.
+    const result = spawnCommandSync(command, [...editorArgs, scratchPath], { stdio: "inherit" });
+    if (result.error) throw new Error(`Could not run ${command}: ${result.error.message}`);
+    if (result.status !== 0) {
+      throw new Error(`${command} exited with ${result.status ?? "a signal"}, so nothing was changed.`);
+    }
+
+    const edited = parseEditedEnv(await readFile(scratchPath, "utf8"));
+    const removed = Object.keys(current).filter((key) => !(key in edited));
+    await updateProfileEnv(id, { set: edited, unset: removed });
+    warnPlaintextEnv(id, Object.keys(edited));
+    return success(`Updated ${bold(id)} ${dim(`(${Object.keys(edited).length} setting(s))`)}`);
+  } finally {
+    await rm(dir, { force: true, recursive: true }).catch(() => {});
   }
 }
 
@@ -93,13 +387,35 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("USAGE")}`,
         helpUsage("clausona add <profile> [--from <path>] [--merge-sessions]"),
+        helpUsage("clausona add <profile> --api --base-url <url> [--model <id>] [--auth <scheme>]"),
         "",
         `  ${bold("ARGUMENTS")}`,
         `    ${accent("profile".padEnd(18))}${dim("Profile to create (e.g. work or claude:work)")}`,
+        `    ${" ".repeat(18)}${dim("Letters, digits, '.', '_' and '-', starting with a letter or digit:")}`,
+        `    ${" ".repeat(18)}${dim("/^[A-Za-z0-9][A-Za-z0-9._-]*$/. Names are compared without case,")}`,
+        `    ${" ".repeat(18)}${dim("so 'Work' and 'work' are the same profile.")}`,
         "",
         `  ${bold("OPTIONS")}`,
         `    ${accent("--from".padEnd(18))}${dim("Import configuration from an existing path")}`,
         `    ${accent("--merge-sessions".padEnd(18))}${dim("Share session history across profiles (default: separated)")}`,
+        `    ${accent("--api".padEnd(18))}${dim("Create an API profile instead of a subscription login")}`,
+        `    ${accent("--base-url".padEnd(18))}${dim("API endpoint, http:// or https:// (required with --api)")}`,
+        `    ${accent("--model".padEnd(18))}${dim("Model id, stored as ANTHROPIC_MODEL")}`,
+        `    ${accent("--auth".padEnd(18))}${dim("bearer | api-key (default: api-key for anthropic.com, else bearer)")}`,
+        `    ${accent("--key-from".padEnd(18))}${dim('keychain (default) | env:NAME | command:"<shell command>"')}`,
+        `    ${accent("--label".padEnd(18))}${dim("Display name shown in list (default: the endpoint host)")}`,
+        `    ${accent("--set".padEnd(18))}${dim("Advanced setting KEY=VALUE; repeatable")}`,
+        "",
+        `  ${bold("EXAMPLES")}`,
+        helpUsage("clausona add claude:gw --api --base-url https://openrouter.ai/api --model z-ai/glm-5.3"),
+        helpUsage('printf %s "$MY_API_KEY" | clausona add claude:gw --api --base-url https://openrouter.ai/api'),
+        helpUsage("clausona add claude:local --api --base-url http://localhost:8000 --key-from env:MY_API_KEY"),
+        helpUsage('clausona add claude:vault --api --base-url http://localhost:8000 --key-from command:"pass show gw"'),
+        "",
+        `  ${bold("THE KEY")}`,
+        `    ${dim("With --key-from keychain (the default) the key is read from a prompt that does")}`,
+        `    ${dim("not echo it, or from stdin when something is piped in. Never pass a key as an")}`,
+        `    ${dim("argument: `ps` shows every process's arguments to every user on the machine.")}`,
         "",
       ].join("\n");
 
@@ -182,13 +498,37 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("USAGE")}`,
         helpUsage("clausona config <profile> --merge-sessions | --separate-sessions"),
+        helpUsage("clausona config <profile> --set KEY=VALUE [--set ...] [--unset KEY]"),
+        helpUsage("clausona config <profile> --key | --key-from <source>"),
+        helpUsage("clausona config <profile> --edit"),
+        helpUsage("clausona config <profile> --show [--json]"),
         "",
         `  ${bold("ARGUMENTS")}`,
-        `    ${accent("profile".padEnd(12))}${dim("Profile to configure")}`,
+        `    ${accent("profile".padEnd(22))}${dim("Profile to configure")}`,
         "",
         `  ${bold("OPTIONS")}`,
         `    ${accent("--merge-sessions".padEnd(22))}${dim("Share sessions with primary profile")}`,
         `    ${accent("--separate-sessions".padEnd(22))}${dim("Keep sessions isolated (default)")}`,
+        `    ${accent("--set".padEnd(22))}${dim("Set an advanced env setting; repeatable")}`,
+        `    ${accent("--unset".padEnd(22))}${dim("Remove an advanced env setting; repeatable")}`,
+        `    ${accent("--key".padEnd(22))}${dim("Re-enter the API key for an API profile")}`,
+        `    ${accent("--key-from".padEnd(22))}${dim('Switch the source: keychain | env:NAME | command:"<shell command>"')}`,
+        `    ${accent("--edit".padEnd(22))}${dim("Open the profile's env map in $EDITOR")}`,
+        `    ${accent("--show".padEnd(22))}${dim("Print the profile's settings (add --json for the full catalog)")}`,
+        "",
+        `    ${dim("One change per call, except --show, which only reads.")}`,
+        "",
+        `  ${bold("EXAMPLES")}`,
+        helpUsage("clausona config claude:gw --set CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144"),
+        helpUsage("clausona config claude:gw --unset ANTHROPIC_MODEL"),
+        helpUsage("clausona config claude:gw --show --json"),
+        helpUsage('printf %s "$MY_API_KEY" | clausona config claude:gw --key'),
+        "",
+        `  ${bold("WHERE THINGS ARE STORED")}`,
+        `    ${dim("The env map is stored in plain text in ~/.clausona/profiles.json. The API key")}`,
+        `    ${dim("is not: it belongs in the credential store, set with --key or read from")}`,
+        `    ${dim("--key-from. Do not put it in --set ANTHROPIC_API_KEY=... or in an")}`,
+        `    ${dim("Authorization header under ANTHROPIC_CUSTOM_HEADERS.")}`,
         "",
       ].join("\n");
 
@@ -302,7 +642,7 @@ function usageText() {
     helpSection("COMMANDS", [
       ["run <profile>", "Run the CLI with a specific profile"],
       ["init", "Discover accounts interactively"],
-      ["add <profile>", "Add a new profile"],
+      ["add <profile>", "Add a new profile (--api for an endpoint instead of a login)"],
       ["use [profile]", "Switch active profile"],
       ["list", "Show profiles with quota and usage"],
       ["usage [profile]", "Show usage summary"],
@@ -469,18 +809,68 @@ export async function runCommand(command: string, args: string[]) {
     }
 
     case "config": {
+      const setPairs = optionValues(args, "--set");
+      const unsetKeys = optionValues(args, "--unset").map((key) => parseEnvName(key, "--unset"));
+      const keyFrom = optionValue(args, "--key-from");
+      const changeKey = args.includes("--key") || keyFrom !== undefined;
+      const openEditor = args.includes("--edit");
       const mergeSessions = args.includes("--merge-sessions");
       const separateSessions = args.includes("--separate-sessions");
-      if (mergeSessions === separateSessions) {
-        throw new Error("Usage: clausona config <profile> --merge-sessions | --separate-sessions");
-      }
-      const [input] = args.filter((a) => !a.startsWith("--"));
-      if (!input) {
-        throw new Error("Usage: clausona config <profile> --merge-sessions | --separate-sessions");
-      }
+      const changeEnv = setPairs.length > 0 || unsetKeys.length > 0;
+      const changeSessions = mergeSessions || separateSessions;
+
+      const input = positionalArg(args, CONFIG_VALUE_FLAGS);
+      if (!input) throw new Error(CONFIG_USAGE);
+
       const registry = await loadRegistry();
       if (!registry) throw new Error("clausona is not initialized.");
       const ref = parseProfileRef(input, registry);
+      const profile = registry.profiles[ref.id];
+
+      // A read, and it wins over everything else: `--show` next to a change is a caller
+      // asking what is there, and answering that is always safe.
+      if (args.includes("--show")) return showProfile(ref.id, profile, jsonFlag(args));
+
+      // One change per call. Each branch below returns, so a second flag would be dropped
+      // without a word - the caller would be told the profile was updated, for the other
+      // thing they asked for.
+      const changes = [changeEnv, changeKey, openEditor, changeSessions].filter(Boolean).length;
+      if (changes === 0) throw new Error(CONFIG_USAGE);
+      if (changes > 1) {
+        throw new Error(
+          "Change one thing at a time: --set/--unset, --key/--key-from, --edit, or --merge-sessions/--separate-sessions.",
+        );
+      }
+
+      if (changeEnv) {
+        const set: Record<string, string> = {};
+        for (const assignment of setPairs) {
+          const [key, value] = parseAssignment(assignment, "--set");
+          set[key] = value;
+        }
+        // updateProfileEnv validates every entry through validateEnvEntry before it saves.
+        await updateProfileEnv(ref.id, { set, unset: unsetKeys });
+        warnPlaintextEnv(ref.id, Object.keys(set));
+        const changed = [...Object.keys(set), ...unsetKeys].join(", ");
+        return success(`Updated ${bold(ref.id)} ${dim(`(${changed})`)}`);
+      }
+
+      if (changeKey) {
+        // Checked before the prompt, not after: updateProfileSecret refuses the same
+        // thing, but by then the user has typed a key for a profile that has no use for one.
+        if (profile.kind !== "api" || !profile.api) throw new Error(`Profile '${ref.id}' is not an API profile.`);
+        const secret = parseSecretSource(keyFrom ?? "keychain");
+        const value = secret.source === "keychain" ? await promptSecret("API key: ") : undefined;
+        if (secret.source === "keychain" && !value) throw new Error(NO_KEY_SUPPLIED);
+        await updateProfileSecret(ref.id, secret, value);
+        return success(`Updated the credential for ${bold(ref.id)}`);
+      }
+
+      if (openEditor) return await editProfileEnv(ref.id, profile.env ?? {});
+
+      if (mergeSessions && separateSessions) {
+        throw new Error("Pass --merge-sessions or --separate-sessions, not both.");
+      }
       const result = await updateProfileConfig(ref.id, { mergeSessions });
       if (!result.changed) return dim(`${ref.id} is already ${mergeSessions ? "merged" : "separated"}`);
       return success(`${bold(ref.id)} sessions set to ${result.mergeSessions ? "merged" : "separated"}`);
@@ -497,12 +887,24 @@ export async function runCommand(command: string, args: string[]) {
     }
 
     case "add": {
-      const fromIndex = args.indexOf("--from");
-      const fromPath = fromIndex >= 0 ? args[fromIndex + 1] : undefined;
-      const fromValueIndex = fromIndex >= 0 ? fromIndex + 1 : -1;
+      const api = args.includes("--api");
+      const fromPath = optionValue(args, "--from");
       const mergeSessions = args.includes("--merge-sessions");
-      const [input] = args.filter((arg, i) => !arg.startsWith("--") && i !== fromValueIndex);
-      if (!input) throw new Error("Usage: clausona add <profile> [--from <path>] [--merge-sessions]");
+
+      if (api && fromPath !== undefined) {
+        throw new Error("--api and --from cannot be combined: an API profile has no account to import.");
+      }
+      if (!api) {
+        // Silently ignoring one of these would leave a subscription profile where the
+        // caller asked for an endpoint, and nothing on screen would say so.
+        const stray = API_ONLY_FLAGS.find((flag) => optionValues(args, flag).length > 0);
+        if (stray) throw new Error(`${stray} only applies to an API profile. Add --api, or leave it out.`);
+      }
+
+      const input = positionalArg(args, ADD_VALUE_FLAGS);
+      if (!input) {
+        throw new Error(api ? ADD_API_USAGE : "Usage: clausona add <profile> [--from <path>] [--merge-sessions]");
+      }
 
       const registry = await loadRegistry();
       if (!registry) throw new Error("clausona is not initialized.");
@@ -528,6 +930,57 @@ export async function runCommand(command: string, args: string[]) {
         }
         tool = configured[0];
         name = input;
+      }
+
+      if (api) {
+        const baseUrl = optionValue(args, "--base-url");
+        if (!baseUrl) throw new Error(ADD_API_USAGE);
+        // Parsed only to pick the default auth scheme and to name the endpoint in the
+        // success line. addApiProfile owns what a base URL may be, so an unparseable one
+        // falls through to it rather than collecting a second, different rule here.
+        const url = tryParseUrl(baseUrl);
+
+        const authArg = optionValue(args, "--auth");
+        if (authArg !== undefined && authArg !== "bearer" && authArg !== "api-key") {
+          throw new Error("Invalid --auth: use bearer or api-key.");
+        }
+        const authScheme = authArg ?? (url && isAnthropicHost(url.hostname) ? "api-key" : "bearer");
+
+        // Built before the key is asked for: a rejected setting should not cost the user
+        // a typed key. This is the same validator addApiProfile runs, not a second rule.
+        const env: Record<string, string> = {};
+        const model = optionValue(args, "--model");
+        if (model !== undefined) env.ANTHROPIC_MODEL = model;
+        for (const assignment of optionValues(args, "--set")) {
+          const [key, value] = parseAssignment(assignment, "--set");
+          if (key === "ANTHROPIC_MODEL" && model !== undefined) {
+            throw new Error("ANTHROPIC_MODEL is what --model sets. Pass one or the other.");
+          }
+          const result = validateEnvEntry(key, value);
+          if (!result.ok) throw new Error(result.error);
+          env[key] = value;
+        }
+
+        const secret = parseSecretSource(optionValue(args, "--key-from") ?? "keychain");
+        const secretValue = secret.source === "keychain" ? await promptSecret("API key: ") : undefined;
+        if (secret.source === "keychain" && !secretValue) throw new Error(NO_KEY_SUPPLIED);
+
+        const result = await addApiProfile({
+          tool,
+          name,
+          baseUrl,
+          authScheme,
+          secret,
+          secretValue,
+          label: optionValue(args, "--label"),
+          env,
+          mergeSessions: mergeSessions || undefined,
+        });
+        const id = profileId(tool, result.name);
+        warnPlaintextEnv(id, Object.keys(env));
+        return success(
+          `Added ${bold(id)} ${dim(`(${url?.host ?? baseUrl})`)}\n  ${dim(`Config: ${result.configDir}`)}`,
+        );
       }
 
       // addProfile enforces the name rule before it touches anything.
