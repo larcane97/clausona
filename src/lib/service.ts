@@ -12,7 +12,7 @@ import { isPosixEnvName, renderShellInit } from "../core/shell.js";
 import { seedSeenSessions } from "../core/track-usage.js";
 import { summarizeUsage } from "../core/usage.js";
 import { validateEnvEntry } from "../tools/claude-env-catalog.js";
-import { allAdapters, getAdapter } from "../tools/registry.js";
+import { ALL_TOOLS, allAdapters, getAdapter } from "../tools/registry.js";
 import type { ToolAdapter } from "../tools/types.js";
 import type {
   DiscoveredAccount,
@@ -675,7 +675,8 @@ export async function loadUsageStore() {
 export async function initializeRegistry(options: {
   accounts: DiscoveredAccount[];
   profileNames: Record<string, string>;
-  defaultProfile: string;
+  /** A bare claude profile name the user picked; leave it out when nobody chose one. */
+  defaultProfile?: string;
   mergeSessions?: boolean;
   mergeSessionsMap?: Record<string, boolean>;
 }) {
@@ -778,21 +779,18 @@ export async function initializeRegistry(options: {
 
   for (const [id, profile] of carried) registry.profiles[id] = profile;
 
-  // Determine activeProfiles map from options.defaultProfile (per-tool)
-  // defaultProfile is a bare name from CLI; resolve to claude:<name> for backwards compat.
-  const firstId = (tool: ToolName) => planned.find((p) => p.account.tool === tool)?.id;
-  const claudeFallback = firstId("claude");
-  if (claudeFallback) {
-    const wanted = profileId("claude", options.defaultProfile);
-    registry.activeProfiles.claude = registry.profiles[wanted] ? wanted : claudeFallback;
-  }
-  const codexFallback = firstId("codex");
-  if (codexFallback) registry.activeProfiles.codex = codexFallback;
-
-  // An active API profile stays active. Init does not discover it, so no default chosen
-  // among the accounts it found was a choice against it.
-  for (const [id, profile] of carried) {
-    if (existing?.activeProfiles[profile.tool] === id) registry.activeProfiles[profile.tool] = id;
+  // A default the user picked wins for the tool it names - a bare name, so claude. A tool
+  // nobody chose for keeps the profile that was active, API or subscription, while it is still
+  // registered, and otherwise gets its first account. `init --auto` never chooses, so running
+  // it again leaves the active profiles as they were.
+  const picked = options.defaultProfile === undefined ? undefined : profileId("claude", options.defaultProfile);
+  for (const tool of ALL_TOOLS) {
+    const active = existing?.activeProfiles[tool];
+    const next =
+      (tool === "claude" && picked && registry.profiles[picked] ? picked : undefined) ??
+      (active && registry.profiles[active]?.tool === tool ? active : undefined) ??
+      planned.find((p) => p.account.tool === tool)?.id;
+    if (next) registry.activeProfiles[tool] = next;
   }
 
   await saveRegistry(registry);

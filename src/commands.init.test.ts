@@ -277,14 +277,15 @@ describe("re-running init with an API profile registered", () => {
     expect(h.ids()).toEqual([...EXPECTED_IDS, "claude:glm"].sort());
   });
 
-  it("keeps an active one active even when the caller names another default", async () => {
-    // TUI init's default step only lists the accounts it found, so it cannot offer this one.
-    const { h } = await withApiProfile({ active: true });
+  it("gives way to a default the user picks in TUI init", async () => {
+    const { h, entry } = await withApiProfile({ active: true });
 
     const state = await h.commands.bootstrapInitFromCurrentState();
+    // The TUI's default step always ends in an explicit pick.
     await h.service.initializeRegistry({ ...state, defaultProfile: "work" });
 
-    expect(h.registry().activeProfiles.claude).toBe("claude:glm");
+    expect(h.registry().activeProfiles.claude).toBe("claude:work");
+    expect(h.registry().profiles["claude:glm"]).toEqual(entry);
   });
 
   it("keeps an inactive one without making it active", async () => {
@@ -319,6 +320,94 @@ describe("re-running init with an API profile registered", () => {
       }),
     ).rejects.toThrow("'claude:glm' is an API profile, which init keeps. Give 'claude:GLM' another name.");
     expect(readFileSync(path.join(h.home, ".clausona", "profiles.json"), "utf8")).toBe(before);
+  });
+});
+
+describe("re-running init --auto leaves the active profiles alone", () => {
+  // `init --auto` never asks which profile should be active, so it has no business changing
+  // it. It used to make the first account of each tool active on every run.
+  it("keeps a non-first codex profile active", async () => {
+    const h = await harness();
+    await h.commands.runCommand("init", ["--auto"]);
+    await h.service.setActiveProfileByName("codex:work");
+
+    await h.commands.runCommand("init", ["--auto"]);
+
+    expect(h.registry().activeProfiles.codex).toBe("codex:work");
+  });
+
+  it("keeps a non-first claude subscription profile active", async () => {
+    const h = await harness();
+    await h.commands.runCommand("init", ["--auto"]);
+    await h.service.setActiveProfileByName("claude:work");
+
+    await h.commands.runCommand("init", ["--auto"]);
+
+    expect(h.registry().activeProfiles).toEqual({ claude: "claude:work", codex: "codex:default" });
+  });
+
+  it("falls back to a tool's first account when its active profile is gone", async () => {
+    const h = await harness();
+    await h.commands.runCommand("init", ["--auto"]);
+    await h.service.setActiveProfileByName("claude:work");
+    rmSync(path.join(h.home, ".claude-work"), { recursive: true, force: true });
+
+    await h.commands.runCommand("init", ["--auto"]);
+
+    expect(h.ids()).toEqual(["claude:default", "codex:default", "codex:work"]);
+    expect(h.registry().activeProfiles.claude).toBe("claude:default");
+  });
+
+  it("makes each tool's first account active on the first run", async () => {
+    const h = await harness();
+
+    await h.commands.runCommand("init", ["--auto"]);
+
+    expect(h.registry().activeProfiles).toEqual({ claude: "claude:default", codex: "codex:default" });
+  });
+});
+
+describe("TUI init", () => {
+  it("keeps the active codex profile, since its default step picks the claude one", async () => {
+    const h = await harness();
+    await h.commands.runCommand("init", ["--auto"]);
+    await h.service.setActiveProfileByName("codex:work");
+
+    const state = await h.commands.bootstrapInitFromCurrentState();
+    await h.service.initializeRegistry({ ...state, defaultProfile: "work" });
+
+    expect(h.registry().activeProfiles).toEqual({ claude: "claude:work", codex: "codex:work" });
+  });
+});
+
+describe("init --auto over a registry from before codex support", () => {
+  // Reading the registry to reuse its names runs the existing v1 -> v2 migration first.
+  it("ends with the v1 profiles under their names, their backups in place, and the active one kept", async () => {
+    const h = await harness();
+    const clausona = path.join(h.home, ".clausona");
+    mkdirSync(path.join(clausona, "backups", "work"), { recursive: true });
+    writeFileSync(path.join(clausona, "backups", "work", "settings.json"), '{"original":true}');
+    const v1 = {
+      primarySource: path.join(h.home, ".claude"),
+      activeProfile: "work",
+      profiles: {
+        default: { configDir: path.join(h.home, ".claude"), email: "primary@example.com", isPrimary: true },
+        work: { configDir: path.join(h.home, ".claude-work"), email: "work@example.com" },
+      },
+    };
+    writeFileSync(path.join(clausona, "profiles.json"), JSON.stringify(v1));
+
+    await h.commands.runCommand("init", ["--auto"]);
+
+    const registry = h.registry();
+    expect(registry.version).toBe(2);
+    expect(h.ids()).toEqual(EXPECTED_IDS);
+    expect(registry.activeProfiles).toEqual({ claude: "claude:work", codex: "codex:default" });
+    expect(readFileSync(path.join(clausona, "backups", "claude", "work", "settings.json"), "utf8")).toBe(
+      '{"original":true}',
+    );
+    expect(existsSync(path.join(clausona, "backups", "work")), "the v1 backup was left in the old layout").toBe(false);
+    expect(JSON.parse(readFileSync(path.join(clausona, "profiles.json.v1.bak"), "utf8"))).toEqual(v1);
   });
 });
 

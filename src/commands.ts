@@ -622,8 +622,8 @@ export async function runCommand(command: string, args: string[]) {
       }
       const mergeSessions = args.includes("--merge-sessions") || undefined;
       const profileNames = initProfileNames(accounts, await loadRegistry());
-      const defaultProfile = Object.values(profileNames)[0] ?? "default";
-      await initializeRegistry({ accounts, profileNames, defaultProfile, mergeSessions });
+      // No default: nobody was asked, so each tool keeps the profile that was active.
+      await initializeRegistry({ accounts, profileNames, mergeSessions });
       return success(`Initialized ${bold(String(accounts.length))} profile(s)`);
     }
 
