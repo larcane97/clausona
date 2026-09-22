@@ -140,7 +140,10 @@ export function controlledEnvKeys(profile: Profile, built: BuiltEnv): string[] {
 }
 
 export function displayName(profile: Pick<Profile, "email" | "label">): string {
-  return profile.label ?? profile.email;
+  // Blank-aware, not just absent-aware: `add --api` refuses an empty label, but a
+  // hand-edited profiles.json can carry one, and `label ?? email` would then hide a real
+  // account email behind whitespace wherever a profile is named.
+  return profile.label?.trim() || profile.email;
 }
 
 /**

@@ -69,6 +69,13 @@ describe("displayName", () => {
   it("falls back to the email", () => {
     expect(displayName({ email: "you@example.com" })).toBe("you@example.com");
   });
+
+  it("falls back to the email when the label is blank", () => {
+    // `add --api` refuses a blank label, but a hand-edited profiles.json can carry one,
+    // and a row or a doctor title showing nothing is worse than one showing the email.
+    expect(displayName({ email: "you@example.com", label: "   " })).toBe("you@example.com");
+    expect(displayName({ email: "you@example.com", label: "" })).toBe("you@example.com");
+  });
 });
 
 describe("buildProfileEnv", () => {
