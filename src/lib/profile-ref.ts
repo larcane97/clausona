@@ -7,6 +7,25 @@ export function profileId(tool: ToolName, name: string): string {
   return `${tool}:${name}`;
 }
 
+/**
+ * The names a new profile may take. A name becomes a path segment - `~/.claude-<name>`
+ * and the backup directory `~/.clausona/backups/<tool>/<name>`, which both add paths
+ * clear before use - so `..` would point that clear at every backup clausona holds and
+ * `.` at every one for the tool. An allowlist rules out the whole class (dot segments,
+ * separators, `:`, whitespace) rather than enumerating the dangerous names.
+ *
+ * Checked at creation only: profiles registered before this rule keep working.
+ */
+const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+export function validateProfileName(name: string): { ok: true } | { ok: false; error: string } {
+  if (PROFILE_NAME.test(name)) return { ok: true };
+  return {
+    ok: false,
+    error: `Invalid profile name '${name}': must be non-empty, start with a letter or digit, and use only letters, digits, '.', '_' and '-'.`,
+  };
+}
+
 function isToolName(value: string): value is ToolName {
   return (ALL_TOOLS as string[]).includes(value);
 }

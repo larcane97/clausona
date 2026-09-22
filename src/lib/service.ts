@@ -26,7 +26,7 @@ import type {
   UsagePeriod,
   UsageStore,
 } from "../types.js";
-import { profileId } from "./profile-ref.js";
+import { profileId, validateProfileName } from "./profile-ref.js";
 
 /** Files inside plugins/ that contain absolute paths and must be per-profile */
 const PLUGINS_PATH_FILES = new Set(["known_marketplaces.json", "installed_plugins.json"]);
@@ -1188,9 +1188,8 @@ export async function addProfile(options: {
   fromPath?: string;
   mergeSessions?: boolean;
 }) {
-  if (options.name === "" || options.name.includes(":")) {
-    throw new Error(`Invalid profile name '${options.name}': must be non-empty and not contain ':'.`);
-  }
+  const nameCheck = validateProfileName(options.name);
+  if (!nameCheck.ok) throw new Error(nameCheck.error);
 
   const registry = await loadRegistry();
   if (!registry) throw new Error("clausona is not initialized.");

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Registry } from "../types.js";
-import { parseProfileRef, profileId } from "./profile-ref.js";
+import { parseProfileRef, profileId, validateProfileName } from "./profile-ref.js";
 import { addProfile } from "./service.js";
 
 const REG: Registry = {
@@ -47,6 +47,26 @@ describe("parseProfileRef", () => {
 describe("profileId", () => {
   it("composes tool:name", () => {
     expect(profileId("codex", "work")).toBe("codex:work");
+  });
+});
+
+describe("validateProfileName", () => {
+  it("accepts names built from letters, digits, '.', '_' and '-'", () => {
+    for (const name of ["work", "Work2", "glm-5.3", "a_b", "7"]) {
+      expect(validateProfileName(name), name).toEqual({ ok: true });
+    }
+  });
+
+  it("rejects dot segments, separators, ':', whitespace and a leading punctuation mark", () => {
+    for (const name of ["", ".", "..", ".hidden", "a/b", "a\\b", "../x", "a:b", "a b", " a", "-a", "_a", "a\n"]) {
+      expect(validateProfileName(name), JSON.stringify(name)).toMatchObject({ ok: false });
+    }
+  });
+
+  it("states the rule so the name can be corrected", () => {
+    const result = validateProfileName("..");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/start with a letter or digit.*letters, digits, '\.', '_' and '-'/);
   });
 });
 

@@ -529,13 +529,7 @@ export async function runCommand(command: string, args: string[]) {
         name = input;
       }
 
-      if (!name) {
-        throw new Error("Profile name cannot be empty.");
-      }
-      if (name.includes(":")) {
-        throw new Error(`Profile name '${name}' cannot contain ':'.`);
-      }
-
+      // addProfile enforces the name rule before it touches anything.
       const added = await addProfile({ tool, name, fromPath, mergeSessions: mergeSessions || undefined });
       return success(`Added ${bold(profileId(tool, added.name))} ${dim(`(${added.email})`)}`);
     }
