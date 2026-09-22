@@ -1333,6 +1333,12 @@ async function claimBackupDir(backupDir: string, id: string) {
   });
 }
 
+/** True when `child` is `parent` or lies inside it. Both are absolute, normalized paths. */
+function isWithin(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
 /**
  * Another registered profile whose backup directory is this profile's, holds it, or lies
  * inside it. Which files in a shared directory belong to which profile cannot be told apart,
@@ -1350,38 +1356,43 @@ function backupDirSharer(registry: Registry, id: string, tool: ToolName, name: s
   const backups = path.join(CLAUSONA_DIR, "backups");
   const where = (entryTool: string, entryName: string) =>
     foldProfileName(path.resolve(path.join(backups, entryTool, entryName)));
-  const within = (parent: string, child: string) => {
-    const relative = path.relative(parent, child);
-    return (
-      relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
-    );
-  };
   const own = where(tool, name);
   return Object.entries(registry.profiles).find(([other, profile]) => {
     if (other === id || typeof profile !== "object" || profile === null || profile.isPrimary) return false;
     const separator = other.indexOf(":");
     if (separator < 0 || typeof profile.tool !== "string") return false;
     const theirs = where(profile.tool, other.slice(separator + 1));
-    return within(own, theirs) || within(theirs, own);
+    return isWithin(own, theirs) || isWithin(theirs, own);
   })?.[0];
 }
 
 /**
  * `add --from` moves each entry the primary shares into a backup and links it to the
  * primary's. Run on the primary itself, that replaces each entry with a link to itself; run
- * on another profile's directory, it gives two profiles one directory. Both are compared by
- * where they resolve, so a trailing separator or a link cannot slip past.
+ * on another profile's directory, it gives two profiles one directory; run on a directory
+ * that holds one of those - the home directory holds the primary and its `.claude.json` -
+ * it replaces that directory's own entries with links. All are compared by where they
+ * resolve, so a trailing separator or a link cannot slip past.
  */
 async function assertImportable(registry: Registry, tool: ToolName, configDir: string, primarySource: string) {
+  const home = homedir();
   const resolve = (dir: string) => realpath(dir).catch(() => path.resolve(dir));
   const target = await resolve(configDir);
-  const shown = configDir.replace(homedir(), "~");
+  const shown = configDir.replace(home, "~");
   if (target === (await resolve(primarySource))) {
     throw new Error(`Cannot add ${shown}: it is ${tool}'s primary config directory, which every profile shares.`);
   }
   for (const [id, profile] of Object.entries(registry.profiles)) {
     if (target === (await resolve(profile.configDir))) {
       throw new Error(`Cannot add ${shown}: it is already registered as '${id}'.`);
+    }
+  }
+  if (target === (await resolve(home))) {
+    throw new Error(`Cannot add ${shown}: it is the home directory, not a config directory.`);
+  }
+  for (const managed of [primarySource, ...Object.values(registry.profiles).map((profile) => profile.configDir)]) {
+    if (isWithin(target, await resolve(managed))) {
+      throw new Error(`Cannot add ${shown}: it holds ${managed.replace(home, "~")}, which clausona already manages.`);
     }
   }
 }

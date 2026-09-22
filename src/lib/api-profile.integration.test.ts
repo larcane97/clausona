@@ -1082,6 +1082,78 @@ describe("add --from a directory clausona already manages", () => {
     });
   }
 
+  // A directory that holds a managed one looks importable - `~` holds the primary's
+  // `~/.claude.json` - and importing it replaced its own entries with links.
+  it("refuses the home directory and leaves its entries alone", async () => {
+    const h = await harness();
+    const mine = path.join(h.home, "commands", "mine.md");
+    mkdirSync(path.dirname(mine), { recursive: true });
+    writeFileSync(mine, "my command");
+    const before = h.snapshot();
+
+    const outcome = await h.service.addProfile({ tool: "claude", name: "x", fromPath: "~" }).catch((e: Error) => e);
+
+    expect(lstatSync(path.dirname(mine)).isDirectory(), "~/commands was replaced").toBe(true);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toBe("Cannot add ~: it is the home directory, not a config directory.");
+    expect(h.snapshot()).toEqual(before);
+  });
+
+  it("refuses the directory that holds the primary, when that is not the home directory", async () => {
+    const h = await harness();
+    const parent = path.join(h.home, "nested");
+    const primary = path.join(parent, ".claude");
+    mkdirSync(path.join(primary, "commands"), { recursive: true });
+    writeFileSync(
+      path.join(parent, ".claude.json"),
+      JSON.stringify({ oauthAccount: { emailAddress: "p@example.com" } }),
+    );
+    const registry = h.registry();
+    registry.primarySources.claude = primary;
+    registry.profiles["claude:default"].configDir = primary;
+    writeFileSync(h.registryPath, JSON.stringify(registry));
+    const mine = path.join(parent, "commands", "mine.md");
+    mkdirSync(path.dirname(mine), { recursive: true });
+    writeFileSync(mine, "my command");
+    const before = h.snapshot();
+
+    const outcome = await h.service.addProfile({ tool: "claude", name: "x", fromPath: parent }).catch((e: Error) => e);
+
+    expect(lstatSync(path.dirname(mine)).isDirectory(), "nested/commands was replaced").toBe(true);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toBe(
+      `Cannot add ${path.join("~", "nested")}: it holds ${path.join("~", "nested", ".claude")}, which clausona already manages.`,
+    );
+    expect(h.snapshot()).toEqual(before);
+  });
+
+  it("refuses the directory that holds a registered profile's", async () => {
+    const h = await harness();
+    const parent = path.join(h.home, "accounts");
+    await h.service.addProfile({
+      tool: "claude",
+      name: "work",
+      fromPath: seedAccountDir(h.home, path.join("accounts", "work"), "work@example.com"),
+    });
+    writeFileSync(
+      path.join(parent, ".claude.json"),
+      JSON.stringify({ oauthAccount: { emailAddress: "a@example.com" } }),
+    );
+    const mine = path.join(parent, "commands", "mine.md");
+    mkdirSync(path.dirname(mine), { recursive: true });
+    writeFileSync(mine, "my command");
+    const before = h.snapshot();
+
+    const outcome = await h.service.addProfile({ tool: "claude", name: "x", fromPath: parent }).catch((e: Error) => e);
+
+    expect(lstatSync(path.dirname(mine)).isDirectory(), "accounts/commands was replaced").toBe(true);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toBe(
+      `Cannot add ${path.join("~", "accounts")}: it holds ${path.join("~", "accounts", "work")}, which clausona already manages.`,
+    );
+    expect(h.snapshot()).toEqual(before);
+  });
+
   it("refuses a directory another profile already uses", async () => {
     const h = await harness();
     const shared = seedAccountDir(h.home, "work-account", "work@example.com");
