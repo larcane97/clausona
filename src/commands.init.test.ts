@@ -125,6 +125,20 @@ describe("init --auto", () => {
 
     expect(h.ids()).toEqual([...EXPECTED_IDS, "claude:my-work"].sort());
   });
+
+  // Neither of these can be fitted - one is spelled legally and only *looks* like a key,
+  // the other is simply too long - so without a fallback the name rule would stop init
+  // for a directory it used to name.
+  it("names an account whose directory looks like a key, or is too long to be a name", async () => {
+    const h = await harness();
+    seedClaudeAccount(h.home, ".claude-sk-foo", "sk@example.com");
+    seedClaudeAccount(h.home, `.claude-${"a".repeat(70)}`, "long@example.com");
+
+    await h.commands.runCommand("init", ["--auto"]);
+
+    // Both fall back to "profile", and the collision numbering keeps them apart.
+    expect(h.ids()).toEqual([...EXPECTED_IDS, "claude:profile", "claude:profile-2"].sort());
+  });
 });
 
 describe("bootstrapInitFromCurrentState", () => {

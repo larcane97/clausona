@@ -128,6 +128,21 @@ describe("validateProfileName", () => {
       }
     });
 
+    // `claude:<key>` starts with 'claude:', and for a shorter key it stays under the
+    // ceiling too - so the ref as a whole looks fine while the name part does not.
+    it("refuses one behind a tool prefix, whatever its length", () => {
+      for (const key of ["sk-or-v1-FAKE-0123", PROBE, `sk-${"a".repeat(80)}`]) {
+        for (const ref of [`claude:${key}`, `codex:${key}`, `nosuch:${key}`]) {
+          expect(() => parseProfileRef(ref, REG), ref).toThrow(/looks like an API key/);
+          try {
+            parseProfileRef(ref, REG);
+          } catch (error) {
+            expect((error as Error).message, ref).not.toContain(key);
+          }
+        }
+      }
+    });
+
     // The ceiling is a creation-time rule. A profile registered before it - or by hand -
     // still has to resolve, or it could never be removed.
     it("still resolves a registered name the ceiling would refuse", () => {
@@ -173,6 +188,10 @@ describe("defaultProfileName", () => {
       [".claude-work!", "work"],
       [".claude-日本", "profile"],
       [".claude-...", "profile"],
+      // Nothing to fit in either of these - one is already spelled legally and the other
+      // cannot be shortened - so the fallback is what keeps `init` working.
+      [".claude-sk-foo", "profile"],
+      [`.claude-${"a".repeat(70)}`, "profile"],
     ];
     for (const [dir, expected] of cases) {
       const name = defaultProfileName(path.join(home, dir));

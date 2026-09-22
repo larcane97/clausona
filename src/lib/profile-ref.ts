@@ -73,6 +73,11 @@ export function validateProfileName(name: string): { ok: true } | { ok: false; e
  * clausona's choice rather than the user's - `init --auto` has nobody to ask for another -
  * so one the rule rejects is made to fit it: each run of other characters becomes `-`, and
  * whatever cannot start a name is dropped. "profile" is what is left when nothing else is.
+ *
+ * The result is checked against the whole rule, not just the characters. Fitting cannot
+ * shorten a directory whose name is over the ceiling, and it cannot do anything at all for
+ * `~/.claude-sk-foo`, which is already spelled legally - so without the second check those
+ * two directories would make `clausona init` fail outright, where it used to name them.
  */
 export function defaultProfileName(dir: string): string {
   const name = directoryName(dir);
@@ -81,7 +86,7 @@ export function defaultProfileName(dir: string): string {
     .replace(/[^A-Za-z0-9._-]+/g, "-")
     .replace(/^[^A-Za-z0-9]+/, "")
     .replace(/-+$/, "");
-  return fitted || "profile";
+  return validateProfileName(fitted).ok ? fitted : "profile";
 }
 
 function directoryName(dir: string): string {
@@ -166,20 +171,25 @@ export function parseProfileRef(input: string, registry: Registry): ParsedProfil
    * Only on the paths that fail. A ref that resolves is a registered profile, not a
    * credential, and a legacy name long enough to trip the ceiling has to stay removable.
    */
-  const refuseIfKeyShaped = () => {
-    if (looksLikeCredential(input)) throw new Error(CREDENTIAL_AS_NAME_ERROR);
+  // The first candidate is required, so a call site that passes none does not compile -
+  // a bare `...candidates` would take zero arguments and check nothing, quietly.
+  const refuseIfKeyShaped = (candidate: string, ...more: string[]) => {
+    if ([candidate, ...more].some(looksLikeCredential)) throw new Error(CREDENTIAL_AS_NAME_ERROR);
   };
 
   if (input.includes(":")) {
     const [maybeTool, ...rest] = input.split(":");
     const name = rest.join(":");
     if (!isToolName(maybeTool)) {
-      refuseIfKeyShaped();
+      refuseIfKeyShaped(input, name);
       throw new Error(`Unknown tool '${maybeTool}'. Use one of: ${ALL_TOOLS.join(", ")}.`);
     }
     const id = profileId(maybeTool, name);
     if (!registry.profiles[id]) {
-      refuseIfKeyShaped();
+      // The name as well as the whole ref: `claude:<key>` does not start with 'sk-' and,
+      // for a shorter key, does not reach the ceiling either - but the key is still in
+      // the message that follows.
+      refuseIfKeyShaped(input, name);
       throw new Error(`Profile '${id}' not found.`);
     }
     return { tool: maybeTool, name, id };
@@ -191,7 +201,7 @@ export function parseProfileRef(input: string, registry: Registry): ParsedProfil
     if (registry.profiles[id]) candidates.push({ tool, name: input, id });
   }
   if (candidates.length === 0) {
-    refuseIfKeyShaped();
+    refuseIfKeyShaped(input);
     throw new Error(`Profile '${input}' not found.`);
   }
   if (candidates.length > 1) {
