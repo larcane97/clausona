@@ -575,16 +575,50 @@ describe("removing a profile next to a malformed registry entry", () => {
   // gone, registry saved) or fails before its first side effect. It used to read another
   // entry's `tool` after cleanupProfile had restored and deleted the backup and stripped the
   // links, so a `null` sorted ahead of the others left it half done and still registered.
-  const shapes: Array<[label: string, key: string, value: unknown]> = [
-    ["null", "claude:bad", null],
-    ["a string", "claude:bad", "not a profile"],
-    ["an entry without a tool", "claude:bad", { configDir: "/nowhere", email: "x@example.com" }],
+  // The last column is how removing the malformed entry itself is refused.
+  const refusedBecause = (key: string, reason: string) =>
+    `Profile '${key}' ${reason}, so it cannot be removed. Remove its entry from ${path.join("~", ".clausona", "profiles.json")} by hand.`;
+  const shapes: Array<[label: string, key: string, value: unknown, refusal: string]> = [
+    ["null", "claude:bad", null, "Profile 'claude:bad' not found."],
+    ["a string", "claude:bad", "not a profile", refusedBecause("claude:bad", "is not a profile entry")],
+    [
+      "an entry without a tool",
+      "claude:bad",
+      { configDir: "/nowhere", email: "x@example.com" },
+      refusedBecause("claude:bad", "has no known tool (claude or codex)"),
+    ],
+    [
+      "an entry with an unknown tool",
+      "claude:bad",
+      { tool: "gemini", configDir: "/nowhere", email: "x@example.com" },
+      refusedBecause("claude:bad", "has no known tool (claude or codex)"),
+    ],
     [
       "a key without a tool prefix",
       "no-tool-prefix",
       { tool: "claude", configDir: "/nowhere", email: "x@example.com" },
+      refusedBecause("no-tool-prefix", "is not listed as 'claude:<name>'"),
     ],
-    ["an API entry without a config dir", "claude:bad", { tool: "claude", kind: "api", email: "" }],
+    [
+      // Its stored key would be looked up as claude:bad, which is another profile's.
+      "an entry filed under the other tool",
+      "codex:bad",
+      { tool: "claude", kind: "api", configDir: "/nowhere", email: "" },
+      refusedBecause("codex:bad", "is not listed as 'claude:<name>'"),
+    ],
+    [
+      "an API entry without a config dir",
+      "claude:bad",
+      { tool: "claude", kind: "api", email: "" },
+      refusedBecause("claude:bad", "has no config directory path"),
+    ],
+    [
+      // An empty path would have the link stripping run relative to the working directory.
+      "an entry whose config dir is not an absolute path",
+      "claude:bad",
+      { tool: "claude", kind: "api", configDir: "", email: "" },
+      refusedBecause("claude:bad", "has no config directory path"),
+    ],
   ];
 
   async function withMalformed(key: string, value: unknown, position: "first" | "last", active: boolean) {
@@ -596,7 +630,7 @@ describe("removing a profile next to a malformed registry entry", () => {
     });
     // Things a half-done removal would visibly restore and delete, or delete.
     seedBackupFile(h.home, "work");
-    writeFileSync(path.join(h.home, ".clausona", "secrets.json"), JSON.stringify({ [key]: KEY }));
+    writeFileSync(path.join(h.home, ".clausona", "secrets.json"), JSON.stringify({ [key]: KEY, "claude:bad": KEY }));
     const registry = h.registry();
     registry.profiles =
       position === "first" ? { [key]: value, ...registry.profiles } : { ...registry.profiles, [key]: value };
@@ -614,7 +648,7 @@ describe("removing a profile next to a malformed registry entry", () => {
     }
   }
 
-  for (const [label, key, value] of shapes) {
+  for (const [label, key, value, refusal] of shapes) {
     for (const position of ["first", "last"] as const) {
       for (const active of [false, true]) {
         const which = active ? "the active profile" : "a profile";
@@ -634,13 +668,46 @@ describe("removing a profile next to a malformed registry entry", () => {
       }
     }
 
-    it(`refuses to remove ${label} itself without touching anything`, async () => {
+    it(`refuses to remove ${label} itself, and touches nothing`, async () => {
       const h = await withMalformed(key, value, "first", false);
       const before = h.snapshot();
 
       const outcome = await h.service.removeProfile(key).catch((e: Error) => e);
 
-      expectAllOrNothing(h, before, outcome, key);
+      expect(h.snapshot(), "the refused removal changed something").toEqual(before);
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toBe(refusal);
+    });
+  }
+});
+
+describe("removing a profile when the registry's primary source is not a path", () => {
+  // cleanupProfile uses the primary source to recognise the profile's links to the primary,
+  // and it runs only after the stored key is deleted. A primary source that is not a path
+  // used to throw there, with the key gone and the entry still registered. Falling back to
+  // the default would guess which links are shared, so the removal is refused instead.
+  for (const [label, recorded] of [
+    ["a number", 42],
+    ["an object", {}],
+    ["an empty string", ""],
+    ["a relative path", ".claude"],
+  ] as const) {
+    it(`refuses when primarySources.claude is ${label}, before touching anything`, async () => {
+      const h = await harness();
+      await h.service.addApiProfile(apiOptions());
+      const registry = h.registry();
+      registry.primarySources.claude = recorded;
+      writeFileSync(h.registryPath, JSON.stringify(registry));
+      const before = h.snapshot();
+
+      const outcome = await h.service.removeProfile("claude:glm").catch((e: Error) => e);
+
+      expect(h.storedSecrets(), "the key was deleted").toEqual({ "claude:glm": KEY });
+      expect(h.snapshot(), "the refused removal changed something").toEqual(before);
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toBe(
+        `primarySources.claude in ${path.join("~", ".clausona", "profiles.json")} is not a path, so 'claude:glm' cannot be removed: clausona needs it to tell the profile's links to the primary apart. Set it to the claude primary config directory (${path.join("~", ".claude")}) and run the command again.`,
+      );
     });
   }
 });

@@ -1757,22 +1757,35 @@ export async function removeProfile(id: string) {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
 
-  const profile = registry.profiles[id];
-  if (profile.isPrimary) throw new Error("Cannot remove the primary profile.");
-
-  // Everything the removal reads from the registry is read here, before the first side effect.
-  // cleanupProfile restores and deletes the backup, strips the links and deletes a stored key,
-  // and a read that failed after it would leave the removal half done with the entry still
-  // registered. Other entries are read defensively: profiles.json can be edited by hand.
+  // Every value the removal uses is read and checked here, before its first side effect.
+  // cleanupProfile deletes a stored key before it touches anything else, then strips the links
+  // and restores and deletes the backup, so a bad value it met on the way would leave the
+  // removal half done with the entry still registered. profiles.json can be edited by hand,
+  // so nothing in it is taken on trust.
   const home = homedir();
-  const { name } = parseProfileRef(id, registry);
-  // cleanupProfile reads the config dir only after it has deleted a stored key.
-  if (typeof profile.configDir !== "string") {
+  const shownRegistry = REGISTRY_PATH.replace(home, "~");
+  const unremovable = (reason: string) =>
+    new Error(`Profile '${id}' ${reason}, so it cannot be removed. Remove its entry from ${shownRegistry} by hand.`);
+  const profile = registry.profiles[id];
+  if (typeof profile !== "object") throw unremovable("is not a profile entry");
+  if (profile.isPrimary) throw new Error("Cannot remove the primary profile.");
+  if (!ALL_TOOLS.includes(profile.tool)) throw unremovable("has no known tool (claude or codex)");
+  // The tool decides whose stored key and backup directory this removal deletes.
+  if (!id.startsWith(`${profile.tool}:`)) throw unremovable(`is not listed as '${profile.tool}:<name>'`);
+  if (typeof profile.configDir !== "string" || !path.isAbsolute(profile.configDir)) {
+    throw unremovable("has no config directory path");
+  }
+  // Recognising which links lead to the primary depends on this, so a value that is not a path
+  // is refused rather than replaced by the default: a wrong guess would strip the wrong links.
+  const adapter = getAdapter(profile.tool);
+  const recorded: unknown = registry.primarySources?.[profile.tool];
+  if (recorded !== undefined && (typeof recorded !== "string" || !path.isAbsolute(recorded))) {
     throw new Error(
-      `Profile '${id}' has no config directory, so it cannot be removed. Remove its entry from ${REGISTRY_PATH.replace(home, "~")} by hand.`,
+      `primarySources.${profile.tool} in ${shownRegistry} is not a path, so '${id}' cannot be removed: clausona needs it to tell the profile's links to the primary apart. Set it to the ${profile.tool} primary config directory (${adapter.defaultConfigDir(home).replace(home, "~")}) and run the command again.`,
     );
   }
-  const primarySource = registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(home);
+  const primarySource = (recorded as string | undefined) ?? adapter.defaultConfigDir(home);
+  const { name } = parseProfileRef(id, registry);
   const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
   const sharer = backupDirSharer(registry, id, profile.tool, name);
   const sharedWarning = sharer
@@ -1787,7 +1800,8 @@ export async function removeProfile(id: string) {
       key !== id &&
       key.startsWith(`${profile.tool}:`) &&
       other?.tool === profile.tool &&
-      typeof other.configDir === "string"
+      typeof other.configDir === "string" &&
+      path.isAbsolute(other.configDir)
     );
   });
   const profiles = { ...registry.profiles };
