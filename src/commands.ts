@@ -8,7 +8,7 @@ import { trackUsage } from "./core/track-usage.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import { renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
 import { buildProfileEnv, CREDENTIAL_ENV_KEYS, controlledEnvKeys } from "./lib/profile-env.js";
-import { parseProfileRef, profileId } from "./lib/profile-ref.js";
+import { parseProfileRef, profileId, validateProfileName } from "./lib/profile-ref.js";
 import { promptSecret } from "./lib/prompt-secret.js";
 import {
   addApiProfile,
@@ -960,6 +960,11 @@ export async function runCommand(command: string, args: string[]) {
           if (!result.ok) throw new Error(result.error);
           env[key] = value;
         }
+
+        // Same reason as the settings above, and the same validator addApiProfile runs:
+        // a name it is going to refuse should not cost the user a typed key first.
+        const nameCheck = validateProfileName(name);
+        if (!nameCheck.ok) throw new Error(nameCheck.error);
 
         const secret = parseSecretSource(optionValue(args, "--key-from") ?? "keychain");
         const secretValue = secret.source === "keychain" ? await promptSecret("API key: ") : undefined;

@@ -364,13 +364,13 @@ describe("add --api", () => {
       expect(message).toBe("Invalid base URL: the scheme must be http or https, not 'localhost'.");
     });
 
-    it("refuses a bad profile name with the service's rule", async () => {
+    it("refuses a bad profile name with the service's rule, before asking for a key", async () => {
       const h = await harness();
-      promptAnswers.push(KEY);
 
       const message = await failure(h.run("add", "claude:.hidden", "--api", "--base-url", "http://localhost:8000"));
 
       expect(message).toContain("Invalid profile name");
+      expect(promptCalls).toEqual([]);
       expect(existsSync(path.join(h.home, ".claude-.hidden"))).toBe(false);
     });
 
