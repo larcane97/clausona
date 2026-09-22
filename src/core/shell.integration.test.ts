@@ -389,13 +389,16 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
     const logPath = path.join(root, "calls.log");
     writeFileSync(logPath, "");
 
-    // Logs every subcommand the hook asks for, so the call sequence can be asserted the way
-    // the POSIX harness does; `_shell-env <tool> --json` is the only one that answers.
+    // Logs every subcommand the hook asks for, with the tool it names, so the call sequence
+    // can be asserted the way the POSIX harness does; `_shell-env <tool> --json` is the only
+    // one that answers. The redirect leads the line so `echo` never ends in a bare digit that
+    // cmd.exe would read as a handle to redirect. The hook only ever passes fixed words here,
+    // so the arguments need no escaping.
     writeFileSync(
       path.join(binDir, "clausona.cmd"),
       [
         "@echo off",
-        '>>"%CLAUSONA_TEST_LOG%" echo %1',
+        '>>"%CLAUSONA_TEST_LOG%" echo %1 %2',
         'if not "%1"=="_shell-env" exit /b 0',
         `echo ${escapeForCmdEcho(JSON.stringify(env))}`,
         "exit /b 0",
@@ -463,7 +466,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       expect(result.stdout).toContain(JSON.stringify(AWKWARD_TOKEN));
       expect(result.stdout).toContain("hello & echo INJECTED");
       // The same call sequence the POSIX tests pin, in the same order.
-      expect(harness.log()).toEqual(["_shell-env", "_sync-plugins", "_track-usage"]);
+      expect(harness.log()).toEqual(["_shell-env claude", "_sync-plugins", "_track-usage"]);
     },
     // Cold powershell.exe startup on a CI runner took 5.4s, over vitest's 5s default, so
     // the test was killed before it could assert. Must exceed the spawn timeout above.
@@ -493,7 +496,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       expect(result.stdout).toContain("C:\\mine");
       // Three calls from the first invocation and none from the second: once the user has
       // set CLAUDE_CONFIG_DIR the wrapper steps aside and asks clausona for nothing.
-      expect(harness.log()).toEqual(["_shell-env", "_sync-plugins", "_track-usage"]);
+      expect(harness.log()).toEqual(["_shell-env claude", "_sync-plugins", "_track-usage"]);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );
@@ -525,7 +528,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       expect(result.stdout).toContain(codexHome);
       expect(result.stdout).toContain("exec");
       // _sync-plugins and _track-usage are claude-only on this platform too.
-      expect(harness.log()).toEqual(["_shell-env"]);
+      expect(harness.log()).toEqual(["_shell-env codex"]);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );
