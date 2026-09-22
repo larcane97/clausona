@@ -2,7 +2,30 @@ import { describe, expect, it } from "vitest";
 
 import { isPosixEnvName } from "../core/shell.js";
 import type { Profile } from "../types.js";
-import { API_CREDENTIAL_ENV_KEYS, buildProfileEnv, displayName, RESERVED_ENV_KEYS } from "./profile-env.js";
+import {
+  buildProfileEnv,
+  CREDENTIAL_ENV_KEYS,
+  displayName,
+  PROVIDER_SWITCH_ENV_KEYS,
+  RESERVED_ENV_KEYS,
+} from "./profile-env.js";
+
+/** Written out rather than imported, so the constants are pinned rather than echoed. */
+const CREDENTIALS = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "ANTHROPIC_CUSTOM_HEADERS",
+];
+const PROVIDER_SWITCHES = [
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_GATEWAY",
+  "CLAUDE_CODE_USE_MANTLE",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+  "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+];
 
 const identityRealpath = async (p: string) => p;
 const fakeSecret = async () => "sk-test";
@@ -119,32 +142,45 @@ describe("buildProfileEnv", () => {
    * Claude Code reads ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN independently and sends
    * X-Api-Key and Authorization together when both are set. Applying a profile on top of
    * the caller's environment is therefore not enough: a key the user exported for some
-   * other purpose would travel to this profile's endpoint next to the profile's own.
+   * other purpose would travel to this profile's endpoint next to the profile's own. An
+   * inherited provider switch would send the tool somewhere else entirely.
    */
   describe("unset", () => {
-    it("clears the API key and the OAuth token for the bearer scheme", async () => {
+    it("clears every credential but the profile's own, and every provider switch, for bearer", async () => {
       const { env, unset } = await buildProfileEnv("claude:glm", apiProfile(), deps);
-      expect(unset).toEqual(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]);
+      expect(unset).toEqual([
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_CUSTOM_HEADERS",
+        ...PROVIDER_SWITCHES,
+      ]);
       expect(env.ANTHROPIC_AUTH_TOKEN).toBe("sk-test");
     });
 
-    it("clears the auth token and the OAuth token for the api-key scheme", async () => {
+    it("clears every credential but the profile's own, and every provider switch, for api-key", async () => {
       const profile = apiProfile({
         api: { baseUrl: "https://openrouter.ai/api", authScheme: "api-key", secret: { source: "keychain" } },
       });
       const { env, unset } = await buildProfileEnv("claude:or", profile, deps);
-      expect(unset).toEqual(["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]);
+      expect(unset).toEqual([
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_CUSTOM_HEADERS",
+        ...PROVIDER_SWITCHES,
+      ]);
       expect(env.ANTHROPIC_API_KEY).toBe("sk-test");
     });
 
-    it("leaves alone a credential the env map sets explicitly", async () => {
-      const profile = apiProfile({
-        env: { ANTHROPIC_API_KEY: "sk-explicit", CLAUDE_CODE_OAUTH_TOKEN: "oat-explicit" },
-      });
-      const { env, unset } = await buildProfileEnv("claude:glm", profile, deps);
-      expect(unset).toEqual([]);
-      expect(env.ANTHROPIC_API_KEY).toBe("sk-explicit");
-      expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("oat-explicit");
+    it("leaves alone anything the env map sets explicitly", async () => {
+      const explicit = {
+        ANTHROPIC_API_KEY: "sk-explicit",
+        CLAUDE_CODE_OAUTH_TOKEN: "oat-explicit",
+        ANTHROPIC_CUSTOM_HEADERS: "X-Team: platform",
+        CLAUDE_CODE_USE_BEDROCK: "1",
+      };
+      const { env, unset } = await buildProfileEnv("claude:glm", apiProfile({ env: explicit }), deps);
+      expect(env).toMatchObject(explicit);
+      expect(unset).toEqual(PROVIDER_SWITCHES.filter((key) => key !== "CLAUDE_CODE_USE_BEDROCK"));
     });
 
     // The profile's own variable is cleared too: an inherited one of the same name would
@@ -160,7 +196,7 @@ describe("buildProfileEnv", () => {
             throw new Error("no stored secret");
           },
         });
-        expect(unset).toEqual(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]);
+        expect(unset).toEqual([...CREDENTIALS, ...PROVIDER_SWITCHES]);
         expect(env).not.toHaveProperty("ANTHROPIC_API_KEY");
         expect(env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
       });
@@ -184,10 +220,10 @@ describe("buildProfileEnv", () => {
     it("never lists a variable it also sets", async () => {
       const profiles = [
         apiProfile(),
-        apiProfile({ env: { ANTHROPIC_API_KEY: "sk-explicit" } }),
+        apiProfile({ env: { ANTHROPIC_API_KEY: "sk-explicit", CLAUDE_CODE_USE_VERTEX: "1" } }),
         apiProfile({
           api: { baseUrl: "https://openrouter.ai/api", authScheme: "api-key", secret: { source: "keychain" } },
-          env: { ANTHROPIC_AUTH_TOKEN: "explicit" },
+          env: { ANTHROPIC_AUTH_TOKEN: "explicit", ANTHROPIC_CUSTOM_HEADERS: "X-Team: platform" },
         }),
       ];
       for (const profile of profiles) {
@@ -197,13 +233,15 @@ describe("buildProfileEnv", () => {
     });
   });
 
-  // Narrowing this list reopens the leak for whichever variable is dropped from it.
+  // Narrowing either list reopens, for whatever is dropped, what it exists to prevent.
   it("treats every variable Claude Code authenticates with as a credential", () => {
-    expect([...API_CREDENTIAL_ENV_KEYS]).toEqual([
-      "ANTHROPIC_API_KEY",
-      "ANTHROPIC_AUTH_TOKEN",
-      "CLAUDE_CODE_OAUTH_TOKEN",
-    ]);
+    expect([...CREDENTIAL_ENV_KEYS]).toEqual(CREDENTIALS);
+  });
+
+  it("treats every variable that routes Claude Code to another provider as a switch", () => {
+    expect([...PROVIDER_SWITCH_ENV_KEYS]).toEqual(PROVIDER_SWITCHES);
+    // A USE_ flag that routes nothing is not one of them.
+    expect(PROVIDER_SWITCH_ENV_KEYS).not.toContain("CLAUDE_CODE_USE_POWERSHELL_TOOL");
   });
 
   it("reserves the tool config variables", () => {

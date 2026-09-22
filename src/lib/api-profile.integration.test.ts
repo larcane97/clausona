@@ -1517,6 +1517,63 @@ describe("resolveProfileEnv", () => {
     });
   }
 
+  // Custom headers can carry an Authorization header to the endpoint, and a provider switch
+  // sends the tool somewhere other than the profile's base URL. The profile's own win.
+  it("drops an inherited provider switch and custom headers, unless the env map sets them", async () => {
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions());
+    await h.service.addApiProfile(
+      apiOptions({
+        name: "pinned",
+        env: { CLAUDE_CODE_USE_BEDROCK: "1", ANTHROPIC_CUSTOM_HEADERS: "X-Team: platform" },
+      }),
+    );
+    vi.stubEnv("CLAUDE_CODE_USE_BEDROCK", "1");
+    vi.stubEnv("ANTHROPIC_CUSTOM_HEADERS", "Authorization: Bearer sk-ant-parent-sentinel");
+
+    const plain = (await h.service.resolveProfileEnv("claude:glm")).env;
+    const pinned = (await h.service.resolveProfileEnv("claude:pinned")).env;
+
+    expect("CLAUDE_CODE_USE_BEDROCK" in plain).toBe(false);
+    expect("ANTHROPIC_CUSTOM_HEADERS" in plain).toBe(false);
+    expect(pinned.CLAUDE_CODE_USE_BEDROCK).toBe("1");
+    expect(pinned.ANTHROPIC_CUSTOM_HEADERS).toBe("X-Team: platform");
+  });
+
+  /**
+   * Windows treats environment names case-insensitively: `anthropic_api_key` is
+   * ANTHROPIC_API_KEY to the tool. A spread of process.env keeps whatever spelling the
+   * variable was created with, so on Windows every spelling has to go. On POSIX those are
+   * different variables that Claude Code never reads, and not clausona's to drop.
+   */
+  it("drops a differently cased credential on Windows, and only there", async () => {
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions());
+    vi.stubEnv("anthropic_api_key", "sk-ant-parent-sentinel");
+    vi.stubEnv("Claude_Code_Use_Bedrock", "1");
+    const spellings = (env: NodeJS.ProcessEnv) =>
+      Object.keys(env).filter((key) => /^(ANTHROPIC_API_KEY|CLAUDE_CODE_USE_BEDROCK)$/i.test(key));
+
+    const windows = (await h.service.resolveProfileEnv("claude:glm", "win32")).env;
+    const posix = (await h.service.resolveProfileEnv("claude:glm", "linux")).env;
+
+    expect(spellings(windows)).toEqual([]);
+    expect(windows.ANTHROPIC_AUTH_TOKEN).toBe(KEY);
+    expect(spellings(posix).sort()).toEqual(["Claude_Code_Use_Bedrock", "anthropic_api_key"]);
+  });
+
+  it("drops a differently cased config dir for the primary on Windows, and only there", async () => {
+    const h = await harness();
+    vi.stubEnv("claude_config_dir", path.join(h.home, "somewhere-else"));
+    const spellings = (env: NodeJS.ProcessEnv) => Object.keys(env).filter((key) => /^CLAUDE_CONFIG_DIR$/i.test(key));
+
+    const windows = (await h.service.resolveProfileEnv("claude:default", "win32")).env;
+    const posix = (await h.service.resolveProfileEnv("claude:default", "linux")).env;
+
+    expect(spellings(windows)).toEqual([]);
+    expect(spellings(posix)).toEqual(["claude_config_dir"]);
+  });
+
   it("leaves a subscription profile's inherited credentials alone", async () => {
     const h = await harness();
     const fromPath = seedAccountDir(h.home, ".claude-work", "work@example.com");

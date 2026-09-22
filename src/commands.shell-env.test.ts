@@ -94,6 +94,17 @@ function parseExports(out: string): Record<string, string | null> {
   return parsed;
 }
 
+/** Every provider switch an API profile clears, as `--json` names them. */
+const CLEARED_SWITCHES = {
+  CLAUDE_CODE_USE_BEDROCK: null,
+  CLAUDE_CODE_USE_VERTEX: null,
+  CLAUDE_CODE_USE_GATEWAY: null,
+  CLAUDE_CODE_USE_MANTLE: null,
+  CLAUDE_CODE_USE_FOUNDRY: null,
+  CLAUDE_CODE_USE_ANTHROPIC_AWS: null,
+  CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD: null,
+};
+
 describe("_shell-env", () => {
   // Regression test for a shell-injection hole: keys used to be interpolated bare, so
   // `export A; touch /tmp/clausona-pwned; B='x'` came out of a hand-edited profiles.json
@@ -176,6 +187,8 @@ describe("_shell-env", () => {
       ANTHROPIC_API_KEY: null,
       ANTHROPIC_AUTH_TOKEN: null,
       CLAUDE_CODE_OAUTH_TOKEN: null,
+      ANTHROPIC_CUSTOM_HEADERS: null,
+      ...CLEARED_SWITCHES,
       CLAUDE_CONFIG_DIR: h.workDir,
       ANTHROPIC_BASE_URL: "http://localhost:8000",
       ANTHROPIC_MODEL: "m",
@@ -235,6 +248,8 @@ describe("_shell-env", () => {
     expect(json).toEqual({
       ANTHROPIC_AUTH_TOKEN: null,
       CLAUDE_CODE_OAUTH_TOKEN: null,
+      ANTHROPIC_CUSTOM_HEADERS: null,
+      ...CLEARED_SWITCHES,
       CLAUDE_CONFIG_DIR: h.workDir,
       ANTHROPIC_BASE_URL: "http://localhost:8000",
       ANTHROPIC_API_KEY: "sk-not-a-real-key",
@@ -272,6 +287,8 @@ describe("_shell-env", () => {
     expect(JSON.parse(raw)).toEqual({
       ANTHROPIC_API_KEY: null,
       CLAUDE_CODE_OAUTH_TOKEN: null,
+      ANTHROPIC_CUSTOM_HEADERS: null,
+      ...CLEARED_SWITCHES,
       CLAUDE_CONFIG_DIR: h.workDir,
       ANTHROPIC_BASE_URL: "https://openrouter.ai/api",
       ANTHROPIC_AUTH_TOKEN: "sk-or-not-a-real-key",
@@ -553,5 +570,75 @@ describe("_shell-env", () => {
         expect(result.stdout).toBe(`parent ${ownVar}=${parentValue}\n`);
       },
     );
+  }
+
+  /**
+   * An inherited ANTHROPIC_CUSTOM_HEADERS can carry an Authorization header to the profile's
+   * endpoint, and an inherited provider switch sends the tool to Bedrock or Vertex with the
+   * profile's base URL ignored. Both are cleared unless the profile sets them itself.
+   */
+  for (const c of [
+    { name: "clears an inherited provider switch and custom headers", env: undefined, expected: {} },
+    {
+      name: "keeps a provider switch and custom headers the env map sets",
+      env: { ANTHROPIC_CUSTOM_HEADERS: "X-Team: platform", CLAUDE_CODE_USE_BEDROCK: "1" },
+      expected: { ANTHROPIC_CUSTOM_HEADERS: "X-Team: platform", CLAUDE_CODE_USE_BEDROCK: "1" },
+    },
+  ]) {
+    it.skipIf(process.platform === "win32")(c.name, async () => {
+      const inheritedHeaders = "Authorization: Bearer sk-ant-parent-sentinel";
+      const h = await harness((home, workDir) =>
+        registryWith(
+          {
+            tool: "claude",
+            kind: "api",
+            configDir: workDir,
+            email: "",
+            label: "router",
+            api: {
+              baseUrl: "https://openrouter.ai/api",
+              authScheme: "bearer",
+              secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
+            },
+            env: c.env,
+          },
+          home,
+        ),
+      );
+      vi.stubEnv("CLAUSONA_TEST_SECRET", "sk-or-profile-token");
+      const out = await h.run("claude");
+      const outPath = path.join(h.home, "shell-env.sh");
+      const childEnvPath = path.join(h.home, "child.env");
+      writeFileSync(outPath, out);
+
+      const script = [
+        "(",
+        `  eval "$(cat '${outPath}')"`,
+        `  env > '${childEnvPath}'`,
+        ")",
+        `printf 'parent %s|%s\\n' "$CLAUDE_CODE_USE_BEDROCK" "$ANTHROPIC_CUSTOM_HEADERS"`,
+      ].join("\n");
+      const result = spawnSync("/bin/sh", ["-c", script], {
+        encoding: "utf8",
+        timeout: 5000,
+        env: { PATH: process.env.PATH ?? "", CLAUDE_CODE_USE_BEDROCK: "1", ANTHROPIC_CUSTOM_HEADERS: inheritedHeaders },
+      });
+
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      const child = Object.fromEntries(
+        readFileSync(childEnvPath, "utf8")
+          .split("\n")
+          .filter((line) => line.includes("="))
+          .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+      );
+      expect({
+        ANTHROPIC_CUSTOM_HEADERS: child.ANTHROPIC_CUSTOM_HEADERS,
+        CLAUDE_CODE_USE_BEDROCK: child.CLAUDE_CODE_USE_BEDROCK,
+      }).toEqual({ ANTHROPIC_CUSTOM_HEADERS: undefined, CLAUDE_CODE_USE_BEDROCK: undefined, ...c.expected });
+      expect(child.ANTHROPIC_AUTH_TOKEN).toBe("sk-or-profile-token");
+      // The parent shell keeps both of its own either way.
+      expect(result.stdout).toBe(`parent 1|${inheritedHeaders}\n`);
+    });
   }
 });

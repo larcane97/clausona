@@ -19,12 +19,34 @@ export const RESERVED_ENV_KEYS = new Set(["CLAUDE_CONFIG_DIR", "CODEX_HOME"]);
  * purpose would go to this profile's endpoint - a third party, often - next to the
  * profile's own, or in its place when the profile's key did not resolve. A subscription
  * OAuth token is never wanted either, and Claude Code ranks it as an auth source.
+ * ANTHROPIC_CUSTOM_HEADERS is here because it can carry an Authorization header of its own.
  * Dropping a name from this list reopens that leak for it.
  */
-export const API_CREDENTIAL_ENV_KEYS = [
+export const CREDENTIAL_ENV_KEYS = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
   "CLAUDE_CODE_OAUTH_TOKEN",
+  "ANTHROPIC_CUSTOM_HEADERS",
+] as const;
+
+/**
+ * Every variable that routes Claude Code to a provider other than ANTHROPIC_BASE_URL. An
+ * inherited one sends an API profile's run to Bedrock, Vertex and the like with the
+ * profile's base URL silently ignored - not a leak, but a profile that does not do what it
+ * says. Cleared on the same terms as the credentials.
+ *
+ * Taken from the strings in the Claude Code 2.1.278 binary, routing flags only - the
+ * other CLAUDE_CODE_USE_* flags (CLAUDE_CODE_USE_POWERSHELL_TOOL and the like) choose
+ * features, not providers. Re-check this list whenever Claude Code adds a provider.
+ */
+export const PROVIDER_SWITCH_ENV_KEYS = [
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_GATEWAY",
+  "CLAUDE_CODE_USE_MANTLE",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+  "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
 ] as const;
 
 export function displayName(profile: Pick<Profile, "email" | "label">): string {
@@ -96,8 +118,12 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
     env[key] = value;
   }
 
-  // A set difference, taken last: the resolved key and any explicit env-map entry are in
-  // env and so kept; everything else - an unresolved key's variable included - is cleared.
-  const unset = profile.kind === "api" && profile.api ? API_CREDENTIAL_ENV_KEYS.filter((key) => !(key in env)) : [];
+  // For an API profile the endpoint and every credential come from the profile or not at
+  // all. A set difference, taken last: the resolved key and any explicit env-map entry are
+  // in env and so kept; everything else - an unresolved key's variable included - is cleared.
+  const unset =
+    profile.kind === "api" && profile.api
+      ? [...CREDENTIAL_ENV_KEYS, ...PROVIDER_SWITCH_ENV_KEYS].filter((key) => !(key in env))
+      : [];
   return { env, unset, warnings };
 }
