@@ -13,7 +13,8 @@
  *   at all.
  *
  * Raw mode also turns off the line discipline, so this reader is what handles Enter,
- * backspace and Ctrl-C.
+ * backspace, Ctrl-C and the escape sequences a terminal sends - including the brackets
+ * around a paste, which is how most people put a key into a prompt.
  */
 
 import { StringDecoder } from "node:string_decoder";
@@ -27,6 +28,64 @@ const CTRL_D = "\u0004";
 /** Kill line: clears what has been typed so far. */
 const CTRL_U = "\u0015";
 const ESC = "\u001b";
+
+/**
+ * Bracketed paste (DEC private mode 2004): what a terminal wraps pasted text in so that a
+ * program can tell it apart from typing. Nothing in clausona turns the mode on, and the
+ * shells disable it around a command, but it is left on by any program that set it and
+ * exited without restoring it - so a paste can arrive bracketed, and pasting is how most
+ * people put a key into a prompt.
+ */
+const PASTE_START = `${ESC}[200~`;
+const PASTE_END = `${ESC}[201~`;
+
+/**
+ * An escape sequence longer than this is not one this reader knows how to skip. It gives
+ * up rather than guess, because guessing wrong means dropping part of a credential.
+ */
+const MAX_ESCAPE_LENGTH = 32;
+
+const UNREADABLE_INPUT =
+  'Could not read the key: this terminal sent something the prompt cannot interpret, and a key read from it might be incomplete. Pipe the key in instead: printf %s "$KEY" | clausona … , or point at it with --key-from env:NAME.';
+
+type EscapeScan =
+  | { consumed: number; kind: "paste-start" | "paste-end" | "skip" }
+  /** The sequence has not finished arriving; wait for the next read. */
+  | "incomplete"
+  /** Not a sequence this reader can measure, so where it ends is a guess. */
+  | "runaway";
+
+/**
+ * Measures the escape sequence at the front of `buffer`, which starts with ESC.
+ *
+ * Measuring it is the whole point: the previous version abandoned the rest of the read at
+ * the first ESC, so a bracketed paste took the key with it - and a paste split across two
+ * reads left a *fragment*, which would then be stored and reported as success.
+ *
+ * - ESC `[` or ESC `O` begins a CSI or SS3 sequence, which runs to the first byte in the
+ *   range `@`-`~`. That covers the arrow keys and both paste markers.
+ * - ESC before a printable character is an Alt-combo: two bytes, neither part of a key.
+ * - ESC before a control character is a standalone Escape keypress. Only the ESC is
+ *   dropped, so the character after it - an Enter, most importantly - is still acted on.
+ *   Consuming that byte as part of a sequence is what would swallow the Enter and hang
+ *   the prompt.
+ */
+function scanEscape(buffer: string): EscapeScan {
+  if (buffer.length < 2) return "incomplete";
+  const second = buffer[1];
+  if (second !== "[" && second !== "O") {
+    return { consumed: second < " " || second === "\u007f" ? 1 : 2, kind: "skip" };
+  }
+  for (let i = 2; i < buffer.length; i++) {
+    const code = buffer.charCodeAt(i);
+    if (code >= 0x40 && code <= 0x7e) {
+      const sequence = buffer.slice(0, i + 1);
+      const kind = sequence === PASTE_START ? "paste-start" : sequence === PASTE_END ? "paste-end" : "skip";
+      return { consumed: i + 1, kind };
+    }
+  }
+  return buffer.length > MAX_ESCAPE_LENGTH ? "runaway" : "incomplete";
+}
 
 export type SecretInputStream = NodeJS.ReadableStream & {
   isTTY?: boolean;
@@ -90,6 +149,10 @@ function readTypedSecret(prompt: string, input: SecretInputStream, output: Secre
     const decoder = new StringDecoder("utf8");
     let typed = "";
     let settled = false;
+    /** What has arrived and not been consumed: at most one unfinished escape sequence. */
+    let buffer = "";
+    /** Between a paste's brackets, where every byte is text rather than a keypress. */
+    let pasting = false;
 
     const finish = (settle: () => void) => {
       if (settled) return;
@@ -109,22 +172,52 @@ function readTypedSecret(prompt: string, input: SecretInputStream, output: Secre
     };
 
     const onData = (chunk: Buffer | string) => {
-      const text = typeof chunk === "string" ? chunk : decoder.write(chunk);
-      for (const char of text) {
-        // An arrow key or any other escape sequence arrives as one read starting with
-        // ESC. Dropping the rest of that read keeps its letters ("[A") out of the key.
-        if (char === ESC) return;
-        if (ENTER.has(char)) {
-          finish(() => {
-            output.write("\n");
-            resolve(typed.trim());
-          });
-          return;
+      buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
+      while (buffer.length > 0 && !settled) {
+        if (buffer[0] === ESC) {
+          const sequence = scanEscape(buffer);
+          // The sequence is still arriving: keep it whole and wait. A sequence split
+          // across two reads is how a paste loses its second half otherwise.
+          if (sequence === "incomplete") return;
+          if (sequence === "runaway") {
+            finish(() => {
+              output.write("\n");
+              reject(new Error(UNREADABLE_INPUT));
+            });
+            return;
+          }
+          buffer = buffer.slice(sequence.consumed);
+          if (sequence.kind === "paste-start") pasting = true;
+          else if (sequence.kind === "paste-end") pasting = false;
+          continue;
         }
+
+        const char = buffer[0];
+        buffer = buffer.slice(1);
+
+        // Ctrl-C is honoured even between the brackets. A paste whose closing marker never
+        // arrives would otherwise leave the prompt with no way out at all, and a raw 0x03
+        // byte inside a pasted API key is not a thing; being stuck is.
         if (char === CTRL_C) {
           finish(() => {
             output.write("\n");
             reject(new PromptCancelledError());
+          });
+          return;
+        }
+
+        if (pasting) {
+          // Otherwise nothing between the brackets is a keypress - that is what bracketing
+          // is for - so a newline in pasted text does not submit. Control characters are
+          // not part of a key either way, so they are dropped.
+          if (char >= " " && char !== "\u007f") typed += char;
+          continue;
+        }
+
+        if (ENTER.has(char)) {
+          finish(() => {
+            output.write("\n");
+            resolve(typed.trim());
           });
           return;
         }

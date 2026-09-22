@@ -104,6 +104,136 @@ describe("promptSecret on a terminal", () => {
     await expect(answer).resolves.toBe("abc");
   });
 
+  it("keeps the characters after an escape sequence in the same read", async () => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    // The old reader abandoned the rest of the read at the first ESC, so everything
+    // after the arrow key was lost - silently.
+    tty.type(`ab\u001b[A${KEY}\r`);
+
+    await expect(answer).resolves.toBe(`ab${KEY}`);
+  });
+
+  it("acts on an Enter that follows a lone Escape keypress", async () => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type(KEY);
+    // Consuming the byte after a lone ESC as part of a sequence would swallow this Enter
+    // and leave the prompt waiting forever.
+    tty.type("\u001b");
+    tty.type("\r");
+
+    await expect(answer).resolves.toBe(KEY);
+  });
+
+  it("gives up loudly on an escape sequence it cannot measure", async () => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type(KEY);
+    // A CSI that never reaches its terminator: where it ends would be a guess, and
+    // guessing wrong means returning part of a key as if it were the whole one.
+    tty.type(`\u001b[${"0".repeat(64)}`);
+
+    await expect(answer).rejects.toThrow(/cannot interpret/);
+    expect(tty.screen()).toBe(`${PROMPT}\n`);
+    expect(tty.rawModeCalls).toEqual([true, false]);
+  });
+});
+
+/**
+ * Bracketed paste (DEC 2004). Each of the first three shapes is a way the previous reader
+ * lost a key: the whole key, the key *and* the Enter, and - worst - a fragment of the key
+ * that `addApiProfile` would have stored while printing "Added".
+ */
+describe("promptSecret and a pasted key", () => {
+  it("takes a bracketed paste as the key", async () => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type(`\u001b[200~${KEY}\u001b[201~`);
+    tty.type("\r");
+
+    await expect(answer).resolves.toBe(KEY);
+    expect(tty.screen()).toBe(`${PROMPT}\n`);
+  });
+
+  it("takes a bracketed paste that arrives with its Enter", async () => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type(`\u001b[200~${KEY}\u001b[201~\r`);
+
+    await expect(answer).resolves.toBe(KEY);
+  });
+
+  it("joins a bracketed paste split across two reads", async () => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type(`\u001b[200~${KEY.slice(0, 6)}`);
+    tty.type(`${KEY.slice(6)}\u001b[201~\r`);
+
+    // Not a fragment. A fragment here is stored and reported as a success.
+    await expect(answer).resolves.toBe(KEY);
+  });
+
+  it("joins a paste whose marker itself is split across two reads", async () => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type("\u001b[20");
+    tty.type(`0~${KEY}\u001b[201~\r`);
+
+    await expect(answer).resolves.toBe(KEY);
+  });
+
+  it("takes the markers as separate reads, the shape that already worked", async () => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type("\u001b[200~");
+    tty.type(KEY);
+    tty.type("\u001b[201~");
+    tty.type("\r");
+
+    await expect(answer).resolves.toBe(KEY);
+  });
+
+  it("does not submit on a newline inside the brackets", async () => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    // A key copied with its trailing newline. The newline is pasted text, not an Enter.
+    tty.type(`\u001b[200~${KEY}\r\u001b[201~`);
+    tty.type("more");
+    tty.type("\r");
+
+    await expect(answer).resolves.toBe(`${KEY}more`);
+  });
+
+  it("still lets ctrl-c out of a paste whose closing marker never arrives", async () => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type(`\u001b[200~${KEY}`);
+    tty.type("\u0003");
+
+    await expect(answer).rejects.toBeInstanceOf(PromptCancelledError);
+    expect(tty.rawModeCalls).toEqual([true, false]);
+  });
+
+  it("keeps typing and pasting apart in one read", async () => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type(`ab\u001b[200~${KEY}\u001b[201~cd\r`);
+
+    await expect(answer).resolves.toBe(`ab${KEY}cd`);
+  });
+
   it("drops the control characters a paste can carry", async () => {
     const tty = fakeTerminal();
 
