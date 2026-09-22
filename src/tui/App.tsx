@@ -1,5 +1,4 @@
 import { homedir } from "node:os";
-import path from "node:path";
 import { Spinner } from "@inkjs/ui";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import TextInput from "ink-text-input";
@@ -7,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { bootstrapInitFromCurrentState } from "../commands.js";
 import { formatCount, formatCurrency, formatQuotaInline, localTimezoneLabel, quotaSeverity } from "../lib/format.js";
-import { profileId } from "../lib/profile-ref.js";
+import { defaultProfileName, profileId } from "../lib/profile-ref.js";
 import {
   addProfile,
   discoverAccounts,
@@ -534,9 +533,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           } else if (key.return && addState.selectedAccounts.length > 0) {
             const first = addState.selectedAccounts[0];
             const account = addState.discoveredAccounts.find((a) => a.configDir === first);
-            const defaultName = account
-              ? path.basename(account.configDir).replace(/^\.claude-?/, "") || "profile"
-              : "profile";
+            const defaultName = account ? defaultProfileName(account.configDir) : "profile";
             setAddState((prev) =>
               prev
                 ? {
@@ -628,9 +625,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           } else {
             const nextDir = addState.selectedAccounts[nextIndex];
             const nextAccount = addState.discoveredAccounts.find((a) => a.configDir === nextDir);
-            const nextDefault = nextAccount
-              ? path.basename(nextAccount.configDir).replace(/^\.claude-?/, "") || "profile"
-              : "profile";
+            const nextDefault = nextAccount ? defaultProfileName(nextAccount.configDir) : "profile";
             setAddState((prev) =>
               prev
                 ? {
@@ -703,7 +698,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             if ("error" in result) {
               setAddState((prev) => (prev ? { ...prev, importError: result.error } : null));
             } else {
-              const defaultName = path.basename(result.account.configDir).replace(/^\.claude-?/, "") || "profile";
+              const defaultName = defaultProfileName(result.account.configDir);
               setAddState((prev) =>
                 prev
                   ? {

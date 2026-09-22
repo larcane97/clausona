@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { ALL_TOOLS } from "../tools/registry.js";
 import type { Registry, ToolName } from "../types.js";
 
@@ -24,6 +26,16 @@ export function validateProfileName(name: string): { ok: true } | { ok: false; e
     ok: false,
     error: `Invalid profile name '${name}': must be non-empty, start with a letter or digit, and use only letters, digits, '.', '_' and '-'.`,
   };
+}
+
+/**
+ * The name offered for an account found at `dir`: the directory's name without the
+ * `.claude` or `.codex` prefix, or "profile" when nothing is left. A directory can be
+ * named anything, so the result can still fail validateProfileName; whatever creates the
+ * profile checks it.
+ */
+export function defaultProfileName(dir: string): string {
+  return path.basename(dir).replace(/^\.(?:claude|codex)-?/, "") || "profile";
 }
 
 function isToolName(value: string): value is ToolName {

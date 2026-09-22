@@ -1,6 +1,7 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Registry } from "../types.js";
-import { parseProfileRef, profileId, validateProfileName } from "./profile-ref.js";
+import { defaultProfileName, parseProfileRef, profileId, validateProfileName } from "./profile-ref.js";
 import { addProfile } from "./service.js";
 
 const REG: Registry = {
@@ -67,6 +68,32 @@ describe("validateProfileName", () => {
     const result = validateProfileName("..");
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/start with a letter or digit.*letters, digits, '\.', '_' and '-'/);
+  });
+});
+
+describe("defaultProfileName", () => {
+  const home = path.join(path.parse(process.cwd()).root, "home", "u");
+
+  it("strips the tool prefix from either tool's directory", () => {
+    // The codex case used to keep its prefix, and `.codex-work` breaks the name rule.
+    expect(defaultProfileName(path.join(home, ".claude-work"))).toBe("work");
+    expect(defaultProfileName(path.join(home, ".codex-work"))).toBe("work");
+    expect(validateProfileName(defaultProfileName(path.join(home, ".codex-work")))).toEqual({ ok: true });
+  });
+
+  it("falls back to 'profile' for a tool's bare default directory", () => {
+    expect(defaultProfileName(path.join(home, ".claude"))).toBe("profile");
+    expect(defaultProfileName(path.join(home, ".codex"))).toBe("profile");
+  });
+
+  it("uses the directory name as-is for an imported directory without a prefix", () => {
+    expect(defaultProfileName(path.join(home, "backups", "old-claude"))).toBe("old-claude");
+  });
+
+  it("can still produce a name the rule rejects, which creation then refuses", () => {
+    const name = defaultProfileName(path.join(home, ".claude-my work"));
+    expect(name).toBe("my work");
+    expect(validateProfileName(name)).toMatchObject({ ok: false });
   });
 });
 
