@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { SecretSource } from "../types.js";
+import type { DiscoveredAccount, SecretSource } from "../types.js";
 
 /**
  * Drives the service functions against a real filesystem under a temp HOME.
@@ -243,5 +243,74 @@ describe("profile names that differ only by case", () => {
     await expect(h.service.addProfile({ tool: "codex", name: "Work", fromPath: codexDir })).resolves.toMatchObject({
       name: "Work",
     });
+  });
+});
+
+describe("initializeRegistry names", () => {
+  // init creates profiles too, from names the user typed in the TUI, so it gets the same
+  // rules as add - checked for the whole set before anything is written.
+  function accounts(h: { home: string; primary: string }, ...dirNames: string[]): DiscoveredAccount[] {
+    const primary: DiscoveredAccount = {
+      tool: "claude",
+      configDir: h.primary,
+      jsonPath: path.join(h.home, ".claude.json"),
+      email: "primary@example.com",
+      keychainService: "",
+      isPrimary: true,
+    };
+    return [
+      primary,
+      ...dirNames.map((dirName) => {
+        const configDir = seedAccountDir(h.home, dirName, `${dirName}@example.com`);
+        return {
+          tool: "claude" as const,
+          configDir,
+          jsonPath: path.join(configDir, ".claude.json"),
+          email: `${dirName}@example.com`,
+          keychainService: "",
+          isPrimary: false,
+        };
+      }),
+    ];
+  }
+
+  const rejections: Array<[string, string[], RegExp]> = [
+    ["a name outside the rule", [".."], /Invalid profile name '\.\.'.*start with a letter or digit/],
+    ["a name with a separator", ["a/../.."], /Invalid profile name/],
+    ["two names that differ only by case", ["Work", "work"], /'claude:Work' and 'claude:work' name the same profile/],
+    ["the same name twice", ["work", "work"], /Two accounts are both named 'claude:work'/],
+  ];
+  for (const [label, names, message] of rejections) {
+    it(`refuses ${label} before writing anything`, async () => {
+      const h = await harness();
+      const sentinel = seedBackupSentinel(h.home);
+      const found = accounts(h, ...names.map((_, i) => `account-${i}`));
+      const profileNames = Object.fromEntries([
+        [h.primary, "default"],
+        ...names.map((name, i) => [found[i + 1].configDir, name]),
+      ]);
+      const before = h.snapshot();
+
+      await expect(
+        h.service.initializeRegistry({ accounts: found, profileNames, defaultProfile: "default" }),
+      ).rejects.toThrow(message);
+      expect(existsSync(sentinel)).toBe(true);
+      expect(h.snapshot()).toEqual(before);
+    });
+  }
+
+  it("accepts names that follow the rule", async () => {
+    const h = await harness();
+    const found = accounts(h, "account-0", "account-1");
+    const profileNames = {
+      [h.primary]: "default",
+      [found[1].configDir]: "work",
+      [found[2].configDir]: "glm-5.3",
+    };
+
+    await h.service.initializeRegistry({ accounts: found, profileNames, defaultProfile: "work" });
+
+    expect(Object.keys(h.registry().profiles).sort()).toEqual(["claude:default", "claude:glm-5.3", "claude:work"]);
+    expect(h.registry().activeProfiles).toEqual({ claude: "claude:work" });
   });
 });

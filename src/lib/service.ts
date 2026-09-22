@@ -684,6 +684,25 @@ export async function initializeRegistry(options: {
   mergeSessions?: boolean;
   mergeSessionsMap?: Record<string, boolean>;
 }) {
+  // Every name is checked before anything is written. These are new profiles, so they get
+  // the same rules as `add`: the name rule, and no two ids of one tool that differ only by
+  // case - they would share a backup directory on a case-insensitive filesystem.
+  const initIds = new Map<string, string>();
+  for (const account of options.accounts) {
+    const name = options.profileNames[account.configDir] ?? defaultProfileNameForConfigDir(account.configDir);
+    const nameCheck = validateProfileName(name);
+    if (!nameCheck.ok) throw new Error(nameCheck.error);
+    const id = profileId(account.tool, name);
+    const clash = initIds.get(id.toLowerCase());
+    if (clash === id) throw new Error(`Two accounts are both named '${id}'. Give each account its own name.`);
+    if (clash !== undefined) {
+      throw new Error(
+        `'${clash}' and '${id}' name the same profile (names are compared without case). Give each account its own name.`,
+      );
+    }
+    initIds.set(id.toLowerCase(), id);
+  }
+
   await ensureStorage();
 
   const home = homedir();
