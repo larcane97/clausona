@@ -1,3 +1,14 @@
+/**
+ * Emits `export KEY='VALUE'` lines. Single quotes are the only POSIX form in which no
+ * character is special, so a value can carry `$`, backticks, and newlines untouched; an
+ * embedded quote is closed, escaped, and reopened.
+ */
+export function renderPosixExports(env: Record<string, string>): string {
+  return Object.entries(env)
+    .map(([key, value]) => `export ${key}='${value.replace(/'/g, "'\\''")}'`)
+    .join("\n");
+}
+
 export function renderPosixShellInit() {
   return `# clausona shell integration
 _clausona_resolve() {

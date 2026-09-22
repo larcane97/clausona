@@ -1,9 +1,11 @@
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { renderPosixExports } from "./core/shell.js";
 import { trackUsage } from "./core/track-usage.js";
-import { accent, bold, box, dim, helpSection, helpUsage, secondary, success } from "./lib/cli-style.js";
+import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import { renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
+import { buildProfileEnv } from "./lib/profile-env.js";
 import { parseProfileRef, profileId } from "./lib/profile-ref.js";
 import {
   addProfile,
@@ -49,6 +51,7 @@ const commandFlags: Record<string, { flags: string[]; prefixes?: string[] }> = {
   "shell-init": { flags: [] },
   uninstall: { flags: [] },
   version: { flags: [] },
+  "_shell-env": { flags: ["--json"] },
 };
 
 function validateFlags(command: string, args: string[]) {
@@ -539,6 +542,26 @@ export async function runCommand(command: string, args: string[]) {
 
     case "run": {
       throw new Error("Usage: clausona run <profile> [claude-args...]");
+    }
+
+    case "_shell-env": {
+      // Internal: the shell wrapper runs this as `eval "$(clausona _shell-env claude)"`, so
+      // stdout carries export lines and nothing else — every diagnostic goes to stderr, and
+      // an unusable registry resolves to empty output rather than an error the shell would eval.
+      const [toolArg] = args.filter((arg) => !arg.startsWith("-"));
+      if (!toolArg || !(ALL_TOOLS as readonly string[]).includes(toolArg)) return "";
+
+      const registry = await loadRegistry();
+      if (!registry) return "";
+      const id = registry.activeProfiles[toolArg as ToolName];
+      const profile = id ? registry.profiles[id] : undefined;
+      if (!id || !profile) return "";
+
+      const { env, warnings } = await buildProfileEnv(id, profile);
+      // Repeated on every launch on purpose: a warning here means a persistent
+      // misconfiguration, and it should keep showing until the profile is fixed.
+      for (const warning of warnings) process.stderr.write(`  ${warnIcon} ${warning}\n`);
+      return jsonFlag(args) ? JSON.stringify(env) : renderPosixExports(env);
     }
 
     case "_sync-plugins": {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderPosixShellInit, renderPowerShellInit, renderShellInit } from "./shell.js";
+import { renderPosixExports, renderPosixShellInit, renderPowerShellInit, renderShellInit } from "./shell.js";
 
 describe("renderShellInit", () => {
   const out = renderPosixShellInit();
@@ -67,5 +67,25 @@ describe("renderPowerShellInit", () => {
     expect(out).toMatch(/\$previousConfig = \$env:CLAUDE_CONFIG_DIR/);
     expect(out).toMatch(/\$env:CLAUDE_CONFIG_DIR = \$previousConfig/);
     expect(out).toMatch(/Set-Alias -Name csn -Value clausona -Scope Global/);
+  });
+});
+
+describe("renderPosixExports", () => {
+  it("returns an empty string for an empty env", () => {
+    expect(renderPosixExports({})).toBe("");
+  });
+
+  it("single-quotes every value", () => {
+    expect(renderPosixExports({ A: "1", B: "two" })).toBe("export A='1'\nexport B='two'");
+  });
+
+  it("survives a value containing a single quote", () => {
+    // '\'' closes the quote, emits a literal quote, and reopens — the only safe form.
+    expect(renderPosixExports({ K: "a'b" })).toBe("export K='a'\\''b'");
+  });
+
+  it("does not expand $, backticks, or newlines", () => {
+    const out = renderPosixExports({ K: "$HOME `id`\nx" });
+    expect(out).toBe("export K='$HOME `id`\nx'");
   });
 });
