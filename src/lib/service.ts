@@ -29,7 +29,7 @@ import type {
   UsageStore,
 } from "../types.js";
 import { buildProfileEnv } from "./profile-env.js";
-import { profileId, validateProfileName } from "./profile-ref.js";
+import { defaultProfileName, profileId, validateProfileName } from "./profile-ref.js";
 import { deleteSecret, storeSecret } from "./secrets.js";
 
 /** Files inside plugins/ that contain absolute paths and must be per-profile */
@@ -134,11 +134,11 @@ async function execCommand(
 
 function defaultProfileNameForConfigDir(configDir: string) {
   const base = path.basename(configDir);
-  if (base === ".claude") {
+  if (base === ".claude" || base === ".codex") {
     return "default";
   }
 
-  return base.replace(/^\.claude-/, "") || "profile";
+  return defaultProfileName(configDir);
 }
 
 async function ensureStorage() {

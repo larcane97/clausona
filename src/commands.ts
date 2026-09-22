@@ -6,7 +6,7 @@ import { trackUsage } from "./core/track-usage.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import { renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
 import { buildProfileEnv } from "./lib/profile-env.js";
-import { parseProfileRef, profileId } from "./lib/profile-ref.js";
+import { defaultProfileName, parseProfileRef, profileId } from "./lib/profile-ref.js";
 import {
   addProfile,
   discoverAccounts,
@@ -624,7 +624,7 @@ export async function runCommand(command: string, args: string[]) {
       const profileNames = Object.fromEntries(
         accounts.map((account) => [
           account.configDir,
-          account.isPrimary ? "default" : path.basename(account.configDir).replace(/^\.claude-/, ""),
+          account.isPrimary ? "default" : defaultProfileName(account.configDir),
         ]),
       );
       const defaultProfile = Object.values(profileNames)[0] ?? "default";
@@ -640,12 +640,16 @@ export async function runCommand(command: string, args: string[]) {
 export async function bootstrapInitFromCurrentState() {
   const accounts = await discoverAccounts();
   const existing = await loadRegistry();
+  // Registry keys are ids (`claude:work`); init takes bare names and adds the tool itself.
+  const nameOf = (id: string) => id.split(":").slice(1).join(":");
   const profileNames = Object.fromEntries(
-    accounts.map((account) => [
-      account.configDir,
-      Object.entries(existing?.profiles ?? {}).find(([, profile]) => profile.configDir === account.configDir)?.[0] ??
-        (account.isPrimary ? "default" : path.basename(account.configDir).replace(/^\.claude-/, "")),
-    ]),
+    accounts.map((account) => {
+      const registered = Object.entries(existing?.profiles ?? {}).find(
+        ([, profile]) => profile.configDir === account.configDir,
+      )?.[0];
+      if (registered) return [account.configDir, nameOf(registered)];
+      return [account.configDir, account.isPrimary ? "default" : defaultProfileName(account.configDir)];
+    }),
   );
 
   return {
