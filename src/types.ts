@@ -50,6 +50,11 @@ export type QuotaSnapshot = QuotaWindows & {
 
 export type ToolName = "claude" | "codex";
 
+export type SecretSource =
+  | { source: "keychain" }
+  | { source: "env"; name: string }
+  | { source: "command"; run: string };
+
 export type Profile = {
   tool: ToolName;
   configDir: string;
