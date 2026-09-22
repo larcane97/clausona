@@ -8,9 +8,10 @@ import { spawnCommand } from "../core/process.js";
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
 import { isV1Registry, migrateRegistryV1toV2, setActiveProfile } from "../core/registry.js";
 import { createSharedLink, inspectSharedLink } from "../core/shared-links.js";
-import { renderShellInit } from "../core/shell.js";
+import { isPosixEnvName, renderShellInit } from "../core/shell.js";
 import { seedSeenSessions } from "../core/track-usage.js";
 import { summarizeUsage } from "../core/usage.js";
+import { validateEnvEntry } from "../tools/claude-env-catalog.js";
 import { allAdapters, getAdapter } from "../tools/registry.js";
 import type { ToolAdapter } from "../tools/types.js";
 import type {
@@ -22,11 +23,14 @@ import type {
   QuotaSnapshot,
   Registry,
   RegistryV1,
+  SecretSource,
   ToolName,
   UsagePeriod,
   UsageStore,
 } from "../types.js";
+import { buildProfileEnv } from "./profile-env.js";
 import { profileId, validateProfileName } from "./profile-ref.js";
+import { deleteSecret, storeSecret } from "./secrets.js";
 
 /** Files inside plugins/ that contain absolute paths and must be per-profile */
 const PLUGINS_PATH_FILES = new Set(["known_marketplaces.json", "installed_plugins.json"]);
@@ -1165,12 +1169,55 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
   return { name: id, mergeSessions: next, changed: true };
 }
 
+export async function updateProfileEnv(id: string, changes: { set?: Record<string, string>; unset?: string[] }) {
+  const registry = await loadRegistry();
+  if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
+  const profile = registry.profiles[id];
+  const env = { ...(profile.env ?? {}) };
+
+  for (const [key, value] of Object.entries(changes.set ?? {})) {
+    const result = validateEnvEntry(key, value);
+    if (!result.ok) throw new Error(result.error);
+    env[key] = value;
+  }
+  for (const key of changes.unset ?? []) delete env[key];
+
+  registry.profiles[id] = { ...profile, env };
+  await saveRegistry(registry);
+  return registry.profiles[id];
+}
+
+export async function updateProfileSecret(id: string, secret: SecretSource, value?: string) {
+  const registry = await loadRegistry();
+  if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
+  const profile = registry.profiles[id];
+  if (profile.kind !== "api" || !profile.api) throw new Error(`Profile '${id}' is not an API profile.`);
+  const { source, toStore } = checkSecretSource(secret, value);
+
+  // Ordered so the registry never names a credential that is not there: a new value is
+  // stored before the registry points at it, and an old one is deleted only after the
+  // registry has stopped pointing at it.
+  if (toStore !== null) await storeSecret(id, toStore);
+  registry.profiles[id] = { ...profile, api: { ...profile.api, secret: source } };
+  await saveRegistry(registry);
+  if (toStore === null) {
+    // Leaving a stored value behind after switching to an env or command source would
+    // keep a credential alive that nothing reads any more.
+    await deleteSecret(id).catch(() => {});
+  }
+}
+
 async function cleanupProfile(name: string, profile: Profile, primarySource: string) {
   if (profile.isPrimary) return;
 
   // Resolved before anything is touched: for a name that escapes the backups directory,
   // backupDirFor throws, and the profile should be left exactly as it was.
   const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
+
+  // The registry entry is about to go; a credential outliving it is a credential nothing
+  // will ever clean up. Only an API profile can own one, and gating on that keeps removing
+  // a subscription profile from reaching into the credential store at all.
+  if (profile.kind === "api") await deleteSecret(profileId(profile.tool, name)).catch(() => {});
 
   // 1a. Strip inner symlinks from plugins/ dir (real dir with inner symlinks)
   const profilePlugins = path.join(profile.configDir, "plugins");
@@ -1372,10 +1419,162 @@ export async function addProfile(options: {
   return { name: options.name, email: accountInfo.email, configDir };
 }
 
+/**
+ * Checks a key source before anything is stored or persisted. Returns the reference to
+ * persist - rebuilt from its known fields, so nothing else a caller attached to the object
+ * reaches profiles.json - and the value to store, which only the keychain source has.
+ * No error here carries a key.
+ */
+function checkSecretSource(
+  secret: SecretSource,
+  value: string | undefined,
+): { source: SecretSource; toStore: string | null } {
+  switch (secret.source) {
+    case "keychain":
+      if (value === undefined || value.trim() === "") throw new Error("no API key supplied for the keychain source");
+      return { source: { source: "keychain" }, toStore: value };
+    case "env":
+      // Not echoed: a key pasted where the variable name belongs would land in the error.
+      if (typeof secret.name !== "string" || !isPosixEnvName(secret.name)) {
+        throw new Error(
+          "Invalid key variable name: use letters, digits and underscores, starting with a letter or underscore. Pass the variable's name, not the key.",
+        );
+      }
+      return { source: { source: "env", name: secret.name }, toStore: null };
+    case "command":
+      if (typeof secret.run !== "string" || secret.run.trim() === "") {
+        throw new Error("The key command is empty.");
+      }
+      return { source: { source: "command", run: secret.run }, toStore: null };
+    default:
+      throw new Error("Unknown key source: use keychain, env or command.");
+  }
+}
+
+function parseBaseUrl(baseUrl: string): URL {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    throw new Error("Invalid base URL: must be an absolute http:// or https:// URL.");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`Invalid base URL: the scheme must be http or https, not '${url.protocol.slice(0, -1)}'.`);
+  }
+  // profiles.json holds references to secrets, never secrets, and a password in the URL
+  // would be persisted and exported in plain text alongside it.
+  if (url.username !== "" || url.password !== "") {
+    throw new Error("Invalid base URL: it must not carry credentials. Supply the key through the key source instead.");
+  }
+  return url;
+}
+
+export async function addApiProfile(options: {
+  tool: ToolName;
+  name: string;
+  baseUrl: string;
+  authScheme: "bearer" | "api-key";
+  secret: SecretSource;
+  /** Present only for the keychain source: the value to store. */
+  secretValue?: string;
+  label?: string;
+  env?: Record<string, string>;
+  mergeSessions?: boolean;
+}) {
+  // Every input is checked before the first side effect, so a rejection leaves no config
+  // directory, stored credential, or registry entry behind.
+  const nameCheck = validateProfileName(options.name);
+  if (!nameCheck.ok) throw new Error(nameCheck.error);
+  if (options.tool !== "claude") {
+    throw new Error("API profiles are supported for claude only in this version.");
+  }
+  const baseUrl = options.baseUrl.trim();
+  const url = parseBaseUrl(baseUrl);
+  if (options.authScheme !== "bearer" && options.authScheme !== "api-key") {
+    throw new Error(`Invalid auth scheme '${options.authScheme}': must be 'bearer' or 'api-key'.`);
+  }
+  // A blank label would render the profile as an empty row; absent means "use the host".
+  if (options.label !== undefined && options.label.trim() === "") {
+    throw new Error("Label cannot be blank. Leave it out to use the endpoint's host.");
+  }
+  const label = options.label?.trim() ?? url.host;
+  const { source: secret, toStore } = checkSecretSource(options.secret, options.secretValue);
+  const env = { ...options.env };
+  for (const [key, value] of Object.entries(env)) {
+    const result = validateEnvEntry(key, value);
+    if (!result.ok) throw new Error(result.error);
+  }
+
+  const registry = await loadRegistry();
+  if (!registry) throw new Error("clausona is not initialized.");
+
+  const id = profileId(options.tool, options.name);
+  assertProfileIdAvailable(registry, id);
+
+  const adapter = getAdapter(options.tool);
+  const home = homedir();
+  const primarySource = registry.primarySources[options.tool] ?? adapter.defaultConfigDir(home);
+  const configDir = path.join(home, `.claude-${options.name}`);
+  if (await exists(configDir)) {
+    throw new Error(`${configDir.replace(home, "~")} already exists. Choose another profile name.`);
+  }
+
+  const mergeSessions = options.mergeSessions ?? false;
+  const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);
+  await mkdir(configDir, { recursive: true });
+  try {
+    // Carry the primary's onboarding state across. An API profile has no login step, so an
+    // onboarding wizard on first launch is even more jarring than it is for a new account.
+    const primaryJsonPath = claudeJsonPathForConfigDir({ homeDir: home, configDir: primarySource });
+    const jsonPath = path.join(configDir, ".claude.json");
+    const primaryJson = await readJson<Record<string, unknown>>(primaryJsonPath, {});
+    const profileJson = await readJson<Record<string, unknown>>(jsonPath, {});
+    for (const key of ["hasCompletedOnboarding", "lastOnboardingVersion"] as const) {
+      if (primaryJson[key] !== undefined && profileJson[key] === undefined) profileJson[key] = primaryJson[key];
+    }
+    await writeJson(jsonPath, profileJson);
+
+    await rm(backupDir, { force: true, recursive: true });
+    await mkdir(backupDir, { recursive: true });
+    await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
+    await setupPluginsDir(configDir, primarySource);
+    if (toStore !== null) await storeSecret(id, toStore);
+
+    // Inside the try: a registry write that fails must not strand the credential above.
+    registry.profiles[id] = {
+      tool: options.tool,
+      kind: "api",
+      configDir,
+      email: "",
+      label,
+      mergeSessions,
+      api: { baseUrl, authScheme: options.authScheme, secret },
+      env,
+    };
+    if (!registry.primarySources[options.tool]) registry.primarySources[options.tool] = primarySource;
+    await saveRegistry(registry);
+  } catch (error) {
+    await cleanupProfile(
+      options.name,
+      { tool: options.tool, kind: "api", configDir, email: "", isPrimary: false },
+      primarySource,
+    ).catch(() => {});
+    await rm(configDir, { force: true, recursive: true }).catch(() => {});
+    throw new Error(
+      `Failed to set up profile '${options.name}': ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  await seedSeenSessions(id, configDir);
+  return { name: options.name, configDir };
+}
+
 export async function loginProfile(id: string) {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
   const profile = registry.profiles[id];
+  if (profile.kind === "api") {
+    throw new Error(`'${id}' is an API profile. Change its key with 'clausona config ${id} --key'.`);
+  }
   const loggedIn = await getAdapter(profile.tool).runLogin(profile.configDir);
   if (!loggedIn) throw new Error(`${profile.tool} login failed.`);
   return profile;
@@ -1417,12 +1616,12 @@ export async function resolveProfileEnv(
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
   const profile = registry.profiles[id];
   const adapter = getAdapter(profile.tool);
-  const env = { ...process.env };
-  if (profile.isPrimary) {
-    delete env[adapter.configEnvVar];
-  } else {
-    env[adapter.configEnvVar] = profile.configDir;
-  }
+  const { env: profileEnv, warnings } = await buildProfileEnv(id, profile);
+  for (const warning of warnings) warn(warning);
+  const env: NodeJS.ProcessEnv = { ...process.env, ...profileEnv };
+  // buildProfileEnv omits the config variable for a primary profile; an inherited value
+  // from the surrounding shell would otherwise survive and point at the wrong profile.
+  if (!(adapter.configEnvVar in profileEnv)) delete env[adapter.configEnvVar];
   if (profile.tool === "claude") {
     const primary = registry.primarySources.claude ?? adapter.defaultConfigDir(homedir());
     await syncPluginsJson(profile.configDir, primary).catch((e) =>
