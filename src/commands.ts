@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { isAnthropicHost } from "./core/api-url.js";
 import { spawnCommandSync } from "./core/process.js";
 import { isPosixEnvName, renderPosixExports } from "./core/shell.js";
 import { trackUsage } from "./core/track-usage.js";
@@ -198,19 +199,6 @@ function parseSecretSource(input: string): SecretSource {
     return { source: "command", run };
   }
   throw new Error('Invalid --key-from: use keychain, env:NAME, or command:"<shell command>".');
-}
-
-/**
- * Anthropic's own API authenticates with x-api-key; gateways and self-hosted servers
- * overwhelmingly take a Bearer token.
- *
- * Matched on the hostname, exactly: `URL.host` carries the port, and a plain
- * `endsWith("anthropic.com")` would also accept `evilanthropic.com` - which would hand
- * that host a key in the header Anthropic's own API expects.
- */
-function isAnthropicHost(hostname: string): boolean {
-  const host = hostname.toLowerCase();
-  return host === "anthropic.com" || host.endsWith(".anthropic.com");
 }
 
 /**

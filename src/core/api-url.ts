@@ -38,3 +38,20 @@ export function checkBaseUrl(baseUrl: string): { ok: true; url: URL } | { ok: fa
   }
   return { ok: true, url };
 }
+
+/**
+ * Whether an endpoint is Anthropic's own, which is what decides the auth scheme offered
+ * by default: Anthropic's API reads the key from X-Api-Key, and everything else -
+ * gateways, proxies, self-hosted servers - overwhelmingly takes a Bearer token.
+ *
+ * Matched on the hostname, exactly: `URL.host` carries the port, and a plain
+ * `endsWith("anthropic.com")` would also accept `evilanthropic.com` - which would hand
+ * that host a key in the header Anthropic's own API expects.
+ *
+ * Here rather than at one call site because both surfaces that offer a default need it,
+ * and the second copy is how the two would come to disagree about the same URL.
+ */
+export function isAnthropicHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === "anthropic.com" || host.endsWith(".anthropic.com");
+}
