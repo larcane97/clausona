@@ -1,6 +1,5 @@
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { render } from "ink";
 
 import { runCommand } from "./commands.js";
 import { spawnCommandSync } from "./core/process.js";
@@ -8,7 +7,6 @@ import { trackUsage } from "./core/track-usage.js";
 import { accent, fail as xMark } from "./lib/cli-style.js";
 import { parseProfileRef } from "./lib/profile-ref.js";
 import { loadRegistry, resolveProfileEnv } from "./lib/service.js";
-import { App } from "./tui/App.js";
 import type { ParsedCommand } from "./types.js";
 
 export function parseCommand(argv: string[]): ParsedCommand {
@@ -29,16 +27,38 @@ export function parseCommand(argv: string[]): ParsedCommand {
   return { kind: "command", command, args };
 }
 
-const TUI_SCREENS = new Set(["dashboard", "use", "doctor", "init"]);
+type TuiScreen = "dashboard" | "use" | "doctor" | "init";
+
+const TUI_SCREENS = new Set<string>(["dashboard", "use", "doctor", "init"]);
+
+/**
+ * React and Ink are the bulk of this bundle's startup cost, and nothing but the TUI needs
+ * them. They stay behind a dynamic import because the shell hook calls `clausona _shell-env`
+ * before every `claude` and `codex` run, and that command prints two lines and exits - it
+ * should not be paying to evaluate a React renderer first.
+ */
+async function renderTui(screen: TuiScreen): Promise<void> {
+  const [{ render }, { App }] = await Promise.all([import("ink"), import("./tui/App.js")]);
+
+  // Clear initial state
+  if (process.stdout.isTTY) {
+    process.stdout.write("\x1bc"); // FULL reset
+  }
+
+  // Pass the real streams so ink does not throw Raw mode errors when piped.
+  const { waitUntilExit } = render(<App initialScreen={screen} />, {
+    stdout: process.stdout,
+    stdin: process.stdin,
+  });
+
+  await waitUntilExit();
+  if (process.stdout.isTTY) {
+    process.stdout.write("\x1bc"); // Full clear on exit
+  }
+}
 
 async function main() {
   const parsed = parseCommand(process.argv.slice(2));
-
-  // Create a proper input stream that won't throw Raw mode errors when piped
-  const renderOptions = {
-    stdout: process.stdout,
-    stdin: process.stdin,
-  };
 
   // Skip TUI completely if not in a TTY (for scripts, CI, etc)
   if (parsed.kind === "tui" && !process.stdout.isTTY) {
@@ -47,17 +67,7 @@ async function main() {
   }
 
   if (parsed.kind === "tui") {
-    // Clear initial state
-    if (process.stdout.isTTY) {
-      process.stdout.write("\x1bc"); // FULL reset
-    }
-
-    const { waitUntilExit } = render(<App initialScreen="dashboard" />, renderOptions);
-
-    await waitUntilExit();
-    if (process.stdout.isTTY) {
-      process.stdout.write("\x1bc"); // Full clear on exit
-    }
+    await renderTui("dashboard");
     return;
   }
 
@@ -90,19 +100,7 @@ async function main() {
           return;
         }
 
-        if (process.stdout.isTTY) {
-          process.stdout.write("\x1bc"); // FULL reset
-        }
-
-        const { waitUntilExit } = render(
-          <App initialScreen={screen as "dashboard" | "use" | "doctor" | "init"} />,
-          renderOptions,
-        );
-
-        await waitUntilExit();
-        if (process.stdout.isTTY) {
-          process.stdout.write("\x1bc"); // Full clear on exit
-        }
+        await renderTui(screen as TuiScreen);
         return;
       }
       process.stderr.write(
