@@ -40,7 +40,7 @@ import type {
   UsagePeriod,
   UsageStore,
 } from "../types.js";
-import { buildProfileEnv } from "./profile-env.js";
+import { buildProfileEnv, envKeyCaseTwin, envKeyCaseTwinError } from "./profile-env.js";
 import { foldProfileName, initProfileNames, parseProfileRef, profileId, validateProfileName } from "./profile-ref.js";
 import { deleteSecret, storeSecret } from "./secrets.js";
 
@@ -1212,6 +1212,12 @@ export async function updateProfileEnv(id: string, changes: { set?: Record<strin
     env[key] = value;
   }
   for (const key of changes.unset ?? []) delete env[key];
+  // Checked against the map as it will be saved, so a rename in case within one call works.
+  for (const key of Object.keys(changes.set ?? {})) {
+    if (!Object.hasOwn(env, key)) continue;
+    const twin = envKeyCaseTwin(key, Object.keys(env), profile.kind);
+    if (twin !== undefined) throw new Error(envKeyCaseTwinError(key, twin));
+  }
 
   registry.profiles[id] = { ...profile, env };
   await saveRegistry(registry);
@@ -1676,6 +1682,8 @@ export async function addApiProfile(options: {
   for (const [key, value] of Object.entries(env)) {
     const result = validateEnvEntry(key, value);
     if (!result.ok) throw new Error(result.error);
+    const twin = envKeyCaseTwin(key, Object.keys(env), "api");
+    if (twin !== undefined) throw new Error(envKeyCaseTwinError(key, twin));
   }
 
   const registry = await loadRegistry();
@@ -1824,15 +1832,18 @@ export async function removeProfile(id: string) {
  * Deletes a variable from an environment copy. Windows treats environment names
  * case-insensitively - `anthropic_api_key` is ANTHROPIC_API_KEY to the tool - and a spread
  * of process.env keeps whatever spelling the variable was created with, so there every
- * spelling goes. On POSIX a differently cased name is a different variable.
+ * spelling goes, except one the profile set itself. On POSIX a differently cased name is a
+ * different variable.
  */
-function deleteEnvVar(env: NodeJS.ProcessEnv, key: string, platform: NodeJS.Platform) {
+function deleteEnvVar(env: NodeJS.ProcessEnv, key: string, platform: NodeJS.Platform, keep: Record<string, string>) {
   if (platform !== "win32") {
     delete env[key];
     return;
   }
   const upper = key.toUpperCase();
-  for (const name of Object.keys(env)) if (name.toUpperCase() === upper) delete env[name];
+  for (const name of Object.keys(env)) {
+    if (name.toUpperCase() === upper && !Object.hasOwn(keep, name)) delete env[name];
+  }
 }
 
 export async function resolveProfileEnv(
@@ -1845,14 +1856,21 @@ export async function resolveProfileEnv(
   const adapter = getAdapter(profile.tool);
   const { env: profileEnv, unset, warnings } = await buildProfileEnv(id, profile);
   for (const warning of warnings) warn(warning);
-  const env: NodeJS.ProcessEnv = { ...process.env, ...profileEnv };
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // On Windows an inherited `my_flag` is the profile's `My_Flag` under another spelling, and
+  // with both in the env the child would get whichever sorts first - so the profile's own
+  // spelling replaces every inherited one.
+  for (const key of Object.keys(profileEnv)) deleteEnvVar(env, key, platform, {});
+  Object.assign(env, profileEnv);
   // buildProfileEnv omits the config variable for a primary profile; an inherited value
   // from the surrounding shell would otherwise survive and point at the wrong profile.
-  if (!Object.hasOwn(profileEnv, adapter.configEnvVar)) deleteEnvVar(env, adapter.configEnvVar, platform);
+  if (!Object.hasOwn(profileEnv, adapter.configEnvVar)) {
+    deleteEnvVar(env, adapter.configEnvVar, platform, profileEnv);
+  }
   // A credential the caller exported for something else, which the tool would otherwise
   // send to this profile's endpoint alongside the profile's own, or a provider switch that
   // would route around it. The shell hooks unset the same list.
-  for (const key of unset) deleteEnvVar(env, key, platform);
+  for (const key of unset) deleteEnvVar(env, key, platform, profileEnv);
   if (profile.tool === "claude") {
     const primary = registry.primarySources.claude ?? adapter.defaultConfigDir(homedir());
     await syncPluginsJson(profile.configDir, primary).catch((e) =>

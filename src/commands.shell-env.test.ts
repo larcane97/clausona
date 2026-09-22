@@ -314,6 +314,38 @@ describe("_shell-env", () => {
     });
   });
 
+  // PowerShell's ConvertFrom-Json refuses an object with two keys that differ only in case,
+  // and the hook's catch would then apply no profile at all - default account, no warning.
+  it("never emits two JSON keys that are one variable on Windows", async () => {
+    const h = await harness((home, workDir) =>
+      registryWith(
+        {
+          tool: "claude",
+          kind: "api",
+          configDir: workDir,
+          email: "",
+          label: "router",
+          api: {
+            baseUrl: "https://openrouter.ai/api",
+            authScheme: "bearer",
+            secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
+          },
+          env: { anthropic_custom_headers: "X-Team: platform", claude_config_dir: "/evil", MY_FLAG: "1", my_flag: "2" },
+        },
+        home,
+      ),
+    );
+    vi.stubEnv("CLAUSONA_TEST_SECRET", "sk-or-not-a-real-key");
+
+    const keys = Object.keys(JSON.parse(await h.run("claude", "--json")) as Record<string, unknown>);
+
+    const folded = keys.map((key) => key.toUpperCase());
+    expect(new Set(folded).size).toBe(keys.length);
+    expect(keys).toContain("ANTHROPIC_CUSTOM_HEADERS");
+    expect(keys).toContain("MY_FLAG");
+    expect(h.warnings).toHaveLength(3);
+  });
+
   /**
    * kind: undefined means subscription, and a subscription profile clears nothing: its
    * output, in both forms, is pinned byte for byte as it was before API profiles could

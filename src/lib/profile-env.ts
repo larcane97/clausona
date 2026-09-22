@@ -6,8 +6,15 @@ import { getAdapter } from "../tools/registry.js";
 import type { Profile } from "../types.js";
 import { resolveSecret } from "./secrets.js";
 
-/** Variables clausona owns; a profile's env map may not redefine them. */
+/**
+ * Variables clausona owns; a profile's env map may not redefine them, in any spelling -
+ * Windows treats `claude_config_dir` as CLAUDE_CONFIG_DIR.
+ */
 export const RESERVED_ENV_KEYS = new Set(["CLAUDE_CONFIG_DIR", "CODEX_HOME"]);
+
+export function isReservedEnvKey(key: string): boolean {
+  return RESERVED_ENV_KEYS.has(key.toUpperCase());
+}
 
 /**
  * The variables Claude Code takes a credential from, or that switch on an auth flow. For an
@@ -82,6 +89,31 @@ export const ROUTING_ENV_KEYS = [
   "CLAUDE_CODE_CUSTOM_OAUTH_URL",
 ] as const;
 
+/** Everything clausona sets or clears for an API profile, besides its free-form env map. */
+const API_MANAGED_ENV_KEYS: readonly string[] = ["ANTHROPIC_BASE_URL", ...CREDENTIAL_ENV_KEYS, ...ROUTING_ENV_KEYS];
+
+/**
+ * The name `key` would be the same variable as on Windows, which treats environment names
+ * case-insensitively: another name already in `others`, or - for an API profile - a name
+ * clausona sets or clears for it, spelled differently. Undefined when there is none.
+ *
+ * Two such names cannot both be honoured. PowerShell's ConvertFrom-Json refuses a JSON
+ * object carrying both, and the hook would then apply no profile at all; and on POSIX a
+ * miscased `anthropic_custom_headers` is a variable Claude Code never reads, while treating
+ * it as the real one would leave the caller's ANTHROPIC_CUSTOM_HEADERS uncleared. So the
+ * env map may hold at most one spelling of a name, and never a variant of a managed one.
+ */
+export function envKeyCaseTwin(key: string, others: Iterable<string>, kind: Profile["kind"]): string | undefined {
+  const upper = key.toUpperCase();
+  for (const other of others) if (other !== key && other.toUpperCase() === upper) return other;
+  if (kind === "api") return API_MANAGED_ENV_KEYS.find((managed) => managed !== key && managed === upper);
+  return undefined;
+}
+
+export function envKeyCaseTwinError(key: string, twin: string): string {
+  return `'${key}' differs from ${twin} only in case, and Windows treats the two as one variable. Use ${twin}.`;
+}
+
 export function displayName(profile: Pick<Profile, "email" | "label">): string {
   return profile.label ?? profile.email;
 }
@@ -142,10 +174,18 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
       warnings.push(`${id}: ignoring '${key}' from the env map - not a valid environment variable name`);
       continue;
     }
-    if (RESERVED_ENV_KEYS.has(key)) {
+    if (isReservedEnvKey(key)) {
       // Honouring the override would break profile isolation, so drop it - but say so,
       // since a hand-edited profiles.json is the usual way to land here.
       warnings.push(`${id}: ignoring ${key} from the env map - clausona sets it per profile`);
+      continue;
+    }
+    // The set-time check refuses these; a hand-edited profiles.json can still carry one.
+    const twin = envKeyCaseTwin(key, Object.keys(env), profile.kind);
+    if (twin !== undefined) {
+      warnings.push(
+        `${id}: ignoring '${key}' from the env map - it differs from ${twin} only in case, and Windows treats the two as one variable`,
+      );
       continue;
     }
     env[key] = value;
@@ -154,6 +194,9 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
   // For an API profile the endpoint and every credential come from the profile or not at
   // all. A set difference, taken last: the resolved key and any explicit env-map entry are
   // in env and so kept; everything else - an unresolved key's variable included - is cleared.
+  // It matches names exactly on purpose: the loop above has already dropped any env-map key
+  // that is a case variant of one of these, so no name here is another spelling of one in
+  // env - and matching case-insensitively would, on POSIX, keep the caller's real variable.
   const unset =
     profile.kind === "api" && profile.api
       ? [...CREDENTIAL_ENV_KEYS, ...ROUTING_ENV_KEYS].filter((key) => !Object.hasOwn(env, key))

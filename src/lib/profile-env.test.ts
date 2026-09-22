@@ -262,6 +262,99 @@ describe("buildProfileEnv", () => {
     expect(ROUTING_ENV_KEYS).not.toContain("CLAUDE_CODE_USE_POWERSHELL_TOOL");
   });
 
+  /**
+   * Windows treats environment names case-insensitively, so two names that differ only in
+   * case are one variable there. PowerShell's ConvertFrom-Json refuses a JSON object holding
+   * both, and the hook's catch then applies no profile at all - the tool runs on the default
+   * account. So an env-map key that differs only in case from a name already in the output,
+   * or from a name clausona sets or clears for an API profile, is dropped with a warning.
+   */
+  describe("case collisions in the env map", () => {
+    const folded = (keys: string[]) => keys.map((key) => key.toUpperCase());
+
+    it("drops a key that differs from an earlier one only in case", async () => {
+      const profile: Profile = {
+        tool: "claude",
+        configDir: "/home/u/.claude-work",
+        email: "you@example.com",
+        env: { ANTHROPIC_MODEL: "first", anthropic_model: "second-secret-looking-value" },
+      };
+      const { env, warnings } = await buildProfileEnv("claude:work", profile, deps);
+      expect(env).toEqual({ CLAUDE_CONFIG_DIR: "/home/u/.claude-work", ANTHROPIC_MODEL: "first" });
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("anthropic_model");
+      expect(warnings[0]).toContain("ANTHROPIC_MODEL");
+      expect(warnings[0]).not.toContain("second-secret-looking-value");
+    });
+
+    it("drops any spelling of a variable clausona owns", async () => {
+      for (const profile of [
+        { tool: "claude", configDir: "/home/u/.claude-work", email: "a@b.c", env: { claude_config_dir: "/evil" } },
+        { ...apiProfile(), env: { Claude_Config_Dir: "/evil" } },
+      ] as Profile[]) {
+        const { env, warnings } = await buildProfileEnv("claude:x", profile, deps);
+        expect(Object.values(env)).not.toContain("/evil");
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toMatch(/clausona sets it per profile/);
+      }
+    });
+
+    it("drops a miscased name an API profile sets or clears, so the real one is still cleared", async () => {
+      const profile = apiProfile({
+        env: {
+          anthropic_custom_headers: "X-Team: platform",
+          anthropic_auth_token: "sk-lowercase",
+          Anthropic_Base_Url: "http://elsewhere:1",
+          claude_code_use_bedrock: "1",
+          ANTHROPIC_MODEL: "glm-5.3",
+        },
+      });
+      const { env, unset, warnings } = await buildProfileEnv("claude:glm", profile, deps);
+      expect(env).toEqual({
+        CLAUDE_CONFIG_DIR: "/home/u/.claude-glm",
+        ANTHROPIC_BASE_URL: "http://gpu-box:30000",
+        ANTHROPIC_AUTH_TOKEN: "sk-test",
+        ANTHROPIC_MODEL: "glm-5.3",
+      });
+      expect(unset).toContain("ANTHROPIC_CUSTOM_HEADERS");
+      expect(unset).toContain("CLAUDE_CODE_USE_BEDROCK");
+      expect(warnings).toHaveLength(4);
+      for (const warning of warnings) expect(warning).toMatch(/differs from [A-Z_]+ only in case/);
+      expect(warnings.join("\n")).not.toContain("sk-lowercase");
+    });
+
+    // On POSIX those are distinct variables Claude Code never reads, and a subscription
+    // profile clears nothing - so its output stays exactly what it was.
+    it("keeps a subscription profile's miscased credential-like key", async () => {
+      const profile: Profile = {
+        tool: "claude",
+        configDir: "/home/u/.claude-work",
+        email: "you@example.com",
+        env: { anthropic_api_key: "mine" },
+      };
+      const { env, unset, warnings } = await buildProfileEnv("claude:work", profile, deps);
+      expect(env).toEqual({ CLAUDE_CONFIG_DIR: "/home/u/.claude-work", anthropic_api_key: "mine" });
+      expect(unset).toEqual([]);
+      expect(warnings).toEqual([]);
+    });
+
+    it("never produces two names, set or cleared, that are one variable on Windows", async () => {
+      const profiles: Profile[] = [
+        apiProfile({ env: { anthropic_custom_headers: "x", ANTHROPIC_MODEL: "a", anthropic_model: "b" } }),
+        apiProfile({
+          api: { baseUrl: "https://openrouter.ai/api", authScheme: "api-key", secret: { source: "keychain" } },
+          env: { anthropic_api_key: "x", Claude_Code_Oauth_Token: "y", anthropic_unix_socket: "/s" },
+        }),
+        { tool: "claude", configDir: "/home/u/.claude-work", email: "a@b.c", env: { FOO: "1", foo: "2", Foo: "3" } },
+      ];
+      for (const profile of profiles) {
+        const { env, unset } = await buildProfileEnv("claude:glm", profile, deps);
+        const names = folded([...Object.keys(env), ...unset]);
+        expect(new Set(names).size, JSON.stringify(profile.env)).toBe(names.length);
+      }
+    });
+  });
+
   it("reserves the tool config variables", () => {
     expect(RESERVED_ENV_KEYS.has("CLAUDE_CONFIG_DIR")).toBe(true);
     expect(RESERVED_ENV_KEYS.has("CODEX_HOME")).toBe(true);

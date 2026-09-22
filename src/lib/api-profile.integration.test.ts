@@ -1090,6 +1090,29 @@ describe("addApiProfile", () => {
   }
 });
 
+describe("addApiProfile env map case clashes", () => {
+  for (const [label, env, message] of [
+    [
+      "two keys that differ only in case",
+      { MY_FLAG: "1", my_flag: "2" },
+      /'MY_FLAG' differs from my_flag only in case/,
+    ],
+    [
+      "a miscased name it clears",
+      { claude_code_use_bedrock: "1" },
+      /differs from CLAUDE_CODE_USE_BEDROCK only in case/,
+    ],
+  ] as const) {
+    it(`refuses ${label} before touching anything`, async () => {
+      const h = await harness();
+      const before = h.snapshot();
+
+      await expect(h.service.addApiProfile(apiOptions({ env: { ...env } }))).rejects.toThrow(message);
+      expect(h.snapshot()).toEqual(before);
+    });
+  }
+});
+
 describe("addApiProfile when a step after its first write fails", () => {
   // Everything after the backup directory is claimed runs inside a try whose catch undoes
   // it all, key included, so a failure there must leave nothing of the profile behind.
@@ -1331,6 +1354,57 @@ describe("updateProfileEnv", () => {
       "Profile 'claude:nope' not found.",
     );
   });
+
+  // Windows treats names that differ only in case as one variable, and PowerShell refuses a
+  // JSON object carrying both - so the whole profile would silently not apply there.
+  const caseClashes: Array<[string, Record<string, string>, RegExp]> = [
+    [
+      "a key already there in another case",
+      { anthropic_model: "x" },
+      /'anthropic_model' differs from ANTHROPIC_MODEL only in case/,
+    ],
+    ["two new keys that differ only in case", { MY_FLAG: "1", my_flag: "2" }, /differs from my_flag only in case/],
+    [
+      "a miscased name the profile clears",
+      { anthropic_custom_headers: "x" },
+      /differs from ANTHROPIC_CUSTOM_HEADERS only in case/,
+    ],
+    ["a miscased name the profile sets", { Anthropic_Base_Url: "x" }, /differs from ANTHROPIC_BASE_URL only in case/],
+    ["any spelling of a variable clausona owns", { claude_config_dir: "/tmp/elsewhere" }, /is managed by clausona/],
+  ];
+  for (const [label, set, message] of caseClashes) {
+    it(`rejects ${label} and persists nothing`, async () => {
+      const h = await withApiProfile();
+      const before = h.registryText();
+
+      await expect(h.service.updateProfileEnv("claude:glm", { set })).rejects.toThrow(message);
+      expect(h.registryText()).toBe(before);
+    });
+  }
+
+  it("still lets a key be changed, or renamed in case within one call", async () => {
+    const h = await withApiProfile();
+
+    await h.service.updateProfileEnv("claude:glm", { set: { ANTHROPIC_MODEL: "glm-5.4" } });
+    const renamed = await h.service.updateProfileEnv("claude:glm", {
+      set: { Anthropic_Model: "glm-5.4" },
+      unset: ["ANTHROPIC_MODEL"],
+    });
+
+    expect(renamed.env).toEqual({ Anthropic_Model: "glm-5.4" });
+  });
+
+  // A subscription profile clears nothing, so on POSIX its lowercase name is simply another
+  // variable - the only clash there is with a name already in its own env map.
+  it("lets a subscription profile set a miscased credential-like name", async () => {
+    const h = await harness();
+    const fromPath = seedAccountDir(h.home, ".claude-work", "work@example.com");
+    await h.service.addProfile({ tool: "claude", name: "work", fromPath });
+
+    const updated = await h.service.updateProfileEnv("claude:work", { set: { anthropic_api_key: "mine" } });
+
+    expect(updated.env).toEqual({ anthropic_api_key: "mine" });
+  });
 });
 
 describe("updateProfileSecret", () => {
@@ -1560,6 +1634,32 @@ describe("resolveProfileEnv", () => {
     expect(spellings(windows)).toEqual([]);
     expect(windows.ANTHROPIC_AUTH_TOKEN).toBe(KEY);
     expect(spellings(posix).sort()).toEqual(["Claude_Code_Use_Bedrock", "anthropic_api_key"]);
+  });
+
+  // The other direction: what the profile sets itself must reach the tool on Windows, in the
+  // profile's own spelling, and not lose to - or be deleted along with - an inherited one.
+  it("keeps the profile's own spelling on Windows and drops the inherited ones", async () => {
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions({ env: { My_Flag: "profile", CLAUDE_CODE_USE_BEDROCK: "1" } }));
+    vi.stubEnv("MY_FLAG", "parent");
+    vi.stubEnv("claude_code_use_bedrock", "parent");
+    const spellings = (env: NodeJS.ProcessEnv, name: string) =>
+      Object.entries(env).filter(([key]) => key.toUpperCase() === name);
+
+    const windows = (await h.service.resolveProfileEnv("claude:glm", "win32")).env;
+    const posix = (await h.service.resolveProfileEnv("claude:glm", "linux")).env;
+
+    expect(spellings(windows, "MY_FLAG")).toEqual([["My_Flag", "profile"]]);
+    expect(spellings(windows, "CLAUDE_CODE_USE_BEDROCK")).toEqual([["CLAUDE_CODE_USE_BEDROCK", "1"]]);
+    // On POSIX each spelling is its own variable, and the inherited ones are not clausona's.
+    expect(spellings(posix, "MY_FLAG").sort()).toEqual([
+      ["MY_FLAG", "parent"],
+      ["My_Flag", "profile"],
+    ]);
+    expect(spellings(posix, "CLAUDE_CODE_USE_BEDROCK").sort()).toEqual([
+      ["CLAUDE_CODE_USE_BEDROCK", "1"],
+      ["claude_code_use_bedrock", "parent"],
+    ]);
   });
 
   it("drops a differently cased config dir for the primary on Windows, and only there", async () => {

@@ -1,5 +1,5 @@
 import { isPosixEnvName } from "../core/shell.js";
-import { RESERVED_ENV_KEYS } from "../lib/profile-env.js";
+import { isReservedEnvKey } from "../lib/profile-env.js";
 
 export type EnvGroup = "model" | "context" | "limits" | "timeouts" | "compat" | "transport";
 
@@ -185,7 +185,7 @@ export function validateEnvEntry(key: string, value: string): { ok: true } | { o
     };
   }
 
-  if (RESERVED_ENV_KEYS.has(key)) {
+  if (isReservedEnvKey(key)) {
     return { ok: false, error: `${key} is managed by clausona and cannot be set on a profile` };
   }
 
