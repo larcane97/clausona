@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -143,6 +143,78 @@ describe("bootstrapInitFromCurrentState", () => {
       [path.join(h.home, ".codex-work")]: "work",
     });
     expect(state.defaultProfile).toBe("work");
+  });
+});
+
+describe("re-running init over a registry that holds a name from before the name rule", () => {
+  // The old `init --auto` named a second codex account `.codex-work`. Its backup directory
+  // is backups/codex/.codex-work, and everything clausona keys by id says `codex:.codex-work`.
+  async function withLegacyCodexName() {
+    const h = await harness();
+    await h.commands.runCommand("init", ["--auto"]);
+    const registry = h.registry();
+    registry.profiles["codex:.codex-work"] = registry.profiles["codex:work"];
+    delete registry.profiles["codex:work"];
+    writeFileSync(path.join(h.home, ".clausona", "profiles.json"), JSON.stringify(registry));
+    const backups = path.join(h.home, ".clausona", "backups", "codex");
+    renameSync(path.join(backups, "work"), path.join(backups, ".codex-work"));
+    const sentinel = path.join(backups, ".codex-work", "sentinel.json");
+    writeFileSync(sentinel, '{"original":true}');
+    return { h, sentinel, backups };
+  }
+  const LEGACY_IDS = ["claude:default", "claude:work", "codex:.codex-work", "codex:default"];
+
+  it("init --auto keeps the registered name instead of deriving a new one", async () => {
+    const { h, sentinel, backups } = await withLegacyCodexName();
+
+    await h.commands.runCommand("init", ["--auto"]);
+
+    expect(h.ids()).toEqual(LEGACY_IDS);
+    expect(existsSync(sentinel), "the profile's backup is no longer where its name points").toBe(true);
+    expect(existsSync(path.join(backups, "work")), "a second backup directory was started").toBe(false);
+  });
+
+  it("TUI init accepts the registered name it offers", async () => {
+    const { h, sentinel } = await withLegacyCodexName();
+
+    const state = await h.commands.bootstrapInitFromCurrentState();
+    await h.service.initializeRegistry(state);
+
+    expect(state.profileNames[path.join(h.home, ".codex-work")]).toBe(".codex-work");
+    expect(h.ids()).toEqual(LEGACY_IDS);
+    expect(existsSync(sentinel)).toBe(true);
+  });
+
+  it("still refuses that name for any other account", async () => {
+    const { h } = await withLegacyCodexName();
+    seedCodexAccount(h.home, ".codex-other", "other@example.com");
+    const accounts = await h.service.discoverAccounts();
+    const profileNames = {
+      [path.join(h.home, ".codex-work")]: "work",
+      [path.join(h.home, ".codex-other")]: ".codex-work",
+    };
+    const before = readFileSync(path.join(h.home, ".clausona", "profiles.json"), "utf8");
+
+    await expect(h.service.initializeRegistry({ accounts, profileNames, defaultProfile: "default" })).rejects.toThrow(
+      "Invalid profile name '.codex-work'",
+    );
+    expect(readFileSync(path.join(h.home, ".clausona", "profiles.json"), "utf8")).toBe(before);
+  });
+});
+
+describe("derived names that collide", () => {
+  it("init --auto numbers the second one instead of giving up", async () => {
+    const h = await harness();
+    seedClaudeAccount(h.home, ".claude-my work", "spaced@example.com");
+    seedClaudeAccount(h.home, ".claude-my-work", "dashed@example.com");
+
+    await h.commands.runCommand("init", ["--auto"]);
+
+    const profiles = h.registry().profiles;
+    expect(h.ids()).toEqual([...EXPECTED_IDS, "claude:my-work", "claude:my-work-2"].sort());
+    // The directory that already spells the name keeps it.
+    expect(profiles["claude:my-work"].configDir).toBe(path.join(h.home, ".claude-my-work"));
+    expect(profiles["claude:my-work-2"].configDir).toBe(path.join(h.home, ".claude-my work"));
   });
 });
 

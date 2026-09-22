@@ -6,7 +6,7 @@ import { trackUsage } from "./core/track-usage.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import { renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
 import { buildProfileEnv } from "./lib/profile-env.js";
-import { defaultProfileName, parseProfileRef, profileId } from "./lib/profile-ref.js";
+import { initProfileNames, parseProfileRef, profileId } from "./lib/profile-ref.js";
 import {
   addProfile,
   discoverAccounts,
@@ -621,12 +621,7 @@ export async function runCommand(command: string, args: string[]) {
         throw new Error("No Claude Code accounts found. Run `claude login` first.");
       }
       const mergeSessions = args.includes("--merge-sessions") || undefined;
-      const profileNames = Object.fromEntries(
-        accounts.map((account) => [
-          account.configDir,
-          account.isPrimary ? "default" : defaultProfileName(account.configDir),
-        ]),
-      );
+      const profileNames = initProfileNames(accounts, await loadRegistry());
       const defaultProfile = Object.values(profileNames)[0] ?? "default";
       await initializeRegistry({ accounts, profileNames, defaultProfile, mergeSessions });
       return success(`Initialized ${bold(String(accounts.length))} profile(s)`);
@@ -640,25 +635,16 @@ export async function runCommand(command: string, args: string[]) {
 export async function bootstrapInitFromCurrentState() {
   const accounts = await discoverAccounts();
   const existing = await loadRegistry();
+  const profileNames = initProfileNames(accounts, existing);
   // Registry keys are ids (`claude:work`), but init takes bare names and adds the tool
   // itself - an id passed through would come back as `claude:claude:work`.
-  const bareName = (id: string | undefined) =>
-    existing && id && existing.profiles[id] ? parseProfileRef(id, existing).name : undefined;
-  const profileNames = Object.fromEntries(
-    accounts.map((account) => {
-      const registered = Object.keys(existing?.profiles ?? {}).find(
-        (id) => existing?.profiles[id].configDir === account.configDir,
-      );
-      return [
-        account.configDir,
-        bareName(registered) ?? (account.isPrimary ? "default" : defaultProfileName(account.configDir)),
-      ];
-    }),
-  );
+  const active = existing?.activeProfiles?.claude;
+  const activeName =
+    existing && active && existing.profiles[active] ? parseProfileRef(active, existing).name : undefined;
 
   return {
     accounts,
     profileNames,
-    defaultProfile: bareName(existing?.activeProfiles?.claude) ?? Object.values(profileNames)[0] ?? "default",
+    defaultProfile: activeName ?? Object.values(profileNames)[0] ?? "default",
   };
 }

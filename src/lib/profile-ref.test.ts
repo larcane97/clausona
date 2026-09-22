@@ -1,7 +1,14 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { Registry } from "../types.js";
-import { defaultProfileName, parseProfileRef, profileId, validateProfileName } from "./profile-ref.js";
+import type { DiscoveredAccount, Profile, Registry, ToolName } from "../types.js";
+import {
+  defaultProfileName,
+  foldProfileName,
+  initProfileNames,
+  parseProfileRef,
+  profileId,
+  validateProfileName,
+} from "./profile-ref.js";
 import { addProfile } from "./service.js";
 
 const REG: Registry = {
@@ -118,6 +125,143 @@ describe("defaultProfileName", () => {
     for (const name of ["work", "glm-5.3", "a_b", "work-", "x."]) {
       expect(defaultProfileName(path.join(home, `.claude-${name}`))).toBe(name);
     }
+  });
+});
+
+describe("initProfileNames", () => {
+  const home = path.join(path.parse(process.cwd()).root, "home", "u");
+  const account = (tool: ToolName, dirName: string, isPrimary = false): DiscoveredAccount => ({
+    tool,
+    configDir: path.join(home, dirName),
+    jsonPath: "",
+    email: `${dirName}@example.com`,
+    keychainService: "",
+    isPrimary,
+  });
+  const registry = (profiles: Record<string, Pick<Profile, "tool" | "configDir"> & Partial<Profile>>): Registry => ({
+    version: 2,
+    primarySources: {},
+    activeProfiles: {},
+    profiles: Object.fromEntries(
+      Object.entries(profiles).map(([id, p]) => [
+        id,
+        { email: "x@example.com", ...p, configDir: path.join(home, p.configDir) },
+      ]),
+    ),
+  });
+  const byDir = (names: Record<string, string>) =>
+    Object.fromEntries(Object.entries(names).map(([dir, name]) => [path.basename(dir), name]));
+
+  it("names each primary 'default' and every other account after its directory", () => {
+    const found = [
+      account("claude", ".claude", true),
+      account("claude", ".claude-work"),
+      account("codex", ".codex", true),
+      account("codex", ".codex-work"),
+    ];
+
+    expect(byDir(initProfileNames(found, null))).toEqual({
+      ".claude": "default",
+      ".claude-work": "work",
+      ".codex": "default",
+      ".codex-work": "work",
+    });
+  });
+
+  it("keeps the name an account is already registered under, even one from before the name rule", () => {
+    const found = [account("claude", ".claude", true), account("codex", ".codex-work")];
+    const existing = registry({
+      "claude:main": { tool: "claude", configDir: ".claude", isPrimary: true },
+      "codex:.codex-work": { tool: "codex", configDir: ".codex-work" },
+    });
+
+    expect(byDir(initProfileNames(found, existing))).toEqual({ ".claude": "main", ".codex-work": ".codex-work" });
+  });
+
+  it("does not take a name from the same directory registered under the other tool", () => {
+    const found = [account("codex", ".claude-work")];
+    const existing = registry({ "claude:office": { tool: "claude", configDir: ".claude-work" } });
+
+    expect(byDir(initProfileNames(found, existing))).toEqual({ ".claude-work": "work" });
+  });
+
+  it("keeps a name the caller chose over the registered one", () => {
+    const found = [account("claude", ".claude-work")];
+    const existing = registry({ "claude:work": { tool: "claude", configDir: ".claude-work" } });
+
+    expect(byDir(initProfileNames(found, existing, { [found[0].configDir]: "office" }))).toEqual({
+      ".claude-work": "office",
+    });
+  });
+
+  it("numbers a derived name another account already has, and lets the directory that spells it keep it", () => {
+    // Sorted as discovery sorts them, the fitted one comes first; it still gets the suffix.
+    const found = [
+      account("claude", ".claude-my work"),
+      account("claude", ".claude-my-work"),
+      account("claude", ".claude-my_work"),
+    ];
+
+    expect(byDir(initProfileNames(found, null))).toEqual({
+      ".claude-my work": "my-work-2",
+      ".claude-my-work": "my-work",
+      ".claude-my_work": "my_work",
+    });
+  });
+
+  it("numbers a derived name that differs from a taken one only by case", () => {
+    const found = [account("claude", ".claude-Work"), account("claude", ".claude-work")];
+
+    expect(byDir(initProfileNames(found, null))).toEqual({ ".claude-Work": "Work", ".claude-work": "work-2" });
+  });
+
+  it("does not derive the name of a registered profile at another directory", () => {
+    // Init drops that profile, but its backup directory - and the name it is under - remain.
+    const found = [
+      account("claude", ".claude", true),
+      account("claude", ".claude-work"),
+      account("claude", ".claude-glm"),
+    ];
+    const existing = registry({
+      "claude:default": { tool: "claude", configDir: ".claude", isPrimary: true },
+      "claude:work": { tool: "claude", configDir: "imported/work" },
+      "claude:GLM": { tool: "claude", configDir: ".claude-api-glm", kind: "api" },
+    });
+
+    expect(byDir(initProfileNames(found, existing))).toEqual({
+      ".claude": "default",
+      ".claude-work": "work-2",
+      ".claude-glm": "glm-2",
+    });
+  });
+
+  it("gives the primary 'default' even when a profile elsewhere is registered under it", () => {
+    // The primary has no backup directory, so there is nothing of that profile's to inherit.
+    const found = [account("claude", ".claude", true)];
+    const existing = registry({ "claude:default": { tool: "claude", configDir: "old-home/.claude", isPrimary: true } });
+
+    expect(byDir(initProfileNames(found, existing))).toEqual({ ".claude": "default" });
+  });
+
+  it("only derives names the rule accepts", () => {
+    const found = [
+      account("claude", ".claude-a b"),
+      account("claude", ".claude-a:b"),
+      account("claude", ".claude-日本"),
+    ];
+    for (const name of Object.values(initProfileNames(found, null))) {
+      expect(validateProfileName(name), name).toEqual({ ok: true });
+    }
+  });
+});
+
+describe("foldProfileName", () => {
+  it("folds case and the characters APFS treats as the same letter", () => {
+    expect(foldProfileName("Work")).toBe(foldProfileName("work"));
+    // U+017F LATIN SMALL LETTER LONG S and U+212A KELVIN SIGN
+    expect(foldProfileName("\u017Fwork")).toBe(foldProfileName("swork"));
+    expect(foldProfileName("\u212Aey")).toBe(foldProfileName("key"));
+    expect(foldProfileName("work")).not.toBe(foldProfileName("worker"));
   });
 });
 

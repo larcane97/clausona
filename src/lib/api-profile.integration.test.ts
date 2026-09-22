@@ -563,6 +563,43 @@ describe("initializeRegistry names", () => {
     });
   }
 
+  // Re-registering a profile under the name it already has is not creating a name.
+  it("keeps registered names from before the rules for the accounts that hold them", async () => {
+    const h = await harness();
+    const found = accounts(h, "account-0", "account-1", "account-2");
+    const registry = h.registry();
+    registry.profiles["claude:.old"] = { tool: "claude", configDir: found[1].configDir, email: "x@example.com" };
+    registry.profiles["claude:Work"] = { tool: "claude", configDir: found[2].configDir, email: "x@example.com" };
+    registry.profiles["claude:work"] = { tool: "claude", configDir: found[3].configDir, email: "x@example.com" };
+    writeFileSync(h.registryPath, JSON.stringify(registry));
+
+    await h.service.initializeRegistry({ accounts: found, profileNames: {}, defaultProfile: ".old" });
+
+    expect(Object.keys(h.registry().profiles).sort()).toEqual([
+      "claude:.old",
+      "claude:Work",
+      "claude:default",
+      "claude:work",
+    ]);
+    expect(h.registry().activeProfiles).toEqual({ claude: "claude:.old" });
+  });
+
+  it("refuses a kept name the backup guard refuses before writing anything, and says how to recover", async () => {
+    const h = await harness();
+    const sentinel = seedBackupSentinel(h.home);
+    const found = accounts(h, "account-0");
+    const registry = h.registry();
+    registry.profiles["claude:.."] = { tool: "claude", configDir: found[1].configDir, email: "x@example.com" };
+    writeFileSync(h.registryPath, JSON.stringify(registry));
+    const before = h.snapshot();
+
+    await expect(
+      h.service.initializeRegistry({ accounts: found, profileNames: {}, defaultProfile: "default" }),
+    ).rejects.toThrow(/refusing to use it as a backup directory\. To recover, remove the 'claude:\.\.' entry from/);
+    expect(existsSync(sentinel)).toBe(true);
+    expect(h.snapshot()).toEqual(before);
+  });
+
   it("accepts names that follow the rule", async () => {
     const h = await harness();
     const found = accounts(h, "account-0", "account-1");

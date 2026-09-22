@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import { ALL_TOOLS } from "../tools/registry.js";
-import type { Registry, ToolName } from "../types.js";
+import type { DiscoveredAccount, Registry, ToolName } from "../types.js";
 
 export type ParsedProfileRef = { tool: ToolName; name: string; id: string };
 
@@ -11,8 +11,8 @@ export function profileId(tool: ToolName, name: string): string {
 
 /**
  * The names a new profile may take. A name becomes a path segment - `~/.claude-<name>`
- * and the backup directory `~/.clausona/backups/<tool>/<name>`, which both add paths
- * clear before use - so `..` would point that clear at every backup clausona holds and
+ * and the backup directory `~/.clausona/backups/<tool>/<name>`, which removing the
+ * profile clears - so `..` would point that clear at every backup clausona holds and
  * `.` at every one for the tool. An allowlist rules out the whole class (dot segments,
  * separators, `:`, whitespace) rather than enumerating the dangerous names.
  *
@@ -46,13 +46,74 @@ export function validateProfileName(name: string): { ok: true } | { ok: false; e
  * whatever cannot start a name is dropped. "profile" is what is left when nothing else is.
  */
 export function defaultProfileName(dir: string): string {
-  const name = path.basename(dir).replace(/^\.(?:claude|codex)-?/, "");
+  const name = directoryName(dir);
   if (validateProfileName(name).ok) return name;
   const fitted = name
     .replace(/[^A-Za-z0-9._-]+/g, "-")
     .replace(/^[^A-Za-z0-9]+/, "")
     .replace(/-+$/, "");
   return fitted || "profile";
+}
+
+function directoryName(dir: string): string {
+  return path.basename(dir).replace(/^\.(?:claude|codex)-?/, "");
+}
+
+/**
+ * The names init gives the accounts it found, keyed by config dir.
+ *
+ * A name the caller chose is kept as it is, and so is the name an account is already
+ * registered under - even one from before the name rule - since renaming a profile strands
+ * its backup directory and everything keyed by its id. Any other account gets "default" if
+ * it is the primary, or defaultProfileName otherwise. A derived name is clausona's choice,
+ * so rather than fail init over a clash it takes the first free `-2`, `-3`, ... suffix;
+ * a directory that spells the name exactly keeps it ahead of one whose name was fitted.
+ * A non-primary account also steers clear of every registered name: a profile init drops
+ * still has a backup directory under it.
+ */
+export function initProfileNames(
+  accounts: DiscoveredAccount[],
+  registry: Registry | null,
+  chosen: Record<string, string> = {},
+): Record<string, string> {
+  const profiles = registry?.profiles ?? {};
+  const registeredName = (account: DiscoveredAccount) => {
+    const id = Object.keys(profiles).find(
+      (candidate) =>
+        profiles[candidate].tool === account.tool &&
+        path.resolve(profiles[candidate].configDir) === path.resolve(account.configDir),
+    );
+    return registry && id ? parseProfileRef(id, registry).name : undefined;
+  };
+
+  const names = new Map<string, string>();
+  const assigned = new Set<string>();
+  const assign = (account: DiscoveredAccount, name: string) => {
+    names.set(account.configDir, name);
+    assigned.add(foldProfileName(profileId(account.tool, name)));
+  };
+  const toDerive: DiscoveredAccount[] = [];
+  for (const account of accounts) {
+    const name = chosen[account.configDir] ?? registeredName(account);
+    if (name === undefined) toDerive.push(account);
+    else assign(account, name);
+  }
+
+  const registered = new Set(Object.keys(profiles).map(foldProfileName));
+  const fitted = (account: DiscoveredAccount) =>
+    !account.isPrimary && defaultProfileName(account.configDir) !== directoryName(account.configDir);
+  for (const account of [...toDerive].sort((a, b) => Number(fitted(a)) - Number(fitted(b)))) {
+    const base = account.isPrimary ? "default" : defaultProfileName(account.configDir);
+    const taken = (name: string) => {
+      const folded = foldProfileName(profileId(account.tool, name));
+      return assigned.has(folded) || (!account.isPrimary && registered.has(folded));
+    };
+    let name = base;
+    for (let n = 2; taken(name); n++) name = `${base}-${n}`;
+    assign(account, name);
+  }
+
+  return Object.fromEntries(accounts.map((account) => [account.configDir, names.get(account.configDir) ?? ""]));
 }
 
 function isToolName(value: string): value is ToolName {

@@ -29,7 +29,7 @@ import type {
   UsageStore,
 } from "../types.js";
 import { buildProfileEnv } from "./profile-env.js";
-import { defaultProfileName, foldProfileName, parseProfileRef, profileId, validateProfileName } from "./profile-ref.js";
+import { foldProfileName, initProfileNames, parseProfileRef, profileId, validateProfileName } from "./profile-ref.js";
 import { deleteSecret, storeSecret } from "./secrets.js";
 
 /** Files inside plugins/ that contain absolute paths and must be per-profile */
@@ -679,27 +679,38 @@ export async function initializeRegistry(options: {
   mergeSessions?: boolean;
   mergeSessionsMap?: Record<string, boolean>;
 }) {
-  // The same default the init command itself uses, for an account the caller left unnamed.
-  const nameFor = (account: DiscoveredAccount) =>
-    options.profileNames[account.configDir] ?? (account.isPrimary ? "default" : defaultProfileName(account.configDir));
+  const existing = await loadRegistry();
+  // An account the caller left unnamed is named exactly as the init command names it.
+  const names = initProfileNames(options.accounts, existing, options.profileNames);
 
-  // Every name is checked before anything is written. These are new profiles, so they get
-  // the same rules as `add`: the name rule, and no two ids of one tool that differ only by
-  // case - they would share a backup directory on a case-insensitive filesystem.
-  const initIds = new Map<string, string>();
+  // Every name is checked before anything is written. A new name gets the same rules as
+  // `add`: the name rule, and no two ids of one tool that differ only by case - they would
+  // share a backup directory on a case-insensitive filesystem. An account re-registered
+  // under the name it already has creates nothing, so a name from before the rules keeps
+  // working: renaming it would strand its backup and everything keyed by its id.
+  const planned: Array<{ account: DiscoveredAccount; id: string; backupDir: string | null }> = [];
+  const initIds = new Map<string, { id: string; kept: boolean }>();
   for (const account of options.accounts) {
-    const name = nameFor(account);
-    const nameCheck = validateProfileName(name);
-    if (!nameCheck.ok) throw new Error(nameCheck.error);
+    const name = names[account.configDir];
     const id = profileId(account.tool, name);
-    const clash = initIds.get(id.toLowerCase());
-    if (clash === id) throw new Error(`Two accounts are both named '${id}'. Give each account its own name.`);
-    if (clash !== undefined) {
+    const registered = existing?.profiles[id];
+    const kept =
+      registered?.tool === account.tool && path.resolve(registered.configDir) === path.resolve(account.configDir);
+    if (!kept) {
+      const nameCheck = validateProfileName(name);
+      if (!nameCheck.ok) throw new Error(nameCheck.error);
+    }
+    const clash = initIds.get(foldProfileName(id));
+    if (clash?.id === id) throw new Error(`Two accounts are both named '${id}'. Give each account its own name.`);
+    if (clash && !(clash.kept && kept)) {
       throw new Error(
-        `'${clash}' and '${id}' name the same profile (names are compared without case). Give each account its own name.`,
+        `'${clash.id}' and '${id}' name the same profile (names are compared without case). Give each account its own name.`,
       );
     }
-    initIds.set(id.toLowerCase(), id);
+    initIds.set(foldProfileName(id), { id, kept });
+    // Resolved now, so a kept name the containment guard refuses stops init before it writes.
+    const backupDir = account.isPrimary ? null : backupDirFor(CLAUSONA_DIR, account.tool, name);
+    planned.push({ account, id, backupDir });
   }
 
   await ensureStorage();
@@ -720,9 +731,7 @@ export async function initializeRegistry(options: {
     profiles: {},
   };
 
-  for (const account of options.accounts) {
-    const baseName = nameFor(account);
-    const id = profileId(account.tool, baseName);
+  for (const { account, id, backupDir } of planned) {
     const mergeSessions = account.isPrimary
       ? undefined
       : (options.mergeSessionsMap?.[account.configDir] ?? options.mergeSessions ?? false);
@@ -735,9 +744,8 @@ export async function initializeRegistry(options: {
       mergeSessions,
     };
 
-    if (!account.isPrimary) {
+    if (backupDir) {
       const merge = mergeSessions ?? false;
-      const backupDir = backupDirFor(CLAUSONA_DIR, account.tool, baseName);
       if (!(await exists(backupDir))) {
         await mkdir(backupDir, { recursive: true });
         // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
@@ -760,25 +768,20 @@ export async function initializeRegistry(options: {
 
   // Determine activeProfiles map from options.defaultProfile (per-tool)
   // defaultProfile is a bare name from CLI; resolve to claude:<name> for backwards compat.
-  const claudeAccounts = options.accounts.filter((a) => a.tool === "claude");
-  const codexAccounts = options.accounts.filter((a) => a.tool === "codex");
-  if (claudeAccounts.length > 0) {
-    const fallback = nameFor(claudeAccounts[0]);
+  const firstId = (tool: ToolName) => planned.find((p) => p.account.tool === tool)?.id;
+  const claudeFallback = firstId("claude");
+  if (claudeFallback) {
     const wanted = profileId("claude", options.defaultProfile);
-    registry.activeProfiles.claude = registry.profiles[wanted] ? wanted : profileId("claude", fallback);
+    registry.activeProfiles.claude = registry.profiles[wanted] ? wanted : claudeFallback;
   }
-  if (codexAccounts.length > 0) {
-    const fallback = nameFor(codexAccounts[0]);
-    registry.activeProfiles.codex = profileId("codex", fallback);
-  }
+  const codexFallback = firstId("codex");
+  if (codexFallback) registry.activeProfiles.codex = codexFallback;
 
   await saveRegistry(registry);
   await writeJson(USAGE_PATH, {});
 
   // Seed seenSessions for each registered profile (claude only — codex usage tracking is v1 OOS)
-  for (const account of options.accounts) {
-    const baseName = nameFor(account);
-    const id = profileId(account.tool, baseName);
+  for (const { account, id } of planned) {
     if (account.tool === "claude") {
       await seedSeenSessions(id, account.configDir);
     }
