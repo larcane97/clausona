@@ -70,8 +70,11 @@ describe("isMainModule", () => {
 });
 
 describe("--period validation (F4)", () => {
-  it("throws for an invalid --period value", async () => {
-    await expect(runCommand("usage", ["--period=foo"])).rejects.toThrow(/invalid --period value 'foo'/i);
+  it("throws for an invalid --period value, naming the valid ones rather than the input", async () => {
+    // The value is not echoed: it is an option value like any other, and the CLI does not
+    // repeat those back. The message says what would have worked instead.
+    await expect(runCommand("usage", ["--period=foo"])).rejects.toThrow(/invalid --period: use today, week/i);
+    await expect(runCommand("usage", ["--period=foo"])).rejects.not.toThrow(/foo/);
   });
 
   it("does not throw an invalid-period error for a valid period value", async () => {

@@ -810,7 +810,9 @@ export async function runCommand(command: string, args: string[]) {
         if (periodValue === "today" || periodValue === "week" || periodValue === "month" || periodValue === "all") {
           return periodValue;
         }
-        throw new Error(`Invalid --period value '${periodValue}'. Use: today | week | month | all.`);
+        // The value is not echoed, for the same reason none of the others are. This one is
+        // nowhere near a key, but one exception is how a rule stops being a rule.
+        throw new Error("Invalid --period: use today, week, month or all.");
       })();
 
       let id: string | null = null;
