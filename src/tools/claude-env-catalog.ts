@@ -168,6 +168,12 @@ export function catalogEntry(key: string): EnvCatalogEntry | undefined {
   return BY_KEY.get(key);
 }
 
+function jsonTypeName(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
 export function validateEnvEntry(key: string, value: string): { ok: true } | { ok: false; error: string } {
   if (RESERVED_ENV_KEYS.has(key)) {
     return { ok: false, error: `${key} is managed by clausona and cannot be set on a profile` };
@@ -176,17 +182,26 @@ export function validateEnvEntry(key: string, value: string): { ok: true } | { o
   const entry = BY_KEY.get(key);
   if (!entry) return { ok: true };
 
-  if (entry.kind === "number" && !/^\d+$/.test(value)) {
+  if (entry.kind === "number" && !/^(?:0|[1-9]\d*)$/.test(value)) {
     return { ok: false, error: `${key} expects a whole number, got '${value}'` };
   }
   if (entry.kind === "bool" && value !== "0" && value !== "1") {
     return { ok: false, error: `${key} expects 0 or 1, got '${value}'` };
   }
   if (entry.kind === "json") {
+    // Unlike the number and bool branches above, this one never echoes the value. A json
+    // entry is where someone pastes a request-body fragment for a self-hosted gateway,
+    // auth field included, so a malformed paste must not land in an error string the CLI
+    // prints. A JSON type name carries no content, so naming the shape is safe. Do not
+    // harmonise these three branches.
+    let parsed: unknown;
     try {
-      JSON.parse(value);
+      parsed = JSON.parse(value);
     } catch {
-      return { ok: false, error: `${key} expects a JSON object, got '${value}'` };
+      return { ok: false, error: `${key} expects a JSON object` };
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { ok: false, error: `${key} expects a JSON object, got ${jsonTypeName(parsed)}` };
     }
   }
   return { ok: true };
