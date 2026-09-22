@@ -1760,34 +1760,50 @@ export async function removeProfile(id: string) {
   const profile = registry.profiles[id];
   if (profile.isPrimary) throw new Error("Cannot remove the primary profile.");
 
+  // Everything the removal reads from the registry is read here, before the first side effect.
+  // cleanupProfile restores and deletes the backup, strips the links and deletes a stored key,
+  // and a read that failed after it would leave the removal half done with the entry still
+  // registered. Other entries are read defensively: profiles.json can be edited by hand.
+  const home = homedir();
   const { name } = parseProfileRef(id, registry);
-  const primarySource = registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
-  const sharer = backupDirSharer(registry, id, profile.tool, name);
-  await cleanupProfile(name, profile, primarySource, { keepBackup: sharer !== undefined });
-  if (sharer) {
-    const home = homedir();
-    const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
-    warn(
-      `${id}: left ${backupDir.replace(home, "~")} in place because '${sharer}' keeps its backup there too. Nothing from it was restored into ${profile.configDir.replace(home, "~")}; copy back anything you need from it by hand.`,
+  // cleanupProfile reads the config dir only after it has deleted a stored key.
+  if (typeof profile.configDir !== "string") {
+    throw new Error(
+      `Profile '${id}' has no config directory, so it cannot be removed. Remove its entry from ${REGISTRY_PATH.replace(home, "~")} by hand.`,
     );
   }
+  const primarySource = registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(home);
+  const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
+  const sharer = backupDirSharer(registry, id, profile.tool, name);
+  const sharedWarning = sharer
+    ? `${id}: left ${backupDir.replace(home, "~")} in place because '${sharer}' keeps its backup there too. Nothing from it was restored into ${profile.configDir.replace(home, "~")}; copy back anything you need from it by hand.`
+    : undefined;
 
-  delete registry.profiles[id];
-  // If the removed profile was the active one for its tool, pick another or clear
-  if (registry.activeProfiles[profile.tool] === id) {
-    const otherKey = Object.keys(registry.profiles).find((k) => registry.profiles[k].tool === profile.tool);
-    if (otherKey) {
-      registry.activeProfiles[profile.tool] = otherKey;
-    } else {
-      delete registry.activeProfiles[profile.tool];
-    }
+  // The profiles of this tool that remain, counting only entries clausona could have written:
+  // the next active profile is picked from these.
+  const remaining = Object.keys(registry.profiles).filter((key) => {
+    const other = registry.profiles[key];
+    return (
+      key !== id &&
+      key.startsWith(`${profile.tool}:`) &&
+      other?.tool === profile.tool &&
+      typeof other.configDir === "string"
+    );
+  });
+  const profiles = { ...registry.profiles };
+  delete profiles[id];
+  const activeProfiles = { ...registry.activeProfiles };
+  if (activeProfiles[profile.tool] === id) {
+    if (remaining.length > 0) activeProfiles[profile.tool] = remaining[0];
+    else delete activeProfiles[profile.tool];
   }
-  // Clean primarySources if no profile of this tool remains
-  const anyLeftForTool = Object.values(registry.profiles).some((p) => p.tool === profile.tool);
-  if (!anyLeftForTool) {
-    delete registry.primarySources[profile.tool];
-  }
-  await saveRegistry(registry);
+  const primarySources = { ...registry.primarySources };
+  if (remaining.length === 0) delete primarySources[profile.tool];
+  const next: Registry = { ...registry, profiles, activeProfiles, primarySources };
+
+  await cleanupProfile(name, profile, primarySource, { keepBackup: sharer !== undefined });
+  if (sharedWarning) warn(sharedWarning);
+  await saveRegistry(next);
 }
 
 export async function resolveProfileEnv(

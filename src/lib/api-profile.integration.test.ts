@@ -567,33 +567,82 @@ describe("the removal check for a shared backup directory", () => {
     expect(existsSync(sentinel), "the backup was deleted").toBe(true);
     expect(stderr()).toContain("because 'claude:.' keeps its backup there too");
   });
+});
 
-  // Keys are only ever written as `tool:name`, but profiles.json can be edited by hand.
-  it("does not let a malformed registry entry stop another profile's removal", async () => {
+describe("removing a profile next to a malformed registry entry", () => {
+  // Keys are only ever written as `tool:name`, but profiles.json can be edited by hand. A
+  // removal must be all or nothing whatever the other entries hold: it either finishes (entry
+  // gone, registry saved) or fails before its first side effect. It used to read another
+  // entry's `tool` after cleanupProfile had restored and deleted the backup and stripped the
+  // links, so a `null` sorted ahead of the others left it half done and still registered.
+  const shapes: Array<[label: string, key: string, value: unknown]> = [
+    ["null", "claude:bad", null],
+    ["a string", "claude:bad", "not a profile"],
+    ["an entry without a tool", "claude:bad", { configDir: "/nowhere", email: "x@example.com" }],
+    [
+      "a key without a tool prefix",
+      "no-tool-prefix",
+      { tool: "claude", configDir: "/nowhere", email: "x@example.com" },
+    ],
+    ["an API entry without a config dir", "claude:bad", { tool: "claude", kind: "api", email: "" }],
+  ];
+
+  async function withMalformed(key: string, value: unknown, position: "first" | "last", active: boolean) {
     const h = await harness();
     await h.service.addProfile({
       tool: "claude",
       name: "work",
       fromPath: seedAccountDir(h.home, "work-account", "work@example.com"),
     });
+    // Things a half-done removal would visibly restore and delete, or delete.
+    seedBackupFile(h.home, "work");
+    writeFileSync(path.join(h.home, ".clausona", "secrets.json"), JSON.stringify({ [key]: KEY }));
     const registry = h.registry();
-    const stray = { tool: "claude", configDir: path.join(h.home, "stray"), email: "stray@example.com" };
-    registry.profiles["no-tool-prefix"] = stray;
-    registry.profiles["gemini:work"] = stray;
-    registry.profiles["claude:broken"] = { configDir: path.join(h.home, "stray") };
-    registry.profiles["claude:null"] = null;
+    registry.profiles =
+      position === "first" ? { [key]: value, ...registry.profiles } : { ...registry.profiles, [key]: value };
+    if (active) registry.activeProfiles.claude = "claude:work";
     writeFileSync(h.registryPath, JSON.stringify(registry));
+    return h;
+  }
 
-    await h.service.removeProfile("claude:work");
+  /** Either the removal finished, or it changed nothing at all. */
+  function expectAllOrNothing(h: Harness, before: Record<string, string>, outcome: unknown, id: string) {
+    if (outcome instanceof Error) {
+      expect(h.snapshot(), `removal failed part-way through: ${outcome.message}`).toEqual(before);
+    } else {
+      expect(h.registry().profiles[id], "the entry is still registered").toBeUndefined();
+    }
+  }
 
-    expect(Object.keys(h.registry().profiles).sort()).toEqual([
-      "claude:broken",
-      "claude:default",
-      "claude:null",
-      "gemini:work",
-      "no-tool-prefix",
-    ]);
-  });
+  for (const [label, key, value] of shapes) {
+    for (const position of ["first", "last"] as const) {
+      for (const active of [false, true]) {
+        const which = active ? "the active profile" : "a profile";
+        it(`removes ${which} with ${label} listed ${position}`, async () => {
+          const h = await withMalformed(key, value, position, active);
+          const before = h.snapshot();
+
+          const outcome = await h.service.removeProfile("claude:work").catch((e: Error) => e);
+
+          expectAllOrNothing(h, before, outcome, "claude:work");
+          expect(outcome, "the malformed entry stopped the removal").not.toBeInstanceOf(Error);
+          const after = h.registry();
+          expect(after.profiles[key], "the malformed entry was changed").toEqual(value);
+          expect(after.activeProfiles.claude).toBe("claude:default");
+          expect(after.primarySources.claude).toBe(h.primary);
+        });
+      }
+    }
+
+    it(`refuses to remove ${label} itself without touching anything`, async () => {
+      const h = await withMalformed(key, value, "first", false);
+      const before = h.snapshot();
+
+      const outcome = await h.service.removeProfile(key).catch((e: Error) => e);
+
+      expectAllOrNothing(h, before, outcome, key);
+    });
+  }
 });
 
 describe("a legacy pair of names that differ only by case", () => {
