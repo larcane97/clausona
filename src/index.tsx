@@ -73,15 +73,7 @@ async function main() {
 
   if (parsed.kind === "exec") {
     try {
-      const registry = await loadRegistry();
-      if (!registry) throw new Error("clausona is not initialized.");
-      const ref = parseProfileRef(parsed.profile, registry);
-      const { binary, env } = await resolveProfileEnv(ref.id);
-      const result = spawnCommandSync(binary, parsed.args, { stdio: "inherit", env });
-      process.exitCode = result.status ?? 1;
-      if (ref.tool === "claude") {
-        await trackUsage(ref.id).catch(() => {});
-      }
+      process.exitCode = await runProfile(parsed.profile, parsed.args);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       process.stderr.write(`  ${xMark} ${message}\n`);
@@ -115,6 +107,27 @@ async function main() {
     process.stderr.write(`  ${xMark} ${message}\n`);
     process.exitCode = 1;
   }
+}
+
+/**
+ * `clausona run <profile> [args...]`: launches the profile's tool with the profile's
+ * environment and returns its exit code. The platform reaches both the environment and the
+ * spawn, so what the child actually receives on Windows is testable on every OS.
+ */
+export async function runProfile(
+  profileArg: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+): Promise<number> {
+  const registry = await loadRegistry();
+  if (!registry) throw new Error("clausona is not initialized.");
+  const ref = parseProfileRef(profileArg, registry);
+  const { binary, env } = await resolveProfileEnv(ref.id, platform);
+  const result = spawnCommandSync(binary, args, { stdio: "inherit", env }, platform);
+  if (ref.tool === "claude") {
+    await trackUsage(ref.id).catch(() => {});
+  }
+  return result.status ?? 1;
 }
 
 /**
