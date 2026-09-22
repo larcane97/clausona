@@ -1007,6 +1007,9 @@ describe("help", () => {
     // source is executed - doctor is not a read-only inspection of the registry.
     expect(help).toContain("never prints the key");
     expect(help).toContain("is run");
+    // Which of the four leave the profile healthy, so a warning is not read as breakage.
+    expect(help).toContain("are warnings");
+    expect(help).toContain("stays healthy");
     // And what it does not do, so a healthy report is not read as "the endpoint answered".
     expect(help).toContain("No request is made");
   });

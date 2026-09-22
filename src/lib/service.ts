@@ -14,7 +14,7 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { evaluateApiHealth, evaluateSymlinkHealth } from "../core/doctor.js";
+import { countIssues, evaluateApiHealth, evaluateSymlinkHealth } from "../core/doctor.js";
 import { backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
@@ -1130,7 +1130,9 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
       email: displayName(profile),
       configDir: profile.configDir,
       isPrimary: Boolean(profile.isPrimary),
-      healthy: issues.length === 0,
+      // Warnings do not make a profile unhealthy: it works, and saying otherwise would
+      // send a user to `repair` or `login` for something neither command can change.
+      healthy: countIssues(issues).errors === 0,
       issues,
     });
   }

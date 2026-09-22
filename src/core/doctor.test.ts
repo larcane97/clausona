@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ApiEndpoint, Profile } from "../types.js";
-import { type ApiHealthInput, evaluateApiHealth, evaluateSymlinkHealth } from "./doctor.js";
+import { type ApiHealthInput, countIssues, evaluateApiHealth, evaluateSymlinkHealth } from "./doctor.js";
 
 describe("evaluateSymlinkHealth", () => {
   it("reports a local override where primary has the item", () => {
@@ -257,5 +257,51 @@ describe("evaluateApiHealth", () => {
       "shared_api_key_helper",
       "plaintext_env_secret",
     ]);
+  });
+});
+
+describe("severity", () => {
+  it("marks the two advisory findings as warnings", () => {
+    const issues = health({
+      profile: { ...apiProfile, env: { ANTHROPIC_API_KEY: "sk-plain" } },
+      settings: { apiKeyHelper: "op read op://vault/key" },
+      credentialEnvKeys: ["ANTHROPIC_API_KEY"],
+    });
+
+    // Both describe a profile that works. Reporting them as breakage would send a user to
+    // repair or login for something neither command can change.
+    expect(issues.map((issue) => [issue.kind, issue.severity])).toEqual([
+      ["shared_api_key_helper", "warning"],
+      ["plaintext_env_secret", "warning"],
+    ]);
+  });
+
+  it("leaves the severity key off a finding that stops the profile working", () => {
+    const issues = health({ profile: withApi(""), secret: { ok: false, error: "no stored secret" } });
+
+    expect(issues.map((issue) => issue.kind)).toEqual(["invalid_api_config", "missing_api_secret"]);
+    // Absent, not "error": a key that is never written cannot change the JSON a registry
+    // without warnings produces.
+    for (const issue of issues) expect(Object.hasOwn(issue, "severity"), issue.kind).toBe(false);
+  });
+});
+
+describe("countIssues", () => {
+  it("reads a missing severity as an error", () => {
+    expect(countIssues([{ kind: "broken_symlink", message: "x" }])).toEqual({ errors: 1, warnings: 0 });
+  });
+
+  it("counts the two apart", () => {
+    expect(
+      countIssues([
+        { kind: "broken_symlink", message: "x" },
+        { kind: "plaintext_env_secret", message: "y", severity: "warning" },
+        { kind: "shared_api_key_helper", message: "z", severity: "warning" },
+      ]),
+    ).toEqual({ errors: 1, warnings: 2 });
+  });
+
+  it("counts nothing as nothing", () => {
+    expect(countIssues([])).toEqual({ errors: 0, warnings: 0 });
   });
 });

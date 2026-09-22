@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-
+import { countIssues } from "../core/doctor.js";
 import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot } from "../types.js";
 import { stripAnsi } from "./cli-style.js";
 import {
+  doctorSummary,
   fitQuotaValue,
   formatAge,
   formatQuotaInline,
@@ -359,18 +360,75 @@ describe("fitQuotaValue", () => {
   });
 });
 
-describe("renderDoctor next-step hint", () => {
-  function result(issues: DoctorProfileResult["issues"]): DoctorProfileResult {
-    return {
-      name: "claude:work",
-      email: "work@example.com",
-      configDir: "/h/.claude-work",
-      isPrimary: false,
-      healthy: issues.length === 0,
-      issues,
-    };
-  }
+function result(issues: DoctorProfileResult["issues"]): DoctorProfileResult {
+  return {
+    name: "claude:work",
+    email: "work@example.com",
+    configDir: "/h/.claude-work",
+    isPrimary: false,
+    // What doctorProfiles computes: a warning leaves the profile healthy.
+    healthy: countIssues(issues).errors === 0,
+    issues,
+  };
+}
 
+describe("doctorSummary", () => {
+  it("names what a profile has", () => {
+    expect(doctorSummary([])).toBe("healthy");
+    expect(doctorSummary([{ kind: "broken_symlink", message: "x" }])).toBe("1 issue");
+    expect(
+      doctorSummary([
+        { kind: "broken_symlink", message: "x" },
+        { kind: "stale_symlink", message: "y" },
+      ]),
+    ).toBe("2 issues");
+    expect(doctorSummary([{ kind: "plaintext_env_secret", message: "x", severity: "warning" }])).toBe("1 warning");
+    expect(
+      doctorSummary([
+        { kind: "broken_symlink", message: "x" },
+        { kind: "plaintext_env_secret", message: "y", severity: "warning" },
+      ]),
+    ).toBe("1 issue, 1 warning");
+  });
+});
+
+describe("renderDoctor severity", () => {
+  const warning = { kind: "plaintext_env_secret", message: "a key sits in the env map", severity: "warning" } as const;
+
+  it("reports a profile that has only warnings as working, with the warnings shown", () => {
+    const out = stripAnsi(renderDoctor([result([warning])]));
+
+    // The profile runs. Rendering it as broken would be the same false alarm the
+    // subscription-only checks used to raise on every API profile.
+    expect(out).toContain("1 warning");
+    expect(out).not.toContain("issue");
+    expect(out).toContain("a key sits in the env map");
+    expect(out).not.toContain("clausona repair");
+    expect(out).not.toContain("clausona login");
+  });
+
+  it("leads with what is actually broken when a profile has both", () => {
+    const out = stripAnsi(renderDoctor([result([{ kind: "broken_symlink", message: "a link dangles" }, warning])]));
+
+    expect(out).toContain("1 issue, 1 warning");
+    expect(out).toContain("clausona repair claude:work");
+  });
+
+  it("marks the warning line itself, so a mixed list can be read at a glance", () => {
+    const lines = stripAnsi(renderDoctor([result([{ kind: "broken_symlink", message: "a link dangles" }, warning])]))
+      .split("\n")
+      .filter((line) => line.includes("dangles") || line.includes("env map"));
+
+    expect(lines[0]).not.toContain("⚠");
+    expect(lines[1]).toContain("⚠");
+  });
+
+  it("still says healthy when there is nothing at all", () => {
+    expect(stripAnsi(renderDoctor([result([])]))).toContain("healthy");
+  });
+});
+
+describe("renderDoctor next-step hint", () => {
   it("suggests repair for issues repair can resolve", () => {
     const out = stripAnsi(renderDoctor([result([{ kind: "stale_symlink", message: "x" }])]));
 

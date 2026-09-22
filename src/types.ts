@@ -147,6 +147,15 @@ export type DoctorIssue = {
     | "shared_api_key_helper"
     | "plaintext_env_secret";
   message: string;
+  /**
+   * Absent means this is an error: the profile does not work until it is resolved, and
+   * `healthy` is false. `"warning"` means the profile works and the finding is advice.
+   *
+   * There is deliberately no `"error"` to write. An error must carry no `severity` key at
+   * all, so the report a registry without warnings produces - every subscription-only one -
+   * is byte-identical to the report it produced before warnings existed.
+   */
+  severity?: "warning";
 };
 
 export type DoctorProfileResult = {

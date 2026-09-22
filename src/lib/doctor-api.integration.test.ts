@@ -269,6 +269,39 @@ describe("doctor on an API profile", () => {
   });
 });
 
+describe("a warning is not breakage", () => {
+  it("leaves a profile that only has warnings healthy, and still shows them", async () => {
+    const h = await harness({ settings: { apiKeyHelper: "op read op://vault/anthropic" } });
+    await h.addApi({ label: "gpu-box", env: { ANTHROPIC_API_KEY: "sk-parked-0003" } });
+
+    const results = await h.doctor();
+    const rendered = h.normalize(h.render(results));
+
+    // The profile runs: its endpoint is configured and its key resolves. Both findings are
+    // about a second key that could also reach the endpoint - worth knowing, not breakage.
+    expect(results.find((r) => r.name === "claude:glm")?.healthy).toBe(true);
+    expect(issuesFor(results, "claude:glm").map((i) => i.severity)).toEqual(["warning", "warning"]);
+    expect(rendered).toContain("2 warnings");
+    expect(rendered).toContain("apiKeyHelper");
+    expect(rendered).toContain("ANTHROPIC_API_KEY");
+    // Neither the word nor the suggestion that would send the user to a fix that is not one.
+    expect(rendered).not.toContain("issue");
+    expect(rendered).not.toContain("clausona repair");
+  });
+
+  it("still fails a profile that has a real problem alongside a warning", async () => {
+    const h = await harness({ settings: { apiKeyHelper: "op read op://vault/anthropic" } });
+    await h.addApi({ label: "gpu-box" });
+    await h.secrets.deleteSecret("claude:glm");
+
+    const results = await h.doctor();
+
+    expect(results.find((r) => r.name === "claude:glm")?.healthy).toBe(false);
+    expect(kinds(results, "claude:glm")).toEqual(["missing_api_secret", "shared_api_key_helper"]);
+    expect(h.render(results)).toContain("1 issue, 1 warning");
+  });
+});
+
 describe("doctor and the key itself", () => {
   it("never puts the key in its output, however many other things are wrong", async () => {
     const h = await harness({ settings: { apiKeyHelper: "op read op://vault/anthropic" } });
@@ -364,6 +397,9 @@ describe("doctor on a subscription-only registry", () => {
     ]);
     // No key the JSON does not already carry: the shape is pinned as well as the values.
     expect(json).not.toContain('kind": "api');
+    // `severity` is absent on an error for exactly this reason: a registry with no
+    // warnings serialises the same bytes it did before warnings existed.
+    expect(json).not.toContain("severity");
   });
 });
 

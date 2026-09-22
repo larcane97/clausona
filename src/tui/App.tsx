@@ -5,7 +5,14 @@ import TextInput from "ink-text-input";
 import { useEffect, useRef, useState } from "react";
 
 import { bootstrapInitFromCurrentState } from "../commands.js";
-import { formatCount, formatCurrency, formatQuotaInline, localTimezoneLabel, quotaSeverity } from "../lib/format.js";
+import {
+  doctorSummary,
+  formatCount,
+  formatCurrency,
+  formatQuotaInline,
+  localTimezoneLabel,
+  quotaSeverity,
+} from "../lib/format.js";
 import { defaultProfileName, profileId } from "../lib/profile-ref.js";
 import {
   addProfile,
@@ -1542,7 +1549,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                 id: r.name,
                 label: r.name,
                 detail: r.email,
-                badge: r.healthy ? "healthy" : `${r.issues.length} issue(s)`,
+                // A warning leaves the profile healthy, but "healthy" alone would hide it
+                // from the only column this list has.
+                badge: doctorSummary(r.issues),
                 badgeVariant: r.healthy ? ("healthy" as const) : ("warning" as const),
               }))}
               index={cursor}
@@ -1581,7 +1590,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                     ))}
                   </Box>
                 )}
-                {currentDoctor.healthy && (
+                {currentDoctor.issues.length === 0 && (
+                  // Not `healthy`: a profile with warnings is healthy, and claiming every
+                  // check passed directly under a list of findings is a plain contradiction.
                   <Box marginTop={1}>
                     <Text color={color.healthy}>{symbol.check} All checks passed</Text>
                   </Box>

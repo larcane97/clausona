@@ -1,3 +1,4 @@
+import { countIssues } from "../core/doctor.js";
 import { symbol } from "../tui/theme.js";
 import type {
   DoctorIssue,
@@ -22,6 +23,7 @@ import {
   styledCost,
   styledCount,
   truncate,
+  warnIcon,
   fail as xMark,
   yellow,
 } from "./cli-style.js";
@@ -437,18 +439,43 @@ const SELF_DIRECTED_ISSUE_KINDS = new Set<DoctorIssue["kind"]>([
   "plaintext_env_secret",
 ]);
 
+const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
+
+/**
+ * What a doctor result amounts to, in one unstyled phrase: `healthy`, `2 warnings`,
+ * `1 issue`, or `1 issue, 2 warnings`. Shared with the TUI, which has one column for it
+ * and would otherwise label a profile carrying only warnings "healthy" and show nothing.
+ */
+export function doctorSummary(issues: DoctorIssue[]): string {
+  const { errors, warnings } = countIssues(issues);
+  if (errors > 0) {
+    return warnings === 0 ? plural(errors, "issue") : `${plural(errors, "issue")}, ${plural(warnings, "warning")}`;
+  }
+  return warnings > 0 ? plural(warnings, "warning") : "healthy";
+}
+
 export function renderDoctor(results: DoctorProfileResult[]) {
   const sections = results.map((result) => {
     const title = `  ${bold(result.name)} ${dim(`(${result.email})`)}`;
-    if (result.healthy) {
+    const { errors, warnings } = countIssues(result.issues);
+    if (errors === 0 && warnings === 0) {
       return [title, `    ${ok} ${green("healthy")}`].join("\n");
     }
 
     const count = result.issues.length;
-    const statusLine = `    ${xMark} ${red(`${count} issue${count === 1 ? "" : "s"}`)}`;
+    // Warnings do not make a profile broken, so they never turn the line red or add to the
+    // issue count. A profile that has only them says so in its own words; one that has both
+    // leads with what is actually wrong.
+    const statusLine =
+      errors === 0
+        ? `    ${warnIcon} ${yellow(plural(warnings, "warning"))}`
+        : `    ${xMark} ${red(plural(errors, "issue"))}${warnings === 0 ? "" : dim(`, ${plural(warnings, "warning")}`)}`;
     const issueLines = result.issues.map((issue, i) => {
       const connector = i === count - 1 ? symbol.cornerBL : symbol.teeR;
-      return `    ${dim(connector + symbol.lineH)} ${issue.message}`;
+      // Marked per line too: in a mixed list, which of these stops the profile working is
+      // the first thing a reader needs.
+      const marker = issue.severity === "warning" ? `${warnIcon} ` : "";
+      return `    ${dim(connector + symbol.lineH)} ${marker}${issue.message}`;
     });
 
     // repair rebuilds shared links, folds in session state and re-runs the plugins

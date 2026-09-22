@@ -61,6 +61,19 @@ export function evaluateSymlinkHealth({
 }
 
 /**
+ * How many findings of each kind a list holds, with "no `severity` key" read as an error.
+ *
+ * The one place that rule lives. A profile is healthy when `errors` is 0 - warnings are
+ * things to know about a profile that works, and a profile that works must not render as
+ * broken.
+ */
+export function countIssues(issues: DoctorIssue[]): { errors: number; warnings: number } {
+  let warnings = 0;
+  for (const issue of issues) if (issue.severity === "warning") warnings += 1;
+  return { errors: issues.length - warnings, warnings };
+}
+
+/**
  * Where an API profile's endpoint and key source live. No command rewrites either one:
  * `config --key` changes the key, `config --edit` the env map, and the rest of the block
  * is only ever written by `add --api`.
@@ -170,8 +183,11 @@ export function evaluateApiHealth({
     // link into the primary, so a helper written for the primary's account also runs for
     // this profile - and hands that key to whatever endpoint this profile points at.
     // The helper's own command line is not repeated: it can name the secret.
+    // A warning: the profile works, and whether a second key reaching this endpoint is a
+    // problem is the user's call, not doctor's.
     issues.push({
       kind: "shared_api_key_helper",
+      severity: "warning",
       message: `apiKeyHelper in ${settingsPath} (shared with the primary) also runs for this profile, so the key it prints can reach ${endpoint}`,
     });
   }
@@ -179,8 +195,11 @@ export function evaluateApiHealth({
   // Sorted, so two runs over the same profile read the same way.
   for (const key of Object.keys(profile.env ?? {}).sort()) {
     if (!credentialEnvKeys.includes(key)) continue;
+    // Also a warning: the env map is a documented, supported place to put a value, and a
+    // profile that keeps a key there runs exactly as intended.
     issues.push({
       kind: "plaintext_env_secret",
+      severity: "warning",
       message: `${key} is stored in plain text in ${REGISTRY_FILE} - if it holds this profile's API key, run 'clausona config ${id} --key' instead`,
     });
   }

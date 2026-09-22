@@ -1,6 +1,6 @@
 import { Box, Text } from "ink";
 import { truncate } from "../../lib/cli-style.js";
-import { fitQuotaValue, formatAge, formatCurrency, localTimezoneLabel } from "../../lib/format.js";
+import { doctorSummary, fitQuotaValue, formatAge, formatCurrency, localTimezoneLabel } from "../../lib/format.js";
 import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot, QuotaWindow } from "../../types.js";
 import { color, symbol } from "../theme.js";
 
@@ -130,12 +130,13 @@ export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem;
     );
   }
 
-  const healthColor = doctor ? (doctor.healthy ? color.healthy : color.warning) : color.muted;
+  // Any finding at all, warning included, is something to look at - so the icon and the
+  // colour follow the issue list, while `healthy` decides only what the phrase says.
+  const clean = doctor?.issues.length === 0;
+  const healthColor = doctor ? (clean ? color.healthy : color.warning) : color.muted;
 
   const healthLabel = doctor
-    ? doctor.healthy
-      ? `${symbol.check} healthy`
-      : `${symbol.diamond} ${doctor.issues.length} issue(s)`
+    ? `${clean ? symbol.check : symbol.diamond} ${doctorSummary(doctor.issues)}`
     : `${symbol.circle} unknown`;
 
   return (
