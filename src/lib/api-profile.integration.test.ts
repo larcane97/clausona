@@ -1550,6 +1550,27 @@ describe("listProfiles with an API profile", () => {
     expect(json).not.toContain("keychain");
   });
 
+  // The TUI's preview panel says what an API profile is - endpoint, model, and where the
+  // key is read from - so it asks for what the listing above deliberately leaves out. An
+  // option rather than a wider listing, because the listing above is what `list --json`
+  // prints, and that is the one that gets piped into a file.
+  it("hands the endpoint over when a caller asks for the detail, and still never the key", async () => {
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions());
+
+    const items = await h.service.listProfiles({ detail: true });
+    const api = items.find((item) => item.name === "claude:glm");
+
+    expect(api?.api).toEqual({
+      baseUrl: "http://gpu-box:30000",
+      authScheme: "bearer",
+      secret: { source: "keychain" },
+    });
+    expect(api?.env).toEqual({});
+    // A reference to the credential, as the registry holds it. Never the credential.
+    expect(JSON.stringify(items)).not.toContain(KEY);
+  });
+
   it("leaves a subscription profile's listed fields untouched", async () => {
     const h = await harness();
     await h.service.addApiProfile(apiOptions());

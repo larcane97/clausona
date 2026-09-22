@@ -864,6 +864,19 @@ export type ListProfilesOptions = {
   refresh?: boolean;
   /** Renew lapsed access tokens instead of reporting them as expired. Default on. */
   renew?: boolean;
+  /**
+   * Attach the endpoint block and the env map.
+   *
+   * Off by default, and deliberately: `list --json` is JSON.stringify of exactly this
+   * array, and neither belongs in a listing that gets piped into a file or a log. The api
+   * block holds a reference rather than a key, but a reference names an environment
+   * variable or a whole command line, and the env map is free-form.
+   *
+   * The TUI asks for it because its preview panel is a screen rather than a pipe, and
+   * "what is this profile" is the question the panel exists to answer. It still shows
+   * where the key is read from and never what it is.
+   */
+  detail?: boolean;
 };
 
 export async function listProfiles(options: ListProfilesOptions = {}): Promise<ProfileListItem[]> {
@@ -904,6 +917,7 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
       isPrimary: Boolean(profile.isPrimary),
       isActive: registry.activeProfiles[profile.tool] === id,
       mergeSessions: profile.mergeSessions,
+      ...(options.detail ? { api: profile.api, env: profile.env } : {}),
       quota: quotas[id],
       today: summarizeUsage({ now, period: "today", records }),
       week: summarizeUsage({ now, period: "week", records }),

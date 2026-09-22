@@ -123,6 +123,10 @@ export type ProfileListItem = {
   isPrimary: boolean;
   isActive: boolean;
   mergeSessions?: boolean;
+  /** Present for API profiles. `secret` names where the key is read from, never the key. */
+  api?: ApiEndpoint;
+  /** Free-form environment overrides, as stored. */
+  env?: Record<string, string>;
   quota?: QuotaSnapshot;
   today: UsageSummary;
   week: UsageSummary;

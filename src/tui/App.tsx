@@ -14,8 +14,9 @@ import {
   localTimezoneLabel,
   quotaSeverity,
 } from "../lib/format.js";
-import { defaultProfileName, profileId } from "../lib/profile-ref.js";
+import { defaultProfileName, looksLikeCredential, profileId } from "../lib/profile-ref.js";
 import {
+  addApiProfile,
   addProfile,
   discoverAccounts,
   doctorProfiles,
@@ -30,6 +31,22 @@ import {
   validateConfigDir,
 } from "../lib/service.js";
 import type { DiscoveredAccount, DoctorProfileResult, ProfileListItem, QuotaSnapshot, ToolName } from "../types.js";
+import {
+  type ApiField,
+  type ApiFormState,
+  apiFormEnv,
+  apiFormFields,
+  apiFormHost,
+  customEntryError,
+  defaultAuthScheme,
+  emptyApiForm,
+  isTypingField,
+  liveApiFieldError,
+  scrubSecret,
+  validateApiForm,
+  withoutKeys,
+} from "./api-form.js";
+import { ApiForm } from "./components/ApiForm.js";
 import { Chrome } from "./components/Chrome.js";
 import { Divider } from "./components/Divider.js";
 import { ProfilePreview } from "./components/ProfilePreview.js";
@@ -69,9 +86,24 @@ type AddStep =
   | "login-name"
   | "import-path"
   | "import-name"
+  | "api-form"
   | "applying"
   | "done"
   | "error";
+
+/**
+ * The ways to add a profile, and the only list the method step reads - both for the rows
+ * it draws and for what Enter on one of them means.
+ *
+ * Exported so that a test can assert the set without first driving the key sequence that
+ * reaches the step: a binding moving should not silently take an option with it.
+ */
+export const ADD_METHODS = [
+  { value: "discover", label: "Discover accounts", hint: "Scan for unregistered ~/.claude-* accounts" },
+  { value: "login", label: "Login as new account", hint: "Authenticate via browser OAuth" },
+  { value: "import", label: "Import from path", hint: "Register an existing config directory manually" },
+  { value: "api", label: "API endpoint", hint: "Anthropic API, a gateway, or a self-hosted server" },
+] as const;
 
 type AddState = {
   step: AddStep;
@@ -88,6 +120,8 @@ type AddState = {
   mergeSessionsMap: Record<string, boolean>;
   nameField: 0 | 1;
   selectedTool: import("../types.js").ToolName;
+  /** The API form's fields. The key it collects is deliberately not among them. */
+  api: ApiFormState;
   message?: string;
 };
 
@@ -148,6 +182,14 @@ const initNameHints = [
   { keys: "esc", action: "back" },
 ];
 
+const apiFormHints = [
+  { keys: "↑↓", action: "field" },
+  { keys: "enter", action: "next" },
+  { keys: "space", action: "toggle" },
+  { keys: "a", action: "advanced" },
+  { keys: "esc", action: "back" },
+];
+
 const overlayHints = [
   { keys: "y", action: "confirm" },
   { keys: "esc", action: "cancel" },
@@ -181,6 +223,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     }
   }, [stdout, write]);
   const [profiles, setProfiles] = useState<ProfileListItem[]>([]);
+  /** Registered ids, for the name check the API form runs while a name is being typed. */
+  const existingProfileIds = profiles.map((profile) => profile.name);
   const [doctor, setDoctor] = useState<DoctorProfileResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [cursor, setCursor] = useState(0);
@@ -201,6 +245,17 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   });
 
   const [addState, setAddState] = useState<AddState | null>(null);
+  /**
+   * The API key being typed, held apart from `addState` and dropped on every way out of
+   * the form: submitting it, leaving the step, closing the flow, or leaving the screen.
+   *
+   * Apart, because `addState` is the flow's memory - it survives a step change, and the
+   * form is reachable again from the method step - and a credential should not be a thing
+   * this component remembers for longer than the save it was typed for. Leaving the form
+   * clears it, so coming back shows an empty field rather than a mask over a value the
+   * user can no longer see, check, or be sure is still the one they meant.
+   */
+  const [apiKey, setApiKey] = useState("");
   const [overlay, setOverlay] = useState<OverlayState>(null);
   const lastEscRef = useRef(0);
 
@@ -213,6 +268,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       setMessage("");
       setCursor(0);
       setAddState(null);
+      setApiKey("");
       setOverlay(null);
       setScreen("dashboard");
     }
@@ -220,10 +276,12 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
 
   function resetAddState() {
     setAddState(null);
+    setApiKey("");
     setCursor(0);
   }
 
   async function startAddFlow() {
+    setApiKey("");
     setAddState({
       step: "loading",
       discoveredAccounts: [],
@@ -239,6 +297,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       mergeSessionsMap: {},
       nameField: 0,
       selectedTool: "claude",
+      api: emptyApiForm(),
     });
     try {
       const discovered = await discoverAccounts();
@@ -259,6 +318,148 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     }
   }
 
+  // ── API form ──
+
+  function updateApiForm(update: (form: ApiFormState) => ApiFormState) {
+    setAddState((prev) => (prev ? { ...prev, api: update(prev.api) } : null));
+  }
+
+  /** Moves the cursor by `delta`, wrapping, over whatever fields are currently shown. */
+  function moveApiCursor(delta: number) {
+    updateApiForm((form) => {
+      const length = apiFormFields(form).length;
+      return { ...form, cursor: (Math.min(form.cursor, length - 1) + delta + length) % length };
+    });
+  }
+
+  function toggleApiAdvanced() {
+    updateApiForm((form) => {
+      const before = apiFormFields(form);
+      const currentId = before[Math.min(form.cursor, before.length - 1)]?.id;
+      const next = { ...form, advancedOpen: !form.advancedOpen };
+      const after = apiFormFields(next);
+      // Folding takes the field under the cursor away with it, so the cursor comes back to
+      // the row that folds the section rather than to whatever now sits at that index.
+      const moved = after.findIndex((field) => field.id === currentId);
+      next.cursor = moved === -1 ? after.findIndex((field) => field.id === "advanced") : moved;
+      return next;
+    });
+  }
+
+  function editApiField(field: ApiField, value: string) {
+    // The key is never written into the form, so it cannot be re-rendered from it, saved
+    // with it, or reported in an error built from it.
+    if (field.kind === "secret") {
+      setApiKey(value);
+      updateApiForm((form) => ({ ...form, errors: withoutKeys(form.errors, "key") }));
+      return;
+    }
+    updateApiForm((form) => {
+      let next: ApiFormState = form;
+      if (field.kind === "env" && field.envKey) {
+        next = { ...form, env: { ...form.env, [field.envKey]: value } };
+      } else if (field.id === "name") {
+        next = { ...form, name: value };
+      } else if (field.id === "baseUrl") {
+        // The scheme follows the host until the user picks one, which is the same default
+        // `clausona add --api` offers - one rule, so the two cannot disagree about a URL.
+        next = { ...form, baseUrl: value, authScheme: form.authTouched ? form.authScheme : defaultAuthScheme(value) };
+      } else if (field.id === "customKey") {
+        next = { ...form, customKey: value };
+      } else if (field.id === "customValue") {
+        next = { ...form, customValue: value };
+      }
+      // The free-form row is one setting spread over two fields, and what is wrong with it
+      // is not always wrong at the field being typed in - a name with no value belongs
+      // under the value. So the row is judged as a whole and the message goes where the
+      // row says. Every other field answers for itself.
+      if (field.id === "customKey" || field.id === "customValue") {
+        const row = customEntryError(next);
+        const cleared = withoutKeys(next.errors, "customKey", "customValue");
+        return { ...next, errors: row ? { ...cleared, [row.field]: row.message } : cleared };
+      }
+      const problem = liveApiFieldError(field, next, existingProfileIds);
+      const cleared = withoutKeys(next.errors, field.id);
+      return { ...next, errors: problem ? { ...cleared, [field.id]: problem } : cleared };
+    });
+  }
+
+  /** Enter on the free-form row: its pair joins the env map and the row clears for another. */
+  function commitCustomEntry() {
+    updateApiForm((form) => {
+      const problem = customEntryError(form);
+      if (problem) return { ...form, errors: { ...form.errors, [problem.field]: problem.message } };
+      const key = form.customKey.trim();
+      return {
+        ...form,
+        env: { ...form.env, [key]: form.customValue },
+        customKey: "",
+        customValue: "",
+        errors: withoutKeys(form.errors, "customKey", "customValue"),
+      };
+    });
+  }
+
+  function submitApiForm(state: AddState) {
+    const form = state.api;
+    const errors = validateApiForm(form, { existingIds: existingProfileIds, hasKey: apiKey.trim() !== "" });
+    if (Object.keys(errors).length > 0) {
+      // A setting that is wrong while the section is folded has nowhere to be shown, so
+      // the section opens rather than the form refusing to submit for an invisible reason.
+      const needsAdvanced = Object.keys(errors).some((id) => id.startsWith("env:") || id.startsWith("custom"));
+      const advancedOpen = form.advancedOpen || needsAdvanced;
+      const fields = apiFormFields({ ...form, advancedOpen });
+      const firstBad = fields.findIndex((field) => errors[field.id] !== undefined);
+      updateApiForm((current) => ({
+        ...current,
+        errors,
+        advancedOpen,
+        cursor: firstBad === -1 ? current.cursor : firstBad,
+      }));
+      return;
+    }
+
+    const host = apiFormHost(form);
+    const env = apiFormEnv(form);
+    const name = form.name.trim();
+    // Taken out of state before the save begins: from here the key exists only as this
+    // local, for as long as the call and its failure message need it.
+    const secretValue = apiKey;
+    setApiKey("");
+    setAddState((prev) => (prev ? { ...prev, step: "applying", api: { ...prev.api, errors: {} } } : null));
+    void (async () => {
+      try {
+        const result = await addApiProfile({
+          tool: "claude",
+          name,
+          baseUrl: form.baseUrl.trim(),
+          authScheme: form.authScheme,
+          secret: { source: "keychain" },
+          secretValue,
+          env,
+          mergeSessions: state.mergeSessions || undefined,
+        });
+        setAddState((prev) =>
+          prev ? { ...prev, step: "done", message: `Added ${profileId("claude", result.name)} (${host})` } : null,
+        );
+        await refreshDashboard();
+      } catch (error) {
+        setAddState((prev) =>
+          prev
+            ? {
+                ...prev,
+                step: "error",
+                // Scrubbed on the way to the screen. Nothing below `addApiProfile` puts a
+                // key into what it throws today, and this is what keeps that true from
+                // here regardless of what changes down there.
+                message: scrubSecret(error instanceof Error ? error.message : String(error), secretValue),
+              }
+            : null,
+        );
+      }
+    })();
+  }
+
   async function suspendTuiAndRun<T>(fn: () => Promise<T>): Promise<T> {
     setSuspended(true);
     // Wait a tick for Ink to render empty output before we hand over stdout
@@ -275,7 +476,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
 
   async function refreshDashboard() {
     setLoading(true);
-    const [nextProfiles, nextDoctor] = await Promise.all([listProfiles(), doctorProfiles()]);
+    // `detail` because the preview panel says what an API profile is - its endpoint, its
+    // model, and where its key is read from. `list --json` does not ask for it.
+    const [nextProfiles, nextDoctor] = await Promise.all([listProfiles({ detail: true }), doctorProfiles()]);
     setProfiles(nextProfiles);
     setDoctor(nextDoctor);
     setLoading(false);
@@ -394,6 +597,31 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           setAddState((prev) => (prev ? { ...prev, step: "method", cursor: 0 } : null));
         } else if (addState.step === "discover-select" || addState.step === "import-path") {
           setAddState((prev) => (prev ? { ...prev, step: "method", cursor: 0 } : null));
+        } else if (addState.step === "api-form") {
+          // The key goes with the step; everything else stays, so a stray esc costs a URL
+          // nobody has to retype. Coming back to a mask over a value the user can no
+          // longer read is a value they cannot check, and one this component would then
+          // have held for the rest of the session - so the field comes back empty, on a
+          // form that is otherwise as they left it.
+          //
+          // A name is a plain field and shows what was typed into it, key included, for as
+          // long as it is on screen. It does not outlive the step: a name the form already
+          // refused as key-shaped goes the same way the key does.
+          setApiKey("");
+          setAddState((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  step: "method",
+                  cursor: 0,
+                  api: {
+                    ...prev.api,
+                    name: looksLikeCredential(prev.api.name.trim()) ? "" : prev.api.name,
+                    cursor: 0,
+                  },
+                }
+              : null,
+          );
         } else if (addState.step === "login-name") {
           setAddState((prev) => (prev ? { ...prev, step: "login-tool", cursor: 0 } : null));
         } else if (addState.step === "discover-name") {
@@ -490,7 +718,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       if (addState) {
         // Method chooser
         if (addState.step === "method") {
-          const methods = ["discover", "login", "import"] as const;
+          const methods = ADD_METHODS.map((method) => method.value);
           if (key.upArrow) {
             setAddState((prev) =>
               prev ? { ...prev, cursor: (prev.cursor - 1 + methods.length) % methods.length } : null,
@@ -516,7 +744,62 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               setAddState((prev) =>
                 prev ? { ...prev, step: "import-path", importPath: "", importError: null } : null,
               );
+            } else if (selected === "api") {
+              setAddState((prev) => (prev ? { ...prev, step: "api-form", api: { ...prev.api, cursor: 0 } } : null));
             }
+          }
+          return;
+        }
+
+        // API endpoint form. One step with many fields rather than a step per field: the
+        // cursor walks them, and nothing but Submit leaves.
+        if (addState.step === "api-form") {
+          const form = addState.api;
+          const fields = apiFormFields(form);
+          const index = Math.min(form.cursor, fields.length - 1);
+          const current = fields[index];
+          const typing = isTypingField(current);
+
+          if (key.upArrow) {
+            moveApiCursor(-1);
+            return;
+          }
+          if (key.downArrow || key.tab) {
+            moveApiCursor(1);
+            return;
+          }
+          // Bare letters are shortcuts only where no input has the keystrokes: on a text
+          // field, `a` is the letter a.
+          if (!typing && input === "a") {
+            toggleApiAdvanced();
+            return;
+          }
+          if (current?.kind === "auth" && (input === " " || key.leftArrow || key.rightArrow)) {
+            updateApiForm((prev) => ({
+              ...prev,
+              authScheme: prev.authScheme === "bearer" ? "api-key" : "bearer",
+              authTouched: true,
+            }));
+            return;
+          }
+          if (current?.kind === "sessions" && input === " ") {
+            setAddState((prev) => (prev ? { ...prev, mergeSessions: !prev.mergeSessions } : null));
+            return;
+          }
+          if (current?.kind === "advanced" && (input === " " || key.return)) {
+            toggleApiAdvanced();
+            return;
+          }
+          if (key.return) {
+            if (current?.kind === "submit") {
+              submitApiForm(addState);
+              return;
+            }
+            if (current?.id === "customValue" && form.customKey.trim() !== "") {
+              commitCustomEntry();
+              return;
+            }
+            moveApiCursor(1);
           }
           return;
         }
@@ -1097,30 +1380,37 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       }
 
       if (addState.step === "method") {
-        const methods: SelectListItem[] = [
-          {
-            id: "discover",
-            label: "Discover accounts",
-            detail: "Scan for unregistered ~/.claude-* accounts",
-            badge: addState.discoveredAccounts.length > 0 ? `${addState.discoveredAccounts.length} found` : "none",
-            badgeVariant: addState.discoveredAccounts.length > 0 ? "primary" : "muted",
-          },
-          {
-            id: "login",
-            label: "Login as new account",
-            detail: "Authenticate via browser OAuth",
-          },
-          {
-            id: "import",
-            label: "Import from path",
-            detail: "Register an existing config directory manually",
-          },
-        ];
+        const found = addState.discoveredAccounts.length;
+        const methods: SelectListItem[] = ADD_METHODS.map((method) => ({
+          id: method.value,
+          label: method.label,
+          detail: method.hint,
+          ...(method.value === "discover"
+            ? {
+                badge: found > 0 ? `${found} found` : "none",
+                badgeVariant: found > 0 ? ("primary" as const) : ("muted" as const),
+              }
+            : {}),
+        }));
         return (
           <Chrome title="Add Profile" subtitle="Choose how to add" hints={selectHints}>
             <Box flexDirection="column" borderStyle="round" borderColor={color.dim} paddingX={2} paddingY={1}>
               <SelectList items={methods} index={addState.cursor} />
             </Box>
+          </Chrome>
+        );
+      }
+
+      if (addState.step === "api-form") {
+        return (
+          <Chrome title="Add Profile" subtitle="API endpoint" hints={apiFormHints}>
+            <ApiForm
+              form={addState.api}
+              fields={apiFormFields(addState.api)}
+              apiKey={apiKey}
+              mergeSessions={addState.mergeSessions}
+              onChange={editApiField}
+            />
           </Chrome>
         );
       }
