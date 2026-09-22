@@ -78,6 +78,30 @@ describe("renderPowerShellInit", () => {
 
   it("avoids the null-coalescing operator (PowerShell 5.1 floor)", () => {
     expect(out).not.toMatch(/\?\?/);
+    // 5.1 has neither `??` nor `?:` nor `?.`, and the script has never needed a `?` for
+    // anything else, so the cheapest way to keep all three out is to allow none of them.
+    expect(out).not.toContain("?");
+  });
+
+  // Task 4 emits a warning on every _shell-env run so a broken profile keeps announcing
+  // itself. Merging stderr into stdout would corrupt the JSON, so it is captured and
+  // replayed instead - and discarding it, as `2>$null` did, voided the contract on Windows.
+  it("replays _shell-env warnings to stderr instead of discarding them", () => {
+    expect(out).not.toMatch(/_shell-env \$Tool --json 2>\$null/);
+    expect(out).toMatch(/_shell-env \$Tool --json 2>\$stderrPath/);
+    // Not Write-Host: that writes to stdout and would corrupt `claude | Something`.
+    expect(out).toMatch(/\[Console\]::Error\.Write\(\$warning\)/);
+    expect(out).toMatch(/Remove-Item -LiteralPath \$stderrPath -Force/);
+    // stdout carries the JSON; merging the two streams would break ConvertFrom-Json.
+    expect(out).not.toMatch(/2>&1/);
+  });
+
+  it("cannot let the diagnostic path stop the tool from launching", () => {
+    // Both the lookup and the replay of its warnings are wrapped, and the replay runs in a
+    // finally so the temp file is cleaned up even when the lookup threw.
+    const helper = out.split("function global:Invoke-ClausonaTool")[1]?.split("function global:claude")[0] ?? "";
+    expect(helper).toMatch(/catch \{[\s\S]*?\} finally \{[\s\S]*?Test-Path -LiteralPath \$stderrPath/);
+    expect(helper).toMatch(/try \{[\s\S]*?Remove-Item -LiteralPath \$stderrPath -Force[\s\S]*?\} catch \{/);
   });
 
   // 5.1 has no `?:` either, and `[Environment]::GetEnvironmentVariable` is the only

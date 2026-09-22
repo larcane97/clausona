@@ -188,6 +188,11 @@ If you export `CLAUDE_CONFIG_DIR` (or `CODEX_HOME`) yourself, clausona steps asi
 shell: it applies no profile environment, skips plugin sync and usage tracking, and leaves your
 variable untouched. Unset it to hand control back to clausona.
 
+If a profile cannot be applied in full — a credential command that fails, an environment
+variable name a shell cannot export — the wrapper prints a warning to stderr and still runs the
+tool, on every platform and before every invocation. The warning repeats until the profile is
+fixed; it is not a one-off notice.
+
 ### Shared Environment
 
 When you register a new profile, clausona symlinks shared resources from your primary config directory into the new profile's config directory.
