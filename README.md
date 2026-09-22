@@ -163,20 +163,30 @@ being blanked out.
 Shell wrappers for `claude` and `codex` are registered via `eval "$(clausona shell-init)"` on zsh/bash or
 `Invoke-Expression (& clausona shell-init | Out-String)` on PowerShell:
 
-1. **Before** each invocation — reads `~/.clausona/profiles.json` and sets the appropriate env var (`CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME` for codex) to the active profile's config directory
-2. **After** each `claude` invocation — detects usage changes via fingerprint comparison and records cost/token usage per profile
+1. **Before** each invocation — asks clausona for the active profile's environment: the config
+   directory (`CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME` for codex) and, for an API-backed
+   profile, its endpoint and credential
+2. **During** the invocation — those variables exist only for that one run. On zsh/bash the tool
+   runs in a subshell, on PowerShell each variable is restored afterwards, so your interactive
+   shell is left exactly as it was
+3. **After** each `claude` invocation — detects usage changes via fingerprint comparison and
+   records cost/token usage per profile
 
 ```
 clausona use work
 ↓
-claude             ← wrapper sets CLAUDE_CONFIG_DIR, then runs claude
+claude             ← wrapper applies the work profile's env, then runs claude
 ↓
 _track-usage       ← on exit, records any new cost/token usage
 
 clausona use codex:personal
 ↓
-codex              ← wrapper sets CODEX_HOME, then runs codex
+codex              ← wrapper applies the personal profile's env, then runs codex
 ```
+
+If you export `CLAUDE_CONFIG_DIR` (or `CODEX_HOME`) yourself, clausona steps aside for that
+shell: it applies no profile environment, skips plugin sync and usage tracking, and leaves your
+variable untouched. Unset it to hand control back to clausona.
 
 ### Shared Environment
 

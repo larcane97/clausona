@@ -10,68 +10,96 @@ import {
 describe("renderShellInit", () => {
   const out = renderPosixShellInit();
 
-  it("defines _clausona_resolve helper that takes a tool argument", () => {
-    expect(out).toMatch(/_clausona_resolve\(\)\s*\{/);
-    expect(out).toMatch(/local tool=\$1/);
+  it("no longer defines the inline node resolver", () => {
+    expect(out).not.toMatch(/_clausona_resolve/);
+    expect(out).not.toMatch(/node -e/);
   });
 
-  it("defines a claude() wrapper that sets CLAUDE_CONFIG_DIR", () => {
-    expect(out).toMatch(/^claude\(\)\s*\{/m);
-    expect(out).toMatch(/CLAUDE_CONFIG_DIR/);
-    expect(out).toMatch(/_clausona_resolve claude/);
+  it("evaluates _shell-env inside a subshell so exports do not leak", () => {
+    const claudeBlock = out.split(/^claude\(\)\s*\{/m)[1]?.split(/^\}/m)[0] ?? "";
+    expect(claudeBlock).toMatch(/\(\s*\n\s*eval "\$\(clausona _shell-env claude\)"/);
+    expect(claudeBlock).not.toMatch(/unset CLAUDE_CONFIG_DIR/);
+  });
+
+  it("steps aside when the user set CLAUDE_CONFIG_DIR themselves", () => {
+    expect(out).toMatch(/if \[\[ -n "\$\{CLAUDE_CONFIG_DIR:-\}" \]\]/);
+  });
+
+  it("runs _sync-plugins inside the subshell, where CLAUDE_CONFIG_DIR is set", () => {
+    const claudeBlock = out.split(/^claude\(\)\s*\{/m)[1]?.split(/^\}/m)[0] ?? "";
+    // From the subshell's opening paren to the `)` that closes it on its own line.
+    const subshell =
+      claudeBlock
+        .split("(")
+        .slice(1)
+        .join("(")
+        .split(/^\s*\)/m)[0] ?? "";
+    expect(subshell).toMatch(/clausona _sync-plugins/);
+    // _track-usage belongs after the subshell, so it still runs once the variables are gone.
+    expect(subshell).not.toMatch(/clausona _track-usage/);
+  });
+
+  it("keeps _track-usage outside the subshell and claude-only", () => {
     expect(out).toMatch(/clausona _track-usage/);
-  });
-
-  it("defines a codex() wrapper that sets CODEX_HOME", () => {
-    expect(out).toMatch(/^codex\(\)\s*\{/m);
-    expect(out).toMatch(/CODEX_HOME/);
-    expect(out).toMatch(/_clausona_resolve codex/);
-  });
-
-  it("does NOT include _track-usage in codex wrapper (claude only in v1)", () => {
     const codexBlock = out.split(/^codex\(\)\s*\{/m)[1] ?? "";
     expect(codexBlock).not.toMatch(/_track-usage/);
+  });
+
+  it("defines a codex wrapper on the same mechanism", () => {
+    const codexBlock = out.split(/^codex\(\)\s*\{/m)[1] ?? "";
+    expect(codexBlock).toMatch(/clausona _shell-env codex/);
   });
 
   it("retains csn alias", () => {
     expect(out).toMatch(/alias csn=clausona/);
   });
 
-  it("does not use ! operator in inline node script (zsh history-expansion safe)", () => {
-    // The inline node script in _clausona_resolve must not use `!` operators
-    // because zsh history-expands them inside double-quoted strings at function
-    // definition time, corrupting the script.
-    // Extract the node -e "..." script directly from the full output.
-    // The script starts after `node -e "` and ends before `" 2>/dev/null`.
-    const nodeMatch = out.match(/node -e "([\s\S]*?)" 2>\/dev\/null/);
-    expect(nodeMatch).not.toBeNull();
-    expect(nodeMatch?.[1]).not.toMatch(/!/);
+  it("does not use ! inside double-quoted strings (zsh history expansion)", () => {
+    const doubleQuoted = out.match(/"[^"\n]*"/g) ?? [];
+    for (const fragment of doubleQuoted) expect(fragment).not.toMatch(/!/);
   });
 
   it("selects PowerShell integration on Windows", () => {
     expect(renderShellInit("win32")).toBe(renderPowerShellInit());
+    expect(renderShellInit("darwin")).toBe(renderPosixShellInit());
   });
 });
 
 describe("renderPowerShellInit", () => {
   const out = renderPowerShellInit();
 
-  it("defines wrappers for Claude and Codex with their profile environment variables", () => {
-    expect(out).toMatch(/function global:claude/);
-    expect(out).toMatch(/CLAUDE_CONFIG_DIR/);
-    expect(out).toMatch(/function global:codex/);
-    expect(out).toMatch(/CODEX_HOME/);
+  it("consumes the JSON form and restores every variable it set", () => {
+    // One helper serves both tools, so the tool name is the $Tool parameter.
+    expect(out).toMatch(/& clausona _shell-env \$Tool --json/);
+    expect(out).toMatch(/Invoke-ClausonaTool -Tool claude/);
+    expect(out).toMatch(/ConvertFrom-Json/);
+    expect(out).toMatch(/finally/);
   });
 
-  it("resolves active profiles from the clausona registry", () => {
-    expect(out).toContain('Join-Path $HOME ".clausona\\profiles.json"');
-    expect(out).toMatch(/Get-ClausonaProfileDir -Tool claude/);
-    expect(out).toMatch(/Get-ClausonaProfileDir -Tool codex/);
+  it("avoids the null-coalescing operator (PowerShell 5.1 floor)", () => {
+    expect(out).not.toMatch(/\?\?/);
   });
 
-  it("restores pre-existing environment variables and keeps the csn alias", () => {
-    expect(out).toMatch(/\$previousConfig = \$env:CLAUDE_CONFIG_DIR/);
-    expect(out).toMatch(/\$env:CLAUDE_CONFIG_DIR = \$previousConfig/);
+  // 5.1 has no `?:` either, and `[Environment]::GetEnvironmentVariable` is the only
+  // accessor that reports an unset variable as $null rather than "".
+  it("restores an unset variable to unset rather than empty", () => {
+    expect(out).toMatch(/\[Environment\]::GetEnvironmentVariable\(\$name, "Process"\)/);
+    expect(out).toMatch(/\[Environment\]::SetEnvironmentVariable\(\$name, \$applied\[\$name\], "Process"\)/);
+    expect(out).not.toMatch(/\$\w+\s*\?\s*[^\s]+\s*:\s/);
+  });
+
+  it("steps aside when the user set the config variable themselves", () => {
+    expect(out).toMatch(/Test-Path Env:CLAUDE_CONFIG_DIR/);
+    expect(out).toMatch(/Test-Path Env:CODEX_HOME/);
+  });
+
+  it("keeps _sync-plugins and _track-usage claude-only and preserves the exit code", () => {
+    expect(out).toMatch(/if \(\$Tool -eq "claude"\) \{ clausona _sync-plugins/);
+    expect(out).toMatch(/if \(\$Tool -eq "claude"\) \{ clausona _track-usage/);
+    expect(out).toMatch(/\$global:LASTEXITCODE = \$exitCode/);
+  });
+
+  it("retains the csn alias", () => {
     expect(out).toMatch(/Set-Alias -Name csn -Value clausona -Scope Global/);
   });
 });
