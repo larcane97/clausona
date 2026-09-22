@@ -114,6 +114,13 @@ function global:Invoke-ClausonaTool {
   } catch {
     $stderrPath = $null
   }
+  # A caller's $ErrorActionPreference = 'Stop' must not cut the lookup short. 5.1 turns each
+  # line a native command writes to a redirected stderr into an error record, so under Stop
+  # the first warning would throw before $raw is assigned; 7.3+ can do the same to a non-zero
+  # exit. Continue covers the lookup alone: the finally hands the caller's value back before
+  # anything else, so the tool itself runs under the caller's own preference.
+  $callerErrorAction = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
   try {
     if ($stderrPath) {
       $raw = & clausona _shell-env $Tool --json 2>$stderrPath
@@ -131,6 +138,7 @@ function global:Invoke-ClausonaTool {
   } catch {
     # A failed lookup must never stop the tool from starting.
   } finally {
+    $ErrorActionPreference = $callerErrorAction
     # Neither must reporting one, hence the inner try. [Console]::Error keeps the warning
     # on stderr, where Write-Host would put it on stdout and corrupt a piped run.
     #

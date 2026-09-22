@@ -158,6 +158,28 @@ describe("renderPowerShellInit", () => {
     expect(helper).toMatch(/if \(\$stderrPath\) \{ Remove-Item -LiteralPath \$stderrPath -Force/);
   });
 
+  /**
+   * Under a caller's `$ErrorActionPreference = 'Stop'`, 5.1 makes the first line of a
+   * redirected native stderr a terminating error - the lookup would die on the very warning
+   * it exists to replay, before `$raw` is assigned. Continue is scoped to the lookup, and the
+   * tool must still run under the caller's preference, not under ours.
+   */
+  it("runs the lookup under Continue and hands the caller's preference back before the tool", () => {
+    // One override and one restore, and no other statement touches the preference.
+    const assignments = (helper.match(/^\s*\$ErrorActionPreference = .*/gm) ?? []).map((line) => line.trim());
+    expect(assignments).toEqual(['$ErrorActionPreference = "Continue"', "$ErrorActionPreference = $callerErrorAction"]);
+    // Saved and overridden immediately before the try that holds the lookup...
+    expect(helper).toMatch(
+      /\$callerErrorAction = \$ErrorActionPreference\s*\n\s*\$ErrorActionPreference = "Continue"\s*\n\s*try \{\s*\n\s*if \(\$stderrPath\) \{\s*\n\s*\$raw = & clausona _shell-env/,
+    );
+    // ...restored as the first statement of a finally, so a lookup that threw restores too...
+    expect(helper).toMatch(/\} finally \{\s*\n\s*\$ErrorActionPreference = \$callerErrorAction\s*\n/);
+    // ...and that finally is the lookup's, not the tool's: it closes before the tool starts.
+    const restore = helper.indexOf("$ErrorActionPreference = $callerErrorAction");
+    expect(restore).toBeGreaterThan(helper.lastIndexOf("clausona _shell-env $Tool --json"));
+    expect(restore).toBeLessThan(helper.indexOf("& $command.Source @ToolArgs"));
+  });
+
   // 5.1 has no `?:` either, and `[Environment]::GetEnvironmentVariable` is the only
   // accessor that reports an unset variable as $null rather than "".
   it("restores an unset variable to unset rather than empty", () => {
