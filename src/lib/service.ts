@@ -1,4 +1,5 @@
 import {
+  chmod,
   cp,
   lstat,
   mkdir,
@@ -129,11 +130,22 @@ function warn(message: string): void {
   process.stderr.write(`  warn: ${message}\n`);
 }
 
-async function writeJson(targetPath: string, value: unknown) {
+/**
+ * `mode` is for clausona's own files only. Claude Code's files go through here too, and
+ * they keep whatever mode Claude Code gave them.
+ */
+async function writeJson(targetPath: string, value: unknown, mode?: number) {
   await mkdir(path.dirname(targetPath), { recursive: true });
   const tmpPath = `${targetPath}.tmp.${process.pid}`;
-  await writeFile(tmpPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await writeFile(
+    tmpPath,
+    `${JSON.stringify(value, null, 2)}\n`,
+    mode === undefined ? "utf8" : { encoding: "utf8", mode },
+  );
   await rename(tmpPath, targetPath);
+  // writeFile applies the mode only to a file it creates, so it is asserted again after the
+  // rename rather than assumed, as writeSecretsFile does.
+  if (mode !== undefined) await chmod(targetPath, mode).catch(() => {});
 }
 
 async function execCommand(
@@ -715,7 +727,9 @@ export async function loadRegistry(): Promise<Registry | null> {
 }
 
 export async function saveRegistry(registry: Registry) {
-  await writeJson(REGISTRY_PATH, registry);
+  // Owner-only: it holds each API profile's command: key source, whose command line can
+  // carry a vault token, and every env map in plain text.
+  await writeJson(REGISTRY_PATH, registry, 0o600);
 }
 
 export async function loadUsageStore() {

@@ -644,8 +644,8 @@ that profile's key to Claude Code, which then talks to the endpoint you configur
 
 ```
 ~/.clausona/
-├── profiles.json    # registered profiles and active selection (including each API
-│                    #   profile's endpoint and key *source*, never the key)
+├── profiles.json    # registered profiles and active selection, owner-only (including
+│                    #   each API profile's endpoint and key *source*, never the key)
 ├── secrets.json     # API profile keys, owner-only, where no OS credential store is used
 ├── usage.json       # per-profile usage history
 ├── quota.json       # cached plan-quota readings (5-minute freshness)

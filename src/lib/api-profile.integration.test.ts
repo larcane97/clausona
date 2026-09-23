@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -7,6 +8,7 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -1007,6 +1009,21 @@ describe("addApiProfile", () => {
 
     expect(h.registry().profiles["claude:glm"].api.secret).toEqual({ source: "env", name: "GLM_KEY" });
     expect(h.registryText()).not.toContain(KEY);
+  });
+
+  // profiles.json holds a command: source's command line, which can carry a vault token,
+  // and the env map in plain text, so it is written owner-only the way secrets.json is.
+  it.skipIf(process.platform === "win32")("leaves profiles.json readable only by its owner", async () => {
+    const h = await harness();
+    // A registry written before it was, readable by everyone.
+    chmodSync(h.registryPath, 0o644);
+
+    await h.service.addApiProfile(
+      apiOptions({ secret: { source: "command", run: "pass show gw" }, secretValue: undefined }),
+    );
+
+    expect(h.registryText()).toContain("pass show gw");
+    expect(statSync(h.registryPath).mode & 0o777).toBe(0o600);
   });
 
   // Every input is checked before the first side effect. Each case asserts the whole HOME
