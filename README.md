@@ -359,8 +359,11 @@ with `CLAUDE_CODE_MAX_CONTEXT_TOKENS`. And a cold GPU server is slow to first by
 
 **The env map is stored in plain text** in `~/.clausona/profiles.json`. The API key does not
 belong in it — not as `--set ANTHROPIC_API_KEY=…`, and not as an `Authorization` header under
-`--set ANTHROPIC_CUSTOM_HEADERS=…`. Use `--key` or `--key-from` instead. clausona warns when
-you set one of those names, on any profile, and names the commands that undo it:
+`--set ANTHROPIC_CUSTOM_HEADERS=…`. Use `--key` or `--key-from` instead. A value shaped like
+an API key under a name that does not say it holds a secret — `CLAUDE_CODE_MAX_CONTEXT_TOKENS`,
+say — is refused by `add --set`, `config --set` and `config --edit` alike, and no refusal
+repeats the value. clausona warns when you set one of those credential names, on any profile,
+and names the commands that undo it:
 
 - an API profile whose key is in the credential store: `config <profile> --key` to store the
   key, then `config <profile> --unset <NAME>` to drop the plain-text copy, which would

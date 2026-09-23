@@ -1442,9 +1442,10 @@ export async function updateProfileEnv(
   const env = changes.replace ? {} : { ...current };
 
   for (const [key, value] of Object.entries(changes.set ?? {})) {
+    // The model's own words first, for a key given as the model.
+    checkModelEntry(key, value, "config");
     const result = validateEnvEntry(key, value, profile.kind);
     if (!result.ok) throw new Error(result.error);
-    checkModelEntry(key, value, "config");
     env[key] = value;
   }
   for (const key of changes.unset ?? []) delete env[key];
@@ -2120,9 +2121,9 @@ export async function addApiProfile(options: {
   const { source: secret, toStore } = checkSecretSource(options.secret, options.secretValue);
   const env = { ...options.env };
   for (const [key, value] of Object.entries(env)) {
+    checkModelEntry(key, value, "add");
     const result = validateEnvEntry(key, value, "api");
     if (!result.ok) throw new Error(result.error);
-    checkModelEntry(key, value, "add");
     const twin = envKeyCaseTwin(key, Object.keys(env), "api");
     if (twin !== undefined) throw new Error(envKeyCaseTwinError(key, twin));
   }

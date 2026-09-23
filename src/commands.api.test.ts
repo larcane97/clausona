@@ -14,6 +14,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { stripAnsi } from "./lib/cli-style.js";
+import { randomBody } from "./test-leaks.js";
 import type { DoctorProfileResult, Profile, SecretSource } from "./types.js";
 
 /**
@@ -921,6 +922,38 @@ describe("config --set / --unset", () => {
     expect(message).toMatch(
       /^(ANTHROPIC_BASE_URL|anthropic_base_url) is this profile's endpoint - set the endpoint with --base-url$/,
     );
+    expect(h.registryText()).toBe(before);
+    expect(promptCalls).toEqual([]);
+  });
+
+  // validateEnvEntry quoted what it refused for a number or 0/1 setting, so a key given there
+  // was printed back - the rule every other option already keeps.
+  it.each([
+    [
+      "config --set on a number setting",
+      ["config", "claude:gw", "--set", `CLAUDE_CODE_MAX_CONTEXT_TOKENS=${KEY_SHAPED}`],
+    ],
+    [
+      "add --set on a 0/1 setting",
+      [
+        "add",
+        "claude:gw2",
+        "--api",
+        "--base-url",
+        "https://gw.example.com",
+        "--set",
+        `DISABLE_AUTO_COMPACT=${KEY_SHAPED}`,
+      ],
+    ],
+    ["config --set on a setting of the user's own", ["config", "claude:gw", "--set", `MY_SETTING=${KEY_SHAPED}`]],
+  ])("refuses a key given as a setting's value through %s, without printing it", async (_route, [command, ...args]) => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+    const before = h.registryText();
+
+    const message = await failure(h.run(command as string, ...args));
+
+    expect(message).toContain("That setting's value is shaped like an API key, so it was not stored.");
+    expect(slicesIn(message, randomBody(KEY_SHAPED))).toEqual([]);
     expect(h.registryText()).toBe(before);
     expect(promptCalls).toEqual([]);
   });
@@ -2615,6 +2648,20 @@ describe("config --edit", () => {
     expect(h.profile("claude:gw").env).toEqual({ API_TIMEOUT_MS: "600000" });
     expect(output).toContain("1 setting(s)");
     expect(existsSync(seen[0].dir)).toBe(false);
+  });
+
+  // The value was never on a command line here, so an error quoting it would be the only
+  // place the key ever showed.
+  it("refuses a key saved as a setting's value, without printing it", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+    vi.stubEnv("EDITOR", "fake-editor");
+    fakeEditor((file) => writeFileSync(file, JSON.stringify({ CLAUDE_CODE_MAX_CONTEXT_TOKENS: KEY_SHAPED })));
+
+    const message = await failure(h.run("config", "claude:gw", "--edit"));
+
+    expect(message).toContain("shaped like an API key");
+    expect(slicesIn(message, randomBody(KEY_SHAPED))).toEqual([]);
+    expect(h.profile("claude:gw").env).toEqual({ ANTHROPIC_MODEL: "z-ai/glm-5.3" });
   });
 
   it("opens the map the profile already has", async () => {

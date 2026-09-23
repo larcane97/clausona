@@ -13,7 +13,7 @@
  * right in a form where the offending value is still on screen and still editable.
  */
 
-import { checkBaseUrl, redactUrlsIn, sendsKeyInClear } from "../core/api-url.js";
+import { checkBaseUrl, sendsKeyInClear } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { envKeyCaseTwin, envKeyCaseTwinError, isSecretEnvName } from "../lib/profile-env.js";
 import { foldProfileName, looksLikeCredential, profileId, validateProfileName } from "../lib/profile-ref.js";
@@ -26,6 +26,7 @@ import {
   type EnvCatalogEntry,
   type EnvGroup,
   isBaseUrlEnvKey,
+  misplacedKeyValue,
   validateEnvEntry,
 } from "../tools/claude-env-catalog.js";
 
@@ -306,38 +307,19 @@ export function baseUrlError(baseUrl: string): string | undefined {
 }
 
 /**
- * Whether a setting's value is a key in the wrong field: shaped like one, under a name whose
- * value output does not hide - a header or a request body is where a gateway takes a key.
- * Judged as output shows it (`redactUrlsIn`), so a proxy's long random password, which output
- * hides and `--set` stores, is not taken for a key.
- */
-function misplacedKeyValue(key: string, value: string): boolean {
-  return !hidesEnvValue(key) && carriesCredentialToken(redactUrlsIn(value));
-}
-
-/**
  * What is wrong with one advanced setting, by the rules `addApiProfile` applies to the
  * same pair: `validateEnvEntry`, and then the case-twin check for a name that would be a
  * managed variable on Windows.
  *
- * With one substitution. `validateEnvEntry` repeats the value it refused for a number or
- * bool entry, which is right for a command line - the value is already in the scrollback -
- * and wrong for a form, where a key mis-pasted into "Context window" would be echoed in
- * plain text under the field. Same rule, same refusal; the expectation is named instead of
- * the value. The json branch already refuses to echo, for the same reason.
+ * Two of its refusals are said in the form's words rather than the CLI's, which point at
+ * flags: a key where a setting goes (`misplacedKeyValue`, the validator's own rule), and the
+ * endpoint as a setting. Neither ever quotes the value.
  */
 export function envError(key: string, value: string, others: readonly string[]): string | undefined {
-  // First, so that no message below gets as far as quoting it.
   if (misplacedKeyValue(key, value)) return MISPLACED_KEY;
   if (isBaseUrlEnvKey(key)) return ENDPOINT_AS_SETTING;
   const result = validateEnvEntry(key, value, "api");
-  if (!result.ok) {
-    const entry = catalogEntry(key);
-    if (looksLikeCredential(value) && (entry?.kind === "number" || entry?.kind === "bool")) {
-      return `${key} expects ${entry.kind === "number" ? "a whole number" : "0 or 1"}.`;
-    }
-    return result.error;
-  }
+  if (!result.ok) return result.error;
   const twin = envKeyCaseTwin(key, others, "api");
   if (twin !== undefined) return envKeyCaseTwinError(key, twin);
   return undefined;

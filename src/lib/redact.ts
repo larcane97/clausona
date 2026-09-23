@@ -1,13 +1,12 @@
 import { HIDDEN, redactBaseUrl, redactUrlsIn } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { describeSecretSource, redactSecretSource } from "../core/key-source.js";
-import { catalogEntry } from "../tools/claude-env-catalog.js";
+import { hidesEnvValue } from "../tools/claude-env-catalog.js";
 import type { Profile, ShownKind } from "../types.js";
 import {
   envMapOf,
   isCredentialEnvKey,
   isEnvMap,
-  isSecretEnvName,
   printable,
   shownEnvName,
   shownKind,
@@ -42,17 +41,7 @@ import {
  * them to the tool, and `config --edit`, whose file has to round-trip them.
  */
 
-export { describeSecretSource, HIDDEN, isCredentialEnvKey, redactSecretSource };
-
-/**
- * A name whose value is never printed, in part or whole: any name that says it holds a
- * secret (`isSecretEnvName`, which is wider than the clear list), and a json setting. The API
- * form draws these masked for the same reason, so a value is on screen exactly where it would
- * be in `config --show`.
- */
-export function hidesEnvValue(key: string): boolean {
-  return isSecretEnvName(key) || catalogEntry(key)?.kind === "json" || shownEnvName(key) !== key;
-}
+export { describeSecretSource, HIDDEN, hidesEnvValue, isCredentialEnvKey, redactSecretSource };
 
 /**
  * Whether a value is hidden whole under any name: one shaped like a key - `--model "$KEY"`
