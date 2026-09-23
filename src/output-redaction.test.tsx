@@ -156,15 +156,16 @@ async function harness() {
       },
       apiKey: PLANTED["a field added to profiles.json by hand"],
     },
-    // A URL add would accept - its query is where a gateway that takes the key as a
-    // parameter would have it - and an apiKeyHelper, so doctor has a reason to name it.
+    // A URL add would accept - its parameter is not named for a credential, and its query is
+    // hidden all the same, since a name cannot promise what a value holds - and an
+    // apiKeyHelper, so doctor has a reason to name it.
     "claude:valid": {
       tool: "claude",
       kind: "api",
       configDir: dir("valid"),
       email: "",
       label: "gw.example.com",
-      api: api(`https://gw.example.com/api?key=${PLANTED["the query of a base URL that is otherwise valid"]}`, {
+      api: api(`https://gw.example.com/api?tenant=${PLANTED["the query of a base URL that is otherwise valid"]}`, {
         source: "keychain",
       }),
     },
