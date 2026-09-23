@@ -1603,6 +1603,32 @@ describe("doctor's advice for a broken base URL", () => {
   });
 });
 
+describe("doctor's advice for a config directory that is gone", () => {
+  it("is to remove and re-add the profile under its own name, and following it clears the finding", async () => {
+    // Linux, so doctor reads the primary's login from a file rather than spawning `security`.
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const h = await harness();
+    // Added, not written into the registry: add is what leaves a backup behind to restore.
+    promptAnswers.push(KEY);
+    await h.run("add", "claude:gw", "--api", "--base-url", "https://openrouter.ai/api");
+    rmSync(path.join(h.home, ".claude-gw"), { recursive: true, force: true });
+    const findings = async () =>
+      (JSON.parse(String(await h.run("doctor", "--json"))) as DoctorProfileResult[])
+        .flatMap((result) => result.issues)
+        .filter((issue) => issue.kind === "missing_config_dir");
+    const [finding] = await findings();
+    promptAnswers.push(KEY);
+
+    for (const argv of advisedCommands(finding?.message ?? "")) {
+      const args = argv.map((arg) => (arg === "<url>" ? "https://openrouter.ai/api" : arg));
+      await h.run(args[0] as string, ...args.slice(1));
+    }
+
+    expect(await findings()).toEqual([]);
+    expect(Object.keys(h.registry().profiles)).toEqual(["claude:default", "claude:gw"]);
+  });
+});
+
 /**
  * The spec's "doctor reports which backend is in use": the one place a user learns whether a
  * stored key is in the Keychain or in a file in their home directory.

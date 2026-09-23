@@ -1571,10 +1571,22 @@ async function cleanupProfile(
   }
 
   // 2. Restore backup if available (original files before clausona setup), unless the
-  // caller found another profile keeping its backup in the same directory.
+  // caller found another profile keeping its backup in the same directory. Never into a
+  // config directory that is gone: that would bring back a directory the user deleted, with
+  // only the backup in it, and keep the name taken - add refuses a name whose directory
+  // exists. An empty backup goes with it; one that holds something is left, and said.
   if (!options.keepBackup && (await exists(backupDir))) {
-    await cp(backupDir, profile.configDir, { recursive: true });
-    await rm(backupDir, { force: true, recursive: true });
+    if (await exists(profile.configDir)) {
+      await cp(backupDir, profile.configDir, { recursive: true });
+      await rm(backupDir, { force: true, recursive: true });
+    } else if (await backupDirOccupied(backupDir)) {
+      const home = homedir();
+      warn(
+        `${profile.configDir.replace(home, "~")} no longer exists, so nothing was restored into it. What clausona set aside from it is still in ${backupDir.replace(home, "~")}: move it somewhere else, or delete it once nothing in it is needed.`,
+      );
+    } else {
+      await rmdir(backupDir).catch(() => {});
+    }
   }
 }
 
