@@ -420,6 +420,14 @@ describe("a key in a field that draws what it holds", () => {
     });
   });
 
+  it("refuses a key typed as the value before any name, at the value", () => {
+    // Rather than asking for a name first, which is true and not the problem.
+    expect(customEntryError(form({ customKey: "", customValue: KEY }))).toEqual({
+      field: "customValue",
+      message: MISPLACED_KEY,
+    });
+  });
+
   it("refuses a key as the value of an ordinary setting", () => {
     expect(customEntryError(form({ customKey: "MY_VAR", customValue: KEY }))).toEqual({
       field: "customValue",

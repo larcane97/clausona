@@ -11,11 +11,13 @@
  * panel, padding and line breaks all go, which puts a secret wrapped inside one panel back
  * into one run. Then every `WINDOW`-character window of the secret is searched for.
  *
- * Why eight. Shorter windows of a random key start to turn up in the TUI's own words - four
- * characters of base62 match ordinary text often enough to fail a suite that leaks nothing -
- * and eight characters of a key is a leak in itself. A key drawn beside another panel, where
- * flattening cannot rejoin it, is still found wherever eight of its characters sit together
- * on one line; what this can miss is a fragment of seven or fewer at a line's end.
+ * Why eight. A key's prefix is public and shares short runs with the TUI's own words: `-api`
+ * is in `sk-ant-api03-` and in the auth row's `x-api-key`, so a four-character window reports
+ * a leak on a screen that has none (measured, and pinned in ApiForm.test.tsx). Five is the
+ * least that passes today; eight leaves room for text added later, and eight characters of a
+ * key's random body is a leak in itself. A key drawn beside another panel, where flattening
+ * cannot rejoin it, is still found wherever eight of its characters sit together on one line;
+ * what this can miss is a fragment of seven or fewer at a line's end.
  *
  * Only for tests. Nothing in the app imports it.
  */

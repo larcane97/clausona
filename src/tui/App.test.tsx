@@ -634,6 +634,20 @@ describe("App add-profile: API endpoint", () => {
       instance.unmount();
     });
 
+    it.each([
+      ["Alt+Shift+O, then a paste", ["\u001bO", KEY], `O${KEY}`],
+      ["Alt+[, then a bracketed paste", ["\u001b[", `\u001b[200~${KEY}\u001b[201~`], `[${KEY}`],
+    ])("takes %s as the two keystrokes they were", async (_case, reads, expected) => {
+      // ink holds the unfinished ESC O or ESC [ for a turn, then hands it over on its own:
+      // a keypress. Joining it to the paste took the paste's first character as the SS3's
+      // final byte, or put `200~` in front of the key.
+      expect(
+        await keyFrom(async (instance) => {
+          for (const read of reads) await type(instance, read);
+        }),
+      ).toBe(expected);
+    });
+
     it("takes `a` and space as characters of the key, not as the form's shortcuts", async () => {
       // `a` unfolds Advanced on a row that is not a typing field, and space toggles the
       // auth scheme and the sessions switch on theirs. Both of those arms sit above the
@@ -752,6 +766,20 @@ describe("App add-profile: API endpoint", () => {
 
       expect(saved?.secretValue).toBe(KEY);
       expect(saved?.env).toEqual({});
+      instance.unmount();
+    });
+
+    it("keeps an erase that arrives with the arrow leaving the key field off the key", async () => {
+      // The form's own keys act on the field under the cursor now, not on the one in the
+      // handler's render: that one is still the key field for the rest of this read, and an
+      // erase there took the key's last character with it.
+      const instance = await filledTo("API key");
+      await press(instance, KEY);
+
+      await type(instance, `${DOWN}\u007f`);
+
+      expect(focusedOn(instance.lastFrame() ?? "", "Model")).toBe(true);
+      expect((await submit(instance))?.secretValue).toBe(KEY);
       instance.unmount();
     });
 

@@ -48,6 +48,7 @@ describe("carriesCredentialToken", () => {
     ["an ordinary endpoint", "https://openrouter.ai/api/v1"],
     ["a hostname with sk- inside a word", "https://api.risk-management-service-v2.example.com"],
     ["a hostname beginning sk-", "https://sk-proxy-2024-production-cluster.example.com"],
+    ["a hostname with sk- before a long word", "https://api.desk-internationalization.example.com"],
     ["a path with sk- inside a word", "http://localhost:8000/flask-app/v1/messages"],
     [
       "a Cloudflare AI Gateway URL, whose ids are lowercase hex",
@@ -58,6 +59,10 @@ describe("carriesCredentialToken", () => {
     ["a long model id", "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8"],
     ["a model id with a provider prefix", "openrouter/z-ai/glm-5.3"],
     ["a camel-case name with a digit", "MyFineTunedModelVersion2"],
+    [
+      "a camel-case name long enough to be checked, with its number at the end",
+      "DeepSeekCoderInstructQuantizedModelVersion2",
+    ],
     ["a beta-header list", "context-1m-2025-08-07,interleaved-thinking-2025-05-14"],
     ["a number", "262144"],
     ["a short sk- name", "sk-test"],

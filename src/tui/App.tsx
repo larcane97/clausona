@@ -57,7 +57,6 @@ import {
   NO_RAW_KEY_INPUT,
   scrubSecret,
   UNFINISHED_PASTE,
-  UNFINISHED_SEQUENCE,
   UNREADABLE_KEY_INPUT,
   validateApiForm,
   withoutKeys,
@@ -228,10 +227,7 @@ function holdsPartialInput(state: SecretInputState): boolean {
  * and "the paste never finished" under a field holding the whole key is a message that lies.
  */
 function keyErrorsAfter(errors: Record<string, string>, read: SecretChunk): Record<string, string> {
-  const stale =
-    read.text !== "" ||
-    (errors.key === UNFINISHED_PASTE && !read.state.pasting) ||
-    (errors.key === UNFINISHED_SEQUENCE && read.state.pending === "");
+  const stale = read.text !== "" || (errors.key === UNFINISHED_PASTE && !read.state.pasting);
   return stale && errors.key !== undefined ? withoutKeys(errors, KEY_FIELD) : errors;
 }
 

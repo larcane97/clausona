@@ -196,6 +196,14 @@ describe("a key in a field that draws what it holds", () => {
     );
   });
 
+  it("finds no part of a key on a form that shows none, even where the form says x-api-key", () => {
+    // What the helper's window size is for: `-api` is in the key's public prefix and in the
+    // auth row's own text, and a shorter window would call this screen a leak.
+    const state = form({ authScheme: "api-key" });
+
+    expect(windowsOnScreen([frameFor({ ...state, cursor: cursorOn(state, "auth") }, true)], KEY)).toEqual([]);
+  });
+
   it("draws a model id as it is", () => {
     const state = form({ env: { [MODEL_KEY]: "z-ai/glm-5.3" } });
 
