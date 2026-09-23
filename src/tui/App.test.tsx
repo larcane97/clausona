@@ -1079,6 +1079,143 @@ describe("App add-profile: API endpoint", () => {
   });
 
   /**
+   * A keystroke that ink could not name, because it arrived inside a run of text.
+   *
+   * ink names Tab, Enter, Backspace or Ctrl-U only when the byte is a read of its own. In one
+   * read with text around it, it is a control character in a text event: `useInput` sees no
+   * Tab, the cursor did not move, and the key field's reader dropped the byte and appended what
+   * came after it - `<KEY>glm-5`, behind the mask, and "Added". Each byte is asserted typed,
+   * between a paste's brackets, and right after a paste closes, against what the save gets and
+   * against every frame.
+   */
+  describe("a keystroke inside a run of text on the key field", () => {
+    const PASTE = (text: string) => `\u001b[200~${text}\u001b[201~`;
+
+    async function keyAfter(...reads: string[]) {
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const instance = await openApiForm();
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+      await press(instance, "https://gateway.example.com");
+      await moveTo(instance, "API key");
+      for (const read of reads) await type(instance, read);
+      const landed = instance.lastFrame() ?? "";
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added") || f.includes("✘"));
+      const saved = vi.mocked(addApiProfile).mock.calls[0]?.[0];
+      const leaked = windowsOnScreen(instance.frames, KEY);
+      instance.unmount();
+      return { saved, landed, leaked };
+    }
+
+    const MOVES: [string, string][] = [
+      ["a tab", "\t"],
+      ["an Enter", "\r"],
+      ["a line feed", "\n"],
+    ];
+
+    it.each(MOVES)("ends the key at %s typed with it, and moves on without the text after it", async (_c, byte) => {
+      // What the named key does - the cursor goes to Model - and the text after it was typed
+      // after that move, where input has nowhere to go until a frame draws the cursor.
+      const { saved, landed, leaked } = await keyAfter(`${KEY}${byte}glm-5`);
+
+      expect(saved?.secretValue).toBe(KEY);
+      expect(saved?.env).toEqual({});
+      expect(focusedOn(landed, "Model")).toBe(true);
+      expect(landed).not.toContain("glm-5");
+      expect(leaked).toEqual([]);
+    });
+
+    it.each(MOVES)("does the same with %s right after a paste closes", async (_c, byte) => {
+      const { saved, landed, leaked } = await keyAfter(`${PASTE(KEY)}${byte}glm-5`);
+
+      expect(saved?.secretValue).toBe(KEY);
+      expect(saved?.env).toEqual({});
+      expect(focusedOn(landed, "Model")).toBe(true);
+      expect(leaked).toEqual([]);
+    });
+
+    const ALL: [string, string][] = [
+      ...MOVES,
+      ["a Ctrl-U", "\u0015"],
+      ["a backspace sent as DEL", "\u007f"],
+      ["a backspace sent as BS", "\u0008"],
+      ["a Ctrl-C", "\u0003"],
+      ["a Ctrl-D", "\u0004"],
+    ];
+
+    it.each(ALL)("reads %s between a paste's brackets as pasted data", async (_c, byte) => {
+      // The terminal has said every byte until the closing bracket is pasted: nothing in it is a
+      // keypress, and a key has no control characters in it.
+      const { saved, landed, leaked } = await keyAfter(PASTE(`${KEY.slice(0, 20)}${byte}${KEY.slice(20)}`));
+
+      expect(saved?.secretValue).toBe(KEY);
+      expect(focusedOn(landed, "API key")).toBe(true);
+      expect(leaked).toEqual([]);
+    });
+
+    it.each([
+      ["typed", ["x-junk", `\u0015${KEY}`]],
+      ["typed with the junk in the same read", [`x-junk\u0015${KEY}`]],
+      ["right after a paste closes", [`${PASTE("x-junk")}\u0015${KEY}`]],
+    ])("clears the field at a Ctrl-U %s, and keeps what follows it", async (_c, reads) => {
+      const { saved, leaked } = await keyAfter(...reads);
+
+      expect(saved?.secretValue).toBe(KEY);
+      expect(leaked).toEqual([]);
+    });
+
+    it.each([
+      ["DEL", "\u007f"],
+      ["BS", "\u0008"],
+    ])("erases one character at a backspace sent as %s, typed or right after a paste closes", async (_c, byte) => {
+      const typed = await keyAfter(`${KEY}xy${byte}${byte}`);
+      const afterPaste = await keyAfter(`${PASTE(`${KEY}xy`)}${byte}${byte}`);
+
+      expect(typed.saved?.secretValue).toBe(KEY);
+      expect(afterPaste.saved?.secretValue).toBe(KEY);
+      expect([...typed.leaked, ...afterPaste.leaked]).toEqual([]);
+    });
+
+    it.each([
+      ["typed", `${KEY}\u0003glm-5`],
+      ["right after a paste closes", `${PASTE(KEY)}\u0003glm-5`],
+    ])("stops taking text at a Ctrl-C %s", async (_c, read) => {
+      // Alone, ink takes it as the quit key. Inside text it quits nothing, and what follows it
+      // is not taken as the key either.
+      const { saved, landed, leaked } = await keyAfter(read);
+
+      expect(saved?.secretValue).toBe(KEY);
+      expect(focusedOn(landed, "API key")).toBe(true);
+      expect(leaked).toEqual([]);
+    });
+
+    it.each([
+      ["typed", `${KEY}\u0004glm-5`],
+      ["right after a paste closes", `${PASTE(KEY)}\u0004glm-5`],
+    ])("does nothing at a Ctrl-D %s, as it does alone", async (_c, read) => {
+      // Ctrl-D ends the CLI's prompt; this form binds nothing to it. The cursor does not move,
+      // so what follows it was typed into the key field, and it goes there.
+      const { saved, landed, leaked } = await keyAfter(read);
+
+      expect(saved?.secretValue).toBe(`${KEY}glm-5`);
+      expect(focusedOn(landed, "API key")).toBe(true);
+      expect(leaked).toEqual([]);
+    });
+
+    it("moves on at a line feed alone, as at an Enter", async () => {
+      // ink names a lone LF "enter" but hands useInput no flag for it, so the App's own keys
+      // never saw it; the key field's reader does, and it is an Enter here as at the prompt.
+      const { saved, landed } = await keyAfter(KEY, "\n");
+
+      expect(saved?.secretValue).toBe(KEY);
+      expect(focusedOn(landed, "Model")).toBe(true);
+    });
+  });
+
+  /**
    * Ruling 88's second layer, end to end: a field that draws what it holds never draws a key,
    * whichever way the key got there.
    */

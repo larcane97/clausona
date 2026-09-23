@@ -214,6 +214,14 @@ function apiFieldUnderCursor(screen: Screen, state: AddState | null): ApiField |
 /** The key field's id: the one field whose input comes from the reader rather than a TextInput. */
 const KEY_FIELD = "key";
 
+/**
+ * The keystrokes the App's own keys answer on the key field when ink hands one over as a whole
+ * event, named: Enter, Tab, Backspace (DEL or BS) and Ctrl-U. The key field's reader leaves those
+ * to them. A line feed is not among them - ink names it, but `useInput` carries no flag for it -
+ * so the reader answers it, as an Enter.
+ */
+const APP_KEYS = new Set(["\r", "\t", "\u007f", "\u0008", "\u0015"]);
+
 /** Whether the key field's reader holds part of something - a sequence or a paste - rather than nothing. */
 function holdsPartialInput(state: SecretInputState): boolean {
   return state.pending !== "" || state.pasting;
@@ -564,6 +572,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   const fieldUnderCursor = apiFieldUnderCursor(screen, addState)?.id;
   const apiFormOpen = fieldUnderCursor !== undefined;
   const canReadKeyInput = typeof inputEvents?.on === "function" && typeof inputEvents?.off === "function";
+  // biome-ignore lint/correctness/useExhaustiveDependencies: moveApiCursor touches only refs and state setters, so the first render's is as good as any; re-subscribing every render is the per-frame gap this listener closes
   useLayoutEffect(() => {
     if (!apiFormOpen || !canReadKeyInput) return;
     let ending: NodeJS.Immediate | undefined;
@@ -577,6 +586,12 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       if (inputTarget.current !== KEY_FIELD || droppingPaste.current) return;
       // The writes `editApiKey` makes, inlined so that this listener depends on nothing that
       // changes every render - it is subscribed once a visit to the form, not per frame.
+      //
+      // A keystroke is acted on where it falls in the event. ink names Tab, Enter, Backspace or
+      // Ctrl-U only when the byte is a whole event, and then the App's own keys answer it; inside
+      // a run of text it is a control character nothing else sees, and dropping it appended the
+      // text after it to the key - a Tab's model id, a Ctrl-U's junk still in front.
+      const answeredByApp = APP_KEYS.has(input);
       let rest = input;
       let edited = false;
       for (;;) {
@@ -597,9 +612,29 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           setApiKey((previous) => previous + read.text);
           edited = true;
         }
-        if (!read.keystroke) break;
-        // A keystroke inside a run of text: dropped, as every control character in it was.
+        if (!read.keystroke || answeredByApp) break;
         rest = read.keystroke.rest;
+        const key = read.keystroke.key;
+        if (key === "erase") {
+          setApiKey((previous) => previous.slice(0, -1));
+          edited = true;
+        } else if (key === "clear") {
+          setApiKey("");
+          edited = true;
+        } else if (key === "enter" || key === "tab") {
+          // What the named key does here: the cursor moves on. The rest of the event came after
+          // the move, and is routed the way the rest of a read after an arrow is - nowhere, until
+          // a frame draws where the cursor landed.
+          moveApiCursor(1);
+          break;
+        } else if (key === "interrupt" && !read.state.pasting) {
+          // Alone, ink takes it as the quit key. Inside text it quits nothing, and what comes
+          // after it is not the key's either. Between a paste's brackets it is pasted data, and
+          // the paste reads on - the prompt's way out of a paste that never ends is not needed
+          // here, where ctrl-u alone is one.
+          break;
+        }
+        // "end", Ctrl-D: nothing in this form is bound to it, alone or not.
       }
       setKeyPartial(holdsPartialInput(secretInput.current));
       setAddState((prev) => {
