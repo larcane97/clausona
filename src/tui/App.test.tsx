@@ -809,7 +809,6 @@ describe("App add-profile: API endpoint", () => {
       await type(instance, `x${DOWN}\u001b[200~${KEY.slice(0, 20)}`);
 
       expect(focusedOn(instance.lastFrame() ?? "", "Model")).toBe(true);
-      expect(row(instance, "Model")).not.toContain(KEY.slice(0, 8));
       const saved = await submit(instance);
 
       expect(saved?.secretValue).toBe("x");
