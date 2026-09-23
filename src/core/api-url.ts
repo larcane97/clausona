@@ -7,7 +7,9 @@ import { carriesCredentialToken, looksLikeCredential } from "./credential-token.
  * - `scheme`, which is whatever the parser took for the scheme: with no `//` the URL is
  *   opaque, and `admin:pw@host` parses with the username as its scheme. So a caller checks
  *   `hasBareUserinfo` before it names the scheme, and reports that shape as the credentials
- *   it is. A scheme that starts like a key is reported as `key-shaped` instead;
+ *   it is. A scheme that starts like a key is reported as `key-shaped` instead, and one that
+ *   could not be a scheme's name - a token with a colon typed after it - is left undefined,
+ *   for the caller to say there is no http(s) scheme without quoting anything;
  * - `parameter`, the name of a query parameter that carries a credential, as typed - which
  *   can only be one of the names in CREDENTIAL_PARAMETERS - and never its value.
  */
@@ -15,7 +17,7 @@ export type BaseUrlProblem =
   | { reason: "empty" }
   | { reason: "key-shaped" }
   | { reason: "unparseable" }
-  | { reason: "scheme"; scheme: string }
+  | { reason: "scheme"; scheme: string | undefined }
   | { reason: "credentials" }
   | { reason: "key-parameter"; parameter: string };
 
@@ -37,6 +39,9 @@ const CREDENTIAL_PARAMETERS = new Set([
   "signature",
   "subscription_key",
 ]);
+
+/** What could be a URL scheme's name, and is short enough that a token is not one. */
+const SCHEME_NAME = /^[a-z][a-z0-9+.-]{0,9}$/;
 
 /**
  * The one definition of a base URL clausona will accept, shared by the command that stores
@@ -71,7 +76,11 @@ export function checkBaseUrl(baseUrl: string): { ok: true; url: URL } | { ok: fa
     if (looksLikeCredential(baseUrl.trim().split(":")[0] ?? "")) {
       return { ok: false, problem: { reason: "key-shaped" } };
     }
-    return { ok: false, problem: { reason: "scheme", scheme: url.protocol.slice(0, -1) } };
+    // Named only when it could be a scheme's name: a letter, then letters, digits, `+`, `-` or
+    // `.`, and short. A gateway token with no prefix misses the key check, and before a colon
+    // it parses as a scheme too - lowercased, which for hex is still the whole token.
+    const scheme = url.protocol.slice(0, -1);
+    return { ok: false, problem: { reason: "scheme", scheme: SCHEME_NAME.test(scheme) ? scheme : undefined } };
   }
   if (url.username !== "" || url.password !== "") {
     return { ok: false, problem: { reason: "credentials" } };

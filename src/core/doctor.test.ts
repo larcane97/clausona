@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { leakedWindows } from "../test-leaks.js";
 import type { ApiEndpoint, Profile } from "../types.js";
 import { type ApiHealthInput, countIssues, evaluateApiHealth, evaluateSymlinkHealth } from "./doctor.js";
 
@@ -221,6 +222,36 @@ describe("evaluateApiHealth", () => {
           baseUrl,
         ).toContain("invalid_api_config");
       }
+    });
+
+    // With no `//`, whatever comes before the first colon parses as the scheme - and a gateway
+    // token with no prefix, too short for the key-shape check, is exactly that. Every surface
+    // that words the refusal says there is no http(s) scheme instead of quoting it.
+    it("quotes no would-be scheme that could be a token, on any surface", async () => {
+      const { parseBaseUrl } = await import("../lib/service.js");
+      const { baseUrlError } = await import("../tui/api-form.js");
+      const token = ["a3f9c2e1", "7b4d0e8f", "c61a5b2d", "9e0f4c7a"].join("");
+      const baseUrl = `${token}:v1`;
+
+      const messages = [
+        (() => {
+          try {
+            parseBaseUrl(baseUrl);
+            return "";
+          } catch (error) {
+            return (error as Error).message;
+          }
+        })(),
+        baseUrlError(baseUrl) ?? "",
+        ...health({ profile: withApi(baseUrl) }).map((issue) => issue.message),
+      ];
+
+      expect(messages.every((message) => /no http:\/\/ or https:\/\/ scheme/i.test(message)), messages.join("\n")).toBe(
+        true,
+      );
+      expect(leakedWindows(messages, token)).toEqual([]);
+      // A real scheme is still named.
+      expect(baseUrlError("ftp://gpu-box")).toContain("'ftp'");
     });
 
     it("accepts the base URLs add --api accepts", async () => {

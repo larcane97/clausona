@@ -168,10 +168,11 @@ function baseUrlProblem(baseUrl: string, remedy: string): string | undefined {
       // A real scheme cannot contain userinfo, so naming it gives nothing away. But with no
       // `//`, `admin:pw@host` parses with the username as its "scheme" - so that shape is
       // reported as the credentials it is, and none of it is quoted.
-      if (!hasBareUserinfo(baseUrl)) {
-        return `the base URL's scheme is '${checked.problem.scheme}', not http or https - ${remedy}`;
+      if (hasBareUserinfo(baseUrl)) {
+        return `the base URL carries a username or password - put the key in the key source instead, and ${remedy}`;
       }
-      return `the base URL carries a username or password - put the key in the key source instead, and ${remedy}`;
+      if (checked.problem.scheme === undefined) return `the base URL has no http:// or https:// scheme - ${remedy}`;
+      return `the base URL's scheme is '${checked.problem.scheme}', not http or https - ${remedy}`;
     case "credentials":
       return `the base URL carries a username or password - put the key in the key source instead, and ${remedy}`;
     case "key-shaped":

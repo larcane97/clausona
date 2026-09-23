@@ -2011,12 +2011,15 @@ export function parseBaseUrl(baseUrl: string): URL {
       case "scheme":
         // With no `//`, `user:pass@host` parses with the username as its "scheme": naming it
         // would print a token pasted there. It is userinfo, and is refused as userinfo.
-        if (!hasBareUserinfo(baseUrl)) {
-          throw new Error(`Invalid base URL: the scheme must be http or https, not '${checked.problem.scheme}'.`);
+        if (hasBareUserinfo(baseUrl)) {
+          throw new Error(
+            "Invalid base URL: it must not carry credentials. Supply the key through the key source instead.",
+          );
         }
-        throw new Error(
-          "Invalid base URL: it must not carry credentials. Supply the key through the key source instead.",
-        );
+        if (checked.problem.scheme === undefined) {
+          throw new Error("Invalid base URL: it has no http:// or https:// scheme.");
+        }
+        throw new Error(`Invalid base URL: the scheme must be http or https, not '${checked.problem.scheme}'.`);
       case "credentials":
         throw new Error(
           "Invalid base URL: it must not carry credentials. Supply the key through the key source instead.",

@@ -283,6 +283,7 @@ export function baseUrlError(baseUrl: string): string | undefined {
     case "unparseable":
       return "Not a URL - it must be absolute, like https://api.example.com.";
     case "scheme":
+      if (checked.problem.scheme === undefined) return "The URL has no http:// or https:// scheme.";
       return `The scheme must be http or https, not '${checked.problem.scheme}'.`;
     case "credentials":
       return "The URL must not carry a user or password. Put the key in the Key field.";
