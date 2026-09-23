@@ -1343,8 +1343,7 @@ export async function addProfile(options: {
  * the same form are compared: two emails case-insensitively, two ids exactly. An email
  * against an id could be the same account and is not reported.
  */
-export function isOtherAccount(registered: string, signedInAs: string | null): signedInAs is string {
-  if (!signedInAs) return false;
+export function isOtherAccount(registered: string, signedInAs: string): boolean {
   const isEmail = registered.includes("@");
   if (isEmail !== signedInAs.includes("@")) return false;
   return isEmail ? signedInAs.toLowerCase() !== registered.toLowerCase() : signedInAs !== registered;
@@ -1352,7 +1351,9 @@ export function isOtherAccount(registered: string, signedInAs: string | null): s
 
 export type LoginResult =
   | { status: "ok"; profile: Profile }
-  | { status: "other_account"; profile: Profile; signedInAs: string };
+  | { status: "other_account"; profile: Profile; signedInAs: string }
+  /** Nothing could be read back where clausona reads the account, so it is not known. */
+  | { status: "unverified"; profile: Profile };
 
 export async function loginProfile(id: string): Promise<LoginResult> {
   const registry = await loadRegistry();
@@ -1366,7 +1367,8 @@ export async function loginProfile(id: string): Promise<LoginResult> {
   // a successful login is not proof that the registered account is the one now stored.
   // Reported rather than thrown: the sign-in completed and is what the profile now uses,
   // and a profile whose account legitimately changed would otherwise fail every time.
-  const signedInAs = (await adapter.readAccountInfo(profile.configDir))?.email ?? null;
+  const signedInAs = (await adapter.readAccountInfo(profile.configDir))?.email;
+  if (!signedInAs) return { status: "unverified", profile };
   if (isOtherAccount(profile.email, signedInAs)) return { status: "other_account", profile, signedInAs };
   return { status: "ok", profile };
 }

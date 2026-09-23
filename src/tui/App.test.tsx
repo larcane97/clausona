@@ -105,7 +105,8 @@ describe("App", () => {
       await press(stdin, "y", () => !frame().includes(OVERLAY));
       await until(() => frame().includes("other@example.com"));
 
-      expect(frame()).toContain("work@example.com");
+      // The row below always shows work@example.com, so check the message itself.
+      expect(frame()).toContain("is signed in as other@example.com, not work@example.com");
       expect(frame()).not.toContain("Re-login completed");
     });
   });
@@ -129,6 +130,29 @@ describe("App", () => {
       await until(() => frame().includes("reloaded@example.com"));
 
       await press(stdin, "l", () => frame().includes(OVERLAY));
+    });
+  });
+});
+
+describe("App after a re-login", () => {
+  it("shows why when reloading the dashboard afterwards fails", async () => {
+    const { listProfiles, loginProfile } = await import("../lib/service.js");
+    vi.mocked(listProfiles)
+      .mockResolvedValueOnce([WORK])
+      .mockRejectedValueOnce(new Error("profiles.json is unreadable"));
+    vi.mocked(loginProfile).mockResolvedValueOnce({
+      status: "ok",
+      profile: { tool: "claude", configDir: WORK.configDir, email: WORK.email },
+    });
+
+    await withTerminalHandOver(async () => {
+      const { lastFrame, stdin } = render(<App initialScreen="use" />);
+      const frame = () => lastFrame() ?? "";
+      await until(() => frame().includes("claude:work"));
+      await press(stdin, "l", () => frame().includes(OVERLAY));
+      await press(stdin, "y", () => !frame().includes(OVERLAY));
+
+      await until(() => frame().includes("profiles.json is unreadable"));
     });
   });
 });

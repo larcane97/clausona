@@ -256,14 +256,31 @@ async function renewClaudeCredential(
   };
 }
 
+/**
+ * Environment for `claude auth login` that signs in to the stores clausona reads for
+ * `configDir`: CLAUDE_CONFIG_DIR unset for the default dir, set to the dir otherwise.
+ *
+ * The variable is cleared by assigning undefined rather than deleting it. spawnCommand
+ * merges this over process.env on the Windows .cmd shim path, so only an explicit key can
+ * override an inherited value, and Node drops undefined entries when it spawns. Windows
+ * also treats names case-insensitively, so any other spelling is cleared there as well.
+ */
+export function claudeLoginEnv(
+  configDir: string,
+  { homeDir, env, platform }: { homeDir: string; env: NodeJS.ProcessEnv; platform: NodeJS.Platform },
+): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...env };
+  if (platform === "win32") {
+    for (const key of Object.keys(out)) {
+      if (key.toUpperCase() === "CLAUDE_CONFIG_DIR") out[key] = undefined;
+    }
+  }
+  out.CLAUDE_CONFIG_DIR = isDefaultClaudeConfigDir(homeDir, configDir) ? undefined : configDir;
+  return out;
+}
+
 async function runLoginInteractive(configDir: string): Promise<boolean> {
-  // Cleared by assigning undefined rather than deleting: spawnCommand merges this over
-  // process.env when it goes through the Windows .cmd shim, and only an explicit key can
-  // override an inherited value there. Node drops undefined entries when it spawns.
-  const env = {
-    ...process.env,
-    CLAUDE_CONFIG_DIR: isDefaultClaudeConfigDir(homedir(), configDir) ? undefined : configDir,
-  };
+  const env = claudeLoginEnv(configDir, { homeDir: homedir(), env: process.env, platform: process.platform });
   return new Promise<boolean>((resolve) => {
     const child = spawnCommand("claude", ["auth", "login"], { env, stdio: "inherit" });
     child.on("close", (code) => resolve(code === 0));

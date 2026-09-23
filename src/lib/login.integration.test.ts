@@ -39,15 +39,17 @@ const path = require("node:path");
 const configDir = process.env.CLAUDE_CONFIG_DIR;
 fs.writeFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ args: process.argv.slice(2), configDir: configDir ?? null }));
 const accountDir = configDir || process.env.FAKE_HOME;
-fs.writeFileSync(
-  path.join(accountDir, ".claude.json"),
-  JSON.stringify({ oauthAccount: { emailAddress: process.env.FAKE_CLAUDE_EMAIL } }),
-);
+if (process.env.FAKE_CLAUDE_EMAIL) {
+  fs.writeFileSync(
+    path.join(accountDir, ".claude.json"),
+    JSON.stringify({ oauthAccount: { emailAddress: process.env.FAKE_CLAUDE_EMAIL } }),
+  );
+}
 `;
 
 type Setup = {
-  /** Account the browser session signs in to. */
-  signInAs: string;
+  /** Account the browser session signs in to; null leaves no account file behind. */
+  signInAs: string | null;
   /** Email the primary profile was registered with. */
   primaryEmail?: string;
 };
@@ -81,7 +83,8 @@ async function setup({ signInAs, primaryEmail = "a@example.com" }: Setup) {
   const log = path.join(currentHome, "fake-claude.log");
   process.env.PATH = `${bin}${path.delimiter}${process.env.PATH ?? ""}`;
   process.env.FAKE_CLAUDE_LOG = log;
-  process.env.FAKE_CLAUDE_EMAIL = signInAs;
+  if (signInAs === null) delete process.env.FAKE_CLAUDE_EMAIL;
+  else process.env.FAKE_CLAUDE_EMAIL = signInAs;
   process.env.FAKE_HOME = currentHome;
   delete process.env.CLAUDE_CONFIG_DIR;
 
@@ -151,6 +154,20 @@ describe("loginProfile", () => {
     },
     SPAWN_TEST_TIMEOUT_MS,
   );
+
+  it(
+    "does not claim the registered account when the account cannot be read back",
+    async () => {
+      // No account file where clausona reads it: the sign-in may have gone anywhere, so
+      // "Token refreshed for <registered email>" would be the unverified claim #23 was about.
+      const { service } = await setup({ signInAs: null });
+
+      const result = await service.loginProfile("claude:default");
+
+      expect(result.status).toBe("unverified");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 });
 
 describe("isOtherAccount", () => {
@@ -165,8 +182,6 @@ describe("isOtherAccount", () => {
     // Two account ids are the same form, so they can be compared exactly.
     ["1f3c9a2e-4b5d-4e6f-8a7b-9c0d1e2f3a4b", "7d8e9f0a-1b2c-4d3e-9f4a-5b6c7d8e9f0a", true],
     ["1f3c9a2e-4b5d-4e6f-8a7b-9c0d1e2f3a4b", "1f3c9a2e-4b5d-4e6f-8a7b-9c0d1e2f3a4b", false],
-    // Nothing could be read back, so there is nothing to compare.
-    ["a@example.com", null, false],
   ])("registered %s, signed in as %s: %s", async (registered, signedInAs, expected) => {
     const { isOtherAccount } = await import("./service.js");
 
@@ -187,6 +202,19 @@ describe("clausona login", () => {
       expect(out).toContain("b@example.com");
       expect(out).toContain("a@example.com");
       expect(out).not.toContain("Token refreshed");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "does not report a refreshed token for an account it could not read back",
+    async () => {
+      const { runCommand } = await setup({ signInAs: null });
+
+      const out = stripAnsi(await runCommand("login", ["claude:default"]));
+
+      expect(out).not.toContain("Token refreshed");
+      expect(out).toContain("claude:default");
     },
     SPAWN_TEST_TIMEOUT_MS,
   );
