@@ -13,8 +13,11 @@ const BASH_AVAILABLE = spawnSync("which", ["bash"]).status === 0;
 // both the spawn budget and the surrounding test budget are sized for contention.
 const POWERSHELL_SPAWN_TIMEOUT_MS = 45_000;
 const POWERSHELL_TEST_TIMEOUT_MS = 60_000;
-const describeIfZsh = ZSH_AVAILABLE ? describe : describe.skip;
-const describeIfBash = BASH_AVAILABLE ? describe : describe.skip;
+// On Windows renderShellInit() renders the PowerShell hook, which is what users there get -
+// and a runner's Git Bash, which `which bash` finds, would be handed it.
+const POSIX_HOST = process.platform !== "win32";
+const describeIfZsh = POSIX_HOST && ZSH_AVAILABLE ? describe : describe.skip;
+const describeIfBash = POSIX_HOST && BASH_AVAILABLE ? describe : describe.skip;
 
 const UNSET = "<unset>";
 
