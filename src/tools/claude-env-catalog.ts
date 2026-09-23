@@ -1,5 +1,6 @@
 import { isPosixEnvName } from "../core/shell.js";
 import { isReservedEnvKey, shownEnvName } from "../lib/profile-env.js";
+import type { Profile } from "../types.js";
 
 export type EnvGroup = "model" | "context" | "limits" | "timeouts" | "compat" | "transport";
 
@@ -177,7 +178,25 @@ function jsonTypeName(value: unknown): string {
   return typeof value;
 }
 
-export function validateEnvEntry(key: string, value: string): { ok: true } | { ok: false; error: string } {
+/**
+ * Whether a name is the base URL's variable, in any case. An API profile's endpoint is its
+ * `api.baseUrl`, which `list`, `config --show` and doctor show and `--base-url` checks; the env
+ * map is applied after it, so the variable there would move the key to a host none of them
+ * name, past every note `--base-url` prints.
+ */
+export function isBaseUrlEnvKey(key: string): boolean {
+  return key.toUpperCase() === "ANTHROPIC_BASE_URL";
+}
+
+/**
+ * `kind` is the profile's: an API profile refuses its endpoint as a setting. Any other kind
+ * has no endpoint of clausona's, and a user who points a subscription at a proxy may set it.
+ */
+export function validateEnvEntry(
+  key: string,
+  value: string,
+  kind?: Profile["kind"],
+): { ok: true } | { ok: false; error: string } {
   // Before the name rule, whose message quotes the name: this one is a key.
   if (shownEnvName(key) !== key) {
     return {
@@ -194,6 +213,9 @@ export function validateEnvEntry(key: string, value: string): { ok: true } | { o
 
   if (isReservedEnvKey(key)) {
     return { ok: false, error: `${key} is managed by clausona and cannot be set on a profile` };
+  }
+  if (kind === "api" && isBaseUrlEnvKey(key)) {
+    return { ok: false, error: `${key} is this profile's endpoint - set the endpoint with --base-url` };
   }
 
   const entry = BY_KEY.get(key);

@@ -503,6 +503,7 @@ const SELF_DIRECTED_ISSUE_KINDS = new Set<DoctorIssue["kind"]>([
   "plaintext_env_secret",
   "shared_key_source",
   "settings_env_override",
+  "env_overrides_endpoint",
   "invalid_env_map",
   "invalid_profile_kind",
 ]);

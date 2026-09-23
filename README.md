@@ -346,6 +346,12 @@ group (model, context, limits, timeouts, compat, transport). The catalog is a co
 not an allowlist: a variable a future Claude Code release introduces can be set today, as
 long as the name is one a shell can export.
 
+An API profile's endpoint is not one of these settings. `--set ANTHROPIC_BASE_URL=…` is
+refused on an API profile, in any case — set the endpoint with `--base-url`, which checks the
+URL and says when the key would go to a new host. The env map is applied after the endpoint,
+so one a hand edit leaves there still wins at launch; `doctor` warns about it, with
+`config <profile> --unset ANTHROPIC_BASE_URL` and then `--base-url`.
+
 Two are worth knowing about for a self-hosted model. Claude Code assumes a conservative
 context window for a model it does not recognise and compacts early, so declare the real one
 with `CLAUDE_CODE_MAX_CONTEXT_TOKENS`. And a cold GPU server is slow to first byte, so raise

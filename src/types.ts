@@ -170,6 +170,8 @@ export type DoctorIssue = {
     // API profiles only: a settings.json `env` block that Claude Code applies over the
     // profile's endpoint, key or routing (an error), or its model (a warning).
     | "settings_env_override"
+    // API profiles only: ANTHROPIC_BASE_URL in the env map, which overrides the endpoint.
+    | "env_overrides_endpoint"
     // Any profile: an env map a hand edit left as something other than a map, or holding a
     // value that is not a string; or a kind that is neither subscription nor api.
     | "invalid_env_map"

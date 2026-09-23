@@ -25,6 +25,7 @@ import {
   catalogEntry,
   type EnvCatalogEntry,
   type EnvGroup,
+  isBaseUrlEnvKey,
   validateEnvEntry,
 } from "../tools/claude-env-catalog.js";
 
@@ -49,6 +50,9 @@ const MODEL_ENTRY = CLAUDE_ENV_CATALOG.find((entry) => entry.key === MODEL_KEY);
 
 /** A key in a field that draws what it holds, from the name to the free-form row. */
 export const MISPLACED_KEY = "That looks like an API key - it goes in the API key field.";
+
+/** The base URL's variable as a setting, which would move the key off the Endpoint field's host. */
+export const ENDPOINT_AS_SETTING = "That is the endpoint - it goes in the Endpoint field above.";
 
 /** Submit with nothing in the key field. */
 export const KEY_REQUIRED = "Enter the API key. It goes to the credential store.";
@@ -325,7 +329,8 @@ function misplacedKeyValue(key: string, value: string): boolean {
 export function envError(key: string, value: string, others: readonly string[]): string | undefined {
   // First, so that no message below gets as far as quoting it.
   if (misplacedKeyValue(key, value)) return MISPLACED_KEY;
-  const result = validateEnvEntry(key, value);
+  if (isBaseUrlEnvKey(key)) return ENDPOINT_AS_SETTING;
+  const result = validateEnvEntry(key, value, "api");
   if (!result.ok) {
     const entry = catalogEntry(key);
     if (looksLikeCredential(value) && (entry?.kind === "number" || entry?.kind === "bool")) {

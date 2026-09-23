@@ -894,6 +894,44 @@ describe("config --set / --unset", () => {
 
     expect(h.stderr()).toBe("");
   });
+
+  // The env map is applied after the endpoint, so the variable there would send the key to a
+  // host that list, --show and doctor never name, past every note --base-url prints.
+  it.each([
+    ["config --set", ["config", "claude:gw", "--set", "ANTHROPIC_BASE_URL=http://gw.example.com"]],
+    ["config --set, in another case", ["config", "claude:gw", "--set", "anthropic_base_url=http://gw.example.com"]],
+    [
+      "add --set",
+      [
+        "add",
+        "claude:gw2",
+        "--api",
+        "--base-url",
+        "https://openrouter.ai/api",
+        "--set",
+        "ANTHROPIC_BASE_URL=http://x.example.com",
+      ],
+    ],
+  ])("refuses an API profile's endpoint as a setting through %s", async (_route, [command, ...args]) => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+    const before = h.registryText();
+
+    const message = await failure(h.run(command as string, ...args));
+
+    expect(message).toMatch(
+      /^(ANTHROPIC_BASE_URL|anthropic_base_url) is this profile's endpoint - set the endpoint with --base-url$/,
+    );
+    expect(h.registryText()).toBe(before);
+    expect(promptCalls).toEqual([]);
+  });
+
+  it("still lets a subscription profile set ANTHROPIC_BASE_URL", async () => {
+    const h = await harness({ "claude:work": { tool: "claude", email: "work@example.com" } });
+
+    await h.run("config", "claude:work", "--set", "ANTHROPIC_BASE_URL=http://proxy.example.com");
+
+    expect(h.profile("claude:work").env).toEqual({ ANTHROPIC_BASE_URL: "http://proxy.example.com" });
+  });
 });
 
 describe("config --key", () => {

@@ -143,6 +143,22 @@ describe("evaluateApiHealth", () => {
       expect(issues[0].message).toContain("clausona config claude:glm --base-url <url>");
     });
 
+    // `--set` refuses it now; one stored before, or by hand, still wins at launch.
+    it("warns that an ANTHROPIC_BASE_URL in the env map overrides the endpoint shown", () => {
+      const issues = health({
+        profile: { ...apiProfile, env: { ANTHROPIC_BASE_URL: "http://elsewhere.example.com" } },
+      });
+
+      expect(issues.map((issue) => [issue.kind, issue.severity])).toEqual([["env_overrides_endpoint", "warning"]]);
+      expect(issues[0].message).toContain("clausona config claude:glm --unset ANTHROPIC_BASE_URL");
+      expect(issues[0].message).toContain("clausona config claude:glm --base-url <url>");
+      expect(issues[0].message).not.toContain("elsewhere");
+      // A miscased one is dropped at launch, with a warning of its own, so it overrides nothing.
+      expect(
+        health({ profile: { ...apiProfile, env: { anthropic_base_url: "http://elsewhere.example.com" } } }),
+      ).toEqual([]);
+    });
+
     // Parses with an empty host, and the "scheme" is the username: never quote any of it.
     it("reports scheme-less userinfo as credentials, quoting none of it", () => {
       const message = health({ profile: withApi("admin-name:pw-0040@gpu-box/api") })[0].message;

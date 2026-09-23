@@ -255,6 +255,18 @@ export function evaluateApiHealth({
   const urlProblem = baseUrlProblem(baseUrl, baseUrlRemedy(id, profile.api !== undefined));
   if (urlProblem) issues.push({ kind: "invalid_api_config", message: urlProblem });
 
+  if (Object.hasOwn(profile.env ?? {}, "ANTHROPIC_BASE_URL")) {
+    // `--set` refuses it for an API profile now; a hand edit, or a profile set before that,
+    // can still hold one. The env map is applied after the endpoint, so this is where the key
+    // goes - a host that list, config --show and the checks above never name. Not quoted, like
+    // any base URL. A miscased spelling is not here: launch drops that one, and says so.
+    issues.push({
+      kind: "env_overrides_endpoint",
+      severity: "warning",
+      message: `ANTHROPIC_BASE_URL in this profile's env map overrides the endpoint shown for it, so the key goes wherever that says - run 'clausona config ${id} --unset ANTHROPIC_BASE_URL', then 'clausona config ${id} --base-url <url>' to change the endpoint`,
+    });
+  }
+
   if (profile.api && profile.api.authScheme !== "bearer" && profile.api.authScheme !== "api-key") {
     // A hand edit. Launch sends the key as ANTHROPIC_API_KEY for anything but `bearer`, which
     // may or may not be what the endpoint reads; either way the file does not say. Not quoted.

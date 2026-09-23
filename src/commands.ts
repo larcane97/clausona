@@ -1336,7 +1336,7 @@ export async function runCommand(command: string, args: string[]) {
         for (const assignment of optionValues(args, "--set")) {
           const [key, value] = parseAssignment(assignment, "--set");
           if (key === "ANTHROPIC_MODEL" && model !== undefined) throw new Error(MODEL_TWICE);
-          const result = validateEnvEntry(key, value);
+          const result = validateEnvEntry(key, value, "api");
           if (!result.ok) throw new Error(result.error);
           checkModelEntry(key, value, "add");
           env[key] = value;
