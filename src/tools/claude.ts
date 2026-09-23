@@ -14,7 +14,23 @@ import type { ToolAdapter, ToolCredential } from "./types.js";
 // That is why sharing it went unnoticed: on Linux and Windows a shared link makes every
 // profile read the primary's token, so all accounts authenticate and spend quota as the
 // primary no matter what `/status` reports.
-const BASE_SHARED_LINK_SKIP = new Set([".claude.json", ".credentials.json", "image-cache", "statsig", "plugins"]);
+//
+// `.last-update-result.json` (the last auto-update's outcome), `gh-pr-status-cache.json`
+// (the PR status shown in the prompt) and `.session-stats.json` (written by a hook or
+// status line, not by Claude Code itself) are state or a cache for one config dir. Each
+// writer replaces a shared link with a regular file — Claude Code's atomic write, or the
+// hook's — so the link never stays in place, and while it does, one account's data shows
+// in another's profile.
+const BASE_SHARED_LINK_SKIP = new Set([
+  ".claude.json",
+  ".credentials.json",
+  "image-cache",
+  "statsig",
+  "plugins",
+  ".last-update-result.json",
+  "gh-pr-status-cache.json",
+  ".session-stats.json",
+]);
 
 // State keyed by session id. `jobs/` holds the background-session records that the
 // background list reads (state, respawn flags, resume target) and `teams/` holds team
