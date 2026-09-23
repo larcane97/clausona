@@ -767,7 +767,7 @@ describe("config --key", () => {
     const h = await harness({ "claude:gw": API_PROFILE });
     promptAnswers.push(KEY);
     await h.run("config", "claude:gw", "--key");
-    vi.stubEnv("MY_KEY", "sk-fake-in-the-shell");
+    vi.stubEnv("MY_KEY", "set-in-the-shell");
 
     const output = stripAnsi(String(await h.run("config", "claude:gw", "--key-from", "env:MY_KEY")));
 

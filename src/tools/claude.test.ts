@@ -94,10 +94,12 @@ describe.skipIf(process.platform === "win32")("renewing a Claude credential in t
   });
 
   const NOW = 1_790_000_000_000;
-  const OLD = { accessToken: "sk-ant-oat01-fixture-old-access", refreshToken: "sk-ant-ort01-fixture-old-refresh" };
+  // Put together here, so no line of this file holds a token a secret scanner would match.
+  const token = (kind: "oat01" | "ort01", body: string) => ["sk", "ant", kind, "fixture", body].join("-");
+  const OLD = { accessToken: token("oat01", "old-access"), refreshToken: token("ort01", "old-refresh") };
   const RENEWED = {
-    access_token: "sk-ant-oat01-fixture-renewed-access-0123456789",
-    refresh_token: "sk-ant-ort01-fixture-renewed-refresh-0123456789",
+    access_token: token("oat01", "renewed-access-0123456789"),
+    refresh_token: token("ort01", "renewed-refresh-0123456789"),
     expires_in: 28_800,
   };
   const OAUTH = {

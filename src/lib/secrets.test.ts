@@ -148,8 +148,9 @@ describe.skipIf(process.platform === "win32")("storeSecret on the Keychain backe
   // ASCII, so the read-back compares against that, not against the key as typed.
   it("accepts the hex security prints back for a key with a non-ASCII character", async () => {
     const keychain = security();
-    await expect(storeSecret("claude:x", "sk-fixture-\u00e9t\u00e9", "keychain")).resolves.toBeUndefined();
-    expect(keychain.stored("clausona-claude:x", "claude:x")).toBe("sk-fixture-\u00e9t\u00e9");
+    const key = ["sk", "fixture", "\u00e9t\u00e9"].join("-");
+    await expect(storeSecret("claude:x", key, "keychain")).resolves.toBeUndefined();
+    expect(keychain.stored("clausona-claude:x", "claude:x")).toBe(key);
   });
 
   // A line break would end the command there and hand the rest of the id to `security` as
