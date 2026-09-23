@@ -18,6 +18,7 @@ import path from "node:path";
 import { checkBaseUrl, hasBareUserinfo, isAnthropicHost, sendsKeyInClear } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
+import { acquireFileLock } from "../core/file-lock.js";
 import { isKnownSecretSource, keySharersElsewhere } from "../core/key-source.js";
 import { backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
@@ -89,6 +90,13 @@ function isManagedMarketplace(entry: unknown, configDir: string): boolean {
 const CLAUSONA_DIR = path.join(homedir(), ".clausona");
 const REGISTRY_PATH = path.join(CLAUSONA_DIR, "profiles.json");
 const USAGE_PATH = path.join(CLAUSONA_DIR, "usage.json");
+const REGISTRY_LOCK_PATH = path.join(CLAUSONA_DIR, "locks", "registry.lock");
+
+// The registry lock only ever covers re-reading, changing and saving one small file, so
+// a lock this old was left by a process that died holding it. Waiting longer than that
+// lets a writer queued behind such a process take over rather than fail.
+const REGISTRY_LOCK_STALE_MS = 5_000;
+const REGISTRY_LOCK_WAIT_MS = 10_000;
 
 async function exists(targetPath: string) {
   try {
@@ -730,7 +738,8 @@ export async function noRegistryError(): Promise<Error> {
   return new Error((await registryProblem()) ?? "clausona is not initialized. Run `clausona init` first.");
 }
 
-export async function loadRegistry(): Promise<Registry | null> {
+/** Reads the registry, migrating a v1 file in place. Only call it holding the registry lock. */
+async function readRegistryLocked(): Promise<Registry | null> {
   const raw = await readJson<unknown>(REGISTRY_PATH, null);
   if (raw === null) return null;
   if (!isV1Registry(raw)) return raw as Registry;
@@ -785,10 +794,56 @@ export async function loadRegistry(): Promise<Registry | null> {
   return migrated;
 }
 
-export async function saveRegistry(registry: Registry) {
+export async function loadRegistry(): Promise<Registry | null> {
+  const raw = await readJson<unknown>(REGISTRY_PATH, null);
+  if (raw === null || !isV1Registry(raw)) return raw as Registry | null;
+  // Migrating rewrites the file, which makes it a registry write like any other.
+  return withRegistryLock(readRegistryLocked);
+}
+
+/** Writes the registry as given. Only updateRegistry calls it, holding the registry lock. */
+async function saveRegistry(registry: Registry) {
   // Owner-only: it holds each API profile's command: key source, whose command line can
   // carry a vault token, and every env map in plain text.
   await writeJson(REGISTRY_PATH, registry, 0o600);
+}
+
+async function withRegistryLock<T>(fn: () => Promise<T>): Promise<T> {
+  const release = await acquireFileLock(REGISTRY_LOCK_PATH, {
+    staleMs: REGISTRY_LOCK_STALE_MS,
+    waitMs: REGISTRY_LOCK_WAIT_MS,
+  });
+  if (!release) {
+    throw new Error(
+      `Timed out waiting for another clausona process to release ${REGISTRY_LOCK_PATH}. If none is running, delete that file and try again.`,
+    );
+  }
+
+  try {
+    return await fn();
+  } finally {
+    await release();
+  }
+}
+
+/**
+ * Changes the registry as it stands when the change is written, not as it stood when
+ * the caller started. `update` gets a copy read under the lock and returns the registry
+ * to save, or null to leave the file untouched.
+ *
+ * Every writer goes through here because loading early and saving late silently
+ * reverts whatever was written in between: `add` holds its copy across an interactive
+ * login that takes minutes, and used to drop profiles other adds registered meanwhile.
+ * Keep slow work out of `update` — every other writer waits for it.
+ */
+export async function updateRegistry<R extends Registry | null>(
+  update: (current: Registry | null) => R | Promise<R>,
+): Promise<R> {
+  return withRegistryLock(async () => {
+    const next = await update(await readRegistryLocked());
+    if (next) await saveRegistry(next);
+    return next;
+  });
 }
 
 export async function loadUsageStore() {
@@ -910,28 +965,37 @@ export async function initializeRegistry(options: {
     }
   }
 
-  for (const [id, profile] of carried) registry.profiles[id] = profile;
+  // Init replaces the registry, but what it keeps of the old one - the API profiles, and the
+  // active profiles - is taken from the registry as it is when init writes, not as it was when
+  // init began: an API profile added, changed or removed while the accounts above were being
+  // set up stays that way. An account's id wins over one registered in that time.
+  const saved = await updateRegistry((current) => {
+    for (const [id, profile] of Object.entries(current?.profiles ?? {})) {
+      if (profile.kind !== "api" || registry.profiles[id]) continue;
+      registry.profiles[id] = profile;
+      registry.primarySources[profile.tool] ??= getAdapter(profile.tool).defaultConfigDir(home);
+    }
 
-  // A default the user picked wins for the tool it names - a bare name, so claude. A tool
-  // nobody chose for keeps the profile that was active, API or subscription, while it is still
-  // registered, and otherwise gets its first account. `init --auto` never chooses, so running
-  // it again leaves the active profiles as they were.
-  const picked = options.defaultProfile === undefined ? undefined : profileId("claude", options.defaultProfile);
-  for (const tool of ALL_TOOLS) {
-    const active = existing?.activeProfiles[tool];
-    const next =
-      (tool === "claude" && picked && registry.profiles[picked] ? picked : undefined) ??
-      (active && registry.profiles[active]?.tool === tool ? active : undefined) ??
-      planned.find((p) => p.account.tool === tool)?.id;
-    if (next) registry.activeProfiles[tool] = next;
-  }
-
-  await saveRegistry(registry);
+    // A default the user picked wins for the tool it names - a bare name, so claude. A tool
+    // nobody chose for keeps the profile that was active, API or subscription, while it is still
+    // registered, and otherwise gets its first account. `init --auto` never chooses, so running
+    // it again leaves the active profiles as they were.
+    const picked = options.defaultProfile === undefined ? undefined : profileId("claude", options.defaultProfile);
+    for (const tool of ALL_TOOLS) {
+      const active = current?.activeProfiles[tool];
+      const next =
+        (tool === "claude" && picked && registry.profiles[picked] ? picked : undefined) ??
+        (active && registry.profiles[active]?.tool === tool ? active : undefined) ??
+        planned.find((p) => p.account.tool === tool)?.id;
+      if (next) registry.activeProfiles[tool] = next;
+    }
+    return registry;
+  });
   await writeJson(USAGE_PATH, {});
 
   // Seed seenSessions for each registered profile (claude only — codex usage tracking is v1 OOS).
   // usage.json was just reset, so a carried API profile needs it as much as any other.
-  for (const [id, { tool, configDir }] of [...planned.map((p) => [p.id, p.account] as const), ...carried]) {
+  for (const [id, { tool, configDir }] of Object.entries(saved.profiles)) {
     if (tool === "claude") {
       await seedSeenSessions(id, configDir);
     }
@@ -1036,13 +1100,12 @@ export async function fetchProfileQuotas(
 }
 
 export async function setActiveProfileByName(id: string) {
-  const registry = await loadRegistry();
-  if (!registry?.profiles[id]) {
-    throw new Error(`Profile '${id}' not found.`);
-  }
-
-  const next = setActiveProfile(registry, id);
-  await saveRegistry(next);
+  const next = await updateRegistry((current) => {
+    if (!current?.profiles[id]) {
+      throw new Error(`Profile '${id}' not found.`);
+    }
+    return setActiveProfile(current, id);
+  });
   return next.profiles[id];
 }
 
@@ -1415,8 +1478,11 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
     await mergeSessionState(profile.configDir, primarySource);
   }
 
-  profile.mergeSessions = next;
-  await saveRegistry(registry);
+  await updateRegistry((current) => {
+    if (!current?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
+    current.profiles[id].mergeSessions = next;
+    return current;
+  });
 
   const updateAdapter = getAdapter(profile.tool);
   await setupSharedLinks(updateAdapter, profile.configDir, primarySource, next, backupDir);
@@ -1480,37 +1546,40 @@ export async function updateProfileEnv(
   id: string,
   changes: { set?: Record<string, string>; unset?: string[]; replace?: boolean },
 ) {
-  const registry = await loadRegistry();
-  if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
-  const profile = registry.profiles[id];
-  const current = envMapOf(profile.env);
-  // Spread, a list or a string turns its content into index keys - `0` holding a whole entry,
-  // or one character per key - which is then a map: printed on every path, and no longer
-  // reported. `--edit` is the one change that can start from it, because it replaces it.
-  if (current === undefined && !changes.replace) {
-    const message = invalidEnvMapMessage(id);
-    throw new Error(`${message[0].toUpperCase()}${message.slice(1)}.`);
-  }
-  const env = changes.replace ? {} : { ...current };
+  // All of it under the registry lock: the change applies to the map as it is saved, so it is
+  // checked against that map too.
+  const saved = await updateRegistry((registry) => {
+    if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
+    const profile = registry.profiles[id];
+    const current = envMapOf(profile.env);
+    // Spread, a list or a string turns its content into index keys - `0` holding a whole entry,
+    // or one character per key - which is then a map: printed on every path, and no longer
+    // reported. `--edit` is the one change that can start from it, because it replaces it.
+    if (current === undefined && !changes.replace) {
+      const message = invalidEnvMapMessage(id);
+      throw new Error(`${message[0].toUpperCase()}${message.slice(1)}.`);
+    }
+    const env = changes.replace ? {} : { ...current };
 
-  for (const [key, value] of Object.entries(changes.set ?? {})) {
-    // The model's own words first, for a key given as the model.
-    checkModelEntry(key, value, "config");
-    const result = validateEnvEntry(key, value, profile.kind);
-    if (!result.ok) throw new Error(result.error);
-    env[key] = value;
-  }
-  for (const key of changes.unset ?? []) delete env[key];
-  // Checked against the map as it will be saved, so a rename in case within one call works.
-  for (const key of Object.keys(changes.set ?? {})) {
-    if (!Object.hasOwn(env, key)) continue;
-    const twin = envKeyCaseTwin(key, Object.keys(env), profile.kind);
-    if (twin !== undefined) throw new Error(envKeyCaseTwinError(key, twin));
-  }
+    for (const [key, value] of Object.entries(changes.set ?? {})) {
+      // The model's own words first, for a key given as the model.
+      checkModelEntry(key, value, "config");
+      const result = validateEnvEntry(key, value, profile.kind);
+      if (!result.ok) throw new Error(result.error);
+      env[key] = value;
+    }
+    for (const key of changes.unset ?? []) delete env[key];
+    // Checked against the map as it will be saved, so a rename in case within one call works.
+    for (const key of Object.keys(changes.set ?? {})) {
+      if (!Object.hasOwn(env, key)) continue;
+      const twin = envKeyCaseTwin(key, Object.keys(env), profile.kind);
+      if (twin !== undefined) throw new Error(envKeyCaseTwinError(key, twin));
+    }
 
-  registry.profiles[id] = { ...profile, env };
-  await saveRegistry(registry);
-  return registry.profiles[id];
+    registry.profiles[id] = { ...profile, env };
+    return registry;
+  });
+  return saved.profiles[id];
 }
 
 /**
@@ -1537,16 +1606,20 @@ export async function updateProfileSecret(
 ): Promise<{ deletedStoredKey: boolean }> {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
-  const profile = registry.profiles[id];
-  const api = requireEndpoint(id, profile);
+  requireEndpoint(id, registry.profiles[id]);
   const { source, toStore } = checkSecretSource(secret, value);
 
   // Ordered so the registry never names a credential that is not there: a new value is
   // stored before the registry points at it, and an old one is deleted only after the
-  // registry has stopped pointing at it.
+  // registry has stopped pointing at it. Both can wait on the credential store, so they stay
+  // outside the registry lock, and only the change of source is made under it.
   if (toStore !== null) await storeSecret(id, toStore);
-  registry.profiles[id] = { ...profile, api: { ...api, secret: source } };
-  await saveRegistry(registry);
+  await updateRegistry((current) => {
+    const profile = current?.profiles[id];
+    if (!current || !profile) throw new Error(`Profile '${id}' not found.`);
+    current.profiles[id] = { ...profile, api: { ...requireEndpoint(id, profile), secret: source } };
+    return current;
+  });
   if (toStore !== null) return { deletedStoredKey: false };
   // Leaving a stored value behind after switching to an env or command source would keep
   // a credential alive that nothing reads any more.
@@ -1603,49 +1676,55 @@ export async function updateProfileApi(
   id: string,
   changes: { baseUrl?: string; authScheme?: string; label?: string },
 ): Promise<ProfileApiUpdate> {
-  const registry = await loadRegistry();
-  if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
-  const profile = registry.profiles[id];
-  const api = requireEndpoint(id, profile);
+  let update: ProfileApiUpdate | undefined;
+  // All of it under the registry lock, so the change is worked out from the endpoint as it is
+  // saved rather than as it was read before.
+  await updateRegistry((registry) => {
+    if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
+    const profile = registry.profiles[id];
+    const api = requireEndpoint(id, profile);
 
-  const baseUrl = changes.baseUrl?.trim() ?? api.baseUrl;
-  const url = changes.baseUrl === undefined ? undefined : parseBaseUrl(baseUrl);
-  const chosenAuth = changes.authScheme === undefined ? undefined : checkAuthScheme(changes.authScheme);
-  const chosenLabel = changes.label === undefined ? undefined : checkLabel(changes.label);
+    const baseUrl = changes.baseUrl?.trim() ?? api.baseUrl;
+    const url = changes.baseUrl === undefined ? undefined : parseBaseUrl(baseUrl);
+    const chosenAuth = changes.authScheme === undefined ? undefined : checkAuthScheme(changes.authScheme);
+    const chosenLabel = changes.label === undefined ? undefined : checkLabel(changes.label);
 
-  const before = checkBaseUrl(api.baseUrl);
-  const previous = before.ok ? before.url : undefined;
-  const followLabel =
-    chosenLabel === undefined && url !== undefined && previous !== undefined && profile.label === previous.host;
-  const followAuth =
-    chosenAuth === undefined &&
-    url !== undefined &&
-    previous !== undefined &&
-    api.authScheme === defaultAuthScheme(previous.hostname) &&
-    defaultAuthScheme(url.hostname) !== api.authScheme;
-  const label = followLabel && url ? url.host : (chosenLabel ?? profile.label);
-  const authScheme = chosenAuth ?? (followAuth && url ? defaultAuthScheme(url.hostname) : api.authScheme);
-  const hostDefault = url ? defaultAuthScheme(url.hostname) : undefined;
-
-  registry.profiles[id] = { ...profile, label, api: { ...api, baseUrl, authScheme } };
-  await saveRegistry(registry);
-  return {
-    profile: registry.profiles[id],
-    previousHost: previous?.host,
-    host: url?.host ?? previous?.host,
-    followed: { label: followLabel, auth: followAuth },
-    // Only when the host changes: on the same host the scheme was already kept, and said.
-    hostDefaultAuth:
+    const before = checkBaseUrl(api.baseUrl);
+    const previous = before.ok ? before.url : undefined;
+    const followLabel =
+      chosenLabel === undefined && url !== undefined && previous !== undefined && profile.label === previous.host;
+    const followAuth =
       chosenAuth === undefined &&
-      hostDefault !== undefined &&
-      hostDefault !== authScheme &&
-      url?.host !== previous?.host
-        ? hostDefault
-        : undefined,
-    cleartext:
-      url !== undefined && sendsKeyInClear(url) && !(previous?.protocol === "http:" && previous.host === url.host),
-    sharedWith: keySharersElsewhere(id, api.secret, baseUrl, registry.profiles),
-  };
+      url !== undefined &&
+      previous !== undefined &&
+      api.authScheme === defaultAuthScheme(previous.hostname) &&
+      defaultAuthScheme(url.hostname) !== api.authScheme;
+    const label = followLabel && url ? url.host : (chosenLabel ?? profile.label);
+    const authScheme = chosenAuth ?? (followAuth && url ? defaultAuthScheme(url.hostname) : api.authScheme);
+    const hostDefault = url ? defaultAuthScheme(url.hostname) : undefined;
+
+    registry.profiles[id] = { ...profile, label, api: { ...api, baseUrl, authScheme } };
+    update = {
+      profile: registry.profiles[id],
+      previousHost: previous?.host,
+      host: url?.host ?? previous?.host,
+      followed: { label: followLabel, auth: followAuth },
+      // Only when the host changes: on the same host the scheme was already kept, and said.
+      hostDefaultAuth:
+        chosenAuth === undefined &&
+        hostDefault !== undefined &&
+        hostDefault !== authScheme &&
+        url?.host !== previous?.host
+          ? hostDefault
+          : undefined,
+      cleartext:
+        url !== undefined && sendsKeyInClear(url) && !(previous?.protocol === "http:" && previous.host === url.host),
+      sharedWith: keySharersElsewhere(id, api.secret, baseUrl, registry.profiles),
+    };
+    return registry;
+  });
+  // updateRegistry either ran the update above, which set it, or threw.
+  return update as ProfileApiUpdate;
 }
 
 async function cleanupProfile(
@@ -1866,6 +1945,60 @@ async function assertImportable(registry: Registry, tool: ToolName, configDir: s
   }
 }
 
+/** An add whose id was taken while it was setting up, most often by another add. */
+type ProfileTaken = {
+  /** What the add's first check would have said, had the id been taken then. */
+  refusal: Error;
+  /** A registered profile uses the add's config directory, which is then that profile's. */
+  dirRegistered: boolean;
+};
+
+/**
+ * Whether an add that found `id` free can still register it for `configDir`. An add checks
+ * before it starts, but it can be minutes of login later that it registers, and in that time
+ * another add can take the id - and even register this same directory with `--from`.
+ */
+function profileTaken(registry: Registry, id: string, configDir: string): ProfileTaken | undefined {
+  try {
+    assertProfileIdAvailable(registry, id);
+    return undefined;
+  } catch (refusal) {
+    const dir = path.resolve(configDir);
+    return {
+      refusal: refusal as Error,
+      dirRegistered: Object.values(registry.profiles).some(
+        (other) => typeof other?.configDir === "string" && path.resolve(other.configDir) === dir,
+      ),
+    };
+  }
+}
+
+/**
+ * Records a profile an add has finished setting up, and returns the registry as saved. The id
+ * is checked again, by the same rule as when the add began, against the registry as it is now.
+ * If it was taken in the meantime, nothing is written, and what comes back says why.
+ */
+async function registerProfile(
+  id: string,
+  profile: Profile,
+  primarySource: string,
+): Promise<{ saved: Registry } | { taken: ProfileTaken }> {
+  let taken: ProfileTaken | undefined;
+  const saved = await updateRegistry(async (current) => {
+    if (!current) throw await noRegistryError();
+    taken = profileTaken(current, id, profile.configDir);
+    if (taken) return null;
+
+    current.profiles[id] = profile;
+    if (!current.primarySources[profile.tool]) {
+      current.primarySources[profile.tool] = primarySource;
+    }
+    return current;
+  });
+  // The update writes nothing only when it found the id taken, and it said so above.
+  return saved ? { saved } : { taken: taken as ProfileTaken };
+}
+
 export async function addProfile(options: {
   tool: ToolName;
   name: string;
@@ -1914,17 +2047,23 @@ export async function addProfile(options: {
         `Failed to set up profile '${options.name}': ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    registry.profiles[id] = {
-      tool: options.tool,
-      configDir,
-      email: accountInfo.email,
-      orgName: accountInfo.orgName,
-      mergeSessions,
-    };
-    if (!registry.primarySources[options.tool]) {
-      registry.primarySources[options.tool] = primarySource;
+    const registration = await registerProfile(
+      id,
+      { tool: options.tool, configDir, email: accountInfo.email, orgName: accountInfo.orgName, mergeSessions },
+      primarySource,
+    );
+    if ("taken" in registration) {
+      // Another add took the id during the setup above. Undone the way a failed setup is -
+      // unless a registered profile now uses this directory, which then belongs to it.
+      if (!registration.taken.dirRegistered) {
+        await cleanupProfile(
+          options.name,
+          { tool: options.tool, configDir, email: "", isPrimary: false },
+          primarySource,
+        ).catch(() => {});
+      }
+      throw registration.taken.refusal;
     }
-    await saveRegistry(registry);
     if (options.tool === "claude") await seedSeenSessions(id, configDir);
     return { name: options.name, email: accountInfo.email, configDir, backupDir };
   }
@@ -1999,8 +2138,12 @@ export async function addProfile(options: {
   }
 
   await claimBackupDir(backupDir, id).catch(async (error) => {
-    await rm(configDir, { force: true, recursive: true });
-    throw error;
+    // Refused after the login most often because another add of this name finished during
+    // it. Then that is what is said, and the directory stays if that add registered it.
+    const now = await loadRegistry().catch(() => null);
+    const taken = now ? profileTaken(now, id, configDir) : undefined;
+    if (!taken?.dirRegistered) await rm(configDir, { force: true, recursive: true });
+    throw taken?.refusal ?? error;
   });
   // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
 
@@ -2021,17 +2164,23 @@ export async function addProfile(options: {
       `Failed to set up profile '${options.name}': ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  registry.profiles[id] = {
-    tool: options.tool,
-    configDir,
-    email: accountInfo.email,
-    orgName: accountInfo.orgName,
-    mergeSessions,
-  };
-  if (!registry.primarySources[options.tool]) {
-    registry.primarySources[options.tool] = primarySource;
+  const registration = await registerProfile(
+    id,
+    { tool: options.tool, configDir, email: accountInfo.email, orgName: accountInfo.orgName, mergeSessions },
+    primarySource,
+  );
+  if ("taken" in registration) {
+    // As with --from above, and the directory this add created goes too.
+    if (!registration.taken.dirRegistered) {
+      await cleanupProfile(
+        options.name,
+        { tool: options.tool, configDir, email: "", isPrimary: false },
+        primarySource,
+      ).catch(() => {});
+      await rm(configDir, { force: true, recursive: true }).catch(() => {});
+    }
+    throw registration.taken.refusal;
   }
-  await saveRegistry(registry);
   if (options.tool === "claude") await seedSeenSessions(id, configDir);
   return { name: options.name, email: accountInfo.email, configDir, credentialUnconfirmed };
 }
@@ -2233,6 +2382,8 @@ export async function addApiProfile(options: {
   const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);
   // The first side effect, so a backup directory that is already there changes nothing.
   await claimBackupDir(backupDir, id);
+  let taken: ProfileTaken | undefined;
+  let saved: Registry;
   try {
     await mkdir(configDir, { recursive: true });
     // Carry the primary's onboarding state across. An API profile has no login step, so an
@@ -2250,26 +2401,40 @@ export async function addApiProfile(options: {
     await setupPluginsDir(configDir, primarySource);
     if (toStore !== null) await storeSecret(id, toStore);
 
-    // Inside the try: a registry write that fails must not strand the credential above.
-    registry.profiles[id] = {
-      tool: options.tool,
-      kind: "api",
-      configDir,
-      email: "",
-      label,
-      mergeSessions,
-      api: { baseUrl, authScheme: options.authScheme, secret },
-      env,
-    };
-    if (!registry.primarySources[options.tool]) registry.primarySources[options.tool] = primarySource;
-    await saveRegistry(registry);
-  } catch (error) {
-    await cleanupProfile(
-      options.name,
-      { tool: options.tool, kind: "api", configDir, email: "", isPrimary: false },
+    // Inside the try: neither a registry write that fails nor an id another add took meanwhile
+    // may strand the credential above.
+    const registration = await registerProfile(
+      id,
+      {
+        tool: options.tool,
+        kind: "api",
+        configDir,
+        email: "",
+        label,
+        mergeSessions,
+        api: { baseUrl, authScheme: options.authScheme, secret },
+        env,
+      },
       primarySource,
-    ).catch(() => {});
-    await rm(configDir, { force: true, recursive: true }).catch(() => {});
+    );
+    if ("taken" in registration) {
+      taken = registration.taken;
+      throw taken.refusal;
+    }
+    saved = registration.saved;
+  } catch (error) {
+    // Unless the add that took the id registered this same directory: then the directory, and
+    // the key stored under the id, are that profile's.
+    if (!taken?.dirRegistered) {
+      await cleanupProfile(
+        options.name,
+        { tool: options.tool, kind: "api", configDir, email: "", isPrimary: false },
+        primarySource,
+      ).catch(() => {});
+      await rm(configDir, { force: true, recursive: true }).catch(() => {});
+    }
+    // A taken id is refused in the words of the check before the setup.
+    if (taken) throw taken.refusal;
     throw new Error(
       `Failed to set up profile '${options.name}': ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -2277,7 +2442,7 @@ export async function addApiProfile(options: {
   await seedSeenSessions(id, configDir);
   // The profiles this one now shares its key's variable or command with, on other endpoints:
   // the state doctor reports, which `add` is the first to see.
-  return { name: options.name, configDir, sharedWith: keySharersElsewhere(id, secret, baseUrl, registry.profiles) };
+  return { name: options.name, configDir, sharedWith: keySharersElsewhere(id, secret, baseUrl, saved.profiles) };
 }
 
 /**
@@ -2403,32 +2568,36 @@ export async function removeProfile(id: string) {
     ? `${id}: left ${backupDir.replace(home, "~")} in place because '${sharer}' keeps its backup there too. Nothing from it was restored into ${profile.configDir.replace(home, "~")}; copy back anything you need from it by hand.`
     : undefined;
 
-  // The profiles of this tool that remain, counting only entries clausona could have written:
-  // the next active profile is picked from these.
-  const remaining = Object.keys(registry.profiles).filter((key) => {
-    const other = registry.profiles[key];
-    return (
-      key !== id &&
-      key.startsWith(`${profile.tool}:`) &&
-      other?.tool === profile.tool &&
-      typeof other.configDir === "string" &&
-      path.isAbsolute(other.configDir)
-    );
-  });
-  const profiles = { ...registry.profiles };
-  delete profiles[id];
-  const activeProfiles = { ...registry.activeProfiles };
-  if (activeProfiles[profile.tool] === id) {
-    if (remaining.length > 0) activeProfiles[profile.tool] = remaining[0];
-    else delete activeProfiles[profile.tool];
-  }
-  const primarySources = { ...registry.primarySources };
-  if (remaining.length === 0) delete primarySources[profile.tool];
-  const next: Registry = { ...registry, profiles, activeProfiles, primarySources };
-
   await cleanupProfile(name, profile, primarySource, { keepBackup: sharer !== undefined });
   if (sharedWarning) warn(sharedWarning);
-  await saveRegistry(next);
+
+  await updateRegistry((current) => {
+    // Already removed by another process - nothing left to write.
+    if (!current?.profiles[id]) return null;
+
+    // The profiles of this tool that remain, counting only entries clausona could have written:
+    // the next active profile is picked from these.
+    const remaining = Object.keys(current.profiles).filter((key) => {
+      const other = current.profiles[key];
+      return (
+        key !== id &&
+        key.startsWith(`${profile.tool}:`) &&
+        other?.tool === profile.tool &&
+        typeof other.configDir === "string" &&
+        path.isAbsolute(other.configDir)
+      );
+    });
+    const profiles = { ...current.profiles };
+    delete profiles[id];
+    const activeProfiles = { ...current.activeProfiles };
+    if (activeProfiles[profile.tool] === id) {
+      if (remaining.length > 0) activeProfiles[profile.tool] = remaining[0];
+      else delete activeProfiles[profile.tool];
+    }
+    const primarySources = { ...current.primarySources };
+    if (remaining.length === 0) delete primarySources[profile.tool];
+    return { ...current, profiles, activeProfiles, primarySources };
+  });
 }
 
 /**
