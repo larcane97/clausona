@@ -42,6 +42,14 @@ vi.mock("../lib/service", () => ({
   addApiProfile: vi.fn(async () => ({ name: "gateway", configDir: "/Users/test/.claude-gateway" })),
 }));
 
+/**
+ * These tests drive the whole App a keystroke at a time, and every step already fails on its own
+ * at three seconds (`press`, `waitForFrame`) - so a hang still fails at the step that hung. What
+ * five seconds per test did not survive was a machine at a load average of 55, where forty slow
+ * but correct steps add up.
+ */
+vi.setConfig({ testTimeout: 15_000 });
+
 import { App } from "./App.js";
 import { NO_RAW_KEY_INPUT } from "./api-form.js";
 import { ENTER, type Instance, moveTo, press, renderAt, type, waitForFrame } from "./test-drive.js";

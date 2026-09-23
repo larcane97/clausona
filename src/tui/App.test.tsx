@@ -48,6 +48,15 @@ vi.mock("../lib/service", () => ({
 }));
 
 import { BRACKETED_PASTE_OFF, BRACKETED_PASTE_ON } from "../lib/prompt-secret.js";
+
+/**
+ * These tests drive the whole App a keystroke at a time, and every step already fails on its own
+ * at three seconds (`press`, `waitForFrame`) - so a hang still fails at the step that hung. What
+ * five seconds per test did not survive was a machine at a load average of 55, where forty slow
+ * but correct steps add up.
+ */
+vi.setConfig({ testTimeout: 15_000 });
+
 import { ADD_METHODS, App } from "./App.js";
 import {
   KEY_REQUIRED,
