@@ -1060,6 +1060,22 @@ describe("App add-profile: API endpoint", () => {
       expect(await submit(instance)).toBeUndefined();
       instance.unmount();
     });
+
+    it("leaves a key already in the field alone when the tail of a dropped paste arrives there", async () => {
+      // A paste that began in the read that brought the cursor here is dropped whole, end
+      // marker included, before the reader hears any of it. Were its tail read as a paste that
+      // lost its start, the field would be cleared - and with it a key that was already right.
+      const instance = await filledTo("API key");
+      await press(instance, KEY);
+      await moveTo(instance, "Auth");
+
+      await type(instance, `${DOWN}\u001b[200~https://other.`);
+      await type(instance, "example.com/v1\u001b[201~");
+
+      expect(instance.lastFrame()).not.toContain(LOST_PASTE_START);
+      expect((await submit(instance))?.secretValue).toBe(KEY);
+      instance.unmount();
+    });
   });
 
   /**
