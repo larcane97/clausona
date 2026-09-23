@@ -154,6 +154,11 @@ export type ApiFormState = {
   customValue: string;
   /** Index into `apiFormFields`. */
   cursor: number;
+  /**
+   * Where the text cursor is inside a field: the field it was last moved or typed in, and the
+   * offset. Every other field has it at the end of its value - see `caretIn`.
+   */
+  caret?: { field: string; at: number };
   /** Field id -> what is wrong with it, shown under that field. */
   errors: Record<string, string>;
 };
@@ -183,7 +188,7 @@ export type ApiField = {
   entry?: EnvCatalogEntry;
 };
 
-/** A field whose keystrokes belong to a TextInput, so no bare letter is a shortcut there. */
+/** A field whose keystrokes belong to a text input, so no bare letter is a shortcut there. */
 export function isTypingField(field: ApiField | undefined): boolean {
   return field?.kind === "text" || field?.kind === "secret" || field?.kind === "env";
 }
@@ -485,6 +490,16 @@ export function fieldValue(field: ApiField, form: ApiFormState): string {
   if (field.id === "customKey") return form.customKey;
   if (field.id === "customValue") return form.customValue;
   return "";
+}
+
+/**
+ * Where the text cursor is in a field: where it was left, if that was in this field, and at the
+ * end of the value otherwise - where a text input puts it when it is first drawn. Clamped, as a
+ * value can shrink under it (a masked value is cleared on the first erase).
+ */
+export function caretIn(field: ApiField, form: ApiFormState): number {
+  const length = fieldValue(field, form).length;
+  return form.caret?.field === field.id ? Math.max(0, Math.min(form.caret.at, length)) : length;
 }
 
 /** The variable a field's value would be stored under, when it writes the env map at all. */

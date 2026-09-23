@@ -1657,6 +1657,33 @@ describe("App add-profile: API endpoint", () => {
       instance.unmount();
     });
 
+    it("puts a paste where the cursor was moved to inside the field, and goes on typing after it", async () => {
+      // #20: the cursor was the text input's own, out of the listener's sight, so a paste went
+      // in at the end whatever the arrows had done.
+      const LEFT = "\u001b[D";
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const instance = await openApiForm();
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+
+      await press(instance, "https://gateway.com");
+      for (let step = 0; step < 4; step++) await type(instance, LEFT);
+      await type(instance, PASTE(".exampl"));
+      await type(instance, "e");
+
+      expect(row(instance, "Endpoint")).toContain("https://gateway.example.com");
+      await moveTo(instance, "API key");
+      await type(instance, PASTE(KEY));
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added claude:gateway"));
+      expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(
+        expect.objectContaining({ baseUrl: "https://gateway.example.com" }),
+      );
+      instance.unmount();
+    });
+
     it("holds the cursor on the field while its paste is open, and says how to get out", async () => {
       // A newline ink hands over alone inside the paste is pasted text, as on the key field.
       const instance = await openApiForm();

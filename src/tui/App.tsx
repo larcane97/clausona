@@ -52,6 +52,7 @@ import {
   apiFormEnv,
   apiFormFields,
   apiFormHost,
+  caretIn,
   concealsValue,
   customEntryError,
   emptyApiForm,
@@ -228,7 +229,7 @@ function offersRelogin(profile: ProfileListItem | undefined): boolean {
   return profile !== undefined && !profile.isPrimary && profile.kind !== "api";
 }
 
-/** The key field's id: the one field whose input comes from the reader rather than a TextInput. */
+/** The key field's id: the one field whose input comes from the reader rather than a text input. */
 const KEY_FIELD = "key";
 
 /**
@@ -376,7 +377,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    * arrow and a paste arriving together sent the paste to the field being left: a key drawn
    * in the Endpoint row, then stored as part of the base URL.
    *
-   * Every edit path asks this first - the key's reader, every TextInput in the form, the
+   * Every edit path asks this first - the key's reader, every text input in the form, the
    * form's own keys - and an edit for any other field is dropped. Dropped, not re-routed:
    * typeahead that went nowhere is an empty field the user can see, and typeahead sent to the
    * field it was not meant for is a corrupted key, or a key on screen. A handler that moves
@@ -398,13 +399,13 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   const droppingPaste = useRef(false);
   /**
    * A bracketed paste into one of the form's text fields, read by the form's listener instead of
-   * the field's TextInput, and put into the field whole when its closing bracket arrives.
+   * the field's text input, and put into the field whole when its closing bracket arrives.
    *
-   * The TextInput hears a paste as three events of one read - the opening bracket, the text, the
+   * The text input hears a paste as three events of one read - the opening bracket, the text, the
    * closing bracket - and answers each from the value it was last drawn with, so the last one
    * won and the field read `[201~`. The listener reads it with the key field's reader, where
    * brackets are measured and a read split anywhere is joined. Until the rest of the read after
-   * the closing bracket, the TextInput's own edits are the paste's and are ignored.
+   * the closing bracket, the text input's own edits are the paste's and are ignored.
    */
   const fieldPaste = useRef<{ field: string; input: SecretInputState; text: string; closed: boolean } | undefined>(
     undefined,
@@ -577,7 +578,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
 
   /**
    * Ends a text field's paste: its text goes in (unless it was given up), and the paste still
-   * owns the rest of this read, where the TextInput hears the same closing bracket.
+   * owns the rest of this read, where the text input hears the same closing bracket.
    */
   function closeFieldPaste(paste: NonNullable<typeof fieldPaste.current>, keep: boolean) {
     paste.closed = true;
@@ -632,7 +633,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    * It keeps `droppingPaste` too, which needs every input event while the form is open,
    * whichever field has the cursor, since a dropped paste's tail can reach any of them - and
    * the read that opens the form, whose Enter is heard on the method step. The end is taken
-   * after the rest of the read, so the handlers still to hear the closing bracket - a TextInput
+   * after the rest of the read, so the handlers still to hear the closing bracket - a text input
    * would type it as `[201~` - hear it as part of what is dropped.
    *
    * `useInput`'s handler hears an event before this listener - it is subscribed for the App's
@@ -838,19 +839,27 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     fieldAtCursor.current = cursorField;
   });
 
-  function editApiField(field: ApiField, edited: string) {
-    // A TextInput of a field the cursor has left is still subscribed until the next render,
+  function editApiField(field: ApiField, edited: string, caret: number) {
+    // A text input of a field the cursor has left is still subscribed until the next render,
     // and hears the rest of the read that moved the cursor. See `inputTarget`, and
     // `droppingPaste` for the rest of a paste that read began.
     if (inputTarget.current !== field.id || droppingPaste.current || fieldPaste.current) return;
-    updateApiForm((form) => withApiFieldEdit(form, field, edited));
+    updateApiForm((form) => {
+      const moved: ApiFormState = { ...form, caret: { field: field.id, at: caret } };
+      // An arrow moves the text cursor and changes nothing else: the field is not re-judged.
+      return edited === fieldValue(field, form) ? moved : withApiFieldEdit(moved, field, edited);
+    });
   }
 
-  /** A text field's paste, put in whole after what the field holds: see `fieldPaste`. */
+  /** A text field's paste, put in whole at the field's text cursor, which ends up after it: see `fieldPaste`. */
   const pasteIntoApiField = useCommittedHandler((fieldId: string, text: string) => {
     updateApiForm((form) => {
       const field = apiFormFields(form).find((candidate) => candidate.id === fieldId);
-      return field ? withApiFieldEdit(form, field, fieldValue(field, form) + text) : form;
+      if (!field) return form;
+      const value = fieldValue(field, form);
+      const at = caretIn(field, form);
+      const moved: ApiFormState = { ...form, caret: { field: fieldId, at: at + text.length } };
+      return withApiFieldEdit(moved, field, value.slice(0, at) + text + value.slice(at));
     });
   });
 
@@ -1355,7 +1364,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             return;
           }
           // ctrl-u, the way out that message names, gives up a text field's paste: nothing of it
-          // goes in, and neither does the `u` the TextInput would type for it.
+          // goes in, and neither does the `u` the text input would type for it.
           const textPaste = fieldPaste.current;
           if (textPaste && !textPaste.closed && key.ctrl && input === "u") {
             closeFieldPaste(textPaste, false);
