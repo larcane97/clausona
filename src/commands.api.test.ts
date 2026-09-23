@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Profile, SecretSource } from "./types.js";
+import { stripAnsi } from "./lib/cli-style.js";
+import type { DoctorProfileResult, Profile, SecretSource } from "./types.js";
 
 /**
  * The CLI surface for API profiles: `add --api`, and `config` for a profile's advanced
@@ -32,8 +33,10 @@ let spawned: string[] = [];
 let promptAnswers: string[] = [];
 let promptCalls: string[] = [];
 let editor: ((argv: string[]) => SpawnSyncReturns<string>) | null = null;
+const realPlatform = process.platform;
 
 afterEach(() => {
+  Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.doUnmock("./core/process.js");
@@ -167,6 +170,20 @@ async function failure(promise: Promise<unknown>): Promise<string> {
     return error instanceof Error ? error.message : String(error);
   }
   throw new Error("expected the command to be rejected");
+}
+
+/**
+ * Every `clausona …` command a piece of advice names, as argv for `runCommand`, in the
+ * order it names them. Advice is tested by running what it says rather than by matching
+ * its words: a warning that names a command which refuses the profile it is about reads
+ * perfectly well.
+ */
+function advisedCommands(text: string): string[][] {
+  const commands: string[][] = [];
+  for (const match of stripAnsi(text).matchAll(/clausona ([^`'()\n]+)/g)) {
+    commands.push(match[1].trim().split(/\s+/));
+  }
+  return commands;
 }
 
 describe("add --api", () => {
@@ -708,6 +725,110 @@ describe("config --key", () => {
 
     expect(message).toBe("Profile 'claude:default' is not an API profile.");
     expect(promptCalls).toEqual([]);
+  });
+});
+
+/**
+ * The warning written when a credential name lands in a profile's env map. It is advice,
+ * so it is only right if following it works - and what works depends on the profile's
+ * kind: `--key` stores a key for an API profile and refuses a subscription one. One case
+ * per kind and per command that writes the map, each running every command the warning
+ * names and then checking the credential is no longer in plain text.
+ */
+describe("the plain-text credential warning", () => {
+  const SUBSCRIPTION = { tool: "claude", email: "work@example.com" };
+  const PLAINTEXT = "sk-fake-plain-0004";
+
+  /** Writes `{ [key]: PLAINTEXT }` into the map through one of the three routes that warn. */
+  const routes: Record<string, (h: Awaited<ReturnType<typeof harness>>, id: string, key: string) => Promise<unknown>> =
+    {
+      "config --set": (h, id, key) => h.run("config", id, "--set", `${key}=${PLAINTEXT}`),
+      "config --edit": (h, id, key) => {
+        vi.stubEnv("EDITOR", "fake-editor");
+        editor = (argv) => {
+          writeFileSync(argv[argv.length - 1], JSON.stringify({ [key]: PLAINTEXT }));
+          return { status: 0 } as SpawnSyncReturns<string>;
+        };
+        return h.run("config", id, "--edit");
+      },
+      "add --api --set": (h, id, key) => {
+        promptAnswers.push(KEY);
+        return h.run("add", id, "--api", "--base-url", "http://localhost:8000", "--set", `${key}=${PLAINTEXT}`);
+      },
+    };
+
+  async function followAdvice(h: Awaited<ReturnType<typeof harness>>) {
+    const commands = advisedCommands(h.stderr());
+    expect(commands.length, h.stderr()).toBeGreaterThan(0);
+    const outputs: string[] = [];
+    for (const argv of commands) {
+      editor = null;
+      outputs.push(String(await h.run(argv[0], ...argv.slice(1))));
+    }
+    return outputs;
+  }
+
+  for (const route of ["config --set", "config --edit", "add --api --set"]) {
+    it(`gives an API profile advice that moves the key, via ${route}`, async () => {
+      const h = await harness(route.startsWith("add") ? {} : { "claude:gw": API_PROFILE });
+      await routes[route](h, "claude:gw", "ANTHROPIC_AUTH_TOKEN");
+      expect(h.registryText()).toContain(PLAINTEXT);
+
+      promptAnswers.push(PLAINTEXT);
+      await followAdvice(h);
+
+      // Moved, not copied: the env map is applied after the stored key, so a copy left
+      // there would still be what Claude Code is handed - and still in plain text.
+      expect(h.registryText()).not.toContain(PLAINTEXT);
+      expect(h.storedSecrets()["claude:gw"]).toBe(PLAINTEXT);
+    });
+  }
+
+  for (const route of ["config --set", "config --edit"]) {
+    it(`gives a subscription profile advice it can follow, via ${route}`, async () => {
+      const h = await harness({ "claude:work": SUBSCRIPTION });
+      await routes[route](h, "claude:work", "ANTHROPIC_API_KEY");
+      expect(h.registryText()).toContain(PLAINTEXT);
+
+      const outputs = await followAdvice(h);
+
+      expect(h.registryText()).not.toContain(PLAINTEXT);
+      // Nothing asked for a key: a subscription profile has nowhere to store one.
+      expect(promptCalls).toEqual([]);
+      // The way to what they may have meant, an API profile, is a command that runs too.
+      expect(outputs.some((output) => output.includes("--api --base-url"))).toBe(true);
+    });
+  }
+
+  // doctor keeps reporting the same condition after the fact, so its advice has to clear
+  // it too - and doctor looks again, so here "it worked" is doctor saying so.
+  it("gives doctor's finding advice that clears it", async () => {
+    // Linux, so doctor reads the primary's login from a file rather than spawning `security`.
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const h = await harness({ "claude:gw": { ...API_PROFILE, env: { ANTHROPIC_AUTH_TOKEN: PLAINTEXT } } });
+    const findings = async () =>
+      (JSON.parse(String(await h.run("doctor", "--json"))) as DoctorProfileResult[])
+        .flatMap((result) => result.issues)
+        .filter((issue) => issue.kind === "plaintext_env_secret");
+
+    const [finding] = await findings();
+    const commands = advisedCommands(finding.message);
+    expect(commands.length, finding.message).toBeGreaterThan(0);
+    promptAnswers.push(PLAINTEXT);
+    for (const argv of commands) await h.run(argv[0], ...argv.slice(1));
+
+    expect(await findings()).toEqual([]);
+    expect(h.registryText()).not.toContain(PLAINTEXT);
+  });
+
+  it("never prints the value it warns about, for either kind", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE, "claude:work": SUBSCRIPTION });
+
+    await h.run("config", "claude:gw", "--set", `ANTHROPIC_AUTH_TOKEN=${PLAINTEXT}`);
+    await h.run("config", "claude:work", "--set", `ANTHROPIC_API_KEY=${PLAINTEXT}`);
+
+    expect(h.stderr()).not.toContain(PLAINTEXT);
+    expect(h.stderr()).not.toContain(PLAINTEXT.slice(0, 10));
   });
 });
 

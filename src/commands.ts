@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { isAnthropicHost } from "./core/api-url.js";
+import { plaintextEnvRemedy } from "./core/doctor.js";
 import { spawnCommandSync } from "./core/process.js";
 import { isPosixEnvName, renderPosixExports } from "./core/shell.js";
 import { trackUsage } from "./core/track-usage.js";
@@ -207,16 +208,27 @@ function parseSecretSource(input: string): SecretSource {
  * are the ones whose value is a credential, and a key pasted into one is a key in a file
  * that nothing treats as a secret. Warn, never block: a legitimate non-secret header
  * override goes through the same map.
+ *
+ * The commands come from `plaintextEnvRemedy`, which doctor's finding uses too, and they
+ * differ by kind because `--key` only works on an API profile. A subscription profile is
+ * also pointed at `add --help`: a key in its map most likely means an API profile was
+ * wanted, and that is where to find out how to make one.
  */
 const CREDENTIAL_ENV_KEY_SET = new Set<string>(CREDENTIAL_ENV_KEYS);
 
-function warnPlaintextEnv(id: string, keys: string[]) {
+function warnPlaintextEnv(id: string, kind: Profile["kind"], keys: string[]) {
   for (const key of keys) {
     if (!CREDENTIAL_ENV_KEY_SET.has(key)) continue;
-    process.stderr.write(
-      `  ${warnIcon} ${key} is stored in plain text in ~/.clausona/profiles.json.\n` +
-        `    If it carries this profile's API key, put the key in the credential store instead: clausona config ${id} --key\n`,
-    );
+    const commands = plaintextEnvRemedy(id, kind, key).map((command) => `      ${accent(command)}\n`);
+    const advice =
+      kind === "api"
+        ? "    If it carries this profile's API key, move the key to the credential store and remove this copy:\n" +
+          commands.join("")
+        : "    A subscription profile signs in with its account, so if it carries an API key it does not belong here:\n" +
+          commands.join("") +
+          "    To use an API key instead, give it an API profile of its own:\n" +
+          `      ${accent("clausona add --help")}\n`;
+    process.stderr.write(`  ${warnIcon} ${key} is stored in plain text in ~/.clausona/profiles.json.\n${advice}`);
   }
 }
 
@@ -340,7 +352,8 @@ function parseEditedEnv(raw: string): Record<string, string> {
  * open, which reaches clausona too (the editor shares its process group) and would
  * otherwise kill it before any `finally` ran.
  */
-async function editProfileEnv(id: string, current: Record<string, string>): Promise<string> {
+async function editProfileEnv(id: string, profile: Profile): Promise<string> {
+  const current = profile.env ?? {};
   // A blank $VISUAL is as good as an unset one; `??` would take "" and stop there.
   const editor = [process.env.VISUAL, process.env.EDITOR].find((value) => (value ?? "").trim() !== "");
   const [command, ...editorArgs] = splitCommandLine(editor ?? "");
@@ -378,7 +391,7 @@ async function editProfileEnv(id: string, current: Record<string, string>): Prom
     const edited = parseEditedEnv(await readFile(scratchPath, "utf8"));
     const removed = Object.keys(current).filter((key) => !(key in edited));
     await updateProfileEnv(id, { set: edited, unset: removed });
-    warnPlaintextEnv(id, Object.keys(edited));
+    warnPlaintextEnv(id, profile.kind, Object.keys(edited));
     return success(`Updated ${bold(id)} ${dim(`(${Object.keys(edited).length} setting(s))`)}`);
   } finally {
     detachSignals();
@@ -549,7 +562,8 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("  reach the profile's endpoint, whatever auth scheme the profile uses.")}`,
         `    ${dim("  A settings.json that cannot be read is reported rather than skipped;")}`,
         `    ${dim("- a credential name in the profile's env map, which profiles.json holds")}`,
-        `    ${dim("  in plain text. Move it with `clausona config <profile> --key`.")}`,
+        `    ${dim("  in plain text. Move it with `clausona config <profile> --key`, then")}`,
+        `    ${dim("  drop the copy with `clausona config <profile> --unset <NAME>`.")}`,
         "",
         `    ${dim("The last two are warnings. They describe a key that could reach the")}`,
         `    ${dim("endpoint, not a profile that is broken, so the profile stays healthy.")}`,
@@ -925,7 +939,7 @@ export async function runCommand(command: string, args: string[]) {
         }
         // updateProfileEnv validates every entry through validateEnvEntry before it saves.
         await updateProfileEnv(ref.id, { set, unset: unsetKeys });
-        warnPlaintextEnv(ref.id, Object.keys(set));
+        warnPlaintextEnv(ref.id, profile.kind, Object.keys(set));
         const changed = [...Object.keys(set), ...unsetKeys].join(", ");
         return success(`Updated ${bold(ref.id)} ${dim(`(${changed})`)}`);
       }
@@ -941,7 +955,7 @@ export async function runCommand(command: string, args: string[]) {
         return success(`Updated the credential for ${bold(ref.id)}`);
       }
 
-      if (openEditor) return await editProfileEnv(ref.id, profile.env ?? {});
+      if (openEditor) return await editProfileEnv(ref.id, profile);
 
       if (mergeSessions && separateSessions) {
         throw new Error("Pass --merge-sessions or --separate-sessions, not both.");
@@ -1063,7 +1077,7 @@ export async function runCommand(command: string, args: string[]) {
           mergeSessions: mergeSessions || undefined,
         });
         const id = profileId(tool, result.name);
-        warnPlaintextEnv(id, Object.keys(env));
+        warnPlaintextEnv(id, "api", Object.keys(env));
         return success(`Added ${bold(id)} ${dim(`(${url.host})`)}\n  ${dim(`Config: ${result.configDir}`)}`);
       }
 

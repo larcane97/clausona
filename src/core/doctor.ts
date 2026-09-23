@@ -234,12 +234,35 @@ export function evaluateApiHealth({
     if (!credentialEnvKeys.includes(key)) continue;
     // Also a warning: the env map is a documented, supported place to put a value, and a
     // profile that keeps a key there runs exactly as intended.
+    const remedy = plaintextEnvRemedy(id, profile.kind, key)
+      .map((command) => `'${command}'`)
+      .join(" and then ");
     issues.push({
       kind: "plaintext_env_secret",
       severity: "warning",
-      message: `${key} is stored in plain text in ${REGISTRY_FILE} - if it holds this profile's API key, run 'clausona config ${id} --key' instead`,
+      message: `${key} is stored in plain text in ${REGISTRY_FILE} - if it holds this profile's API key, run ${remedy}`,
     });
   }
 
   return issues;
+}
+
+/**
+ * The commands that take a credential out of a profile's plain-text env map, in the order
+ * to run them. Shared by `doctor` and by the warning `config` and `add` print when the name
+ * is written, so the two cannot advise different things for the same finding.
+ *
+ * Different per kind, because the commands that work are:
+ *
+ * - An API profile has a credential store, so the key moves there with `--key`. That alone
+ *   is not enough: the env map is applied after the stored key, so a copy left in it is
+ *   still what Claude Code is handed - and still in plain text. Hence the `--unset` too.
+ * - A subscription profile signs in with its account and has no store to move a key into;
+ *   `--key` refuses it. A key there is a mistake or a sign an API profile was wanted, and
+ *   either way the copy in the map goes. The second reading is the caller's to point at,
+ *   since it is not a step in removing this one.
+ */
+export function plaintextEnvRemedy(id: string, kind: Profile["kind"], key: string): string[] {
+  const unset = `clausona config ${id} --unset ${key}`;
+  return kind === "api" ? [`clausona config ${id} --key`, unset] : [unset];
 }
