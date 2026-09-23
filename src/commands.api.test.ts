@@ -529,6 +529,24 @@ describe("add --api", () => {
       expect(existsSync(path.join(h.home, ".claude-.hidden"))).toBe(false);
     });
 
+    // The key prompt used to come first, so the refusal cost the user a typed key.
+    it.each([
+      ["a profile that already has the name", "Profile 'claude:gw' already exists."],
+      [
+        "a config directory already at its path",
+        `${path.join("~", ".claude-other")} already exists. Choose another profile name.`,
+      ],
+    ])("refuses a name taken by %s before asking for a key", async (_case, expected) => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+      mkdirSync(path.join(h.home, ".claude-other"));
+      const name = expected.startsWith("Profile") ? "claude:gw" : "claude:other";
+
+      const message = await failure(h.run("add", name, "--api", "--base-url", "http://localhost:8000"));
+
+      expect(message).toBe(expected);
+      expect(promptCalls).toEqual([]);
+    });
+
     it("says nothing about the key when there is none", async () => {
       const h = await harness();
       promptAnswers.push("");

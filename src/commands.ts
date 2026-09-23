@@ -45,6 +45,7 @@ import {
   defaultAuthScheme,
   discoverAccounts,
   doctorProfiles,
+  freeApiConfigDir,
   getUsageSummary,
   initializeRegistry,
   listProfiles,
@@ -1345,6 +1346,8 @@ export async function runCommand(command: string, args: string[]) {
         // a name it is going to refuse should not cost the user a typed key first.
         const nameCheck = validateProfileName(name);
         if (!nameCheck.ok) throw new Error(nameCheck.error);
+        // And that the name is free - no profile has it, and no directory is at its path.
+        await freeApiConfigDir(registry, tool, name);
 
         const secret = parseSecretSource(optionValue(args, "--key-from") ?? "keychain");
         const secretValue = secret.source === "keychain" ? await promptSecret("API key: ") : undefined;
