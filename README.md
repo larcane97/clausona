@@ -59,6 +59,12 @@ Windows PowerShell:
 irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex
 ```
 
+**After upgrading, open a new shell** — or re-run the hook in each shell that is already open:
+`eval "$(clausona shell-init)"` on zsh/bash, `Invoke-Expression (& clausona shell-init | Out-String)`
+on PowerShell. A shell keeps the hook it loaded when it started, and an older hook can apply less
+than the version you just installed: one from before API profiles sets only the config directory,
+with no endpoint and no key.
+
 ## Quick Start
 
 ```bash
@@ -589,7 +595,7 @@ profile's key is stored by clausona, the report ends by saying where: the macOS 
 | `clausona init`                                                     | Discover and register Claude Code and Codex accounts |
 | `clausona add <profile> [--from <path>] [--merge-sessions]`         | Add a profile manually                               |
 | `clausona add <profile> --api --base-url <url> [...]`               | Add an [API profile](#api-profiles)                  |
-| `clausona remove <profile>`                                         | Remove a profile                                     |
+| `clausona remove <profile>`                                         | Remove a profile. Its config directory and history stay, so delete that directory before adding the name again |
 | `clausona use [profile]`                                            | Switch active profile                                |
 | `clausona run <profile> [-- args...]`                               | Run the tool's CLI with a specific profile (a leading `--` is dropped) |
 | `clausona list [--json] [--refresh] [--no-quota] [--no-renew]`      | List all profiles with plan quota and usage          |

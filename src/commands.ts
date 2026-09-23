@@ -827,6 +827,11 @@ function subcommandHelpText(command: string): string | undefined {
         `  ${bold("ARGUMENTS")}`,
         `    ${accent("profile".padEnd(12))}${dim("Profile to remove")}`,
         "",
+        `  ${bold("NOTES")}`,
+        `    ${dim("The profile's config directory (such as ~/.claude-<name>) and its history stay,")}`,
+        `    ${dim("so the name stays taken: delete that directory before adding the name again.")}`,
+        `    ${dim("A key clausona stored for an API profile is deleted.")}`,
+        "",
       ].join("\n");
 
     case "run":
