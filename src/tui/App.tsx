@@ -452,8 +452,14 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             void (async () => {
               try {
                 setOverlay(null);
-                await suspendTuiAndRun(() => loginProfile(overlay.profileName));
-                setMessage(`${symbol.check} Re-login completed for ${overlay.profileName}`);
+                const { profile, signedInAs, accountMismatch } = await suspendTuiAndRun(() =>
+                  loginProfile(overlay.profileName),
+                );
+                setMessage(
+                  accountMismatch
+                    ? `${symbol.diamond} Signed in as ${signedInAs}, but ${overlay.profileName} is registered as ${profile.email}`
+                    : `${symbol.check} Re-login completed for ${overlay.profileName}`,
+                );
                 await refreshDashboard();
               } catch (error) {
                 setMessage(`${symbol.cross} ${error instanceof Error ? error.message : String(error)}`);

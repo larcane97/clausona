@@ -35,6 +35,7 @@ vi.mock("../lib/service", () => ({
     },
   ]),
   fetchProfileQuotas: vi.fn(async () => ({})),
+  loginProfile: vi.fn(),
   initializeRegistry: vi.fn(async () => ({})),
   setActiveProfileByName: vi.fn(async () => ({})),
 }));
@@ -85,5 +86,42 @@ describe("App", () => {
     expect(frame).toContain("codex:default");
     expect(frame).not.toMatch(/claude:claude:/);
     expect(frame).not.toMatch(/codex:codex:/);
+  });
+
+  it("names the account a re-login landed on when it is not the registered one", async () => {
+    const { listProfiles, loginProfile } = await import("../lib/service.js");
+    const work = {
+      name: "claude:work",
+      tool: "claude" as const,
+      email: "work@example.com",
+      configDir: "/h/.claude-work",
+      isPrimary: false,
+      isActive: true,
+      today: { cost: 0, inputTokens: 0, outputTokens: 0 },
+      week: { cost: 0, inputTokens: 0, outputTokens: 0 },
+      month: { cost: 0, inputTokens: 0, outputTokens: 0 },
+      total: { cost: 0, inputTokens: 0, outputTokens: 0 },
+    };
+    // Once for the initial load, once for the refresh after signing in.
+    vi.mocked(listProfiles).mockResolvedValueOnce([work]).mockResolvedValueOnce([work]);
+    vi.mocked(loginProfile).mockResolvedValueOnce({
+      profile: { tool: "claude", configDir: work.configDir, email: work.email },
+      signedInAs: "other@example.com",
+      accountMismatch: true,
+    });
+
+    // Signing in hands the terminal over by clearing the real stdout; keep that out of the test output.
+    const clear = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const { lastFrame, stdin } = render(<App initialScreen="use" />);
+    await new Promise((r) => setTimeout(r, 100));
+    stdin.write("l");
+    await new Promise((r) => setTimeout(r, 50));
+    stdin.write("y");
+    await new Promise((r) => setTimeout(r, 300));
+    clear.mockRestore();
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("other@example.com");
+    expect(frame).not.toContain("Re-login completed");
   });
 });

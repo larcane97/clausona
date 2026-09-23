@@ -1337,13 +1337,28 @@ export async function addProfile(options: {
   return { name: options.name, email: accountInfo.email, configDir };
 }
 
-export async function loginProfile(id: string) {
+export type LoginResult = {
+  profile: Profile;
+  /** Account the sign-in landed on, read back from the store clausona uses; null if unreadable. */
+  signedInAs: string | null;
+  /** True when that account is not the one the profile was registered with. */
+  accountMismatch: boolean;
+};
+
+export async function loginProfile(id: string): Promise<LoginResult> {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
   const profile = registry.profiles[id];
-  const loggedIn = await getAdapter(profile.tool).runLogin(profile.configDir);
+  const adapter = getAdapter(profile.tool);
+  const loggedIn = await adapter.runLogin(profile.configDir);
   if (!loggedIn) throw new Error(`${profile.tool} login failed.`);
-  return profile;
+
+  // Which account signs in is decided by the browser session, not by this profile, so
+  // a successful login is not proof that the registered account is the one now stored.
+  const account = await adapter.readAccountInfo(profile.configDir);
+  const signedInAs = account?.email ?? null;
+  const accountMismatch = signedInAs !== null && signedInAs.toLowerCase() !== profile.email.toLowerCase();
+  return { profile, signedInAs, accountMismatch };
 }
 
 export async function removeProfile(id: string) {
