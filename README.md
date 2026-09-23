@@ -28,6 +28,7 @@ No re-login. No reinstalling plugins. Just switch and go.
 
 - **One-command switching** — `clausona use <name>` and you're on a different account
 - **Shared environment** — MCP servers, plugins, permissions, settings (Claude) and config.toml, skills, hooks (Codex) are symlinked across profiles within each tool. Set up once, use everywhere.
+- **API profiles** — a profile can point at an API endpoint instead of a subscription login: the Anthropic API, a gateway, or a model you serve yourself
 - **Pure CLI passthrough** — no wrapping, no proxying, no background process. `claude` and `codex` run directly and unmodified. Compatible with oh-my-claudecode, Cline, codex plugins, and any other tool in your stack.
 - **Lightweight** — a single shell hook and a few symlinks. No daemon, no server, no runtime overhead.
 - **Plan quota at a glance** — session and weekly limit usage for every account, read live from each tool's own usage endpoint (Claude and Codex)
@@ -68,6 +69,8 @@ clausona add codex:work   # add a codex profile
 clausona use codex:personal  # switch codex account
 clausona list             # see all profiles with plan quota and weekly usage
 clausona                  # open the interactive dashboard
+
+clausona add claude:gw --api --base-url https://openrouter.ai/api   # a profile backed by an API endpoint
 ```
 
 ## Plan quota
@@ -90,10 +93,12 @@ The table adapts to the terminal: as it narrows, token counts give way first, th
 cost, then the reset times — the quota columns and the profile name are the last things
 to go, so the row never wraps into itself.
 
-Readings come from each tool's own usage endpoint, authenticated with the credential
-that tool already stored for that profile — clausona never asks for or stores a token
-of its own. Results are cached for 5 minutes; `--refresh` forces a re-read and
-`--no-quota` skips the network entirely.
+Readings come from each tool's own usage endpoint, authenticated with the credential that
+tool already stored for that profile. For subscription profiles clausona holds no token of
+its own. An API profile is different by nature: its key is either held by clausona in the
+platform's credential store, or merely referenced — see [API profiles](#api-profiles).
+Results are cached for 5 minutes; `--refresh` forces a re-read and `--no-quota` skips the
+network entirely.
 
 ### Profiles you have not used recently
 
@@ -135,6 +140,216 @@ A dash means the reading could not be taken, and the reason is printed below the
 Where numbers are already known, they stay on screen dimmed with their age, rather than
 being blanked out.
 
+## API profiles
+
+A profile can be backed by an API endpoint instead of a subscription login — the Anthropic
+API, a gateway such as OpenRouter, or a model you serve yourself. It sits beside your
+subscription profiles in `clausona list`, switches the same way, and shares the same
+plugins, MCP servers, and settings.
+
+```bash
+# a hosted gateway
+clausona add claude:gw --api \
+  --base-url https://openrouter.ai/api \
+  --model z-ai/glm-5.3
+
+# a model you serve yourself
+clausona add claude:local --api \
+  --base-url http://localhost:8000 \
+  --model glm-5.3 \
+  --set CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144 \
+  --set API_TIMEOUT_MS=600000
+
+clausona use claude:gw
+```
+
+`--base-url` must be an absolute `http://` or `https://` URL carrying no username or
+password — a credential in the URL would be stored in `profiles.json` in plain text, which
+is exactly what the key source exists to avoid. `--auth` picks how the key is presented:
+`api-key` passes it as `ANTHROPIC_API_KEY`, which Claude Code sends as Anthropic's
+`X-Api-Key` header, and is the default for `anthropic.com` and its subdomains; `bearer`
+passes it as `ANTHROPIC_AUTH_TOKEN`, sent as `Authorization: Bearer`, and is the default
+everywhere else. `--model` is stored as `ANTHROPIC_MODEL` and is whatever your endpoint calls
+the model; clausona never contacts the endpoint, so a typo there surfaces as an error from
+`claude` rather than from `clausona add`. `--label` sets the name shown in `list`, which
+otherwise defaults to the endpoint's host.
+
+Claude Code speaks the Anthropic Messages format, which recent SGLang, vLLM, llama.cpp and
+OpenRouter's Anthropic endpoint all serve natively. An endpoint that only speaks the OpenAI
+format needs a translation proxy of your own (LiteLLM, claude-code-router); point
+`--base-url` at that proxy.
+
+The dashboard registers one too — **Profiles → add → API endpoint** walks the same fields.
+
+### Profile names
+
+A name must match `/^[A-Za-z0-9][A-Za-z0-9._-]*$/`, because it becomes a directory name,
+and names are compared without case, so `Work` and `work` are the same profile. A name that
+looks like an API key — longer than 64 characters, or starting with `sk-` — is refused
+outright: `ps` shows every process's arguments to every user on the machine, so a key never
+belongs in an argument.
+
+### Where the key lives
+
+`--key-from` decides, both on `add` and later on `config`:
+
+| Value | Where the key lives | When it is read |
+| --- | --- | --- |
+| `keychain` (default) | clausona stores it — macOS Keychain, `secret-tool` on Linux where it is installed, otherwise `~/.clausona/secrets.json`, written owner-only | at every launch, from that store |
+| `env:NAME` | your shell; clausona records only the variable name | at every launch, **in the shell that runs `claude`** — so `NAME` has to be exported there, not only where you ran `clausona add` |
+| `command:"…"` | wherever the command gets it — `op read`, `pass show`, `vault kv get` | at every launch, and on every `clausona doctor`; the first line of its output is the key |
+
+`profiles.json` never holds the key itself, only which of these to use.
+
+Never pass a key as an argument. With the default `keychain` source the key is read from a
+prompt that does not echo it, or from stdin when something is piped in — which is how to
+register a profile without a terminal:
+
+```bash
+printf %s "$MY_API_KEY" | clausona add claude:gw --api --base-url https://openrouter.ai/api
+printf %s "$MY_API_KEY" | clausona config claude:gw --key     # rotate it later
+```
+
+Or keep the key out of clausona entirely:
+
+```bash
+clausona add claude:gw --api --base-url https://openrouter.ai/api --key-from env:MY_API_KEY
+clausona add claude:vault --api --base-url https://openrouter.ai/api --key-from command:"pass show gw"
+```
+
+Rotating depends on the source. With `env:` or `command:` there is nothing to run — change
+the variable, or what the command returns, and the next launch picks it up. With `keychain`,
+pipe the new key into `clausona config <profile> --key`; that always means "store this in the
+credential store", so on a profile currently reading `env:` or `command:` it switches the
+source to `keychain` as well. `clausona config <profile> --key-from <source>` moves a profile
+between the three without typing a key, and deletes the stored one when you move away from
+`keychain`.
+
+`clausona config <profile> --show` prints the endpoint, the auth scheme and the key's
+*source* — never the key. Neither does `doctor`, in either output form.
+
+The credential reaches Claude Code through its environment, so **processes Claude Code
+starts — including its own Bash tool calls — can read it**. Use `env:` or `command:` with a
+short-lived token if that matters for your threat model.
+
+### Advanced settings
+
+Anything Claude Code reads from the environment can be set per profile:
+
+```bash
+clausona config claude:gw --set CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144
+clausona config claude:gw --set CLAUDE_CODE_MAX_RETRIES=8
+clausona config claude:gw --unset DISABLE_PROMPT_CACHING
+clausona config claude:gw --edit          # open the whole map in $VISUAL or $EDITOR
+clausona config claude:gw --show          # what this profile sets
+clausona config claude:gw --show --json   # the same, plus every variable clausona knows about
+```
+
+`--show --json` is the discovery mechanism: next to the profile it prints the full catalog —
+each variable's key, a one-line hint, its type (`number`, `bool`, `string`, `json`) and its
+group (model, context, limits, timeouts, compat, transport). The catalog is a convenience,
+not an allowlist: a variable a future Claude Code release introduces can be set today, as
+long as the name is one a shell can export.
+
+Two are worth knowing about for a self-hosted model. Claude Code assumes a conservative
+context window for a model it does not recognise and compacts early, so declare the real one
+with `CLAUDE_CODE_MAX_CONTEXT_TOKENS`. And a cold GPU server is slow to first byte, so raise
+`API_TIMEOUT_MS` and `CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS`.
+
+**The env map is stored in plain text** in `~/.clausona/profiles.json`. The API key does not
+belong in it — not as `--set ANTHROPIC_API_KEY=…`, and not as an `Authorization` header under
+`--set ANTHROPIC_CUSTOM_HEADERS=…`. Use `--key` or `--key-from` instead. clausona warns when
+you set one of those names, and `doctor` keeps warning afterwards — but only for an **API**
+profile. A subscription profile's env map is never checked, so a clean `doctor` does not mean
+no profile on this machine holds a plaintext key.
+
+The endpoint and the label are the two things `config` cannot change. Correcting either means
+editing `~/.clausona/profiles.json` by hand, or removing and re-adding the profile.
+
+### What an API profile clears from your environment
+
+Claude Code takes a credential from whichever source it finds first, and sends `X-Api-Key`
+and `Authorization` together when it has both — so an `ANTHROPIC_API_KEY` you exported for
+something else would reach this profile's endpoint, often a third party, next to the
+profile's own key or in its place. So with an API profile active, clausona removes every
+credential and endpoint-routing variable it knows about from that run, unless the profile's
+own env map sets it:
+
+- the auth variables — `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`
+  — and `ANTHROPIC_CUSTOM_HEADERS`, which can carry an `Authorization` header of its own
+- a subscription's OAuth refresh token
+- the four file-descriptor credential sources
+- the workload-identity-federation set: the identity token or its file, and the rule-id and
+  organization-id pair that switches it on
+- a host's credentials, a remote session's token, and the background handoff snapshot
+- the provider switches (`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and the rest),
+  `ANTHROPIC_UNIX_SOCKET`, `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST` and
+  `CLAUDE_CODE_CUSTOM_OAUTH_URL` — each of which would route the run somewhere other than the
+  base URL you configured
+
+Only that run is affected; your interactive shell keeps whatever it had, and subscription
+profiles inherit your environment exactly as they always did.
+
+**An API profile refuses to launch** if it cannot set or clear one of the variables it
+manages — a `readonly ANTHROPIC_API_KEY` in your shell, say. It names the variable and stops,
+rather than starting the tool with the wrong credential:
+
+```
+clausona: ANTHROPIC_API_KEY is read-only in this shell, so clausona cannot set or clear it for this profile. Not starting the tool.
+```
+
+**`apiKeyHelper` is a second path to the same leak, and one the environment rules cannot
+cover.** `settings.json` is shared with your primary profile, so a helper written for a
+subscription account also runs for every API profile, and the key it prints can reach that
+profile's endpoint — whatever auth scheme the profile uses. `clausona doctor` reports it;
+removing it removes it for every profile.
+
+### What `list` shows
+
+The `ACCOUNT` column holds the account email for a subscription profile and the label for an
+API one — the endpoint's host, unless you passed `--label`. `5H` and `7D` show a dash: those
+are subscription plan windows, an API endpoint bills per token, and there is nothing to read.
+**The dash is not an error** — unlike the dashes described under [When a reading is
+unavailable](#when-a-reading-is-unavailable), no state and no reason line accompany it. The
+profile is never queried, so `--refresh` and `--no-quota` change nothing for it.
+
+```
+PROFILE             ACCOUNT                      5H         7D
+claude:work         you@example.com              6% 23m     46% 13h
+claude:gw           openrouter.ai                —          —
+```
+
+`COST`, `INPUT` and `OUTPUT` do count for an API profile, but they come from clausona's own
+local record of what ran through it, not from the provider — they are not a bill. Claude
+Code's accounting has no price table for third-party models, so cost may read as zero while
+the token counts stay accurate.
+
+In `clausona list --json` an API profile carries `kind: "api"` and `label`; a subscription
+profile carries neither key. Neither form ever carries the key or its source — `clausona
+config <profile> --show` is where the source is visible.
+
+### What `doctor` checks
+
+An API profile has no account file and no stored login, so `doctor` looks for neither and
+reports neither missing. It checks these instead:
+
+- that the profile's config directory is still there. `clausona repair` cannot rebuild one —
+  it only links into a directory it did not create — so the fix is to remove and add the
+  profile again
+- the base URL, which only a hand-edited `profiles.json` can break. The URL is never quoted
+  back, because a hand-edited one can carry a password; `config <profile> --show` is where to
+  read it
+- that the key resolves. **A `command:` source is executed**, in a shell, every time doctor
+  runs — so a vault round-trip or a touch-ID prompt happens on every `clausona doctor`. An
+  `env:` source is read from doctor's own environment, which is not necessarily the
+  environment the profile will run in
+- `apiKeyHelper` in `settings.json`, and a credential name in the profile's env map. Both are
+  warnings: they describe a key that could reach the endpoint, not a profile that is broken,
+  so the profile still reads as healthy
+
+No request is made to the endpoint. A healthy report means the profile is configured and its
+key resolves, not that the endpoint answered — run `claude` itself to find that out.
+
 ## Commands
 
 `<profile>` accepts either a bare name (e.g. `work`) when it is unique across all tools, or a `tool:name` prefix (e.g. `claude:work`, `codex:work`) when disambiguation is needed.
@@ -144,6 +359,7 @@ being blanked out.
 | `clausona`                                                          | Interactive TUI dashboard                            |
 | `clausona init`                                                     | Discover and register Claude Code and Codex accounts |
 | `clausona add <profile> [--from <path>] [--merge-sessions]`         | Add a profile manually                               |
+| `clausona add <profile> --api --base-url <url> [...]`               | Add an [API profile](#api-profiles)                  |
 | `clausona remove <profile>`                                         | Remove a profile                                     |
 | `clausona use [profile]`                                            | Switch active profile                                |
 | `clausona run <profile> [-- args...]`                               | Run the tool's CLI with a specific profile           |
@@ -151,6 +367,9 @@ being blanked out.
 | `clausona usage [profile] [--period=today\|week\|month\|all]`       | View cost and token usage                            |
 | `clausona current [--json]`                                         | Show active profile                                  |
 | `clausona config <profile> --merge-sessions \| --separate-sessions` | Configure session mode                               |
+| `clausona config <profile> --set KEY=VALUE \| --unset KEY \| --edit` | Set [advanced settings](#advanced-settings) per profile |
+| `clausona config <profile> --key \| --key-from <source>`            | Change an API profile's key, or where it is read from |
+| `clausona config <profile> --show [--json]`                         | Print a profile's settings (`--json` adds the catalog) |
 | `clausona doctor [--json]`                                          | Check profile health                                 |
 | `clausona repair <profile>`                                         | Fix broken shared links                              |
 | `clausona login <profile>`                                          | Re-authenticate a profile                            |
@@ -186,7 +405,8 @@ codex              ← wrapper applies the personal profile's env, then runs cod
 
 If you export `CLAUDE_CONFIG_DIR` (or `CODEX_HOME`) yourself, clausona steps aside for that
 shell: it applies no profile environment, skips plugin sync and usage tracking, and leaves your
-variable untouched. Unset it to hand control back to clausona.
+variable untouched — tracking that run would file its cost against a profile you are not using.
+Unset it to hand control back to clausona.
 
 If a profile cannot be applied in full — a credential command that fails, an environment
 variable name a shell cannot export — the wrapper applies the rest of the profile, prints a
@@ -257,6 +477,10 @@ that has just had a stale credential link removed reports `missing_oauth` until 
 in, so doctor points those findings at `clausona login <profile>` rather than at
 `clausona repair`, which rebuilds shared links and cannot produce a credential.
 
+`settings.json` is shared, though, and an `apiKeyHelper` in it runs for every profile that
+links to it — including API profiles, whose endpoint the key it prints would then reach. See
+[What an API profile clears from your environment](#what-an-api-profile-clears-from-your-environment).
+
 A marketplace registered from a path of your own — rather than installed under
 `plugins/marketplaces/` — is left alone. clausona neither reports it as drift nor
 rewrites its location, so `clausona repair` keeps the registration intact.
@@ -275,11 +499,15 @@ own, and nothing is sent to a third party.
 The one thing that leaves your machine is the plan-quota lookup: each profile's own
 credential is sent to that profile's own provider endpoint (`api.anthropic.com` for
 Claude, `chatgpt.com` for Codex) to read its limits, and to renew a lapsed token.
-Nothing else is transmitted, and `clausona list --no-quota` skips it entirely.
+Nothing else is transmitted, and `clausona list --no-quota` skips it entirely. An API
+profile is not part of this: clausona makes no request on its behalf, but it does hand
+that profile's key to Claude Code, which then talks to the endpoint you configured.
 
 ```
 ~/.clausona/
-├── profiles.json    # registered profiles and active selection
+├── profiles.json    # registered profiles and active selection (including each API
+│                    #   profile's endpoint and key *source*, never the key)
+├── secrets.json     # API profile keys, owner-only, where no OS credential store is used
 ├── usage.json       # per-profile usage history
 ├── quota.json       # cached plan-quota readings (5-minute freshness)
 ├── locks/           # short-lived per-profile credential renewal locks
