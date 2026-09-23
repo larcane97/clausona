@@ -173,9 +173,11 @@ a shell without the hook, `use` changes nothing `claude` sees — `clausona run 
 applies a profile for one run without it. See [Profile Switching](#profile-switching).
 
 `--base-url` must be an absolute `http://` or `https://` URL carrying no username or
-password, no query parameter named for a credential (`key`, `api_key`, `apikey`, `token`,
-`access_token`, `secret`, `password`, `sig`, `signature` or `subscription_key`, matched
-without case and with `-` read as `_`), and nothing shaped like an API key anywhere in it — a
+password, no query parameter named for a credential (`apikey`, or any name with `key`,
+`token`, `secret`, `password`, `passwd`, `sig`, `signature`, `auth` or `credential` — or its
+plural — as one of its `_`-separated parts, such as `api_key`, `x-api-key`, `client_secret`
+or `auth_token`; matched without case and with `-` read as `_`, so `page_token` and `key_id`
+are refused too), and nothing shaped like an API key anywhere in it — a
 credential in the URL would be stored in `profiles.json` in plain text, which is exactly what
 the key source exists to avoid. The shape check can be wrong about a URL with a long
 random-looking segment in it; if none of it is a key, write the URL into `api.baseUrl` in

@@ -475,6 +475,12 @@ describe("add --api", () => {
       "password",
       "sig",
       "signature",
+      // A credential word as one part of a longer name.
+      "x-api-key",
+      "client_secret",
+      "auth_token",
+      "api_token",
+      "access_key",
     ])("refuses a base URL with a %s query parameter, whatever its value, without printing the value", async (name) => {
       const h = await harness();
 
