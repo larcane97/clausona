@@ -171,8 +171,9 @@ shell without the hook, `use` changes nothing `claude` sees — `clausona run cl
 a profile for one run without it. See [Profile Switching](#profile-switching).
 
 `--base-url` must be an absolute `http://` or `https://` URL carrying no username or
-password — a credential in the URL would be stored in `profiles.json` in plain text, which
-is exactly what the key source exists to avoid. `--auth` picks how the key is presented:
+password, and nothing shaped like an API key anywhere in it, query included — a credential in
+the URL would be stored in `profiles.json` in plain text, which is exactly what the key source
+exists to avoid. `--auth` picks how the key is presented:
 `api-key` passes it as `ANTHROPIC_API_KEY`, which Claude Code sends as Anthropic's
 `X-Api-Key` header, and is the default for `anthropic.com` and its subdomains; `bearer`
 passes it as `ANTHROPIC_AUTH_TOKEN`, sent as `Authorization: Bearer`, and is the default
@@ -344,7 +345,8 @@ go through one rule for what they print about a profile:
   prints as `<hidden>`;
 - a URL's userinfo, query and fragment print as `<hidden>`, in the base URL and in any
   setting — `HTTPS_PROXY=http://user:pass@proxy:8080` shows as
-  `http://<hidden>@proxy:8080/`. A base URL that does not parse is hidden whole;
+  `http://<hidden>@proxy:8080/`. A base URL that does not parse, or that carries something
+  shaped like an API key, is hidden whole;
 - a `command:` key source shows as `command`. Its command line can carry a vault token or the
   key itself, so it is only in `~/.clausona/profiles.json`, and a message about it says what
   failed ("secret command exited with 1") rather than quoting it;
