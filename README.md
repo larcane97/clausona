@@ -342,9 +342,10 @@ clausona config claude:gw --show          # what this profile sets
 clausona config claude:gw --show --json   # the same, plus every variable clausona knows about
 ```
 
-`--show --json` is the discovery mechanism: next to the profile it prints the full catalog —
-each variable's key, a one-line hint, its type (`number`, `bool`, `string`, `json`) and its
-group (model, context, limits, timeouts, compat, transport). The catalog is a convenience,
+`--show --json` is the discovery mechanism: next to the profile it prints the full catalog
+under `catalog` — for each variable its `key`, a short `label`, a one-line `hint`, its `kind`
+(`number`, `bool`, `string` or `json`) and its `group` (`model`, `context`, `limits`,
+`timeouts`, `compat` or `transport`). The catalog is a convenience,
 not an allowlist: a variable a future Claude Code release introduces can be set today, as
 long as the name is one a shell can export.
 
