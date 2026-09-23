@@ -227,11 +227,18 @@ export type SecretChunk = {
   /** Characters to append to the secret. Never part of an escape sequence. */
   text: string;
   /**
-   * Set when the input cannot be measured, so where the sequence ended is a guess and a
-   * guess would take part of a credential with it. The caller says so and stores nothing;
-   * the wording is the caller's, because the way out differs between a prompt and a form.
+   * Set when what the caller holds cannot be trusted to be a key. The caller says so and
+   * stores nothing; the wording is the caller's, because the way out differs between a
+   * prompt and a form.
+   *
+   * - `"unreadable"`: input that cannot be measured, so where the sequence ended is a guess,
+   *   and a guess would take part of a credential with it.
+   * - `"lost-paste-start"`: a paste's closing bracket with no paste open. The terminal says a
+   *   paste just ended, so its opening bracket - and the key's head with it - went somewhere
+   *   this reader never saw, and the text before the bracket is the back of a key. Nothing in
+   *   the chunk is kept, and the caller clears what it already took.
    */
-  problem?: "unreadable";
+  problem?: "unreadable" | "lost-paste-start";
 };
 
 /**
@@ -273,6 +280,8 @@ export function readSecretChunk(state: SecretInputState, chunk: string, edge: Se
         sequence = LONE_ESCAPE;
       }
       if (sequence === "runaway") return { state: { ...EMPTY_SECRET_INPUT }, text: "", problem: "unreadable" };
+      if (sequence.kind === "paste-end" && !pasting)
+        return { state: { ...EMPTY_SECRET_INPUT }, text: "", problem: "lost-paste-start" };
       buffer = buffer.slice(sequence.consumed);
       if (sequence.kind === "paste-start") pasting = true;
       else if (sequence.kind === "paste-end") pasting = false;

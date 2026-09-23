@@ -17,7 +17,7 @@ import { checkBaseUrl, isAnthropicHost } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { envKeyCaseTwin, envKeyCaseTwinError } from "../lib/profile-env.js";
 import { foldProfileName, looksLikeCredential, profileId, validateProfileName } from "../lib/profile-ref.js";
-import type { SecretInputState } from "../lib/prompt-secret.js";
+import type { SecretChunk, SecretInputState } from "../lib/prompt-secret.js";
 import { hidesEnvValue, isCredentialEnvKey } from "../lib/redact.js";
 import {
   CLAUDE_ENV_CATALOG,
@@ -59,6 +59,12 @@ export const KEY_REQUIRED = "Enter the API key. It goes to the credential store.
  */
 export const UNREADABLE_KEY_INPUT = "Paste the key again - unreadable input cleared the field.";
 
+/**
+ * A paste whose closing bracket arrived with no opening one: its start went somewhere else,
+ * so what the field held was the back of a key, and it has been cleared.
+ */
+export const LOST_PASTE_START = "Paste the key again - only its end arrived, so it was cleared.";
+
 /** A paste whose closing bracket has not arrived: what is in the field is the front of a key. */
 export const UNFINISHED_PASTE = "Clear it with ctrl-u and paste again: the paste never finished.";
 
@@ -76,10 +82,30 @@ export const KEY_FIELD_MESSAGES = {
   MISPLACED_KEY,
   KEY_REQUIRED,
   UNREADABLE_KEY_INPUT,
+  LOST_PASTE_START,
   UNFINISHED_PASTE,
   UNFINISHED_SEQUENCE,
   NO_RAW_KEY_INPUT,
 } as const;
+
+/**
+ * What the key field says when its reader gives up on what arrived. The field has been
+ * cleared either way; the message says why, and that pasting again is the way on.
+ */
+export function keyReadRefusal(problem: NonNullable<SecretChunk["problem"]>): string {
+  switch (problem) {
+    case "unreadable":
+      return UNREADABLE_KEY_INPUT;
+    case "lost-paste-start":
+      return LOST_PASTE_START;
+    default: {
+      // A third reason added to `SecretChunk` fails to compile here, rather than clearing the
+      // field under whichever message a fall-through happened to pick.
+      const unhandled: never = problem;
+      throw new Error(`unhandled key input problem: ${JSON.stringify(unhandled)}`);
+    }
+  }
+}
 
 /**
  * Why the key field cannot be saved from as it stands, beyond being empty.

@@ -521,6 +521,16 @@ describe("readSecretChunk", () => {
   it("drops the control characters the prompt drops, newlines included", () => {
     expect(read(`sk-\u0000A\u001fB\rC\nD\u007fE`).text).toBe("sk-ABCDE");
   });
+
+  it("gives up on a paste's closing marker when no paste is open, and keeps nothing it came with", () => {
+    // The terminal says a paste just ended. With none open here, its start went somewhere
+    // else, and the key's head with it: what arrived is the back of a key, not a key.
+    expect(read(`${KEY.slice(20)}\u001b[201~`)).toEqual({
+      state: EMPTY_SECRET_INPUT,
+      text: "",
+      problem: "lost-paste-start",
+    });
+  });
 });
 
 /**
@@ -828,6 +838,35 @@ describe("readSecretChunk on ink's input events", () => {
 
     expect(result.text).toBe(KEY);
     expect(result.state).toEqual(EMPTY_SECRET_INPUT);
+  });
+
+  it("says a paste's start was lost when its end marker is an event of its own, with none open", () => {
+    // ink hands the marker over as its own event, after the text it closed. That text is
+    // already in the caller's field, and the problem is the caller's cue to clear it.
+    expect(events(KEY.slice(20), "\u001b[201~")).toEqual({
+      state: EMPTY_SECRET_INPUT,
+      text: KEY.slice(20),
+      problem: "lost-paste-start",
+    });
+  });
+
+  it("gives up on a bracketed paste whose start marker ink flushed early, rather than keep it typed", () => {
+    // Ruling 87's cost, for a paste: the start marker split inside its CSI across two turns
+    // reads as Alt+[ and typing, so `[200~` and the key after it were stored as the key. The
+    // end marker then arrives with no paste open, which says exactly that.
+    expect(events("\u001b[20", `0~${KEY}`, "\u001b[201~")).toEqual({
+      state: EMPTY_SECRET_INPUT,
+      text: `[200~${KEY}`,
+      problem: "lost-paste-start",
+    });
+  });
+
+  it("closes a paste whose start it saw without saying anything was lost", () => {
+    expect(events("\u001b[200~", KEY.slice(0, 20), KEY.slice(20), "\u001b[201~")).toEqual({
+      state: EMPTY_SECRET_INPUT,
+      text: KEY,
+      problem: undefined,
+    });
   });
 
   it("refuses an unfinished CSI too long for any keypress", () => {

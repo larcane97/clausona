@@ -55,11 +55,11 @@ import {
   fieldValue,
   isTypingField,
   keyInputRefusal,
+  keyReadRefusal,
   liveApiFieldError,
   NO_RAW_KEY_INPUT,
   scrubSecret,
   UNFINISHED_PASTE,
-  UNREADABLE_KEY_INPUT,
   validateApiForm,
   withoutKeys,
   withoutMisplacedKeys,
@@ -577,10 +577,13 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       setKeyPartial(holdsPartialInput(read.state));
       // The writes `editApiKey` makes, inlined so that this listener depends on nothing that
       // changes every render - it is subscribed once a visit to the form, not per frame.
-      if (read.problem === "unreadable") {
+      if (read.problem) {
+        // What the field holds is not a key - where input stopped is a guess, or a paste ended
+        // whose start went somewhere else - so it goes, and the message says to paste again.
+        const refusal = keyReadRefusal(read.problem);
         setApiKey("");
         setAddState((prev) =>
-          prev ? { ...prev, api: { ...prev.api, errors: { ...prev.api.errors, key: UNREADABLE_KEY_INPUT } } } : null,
+          prev ? { ...prev, api: { ...prev.api, errors: { ...prev.api.errors, key: refusal } } } : null,
         );
         return;
       }

@@ -15,6 +15,8 @@ import {
   envError,
   KEY_FIELD_MESSAGES,
   keyInputRefusal,
+  keyReadRefusal,
+  LOST_PASTE_START,
   liveApiFieldError,
   MISPLACED_KEY,
   MODEL_KEY,
@@ -24,6 +26,7 @@ import {
   scrubSecret,
   UNFINISHED_PASTE,
   UNFINISHED_SEQUENCE,
+  UNREADABLE_KEY_INPUT,
   validateApiForm,
   withoutMisplacedKeys,
 } from "./api-form.js";
@@ -525,6 +528,17 @@ describe("keyInputRefusal", () => {
   it("refuses a field that never had a reader, whatever the reader says", () => {
     expect(keyInputRefusal(EMPTY_SECRET_INPUT, false)).toBe(NO_RAW_KEY_INPUT);
     expect(keyInputRefusal({ pending: "\u001b]", pasting: true }, false)).toBe(NO_RAW_KEY_INPUT);
+  });
+});
+
+/** What the field says when its reader gives up on what arrived, one case per reason. */
+describe("keyReadRefusal", () => {
+  it("says input it could not measure cleared the field", () => {
+    expect(keyReadRefusal("unreadable")).toBe(UNREADABLE_KEY_INPUT);
+  });
+
+  it("says a paste that ended with no start cleared the field", () => {
+    expect(keyReadRefusal("lost-paste-start")).toBe(LOST_PASTE_START);
   });
 });
 

@@ -48,7 +48,7 @@ vi.mock("../lib/service", () => ({
 }));
 
 import { ADD_METHODS, App } from "./App.js";
-import { KEY_REQUIRED, MISPLACED_KEY, UNFINISHED_PASTE, UNREADABLE_KEY_INPUT } from "./api-form.js";
+import { KEY_REQUIRED, LOST_PASTE_START, MISPLACED_KEY, UNFINISHED_PASTE, UNREADABLE_KEY_INPUT } from "./api-form.js";
 import {
   CURSOR,
   DOWN,
@@ -1024,6 +1024,42 @@ describe("App add-profile: API endpoint", () => {
       expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
       instance.unmount();
     });
+
+    it("clears the field and says to paste again when a paste ends there that never began there", async () => {
+      // The end marker is the terminal saying a paste just finished. With no paste open, its
+      // start - and the key's head with it - went somewhere else, and what the field holds is
+      // the back of a key. Stored, it is the tail again, behind the same mask.
+      const instance = await filledTo("API key");
+
+      await type(instance, `${KEY.slice(20)}\u001b[201~`);
+      await waitForFrame(instance.lastFrame, (f) => f.includes(LOST_PASTE_START));
+
+      expect(row(instance, "API key")).toContain("type or paste the key");
+      expect(await submit(instance)).toBeUndefined();
+      expect(instance.lastFrame()).toContain(KEY_REQUIRED);
+
+      // The way out the message gives works: the next paste is the key.
+      await moveTo(instance, "API key");
+      await press(instance, KEY);
+      expect((await submit(instance))?.secretValue).toBe(KEY);
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+      instance.unmount();
+    });
+
+    it("does the same when ctrl-u emptied the field while the paste was still arriving", async () => {
+      // ctrl-u is the stated way out of a paste that never finished. If it did finish after all,
+      // what arrives after the clear is the rest of that paste and not a key.
+      const instance = await filledTo("API key");
+
+      await type(instance, `\u001b[200~${KEY.slice(0, 20)}`);
+      await press(instance, "\u0015");
+      await waitForFrame(instance.lastFrame, (f) => !f.includes(MASK));
+      await type(instance, `${KEY.slice(20)}\u001b[201~`);
+      await waitForFrame(instance.lastFrame, (f) => f.includes(LOST_PASTE_START));
+
+      expect(await submit(instance)).toBeUndefined();
+      instance.unmount();
+    });
   });
 
   /**
@@ -1111,6 +1147,15 @@ describe("App add-profile: API endpoint", () => {
       await type(instance, `\u001b]${"x".repeat(5000)}`);
 
       await waitForFrame(instance.lastFrame, (f) => f.includes(UNREADABLE_KEY_INPUT));
+      instance.unmount();
+    });
+
+    it("shows the lost-start message whole", async () => {
+      const instance = await formAt();
+      await moveTo(instance, "API key");
+      await type(instance, "abc\u001b[201~");
+
+      await waitForFrame(instance.lastFrame, (f) => f.includes(LOST_PASTE_START));
       instance.unmount();
     });
 
