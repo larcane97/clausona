@@ -265,15 +265,15 @@ export function evaluateApiHealth({
     // profile that keeps a key there runs exactly as intended.
     const { commands, keyFrom, keepInShell } = plaintextEnvRemedy(id, profile, key, credentialEnvKeys.includes(key));
     const remedy = commands.map((command) => `'${command}'`).join(" and then ");
-    const condition = keepInShell
-      ? "if it holds a secret, keep it in your shell's environment, which the hook passes through,"
+    const advice = keepInShell
+      ? `if it holds a secret, keep it in your shell's environment, which the hook passes through, and run ${remedy}`
       : keyFrom === undefined
-        ? "if it holds this profile's API key"
-        : `this profile's key already comes from ${keyFrom}, so if it holds that key`;
+        ? `if it holds this profile's API key, run ${remedy}`
+        : `this profile's key already comes from ${keyFrom}, so if it holds that key, run ${remedy}`;
     issues.push({
       kind: "plaintext_env_secret",
       severity: "warning",
-      message: `${key} is stored in plain text in ${REGISTRY_FILE} - ${condition}, run ${remedy}`,
+      message: `${key} is stored in plain text in ${REGISTRY_FILE} - ${advice}`,
     });
   }
 

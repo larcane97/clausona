@@ -1682,7 +1682,10 @@ describe("the plain-text credential warning", () => {
           .filter((issue) => issue.kind === "plaintext_env_secret");
 
       const [finding] = await findings();
-      expect(finding?.message).toContain("shell's environment");
+      // The whole sentence, since the parts were right and the joint between them was not.
+      expect(finding?.message).toBe(
+        `${OTEL} is stored in plain text in ~/.clausona/profiles.json - if it holds a secret, keep it in your shell's environment, which the hook passes through, and run 'clausona config claude:gw --unset ${OTEL}'`,
+      );
       const commands = advisedCommands(finding.message);
       expect(commands).toEqual([["config", "claude:gw", "--unset", OTEL]]);
       for (const argv of commands) await h.run(argv[0], ...argv.slice(1));
