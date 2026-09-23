@@ -158,13 +158,21 @@ const CONFIG_EXTRA_ARGUMENT =
 const NO_KEY_SUPPLIED =
   'No API key supplied. Type it at the prompt, pipe it in (printf %s "$KEY" | clausona …), or read it from elsewhere with --key-from env:NAME.';
 
-/** Reads `--flag value` and `--flag=value`, returning every occurrence in order. */
+/**
+ * Reads `--flag value` and `--flag=value`, returning every occurrence in order.
+ *
+ * `--flag` with nothing after it, or with another option after it, is refused: the first was
+ * dropped without a word, and the second took the option as the value - `--label --json`
+ * stored the label "--json". Only the spaced form: `--flag=--x` says what it means.
+ */
 function optionValues(args: string[], flag: string): string[] {
   const values: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === flag && args[i + 1] !== undefined) {
-      values.push(args[i + 1]);
+    if (arg === flag) {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("--")) throw new Error(`${flag} needs a value.`);
+      values.push(value);
       i++;
     } else if (arg.startsWith(`${flag}=`)) {
       values.push(arg.slice(flag.length + 1));
@@ -1259,8 +1267,9 @@ export async function runCommand(command: string, args: string[]) {
       }
       if (!api) {
         // Silently ignoring one of these would leave a subscription profile where the
-        // caller asked for an endpoint, and nothing on screen would say so.
-        const stray = API_ONLY_FLAGS.find((flag) => optionValues(args, flag).length > 0);
+        // caller asked for an endpoint, and nothing on screen would say so. Counted by the
+        // option, not its value: `--model` with none is still an API option given here.
+        const stray = API_ONLY_FLAGS.find((flag) => args.some((arg) => arg === flag || arg.startsWith(`${flag}=`)));
         if (stray) throw new Error(`${stray} only applies to an API profile. Add --api, or leave it out.`);
       }
 

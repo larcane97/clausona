@@ -365,6 +365,36 @@ describe("add --api", () => {
       expect(Object.keys(h.registry().profiles)).toEqual(["claude:default"]);
     });
 
+    // A value option that ends the line was dropped without a word, and one followed by another
+    // option took that option as its value: `--label --json` stored the label "--json".
+    it.each([
+      [
+        "ends the line",
+        ["add", "claude:gw", "--api", "--base-url", "http://localhost:8000", "--key-from", "env:X1", "--model"],
+      ],
+      ["is followed by another option", ["config", "claude:gw", "--label", "--json"]],
+    ])("refuses a value option that %s, rather than dropping it or taking the option", async (_case, args) => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+      const flag = args.includes("--model") ? "--model" : "--label";
+
+      const message = await failure(h.run(args[0], ...args.slice(1)));
+
+      expect(message).toBe(`${flag} needs a value.`);
+      expect(h.profile("claude:gw")).toMatchObject({
+        label: "openrouter.ai",
+        env: { ANTHROPIC_MODEL: "z-ai/glm-5.3" },
+      });
+      expect(promptCalls).toEqual([]);
+    });
+
+    it("still counts a value option with no value as one given without --api", async () => {
+      const h = await harness();
+
+      const message = await failure(h.run("add", "claude:gw", "--model"));
+
+      expect(message).toBe("--model only applies to an API profile. Add --api, or leave it out.");
+    });
+
     it("refuses an option given twice instead of quietly taking the first", async () => {
       const h = await harness();
 
