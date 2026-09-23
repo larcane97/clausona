@@ -50,13 +50,41 @@ export type QuotaSnapshot = QuotaWindows & {
 
 export type ToolName = "claude" | "codex";
 
+export type SecretSource =
+  | { source: "keychain" }
+  | { source: "env"; name: string }
+  | { source: "command"; run: string };
+
+export type ApiEndpoint = {
+  baseUrl: string;
+  /** bearer -> ANTHROPIC_AUTH_TOKEN, api-key -> ANTHROPIC_API_KEY */
+  authScheme: "bearer" | "api-key";
+  secret: SecretSource;
+};
+
+/**
+ * A key source as it is printed: `redactSecretSource`'s answer. One clausona does not know - a
+ * hand edit - is `unknown`, which no stored source can be.
+ */
+export type ShownSecretSource = SecretSource | { source: "unknown" };
+
+/** An endpoint as it is printed, by `redactProfile`. */
+export type ShownApiEndpoint = Omit<ApiEndpoint, "secret"> & { secret: ShownSecretSource };
+
 export type Profile = {
   tool: ToolName;
+  /** undefined means "subscription" — existing registries carry no kind. */
+  kind?: "subscription" | "api";
   configDir: string;
   email: string;
+  /** Display name for profiles that have no account email. */
+  label?: string;
   orgName?: string;
   isPrimary?: boolean;
   mergeSessions?: boolean;
+  api?: ApiEndpoint;
+  /** Free-form environment overrides. The advanced UI is a view over this map. */
+  env?: Record<string, string>;
 };
 
 export type Registry = {
@@ -91,15 +119,35 @@ export type DiscoveredAccount = {
   isPrimary: boolean;
 };
 
+/** A profile's kind as printed: `unknown` for a stored one that is neither, which only a hand edit leaves. */
+export type ShownKind = "subscription" | "api" | "unknown";
+
 export type ProfileListItem = {
   name: string;
   tool: ToolName;
+  /** undefined means "subscription", as on Profile. */
+  kind?: ShownKind;
   email: string;
+  /** Display name for profiles that have no account email. */
+  label?: string;
   orgName?: string;
   configDir: string;
   isPrimary: boolean;
   isActive: boolean;
   mergeSessions?: boolean;
+  /**
+   * The model the profile pins: its env map's ANTHROPIC_MODEL, worked out by `profileModel`.
+   * Always listed, unlike `env` - it is what `list` is asked to show, and not a credential.
+   * Absent when none is pinned.
+   */
+  model?: string;
+  /**
+   * Present for API profiles, with `listProfiles({ detail: true })` only, and redacted by
+   * `redactProfile`: `secret` names where the key is read from, never the key or a command.
+   */
+  api?: ShownApiEndpoint;
+  /** The env map, with `detail` only, and redacted by `redactProfile`. */
+  env?: Record<string, string>;
   quota?: QuotaSnapshot;
   today: UsageSummary;
   week: UsageSummary;
@@ -116,13 +164,47 @@ export type DoctorIssue = {
     | "local_override"
     | "stale_symlink"
     | "missing_shared_link"
-    | "plugins_out_of_sync";
+    | "plugins_out_of_sync"
+    // API profiles only. The first three are the profile's own configuration; the next
+    // three are about a second key reaching the profile's endpoint by a route clausona
+    // does not clear, or about not being able to tell; the last, about this profile's key
+    // reaching another profile's endpoint.
+    | "missing_config_dir"
+    | "missing_api_secret"
+    | "invalid_api_config"
+    | "shared_api_key_helper"
+    | "unreadable_settings"
+    | "plaintext_env_secret"
+    | "shared_key_source"
+    // API profiles only: a settings.json `env` block that Claude Code applies over the
+    // profile's endpoint, key or routing (an error), or its model (a warning).
+    | "settings_env_override"
+    // API profiles only: ANTHROPIC_BASE_URL in the env map, which overrides the endpoint.
+    | "env_overrides_endpoint"
+    // Any profile: an env map a hand edit left as something other than a map, or holding a
+    // value that is not a string; or a kind that is neither subscription nor api.
+    | "invalid_env_map"
+    | "invalid_profile_kind";
   message: string;
+  /**
+   * Absent means this is an error: the profile does not work until it is resolved, and
+   * `healthy` is false. `"warning"` means the profile works and the finding is advice.
+   *
+   * There is deliberately no `"error"` to write. An error must carry no `severity` key at
+   * all, so the report a registry without warnings produces - every subscription-only one -
+   * is byte-identical to the report it produced before warnings existed.
+   */
+  severity?: "warning";
 };
 
 export type DoctorProfileResult = {
   name: string;
+  /** As in `list --json`: absent for a subscription profile that stores none. */
+  kind?: ShownKind;
+  /** The account email; empty for an API profile, which has none - `label` names it. */
   email: string;
+  /** Display name for a profile that has no account email. */
+  label?: string;
   configDir: string;
   isPrimary: boolean;
   healthy: boolean;

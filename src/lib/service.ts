@@ -1,19 +1,37 @@
-import { cp, lstat, mkdir, readdir, readFile, readlink, realpath, rename, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  cp,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  readlink,
+  realpath,
+  rename,
+  rm,
+  rmdir,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { evaluateSymlinkHealth } from "../core/doctor.js";
+import { checkBaseUrl, hasBareUserinfo, isAnthropicHost, sendsKeyInClear } from "../core/api-url.js";
+import { carriesCredentialToken } from "../core/credential-token.js";
+import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
+import { isKnownSecretSource, keySharersElsewhere } from "../core/key-source.js";
 import { backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
 import { isV1Registry, migrateRegistryV1toV2, setActiveProfile } from "../core/registry.js";
 import { createSharedLink, inspectSharedLink } from "../core/shared-links.js";
-import { renderShellInit } from "../core/shell.js";
+import { isPosixEnvName, renderShellInit } from "../core/shell.js";
 import { seedSeenSessions } from "../core/track-usage.js";
 import { summarizeUsage } from "../core/usage.js";
-import { allAdapters, getAdapter } from "../tools/registry.js";
+import { validateEnvEntry } from "../tools/claude-env-catalog.js";
+import { ALL_TOOLS, allAdapters, getAdapter } from "../tools/registry.js";
 import type { ToolAdapter } from "../tools/types.js";
 import type {
+  ApiEndpoint,
   DiscoveredAccount,
   DoctorIssue,
   DoctorProfileResult,
@@ -22,11 +40,29 @@ import type {
   QuotaSnapshot,
   Registry,
   RegistryV1,
+  SecretSource,
   ToolName,
   UsagePeriod,
   UsageStore,
 } from "../types.js";
-import { profileId } from "./profile-ref.js";
+import {
+  buildProfileEnv,
+  CREDENTIAL_ENV_KEYS,
+  envKeyCaseTwin,
+  envKeyCaseTwinError,
+  envMapOf,
+  invalidEnvMapMessage,
+  isSecretEnvName,
+  nonStringEnvKeys,
+  nonStringEnvValueMessage,
+  profileModel,
+  ROUTING_ENV_KEYS,
+  shownKind,
+  shownLabel,
+} from "./profile-env.js";
+import { foldProfileName, initProfileNames, parseProfileRef, profileId, validateProfileName } from "./profile-ref.js";
+import { redactProfile } from "./redact.js";
+import { deleteSecret, resolveSecret, storeSecret } from "./secrets.js";
 
 /** Files inside plugins/ that contain absolute paths and must be per-profile */
 const PLUGINS_PATH_FILES = new Set(["known_marketplaces.json", "installed_plugins.json"]);
@@ -62,6 +98,31 @@ async function exists(targetPath: string) {
   }
 }
 
+/**
+ * A profile's settings.json for the doctor: the parsed object, `{}` when there is no such
+ * file, and null when there is one that cannot be used.
+ *
+ * `readJson`'s single fallback cannot tell those last two apart, and here they mean opposite
+ * things: no file means nothing is configured, while a file that does not parse means the
+ * apiKeyHelper check could not run - which is not the same as finding no helper.
+ */
+async function readSettings(targetPath: string): Promise<Record<string, unknown> | null> {
+  let raw: string;
+  try {
+    raw = await readFile(targetPath, "utf8");
+  } catch (error) {
+    // A broken shared link reads as ENOENT too; it has its own finding already.
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? {} : null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 async function readJson<T>(targetPath: string, fallback: T): Promise<T> {
   try {
     const raw = await readFile(targetPath, "utf8");
@@ -75,11 +136,22 @@ function warn(message: string): void {
   process.stderr.write(`  warn: ${message}\n`);
 }
 
-async function writeJson(targetPath: string, value: unknown) {
+/**
+ * `mode` is for clausona's own files only. Claude Code's files go through here too, and
+ * they keep whatever mode Claude Code gave them.
+ */
+async function writeJson(targetPath: string, value: unknown, mode?: number) {
   await mkdir(path.dirname(targetPath), { recursive: true });
   const tmpPath = `${targetPath}.tmp.${process.pid}`;
-  await writeFile(tmpPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await writeFile(
+    tmpPath,
+    `${JSON.stringify(value, null, 2)}\n`,
+    mode === undefined ? "utf8" : { encoding: "utf8", mode },
+  );
   await rename(tmpPath, targetPath);
+  // writeFile applies the mode only to a file it creates, so it is asserted again after the
+  // rename rather than assumed, as writeSecretsFile does.
+  if (mode !== undefined) await chmod(targetPath, mode).catch(() => {});
 }
 
 async function execCommand(
@@ -126,15 +198,6 @@ async function execCommand(
       resolve({ code: 1, stdout, stderr });
     });
   });
-}
-
-function defaultProfileNameForConfigDir(configDir: string) {
-  const base = path.basename(configDir);
-  if (base === ".claude") {
-    return "default";
-  }
-
-  return base.replace(/^\.claude-/, "") || "profile";
 }
 
 async function ensureStorage() {
@@ -627,6 +690,40 @@ export async function discoverAccounts(): Promise<DiscoveredAccount[]> {
   return out;
 }
 
+/**
+ * Why profiles.json cannot be used, as one line with its remedy, or null when it can - or
+ * is not there at all, which is a clausona that has not been set up.
+ *
+ * `loadRegistry` reads a file it cannot use exactly as it reads no file, and the other
+ * commands are content with that. The doctor is not: it printed an empty report, which
+ * says nothing is wrong. JSON.parse's own message is not passed on - it quotes the text
+ * around the error, and the file can hold a key command's command line.
+ */
+export async function registryProblem(): Promise<string | null> {
+  let reason: string;
+  try {
+    const parsed: unknown = JSON.parse(await readFile(REGISTRY_PATH, "utf8"));
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) return null;
+    reason = "it is not a JSON object";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return null;
+    reason = error instanceof SyntaxError ? "it is not valid JSON" : `it could not be opened (${code ?? "unknown"})`;
+  }
+  // There is no copy of it under ~/.clausona/backups to point at: that holds each
+  // profile's own files, never the registry.
+  return `${REGISTRY_PATH.replace(homedir(), "~")} could not be read: ${reason}. Fix it by hand, or move it aside and run 'clausona init' to set clausona up again.`;
+}
+
+/**
+ * The error for a command that needs the registry and got none from `loadRegistry`. A file
+ * that is there but cannot be read is reported as that, with its remedy: "not initialized"
+ * sent the user to `init`, which replaced the file and every API profile in it.
+ */
+export async function noRegistryError(): Promise<Error> {
+  return new Error((await registryProblem()) ?? "clausona is not initialized. Run `clausona init` first.");
+}
+
 export async function loadRegistry(): Promise<Registry | null> {
   const raw = await readJson<unknown>(REGISTRY_PATH, null);
   if (raw === null) return null;
@@ -683,7 +780,9 @@ export async function loadRegistry(): Promise<Registry | null> {
 }
 
 export async function saveRegistry(registry: Registry) {
-  await writeJson(REGISTRY_PATH, registry);
+  // Owner-only: it holds each API profile's command: key source, whose command line can
+  // carry a vault token, and every env map in plain text.
+  await writeJson(REGISTRY_PATH, registry, 0o600);
 }
 
 export async function loadUsageStore() {
@@ -693,18 +792,71 @@ export async function loadUsageStore() {
 export async function initializeRegistry(options: {
   accounts: DiscoveredAccount[];
   profileNames: Record<string, string>;
-  defaultProfile: string;
+  /** A bare claude profile name the user picked; leave it out when nobody chose one. */
+  defaultProfile?: string;
   mergeSessions?: boolean;
   mergeSessionsMap?: Record<string, boolean>;
 }) {
+  // A profiles.json that cannot be read loads as no registry, and a registry rebuilt from
+  // that replaces the file - with every API profile in it, which discovery cannot find again.
+  const problem = await registryProblem();
+  if (problem) throw new Error(problem);
+  const existing = await loadRegistry();
+  // API profiles are not discovered, so a registry rebuilt from what init found would drop
+  // them, and with them the only reference to their stored key, config dir and backup.
+  // They are carried over exactly as they are.
+  const carried = Object.entries(existing?.profiles ?? {}).filter(([, profile]) => profile.kind === "api");
+  const carriedDirs = new Set(carried.map(([, profile]) => path.resolve(profile.configDir)));
+  // An account found in an API profile's own directory is that profile, not a new one.
+  const accounts = options.accounts.filter((account) => !carriedDirs.has(path.resolve(account.configDir)));
+  // An account the caller left unnamed is named exactly as the init command names it.
+  const names = await proposeInitProfileNames(accounts, existing, options.profileNames);
+
+  // Every name is checked before anything is written. A new name gets the same rules as
+  // `add`: the name rule, and no two ids of one tool that differ only by case - they would
+  // share a backup directory on a case-insensitive filesystem. An account re-registered
+  // under the name it already has creates nothing, so a name from before the rules keeps
+  // working: renaming it would strand its backup and everything keyed by its id.
+  const planned: Array<{ account: DiscoveredAccount; id: string; backupDir: string | null; kept: boolean }> = [];
+  const initIds = new Map<string, { id: string; kept: boolean; api?: boolean }>(
+    carried.map(([id]) => [foldProfileName(id), { id, kept: false, api: true }]),
+  );
+  for (const account of accounts) {
+    const name = names[account.configDir];
+    const id = profileId(account.tool, name);
+    const registered = existing?.profiles[id];
+    const kept =
+      registered?.tool === account.tool && path.resolve(registered.configDir) === path.resolve(account.configDir);
+    if (!kept) {
+      const nameCheck = validateProfileName(name);
+      if (!nameCheck.ok) throw new Error(nameCheck.error);
+    }
+    const clash = initIds.get(foldProfileName(id));
+    if (clash?.api) throw new Error(`'${clash.id}' is an API profile, which init keeps. Give '${id}' another name.`);
+    if (clash?.id === id) throw new Error(`Two accounts are both named '${id}'. Give each account its own name.`);
+    if (clash && !(clash.kept && kept)) {
+      throw new Error(
+        `'${clash.id}' and '${id}' name the same profile (names are compared without case). Give each account its own name.`,
+      );
+    }
+    initIds.set(foldProfileName(id), { id, kept });
+    // Resolved now, so a kept name the containment guard refuses stops init before it writes.
+    const backupDir = account.isPrimary ? null : backupDirFor(CLAUSONA_DIR, account.tool, name);
+    // A re-registered profile goes on using its own backup. A new name gets the add paths'
+    // rule: a directory already there that holds something belongs to someone else. Derived
+    // names are steered around those, so only a name the caller chose can land on one.
+    if (backupDir && !kept && (await backupDirOccupied(backupDir))) throw backupDirTaken(backupDir, id);
+    planned.push({ account, id, backupDir, kept });
+  }
+
   await ensureStorage();
 
   const home = homedir();
-  // Build per-tool primary sources from the adapter defaults; only include tools with at least one account
+  // Build per-tool primary sources from the adapter defaults; only include tools with at least one profile
   const primarySources: Registry["primarySources"] = {};
-  for (const account of options.accounts) {
-    if (!primarySources[account.tool]) {
-      primarySources[account.tool] = getAdapter(account.tool).defaultConfigDir(home);
+  for (const { tool } of [...accounts, ...carried.map(([, profile]) => profile)]) {
+    if (!primarySources[tool]) {
+      primarySources[tool] = getAdapter(tool).defaultConfigDir(home);
     }
   }
 
@@ -715,9 +867,7 @@ export async function initializeRegistry(options: {
     profiles: {},
   };
 
-  for (const account of options.accounts) {
-    const baseName = options.profileNames[account.configDir] ?? defaultProfileNameForConfigDir(account.configDir);
-    const id = profileId(account.tool, baseName);
+  for (const { account, id, backupDir, kept } of planned) {
     const mergeSessions = account.isPrimary
       ? undefined
       : (options.mergeSessionsMap?.[account.configDir] ?? options.mergeSessions ?? false);
@@ -730,13 +880,14 @@ export async function initializeRegistry(options: {
       mergeSessions,
     };
 
-    if (!account.isPrimary) {
+    if (backupDir) {
       const merge = mergeSessions ?? false;
-      const backupDir = backupDirFor(CLAUSONA_DIR, account.tool, baseName);
-      if (!(await exists(backupDir))) {
+      if (!kept) {
+        await claimBackupDir(backupDir, id);
+      } else if (!(await exists(backupDir))) {
         await mkdir(backupDir, { recursive: true });
-        // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
       }
+      // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
       const adapter = getAdapter(account.tool);
       const primary = primarySources[account.tool];
       if (!primary) {
@@ -753,31 +904,30 @@ export async function initializeRegistry(options: {
     }
   }
 
-  // Determine activeProfiles map from options.defaultProfile (per-tool)
-  // defaultProfile is a bare name from CLI; resolve to claude:<name> for backwards compat.
-  const claudeAccounts = options.accounts.filter((a) => a.tool === "claude");
-  const codexAccounts = options.accounts.filter((a) => a.tool === "codex");
-  if (claudeAccounts.length > 0) {
-    const fallback =
-      options.profileNames[claudeAccounts[0].configDir] ?? defaultProfileNameForConfigDir(claudeAccounts[0].configDir);
-    const wanted = profileId("claude", options.defaultProfile);
-    registry.activeProfiles.claude = registry.profiles[wanted] ? wanted : profileId("claude", fallback);
-  }
-  if (codexAccounts.length > 0) {
-    const fallback =
-      options.profileNames[codexAccounts[0].configDir] ?? defaultProfileNameForConfigDir(codexAccounts[0].configDir);
-    registry.activeProfiles.codex = profileId("codex", fallback);
+  for (const [id, profile] of carried) registry.profiles[id] = profile;
+
+  // A default the user picked wins for the tool it names - a bare name, so claude. A tool
+  // nobody chose for keeps the profile that was active, API or subscription, while it is still
+  // registered, and otherwise gets its first account. `init --auto` never chooses, so running
+  // it again leaves the active profiles as they were.
+  const picked = options.defaultProfile === undefined ? undefined : profileId("claude", options.defaultProfile);
+  for (const tool of ALL_TOOLS) {
+    const active = existing?.activeProfiles[tool];
+    const next =
+      (tool === "claude" && picked && registry.profiles[picked] ? picked : undefined) ??
+      (active && registry.profiles[active]?.tool === tool ? active : undefined) ??
+      planned.find((p) => p.account.tool === tool)?.id;
+    if (next) registry.activeProfiles[tool] = next;
   }
 
   await saveRegistry(registry);
   await writeJson(USAGE_PATH, {});
 
-  // Seed seenSessions for each registered profile (claude only — codex usage tracking is v1 OOS)
-  for (const account of options.accounts) {
-    const baseName = options.profileNames[account.configDir] ?? defaultProfileNameForConfigDir(account.configDir);
-    const id = profileId(account.tool, baseName);
-    if (account.tool === "claude") {
-      await seedSeenSessions(id, account.configDir);
+  // Seed seenSessions for each registered profile (claude only — codex usage tracking is v1 OOS).
+  // usage.json was just reset, so a carried API profile needs it as much as any other.
+  for (const [id, { tool, configDir }] of [...planned.map((p) => [p.id, p.account] as const), ...carried]) {
+    if (tool === "claude") {
+      await seedSeenSessions(id, configDir);
     }
   }
 
@@ -791,6 +941,19 @@ export type ListProfilesOptions = {
   refresh?: boolean;
   /** Renew lapsed access tokens instead of reporting them as expired. Default on. */
   renew?: boolean;
+  /**
+   * Attach the endpoint block and the env map.
+   *
+   * Off by default, and deliberately: `list --json` is JSON.stringify of exactly this
+   * array, and neither belongs in a listing that gets piped into a file or a log. The api
+   * block holds a reference rather than a key, but a reference names an environment
+   * variable or a whole command line, and the env map is free-form.
+   *
+   * The TUI asks for it because its preview panel is a screen rather than a pipe, and
+   * "what is this profile" is the question the panel exists to answer. Both come through
+   * `redactProfile`, so it still shows where the key is read from and never what it is.
+   */
+  detail?: boolean;
 };
 
 export async function listProfiles(options: ListProfilesOptions = {}): Promise<ProfileListItem[]> {
@@ -806,25 +969,39 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
 
   let quotas: Record<string, QuotaSnapshot> = {};
   if (options.quota) {
-    const targets: QuotaTarget[] = entries.map(([id, profile]) => ({
-      id,
-      tool: profile.tool,
-      configDir: profile.configDir,
-    }));
+    // An API profile has no plan limits and no OAuth credential. Left in, readCredential
+    // returns null and the row renders as `missing`, which reads like an expired account.
+    const targets: QuotaTarget[] = entries
+      .filter(([, profile]) => profile.kind !== "api")
+      .map(([id, profile]) => ({
+        id,
+        tool: profile.tool,
+        configDir: profile.configDir,
+      }));
     quotas = await collectQuotas(targets, { refresh: options.refresh, renew: options.renew });
   }
 
   return entries.map(([id, profile]) => {
     const records = usage[id]?.records ?? [];
+    const model = profileModel(profile);
+    // Redacted like every other path that prints a profile: the dashboard draws these.
+    const shown = options.detail ? redactProfile(profile) : undefined;
     return {
       name: id,
       tool: profile.tool,
+      kind: shownKind(profile.kind),
       email: profile.email,
+      // Stored before `checkLabel` refused a key-shaped one, or by hand.
+      label: shownLabel(profile.label),
       orgName: profile.orgName,
       configDir: profile.configDir,
       isPrimary: Boolean(profile.isPrimary),
       isActive: registry.activeProfiles[profile.tool] === id,
       mergeSessions: profile.mergeSessions,
+      // The one value from the env map that is listed - by name, never by widening to the
+      // map. Absent rather than undefined, so a profile without one gains no key.
+      ...(model === undefined ? {} : { model }),
+      ...(shown ? { api: shown.api, env: shown.env } : {}),
       quota: quotas[id],
       today: summarizeUsage({ now, period: "today", records }),
       week: summarizeUsage({ now, period: "week", records }),
@@ -839,11 +1016,15 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
  * can paint immediately and fill quota in once the network settles.
  */
 export async function fetchProfileQuotas(
-  items: Pick<ProfileListItem, "name" | "tool" | "configDir">[],
+  items: Pick<ProfileListItem, "name" | "tool" | "kind" | "configDir">[],
   options: { refresh?: boolean; renew?: boolean } = {},
 ): Promise<Record<string, QuotaSnapshot>> {
   return collectQuotas(
-    items.map((item) => ({ id: item.name, tool: item.tool, configDir: item.configDir })),
+    // Same exclusion as listProfiles: an API profile has no plan quota to read, so
+    // asking for one costs a credential lookup and answers `missing`.
+    items
+      .filter((item) => item.kind !== "api")
+      .map((item) => ({ id: item.name, tool: item.tool, configDir: item.configDir })),
     options,
   );
 }
@@ -881,22 +1062,108 @@ export async function getUsageSummary(profileId_: string | null, period: UsagePe
   );
 }
 
-export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
+export async function doctorProfiles(
+  options: {
+    /**
+     * Resolve each API profile's key, which for a `command:` source runs the command. The
+     * dashboard turns it off: it reads doctor on open and after every change, and a vault
+     * round-trip or a touch-ID prompt there held the whole screen on Loading.
+     */
+    resolveSecrets?: boolean;
+  } = {},
+): Promise<DoctorProfileResult[]> {
+  const { resolveSecrets = true } = options;
   const registry = await loadRegistry();
   if (!registry) {
     return [];
   }
 
   const results: DoctorProfileResult[] = [];
+  const home = homedir();
 
   for (const [id, profile] of Object.entries(registry.profiles)) {
     const issues: DoctorIssue[] = [];
 
+    // Any kind. A list or a string where the env map belongs is applied as nothing, and
+    // printed as `<hidden>`, so this is where it is found. `null` and `[]` are not: they
+    // apply exactly what `{}` does.
+    const envMap = envMapOf(profile.env);
+    if (envMap === undefined) {
+      issues.push({ kind: "invalid_env_map", message: invalidEnvMapMessage(id) });
+    } else {
+      // A map with a number, a boolean or null in it: launch drops those entries.
+      for (const key of nonStringEnvKeys(envMap)) {
+        issues.push({ kind: "invalid_env_map", message: nonStringEnvValueMessage(id, key) });
+      }
+    }
+    // Any kind but the two there are - a hand edit - is read as a subscription everywhere,
+    // which a profile meant as an API one is not. Not quoted: it can carry anything.
+    if (profile.kind !== undefined && profile.kind !== "subscription" && profile.kind !== "api") {
+      issues.push({
+        kind: "invalid_profile_kind",
+        message: `the profile's kind in ~/.clausona/profiles.json is not subscription or api, so clausona treats it as a subscription profile - remove it with 'clausona remove ${id}' and add it again under a new name, since remove keeps the config directory and the old name stays taken`,
+      });
+    }
+
     const primarySource = registry.primarySources[profile.tool];
     const adapter = getAdapter(profile.tool);
 
-    // Run tool-aware account/keychain checks
-    {
+    /**
+     * An API profile pointing at a directory that is not there. Everything the shared-link
+     * and plugins checks would say about it is a consequence of that one absence, and each
+     * of those findings carries "run 'clausona repair'" in its own text - a command that
+     * fails with ENOENT in exactly this state, because it symlinks into a directory it does
+     * not create. So they are skipped and the profile is left with the one instruction that
+     * works.
+     *
+     * Only for an API profile, and deliberately: a subscription profile in the same state
+     * reports the same findings it always has, because a registry without API profiles has
+     * to produce the report it produced before they existed. The same misleading advice is
+     * reachable there; closing it is a change to subscription behaviour, and belongs to
+     * whoever can decide that.
+     */
+    const configDirMissing = profile.kind === "api" && !(await exists(profile.configDir));
+
+    if (profile.kind === "api") {
+      // An API profile has no account JSON and no Claude Code credential, by design, so
+      // the checks below would report every healthy one as broken. These take their place.
+      const settingsPath = path.join(profile.configDir, "settings.json");
+      issues.push(
+        ...evaluateApiHealth({
+          id,
+          profile,
+          configDirExists: !configDirMissing,
+          // The outcome, and nothing else. resolveSecret returns the key itself: it is
+          // awaited and dropped in the same expression so no binding ever holds it.
+          // Not for a source clausona does not know, which evaluateApiHealth reports itself,
+          // and not when the caller asked for no key to be resolved: then it goes unchecked.
+          secret:
+            resolveSecrets && profile.api && isKnownSecretSource(profile.api.secret)
+              ? await resolveSecret(id, profile.api.secret)
+                  .then(() => ({ ok: true }) as const)
+                  .catch((error: unknown) => ({
+                    ok: false as const,
+                    error: error instanceof Error ? error.message : String(error),
+                  }))
+              : undefined,
+          settings: await readSettings(settingsPath),
+          settingsPath: settingsPath.replace(home, "~"),
+          // Whether the helper the profile reads is the primary's or its own, which is the
+          // difference between "someone else's helper also runs here" and "this profile has
+          // one". A local override is reported separately, by its own check.
+          settingsShared: primarySource
+            ? (await inspectSharedLink(settingsPath, path.join(primarySource, "settings.json"))).pointsToSource
+            : false,
+          credentialEnvKeys: CREDENTIAL_ENV_KEYS,
+          routingEnvKeys: ROUTING_ENV_KEYS,
+          secretEnvName: isSecretEnvName,
+          keySharers: profile.api
+            ? keySharersElsewhere(id, profile.api.secret, profile.api.baseUrl, registry.profiles)
+            : [],
+        }),
+      );
+    } else {
+      // Run tool-aware account/keychain checks
       const accountInfo = await adapter.readAccountInfo(profile.configDir);
       if (!accountInfo) {
         issues.push({
@@ -928,7 +1195,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
       }
     }
 
-    if (primarySource) {
+    if (primarySource && !configDirMissing) {
       const primaryDirents = await readdir(primarySource, { withFileTypes: true }).catch(() => []);
       const primaryEntries = new Set(primaryDirents.map((entry) => entry.name));
 
@@ -996,7 +1263,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
     }
 
     // Check plugins/ consistency for non-primary claude profiles with a real plugins/ dir
-    if (!profile.isPrimary && profile.tool === "claude") {
+    if (!profile.isPrimary && profile.tool === "claude" && !configDirMissing) {
       const profilePlugins = path.join(profile.configDir, "plugins");
       const pluginsStats = await lstat(profilePlugins).catch(() => null);
       if (pluginsStats && !pluginsStats.isSymbolicLink()) {
@@ -1042,10 +1309,17 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
 
     results.push({
       name: id,
+      // The fields `list --json` gives a profile: an API profile's `email` is empty and its
+      // label is under `label`. The report's title is `displayName` of these, as before. A
+      // subscription profile has neither `kind` nor `label`, so its JSON is what it was.
+      kind: shownKind(profile.kind),
       email: profile.email,
+      label: shownLabel(profile.label),
       configDir: profile.configDir,
       isPrimary: Boolean(profile.isPrimary),
-      healthy: issues.length === 0,
+      // Warnings do not make a profile unhealthy: it works, and saying otherwise would
+      // send a user to `repair` or `login` for something neither command can change.
+      healthy: countIssues(issues).errors === 0,
       issues,
     });
   }
@@ -1064,7 +1338,7 @@ export async function repairProfile(id: string) {
     return { repaired: 0 };
   }
 
-  const name = id.split(":").slice(1).join(":");
+  const { name } = parseProfileRef(id, registry);
   const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
   const profileAdapter = getAdapter(profile.tool);
   const primarySource = registry.primarySources[profile.tool] ?? profileAdapter.defaultConfigDir(homedir());
@@ -1118,6 +1392,9 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
   if (prev === next) return { name: id, mergeSessions: next, changed: false };
 
   const primarySource = registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
+  // Resolved before the registry changes, so a name backupDirFor refuses changes nothing.
+  const { name } = parseProfileRef(id, registry);
+  const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
 
   // separated → merged: merge session files before symlinking
   if (next && profile.tool === "claude") {
@@ -1127,8 +1404,6 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
   profile.mergeSessions = next;
   await saveRegistry(registry);
 
-  const name = id.split(":").slice(1).join(":");
-  const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
   const updateAdapter = getAdapter(profile.tool);
   await setupSharedLinks(updateAdapter, profile.configDir, primarySource, next, backupDir);
   if (profile.tool === "claude") {
@@ -1158,8 +1433,227 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
   return { name: id, mergeSessions: next, changed: true };
 }
 
-async function cleanupProfile(name: string, profile: Profile, primarySource: string) {
+/**
+ * A blank ANTHROPIC_MODEL, by any route that writes it. `list` and the preview read a blank
+ * one as "none pinned" (see `profileModel`), but launch exports it as it is - so letting one
+ * in would make what `list` says differ from what Claude Code gets. `--model ""` was already
+ * refused; `--set`, `--edit` and `add --api --set` are the other doors.
+ *
+ * Worded by where it was written, not by which flag: at `add` there is nothing yet to clear.
+ */
+export function checkModelEntry(key: string, value: string, context: "add" | "config"): void {
+  if (key !== "ANTHROPIC_MODEL") return;
+  // Not echoed, and refused rather than stored: `--model "$KEY"` with the wrong variable would
+  // put the key in list's MODEL column and send it to the endpoint as the model's name.
+  if (carriesCredentialToken(value)) {
+    throw new Error(
+      `Give the model's id as your endpoint names it, such as z-ai/glm-5.3, and the key through ${KEY_SOURCE_ROUTES}. This value for ANTHROPIC_MODEL looks like an API key, so it was not stored. If it is the model's id, pick it for one session with \`claude --model\` instead.`,
+    );
+  }
+  if (value.trim() !== "") return;
+  throw new Error(
+    context === "add"
+      ? "A model id cannot be blank. To pin none, leave the model out."
+      : "A model id cannot be blank. To pin none, clear it with clausona config <profile> --unset ANTHROPIC_MODEL.",
+  );
+}
+
+/**
+ * `replace` saves `set` as the whole map, which is what `--edit` does: it opened the map as it
+ * was, so what it saves is the map as it is to be.
+ */
+export async function updateProfileEnv(
+  id: string,
+  changes: { set?: Record<string, string>; unset?: string[]; replace?: boolean },
+) {
+  const registry = await loadRegistry();
+  if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
+  const profile = registry.profiles[id];
+  const current = envMapOf(profile.env);
+  // Spread, a list or a string turns its content into index keys - `0` holding a whole entry,
+  // or one character per key - which is then a map: printed on every path, and no longer
+  // reported. `--edit` is the one change that can start from it, because it replaces it.
+  if (current === undefined && !changes.replace) {
+    const message = invalidEnvMapMessage(id);
+    throw new Error(`${message[0].toUpperCase()}${message.slice(1)}.`);
+  }
+  const env = changes.replace ? {} : { ...current };
+
+  for (const [key, value] of Object.entries(changes.set ?? {})) {
+    // The model's own words first, for a key given as the model.
+    checkModelEntry(key, value, "config");
+    const result = validateEnvEntry(key, value, profile.kind);
+    if (!result.ok) throw new Error(result.error);
+    env[key] = value;
+  }
+  for (const key of changes.unset ?? []) delete env[key];
+  // Checked against the map as it will be saved, so a rename in case within one call works.
+  for (const key of Object.keys(changes.set ?? {})) {
+    if (!Object.hasOwn(env, key)) continue;
+    const twin = envKeyCaseTwin(key, Object.keys(env), profile.kind);
+    if (twin !== undefined) throw new Error(envKeyCaseTwinError(key, twin));
+  }
+
+  registry.profiles[id] = { ...profile, env };
+  await saveRegistry(registry);
+  return registry.profiles[id];
+}
+
+/**
+ * The endpoint block a change to an API profile works on, or why there is none. Two
+ * different answers: a subscription profile is not an API profile at all, while one marked
+ * `api` with no block - a hand edit - is an API profile to doctor and `list`, and has a
+ * remedy, the one doctor gives for it.
+ */
+export function requireEndpoint(id: string, profile: Profile): ApiEndpoint {
+  if (profile.kind !== "api") throw new Error(`Profile '${id}' is not an API profile.`);
+  if (!profile.api) {
+    throw new Error(
+      `Profile '${id}' has no endpoint in ~/.clausona/profiles.json, so there is nothing for config to change - ${missingEndpointRemedy(id)}.`,
+    );
+  }
+  return profile.api;
+}
+
+/** Resolves with whether a key clausona had stored was deleted, which the CLI says. */
+export async function updateProfileSecret(
+  id: string,
+  secret: SecretSource,
+  value?: string,
+): Promise<{ deletedStoredKey: boolean }> {
+  const registry = await loadRegistry();
+  if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
+  const profile = registry.profiles[id];
+  const api = requireEndpoint(id, profile);
+  const { source, toStore } = checkSecretSource(secret, value);
+
+  // Ordered so the registry never names a credential that is not there: a new value is
+  // stored before the registry points at it, and an old one is deleted only after the
+  // registry has stopped pointing at it.
+  if (toStore !== null) await storeSecret(id, toStore);
+  registry.profiles[id] = { ...profile, api: { ...api, secret: source } };
+  await saveRegistry(registry);
+  if (toStore !== null) return { deletedStoredKey: false };
+  // Leaving a stored value behind after switching to an env or command source would keep
+  // a credential alive that nothing reads any more.
+  return { deletedStoredKey: await deleteSecret(id).catch(() => false) };
+}
+
+/**
+ * The scheme `add --api` picks for a host when `--auth` is not given: Anthropic's own API
+ * reads X-Api-Key, and gateways, proxies and self-hosted servers overwhelmingly take a Bearer
+ * token. One rule for `add` and for `config --base-url`, which is what keeps the two from
+ * producing different profiles for the same URL.
+ */
+export function defaultAuthScheme(hostname: string): ApiEndpoint["authScheme"] {
+  return isAnthropicHost(hostname) ? "api-key" : "bearer";
+}
+
+export type ProfileApiUpdate = {
+  profile: Profile;
+  /** The host the key went to before, and goes to now. Undefined for a URL that does not parse. */
+  previousHost?: string;
+  host?: string;
+  /** What `add`'s defaults moved with a new base URL, because they were still the old host's. */
+  followed: { label: boolean; auth: boolean };
+  /**
+   * The scheme the new host would default to, when a base URL change to another host kept a
+   * scheme that differs from it: one that was chosen, or one there was no old host to judge by.
+   */
+  hostDefaultAuth?: ApiEndpoint["authScheme"];
+  /** The new base URL sends the key unencrypted to somewhere off this machine, and did not before. */
+  cleartext: boolean;
+  /**
+   * The other API profiles whose key comes from the same variable or command, and that send
+   * it somewhere other than the new endpoint. Changing what that source gives changes their
+   * key too, and they still send it to their own host. One already on the new endpoint wants
+   * the same key, so it is not counted.
+   */
+  sharedWith: string[];
+};
+
+/**
+ * Changes what `add --api` set besides the key: the endpoint, how the key is presented, and
+ * the label. Every value goes through the rule `addApiProfile` applies, and all of them are
+ * checked before anything is written, so a call that is refused changes nothing. The key
+ * and where it is read from are `updateProfileSecret`'s, and are left alone.
+ *
+ * `add`'s two defaults move with a new base URL while they are still the old host's: the
+ * label, which is the host, and the auth scheme, which the host decides. Left behind, `list`
+ * names a host the profile no longer talks to, and the key goes in a header the new host
+ * does not read - a 401 with nothing to explain it. One that was chosen stays; a scheme that
+ * stays and differs from the new host's default is reported, so the caller can say so. With
+ * a stored URL too broken to have a host there is nothing to compare, and both stay.
+ */
+export async function updateProfileApi(
+  id: string,
+  changes: { baseUrl?: string; authScheme?: string; label?: string },
+): Promise<ProfileApiUpdate> {
+  const registry = await loadRegistry();
+  if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
+  const profile = registry.profiles[id];
+  const api = requireEndpoint(id, profile);
+
+  const baseUrl = changes.baseUrl?.trim() ?? api.baseUrl;
+  const url = changes.baseUrl === undefined ? undefined : parseBaseUrl(baseUrl);
+  const chosenAuth = changes.authScheme === undefined ? undefined : checkAuthScheme(changes.authScheme);
+  const chosenLabel = changes.label === undefined ? undefined : checkLabel(changes.label);
+
+  const before = checkBaseUrl(api.baseUrl);
+  const previous = before.ok ? before.url : undefined;
+  const followLabel =
+    chosenLabel === undefined && url !== undefined && previous !== undefined && profile.label === previous.host;
+  const followAuth =
+    chosenAuth === undefined &&
+    url !== undefined &&
+    previous !== undefined &&
+    api.authScheme === defaultAuthScheme(previous.hostname) &&
+    defaultAuthScheme(url.hostname) !== api.authScheme;
+  const label = followLabel && url ? url.host : (chosenLabel ?? profile.label);
+  const authScheme = chosenAuth ?? (followAuth && url ? defaultAuthScheme(url.hostname) : api.authScheme);
+  const hostDefault = url ? defaultAuthScheme(url.hostname) : undefined;
+
+  registry.profiles[id] = { ...profile, label, api: { ...api, baseUrl, authScheme } };
+  await saveRegistry(registry);
+  return {
+    profile: registry.profiles[id],
+    previousHost: previous?.host,
+    host: url?.host ?? previous?.host,
+    followed: { label: followLabel, auth: followAuth },
+    // Only when the host changes: on the same host the scheme was already kept, and said.
+    hostDefaultAuth:
+      chosenAuth === undefined &&
+      hostDefault !== undefined &&
+      hostDefault !== authScheme &&
+      url?.host !== previous?.host
+        ? hostDefault
+        : undefined,
+    cleartext:
+      url !== undefined && sendsKeyInClear(url) && !(previous?.protocol === "http:" && previous.host === url.host),
+    sharedWith: keySharersElsewhere(id, api.secret, baseUrl, registry.profiles),
+  };
+}
+
+async function cleanupProfile(
+  name: string,
+  profile: Profile,
+  primarySource: string,
+  options: { keepBackup?: boolean } = {},
+) {
   if (profile.isPrimary) return;
+
+  // Resolved before anything is touched: for a name that is not a directory of its own
+  // under the backups, backupDirFor throws, and the profile should be left exactly as it was.
+  const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
+
+  // The registry entry is about to go; a credential outliving it is a credential nothing
+  // will ever clean up. Only an API profile can own one, and gating on that keeps removing
+  // a subscription profile from reaching into the credential store at all. An endpoint block
+  // that says the key is stored owns one whatever the kind says: a hand-edited kind is read
+  // as a subscription, and its key was left behind.
+  if (profile.kind === "api" || profile.api?.secret?.source === "keychain") {
+    await deleteSecret(profileId(profile.tool, name)).catch(() => {});
+  }
 
   // 1a. Strip inner symlinks from plugins/ dir (real dir with inner symlinks)
   const profilePlugins = path.join(profile.configDir, "plugins");
@@ -1187,11 +1681,166 @@ async function cleanupProfile(name: string, profile: Profile, primarySource: str
     }
   }
 
-  // 2. Restore backup if available (original files before clausona setup)
-  const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
-  if (await exists(backupDir)) {
-    await cp(backupDir, profile.configDir, { recursive: true });
-    await rm(backupDir, { force: true, recursive: true });
+  // 2. Restore backup if available (original files before clausona setup), unless the
+  // caller found another profile keeping its backup in the same directory. Never into a
+  // config directory that is gone: that would bring back a directory the user deleted, with
+  // only the backup in it, and keep the name taken - add refuses a name whose directory
+  // exists. An empty backup goes with it; one that holds something is left, and said.
+  if (!options.keepBackup && (await exists(backupDir))) {
+    if (await exists(profile.configDir)) {
+      await cp(backupDir, profile.configDir, { recursive: true });
+      await rm(backupDir, { force: true, recursive: true });
+    } else if (await backupDirOccupied(backupDir)) {
+      const home = homedir();
+      warn(
+        `${profile.configDir.replace(home, "~")} no longer exists, so nothing was restored into it. What clausona set aside from it is still in ${backupDir.replace(home, "~")}: move it somewhere else, or delete it once nothing in it is needed.`,
+      );
+    } else {
+      await rmdir(backupDir).catch(() => {});
+    }
+  }
+}
+
+/**
+ * A new profile's id must differ from every existing one by more than case. Its backup
+ * directory is backups/<tool>/<name>, and on a case-insensitive filesystem - macOS and
+ * Windows by default - `Work` names the directory `work` already owns.
+ */
+function assertProfileIdAvailable(registry: Registry, id: string) {
+  if (registry.profiles[id]) throw new Error(`Profile '${id}' already exists.`);
+  const folded = foldProfileName(id);
+  const clash = Object.keys(registry.profiles).find((existing) => foldProfileName(existing) === folded);
+  if (clash) throw new Error(`Profile '${clash}' already exists (names are compared without case).`);
+}
+
+/**
+ * A new profile's backup directory must not exist yet. Whatever is there belongs to someone
+ * else - a profile whose name differs only by case on a case-insensitive filesystem, or one
+ * that outlived its registry entry and may hold the user's original files - and the add
+ * paths used to clear it before use.
+ */
+function backupDirTaken(backupDir: string, id: string): Error {
+  return new Error(
+    `${backupDir.replace(homedir(), "~")} already exists, so '${id}' cannot use it as its backup directory. It may hold another profile's original files: move it somewhere else (or delete it once you are sure nothing in it is needed), then try again.`,
+  );
+}
+
+/**
+ * Clears the way for a new profile's backup directory. An empty directory left there holds
+ * nothing to lose, and rmdir removes a directory only while it is empty; anything else at
+ * that path - a directory with something in it, or not a directory at all - is refused.
+ */
+async function clearBackupDir(backupDir: string, id: string) {
+  await rmdir(backupDir).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return;
+    // POSIX allows EEXIST as well as ENOTEMPTY for a directory that is not empty.
+    if (error.code === "ENOTEMPTY" || error.code === "EEXIST" || error.code === "ENOTDIR") {
+      throw backupDirTaken(backupDir, id);
+    }
+    throw error;
+  });
+}
+
+/** Whether a backup directory holds anything - or is something other than a directory. */
+async function backupDirOccupied(backupDir: string): Promise<boolean> {
+  const stats = await lstat(backupDir).catch(() => null);
+  if (!stats) return false;
+  if (!stats.isDirectory()) return true;
+  return (await readdir(backupDir)).length > 0;
+}
+
+/**
+ * The names init proposes for these accounts: initProfileNames, with derived names kept clear
+ * of every backup directory that already holds something. Taking one would make it the new
+ * profile's backup, and an item it already has would then be deleted from the account
+ * without being saved.
+ */
+export async function proposeInitProfileNames(
+  accounts: DiscoveredAccount[],
+  registry: Registry | null,
+  chosen: Record<string, string> = {},
+): Promise<Record<string, string>> {
+  const occupied = new Set<string>();
+  for (const tool of ALL_TOOLS) {
+    const base = path.join(CLAUSONA_DIR, "backups", tool);
+    for (const name of await readdir(base).catch((): string[] => [])) {
+      if (await backupDirOccupied(path.join(base, name))) occupied.add(foldProfileName(profileId(tool, name)));
+    }
+  }
+  return initProfileNames(accounts, registry, chosen, occupied);
+}
+
+/** Creates a new profile's backup directory, and refuses rather than reuse one that holds anything. */
+async function claimBackupDir(backupDir: string, id: string) {
+  await clearBackupDir(backupDir, id);
+  await mkdir(path.dirname(backupDir), { recursive: true });
+  // Not recursive: one that appeared since it was cleared is refused, not adopted.
+  await mkdir(backupDir).catch((error: NodeJS.ErrnoException) => {
+    throw error.code === "EEXIST" ? backupDirTaken(backupDir, id) : error;
+  });
+}
+
+/** True when `child` is `parent` or lies inside it. Both are absolute, normalized paths. */
+function isWithin(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+/**
+ * Another registered profile whose backup directory is this profile's, holds it, or lies
+ * inside it. Which files in a shared directory belong to which profile cannot be told apart,
+ * so it is not this profile's alone to restore from and delete. A registry can hold such a
+ * pair from before the name rule: names that differ only by case (one directory on a
+ * case-insensitive filesystem), a name that normalizes to this one (`work/`) or nests under
+ * it (`work/x`), or one that reaches into another tool's backups (`claude:../codex/work`).
+ *
+ * Each other profile's directory is worked out with the plain path math that placed it -
+ * joined onto its own tool's backups, as backupDirFor did before it refused such names -
+ * and not through backupDirFor: an entry that is malformed or refused must not make this
+ * profile's removal fail.
+ */
+function backupDirSharer(registry: Registry, id: string, tool: ToolName, name: string): string | undefined {
+  const backups = path.join(CLAUSONA_DIR, "backups");
+  const where = (entryTool: string, entryName: string) =>
+    foldProfileName(path.resolve(path.join(backups, entryTool, entryName)));
+  const own = where(tool, name);
+  return Object.entries(registry.profiles).find(([other, profile]) => {
+    if (other === id || typeof profile !== "object" || profile === null || profile.isPrimary) return false;
+    const separator = other.indexOf(":");
+    if (separator < 0 || typeof profile.tool !== "string") return false;
+    const theirs = where(profile.tool, other.slice(separator + 1));
+    return isWithin(own, theirs) || isWithin(theirs, own);
+  })?.[0];
+}
+
+/**
+ * `add --from` moves each entry the primary shares into a backup and links it to the
+ * primary's. Run on the primary itself, that replaces each entry with a link to itself; run
+ * on another profile's directory, it gives two profiles one directory; run on a directory
+ * that holds one of those - the home directory holds the primary and its `.claude.json` -
+ * it replaces that directory's own entries with links. All are compared by where they
+ * resolve, so a trailing separator or a link cannot slip past.
+ */
+async function assertImportable(registry: Registry, tool: ToolName, configDir: string, primarySource: string) {
+  const home = homedir();
+  const resolve = (dir: string) => realpath(dir).catch(() => path.resolve(dir));
+  const target = await resolve(configDir);
+  const shown = configDir.replace(home, "~");
+  if (target === (await resolve(primarySource))) {
+    throw new Error(`Cannot add ${shown}: it is ${tool}'s primary config directory, which every profile shares.`);
+  }
+  for (const [id, profile] of Object.entries(registry.profiles)) {
+    if (target === (await resolve(profile.configDir))) {
+      throw new Error(`Cannot add ${shown}: it is already registered as '${id}'.`);
+    }
+  }
+  if (target === (await resolve(home))) {
+    throw new Error(`Cannot add ${shown}: it is the home directory, not a config directory.`);
+  }
+  for (const managed of [primarySource, ...Object.values(registry.profiles).map((profile) => profile.configDir)]) {
+    if (isWithin(target, await resolve(managed))) {
+      throw new Error(`Cannot add ${shown}: it holds ${managed.replace(home, "~")}, which clausona already manages.`);
+    }
   }
 }
 
@@ -1201,15 +1850,14 @@ export async function addProfile(options: {
   fromPath?: string;
   mergeSessions?: boolean;
 }) {
-  if (options.name === "" || options.name.includes(":")) {
-    throw new Error(`Invalid profile name '${options.name}': must be non-empty and not contain ':'.`);
-  }
+  const nameCheck = validateProfileName(options.name);
+  if (!nameCheck.ok) throw new Error(nameCheck.error);
 
   const registry = await loadRegistry();
-  if (!registry) throw new Error("clausona is not initialized.");
+  if (!registry) throw await noRegistryError();
 
   const id = profileId(options.tool, options.name);
-  if (registry.profiles[id]) throw new Error(`Profile '${id}' already exists.`);
+  assertProfileIdAvailable(registry, id);
 
   const adapter = getAdapter(options.tool);
   const home = homedir();
@@ -1217,12 +1865,12 @@ export async function addProfile(options: {
 
   if (options.fromPath) {
     const configDir = options.fromPath.replace(/^~(?=$|[\\/])/, home);
+    await assertImportable(registry, options.tool, configDir, primarySource);
     const accountInfo = await adapter.readAccountInfo(configDir);
     if (!accountInfo) throw new Error("Could not read account info from config dir.");
 
     const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);
-    await rm(backupDir, { force: true, recursive: true });
-    await mkdir(backupDir, { recursive: true });
+    await claimBackupDir(backupDir, id);
     // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
     const mergeSessions = options.mergeSessions ?? false;
     try {
@@ -1267,6 +1915,9 @@ export async function addProfile(options: {
       `${configDir.replace(home, "~")} already exists. Use --from ${configDir.replace(home, "~")} to import it instead.`,
     );
   }
+  // Cleared here as well as where it is created, so a refusal does not come after a sign-in.
+  const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);
+  await clearBackupDir(backupDir, id);
   await mkdir(configDir, { recursive: true });
 
   // Check if credentials already exist for this dir
@@ -1313,9 +1964,10 @@ export async function addProfile(options: {
     throw new Error("Login succeeded but account metadata is missing.");
   }
 
-  const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);
-  await rm(backupDir, { force: true, recursive: true });
-  await mkdir(backupDir, { recursive: true });
+  await claimBackupDir(backupDir, id).catch(async (error) => {
+    await rm(configDir, { force: true, recursive: true });
+    throw error;
+  });
   // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
 
   const mergeSessions = options.mergeSessions ?? false;
@@ -1351,6 +2003,250 @@ export async function addProfile(options: {
 }
 
 /**
+ * Checks a key source before anything is stored or persisted. Returns the reference to
+ * persist - rebuilt from its known fields, so nothing else a caller attached to the object
+ * reaches profiles.json - and the value to store, which only the keychain source has.
+ * No error here carries a key.
+ */
+function checkSecretSource(
+  secret: SecretSource,
+  value: string | undefined,
+): { source: SecretSource; toStore: string | null } {
+  switch (secret.source) {
+    case "keychain":
+      if (value === undefined || value.trim() === "") throw new Error("no API key supplied for the keychain source");
+      // A pasted key often brings a newline along, and the file backend reads back what it stored.
+      return { source: { source: "keychain" }, toStore: value.trim() };
+    case "env":
+      // Not echoed: a key pasted where the variable name belongs would land in the error. A
+      // key can be a valid name - `hf_…`, `gsk_…`, `sk_live_…` are letters, digits and
+      // underscores - so the name rule alone would store one, and every surface that names
+      // the variable would print it. The shape check comes first, for the message that fits.
+      if (typeof secret.name === "string" && carriesCredentialToken(secret.name)) {
+        throw new Error(
+          "Pass the name of the variable that holds the key - export GW_KEY=… in the shell that runs claude, then --key-from env:GW_KEY. What followed env: looks like an API key rather than a name, so it was not stored. If it is a variable's name, copy the variable to a plainer name the same way and pass that.",
+        );
+      }
+      if (typeof secret.name !== "string" || !isPosixEnvName(secret.name)) {
+        throw new Error(
+          "Invalid key variable name: use letters, digits and underscores, starting with a letter or underscore. Pass the variable's name, not the key.",
+        );
+      }
+      return { source: { source: "env", name: secret.name }, toStore: null };
+    case "command":
+      if (typeof secret.run !== "string" || secret.run.trim() === "") {
+        throw new Error("The key command is empty.");
+      }
+      return { source: { source: "command", run: secret.run }, toStore: null };
+    default:
+      throw new Error("Unknown key source: use keychain, env or command.");
+  }
+}
+
+/** Where a key goes instead of wherever it was just refused, said the same way each time. */
+const KEY_SOURCE_ROUTES = "the key source - the prompt or --key, or --key-from env:NAME";
+
+/**
+ * Exported so the CLI can apply this rule before it asks for a key, rather than after -
+ * a rejected base URL should not cost the user a typed key. It is the definition, not a
+ * copy: `addApiProfile` calls the same function, and the caller gets the same message.
+ */
+export function parseBaseUrl(baseUrl: string): URL {
+  // The rules live in core/api-url.ts, which the doctor reads too; only the wording is
+  // here. Neither message repeats the URL: profiles.json holds references to secrets,
+  // never secrets, and a password in the URL would be persisted and exported with it.
+  const checked = checkBaseUrl(baseUrl);
+  if (!checked.ok) {
+    switch (checked.problem.reason) {
+      case "empty":
+      case "unparseable":
+        throw new Error("Invalid base URL: must be an absolute http:// or https:// URL.");
+      case "scheme":
+        // With no `//`, `user:pass@host` parses with the username as its "scheme": naming it
+        // would print a token pasted there. It is userinfo, and is refused as userinfo.
+        if (hasBareUserinfo(baseUrl)) {
+          throw new Error(
+            "Invalid base URL: it must not carry credentials. Supply the key through the key source instead.",
+          );
+        }
+        if (checked.problem.scheme === undefined) {
+          throw new Error("Invalid base URL: it has no http:// or https:// scheme.");
+        }
+        throw new Error(`Invalid base URL: the scheme must be http or https, not '${checked.problem.scheme}'.`);
+      case "credentials":
+        throw new Error(
+          "Invalid base URL: it must not carry credentials. Supply the key through the key source instead.",
+        );
+      case "key-shaped":
+        // The way out first. The shape check can be wrong about a URL - a long random-looking
+        // path segment is one - and there is no flag to overrule it, so the one way to use
+        // such an endpoint is said too: by hand, which doctor then reports without blocking.
+        throw new Error(
+          `Invalid base URL: give the endpoint without the key, and the key through ${KEY_SOURCE_ROUTES}. Part of this URL looks like an API key, so it was not stored. If none of it is one, write the URL into api.baseUrl in ~/.clausona/profiles.json by hand (for a new profile, after adding it with any other URL).`,
+        );
+      case "key-parameter":
+        throw new Error(
+          `Invalid base URL: give the endpoint without its '${checked.problem.parameter}' parameter, and the key through ${KEY_SOURCE_ROUTES}. A query parameter by that name carries a credential, so the URL was not stored.`,
+        );
+      default: {
+        const unhandled: never = checked.problem;
+        throw new Error(`unhandled base URL problem: ${JSON.stringify(unhandled)}`);
+      }
+    }
+  }
+  return checked.url;
+}
+
+/**
+ * The label rule, for `add --api` and `config --label` alike. Exported so the CLI can apply
+ * it before asking for a key, as it does `parseBaseUrl`.
+ *
+ * A blank label would render the profile as an empty row in `list`, since an API profile
+ * has no account email for `displayName` to fall back on.
+ */
+export function checkLabel(label: string, context: "add" | "config" = "config"): string {
+  const trimmed = label.trim();
+  // Not echoed: a label is printed wherever the profile is named, so a key given as one would
+  // be on every `list`.
+  if (carriesCredentialToken(trimmed)) {
+    throw new Error(
+      `Choose a label that reads as a name, such as --label "OpenRouter GLM", and pass the key through ${KEY_SOURCE_ROUTES}. This label looks like an API key, so it was not stored.`,
+    );
+  }
+  if (trimmed === "") {
+    // At add, leaving the label out gets the endpoint's host; at config there is no such
+    // default to fall back on, only the label the profile already has.
+    const hint = context === "add" ? " Leave --label out to use the endpoint's host." : "";
+    throw new Error(`Label cannot be blank: it is the name \`clausona list\` shows for this profile.${hint}`);
+  }
+  return trimmed;
+}
+
+function checkAuthScheme(scheme: string): ApiEndpoint["authScheme"] {
+  // Not echoed: arguments passed in the wrong order would put the key here.
+  if (scheme !== "bearer" && scheme !== "api-key") {
+    throw new Error("Invalid auth scheme: must be 'bearer' or 'api-key'.");
+  }
+  return scheme;
+}
+
+/**
+ * API profiles are Claude Code's alone in this version. Exported so the CLI refuses a Codex
+ * one before its key prompt, as it does with `parseBaseUrl`, rather than after the key is typed.
+ */
+export function checkApiTool(tool: ToolName): void {
+  if (tool !== "claude") throw new Error("API profiles are Claude Code only in this version.");
+}
+
+/**
+ * Where a new API profile's config directory goes, once the name is free: no profile has its
+ * id, and nothing is at the directory yet. addApiProfile's own check, exported so the CLI
+ * makes it before the key prompt - a name it is going to refuse should not cost a typed key.
+ */
+export async function freeApiConfigDir(registry: Registry, tool: ToolName, name: string): Promise<string> {
+  assertProfileIdAvailable(registry, profileId(tool, name));
+  const home = homedir();
+  const configDir = path.join(home, `.claude-${name}`);
+  if (await exists(configDir)) {
+    throw new Error(`${configDir.replace(home, "~")} already exists. Choose another profile name.`);
+  }
+  return configDir;
+}
+
+export async function addApiProfile(options: {
+  tool: ToolName;
+  name: string;
+  baseUrl: string;
+  authScheme: "bearer" | "api-key";
+  secret: SecretSource;
+  /** Present only for the keychain source: the value to store. */
+  secretValue?: string;
+  label?: string;
+  env?: Record<string, string>;
+  mergeSessions?: boolean;
+}) {
+  // Every input is checked before the first side effect, so a rejection leaves no config
+  // directory, stored credential, or registry entry behind.
+  const nameCheck = validateProfileName(options.name);
+  if (!nameCheck.ok) throw new Error(nameCheck.error);
+  checkApiTool(options.tool);
+  const baseUrl = options.baseUrl.trim();
+  const url = parseBaseUrl(baseUrl);
+  checkAuthScheme(options.authScheme);
+  // Absent means "use the host".
+  const label = options.label === undefined ? url.host : checkLabel(options.label, "add");
+  const { source: secret, toStore } = checkSecretSource(options.secret, options.secretValue);
+  const env = { ...options.env };
+  for (const [key, value] of Object.entries(env)) {
+    checkModelEntry(key, value, "add");
+    const result = validateEnvEntry(key, value, "api");
+    if (!result.ok) throw new Error(result.error);
+    const twin = envKeyCaseTwin(key, Object.keys(env), "api");
+    if (twin !== undefined) throw new Error(envKeyCaseTwinError(key, twin));
+  }
+
+  const registry = await loadRegistry();
+  if (!registry) throw await noRegistryError();
+
+  const id = profileId(options.tool, options.name);
+  const configDir = await freeApiConfigDir(registry, options.tool, options.name);
+
+  const adapter = getAdapter(options.tool);
+  const home = homedir();
+  const primarySource = registry.primarySources[options.tool] ?? adapter.defaultConfigDir(home);
+
+  const mergeSessions = options.mergeSessions ?? false;
+  const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);
+  // The first side effect, so a backup directory that is already there changes nothing.
+  await claimBackupDir(backupDir, id);
+  try {
+    await mkdir(configDir, { recursive: true });
+    // Carry the primary's onboarding state across. An API profile has no login step, so an
+    // onboarding wizard on first launch is even more jarring than it is for a new account.
+    const primaryJsonPath = claudeJsonPathForConfigDir({ homeDir: home, configDir: primarySource });
+    const jsonPath = path.join(configDir, ".claude.json");
+    const primaryJson = await readJson<Record<string, unknown>>(primaryJsonPath, {});
+    const profileJson = await readJson<Record<string, unknown>>(jsonPath, {});
+    for (const key of ["hasCompletedOnboarding", "lastOnboardingVersion"] as const) {
+      if (primaryJson[key] !== undefined && profileJson[key] === undefined) profileJson[key] = primaryJson[key];
+    }
+    await writeJson(jsonPath, profileJson);
+
+    await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
+    await setupPluginsDir(configDir, primarySource);
+    if (toStore !== null) await storeSecret(id, toStore);
+
+    // Inside the try: a registry write that fails must not strand the credential above.
+    registry.profiles[id] = {
+      tool: options.tool,
+      kind: "api",
+      configDir,
+      email: "",
+      label,
+      mergeSessions,
+      api: { baseUrl, authScheme: options.authScheme, secret },
+      env,
+    };
+    if (!registry.primarySources[options.tool]) registry.primarySources[options.tool] = primarySource;
+    await saveRegistry(registry);
+  } catch (error) {
+    await cleanupProfile(
+      options.name,
+      { tool: options.tool, kind: "api", configDir, email: "", isPrimary: false },
+      primarySource,
+    ).catch(() => {});
+    await rm(configDir, { force: true, recursive: true }).catch(() => {});
+    throw new Error(
+      `Failed to set up profile '${options.name}': ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  await seedSeenSessions(id, configDir);
+  // The profiles this one now shares its key's variable or command with, on other endpoints:
+  // the state doctor reports, which `add` is the first to see.
+  return { name: options.name, configDir, sharedWith: keySharersElsewhere(id, secret, baseUrl, registry.profiles) };
+}
+
+/**
  * Whether a sign-in landed on a different account than the one registered. Codex records
  * the account id instead of an email when its id_token carries none, so only values of
  * the same form are compared: two emails case-insensitively, two ids exactly. An email
@@ -1372,6 +2268,9 @@ export async function loginProfile(id: string): Promise<LoginResult> {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
   const profile = registry.profiles[id];
+  if (profile.kind === "api") {
+    throw new Error(`'${id}' is an API profile. Change its key with 'clausona config ${id} --key'.`);
+  }
   const adapter = getAdapter(profile.tool);
   const loggedIn = await adapter.runLogin(profile.configDir);
   if (!loggedIn) throw new Error(`${profile.tool} login failed.`);
@@ -1390,44 +2289,112 @@ export async function removeProfile(id: string) {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
 
+  // Every value the removal uses is read and checked here, before its first side effect.
+  // cleanupProfile deletes a stored key before it touches anything else, then strips the links
+  // and restores and deletes the backup, so a bad value it met on the way would leave the
+  // removal half done with the entry still registered. profiles.json can be edited by hand,
+  // so nothing in it is taken on trust.
+  const home = homedir();
+  const shownRegistry = REGISTRY_PATH.replace(home, "~");
+  const unremovable = (reason: string) =>
+    new Error(`Profile '${id}' ${reason}, so it cannot be removed. Remove its entry from ${shownRegistry} by hand.`);
   const profile = registry.profiles[id];
+  if (typeof profile !== "object") throw unremovable("is not a profile entry");
   if (profile.isPrimary) throw new Error("Cannot remove the primary profile.");
-
-  const name = id.split(":").slice(1).join(":");
-  const primarySource = registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
-  await cleanupProfile(name, profile, primarySource);
-
-  delete registry.profiles[id];
-  // If the removed profile was the active one for its tool, pick another or clear
-  if (registry.activeProfiles[profile.tool] === id) {
-    const otherKey = Object.keys(registry.profiles).find((k) => registry.profiles[k].tool === profile.tool);
-    if (otherKey) {
-      registry.activeProfiles[profile.tool] = otherKey;
-    } else {
-      delete registry.activeProfiles[profile.tool];
-    }
+  if (!ALL_TOOLS.includes(profile.tool)) throw unremovable("has no known tool (claude or codex)");
+  // The tool decides whose stored key and backup directory this removal deletes.
+  if (!id.startsWith(`${profile.tool}:`)) throw unremovable(`is not listed as '${profile.tool}:<name>'`);
+  if (typeof profile.configDir !== "string" || !path.isAbsolute(profile.configDir)) {
+    throw unremovable("has no config directory path");
   }
-  // Clean primarySources if no profile of this tool remains
-  const anyLeftForTool = Object.values(registry.profiles).some((p) => p.tool === profile.tool);
-  if (!anyLeftForTool) {
-    delete registry.primarySources[profile.tool];
+  // Recognising which links lead to the primary depends on this, so a value that is not a path
+  // is refused rather than replaced by the default: a wrong guess would strip the wrong links.
+  const adapter = getAdapter(profile.tool);
+  const recorded: unknown = registry.primarySources?.[profile.tool];
+  if (recorded !== undefined && (typeof recorded !== "string" || !path.isAbsolute(recorded))) {
+    throw new Error(
+      `primarySources.${profile.tool} in ${shownRegistry} is not a path, so '${id}' cannot be removed: clausona needs it to tell the profile's links to the primary apart. Set it to the ${profile.tool} primary config directory (${adapter.defaultConfigDir(home).replace(home, "~")}) and run the command again.`,
+    );
   }
-  await saveRegistry(registry);
+  const primarySource = (recorded as string | undefined) ?? adapter.defaultConfigDir(home);
+  const { name } = parseProfileRef(id, registry);
+  const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
+  const sharer = backupDirSharer(registry, id, profile.tool, name);
+  const sharedWarning = sharer
+    ? `${id}: left ${backupDir.replace(home, "~")} in place because '${sharer}' keeps its backup there too. Nothing from it was restored into ${profile.configDir.replace(home, "~")}; copy back anything you need from it by hand.`
+    : undefined;
+
+  // The profiles of this tool that remain, counting only entries clausona could have written:
+  // the next active profile is picked from these.
+  const remaining = Object.keys(registry.profiles).filter((key) => {
+    const other = registry.profiles[key];
+    return (
+      key !== id &&
+      key.startsWith(`${profile.tool}:`) &&
+      other?.tool === profile.tool &&
+      typeof other.configDir === "string" &&
+      path.isAbsolute(other.configDir)
+    );
+  });
+  const profiles = { ...registry.profiles };
+  delete profiles[id];
+  const activeProfiles = { ...registry.activeProfiles };
+  if (activeProfiles[profile.tool] === id) {
+    if (remaining.length > 0) activeProfiles[profile.tool] = remaining[0];
+    else delete activeProfiles[profile.tool];
+  }
+  const primarySources = { ...registry.primarySources };
+  if (remaining.length === 0) delete primarySources[profile.tool];
+  const next: Registry = { ...registry, profiles, activeProfiles, primarySources };
+
+  await cleanupProfile(name, profile, primarySource, { keepBackup: sharer !== undefined });
+  if (sharedWarning) warn(sharedWarning);
+  await saveRegistry(next);
+}
+
+/**
+ * Deletes a variable from an environment copy. Windows treats environment names
+ * case-insensitively - `anthropic_api_key` is ANTHROPIC_API_KEY to the tool - and a spread
+ * of process.env keeps whatever spelling the variable was created with, so there every
+ * spelling goes, except one the profile set itself. On POSIX a differently cased name is a
+ * different variable.
+ */
+function deleteEnvVar(env: NodeJS.ProcessEnv, key: string, platform: NodeJS.Platform, keep: Record<string, string>) {
+  if (platform !== "win32") {
+    delete env[key];
+    return;
+  }
+  const upper = key.toUpperCase();
+  for (const name of Object.keys(env)) {
+    if (name.toUpperCase() === upper && !Object.hasOwn(keep, name)) delete env[name];
+  }
 }
 
 export async function resolveProfileEnv(
   id: string,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<{ tool: ToolName; binary: string; configDir: string; env: NodeJS.ProcessEnv }> {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
   const profile = registry.profiles[id];
   const adapter = getAdapter(profile.tool);
-  const env = { ...process.env };
-  if (profile.isPrimary) {
-    delete env[adapter.configEnvVar];
-  } else {
-    env[adapter.configEnvVar] = profile.configDir;
+  const { env: profileEnv, unset, warnings } = await buildProfileEnv(id, profile);
+  for (const warning of warnings) warn(warning);
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // On Windows an inherited `my_flag` is the profile's `My_Flag` under another spelling, and
+  // with both in the env the child would get whichever sorts first - so the profile's own
+  // spelling replaces every inherited one.
+  for (const key of Object.keys(profileEnv)) deleteEnvVar(env, key, platform, {});
+  Object.assign(env, profileEnv);
+  // buildProfileEnv omits the config variable for a primary profile; an inherited value
+  // from the surrounding shell would otherwise survive and point at the wrong profile.
+  if (!Object.hasOwn(profileEnv, adapter.configEnvVar)) {
+    deleteEnvVar(env, adapter.configEnvVar, platform, profileEnv);
   }
+  // A credential the caller exported for something else, which the tool would otherwise
+  // send to this profile's endpoint alongside the profile's own, or a provider switch that
+  // would route around it. The shell hooks unset the same list.
+  for (const key of unset) deleteEnvVar(env, key, platform, profileEnv);
   if (profile.tool === "claude") {
     const primary = registry.primarySources.claude ?? adapter.defaultConfigDir(homedir());
     await syncPluginsJson(profile.configDir, primary).catch((e) =>
@@ -1451,7 +2418,7 @@ export async function uninstallClausona() {
     for (const [id, profile] of Object.entries(registry.profiles)) {
       if (profile.isPrimary) continue;
       try {
-        const name = id.split(":").slice(1).join(":");
+        const { name } = parseProfileRef(id, registry);
         const primarySource =
           registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
         await cleanupProfile(name, profile, primarySource);

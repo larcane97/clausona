@@ -74,8 +74,9 @@ function prepareCommand(
 
 /**
  * Only the PowerShell shim needs an env of our making — it reads the command and its
- * arguments out of two variables. Every other call keeps the caller's `env` exactly as
- * given, so a caller that deliberately restricts the child's environment still does.
+ * arguments out of two variables, added on top of the child's environment. Every other call
+ * keeps the caller's `env` exactly as given, so a caller that deliberately restricts the
+ * child's environment still does.
  */
 function spawnOptions<T extends SpawnOptions | SpawnSyncOptions>(
   options: T,
@@ -86,9 +87,17 @@ function spawnOptions<T extends SpawnOptions | SpawnSyncOptions>(
   return { ...options, env: { ...resolvedEnv, ...preparedEnv } };
 }
 
-export function spawnCommand(command: string, args: string[], options: SpawnOptions = {}): ChildProcess {
-  const env = { ...process.env, ...options.env };
-  const prepared = prepareCommand(command, args, env);
+export function spawnCommand(
+  command: string,
+  args: string[],
+  options: SpawnOptions = {},
+  platform: NodeJS.Platform = process.platform,
+): ChildProcess {
+  // A given env replaces the environment, as Node's own `env` option does - it is never
+  // merged back over process.env. `clausona run` passes one with a parent's credentials
+  // removed, and a merge here handed them straight back to a Windows .cmd/.bat/.ps1 shim.
+  const env = options.env ?? process.env;
+  const prepared = prepareCommand(command, args, env, platform);
   return spawn(prepared.command, prepared.args, spawnOptions(options, env, prepared.env));
 }
 
@@ -96,9 +105,13 @@ export function spawnCommandSync(
   command: string,
   args: string[],
   options: SpawnSyncOptions = {},
+  platform: NodeJS.Platform = process.platform,
 ): SpawnSyncReturns<Buffer | string> {
-  const env = { ...process.env, ...options.env };
-  const prepared = prepareCommand(command, args, env);
+  // A given env replaces the environment, as Node's own `env` option does - it is never
+  // merged back over process.env. `clausona run` passes one with a parent's credentials
+  // removed, and a merge here handed them straight back to a Windows .cmd/.bat/.ps1 shim.
+  const env = options.env ?? process.env;
+  const prepared = prepareCommand(command, args, env, platform);
   return spawnSync(prepared.command, prepared.args, spawnOptions(options, env, prepared.env)) as SpawnSyncReturns<
     Buffer | string
   >;

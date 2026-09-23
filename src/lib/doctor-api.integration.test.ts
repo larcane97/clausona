@@ -1,0 +1,710 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { DoctorProfileResult, SecretSource } from "../types.js";
+
+/**
+ * `clausona doctor` over a registry that holds API profiles, driven through the real
+ * service against a real filesystem.
+ *
+ * The same three seams as src/lib/api-profile.integration.test.ts keep this off the
+ * machine running it:
+ *
+ * - HOME, stubbed with the module graph re-imported, so ~/.clausona is a temp directory.
+ * - `./secrets.js`, delegating to the real implementation with the "file" backend forced,
+ *   so a stored key lands in the temp HOME and never in the login Keychain.
+ * - `../core/process.js`, where every spawn throws and is recorded. `security` and
+ *   `secret-tool` are reached only through the spawn helpers, so no test here can touch a
+ *   real credential store even if the secrets mock were wrong. One test deliberately
+ *   provokes a spawn - resolving a `command:` key source is a spawn - and clears the
+ *   record itself.
+ *
+ * process.platform is forced too. Left alone, the Keychain probe for the subscription
+ * profiles would spawn `security` on the developer's own machine.
+ */
+
+const temps: string[] = [];
+let spawned: string[] = [];
+const realPlatform = process.platform;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  vi.doUnmock("./secrets.js");
+  vi.doUnmock("../core/process.js");
+  vi.resetModules();
+  Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+  for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
+  const unexpected = spawned;
+  spawned = [];
+  expect(unexpected, "a test spawned a process").toEqual([]);
+});
+
+type HarnessOptions = {
+  platform?: NodeJS.Platform;
+  /** Extra profiles written straight into profiles.json, as a hand-edited one would be. */
+  profiles?: Record<string, unknown>;
+  /** Contents of the primary's settings.json, which every profile shares. */
+  settings?: Record<string, unknown>;
+  /** Leave the primary out of the registry entirely. */
+  withoutPrimary?: boolean;
+  /**
+   * Directories to create in the primary. The default is one ordinary shared directory;
+   * `[]` gives a primary that holds nothing a profile could be missing, which is what
+   * makes the shared-link checks say nothing at all.
+   */
+  primaryDirs?: string[];
+};
+
+async function harness(options: HarnessOptions = {}) {
+  const home = mkdtempSync(path.join(tmpdir(), "clausona-doctor-api-"));
+  temps.push(home);
+
+  // What an initialised install has: a primary that has been through onboarding and holds
+  // a login, plus one directory for profiles to share.
+  const primary = path.join(home, ".claude");
+  mkdirSync(primary, { recursive: true });
+  for (const dir of options.primaryDirs ?? ["commands"]) mkdirSync(path.join(primary, dir), { recursive: true });
+  mkdirSync(path.join(home, ".clausona"), { recursive: true });
+  writeFileSync(path.join(primary, "settings.json"), JSON.stringify(options.settings ?? { theme: "dark" }));
+  writeFileSync(path.join(primary, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "P" } }));
+  writeFileSync(
+    path.join(home, ".claude.json"),
+    JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { emailAddress: "primary@example.com" } }),
+  );
+
+  const registryPath = path.join(home, ".clausona", "profiles.json");
+  writeFileSync(
+    registryPath,
+    JSON.stringify({
+      version: 2,
+      primarySources: { claude: primary },
+      activeProfiles: { claude: "claude:default" },
+      profiles: {
+        ...(options.withoutPrimary
+          ? {}
+          : {
+              "claude:default": { tool: "claude", configDir: primary, email: "primary@example.com", isPrimary: true },
+            }),
+        ...options.profiles,
+      },
+    }),
+  );
+
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("USERPROFILE", home);
+  Object.defineProperty(process, "platform", { value: options.platform ?? "linux", configurable: true });
+  vi.resetModules();
+  vi.doMock("../core/process.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../core/process.js")>();
+    const refuse = (command: string): never => {
+      spawned.push(command);
+      throw new Error(`test attempted to spawn '${command}'`);
+    };
+    return { ...actual, spawnCommand: refuse, spawnCommandSync: refuse };
+  });
+  vi.doMock("./secrets.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./secrets.js")>();
+    return {
+      ...actual,
+      storeSecret: (id: string, value: string) => actual.storeSecret(id, value, "file"),
+      deleteSecret: (id: string) => actual.deleteSecret(id, "file"),
+      resolveSecret: (id: string, source: SecretSource) => actual.resolveSecret(id, source, "file"),
+    };
+  });
+  const service = await import("./service.js");
+  const secrets = await import("./secrets.js");
+  const { renderDoctor } = await import("./format.js");
+  const { stripAnsi } = await import("./cli-style.js");
+
+  return {
+    home,
+    primary,
+    service,
+    secrets,
+    /** The config dir `addApi` creates, so a test can break it after the fact. */
+    apiConfigDir: path.join(home, ".claude-glm"),
+    /**
+     * Paths under the temp HOME are replaced with `~`, so output can be compared literally -
+     * JSON too, which spells a Windows home with its backslashes doubled.
+     */
+    normalize: (text: string) => text.split(JSON.stringify(home).slice(1, -1)).join("~").split(home).join("~"),
+    doctor: () => service.doctorProfiles(),
+    render: (results: DoctorProfileResult[]) => stripAnsi(renderDoctor(results)),
+    /** The API profile every test starts from: one endpoint, one stored key. */
+    addApi: (extra: Parameters<typeof service.addApiProfile>[0] extends infer T ? Partial<T> : never = {}) =>
+      service.addApiProfile({
+        tool: "claude",
+        name: "glm",
+        baseUrl: "http://gpu-box:30000",
+        authScheme: "bearer",
+        secret: { source: "keychain" },
+        secretValue: STORED_KEY,
+        ...extra,
+      }),
+  };
+}
+
+/** A value that must never appear in doctor's output, in any form. */
+const STORED_KEY = "sk-live-DO-NOT-PRINT-0001";
+
+function issuesFor(results: DoctorProfileResult[], name: string) {
+  const result = results.find((r) => r.name === name);
+  if (!result) throw new Error(`no doctor result for ${name}`);
+  return result.issues;
+}
+
+const kinds = (results: DoctorProfileResult[], name: string) => issuesFor(results, name).map((issue) => issue.kind);
+
+describe("doctor on an API profile", () => {
+  it("reports a healthy one as healthy", async () => {
+    const h = await harness();
+    await h.addApi();
+
+    const results = await h.doctor();
+
+    // Before this, every API profile was reported broken: it has no account JSON and no
+    // Claude Code Keychain item, and it never will have either.
+    expect(issuesFor(results, "claude:glm")).toEqual([]);
+    expect(results.find((r) => r.name === "claude:glm")?.healthy).toBe(true);
+  });
+
+  // The same fields `list --json` gives it: no account email, so `email` is empty, and the
+  // label and kind under their own names. The text report still titles it with the label.
+  it("carries its kind and label in the JSON, and titles the report with the label", async () => {
+    const h = await harness();
+    await h.addApi({ label: "gpu-box" });
+
+    const results = await h.doctor();
+    const result = results.find((r) => r.name === "claude:glm");
+
+    expect(result).toMatchObject({ kind: "api", email: "", label: "gpu-box" });
+    expect(h.render(results)).toContain("claude:glm (gpu-box)");
+    // A subscription profile gains neither key, as in `list --json`.
+    expect(Object.keys(JSON.parse(JSON.stringify(results.find((r) => r.name === "claude:default"))))).toEqual([
+      "name",
+      "email",
+      "configDir",
+      "isPrimary",
+      "healthy",
+      "issues",
+    ]);
+  });
+
+  it("does not probe the Keychain for it on macOS", async () => {
+    // Only the API profile is registered: any spawn at all here came from this profile,
+    // and `security` is reached only through the mocked spawn helpers.
+    const h = await harness({ platform: "darwin", withoutPrimary: true });
+    await h.addApi();
+
+    const results = await h.doctor();
+
+    expect(spawned).toEqual([]);
+    expect(kinds(results, "claude:glm")).toEqual([]);
+  });
+
+  it("reports a key that is no longer in the store", async () => {
+    const h = await harness();
+    await h.addApi();
+    await h.secrets.deleteSecret("claude:glm");
+
+    const issues = issuesFor(await h.doctor(), "claude:glm");
+
+    expect(issues.map((i) => i.kind)).toEqual(["missing_api_secret"]);
+    expect(issues[0].message).toContain("clausona config claude:glm --key");
+  });
+
+  it("reports a key source whose environment variable is unset", async () => {
+    const h = await harness();
+    await h.addApi({ secret: { source: "env", name: "GLM_KEY_UNSET" }, secretValue: undefined });
+
+    const issues = issuesFor(await h.doctor(), "claude:glm");
+
+    expect(issues.map((i) => i.kind)).toEqual(["missing_api_secret"]);
+    expect(issues[0].message).toContain("GLM_KEY_UNSET");
+  });
+
+  it("is quiet when the environment variable is set", async () => {
+    const h = await harness();
+    await h.addApi({ secret: { source: "env", name: "GLM_KEY_SET" }, secretValue: undefined });
+    vi.stubEnv("GLM_KEY_SET", STORED_KEY);
+
+    expect(issuesFor(await h.doctor(), "claude:glm")).toEqual([]);
+  });
+
+  it("runs a command key source, because running it is the check", async () => {
+    const h = await harness();
+    await h.addApi({ secret: { source: "command", run: "op read op://vault/glm" }, secretValue: undefined });
+
+    const issues = issuesFor(await h.doctor(), "claude:glm");
+
+    // The spawn is the point: a command source is only healthy if the command works, and
+    // there is no way to learn that without running it. Here the harness refuses it.
+    expect(spawned).toEqual(["/bin/sh"]);
+    spawned = [];
+    expect(issues.map((i) => i.kind)).toEqual(["missing_api_secret"]);
+  });
+
+  it("runs no command key source for a caller that asks for no key to be resolved", async () => {
+    // The dashboard's read, on open and after every change: it left the screen on Loading
+    // for as long as each command took, and a touch-ID prompt fired on every reload.
+    const h = await harness();
+    await h.addApi({ secret: { source: "command", run: "op read op://vault/glm" }, secretValue: undefined });
+
+    const issues = issuesFor(await h.service.doctorProfiles({ resolveSecrets: false }), "claude:glm");
+
+    expect(spawned).toEqual([]);
+    expect(issues).toEqual([]);
+  });
+
+  it("reports an endpoint that was edited into profiles.json by hand", async () => {
+    const h = await harness({
+      profiles: {
+        "claude:bad": {
+          tool: "claude",
+          kind: "api",
+          configDir: path.join("/does-not-matter"),
+          email: "",
+          label: "bad",
+          api: { baseUrl: "gpu-box:30000", authScheme: "bearer", secret: { source: "env", name: "SET_BELOW" } },
+        },
+      },
+    });
+    vi.stubEnv("SET_BELOW", STORED_KEY);
+
+    const issues = issuesFor(await h.doctor(), "claude:bad");
+
+    expect(issues.map((i) => i.kind)).toContain("invalid_api_config");
+    // The command that rewrites it, rather than the file a hand edit broke it in.
+    expect(issues.find((i) => i.kind === "invalid_api_config")?.message).toContain(
+      "clausona config claude:bad --base-url <url>",
+    );
+  });
+
+  it("reports apiKeyHelper in the settings the profile shares with the primary", async () => {
+    const h = await harness({ settings: { theme: "dark", apiKeyHelper: "op read op://vault/anthropic" } });
+    await h.addApi();
+
+    const results = await h.doctor();
+
+    // settings.json is a shared link into the primary, so the helper Claude Code runs for
+    // the primary runs for this profile too - and hands its key to a third-party endpoint.
+    expect(kinds(results, "claude:glm")).toEqual(["shared_api_key_helper"]);
+    expect(issuesFor(results, "claude:glm")[0].message).toContain("http://gpu-box:30000");
+    // The primary is the profile the helper was written for. Nothing is wrong there.
+    expect(kinds(results, "claude:default")).toEqual([]);
+  });
+
+  it("does not call the settings shared when the profile has its own copy", async () => {
+    const h = await harness();
+    await h.addApi();
+    // A local override: the shared link replaced by a real file. doctor reports that
+    // separately as `local_override`; the helper message must not also claim the file is
+    // shared with the primary, which is the one thing it is not.
+    const own = path.join(h.apiConfigDir, "settings.json");
+    rmSync(own, { force: true });
+    writeFileSync(own, JSON.stringify({ apiKeyHelper: "cat ~/key" }));
+
+    const results = await h.doctor();
+
+    expect(kinds(results, "claude:glm")).toContain("shared_api_key_helper");
+    const helper = issuesFor(results, "claude:glm").find((i) => i.kind === "shared_api_key_helper");
+    expect(helper?.message).not.toContain("shared with the primary");
+    expect(helper?.message).toContain("http://gpu-box:30000");
+  });
+
+  it("says when it could not read the settings, rather than passing over them", async () => {
+    const h = await harness();
+    await h.addApi();
+    // The primary's file, which this profile reads through its shared link - so the only
+    // finding is the one about not being able to read it.
+    writeFileSync(path.join(h.primary, "settings.json"), '{"apiKeyHelper": "op read op://vault/anthropic"');
+
+    const issues = issuesFor(await h.doctor(), "claude:glm");
+
+    // Falling back to `{}` made a helper in a malformed file silently unreported: a check
+    // that fails closed and says nothing is worse than one that says it could not run.
+    expect(issues.map((i) => i.kind)).toEqual(["unreadable_settings"]);
+    expect(issues[0].severity).toBe("warning");
+    expect(issues[0].message).toContain("apiKeyHelper");
+  });
+
+  // Claude Code copies settings.json's env block over its own environment at startup, so a key
+  // or an endpoint there beats everything the profile set and cleared.
+  it("reports an env block in the shared settings that overrides the profile, by name only", async () => {
+    const settingsKey = ["sk", "ant", "api03", "SETTINGSENVBLOCK0001"].join("-");
+    const h = await harness({
+      settings: {
+        env: {
+          ANTHROPIC_API_KEY: settingsKey,
+          ANTHROPIC_BASE_URL: "http://localhost:47812",
+          claude_code_use_bedrock: "1",
+          ANTHROPIC_MODEL: "opus",
+          DISABLE_TELEMETRY: "1",
+        },
+      },
+    });
+    await h.addApi();
+
+    const results = await h.doctor();
+    const overrides = issuesFor(results, "claude:glm").filter((i) => i.kind === "settings_env_override");
+
+    expect(overrides.map((i) => [i.message.split(" ")[0], i.severity])).toEqual([
+      ["ANTHROPIC_API_KEY", undefined],
+      ["ANTHROPIC_BASE_URL", undefined],
+      ["ANTHROPIC_MODEL", "warning"],
+      ["claude_code_use_bedrock", undefined],
+    ]);
+    expect(overrides[0].message).toContain("(shared with the primary)");
+    expect(overrides[0].message).toContain("Claude Code applies it over this profile");
+    expect(overrides[0].message).toContain("clausona config <that profile> --set ANTHROPIC_API_KEY=VALUE");
+    expect(results.find((r) => r.name === "claude:glm")?.healthy).toBe(false);
+    const text = JSON.stringify(results) + h.render(results);
+    expect(text).not.toContain(settingsKey);
+    expect(text).not.toContain("47812");
+    // The primary is what the file was written for.
+    expect(kinds(results, "claude:default")).toEqual([]);
+  });
+
+  it("warns about the helper whatever auth scheme the profile uses", async () => {
+    const h = await harness({ settings: { apiKeyHelper: "op read op://vault/anthropic" } });
+    await h.addApi({ authScheme: "api-key" });
+
+    // The scheme decides which variable clausona sets, not whether the helper runs.
+    expect(kinds(await h.doctor(), "claude:glm")).toEqual(["shared_api_key_helper"]);
+  });
+
+  it("reports a credential parked in the profile's plain-text env map", async () => {
+    const h = await harness();
+    await h.addApi({ env: { ANTHROPIC_AUTH_TOKEN: "sk-in-the-registry-0002" } });
+
+    const results = await h.doctor();
+
+    expect(kinds(results, "claude:glm")).toEqual(["plaintext_env_secret"]);
+    expect(issuesFor(results, "claude:glm")[0].message).toContain("ANTHROPIC_AUTH_TOKEN");
+    expect(JSON.stringify(results)).not.toContain("sk-in-the-registry-0002");
+  });
+});
+
+// Launch drops such an entry, so a profile carrying one does not run as its map says.
+describe("an env-map value that is not a string", () => {
+  it.each([
+    ["a subscription profile", { tool: "claude", configDir: "WORK_DIR", email: "work@example.com" }],
+    [
+      "an API profile",
+      {
+        tool: "claude",
+        kind: "api",
+        configDir: "WORK_DIR",
+        email: "",
+        label: "local",
+        api: { baseUrl: "http://localhost:8000", authScheme: "bearer", secret: { source: "env", name: "SET_BELOW" } },
+      },
+    ],
+  ])("is reported on %s, by name, with the edit that fixes it", async (_kind, profile) => {
+    const h = await harness({
+      profiles: { "claude:work": { ...profile, env: { API_TIMEOUT_MS: 600000, ANTHROPIC_MODEL: "m" } } },
+    });
+    vi.stubEnv("SET_BELOW", STORED_KEY);
+
+    const issues = issuesFor(await h.doctor(), "claude:work").filter((issue) => issue.kind === "invalid_env_map");
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0].message).toContain("API_TIMEOUT_MS");
+    expect(issues[0].message).toContain("clausona config claude:work --edit");
+    expect(issues[0].message).not.toContain("600000");
+    expect(issues[0].severity).toBeUndefined();
+  });
+});
+
+describe("a profile whose config directory is gone", () => {
+  /**
+   * The config dir is the one thing every other check assumes. Nothing else looks for it:
+   * the subscription checks that happened to notice are skipped for an API profile, and
+   * the shared-link checks only speak when the primary holds a directory to be missing -
+   * so with a primary that holds none, a profile pointing at nothing looked healthy.
+   */
+  it("says so, even when the primary has no shared directory to miss", async () => {
+    const h = await harness({ primaryDirs: [] });
+    await h.addApi();
+    rmSync(h.apiConfigDir, { recursive: true, force: true });
+
+    const results = await h.doctor();
+
+    expect(kinds(results, "claude:glm")).toContain("missing_config_dir");
+    expect(results.find((r) => r.name === "claude:glm")?.healthy).toBe(false);
+    expect(issuesFor(results, "claude:glm")[0].message).toContain(".claude-glm");
+  });
+
+  it("says only that, and never repeats advice that would fail in this state", async () => {
+    const h = await harness();
+    await h.addApi();
+    rmSync(h.apiConfigDir, { recursive: true, force: true });
+
+    const results = await h.doctor();
+    const rendered = h.render(results);
+
+    // Every shared-link and plugin finding here is a consequence of the one absence, and
+    // each carries "run 'clausona repair'" in its own text - a command that fails with
+    // ENOENT in exactly this state. Suppressing the footer was not enough: the advice was
+    // still printed inside the message body, which is what a user reads. The one mention of
+    // repair left is the one that comes after the directory is made again.
+    expect(kinds(results, "claude:glm")).toEqual(["missing_config_dir"]);
+    expect(rendered).not.toContain("to fix");
+    expect(rendered).toContain("create the directory again, then run 'clausona repair claude:glm'");
+    // remove no longer puts a directory that is gone back from its backup, so the same name
+    // is free to add again (src/commands.api.test.ts runs this advice).
+    expect(rendered).toContain(
+      "remove and re-add the profile, which deletes a stored key: 'clausona remove claude:glm', then 'clausona add claude:glm --api --base-url <url>'",
+    );
+  });
+
+  it("comes back with the directory made again and repair, an API profile and a subscription one alike", async () => {
+    // The lossless remedy: remove and re-add deletes a stored key the provider may not show
+    // twice, along with the model, the env map and the label.
+    const h = await harness();
+    await h.addApi({ label: "gpu-box", env: { ANTHROPIC_MODEL: "glm-5.3" } });
+    const work = path.join(h.home, ".claude-work");
+    mkdirSync(work);
+    writeFileSync(path.join(work, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: "w@example.com" } }));
+    writeFileSync(path.join(work, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "W" } }));
+    await h.service.addProfile({ tool: "claude", name: "work", fromPath: work });
+    const before = await h.service.loadRegistry();
+    expect(kinds(await h.doctor(), "claude:glm")).toEqual([]);
+    expect(kinds(await h.doctor(), "claude:work")).toEqual([]);
+
+    for (const [id, dir] of [
+      ["claude:glm", h.apiConfigDir],
+      ["claude:work", work],
+    ] as const) {
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(dir);
+      await h.service.repairProfile(id);
+    }
+    const results = await h.doctor();
+
+    // Nothing lost: the key still resolves and the entry is as it was.
+    expect(kinds(results, "claude:glm")).toEqual([]);
+    expect(await h.secrets.resolveSecret("claude:glm", { source: "keychain" })).toBe(STORED_KEY);
+    expect((await h.service.loadRegistry())?.profiles["claude:glm"]).toEqual(before?.profiles["claude:glm"]);
+    // Linked again too. Its sign-in lived in the directory, so what is left is the login
+    // doctor advises - not a link repair would have to make.
+    expect(kinds(results, "claude:work")).toEqual(["missing_json", "missing_oauth"]);
+    expect(h.render(results)).toContain("Run clausona login claude:work to sign in");
+    expect(h.render(results)).not.toContain("clausona repair claude:work");
+  });
+
+  it("leaves a subscription profile in the same state reporting exactly what it always did", async () => {
+    // The advice is misleading there too, but a registry without API profiles has to
+    // produce the report it produced before they existed. Changing that is a decision
+    // about subscription behaviour, not a consequence of this feature.
+    const h = await harness({
+      profiles: { "claude:work": { tool: "claude", configDir: path.join("/deleted-by-hand"), email: "w@example.com" } },
+    });
+
+    const kindsFor = kinds(await h.doctor(), "claude:work");
+
+    expect(kindsFor).toContain("missing_json");
+    expect(kindsFor).toContain("missing_oauth");
+    expect(kindsFor).toContain("missing_shared_link");
+  });
+
+  it("is quiet about it for a profile whose directory is there", async () => {
+    const h = await harness({ primaryDirs: [] });
+    await h.addApi();
+
+    expect(kinds(await h.doctor(), "claude:glm")).toEqual([]);
+  });
+});
+
+describe("a warning is not breakage", () => {
+  it("leaves a profile that only has warnings healthy, and still shows them", async () => {
+    const h = await harness({ settings: { apiKeyHelper: "op read op://vault/anthropic" } });
+    await h.addApi({ label: "gpu-box", env: { ANTHROPIC_API_KEY: "sk-parked-0003" } });
+
+    const results = await h.doctor();
+    const rendered = h.normalize(h.render(results));
+
+    // The profile runs: its endpoint is configured and its key resolves. Both findings are
+    // about a second key that could also reach the endpoint - worth knowing, not breakage.
+    expect(results.find((r) => r.name === "claude:glm")?.healthy).toBe(true);
+    expect(issuesFor(results, "claude:glm").map((i) => i.severity)).toEqual(["warning", "warning"]);
+    expect(rendered).toContain("2 warnings");
+    expect(rendered).toContain("apiKeyHelper");
+    expect(rendered).toContain("ANTHROPIC_API_KEY");
+    // Neither the word nor the suggestion that would send the user to a fix that is not one.
+    expect(rendered).not.toContain("issue");
+    expect(rendered).not.toContain("clausona repair");
+  });
+
+  it("still fails a profile that has a real problem alongside a warning", async () => {
+    const h = await harness({ settings: { apiKeyHelper: "op read op://vault/anthropic" } });
+    await h.addApi({ label: "gpu-box" });
+    await h.secrets.deleteSecret("claude:glm");
+
+    const results = await h.doctor();
+
+    expect(results.find((r) => r.name === "claude:glm")?.healthy).toBe(false);
+    expect(kinds(results, "claude:glm")).toEqual(["missing_api_secret", "shared_api_key_helper"]);
+    expect(h.render(results)).toContain("1 issue, 1 warning");
+  });
+});
+
+describe("doctor and the key itself", () => {
+  it.each([
+    ["the scheme is wrong too", "ftp://admin-name:sk-SECRET-IN-URL@gpu-box/api"],
+    ["the URL does not parse", "//admin-name:sk-SECRET-IN-URL@gpu-box/api"],
+  ])("keeps a password hand-edited into the base URL out of both output forms when %s", async (_label, baseUrl) => {
+    const h = await harness({
+      profiles: {
+        "claude:bad": {
+          tool: "claude",
+          kind: "api",
+          configDir: path.join("/does-not-matter"),
+          email: "",
+          label: "bad",
+          api: { baseUrl, authScheme: "bearer", secret: { source: "env", name: "SET_BELOW" } },
+        },
+      },
+    });
+    vi.stubEnv("SET_BELOW", STORED_KEY);
+
+    const results = await h.doctor();
+
+    expect(kinds(results, "claude:bad")).toContain("invalid_api_config");
+    // Whichever branch rejects the URL first, it must not quote it back: this value is a
+    // credential, and `doctor --help` says the output is safe to paste into a bug report.
+    expect(`${JSON.stringify(results)}\n${h.render(results)}`).not.toContain("sk-SECRET-IN-URL");
+  });
+
+  it("never puts the key in its output, however many other things are wrong", async () => {
+    const h = await harness({ settings: { apiKeyHelper: "op read op://vault/anthropic" } });
+    await h.addApi({ env: { ANTHROPIC_API_KEY: STORED_KEY } });
+
+    const results = await h.doctor();
+    const everything = `${JSON.stringify(results)}\n${h.render(results)}`;
+
+    // doctor resolves the key only to learn whether it resolves. The value is read from
+    // the store on every run and must not reach a message, a log, or --json.
+    expect(everything).not.toContain(STORED_KEY);
+    expect(everything).not.toContain(STORED_KEY.slice(0, 10));
+    expect(kinds(results, "claude:glm")).toEqual(["shared_api_key_helper", "plaintext_env_secret"]);
+  });
+});
+
+describe("doctor on a subscription-only registry", () => {
+  /**
+   * A registry with no API profile anywhere must produce exactly the report it produced
+   * before API profiles existed - the same issues, in the same order, with the same words,
+   * in both output forms. Both expectations below are literal for that reason.
+   */
+  async function subscriptionOnly() {
+    const h = await harness({
+      profiles: { "claude:work": { tool: "claude", configDir: "WORK_DIR", email: "work@example.com" } },
+    });
+    // The registry is rewritten with a real path now that the temp home is known - through
+    // JSON, not into its text, where a Windows path's backslashes would be escapes.
+    const registryPath = path.join(h.home, ".clausona", "profiles.json");
+    const { readFileSync, writeFileSync: write } = await import("node:fs");
+    const registry = JSON.parse(readFileSync(registryPath, "utf8"));
+    registry.profiles["claude:work"].configDir = path.join(h.home, ".claude-work");
+    write(registryPath, JSON.stringify(registry));
+    mkdirSync(path.join(h.home, ".claude-work"), { recursive: true });
+    return h;
+  }
+
+  it("renders exactly what it always rendered", async () => {
+    const h = await subscriptionOnly();
+
+    const output = h.normalize(h.render(await h.doctor()));
+
+    expect(output).toBe(
+      [
+        "",
+        "",
+        "  claude:default (primary@example.com)",
+        "    ✔ healthy",
+        "",
+        "  claude:work (work@example.com)",
+        "    ✘ 3 issues",
+        "    ├─ .claude.json is missing or missing oauthAccount.emailAddress",
+        "    ├─ .credentials.json is missing or has no access token - sign in from this profile",
+        "    ╰─ commands/ is shared in primary but missing here — run 'clausona repair'",
+        "       Run clausona repair claude:work to fix",
+        "       Run clausona login claude:work to sign in",
+        "",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("serialises exactly what it always serialised", async () => {
+    const h = await subscriptionOnly();
+
+    const json = h.normalize(JSON.stringify(await h.doctor(), null, 2));
+
+    expect(JSON.parse(json)).toEqual([
+      {
+        name: "claude:default",
+        email: "primary@example.com",
+        configDir: path.join("~", ".claude"),
+        isPrimary: true,
+        healthy: true,
+        issues: [],
+      },
+      {
+        name: "claude:work",
+        email: "work@example.com",
+        configDir: path.join("~", ".claude-work"),
+        isPrimary: false,
+        healthy: false,
+        issues: [
+          { kind: "missing_json", message: ".claude.json is missing or missing oauthAccount.emailAddress" },
+          {
+            kind: "missing_oauth",
+            message: ".credentials.json is missing or has no access token - sign in from this profile",
+          },
+          {
+            kind: "missing_shared_link",
+            message: "commands/ is shared in primary but missing here — run 'clausona repair'",
+          },
+        ],
+      },
+    ]);
+    // No key the JSON does not already carry: the shape is pinned as well as the values.
+    expect(json).not.toContain('kind": "api');
+    // `severity` is absent on an error for exactly this reason: a registry with no
+    // warnings serialises the same bytes it did before warnings existed.
+    expect(json).not.toContain("severity");
+  });
+});
+
+describe("the report a mixed registry produces", () => {
+  it("reads as one healthy account and one endpoint that needs attention", async () => {
+    const h = await harness();
+    await h.addApi({ label: "gpu-box" });
+    await h.secrets.deleteSecret("claude:glm");
+
+    const output = h.normalize(h.render(await h.doctor()));
+
+    expect(output).toBe(
+      [
+        "",
+        "",
+        "  claude:default (primary@example.com)",
+        "    ✔ healthy",
+        "",
+        "  claude:glm (gpu-box)",
+        "    ✘ 1 issue",
+        "    ╰─ API key unavailable: no stored secret for 'claude:glm' - run 'clausona config claude:glm --key'",
+        "",
+        "",
+      ].join("\n"),
+    );
+    // Neither repair nor login can produce an API key, so neither is offered.
+    expect(output).not.toContain("clausona repair");
+    expect(output).not.toContain("clausona login");
+  });
+});

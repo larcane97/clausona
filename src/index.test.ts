@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands.js";
-import { isMainModule, parseCommand } from "./index.js";
+import { isMainModule, parseCommand, writeCommandResult } from "./index.js";
 
 describe("parseCommand", () => {
   it("defaults to interactive mode with no args", () => {
@@ -23,12 +23,51 @@ describe("parseCommand", () => {
     });
   });
 
+  it("drops the one leading -- that separates the tool's arguments from clausona's", () => {
+    expect(parseCommand(["run", "claude:x", "--", "-p", "q"])).toEqual({
+      kind: "exec",
+      profile: "claude:x",
+      args: ["-p", "q"],
+    });
+    expect(parseCommand(["run", "claude:x", "--", "--", "q"])).toEqual({
+      kind: "exec",
+      profile: "claude:x",
+      args: ["--", "q"],
+    });
+  });
+
   it("parses run without profile as a regular command", () => {
     expect(parseCommand(["run", "--help"])).toEqual({
       kind: "command",
       command: "run",
       args: ["--help"],
     });
+  });
+});
+
+/**
+ * The shell hooks run `clausona _sync-plugins` and `clausona _track-usage` with only stderr
+ * silenced, around every wrapped launch. Both return "", which used to print as a bare
+ * newline - a blank line above and below every `claude` run.
+ */
+describe("writeCommandResult", () => {
+  function sink() {
+    const chunks: string[] = [];
+    return { chunks, out: { write: (chunk: string) => chunks.push(chunk) > 0 } };
+  }
+
+  it("writes nothing at all for an empty result", () => {
+    const { chunks, out } = sink();
+    writeCommandResult("", out);
+    expect(chunks).toEqual([]);
+  });
+
+  it("writes any other result followed by exactly one newline", () => {
+    for (const result of ["export A='1'", "{}", " ", "\n", "line one\nline two"]) {
+      const { chunks, out } = sink();
+      writeCommandResult(result, out);
+      expect(chunks, JSON.stringify(result)).toEqual([`${result}\n`]);
+    }
   });
 });
 
@@ -44,8 +83,11 @@ describe("isMainModule", () => {
 });
 
 describe("--period validation (F4)", () => {
-  it("throws for an invalid --period value", async () => {
-    await expect(runCommand("usage", ["--period=foo"])).rejects.toThrow(/invalid --period value 'foo'/i);
+  it("throws for an invalid --period value, naming the valid ones rather than the input", async () => {
+    // The value is not echoed: it is an option value like any other, and the CLI does not
+    // repeat those back. The message says what would have worked instead.
+    await expect(runCommand("usage", ["--period=foo"])).rejects.toThrow(/invalid --period: use today, week/i);
+    await expect(runCommand("usage", ["--period=foo"])).rejects.not.toThrow(/foo/);
   });
 
   it("does not throw an invalid-period error for a valid period value", async () => {

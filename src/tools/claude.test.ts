@@ -1,14 +1,10 @@
-import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-// Every spawned command goes through this stub, so no test here can reach the real
-// `security` and with it the Keychain of the machine running the suite.
-const spawnCommand = vi.hoisted(() => vi.fn());
-vi.mock("../core/process.js", () => ({ spawnCommand }));
-
+import { keychainServiceForConfigDir } from "../core/paths.js";
+import { keychainStandIn, splitSecurityLine } from "../lib/test-keychain.js";
 import { claudeAdapter, claudeLoginEnv } from "./claude.js";
 
 /** Entries a child would actually receive for the variable, in any spelling. */
@@ -84,97 +80,141 @@ describe("claudeAdapter.sharedSkipSet", () => {
   });
 });
 
-const realPlatform = process.platform;
-
-function forcePlatform(platform: NodeJS.Platform) {
-  Object.defineProperty(process, "platform", { value: platform, configurable: true });
-}
-
-// Key-shaped literals trip push protection, so fixture tokens are assembled.
-const token = (kind: string, body: string) => ["sk", "ant", kind, body].join("-");
-
-let tmp: string;
-
-beforeEach(() => {
-  spawnCommand.mockReset();
-  spawnCommand.mockImplementation((command: string) => {
-    throw new Error(`unexpected spawn of ${command}`);
+/**
+ * The one place clausona writes Claude Code's own credentials: a renewal on macOS, into the
+ * Keychain item Claude Code reads. It is the user's live subscription login, so the item must
+ * come out exactly as the `security add-generic-password -U ... -w <blob>` it replaces left
+ * it - same service, same account, same bytes - with the blob kept out of `security`'s
+ * arguments, which `ps` shows to every user on the machine.
+ *
+ * `security` is a stand-in first on PATH that keeps its items in a file, and the platform is
+ * forced to darwin, so this runs wherever sh does. The token endpoint is a stubbed fetch.
+ */
+describe.skipIf(process.platform === "win32")("renewing a Claude credential in the macOS Keychain", () => {
+  const temps: string[] = [];
+  const realPlatform = process.platform;
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
-  tmp = mkdtempSync(path.join(tmpdir(), "clausona-claude-"));
-});
 
-afterEach(() => {
-  forcePlatform(realPlatform);
-  vi.unstubAllGlobals();
-  rmSync(tmp, { recursive: true, force: true });
-});
+  const NOW = 1_790_000_000_000;
+  // Put together here, so no line of this file holds a token a secret scanner would match.
+  const token = (kind: "oat01" | "ort01", body: string) => ["sk", "ant", kind, "fixture", body].join("-");
+  const OLD = { accessToken: token("oat01", "old-access"), refreshToken: token("ort01", "old-refresh") };
+  const RENEWED = {
+    access_token: token("oat01", "renewed-access-0123456789"),
+    refresh_token: token("ort01", "renewed-refresh-0123456789"),
+    expires_in: 28_800,
+  };
+  const OAUTH = {
+    ...OLD,
+    expiresAt: 1,
+    scopes: ["user:inference", "user:profile", "user:sessions:claude_code"],
+    subscriptionType: "max",
+    rateLimitTier: "default_claude_max_20x",
+  };
+  /** An MCP server's OAuth state, which Claude Code keeps in the same item. */
+  const mcpServer = (accessToken: string) => ({
+    serverName: "tracker",
+    serverUrl: "https://mcp.example.com/sse",
+    accessToken,
+    expiresAt: NOW,
+    discoveryState: { authorizationServerUrl: "https://mcp.example.com/" },
+  });
 
-describe("claudeAdapter.renewCredential", () => {
-  it("keeps the MCP OAuth tokens when the stored blob cannot be re-read after the refresh", async () => {
-    forcePlatform("linux");
-    const credentialsPath = path.join(tmp, ".credentials.json");
-    const oldAccess = token("oat01", "old");
-    const oldRefresh = token("ort01", "old");
-    const newAccess = token("oat01", "new");
-    const newRefresh = token("ort01", "new");
-    const mcpOAuth = { "linear|abc123": { accessToken: "mcp-token", expiresAt: 1 } };
-    writeFileSync(
-      credentialsPath,
-      JSON.stringify({
-        claudeAiOauth: { accessToken: oldAccess, refreshToken: oldRefresh, subscriptionType: "max" },
-        mcpOAuth,
-      }),
-    );
+  /** Renews against an item Claude Code left under `fixture-user`; returns what -w would have stored. */
+  async function renew(stored: Record<string, unknown>) {
+    const home = mkdtempSync(path.join(tmpdir(), "clausona-claude-renew-"));
+    temps.push(home);
+    const configDir = path.join(home, ".claude-work");
+    mkdirSync(configDir);
+    const keychain = keychainStandIn(path.join(home, "keychain"));
+    const service = keychainServiceForConfigDir({ homeDir: home, configDir });
+    keychain.seed(service, "fixture-user", JSON.stringify(stored));
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("PATH", `${keychain.bin}${path.delimiter}${process.env.PATH ?? ""}`);
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify(RENEWED), { status: 200 }));
 
-    // The stored blob turns unreadable while the request is in flight, as a busy
-    // Keychain or a half-written file would make it.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        writeFileSync(credentialsPath, "{");
-        return Response.json({ access_token: newAccess, refresh_token: newRefresh, expires_in: 3600 });
-      }),
-    );
+    await claudeAdapter.renewCredential?.(configDir, { ...OLD, expiresAt: 1 }, new AbortController().signal);
 
-    const renewed = await claudeAdapter.renewCredential?.(
-      tmp,
-      { accessToken: oldAccess, refreshToken: oldRefresh },
-      new AbortController().signal,
-    );
-
-    expect(renewed?.accessToken).toBe(newAccess);
-    const stored = JSON.parse(readFileSync(credentialsPath, "utf8"));
-    expect(stored.mcpOAuth).toEqual(mcpOAuth);
-    expect(stored.claudeAiOauth).toMatchObject({
-      accessToken: newAccess,
-      refreshToken: newRefresh,
-      subscriptionType: "max",
+    // The serialization renewal has always handed `-w`, and so the bytes it stored.
+    const expected = JSON.stringify({
+      ...stored,
+      claudeAiOauth: {
+        ...OAUTH,
+        accessToken: RENEWED.access_token,
+        refreshToken: RENEWED.refresh_token,
+        expiresAt: NOW + RENEWED.expires_in * 1000,
+      },
     });
-  });
-});
+    return { keychain, service, expected };
+  }
 
-describe("claudeAdapter.readCredential on macOS", () => {
-  it("reads a Keychain blob that `security` prints as hex", async () => {
-    forcePlatform("darwin");
-    const accessToken = token("oat01", "hex");
-    // One non-ASCII character anywhere is enough for `security -w` to print hex.
-    const blob = { claudeAiOauth: { accessToken }, mcpOAuth: { "café|abc123": { accessToken: "mcp-token" } } };
-    spawnCommand.mockImplementation(() => {
-      const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter() });
-      setImmediate(() => {
-        child.stdout.emit("data", `${Buffer.from(JSON.stringify(blob), "utf8").toString("hex")}\n`);
-        child.emit("close", 0);
-      });
-      return child;
+  it("stores the same bytes under the same item, with nothing of the blob in security's arguments", async () => {
+    const { keychain, service, expected } = await renew({
+      claudeAiOauth: OAUTH,
+      mcpOAuth: { "tracker|0123456789abcdef": mcpServer("mcp-fixture-token") },
     });
 
-    const credential = await claudeAdapter.readCredential?.(tmp);
+    // Updated in place (-U) under the account Claude Code wrote it with, not a second item.
+    expect(keychain.items().map(({ service: s, account }) => [s, account])).toEqual([[service, "fixture-user"]]);
+    expect(keychain.stored(service, "fixture-user")).toBe(expected);
 
-    expect(spawnCommand).toHaveBeenCalledWith(
-      "security",
-      ["find-generic-password", "-s", expect.stringMatching(/^Claude Code-credentials-/), "-w"],
-      expect.anything(),
-    );
-    expect(credential?.accessToken).toBe(accessToken);
+    const hex = Buffer.from(expected, "utf8").toString("hex");
+    for (const { argv } of keychain.calls()) {
+      for (const arg of argv) {
+        for (const secret of [RENEWED.access_token, RENEWED.refresh_token, "mcp-fixture-token"]) {
+          expect(arg).not.toContain(secret);
+          expect(arg).not.toContain(Buffer.from(secret, "utf8").toString("hex"));
+        }
+        expect(arg).not.toContain(hex.slice(0, 64));
+      }
+    }
+    const writes = keychain.calls().filter(({ argv }) => argv[0] === "-i");
+    expect(writes).toHaveLength(1);
+    const lines = (writes[0]?.stdin ?? "").split("\n");
+    expect(lines).toHaveLength(2);
+    expect(splitSecurityLine(lines[0] ?? "")).toEqual([
+      "add-generic-password",
+      "-U",
+      "-s",
+      service,
+      "-a",
+      "fixture-user",
+      "-X",
+      hex,
+    ]);
+  });
+
+  // Claude Code's item holds every MCP server's tokens too, and a few of them outgrow the
+  // line `security -i` reads (4094 bytes, the blob as hex). Refusing would lose tokens the
+  // provider has already replaced, so the write goes in the arguments, as -X <hex> - what
+  // Claude Code does with the same item - and still stores the same bytes.
+  it("stores a blob too long for one security line through its arguments, as Claude Code does", async () => {
+    const { keychain, service, expected } = await renew({
+      claudeAiOauth: OAUTH,
+      mcpOAuth: { "tracker|0123456789abcdef": mcpServer(`mcp-fixture-${"t".repeat(2400)}`) },
+    });
+
+    expect(keychain.stored(service, "fixture-user")).toBe(expected);
+    const writes = keychain.calls().filter(({ argv }) => argv[0] === "add-generic-password");
+    expect(writes.map(({ argv }) => argv)).toEqual([
+      [
+        "add-generic-password",
+        "-U",
+        "-s",
+        service,
+        "-a",
+        "fixture-user",
+        "-X",
+        Buffer.from(expected, "utf8").toString("hex"),
+      ],
+    ]);
   });
 });

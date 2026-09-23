@@ -1,3 +1,4 @@
+import { countIssues } from "../core/doctor.js";
 import { symbol } from "../tui/theme.js";
 import type {
   DoctorIssue,
@@ -22,9 +23,11 @@ import {
   styledCost,
   styledCount,
   truncate,
+  warnIcon,
   fail as xMark,
   yellow,
 } from "./cli-style.js";
+import { displayName } from "./profile-env.js";
 
 // ─── Timezone ────────────────────────────────────────────────────────
 export function localTimezoneLabel(): string {
@@ -63,6 +66,32 @@ export function quotaSeverity(quota: QuotaSnapshot | undefined): "healthy" | "wa
   if (peak >= QUOTA_CRITICAL) return "error";
   if (peak >= QUOTA_WARNING) return "warning";
   return "healthy";
+}
+
+/**
+ * A profile's model as every surface shows it: the id as stored, or a dash when none is
+ * pinned. `list` and the dashboard's preview both go through this, with the id worked out
+ * once by `profileModel`, so they cannot disagree about a profile's model or about "none".
+ */
+export function formatModel(model: string | undefined): string {
+  return model ?? "—";
+}
+
+/**
+ * A model id cut to `width`, for every surface that has less room than the id: `list`'s
+ * column and the preview's row. From the middle, with twice the room for the end as for the
+ * start - the end is what tells variants apart (`-flash`, `-air`, a date) and the start names
+ * the gateway, while the middle is what two ids share. Cut from the end, as a width limit
+ * would, `openrouter/z-ai/glm-5.3-flash` and `…-air` read the same.
+ */
+export function fitModel(model: string | undefined, width: number): string {
+  const text = formatModel(model);
+  if (text.length <= width) return text;
+  if (width <= 0) return "";
+  if (width === 1) return "…";
+  const keep = width - 1;
+  const tail = Math.ceil((keep * 2) / 3);
+  return `${text.slice(0, keep - tail)}…${text.slice(text.length - tail)}`;
 }
 
 export function formatUsage(summary: UsageSummary) {
@@ -185,7 +214,7 @@ export function quotaNotes(items: ProfileListItem[]): string[] {
 }
 
 // ─── List ───────────────────────────────────────────────────────────
-type ColumnKey = "profile" | "account" | "session" | "weekly" | "cost" | "input" | "output";
+type ColumnKey = "profile" | "account" | "model" | "session" | "weekly" | "cost" | "input" | "output";
 
 const QUOTA_WIDTH_WITH_RESET = 11;
 const QUOTA_WIDTH_PLAIN = 7;
@@ -201,6 +230,7 @@ type Layout = {
 const LABELS: Record<ColumnKey, string> = {
   profile: "PROFILE",
   account: "ACCOUNT",
+  model: "MODEL",
   session: "5H",
   weekly: "7D",
   cost: "COST",
@@ -208,7 +238,8 @@ const LABELS: Record<ColumnKey, string> = {
   output: "OUTPUT",
 };
 
-const FIXED_WIDTHS = { cost: 12, input: 14, output: 10 } as const;
+/** The model column holds a gateway id such as `openrouter/z-ai/glm-5.3`; longer ones are cut. */
+const FIXED_WIDTHS = { model: 24, cost: 12, input: 14, output: 10 } as const;
 
 function columnWidth(key: ColumnKey, layout: Layout): number {
   switch (key) {
@@ -234,20 +265,35 @@ function layoutWidth(layout: Layout): number {
  * Progressively narrower fallbacks, widest first. Cost and token counts give way
  * before the quota pair does: quota is why you run the command, and the spend figures
  * are still available in full from `clausona usage`.
+ *
+ * The model column, shown once some profile pins a model, sits in front of all of that.
+ * Every layout carrying it is tried first - dropping token counts, then cost, to keep it -
+ * and each one has what the table would otherwise have at its best: the quota pair with
+ * reset times, and full-width names. Once none of them fits, the list is exactly the one
+ * without a model. So the model never costs the quota columns, their reset times or the
+ * name a single character; it goes first, and below its narrowest layout the table is the
+ * one it always was. It does outrank spend, which `clausona usage` has in full, while
+ * nothing else lists every profile's model.
  */
-function candidateLayouts(showQuota: boolean): Layout[] {
+function candidateLayouts(showQuota: boolean, showModel = false): Layout[] {
   const base = { profileWidth: 20, accountWidth: 32 };
   const tail: ColumnKey[][] = [["cost", "input", "output"], ["cost", "input"], ["cost"], []];
+  const quota: ColumnKey[] = showQuota ? ["session", "weekly"] : [];
+
+  const withModel: Layout[] = showModel
+    ? tail.map((extra) => ({ keys: ["profile", "account", "model", ...quota, ...extra], reset: showQuota, ...base }))
+    : [];
 
   if (!showQuota) {
     return [
+      ...withModel,
       ...tail.map((extra) => ({ keys: ["profile", "account", ...extra] as ColumnKey[], reset: false, ...base })),
       { keys: ["profile", "account", "cost"], reset: false, profileWidth: 14, accountWidth: 22 },
     ];
   }
 
-  const quota: ColumnKey[] = ["session", "weekly"];
   return [
+    ...withModel,
     ...tail.map((extra) => ({
       keys: ["profile", "account", ...quota, ...extra] as ColumnKey[],
       reset: true,
@@ -259,8 +305,8 @@ function candidateLayouts(showQuota: boolean): Layout[] {
 }
 
 /** Widest layout that fits; the narrowest is used when even that overflows. */
-export function pickLayout(showQuota: boolean, available: number): Layout {
-  const layouts = candidateLayouts(showQuota);
+export function pickLayout(showQuota: boolean, available: number, showModel = false): Layout {
+  const layouts = candidateLayouts(showQuota, showModel);
   return layouts.find((layout) => layoutWidth(layout) <= available) ?? layouts[layouts.length - 1];
 }
 
@@ -269,10 +315,12 @@ export function pickLayout(showQuota: boolean, available: number): Layout {
  * to drop, so rows are allowed to overflow rather than losing the profile name.
  */
 export const LIST_MIN_WIDTH = Math.max(
-  ...[true, false].map((showQuota) => {
-    const layouts = candidateLayouts(showQuota);
-    return layoutWidth(layouts[layouts.length - 1]);
-  }),
+  ...[true, false].flatMap((showQuota) =>
+    [true, false].map((showModel) => {
+      const layouts = candidateLayouts(showQuota, showModel);
+      return layoutWidth(layouts[layouts.length - 1]);
+    }),
+  ),
 );
 
 function quotaCell(
@@ -302,10 +350,12 @@ export function renderList(items: ProfileListItem[], options: { width?: number }
     return a.name.localeCompare(b.name);
   });
 
-  // Quota columns are only worth their width once something has been fetched.
+  // Quota columns are only worth their width once something has been fetched, and the model
+  // column once something pins a model - so a table with neither is the one it always was.
   const showQuota = sorted.some((item) => item.quota);
+  const showModel = sorted.some((item) => item.model !== undefined);
   const available = options.width ?? process.stdout.columns ?? 120;
-  const layout = pickLayout(showQuota, available);
+  const layout = pickLayout(showQuota, available, showModel);
 
   const widths = layout.keys.map((key) => columnWidth(key, layout));
   const headerLine = `    ${layout.keys.map((key, i) => secondary(LABELS[key].padEnd(widths[i]))).join("")}`;
@@ -327,8 +377,16 @@ export function renderList(items: ProfileListItem[], options: { width?: number }
           return item.isActive ? accent(name) : name;
         }
         case "account": {
-          const email = truncate(item.email, layout.accountWidth - 1);
-          return item.isActive ? email : secondary(email);
+          // An API profile has no account email; its label stands in, exactly as it does
+          // in `config --show`. The dash is for a hand-edited profiles.json that carries
+          // neither — a blank cell there reads as a bug rather than as "nothing to show".
+          const account = truncate(displayName(item).trim() || "—", layout.accountWidth - 1);
+          return item.isActive ? account : secondary(account);
+        }
+        case "model": {
+          const model = fitModel(item.model, FIXED_WIDTHS.model - 1);
+          if (item.model === undefined) return dim(model);
+          return item.isActive ? model : secondary(model);
         }
         case "session":
           return quotaCell(item.quota?.session, item.quota?.state, layout.reset, now);
@@ -430,26 +488,88 @@ export function describeUnverifiedLogin(id: string): string {
 /** Issues that describe a missing credential, which only signing in can resolve. */
 const CREDENTIAL_ISSUE_KINDS = new Set<DoctorIssue["kind"]>(["missing_json", "missing_keychain", "missing_oauth"]);
 
+/**
+ * Issues whose message already names what to do. Every one of them belongs to an API
+ * profile, which has neither a login to renew nor shared links that could be at fault —
+ * so offering `repair` or `login` here would point at a command that reports success and
+ * changes nothing.
+ */
+const SELF_DIRECTED_ISSUE_KINDS = new Set<DoctorIssue["kind"]>([
+  "missing_config_dir",
+  "missing_api_secret",
+  "invalid_api_config",
+  "shared_api_key_helper",
+  "unreadable_settings",
+  "plaintext_env_secret",
+  "shared_key_source",
+  "settings_env_override",
+  "env_overrides_endpoint",
+  "invalid_env_map",
+  "invalid_profile_kind",
+]);
+
+const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
+
+/**
+ * Which of the three states a doctor result is in, for anything that colours by it - the
+ * same shape as `quotaSeverity`, and the same reason: two surfaces writing this rule out by
+ * hand disagreed about a profile that had only warnings, one painting it green and the other
+ * amber. The guarantee is that there is one rule rather than that each surface was reviewed;
+ * a colour is only visible to a test with FORCE_COLOR set, which no ordinary render
+ * assertion in this repo has.
+ */
+export function doctorSeverity(issues: DoctorIssue[]): "healthy" | "warning" | "error" {
+  const { errors, warnings } = countIssues(issues);
+  if (errors > 0) return "error";
+  return warnings > 0 ? "warning" : "healthy";
+}
+
+/**
+ * What a doctor result amounts to, in one unstyled phrase: `healthy`, `2 warnings`,
+ * `1 issue`, or `1 issue, 2 warnings`. Shared with the TUI, which has one column for it
+ * and would otherwise label a profile carrying only warnings "healthy" and show nothing.
+ */
+export function doctorSummary(issues: DoctorIssue[]): string {
+  const { errors, warnings } = countIssues(issues);
+  if (errors > 0) {
+    return warnings === 0 ? plural(errors, "issue") : `${plural(errors, "issue")}, ${plural(warnings, "warning")}`;
+  }
+  return warnings > 0 ? plural(warnings, "warning") : "healthy";
+}
+
 export function renderDoctor(results: DoctorProfileResult[]) {
   const sections = results.map((result) => {
-    const title = `  ${bold(result.name)} ${dim(`(${result.email})`)}`;
-    if (result.healthy) {
+    const title = `  ${bold(result.name)} ${dim(`(${displayName(result)})`)}`;
+    const { errors, warnings } = countIssues(result.issues);
+    if (errors === 0 && warnings === 0) {
       return [title, `    ${ok} ${green("healthy")}`].join("\n");
     }
 
     const count = result.issues.length;
-    const statusLine = `    ${xMark} ${red(`${count} issue${count === 1 ? "" : "s"}`)}`;
+    // Warnings do not make a profile broken, so they never turn the line red or add to the
+    // issue count. A profile that has only them says so in its own words; one that has both
+    // leads with what is actually wrong.
+    const statusLine =
+      errors === 0
+        ? `    ${warnIcon} ${yellow(plural(warnings, "warning"))}`
+        : `    ${xMark} ${red(plural(errors, "issue"))}${warnings === 0 ? "" : dim(`, ${plural(warnings, "warning")}`)}`;
     const issueLines = result.issues.map((issue, i) => {
       const connector = i === count - 1 ? symbol.cornerBL : symbol.teeR;
-      return `    ${dim(connector + symbol.lineH)} ${issue.message}`;
+      // Marked per line too: in a mixed list, which of these stops the profile working is
+      // the first thing a reader needs.
+      const marker = issue.severity === "warning" ? `${warnIcon} ` : "";
+      return `    ${dim(connector + symbol.lineH)} ${marker}${issue.message}`;
     });
 
-    // repair rebuilds shared links, folds in session state and re-runs the plugins
-    // setup. It cannot produce a credential, so a profile that only needs one has to be
+    // repair cannot produce a credential, so a profile that only needs one has to be
     // pointed at login instead of at a command that would report success and change
-    // nothing. A profile carrying both classes of issue needs both steps.
-    const needsLogin = result.issues.some((issue) => CREDENTIAL_ISSUE_KINDS.has(issue.kind));
-    const needsRepair = result.issues.some((issue) => !CREDENTIAL_ISSUE_KINDS.has(issue.kind));
+    // nothing. A profile carrying both classes of issue needs both steps. Not a kind
+    // clausona does not know: that is why it reads as a subscription missing its login,
+    // and signing one in would put a subscription where an API profile was meant to be.
+    const needsLogin =
+      !result.issues.some((issue) => issue.kind === "invalid_profile_kind") &&
+      result.issues.some((issue) => CREDENTIAL_ISSUE_KINDS.has(issue.kind));
+    const needsRepair = offersRepair(result.issues);
     const suggestions: string[] = [];
     if (needsRepair) suggestions.push(`       ${dim(`Run ${accent(`clausona repair ${result.name}`)} to fix`)}`);
     if (needsLogin) suggestions.push(`       ${dim(`Run ${accent(`clausona login ${result.name}`)} to sign in`)}`);
@@ -458,4 +578,20 @@ export function renderDoctor(results: DoctorProfileResult[]) {
   });
 
   return ["", ...sections, ""].join("\n\n");
+}
+
+/**
+ * Whether `clausona repair` can fix something in a doctor result: the CLI's "Run clausona
+ * repair" line and the TUI doctor screen's `r` both ask this, so neither offers it where the
+ * other would not. repair rebuilds shared links, folds in session state and re-runs the
+ * plugins setup; a missing credential and a finding whose message names its own fix are not
+ * its to fix.
+ */
+export function offersRepair(issues: DoctorIssue[]): boolean {
+  // repair symlinks into the config directory; it cannot create one. With the directory
+  // gone, every shared-link finding is a consequence of that, and repair fails with
+  // ENOENT instead of fixing anything - so the profile is left with the one instruction
+  // that works, which its own message carries.
+  if (issues.some((issue) => issue.kind === "missing_config_dir")) return false;
+  return issues.some((issue) => !CREDENTIAL_ISSUE_KINDS.has(issue.kind) && !SELF_DIRECTED_ISSUE_KINDS.has(issue.kind));
 }

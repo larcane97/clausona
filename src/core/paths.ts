@@ -31,6 +31,21 @@ export function keychainServiceForConfigDir({ homeDir, configDir }: { homeDir: s
   return `Claude Code-credentials-${hash}`;
 }
 
+/**
+ * Every caller clears this directory with a recursive rm at some point, so it must be this
+ * profile's own: one path segment directly under the tool's backups. `..` or `.` would
+ * point that rm at every backup clausona holds, and a name that normalizes to another one
+ * (`work/`, `./work`, `x/../work`) or nests under it (`work/x`) at that profile's backup.
+ * Names are checked when a profile is created, but a registry written before that check
+ * can still hold any of these, and this is the one place every backup path passes through.
+ */
 export function backupDirFor(clausonaDir: string, tool: ToolName, name: string): string {
-  return path.join(clausonaDir, "backups", tool, name);
+  const base = path.join(clausonaDir, "backups", tool);
+  const dir = path.join(base, name);
+  if (path.dirname(dir) !== base || path.basename(dir) !== name) {
+    throw new Error(
+      `Profile name '${name}' does not map to a directory of its own inside ${base} (it resolves to ${dir}); refusing to use it as a backup directory. To recover, remove the '${tool}:${name}' entry from ${path.join(clausonaDir, "profiles.json")} by hand.`,
+    );
+  }
+  return dir;
 }
