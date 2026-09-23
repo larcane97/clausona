@@ -57,6 +57,14 @@ describe("claudeAdapter.sharedSkipSet", () => {
     expect(claudeAdapter.sharedSkipSet(true).has(".claude.json")).toBe(true);
   });
 
+  it("isolates per-dir state files regardless of session mode", () => {
+    // Their writers replace a shared link with a regular file, so a link never stays.
+    for (const name of [".last-update-result.json", "gh-pr-status-cache.json", ".session-stats.json"]) {
+      expect(claudeAdapter.sharedSkipSet(false).has(name), `expected "${name}" skipped when separated`).toBe(true);
+      expect(claudeAdapter.sharedSkipSet(true).has(name), `expected "${name}" skipped when merged`).toBe(true);
+    }
+  });
+
   it("isolates session-keyed state when sessions are separated", () => {
     const skip = claudeAdapter.sharedSkipSet(false);
     for (const name of ["projects", "jobs", "teams"]) {

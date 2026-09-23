@@ -15,7 +15,23 @@ import type { ToolAdapter, ToolCredential } from "./types.js";
 // That is why sharing it went unnoticed: on Linux and Windows a shared link makes every
 // profile read the primary's token, so all accounts authenticate and spend quota as the
 // primary no matter what `/status` reports.
-const BASE_SHARED_LINK_SKIP = new Set([".claude.json", ".credentials.json", "image-cache", "statsig", "plugins"]);
+//
+// `.last-update-result.json` (the last auto-update's outcome), `gh-pr-status-cache.json`
+// (the PR status shown in the prompt) and `.session-stats.json` (written by a hook or
+// status line, not by Claude Code itself) are state or a cache for one config dir. Each
+// writer replaces a shared link with a regular file — Claude Code's atomic write, or the
+// hook's — so the link never stays in place, and while it does, one account's data shows
+// in another's profile.
+const BASE_SHARED_LINK_SKIP = new Set([
+  ".claude.json",
+  ".credentials.json",
+  "image-cache",
+  "statsig",
+  "plugins",
+  ".last-update-result.json",
+  "gh-pr-status-cache.json",
+  ".session-stats.json",
+]);
 
 // State keyed by session id. `jobs/` holds the background-session records that the
 // background list reads (state, respawn flags, resume target) and `teams/` holds team
@@ -100,9 +116,20 @@ function runSecurity(args: string[]): Promise<{ code: number; stdout: string }> 
   });
 }
 
+/**
+ * `security find-generic-password -w` prints the data as hex once any byte is outside
+ * printable ASCII, which a single non-ASCII character anywhere in the blob (an MCP
+ * server's entry, say) is enough for. A JSON object printed as-is starts with `{`, never
+ * with the hex digits `7b`, so the two cannot be mistaken for each other.
+ */
+function decodeKeychainOutput(stdout: string): string {
+  const trimmed = stdout.trim();
+  return /^7b(?:[0-9a-f]{2})*$/i.test(trimmed) ? Buffer.from(trimmed, "hex").toString("utf8") : stdout;
+}
+
 async function readKeychainBlob(service: string): Promise<StoredCredentials | null> {
   const { code, stdout } = await runSecurity(["find-generic-password", "-s", service, "-w"]);
-  return code === 0 ? parseStored(stdout) : null;
+  return code === 0 ? parseStored(decodeKeychainOutput(stdout)) : null;
 }
 
 /**
@@ -212,6 +239,10 @@ async function renewClaudeCredential(
     throw new Error("no refresh token stored for this profile");
   }
 
+  // Kept in case the re-read after the refresh fails, since writing back an empty blob
+  // would drop everything besides claudeAiOauth, the profile's MCP OAuth tokens included.
+  const before = await readStoredBlob(configDir);
+
   const response = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -231,9 +262,10 @@ async function renewClaudeCredential(
   const data = (await response.json()) as RefreshResponse;
   if (!data.access_token) throw new Error("refresh response carried no access token");
 
-  // Re-read rather than reusing an earlier copy: another process may have rewritten
-  // unrelated parts of the blob (mcpOAuth) while the request was in flight.
-  const blob = (await readStoredBlob(configDir)) ?? {};
+  // Re-read rather than reusing the earlier copy: another process may have rewritten
+  // unrelated parts of the blob (mcpOAuth) while the request was in flight. The earlier
+  // copy stands in only when this read fails.
+  const blob = (await readStoredBlob(configDir)) ?? before ?? {};
   const previous = blob.claudeAiOauth ?? {};
   const now = Date.now();
 
