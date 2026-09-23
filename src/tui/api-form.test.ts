@@ -223,7 +223,8 @@ describe("an advanced setting", () => {
     expect(own).toMatch(/an API key belongs in the Key field/);
     // Not this profile's key, so the Key field is the wrong advice; the CLI's is the shell.
     expect(other).toMatch(/^MY_SERVICE_TOKEN is stored in plain text in profiles\.json/);
-    expect(other).toMatch(/keep it in your shell's environment/);
+    expect(other).toMatch(/your shell's environment can hold it instead/);
+    expect(other).toMatch(/every claude profile launched from that shell/);
     expect(other).not.toMatch(/Key field/);
     expect(plaintextSecretNote("MAX_THINKING_TOKENS", "8000")).toBeUndefined();
   });

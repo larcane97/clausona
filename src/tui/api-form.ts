@@ -457,7 +457,8 @@ export function withoutKeys(errors: Record<string, string>, ...ids: string[]): R
  * What `clausona add --api` prints after a `--set`: for the same names - `isSecretEnvName`, as
  * the doctor's finding too - and with the same advice for each, in the form's terms. A variable
  * Claude Code reads its key from gets the Key field, where the CLI names the credential store;
- * another service's secret gets the shell's environment, which the Key field is no answer for.
+ * another service's secret gets the shell's environment, and what that costs - every claude
+ * profile launched from that shell gets it - since the Key field is no answer for it.
  * Non-blocking for the CLI's reason: a legitimate non-secret header override goes through the
  * same map, so this says what happened rather than refusing it. The doctor reports it again.
  */
@@ -465,7 +466,7 @@ export function plaintextSecretNote(key: string, value: string): string | undefi
   if (value.trim() === "" || !isSecretEnvName(key)) return undefined;
   const stored = `${key} is stored in plain text in profiles.json`;
   if (isCredentialEnvKey(key)) return `${stored} - an API key belongs in the Key field.`;
-  return `${stored}. If it carries a secret, keep it in your shell's environment instead - the hook passes that through to claude - and clear it here.`;
+  return `${stored}. If it carries a secret, your shell's environment can hold it instead - but the hook then passes it to every claude profile launched from that shell, not just this one. If only this profile should have it, leave it here: output hides it.`;
 }
 
 /**
