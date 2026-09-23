@@ -26,6 +26,14 @@ jobs:
 
       - run: pnpm install --no-frozen-lockfile
 
+      # The shell hook's zsh cases need zsh, which ubuntu-latest does not ship; without it
+      # they are skipped, and zsh is the default shell on the maintainer's platform.
+      - name: Install zsh
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh
+
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test

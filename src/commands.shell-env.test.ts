@@ -826,7 +826,15 @@ describe("_shell-env", () => {
  * `clausona` that replays that output, and a stand-in tool that says what it was launched
  * with.
  */
-const HOOK_SHELLS = (["zsh", "bash"] as const).filter((shell) => spawnSync("which", [shell]).status === 0);
+/**
+ * Both shells, each with whether this machine has it. Every case is generated for both and
+ * skipped where the shell is missing, so a runner without zsh reports its cases as skipped
+ * rather than having none.
+ */
+const HOOK_SHELLS = (["zsh", "bash"] as const).map((shell) => ({
+  shell,
+  available: spawnSync("which", [shell]).status === 0,
+}));
 
 function hookRunner(h: Harness, out: string) {
   const bin = path.join(h.home, "bin");
@@ -882,58 +890,58 @@ function apiRegistry(authScheme: "bearer" | "api-key") {
 const PARENT = "sk-ant-parent-sentinel";
 const PROFILE_TOKEN = "sk-or-profile-token";
 
-describe.skipIf(HOOK_SHELLS.length === 0)(
-  "the real hook, with a variable the profile must control made readonly",
-  () => {
-    const cases = [
-      // The name the profile exports as its own credential, under each scheme.
-      { label: "the api-key profile's own ANTHROPIC_API_KEY", scheme: "api-key", readonly: ["ANTHROPIC_API_KEY"] },
-      { label: "the bearer profile's own ANTHROPIC_AUTH_TOKEN", scheme: "bearer", readonly: ["ANTHROPIC_AUTH_TOKEN"] },
-      // The endpoint: with it stuck, bash sent the profile's key to the caller's URL.
-      { label: "the endpoint the profile sets", scheme: "bearer", readonly: ["ANTHROPIC_BASE_URL"] },
-      // The name the profile clears, which the earlier round already guarded.
-      { label: "a credential the profile clears", scheme: "bearer", readonly: ["ANTHROPIC_API_KEY"] },
-      { label: "two of them at once", scheme: "bearer", readonly: ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"] },
-    ] as const;
+describe("the real hook, with a variable the profile must control made readonly", () => {
+  const cases = [
+    // The name the profile exports as its own credential, under each scheme.
+    { label: "the api-key profile's own ANTHROPIC_API_KEY", scheme: "api-key", readonly: ["ANTHROPIC_API_KEY"] },
+    { label: "the bearer profile's own ANTHROPIC_AUTH_TOKEN", scheme: "bearer", readonly: ["ANTHROPIC_AUTH_TOKEN"] },
+    // The endpoint: with it stuck, bash sent the profile's key to the caller's URL.
+    { label: "the endpoint the profile sets", scheme: "bearer", readonly: ["ANTHROPIC_BASE_URL"] },
+    // The name the profile clears, which the earlier round already guarded.
+    { label: "a credential the profile clears", scheme: "bearer", readonly: ["ANTHROPIC_API_KEY"] },
+    { label: "two of them at once", scheme: "bearer", readonly: ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"] },
+  ] as const;
 
-    for (const shell of HOOK_SHELLS) {
-      for (const { label, scheme, readonly } of cases) {
-        it(`refuses to launch in ${shell} when ${label} is readonly`, async () => {
-          const h = await harness(apiRegistry(scheme));
-          vi.stubEnv("CLAUSONA_TEST_SECRET", PROFILE_TOKEN);
-          const run = hookRunner(h, await h.run("claude"));
-          const parentEnv = Object.fromEntries(readonly.map((name) => [name, PARENT]));
+  for (const { shell, available } of HOOK_SHELLS) {
+    for (const { label, scheme, readonly } of cases) {
+      it.skipIf(!available)(`refuses to launch in ${shell} when ${label} is readonly`, async () => {
+        const h = await harness(apiRegistry(scheme));
+        vi.stubEnv("CLAUSONA_TEST_SECRET", PROFILE_TOKEN);
+        const run = hookRunner(h, await h.run("claude"));
+        const parentEnv = Object.fromEntries(readonly.map((name) => [name, PARENT]));
 
-          const result = run(
-            shell,
-            [
-              ...readonly.map((name) => `readonly ${name}`),
-              "claude",
-              'printf "rc=%s\\n" "$?"',
-              ...readonly.map((name) => `printf "parent ${name}=[%s]\\n" "\${${name}:-<unset>}"`),
-            ].join("\n"),
-            parentEnv,
-          );
+        const result = run(
+          shell,
+          [
+            ...readonly.map((name) => `readonly ${name}`),
+            "claude",
+            'printf "rc=%s\\n" "$?"',
+            ...readonly.map((name) => `printf "parent ${name}=[%s]\\n" "\${${name}:-<unset>}"`),
+          ].join("\n"),
+          parentEnv,
+        );
 
-          // The tool never started...
-          expect(result.stdout).not.toContain("TOOL STARTED");
-          expect(result.stdout).toContain("rc=1");
-          // ...every stuck variable was named, with no value...
-          for (const name of readonly) {
-            expect(result.stderr).toContain(`clausona: ${name} is read-only in this shell`);
-            expect(result.stdout).toContain(`parent ${name}=[${PARENT}]`);
-          }
-          expect(result.stderr).not.toContain(PARENT);
-          expect(result.stderr).not.toContain(PROFILE_TOKEN);
-        });
-      }
+        // The tool never started...
+        expect(result.stdout).not.toContain("TOOL STARTED");
+        expect(result.stdout).toContain("rc=1");
+        // ...every stuck variable was named, with no value...
+        for (const name of readonly) {
+          expect(result.stderr).toContain(`clausona: ${name} is read-only in this shell`);
+          expect(result.stdout).toContain(`parent ${name}=[${PARENT}]`);
+        }
+        expect(result.stderr).not.toContain(PARENT);
+        expect(result.stderr).not.toContain(PROFILE_TOKEN);
+      });
+    }
 
-      /**
-       * An env-map name of the user's own. zsh abandons the eval at the failed export, so
-       * every later entry is dropped and the tool launches on a half-applied profile; bash
-       * applies the rest and launches with the caller's value in place of the profile's.
-       */
-      it(`refuses to launch in ${shell} when an env-map name of the user's own is readonly`, async () => {
+    /**
+     * An env-map name of the user's own. zsh abandons the eval at the failed export, so
+     * every later entry is dropped and the tool launches on a half-applied profile; bash
+     * applies the rest and launches with the caller's value in place of the profile's.
+     */
+    it.skipIf(!available)(
+      `refuses to launch in ${shell} when an env-map name of the user's own is readonly`,
+      async () => {
         const h = await harness((home, workDir) =>
           registryWith(
             {
@@ -968,29 +976,29 @@ describe.skipIf(HOOK_SHELLS.length === 0)(
         expect(result.stdout).toContain("rc=1");
         expect(result.stderr).toContain("clausona: MY_FLAG is read-only in this shell");
         expect(result.stdout).toContain(`parent MY_FLAG=[${PARENT}]`);
-      });
+      },
+    );
 
-      it(`launches as usual in ${shell} when nothing is readonly`, async () => {
-        const h = await harness(apiRegistry("bearer"));
-        vi.stubEnv("CLAUSONA_TEST_SECRET", PROFILE_TOKEN);
-        const run = hookRunner(h, await h.run("claude"));
+    it.skipIf(!available)(`launches as usual in ${shell} when nothing is readonly`, async () => {
+      const h = await harness(apiRegistry("bearer"));
+      vi.stubEnv("CLAUSONA_TEST_SECRET", PROFILE_TOKEN);
+      const run = hookRunner(h, await h.run("claude"));
 
-        const result = run(
-          shell,
-          ["claude", 'printf "rc=%s\\n" "$?"', `printf "parent ANTHROPIC_API_KEY=[%s]\\n" "$ANTHROPIC_API_KEY"`].join(
-            "\n",
-          ),
-          { ANTHROPIC_API_KEY: PARENT },
-        );
+      const result = run(
+        shell,
+        ["claude", 'printf "rc=%s\\n" "$?"', `printf "parent ANTHROPIC_API_KEY=[%s]\\n" "$ANTHROPIC_API_KEY"`].join(
+          "\n",
+        ),
+        { ANTHROPIC_API_KEY: PARENT },
+      );
 
-        expect(result.stderr).toBe("");
-        expect(result.stdout).toContain("TOOL STARTED");
-        expect(result.stdout).toContain("rc=0");
-        expect(result.stdout).toContain(`tool ANTHROPIC_AUTH_TOKEN=[${PROFILE_TOKEN}]`);
-        expect(result.stdout).toContain("tool ANTHROPIC_BASE_URL=[https://openrouter.ai/api]");
-        expect(result.stdout).toContain("tool ANTHROPIC_API_KEY=[<unset>]");
-        expect(result.stdout).toContain(`parent ANTHROPIC_API_KEY=[${PARENT}]`);
-      });
-    }
-  },
-);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("TOOL STARTED");
+      expect(result.stdout).toContain("rc=0");
+      expect(result.stdout).toContain(`tool ANTHROPIC_AUTH_TOKEN=[${PROFILE_TOKEN}]`);
+      expect(result.stdout).toContain("tool ANTHROPIC_BASE_URL=[https://openrouter.ai/api]");
+      expect(result.stdout).toContain("tool ANTHROPIC_API_KEY=[<unset>]");
+      expect(result.stdout).toContain(`parent ANTHROPIC_API_KEY=[${PARENT}]`);
+    });
+  }
+});
