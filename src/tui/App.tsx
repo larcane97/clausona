@@ -1029,8 +1029,13 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     setLoading(true);
     try {
       // `detail` because the preview panel says what an API profile is - its endpoint, its
-      // model, and where its key is read from. `list --json` does not ask for it.
-      const [nextProfiles, nextDoctor] = await Promise.all([listProfiles({ detail: true }), doctorProfiles()]);
+      // model, and where its key is read from. `list --json` does not ask for it. No key is
+      // resolved for the dashboard - a `command:` source would run on open and after every
+      // change - only for the doctor screen, which is also where this is called from on mount.
+      const [nextProfiles, nextDoctor] = await Promise.all([
+        listProfiles({ detail: true }),
+        doctorProfiles({ resolveSecrets: screen === "doctor" }),
+      ]);
       // The list carries no quota - that is fetched after it and merged in. A reload keyed on
       // the same profile set would not fetch again, so the panel sat on "loading" from the first
       // switch on. The reading it had stays until the new one lands, and the epoch fetches it.
@@ -1053,6 +1058,18 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     } finally {
       // A failed reload must not leave the TUI on the Loading screen, where the caller's
       // error message is never shown.
+      setLoading(false);
+    }
+  }
+
+  /** The doctor screen's own read, which resolves every API profile's key as `clausona doctor` does. */
+  async function refreshDoctor() {
+    setLoading(true);
+    try {
+      setDoctor(await doctorProfiles());
+    } catch (error) {
+      setMessage(`${symbol.cross} ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
       setLoading(false);
     }
   }
@@ -1158,6 +1175,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         ) {
           setCursor(0);
           setScreen(selectedAction);
+          // The dashboard's doctor left every key unresolved; this screen reports on them.
+          if (selectedAction === "doctor") void refreshDoctor();
         }
       }
       return;

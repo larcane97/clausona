@@ -234,6 +234,18 @@ describe("doctor on an API profile", () => {
     expect(issues.map((i) => i.kind)).toEqual(["missing_api_secret"]);
   });
 
+  it("runs no command key source for a caller that asks for no key to be resolved", async () => {
+    // The dashboard's read, on open and after every change: it left the screen on Loading
+    // for as long as each command took, and a touch-ID prompt fired on every reload.
+    const h = await harness();
+    await h.addApi({ secret: { source: "command", run: "op read op://vault/glm" }, secretValue: undefined });
+
+    const issues = issuesFor(await h.service.doctorProfiles({ resolveSecrets: false }), "claude:glm");
+
+    expect(spawned).toEqual([]);
+    expect(issues).toEqual([]);
+  });
+
   it("reports an endpoint that was edited into profiles.json by hand", async () => {
     const h = await harness({
       profiles: {

@@ -2369,6 +2369,26 @@ describe("App doctor screen", () => {
   });
 });
 
+describe("App's doctor reads", () => {
+  it("resolve no key for the dashboard, and every key for the doctor screen", async () => {
+    // A `command:` key source runs when its key is resolved: on the dashboard that was every
+    // open and every reload, with the screen held on Loading until each command finished.
+    const { doctorProfiles } = await import("../lib/service.js");
+    vi.mocked(doctorProfiles).mockClear();
+    const instance = render(<App initialScreen="dashboard" />);
+    await waitForFrame(instance.lastFrame, (f) => f.includes("Dashboard"));
+
+    expect(vi.mocked(doctorProfiles).mock.calls).toEqual([[{ resolveSecrets: false }]]);
+
+    await moveTo(instance, "Health check");
+    await press(instance, ENTER);
+    await waitForFrame(instance.lastFrame, (f) => f.includes("Health Check"));
+
+    expect(vi.mocked(doctorProfiles).mock.calls).toHaveLength(2);
+    expect(vi.mocked(doctorProfiles).mock.calls[1]?.[0]?.resolveSecrets).not.toBe(false);
+  });
+});
+
 describe("App over a profiles.json that cannot be read", () => {
   it("says why, instead of opening init, which would replace the file", async () => {
     const { listProfiles, registryProblem } = await import("../lib/service.js");

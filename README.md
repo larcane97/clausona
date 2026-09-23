@@ -288,7 +288,7 @@ belongs in an argument.
 | --- | --- | --- |
 | `keychain` (default) | clausona stores it — in the macOS Keychain on a Mac, otherwise in `~/.clausona/secrets.json`, written owner-only. That includes Linux: in this version a stored key goes to that file, readable only by you, not to `secret-tool` or your desktop keyring. `clausona doctor` ends by saying which. On a Mac a key longer than about 2,000 bytes is refused — it does not fit the one line the Keychain is handed it on — so point at such a key with `env:` or `command:` | at every launch, from that store |
 | `env:NAME` | your shell; clausona records only the variable name | at every launch, **in the shell that runs `claude`** — so `NAME` has to be exported there, not only where you ran `clausona add` |
-| `command:"…"` | wherever the command gets it — `op read`, `pass show`, `vault kv get` | at every launch, and on every `clausona doctor`; the first line of its output is the key |
+| `command:"…"` | wherever the command gets it — `op read`, `pass show`, `vault kv get` | at every launch, on every `clausona doctor`, and each time the dashboard's Health check screen opens — never by the dashboard itself; the first line of its output is the key |
 
 `profiles.json` never holds the key itself, only which of these to use. `env:` takes the
 variable's *name*: many keys are valid names too (`hf_…`, `gsk_…`, `sk_live_…`), so a `NAME`
@@ -554,7 +554,9 @@ reports neither missing. It checks these instead:
   and `add` for that one instead. An auth scheme that is not `bearer` or `api-key` is
   reported too, with the `config <profile> --auth` that sets one
 - that the key resolves. **A `command:` source is executed**, in a shell, every time doctor
-  runs — so a vault round-trip or a touch-ID prompt happens on every `clausona doctor`. An
+  runs — so a vault round-trip or a touch-ID prompt happens on every `clausona doctor`, and each
+  time the dashboard's Health check screen opens. The dashboard itself resolves no key, so the
+  health it shows beside a profile does not say whether the key resolves. An
   `env:` source is read from doctor's own environment, which is not necessarily the
   environment the profile will run in. A key source that is none of `keychain`, `env:` and
   `command:` is reported as unknown rather than resolved, with the `config <profile> --key`

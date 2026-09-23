@@ -1047,7 +1047,17 @@ export async function getUsageSummary(profileId_: string | null, period: UsagePe
   );
 }
 
-export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
+export async function doctorProfiles(
+  options: {
+    /**
+     * Resolve each API profile's key, which for a `command:` source runs the command. The
+     * dashboard turns it off: it reads doctor on open and after every change, and a vault
+     * round-trip or a touch-ID prompt there held the whole screen on Loading.
+     */
+    resolveSecrets?: boolean;
+  } = {},
+): Promise<DoctorProfileResult[]> {
+  const { resolveSecrets = true } = options;
   const registry = await loadRegistry();
   if (!registry) {
     return [];
@@ -1104,9 +1114,10 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
           configDirExists: !configDirMissing,
           // The outcome, and nothing else. resolveSecret returns the key itself: it is
           // awaited and dropped in the same expression so no binding ever holds it.
-          // Not for a source clausona does not know, which evaluateApiHealth reports itself.
+          // Not for a source clausona does not know, which evaluateApiHealth reports itself,
+          // and not when the caller asked for no key to be resolved: then it goes unchecked.
           secret:
-            profile.api && isKnownSecretSource(profile.api.secret)
+            resolveSecrets && profile.api && isKnownSecretSource(profile.api.secret)
               ? await resolveSecret(id, profile.api.secret)
                   .then(() => ({ ok: true }) as const)
                   .catch((error: unknown) => ({
