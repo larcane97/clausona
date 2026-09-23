@@ -1,3 +1,5 @@
+import type { EventEmitter } from "node:events";
+
 import { Text, useInput, useStdin } from "ink";
 import { render } from "ink-testing-library";
 import { useEffect } from "react";
@@ -909,6 +911,84 @@ describe("App add-profile: API endpoint", () => {
       return instance;
     }
 
+    async function submit(instance: Instance) {
+      const { addApiProfile } = await import("../lib/service.js");
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added") || f.includes("✘"));
+      return vi.mocked(addApiProfile).mock.calls[0]?.[0];
+    }
+
+    const row = (instance: Instance, label: string) =>
+      (instance.lastFrame() ?? "").split("\n").find((line) => line.includes(label)) ?? "";
+
+    it.each([
+      ["a bracketed paste split over two reads", `\u001b[200~${KEY.slice(0, 20)}`, `${KEY.slice(20)}\u001b[201~`],
+      ["an unbracketed paste split over two reads", KEY.slice(0, 20), KEY.slice(20)],
+      ["a bracketed paste in one read", `\u001b[200~${KEY}\u001b[201~`, ""],
+      ["an unbracketed paste in one read", KEY, ""],
+    ])("takes all of %s that starts the moment the cursor is drawn on the key field", async (_case, head, tail) => {
+      const instance = await filledTo("Auth");
+
+      sendBeforeEffects(instance, (frame) => focusedOn(frame, "API key"), head);
+      await press(instance, DOWN);
+      if (tail !== "") await type(instance, tail);
+      const saved = await submit(instance);
+
+      expect(saved?.secretValue).toBe(KEY);
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+      instance.unmount();
+    });
+
+    it("subscribes the form's listener once a visit, whatever the cursor does, and lets go when the form closes", async () => {
+      // What keeps the gap above shut: nothing about the listener changes when the cursor
+      // moves, so no cursor move can leave a turn in which it is missing. It is found by its
+      // name, so renaming it fails this test rather than letting it pass over nothing.
+      const seam: { emitter?: EventEmitter } = {};
+      function Seam() {
+        seam.emitter = useStdin().internal_eventEmitter;
+        return null;
+      }
+      const instance = renderAt(
+        <>
+          <App initialScreen="use" />
+          <Seam />
+        </>,
+        100,
+      );
+      const listening = () =>
+        (seam.emitter?.listeners("input") ?? []).filter((listener) => listener.name === "hearApiFormInput");
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("default"));
+      await press(instance, "a");
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Choose how to add"));
+      await moveTo(instance, "API endpoint");
+
+      expect(listening()).toHaveLength(0);
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Create profile"));
+      const [first] = listening();
+
+      expect(listening()).toHaveLength(1);
+      for (const label of ["API key", "Model", "Create profile", "Name", "API key"]) {
+        await moveTo(instance, label);
+        expect(listening()).toEqual([first]);
+      }
+
+      await press(instance, ESC);
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Choose how to add"));
+      expect(listening()).toHaveLength(0);
+
+      await moveTo(instance, "API endpoint");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Create profile"));
+      await moveTo(instance, "API key");
+      expect(listening()).toHaveLength(1);
+      expect(listening()[0]).not.toBe(first);
+
+      instance.unmount();
+      expect(listening()).toHaveLength(0);
+    });
+
     it("saves the key the screen shows, not the one a frame before it", async () => {
       // The same turn, one handler over: the App's own keys. ink subscribes a `useInput`
       // handler in an effect too, so an Enter landing the moment "Create profile" is drawn was
@@ -924,6 +1004,24 @@ describe("App add-profile: API endpoint", () => {
 
       const { addApiProfile } = await import("../lib/service.js");
       expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(expect.objectContaining({ secretValue: KEY }));
+      instance.unmount();
+    });
+
+    it("drops a paste that begins with the arrow off the name in the turn the form opens", async () => {
+      // The form's listener is subscribed in the commit that opens the form, not an effect
+      // after it: an arrow and a paste arriving together right then is the paste the form
+      // drops whole, and its tail - twenty characters, too short to look like a key - must
+      // not land in whichever field has the cursor when it arrives.
+      const instance = await formAt();
+
+      sendBeforeEffects(instance, (frame) => frame.includes("Create profile"), `${DOWN}\u001b[200~${KEY.slice(0, 20)}`);
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (frame) => focusedOn(frame, "Endpoint"));
+      await type(instance, `${KEY.slice(20, 40)}\u001b[201~`);
+
+      expect(focusedOn(instance.lastFrame() ?? "", "Endpoint")).toBe(true);
+      expect(row(instance, "Endpoint")).not.toContain("[201~");
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
       instance.unmount();
     });
   });

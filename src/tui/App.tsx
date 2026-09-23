@@ -533,38 +533,50 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    * text - and joining those across events is what `pending` is for.
    *
    * `useInput` keeps the named keys below - erase, ctrl-u, return, esc, the arrows - and
-   * appends nothing, so there is exactly one writer. Attached only while the cursor is on
-   * the key field, and even then it takes an event only while `inputTarget` says the key
-   * field is where input goes: the cursor can leave in the middle of a read, and this
-   * listener hears the rest of that read.
+   * appends nothing, so there is exactly one writer.
    *
-   * Which of this listener and `useInput`'s handler hears an event first is ink's business:
-   * today `useInput`'s, which is subscribed for the App's whole life. Nothing depends on it.
-   * The one place the two disagree - a keystroke that both ends a parked sequence and moves
-   * the cursor - is settled by `releaseApiInput`, whichever order they come in.
+   * Subscribed for as long as the form is open, not while the key field has the cursor. React
+   * runs passive effects a turn of the event loop after the commit that drew their frame, so a
+   * listener subscribed on focus was missing for any read that landed in between: the cursor
+   * was drawn on the key field and `inputTarget` said so, and nothing took the text. A paste's
+   * head went nowhere, its tail was stored as the key, and the mask showed the same eight
+   * bullets. Now no cursor move changes anything about the listener: `inputTarget` decides, in
+   * the same call, whether an event is the key field's - the cursor can also leave in the
+   * middle of a read, and this listener hears the rest of that read. A layout effect, for the
+   * same reason: it is subscribed in the commit that opens the form, not a turn after it.
+   *
+   * It keeps `droppingPaste` too, which needs every input event while the form is open,
+   * whichever field has the cursor, since a dropped paste's tail can reach any of them. The end
+   * is taken after the rest of the read, so the handlers still to hear the closing bracket - a
+   * TextInput would type it as `[201~` - hear it as part of what is dropped.
+   *
+   * `useInput`'s handler hears an event before this listener - it is subscribed for the App's
+   * whole life, this one from when the form opens - and nothing depends on that. The one place
+   * the two disagree, a keystroke that both ends a parked sequence and moves the cursor, is
+   * settled by `releaseApiInput` whichever comes first.
    *
    * The seam is pinned in src/tui/App.test.tsx: `internal_` is a name that can change, and
    * what it would change into is a credential stored wrong and reported as success.
    */
-  const keyFieldFocused = apiFieldUnderCursor(screen, addState)?.id === KEY_FIELD;
+  const fieldUnderCursor = apiFieldUnderCursor(screen, addState)?.id;
+  const apiFormOpen = fieldUnderCursor !== undefined;
   const canReadKeyInput = typeof inputEvents?.on === "function" && typeof inputEvents?.off === "function";
-  useEffect(() => {
-    if (!keyFieldFocused) return;
-    if (!canReadKeyInput) {
-      // No reader at all rather than a guessing one, and the refusal is shown where the key
-      // would have been typed instead of at the save, which is too late to retype anything.
-      setAddState((prev) =>
-        prev ? { ...prev, api: { ...prev.api, errors: { ...prev.api.errors, key: NO_RAW_KEY_INPUT } } } : null,
-      );
-      return;
-    }
-    const onInput = (input: string) => {
+  useLayoutEffect(() => {
+    if (!apiFormOpen || !canReadKeyInput) return;
+    let ending: NodeJS.Immediate | undefined;
+    function hearApiFormInput(input: string) {
+      if (input === PASTE_START && inputTarget.current === undefined) droppingPaste.current = true;
+      else if (input === PASTE_END && droppingPaste.current) {
+        ending = setImmediate(() => {
+          droppingPaste.current = false;
+        });
+      }
       if (inputTarget.current !== KEY_FIELD || droppingPaste.current) return;
       const read = readSecretChunk(secretInput.current, input, "event");
       secretInput.current = read.state;
       setKeyPartial(holdsPartialInput(read.state));
       // The writes `editApiKey` makes, inlined so that this listener depends on nothing that
-      // changes every render - it is subscribed once per focus, not per frame.
+      // changes every render - it is subscribed once a visit to the form, not per frame.
       if (read.problem === "unreadable") {
         setApiKey("");
         setAddState((prev) =>
@@ -578,43 +590,30 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         const errors = keyErrorsAfter(prev.api.errors, read);
         return errors === prev.api.errors ? prev : { ...prev, api: { ...prev.api, errors } };
       });
-    };
-    inputEvents.on("input", onInput);
+    }
+    inputEvents.on("input", hearApiFormInput);
     return () => {
-      inputEvents.off("input", onInput);
+      inputEvents.off("input", hearApiFormInput);
+      if (ending) clearImmediate(ending);
     };
-  }, [keyFieldFocused, canReadKeyInput, inputEvents]);
+  }, [apiFormOpen, canReadKeyInput, inputEvents]);
+
+  // No reader at all rather than a guessing one, and the refusal is shown where the key would
+  // have been typed instead of at the save, which is too late to retype anything.
+  const keyFieldFocused = fieldUnderCursor === KEY_FIELD;
+  useEffect(() => {
+    if (!keyFieldFocused || canReadKeyInput) return;
+    setAddState((prev) =>
+      prev ? { ...prev, api: { ...prev.api, errors: { ...prev.api.errors, key: NO_RAW_KEY_INPUT } } } : null,
+    );
+  }, [keyFieldFocused, canReadKeyInput]);
 
   // What `inputTarget` says between handlers: the field the rendered cursor is on. A layout
   // effect, so it is set in the same commit that draws the cursor there - before any handler
   // can hear another event.
-  const fieldUnderCursor = apiFieldUnderCursor(screen, addState)?.id;
   useLayoutEffect(() => {
     inputTarget.current = fieldUnderCursor;
   });
-
-  // Where `droppingPaste` begins and ends: every input event while the form is open, whichever
-  // field has the cursor, since the paste's tail can reach any of them. The end is taken after
-  // the rest of the read, so the handlers still to hear the closing bracket - a TextInput
-  // would type it as `[201~` - hear it as part of what is dropped.
-  const apiFormOpen = fieldUnderCursor !== undefined;
-  useEffect(() => {
-    if (!apiFormOpen || !canReadKeyInput) return;
-    let ending: NodeJS.Immediate | undefined;
-    const onInput = (input: string) => {
-      if (input === PASTE_START && inputTarget.current === undefined) droppingPaste.current = true;
-      else if (input === PASTE_END && droppingPaste.current) {
-        ending = setImmediate(() => {
-          droppingPaste.current = false;
-        });
-      }
-    };
-    inputEvents.on("input", onInput);
-    return () => {
-      inputEvents.off("input", onInput);
-      if (ending) clearImmediate(ending);
-    };
-  }, [apiFormOpen, canReadKeyInput, inputEvents]);
 
   function editApiField(field: ApiField, edited: string) {
     // A TextInput of a field the cursor has left is still subscribed until the next render,
