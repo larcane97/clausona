@@ -225,7 +225,8 @@ format needs a translation proxy of your own (LiteLLM, claude-code-router); poin
 The dashboard registers one too — **Profiles → add → API endpoint** walks the same fields,
 and says under a field what the CLI would print for it: that an `http://` endpoint off this
 machine sends the key unencrypted, or that a setting whose name says it holds a secret is
-stored in plain text.
+stored in plain text. Its key field shows a constant mask, never the key: a paste there
+replaces whatever the field held, and a key pressed with Alt or Option types nothing into it.
 
 ### The model
 
@@ -294,7 +295,7 @@ belongs in an argument.
 
 | Value | Where the key lives | When it is read |
 | --- | --- | --- |
-| `keychain` (default) | clausona stores it — in the macOS Keychain on a Mac, otherwise in `~/.clausona/secrets.json`, written owner-only. That includes Linux: in this version a stored key goes to that file, readable only by you, not to `secret-tool` or your desktop keyring. `clausona doctor` ends by saying which. On a Mac a key longer than about 2,000 bytes is refused — it does not fit the one line the Keychain is handed it on — so point at such a key with `env:` or `command:` | at every launch, from that store |
+| `keychain` (default) | clausona stores it — in the macOS Keychain on a Mac, otherwise in `~/.clausona/secrets.json`. That includes Linux: in this version a stored key goes to that file, written owner-only (mode 0600) so that only you can read it, not to `secret-tool` or your desktop keyring. On Windows a file mode means nothing; the file is private because it sits inside your user profile, which Windows opens only to you, SYSTEM and administrators. `clausona doctor`'s text report ends by saying which. On a Mac a key longer than about 2,000 bytes is refused — it does not fit the one line the Keychain is handed it on — so point at such a key with `env:` or `command:` | at every launch, from that store |
 | `env:NAME` | your shell; clausona records only the variable name | at every launch, **in the shell that runs `claude`** — so `NAME` has to be exported there, not only where you ran `clausona add` |
 | `command:"…"` | wherever the command gets it — `op read`, `pass show`, `vault kv get` | at every launch, on every `clausona doctor`, and each time the dashboard's Health check screen opens — never by the dashboard itself; the first line of its output is the key |
 
@@ -303,6 +304,16 @@ variable's *name*: many keys are valid names too (`hf_…`, `gsk_…`, `sk_live_
 that looks like an API key is refused, and one stored before is shown as `env:<hidden>` and
 left out of every message. If a real variable's name is refused, copy it to a plainer one
 (`export GW_KEY="$THAT_VARIABLE"`) and pass that.
+
+A `command:` source runs in `sh -c` on macOS and Linux, and in
+`powershell -NoProfile -Command` on Windows, so write it for that shell: `type %USERPROFILE%\…`
+is cmd.exe's, and fails there. In PowerShell, quote the whole value with single quotes, so that
+nothing in it is expanded before clausona stores it — for example with SecretManagement's
+`Get-Secret`:
+
+```powershell
+clausona add claude:vault --api --base-url https://openrouter.ai/api --key-from 'command:Get-Secret gw -AsPlainText'
+```
 
 Never pass a key as an argument. With the default `keychain` source the key is read from a
 prompt that does not echo it, or from stdin when something is piped in — which is how to
@@ -315,7 +326,10 @@ printf %s "$MY_API_KEY" | clausona config claude:gw --key     # rotate it later
 
 The key's ends are trimmed, so one piped or pasted with its newline is fine. A key with a
 space or a line break inside it is refused, whether it was piped, typed, or pasted into the
-dashboard's form: an API key has neither, and two lines run together are not a key.
+dashboard's form: an API key has neither, and two lines run together are not a key. So is a
+key with any character outside printable ASCII — an invisible space, an accent or a curly
+quote that a web page or a chat copied along with it. No API key has one, and the macOS
+Keychain would hand such a key back as hex.
 `pass show` prints more than the key; `--key-from command:"pass show gw"` takes only its
 first line.
 
@@ -332,14 +346,15 @@ pipe the new key into `clausona config <profile> --key`; that always means "stor
 credential store", so on a profile currently reading `env:` or `command:` it switches the
 source to `keychain` as well. `clausona config <profile> --key-from env:NAME` or
 `--key-from command:"…"` moves a profile to that source without typing a key, and deletes
-the stored one when you move away from `keychain` — its success line says so. A `NAME` that
-is not set in the shell you run it from gets a warning, not a refusal: it only has to be set
-where `claude` runs. `--key-from keychain` needs the key,
+the stored one when you move away from `keychain` — its success line says so. Here and on
+`add`, a `NAME` that is not set in the shell you run it from gets a warning, not a refusal: it
+only has to be set where `claude` runs. `--key-from keychain` needs the key,
 piped in or typed at the prompt, as `--key` does.
 
 `clausona config <profile> --show` prints the endpoint, the auth scheme and the key's
 *source* — never the key, and for a `command:` source not the command line either. Neither
 does `doctor`, in either output form; see [What clausona prints](#what-clausona-prints).
+`--show` only reads, so next to a change it is refused and nothing is changed.
 
 The credential reaches Claude Code through its environment, so **processes Claude Code
 starts — including its own Bash tool calls — can read it**. Use `env:` or `command:` with a
@@ -607,14 +622,14 @@ reports neither missing. It checks these instead:
   which Claude Code applies over the profile: an error, since the key or the traffic then goes
   somewhere else. `ANTHROPIC_MODEL` there is a warning
 - one `env:` or `command:` key source read by API profiles on different endpoints (compared by
-  scheme, host and port): whichever key it holds goes to both. Also a warning, reported on
+  scheme, host and port): whichever key it holds goes to each of them. Also a warning, reported on
   each of them with the `config <profile> --key-from env:<ANOTHER_NAME>` that separates them.
   `add --api --key-from` says the same when it creates that state
 
 No request is made to the endpoint. A healthy report means the profile is configured and its
 key resolves, not that the endpoint answered — run `claude` itself to find that out. When a
-profile's key is stored by clausona, the report ends by saying where: the macOS Keychain, or
-`~/.clausona/secrets.json` everywhere else.
+profile's key is stored by clausona, the text report ends by saying where: the macOS Keychain,
+or `~/.clausona/secrets.json` everywhere else. `--json` leaves that line out.
 
 In `clausona doctor --json` each profile carries `kind` and `label` exactly as `list --json`
 does: an API profile has `kind: "api"`, its label under `label` and an empty `email`; a
@@ -789,10 +804,10 @@ that profile's key to Claude Code, which then talks to the endpoint you configur
 
 ```
 ~/.clausona/
-├── profiles.json    # registered profiles and active selection, owner-only (including
-│                    #   each API profile's endpoint and key *source*, never the key)
-├── secrets.json     # API profile keys, owner-only, on Linux and Windows (macOS keeps
-│                    #   them in the Keychain)
+├── profiles.json    # registered profiles and active selection (including each API
+│                    #   profile's endpoint and key *source*, never the key)
+├── secrets.json     # API profile keys on Linux and Windows (macOS keeps them in the
+│                    #   Keychain)
 ├── usage.json       # per-profile usage history
 ├── quota.json       # cached plan-quota readings (5-minute freshness)
 ├── locks/           # short-lived per-profile credential renewal locks
@@ -803,6 +818,10 @@ that profile's key to Claude Code, which then talks to the endpoint you configur
 ~/.claude-<name>/        # claude profile config directories (created by `clausona add`)
 ~/.codex-<name>/         # codex profile config directories (created by `clausona add codex:<name>`)
 ```
+
+`profiles.json` and `secrets.json` are written owner-only (mode 0600) on macOS and Linux. On
+Windows a file mode means nothing: they are private because they sit inside your user profile,
+which Windows opens only to you, SYSTEM and administrators.
 
 ## Migration from 0.0.x
 

@@ -253,6 +253,17 @@ describe("add --api", () => {
     expect(h.storedSecrets()).toEqual({});
   });
 
+  // config --key-from says so; add said nothing, and the first sign was a launch with no key.
+  it("warns, and still adds, when the variable is not set here", async () => {
+    const h = await harness();
+    vi.stubEnv("MY_KEY", "");
+
+    await h.run("add", "claude:gw", "--api", "--base-url", "https://openrouter.ai/api", "--key-from", "env:MY_KEY");
+
+    expect(h.profile("claude:gw").api?.secret).toEqual({ source: "env", name: "MY_KEY" });
+    expect(stripAnsi(h.stderr())).toContain("The key now comes from env:MY_KEY, which is not set in this shell.");
+  });
+
   it('takes --key-from command:"..." without asking for a key', async () => {
     const h = await harness();
 
@@ -364,6 +375,36 @@ describe("add --api", () => {
         expect(message).toBe(`${args[0]} only applies to an API profile. Add --api, or leave it out.`);
       }
       expect(Object.keys(h.registry().profiles)).toEqual(["claude:default"]);
+    });
+
+    // A value option that ends the line was dropped without a word, and one followed by another
+    // option took that option as its value: `--label --json` stored the label "--json".
+    it.each([
+      [
+        "ends the line",
+        ["add", "claude:gw", "--api", "--base-url", "http://localhost:8000", "--key-from", "env:X1", "--model"],
+      ],
+      ["is followed by another option", ["config", "claude:gw", "--label", "--json"]],
+    ])("refuses a value option that %s, rather than dropping it or taking the option", async (_case, args) => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+      const flag = args.includes("--model") ? "--model" : "--label";
+
+      const message = await failure(h.run(args[0], ...args.slice(1)));
+
+      expect(message).toBe(`${flag} needs a value.`);
+      expect(h.profile("claude:gw")).toMatchObject({
+        label: "openrouter.ai",
+        env: { ANTHROPIC_MODEL: "z-ai/glm-5.3" },
+      });
+      expect(promptCalls).toEqual([]);
+    });
+
+    it("still counts a value option with no value as one given without --api", async () => {
+      const h = await harness();
+
+      const message = await failure(h.run("add", "claude:gw", "--model"));
+
+      expect(message).toBe("--model only applies to an API profile. Add --api, or leave it out.");
     });
 
     it("refuses an option given twice instead of quietly taking the first", async () => {
@@ -506,6 +547,24 @@ describe("add --api", () => {
       expect(existsSync(path.join(h.home, ".claude-.hidden"))).toBe(false);
     });
 
+    // The key prompt used to come first, so the refusal cost the user a typed key.
+    it.each([
+      ["a profile that already has the name", "Profile 'claude:gw' already exists."],
+      [
+        "a config directory already at its path",
+        `${path.join("~", ".claude-other")} already exists. Choose another profile name.`,
+      ],
+    ])("refuses a name taken by %s before asking for a key", async (_case, expected) => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+      mkdirSync(path.join(h.home, ".claude-other"));
+      const name = expected.startsWith("Profile") ? "claude:gw" : "claude:other";
+
+      const message = await failure(h.run("add", name, "--api", "--base-url", "http://localhost:8000"));
+
+      expect(message).toBe(expected);
+      expect(promptCalls).toEqual([]);
+    });
+
     it("says nothing about the key when there is none", async () => {
       const h = await harness();
       promptAnswers.push("");
@@ -620,6 +679,20 @@ describe("add --api", () => {
       await h.run("add", "a".repeat(64), "--api", "--base-url", "http://localhost:8000");
 
       expect(Object.keys(h.registry().profiles)).toContain(`claude:${"a".repeat(64)}`);
+    });
+
+    // The tool is not part of the name: `claude:` took seven of the 64 characters.
+    it("measures the name without its tool prefix", async () => {
+      const h = await harness();
+      promptAnswers.push(KEY);
+
+      await h.run("add", `claude:${"a".repeat(60)}`, "--api", "--base-url", "http://localhost:8000");
+      const message = await failure(
+        h.run("add", `claude:${"b".repeat(65)}`, "--api", "--base-url", "http://localhost:8000"),
+      );
+
+      expect(Object.keys(h.registry().profiles)).toContain(`claude:${"a".repeat(60)}`);
+      expect(message).toContain("at most 64 characters");
     });
   });
 
@@ -830,11 +903,13 @@ describe("config --show", () => {
     expect(shown.profile.api).toBeUndefined();
   });
 
-  it("reads rather than writes when it is passed next to a change", async () => {
+  // It used to print the profile and exit 0, and the change was dropped without a word.
+  it("refuses a change passed next to it, and changes nothing", async () => {
     const h = await harness({ "claude:gw": API_PROFILE });
 
-    await h.run("config", "claude:gw", "--show", "--set", "API_TIMEOUT_MS=600000");
+    const message = await failure(h.run("config", "claude:gw", "--show", "--set", "API_TIMEOUT_MS=600000"));
 
+    expect(message).toBe("--show only reads; run the change on its own.");
     expect(h.profile("claude:gw").env).toEqual({ ANTHROPIC_MODEL: "z-ai/glm-5.3" });
   });
 });
@@ -876,6 +951,21 @@ describe("config --set / --unset", () => {
 
     expect(message).toBe("API_TIMEOUT_MS expects a whole number, got 'soon'");
     expect(h.profile("claude:gw").env).toEqual({ ANTHROPIC_MODEL: "z-ai/glm-5.3" });
+  });
+
+  // "✔ Updated" for a name the map never had read as if a setting had gone - a typo included.
+  it("says a name --unset was given was not set, rather than that it was updated", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+
+    const nothing = stripAnsi(await h.run("config", "claude:gw", "--unset", "DISABLE_PROMPT_CACHING"));
+    const some = stripAnsi(
+      await h.run("config", "claude:gw", "--unset", "DISABLE_PROMPT_CACHING", "--unset", "ANTHROPIC_MODEL"),
+    );
+
+    expect(nothing).toBe("DISABLE_PROMPT_CACHING was not set; nothing changed");
+    expect(some).toContain("Updated claude:gw (ANTHROPIC_MODEL)");
+    expect(some).toContain("DISABLE_PROMPT_CACHING was not set");
+    expect(h.profile("claude:gw").env).toEqual({});
   });
 
   it("refuses a bare key, so a typo cannot quietly clear a setting", async () => {
@@ -2369,6 +2459,8 @@ describe("one key source read for two endpoints", () => {
 
   it("is not noted for two profiles on one endpoint", async () => {
     const h = await harness({ "claude:glm": ON_OPENROUTER });
+    // Set, so that the one note an unset variable gets is not what this reads.
+    vi.stubEnv("OR_KEY", "or-key-value");
 
     await h.run(
       "add",
@@ -3101,7 +3193,7 @@ describe("help", () => {
     // source is executed - doctor is not a read-only inspection of the registry.
     expect(help).toContain("never prints the key");
     expect(help).toContain("is run");
-    // Which of the four leave the profile healthy, so a warning is not read as breakage.
+    // Which three leave the profile healthy, so a warning is not read as breakage.
     expect(help).toContain("are warnings");
     expect(help).toContain("stays healthy");
     // And what it does not do, so a healthy report is not read as "the endpoint answered".

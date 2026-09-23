@@ -24,7 +24,9 @@ import type { DoctorProfileResult, SecretSource } from "./types.js";
  * The harness is the one the other integration files use: HOME stubbed, secrets forced to the
  * file backend, and every spawn refused except the shell a `command:` key source runs in -
  * the planted commands are `exit` and `echo`. The platform is forced to linux, so no path
- * reaches for the Keychain.
+ * reaches for the Keychain - and so that shell is /bin/sh, which a Windows runner does not
+ * have. There the cells that need a command to run are left out (`NEEDS_SH`), and the rest of
+ * the matrix runs as it does everywhere else.
  */
 
 const temps: string[] = [];
@@ -93,6 +95,15 @@ function leaks(printed: string, secret: string): boolean {
     leakedWindows([printed.replace(/"\d+":/g, "")], secret, compact).length > 0
   );
 }
+
+/**
+ * The shapes that exist only once a `command:` key source has run: without /bin/sh the command
+ * never prints its key, and a check that finds nothing of a secret nobody produced proves
+ * nothing. A command's own command line is not among them - it sits in profiles.json, and
+ * every path could print it whether or not it runs.
+ */
+const NEEDS_SH: ReadonlySet<string> = new Set(["the key a command prints"]);
+const CELLS = Object.entries(PLANTED).filter(([shape]) => process.platform !== "win32" || !NEEDS_SH.has(shape));
 
 const API_IDS = [
   "claude:leaky",
@@ -361,7 +372,7 @@ const PATHS: Record<string, (h: Harness) => Promise<string>> = {
     each(API_IDS, async (id) => [await h.run("config", id, "--label", "Renamed"), h.takeStderr()].join("\n")),
 };
 
-describe.skipIf(process.platform === "win32")("every output path, every secret shape", () => {
+describe("every output path, every secret shape", () => {
   for (const [name, produce] of Object.entries(PATHS)) {
     it(`${name} prints none of them`, async () => {
       const h = await harness();
@@ -374,9 +385,7 @@ describe.skipIf(process.platform === "win32")("every output path, every secret s
 
       expect(printed.length, name).toBeGreaterThan(0);
       // Every cell of the row at once, so a failure names all the shapes that got out.
-      const leaked = Object.entries(PLANTED)
-        .filter(([, secret]) => leaks(printed, secret))
-        .map(([shape]) => shape);
+      const leaked = CELLS.filter(([, secret]) => leaks(printed, secret)).map(([shape]) => shape);
       expect(leaked, name).toEqual([]);
     });
   }
@@ -386,7 +395,7 @@ describe.skipIf(process.platform === "win32")("every output path, every secret s
  * What redaction must not take away: where a profile points, how it authenticates, which
  * settings it has, and what went wrong. A path that printed nothing would pass the matrix.
  */
-describe.skipIf(process.platform === "win32")("what every path still says", () => {
+describe("what every path still says", () => {
   it("config --show names the endpoint, the source and every setting, with the secrets cut out", async () => {
     const h = await harness();
 
@@ -459,7 +468,8 @@ describe.skipIf(process.platform === "win32")("what every path still says", () =
     const report = stripAnsi(await h.run("doctor"));
 
     expect(report).toContain("can reach https://gw.example.com/api?<hidden>");
-    expect(report).toContain("secret command exited with 3");
+    // What failed is the command, whose exit code needs /bin/sh to run it: see NEEDS_SH.
+    if (process.platform !== "win32") expect(report).toContain("secret command exited with 3");
   });
 
   it("doctor tells a profile whose key variable is not a name how to fix it, and the command runs", async () => {
@@ -493,7 +503,8 @@ describe.skipIf(process.platform === "win32")("what every path still says", () =
  * The exception. `_shell-env` is how the key reaches the tool, so its stdout carries every
  * value as stored - redacting it would hand Claude Code `<hidden>` as a credential. Pinned
  * byte for byte, as it was before any redaction existed, so no change to what the rest of
- * clausona prints can reach it.
+ * clausona prints can reach it. Not on Windows: what it pins is POSIX output, one of whose
+ * values only /bin/sh can produce (`NEEDS_SH`).
  */
 describe.skipIf(process.platform === "win32")("_shell-env's stdout, the one path that carries them", () => {
   const exportsFor = async (id: string) => {

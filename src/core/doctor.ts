@@ -309,7 +309,7 @@ export function evaluateApiHealth({
     issues.push({
       kind: "shared_key_source",
       severity: "warning",
-      message: `this profile's key comes from ${keySourcePhrase(profile.api?.secret)}, which ${keySharers.join(", ")} ${verb} too for a different endpoint, so one key goes to both - if this endpoint takes a key of its own, run 'clausona config ${id} --key-from env:<ANOTHER_NAME>' (or --key, to store it)`,
+      message: `this profile's key comes from ${keySourcePhrase(profile.api?.secret)}, which ${keySharers.join(", ")} ${verb} too for a different endpoint, so one key goes to ${keySharers.length === 1 ? "both" : "all of them"} - if this endpoint takes a key of its own, run 'clausona config ${id} --key-from env:<ANOTHER_NAME>' (or --key, to store it)`,
     });
   }
 

@@ -46,6 +46,7 @@ import {
   defaultAuthScheme,
   discoverAccounts,
   doctorProfiles,
+  freeApiConfigDir,
   getUsageSummary,
   initializeRegistry,
   listProfiles,
@@ -141,10 +142,10 @@ function validateFlags(command: string, args: string[]) {
 // scrollback. Variable *names* are echoed, because they are validated identifiers.
 
 const ADD_API_USAGE =
-  "Usage: clausona add <profile> --api --base-url <url> [--model <id>] [--auth bearer|api-key] [--key-from <source>]";
+  "Usage: clausona add <profile> --api --base-url <url> [--model <id>] [--auth bearer|api-key] [--key-from <source>] [--label <name>] [--set KEY=VALUE]";
 
 const CONFIG_USAGE =
-  "Usage: clausona config <profile> [--model <id>] [--set KEY=VALUE] [--unset KEY] [--base-url <url>] [--auth bearer|api-key] [--label <name>] [--key] [--edit] [--show] [--merge-sessions | --separate-sessions]";
+  "Usage: clausona config <profile> [--model <id>] [--set KEY=VALUE] [--unset KEY] [--base-url <url>] [--auth bearer|api-key] [--label <name>] [--key | --key-from <source>] [--edit] [--show] [--merge-sessions | --separate-sessions]";
 
 /**
  * An argument nobody asked for is usually a key someone expected an option to take.
@@ -160,13 +161,21 @@ const CONFIG_EXTRA_ARGUMENT =
 const NO_KEY_SUPPLIED =
   'No API key supplied. Type it at the prompt, pipe it in (printf %s "$KEY" | clausona …), or read it from elsewhere with --key-from env:NAME.';
 
-/** Reads `--flag value` and `--flag=value`, returning every occurrence in order. */
+/**
+ * Reads `--flag value` and `--flag=value`, returning every occurrence in order.
+ *
+ * `--flag` with nothing after it, or with another option after it, is refused: the first was
+ * dropped without a word, and the second took the option as the value - `--label --json`
+ * stored the label "--json". Only the spaced form: `--flag=--x` says what it means.
+ */
 function optionValues(args: string[], flag: string): string[] {
   const values: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === flag && args[i + 1] !== undefined) {
-      values.push(args[i + 1]);
+    if (arg === flag) {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("--")) throw new Error(`${flag} needs a value.`);
+      values.push(value);
       i++;
     } else if (arg.startsWith(`${flag}=`)) {
       values.push(arg.slice(flag.length + 1));
@@ -296,6 +305,19 @@ function warnPlaintextEnv(id: string, profile: Pick<Profile, "tool" | "kind" | "
     }
     process.stderr.write(`  ${warnIcon} ${key} is stored in plain text in ~/.clausona/profiles.json.\n${advice}`);
   }
+}
+
+/**
+ * Said by `add --api` and `config --key-from` alike when an env: source names a variable this
+ * shell does not have. Warned, not refused: the variable is read at every launch, in the shell
+ * that runs claude, and the user may be about to export it in their rc file.
+ */
+function warnUnsetKeyVariable(secret: SecretSource) {
+  if (secret.source !== "env" || process.env[secret.name]) return;
+  process.stderr.write(
+    `  ${warnIcon} The key now comes from ${describeSecretSource(secret)}, which is not set in this shell.\n` +
+      "    Export it where claude runs - in your shell's rc file, for one - or the next launch has no key.\n",
+  );
 }
 
 /** Said by `add --api` and `config --base-url` alike, whenever `sendsKeyInClear` holds. */
@@ -503,7 +525,8 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("USAGE")}`,
         helpUsage("clausona add <profile> [--from <path>] [--merge-sessions]"),
-        helpUsage("clausona add <profile> --api --base-url <url> [--model <id>] [--auth <scheme>] [--merge-sessions]"),
+        helpUsage("clausona add <profile> --api --base-url <url> [--model <id>] [--auth <scheme>]"),
+        helpUsage("    [--key-from <source>] [--label <name>] [--set KEY=VALUE ...] [--merge-sessions]"),
         "",
         `  ${bold("ARGUMENTS")}`,
         `    ${accent("profile".padEnd(18))}${dim("Profile to create (e.g. work or claude:work)")}`,
@@ -529,8 +552,14 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${accent("--auth".padEnd(18))}${dim("bearer | api-key (default: api-key for anthropic.com, else bearer)")}`,
         `    ${" ".repeat(18)}${dim('With api-key, claude asks "Do you want to use this API key?": answer Yes.')}`,
         `    ${accent("--key-from".padEnd(18))}${dim('keychain (default) | env:NAME | command:"<shell command>"')}`,
+        `    ${" ".repeat(18)}${dim("keychain is the macOS Keychain on a Mac, and ~/.clausona/secrets.json")}`,
+        `    ${" ".repeat(18)}${dim("on Linux and Windows: mode 0600 on Linux, and on Windows private")}`,
+        `    ${" ".repeat(18)}${dim("because it sits in your user profile.")}`,
         `    ${" ".repeat(18)}${dim("NAME is the variable's name, never the key: one that looks like a key")}`,
         `    ${" ".repeat(18)}${dim("is refused.")}`,
+        `    ${" ".repeat(18)}${dim("command: runs in sh -c on macOS and Linux, and in")}`,
+        `    ${" ".repeat(18)}${dim("powershell -NoProfile -Command on Windows; the first line it prints")}`,
+        `    ${" ".repeat(18)}${dim("is the key.")}`,
         `    ${accent("--label".padEnd(18))}${dim("Display name shown in list (default: the endpoint host)")}`,
         `    ${" ".repeat(18)}${dim("A --model or --label that looks like an API key is refused.")}`,
         `    ${accent("--set".padEnd(18))}${dim("Advanced setting KEY=VALUE; repeatable. For example")}`,
@@ -542,6 +571,10 @@ function subcommandHelpText(command: string): string | undefined {
         helpUsage('printf %s "$MY_API_KEY" | clausona add claude:gw --api --base-url https://openrouter.ai/api'),
         helpUsage("clausona add claude:local --api --base-url http://localhost:8000 --key-from env:MY_API_KEY"),
         helpUsage('clausona add claude:vault --api --base-url http://localhost:8000 --key-from command:"pass show gw"'),
+        `    ${dim("On Windows, in PowerShell - single quotes store the command unexpanded:")}`,
+        helpUsage(
+          "clausona add claude:vault --api --base-url http://localhost:8000 --key-from 'command:Get-Secret gw -AsPlainText'",
+        ),
         "",
         `  ${bold("THE KEY")}`,
         `    ${dim("With --key-from keychain (the default) the key is read from a prompt that does")}`,
@@ -551,9 +584,10 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim('env:NAME and command:"..." store a reference, not the key. Each one is resolved')}`,
         `    ${dim("again every time the profile is used, in the shell that runs claude - so the")}`,
         `    ${dim("variable has to be exported there, not only in the shell that ran this command.")}`,
+        `    ${dim("One that is not set here gets a warning, not a refusal.")}`,
         `    ${dim("keychain stores the key itself, so it needs nothing set up afterwards. When")}`,
         `    ${dim("another API profile reads the same env: or command: for a different endpoint,")}`,
-        `    ${dim("add says so: whichever key it holds would then go to both.")}`,
+        `    ${dim("add says so: whichever key it holds would then go to each of them.")}`,
         "",
       ].join("\n");
 
@@ -690,7 +724,7 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("  reach the profile's endpoint, whatever auth scheme the profile uses.")}`,
         `    ${dim("  A settings.json that cannot be read is reported rather than skipped;")}`,
         `    ${dim("- one env: or command: key source read by API profiles on different")}`,
-        `    ${dim("  endpoints, so one key goes to both. The fix is to give one its own:")}`,
+        `    ${dim("  endpoints, so each gets the same key. The fix is to give one its own:")}`,
         `    ${dim("  `clausona config <profile> --key-from env:<ANOTHER_NAME>`;")}`,
         `    ${dim("- a credential name in the profile's env map, which profiles.json holds")}`,
         `    ${dim("  in plain text. Move it with `clausona config <profile> --key`, then")}`,
@@ -703,8 +737,9 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("No request is made to the endpoint. A healthy report means the profile is")}`,
         `    ${dim("configured and its key resolves, not that the endpoint answered.")}`,
         "",
-        `    ${dim("When a profile's key is stored by clausona (--key-from keychain), the report")}`,
-        `    ${dim("ends by saying where: the macOS Keychain, or ~/.clausona/secrets.json elsewhere.")}`,
+        `    ${dim("When a profile's key is stored by clausona (--key-from keychain), the text")}`,
+        `    ${dim("report ends by saying where: the macOS Keychain, or ~/.clausona/secrets.json")}`,
+        `    ${dim("elsewhere. --json leaves that line out.")}`,
         "",
       ].join("\n");
 
@@ -730,7 +765,8 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${accent("--separate-sessions".padEnd(22))}${dim("Keep sessions isolated (default)")}`,
         `    ${accent("--model".padEnd(22))}${dim("The model the profile uses, stored as ANTHROPIC_MODEL")}`,
         `    ${accent("--set".padEnd(22))}${dim("Set an advanced env setting; repeatable")}`,
-        `    ${accent("--unset".padEnd(22))}${dim("Remove an advanced env setting; repeatable")}`,
+        `    ${accent("--unset".padEnd(22))}${dim("Remove an advanced env setting; repeatable. A name")}`,
+        `    ${" ".repeat(22)}${dim("that is not set changes nothing, and is said to be unset")}`,
         `    ${accent("--base-url".padEnd(22))}${dim("Point an API profile at another endpoint, http:// or https://")}`,
         `    ${accent("--auth".padEnd(22))}${dim("bearer | api-key: how an API profile presents its key")}`,
         `    ${accent("--label".padEnd(22))}${dim("Name list shows for an API profile; cannot be blank")}`,
@@ -739,9 +775,10 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${accent("--edit".padEnd(22))}${dim("Open the profile's env map in $VISUAL or $EDITOR")}`,
         `    ${accent("--show".padEnd(22))}${dim("Print the profile's settings (add --json for the full catalog)")}`,
         "",
-        `    ${dim("One change per call, except --show, which only reads. --base-url, --auth and")}`,
-        `    ${dim("--label count as one: together they are the endpoint `add --api` set up.")}`,
-        `    ${dim("--model counts with --set and --unset, since it is a setting too.")}`,
+        `    ${dim("One change per call. --show only reads, and is refused next to a change.")}`,
+        `    ${dim("--base-url, --auth and --label count as one: together they are the endpoint")}`,
+        `    ${dim("`add --api` set up. --model counts with --set and --unset, since it is a")}`,
+        `    ${dim("setting too.")}`,
         "",
         `  ${bold("THE MODEL")}`,
         `    ${dim("--model writes ANTHROPIC_MODEL in the env map, the variable Claude Code reads;")}`,
@@ -1134,14 +1171,18 @@ export async function runCommand(command: string, args: string[]) {
       const ref = parseProfileRef(input, registry);
       const profile = registry.profiles[ref.id];
 
-      // A read, and it wins over everything else: `--show` next to a change is a caller
-      // asking what is there, and answering that is always safe.
-      if (args.includes("--show")) return showProfile(ref.id, profile, jsonFlag(args));
-
       // One change per call. Each branch below returns, so a second flag would be dropped
       // without a word - the caller would be told the profile was updated, for the other
       // thing they asked for.
       const changes = [changeEnv, changeEndpoint, changeKey, openEditor, changeSessions].filter(Boolean).length;
+
+      // A read, and nothing else: next to a change it printed the profile, exited 0 and
+      // dropped the change, which is the same silence as a second change.
+      if (args.includes("--show")) {
+        if (changes > 0) throw new Error("--show only reads; run the change on its own.");
+        return showProfile(ref.id, profile, jsonFlag(args));
+      }
+
       if (changes === 0) throw new Error(CONFIG_USAGE);
       if (changes > 1) {
         throw new Error(
@@ -1172,8 +1213,15 @@ export async function runCommand(command: string, args: string[]) {
         // updateProfileEnv validates every entry through validateEnvEntry before it saves.
         await updateProfileEnv(ref.id, { set, unset: unsetKeys });
         warnPlaintextEnv(ref.id, profile, Object.keys(set));
-        const changed = [...Object.keys(set), ...unsetKeys].join(", ");
-        return success(`Updated ${bold(ref.id)} ${dim(`(${changed})`)}`);
+        // A name the map did not have is said as such: "Updated" read as if a setting had gone,
+        // and a typo in the name looked like success.
+        const before = envMapOf(profile.env) ?? {};
+        const notSet = unsetKeys.filter((key) => !Object.hasOwn(before, key) && !Object.hasOwn(set, key));
+        const notSetLine = `${notSet.join(", ")} ${notSet.length === 1 ? "was" : "were"} not set`;
+        const changed = [...Object.keys(set), ...unsetKeys.filter((key) => !notSet.includes(key))].join(", ");
+        if (changed === "") return dim(`${notSetLine}; nothing changed`);
+        const updated = success(`Updated ${bold(ref.id)} ${dim(`(${changed})`)}`);
+        return notSet.length === 0 ? updated : `${updated}\n  ${dim(notSetLine)}`;
       }
 
       if (changeEndpoint) {
@@ -1243,14 +1291,7 @@ export async function runCommand(command: string, args: string[]) {
         const value = secret.source === "keychain" ? await promptSecret("API key: ") : undefined;
         if (secret.source === "keychain" && !value) throw new Error(NO_KEY_SUPPLIED);
         const { deletedStoredKey } = await updateProfileSecret(ref.id, secret, value);
-        // Warned, not refused: the variable is read at every launch, in the shell that runs
-        // claude, and the user may be about to export it in their rc file.
-        if (secret.source === "env" && !process.env[secret.name]) {
-          process.stderr.write(
-            `  ${warnIcon} The key now comes from ${describeSecretSource(secret)}, which is not set in this shell.\n` +
-              "    Export it where claude runs - in your shell's rc file, for one - or the next launch has no key.\n",
-          );
-        }
+        warnUnsetKeyVariable(secret);
         const deleted = deletedStoredKey ? ` ${dim(`(deleted the key stored in ${secretStoreName()})`)}` : "";
         return success(`Updated the credential for ${bold(ref.id)}${deleted}`);
       }
@@ -1285,8 +1326,9 @@ export async function runCommand(command: string, args: string[]) {
       }
       if (!api) {
         // Silently ignoring one of these would leave a subscription profile where the
-        // caller asked for an endpoint, and nothing on screen would say so.
-        const stray = API_ONLY_FLAGS.find((flag) => optionValues(args, flag).length > 0);
+        // caller asked for an endpoint, and nothing on screen would say so. Counted by the
+        // option, not its value: `--model` with none is still an API option given here.
+        const stray = API_ONLY_FLAGS.find((flag) => args.some((arg) => arg === flag || arg.startsWith(`${flag}=`)));
         if (stray) throw new Error(`${stray} only applies to an API profile. Add --api, or leave it out.`);
       }
 
@@ -1296,8 +1338,12 @@ export async function runCommand(command: string, args: string[]) {
       }
       // Checked before the tool is resolved, because the two messages that resolution can
       // produce both quote the input, and a key in this slot would otherwise end up as a
-      // profile id, a directory name and a line of stdout.
-      if (looksLikeCredential(input)) throw new Error(CREDENTIAL_AS_NAME_ERROR);
+      // profile id, a directory name and a line of stdout. The name is what is measured, not
+      // `claude:` with it; the whole input only when what precedes a colon is not a tool,
+      // since that message quotes it.
+      const [prefix, ...afterPrefix] = input.split(":");
+      const named = afterPrefix.length > 0 && (ALL_TOOLS as readonly string[]).includes(prefix);
+      if (looksLikeCredential(named ? afterPrefix.join(":") : input)) throw new Error(CREDENTIAL_AS_NAME_ERROR);
       if (extraArgs.length > 0) throw new Error(ADD_EXTRA_ARGUMENT);
 
       const registry = await loadRegistry();
@@ -1363,6 +1409,8 @@ export async function runCommand(command: string, args: string[]) {
         // a name it is going to refuse should not cost the user a typed key first.
         const nameCheck = validateProfileName(name);
         if (!nameCheck.ok) throw new Error(nameCheck.error);
+        // And that the name is free - no profile has it, and no directory is at its path.
+        await freeApiConfigDir(registry, tool, name);
 
         const secret = parseSecretSource(optionValue(args, "--key-from") ?? "keychain");
         const secretValue = secret.source === "keychain" ? await promptSecret("API key: ") : undefined;
@@ -1381,13 +1429,14 @@ export async function runCommand(command: string, args: string[]) {
         });
         const id = profileId(tool, result.name);
         warnPlaintextEnv(id, { tool, kind: "api", api: { baseUrl, authScheme, secret } }, Object.keys(env));
+        warnUnsetKeyVariable(secret);
         if (sendsKeyInClear(url)) cleartextNote(url.host);
         if (result.sharedWith.length > 0) {
           // The same finding doctor makes, said when `add` creates it: the source now feeds
           // two endpoints, and each gets whichever key it holds.
           const sharers = result.sharedWith;
           process.stderr.write(
-            `  ${warnIcon} The key comes from ${keySourcePhrase(secret)}, which ${sharers.join(", ")} ${sharers.length === 1 ? "uses" : "use"} too for a different endpoint, so one key now goes to both.\n` +
+            `  ${warnIcon} The key comes from ${keySourcePhrase(secret)}, which ${sharers.join(", ")} ${sharers.length === 1 ? "uses" : "use"} too for a different endpoint, so one key now goes to ${sharers.length === 1 ? "both" : "all of them"}.\n` +
               "    If this endpoint takes a key of its own, give this profile its own:\n" +
               `      ${accent(`clausona config ${id} --key-from env:<ANOTHER_NAME>`)}   ${dim("(or --key, to store it)")}\n`,
           );

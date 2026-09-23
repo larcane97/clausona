@@ -2125,6 +2125,21 @@ export function checkApiTool(tool: ToolName): void {
   if (tool !== "claude") throw new Error("API profiles are Claude Code only in this version.");
 }
 
+/**
+ * Where a new API profile's config directory goes, once the name is free: no profile has its
+ * id, and nothing is at the directory yet. addApiProfile's own check, exported so the CLI
+ * makes it before the key prompt - a name it is going to refuse should not cost a typed key.
+ */
+export async function freeApiConfigDir(registry: Registry, tool: ToolName, name: string): Promise<string> {
+  assertProfileIdAvailable(registry, profileId(tool, name));
+  const home = homedir();
+  const configDir = path.join(home, `.claude-${name}`);
+  if (await exists(configDir)) {
+    throw new Error(`${configDir.replace(home, "~")} already exists. Choose another profile name.`);
+  }
+  return configDir;
+}
+
 export async function addApiProfile(options: {
   tool: ToolName;
   name: string;
@@ -2161,15 +2176,11 @@ export async function addApiProfile(options: {
   if (!registry) throw await noRegistryError();
 
   const id = profileId(options.tool, options.name);
-  assertProfileIdAvailable(registry, id);
+  const configDir = await freeApiConfigDir(registry, options.tool, options.name);
 
   const adapter = getAdapter(options.tool);
   const home = homedir();
   const primarySource = registry.primarySources[options.tool] ?? adapter.defaultConfigDir(home);
-  const configDir = path.join(home, `.claude-${options.name}`);
-  if (await exists(configDir)) {
-    throw new Error(`${configDir.replace(home, "~")} already exists. Choose another profile name.`);
-  }
 
   const mergeSessions = options.mergeSessions ?? false;
   const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);

@@ -904,7 +904,15 @@ describe("_shell-env", () => {
  * `clausona` that replays that output, and a stand-in tool that says what it was launched
  * with.
  */
-const HOOK_SHELLS = (["zsh", "bash"] as const).filter((shell) => spawnSync("which", [shell]).status === 0);
+/**
+ * Both shells, each with whether this machine has it. Every case is generated for both and
+ * skipped where the shell is missing, so a runner without zsh reports its cases as skipped
+ * rather than having none.
+ */
+const HOOK_SHELLS = (["zsh", "bash"] as const).map((shell) => ({
+  shell,
+  available: spawnSync("which", [shell]).status === 0,
+}));
 
 function hookRunner(h: Harness, out: string) {
   const bin = path.join(h.home, "bin");
@@ -960,7 +968,7 @@ function apiRegistry(authScheme: "bearer" | "api-key") {
 const PARENT = "sk-ant-parent-sentinel";
 const PROFILE_TOKEN = "sk-or-profile-token";
 
-describe.skipIf(HOOK_SHELLS.length === 0)(
+describe.skipIf(HOOK_SHELLS.every(({ available }) => !available))(
   "the real hook, with a variable the profile must control made readonly",
   () => {
     const cases = [
@@ -974,9 +982,9 @@ describe.skipIf(HOOK_SHELLS.length === 0)(
       { label: "two of them at once", scheme: "bearer", readonly: ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"] },
     ] as const;
 
-    for (const shell of HOOK_SHELLS) {
+    for (const { shell, available } of HOOK_SHELLS) {
       for (const { label, scheme, readonly } of cases) {
-        it(`refuses to launch in ${shell} when ${label} is readonly`, async () => {
+        it.skipIf(!available)(`refuses to launch in ${shell} when ${label} is readonly`, async () => {
           const h = await harness(apiRegistry(scheme));
           vi.stubEnv("CLAUSONA_TEST_SECRET", PROFILE_TOKEN);
           const run = hookRunner(h, await h.run("claude"));
@@ -1011,7 +1019,7 @@ describe.skipIf(HOOK_SHELLS.length === 0)(
        * every later entry is dropped and the tool launches on a half-applied profile; bash
        * applies the rest and launches with the caller's value in place of the profile's.
        */
-      it(`refuses to launch in ${shell} when an env-map name of the user's own is readonly`, async () => {
+      it.skipIf(!available)(`refuses to launch in ${shell} when a user's own env-map name is readonly`, async () => {
         const h = await harness((home, workDir) =>
           registryWith(
             {
@@ -1048,7 +1056,7 @@ describe.skipIf(HOOK_SHELLS.length === 0)(
         expect(result.stdout).toContain(`parent MY_FLAG=[${PARENT}]`);
       });
 
-      it(`launches as usual in ${shell} when nothing is readonly`, async () => {
+      it.skipIf(!available)(`launches as usual in ${shell} when nothing is readonly`, async () => {
         const h = await harness(apiRegistry("bearer"));
         vi.stubEnv("CLAUSONA_TEST_SECRET", PROFILE_TOKEN);
         const run = hookRunner(h, await h.run("claude"));
