@@ -219,7 +219,9 @@ while `list` showed no model at all.
 Same endpoint, same key, only the model differs: one profile. A different endpoint, a
 different key, or wanting separate history or cost tracking: separate profiles. When you do
 want one per model, `--merge-sessions` gives them a shared history and `--key-from env:NAME`
-lets them read one key rather than each storing a copy.
+lets them read one key rather than each storing a copy — while they point at the same
+endpoint. A key belongs to one endpoint: once a profile moves to another, give it its own
+(see [Changing the endpoint](#changing-the-endpoint)).
 
 **The context window belongs to the endpoint, not to the model name.** The same model can be
 served with very different limits — OpenRouter advertises `z-ai/glm-5.3` at 1,310,720 tokens,
@@ -340,7 +342,15 @@ can be given together, as one change. Two things happen that you might not expec
 
 - **The key is kept.** After `--base-url`, the next launch sends the same key to the new
   host, and clausona says so when the host changes. If the new endpoint takes a different
-  key, run `clausona config <profile> --key` next.
+  key, what to do depends on where the key comes from:
+  - the credential store (`keychain`): pipe the new one into `clausona config <profile> --key`;
+  - `env:` or `command:`, read by this profile alone: change the variable or what the
+    command prints, or read another with `--key-from` (`--key` would replace the source
+    with the credential store);
+  - `env:` or `command:` that another profile reads too: changing it would send the new key
+    to that profile's endpoint as well, so give this profile its own —
+    `clausona config <profile> --key-from env:<ANOTHER_NAME>`, or `--key` to store it. The
+    note `--base-url` prints names the profiles that share the source.
 - **What `add` chose by itself follows the new host** while it is still the old host's:
   a label that is the old host, and the auth scheme — `api-key` for `anthropic.com`,
   `bearer` elsewhere — so moving from a gateway to Anthropic's own API does not leave the key
