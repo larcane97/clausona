@@ -1560,6 +1560,20 @@ describe("help", () => {
     expect(help).toContain("the shell that runs claude");
   });
 
+  it("says what --show, current and doctor never print, and where the command line is", async () => {
+    const h = await harness();
+
+    const config = stripAnsi(String(await h.run("config", "--help")));
+    const current = stripAnsi(String(await h.run("current", "--help")));
+    const doctor = stripAnsi(String(await h.run("doctor", "--help")));
+
+    expect(config).toContain("<hidden>");
+    expect(config).toContain("command line");
+    expect(config).toContain("profiles.json");
+    expect(current).toContain("<hidden>");
+    expect(doctor).toContain("command line");
+  });
+
   it("names the editor variables --edit reads, in the order it reads them", async () => {
     const h = await harness();
 

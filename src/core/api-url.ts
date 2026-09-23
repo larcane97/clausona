@@ -55,3 +55,60 @@ export function isAnthropicHost(hostname: string): boolean {
   const host = hostname.toLowerCase();
   return host === "anthropic.com" || host.endsWith(".anthropic.com");
 }
+
+/** What stands in, on every output path, for anything clausona will not print. */
+export const HIDDEN = "<hidden>";
+
+/**
+ * A parsed URL with the three parts that can carry a credential - userinfo, query and
+ * fragment - replaced by HIDDEN. Returned as `original` when there is none of them, so an
+ * ordinary URL reads exactly as it was typed rather than as the parser re-spells it.
+ *
+ * The query goes with the userinfo because it is where a gateway that takes its key as a
+ * parameter has it, and neither is part of saying where a profile points - scheme, host and
+ * path are.
+ */
+function withoutUrlSecrets(url: URL, original: string): string {
+  const userinfo = url.username !== "" || url.password !== "";
+  if (!userinfo && url.search === "" && url.hash === "") return original;
+  const authority = url.host === "" ? "" : `//${userinfo ? `${HIDDEN}@` : ""}${url.host}`;
+  return `${url.protocol}${authority}${url.pathname}${url.search ? `?${HIDDEN}` : ""}${url.hash ? `#${HIDDEN}` : ""}`;
+}
+
+/**
+ * A base URL as clausona prints it, on every path but the one that hands it to the tool.
+ *
+ * One that does not parse is hidden whole: it cannot be taken apart, and it can still hold a
+ * password - `//admin:pw@host` is one. The same reason `baseUrlProblem` never quotes a URL
+ * it refuses.
+ */
+export function redactBaseUrl(baseUrl: string): string {
+  if (typeof baseUrl !== "string") return HIDDEN;
+  if (baseUrl.trim() === "") return baseUrl;
+  try {
+    return withoutUrlSecrets(new URL(baseUrl.trim()), baseUrl);
+  } catch {
+    return HIDDEN;
+  }
+}
+
+/** `user:pass@host`, with or without a leading `//`, which no URL parser reads as userinfo. */
+const BARE_USERINFO = /^(?:\/\/)?[^\s/@:?#]+:[^\s/@?#]*@/;
+
+/**
+ * A value from a profile's env map, with any URL credential in it hidden. HTTPS_PROXY is the
+ * usual carrier - `http://user:pass@proxy:8080` - and proxies take the scheme-less form too.
+ *
+ * Unlike `redactBaseUrl`, a value that is not a URL is left alone: most of the map is model
+ * ids and numbers. A query is hidden only on a URL with a host, so a value that merely parses
+ * as one - an ARN, `foo:bar?x` - is not rewritten.
+ */
+export function redactUrlsIn(value: string): string {
+  try {
+    const url = new URL(value.trim());
+    if (url.host !== "") return withoutUrlSecrets(url, value);
+  } catch {
+    // Not a URL; the scheme-less form below is the one left to look for.
+  }
+  return value.replace(BARE_USERINFO, `${HIDDEN}@`);
+}

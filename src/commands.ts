@@ -10,7 +10,7 @@ import { isPosixEnvName, renderPosixExports } from "./core/shell.js";
 import { trackUsage } from "./core/track-usage.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import { renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
-import { buildProfileEnv, CREDENTIAL_ENV_KEYS, controlledEnvKeys, displayName } from "./lib/profile-env.js";
+import { buildProfileEnv, controlledEnvKeys, displayName } from "./lib/profile-env.js";
 import {
   CREDENTIAL_AS_NAME_ERROR,
   looksLikeCredential,
@@ -19,6 +19,7 @@ import {
   validateProfileName,
 } from "./lib/profile-ref.js";
 import { promptSecret } from "./lib/prompt-secret.js";
+import { describeSecretSource, hiddenEnvKeys, isCredentialEnvKey, redactProfile } from "./lib/redact.js";
 import {
   addApiProfile,
   addProfile,
@@ -241,11 +242,9 @@ function parseSecretSource(input: string): SecretSource {
  * also pointed at `add --help`: a key in its map most likely means an API profile was
  * wanted, and that is where to find out how to make one.
  */
-const CREDENTIAL_ENV_KEY_SET = new Set<string>(CREDENTIAL_ENV_KEYS);
-
 function warnPlaintextEnv(id: string, kind: Profile["kind"], keys: string[]) {
   for (const key of keys) {
-    if (!CREDENTIAL_ENV_KEY_SET.has(key)) continue;
+    if (!isCredentialEnvKey(key)) continue;
     const commands = plaintextEnvRemedy(id, kind, key).map((command) => `      ${accent(command)}\n`);
     const advice =
       kind === "api"
@@ -259,47 +258,35 @@ function warnPlaintextEnv(id: string, kind: Profile["kind"], keys: string[]) {
   }
 }
 
-function describeSecretSource(secret: SecretSource): string {
-  if (secret.source === "env") return `env:${secret.name}`;
-  if (secret.source === "command") return `command:${secret.run}`;
-  return "keychain";
-}
-
 /**
  * `config --show`: what this profile is and what it sets. The JSON form also carries the
  * advanced-settings catalog, so a caller who has only `--help` and this command can find
  * out which keys exist and what each one expects.
  *
- * A value under one of the credential names is reported as present but not printed.
- * Nothing here should make `--show` a way to read a key out of a profile - not on a
- * shared terminal, and not into a log. The credential itself is never in the registry at
- * all; only its source is, and that is shown.
+ * Everything printed comes from `redactProfile`, which every other path uses too, so
+ * `--show` is not a way to read a key out of a profile - not on a shared terminal, and not
+ * into a log. A value it hides whole is still reported as present.
  */
 function showProfile(id: string, profile: Profile, asJson: boolean): string {
-  const env = profile.env ?? {};
-  const hiddenEnvKeys = Object.keys(env).filter((key) => CREDENTIAL_ENV_KEY_SET.has(key));
+  const shown = redactProfile(profile);
+  const env = shown.env ?? {};
+  const hidden = hiddenEnvKeys(profile.env ?? {});
 
   if (asJson) {
-    const shown = Object.fromEntries(
-      Object.entries(env).map(([key, value]) => [key, CREDENTIAL_ENV_KEY_SET.has(key) ? "<hidden>" : value]),
-    );
     return JSON.stringify(
       {
         profile: {
           id,
-          kind: profile.kind ?? "subscription",
-          label: profile.label,
-          email: profile.email,
-          configDir: profile.configDir,
-          isPrimary: profile.isPrimary ?? false,
-          mergeSessions: profile.mergeSessions ?? false,
-          // The key's VALUE is deliberately absent; only where it is read from.
-          api: profile.api
-            ? { baseUrl: profile.api.baseUrl, authScheme: profile.api.authScheme, secret: profile.api.secret }
-            : undefined,
-          env: shown,
+          kind: shown.kind ?? "subscription",
+          label: shown.label,
+          email: shown.email,
+          configDir: shown.configDir,
+          isPrimary: shown.isPrimary ?? false,
+          mergeSessions: shown.mergeSessions ?? false,
+          api: shown.api,
+          env,
           /** Names whose value `env` reports as "<hidden>" rather than printing. */
-          hiddenEnvKeys,
+          hiddenEnvKeys: hidden,
         },
         catalog: CLAUDE_ENV_CATALOG,
       },
@@ -309,23 +296,23 @@ function showProfile(id: string, profile: Profile, asJson: boolean): string {
   }
 
   const lines = [
-    `${secondary("Kind".padEnd(12))}${profile.kind ?? "subscription"}`,
-    `${secondary("Account".padEnd(12))}${displayName(profile)}`,
-    `${secondary("Config".padEnd(12))}${dim(profile.configDir)}`,
+    `${secondary("Kind".padEnd(12))}${shown.kind ?? "subscription"}`,
+    `${secondary("Account".padEnd(12))}${displayName(shown)}`,
+    `${secondary("Config".padEnd(12))}${dim(shown.configDir)}`,
   ];
-  if (profile.api) {
-    lines.push(`${secondary("Endpoint".padEnd(12))}${profile.api.baseUrl}`);
-    lines.push(`${secondary("Auth".padEnd(12))}${profile.api.authScheme}`);
-    lines.push(`${secondary("Key".padEnd(12))}${describeSecretSource(profile.api.secret)}`);
+  if (shown.api) {
+    lines.push(`${secondary("Endpoint".padEnd(12))}${shown.api.baseUrl}`);
+    lines.push(`${secondary("Auth".padEnd(12))}${shown.api.authScheme}`);
+    lines.push(`${secondary("Key".padEnd(12))}${describeSecretSource(shown.api.secret)}`);
   }
-  if (!profile.isPrimary) {
-    lines.push(`${secondary("Sessions".padEnd(12))}${profile.mergeSessions ? "merged" : "separated"}`);
+  if (!shown.isPrimary) {
+    lines.push(`${secondary("Sessions".padEnd(12))}${shown.mergeSessions ? "merged" : "separated"}`);
   }
   const keys = Object.keys(env).sort();
   lines.push(`${secondary("Settings".padEnd(12))}${keys.length === 0 ? dim("none") : ""}`);
   for (const key of keys) {
     lines.push(
-      CREDENTIAL_ENV_KEY_SET.has(key)
+      hidden.includes(key)
         ? `  ${accent(key)} ${dim("(set; not shown - it can hold a credential)")}`
         : `  ${accent(key)}=${env[key]}`,
     );
@@ -563,6 +550,10 @@ function subcommandHelpText(command: string): string | undefined {
         `  ${bold("OPTIONS")}`,
         `    ${accent("--json".padEnd(12))}${dim("Output as JSON")}`,
         "",
+        `    ${dim("--json prints the profile as config --show --json does: a value that can hold")}`,
+        `    ${dim("a credential, a URL's userinfo and query, and a key command's command line are")}`,
+        `    ${dim("<hidden>.")}`,
+        "",
       ].join("\n");
 
     case "doctor":
@@ -593,7 +584,8 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("  `clausona config <profile> --base-url <url>` puts it right;")}`,
         `    ${dim("- whether its key resolves. A command: key source is run, in the shell,")}`,
         `    ${dim("  every time doctor is; an env: one is read from doctor's own environment.")}`,
-        `    ${dim("  doctor never prints the key, in either output form;")}`,
+        `    ${dim("  doctor never prints the key, or a key command's command line, in either")}`,
+        `    ${dim("  output form;")}`,
         `    ${dim("- apiKeyHelper in settings.json, which profiles share with the primary:")}`,
         `    ${dim("  Claude Code runs it for this profile too and the key it prints can")}`,
         `    ${dim("  reach the profile's endpoint, whatever auth scheme the profile uses.")}`,
@@ -677,6 +669,13 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim('--key-from env:NAME and command:"..." store a reference. Each is resolved again')}`,
         `    ${dim("every time the profile is used, in the shell that runs claude, so the variable")}`,
         `    ${dim("has to be exported there. --key stores the key itself and needs nothing set up.")}`,
+        "",
+        `  ${bold("WHAT --show PRINTS")}`,
+        `    ${dim("The same as current, list and the dashboard, in text and in --json: never the")}`,
+        `    ${dim("key, and <hidden> for a value that can hold one - a credential setting, a json")}`,
+        `    ${dim("setting, a URL's userinfo, query and fragment. A command key source shows as")}`,
+        `    ${dim("`command`: its command line can carry a token or the key itself, so it is only")}`,
+        `    ${dim("in ~/.clausona/profiles.json. The profile still works exactly as stored.")}`,
         "",
       ].join("\n");
 
@@ -854,7 +853,9 @@ export async function runCommand(command: string, args: string[]) {
           if (!activeId) continue;
           const profile = registry.profiles[activeId];
           if (!profile) continue;
-          out[tool] = { id: activeId, ...profile };
+          // Through the one redaction every output path uses: a spread of the stored profile
+          // printed its env map, its command line and any field a hand edit added.
+          out[tool] = { id: activeId, ...redactProfile(profile) };
         }
         if (Object.keys(out).length === 0) {
           throw new Error("No active profiles. Run `clausona init` to set up profiles.");

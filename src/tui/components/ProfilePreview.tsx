@@ -10,7 +10,8 @@ import {
   localTimezoneLabel,
 } from "../../lib/format.js";
 import { displayName } from "../../lib/profile-env.js";
-import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot, QuotaWindow, SecretSource } from "../../types.js";
+import { describeSecretSource } from "../../lib/redact.js";
+import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot, QuotaWindow } from "../../types.js";
 import { color, symbol } from "../theme.js";
 import { Badge } from "./Badge.js";
 
@@ -124,22 +125,9 @@ function QuotaSection({ quota }: { quota?: QuotaSnapshot }) {
 }
 
 /**
- * Where the key is read from, and nothing else about it.
- *
- * A `command` source is named without its command line, unlike `config --show`: that panel
- * is a deliberate read of one profile, while this one paints whatever the cursor passes
- * over, and a command carrying a vault path or an inline argument does not belong on a
- * screen somebody is scrolling past. `keychain` and `env:NAME` say everything they have.
- */
-function describeSecretSource(secret: SecretSource): string {
-  if (secret.source === "env") return `env:${secret.name}`;
-  if (secret.source === "command") return "command";
-  return "keychain";
-}
-
-/**
  * What an API profile is: where it points, what it asks for, and where its key comes from.
- * Never the key - `api.secret` is a reference, and the registry has never held anything else.
+ * Never the key, nor a command line: `profile.api` arrives from listProfiles already through
+ * `redactProfile`, and the key row is `describeSecretSource`, the form `config --show` uses.
  */
 function ApiSection({ profile }: { profile: ProfileListItem }) {
   const api = profile.api;

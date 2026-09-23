@@ -129,9 +129,12 @@ export type ProfileListItem = {
    * Absent when none is pinned.
    */
   model?: string;
-  /** Present for API profiles. `secret` names where the key is read from, never the key. */
+  /**
+   * Present for API profiles, with `listProfiles({ detail: true })` only, and redacted by
+   * `redactProfile`: `secret` names where the key is read from, never the key or a command.
+   */
   api?: ApiEndpoint;
-  /** Free-form environment overrides, as stored. */
+  /** The env map, with `detail` only, and redacted by `redactProfile`. */
   env?: Record<string, string>;
   quota?: QuotaSnapshot;
   today: UsageSummary;

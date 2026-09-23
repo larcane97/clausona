@@ -51,6 +51,7 @@ import {
   profileModel,
 } from "./profile-env.js";
 import { foldProfileName, initProfileNames, parseProfileRef, profileId, validateProfileName } from "./profile-ref.js";
+import { redactProfile } from "./redact.js";
 import { deleteSecret, resolveSecret, storeSecret } from "./secrets.js";
 
 /** Files inside plugins/ that contain absolute paths and must be per-profile */
@@ -875,8 +876,8 @@ export type ListProfilesOptions = {
    * variable or a whole command line, and the env map is free-form.
    *
    * The TUI asks for it because its preview panel is a screen rather than a pipe, and
-   * "what is this profile" is the question the panel exists to answer. It still shows
-   * where the key is read from and never what it is.
+   * "what is this profile" is the question the panel exists to answer. Both come through
+   * `redactProfile`, so it still shows where the key is read from and never what it is.
    */
   detail?: boolean;
 };
@@ -909,6 +910,8 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
   return entries.map(([id, profile]) => {
     const records = usage[id]?.records ?? [];
     const model = profileModel(profile);
+    // Redacted like every other path that prints a profile: the dashboard draws these.
+    const shown = options.detail ? redactProfile(profile) : undefined;
     return {
       name: id,
       tool: profile.tool,
@@ -923,7 +926,7 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
       // The one value from the env map that is listed - by name, never by widening to the
       // map. Absent rather than undefined, so a profile without one gains no key.
       ...(model === undefined ? {} : { model }),
-      ...(options.detail ? { api: profile.api, env: profile.env } : {}),
+      ...(shown ? { api: shown.api, env: shown.env } : {}),
       quota: quotas[id],
       today: summarizeUsage({ now, period: "today", records }),
       week: summarizeUsage({ now, period: "week", records }),

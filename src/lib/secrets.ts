@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import { spawnCommand } from "../core/process.js";
+import { isPosixEnvName } from "../core/shell.js";
 import type { SecretSource } from "../types.js";
 
 const CLAUSONA_DIR = path.join(homedir(), ".clausona");
@@ -140,9 +141,20 @@ async function readStoredSecret(profileId: string, backend?: SecretBackend): Pro
  * Resolves the credential for one profile. Every failure path throws with a message the
  * user can act on — an empty string returned as if it were a credential would surface
  * much later as an opaque 401 from the provider.
+ *
+ * No message quotes the reference, only what went wrong with it. These reach doctor, the
+ * dashboard and the warning printed at every launch, and a command line can carry a vault
+ * path, a token argument or the key itself - see src/lib/redact.ts, which hides it on
+ * every path. A variable's name is quoted only when it is a name: a hand edit can put a
+ * key in that slot.
  */
 export async function resolveSecret(profileId: string, source: SecretSource, backend?: SecretBackend): Promise<string> {
   if (source.source === "env") {
+    if (!isPosixEnvName(source.name)) {
+      throw new Error(
+        `the key's environment variable is not a valid name - run 'clausona config ${profileId} --key-from env:<NAME>'`,
+      );
+    }
     const value = process.env[source.name];
     if (!value) throw new Error(`environment variable ${source.name} is unset or empty`);
     return value;
@@ -152,9 +164,9 @@ export async function resolveSecret(profileId: string, source: SecretSource, bac
     const shell = process.platform === "win32" ? "powershell" : "/bin/sh";
     const args = process.platform === "win32" ? ["-NoProfile", "-Command", source.run] : ["-c", source.run];
     const { code, stdout } = await run(shell, args);
-    if (code !== 0) throw new Error(`secret command exited with ${code}: ${source.run}`);
+    if (code !== 0) throw new Error(`secret command exited with ${code}`);
     const first = stdout.split(/\r?\n/)[0]?.trim() ?? "";
-    if (first === "") throw new Error(`secret command produced no output: ${source.run}`);
+    if (first === "") throw new Error("secret command produced no output");
     return first;
   }
 

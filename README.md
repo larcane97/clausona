@@ -268,7 +268,8 @@ between the three without typing a key, and deletes the stored one when you move
 `keychain`.
 
 `clausona config <profile> --show` prints the endpoint, the auth scheme and the key's
-*source* — never the key. Neither does `doctor`, in either output form.
+*source* — never the key, and for a `command:` source not the command line either. Neither
+does `doctor`, in either output form; see [What clausona prints](#what-clausona-prints).
 
 The credential reaches Claude Code through its environment, so **processes Claude Code
 starts — including its own Bash tool calls — can read it**. Use `env:` or `command:` with a
@@ -332,6 +333,26 @@ can be given together, as one change. Two things happen that you might not expec
 A subscription profile has no endpoint, and `list` names it by its account email, so all
 three refuse one. Do not edit `~/.clausona/profiles.json` by hand for any of this — a
 hand-edited file is the one way a base URL gets broken.
+
+### What clausona prints
+
+`config --show`, `current`, `list`, `doctor` and the dashboard, in text and in `--json`, all
+go through one rule for what they print about a profile:
+
+- the value under a credential name (`ANTHROPIC_API_KEY`, `ANTHROPIC_CUSTOM_HEADERS` and the
+  rest) and under a json setting (`CLAUDE_CODE_EXTRA_BODY`, where a gateway's auth field goes)
+  prints as `<hidden>`;
+- a URL's userinfo, query and fragment print as `<hidden>`, in the base URL and in any
+  setting — `HTTPS_PROXY=http://user:pass@proxy:8080` shows as
+  `http://<hidden>@proxy:8080/`. A base URL that does not parse is hidden whole;
+- a `command:` key source shows as `command`. Its command line can carry a vault token or the
+  key itself, so it is only in `~/.clausona/profiles.json`, and a message about it says what
+  failed ("secret command exited with 1") rather than quoting it;
+- a field clausona does not define is left out.
+
+Only what is printed changes, not what is stored or what reaches `claude`. The two
+exceptions are the ones whose job is the values: the shell hook, which hands them to the
+tool, and `config --edit`, whose file has to carry them to save them back.
 
 ### What an API profile clears from your environment
 

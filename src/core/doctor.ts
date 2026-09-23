@@ -1,5 +1,5 @@
 import type { DoctorIssue, Profile } from "../types.js";
-import { checkBaseUrl } from "./api-url.js";
+import { checkBaseUrl, redactBaseUrl } from "./api-url.js";
 
 export function evaluateSymlinkHealth({
   isPrimary,
@@ -202,8 +202,9 @@ export function evaluateApiHealth({
   }
 
   // Never a base URL that was just reported as unusable: it can be the thing carrying a
-  // password.
-  const endpoint = urlProblem ? "this profile's endpoint" : baseUrl;
+  // password. A usable one can still carry a key in its query, so it is printed the way every
+  // other path prints it.
+  const endpoint = urlProblem ? "this profile's endpoint" : redactBaseUrl(baseUrl);
 
   if (settings === null) {
     // Falling back to an empty object hid a helper sitting in a file that does not parse:
