@@ -54,6 +54,8 @@ import {
   envMapOf,
   invalidEnvMapMessage,
   isSecretEnvName,
+  nonStringEnvKeys,
+  nonStringEnvValueMessage,
   profileModel,
   shownKind,
   shownLabel,
@@ -1049,8 +1051,14 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
     // Any kind. A list or a string where the env map belongs is applied as nothing, and
     // printed as `<hidden>`, so this is where it is found. `null` and `[]` are not: they
     // apply exactly what `{}` does.
-    if (envMapOf(profile.env) === undefined) {
+    const envMap = envMapOf(profile.env);
+    if (envMap === undefined) {
       issues.push({ kind: "invalid_env_map", message: invalidEnvMapMessage(id) });
+    } else {
+      // A map with a number, a boolean or null in it: launch drops those entries.
+      for (const key of nonStringEnvKeys(envMap)) {
+        issues.push({ kind: "invalid_env_map", message: nonStringEnvValueMessage(id, key) });
+      }
     }
     // Any kind but the two there are - a hand edit - is read as a subscription everywhere,
     // which a profile meant as an API one is not. Not quoted: it can carry anything.

@@ -24,6 +24,7 @@ import {
   envMapOf,
   isEnvMap,
   isSecretEnvName,
+  nonStringEnvKeys,
   printable,
 } from "./lib/profile-env.js";
 import {
@@ -361,11 +362,15 @@ function showProfile(id: string, profile: Profile, asJson: boolean): string {
   }
   const keys = Object.keys(env).sort();
   lines.push(`${secondary("Settings".padEnd(12))}${keys.length === 0 ? dim("none") : ""}`);
+  // A hand edit's number or boolean: hidden like a credential, but for a different reason.
+  const notApplied = new Set(nonStringEnvKeys(envMapOf(profile.env) ?? {}));
   for (const key of keys) {
     lines.push(
-      hidden.includes(key)
-        ? `  ${accent(key)} ${dim("(set; not shown - it can hold a credential)")}`
-        : `  ${accent(key)}=${env[key]}`,
+      notApplied.has(key)
+        ? `  ${accent(key)} ${dim("(not a string, so not applied - see clausona doctor)")}`
+        : hidden.includes(key)
+          ? `  ${accent(key)} ${dim("(set; not shown - it can hold a credential)")}`
+          : `  ${accent(key)}=${env[key]}`,
     );
   }
   lines.push("", dim("Run `clausona config <profile> --show --json` for the full advanced-settings catalog."));

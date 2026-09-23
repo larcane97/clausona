@@ -255,6 +255,64 @@ describe("_shell-env", () => {
     expect(h.warnings[0]).toContain("CLAUDE_CONFIG_DIR");
   });
 
+  // A hand edit that writes `"API_TIMEOUT_MS": 600000` used to crash the command, and the
+  // hook then evaluated nothing: the tool ran on the default account, the caller's own key
+  // still set. Each such entry is dropped with a warning of its own, and the rest applies.
+  describe("an env-map value that is not a string", () => {
+    const values = { API_TIMEOUT_MS: 600000, DISABLE_PROMPT_CACHING: true, CLAUDE_CODE_MAX_RETRIES: null };
+    const profiles: [string, (workDir: string) => Record<string, unknown>][] = [
+      ["a subscription profile", (workDir) => ({ tool: "claude", configDir: workDir, email: "you@example.com" })],
+      [
+        "an API profile",
+        (workDir) => ({
+          tool: "claude",
+          kind: "api",
+          configDir: workDir,
+          email: "",
+          label: "local",
+          api: {
+            baseUrl: "http://localhost:8000",
+            authScheme: "bearer",
+            secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
+          },
+        }),
+      ],
+    ];
+    for (const [name, make] of profiles) {
+      it(`is dropped with a warning for ${name}, and the rest of the profile still applies`, async () => {
+        const h = await harness((home, workDir) =>
+          registryWith({ ...make(workDir), env: { ...values, ANTHROPIC_MODEL: "m" } }, home),
+        );
+        vi.stubEnv("CLAUSONA_TEST_SECRET", "sk-not-a-real-key");
+
+        const exported = parseExports(await h.run("claude"));
+
+        expect(exported.CLAUDE_CONFIG_DIR).toBe(h.workDir);
+        expect(exported.ANTHROPIC_MODEL).toBe("m");
+        for (const key of Object.keys(values)) expect(Object.keys(exported)).not.toContain(key);
+        expect(h.warnings).toHaveLength(Object.keys(values).length);
+        for (const key of Object.keys(values)) {
+          expect(
+            h.warnings.some((w) => w.includes(key) && w.includes("clausona config claude:work --edit")),
+            key,
+          ).toBe(true);
+        }
+        // --json, which the PowerShell hook reads, drops the same entries.
+        expect(JSON.parse(await h.run("claude", "--json"))).toEqual(exported);
+      });
+    }
+
+    it("prints one warning, not one per character, for an env map that is a string", async () => {
+      const h = await harness((home, workDir) =>
+        registryWith({ tool: "claude", configDir: workDir, email: "you@example.com", env: "API_TIMEOUT_MS=1" }, home),
+      );
+
+      expect(parseExports(await h.run("claude"))).toEqual({ CLAUDE_CONFIG_DIR: h.workDir });
+      expect(h.warnings).toHaveLength(1);
+      expect(h.warnings[0]).toContain("clausona config claude:work --edit");
+    });
+  });
+
   // The PowerShell hook reads --json, so the two paths must describe the same environment.
   it("describes the same environment through --json as through the export lines", async () => {
     const h = await harness((home, workDir) =>

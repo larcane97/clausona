@@ -178,6 +178,16 @@ describe("redactEnv", () => {
       }),
     ).toEqual(["CLAUDE_CODE_EXTRA_BODY", "ANTHROPIC_AUTH_TOKEN"]);
   });
+
+  // `config --show --json` reports these as `<hidden>`, so its list of hidden names has them too.
+  it("names a value it hid for not being a string", () => {
+    const env = { API_TIMEOUT_MS: 600000, DISABLE_PROMPT_CACHING: true, ANTHROPIC_MODEL: "m" };
+
+    expect(hiddenEnvKeys(env as unknown as Record<string, string>)).toEqual([
+      "API_TIMEOUT_MS",
+      "DISABLE_PROMPT_CACHING",
+    ]);
+  });
 });
 
 /**

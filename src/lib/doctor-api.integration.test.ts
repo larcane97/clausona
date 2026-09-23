@@ -326,6 +326,37 @@ describe("doctor on an API profile", () => {
   });
 });
 
+// Launch drops such an entry, so a profile carrying one does not run as its map says.
+describe("an env-map value that is not a string", () => {
+  it.each([
+    ["a subscription profile", { tool: "claude", configDir: "WORK_DIR", email: "work@example.com" }],
+    [
+      "an API profile",
+      {
+        tool: "claude",
+        kind: "api",
+        configDir: "WORK_DIR",
+        email: "",
+        label: "local",
+        api: { baseUrl: "http://localhost:8000", authScheme: "bearer", secret: { source: "env", name: "SET_BELOW" } },
+      },
+    ],
+  ])("is reported on %s, by name, with the edit that fixes it", async (_kind, profile) => {
+    const h = await harness({
+      profiles: { "claude:work": { ...profile, env: { API_TIMEOUT_MS: 600000, ANTHROPIC_MODEL: "m" } } },
+    });
+    vi.stubEnv("SET_BELOW", STORED_KEY);
+
+    const issues = issuesFor(await h.doctor(), "claude:work").filter((issue) => issue.kind === "invalid_env_map");
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0].message).toContain("API_TIMEOUT_MS");
+    expect(issues[0].message).toContain("clausona config claude:work --edit");
+    expect(issues[0].message).not.toContain("600000");
+    expect(issues[0].severity).toBeUndefined();
+  });
+});
+
 describe("a profile whose config directory is gone", () => {
   /**
    * The config dir is the one thing every other check assumes. Nothing else looks for it:

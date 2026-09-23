@@ -63,6 +63,14 @@ function keyShapedValue(value: unknown): boolean {
 }
 
 /**
+ * Whether `redactEnv` hides a value whole: by its name, or because it is not a string - a
+ * hand edit's number, which launch drops and doctor reports - or is shaped like a key.
+ */
+function hidesWholeValue(key: string, value: unknown): boolean {
+  return hidesEnvValue(key) || typeof value !== "string" || keyShapedValue(value);
+}
+
+/**
  * The names `redactEnv` hides the whole value of, in the map's order and as it prints them. None
  * for a map that is not one.
  */
@@ -71,7 +79,7 @@ export function hiddenEnvKeys(env: Record<string, string>): string[] {
     ? [
         ...new Set(
           Object.keys(env)
-            .filter((key) => hidesEnvValue(key) || keyShapedValue(env[key]))
+            .filter((key) => hidesWholeValue(key, env[key]))
             .map(shownEnvName),
         ),
       ]
@@ -82,7 +90,7 @@ export function redactEnv(env: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(env).map(([key, value]) => [
       shownEnvName(key),
-      hidesEnvValue(key) || typeof value !== "string" || keyShapedValue(value) ? HIDDEN : redactUrlsIn(value),
+      hidesWholeValue(key, value) ? HIDDEN : redactUrlsIn(value),
     ]),
   );
 }

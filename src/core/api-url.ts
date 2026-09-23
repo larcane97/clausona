@@ -60,6 +60,9 @@ const SCHEME_NAME = /^[a-z][a-z0-9+.-]{0,9}$/;
  * belongs than with "not a URL".
  */
 export function checkBaseUrl(baseUrl: string): { ok: true; url: URL } | { ok: false; problem: BaseUrlProblem } {
+  // A hand edit's `8000`. Typed as a string, and still checked: doctor and `config --base-url`
+  // pass whatever is stored, and a throw here took the whole report down with it.
+  if (typeof baseUrl !== "string") return { ok: false, problem: { reason: "unparseable" } };
   if (baseUrl.trim() === "") return { ok: false, problem: { reason: "empty" } };
   if (carriesCredentialToken(baseUrl)) return { ok: false, problem: { reason: "key-shaped" } };
 

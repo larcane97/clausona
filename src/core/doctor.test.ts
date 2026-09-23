@@ -134,6 +134,15 @@ describe("evaluateApiHealth", () => {
       expect(issues[0].message).not.toContain("gpu-box:30000");
     });
 
+    // checkBaseUrl called `.trim()` on it, and the throw took every profile's report with it.
+    it("reports a base URL a hand edit left as a number, rather than crashing", () => {
+      const issues = health({ profile: withApi(8000 as unknown as string) });
+
+      expect(issues.map((issue) => issue.kind)).toEqual(["invalid_api_config"]);
+      expect(issues[0].message).toContain("not an absolute http:// or https:// URL");
+      expect(issues[0].message).toContain("clausona config claude:glm --base-url <url>");
+    });
+
     // Parses with an empty host, and the "scheme" is the username: never quote any of it.
     it("reports scheme-less userinfo as credentials, quoting none of it", () => {
       const message = health({ profile: withApi("admin-name:pw-0040@gpu-box/api") })[0].message;

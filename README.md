@@ -446,7 +446,10 @@ go through one rule for what they print about a profile:
 - a field clausona does not define is left out, and an env map a hand edit left as a list or
   a string — not a map of settings — is hidden whole. `doctor` reports that one, with the
   `config <profile> --edit` that fixes it; until then `--set`, `--unset` and `--model` refuse
-  to change it. An empty list or `null` applies what `{}` does, and is read as that;
+  to change it. An empty list or `null` applies what `{}` does, and is read as that. A value
+  that is not a string in quotes — a hand edit's `"API_TIMEOUT_MS": 600000` — is hidden too
+  and listed in `hiddenEnvKeys`; launch skips that one entry, with a warning, and applies the
+  rest, and `doctor` reports it with the same `--edit`;
 - a control character — an escape sequence a hand edit left in a profile's label, kind or
   auth scheme — is dropped, so printing a profile cannot drive your terminal. `doctor`
   reports a kind that is not `subscription` or `api`, and an auth scheme that is not
