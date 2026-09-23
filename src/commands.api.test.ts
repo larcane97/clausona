@@ -946,6 +946,21 @@ describe("config --set / --unset", () => {
     expect(h.profile("claude:gw").env).toEqual({ ANTHROPIC_MODEL: "z-ai/glm-5.3" });
   });
 
+  // "✔ Updated" for a name the map never had read as if a setting had gone - a typo included.
+  it("says a name --unset was given was not set, rather than that it was updated", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+
+    const nothing = stripAnsi(await h.run("config", "claude:gw", "--unset", "DISABLE_PROMPT_CACHING"));
+    const some = stripAnsi(
+      await h.run("config", "claude:gw", "--unset", "DISABLE_PROMPT_CACHING", "--unset", "ANTHROPIC_MODEL"),
+    );
+
+    expect(nothing).toBe("DISABLE_PROMPT_CACHING was not set; nothing changed");
+    expect(some).toContain("Updated claude:gw (ANTHROPIC_MODEL)");
+    expect(some).toContain("DISABLE_PROMPT_CACHING was not set");
+    expect(h.profile("claude:gw").env).toEqual({});
+  });
+
   it("refuses a bare key, so a typo cannot quietly clear a setting", async () => {
     const h = await harness({ "claude:gw": API_PROFILE });
 

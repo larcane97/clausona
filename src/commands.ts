@@ -732,7 +732,8 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${accent("--separate-sessions".padEnd(22))}${dim("Keep sessions isolated (default)")}`,
         `    ${accent("--model".padEnd(22))}${dim("The model the profile uses, stored as ANTHROPIC_MODEL")}`,
         `    ${accent("--set".padEnd(22))}${dim("Set an advanced env setting; repeatable")}`,
-        `    ${accent("--unset".padEnd(22))}${dim("Remove an advanced env setting; repeatable")}`,
+        `    ${accent("--unset".padEnd(22))}${dim("Remove an advanced env setting; repeatable. A name")}`,
+        `    ${" ".repeat(22)}${dim("that is not set changes nothing, and is said to be unset")}`,
         `    ${accent("--base-url".padEnd(22))}${dim("Point an API profile at another endpoint, http:// or https://")}`,
         `    ${accent("--auth".padEnd(22))}${dim("bearer | api-key: how an API profile presents its key")}`,
         `    ${accent("--label".padEnd(22))}${dim("Name list shows for an API profile; cannot be blank")}`,
@@ -1174,8 +1175,15 @@ export async function runCommand(command: string, args: string[]) {
         // updateProfileEnv validates every entry through validateEnvEntry before it saves.
         await updateProfileEnv(ref.id, { set, unset: unsetKeys });
         warnPlaintextEnv(ref.id, profile, Object.keys(set));
-        const changed = [...Object.keys(set), ...unsetKeys].join(", ");
-        return success(`Updated ${bold(ref.id)} ${dim(`(${changed})`)}`);
+        // A name the map did not have is said as such: "Updated" read as if a setting had gone,
+        // and a typo in the name looked like success.
+        const before = envMapOf(profile.env) ?? {};
+        const notSet = unsetKeys.filter((key) => !Object.hasOwn(before, key) && !Object.hasOwn(set, key));
+        const notSetLine = `${notSet.join(", ")} ${notSet.length === 1 ? "was" : "were"} not set`;
+        const changed = [...Object.keys(set), ...unsetKeys.filter((key) => !notSet.includes(key))].join(", ");
+        if (changed === "") return dim(`${notSetLine}; nothing changed`);
+        const updated = success(`Updated ${bold(ref.id)} ${dim(`(${changed})`)}`);
+        return notSet.length === 0 ? updated : `${updated}\n  ${dim(notSetLine)}`;
       }
 
       if (changeEndpoint) {
