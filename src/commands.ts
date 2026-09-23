@@ -719,6 +719,8 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim('--key-from env:NAME and command:"..." store a reference. Each is resolved again')}`,
         `    ${dim("every time the profile is used, in the shell that runs claude, so the variable")}`,
         `    ${dim("has to be exported there. --key stores the key itself and needs nothing set up.")}`,
+        `    ${dim("Moving to env: or command: deletes a stored key, and says so; a variable that")}`,
+        `    ${dim("is not set where you run config gets a warning, not a refusal.")}`,
         "",
         `  ${bold("WHAT --show PRINTS")}`,
         `    ${dim("The same as current, list and the dashboard, in text and in --json: never the")}`,
@@ -1161,8 +1163,17 @@ export async function runCommand(command: string, args: string[]) {
         const secret = parseSecretSource(keyFrom ?? "keychain");
         const value = secret.source === "keychain" ? await promptSecret("API key: ") : undefined;
         if (secret.source === "keychain" && !value) throw new Error(NO_KEY_SUPPLIED);
-        await updateProfileSecret(ref.id, secret, value);
-        return success(`Updated the credential for ${bold(ref.id)}`);
+        const { deletedStoredKey } = await updateProfileSecret(ref.id, secret, value);
+        // Warned, not refused: the variable is read at every launch, in the shell that runs
+        // claude, and the user may be about to export it in their rc file.
+        if (secret.source === "env" && !process.env[secret.name]) {
+          process.stderr.write(
+            `  ${warnIcon} The key now comes from ${describeSecretSource(secret)}, which is not set in this shell.\n` +
+              "    Export it where claude runs - in your shell's rc file, for one - or the next launch has no key.\n",
+          );
+        }
+        const deleted = deletedStoredKey ? ` ${dim(`(deleted the key stored in ${secretStoreName()})`)}` : "";
+        return success(`Updated the credential for ${bold(ref.id)}${deleted}`);
       }
 
       if (openEditor) return await editProfileEnv(ref.id, profile);

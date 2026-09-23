@@ -1404,7 +1404,12 @@ export function requireEndpoint(id: string, profile: Profile): ApiEndpoint {
   return profile.api;
 }
 
-export async function updateProfileSecret(id: string, secret: SecretSource, value?: string) {
+/** Resolves with whether a key clausona had stored was deleted, which the CLI says. */
+export async function updateProfileSecret(
+  id: string,
+  secret: SecretSource,
+  value?: string,
+): Promise<{ deletedStoredKey: boolean }> {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
   const profile = registry.profiles[id];
@@ -1417,11 +1422,10 @@ export async function updateProfileSecret(id: string, secret: SecretSource, valu
   if (toStore !== null) await storeSecret(id, toStore);
   registry.profiles[id] = { ...profile, api: { ...api, secret: source } };
   await saveRegistry(registry);
-  if (toStore === null) {
-    // Leaving a stored value behind after switching to an env or command source would
-    // keep a credential alive that nothing reads any more.
-    await deleteSecret(id).catch(() => {});
-  }
+  if (toStore !== null) return { deletedStoredKey: false };
+  // Leaving a stored value behind after switching to an env or command source would keep
+  // a credential alive that nothing reads any more.
+  return { deletedStoredKey: await deleteSecret(id).catch(() => false) };
 }
 
 /**

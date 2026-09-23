@@ -191,15 +191,17 @@ export async function storeSecret(profileId: string, value: string, backend?: Se
   await writeSecretsFile(values);
 }
 
-export async function deleteSecret(profileId: string, backend?: SecretBackend): Promise<void> {
+/** Resolves true when a stored key was there and is gone, false when there was none to delete. */
+export async function deleteSecret(profileId: string, backend?: SecretBackend): Promise<boolean> {
   if ((backend ?? detectBackend()) === "keychain") {
-    await run("security", ["delete-generic-password", "-s", keychainItemFor(profileId)]);
-    return;
+    const { code } = await run("security", ["delete-generic-password", "-s", keychainItemFor(profileId)]);
+    return code === 0;
   }
   const values = await readSecretsFile();
-  if (!(profileId in values)) return;
+  if (!(profileId in values)) return false;
   delete values[profileId];
   await writeSecretsFile(values);
+  return true;
 }
 
 async function readStoredSecret(profileId: string, backend?: SecretBackend): Promise<string | null> {
