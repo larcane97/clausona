@@ -1181,8 +1181,9 @@ describe("addApiProfile when a step after its first write fails", () => {
 });
 
 describe("a key pasted with whitespace around it", () => {
-  // The Keychain and secret-tool reads trim, but the file backend's does not, so the
-  // newline a paste often brings along would become part of the token.
+  // A key's ends are trimmed wherever it arrives; whitespace inside one is what the readers
+  // refuse (`hasInnerWhitespace`). The Keychain read trims too, but the file backend's does
+  // not, so the newline a paste often brings along would become part of the token.
   it("addApiProfile stores the key without it", async () => {
     const h = await harness();
 
