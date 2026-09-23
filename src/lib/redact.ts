@@ -64,10 +64,11 @@ function keyShapedValue(value: unknown): boolean {
 
 /**
  * Whether `redactEnv` hides a value whole: by its name, or because it is not a string - a
- * hand edit's number, which launch drops and doctor reports - or is shaped like a key.
+ * hand edit's number, which launch drops and doctor reports - or is shaped like a key, as
+ * stored or once its control characters are gone, which is how it would be printed.
  */
 function hidesWholeValue(key: string, value: unknown): boolean {
-  return hidesEnvValue(key) || typeof value !== "string" || keyShapedValue(value);
+  return hidesEnvValue(key) || typeof value !== "string" || keyShapedValue(value) || keyShapedValue(printable(value));
 }
 
 /**
@@ -90,7 +91,9 @@ export function redactEnv(env: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(env).map(([key, value]) => [
       shownEnvName(key),
-      hidesWholeValue(key, value) ? HIDDEN : redactUrlsIn(value),
+      // Without control characters, like the label: `--set X=$'\e[2J'` must not clear the
+      // screen of whoever runs `config --show`.
+      hidesWholeValue(key, value) ? HIDDEN : redactUrlsIn(printable(value)),
     ]),
   );
 }

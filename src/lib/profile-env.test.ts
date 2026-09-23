@@ -8,6 +8,7 @@ import {
   CREDENTIAL_ENV_KEYS,
   controlledEnvKeys,
   displayName,
+  profileModel,
   RESERVED_ENV_KEYS,
   ROUTING_ENV_KEYS,
 } from "./profile-env.js";
@@ -76,6 +77,19 @@ describe("displayName", () => {
     // and a row or a doctor title showing nothing is worse than one showing the email.
     expect(displayName({ email: "you@example.com", label: "   " })).toBe("you@example.com");
     expect(displayName({ email: "you@example.com", label: "" })).toBe("you@example.com");
+  });
+});
+
+describe("profileModel", () => {
+  // `list`'s MODEL column, its --json and the dashboard's preview all print this.
+  it("drops control characters, so a model id cannot drive the terminal", () => {
+    const model = profileModel({ tool: "claude", env: { ANTHROPIC_MODEL: "glm\u001b]0;retitled\u0007-5.3\u009b2J" } });
+
+    expect(model).toBe("glm]0;retitled-5.32J");
+  });
+
+  it("reads no model from a value that is not a string, which launch does not apply either", () => {
+    expect(profileModel({ tool: "claude", env: { ANTHROPIC_MODEL: 5 as unknown as string } })).toBeUndefined();
   });
 });
 

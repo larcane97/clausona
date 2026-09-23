@@ -153,6 +153,22 @@ describe("redactEnv", () => {
     });
   });
 
+  // `config --show` prints these in text and JSON: an ESC there would clear or retitle the
+  // terminal of whoever reads it.
+  it("drops control characters from a value it prints", () => {
+    expect(
+      redactEnv({ API_TIMEOUT_MS: "600\u001b[2J000", HTTPS_PROXY: "http://proxy\u0007.example.com:8080" }),
+    ).toEqual({ API_TIMEOUT_MS: "600[2J000", HTTPS_PROXY: "http://proxy.example.com:8080" });
+  });
+
+  // Split by a control character after every one of its own, a key no longer has the shape
+  // the check looks for - and once the control characters are dropped for printing, it does.
+  it("hides a key that control characters were put inside, which would print whole without them", () => {
+    const key = ["sk", "ant", "api03", "QZXJ7wvKpLmN8rTyUbHc5dFgA2sE9oIuWq"].join("-");
+
+    expect(redactEnv({ MY_SETTING: key.split("").join("\u0007") })).toEqual({ MY_SETTING: HIDDEN });
+  });
+
   it("hides a value that is not a string, which only a hand edit produces", () => {
     expect(redactEnv({ API_TIMEOUT_MS: { nested: "n-0018" } as unknown as string })).toEqual({
       API_TIMEOUT_MS: HIDDEN,

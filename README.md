@@ -458,7 +458,9 @@ go through one rule for what they print about a profile:
   and listed in `hiddenEnvKeys`; launch skips that one entry, with a warning, and applies the
   rest, and `doctor` reports it with the same `--edit`;
 - a control character — an escape sequence a hand edit left in a profile's label, kind or
-  auth scheme — is dropped, so printing a profile cannot drive your terminal. `doctor`
+  auth scheme, or one given in a model id or a setting's value — is dropped, so printing a
+  profile cannot drive your terminal. Only the printed copy loses it; the stored value and
+  what reaches `claude` keep it. `doctor`
   reports a kind that is not `subscription` or `api`, and an auth scheme that is not
   `bearer` or `api-key`, with the command that fixes it.
 
