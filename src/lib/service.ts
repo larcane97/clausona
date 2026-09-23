@@ -702,6 +702,15 @@ export async function registryProblem(): Promise<string | null> {
   return `${REGISTRY_PATH.replace(homedir(), "~")} could not be read: ${reason}. Fix it by hand, or move it aside and run 'clausona init' to set clausona up again.`;
 }
 
+/**
+ * The error for a command that needs the registry and got none from `loadRegistry`. A file
+ * that is there but cannot be read is reported as that, with its remedy: "not initialized"
+ * sent the user to `init`, which replaced the file and every API profile in it.
+ */
+export async function noRegistryError(): Promise<Error> {
+  return new Error((await registryProblem()) ?? "clausona is not initialized. Run `clausona init` first.");
+}
+
 export async function loadRegistry(): Promise<Registry | null> {
   const raw = await readJson<unknown>(REGISTRY_PATH, null);
   if (raw === null) return null;
@@ -775,6 +784,10 @@ export async function initializeRegistry(options: {
   mergeSessions?: boolean;
   mergeSessionsMap?: Record<string, boolean>;
 }) {
+  // A profiles.json that cannot be read loads as no registry, and a registry rebuilt from
+  // that replaces the file - with every API profile in it, which discovery cannot find again.
+  const problem = await registryProblem();
+  if (problem) throw new Error(problem);
   const existing = await loadRegistry();
   // API profiles are not discovered, so a registry rebuilt from what init found would drop
   // them, and with them the only reference to their stored key, config dir and backup.
@@ -1036,7 +1049,17 @@ export async function getUsageSummary(profileId_: string | null, period: UsagePe
   );
 }
 
-export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
+export async function doctorProfiles(
+  options: {
+    /**
+     * Resolve each API profile's key, which for a `command:` source runs the command. The
+     * dashboard turns it off: it reads doctor on open and after every change, and a vault
+     * round-trip or a touch-ID prompt there held the whole screen on Loading.
+     */
+    resolveSecrets?: boolean;
+  } = {},
+): Promise<DoctorProfileResult[]> {
+  const { resolveSecrets = true } = options;
   const registry = await loadRegistry();
   if (!registry) {
     return [];
@@ -1065,7 +1088,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
     if (profile.kind !== undefined && profile.kind !== "subscription" && profile.kind !== "api") {
       issues.push({
         kind: "invalid_profile_kind",
-        message: `the profile's kind in ~/.clausona/profiles.json is not subscription or api, so clausona treats it as a subscription profile - remove it with 'clausona remove ${id}' and add it again`,
+        message: `the profile's kind in ~/.clausona/profiles.json is not subscription or api, so clausona treats it as a subscription profile - remove it with 'clausona remove ${id}' and add it again under a new name, since remove keeps the config directory and the old name stays taken`,
       });
     }
 
@@ -1099,9 +1122,10 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
           configDirExists: !configDirMissing,
           // The outcome, and nothing else. resolveSecret returns the key itself: it is
           // awaited and dropped in the same expression so no binding ever holds it.
-          // Not for a source clausona does not know, which evaluateApiHealth reports itself.
+          // Not for a source clausona does not know, which evaluateApiHealth reports itself,
+          // and not when the caller asked for no key to be resolved: then it goes unchecked.
           secret:
-            profile.api && isKnownSecretSource(profile.api.secret)
+            resolveSecrets && profile.api && isKnownSecretSource(profile.api.secret)
               ? await resolveSecret(id, profile.api.secret)
                   .then(() => ({ ok: true }) as const)
                   .catch((error: unknown) => ({
@@ -1611,8 +1635,12 @@ async function cleanupProfile(
 
   // The registry entry is about to go; a credential outliving it is a credential nothing
   // will ever clean up. Only an API profile can own one, and gating on that keeps removing
-  // a subscription profile from reaching into the credential store at all.
-  if (profile.kind === "api") await deleteSecret(profileId(profile.tool, name)).catch(() => {});
+  // a subscription profile from reaching into the credential store at all. An endpoint block
+  // that says the key is stored owns one whatever the kind says: a hand-edited kind is read
+  // as a subscription, and its key was left behind.
+  if (profile.kind === "api" || profile.api?.secret?.source === "keychain") {
+    await deleteSecret(profileId(profile.tool, name)).catch(() => {});
+  }
 
   // 1a. Strip inner symlinks from plugins/ dir (real dir with inner symlinks)
   const profilePlugins = path.join(profile.configDir, "plugins");
@@ -1813,7 +1841,7 @@ export async function addProfile(options: {
   if (!nameCheck.ok) throw new Error(nameCheck.error);
 
   const registry = await loadRegistry();
-  if (!registry) throw new Error("clausona is not initialized.");
+  if (!registry) throw await noRegistryError();
 
   const id = profileId(options.tool, options.name);
   assertProfileIdAvailable(registry, id);
@@ -2130,7 +2158,7 @@ export async function addApiProfile(options: {
   }
 
   const registry = await loadRegistry();
-  if (!registry) throw new Error("clausona is not initialized.");
+  if (!registry) throw await noRegistryError();
 
   const id = profileId(options.tool, options.name);
   assertProfileIdAvailable(registry, id);

@@ -59,6 +59,12 @@ Windows PowerShell:
 irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex
 ```
 
+**After upgrading, open a new shell** — or re-run the hook in each shell that is already open:
+`eval "$(clausona shell-init)"` on zsh/bash, `Invoke-Expression (& clausona shell-init | Out-String)`
+on PowerShell. A shell keeps the hook it loaded when it started, and an older hook can apply less
+than the version you just installed: one from before API profiles sets only the config directory,
+with no endpoint and no key.
+
 ## Quick Start
 
 ```bash
@@ -72,6 +78,12 @@ clausona                  # open the interactive dashboard
 
 clausona add claude:gw --api --base-url https://openrouter.ai/api   # a profile backed by an API endpoint
 ```
+
+clausona starts from a Claude Code account that is already signed in: `clausona init` registers
+the accounts it finds and refuses when there are none, and until it has run the other commands say
+"clausona is not initialized". On a machine where Claude Code has never been signed in, run
+`claude login` once first — also when you mean to use only [API profiles](#api-profiles), which
+are added next to that account.
 
 ## Plan quota
 
@@ -149,6 +161,10 @@ API, a gateway such as OpenRouter, or a model you serve yourself. It sits beside
 subscription profiles in `clausona list`, switches the same way, and shares the same
 plugins, MCP servers, and settings. In this version API profiles are for Claude Code only:
 `clausona add codex:<name> --api` is refused, before it asks for a key.
+
+**An API profile needs clausona set up first**: one Claude Code account signed in
+(`claude login`), then `clausona init`. API profiles are added next to that account; in this
+version clausona cannot be set up from API profiles alone.
 
 ```bash
 # a hosted gateway
@@ -280,7 +296,7 @@ belongs in an argument.
 | --- | --- | --- |
 | `keychain` (default) | clausona stores it — in the macOS Keychain on a Mac, otherwise in `~/.clausona/secrets.json`, written owner-only. That includes Linux: in this version a stored key goes to that file, readable only by you, not to `secret-tool` or your desktop keyring. `clausona doctor` ends by saying which. On a Mac a key longer than about 2,000 bytes is refused — it does not fit the one line the Keychain is handed it on — so point at such a key with `env:` or `command:` | at every launch, from that store |
 | `env:NAME` | your shell; clausona records only the variable name | at every launch, **in the shell that runs `claude`** — so `NAME` has to be exported there, not only where you ran `clausona add` |
-| `command:"…"` | wherever the command gets it — `op read`, `pass show`, `vault kv get` | at every launch, and on every `clausona doctor`; the first line of its output is the key |
+| `command:"…"` | wherever the command gets it — `op read`, `pass show`, `vault kv get` | at every launch, on every `clausona doctor`, and each time the dashboard's Health check screen opens — never by the dashboard itself; the first line of its output is the key |
 
 `profiles.json` never holds the key itself, only which of these to use. `env:` takes the
 variable's *name*: many keys are valid names too (`hf_…`, `gsk_…`, `sk_live_…`), so a `NAME`
@@ -468,7 +484,9 @@ go through one rule for what they print about a profile:
   profile cannot drive your terminal. Only the printed copy loses it; the stored value and
   what reaches `claude` keep it. `doctor`
   reports a kind that is not `subscription` or `api`, and an auth scheme that is not
-  `bearer` or `api-key`, with the command that fixes it.
+  `bearer` or `api-key`, with the command that fixes it. For the kind, the fix is `remove` and
+  then `add` under a new name, since `remove` keeps the config directory; `remove` deletes a key
+  clausona stored for the profile whatever its kind says.
 
 Only what is printed changes, not what is stored or what reaches `claude`. The two
 exceptions are the ones whose job is the values: the shell hook, which hands them to the
@@ -560,11 +578,14 @@ config <profile> --show` is where the source is visible.
 An API profile has no account file and no stored login, so `doctor` looks for neither and
 reports neither missing. It checks these instead:
 
-- that the profile's config directory is still there. `clausona repair` cannot rebuild one —
-  it only links into a directory it did not create — so the fix is to remove and re-add the
+- that the profile's config directory is still there. `clausona repair` alone cannot rebuild
+  one — it only links into a directory that exists — so the fix is to create the directory again,
+  empty, at the path doctor names, then run `clausona repair <profile>`: that links it back, with
+  the key, the endpoint and every setting as they were. Failing that, remove and re-add the
   profile: `clausona remove <profile>`, then `clausona add <profile> --api ...` under the same
-  name. `remove` does not bring a deleted directory back; if the profile's backup under
-  `~/.clausona/backups` holds anything, it is left there and `remove` says where
+  name — which deletes a stored key, and a provider may not show a key twice. `remove` does not
+  bring a deleted directory back; if the profile's backup under `~/.clausona/backups` holds
+  anything, it is left there and `remove` says where
 - the base URL, which only a hand-edited `profiles.json` can break. The URL is never quoted
   back, because a hand-edited one can carry a password; `config <profile> --show` is where to
   read it, and `config <profile> --base-url <url>` is how to put it right. A profile with no
@@ -572,7 +593,9 @@ reports neither missing. It checks these instead:
   and `add` for that one instead. An auth scheme that is not `bearer` or `api-key` is
   reported too, with the `config <profile> --auth` that sets one
 - that the key resolves. **A `command:` source is executed**, in a shell, every time doctor
-  runs — so a vault round-trip or a touch-ID prompt happens on every `clausona doctor`. An
+  runs — so a vault round-trip or a touch-ID prompt happens on every `clausona doctor`, and each
+  time the dashboard's Health check screen opens. The dashboard itself resolves no key, so the
+  health it shows beside a profile does not say whether the key resolves. An
   `env:` source is read from doctor's own environment, which is not necessarily the
   environment the profile will run in. A key source that is none of `keychain`, `env:` and
   `command:` is reported as unknown rather than resolved, with the `config <profile> --key`
@@ -608,7 +631,7 @@ subscription profile carries neither key. Each finding has a `kind`, a `message`
 | `clausona init`                                                     | Discover and register Claude Code and Codex accounts |
 | `clausona add <profile> [--from <path>] [--merge-sessions]`         | Add a profile manually                               |
 | `clausona add <profile> --api --base-url <url> [...]`               | Add an [API profile](#api-profiles)                  |
-| `clausona remove <profile>`                                         | Remove a profile                                     |
+| `clausona remove <profile>`                                         | Remove a profile. Its config directory and history stay, so delete that directory before adding the name again |
 | `clausona use [profile]`                                            | Switch active profile                                |
 | `clausona run <profile> [-- args...]`                               | Run the tool's CLI with a specific profile (a leading `--` is dropped) |
 | `clausona list [--json] [--refresh] [--no-quota] [--no-renew]`      | List all profiles with plan quota and usage          |
@@ -747,7 +770,10 @@ A `~/.clausona/profiles.json` that is there but is not valid JSON, or not a JSON
 the first thing `clausona doctor` checks. It says so in one line on stderr, in either output
 form, and exits 1 without checking anything else. The line names the file and what is wrong
 with it, never its contents. Fix the file by hand, or move it aside and run `clausona init`
-to set clausona up again. `~/.clausona/backups` holds no copy of it to restore.
+to set clausona up again. `~/.clausona/backups` holds no copy of it to restore. A command
+that would otherwise stop with "clausona is not initialized" prints the same line instead,
+`clausona init` refuses to replace the file while it is there, and the dashboard shows the
+line instead of opening init.
 
 ### Data Storage
 

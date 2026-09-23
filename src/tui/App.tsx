@@ -15,6 +15,7 @@ import {
   formatCurrency,
   formatQuotaInline,
   localTimezoneLabel,
+  offersRepair,
   quotaSeverity,
 } from "../lib/format.js";
 import { displayName } from "../lib/profile-env.js";
@@ -39,6 +40,7 @@ import {
   initializeRegistry,
   listProfiles,
   loginProfile,
+  registryProblem,
   removeProfile,
   repairProfile,
   setActiveProfileByName,
@@ -329,6 +331,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   /** Registered ids, for the name check the API form runs while a name is being typed. */
   const existingProfileIds = profiles.map((profile) => profile.name);
   const [doctor, setDoctor] = useState<DoctorProfileResult[]>([]);
+  /** Why profiles.json cannot be used, when it is there and cannot be. */
+  const [unreadableRegistry, setUnreadableRegistry] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [cursor, setCursor] = useState(0);
   const [message, setMessage] = useState<string>("");
@@ -1026,8 +1030,13 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     setLoading(true);
     try {
       // `detail` because the preview panel says what an API profile is - its endpoint, its
-      // model, and where its key is read from. `list --json` does not ask for it.
-      const [nextProfiles, nextDoctor] = await Promise.all([listProfiles({ detail: true }), doctorProfiles()]);
+      // model, and where its key is read from. `list --json` does not ask for it. No key is
+      // resolved for the dashboard - a `command:` source would run on open and after every
+      // change - only for the doctor screen, which is also where this is called from on mount.
+      const [nextProfiles, nextDoctor] = await Promise.all([
+        listProfiles({ detail: true }),
+        doctorProfiles({ resolveSecrets: screen === "doctor" }),
+      ]);
       // The list carries no quota - that is fetched after it and merged in. A reload keyed on
       // the same profile set would not fetch again, so the panel sat on "loading" from the first
       // switch on. The reading it had stays until the new one lands, and the epoch fetches it.
@@ -1039,13 +1048,29 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       );
       setQuotaEpoch((epoch) => epoch + 1);
       setDoctor(nextDoctor);
+      // A profiles.json that cannot be read lists as no profiles, and init would replace it -
+      // with every API profile in it - so that is said instead of opening init.
+      const problem = nextProfiles.length === 0 ? await registryProblem() : null;
+      setUnreadableRegistry(problem);
       // No registry yet — redirect to init flow
-      if (nextProfiles.length === 0 && screen !== "init") {
+      if (nextProfiles.length === 0 && !problem && screen !== "init") {
         setScreen("init");
       }
     } finally {
       // A failed reload must not leave the TUI on the Loading screen, where the caller's
       // error message is never shown.
+      setLoading(false);
+    }
+  }
+
+  /** The doctor screen's own read, which resolves every API profile's key as `clausona doctor` does. */
+  async function refreshDoctor() {
+    setLoading(true);
+    try {
+      setDoctor(await doctorProfiles());
+    } catch (error) {
+      setMessage(`${symbol.cross} ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
       setLoading(false);
     }
   }
@@ -1121,6 +1146,11 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
 
   // Every key the App answers itself, as of the frame on screen: see `useCommittedHandler`.
   const handleInput = useCommittedHandler((input: string, key: Key) => {
+    if (unreadableRegistry) {
+      if (key.escape) exit();
+      return;
+    }
+
     if (screen === "dashboard") {
       if (key.escape) {
         const now = Date.now();
@@ -1146,6 +1176,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         ) {
           setCursor(0);
           setScreen(selectedAction);
+          // The dashboard's doctor left every key unresolved; this screen reports on them.
+          if (selectedAction === "doctor") void refreshDoctor();
         }
       }
       return;
@@ -1759,7 +1791,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         setCursor((prev) => (prev - 1 + doctor.length) % Math.max(1, doctor.length));
       } else if (key.downArrow) {
         setCursor((prev) => (prev + 1) % Math.max(1, doctor.length));
-      } else if (input === "r" && doctor[cursor] && !doctor[cursor].healthy && !doctor[cursor].isPrimary) {
+      } else if (input === "r" && doctor[cursor] && !doctor[cursor].isPrimary && offersRepair(doctor[cursor].issues)) {
         const d = doctor[cursor];
         void (async () => {
           try {
@@ -1937,6 +1969,18 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     return (
       <Chrome title="Loading" hints={[]}>
         <Spinner label="Reading clausona state..." />
+      </Chrome>
+    );
+  }
+
+  // Every screen reads profiles.json, and the init one would replace it.
+  if (unreadableRegistry) {
+    return (
+      <Chrome title="Cannot read profiles" hints={[{ keys: "esc", action: "quit" }]}>
+        <Box gap={1}>
+          <Text color={color.error}>{symbol.cross}</Text>
+          <Text color={color.text}>{unreadableRegistry}</Text>
+        </Box>
       </Chrome>
     );
   }
@@ -2469,8 +2513,13 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     const currentDoctor = doctor[cursor];
     const doctorHints = [
       ...doctorHintsBase,
-      ...(currentDoctor && !currentDoctor.healthy && !currentDoctor.isPrimary ? [{ keys: "r", action: "repair" }] : []),
+      // Only where `clausona doctor` would advise it: repair reports success on a missing key
+      // or a finding that names its own fix, and changes nothing.
+      ...(currentDoctor && !currentDoctor.isPrimary && offersRepair(currentDoctor.issues)
+        ? [{ keys: "r", action: "repair" }]
+        : []),
     ];
+    const currentSeverity = currentDoctor ? doctorSeverity(currentDoctor.issues) : "healthy";
     return (
       <Chrome title="Health Check" subtitle="Inspect profile integrity and symlink status" hints={doctorHints}>
         <Box gap={2} flexDirection="row" width="100%">
@@ -2514,8 +2563,10 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                   <Text color={color.text} bold>
                     {currentDoctor.name}
                   </Text>
-                  <Text color={currentDoctor.healthy ? color.healthy : color.warning}>
-                    {currentDoctor.healthy ? symbol.check : symbol.diamond}
+                  {/* The rule the list badge uses: a warnings-only profile is `healthy`, and a
+                      green check above its findings said there were none. */}
+                  <Text color={color[currentSeverity]}>
+                    {currentSeverity === "healthy" ? symbol.check : symbol.diamond}
                   </Text>
                 </Box>
                 <Text color={color.secondary}>{displayName(currentDoctor)}</Text>

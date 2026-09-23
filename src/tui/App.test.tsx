@@ -44,6 +44,8 @@ vi.mock("../lib/service", async (importOriginal) => ({
   ]),
   fetchProfileQuotas: vi.fn(async () => ({})),
   loginProfile: vi.fn(),
+  registryProblem: vi.fn(async () => null),
+  repairProfile: vi.fn(async () => ({ repaired: 0 })),
   initializeRegistry: vi.fn(async () => ({})),
   setActiveProfileByName: vi.fn(async () => ({})),
   discoverAccounts: vi.fn(async () => []),
@@ -2386,6 +2388,74 @@ describe("App doctor screen", () => {
     const frame = await waitForFrame(lastFrame, (f) => f.includes("claude:glm"));
 
     expect(frame.split("gpu-box").length - 1).toBe(2);
+  });
+
+  it("heads a warnings-only profile's findings with the badge's mark, not a check", async () => {
+    const frame = await doctorFrame([
+      { kind: "plaintext_env_secret", message: "a key sits in the env map", severity: "warning" },
+    ]);
+
+    expect(frame).toMatch(/claude:glm ◈/);
+    expect(frame).not.toMatch(/claude:glm ✔/);
+  });
+
+  it("offers no repair for an API profile whose only error is its key, and `r` runs none", async () => {
+    // `clausona doctor` advises no repair here: repair would report success and change
+    // nothing, the dead end the profiles screen already stopped offering for a re-login.
+    const { doctorProfiles, repairProfile } = await import("../lib/service.js");
+    vi.mocked(repairProfile).mockClear();
+    vi.mocked(doctorProfiles).mockResolvedValueOnce([
+      {
+        name: "claude:glm",
+        kind: "api",
+        email: "",
+        label: "gpu-box",
+        configDir: "/Users/test/.claude-glm",
+        isPrimary: false,
+        healthy: false,
+        issues: [{ kind: "missing_api_secret", message: "no stored key" }],
+      },
+    ]);
+    const instance = render(<App initialScreen="doctor" />);
+    const frame = await waitForFrame(instance.lastFrame, (f) => f.includes("no stored key"));
+
+    expect(frame).not.toContain("repair");
+    await type(instance, "r");
+    expect(vi.mocked(repairProfile)).not.toHaveBeenCalled();
+  });
+});
+
+describe("App's doctor reads", () => {
+  it("resolve no key for the dashboard, and every key for the doctor screen", async () => {
+    // A `command:` key source runs when its key is resolved: on the dashboard that was every
+    // open and every reload, with the screen held on Loading until each command finished.
+    const { doctorProfiles } = await import("../lib/service.js");
+    vi.mocked(doctorProfiles).mockClear();
+    const instance = render(<App initialScreen="dashboard" />);
+    await waitForFrame(instance.lastFrame, (f) => f.includes("Dashboard"));
+
+    expect(vi.mocked(doctorProfiles).mock.calls).toEqual([[{ resolveSecrets: false }]]);
+
+    await moveTo(instance, "Health check");
+    await press(instance, ENTER);
+    await waitForFrame(instance.lastFrame, (f) => f.includes("Health Check"));
+
+    expect(vi.mocked(doctorProfiles).mock.calls).toHaveLength(2);
+    expect(vi.mocked(doctorProfiles).mock.calls[1]?.[0]?.resolveSecrets).not.toBe(false);
+  });
+});
+
+describe("App over a profiles.json that cannot be read", () => {
+  it("says why, instead of opening init, which would replace the file", async () => {
+    const { listProfiles, registryProblem } = await import("../lib/service.js");
+    // What loadRegistry makes of a file that does not parse: no registry, so no profiles.
+    vi.mocked(listProfiles).mockResolvedValueOnce([]);
+    vi.mocked(registryProblem).mockResolvedValueOnce("profiles.json could not be read: it is not valid JSON.");
+    const { lastFrame } = render(<App initialScreen="dashboard" />);
+
+    const frame = await waitForFrame(lastFrame, (f) => f.includes("could not be read"));
+
+    expect(frame).not.toContain("Initialize");
   });
 });
 

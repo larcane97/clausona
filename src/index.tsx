@@ -6,7 +6,7 @@ import { spawnCommandSync } from "./core/process.js";
 import { trackUsage } from "./core/track-usage.js";
 import { accent, fail as xMark } from "./lib/cli-style.js";
 import { parseProfileRef } from "./lib/profile-ref.js";
-import { loadRegistry, resolveProfileEnv } from "./lib/service.js";
+import { loadRegistry, noRegistryError, resolveProfileEnv } from "./lib/service.js";
 import type { ParsedCommand } from "./types.js";
 
 export function parseCommand(argv: string[]): ParsedCommand {
@@ -123,7 +123,7 @@ export async function runProfile(
   platform: NodeJS.Platform = process.platform,
 ): Promise<number> {
   const registry = await loadRegistry();
-  if (!registry) throw new Error("clausona is not initialized.");
+  if (!registry) throw await noRegistryError();
   const ref = parseProfileRef(profileArg, registry);
   const { binary, env } = await resolveProfileEnv(ref.id, platform);
   const result = spawnCommandSync(binary, args, { stdio: "inherit", env }, platform);
