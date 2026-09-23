@@ -1,3 +1,5 @@
+import { leakedWindows } from "../test-leaks.js";
+
 /**
  * The TUI tests' one way of asking whether a secret was ever on screen.
  *
@@ -9,19 +11,13 @@
  *
  * So each frame is flattened first: ANSI styling, the box-drawing borders ink draws around a
  * panel, padding and line breaks all go, which puts a secret wrapped inside one panel back
- * into one run. Then every `WINDOW`-character window of the secret is searched for.
- *
- * Why eight. A key's prefix is public and shares short runs with the TUI's own words: `-api`
- * is in `sk-ant-api03-` and in the auth row's `x-api-key`, so a four-character window reports
- * a leak on a screen that has none (measured, and pinned in ApiForm.test.tsx). Five is the
- * least that passes today; eight leaves room for text added later, and eight characters of a
- * key's random body is a leak in itself. A key drawn beside another panel, where flattening
- * cannot rejoin it, is still found wherever eight of its characters sit together on one line;
- * what this can miss is a fragment of seven or fewer at a line's end.
+ * into one run. Then the windows of the secret's random body are searched for, by the rule the
+ * output matrix uses too - `leakedWindows` in src/test-leaks.ts, which says why five and why not
+ * the key's public prefix. A key drawn beside another panel, where flattening cannot rejoin
+ * it, is still found wherever five characters of its body sit together on one line.
  *
  * Only for tests. Nothing in the app imports it.
  */
-export const WINDOW = 8;
 
 /** ANSI SGR and cursor sequences, the box-drawing block (U+2500-U+257F), and whitespace of any kind. */
 // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC (\x1b) is required to match ANSI escape sequences
@@ -33,12 +29,9 @@ export function flatten(frame: string): string {
 
 /** Every window of `secret` found in any frame. Empty is the only passing answer. */
 export function windowsOnScreen(frames: readonly (string | undefined)[], secret: string): string[] {
-  const flat = frames.map((frame) => flatten(frame ?? ""));
-  const bare = flatten(secret);
-  const found = new Set<string>();
-  for (let start = 0; start + WINDOW <= bare.length; start++) {
-    const window = bare.slice(start, start + WINDOW);
-    if (flat.some((frame) => frame.includes(window))) found.add(window);
-  }
-  return [...found];
+  return leakedWindows(
+    frames.map((frame) => frame ?? ""),
+    secret,
+    flatten,
+  );
 }

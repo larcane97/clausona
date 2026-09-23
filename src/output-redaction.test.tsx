@@ -5,6 +5,7 @@ import { render } from "ink-testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { stripAnsi } from "./lib/cli-style.js";
+import { leakedWindows } from "./test-leaks.js";
 import type { DoctorProfileResult, SecretSource } from "./types.js";
 
 /**
@@ -44,7 +45,10 @@ afterEach(() => {
   expect(unexpected, "a test spawned a process").toEqual([]);
 });
 
-/** One secret per shape. Each is searched for by every 5-character window of it - see `leaks`. */
+/**
+ * One secret per shape. Each is searched for by every 5-character window of it - see `leaks`.
+ * None has a public prefix, so the whole of each is its random body.
+ */
 const PLANTED = {
   "a credential env value": "S1HDR-1d5e",
   "a second credential env value": "S1TOK-2e6f",
@@ -73,22 +77,21 @@ const PLANTED = {
 } as const;
 
 /**
- * Whether any part of `secret` is in `printed`. Not a prefix: a display that shows the last
- * few characters of a hidden value - "ends in …2e6f" - leaks as surely as one that shows the
- * first few, so every 5-character window is searched. Five, because that is the usual length
- * of such a hint, and every planted secret is at least twice it.
+ * Whether any part of `secret` is in `printed`: every 5-character window of it, by the rule the
+ * TUI's frames are searched with too - `leakedWindows` in src/test-leaks.ts, which says why
+ * windows, why five, and why a key's public prefix is left out. Every planted secret is at
+ * least twice five.
  *
  * And a second time with JSON punctuation, whitespace and numeric keys taken out, because a
  * string walked as if it were an object prints one character per key - `{"0":"S","1":"2"…}` -
  * which no substring search of the raw text finds.
  */
 function leaks(printed: string, secret: string): boolean {
-  const compact = printed.replace(/"\d+":/g, "").replace(/[\s"{}[\],:]/g, "");
-  for (let start = 0; start + 5 <= secret.length; start++) {
-    const window = secret.slice(start, start + 5);
-    if (printed.includes(window) || compact.includes(window.replace(/[\s"{}[\],:]/g, ""))) return true;
-  }
-  return false;
+  const compact = (text: string) => text.replace(/[\s"{}[\],:]/g, "");
+  return (
+    leakedWindows([printed], secret).length > 0 ||
+    leakedWindows([printed.replace(/"\d+":/g, "")], secret, compact).length > 0
+  );
 }
 
 const API_IDS = [

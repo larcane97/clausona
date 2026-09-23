@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { flatten, WINDOW, windowsOnScreen } from "./test-frames.js";
+import { LEAK_WINDOW, randomBody } from "../test-leaks.js";
+import { flatten, windowsOnScreen } from "./test-frames.js";
 
 /** The helper every TUI leak assertion goes through, checked against the shapes it exists for. */
 describe("windowsOnScreen", () => {
@@ -15,7 +16,7 @@ describe("windowsOnScreen", () => {
     ].join("\n");
 
     expect(frame).not.toContain(KEY);
-    expect(windowsOnScreen([frame], KEY)).toHaveLength(KEY.length - WINDOW + 1);
+    expect(windowsOnScreen([frame], KEY)).toHaveLength(randomBody(KEY).length - LEAK_WINDOW + 1);
   });
 
   it("finds part of a key cut off at a panel's edge", () => {
@@ -29,11 +30,22 @@ describe("windowsOnScreen", () => {
   it("finds a key with ANSI styling through it", () => {
     const styled = `${KEY.slice(0, 10)}\u001b[7m${KEY[10]}\u001b[27m${KEY.slice(11)}`;
 
-    expect(windowsOnScreen([styled], KEY)).toHaveLength(KEY.length - WINDOW + 1);
+    expect(windowsOnScreen([styled], KEY)).toHaveLength(randomBody(KEY).length - LEAK_WINDOW + 1);
   });
 
   it("finds nothing in a frame that holds no part of the key", () => {
     const frame = "│  ✦  API key          ••••••••                       │\n│  Stored in the credential store. │";
+
+    expect(windowsOnScreen([frame], KEY)).toEqual([]);
+  });
+
+  it("finds the last five characters of a key shown on their own, the usual 'ends in' hint", () => {
+    expect(windowsOnScreen([`│ API key   ends in …${KEY.slice(-5)} │`], KEY)).toEqual([KEY.slice(-5)]);
+  });
+
+  it("does not take the public prefix every key of its kind begins with for a leak", () => {
+    // `-api` is in `sk-ant-api03-` and in the auth row's `x-api-key`: the TUI's own words.
+    const frame = "│  Auth   api-key   x-api-key - Anthropic's own API │\n│ Keys look like sk-ant-api03-… │";
 
     expect(windowsOnScreen([frame], KEY)).toEqual([]);
   });

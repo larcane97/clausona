@@ -6,7 +6,7 @@ import { renderAt } from "../test-drive.js";
 import { flatten, windowsOnScreen } from "../test-frames.js";
 import { ApiForm } from "./ApiForm.js";
 
-/** A key shape. The panel may draw a mask in its place, and never any eight characters of it. */
+/** A key shape. The panel may draw a mask in its place, and never any five characters of its body. */
 const KEY = "sk-ant-api03-fAkE7wvKpLmN8rTyUbHc5dFgA2sE9oIuWqXv3Bn6Mk1Lp8Rt";
 
 /** What the key field shows instead of a key - the same, whatever is behind it. */
@@ -240,8 +240,8 @@ describe("a key in a field that draws what it holds", () => {
   });
 
   it("finds no part of a key on a form that shows none, even where the form says x-api-key", () => {
-    // What the helper's window size is for: `-api` is in the key's public prefix and in the
-    // auth row's own text, and a shorter window would call this screen a leak.
+    // `-api` is in the key's public prefix and in the auth row's own text: a window of the
+    // whole key found it here once. The helper searches the key's random body only.
     const state = form({ authScheme: "api-key" });
 
     expect(windowsOnScreen([frameFor({ ...state, cursor: cursorOn(state, "auth") }, true)], KEY)).toEqual([]);

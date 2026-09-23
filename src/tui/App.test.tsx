@@ -90,8 +90,8 @@ import {
 import { windowsOnScreen } from "./test-frames.js";
 
 /**
- * A key shape, random like a real one so that no eight characters of it turn up in the TUI's
- * own text. No frame this suite renders may contain any eight characters of it.
+ * A key shape, random like a real one so that no five characters of its body turn up in the
+ * TUI's own text. No frame this suite renders may contain any five characters of its body.
  */
 const KEY = "sk-ant-api03-fAkE7wvKpLmN8rTyUbHc5dFgA2sE9oIuWqXv3Bn6Mk1Lp8Rt";
 /** The constant the key field shows instead. */
@@ -885,7 +885,7 @@ describe("App add-profile: API endpoint", () => {
    * field the cursor is leaving. A person's keystrokes are separated by a repaint; a laggy
    * SSH link, a busy event loop or an auto-type tool delivers them together, which is what
    * `type` does with its whole argument. Each case below is a route that put a key in the
-   * wrong field, and each asserts that no eight characters of it were ever on screen.
+   * wrong field, and each asserts that no five characters of its body were ever on screen.
    */
   describe("input coalesced with a keystroke that moves the cursor", () => {
     async function filledTo(label: string) {
