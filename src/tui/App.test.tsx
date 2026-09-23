@@ -1330,6 +1330,8 @@ describe("App add-profile: API endpoint", () => {
       await type(instance, "[201~");
 
       expect(focusedOn(instance.lastFrame() ?? "", "API key")).toBe(true);
+      // The Esc was held with the message; the paste has ended, and so has the message.
+      expect(instance.lastFrame()).not.toContain(PASTE_SKIPPED);
       await press(instance, KEY);
       expect((await submit(instance))?.secretValue).toBe(KEY);
       expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
@@ -1380,6 +1382,20 @@ describe("App add-profile: API endpoint", () => {
       expect(instance.lastFrame()).not.toContain(PASTE_SKIPPED);
       await press(instance, "glm-5");
       expect(row(instance, "Model")).toContain("glm-5");
+      instance.unmount();
+    });
+
+    it("takes the message down when the paste's end does arrive", async () => {
+      const instance = await filledTo("Endpoint");
+
+      await type(instance, `${DOWN}${DOWN}\u001b[200~${KEY.slice(0, 20)}`);
+      await press(instance, KEY.slice(20, 40));
+      expect(instance.lastFrame()).toContain(PASTE_SKIPPED);
+      await press(instance, "\u001b[201~");
+
+      expect(instance.lastFrame()).not.toContain(PASTE_SKIPPED);
+      await press(instance, KEY);
+      expect((await submit(instance))?.secretValue).toBe(KEY);
       instance.unmount();
     });
   });

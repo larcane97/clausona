@@ -607,9 +607,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     /** The front of the end marker, handed over on its own because a slow read split it. */
     let endSoFar = "";
     function hearApiFormInput(input: string) {
-      if (input === PASTE_START && (inputTarget.current === undefined || droppingPaste.current)) {
-        // A paste starting with input nowhere to go is dropped to its end. So is one starting in
-        // the rest of the read that ended a paste being dropped: that end is only taken after the
+      if (input === PASTE_START && inputTarget.current === undefined) {
+        // A paste starting with input nowhere to go is dropped to its end - including one in the
+        // rest of the read that ended a paste being dropped: that end is only taken after the
         // read, and the new paste would outlive it and land where the cursor did.
         droppingPaste.current = true;
         endSoFar = "";
