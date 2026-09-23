@@ -77,20 +77,59 @@ async function writeSecretsFile(values: Record<string, string>): Promise<void> {
   await chmod(SECRETS_PATH, 0o600).catch(() => {});
 }
 
+/**
+ * The longest line `security -i` reads whole. It reads each line into a 4096-byte buffer
+ * (MAX_LINE_LEN in SecurityTool's security.c): a longer one is cut there and the rest run as
+ * a second command, and one of 4095 leaves its newline behind as an empty command, whose
+ * success would become the exit status.
+ */
+const SECURITY_MAX_LINE = 4094;
+
+/**
+ * One argument on a `security -i` line, read back by its split_line: inside double quotes
+ * only a backslash and the closing quote are special, and a backslash takes the next
+ * character as it is. A line break cannot be quoted - it ends the command, and whatever
+ * follows would run as a command of its own.
+ */
+function securityLineArg(value: string): string {
+  if (/[\n\0]/.test(value)) {
+    throw new Error("could not write the Keychain item: the profile id has a line break or a NUL in it");
+  }
+  return `"${value.replace(/["\\]/g, "\\$&")}"`;
+}
+
+/**
+ * The key goes to `security` on stdin, never in its arguments, which `ps` shows to every user
+ * on the machine. `security -i` reads commands from stdin, and exits with the status of the
+ * last one it ran - so the write is the only line. The key travels as `-X <hex>`, which
+ * add-generic-password has taken since macOS 10.15 (Node 20's floor), so the line splitter
+ * sees nothing of it but hex digits.
+ */
+async function storeKeychainSecret(profileId: string, value: string): Promise<void> {
+  const item = keychainItemFor(profileId);
+  const line = [
+    "add-generic-password",
+    "-U",
+    "-s",
+    securityLineArg(item),
+    "-a",
+    securityLineArg(profileId),
+    "-X",
+    Buffer.from(value, "utf8").toString("hex"),
+  ].join(" ");
+  if (Buffer.byteLength(line) > SECURITY_MAX_LINE) {
+    throw new Error(
+      'the key is too long to store in the Keychain - keep it elsewhere and point at it with --key-from env:NAME or --key-from command:"<command>"',
+    );
+  }
+  const { code } = await run("security", ["-i"], `${line}\n`);
+  if (code !== 0) throw new Error(`could not write Keychain item '${item}'`);
+}
+
 export async function storeSecret(profileId: string, value: string, backend?: SecretBackend): Promise<void> {
   const resolvedBackend = backend ?? (await detectBackend());
   if (resolvedBackend === "keychain") {
-    const { code } = await run("security", [
-      "add-generic-password",
-      "-U",
-      "-s",
-      keychainItemFor(profileId),
-      "-a",
-      profileId,
-      "-w",
-      value,
-    ]);
-    if (code !== 0) throw new Error(`could not write Keychain item '${keychainItemFor(profileId)}'`);
+    await storeKeychainSecret(profileId, value);
     return;
   }
   if (resolvedBackend === "secret-tool") {
