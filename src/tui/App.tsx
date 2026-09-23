@@ -789,8 +789,14 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   // begins, so the tail looked like typing. Bracketed, its start says it is a paste, and a paste
   // whose start went nowhere is dropped whole or refused. The mode is the user's terminal's, so
   // it goes off exactly once on every way out: the form closing (Esc, a save that succeeds or
-  // fails, any change of step or screen), the App unmounting (a quit, Ctrl-C), and the process
-  // exiting without either (a crash). Only a terminal is switched.
+  // fails, any change of step or screen), the App unmounting (a quit, Ctrl-C), the process
+  // exiting without either (a crash), and a SIGTERM or SIGHUP - a closed terminal window, a
+  // `kill`. For those two it is written from a handler of its own, which then lets go of the
+  // signal and raises it again, so the process ends by it exactly as it would have: the exit
+  // status is still the signal's. (ink's own exit hook unmounts on them too, as long as nothing
+  // else listens for the signal; this does not lean on that.) SIGKILL cannot be caught, so after
+  // one the mode stays on until the shell's next prompt - zsh, bash 5.1+ and fish switch it off
+  // there. Only a terminal is switched.
   const apiFormOpen = fieldUnderCursor !== undefined;
   useLayoutEffect(() => {
     if (!apiFormOpen || !stdout?.isTTY) return;
@@ -799,10 +805,18 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       if (!on) return;
       on = false;
       process.off("exit", turnBracketedPasteOff);
+      process.off("SIGTERM", turnBracketedPasteOffAndDie);
+      process.off("SIGHUP", turnBracketedPasteOffAndDie);
       stdout.write(BRACKETED_PASTE_OFF);
+    }
+    function turnBracketedPasteOffAndDie(signal: NodeJS.Signals) {
+      turnBracketedPasteOff();
+      process.kill(process.pid, signal);
     }
     stdout.write(BRACKETED_PASTE_ON);
     process.on("exit", turnBracketedPasteOff);
+    process.on("SIGTERM", turnBracketedPasteOffAndDie);
+    process.on("SIGHUP", turnBracketedPasteOffAndDie);
     return turnBracketedPasteOff;
   }, [apiFormOpen, stdout]);
 

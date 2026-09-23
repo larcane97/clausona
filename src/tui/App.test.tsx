@@ -1836,6 +1836,46 @@ describe("App add-profile: API endpoint", () => {
       expect(instance.modes).toEqual([ON, OFF]);
     });
 
+    it.each([
+      "SIGTERM",
+      "SIGHUP",
+    ] as const)("turns it off once on %s, lets go of the signal, and raises it again so it still ends the process", async (signal) => {
+      const instance = await onForm();
+      const handlers = () =>
+        process.listeners(signal).filter((listener) => listener.name === "turnBracketedPasteOffAndDie");
+      const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+      try {
+        expect(handlers()).toHaveLength(1);
+        (handlers()[0] as (signal: NodeJS.Signals) => void)(signal);
+
+        expect(instance.modes).toEqual([ON, OFF]);
+        expect(kill).toHaveBeenCalledTimes(1);
+        expect(kill).toHaveBeenCalledWith(process.pid, signal);
+        expect(handlers()).toEqual([]);
+        expect(exitHooks()).toEqual([]);
+        instance.unmount();
+        expect(instance.modes).toEqual([ON, OFF]);
+      } finally {
+        kill.mockRestore();
+        instance.unmount();
+      }
+    });
+
+    it("lets go of both signals when the form closes", async () => {
+      const instance = await onForm();
+
+      await press(instance, ESC);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Choose how to add"));
+
+      for (const signal of ["SIGTERM", "SIGHUP"] as const) {
+        expect(process.listeners(signal).filter((listener) => listener.name === "turnBracketedPasteOffAndDie")).toEqual(
+          [],
+        );
+      }
+      instance.unmount();
+    });
+
     it("switches nothing on an output that is not a terminal", async () => {
       const instance = await onForm({ tty: false });
 
