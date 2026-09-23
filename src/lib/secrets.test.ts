@@ -179,12 +179,14 @@ describe.skipIf(process.platform === "win32")("storeSecret on the Keychain backe
 // detectBackend() reports "keychain" on macOS, so exercising the file backend on this
 // platform requires forcing it explicitly via the optional `backend` override on
 // storeSecret/resolveSecret/deleteSecret. The module also resolves its secrets.json path
-// from homedir() at load time, so a fresh module graph is required after HOME is stubbed.
+// from homedir() at load time, so a fresh module graph is required after HOME is stubbed -
+// and USERPROFILE with it, which is where homedir() looks on Windows.
 describe("file backend (forced via the backend override)", () => {
   it("stores, resolves, and deletes a secret", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "clausona-secrets-home-"));
     temps.push(home);
     vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
     vi.resetModules();
     const { storeSecret, resolveSecret: resolveSecretFresh, deleteSecret } = await import("./secrets.js");
 
@@ -211,6 +213,7 @@ describe("file backend (forced via the backend override)", () => {
     const home = mkdtempSync(path.join(tmpdir(), "clausona-secrets-home-"));
     temps.push(home);
     vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
     vi.resetModules();
     const { storeSecret } = await import("./secrets.js");
 
@@ -228,6 +231,7 @@ describe("file backend (forced via the backend override)", () => {
     const home = mkdtempSync(path.join(tmpdir(), "clausona-secrets-home-"));
     temps.push(home);
     vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
     vi.resetModules();
     const { resolveSecret: resolveSecretFresh } = await import("./secrets.js");
 
@@ -242,6 +246,7 @@ describe("file backend (forced via the backend override)", () => {
     const home = mkdtempSync(path.join(tmpdir(), "clausona-secrets-home-"));
     temps.push(home);
     vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
     vi.resetModules();
     const { resolveSecret: resolveSecretFresh } = await import("./secrets.js");
 
