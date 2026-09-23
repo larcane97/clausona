@@ -1196,7 +1196,9 @@ export async function addProfile(options: {
   if (!registry) throw new Error("clausona is not initialized.");
 
   const id = profileId(options.tool, options.name);
-  if (registry.profiles[id]) throw new Error(`Profile '${id}' already exists.`);
+  if (registry.profiles[id]) {
+    throw new Error(`Profile '${id}' already exists. Run \`clausona login ${id}\` to sign in again.`);
+  }
 
   const adapter = getAdapter(options.tool);
   const home = homedir();
