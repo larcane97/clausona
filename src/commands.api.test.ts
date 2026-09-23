@@ -1532,6 +1532,17 @@ describe("help", () => {
     expect(help).toContain("the shell that runs claude");
   });
 
+  it("names the editor variables --edit reads, in the order it reads them", async () => {
+    const h = await harness();
+
+    const line = stripAnsi(String(await h.run("config", "--help")))
+      .split("\n")
+      .find((text) => text.trim().startsWith("--edit"));
+
+    // editProfileEnv takes $VISUAL first and falls back to $EDITOR; the help said $EDITOR only.
+    expect(line).toContain("$VISUAL or $EDITOR");
+  });
+
   it("tells `config` readers how to change what add set, without re-adding", async () => {
     const h = await harness();
 

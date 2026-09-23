@@ -335,7 +335,7 @@ function showProfile(id: string, profile: Profile, asJson: boolean): string {
 }
 
 /**
- * Splits $EDITOR into a command and its arguments. `code -w` and `emacsclient -nw` are
+ * Splits $VISUAL or $EDITOR into a command and its arguments. `code -w` and `emacsclient -nw` are
  * ordinary values for it, and the whole string as one command name would look for a
  * program called "code -w". Quotes group a path with spaces in it; nothing else is
  * interpreted, because this is not a shell and the value is never handed to one.
@@ -369,7 +369,8 @@ function parseEditedEnv(raw: string): Record<string, string> {
 }
 
 /**
- * `config --edit`: the env map in $EDITOR, applied on a clean exit.
+ * `config --edit`: the env map in $VISUAL, or $EDITOR when that is unset, applied on a
+ * clean exit.
  *
  * The scratch file lives in a directory of its own made by mkdtemp (0700) and is written
  * 0600. A fixed name in the shared temp directory would be world-readable and something
@@ -637,7 +638,7 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${accent("--label".padEnd(22))}${dim("Name list shows for an API profile; cannot be blank")}`,
         `    ${accent("--key".padEnd(22))}${dim("Re-enter the API key for an API profile")}`,
         `    ${accent("--key-from".padEnd(22))}${dim('Switch the source: keychain | env:NAME | command:"<shell command>"')}`,
-        `    ${accent("--edit".padEnd(22))}${dim("Open the profile's env map in $EDITOR")}`,
+        `    ${accent("--edit".padEnd(22))}${dim("Open the profile's env map in $VISUAL or $EDITOR")}`,
         `    ${accent("--show".padEnd(22))}${dim("Print the profile's settings (add --json for the full catalog)")}`,
         "",
         `    ${dim("One change per call, except --show, which only reads. --base-url, --auth and")}`,
