@@ -91,7 +91,9 @@ reset time, plus the most-consumed per-model limit.
 
 The table adapts to the terminal: as it narrows, token counts give way first, then
 cost, then the reset times — the quota columns and the profile name are the last things
-to go, so the row never wraps into itself.
+to go, so the row never wraps into itself. A `MODEL` column, shown once any profile pins
+a model, is kept ahead of the token counts and cost but goes before the quota columns or
+their reset times would.
 
 Readings come from each tool's own usage endpoint, authenticated with the credential that
 tool already stored for that profile. For subscription profiles clausona holds no token of
@@ -171,8 +173,9 @@ is exactly what the key source exists to avoid. `--auth` picks how the key is pr
 passes it as `ANTHROPIC_AUTH_TOKEN`, sent as `Authorization: Bearer`, and is the default
 everywhere else. `--model` is stored as `ANTHROPIC_MODEL` and is whatever your endpoint calls
 the model; clausona never contacts the endpoint, so a typo there surfaces as an error from
-`claude` rather than from `clausona add`. `--label` sets the name shown in `list`, which
-otherwise defaults to the endpoint's host.
+`claude` rather than from `clausona add`; [it can be changed later](#the-model). `--label`
+sets the name shown in `list`, which otherwise defaults to the endpoint's host. All of these
+can be [changed later](#changing-the-endpoint) without typing the key again.
 
 Claude Code speaks the Anthropic Messages format, which recent SGLang, vLLM, llama.cpp and
 OpenRouter's Anthropic endpoint all serve natively. An endpoint that only speaks the OpenAI
@@ -180,6 +183,40 @@ format needs a translation proxy of your own (LiteLLM, claude-code-router); poin
 `--base-url` at that proxy.
 
 The dashboard registers one too — **Profiles → add → API endpoint** walks the same fields.
+
+### The model
+
+```bash
+clausona config claude:gw --model z-ai/glm-5.3-flash   # the profile's model from now on
+clausona config claude:gw --unset ANTHROPIC_MODEL      # back to Claude Code's own choice
+```
+
+`--model` writes `ANTHROPIC_MODEL` in the profile's env map. That is the variable Claude Code
+reads and the only place clausona keeps the model, so `--set ANTHROPIC_MODEL=…` and `--edit`
+change the same value, and passing `--model` with a `--set` or `--unset` of that variable is
+refused. It works on a subscription profile too, where it pins a model for that account; a
+Codex profile refuses it, because Codex never reads the variable. An empty `--model` is
+refused rather than taken to mean "clear it" — `--unset ANTHROPIC_MODEL` is how to clear it.
+`clausona list` shows each profile's model in a `MODEL` column, and `list --json` carries it as
+`model`.
+
+**Do you need a profile per model? No.** From cheapest to heaviest:
+
+1. `claude --model <id>` changes the model for one session and leaves the profile alone.
+2. `clausona config <profile> --model <id>` changes the profile's default.
+3. A second profile, only when you want separate *state*: a profile is a config directory —
+   its own history, settings and MCP servers — plus its own line of usage in `list`.
+
+Same endpoint, same key, only the model differs: one profile. A different endpoint, a
+different key, or wanting separate history or cost tracking: separate profiles. When you do
+want one per model, `--merge-sessions` gives them a shared history and `--key-from env:NAME`
+lets them read one key rather than each storing a copy.
+
+**The context window belongs to the endpoint, not to the model name.** The same model can be
+served with very different limits — OpenRouter advertises `z-ai/glm-5.3` at 1,310,720 tokens,
+while a server you run yourself may be configured for a fraction of that. So set
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` on each profile from what its endpoint actually serves, and
+do not copy it from one profile to another.
 
 ### Profile names
 
@@ -345,13 +382,18 @@ claude:work         you@example.com              6% 23m     46% 13h
 claude:gw           openrouter.ai                —          —
 ```
 
+`MODEL`, once any profile pins a model, shows each profile's `ANTHROPIC_MODEL`, subscription
+profiles included; a dash means the profile pins none and Claude Code picks. It is the same
+value the dashboard's preview shows, and `clausona config <profile> --model` changes it.
+
 `COST`, `INPUT` and `OUTPUT` do count for an API profile, but they come from clausona's own
 local record of what ran through it, not from the provider — they are not a bill. Claude
 Code's accounting has no price table for third-party models, so cost may read as zero while
 the token counts stay accurate.
 
 In `clausona list --json` an API profile carries `kind: "api"` and `label`; a subscription
-profile carries neither key. Neither form ever carries the key or its source — `clausona
+profile carries neither key. Any profile that pins a model carries `model`, which is the only
+value from the env map the listing includes. Neither form ever carries the key or its source — `clausona
 config <profile> --show` is where the source is visible.
 
 ### What `doctor` checks
@@ -393,6 +435,7 @@ key resolves, not that the endpoint answered — run `claude` itself to find tha
 | `clausona usage [profile] [--period=today\|week\|month\|all]`       | View cost and token usage                            |
 | `clausona current [--json]`                                         | Show active profile                                  |
 | `clausona config <profile> --merge-sessions \| --separate-sessions` | Configure session mode                               |
+| `clausona config <profile> --model <id>`                            | Change a profile's [model](#the-model)                |
 | `clausona config <profile> --set KEY=VALUE \| --unset KEY \| --edit` | Set [advanced settings](#advanced-settings) per profile |
 | `clausona config <profile> --base-url <url> \| --auth <scheme> \| --label <name>` | [Change an API profile's endpoint](#changing-the-endpoint) |
 | `clausona config <profile> --key \| --key-from <source>`            | Change an API profile's key, or where it is read from |

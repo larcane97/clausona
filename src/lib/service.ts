@@ -48,6 +48,7 @@ import {
   displayName,
   envKeyCaseTwin,
   envKeyCaseTwinError,
+  profileModel,
 } from "./profile-env.js";
 import { foldProfileName, initProfileNames, parseProfileRef, profileId, validateProfileName } from "./profile-ref.js";
 import { deleteSecret, resolveSecret, storeSecret } from "./secrets.js";
@@ -907,6 +908,7 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
 
   return entries.map(([id, profile]) => {
     const records = usage[id]?.records ?? [];
+    const model = profileModel(profile);
     return {
       name: id,
       tool: profile.tool,
@@ -918,6 +920,9 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
       isPrimary: Boolean(profile.isPrimary),
       isActive: registry.activeProfiles[profile.tool] === id,
       mergeSessions: profile.mergeSessions,
+      // The one value from the env map that is listed - by name, never by widening to the
+      // map. Absent rather than undefined, so a profile without one gains no key.
+      ...(model === undefined ? {} : { model }),
       ...(options.detail ? { api: profile.api, env: profile.env } : {}),
       quota: quotas[id],
       today: summarizeUsage({ now, period: "today", records }),

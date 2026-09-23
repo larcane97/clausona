@@ -952,6 +952,161 @@ describe("config --base-url / --auth / --label", () => {
 });
 
 /**
+ * `--model` is sugar over the env map's ANTHROPIC_MODEL, which is what Claude Code reads and
+ * the one place the model is stored - `add --model` writes the same key. So the questions
+ * are the ones `add` already answers: which kinds it applies to, what an empty value means,
+ * and what happens next to a --set or --unset of the same variable.
+ */
+describe("config --model", () => {
+  const SUBSCRIPTION = { tool: "claude", email: "work@example.com" };
+
+  it("changes an API profile's model, and nothing else", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+    const before = h.profile("claude:gw");
+
+    await h.run("config", "claude:gw", "--model", "z-ai/glm-5.3-flash");
+
+    expect(h.profile("claude:gw")).toEqual({ ...before, env: { ANTHROPIC_MODEL: "z-ai/glm-5.3-flash" } });
+  });
+
+  // A subscription profile can pin a model too, and Claude Code honours it there. Refusing
+  // one kind only would be an accident of where the flag is parsed, not a decision.
+  it("pins a subscription profile's model", async () => {
+    const h = await harness({ "claude:work": SUBSCRIPTION });
+
+    await h.run("config", "claude:work", "--model", "claude-opus-5-5");
+
+    expect(h.profile("claude:work").env).toEqual({ ANTHROPIC_MODEL: "claude-opus-5-5" });
+  });
+
+  // Codex reads its model from its own configuration, never from ANTHROPIC_MODEL: a --model
+  // that stored it anyway would report success and change nothing Codex does.
+  it("refuses a Codex profile rather than storing a variable Codex never reads", async () => {
+    const h = await harness({ "codex:personal": { tool: "codex", email: "me@example.com" } });
+    const before = h.registryText();
+
+    const message = await failure(h.run("config", "codex:personal", "--model", "gpt-5"));
+
+    expect(message).toContain("only Claude Code reads");
+    expect(h.registryText()).toBe(before);
+  });
+
+  it("trims the id, on config and on add alike", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+    promptAnswers.push(KEY);
+
+    await h.run("config", "claude:gw", "--model=  z-ai/glm-5.3-flash  ");
+    await h.run("add", "claude:local", "--api", "--base-url", "http://localhost:8000", "--model", " glm-5.3 ");
+
+    expect(h.profile("claude:gw").env?.ANTHROPIC_MODEL).toBe("z-ai/glm-5.3-flash");
+    expect(h.profile("claude:local").env?.ANTHROPIC_MODEL).toBe("glm-5.3");
+  });
+
+  // Empty is refused rather than read as "clear it": `--model "$MODEL"` with MODEL unset
+  // would otherwise drop the profile's model without a word. Clearing has its own spelling.
+  describe("an empty value", () => {
+    for (const value of ["", "   "]) {
+      it(`is refused on config (${JSON.stringify(value)}), and names how to clear it`, async () => {
+        const h = await harness({ "claude:gw": API_PROFILE });
+        const before = h.registryText();
+
+        const message = await failure(h.run("config", "claude:gw", "--model", value));
+
+        expect(message).toContain("--model needs a model id");
+        expect(message).toContain("--unset ANTHROPIC_MODEL");
+        expect(h.registryText()).toBe(before);
+      });
+
+      it(`is refused on add (${JSON.stringify(value)}), before it asks for a key`, async () => {
+        const h = await harness();
+
+        const message = await failure(
+          h.run("add", "claude:gw", "--api", "--base-url", "http://localhost:8000", "--model", value),
+        );
+
+        expect(message).toContain("--model needs a model id");
+        expect(promptCalls).toEqual([]);
+        expect(Object.keys(h.registry().profiles)).toEqual(["claude:default"]);
+      });
+    }
+
+    it("leaves --unset ANTHROPIC_MODEL as the way to clear it", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      await h.run("config", "claude:gw", "--unset", "ANTHROPIC_MODEL");
+
+      expect(h.profile("claude:gw").env).toEqual({});
+    });
+  });
+
+  describe("next to --set or --unset", () => {
+    it("refuses --set ANTHROPIC_MODEL=, as add does", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+      const before = h.registryText();
+
+      const message = await failure(h.run("config", "claude:gw", "--model", "a", "--set", "ANTHROPIC_MODEL=b"));
+
+      expect(message).toBe("ANTHROPIC_MODEL is what --model sets. Pass one or the other.");
+      expect(h.registryText()).toBe(before);
+    });
+
+    it("refuses --unset ANTHROPIC_MODEL, which asks for the opposite", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+      const before = h.registryText();
+
+      const message = await failure(h.run("config", "claude:gw", "--model", "a", "--unset", "ANTHROPIC_MODEL"));
+
+      expect(message).toBe("ANTHROPIC_MODEL is what --model sets. Pass one or the other.");
+      expect(h.registryText()).toBe(before);
+    });
+
+    it("applies with other settings in one change, as add allows", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      await h.run("config", "claude:gw", "--model", "b", "--set", "API_TIMEOUT_MS=600000");
+
+      expect(h.profile("claude:gw").env).toEqual({ ANTHROPIC_MODEL: "b", API_TIMEOUT_MS: "600000" });
+    });
+
+    it("is refused next to a change of another kind", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      const message = await failure(h.run("config", "claude:gw", "--model", "b", "--label", "Gateway"));
+
+      expect(message).toContain("Change one thing at a time");
+      expect(message).toContain("--model");
+    });
+  });
+
+  it("is what list shows afterwards, in the table and in --json", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE, "claude:work": SUBSCRIPTION });
+
+    await h.run("config", "claude:gw", "--model", "z-ai/glm-5.3-flash");
+    await h.run("config", "claude:work", "--model", "claude-opus-5-5");
+    // Wide enough for the column whatever terminal the suite runs in.
+    const columns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+    Object.defineProperty(process.stdout, "columns", { value: 200, configurable: true });
+    const table = await h.run("list", "--no-quota").then(
+      (out) => stripAnsi(String(out)),
+      (error) => error,
+    );
+    if (columns) Object.defineProperty(process.stdout, "columns", columns);
+    else delete (process.stdout as { columns?: number }).columns;
+    if (table instanceof Error) throw table;
+    const json = JSON.parse(String(await h.run("list", "--json", "--no-quota"))) as { name: string; model?: string }[];
+
+    expect(table).toContain("MODEL");
+    expect(table).toContain("z-ai/glm-5.3-flash");
+    expect(table).toContain("claude-opus-5-5");
+    expect(Object.fromEntries(json.map((item) => [item.name, item.model]))).toEqual({
+      "claude:default": undefined,
+      "claude:gw": "z-ai/glm-5.3-flash",
+      "claude:work": "claude-opus-5-5",
+    });
+  });
+});
+
+/**
  * doctor names a command for a base URL it cannot use. With `config --base-url` there is
  * one, where the endpoint block exists to be changed; where it does not, there is no key
  * source for `config` to keep, and `--base-url` would refuse the profile.
@@ -1388,6 +1543,33 @@ describe("help", () => {
     expect(help).toContain("The key is kept");
     expect(help).toContain("follows");
     expect(help).toContain("clausona config claude:gw --base-url http://localhost:8000");
+  });
+
+  it("tells `config` readers how to change the model, and where it is kept", async () => {
+    const h = await harness();
+
+    const help = await h.run("config", "--help");
+
+    expect(help).toContain("--model");
+    expect(help).toContain("stored as ANTHROPIC_MODEL");
+    expect(help).toContain("--unset ANTHROPIC_MODEL");
+    expect(help).toContain("clausona config claude:gw --model z-ai/glm-5.3-flash");
+  });
+
+  it("tells `list` readers what the MODEL column is, and what its dash means", async () => {
+    const h = await harness();
+
+    const help = await h.run("list", "--help");
+
+    expect(help).toContain("MODEL");
+    expect(help).toContain("ANTHROPIC_MODEL");
+    expect(help).toContain("pins none");
+  });
+
+  it("tells `add` readers the model can be changed later", async () => {
+    const h = await harness();
+
+    expect(await h.run("add", "--help")).toContain("config <profile> --model");
   });
 
   it("tells `doctor` readers which command fixes a base URL", async () => {

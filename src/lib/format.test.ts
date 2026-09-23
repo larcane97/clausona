@@ -14,6 +14,7 @@ import {
   doctorSummary,
   fitQuotaValue,
   formatAge,
+  formatModel,
   formatQuotaInline,
   formatQuotaPercent,
   formatResetIn,
@@ -254,6 +255,126 @@ describe("renderList width", () => {
 
     expect(stripAnsi(renderList([codex], { width: 200 }))).toContain("not available for codex");
     expect(stripAnsi(renderList([codex], { width: 80 }))).not.toContain("not available for codex");
+  });
+});
+
+/**
+ * The MODEL column. It is shown only once some profile pins a model - as the quota columns
+ * are shown only once a quota was fetched - and it gives way before anything the table
+ * already had to give way late: the quota pair and its reset times. So the property that
+ * matters is checked at every width rather than at a few.
+ */
+describe("renderList with a model", () => {
+  const zero = { cost: 0, inputTokens: 0, outputTokens: 0 };
+  const row = (name: string, extra: Partial<ProfileListItem> = {}): ProfileListItem => ({
+    name,
+    tool: "claude",
+    email: `${name}@example.com`,
+    configDir: `/home/u/.claude-${name}`,
+    isPrimary: false,
+    isActive: false,
+    quota: snapshot({ session: { usedPercent: 6, resetsAt: "2030-01-01T00:00:00Z" } }),
+    today: zero,
+    week: { cost: 1, inputTokens: 10, outputTokens: 5 },
+    month: zero,
+    total: zero,
+    ...extra,
+  });
+  const pinned = row("gw", { model: "z-ai/glm-5.3" });
+  const unpinned = row("work");
+  const lineFor = (out: string, name: string) => out.split("\n").find((line) => line.includes(name)) ?? "";
+
+  it("puts the model beside the account when there is room", () => {
+    const out = stripAnsi(renderList([unpinned, pinned], { width: 200 }));
+
+    expect(out.split("\n")[3]).toMatch(/^ {4}PROFILE +ACCOUNT +MODEL +5H +7D +COST +INPUT +OUTPUT/);
+    expect(lineFor(out, "gw@example.com")).toMatch(/gw@example\.com +z-ai\/glm-5\.3 +6%/);
+    // A profile that pins none says so the way every other empty cell here does.
+    expect(lineFor(out, "work@example.com")).toMatch(/work@example\.com +— +6%/);
+  });
+
+  it("leaves the table exactly as it was when no profile pins a model", () => {
+    const labels: Record<string, string> = { profile: "PROFILE", account: "ACCOUNT", session: "5H", weekly: "7D" };
+    for (const width of [60, 80, 104, 120, 200]) {
+      const header = stripAnsi(renderList([unpinned], { width })).split("\n")[3];
+      // The headings the table had before there was a model column, and nothing else.
+      const before = pickLayout(true, width).keys.map((key) => labels[key] ?? key.toUpperCase());
+      expect(header.trim().split(/\s+/), `width ${width}`).toEqual(before);
+    }
+    // And literally, at the width the byte-for-byte pins below use.
+    expect(stripAnsi(renderList([unpinned], { width: 120 })).split("\n")[3]).toBe(
+      "    PROFILE             ACCOUNT                         5H         7D         COST        INPUT         OUTPUT    ",
+    );
+  });
+
+  it("never costs the quota columns or their reset times, at any width", () => {
+    for (let width = 20; width <= 220; width++) {
+      const without = pickLayout(true, width, false);
+      const withModel = pickLayout(true, width, true);
+      for (const key of ["session", "weekly"] as const) {
+        expect(withModel.keys.includes(key), `${key} at ${width}`).toBe(without.keys.includes(key));
+      }
+      expect(withModel.reset, `reset at ${width}`).toBe(without.reset);
+      expect(withModel.profileWidth, `profile at ${width}`).toBe(without.profileWidth);
+    }
+  });
+
+  it("gives way before the quota columns do, rather than squeezing them", () => {
+    expect(pickLayout(true, 200, true).keys).toEqual([
+      "profile",
+      "account",
+      "model",
+      "session",
+      "weekly",
+      "cost",
+      "input",
+      "output",
+    ]);
+    expect(pickLayout(true, 80, true).keys).toEqual(["profile", "account", "session", "weekly"]);
+  });
+
+  it("keeps the model over token counts and cost when only one of them fits", () => {
+    // `clausona usage` has the spend in full; nothing else lists every profile's model.
+    const keys = pickLayout(true, 120, true).keys;
+    expect(keys).toContain("model");
+    expect(keys).not.toContain("output");
+  });
+
+  it("does the same without quota columns", () => {
+    expect(pickLayout(false, 200, true).keys).toEqual(["profile", "account", "model", "cost", "input", "output"]);
+    for (let width = 20; width <= 220; width++) {
+      const withModel = pickLayout(false, width, true);
+      expect(withModel.profileWidth, `profile at ${width}`).toBe(pickLayout(false, width, false).profileWidth);
+    }
+  });
+
+  it("never emits a line wider than the terminal", () => {
+    const long = row("long", { model: "openrouter/deepseek/deepseek-v4.1-flash-preview-2026" });
+    for (let width = LIST_MIN_WIDTH; width <= 220; width++) {
+      const over = renderList([unpinned, pinned, long], { width })
+        .split("\n")
+        .filter((line) => stripAnsi(line).length > width);
+      expect(over, `width ${width}`).toEqual([]);
+    }
+  });
+
+  it("cuts a long model id inside its column, with an ellipsis", () => {
+    const long = row("long", { model: "openrouter/deepseek/deepseek-v4.1-flash-preview-2026" });
+    const out = stripAnsi(renderList([long], { width: 200 }));
+
+    // 23 characters and the ellipsis: one column short of the width, as every cell here is.
+    expect(lineFor(out, "long@example.com")).toContain("long@example.com                openrouter/deepseek/de… 6%");
+  });
+
+  it("does not move the guaranteed minimum width", () => {
+    expect(LIST_MIN_WIDTH).toBe(54);
+  });
+});
+
+describe("formatModel", () => {
+  it("is the id as stored, or a dash when none is pinned", () => {
+    expect(formatModel("z-ai/glm-5.3")).toBe("z-ai/glm-5.3");
+    expect(formatModel(undefined)).toBe("—");
   });
 });
 

@@ -56,12 +56,13 @@ const subscription: ProfileListItem = {
   total: { cost: 0, inputTokens: 0, outputTokens: 0 },
 };
 
-/** The same endpoint, with the key read from wherever the caller says. */
+/** The same endpoint, with the key read from wherever the caller says - as listProfiles hands it over. */
 function apiProfile(secret: SecretSource = { source: "keychain" }): ProfileListItem {
   return {
     ...profile,
     api: { baseUrl: "https://gateway.example.com", authScheme: "bearer", secret },
     env: { ANTHROPIC_MODEL: "glm-4.6", CLAUDE_CODE_MAX_CONTEXT_TOKENS: "262144" },
+    model: "glm-4.6",
   };
 }
 
@@ -124,6 +125,37 @@ describe("ProfilePreview for an API profile", () => {
       expect(frame).toContain("command");
       expect(frame).not.toContain("op://vault/key");
     });
+  });
+});
+
+/**
+ * The model, which `list` shows too. Both read `ProfileListItem.model` - worked out once, in
+ * listProfiles - and format it with `formatModel`, so the two cannot disagree about which
+ * model a profile is on, or about what "none" looks like.
+ */
+describe("ProfilePreview model", () => {
+  /** The value on the Model row, or undefined when the panel has no such row. */
+  const modelRow = (item: ProfileListItem) =>
+    panelFor(item)
+      .split("\n")
+      .find((line) => line.includes("Model"))
+      ?.replace(/^.*Model\s+/, "")
+      .replace(/[\s│]+$/, "");
+
+  it("shows the model listProfiles worked out, not a second reading of the env map", () => {
+    // A blank ANTHROPIC_MODEL pins nothing, and listProfiles says so by leaving `model` out.
+    expect(modelRow({ ...endpoint, env: { ANTHROPIC_MODEL: "  " }, model: undefined })).toBe("—");
+    expect(modelRow({ ...endpoint, env: {}, model: "glm-4.6" })).toBe("glm-4.6");
+  });
+
+  it("shows a subscription profile's model when it pins one", () => {
+    expect(modelRow({ ...subscription, model: "claude-opus-5-5" })).toBe("claude-opus-5-5");
+  });
+
+  it("has no model row for a subscription profile that pins none", () => {
+    // For an endpoint a missing model is worth a dash; for an account it is the usual case,
+    // and Claude Code picks the model itself.
+    expect(modelRow(subscription)).toBeUndefined();
   });
 });
 

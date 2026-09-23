@@ -1607,6 +1607,69 @@ describe("listProfiles with an API profile", () => {
     expect(json).not.toContain("keychain");
   });
 
+  // The model is the one value from the env map the listing carries: it is what `list` is
+  // asked to show, and it is not a credential. The rest of the map stays out - it is free
+  // form, and ANTHROPIC_CUSTOM_HEADERS in it can be an Authorization header.
+  it("carries the model, and nothing else from the env map or the endpoint", async () => {
+    const h = await harness();
+    await h.service.addApiProfile(
+      apiOptions({
+        env: {
+          ANTHROPIC_MODEL: "z-ai/glm-5.3",
+          ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer sk-in-a-header-0005",
+          API_TIMEOUT_MS: "600000",
+        },
+      }),
+    );
+
+    const items = await h.service.listProfiles();
+    const json = JSON.stringify(items);
+
+    expect(items.find((item) => item.name === "claude:glm")?.model).toBe("z-ai/glm-5.3");
+    for (const absent of [KEY, "sk-in-a-header", "ANTHROPIC_CUSTOM_HEADERS", "API_TIMEOUT_MS", "gpu-box:30000/"]) {
+      expect(json, absent).not.toContain(absent);
+    }
+    expect(json).not.toContain("secret");
+    expect(json).not.toContain("baseUrl");
+  });
+
+  it("carries a subscription profile's model too, and none for a profile that pins none", async () => {
+    const h = await harness();
+    await h.service.updateProfileEnv("claude:default", { set: { ANTHROPIC_MODEL: "claude-opus-5-5" } });
+    await h.service.addApiProfile(apiOptions());
+
+    const items = await h.service.listProfiles();
+
+    expect(items.find((item) => item.name === "claude:default")?.model).toBe("claude-opus-5-5");
+    // Absent rather than null or "", so `list --json` gains no key for it.
+    expect(items.find((item) => item.name === "claude:glm")).not.toHaveProperty("model");
+  });
+
+  it("reads a blank model as none", async () => {
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions({ env: { ANTHROPIC_MODEL: "  " } }));
+
+    const items = await h.service.listProfiles();
+
+    expect(items.find((item) => item.name === "claude:glm")).not.toHaveProperty("model");
+  });
+
+  it("gives a Codex profile no model, since Codex does not read ANTHROPIC_MODEL", async () => {
+    const h = await harness();
+    const registry = h.registry();
+    registry.profiles["codex:personal"] = {
+      tool: "codex",
+      configDir: path.join(h.home, ".codex-personal"),
+      email: "me@example.com",
+      env: { ANTHROPIC_MODEL: "z-ai/glm-5.3" },
+    };
+    writeFileSync(h.registryPath, JSON.stringify(registry));
+
+    const items = await h.service.listProfiles();
+
+    expect(items.find((item) => item.name === "codex:personal")).not.toHaveProperty("model");
+  });
+
   // The TUI's preview panel says what an API profile is - endpoint, model, and where the
   // key is read from - so it asks for what the listing above deliberately leaves out. An
   // option rather than a wider listing, because the listing above is what `list --json`

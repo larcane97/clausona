@@ -61,7 +61,7 @@ function helpFlag(args: string[]) {
  * `--base-urls` is still refused - a bare `--base-url` prefix would accept it.
  */
 const ADD_VALUE_FLAGS = ["--from", "--base-url", "--model", "--auth", "--key-from", "--label", "--set"];
-const CONFIG_VALUE_FLAGS = ["--set", "--unset", "--key-from", "--base-url", "--auth", "--label"];
+const CONFIG_VALUE_FLAGS = ["--set", "--unset", "--model", "--key-from", "--base-url", "--auth", "--label"];
 
 /** Every `add` option that only means anything for an API profile. */
 const API_ONLY_FLAGS = ["--base-url", "--model", "--auth", "--key-from", "--label", "--set"];
@@ -120,7 +120,7 @@ const ADD_API_USAGE =
   "Usage: clausona add <profile> --api --base-url <url> [--model <id>] [--auth bearer|api-key] [--key-from <source>]";
 
 const CONFIG_USAGE =
-  "Usage: clausona config <profile> [--set KEY=VALUE] [--unset KEY] [--base-url <url>] [--auth bearer|api-key] [--label <name>] [--key] [--edit] [--show] [--merge-sessions | --separate-sessions]";
+  "Usage: clausona config <profile> [--model <id>] [--set KEY=VALUE] [--unset KEY] [--base-url <url>] [--auth bearer|api-key] [--label <name>] [--key] [--edit] [--show] [--merge-sessions | --separate-sessions]";
 
 /**
  * An argument nobody asked for is usually a key someone expected an option to take.
@@ -188,6 +188,25 @@ function parseEnvName(input: string, flag: string): string {
   }
   return input;
 }
+
+/**
+ * `--model`, for `add` and `config` alike: the id, trimmed. A blank one is refused rather
+ * than stored or read as "clear it" - `--model "$MODEL"` with MODEL unset would otherwise
+ * pin an empty model, or drop the profile's own without a word. Clearing has its own
+ * spelling, and the message names it.
+ */
+function parseModel(input: string): string {
+  const model = input.trim();
+  if (model === "") {
+    throw new Error(
+      "--model needs a model id. Leave it out to pin none, or clear one with clausona config <profile> --unset ANTHROPIC_MODEL.",
+    );
+  }
+  return model;
+}
+
+/** `--model` writes ANTHROPIC_MODEL, so naming the variable as well is two answers to one question. */
+const MODEL_TWICE = "ANTHROPIC_MODEL is what --model sets. Pass one or the other.";
 
 /** `--auth`, for `add` and `config` alike. */
 function parseAuthScheme(input: string): "bearer" | "api-key" {
@@ -445,7 +464,8 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${accent("--merge-sessions".padEnd(18))}${dim("Share session history across profiles (default: separated)")}`,
         `    ${accent("--api".padEnd(18))}${dim("Create an API profile instead of a subscription login")}`,
         `    ${accent("--base-url".padEnd(18))}${dim("API endpoint, http:// or https:// (required with --api)")}`,
-        `    ${accent("--model".padEnd(18))}${dim("Model id, stored as ANTHROPIC_MODEL")}`,
+        `    ${accent("--model".padEnd(18))}${dim("Model id, stored as ANTHROPIC_MODEL. Change it later with")}`,
+        `    ${" ".repeat(18)}${dim("`clausona config <profile> --model <id>`.")}`,
         `    ${accent("--auth".padEnd(18))}${dim("bearer | api-key (default: api-key for anthropic.com, else bearer)")}`,
         `    ${accent("--key-from".padEnd(18))}${dim('keychain (default) | env:NAME | command:"<shell command>"')}`,
         `    ${accent("--label".padEnd(18))}${dim("Display name shown in list (default: the endpoint host)")}`,
@@ -504,6 +524,13 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("subscription window to report. It is not queried, so --refresh and")}`,
         `    ${dim("--no-quota change nothing for it. COST and INPUT/OUTPUT still count what")}`,
         `    ${dim("clausona recorded locally.")}`,
+        "",
+        `  ${bold("MODEL")}`,
+        `    ${dim("The model each profile pins, which is its ANTHROPIC_MODEL. A dash means it")}`,
+        `    ${dim("pins none, and Claude Code picks. The column appears once some profile pins")}`,
+        `    ${dim("a model. On a narrow terminal it outlasts the token counts and cost, and goes")}`,
+        `    ${dim("before the quota columns or their reset times would. --json carries it as")}`,
+        `    ${dim("`model`. Change it with `clausona config <profile> --model <id>`.")}`,
         "",
       ].join("\n");
 
@@ -589,6 +616,7 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("USAGE")}`,
         helpUsage("clausona config <profile> --merge-sessions | --separate-sessions"),
+        helpUsage("clausona config <profile> --model <id>"),
         helpUsage("clausona config <profile> --set KEY=VALUE [--set ...] [--unset KEY]"),
         helpUsage("clausona config <profile> [--base-url <url>] [--auth <scheme>] [--label <name>]"),
         helpUsage("clausona config <profile> --key | --key-from <source>"),
@@ -601,6 +629,7 @@ function subcommandHelpText(command: string): string | undefined {
         `  ${bold("OPTIONS")}`,
         `    ${accent("--merge-sessions".padEnd(22))}${dim("Share sessions with primary profile")}`,
         `    ${accent("--separate-sessions".padEnd(22))}${dim("Keep sessions isolated (default)")}`,
+        `    ${accent("--model".padEnd(22))}${dim("The model the profile uses, stored as ANTHROPIC_MODEL")}`,
         `    ${accent("--set".padEnd(22))}${dim("Set an advanced env setting; repeatable")}`,
         `    ${accent("--unset".padEnd(22))}${dim("Remove an advanced env setting; repeatable")}`,
         `    ${accent("--base-url".padEnd(22))}${dim("Point an API profile at another endpoint, http:// or https://")}`,
@@ -613,6 +642,14 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `    ${dim("One change per call, except --show, which only reads. --base-url, --auth and")}`,
         `    ${dim("--label count as one: together they are the endpoint `add --api` set up.")}`,
+        `    ${dim("--model counts with --set and --unset, since it is a setting too.")}`,
+        "",
+        `  ${bold("THE MODEL")}`,
+        `    ${dim("--model writes ANTHROPIC_MODEL in the env map, the variable Claude Code reads;")}`,
+        `    ${dim("there is no second copy, so --set and --edit change the same value. It works on")}`,
+        `    ${dim("subscription profiles too, not on Codex ones, which never read it. An empty")}`,
+        `    ${dim("--model is refused; --unset ANTHROPIC_MODEL clears it. `claude --model <id>`")}`,
+        `    ${dim("changes the model for one session without touching the profile.")}`,
         "",
         `  ${bold("CHANGING THE ENDPOINT")}`,
         `    ${dim("Each value is checked by the rule add --api uses. The key is kept, so after")}`,
@@ -623,6 +660,7 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("email, so all three refuse one.")}`,
         "",
         `  ${bold("EXAMPLES")}`,
+        helpUsage("clausona config claude:gw --model z-ai/glm-5.3-flash"),
         helpUsage("clausona config claude:gw --set CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144"),
         helpUsage("clausona config claude:gw --base-url http://localhost:8000"),
         helpUsage("clausona config claude:gw --unset ANTHROPIC_MODEL"),
@@ -922,6 +960,7 @@ export async function runCommand(command: string, args: string[]) {
     case "config": {
       const setPairs = optionValues(args, "--set");
       const unsetKeys = optionValues(args, "--unset").map((key) => parseEnvName(key, "--unset"));
+      const modelArg = optionValue(args, "--model");
       const keyFrom = optionValue(args, "--key-from");
       const changeKey = args.includes("--key") || keyFrom !== undefined;
       const openEditor = args.includes("--edit");
@@ -930,7 +969,8 @@ export async function runCommand(command: string, args: string[]) {
       const baseUrl = optionValue(args, "--base-url");
       const authArg = optionValue(args, "--auth");
       const label = optionValue(args, "--label");
-      const changeEnv = setPairs.length > 0 || unsetKeys.length > 0;
+      // --model is a setting in the env map, so it is the same change as --set and --unset.
+      const changeEnv = setPairs.length > 0 || unsetKeys.length > 0 || modelArg !== undefined;
       const changeSessions = mergeSessions || separateSessions;
       // One change, not three: together they are what `add --api` set about the endpoint.
       const changeEndpoint = baseUrl !== undefined || authArg !== undefined || label !== undefined;
@@ -955,14 +995,28 @@ export async function runCommand(command: string, args: string[]) {
       if (changes === 0) throw new Error(CONFIG_USAGE);
       if (changes > 1) {
         throw new Error(
-          "Change one thing at a time: --set/--unset, --base-url/--auth/--label, --key/--key-from, --edit, or --merge-sessions/--separate-sessions.",
+          "Change one thing at a time: --model/--set/--unset, --base-url/--auth/--label, --key/--key-from, --edit, or --merge-sessions/--separate-sessions.",
         );
       }
 
       if (changeEnv) {
         const set: Record<string, string> = {};
+        if (modelArg !== undefined) {
+          // Allowed on a subscription profile too: Claude Code honours a pinned model there,
+          // and refusing one kind would be an accident of where the flag is parsed. Codex is
+          // another matter - it never reads the variable, so storing it would report success
+          // and change nothing Codex does.
+          if (profile.tool !== "claude") {
+            throw new Error(
+              `--model sets ANTHROPIC_MODEL, which only Claude Code reads, and '${ref.id}' is a Codex profile.`,
+            );
+          }
+          if (unsetKeys.includes("ANTHROPIC_MODEL")) throw new Error(MODEL_TWICE);
+          set.ANTHROPIC_MODEL = parseModel(modelArg);
+        }
         for (const assignment of setPairs) {
           const [key, value] = parseAssignment(assignment, "--set");
+          if (key === "ANTHROPIC_MODEL" && modelArg !== undefined) throw new Error(MODEL_TWICE);
           set[key] = value;
         }
         // updateProfileEnv validates every entry through validateEnvEntry before it saves.
@@ -1105,12 +1159,10 @@ export async function runCommand(command: string, args: string[]) {
         // a typed key. This is the same validator addApiProfile runs, not a second rule.
         const env: Record<string, string> = {};
         const model = optionValue(args, "--model");
-        if (model !== undefined) env.ANTHROPIC_MODEL = model;
+        if (model !== undefined) env.ANTHROPIC_MODEL = parseModel(model);
         for (const assignment of optionValues(args, "--set")) {
           const [key, value] = parseAssignment(assignment, "--set");
-          if (key === "ANTHROPIC_MODEL" && model !== undefined) {
-            throw new Error("ANTHROPIC_MODEL is what --model sets. Pass one or the other.");
-          }
+          if (key === "ANTHROPIC_MODEL" && model !== undefined) throw new Error(MODEL_TWICE);
           const result = validateEnvEntry(key, value);
           if (!result.ok) throw new Error(result.error);
           env[key] = value;

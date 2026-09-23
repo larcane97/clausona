@@ -147,6 +147,22 @@ export function displayName(profile: Pick<Profile, "email" | "label">): string {
 }
 
 /**
+ * The model a profile pins. There is no field for it: it is the env map's ANTHROPIC_MODEL,
+ * the variable Claude Code reads, which `add --model` and `config --model` write and
+ * `--set`, `--unset` and `--edit` can change as well. One place, so nothing can disagree
+ * with it. This is the one reading of it, for every surface that shows a model.
+ *
+ * Undefined for a Codex profile, which does not read the variable, and for a blank value -
+ * blank-aware for the same reason as `displayName`, since only a hand edit or `--set`
+ * stores one and a blank cell reads as a rendering bug.
+ */
+export function profileModel(profile: Pick<Profile, "tool" | "env">): string | undefined {
+  if (profile.tool !== "claude") return undefined;
+  const model = profile.env?.ANTHROPIC_MODEL;
+  return model?.trim() ? model : undefined;
+}
+
+/**
  * `unset` lists variables that must be absent from the tool's environment, whatever the
  * caller's shell holds. It never names a key that is also in `env`.
  */

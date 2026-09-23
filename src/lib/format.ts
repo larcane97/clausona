@@ -68,6 +68,15 @@ export function quotaSeverity(quota: QuotaSnapshot | undefined): "healthy" | "wa
   return "healthy";
 }
 
+/**
+ * A profile's model as every surface shows it: the id as stored, or a dash when none is
+ * pinned. `list` and the dashboard's preview both go through this, with the id worked out
+ * once by `profileModel`, so they cannot disagree about a profile's model or about "none".
+ */
+export function formatModel(model: string | undefined): string {
+  return model ?? "—";
+}
+
 export function formatUsage(summary: UsageSummary) {
   return `${formatCurrency(summary.cost)} | in ${formatCount(summary.inputTokens)} | out ${formatCount(summary.outputTokens)}`;
 }
@@ -188,7 +197,7 @@ export function quotaNotes(items: ProfileListItem[]): string[] {
 }
 
 // ─── List ───────────────────────────────────────────────────────────
-type ColumnKey = "profile" | "account" | "session" | "weekly" | "cost" | "input" | "output";
+type ColumnKey = "profile" | "account" | "model" | "session" | "weekly" | "cost" | "input" | "output";
 
 const QUOTA_WIDTH_WITH_RESET = 11;
 const QUOTA_WIDTH_PLAIN = 7;
@@ -204,6 +213,7 @@ type Layout = {
 const LABELS: Record<ColumnKey, string> = {
   profile: "PROFILE",
   account: "ACCOUNT",
+  model: "MODEL",
   session: "5H",
   weekly: "7D",
   cost: "COST",
@@ -211,7 +221,8 @@ const LABELS: Record<ColumnKey, string> = {
   output: "OUTPUT",
 };
 
-const FIXED_WIDTHS = { cost: 12, input: 14, output: 10 } as const;
+/** The model column holds a gateway id such as `openrouter/z-ai/glm-5.3`; longer ones are cut. */
+const FIXED_WIDTHS = { model: 24, cost: 12, input: 14, output: 10 } as const;
 
 function columnWidth(key: ColumnKey, layout: Layout): number {
   switch (key) {
@@ -237,20 +248,35 @@ function layoutWidth(layout: Layout): number {
  * Progressively narrower fallbacks, widest first. Cost and token counts give way
  * before the quota pair does: quota is why you run the command, and the spend figures
  * are still available in full from `clausona usage`.
+ *
+ * The model column, shown once some profile pins a model, sits in front of all of that.
+ * Every layout carrying it is tried first - dropping token counts, then cost, to keep it -
+ * and each one has what the table would otherwise have at its best: the quota pair with
+ * reset times, and full-width names. Once none of them fits, the list is exactly the one
+ * without a model. So the model never costs the quota columns, their reset times or the
+ * name a single character; it goes first, and below its narrowest layout the table is the
+ * one it always was. It does outrank spend, which `clausona usage` has in full, while
+ * nothing else lists every profile's model.
  */
-function candidateLayouts(showQuota: boolean): Layout[] {
+function candidateLayouts(showQuota: boolean, showModel = false): Layout[] {
   const base = { profileWidth: 20, accountWidth: 32 };
   const tail: ColumnKey[][] = [["cost", "input", "output"], ["cost", "input"], ["cost"], []];
+  const quota: ColumnKey[] = showQuota ? ["session", "weekly"] : [];
+
+  const withModel: Layout[] = showModel
+    ? tail.map((extra) => ({ keys: ["profile", "account", "model", ...quota, ...extra], reset: showQuota, ...base }))
+    : [];
 
   if (!showQuota) {
     return [
+      ...withModel,
       ...tail.map((extra) => ({ keys: ["profile", "account", ...extra] as ColumnKey[], reset: false, ...base })),
       { keys: ["profile", "account", "cost"], reset: false, profileWidth: 14, accountWidth: 22 },
     ];
   }
 
-  const quota: ColumnKey[] = ["session", "weekly"];
   return [
+    ...withModel,
     ...tail.map((extra) => ({
       keys: ["profile", "account", ...quota, ...extra] as ColumnKey[],
       reset: true,
@@ -262,8 +288,8 @@ function candidateLayouts(showQuota: boolean): Layout[] {
 }
 
 /** Widest layout that fits; the narrowest is used when even that overflows. */
-export function pickLayout(showQuota: boolean, available: number): Layout {
-  const layouts = candidateLayouts(showQuota);
+export function pickLayout(showQuota: boolean, available: number, showModel = false): Layout {
+  const layouts = candidateLayouts(showQuota, showModel);
   return layouts.find((layout) => layoutWidth(layout) <= available) ?? layouts[layouts.length - 1];
 }
 
@@ -272,10 +298,12 @@ export function pickLayout(showQuota: boolean, available: number): Layout {
  * to drop, so rows are allowed to overflow rather than losing the profile name.
  */
 export const LIST_MIN_WIDTH = Math.max(
-  ...[true, false].map((showQuota) => {
-    const layouts = candidateLayouts(showQuota);
-    return layoutWidth(layouts[layouts.length - 1]);
-  }),
+  ...[true, false].flatMap((showQuota) =>
+    [true, false].map((showModel) => {
+      const layouts = candidateLayouts(showQuota, showModel);
+      return layoutWidth(layouts[layouts.length - 1]);
+    }),
+  ),
 );
 
 function quotaCell(
@@ -305,10 +333,12 @@ export function renderList(items: ProfileListItem[], options: { width?: number }
     return a.name.localeCompare(b.name);
   });
 
-  // Quota columns are only worth their width once something has been fetched.
+  // Quota columns are only worth their width once something has been fetched, and the model
+  // column once something pins a model - so a table with neither is the one it always was.
   const showQuota = sorted.some((item) => item.quota);
+  const showModel = sorted.some((item) => item.model !== undefined);
   const available = options.width ?? process.stdout.columns ?? 120;
-  const layout = pickLayout(showQuota, available);
+  const layout = pickLayout(showQuota, available, showModel);
 
   const widths = layout.keys.map((key) => columnWidth(key, layout));
   const headerLine = `    ${layout.keys.map((key, i) => secondary(LABELS[key].padEnd(widths[i]))).join("")}`;
@@ -335,6 +365,11 @@ export function renderList(items: ProfileListItem[], options: { width?: number }
           // neither — a blank cell there reads as a bug rather than as "nothing to show".
           const account = truncate(displayName(item).trim() || "—", layout.accountWidth - 1);
           return item.isActive ? account : secondary(account);
+        }
+        case "model": {
+          const model = truncate(formatModel(item.model), FIXED_WIDTHS.model - 1);
+          if (item.model === undefined) return dim(model);
+          return item.isActive ? model : secondary(model);
         }
         case "session":
           return quotaCell(item.quota?.session, item.quota?.state, layout.reset, now);

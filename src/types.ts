@@ -123,6 +123,12 @@ export type ProfileListItem = {
   isPrimary: boolean;
   isActive: boolean;
   mergeSessions?: boolean;
+  /**
+   * The model the profile pins: its env map's ANTHROPIC_MODEL, worked out by `profileModel`.
+   * Always listed, unlike `env` - it is what `list` is asked to show, and not a credential.
+   * Absent when none is pinned.
+   */
+  model?: string;
   /** Present for API profiles. `secret` names where the key is read from, never the key. */
   api?: ApiEndpoint;
   /** Free-form environment overrides, as stored. */
