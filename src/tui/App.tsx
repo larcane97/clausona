@@ -23,7 +23,7 @@ import {
   BRACKETED_PASTE_OFF,
   BRACKETED_PASTE_ON,
   EMPTY_SECRET_INPUT,
-  hasInnerWhitespace,
+  keyTextProblem,
   PASTE_END,
   PASTE_START,
   readSecretChunk,
@@ -59,6 +59,7 @@ import {
   fieldValue,
   isTypingField,
   KEY_HAS_WHITESPACE,
+  KEY_NOT_PRINTABLE,
   keyInputRefusal,
   keyReadRefusal,
   liveApiFieldError,
@@ -937,11 +938,13 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     // be reached through the keyboard now (see `keyInputRefusal`); they stay because what they
     // guard is a credential stored wrong.
     const refusal = keyInputRefusal(secretInput.current, canReadKeyInput);
+    const textProblem = keyTextProblem(apiKey);
     if (refusal) errors.key = refusal;
-    else if (hasInnerWhitespace(apiKey)) {
-      // Ruling 98, the prompt's rule: not a key but two things run together, which nothing on
-      // screen shows - so it goes, and the message says to paste the key alone.
-      errors.key = KEY_HAS_WHITESPACE;
+    else if (textProblem) {
+      // The prompt's rule: whitespace inside is two things run together (Ruling 98), and a
+      // character outside printable ASCII came along with the key from wherever it was copied.
+      // Nothing on screen shows either - so it goes, and the message says to paste the key alone.
+      errors.key = textProblem === "whitespace" ? KEY_HAS_WHITESPACE : KEY_NOT_PRINTABLE;
       clearApiKey();
     }
     releaseApiInput();

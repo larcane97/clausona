@@ -323,6 +323,26 @@ describe("promptSecret and a pasted key", () => {
     await expect(answer).resolves.toBe(KEY);
   });
 
+  /**
+   * An API key is printable ASCII. What a web page or a chat copies along with one - an invisible
+   * space, an accent, a curly quote - cannot be seen at a prompt that echoes nothing, and macOS's
+   * `security` prints such a key back as hex, which was then sent as the key.
+   */
+  it.each([
+    ["an invisible space", `\u001b[200~${KEY.slice(0, 8)}​${KEY.slice(8)}\u001b[201~\r`],
+    ["an accented letter", `${KEY}é\r`],
+  ])("refuses a key with %s in it, and says why", async (_case, input) => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type(input);
+
+    expect(await answerWithin(answer)).toMatch(
+      /^rejected: Error: Could not read the key: it has a character outside printable ASCII/,
+    );
+    expect(tty.rawModeCalls).toEqual([true, false]);
+  });
+
   it("refuses a paste whose end arrives without its start, rather than returning its back half", async () => {
     // The key field's rule, through the same reader: what came before the closing bracket is
     // the tail of something whose head went elsewhere.
@@ -446,6 +466,14 @@ describe("promptSecret off a terminal", () => {
 
     await expect(promptSecret(PROMPT, piped)).rejects.toThrow(
       /^Could not read the key: what was piped in has a space or a line break inside it/,
+    );
+  });
+
+  it("refuses what was piped in when it has a character outside printable ASCII", async () => {
+    const piped = pipe([Buffer.from(`${KEY.slice(0, 8)}‑${KEY.slice(8)}\n`, "utf8")]);
+
+    await expect(promptSecret(PROMPT, piped)).rejects.toThrow(
+      /^Could not read the key: what was piped in has a character outside printable ASCII/,
     );
   });
 

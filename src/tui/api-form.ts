@@ -61,6 +61,13 @@ export const KEY_REQUIRED = "Enter the API key. It goes to the credential store.
 export const KEY_HAS_WHITESPACE = "Paste the key again - it had a space or a line break inside.";
 
 /**
+ * The key had a character outside printable ASCII - an invisible space or a curly quote a web
+ * page copied with it. `keyTextProblem` is the rule, the prompt's too; the field is cleared,
+ * for the same reason as above.
+ */
+export const KEY_NOT_PRINTABLE = "Paste the key again - it had a non-ASCII or invisible character.";
+
+/**
  * The terminal sent something the key field's reader cannot measure, so where it ended is a
  * guess. The situation, and the refusal, are `prompt-secret.ts`'s; the words are not, because
  * the prompt's way out is to pipe the key in and a form has no pipe behind it.
@@ -96,6 +103,7 @@ export const KEY_FIELD_MESSAGES = {
   MISPLACED_KEY,
   KEY_REQUIRED,
   KEY_HAS_WHITESPACE,
+  KEY_NOT_PRINTABLE,
   UNREADABLE_KEY_INPUT,
   LOST_PASTE_START,
   PASTE_SKIPPED,

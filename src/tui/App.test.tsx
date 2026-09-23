@@ -64,6 +64,7 @@ vi.setConfig({ testTimeout: 15_000 });
 import { ADD_METHODS, App } from "./App.js";
 import {
   KEY_HAS_WHITESPACE,
+  KEY_NOT_PRINTABLE,
   KEY_REQUIRED,
   LOST_PASTE_START,
   MISPLACED_KEY,
@@ -891,6 +892,28 @@ describe("App add-profile: API endpoint", () => {
       expect(vi.mocked(addApiProfile)).not.toHaveBeenCalled();
       instance.unmount();
     });
+  });
+
+  // The prompt's rule (prompt-secret.ts): behind the mask an invisible space is as unseen as
+  // the rest of the key, and macOS's Keychain would hand such a key back as hex.
+  it("refuses a key with a character outside printable ASCII, and clears the field", async () => {
+    const { addApiProfile } = await import("../lib/service.js");
+    vi.mocked(addApiProfile).mockClear();
+    const instance = await openApiForm();
+    await press(instance, "gateway");
+    await moveTo(instance, "Endpoint");
+    await press(instance, "https://gateway.example.com");
+    await moveTo(instance, "API key");
+    await press(instance, `\u001b[200~${KEY.slice(0, 8)}​${KEY.slice(8)}\u001b[201~`);
+    await waitForFrame(instance.lastFrame, (f) => f.includes(MASK));
+
+    await moveTo(instance, "Create profile");
+    await press(instance, ENTER);
+    const refused = await waitForFrame(instance.lastFrame, (f) => f.includes(KEY_NOT_PRINTABLE));
+
+    expect(refused).not.toContain(MASK);
+    expect(vi.mocked(addApiProfile)).not.toHaveBeenCalled();
+    instance.unmount();
   });
 
   it("does not print the key when the save fails with a message carrying it", async () => {

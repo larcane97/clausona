@@ -110,6 +110,29 @@ const TYPED_INNER_WHITESPACE =
 const PIPED_INNER_WHITESPACE =
   'Could not read the key: what was piped in has a space or a line break inside it, and an API key has neither. Nothing was saved. Pipe only the key: printf %s "$KEY" | clausona … , or read it with --key-from command:"…", which takes the first line the command prints.';
 
+const TYPED_UNPRINTABLE =
+  'Could not read the key: it has a character outside printable ASCII - an invisible space, an accent, a curly quote - and an API key has none. A copy from a web page or a chat can bring one along. Nothing was saved. Paste only the key, or pipe it in: printf %s "$KEY" | clausona … .';
+
+const PIPED_UNPRINTABLE =
+  'Could not read the key: what was piped in has a character outside printable ASCII - an invisible space, an accent, a curly quote - and an API key has none. Nothing was saved. Pipe only the key: printf %s "$KEY" | clausona … .';
+
+/** The refusal for a key `keyTextProblem` finds fault with, in the words of the way it came in. */
+function keyTextRefusal(key: string, route: "typed" | "piped"): string | undefined {
+  const problem = keyTextProblem(key);
+  switch (problem) {
+    case undefined:
+      return undefined;
+    case "whitespace":
+      return route === "typed" ? TYPED_INNER_WHITESPACE : PIPED_INNER_WHITESPACE;
+    case "unprintable":
+      return route === "typed" ? TYPED_UNPRINTABLE : PIPED_UNPRINTABLE;
+    default: {
+      const unhandled: never = problem;
+      throw new Error(`unhandled key text problem: ${JSON.stringify(unhandled)}`);
+    }
+  }
+}
+
 /**
  * Whether a key has whitespace inside it once its ends are trimmed - Ruling 98, the one rule for
  * a key typed at the prompt, pasted into it or into the TUI's key field, or piped in.
@@ -124,6 +147,24 @@ const PIPED_INNER_WHITESPACE =
  */
 export function hasInnerWhitespace(key: string): boolean {
   return /\s/.test(key.trim());
+}
+
+/**
+ * What is wrong with a key's characters, if anything - the one rule every way a key is given
+ * goes through: typed, pasted into the prompt or the TUI's key field, or piped in.
+ *
+ * - `"whitespace"`: `hasInnerWhitespace`, Ruling 98.
+ * - `"unprintable"`: a character outside printable ASCII (0x20-0x7e). An API key has none. What
+ *   has one is a key that brought something with it from a web page or a chat - an invisible
+ *   space, a curly quote, a non-breaking hyphen - which a prompt that echoes nothing, or a
+ *   field behind a mask, never shows. macOS's `security` prints such a value back as hex, so
+ *   the Keychain handed that hex over as the key; elsewhere it is not a valid header value.
+ *   Either way it was "Added" and then a 401.
+ */
+export function keyTextProblem(key: string): "whitespace" | "unprintable" | undefined {
+  if (hasInnerWhitespace(key)) return "whitespace";
+  if (/[^\x20-\x7e]/.test(key.trim())) return "unprintable";
+  return undefined;
 }
 
 type EscapeScan =
@@ -409,8 +450,8 @@ export type PromptStreams = { input?: SecretInputStream; output?: SecretOutputSt
 /**
  * The prompt itself. Returns the trimmed key, which may be empty - the caller decides
  * what an empty answer means, because "nothing was piped in" and "Enter was pressed at
- * the prompt" need different advice. A key with whitespace left inside it is refused, piped
- * or typed (`hasInnerWhitespace`).
+ * the prompt" need different advice. A key with whitespace left inside it, or a character
+ * outside printable ASCII, is refused, piped or typed (`keyTextProblem`).
  */
 export async function promptSecret(prompt: string, streams: PromptStreams = {}): Promise<string> {
   const input = streams.input ?? process.stdin;
@@ -427,7 +468,8 @@ async function readPipedSecret(input: SecretInputStream): Promise<string> {
     text += typeof chunk === "string" ? chunk : decoder.write(chunk);
   }
   const key = `${text}${decoder.end()}`.trim();
-  if (hasInnerWhitespace(key)) throw new Error(PIPED_INNER_WHITESPACE);
+  const refusal = keyTextRefusal(key, "piped");
+  if (refusal) throw new Error(refusal);
   return key;
 }
 
@@ -479,11 +521,12 @@ function readTypedSecret(prompt: string, input: SecretInputStream, output: Secre
         reject(new Error(message));
       });
 
-    /** The key as typed, trimmed at its ends - or refused, with whitespace left inside it. */
+    /** The key as typed, trimmed at its ends - or refused, by `keyTextProblem`'s rule. */
     const submit = () => {
       const key = typed.trim();
-      if (hasInnerWhitespace(key)) {
-        refuse(TYPED_INNER_WHITESPACE);
+      const refusal = keyTextRefusal(key, "typed");
+      if (refusal) {
+        refuse(refusal);
         return;
       }
       finish(() => {
@@ -570,8 +613,9 @@ function readTypedSecret(prompt: string, input: SecretInputStream, output: Secre
           return;
         }
         const key = typed.trim();
-        if (hasInnerWhitespace(key)) {
-          reject(new Error(TYPED_INNER_WHITESPACE));
+        const refusal = keyTextRefusal(key, "typed");
+        if (refusal) {
+          reject(new Error(refusal));
           return;
         }
         resolve(key);

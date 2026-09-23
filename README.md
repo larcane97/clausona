@@ -297,7 +297,10 @@ printf %s "$MY_API_KEY" | clausona config claude:gw --key     # rotate it later
 
 The key's ends are trimmed, so one piped or pasted with its newline is fine. A key with a
 space or a line break inside it is refused, whether it was piped, typed, or pasted into the
-dashboard's form: an API key has neither, and two lines run together are not a key.
+dashboard's form: an API key has neither, and two lines run together are not a key. So is a
+key with any character outside printable ASCII — an invisible space, an accent or a curly
+quote that a web page or a chat copied along with it. No API key has one, and the macOS
+Keychain would hand such a key back as hex.
 `pass show` prints more than the key; `--key-from command:"pass show gw"` takes only its
 first line.
 
