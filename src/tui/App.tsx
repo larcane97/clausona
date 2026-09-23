@@ -258,12 +258,16 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     await new Promise((r) => setTimeout(r, 50));
     process.stdin.setRawMode?.(false);
     process.stdout.write("\x1B[2J\x1B[0;0H"); // clear screen
+    let succeeded = false;
     try {
-      return await fn();
+      const result = await fn();
+      succeeded = true;
+      return result;
     } finally {
       // A failed login must still hand the terminal back, or the TUI stays blank and
-      // deaf to input with the error it caught never shown.
-      process.stdout.write("\x1B[2J\x1B[0;0H"); // clear screen
+      // deaf to input with the error it caught never shown. The screen is cleared only
+      // on success, so a failed child's own error output stays readable above the TUI.
+      if (succeeded) process.stdout.write("\x1B[2J\x1B[0;0H"); // clear screen
       process.stdin.setRawMode?.(true);
       process.stdin.resume();
       setSuspended(false);
@@ -454,10 +458,20 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             })();
           } else if (overlay.kind === "login") {
             void (async () => {
+              setOverlay(null);
               try {
-                setOverlay(null);
-                await suspendTuiAndRun(() => loginProfile(overlay.profileName));
-                setMessage(`${symbol.check} Re-login completed for ${overlay.profileName}`);
+                const result = await suspendTuiAndRun(() => loginProfile(overlay.profileName));
+                setMessage(
+                  result.status === "other_account"
+                    ? `${symbol.diamond} ${overlay.profileName} is now signed in as ${result.signedInAs}, not the registered ${result.profile.email}`
+                    : `${symbol.check} Re-login completed for ${overlay.profileName}`,
+                );
+              } catch (error) {
+                setMessage(`${symbol.cross} ${error instanceof Error ? error.message : String(error)}`);
+              }
+              // A sign-in can fail after it has already replaced the stored account, so the
+              // dashboard is reloaded either way.
+              try {
                 await refreshDashboard();
               } catch (error) {
                 setMessage(`${symbol.cross} ${error instanceof Error ? error.message : String(error)}`);

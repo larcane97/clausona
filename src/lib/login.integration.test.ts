@@ -137,15 +137,17 @@ describe("loginProfile", () => {
   );
 
   it(
-    "fails, naming both accounts, when a different account signed in",
+    "reports the account the sign-in landed on when it is not the registered one",
     async () => {
       const { service } = await setup({ signInAs: "b@example.com" });
 
-      const error = await service.loginProfile("claude:default").catch((e: unknown) => e);
+      const result = await service.loginProfile("claude:default");
 
-      expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toContain("b@example.com");
-      expect((error as Error).message).toContain("a@example.com");
+      expect(result).toMatchObject({
+        status: "other_account",
+        signedInAs: "b@example.com",
+        profile: { email: "a@example.com" },
+      });
     },
     SPAWN_TEST_TIMEOUT_MS,
   );
@@ -160,6 +162,9 @@ describe("isOtherAccount", () => {
     // forms of the same account must not read as different accounts.
     ["1f3c9a2e-4b5d-4e6f-8a7b-9c0d1e2f3a4b", "a@example.com", false],
     ["a@example.com", "1f3c9a2e-4b5d-4e6f-8a7b-9c0d1e2f3a4b", false],
+    // Two account ids are the same form, so they can be compared exactly.
+    ["1f3c9a2e-4b5d-4e6f-8a7b-9c0d1e2f3a4b", "7d8e9f0a-1b2c-4d3e-9f4a-5b6c7d8e9f0a", true],
+    ["1f3c9a2e-4b5d-4e6f-8a7b-9c0d1e2f3a4b", "1f3c9a2e-4b5d-4e6f-8a7b-9c0d1e2f3a4b", false],
     // Nothing could be read back, so there is nothing to compare.
     ["a@example.com", null, false],
   ])("registered %s, signed in as %s: %s", async (registered, signedInAs, expected) => {
@@ -171,13 +176,17 @@ describe("isOtherAccount", () => {
 
 describe("clausona login", () => {
   it(
-    "fails instead of reporting success when a different account signed in",
+    "warns, naming both accounts, instead of reporting success when a different account signed in",
     async () => {
-      // A thrown error is what the CLI entry point turns into stderr output and exit code
-      // 1, so `clausona login x && claude ...` stops rather than running as the wrong account.
+      // Not an error: the sign-in completed and is now in use, and a profile whose account
+      // legitimately changed would otherwise fail on every login with no way to update it.
       const { runCommand } = await setup({ signInAs: "b@example.com" });
 
-      await expect(runCommand("login", ["claude:default"])).rejects.toThrow("b@example.com");
+      const out = stripAnsi(await runCommand("login", ["claude:default"]));
+
+      expect(out).toContain("b@example.com");
+      expect(out).toContain("a@example.com");
+      expect(out).not.toContain("Token refreshed");
     },
     SPAWN_TEST_TIMEOUT_MS,
   );

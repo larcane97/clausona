@@ -1,9 +1,8 @@
-import crypto from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import path from "node:path";
 
-import { claudeJsonPathForConfigDir, isDefaultClaudeConfigDir } from "../core/paths.js";
+import { claudeJsonPathForConfigDir, isDefaultClaudeConfigDir, keychainServiceForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { parseClaudeQuota, QuotaHttpError } from "../core/quota.js";
 import type { QuotaWindows } from "../types.js";
@@ -30,12 +29,6 @@ const SESSION_SCOPED = ["projects", "jobs", "teams"] as const;
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-
-function keychainService(args: { homeDir: string; configDir: string }): string {
-  if (isDefaultClaudeConfigDir(args.homeDir, args.configDir)) return "Claude Code-credentials";
-  const hash = crypto.createHash("sha256").update(args.configDir).digest("hex").slice(0, 8);
-  return `Claude Code-credentials-${hash}`;
-}
 
 async function hasKeychain(service: string): Promise<boolean> {
   if (process.platform !== "darwin") return false;
@@ -134,7 +127,7 @@ async function readFileBlob(configDir: string): Promise<StoredCredentials | null
 
 async function readStoredBlob(configDir: string): Promise<StoredCredentials | null> {
   if (process.platform === "darwin") {
-    return readKeychainBlob(keychainService({ homeDir: homedir(), configDir }));
+    return readKeychainBlob(keychainServiceForConfigDir({ homeDir: homedir(), configDir }));
   }
   return readFileBlob(configDir);
 }
@@ -148,7 +141,7 @@ async function writeStoredBlob(configDir: string, blob: StoredCredentials): Prom
   const serialized = JSON.stringify(blob);
 
   if (process.platform === "darwin") {
-    const service = keychainService({ homeDir: homedir(), configDir });
+    const service = keychainServiceForConfigDir({ homeDir: homedir(), configDir });
     const account = await keychainAccount(service);
     const { code } = await runSecurity(["add-generic-password", "-U", "-s", service, "-a", account, "-w", serialized]);
     if (code !== 0) throw new Error(`could not write Keychain item '${service}'`);
@@ -285,7 +278,7 @@ export const claudeAdapter: ToolAdapter = {
   defaultConfigDir: (homeDir) => path.join(homeDir, ".claude"),
   configDirPattern: /^\.claude(-.+)?$/,
   readAccountInfo: readAccount,
-  keychainServiceName: keychainService,
+  keychainServiceName: keychainServiceForConfigDir,
   hasKeychainCredential: hasKeychain,
   sharedSkipSet: (mergeSessions) =>
     mergeSessions ? new Set(BASE_SHARED_LINK_SKIP) : new Set([...BASE_SHARED_LINK_SKIP, ...SESSION_SCOPED]),

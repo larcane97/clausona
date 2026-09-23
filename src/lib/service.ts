@@ -1338,16 +1338,23 @@ export async function addProfile(options: {
 }
 
 /**
- * Whether a sign-in landed on a different account than the one registered. Only two
- * email addresses are compared: Codex records the account id instead when its id_token
- * carries no email, and the two forms of one account must not read as different.
+ * Whether a sign-in landed on a different account than the one registered. Codex records
+ * the account id instead of an email when its id_token carries none, so only values of
+ * the same form are compared: two emails case-insensitively, two ids exactly. An email
+ * against an id could be the same account and is not reported.
  */
-export function isOtherAccount(registered: string, signedInAs: string | null): boolean {
-  if (!signedInAs || !registered.includes("@") || !signedInAs.includes("@")) return false;
-  return signedInAs.toLowerCase() !== registered.toLowerCase();
+export function isOtherAccount(registered: string, signedInAs: string | null): signedInAs is string {
+  if (!signedInAs) return false;
+  const isEmail = registered.includes("@");
+  if (isEmail !== signedInAs.includes("@")) return false;
+  return isEmail ? signedInAs.toLowerCase() !== registered.toLowerCase() : signedInAs !== registered;
 }
 
-export async function loginProfile(id: string) {
+export type LoginResult =
+  | { status: "ok"; profile: Profile }
+  | { status: "other_account"; profile: Profile; signedInAs: string };
+
+export async function loginProfile(id: string): Promise<LoginResult> {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
   const profile = registry.profiles[id];
@@ -1357,14 +1364,11 @@ export async function loginProfile(id: string) {
 
   // Which account signs in is decided by the browser session, not by this profile, so
   // a successful login is not proof that the registered account is the one now stored.
-  const account = await adapter.readAccountInfo(profile.configDir);
-  if (account && isOtherAccount(profile.email, account.email)) {
-    throw new Error(
-      `Signed in as ${account.email}, but ${id} is registered as ${profile.email}. ` +
-        `Sign in to ${profile.email} in your browser, then run 'clausona login ${id}' again.`,
-    );
-  }
-  return profile;
+  // Reported rather than thrown: the sign-in completed and is what the profile now uses,
+  // and a profile whose account legitimately changed would otherwise fail every time.
+  const signedInAs = (await adapter.readAccountInfo(profile.configDir))?.email ?? null;
+  if (isOtherAccount(profile.email, signedInAs)) return { status: "other_account", profile, signedInAs };
+  return { status: "ok", profile };
 }
 
 export async function removeProfile(id: string) {
