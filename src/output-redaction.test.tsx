@@ -44,7 +44,7 @@ afterEach(() => {
   expect(unexpected, "a test spawned a process").toEqual([]);
 });
 
-/** One secret per shape. Each is searched for by its first eight characters, not whole. */
+/** One secret per shape. Each is searched for by every 5-character window of it - see `leaks`. */
 const PLANTED = {
   "a credential env value": "S1HDR-1d5e",
   "a second credential env value": "S1TOK-2e6f",
@@ -55,18 +55,36 @@ const PLANTED = {
   "a base URL's query": "S2QUERY-7e1f",
   "a base URL's fragment": "S2FRAG-8f2a",
   "the query of a base URL that is otherwise valid": "S2VQ-9a3b",
-  "URL userinfo inside an env value": "S2PROXY-0b4c",
+  "URL userinfo inside an env value": "S2PRX-0b4c",
   "URL userinfo without a scheme, inside an env value": "S2BARE-1c5d",
   "a command key source's command line": "S3CMD-2d6e",
   "an env key source whose name is a key": "S3ENV-3e7f",
   "a stored key": "S4STORED-4f8a",
   "the key a command prints": "S4CMDKEY-5a9b",
   "a field added to profiles.json by hand": "S5STRAY-6b0c",
+  "the userinfo of a base URL that does not parse": "S2UNP-7c8d",
 } as const;
 
-const slice = (secret: string) => secret.slice(0, 8);
+/**
+ * Whether any part of `secret` is in `printed`. Not a prefix: a display that shows the last
+ * few characters of a hidden value - "ends in …2e6f" - leaks as surely as one that shows the
+ * first few, so every 5-character window is searched. Five, because that is the usual length
+ * of such a hint, and every planted secret is at least twice it.
+ *
+ * And a second time with JSON punctuation, whitespace and numeric keys taken out, because a
+ * string walked as if it were an object prints one character per key - `{"0":"S","1":"2"…}` -
+ * which no substring search of the raw text finds.
+ */
+function leaks(printed: string, secret: string): boolean {
+  const compact = printed.replace(/"\d+":/g, "").replace(/[\s"{}[\],:]/g, "");
+  for (let start = 0; start + 5 <= secret.length; start++) {
+    const window = secret.slice(start, start + 5);
+    if (printed.includes(window) || compact.includes(window.replace(/[\s"{}[\],:]/g, ""))) return true;
+  }
+  return false;
+}
 
-const API_IDS = ["claude:leaky", "claude:valid", "claude:cmdok", "claude:envsrc"];
+const API_IDS = ["claude:leaky", "claude:valid", "claude:cmdok", "claude:envsrc", "claude:unparse"];
 const ALL_IDS = ["claude:default", ...API_IDS];
 
 async function harness() {
@@ -138,6 +156,18 @@ async function harness() {
       email: "",
       label: "localhost:8000",
       api: api("http://localhost:8000", { source: "command", run: `echo ${PLANTED["the key a command prints"]}` }),
+    },
+    // Task 9's canonical shape: a URL that does not parse, so nothing can take it apart.
+    "claude:unparse": {
+      tool: "claude",
+      kind: "api",
+      configDir: dir("unparse"),
+      email: "",
+      label: "unparse",
+      api: api(`//admin:${PLANTED["the userinfo of a base URL that does not parse"]}@gw.example.com/api`, {
+        source: "env",
+        name: "GW_KEY",
+      }),
     },
     "claude:envsrc": {
       tool: "claude",
@@ -285,12 +315,16 @@ describe.skipIf(process.platform === "win32")("every output path, every secret s
     it(`${name} prints none of them`, async () => {
       const h = await harness();
 
-      const printed = stripAnsi(`${await produce(h)}\n${h.takeStderr()}`);
+      // The temp HOME's random suffix is the one thing in the output that could match a
+      // window by chance, so it is taken out first.
+      const printed = stripAnsi(`${await produce(h)}\n${h.takeStderr()}`)
+        .split(h.home)
+        .join("~");
 
       expect(printed.length, name).toBeGreaterThan(0);
       // Every cell of the row at once, so a failure names all the shapes that got out.
       const leaked = Object.entries(PLANTED)
-        .filter(([, secret]) => printed.includes(slice(secret)))
+        .filter(([, secret]) => leaks(printed, secret))
         .map(([shape]) => shape);
       expect(leaked, name).toEqual([]);
     });
@@ -424,7 +458,7 @@ describe.skipIf(process.platform === "win32")("_shell-env's stdout, the one path
       export ANTHROPIC_CUSTOM_HEADERS='Authorization: Bearer S1HDR-1d5e'
       export ANTHROPIC_AUTH_TOKEN='S1TOK-2e6f'
       export CLAUDE_CODE_EXTRA_BODY='{"api_key":"S1BODY-4b8c"}'
-      export HTTPS_PROXY='http://proxyuser:S2PROXY-0b4c@proxy.example.com:8080'
+      export HTTPS_PROXY='http://proxyuser:S2PRX-0b4c@proxy.example.com:8080'
       export ALL_PROXY='proxyuser:S2BARE-1c5d@proxy.example.com:1080'
       export ANTHROPIC_MODEL='z-ai/glm-5.3'"
     `);
