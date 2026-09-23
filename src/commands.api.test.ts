@@ -662,6 +662,20 @@ describe("add --api", () => {
 
       expect(Object.keys(h.registry().profiles)).toContain(`claude:${"a".repeat(64)}`);
     });
+
+    // The tool is not part of the name: `claude:` took seven of the 64 characters.
+    it("measures the name without its tool prefix", async () => {
+      const h = await harness();
+      promptAnswers.push(KEY);
+
+      await h.run("add", `claude:${"a".repeat(60)}`, "--api", "--base-url", "http://localhost:8000");
+      const message = await failure(
+        h.run("add", `claude:${"b".repeat(65)}`, "--api", "--base-url", "http://localhost:8000"),
+      );
+
+      expect(Object.keys(h.registry().profiles)).toContain(`claude:${"a".repeat(60)}`);
+      expect(message).toContain("at most 64 characters");
+    });
   });
 
   // The other shape of the same slip: the key is passed as if an option took it, and the

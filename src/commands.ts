@@ -1280,8 +1280,12 @@ export async function runCommand(command: string, args: string[]) {
       }
       // Checked before the tool is resolved, because the two messages that resolution can
       // produce both quote the input, and a key in this slot would otherwise end up as a
-      // profile id, a directory name and a line of stdout.
-      if (looksLikeCredential(input)) throw new Error(CREDENTIAL_AS_NAME_ERROR);
+      // profile id, a directory name and a line of stdout. The name is what is measured, not
+      // `claude:` with it; the whole input only when what precedes a colon is not a tool,
+      // since that message quotes it.
+      const [prefix, ...afterPrefix] = input.split(":");
+      const named = afterPrefix.length > 0 && (ALL_TOOLS as readonly string[]).includes(prefix);
+      if (looksLikeCredential(named ? afterPrefix.join(":") : input)) throw new Error(CREDENTIAL_AS_NAME_ERROR);
       if (extraArgs.length > 0) throw new Error(ADD_EXTRA_ARGUMENT);
 
       const registry = await loadRegistry();
