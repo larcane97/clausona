@@ -1192,6 +1192,18 @@ describe("config --base-url / --auth / --label", () => {
       expect(message).toContain("must not carry credentials");
     });
 
+    // The same shape with a key-shaped token is the key check's to answer, and no part of the
+    // key comes back - not even lowercased, which is how the scheme path would print it.
+    it("refuses a key given as scheme-less userinfo with the key message, printing none of it", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      const message = await failure(h.run("config", "claude:gw", "--base-url", `${KEY_SHAPED}:@gw.example.com`));
+
+      expect(message).toContain("shaped like an API key");
+      const slices = Array.from({ length: KEY_SHAPED.length - 4 }, (_, i) => KEY_SHAPED.slice(i, i + 5));
+      expect(slices.filter((slice) => message.toLowerCase().includes(slice.toLowerCase()))).toEqual([]);
+    });
+
     it("still names the scheme of a bare host:port, which carries nothing", async () => {
       const h = await harness({ "claude:gw": API_PROFILE });
 
