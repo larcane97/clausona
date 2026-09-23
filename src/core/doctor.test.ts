@@ -246,9 +246,10 @@ describe("evaluateApiHealth", () => {
         ...health({ profile: withApi(baseUrl) }).map((issue) => issue.message),
       ];
 
-      expect(messages.every((message) => /no http:\/\/ or https:\/\/ scheme/i.test(message)), messages.join("\n")).toBe(
-        true,
-      );
+      expect(
+        messages.every((message) => /no http:\/\/ or https:\/\/ scheme/i.test(message)),
+        messages.join("\n"),
+      ).toBe(true);
       expect(leakedWindows(messages, token)).toEqual([]);
       // A real scheme is still named.
       expect(baseUrlError("ftp://gpu-box")).toContain("'ftp'");
