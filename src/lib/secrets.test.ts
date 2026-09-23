@@ -60,14 +60,22 @@ describe("resolveSecret", () => {
     );
   });
 
-  it.skipIf(process.platform === "win32")("reads the first line of a command source", async () => {
-    const source = { source: "command", run: "node -e \"console.log('S3CRET'); console.log('ignored')\"" } as const;
-    await expect(resolveSecret("claude:x", source)).resolves.toBe("S3CRET");
+  // The command runs in sh -c on macOS and Linux and in powershell -NoProfile -Command on
+  // Windows, so each is written for its shell. PowerShell's own cmdlets there: -Command exits 1
+  // for a native command that failed, whatever its code, so `node -e "process.exit(3)"` could
+  // never report 3.
+  const windows = process.platform === "win32";
+
+  it("reads the first line of a command source", async () => {
+    const run = windows
+      ? "Write-Output 'S3CRET'; Write-Output 'ignored'"
+      : "node -e \"console.log('S3CRET'); console.log('ignored')\"";
+    await expect(resolveSecret("claude:x", { source: "command", run })).resolves.toBe("S3CRET");
   });
 
-  it.skipIf(process.platform === "win32")("throws when the command fails", async () => {
-    const source = { source: "command", run: 'node -e "process.exit(3)"' } as const;
-    await expect(resolveSecret("claude:x", source)).rejects.toThrow(/exited with 3/);
+  it("throws when the command fails", async () => {
+    const run = windows ? "exit 3" : 'node -e "process.exit(3)"';
+    await expect(resolveSecret("claude:x", { source: "command", run })).rejects.toThrow(/exited with 3/);
   });
 });
 

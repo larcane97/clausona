@@ -287,6 +287,16 @@ that looks like an API key is refused, and one stored before is shown as `env:<h
 left out of every message. If a real variable's name is refused, copy it to a plainer one
 (`export GW_KEY="$THAT_VARIABLE"`) and pass that.
 
+A `command:` source runs in `sh -c` on macOS and Linux, and in
+`powershell -NoProfile -Command` on Windows, so write it for that shell: `type %USERPROFILE%\…`
+is cmd.exe's, and fails there. In PowerShell, quote the whole value with single quotes, so that
+nothing in it is expanded before clausona stores it — for example with SecretManagement's
+`Get-Secret`:
+
+```powershell
+clausona add claude:vault --api --base-url https://openrouter.ai/api --key-from 'command:Get-Secret gw -AsPlainText'
+```
+
 Never pass a key as an argument. With the default `keychain` source the key is read from a
 prompt that does not echo it, or from stdin when something is piped in — which is how to
 register a profile without a terminal:
