@@ -511,11 +511,6 @@ const SELF_DIRECTED_ISSUE_KINDS = new Set<DoctorIssue["kind"]>([
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
 
 /**
- * What a doctor result amounts to, in one unstyled phrase: `healthy`, `2 warnings`,
- * `1 issue`, or `1 issue, 2 warnings`. Shared with the TUI, which has one column for it
- * and would otherwise label a profile carrying only warnings "healthy" and show nothing.
- */
-/**
  * Which of the three states a doctor result is in, for anything that colours by it - the
  * same shape as `quotaSeverity`, and the same reason: two surfaces writing this rule out by
  * hand disagreed about a profile that had only warnings, one painting it green and the other
@@ -529,6 +524,11 @@ export function doctorSeverity(issues: DoctorIssue[]): "healthy" | "warning" | "
   return warnings > 0 ? "warning" : "healthy";
 }
 
+/**
+ * What a doctor result amounts to, in one unstyled phrase: `healthy`, `2 warnings`,
+ * `1 issue`, or `1 issue, 2 warnings`. Shared with the TUI, which has one column for it
+ * and would otherwise label a profile carrying only warnings "healthy" and show nothing.
+ */
 export function doctorSummary(issues: DoctorIssue[]): string {
   const { errors, warnings } = countIssues(issues);
   if (errors > 0) {
