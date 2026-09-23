@@ -1032,7 +1032,7 @@ describe("addApiProfile", () => {
     ["the name '..'", { name: ".." }, /Invalid profile name '\.\.'/],
     ["the name '.'", { name: "." }, /Invalid profile name '\.'/],
     ["a name with a space", { name: "my glm" }, /Invalid profile name 'my glm'/],
-    ["a codex profile", { tool: "codex" }, "API profiles are supported for claude only in this version."],
+    ["a codex profile", { tool: "codex" }, "API profiles are Claude Code only in this version."],
     ["an existing id", { name: "default" }, "Profile 'claude:default' already exists."],
     [
       "an id that differs from an existing one only by case",

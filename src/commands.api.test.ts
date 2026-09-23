@@ -321,6 +321,15 @@ describe("add --api", () => {
       expect(promptCalls).toEqual([]);
     });
 
+    it("refuses a Codex profile before asking for a key", async () => {
+      const h = await harness();
+
+      const message = await failure(h.run("add", "codex:gw", "--api", "--base-url", "https://openrouter.ai/api"));
+
+      expect(message).toBe("API profiles are Claude Code only in this version.");
+      expect(promptCalls).toEqual([]);
+    });
+
     it("says what is missing when --base-url is left out", async () => {
       const h = await harness();
 

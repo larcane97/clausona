@@ -148,7 +148,7 @@ A profile can be backed by an API endpoint instead of a subscription login — t
 API, a gateway such as OpenRouter, or a model you serve yourself. It sits beside your
 subscription profiles in `clausona list`, switches the same way, and shares the same
 plugins, MCP servers, and settings. In this version API profiles are for Claude Code only:
-`clausona add codex:<name> --api` is refused.
+`clausona add codex:<name> --api` is refused, before it asks for a key.
 
 ```bash
 # a hosted gateway

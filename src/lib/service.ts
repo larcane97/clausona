@@ -1979,6 +1979,14 @@ function checkAuthScheme(scheme: string): ApiEndpoint["authScheme"] {
   return scheme;
 }
 
+/**
+ * API profiles are Claude Code's alone in this version. Exported so the CLI refuses a Codex
+ * one before its key prompt, as it does with `parseBaseUrl`, rather than after the key is typed.
+ */
+export function checkApiTool(tool: ToolName): void {
+  if (tool !== "claude") throw new Error("API profiles are Claude Code only in this version.");
+}
+
 export async function addApiProfile(options: {
   tool: ToolName;
   name: string;
@@ -1995,9 +2003,7 @@ export async function addApiProfile(options: {
   // directory, stored credential, or registry entry behind.
   const nameCheck = validateProfileName(options.name);
   if (!nameCheck.ok) throw new Error(nameCheck.error);
-  if (options.tool !== "claude") {
-    throw new Error("API profiles are supported for claude only in this version.");
-  }
+  checkApiTool(options.tool);
   const baseUrl = options.baseUrl.trim();
   const url = parseBaseUrl(baseUrl);
   checkAuthScheme(options.authScheme);

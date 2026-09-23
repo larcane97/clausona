@@ -30,6 +30,7 @@ import { secretStoreName } from "./lib/secrets.js";
 import {
   addApiProfile,
   addProfile,
+  checkApiTool,
   checkLabel,
   checkModelEntry,
   defaultAuthScheme,
@@ -1248,6 +1249,9 @@ export async function runCommand(command: string, args: string[]) {
       }
 
       if (api) {
+        // addApiProfile's own check, called here so that a Codex profile is refused before
+        // the key prompt rather than after the key is typed.
+        checkApiTool(tool);
         const baseUrl = optionValue(args, "--base-url");
         if (!baseUrl) throw new Error(ADD_API_USAGE);
         // `parseBaseUrl` is addApiProfile's own check, exported and called here so that a
