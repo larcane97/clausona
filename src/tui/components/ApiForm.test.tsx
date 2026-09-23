@@ -178,6 +178,28 @@ describe("the unfolded form", () => {
   });
 });
 
+/**
+ * #15: the note `config --base-url` prints for a plain-http endpoint off this machine, under
+ * the Endpoint field while it is typed - the form is a route to the same profile.
+ */
+describe("the endpoint row", () => {
+  const CLEARTEXT = "is plain http, so the key crosses the network unencrypted.";
+
+  it("says a plain-http endpoint off this machine sends the key unencrypted", () => {
+    const frame = frameFor(form({ baseUrl: "http://gpu-box:8000" }));
+
+    expect(flatten(frame)).toContain(flatten(`gpu-box:8000 ${CLEARTEXT}`));
+  });
+
+  it.each([
+    ["https", "https://openrouter.ai/api"],
+    ["plain http on this machine", "http://localhost:8000"],
+    ["a URL still being typed", "http://"],
+  ])("says nothing of it for %s", (_case, baseUrl) => {
+    expect(flatten(frameFor(form({ baseUrl })))).not.toContain(flatten(CLEARTEXT));
+  });
+});
+
 describe("the auth row", () => {
   it("says what each scheme means, since the choice is two words otherwise", () => {
     const bearer = form();

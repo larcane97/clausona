@@ -197,7 +197,10 @@ OpenRouter's Anthropic endpoint all serve natively. An endpoint that only speaks
 format needs a translation proxy of your own (LiteLLM, claude-code-router); point
 `--base-url` at that proxy.
 
-The dashboard registers one too — **Profiles → add → API endpoint** walks the same fields.
+The dashboard registers one too — **Profiles → add → API endpoint** walks the same fields,
+and says under a field what the CLI would print for it: that an `http://` endpoint off this
+machine sends the key unencrypted, or that a setting whose name says it holds a secret is
+stored in plain text.
 
 ### The model
 

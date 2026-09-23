@@ -15,7 +15,7 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { checkBaseUrl, hasBareUserinfo, isAnthropicHost } from "../core/api-url.js";
+import { checkBaseUrl, hasBareUserinfo, isAnthropicHost, sendsKeyInCleartext } from "../core/api-url.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
 import { sharesSecretSource } from "../core/key-source.js";
 import { backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
@@ -1434,11 +1434,6 @@ export function defaultAuthScheme(hostname: string): ApiEndpoint["authScheme"] {
   return isAnthropicHost(hostname) ? "api-key" : "bearer";
 }
 
-/** A host an http URL can reach without the key leaving the machine. */
-function isLoopbackHost(hostname: string): boolean {
-  return hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "[::1]" || /^127\./.test(hostname);
-}
-
 export type ProfileApiUpdate = {
   profile: Profile;
   /** The host the key went to before, and goes to now. Undefined for a URL that does not parse. */
@@ -1511,10 +1506,7 @@ export async function updateProfileApi(
     hostDefaultAuth:
       chosenAuth === undefined && hostDefault !== undefined && hostDefault !== authScheme ? hostDefault : undefined,
     cleartext:
-      url !== undefined &&
-      url.protocol === "http:" &&
-      !isLoopbackHost(url.hostname) &&
-      !(previous?.protocol === "http:" && previous.host === url.host),
+      url !== undefined && sendsKeyInCleartext(url) && !(previous?.protocol === "http:" && previous.host === url.host),
     sharedWith: Object.entries(registry.profiles)
       .filter(
         ([other, entry]) => other !== id && entry.kind === "api" && sharesSecretSource(entry.api?.secret, api.secret),

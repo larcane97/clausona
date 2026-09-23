@@ -153,3 +153,17 @@ export function redactUrlsIn(value: string): string {
   }
   return shown.replace(EMBEDDED_USERINFO, `$1${HIDDEN}@`).replace(BARE_USERINFO, `$1${HIDDEN}@`);
 }
+
+/** A host an http URL can reach without the key leaving the machine. */
+export function isLoopbackHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "[::1]" || /^127\./.test(hostname);
+}
+
+/**
+ * Whether a request to `url` carries the key unencrypted off this machine: plain http to a host
+ * that is not loopback. The one rule for every route that sets an endpoint - `add --api`,
+ * `config --base-url` and the dashboard's form - so they cannot disagree about a URL.
+ */
+export function sendsKeyInCleartext(url: URL): boolean {
+  return url.protocol === "http:" && !isLoopbackHost(url.hostname);
+}

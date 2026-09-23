@@ -6,6 +6,7 @@ import {
   type ApiField,
   type ApiFormState,
   advancedFieldIndexes,
+  cleartextNote,
   concealsValue,
   fieldGroup,
   fieldValue,
@@ -267,6 +268,7 @@ export function ApiForm({ form, fields, keySet, mergeSessions, onChange }: ApiFo
           </Box>
         </Box>
         <Hint text={field.entry?.hint} />
+        {field.id === "baseUrl" && <Hint text={cleartextNote(value)} tone="warning" />}
         {field.kind === "env" && field.envKey && (
           <Hint text={plaintextSecretNote(field.envKey, value)} tone="warning" />
         )}
