@@ -23,6 +23,7 @@ import {
   BRACKETED_PASTE_OFF,
   BRACKETED_PASTE_ON,
   EMPTY_SECRET_INPUT,
+  hasInnerWhitespace,
   PASTE_END,
   PASTE_START,
   readSecretChunk,
@@ -56,6 +57,7 @@ import {
   emptyApiForm,
   fieldValue,
   isTypingField,
+  KEY_HAS_WHITESPACE,
   keyInputRefusal,
   keyReadRefusal,
   liveApiFieldError,
@@ -706,7 +708,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         }
         if (read.text !== "") {
           setApiKey((previous) => previous + read.text);
-          edited = true;
+          // Whitespace alone answers nothing the field said: a pasted newline ink handed over on
+          // its own is one the App's hold has just answered with UNFINISHED_PASTE.
+          if (read.text.trim() !== "") edited = true;
         }
         if (!read.keystroke || answeredByApp) break;
         rest = read.keystroke.rest;
@@ -761,7 +765,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           closeFieldPaste(paste, false);
           return true;
         }
-        paste.text += read.text;
+        // The reader keeps a pasted line break or tab for the key's rule on whitespace; a text
+        // field is one line, and takes the text without them, as it always has.
+        paste.text += read.text.replace(/[\t\n\v\f\r]/g, "");
         // Inside the brackets only a Ctrl-C is reported, and here it is pasted data.
         if (!read.keystroke) break;
         rest = read.keystroke.rest;
@@ -899,6 +905,12 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     // guard is a credential stored wrong.
     const refusal = keyInputRefusal(secretInput.current, canReadKeyInput);
     if (refusal) errors.key = refusal;
+    else if (hasInnerWhitespace(apiKey)) {
+      // Ruling 98, the prompt's rule: not a key but two things run together, which nothing on
+      // screen shows - so it goes, and the message says to paste the key alone.
+      errors.key = KEY_HAS_WHITESPACE;
+      clearApiKey();
+    }
     releaseApiInput();
     if (Object.keys(errors).length > 0) {
       // A setting that is wrong while the section is folded has nowhere to be shown, so
@@ -920,8 +932,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     const env = apiFormEnv(form);
     const name = form.name.trim();
     // Taken out of state before the save begins: from here the key exists only as this
-    // local, for as long as the call and its failure message need it.
-    const secretValue = apiKey;
+    // local, for as long as the call and its failure message need it. Trimmed, as the prompt
+    // trims it: a paste keeps the newline a key was copied with.
+    const secretValue = apiKey.trim();
     clearApiKey();
     setAddState((prev) => (prev ? { ...prev, step: "applying", api: { ...prev.api, errors: {} } } : null));
     void (async () => {

@@ -54,6 +54,13 @@ export const MISPLACED_KEY = "That looks like an API key - it goes in the API ke
 export const KEY_REQUIRED = "Enter the API key. It goes to the credential store.";
 
 /**
+ * Ruling 98: the key had a space or a line break inside it once its ends were trimmed - two
+ * pasted lines, or a key and what came after it. `hasInnerWhitespace` is the rule, the prompt's
+ * too; the field is cleared, because what it holds cannot be seen to be fixed.
+ */
+export const KEY_HAS_WHITESPACE = "Paste the key again - it had a space or a line break inside.";
+
+/**
  * The terminal sent something the key field's reader cannot measure, so where it ended is a
  * guess. The situation, and the refusal, are `prompt-secret.ts`'s; the words are not, because
  * the prompt's way out is to pipe the key in and a form has no pipe behind it.
@@ -88,6 +95,7 @@ export const NO_RAW_KEY_INPUT = "Use clausona add --api --key-from env:NAME inst
 export const KEY_FIELD_MESSAGES = {
   MISPLACED_KEY,
   KEY_REQUIRED,
+  KEY_HAS_WHITESPACE,
   UNREADABLE_KEY_INPUT,
   LOST_PASTE_START,
   PASTE_SKIPPED,

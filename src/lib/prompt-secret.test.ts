@@ -237,12 +237,13 @@ describe("promptSecret and a pasted key", () => {
     const tty = fakeTerminal();
 
     const answer = promptSecret(PROMPT, tty);
-    // A key copied with its trailing newline. The newline is pasted text, not an Enter.
+    // A key copied with its trailing newline. The newline is pasted text, not an Enter - and at
+    // the end of the key, trimmed.
     tty.type(`\u001b[200~${KEY}\r\u001b[201~`);
-    tty.type("more");
-    tty.type("\r");
 
-    await expect(answer).resolves.toBe(`${KEY}more`);
+    expect(await answerWithin(answer, 50)).toBe("no answer");
+    tty.type("\r");
+    await expect(answer).resolves.toBe(KEY);
   });
 
   it("refuses a paste the input ends in the middle of, rather than returning its front", async () => {
@@ -286,13 +287,40 @@ describe("promptSecret and a pasted key", () => {
     await expect(answer).resolves.toBe("abc");
   });
 
-  it("drops a tab, which nothing at this prompt is bound to", async () => {
+  /**
+   * Ruling 98: an API key has no whitespace in it. The ends are trimmed - a key copied with its
+   * newline is the key - and a space, a tab or a line break left inside is refused, however it
+   * arrived: typed, or between a paste's brackets, where a line break used to be dropped and two
+   * lines were stored run together as one key.
+   */
+  it.each([
+    ["a typed tab", "ab\tc\r"],
+    ["a typed space", "ab c\r"],
+    ["a line break inside a paste", "\u001b[200~sk-fake-9xQZ\nurl: https://openrouter.ai\u001b[201~\r"],
+    ["a tab inside a paste", "\u001b[200~sk-fake\t9xQZ\u001b[201~\r"],
+  ])("refuses a key with %s inside it, and says why", async (_case, input) => {
     const tty = fakeTerminal();
 
     const answer = promptSecret(PROMPT, tty);
-    tty.type("ab\tc\r");
+    tty.type(input);
 
-    await expect(answer).resolves.toBe("abc");
+    expect(await answerWithin(answer)).toMatch(
+      /^rejected: Error: Could not read the key: it has a space or a line break inside it/,
+    );
+    expect(tty.rawModeCalls).toEqual([true, false]);
+  });
+
+  it.each([
+    ["a pasted newline", `\u001b[200~${KEY}\n\u001b[201~\r`],
+    ["a typed trailing tab and space", `${KEY}\t \r`],
+    ["a pasted leading newline", `\u001b[200~\n${KEY}\u001b[201~\r`],
+  ])("trims %s off the ends of the key", async (_case, input) => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type(input);
+
+    await expect(answer).resolves.toBe(KEY);
   });
 
   it("refuses a paste whose end arrives without its start, rather than returning its back half", async () => {
@@ -407,6 +435,18 @@ describe("promptSecret off a terminal", () => {
     const piped = pipe([Buffer.from("sk-fake-", "utf8"), Buffer.from("9xQZ-0001\n", "utf8")]);
 
     await expect(promptSecret(PROMPT, piped)).resolves.toBe(KEY);
+  });
+
+  it.each([
+    ["a second line", `${KEY}\nGW_KEY=sk-other\n`],
+    ["the metadata `pass show` prints under the key", `${KEY}\nurl: https://openrouter.ai\nuser: me\n`],
+    ["a space", "sk-fake 9xQZ-0001"],
+  ])("refuses what was piped in when it has %s inside it, rather than store it as the key", async (_case, input) => {
+    const piped = pipe([Buffer.from(input, "utf8")]);
+
+    await expect(promptSecret(PROMPT, piped)).rejects.toThrow(
+      /^Could not read the key: what was piped in has a space or a line break inside it/,
+    );
   });
 
   it("returns nothing when nothing was piped in", async () => {
@@ -566,12 +606,25 @@ describe("readSecretChunk", () => {
     });
   });
 
+  const WHITESPACE = new Set(["\r", "\n", "\t"]);
+
   it.each(
-    KEYSTROKES.filter(([, , key]) => key !== "interrupt"),
+    KEYSTROKES.filter(([, byte, key]) => key !== "interrupt" && !WHITESPACE.has(byte)),
   )("reads %s between a paste's brackets as pasted data, and drops it", (_case, byte) => {
     expect(read(`\u001b[200~${KEY.slice(0, 20)}${byte}${KEY.slice(20)}\u001b[201~`)).toEqual({
       state: EMPTY_SECRET_INPUT,
       text: KEY,
+    });
+  });
+
+  it.each(
+    KEYSTROKES.filter(([, byte]) => WHITESPACE.has(byte)),
+  )("keeps %s between a paste's brackets, as the whitespace it is", (_case, byte) => {
+    // Pasted, it is a line break or a tab in the pasted text, not a keypress - and dropping it
+    // joined two lines into one key. Kept, the caller's rule on whitespace refuses the key.
+    expect(read(`\u001b[200~${KEY.slice(0, 20)}${byte}${KEY.slice(20)}\u001b[201~`)).toEqual({
+      state: EMPTY_SECRET_INPUT,
+      text: `${KEY.slice(0, 20)}${byte}${KEY.slice(20)}`,
     });
   });
 

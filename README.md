@@ -266,6 +266,12 @@ printf %s "$MY_API_KEY" | clausona add claude:gw --api --base-url https://openro
 printf %s "$MY_API_KEY" | clausona config claude:gw --key     # rotate it later
 ```
 
+The key's ends are trimmed, so one piped or pasted with its newline is fine. A key with a
+space or a line break inside it is refused, whether it was piped, typed, or pasted into the
+dashboard's form: an API key has neither, and two lines run together are not a key.
+`pass show` prints more than the key; `--key-from command:"pass show gw"` takes only its
+first line.
+
 Or keep the key out of clausona entirely:
 
 ```bash

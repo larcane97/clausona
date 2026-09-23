@@ -104,6 +104,28 @@ const TRUNCATED_PASTE =
 const LOST_PASTE_START =
   'Could not read the key: a paste ended whose start never arrived, so only part of the key did. Nothing was saved. Try again, or pipe the key in: printf %s "$KEY" | clausona … .';
 
+const TYPED_INNER_WHITESPACE =
+  'Could not read the key: it has a space or a line break inside it, and an API key has neither - two lines pasted as one, perhaps. Nothing was saved. Paste only the key, or pipe it in: printf %s "$KEY" | clausona … .';
+
+const PIPED_INNER_WHITESPACE =
+  'Could not read the key: what was piped in has a space or a line break inside it, and an API key has neither. Nothing was saved. Pipe only the key: printf %s "$KEY" | clausona … , or read it with --key-from command:"…", which takes the first line the command prints.';
+
+/**
+ * Whether a key has whitespace inside it once its ends are trimmed - Ruling 98, the one rule for
+ * a key typed at the prompt, pasted into it or into the TUI's key field, or piped in.
+ *
+ * An API key has no whitespace in it. At its ends whitespace is how a key arrives - copied with
+ * its newline, piped from `echo` - so it is trimmed. Inside, it is two things run together: a
+ * key and the next line `pass show` prints, a second secret, a selection that took one line too
+ * many. Stored, that was "Added" and then a 401 that pointed at nothing; joined, which is what a
+ * paste used to do with the line break, it was the same. So it is refused, and the caller says
+ * to give the key alone. The `command:` source keeps its own rule, the first line, which is
+ * where `pass show` puts the key.
+ */
+export function hasInnerWhitespace(key: string): boolean {
+  return /\s/.test(key.trim());
+}
+
 type EscapeScan =
   | { consumed: number; kind: "paste-start" | "paste-end" | "skip" }
   /** The sequence has not finished arriving; wait for the next read. */
@@ -270,8 +292,10 @@ export type SecretChunk = {
  * - `"end"`: Ctrl-D.
  *
  * Between a paste's brackets every byte is pasted data, not a keypress, so only an interrupt
- * is reported there: a paste whose end never comes would otherwise leave no way out. Pasted
- * control characters are dropped either way - a key has no whitespace in it.
+ * is reported there: a paste whose end never comes would otherwise leave no way out. A pasted
+ * line break or tab is kept, as the whitespace it is, for the caller's rule on whitespace in a
+ * key (`hasInnerWhitespace`): dropped, it joined two pasted lines into one key. Other pasted
+ * control characters are dropped.
  */
 export type SecretKeystroke = "enter" | "tab" | "erase" | "clear" | "interrupt" | "end";
 
@@ -337,8 +361,8 @@ export function readSecretChunk(state: SecretInputState, chunk: string, edge: Se
     const key = keystrokeOf(char, pasting);
     if (key) return { state: { pending: "", pasting }, text, keystroke: { key, rest: buffer } };
     // Every other control character is not part of a key, and some of them move the cursor if
-    // they are written back out.
-    if (char >= " " && char !== "\u007f") text += char;
+    // they are written back out. Whitespace is kept, for the caller to trim or refuse.
+    if ((char >= " " && char !== "\u007f") || /\s/.test(char)) text += char;
   }
   return { state: { pending: "", pasting }, text };
 }
@@ -385,7 +409,8 @@ export type PromptStreams = { input?: SecretInputStream; output?: SecretOutputSt
 /**
  * The prompt itself. Returns the trimmed key, which may be empty - the caller decides
  * what an empty answer means, because "nothing was piped in" and "Enter was pressed at
- * the prompt" need different advice.
+ * the prompt" need different advice. A key with whitespace left inside it is refused, piped
+ * or typed (`hasInnerWhitespace`).
  */
 export async function promptSecret(prompt: string, streams: PromptStreams = {}): Promise<string> {
   const input = streams.input ?? process.stdin;
@@ -401,7 +426,9 @@ async function readPipedSecret(input: SecretInputStream): Promise<string> {
   for await (const chunk of input) {
     text += typeof chunk === "string" ? chunk : decoder.write(chunk);
   }
-  return `${text}${decoder.end()}`.trim();
+  const key = `${text}${decoder.end()}`.trim();
+  if (hasInnerWhitespace(key)) throw new Error(PIPED_INNER_WHITESPACE);
+  return key;
 }
 
 /**
@@ -452,6 +479,19 @@ function readTypedSecret(prompt: string, input: SecretInputStream, output: Secre
         reject(new Error(message));
       });
 
+    /** The key as typed, trimmed at its ends - or refused, with whitespace left inside it. */
+    const submit = () => {
+      const key = typed.trim();
+      if (hasInnerWhitespace(key)) {
+        refuse(TYPED_INNER_WHITESPACE);
+        return;
+      }
+      finish(() => {
+        output.write("\n");
+        resolve(key);
+      });
+    };
+
     // The grammar is `readSecretChunk`'s, with a read's end meaning only that the read stopped
     // there: a sequence cut off by it is joined to the next one. What is this prompt's own is
     // what each keystroke does here.
@@ -479,12 +519,12 @@ function readTypedSecret(prompt: string, input: SecretInputStream, output: Secre
         rest = read.keystroke.rest;
         switch (read.keystroke.key) {
           // Enter, or Ctrl-D: on an empty line the shell's EOF, otherwise "I am done typing".
+          //
+          // Unbracketed, a line break in a paste is this Enter too - nothing tells the two apart -
+          // so what follows it in the read is not read, and the key is the line before it.
           case "enter":
           case "end":
-            finish(() => {
-              output.write("\n");
-              resolve(typed.trim());
-            });
+            submit();
             return;
           // Honoured even between a paste's brackets. A paste whose closing marker never
           // arrives would otherwise leave the prompt with no way out at all, and a raw 0x03
@@ -501,8 +541,10 @@ function readTypedSecret(prompt: string, input: SecretInputStream, output: Secre
           case "clear":
             typed = "";
             break;
-          // Not part of a key, and nothing at this prompt is bound to it.
+          // Nothing at this prompt is bound to it, and it is whitespace: kept, so a tab inside
+          // the key is refused at the Enter rather than dropped and the halves joined.
           case "tab":
+            typed += "\t";
             break;
           default: {
             const unhandled: never = read.keystroke.key;
@@ -527,7 +569,12 @@ function readTypedSecret(prompt: string, input: SecretInputStream, output: Secre
           reject(new Error(TRUNCATED_PASTE));
           return;
         }
-        resolve(typed.trim());
+        const key = typed.trim();
+        if (hasInnerWhitespace(key)) {
+          reject(new Error(TYPED_INNER_WHITESPACE));
+          return;
+        }
+        resolve(key);
       });
     };
 

@@ -63,6 +63,7 @@ vi.setConfig({ testTimeout: 15_000 });
 
 import { ADD_METHODS, App } from "./App.js";
 import {
+  KEY_HAS_WHITESPACE,
   KEY_REQUIRED,
   LOST_PASTE_START,
   MISPLACED_KEY,
@@ -553,10 +554,8 @@ describe("App add-profile: API endpoint", () => {
     });
 
     it.each([
-      ["an Enter", "\r"],
       ["a down arrow", "\u001b[B"],
       ["an up arrow", "\u001b[A"],
-      ["a tab", "\t"],
     ])("keeps a paste on the key field when ink names some of its bytes %s", async (_case, keystroke) => {
       // ink's parser emits a run of text as one event and each escape sequence as its own,
       // so where a read happens to be split decides whether a byte inside a paste is named
@@ -581,6 +580,37 @@ describe("App add-profile: API endpoint", () => {
 
       expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(expect.objectContaining({ secretValue: KEY }));
       // The tail of a key drawn in the field the cursor moved to is the leak this prevents.
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+      instance.unmount();
+    });
+
+    it.each([
+      ["an Enter", "\r"],
+      ["a tab", "\t"],
+    ])("keeps a paste on the key field when ink names %s in it, and refuses the key it is inside", async (_case, keystroke) => {
+      // The cursor stays, as for an arrow; but a pasted Enter or tab is whitespace in the key
+      // (Ruling 98), where an arrow's bytes are a sequence the reader drops.
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const instance = await openApiForm();
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+      await press(instance, "https://gateway.example.com");
+      await moveTo(instance, "API key");
+
+      await type(instance, "\u001b[200~");
+      await type(instance, KEY.slice(0, 10));
+      await type(instance, keystroke);
+      await type(instance, KEY.slice(10));
+      await type(instance, "\u001b[201~");
+      const held = instance.lastFrame() ?? "";
+
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes(KEY_HAS_WHITESPACE));
+
+      expect(focusedOn(held, "API key")).toBe(true);
+      expect(vi.mocked(addApiProfile)).not.toHaveBeenCalled();
       expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
       instance.unmount();
     });
@@ -818,11 +848,13 @@ describe("App add-profile: API endpoint", () => {
       expect(instance.lastFrame()).not.toContain("Context window");
       expect(instance.lastFrame()).toContain("bearer");
 
+      // Taken into the key, the spaces are what the save refuses (Ruling 98) - which is how it
+      // shows they went there rather than to a shortcut.
       await moveTo(instance, "Create profile");
       await press(instance, ENTER);
-      await waitForFrame(instance.lastFrame, (f) => f.includes("Added claude:gateway"));
+      await waitForFrame(instance.lastFrame, (f) => f.includes(KEY_HAS_WHITESPACE));
 
-      expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(expect.objectContaining({ secretValue: "sk a b" }));
+      expect(vi.mocked(addApiProfile)).not.toHaveBeenCalled();
       instance.unmount();
     });
   });
@@ -1264,11 +1296,11 @@ describe("App add-profile: API endpoint", () => {
       const landed = instance.lastFrame() ?? "";
       await moveTo(instance, "Create profile");
       await press(instance, ENTER);
-      await waitForFrame(instance.lastFrame, (f) => f.includes("Added") || f.includes("✘"));
+      const done = await waitForFrame(instance.lastFrame, (f) => f.includes("Added") || f.includes("✘"));
       const saved = vi.mocked(addApiProfile).mock.calls[0]?.[0];
       const leaked = windowsOnScreen(instance.frames, KEY);
       instance.unmount();
-      return { saved, landed, leaked };
+      return { saved, landed, leaked, done };
     }
 
     const MOVES: [string, string][] = [
@@ -1307,13 +1339,37 @@ describe("App add-profile: API endpoint", () => {
       ["a Ctrl-D", "\u0004"],
     ];
 
-    it.each(ALL)("reads %s between a paste's brackets as pasted data", async (_c, byte) => {
+    it.each(
+      ALL.filter(([, byte]) => !MOVES.some(([, move]) => move === byte)),
+    )("reads %s between a paste's brackets as pasted data", async (_c, byte) => {
       // The terminal has said every byte until the closing bracket is pasted: nothing in it is a
       // keypress, and a key has no control characters in it.
       const { saved, landed, leaked } = await keyAfter(PASTE(`${KEY.slice(0, 20)}${byte}${KEY.slice(20)}`));
 
       expect(saved?.secretValue).toBe(KEY);
       expect(focusedOn(landed, "API key")).toBe(true);
+      expect(leaked).toEqual([]);
+    });
+
+    it.each(
+      MOVES,
+    )("refuses a key with %s between a paste's brackets, which is whitespace inside it", async (_c, byte) => {
+      // Ruling 98. Pasted, it is not a keypress but a line break or a tab in what was copied - two
+      // lines, or a key and something after it - and joining the halves stored neither.
+      const { saved, landed, leaked, done } = await keyAfter(PASTE(`${KEY.slice(0, 20)}${byte}${KEY.slice(20)}`));
+
+      expect(saved).toBeUndefined();
+      expect(focusedOn(landed, "API key")).toBe(true);
+      expect(done).toContain(KEY_HAS_WHITESPACE);
+      expect(focusedOn(done, "API key")).toBe(true);
+      expect(done).not.toContain(MASK);
+      expect(leaked).toEqual([]);
+    });
+
+    it("takes a key pasted with the newline it was copied with, trimmed", async () => {
+      const { saved, leaked } = await keyAfter(PASTE(`${KEY}\n`));
+
+      expect(saved?.secretValue).toBe(KEY);
       expect(leaked).toEqual([]);
     });
 
