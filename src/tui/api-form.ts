@@ -37,6 +37,9 @@ export const ADVANCED_ENTRIES: EnvCatalogEntry[] = CLAUDE_ENV_CATALOG.filter((en
 
 const MODEL_ENTRY = CLAUDE_ENV_CATALOG.find((entry) => entry.key === MODEL_KEY);
 
+/** A key in a field that draws what it holds, the endpoint among them. */
+export const MISPLACED_KEY = "That looks like an API key - it goes in the API key field.";
+
 export type ApiFormState = {
   name: string;
   baseUrl: string;
@@ -178,6 +181,8 @@ export function baseUrlError(baseUrl: string): string | undefined {
       return `The scheme must be http or https, not '${checked.problem.scheme}'.`;
     case "credentials":
       return "The URL must not carry a user or password. Put the key in the Key field.";
+    case "key-shaped":
+      return MISPLACED_KEY;
     default: {
       // Every reason, and a default that cannot be reached: a fifth one added to
       // `BaseUrlProblem` fails to compile here. Leaving the switch open instead returns

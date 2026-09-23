@@ -45,6 +45,15 @@ describe("redactBaseUrl", () => {
     expect(redactBaseUrl("//admin:pw-0010@gw.example.com/api")).toBe(HIDDEN);
   });
 
+  it.each([
+    ["in its path", "https://gw.example.com/v1/sk-ant-api03-QZXJ7wvKpLmN8rTyUbHc5dFgA2sE9oIuWq"],
+    ["glued to its host", "https://gw.example.comsk-ant-api03-QZXJ7wvKpLmN8rTyUbHc5dFgA2sE9oIuWq"],
+  ])("hides a URL carrying a key %s, whole", (_where, url) => {
+    // Host and path are the parts printed as they are, so a key there has no part of its own
+    // to be replaced in. add and config refuse such a URL now; this is for one stored before.
+    expect(redactBaseUrl(url)).toBe(HIDDEN);
+  });
+
   it("leaves an empty one empty, so a missing URL still reads as missing", () => {
     expect(redactBaseUrl("")).toBe("");
   });

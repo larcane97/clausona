@@ -143,8 +143,16 @@ function baseUrlProblem(baseUrl: string, remedy: string): string | undefined {
     case "scheme":
       // A scheme cannot contain userinfo, so naming it gives nothing away.
       return `the base URL's scheme is '${checked.problem.scheme}', not http or https - ${remedy}`;
-    default:
+    case "credentials":
       return `the base URL carries a username or password - put the key in the key source instead, and ${remedy}`;
+    case "key-shaped":
+      return `the base URL carries something shaped like an API key - put the key in the key source instead, and ${remedy}`;
+    default: {
+      // A new reason would otherwise take the last case's words, which describe a different
+      // URL - the way "key-shaped" briefly read as "a username or password".
+      const unhandled: never = checked.problem;
+      throw new Error(`unhandled base URL problem: ${JSON.stringify(unhandled)}`);
+    }
   }
 }
 

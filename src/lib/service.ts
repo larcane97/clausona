@@ -1805,10 +1805,18 @@ export function parseBaseUrl(baseUrl: string): URL {
         throw new Error("Invalid base URL: must be an absolute http:// or https:// URL.");
       case "scheme":
         throw new Error(`Invalid base URL: the scheme must be http or https, not '${checked.problem.scheme}'.`);
-      default:
+      case "credentials":
         throw new Error(
           "Invalid base URL: it must not carry credentials. Supply the key through the key source instead.",
         );
+      case "key-shaped":
+        throw new Error(
+          "Invalid base URL: it carries something shaped like an API key. Supply the key through the key source instead.",
+        );
+      default: {
+        const unhandled: never = checked.problem;
+        throw new Error(`unhandled base URL problem: ${JSON.stringify(unhandled)}`);
+      }
     }
   }
   return checked.url;

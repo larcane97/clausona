@@ -1,3 +1,5 @@
+import { carriesCredentialToken } from "./credential-token.js";
+
 /**
  * What is wrong with a base URL. Never the URL itself, and never anything taken from the
  * part of it that can hold a password: a caller cannot echo a credential by repeating what
@@ -5,6 +7,7 @@
  */
 export type BaseUrlProblem =
   | { reason: "empty" }
+  | { reason: "key-shaped" }
   | { reason: "unparseable" }
   | { reason: "scheme"; scheme: string }
   | { reason: "credentials" };
@@ -17,12 +20,16 @@ export type BaseUrlProblem =
  * round, and a second copy of these rules in the doctor drifted the moment one side was
  * hardened - a URL `add --api` refuses would have gone on being reported healthy.
  *
- * The rules: absolute, http or https, and carrying no userinfo. A password in the URL would
- * be persisted to profiles.json and exported in plain text with it, which is exactly what
- * the key source exists to avoid.
+ * The rules: absolute, http or https, and carrying no userinfo and nothing shaped like an API
+ * key - in the host, the path, the query or anywhere else. A password or a key in the URL
+ * would be persisted to profiles.json and exported in plain text with it, which is exactly
+ * what the key source exists to avoid; and a query is where a gateway that takes its key as a
+ * parameter would have one. The key check runs first, because a key pasted where the URL goes
+ * is better answered with where it belongs than with "not a URL".
  */
 export function checkBaseUrl(baseUrl: string): { ok: true; url: URL } | { ok: false; problem: BaseUrlProblem } {
   if (baseUrl.trim() === "") return { ok: false, problem: { reason: "empty" } };
+  if (carriesCredentialToken(baseUrl)) return { ok: false, problem: { reason: "key-shaped" } };
 
   let url: URL;
   try {
@@ -80,11 +87,14 @@ function withoutUrlSecrets(url: URL, original: string): string {
  *
  * One that does not parse is hidden whole: it cannot be taken apart, and it can still hold a
  * password - `//admin:pw@host` is one. The same reason `baseUrlProblem` never quotes a URL
- * it refuses.
+ * it refuses. So is one carrying a key: `checkBaseUrl` refuses it on the way in, but one
+ * stored before that - or by hand - can have the key in its host or path, the two parts
+ * printed as they are, so there is no part of it to replace.
  */
 export function redactBaseUrl(baseUrl: string): string {
   if (typeof baseUrl !== "string") return HIDDEN;
   if (baseUrl.trim() === "") return baseUrl;
+  if (carriesCredentialToken(baseUrl)) return HIDDEN;
   try {
     return withoutUrlSecrets(new URL(baseUrl.trim()), baseUrl);
   } catch {

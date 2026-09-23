@@ -157,6 +157,18 @@ describe("evaluateApiHealth", () => {
       expect(issues[0].message).not.toContain(baseUrl);
     });
 
+    it("reports a base URL carrying a key as that, rather than as a username or password", () => {
+      // Its own reason, so its own words: this used to fall through to the userinfo message,
+      // which describes a URL with no user or password in it.
+      const key = "sk-ant-api03-QZXJ7wvKpLmN8rTyUbHc5dFgA2sE9oIuWq";
+      const issues = health({ profile: withApi(`https://gateway.example.com/v1?key=${key}`) });
+
+      expect(issues[0].kind).toBe("invalid_api_config");
+      expect(issues[0].message).toContain("shaped like an API key");
+      expect(issues[0].message).not.toContain("username or password");
+      expect(issues[0].message).not.toContain(key.slice(13, 25));
+    });
+
     it("points at the command that rewrites the endpoint, not at the file", () => {
       // A hand-edited profiles.json is how a base URL gets broken; `config --base-url`
       // rewrites it through the rule `add --api` applies.

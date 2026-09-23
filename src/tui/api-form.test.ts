@@ -104,6 +104,17 @@ describe("the endpoint field", () => {
 
     expect(message).not.toContain(KEY);
   });
+
+  it.each([
+    ["glued to its host, as input meant for the key field leaves it", `https://gateway.example.com${KEY}`],
+    ["in its path", `https://gateway.example.com/v1/${KEY}`],
+    ["in its query", `https://gateway.example.com/v1?key=${KEY}`],
+    ["pasted in place of the URL", KEY],
+  ])("refuses a URL carrying a key %s, and says where the key goes instead", (_where, url) => {
+    const message = baseUrlError(url);
+
+    expect(message).toBe("That looks like an API key - it goes in the API key field.");
+  });
 });
 
 describe("the auth scheme offered for an endpoint", () => {

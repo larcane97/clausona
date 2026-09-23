@@ -27,6 +27,11 @@ import type { DoctorProfileResult, Profile, SecretSource } from "./types.js";
  */
 
 const KEY = "sk-fake-9xQZ-0001";
+/**
+ * A key the endpoint rule recognises. KEY above is short enough to be deliberately below it -
+ * most tests here are about where a key goes, not about spotting one.
+ */
+const KEY_SHAPED = "sk-ant-api03-QZXJ7wvKpLmN8rTyUbHc5dFgA2sE9oIuWq";
 
 const temps: string[] = [];
 let spawned: string[] = [];
@@ -391,6 +396,22 @@ describe("add --api", () => {
       expect(message).toContain("must not carry credentials");
       expect(message).not.toContain("u:p");
       expect(promptCalls).toEqual([]);
+    });
+
+    it.each([
+      ["in the query", `https://gateway.example.com/v1?key=${KEY_SHAPED}`],
+      ["glued to the host", `https://gateway.example.com${KEY_SHAPED}`],
+    ])("refuses a base URL carrying a key %s, before the prompt, without printing it", async (_where, url) => {
+      const h = await harness();
+
+      const message = await failure(h.run("add", "claude:gw", "--api", "--base-url", url));
+
+      expect(message).toBe(
+        "Invalid base URL: it carries something shaped like an API key. Supply the key through the key source instead.",
+      );
+      expect(message).not.toContain(KEY_SHAPED.slice(13, 25));
+      expect(promptCalls).toEqual([]);
+      expect(existsSync(path.join(h.home, ".claude-gw"))).toBe(false);
     });
 
     it("refuses a bad profile name with the service's rule, before asking for a key", async () => {
@@ -866,6 +887,16 @@ describe("config --base-url / --auth / --label", () => {
         "a base URL carrying credentials",
         ["--base-url", "https://u:p@example.com"],
         "Invalid base URL: it must not carry credentials. Supply the key through the key source instead.",
+      ],
+      [
+        "a base URL carrying a key in its query",
+        ["--base-url", `https://gateway.example.com/v1?key=${KEY_SHAPED}`],
+        "Invalid base URL: it carries something shaped like an API key. Supply the key through the key source instead.",
+      ],
+      [
+        "a base URL with a key glued to its host",
+        ["--base-url", `https://gateway.example.com${KEY_SHAPED}`],
+        "Invalid base URL: it carries something shaped like an API key. Supply the key through the key source instead.",
       ],
       ["an empty auth scheme", ["--auth", ""], "Invalid --auth: use bearer or api-key."],
       ["an unknown auth scheme", ["--auth", "basic"], "Invalid --auth: use bearer or api-key."],
