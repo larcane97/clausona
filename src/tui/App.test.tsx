@@ -248,6 +248,41 @@ describe("App profile list, for an API profile", () => {
 
     expect(written.join("")).toContain("Switched to claude:gw (gpu-box)");
   });
+
+  /**
+   * Re-login is an OAuth sign-in, and `loginProfile` refuses an API profile: offering it there
+   * got a confirmation and then a refusal. The action is offered for the kind it can work for.
+   */
+  describe("the re-login action", () => {
+    it("is offered for an account, and asks before signing in", async () => {
+      const { listProfiles } = await import("../lib/service.js");
+      vi.mocked(listProfiles).mockResolvedValueOnce([WORK]);
+      const instance = render(<App initialScreen="use" />);
+
+      const frame = await waitForFrame(instance.lastFrame, (f) => f.includes("claude:work"));
+      expect(frame).toContain("re-login");
+      await press(instance, "l");
+      await waitForFrame(instance.lastFrame, (f) => f.includes(OVERLAY));
+    });
+
+    it("is not offered for an API profile, and l asks nothing", async () => {
+      const { listProfiles, loginProfile } = await import("../lib/service.js");
+      vi.mocked(listProfiles).mockResolvedValueOnce([gateway]);
+      vi.mocked(loginProfile).mockClear();
+      const instance = render(<App initialScreen="use" />);
+
+      const frame = await waitForFrame(instance.lastFrame, (f) => f.includes("claude:gw"));
+      expect(frame).not.toContain("re-login");
+      await type(instance, "l");
+      // The sessions action works for this profile, so its overlay says the `l` before it was
+      // heard - and, had that opened the sign-in overlay, `s` would have gone to it instead.
+      await press(instance, "s");
+      await waitForFrame(instance.lastFrame, (f) => f.includes('Change sessions for "claude:gw"'));
+
+      expect(instance.frames.some((f) => f.includes("Re-login"))).toBe(false);
+      expect(vi.mocked(loginProfile)).not.toHaveBeenCalled();
+    });
+  });
 });
 
 /**

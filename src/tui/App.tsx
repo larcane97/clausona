@@ -216,6 +216,16 @@ function apiFieldUnderCursor(screen: Screen, state: AddState | null): ApiField |
   return fields[Math.min(state.api.cursor, fields.length - 1)];
 }
 
+/**
+ * Whether the profiles screen offers to sign a profile in again. Re-login is an OAuth sign-in,
+ * and only an account profile has one to redo: the primary's is its tool's own, and an API
+ * profile has a key instead, which `loginProfile` refuses. Offering it there asked for a
+ * confirmation and then answered with that refusal.
+ */
+function offersRelogin(profile: ProfileListItem | undefined): boolean {
+  return profile !== undefined && !profile.isPrimary && profile.kind !== "api";
+}
+
 /** The key field's id: the one field whose input comes from the reader rather than a TextInput. */
 const KEY_FIELD = "key";
 
@@ -1668,11 +1678,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       } else if (input === "d" && profiles[cursor]) {
         const p = profiles[cursor];
         setOverlay({ kind: "remove", profileName: p.name, email: p.email, isPrimary: p.isPrimary });
-      } else if (input === "l" && profiles[cursor]) {
+      } else if (input === "l" && offersRelogin(profiles[cursor])) {
         const p = profiles[cursor];
-        if (!p.isPrimary) {
-          setOverlay({ kind: "login", profileName: p.name, email: displayName(p) });
-        }
+        setOverlay({ kind: "login", profileName: p.name, email: displayName(p) });
       } else if (input === "s" && profiles[cursor] && !profiles[cursor].isPrimary) {
         const p = profiles[cursor];
         setOverlay({ kind: "sessions", profileName: p.name, currentMerge: p.mergeSessions ?? false });
@@ -2259,13 +2267,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       { keys: "↑↓", action: "nav" },
       { keys: "enter", action: "switch" },
       { keys: "a", action: "add" },
-      ...(selectedProfile && !selectedProfile.isPrimary
-        ? [
-            { keys: "d", action: "remove" },
-            { keys: "l", action: "re-login" },
-            { keys: "s", action: "sessions" },
-          ]
-        : []),
+      ...(selectedProfile && !selectedProfile.isPrimary ? [{ keys: "d", action: "remove" }] : []),
+      ...(offersRelogin(selectedProfile) ? [{ keys: "l", action: "re-login" }] : []),
+      ...(selectedProfile && !selectedProfile.isPrimary ? [{ keys: "s", action: "sessions" }] : []),
       { keys: "esc", action: "back" },
     ];
 
