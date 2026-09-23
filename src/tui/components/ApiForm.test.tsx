@@ -1,5 +1,5 @@
 import { render } from "ink-testing-library";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { type ApiFormState, apiFormFields, emptyApiForm, MODEL_KEY, plaintextSecretNote } from "../api-form.js";
 import { renderAt } from "../test-drive.js";
@@ -285,5 +285,23 @@ describe("a key in a field that draws what it holds", () => {
     expect(row(frame, "Custom headers")).not.toContain("Authorization");
     expect(windowsOnScreen([frame], KEY)).toEqual([]);
     expect(frame).toContain("stored in plain text");
+  });
+
+  // ink's screen-reader output ignores width and overflow, so a value hidden by being drawn in
+  // a box of no width was printed whole, beside the mask.
+  it("prints none of a concealed value when ink writes for a screen reader", () => {
+    const state = form({
+      advancedOpen: true,
+      env: { [MODEL_KEY]: KEY, ANTHROPIC_CUSTOM_HEADERS: `Authorization: Bearer ${KEY}` },
+    });
+    vi.stubEnv("INK_SCREEN_READER", "true");
+    try {
+      const frame = frameFor({ ...state, cursor: cursorOn(state, "model") });
+
+      expect(frame).toContain("Model");
+      expect(windowsOnScreen([frame], KEY)).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

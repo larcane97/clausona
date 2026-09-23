@@ -245,19 +245,19 @@ export function ApiForm({ form, fields, keySet, mergeSessions, onChange }: ApiFo
               // Drawn as the key field's constant, whatever it holds. A mask glyph per character
               // cut to eight showed the length of anything shorter - `abc` under a header name
               // drew three - and a value under a hidden name can be any length. The input is
-              // still here, drawn at no width, so the value can still be typed into and erased:
-              // App.tsx clears a masked value on the first erase.
+              // still here, concealed - it draws nothing - so the value can still be typed into
+              // and erased: App.tsx clears a masked value on the first erase. Not a box of no
+              // width: ink's screen-reader output ignores layout, and printed the value whole.
               <Box>
                 <Text color={color.text}>{KEY_MASK}</Text>
-                <Box width={0} height={1} overflow="hidden">
-                  <FieldInput
-                    value={value}
-                    cursor={caretIn(field, form)}
-                    onChange={(next, caret) => onChange(field, next, caret)}
-                    focus={focused}
-                    showCursor={false}
-                  />
-                </Box>
+                <FieldInput
+                  value={value}
+                  cursor={caretIn(field, form)}
+                  onChange={(next, caret) => onChange(field, next, caret)}
+                  focus={focused}
+                  showCursor={false}
+                  conceal
+                />
               </Box>
             ) : (
               <FieldInput

@@ -14,6 +14,10 @@ import { Text, useInput } from "ink";
  * (up, down, Tab, Enter, ctrl-c), the arrows that move the cursor only while it is shown, an
  * erase before the cursor, anything else inserted at it - and the offset kept inside the value,
  * where ink-text-input let a left arrow at the start take it below zero for a keystroke.
+ *
+ * `conceal` keeps the editing and draws nothing at all: the caller draws a mask instead. The
+ * value was hidden by drawing it in a box of no width, and ink's screen-reader output, which
+ * ignores width and overflow, printed it whole - a key pasted into the wrong row included.
  */
 export function FieldInput({
   value,
@@ -21,6 +25,7 @@ export function FieldInput({
   focus,
   placeholder = "",
   showCursor,
+  conceal = false,
   onChange,
 }: {
   value: string;
@@ -29,6 +34,8 @@ export function FieldInput({
   focus: boolean;
   placeholder?: string;
   showCursor: boolean;
+  /** Take the keystrokes, and render nothing: no value, no cursor, no placeholder. */
+  conceal?: boolean;
   /** Every edit: the new value and where the cursor is in it - the value unchanged when only the cursor moved. */
   onChange: (value: string, cursor: number) => void;
 }) {
@@ -58,6 +65,7 @@ export function FieldInput({
     { isActive: focus },
   );
 
+  if (conceal) return null;
   if (!(showCursor && focus)) {
     return <Text>{placeholder && value.length === 0 ? chalk.grey(placeholder) : value}</Text>;
   }
