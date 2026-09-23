@@ -63,8 +63,23 @@ const ST_FINAL = "\\";
  * and APC (`_`). Unlike a CSI they do not end at the first byte in `@`-`~` - their body is
  * arbitrary text and they run to a terminator - so measuring one as a CSI would cut it in
  * half and leave the rest in the key.
+ *
+ * Only the 7-bit forms. The 8-bit C1 introducers - DCS 0x90, SOS 0x98, OSC 0x9d, PM 0x9e,
+ * APC 0x9f - cannot reach this grammar: both callers decode UTF-8, so a lone C1 byte
+ * arrives as U+FFFD long before it gets here, and code for them would be code no input can
+ * run.
  */
 const STRING_INTRODUCERS = new Set(["]", "P", "X", "^", "_"]);
+
+/**
+ * Bytes that say the ESC in front of them was a keypress rather than an introducer.
+ *
+ * No terminal puts a line break in an OSC or DCS body; a person who pressed a stray Escape,
+ * typed a key beginning with one of the five introducers and pressed Enter does. Ctrl-C is
+ * here for the same reason and one more: a prompt with no way out is the failure this reader
+ * gives up a lot to avoid, and 0x03 is a byte rather than a signal once raw mode is on.
+ */
+const NOT_A_STRING_BODY = new Set(["\r", "\n", CTRL_C]);
 
 const UNREADABLE_INPUT =
   'Could not read the key: this terminal sent something the prompt cannot interpret, and a key read from it might be incomplete. Pipe the key in instead: printf %s "$KEY" | clausona … , or point at it with --key-from env:NAME.';
@@ -111,7 +126,7 @@ function scanEscape(buffer: string): EscapeScan {
     }
     return buffer.length > MAX_ESCAPE_LENGTH ? "runaway" : "incomplete";
   }
-  if (isStringEscape(buffer)) return scanStringEscape(buffer, second);
+  if (second !== undefined && STRING_INTRODUCERS.has(second)) return scanStringEscape(buffer, second);
   return { consumed: 1, kind: "skip" };
 }
 
@@ -122,17 +137,20 @@ function scanEscape(buffer: string): EscapeScan {
  * actually sends for a window title - and only an OSC, because a BEL inside a DCS body
  * would then cut the sequence short and spill its tail into the key. Refusing to measure a
  * BEL-terminated DCS costs a refusal; mis-measuring one costs a credential.
+ *
+ * A line break or a Ctrl-C before either terminator means this was never a sequence, and it
+ * resolves as the lone Escape it is: only the ESC is dropped and the introducer is the first
+ * character of the key. That arm is the whole reason this function cannot simply wait. Five
+ * of the bytes a key can begin with - `]`, `P`, `X`, `^`, `_` - are introducers, and a key
+ * beginning with one of them, typed after a stray Escape, would otherwise be swallowed into
+ * a payload whose end never comes: no answer, no refusal, and nothing on screen to say why.
  */
-/** Whether `buffer`, which starts with ESC, is the front of a string sequence. */
-function isStringEscape(buffer: string): boolean {
-  const second = buffer[1];
-  return second !== undefined && STRING_INTRODUCERS.has(second);
-}
-
 function scanStringEscape(buffer: string, introducer: string): EscapeScan {
   for (let i = 2; i < buffer.length; i++) {
-    if (introducer === "]" && buffer[i] === BEL) return { consumed: i + 1, kind: "skip" };
-    if (buffer[i] === ESC && buffer[i + 1] === ST_FINAL) return { consumed: i + 2, kind: "skip" };
+    const char = buffer[i] ?? "";
+    if (introducer === "]" && char === BEL) return { consumed: i + 1, kind: "skip" };
+    if (char === ESC && buffer[i + 1] === ST_FINAL) return { consumed: i + 2, kind: "skip" };
+    if (NOT_A_STRING_BODY.has(char)) return { consumed: 1, kind: "skip" };
   }
   return buffer.length > MAX_STRING_ESCAPE_LENGTH ? "runaway" : "incomplete";
 }
@@ -296,20 +314,7 @@ function readTypedSecret(prompt: string, input: SecretInputStream, output: Secre
           const sequence = scanEscape(buffer);
           // The sequence is still arriving: keep it whole and wait. A sequence split
           // across two reads is how a paste loses its second half otherwise.
-          if (sequence === "incomplete") {
-            // Except that a string sequence runs to a terminator and is allowed to be long,
-            // so one that never terminates absorbs thousands of bytes - and raw mode makes
-            // Ctrl-C one of those bytes rather than a signal. A prompt with no way out is
-            // worse than mis-measuring a string whose body carries a raw 0x03, which is not
-            // a thing a terminal sends. A CSI is capped at 32 bytes and needs no such door.
-            if (isStringEscape(buffer) && buffer.includes(CTRL_C)) {
-              finish(() => {
-                output.write("\n");
-                reject(new PromptCancelledError());
-              });
-            }
-            return;
-          }
+          if (sequence === "incomplete") return;
           if (sequence === "runaway") {
             finish(() => {
               output.write("\n");

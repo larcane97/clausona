@@ -1,5 +1,4 @@
 import { homedir } from "node:os";
-import { StringDecoder } from "node:string_decoder";
 
 import { Spinner } from "@inkjs/ui";
 import { Box, Text, useApp, useInput, useStdin, useStdout } from "ink";
@@ -202,13 +201,16 @@ const UNFINISHED_SEQUENCE =
   "The terminal started a sequence and never finished it, so part of the key is still unread. Nothing was saved - clear the field with ctrl-u and paste it again.";
 
 /**
- * What the key field says when it cannot get at the bytes the terminal sent.
+ * What the key field says when it cannot get at the input events behind `useInput`.
  *
- * It reads them directly rather than through ink, because `useInput` strips one leading ESC
- * and offers no flag saying it did - through it, a typed `[` and a stripped `ESC [` are the
- * same string, and so are `O` and `ESC O`. Guessing between them corrupted a key twice, in
- * both directions. So when the raw stream is out of reach there is no reader to fall back
- * to, and the field says where the key can go in instead of taking one it cannot trust.
+ * It reads those rather than `useInput`'s own argument, because `parseKeypress` strips one
+ * leading ESC and offers no flag saying it did - through it, a typed `[` and a stripped
+ * `ESC [` are the same string, and so are `O` and `ESC O`. Guessing between them corrupted a
+ * key twice, in both directions. So when the emitter is out of reach there is no reader to
+ * fall back to, and the field says where the key can go in instead of taking one it cannot
+ * trust. ink's own App always provides the emitter, so this is for a host that renders its
+ * own `StdinContext` - unreachable through `render()`, and kept because the alternative to
+ * refusing is guessing.
  *
  * Short on purpose: the panel truncates an error to one line, and the way out is the part
  * that has to survive the truncation.
@@ -245,7 +247,7 @@ const overlayHints = [
 export function App({ initialScreen = "dashboard" }: AppProps) {
   const { exit } = useApp();
   const { stdout, write } = useStdout();
-  const { stdin } = useStdin();
+  const { internal_eventEmitter: inputEvents } = useStdin();
 
   const [screen, setScreen] = useState<Screen>(initialScreen);
   // Force clear the console state to prevent output duplication on terminal resize.
@@ -414,28 +416,41 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   }
 
   /**
-   * The key field's text comes from the terminal's own bytes, not from `useInput`.
+   * The key field's text comes from ink's input events, not from `useInput`.
    *
-   * `useInput` hands over `keypress.sequence` with one leading ESC removed and nothing in
-   * the `key` object saying it was removed - no `code`, and `meta` false for an unnamed CSI
-   * exactly as for a typed bracket. So through it a focus report `ESC [ I` and a key
-   * containing `[I` are the same three characters, and both of this field's silent
-   * corruptions came from guessing which: the first round appended `[I` to the key, the
-   * second reconstructed an ESC in front of every `[` and `O` and ate the characters after
-   * them. `O` is an ordinary base64 character; there is no third guess.
+   * They are the same events, one step earlier. ink's App parses a read into input events
+   * and emits each one on `internal_eventEmitter`; `useInput` subscribes to that emitter and
+   * *then* runs `parseKeypress`, which strips one leading ESC and hands over no flag saying
+   * it did - no `code`, and `meta` false for an unnamed CSI exactly as for a typed bracket.
+   * So through `useInput` a focus report `ESC [ I` and a key containing `[I` are the same
+   * three characters, and both of this field's silent corruptions came from guessing which:
+   * the first round appended `[I` to the key, the second reconstructed an ESC in front of
+   * every `[` and `O` and ate the characters after them. `O` is an ordinary base64
+   * character; there is no third guess. On the emitter the ESC is still there.
    *
-   * `readSecretChunk` is given what the terminal sent, which is what it needs to measure a
-   * sequence rather than guess at one. `useInput` keeps the named keys below - erase,
-   * ctrl-u, return, esc, the arrows - and appends nothing, so there is exactly one writer.
+   * The emitter rather than the stdin stream, which was the other way to get at the bytes
+   * and is a trap: ink holds that stream in pull mode - `addListener('readable')` and
+   * `while ((chunk = stdin.read()) !== null)` - so a second reader there either steals the
+   * bytes ink is waiting for or depends on emit ordering that is not ours to rely on. This
+   * touches no stream and no raw mode, so there is no refcount to get wrong either.
    *
-   * Attached only while the cursor is on the key field. Everywhere else the terminal's bytes
-   * are none of this listener's business.
+   * ink also does the reassembly: an event is a run of plain text or one whole sequence,
+   * with an unfinished one held and rejoined across reads. What it does not measure is the
+   * string family - `ESC ]`, `ESC P`, `ESC X`, `ESC ^`, `ESC _` arrive as a two-character
+   * event with the payload following as text - and joining those is what `pending` is for.
+   *
+   * `useInput` keeps the named keys below - erase, ctrl-u, return, esc, the arrows - and
+   * appends nothing, so there is exactly one writer. Attached only while the cursor is on
+   * the key field; everywhere else these events are none of this listener's business.
+   *
+   * The seam is pinned in src/tui/App.test.tsx: `internal_` is a name that can change, and
+   * what it would change into is a credential stored wrong and reported as success.
    */
   const keyFieldFocused = isKeyFieldFocused(screen, addState);
-  const canReadKeyBytes = typeof stdin?.on === "function" && typeof stdin?.off === "function";
+  const canReadKeyInput = typeof inputEvents?.on === "function" && typeof inputEvents?.off === "function";
   useEffect(() => {
     if (!keyFieldFocused) return;
-    if (!canReadKeyBytes) {
+    if (!canReadKeyInput) {
       // No reader at all rather than a guessing one, and the refusal is shown where the key
       // would have been typed instead of at the save, which is too late to retype anything.
       setAddState((prev) =>
@@ -443,18 +458,11 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       );
       return;
     }
-    // Decoded here rather than by `setEncoding`, which would change the shared stdin for
-    // whatever ink and the rest of the process do with it, and re-created with the listener
-    // so a multibyte character split across two reads is joined rather than mangled.
-    const decoder = new StringDecoder("utf8");
-    const onData = (chunk: Buffer | string) => {
-      const bytes = typeof chunk === "string" ? chunk : decoder.write(chunk);
-      if (bytes === "") return;
-      const read = readSecretChunk(secretInput.current, bytes);
+    const onInput = (input: string) => {
+      const read = readSecretChunk(secretInput.current, input);
       secretInput.current = read.state;
       // The same two writes `editApiKey` makes, inlined so that this listener depends on
-      // nothing that changes every render: re-attaching it would drop the decoder, and with
-      // it half of any character that happened to be spanning two reads.
+      // nothing that changes every render - it is subscribed once per focus, not per frame.
       if (read.problem === "unreadable") {
         setApiKey("");
         setAddState((prev) =>
@@ -468,11 +476,11 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         prev ? { ...prev, api: { ...prev.api, errors: withoutKeys(prev.api.errors, "key") } } : null,
       );
     };
-    stdin.on("data", onData);
+    inputEvents.on("input", onInput);
     return () => {
-      stdin.off("data", onData);
+      inputEvents.off("input", onInput);
     };
-  }, [keyFieldFocused, canReadKeyBytes, stdin]);
+  }, [keyFieldFocused, canReadKeyInput, inputEvents]);
 
   function editApiField(field: ApiField, value: string) {
     updateApiForm((form) => {
@@ -532,13 +540,20 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     // A paste whose closing bracket never arrived: what is in the field is the front of a
     // key rather than the key. The prompt refuses to return that rather than have it
     // stored and reported as success, and so does this.
+    //
+    // Belt and braces now: the key field holds the cursor while a paste is open, so Submit
+    // is not reachable in that state. It stays because what it is guarding is a credential
+    // being stored wrong, and because "unreachable" is a property of the handler above
+    // rather than of this function.
     if (secretInput.current.pasting) errors.key = UNFINISHED_PASTE;
-    // The same refusal one branch out. Since the field reads the terminal's own bytes, a
-    // sequence still half-arrived at save time means real bytes are parked behind it - and
-    // a key is what the terminal sent, not what got as far as the field.
+    // The same refusal one branch out, and this one is reachable: a stray OSC introducer
+    // parks every byte after it without opening a paste, so the cursor is free to walk to
+    // Submit over a field that looks empty. A sequence still half-arrived at save time
+    // means real bytes are parked behind it, and a key is what the terminal sent rather
+    // than what got as far as the field.
     if (secretInput.current.pending !== "") errors.key = UNFINISHED_SEQUENCE;
     // And nothing can be saved at all from a field that never had a reader.
-    if (!canReadKeyBytes) errors.key = NO_RAW_KEY_INPUT;
+    if (!canReadKeyInput) errors.key = NO_RAW_KEY_INPUT;
     if (Object.keys(errors).length > 0) {
       // A setting that is wrong while the section is folded has nowhere to be shown, so
       // the section opens rather than the form refusing to submit for an invisible reason.
@@ -895,6 +910,22 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           const index = Math.min(form.cursor, fields.length - 1);
           const current = fields[index];
           const typing = isTypingField(current);
+          /**
+           * A paste is open on the key field: its opening bracket arrived and its closing
+           * one has not, so the terminal has said every byte until then is pasted data.
+           *
+           * Which means an Enter or an arrow among those bytes is data too, and whether ink
+           * names one depends only on where a read happened to be split. Acting on it would
+           * move the cursor off the field mid-paste, detach the reader, and type the rest of
+           * the key into the next row - a plain text field that draws what it holds. So the
+           * cursor stays, and the refusal that would otherwise wait until Submit is shown
+           * now, because holding the cursor has to come with a way out: ctrl-u.
+           */
+          const openPaste = current?.kind === "secret" && secretInput.current.pasting;
+          if (openPaste && (key.upArrow || key.downArrow || key.tab || key.return)) {
+            updateApiForm((prev) => ({ ...prev, errors: { ...prev.errors, key: UNFINISHED_PASTE } }));
+            return;
+          }
 
           if (key.upArrow) {
             moveApiCursor(-1);
@@ -929,8 +960,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           // The key field is the one field with no text input behind it, because a text
           // input draws one glyph per character it holds and the length of a key is
           // something this form does not show. So the editing keys are handled here:
-          // erase and kill-line. The characters themselves are not: they come from the raw
-          // stdin listener above, which reads the bytes before ink has edited them.
+          // erase and kill-line. The characters themselves are not: they come from the
+          // input-event listener above, which reads them before ink has edited them.
           if (current?.kind === "secret" && !key.return) {
             if (key.delete || key.backspace) {
               if (apiKey.length <= 1) {

@@ -573,6 +573,42 @@ describe("string-terminated escape sequences", () => {
     expect(runaway.text).toBe("");
   });
 
+  /**
+   * The five introducers are exactly where the lone-Escape contract changed meaning, and
+   * the fixture key above begins with `s`, which proves nothing about them. A key beginning
+   * with one of these bytes, typed after a stray Escape, must still be the key - not a
+   * payload the reader waits forever for the end of.
+   */
+  const INTRODUCERS: [string, string][] = [
+    ["OSC", "]"],
+    ["DCS", "P"],
+    ["SOS", "X"],
+    ["PM", "^"],
+    ["APC", "_"],
+  ];
+
+  it.each(INTRODUCERS)("keeps a key beginning with %s's introducer, typed after a lone Escape", async (_n, byte) => {
+    const tty = fakeTerminal();
+    const key = `${byte}k-fake-9xQZ-0001`;
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type(`\u001b${key}\r`);
+
+    await expect(answer).resolves.toBe(key);
+  });
+
+  it.each(INTRODUCERS)("resolves %s's introducer across reads once the Enter arrives", (_n, byte) => {
+    // How the same keystrokes reach the TUI: ink emits the ESC and the introducer as one
+    // event and the rest as another, so the reader only learns this was never a sequence
+    // when the line break turns up.
+    const first = read(`\u001b${byte}`);
+    const second = readSecretChunk(first.state, "k-fake-9xQZ-0001\r");
+
+    expect(first.text).toBe("");
+    expect(second.text).toBe(`${byte}k-fake-9xQZ-0001`);
+    expect(second.state.pending).toBe("");
+  });
+
   it("still lets ctrl-c out of a string sequence whose terminator never arrives", async () => {
     // The cost of the ceiling above: until it is reached, an unterminated sequence absorbs
     // every byte after it - and raw mode makes Ctrl-C one of those bytes rather than a
