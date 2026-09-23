@@ -1145,7 +1145,18 @@ describe("config --base-url / --auth / --label", () => {
     );
 
     expect(message).toContain("Label cannot be blank");
+    // At add, leaving it out is the way to get the host; at config there is no such default.
+    expect(message).toContain("Leave --label out to use the endpoint's host.");
     expect(promptCalls).toEqual([]);
+  });
+
+  it("config's blank-label refusal does not offer add's default", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+
+    const message = await failure(h.run("config", "claude:gw", "--label", " "));
+
+    expect(message).toContain("Label cannot be blank");
+    expect(message).not.toContain("Leave --label out");
   });
 });
 

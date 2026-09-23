@@ -165,10 +165,11 @@ clausona add claude:local --api \
 clausona use claude:gw
 ```
 
-`clausona use` records which profile is active; it is the shell hook the installer adds to
-your rc file (`eval "$(clausona shell-init)"`) that applies it each time `claude` starts. In a
-shell without the hook, `use` changes nothing `claude` sees — `clausona run claude:gw` applies
-a profile for one run without it. See [Profile Switching](#profile-switching).
+`clausona use` records which profile is active; it is the shell hook the installer adds that
+applies it each time `claude` starts — `eval "$(clausona shell-init)"` in your zsh or bash rc
+file, `Invoke-Expression (& clausona shell-init | Out-String)` in your PowerShell profile. In
+a shell without the hook, `use` changes nothing `claude` sees — `clausona run claude:gw`
+applies a profile for one run without it. See [Profile Switching](#profile-switching).
 
 `--base-url` must be an absolute `http://` or `https://` URL carrying no username or
 password — a credential in the URL would be stored in `profiles.json` in plain text, which
@@ -405,17 +406,17 @@ removing it removes it for every profile.
 ### What `list` shows
 
 The `ACCOUNT` column holds the account email for a subscription profile and the label for an
-API one — the endpoint's host, unless you passed `--label` (or set one since with `config
---label`). `5H` and `7D` show a dash: those
-are subscription plan windows, an API endpoint bills per token, and there is nothing to read.
+API one — the endpoint's host, unless you passed `--label` (or set one since with
+`config --label`). `5H` and `7D` show a dash: those are subscription plan windows, an API
+endpoint bills per token, and there is nothing to read.
 **The dash is not an error** — unlike the dashes described under [When a reading is
 unavailable](#when-a-reading-is-unavailable), no state and no reason line accompany it. The
 profile is never queried, so `--refresh` and `--no-quota` change nothing for it.
 
 ```
-PROFILE             ACCOUNT                      5H         7D
-claude:work         you@example.com              6% 23m     46% 13h
-claude:gw           openrouter.ai                —          —
+PROFILE             ACCOUNT                      MODEL                   5H         7D
+claude:work         you@example.com              —                       6% 23m     46% 13h
+claude:gw           openrouter.ai                z-ai/glm-5.3            —          —
 ```
 
 `MODEL`, once any profile pins a model, shows each profile's `ANTHROPIC_MODEL`, subscription

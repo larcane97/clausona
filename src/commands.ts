@@ -1193,7 +1193,7 @@ export async function runCommand(command: string, args: string[]) {
         const authScheme = authArg === undefined ? defaultAuthScheme(url.hostname) : parseAuthScheme(authArg);
         // addApiProfile's own rule again, for the same reason as the URL above.
         const label = optionValue(args, "--label");
-        if (label !== undefined) checkLabel(label);
+        if (label !== undefined) checkLabel(label, "add");
 
         // Built before the key is asked for: a rejected setting should not cost the user
         // a typed key. This is the same validator addApiProfile runs, not a second rule.

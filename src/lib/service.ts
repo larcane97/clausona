@@ -1902,9 +1902,14 @@ export function parseBaseUrl(baseUrl: string): URL {
  * A blank label would render the profile as an empty row in `list`, since an API profile
  * has no account email for `displayName` to fall back on.
  */
-export function checkLabel(label: string): string {
+export function checkLabel(label: string, context: "add" | "config" = "config"): string {
   const trimmed = label.trim();
-  if (trimmed === "") throw new Error("Label cannot be blank: it is the name `clausona list` shows for this profile.");
+  if (trimmed === "") {
+    // At add, leaving the label out gets the endpoint's host; at config there is no such
+    // default to fall back on, only the label the profile already has.
+    const hint = context === "add" ? " Leave --label out to use the endpoint's host." : "";
+    throw new Error(`Label cannot be blank: it is the name \`clausona list\` shows for this profile.${hint}`);
+  }
   return trimmed;
 }
 
@@ -1939,7 +1944,7 @@ export async function addApiProfile(options: {
   const url = parseBaseUrl(baseUrl);
   checkAuthScheme(options.authScheme);
   // Absent means "use the host".
-  const label = options.label === undefined ? url.host : checkLabel(options.label);
+  const label = options.label === undefined ? url.host : checkLabel(options.label, "add");
   const { source: secret, toStore } = checkSecretSource(options.secret, options.secretValue);
   const env = { ...options.env };
   for (const [key, value] of Object.entries(env)) {
