@@ -66,6 +66,20 @@ export function isAnthropicHost(hostname: string): boolean {
   return host === "anthropic.com" || host.endsWith(".anthropic.com");
 }
 
+/**
+ * Whether plain http to a host keeps the key on this machine: `localhost`, an IPv4 address in
+ * 127.0.0.0/8, or `::1`. Takes a parsed URL's `hostname`, which the parser has already
+ * lowercased and turned from any IPv4 spelling - `127.1`, `0x7f.0.0.1`, `2130706433` - into
+ * four decimal parts, so the address is matched whole: `127.gw.example.com` is a name like
+ * any other, and resolves wherever its owner points it.
+ *
+ * Here rather than beside the one note that uses it, because every route that can store an
+ * http URL - `add`, `config`, the API form - has to agree on which ones cross the network.
+ */
+export function isLoopbackHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "[::1]" || /^127\.\d+\.\d+\.\d+$/.test(hostname);
+}
+
 /** What stands in, on every output path, for anything clausona will not print. */
 export const HIDDEN = "<hidden>";
 

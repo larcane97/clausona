@@ -366,8 +366,9 @@ can be given together, as one change. Two things happen that you might not expec
   in a header Anthropic does not read. A label or scheme you chose stays; when a kept scheme
   differs from what the new host usually takes, clausona says so and names the `--auth` that
   would switch it.
-- **A move to plain `http://` is noted** unless the host is this machine (`localhost`,
-  `127.0.0.1`, `::1`): the key would cross the network unencrypted.
+- **A move to plain `http://` is noted** unless the host is this machine (`localhost`, an
+  address in `127.0.0.0/8`, `::1`): the key would cross the network unencrypted. A name is
+  judged as a name, so `127.gw.example.com` and `gw.localhost` are noted.
 
 A subscription profile has no endpoint, and `list` names it by its account email, so all
 three refuse one. Do not edit `~/.clausona/profiles.json` by hand for any of this — a

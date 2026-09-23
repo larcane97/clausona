@@ -694,7 +694,7 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("the old host, and the auth scheme - api-key for anthropic.com, bearer")}`,
         `    ${dim("elsewhere. One that was chosen stays, with a note if the new host usually takes")}`,
         `    ${dim("the other scheme. A move to plain http off this machine is noted too: the key")}`,
-        `    ${dim("would travel unencrypted.")}`,
+        `    ${dim("would travel unencrypted. This machine is localhost, 127.0.0.0/8 and ::1.")}`,
         `    ${dim("A subscription profile has no endpoint, and list names it by its account")}`,
         `    ${dim("email, so all three refuse one.")}`,
         "",

@@ -15,7 +15,7 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { checkBaseUrl, hasBareUserinfo, isAnthropicHost } from "../core/api-url.js";
+import { checkBaseUrl, hasBareUserinfo, isAnthropicHost, isLoopbackHost } from "../core/api-url.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
 import { sharesSecretSource } from "../core/key-source.js";
 import { backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
@@ -1432,11 +1432,6 @@ export async function updateProfileSecret(id: string, secret: SecretSource, valu
  */
 export function defaultAuthScheme(hostname: string): ApiEndpoint["authScheme"] {
   return isAnthropicHost(hostname) ? "api-key" : "bearer";
-}
-
-/** A host an http URL can reach without the key leaving the machine. */
-function isLoopbackHost(hostname: string): boolean {
-  return hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "[::1]" || /^127\./.test(hostname);
 }
 
 export type ProfileApiUpdate = {

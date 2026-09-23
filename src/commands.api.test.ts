@@ -983,6 +983,11 @@ describe("config --base-url / --auth / --label", () => {
       ["https to http on localhost", "https://openrouter.ai/api", "http://localhost:8000", false],
       ["https to http on 127.0.0.1", "https://openrouter.ai/api", "http://127.0.0.1:8000", false],
       ["https to http on ::1", "https://openrouter.ai/api", "http://[::1]:8000", false],
+      ["https to http on 127.0.0.0/8, spelled short", "https://openrouter.ai/api", "http://127.1:8000", false],
+      // A DNS name that starts like a loopback address is still a name, resolved wherever
+      // its owner points it; the key would leave the machine.
+      ["https to http on a name starting 127.", "https://openrouter.ai/api", "http://127.gw.example.com/api", true],
+      ["https to http on a name under .localhost", "https://openrouter.ai/api", "http://gw.localhost:8000", true],
       ["https to https", "https://openrouter.ai/api", "https://gw.example.com/api", false],
     ];
 
