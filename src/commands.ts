@@ -731,8 +731,13 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("  in plain text. Move it with `clausona config <profile> --key`, then")}`,
         `    ${dim("  drop the copy with `clausona config <profile> --unset <NAME>`. For a key")}`,
         `    ${dim("  read from env: or command:, the --unset alone - --key would replace it.")}`,
+        `    ${dim("  A name shaped like an API key is not printed; `clausona config <profile>")}`,
+        `    ${dim("  --edit` takes it out;")}`,
+        `    ${dim("- ANTHROPIC_BASE_URL in the profile's env map, which a hand edit can put")}`,
+        `    ${dim("  there: it wins at launch over the endpoint list and doctor show. Run")}`,
+        `    ${dim("  `clausona config <profile> --unset ANTHROPIC_BASE_URL`, then --base-url.")}`,
         "",
-        `    ${dim("The last three are warnings. They describe a key that could reach an")}`,
+        `    ${dim("The last four are warnings. They describe a key that could reach an")}`,
         `    ${dim("endpoint, not a profile that is broken, so the profile stays healthy.")}`,
         "",
         `    ${dim("No request is made to the endpoint. A healthy report means the profile is")}`,
@@ -767,7 +772,7 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${accent("--model".padEnd(22))}${dim("The model the profile uses, stored as ANTHROPIC_MODEL")}`,
         `    ${accent("--set".padEnd(22))}${dim("Set an advanced env setting; repeatable")}`,
         `    ${accent("--unset".padEnd(22))}${dim("Remove an advanced env setting; repeatable. A name")}`,
-        `    ${" ".repeat(22)}${dim("that is not set changes nothing, and is said to be unset")}`,
+        `    ${" ".repeat(22)}${dim("that is not set changes nothing, and the output says so")}`,
         `    ${accent("--base-url".padEnd(22))}${dim("Point an API profile at another endpoint, http:// or https://")}`,
         `    ${accent("--auth".padEnd(22))}${dim("bearer | api-key: how an API profile presents its key")}`,
         `    ${accent("--label".padEnd(22))}${dim("Name list shows for an API profile; cannot be blank")}`,
@@ -806,7 +811,8 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("machine is noted too: the key would travel unencrypted. This machine is")}`,
         `    ${dim("localhost, 127.0.0.0/8 and ::1.")}`,
         `    ${dim("A subscription profile has no endpoint, and list names it by its account")}`,
-        `    ${dim("email, so all three refuse one.")}`,
+        `    ${dim("email, so all three refuse one. On an API profile, --set ANTHROPIC_BASE_URL")}`,
+        `    ${dim("is refused: the endpoint is --base-url, which every check above follows.")}`,
         "",
         `  ${bold("EXAMPLES")}`,
         helpUsage("clausona config claude:gw --model z-ai/glm-5.3-flash"),
@@ -1003,6 +1009,12 @@ export async function runCommand(command: string, args: string[]) {
         refresh: args.includes("--refresh"),
         renew: !args.includes("--no-renew"),
       });
+      // A profiles.json that cannot be read lists as no profiles; an empty table, exit 0, read
+      // as "none registered" and sent the user to init. Say what is wrong instead.
+      if (items.length === 0) {
+        const problem = await registryProblem();
+        if (problem) throw new Error(problem);
+      }
       return jsonFlag(args) ? JSON.stringify(items, null, 2) : renderList(items);
     }
 
@@ -1218,8 +1230,11 @@ export async function runCommand(command: string, args: string[]) {
         // and a typo in the name looked like success.
         const before = envMapOf(profile.env) ?? {};
         const notSet = unsetKeys.filter((key) => !Object.hasOwn(before, key) && !Object.hasOwn(set, key));
-        const notSetLine = `${notSet.join(", ")} ${notSet.length === 1 ? "was" : "were"} not set`;
-        const changed = [...Object.keys(set), ...unsetKeys.filter((key) => !notSet.includes(key))].join(", ");
+        // Names as they may be printed: a key pasted as a valid name can be unset, not echoed.
+        const notSetLine = `${notSet.map(shownEnvName).join(", ")} ${notSet.length === 1 ? "was" : "were"} not set`;
+        const changed = [...Object.keys(set), ...unsetKeys.filter((key) => !notSet.includes(key))]
+          .map(shownEnvName)
+          .join(", ");
         if (changed === "") return dim(`${notSetLine}; nothing changed`);
         const updated = success(`Updated ${bold(ref.id)} ${dim(`(${changed})`)}`);
         return notSet.length === 0 ? updated : `${updated}\n  ${dim(notSetLine)}`;

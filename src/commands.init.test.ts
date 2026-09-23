@@ -554,6 +554,15 @@ describe("a profiles.json that cannot be read", () => {
     ).rejects.toThrow(/profiles\.json could not be read/);
   });
 
+  it("is what list reports, in text and --json, rather than an empty table", async () => {
+    const { h } = await unreadable();
+
+    await expect(h.commands.runCommand("list", ["--no-quota"])).rejects.toThrow(/profiles\.json could not be read/);
+    await expect(h.commands.runCommand("list", ["--json", "--no-quota"])).rejects.toThrow(
+      /profiles\.json could not be read/,
+    );
+  });
+
   it("is told apart from no profiles.json at all, which names init", async () => {
     const h = await harness();
 

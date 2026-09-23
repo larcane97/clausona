@@ -968,6 +968,27 @@ describe("config --set / --unset", () => {
     expect(h.profile("claude:gw").env).toEqual({});
   });
 
+  // A key pasted where a name goes, and valid as one: a hand edit can have put it in the map,
+  // and --unset is one way to take it out. What --unset says back must not be the key.
+  it("never prints a key-shaped name it was given, set or not", async () => {
+    // Built from pieces, so no line of this file is a token a secret scanner would flag.
+    const pat = [
+      "github",
+      "pat",
+      "11ABCDEFG0Q8r3LmZ7pW2x",
+      "Kd9fT4vYb6NcR1sHjU5wE8aG3mP0qLzXy7Bn2Vt4Rk9Fh6Ds1Wc3Ju",
+    ].join("_");
+    const h = await harness({ "claude:gw": { ...API_PROFILE, env: { ANTHROPIC_MODEL: "z-ai/glm-5.3", [pat]: "x" } } });
+
+    const removed = stripAnsi(await h.run("config", "claude:gw", "--unset", pat));
+    const notSet = stripAnsi(await h.run("config", "claude:gw", "--unset", pat));
+
+    expect(h.profile("claude:gw").env).toEqual({ ANTHROPIC_MODEL: "z-ai/glm-5.3" });
+    expect(removed).toContain("Updated claude:gw");
+    expect(notSet).toContain("not set; nothing changed");
+    expect(slicesIn(removed + notSet, pat)).toEqual([]);
+  });
+
   it("refuses a bare key, so a typo cannot quietly clear a setting", async () => {
     const h = await harness({ "claude:gw": API_PROFILE });
 
@@ -3207,7 +3228,9 @@ describe("help", () => {
     // source is executed - doctor is not a read-only inspection of the registry.
     expect(help).toContain("never prints the key");
     expect(help).toContain("is run");
-    // Which three leave the profile healthy, so a warning is not read as breakage.
+    expect(help).toContain("ANTHROPIC_BASE_URL in the profile's env map");
+    expect(help).toContain("A name shaped like an API key is not printed");
+    // Which four leave the profile healthy, so a warning is not read as breakage.
     expect(help).toContain("are warnings");
     expect(help).toContain("stays healthy");
     // And what it does not do, so a healthy report is not read as "the endpoint answered".
