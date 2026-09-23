@@ -15,7 +15,7 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { checkBaseUrl, HIDDEN, hasBareUserinfo, isAnthropicHost, isLoopbackHost } from "../core/api-url.js";
+import { checkBaseUrl, HIDDEN, hasBareUserinfo, isAnthropicHost, sendsKeyInClear } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
 import { sharesSecretSource } from "../core/key-source.js";
@@ -1516,10 +1516,7 @@ export async function updateProfileApi(
     hostDefaultAuth:
       chosenAuth === undefined && hostDefault !== undefined && hostDefault !== authScheme ? hostDefault : undefined,
     cleartext:
-      url !== undefined &&
-      url.protocol === "http:" &&
-      !isLoopbackHost(url.hostname) &&
-      !(previous?.protocol === "http:" && previous.host === url.host),
+      url !== undefined && sendsKeyInClear(url) && !(previous?.protocol === "http:" && previous.host === url.host),
     sharedWith: Object.entries(registry.profiles)
       .filter(
         ([other, entry]) => other !== id && entry.kind === "api" && sharesSecretSource(entry.api?.secret, api.secret),

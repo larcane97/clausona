@@ -115,6 +115,11 @@ export function isLoopbackHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "[::1]" || /^127\.\d+\.\d+\.\d+$/.test(hostname);
 }
 
+/** Whether a base URL sends the key across the network unencrypted: plain http, off this machine. */
+export function sendsKeyInClear(url: URL): boolean {
+  return url.protocol === "http:" && !isLoopbackHost(url.hostname);
+}
+
 /** What stands in, on every output path, for anything clausona will not print. */
 export const HIDDEN = "<hidden>";
 
