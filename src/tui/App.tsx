@@ -1,9 +1,9 @@
 import { homedir } from "node:os";
 
 import { Spinner } from "@inkjs/ui";
-import { Box, Text, useApp, useInput, useStdin, useStdout } from "ink";
+import { Box, type Key, Text, useApp, useInput, useStdin, useStdout } from "ink";
 import TextInput from "ink-text-input";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { bootstrapInitFromCurrentState } from "../commands.js";
 import {
@@ -246,6 +246,26 @@ const overlayHints = [
   { keys: "esc", action: "cancel" },
 ];
 
+/**
+ * `handler` as of the last frame React committed, behind one function that never changes -
+ * for `useInput`, so the App's keys are answered with the state on screen.
+ *
+ * ink subscribes a `useInput` handler in an effect and subscribes it again whenever the
+ * handler changes, which an inline one does every render. React runs that effect a turn of
+ * the event loop after the commit that drew the frame, and a read can land in between: it was
+ * answered by the handler of the frame before, with that frame's state. An Enter pressed the
+ * moment "Create profile" was drawn saved the key as the frame before had it - the head of a
+ * paste whose tail came in the read that brought the cursor down. Here the one function is
+ * subscribed once, and what it calls is swapped in the commit itself.
+ */
+function useCommittedHandler<Args extends unknown[]>(handler: (...args: Args) => void): (...args: Args) => void {
+  const committed = useRef(handler);
+  useLayoutEffect(() => {
+    committed.current = handler;
+  });
+  return useCallback((...args: Args) => committed.current(...args), []);
+}
+
 // ── App ──
 
 export function App({ initialScreen = "dashboard" }: AppProps) {
@@ -463,9 +483,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    *
    * Leaving the key field also settles its reader. Leaving is an arrow, a tab or an Enter, and
    * each interrupts a sequence still open - but the same keystroke reaches this handler and the
-   * reader's, in an order that is ink's to choose. Whichever comes first, the parked bytes come
-   * out as the keystroke would have made them: the reader's version when it heard it, this one
-   * when it is about to be told the input is no longer the key field's.
+   * reader's, in an order that is ink's to choose (today this one first). Whichever comes first,
+   * the parked bytes come out as the keystroke would have made them: the reader's version when
+   * it heard it, this one when it is about to be told the input is no longer the key field's.
    */
   function releaseApiInput() {
     if (inputTarget.current === KEY_FIELD) {
@@ -519,9 +539,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    * listener hears the rest of that read.
    *
    * Which of this listener and `useInput`'s handler hears an event first is ink's business:
-   * today this one, because ink re-subscribes `useInput` on every render. Nothing depends on
-   * it. The one place the two disagree - a keystroke that both ends a parked sequence and
-   * moves the cursor - is settled by `releaseApiInput`, whichever order they come in.
+   * today `useInput`'s, which is subscribed for the App's whole life. Nothing depends on it.
+   * The one place the two disagree - a keystroke that both ends a parked sequence and moves
+   * the cursor - is settled by `releaseApiInput`, whichever order they come in.
    *
    * The seam is pinned in src/tui/App.test.tsx: `internal_` is a name that can change, and
    * what it would change into is a credential stored wrong and reported as success.
@@ -821,7 +841,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     { id: "quit", label: "Quit", detail: "Exit clausona" },
   ];
 
-  useInput((input, key) => {
+  // Every key the App answers itself, as of the frame on screen: see `useCommittedHandler`.
+  const handleInput = useCommittedHandler((input: string, key: Key) => {
     if (screen === "dashboard") {
       if (key.escape) {
         const now = Date.now();
@@ -1587,6 +1608,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       }
     }
   });
+  useInput(handleInput);
 
   // ── Screens ──
 

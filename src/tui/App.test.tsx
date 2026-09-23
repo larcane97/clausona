@@ -57,6 +57,7 @@ import {
   moveTo,
   press,
   renderAt,
+  sendBeforeEffects,
   type,
   typeSlowly,
   waitForFrame,
@@ -870,6 +871,59 @@ describe("App add-profile: API endpoint", () => {
       await press(instance, "glm-5");
 
       expect(row(instance, "Model")).toContain("glm-5");
+      instance.unmount();
+    });
+  });
+
+  /**
+   * Ruling 92: a read that lands between the commit that draws a frame and the effects that
+   * frame subscribes in.
+   *
+   * React runs passive effects - `useEffect`, and every `useInput` subscription - a turn of the
+   * event loop after the commit that drew the frame, and a read can arrive in that turn. Arrow
+   * onto the key field and paste at once, on a busy machine, and the field's listener had not
+   * been subscribed yet: the paste's head went nowhere, its tail was stored as the key, and the
+   * form said "Added" over the same eight bullets. `sendBeforeEffects` lands a read in that turn
+   * on purpose, every time, rather than waiting for a machine slow enough.
+   */
+  describe("input that arrives before a frame's effects have run", () => {
+    async function formAt() {
+      const instance = renderAt(<App initialScreen="use" />, 100);
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("default"));
+      await press(instance, "a");
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Choose how to add"));
+      await moveTo(instance, "API endpoint");
+      return instance;
+    }
+
+    async function filledTo(label: string) {
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const instance = await formAt();
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Create profile"));
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+      await press(instance, "https://gateway.example.com");
+      await moveTo(instance, label);
+      return instance;
+    }
+
+    it("saves the key the screen shows, not the one a frame before it", async () => {
+      // The same turn, one handler over: the App's own keys. ink subscribes a `useInput`
+      // handler in an effect too, so an Enter landing the moment "Create profile" is drawn was
+      // answered by the handler of the frame before - with the key as that frame had it. The
+      // read that brought the key's last characters also brought the arrows down to Create
+      // profile, so that frame had only the head, and the head is what was saved.
+      const instance = await filledTo("API key");
+      await type(instance, KEY.slice(0, 20));
+
+      sendBeforeEffects(instance, (frame) => focusedOn(frame, "Create profile"), ENTER);
+      await type(instance, `${KEY.slice(20)}${DOWN}${DOWN}${DOWN}${DOWN}`);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added") || f.includes("✘"));
+
+      const { addApiProfile } = await import("../lib/service.js");
+      expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(expect.objectContaining({ secretValue: KEY }));
       instance.unmount();
     });
   });

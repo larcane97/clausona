@@ -64,16 +64,24 @@ class FakeStdin extends EventEmitter {
   unref() {}
 }
 
+/** `renderAt`'s instance, which also hears each frame the moment ink writes it. */
+export type WatchedInstance = Instance & {
+  /** Calls `listener` with every frame from now on, inside the commit that draws it. */
+  watchFrames(listener: (frame: string) => void): () => void;
+};
+
 /**
  * `render` at a terminal width of the test's choosing. ink-testing-library's is fixed at 100
  * columns, and what a one-line message loses at the panel's edge depends on exactly that.
  */
-export function renderAt(tree: ReactElement, columns: number): Instance {
+export function renderAt(tree: ReactElement, columns: number): WatchedInstance {
   const frames: string[] = [];
+  const watchers = new Set<(frame: string) => void>();
   const stdout = Object.assign(new EventEmitter(), {
     columns,
     write: (frame: string) => {
       frames.push(frame);
+      for (const watcher of [...watchers]) watcher(frame);
       return true;
     },
   });
@@ -92,7 +100,30 @@ export function renderAt(tree: ReactElement, columns: number): Instance {
     frames,
     lastFrame: () => frames.at(-1),
     unmount: instance.unmount,
+    watchFrames(listener) {
+      watchers.add(listener);
+      return () => watchers.delete(listener);
+    },
   };
+}
+
+/**
+ * Sends `keys` as the read after the first frame `drawn` accepts, before React has run that
+ * frame's effects.
+ *
+ * React does not run a commit's passive effects - `useEffect`, and with it every `useInput`
+ * subscription - in the turn that drew the frame: the commit asks its Scheduler to yield for a
+ * paint, and the effects go in a later turn of the event loop. A terminal read can land in
+ * between, and whatever subscribes in such an effect has not heard it. `press` and `type` never
+ * land there, because they wait for the frame and then a turn more. This does, every time: the
+ * write is queued from inside the commit, ahead of the Scheduler's own turn.
+ */
+export function sendBeforeEffects(instance: WatchedInstance, drawn: (frame: string) => boolean, keys: string) {
+  const stop = instance.watchFrames((frame) => {
+    if (!drawn(frame)) return;
+    stop();
+    setImmediate(() => instance.stdin.write(keys));
+  });
 }
 
 /**
