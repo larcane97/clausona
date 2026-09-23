@@ -26,6 +26,7 @@ import {
 } from "./lib/profile-ref.js";
 import { promptSecret } from "./lib/prompt-secret.js";
 import { describeSecretSource, HIDDEN, hiddenEnvKeys, isCredentialEnvKey, redactProfile } from "./lib/redact.js";
+import { secretStoreName } from "./lib/secrets.js";
 import {
   addApiProfile,
   addProfile,
@@ -637,6 +638,9 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("No request is made to the endpoint. A healthy report means the profile is")}`,
         `    ${dim("configured and its key resolves, not that the endpoint answered.")}`,
         "",
+        `    ${dim("When a profile's key is stored by clausona (--key-from keychain), the report")}`,
+        `    ${dim("ends by saying where: the macOS Keychain, or ~/.clausona/secrets.json elsewhere.")}`,
+        "",
       ].join("\n");
 
     case "config":
@@ -983,7 +987,15 @@ export async function runCommand(command: string, args: string[]) {
 
     case "doctor": {
       const results = await doctorProfiles();
-      return jsonFlag(args) ? JSON.stringify(results, null, 2) : renderDoctor(results);
+      if (jsonFlag(args)) return JSON.stringify(results, null, 2);
+      // Said once, after every profile, and only when some API profile has a key stored:
+      // a registry with none gets the report it always got.
+      const registry = await loadRegistry();
+      const keysStored = Object.values(registry?.profiles ?? {}).some(
+        (profile) => profile.kind === "api" && profile.api?.secret?.source === "keychain",
+      );
+      const rendered = renderDoctor(results);
+      return keysStored ? `${rendered}  ${dim(`Stored API keys are kept in ${secretStoreName()}.`)}\n` : rendered;
     }
 
     case "repair": {

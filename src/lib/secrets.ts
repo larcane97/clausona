@@ -9,7 +9,7 @@ import type { SecretSource } from "../types.js";
 const CLAUSONA_DIR = path.join(homedir(), ".clausona");
 const SECRETS_PATH = path.join(CLAUSONA_DIR, "secrets.json");
 
-export type SecretBackend = "keychain" | "secret-tool" | "file";
+export type SecretBackend = "keychain" | "file";
 
 /** Namespaced so a clausona item is never confused with one Claude Code itself wrote. */
 export function keychainItemFor(profileId: string): string {
@@ -33,10 +33,19 @@ function run(command: string, args: string[], input?: string): Promise<RunResult
   });
 }
 
-export async function detectBackend(platform: NodeJS.Platform = process.platform): Promise<SecretBackend> {
-  if (platform === "darwin") return "keychain";
-  if (platform === "linux" && (await run("secret-tool", ["--version"])).code === 0) return "secret-tool";
-  return "file";
+/**
+ * The Keychain on macOS, and ~/.clausona/secrets.json (0600) everywhere else - Linux
+ * included. Not secret-tool: a probe for it cannot tell a working Secret Service from a
+ * machine with the binary and no daemon behind it, and the one it had (`--version`) failed
+ * on every real secret-tool, so the file was already where every Linux key went.
+ */
+export function detectBackend(platform: NodeJS.Platform = process.platform): SecretBackend {
+  return platform === "darwin" ? "keychain" : "file";
+}
+
+/** Where a stored key is, as doctor says it. */
+export function secretStoreName(platform: NodeJS.Platform = process.platform): string {
+  return detectBackend(platform) === "keychain" ? "the macOS Keychain" : "~/.clausona/secrets.json";
 }
 
 /**
@@ -173,18 +182,8 @@ async function storeKeychainSecret(profileId: string, value: string): Promise<vo
 }
 
 export async function storeSecret(profileId: string, value: string, backend?: SecretBackend): Promise<void> {
-  const resolvedBackend = backend ?? (await detectBackend());
-  if (resolvedBackend === "keychain") {
+  if ((backend ?? detectBackend()) === "keychain") {
     await storeKeychainSecret(profileId, value);
-    return;
-  }
-  if (resolvedBackend === "secret-tool") {
-    const { code } = await run(
-      "secret-tool",
-      ["store", "--label", keychainItemFor(profileId), "clausona", profileId],
-      value,
-    );
-    if (code !== 0) throw new Error(`could not store secret for '${profileId}' via secret-tool`);
     return;
   }
   const values = await readSecretsFile();
@@ -193,13 +192,8 @@ export async function storeSecret(profileId: string, value: string, backend?: Se
 }
 
 export async function deleteSecret(profileId: string, backend?: SecretBackend): Promise<void> {
-  const resolvedBackend = backend ?? (await detectBackend());
-  if (resolvedBackend === "keychain") {
+  if ((backend ?? detectBackend()) === "keychain") {
     await run("security", ["delete-generic-password", "-s", keychainItemFor(profileId)]);
-    return;
-  }
-  if (resolvedBackend === "secret-tool") {
-    await run("secret-tool", ["clear", "clausona", profileId]);
     return;
   }
   const values = await readSecretsFile();
@@ -209,13 +203,8 @@ export async function deleteSecret(profileId: string, backend?: SecretBackend): 
 }
 
 async function readStoredSecret(profileId: string, backend?: SecretBackend): Promise<string | null> {
-  const resolvedBackend = backend ?? (await detectBackend());
-  if (resolvedBackend === "keychain") {
+  if ((backend ?? detectBackend()) === "keychain") {
     const { code, stdout } = await run("security", ["find-generic-password", "-s", keychainItemFor(profileId), "-w"]);
-    return code === 0 && stdout.trim() !== "" ? stdout.trim() : null;
-  }
-  if (resolvedBackend === "secret-tool") {
-    const { code, stdout } = await run("secret-tool", ["lookup", "clausona", profileId]);
     return code === 0 && stdout.trim() !== "" ? stdout.trim() : null;
   }
   const values = await readSecretsFile();

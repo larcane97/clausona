@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { detectBackend, keychainItemFor, resolveSecret, storeSecret } from "./secrets.js";
+import { detectBackend, keychainItemFor, resolveSecret, secretStoreName, storeSecret } from "./secrets.js";
 import { keychainStandIn, splitSecurityLine } from "./test-keychain.js";
 
 const temps: string[] = [];
@@ -20,12 +20,30 @@ describe("keychainItemFor", () => {
 });
 
 describe("detectBackend", () => {
-  it("uses the Keychain on macOS", async () => {
-    await expect(detectBackend("darwin")).resolves.toBe("keychain");
+  it("uses the Keychain on macOS", () => {
+    expect(detectBackend("darwin")).toBe("keychain");
   });
 
-  it("falls back to a file on Windows", async () => {
-    await expect(detectBackend("win32")).resolves.toBe("file");
+  it("falls back to a file on Windows", () => {
+    expect(detectBackend("win32")).toBe("file");
+  });
+
+  // The secret-tool probe it had failed on every real secret-tool, so Linux keys were in the
+  // file all along; one that answered would have sent them to a Secret Service that may not
+  // be running. A secret-tool that answers everything with success is first on PATH here.
+  it.skipIf(process.platform === "win32")("keeps Linux keys in the file even where secret-tool answers", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "clausona-secret-tool-"));
+    temps.push(dir);
+    writeFileSync(path.join(dir, "secret-tool"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${dir}${path.delimiter}${process.env.PATH ?? ""}`);
+
+    expect(detectBackend("linux")).toBe("file");
+  });
+
+  it("names the store doctor reports", () => {
+    expect(secretStoreName("darwin")).toBe("the macOS Keychain");
+    expect(secretStoreName("linux")).toBe("~/.clausona/secrets.json");
+    expect(secretStoreName("win32")).toBe("~/.clausona/secrets.json");
   });
 });
 

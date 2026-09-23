@@ -251,7 +251,7 @@ belongs in an argument.
 
 | Value | Where the key lives | When it is read |
 | --- | --- | --- |
-| `keychain` (default) | clausona stores it — in the macOS Keychain on a Mac, otherwise in `~/.clausona/secrets.json`, written owner-only. That includes Linux: in this version a stored key goes to that file, readable only by you, not to `secret-tool` or your desktop keyring. On a Mac a key longer than about 2,000 bytes is refused — it does not fit the one line the Keychain is handed it on — so point at such a key with `env:` or `command:` | at every launch, from that store |
+| `keychain` (default) | clausona stores it — in the macOS Keychain on a Mac, otherwise in `~/.clausona/secrets.json`, written owner-only. That includes Linux: in this version a stored key goes to that file, readable only by you, not to `secret-tool` or your desktop keyring. `clausona doctor` ends by saying which. On a Mac a key longer than about 2,000 bytes is refused — it does not fit the one line the Keychain is handed it on — so point at such a key with `env:` or `command:` | at every launch, from that store |
 | `env:NAME` | your shell; clausona records only the variable name | at every launch, **in the shell that runs `claude`** — so `NAME` has to be exported there, not only where you ran `clausona add` |
 | `command:"…"` | wherever the command gets it — `op read`, `pass show`, `vault kv get` | at every launch, and on every `clausona doctor`; the first line of its output is the key |
 
@@ -494,7 +494,9 @@ reports neither missing. It checks these instead:
   so the profile still reads as healthy
 
 No request is made to the endpoint. A healthy report means the profile is configured and its
-key resolves, not that the endpoint answered — run `claude` itself to find that out.
+key resolves, not that the endpoint answered — run `claude` itself to find that out. When a
+profile's key is stored by clausona, the report ends by saying where: the macOS Keychain, or
+`~/.clausona/secrets.json` everywhere else.
 
 ## Commands
 

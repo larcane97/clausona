@@ -1565,6 +1565,31 @@ describe("doctor's advice for a broken base URL", () => {
 });
 
 /**
+ * The spec's "doctor reports which backend is in use": the one place a user learns whether a
+ * stored key is in the Keychain or in a file in their home directory.
+ */
+describe("doctor's line on where stored keys are kept", () => {
+  // Linux, so doctor reads the primary's login from a file rather than spawning `security`.
+  it("closes the report when an API profile has its key stored", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const h = await harness({ "claude:gw": API_PROFILE });
+
+    const output = stripAnsi(String(await h.run("doctor")));
+
+    expect(output.trimEnd().split("\n").at(-1)).toBe("  Stored API keys are kept in ~/.clausona/secrets.json.");
+  });
+
+  it("is not there when no profile has one", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const h = await harness({
+      "claude:gw": { ...API_PROFILE, api: { ...API_PROFILE.api, secret: { source: "env", name: "GW_KEY" } } },
+    });
+
+    expect(stripAnsi(String(await h.run("doctor")))).not.toContain("Stored API keys");
+  });
+});
+
+/**
  * The warning written when a credential name lands in a profile's env map. It is advice,
  * so it is only right if following it works - and what works depends on the profile's
  * kind: `--key` stores a key for an API profile and refuses a subscription one. One case
