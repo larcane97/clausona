@@ -40,6 +40,15 @@ describe("validateEnvEntry", () => {
     expect(validateEnvEntry("SOME_FUTURE_CLAUDE_VAR", "anything")).toEqual({ ok: true });
   });
 
+  it("refuses a name shaped like an API key without quoting it", () => {
+    // Built from pieces, so no line of this file is a token a secret scanner would flag.
+    const result = validateEnvEntry(["sk", "ant", "api03", "F4NAMEq7Rw2Lp9Xz"].join("-"), "1");
+
+    expect(result.ok).toBe(false);
+    expect(JSON.stringify(result)).not.toContain("F4NAME");
+    expect(result).toMatchObject({ error: expect.stringMatching(/shaped like an API key/) });
+  });
+
   it("rejects a reserved key", () => {
     const result = validateEnvEntry("CLAUDE_CONFIG_DIR", "/tmp/x");
     expect(result.ok).toBe(false);

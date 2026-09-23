@@ -159,6 +159,15 @@ describe("redactEnv", () => {
     });
   });
 
+  // A hand edit can leave a key where a name belongs; printed as a name, it is the key.
+  it("hides a name shaped like an API key, and its value, wherever it names one", () => {
+    // Built from pieces, so no line of this file is a token a secret scanner would flag.
+    const name = ["sk", "ant", "api03", "F4NAMEq7Rw2Lp9Xz"].join("-");
+
+    expect(redactEnv({ [name]: "1", ANTHROPIC_MODEL: "m" })).toEqual({ [HIDDEN]: HIDDEN, ANTHROPIC_MODEL: "m" });
+    expect(hiddenEnvKeys({ [name]: "1", ANTHROPIC_MODEL: "m" })).toEqual([HIDDEN]);
+  });
+
   it("names the keys it hid whole, and only those", () => {
     expect(
       hiddenEnvKeys({
@@ -195,12 +204,43 @@ describe("which names are hidden", () => {
     expect(redactEnv({ [key]: "v-0026" })).toEqual({ [key]: HIDDEN });
   });
 
-  // A count of tokens is not a token.
+  // One name per word, and each name carries no other word, so every word is pinned on its
+  // own: AWS_SECRET_ACCESS_KEY alone would let either SECRET or ACCESS_KEY go unnoticed.
+  it.each([
+    ["TOKEN", "GITHUB_TOKEN"],
+    ["SECRET", "JWT_SECRET"],
+    ["PASSPHRASE", "GPG_PASSPHRASE"],
+    ["API_KEY", "DD_API_KEY"],
+    ["ACCESS_KEY", "MINIO_ACCESS_KEY"],
+    ["HEADERS", "OTEL_EXPORTER_OTLP_HEADERS"],
+    ["CREDENTIAL", "GIT_CREDENTIAL"],
+    ["PRIVATE_KEY", "GITHUB_APP_PRIVATE_KEY"],
+    ["MASTER_KEY", "LITELLM_MASTER_KEY"],
+    ["SIGNING_KEY", "WEBHOOK_SIGNING_KEY"],
+    ["ENCRYPTION_KEY", "DB_ENCRYPTION_KEY"],
+    ["SESSION_KEY", "SESSION_KEY"],
+    ["LICENSE_KEY", "NEW_RELIC_LICENSE_KEY"],
+    ["STORAGE_KEY", "AZURE_STORAGE_KEY"],
+    ["APP_KEY", "DD_APP_KEY"],
+    ["CONNECTION_STRING", "AZURE_STORAGE_CONNECTION_STRING"],
+    ["PAT", "AZURE_DEVOPS_EXT_PAT"],
+    ["PWD", "MYSQL_PWD"],
+    ["COOKIE", "SESSION_COOKIE"],
+    ["PASSWORD, with no underscore before it", "PGPASSWORD"],
+    ["a word in lowercase", "github_token"],
+  ])("hides a name for %s: %s", (_word, key) => {
+    expect(isSecretEnvName(key)).toBe(true);
+  });
+
+  // A count of tokens is not a token, a path is not a PAT, and a bare KEY is a key file's
+  // path as often as a key.
   it.each([
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
     "MAX_THINKING_TOKENS",
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
     "NO_PROXY",
+    "CLAUDE_CODE_GIT_BASH_PATH",
+    "CLAUDE_CODE_CLIENT_KEY",
   ])("leaves %s visible", (key) => {
     expect(isSecretEnvName(key)).toBe(false);
   });
@@ -262,11 +302,15 @@ describe("a key source", () => {
     expect(describeSecretSource(source)).toBe(described);
   });
 
-  it("hides a source clausona does not know", () => {
-    const unknown = { source: "vault", path: "v-0021" } as unknown as SecretSource;
+  // Unknown rather than `<hidden>`: nothing is being withheld, clausona just cannot use it.
+  it.each([
+    ["a source clausona does not know", { source: "vault", path: "v-0021" }],
+    ["no source at all", undefined],
+  ])("reports %s as unknown, and nothing it carries", (_label, source) => {
+    const unknown = source as unknown as SecretSource;
 
-    expect(JSON.stringify(redactSecretSource(unknown))).not.toContain("v-0021");
-    expect(describeSecretSource(unknown)).toBe(HIDDEN);
+    expect(redactSecretSource(unknown)).toEqual({ source: "unknown" });
+    expect(describeSecretSource(unknown)).toBe("unknown");
   });
 });
 

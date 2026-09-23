@@ -501,7 +501,9 @@ const SELF_DIRECTED_ISSUE_KINDS = new Set<DoctorIssue["kind"]>([
   "shared_api_key_helper",
   "unreadable_settings",
   "plaintext_env_secret",
+  "shared_key_source",
   "invalid_env_map",
+  "invalid_profile_kind",
 ]);
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;

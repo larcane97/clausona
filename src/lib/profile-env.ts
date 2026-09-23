@@ -86,26 +86,6 @@ export const CREDENTIAL_ENV_KEYS = [
  * Taken from the Claude Code 2.1.278 binary. Re-check it whenever Claude Code adds a
  * provider or another way to route around the base URL.
  */
-const CREDENTIAL_ENV_KEY_SET = new Set<string>(CREDENTIAL_ENV_KEYS);
-
-/**
- * A name that says its value is a secret. Built for redaction and for the plain-text warning,
- * not for launch: CREDENTIAL_ENV_KEYS above is what an API profile CLEARS, and it is the
- * Anthropic credentials only. Another service's token under a name of its own - OTEL's
- * exporter headers, a Bedrock bearer token, an AWS secret key - is not cleared and should not
- * be, but it is no less a secret in profiles.json or on a screen.
- *
- * Whole words only, so a count of tokens is not a token: CLAUDE_CODE_MAX_CONTEXT_TOKENS and
- * MAX_THINKING_TOKENS stay visible, and of the catalog only ANTHROPIC_CUSTOM_HEADERS matches,
- * which the clear list already has. Hiding one too many costs a `<hidden>` the user can
- * still read in `config --edit`; one too few prints a secret.
- */
-const SECRET_ENV_NAME = /(^|_)(TOKEN|SECRET|PASSWORD|PASSPHRASE|API_KEY|ACCESS_KEY|HEADERS|CREDENTIALS?)(_|$)/;
-
-export function isSecretEnvName(key: string): boolean {
-  return CREDENTIAL_ENV_KEY_SET.has(key) || SECRET_ENV_NAME.test(key);
-}
-
 export const ROUTING_ENV_KEYS = [
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_VERTEX",
@@ -118,6 +98,40 @@ export const ROUTING_ENV_KEYS = [
   "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
   "CLAUDE_CODE_CUSTOM_OAUTH_URL",
 ] as const;
+
+const CREDENTIAL_ENV_KEY_SET = new Set<string>(CREDENTIAL_ENV_KEYS);
+
+/** A name whose value is a credential: the variables Claude Code takes one from. */
+export function isCredentialEnvKey(key: string): boolean {
+  return CREDENTIAL_ENV_KEY_SET.has(key);
+}
+
+/**
+ * A name that says its value is a secret. Built for redaction and for the plain-text warning,
+ * not for launch: CREDENTIAL_ENV_KEYS above is what an API profile CLEARS, and it is the
+ * Anthropic credentials only. Another service's token under a name of its own - OTEL's
+ * exporter headers, a Bedrock bearer token, an AWS secret key - is not cleared and should not
+ * be, but it is no less a secret in profiles.json or on a screen.
+ *
+ * Whole words only, so a count of tokens is not a token: CLAUDE_CODE_MAX_CONTEXT_TOKENS and
+ * MAX_THINKING_TOKENS stay visible, and of the catalog only ANTHROPIC_CUSTOM_HEADERS matches,
+ * which the clear list already has. PASSWORD is the exception, matched anywhere, because
+ * PGPASSWORD - what postgres MCP servers read - has no underscore before it. Any case: a shell
+ * exports `github_token` as readily as `GITHUB_TOKEN`.
+ *
+ * Measured against the 1720 environment names in the Claude Code binary's strings, the words
+ * after CREDENTIALS newly hide three: ANTHROPIC_WEBHOOK_SIGNING_KEY, which is a secret; the
+ * lowercase spelling of GOOGLE_APPLICATION_CREDENTIALS, whose uppercase one was already hidden;
+ * and SSH_SIGNING_KEY, which can be a path. Hidden too, if anyone sets them: PWD, the shell's
+ * own, and a path such as COOKIES_PATH. Hiding one too many costs a `<hidden>` the user can
+ * still read in `config --edit`, and a plain-text note on `--set`; one too few prints a secret.
+ */
+const SECRET_ENV_NAME =
+  /(^|_)(TOKEN|SECRET|PASSPHRASE|API_KEY|ACCESS_KEY|HEADERS|CREDENTIALS?|PRIVATE_KEY|MASTER_KEY|SIGNING_KEY|ENCRYPTION_KEY|SESSION_KEY|LICENSE_KEY|STORAGE_KEY|APP_KEY|CONNECTION_STRING|PAT|PWD|COOKIES?)(_|$)|PASSWORD/i;
+
+export function isSecretEnvName(key: string): boolean {
+  return isCredentialEnvKey(key) || SECRET_ENV_NAME.test(key);
+}
 
 /** Everything clausona sets or clears for an API profile, besides its free-form env map. */
 const API_MANAGED_ENV_KEYS: readonly string[] = ["ANTHROPIC_BASE_URL", ...CREDENTIAL_ENV_KEYS, ...ROUTING_ENV_KEYS];
@@ -171,14 +185,65 @@ export function isEnvMap(env: unknown): env is Record<string, string> {
   return typeof env === "object" && env !== null && !Array.isArray(env);
 }
 
+/**
+ * The env map to read and to change: the map itself, and an empty one for a missing map,
+ * `null` or `[]`, each of which applies exactly what `{}` does - so none of them is reported
+ * or refused. Undefined for one that is not a map at all: a list with entries, a string, a
+ * number. None of that is applied, and `invalidEnvMapMessage` says what fixes it.
+ */
+export function envMapOf(env: unknown): Record<string, string> | undefined {
+  if (env === undefined || env === null || (Array.isArray(env) && env.length === 0)) return {};
+  return isEnvMap(env) ? env : undefined;
+}
+
+/**
+ * doctor's finding for an env map that is not one, and `config`'s refusal to change it. The
+ * value is never quoted: it is what the user meant to set, credentials included. `--edit`
+ * opens what is there and saves the object it is given.
+ */
+export function invalidEnvMapMessage(id: string): string {
+  return `the env map in ~/.clausona/profiles.json is not a map of NAME: value, so none of it is applied - run 'clausona config ${id} --edit' and save it as one`;
+}
+
+/**
+ * A name in the env map as it may be printed: itself, or `<hidden>` when it is shaped like an
+ * API key. No variable is named that way, so it is a key pasted where the name goes - a hand
+ * edit, or a paste that missed - and printing the name would print the key.
+ */
+export function shownEnvName(key: string): string {
+  return carriesCredentialToken(key) ? HIDDEN : key;
+}
+
+/**
+ * A label as it may be printed: without control characters, and `<hidden>` when it is shaped
+ * like an API key - `checkLabel` refuses one now, and a profile stored before that, or edited
+ * by hand, can still hold one.
+ */
+export function shownLabel(label: string | undefined): string | undefined {
+  const shown = printable(label);
+  return shown !== undefined && carriesCredentialToken(shown) ? HIDDEN : shown;
+}
+
 export function displayName(profile: Pick<Profile, "email" | "label">): string {
   // Blank-aware, not just absent-aware: `add --api` refuses an empty label, but a
   // hand-edited profiles.json can carry one, and `label ?? email` would then hide a real
   // account email behind whitespace wherever a profile is named. A key-shaped one is refused
   // too, and one stored before that, or by hand, is not printed.
-  const label = profile.label?.trim();
+  const label = printable(profile.label ?? "").trim();
   if (label && carriesCredentialToken(label)) return HIDDEN;
-  return label || profile.email;
+  return label || printable(profile.email);
+}
+
+/**
+ * A stored string as it may be printed: without C0 or C1 control characters - ESC among
+ * them, so no terminal escape sequence survives. For the fields a hand edit can put anything
+ * in and that are printed as they are - the label, the kind, the auth scheme - so that
+ * opening `list` cannot retitle the terminal, clear it or rewrite what came before. Only
+ * what is printed changes; anything that is not a string is left as it is.
+ */
+export function printable<T>(value: T): T {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes
+  return (typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f-\u009f]/g, "") : value) as T;
 }
 
 /**
@@ -248,6 +313,14 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
   }
 
   for (const [key, value] of Object.entries(profile.env ?? {})) {
+    if (shownEnvName(key) !== key) {
+      // Even where the shell could export it, a variable named after a key hands the key to
+      // every process the tool starts. Said without the name: it is the key.
+      warnings.push(
+        `${id}: ignoring a name shaped like an API key from the env map - remove it with 'clausona config ${id} --edit'`,
+      );
+      continue;
+    }
     if (!isPosixEnvName(key)) {
       // No shell can export this name, and the POSIX path interpolates keys bare - so a
       // key carrying `;` or `$(...)` would become extra commands inside the `eval` around

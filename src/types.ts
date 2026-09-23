@@ -153,17 +153,21 @@ export type DoctorIssue = {
     | "stale_symlink"
     | "missing_shared_link"
     | "plugins_out_of_sync"
-    // API profiles only. The first three are the profile's own configuration; the last
+    // API profiles only. The first three are the profile's own configuration; the next
     // three are about a second key reaching the profile's endpoint by a route clausona
-    // does not clear, or about not being able to tell.
+    // does not clear, or about not being able to tell; the last, about this profile's key
+    // reaching another profile's endpoint.
     | "missing_config_dir"
     | "missing_api_secret"
     | "invalid_api_config"
     | "shared_api_key_helper"
     | "unreadable_settings"
     | "plaintext_env_secret"
-    // Any profile: an env map a hand edit left as something other than a map.
-    | "invalid_env_map";
+    | "shared_key_source"
+    // Any profile: an env map a hand edit left as something other than a map, or a kind
+    // that is neither subscription nor api.
+    | "invalid_env_map"
+    | "invalid_profile_kind";
   message: string;
   /**
    * Absent means this is an error: the profile does not work until it is resolved, and

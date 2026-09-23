@@ -179,7 +179,9 @@ without case and with `-` read as `_`), and nothing shaped like an API key anywh
 credential in the URL would be stored in `profiles.json` in plain text, which is exactly what
 the key source exists to avoid. The shape check can be wrong about a URL with a long
 random-looking segment in it; if none of it is a key, write the URL into `api.baseUrl` in
-`~/.clausona/profiles.json` by hand, and `doctor` will go on naming it. `--auth` picks how the
+`~/.clausona/profiles.json` by hand, and `doctor` will go on naming it. Plain `http://` is
+accepted, with a note unless the host is this machine (`localhost`, an address in
+`127.0.0.0/8`, `::1`): the key would cross the network unencrypted. `--auth` picks how the
 key is presented:
 `api-key` passes it as `ANTHROPIC_API_KEY`, which Claude Code sends as Anthropic's
 `X-Api-Key` header, and is the default for `anthropic.com` and its subdomains; `bearer`
@@ -248,6 +250,17 @@ served with very different limits — OpenRouter advertises `z-ai/glm-5.3` at 1,
 while a server you run yourself may be configured for a fraction of that. So set
 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` on each profile from what its endpoint actually serves, and
 do not copy it from one profile to another.
+
+**`[claude-code:unrecognized_model]` is that setting missing, not a broken profile.** For a
+model id it does not know — any non-Anthropic one, such as `z-ai/glm-5.3` — Claude Code (seen
+with 2.1.280) prints this warning and assumes a 200k-token window, so it compacts the
+conversation early on an endpoint that serves more, and too late on one that serves less.
+The requests themselves go through. Tell it the endpoint's window and it works to that
+instead:
+
+```bash
+clausona config claude:gw --set CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144   # the endpoint's window
+```
 
 ### Profile names
 
@@ -349,13 +362,18 @@ you set one of those names, on any profile, and names the commands that undo it:
 - an API profile whose key comes from `env:` or `command:`: only the `--unset`. The key
   already lives outside `profiles.json`, and `--key` would replace the source you chose with
   the keychain;
+- an API profile a hand edit left with no endpoint recorded, which `--key` refuses:
+  `clausona remove <profile>` and `clausona add <new-name> --api --base-url <url>`, which
+  takes the plain-text copy away with the old profile;
 - a subscription profile, which signs in with its account and has nowhere to store a key:
   only the `--unset`.
 
 It warns too for a secret that is not the profile's key — any name that says it holds one,
-such as `OTEL_EXPORTER_OTLP_HEADERS` or `AWS_BEARER_TOKEN_BEDROCK`. For that the advice is to
-keep it in your shell's environment, which the hook passes through to the tool, and to
-`--unset` the copy. `doctor` keeps warning afterwards — but only for an **API** profile. A
+such as `OTEL_EXPORTER_OTLP_HEADERS` or `AWS_BEARER_TOKEN_BEDROCK`. There is no per-profile
+store for those. Your shell's environment can hold one instead, and the hook passes it
+through — but to every profile of that tool launched from that shell, not just this one; if
+that is fine, `--unset` the copy. If only this profile should have it, leave it in the env
+map, where output hides it. `doctor` keeps warning — but only for an **API** profile. A
 subscription profile's env map is never checked, so a clean `doctor` does not mean no profile
 on this machine holds a plaintext key.
 
@@ -371,7 +389,7 @@ clausona config claude:gw --label "Gateway"
 
 Each value goes through the rule `add` applies, so a URL `add` would refuse is refused here
 too, and an empty `--label` is refused rather than leaving a blank row in `list`. The three
-can be given together, as one change. Two things happen that you might not expect:
+can be given together, as one change. Three things happen that you might not expect:
 
 - **The key is kept.** After `--base-url`, the next launch sends the same key to the new
   host, and clausona says so when the host changes. If the new endpoint takes a different
@@ -383,13 +401,16 @@ can be given together, as one change. Two things happen that you might not expec
   - `env:` or `command:` that another profile reads too: changing it would send the new key
     to that profile's endpoint as well, so give this profile its own —
     `clausona config <profile> --key-from env:<ANOTHER_NAME>`, or `--key` to store it. The
-    note `--base-url` prints names the profiles that share the source.
+    note `--base-url` prints names the profiles that share the source, leaving out any that
+    already point at the new endpoint, since they want the same key.
 - **What `add` chose by itself follows the new host** while it is still the old host's:
   a label that is the old host, and the auth scheme — `api-key` for `anthropic.com`,
   `bearer` elsewhere — so moving from a gateway to Anthropic's own API does not leave the key
-  in a header Anthropic does not read. A label or scheme you chose stays; when a kept scheme
-  differs from what the new host usually takes, clausona says so and names the `--auth` that
-  would switch it.
+  in a header Anthropic does not read. clausona does not record which values you typed, so
+  it goes by the value: a label that is the old host, or a scheme that is the old host's
+  default, follows even if you typed it; any other stays. When a kept scheme differs from
+  what a new host usually takes, clausona says so, once, when the host changes, and names
+  the `--auth` that would switch it.
 - **A move to plain `http://` is noted** unless the host is this machine (`localhost`, an
   address in `127.0.0.0/8`, `::1`): the key would cross the network unencrypted. A name is
   judged as a name, so `127.gw.example.com` and `gw.localhost` are noted.
@@ -405,10 +426,14 @@ go through one rule for what they print about a profile:
 
 - the value under a credential name (`ANTHROPIC_API_KEY`, `ANTHROPIC_CUSTOM_HEADERS` and the
   rest), under any name that says it holds a secret (a `TOKEN`, `SECRET`, `PASSWORD`,
-  `API_KEY`, `HEADERS` and the like, so `OTEL_EXPORTER_OTLP_HEADERS` and
-  `AWS_BEARER_TOKEN_BEDROCK` too, but not a count such as `CLAUDE_CODE_MAX_CONTEXT_TOKENS`),
-  and under a json setting (`CLAUDE_CODE_EXTRA_BODY`, where a gateway's auth field goes)
-  prints as `<hidden>`;
+  `API_KEY`, `PRIVATE_KEY`, `MASTER_KEY`, `PAT`, `PWD`, `COOKIE`, `CONNECTION_STRING`,
+  `HEADERS` and the like, in any case, so `OTEL_EXPORTER_OTLP_HEADERS`,
+  `AWS_BEARER_TOKEN_BEDROCK`, `PGPASSWORD` and `LITELLM_MASTER_KEY` too, but not a count such
+  as `CLAUDE_CODE_MAX_CONTEXT_TOKENS`), and under a json setting (`CLAUDE_CODE_EXTRA_BODY`,
+  where a gateway's auth field goes) prints as `<hidden>`;
+- a setting whose *name* is shaped like an API key — a key pasted where the name goes — prints
+  as `<hidden>`, value and all. `--set` refuses one, and launch skips one a hand edit left,
+  with a warning that does not quote it;
 - a URL's userinfo, query and fragment print as `<hidden>`, in the base URL and in any
   setting — `HTTPS_PROXY=http://user:pass@proxy:8080` shows as
   `http://<hidden>@proxy:8080/`. That includes the scheme-less `user:pass@host` form, and a
@@ -416,10 +441,16 @@ go through one rule for what they print about a profile:
   parse, or that carries something shaped like an API key, is hidden whole;
 - a `command:` key source shows as `command`. Its command line can carry a vault token or the
   key itself, so it is only in `~/.clausona/profiles.json`, and a message about it says what
-  failed ("secret command exited with 1") rather than quoting it;
+  failed ("secret command exited with 1") rather than quoting it. A key source that is none of
+  `keychain`, `env:` and `command:` — a hand edit — shows as `unknown`, and `doctor` reports it;
 - a field clausona does not define is left out, and an env map a hand edit left as a list or
-  a string - not a map of settings - is hidden whole. `doctor` reports that one, with the
-  `config <profile> --edit` that fixes it.
+  a string — not a map of settings — is hidden whole. `doctor` reports that one, with the
+  `config <profile> --edit` that fixes it; until then `--set`, `--unset` and `--model` refuse
+  to change it. An empty list or `null` applies what `{}` does, and is read as that;
+- a control character — an escape sequence a hand edit left in a profile's label, kind or
+  auth scheme — is dropped, so printing a profile cannot drive your terminal. `doctor`
+  reports a kind that is not `subscription` or `api`, and an auth scheme that is not
+  `bearer` or `api-key`, with the command that fixes it.
 
 Only what is printed changes, not what is stored or what reaches `claude`. The two
 exceptions are the ones whose job is the values: the shell hook, which hands them to the
@@ -510,14 +541,21 @@ reports neither missing. It checks these instead:
   back, because a hand-edited one can carry a password; `config <profile> --show` is where to
   read it, and `config <profile> --base-url <url>` is how to put it right. A profile with no
   endpoint recorded at all has no key source for `config` to keep, so doctor names `remove`
-  and `add` for that one instead
+  and `add` for that one instead. An auth scheme that is not `bearer` or `api-key` is
+  reported too, with the `config <profile> --auth` that sets one
 - that the key resolves. **A `command:` source is executed**, in a shell, every time doctor
   runs — so a vault round-trip or a touch-ID prompt happens on every `clausona doctor`. An
   `env:` source is read from doctor's own environment, which is not necessarily the
-  environment the profile will run in
+  environment the profile will run in. A key source that is none of `keychain`, `env:` and
+  `command:` is reported as unknown rather than resolved, with the `config <profile> --key`
+  (or `--key-from`) that gives it one
 - `apiKeyHelper` in `settings.json`, and a credential name in the profile's env map. Both are
   warnings: they describe a key that could reach the endpoint, not a profile that is broken,
   so the profile still reads as healthy
+- one `env:` or `command:` key source read by API profiles on different endpoints (compared by
+  scheme, host and port): whichever key it holds goes to both. Also a warning, reported on
+  each of them with the `config <profile> --key-from env:<ANOTHER_NAME>` that separates them.
+  `add --api --key-from` says the same when it creates that state
 
 No request is made to the endpoint. A healthy report means the profile is configured and its
 key resolves, not that the endpoint answered — run `claude` itself to find that out. When a

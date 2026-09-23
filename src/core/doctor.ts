@@ -1,6 +1,6 @@
 import type { DoctorIssue, Profile } from "../types.js";
 import { checkBaseUrl, hasBareUserinfo, redactBaseUrl } from "./api-url.js";
-import { keySourcePhrase } from "./key-source.js";
+import { isKnownSecretSource, keySourcePhrase } from "./key-source.js";
 
 export function evaluateSymlinkHealth({
   isPrimary,
@@ -95,7 +95,12 @@ function baseUrlRemedy(id: string, hasEndpoint: boolean): string {
  * refuses to change such a profile and says the same thing doctor does about it.
  */
 export function missingEndpointRemedy(id: string): string {
-  return `run 'clausona remove ${id}' and then 'clausona add <new-name> --api --base-url <url>' - remove keeps the config directory, so the old name stays taken`;
+  const [remove, add] = missingEndpointCommands(id);
+  return `run '${remove}' and then '${add}' - remove keeps the config directory, so the old name stays taken`;
+}
+
+function missingEndpointCommands(id: string): string[] {
+  return [`clausona remove ${id}`, "clausona add <new-name> --api --base-url <url>"];
 }
 
 /**
@@ -131,6 +136,12 @@ export type ApiHealthInput = {
    * service's secret rather than the profile's key, and is advised on differently.
    */
   secretEnvName?: (key: string) => boolean;
+  /**
+   * The other API profiles whose key comes from this profile's variable or command and goes
+   * to a different endpoint: `keySharersElsewhere`, worked out by the caller from the
+   * registry this function does not see.
+   */
+  keySharers?: string[];
 };
 
 /**
@@ -199,6 +210,7 @@ export function evaluateApiHealth({
   settingsShared = false,
   credentialEnvKeys = [],
   secretEnvName = (key) => credentialEnvKeys.includes(key),
+  keySharers = [],
 }: ApiHealthInput): DoctorIssue[] {
   // `kind` is tri-state: undefined means subscription, and a subscription profile's
   // report has to stay exactly what it was.
@@ -223,6 +235,25 @@ export function evaluateApiHealth({
   const urlProblem = baseUrlProblem(baseUrl, baseUrlRemedy(id, profile.api !== undefined));
   if (urlProblem) issues.push({ kind: "invalid_api_config", message: urlProblem });
 
+  if (profile.api && profile.api.authScheme !== "bearer" && profile.api.authScheme !== "api-key") {
+    // A hand edit. Launch sends the key as ANTHROPIC_API_KEY for anything but `bearer`, which
+    // may or may not be what the endpoint reads; either way the file does not say. Not quoted.
+    issues.push({
+      kind: "invalid_api_config",
+      message: `the auth scheme in ${REGISTRY_FILE} is not bearer or api-key, so the key goes out as ANTHROPIC_API_KEY - run 'clausona config ${id} --auth bearer' or 'clausona config ${id} --auth api-key'`,
+    });
+  }
+
+  if (profile.api && !isKnownSecretSource(profile.api.secret)) {
+    // Not resolved: resolving a source clausona does not know reads the credential store, and
+    // a "no stored secret" answer would send the user to --key for a reason that is not this.
+    // Not quoted either: a hand edit put it there, and it can hold anything.
+    issues.push({
+      kind: "invalid_api_config",
+      message: `the key source in ${REGISTRY_FILE} is not keychain, env or command, so where the key comes from is unknown - run 'clausona config ${id} --key' to store one, or 'clausona config ${id} --key-from env:<NAME>' to read one`,
+    });
+  }
+
   if (secret && !secret.ok) {
     // resolveSecret's own message, unchanged. It already names the remedy where there is
     // one ("run 'clausona config <id> --key'"), and where there is not - a secrets.json
@@ -235,6 +266,18 @@ export function evaluateApiHealth({
   // password. A usable one can still carry a key in its query, so it is printed the way every
   // other path prints it.
   const endpoint = urlProblem ? "this profile's endpoint" : redactBaseUrl(baseUrl);
+
+  if (!urlProblem && keySharers.length > 0) {
+    // One variable or command feeding profiles on different endpoints: whichever key it holds
+    // goes to both. A warning, since two endpoints can take one key on purpose. Found here
+    // because it is the state `add --key-from` or a `--base-url` move leaves behind silently.
+    const verb = keySharers.length === 1 ? "uses" : "use";
+    issues.push({
+      kind: "shared_key_source",
+      severity: "warning",
+      message: `this profile's key comes from ${keySourcePhrase(profile.api?.secret)}, which ${keySharers.join(", ")} ${verb} too for a different endpoint, so one key goes to both - if this endpoint takes a key of its own, run 'clausona config ${id} --key-from env:<ANOTHER_NAME>' (or --key, to store it)`,
+    });
+  }
 
   if (settings === null) {
     // Falling back to an empty object hid a helper sitting in a file that does not parse:
@@ -274,13 +317,20 @@ export function evaluateApiHealth({
     if (!secretEnvName(key)) continue;
     // Also a warning: the env map is a documented, supported place to put a value, and a
     // profile that keeps a key there runs exactly as intended.
-    const { commands, keyFrom, keepInShell } = plaintextEnvRemedy(id, profile, key, credentialEnvKeys.includes(key));
+    const { commands, keyFrom, keepInShell, noEndpoint } = plaintextEnvRemedy(
+      id,
+      profile,
+      key,
+      credentialEnvKeys.includes(key),
+    );
     const remedy = commands.map((command) => `'${command}'`).join(" and then ");
     const advice = keepInShell
-      ? `if it holds a secret, keep it in your shell's environment, which the hook passes through, and run ${remedy}`
-      : keyFrom === undefined
-        ? `if it holds this profile's API key, run ${remedy}`
-        : `this profile's key already comes from ${keyFrom}, so if it holds that key, run ${remedy}`;
+      ? `if it holds a secret, your shell's environment can hold it instead, but the hook then passes it to every ${profile.tool} profile launched from that shell, not just this one; if that is fine, run ${remedy}, and if not, leave it here, where output hides it`
+      : noEndpoint
+        ? `this profile has no endpoint to keep a key for, so if it holds one, run ${remedy} - remove keeps the config directory, so the old name stays taken`
+        : keyFrom === undefined
+          ? `if it holds this profile's API key, run ${remedy}`
+          : `this profile's key already comes from ${keyFrom}, so if it holds that key, run ${remedy}`;
     issues.push({
       kind: "plaintext_env_secret",
       severity: "warning",
@@ -302,10 +352,15 @@ export function evaluateApiHealth({
  * - An API profile whose key is in the credential store: the key moves there with `--key`.
  *   That alone is not enough - the env map is applied after the stored key, so a copy left
  *   in it is still what Claude Code is handed, and still in plain text. Hence the `--unset`.
+ * - An API profile whose key source clausona does not know: the same as the store, since
+ *   `--key` is also what gives it a source that works.
  * - An API profile whose key comes from `env:` or `command:`: only the `--unset`. The key
  *   already lives outside profiles.json, and `--key` would not move it anywhere - it would
  *   replace the source the user chose with the keychain. `keyFrom` names that source, by
  *   kind and never by command line.
+ * - An API profile with no endpoint block at all: `--key` refuses it, there being no key
+ *   source to change. It is added again, which is `noEndpoint`; the removal takes the
+ *   plain-text copy with it.
  * - Any other profile signs in with its account and has no store to move a key into;
  *   `--key` refuses it. The copy in the map goes, and what the caller says around it is its
  *   own business - a Claude subscription may have wanted an API profile, a Codex one cannot.
@@ -316,13 +371,18 @@ export function plaintextEnvRemedy(
   key: string,
   /** On the clear list: one of the variables Claude Code takes an Anthropic key from. */
   anthropicCredential = true,
-): { commands: string[]; keyFrom?: string; keepInShell?: true } {
+): { commands: string[]; keyFrom?: string; keepInShell?: true; noEndpoint?: true } {
   const unset = `clausona config ${id} --unset ${key}`;
   // Another service's secret is not the profile's key, so `--key` is no place for it. The
-  // hook passes the shell's environment through, so that is where it can live instead.
+  // hook passes the shell's environment through, so that is where it can live instead - but
+  // for every profile of the tool, since there is no per-profile store for it. The callers
+  // say so.
   if (!anthropicCredential) return { commands: [unset], keepInShell: true };
   if (profile.kind !== "api") return { commands: [unset] };
-  const secret = profile.api?.secret;
-  if (secret === undefined || secret.source === "keychain") return { commands: [`clausona config ${id} --key`, unset] };
+  if (profile.api === undefined) return { commands: missingEndpointCommands(id), noEndpoint: true };
+  const secret = profile.api.secret;
+  if (!isKnownSecretSource(secret) || secret.source === "keychain") {
+    return { commands: [`clausona config ${id} --key`, unset] };
+  }
   return { commands: [unset], keyFrom: keySourcePhrase(secret) };
 }

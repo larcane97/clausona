@@ -15,10 +15,10 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { checkBaseUrl, HIDDEN, hasBareUserinfo, isAnthropicHost, sendsKeyInClear } from "../core/api-url.js";
+import { checkBaseUrl, hasBareUserinfo, isAnthropicHost, sendsKeyInClear } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
-import { sharesSecretSource } from "../core/key-source.js";
+import { isKnownSecretSource, keySharersElsewhere } from "../core/key-source.js";
 import { backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
@@ -51,9 +51,12 @@ import {
   displayName,
   envKeyCaseTwin,
   envKeyCaseTwinError,
-  isEnvMap,
+  envMapOf,
+  invalidEnvMapMessage,
   isSecretEnvName,
+  printable,
   profileModel,
+  shownLabel,
 } from "./profile-env.js";
 import { foldProfileName, initProfileNames, parseProfileRef, profileId, validateProfileName } from "./profile-ref.js";
 import { redactProfile } from "./redact.js";
@@ -933,10 +936,10 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
     return {
       name: id,
       tool: profile.tool,
-      kind: profile.kind,
+      kind: printable(profile.kind),
       email: profile.email,
       // Stored before `checkLabel` refused a key-shaped one, or by hand.
-      label: carriesCredentialToken(profile.label ?? "") ? HIDDEN : profile.label,
+      label: shownLabel(profile.label),
       orgName: profile.orgName,
       configDir: profile.configDir,
       isPrimary: Boolean(profile.isPrimary),
@@ -1019,13 +1022,17 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
     const issues: DoctorIssue[] = [];
 
     // Any kind. A list or a string where the env map belongs is applied as nothing, and
-    // printed as `<hidden>`, so this is where it is found. The value is never quoted: it is
-    // what the user meant to set, credentials included. --edit opens it and saves the object
-    // it is given.
-    if (profile.env !== undefined && !isEnvMap(profile.env)) {
+    // printed as `<hidden>`, so this is where it is found. `null` and `[]` are not: they
+    // apply exactly what `{}` does.
+    if (envMapOf(profile.env) === undefined) {
+      issues.push({ kind: "invalid_env_map", message: invalidEnvMapMessage(id) });
+    }
+    // Any kind but the two there are - a hand edit - is read as a subscription everywhere,
+    // which a profile meant as an API one is not. Not quoted: it can carry anything.
+    if (profile.kind !== undefined && profile.kind !== "subscription" && profile.kind !== "api") {
       issues.push({
-        kind: "invalid_env_map",
-        message: `the env map in ~/.clausona/profiles.json is not a map of NAME: value, so none of it is applied - run 'clausona config ${id} --edit' and save it as one`,
+        kind: "invalid_profile_kind",
+        message: `the profile's kind in ~/.clausona/profiles.json is not subscription or api, so clausona treats it as a subscription profile - remove it with 'clausona remove ${id}' and add it again`,
       });
     }
 
@@ -1059,14 +1066,16 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
           configDirExists: !configDirMissing,
           // The outcome, and nothing else. resolveSecret returns the key itself: it is
           // awaited and dropped in the same expression so no binding ever holds it.
-          secret: profile.api
-            ? await resolveSecret(id, profile.api.secret)
-                .then(() => ({ ok: true }) as const)
-                .catch((error: unknown) => ({
-                  ok: false as const,
-                  error: error instanceof Error ? error.message : String(error),
-                }))
-            : undefined,
+          // Not for a source clausona does not know, which evaluateApiHealth reports itself.
+          secret:
+            profile.api && isKnownSecretSource(profile.api.secret)
+              ? await resolveSecret(id, profile.api.secret)
+                  .then(() => ({ ok: true }) as const)
+                  .catch((error: unknown) => ({
+                    ok: false as const,
+                    error: error instanceof Error ? error.message : String(error),
+                  }))
+              : undefined,
           settings: await readSettings(settingsPath),
           settingsPath: settingsPath.replace(home, "~"),
           // Whether the helper the profile reads is the primary's or its own, which is the
@@ -1077,6 +1086,9 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
             : false,
           credentialEnvKeys: CREDENTIAL_ENV_KEYS,
           secretEnvName: isSecretEnvName,
+          keySharers: profile.api
+            ? keySharersElsewhere(id, profile.api.secret, profile.api.baseUrl, registry.profiles)
+            : [],
         }),
       );
     } else {
@@ -1373,11 +1385,26 @@ export function checkModelEntry(key: string, value: string, context: "add" | "co
   );
 }
 
-export async function updateProfileEnv(id: string, changes: { set?: Record<string, string>; unset?: string[] }) {
+/**
+ * `replace` saves `set` as the whole map, which is what `--edit` does: it opened the map as it
+ * was, so what it saves is the map as it is to be.
+ */
+export async function updateProfileEnv(
+  id: string,
+  changes: { set?: Record<string, string>; unset?: string[]; replace?: boolean },
+) {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
   const profile = registry.profiles[id];
-  const env = { ...(profile.env ?? {}) };
+  const current = envMapOf(profile.env);
+  // Spread, a list or a string turns its content into index keys - `0` holding a whole entry,
+  // or one character per key - which is then a map: printed on every path, and no longer
+  // reported. `--edit` is the one change that can start from it, because it replaces it.
+  if (current === undefined && !changes.replace) {
+    const message = invalidEnvMapMessage(id);
+    throw new Error(`${message[0].toUpperCase()}${message.slice(1)}.`);
+  }
+  const env = changes.replace ? {} : { ...current };
 
   for (const [key, value] of Object.entries(changes.set ?? {})) {
     const result = validateEnvEntry(key, value);
@@ -1456,15 +1483,17 @@ export type ProfileApiUpdate = {
   /** What `add`'s defaults moved with a new base URL, because they were still the old host's. */
   followed: { label: boolean; auth: boolean };
   /**
-   * The scheme the new host would default to, when a base URL change kept a scheme that
-   * differs from it: one that was chosen, or one there was no old host to judge by.
+   * The scheme the new host would default to, when a base URL change to another host kept a
+   * scheme that differs from it: one that was chosen, or one there was no old host to judge by.
    */
   hostDefaultAuth?: ApiEndpoint["authScheme"];
   /** The new base URL sends the key unencrypted to somewhere off this machine, and did not before. */
   cleartext: boolean;
   /**
-   * The other API profiles whose key comes from the same variable or command. Changing
-   * what that source gives changes their key too, and they still send it to their own host.
+   * The other API profiles whose key comes from the same variable or command, and that send
+   * it somewhere other than the new endpoint. Changing what that source gives changes their
+   * key too, and they still send it to their own host. One already on the new endpoint wants
+   * the same key, so it is not counted.
    */
   sharedWith: string[];
 };
@@ -1517,15 +1546,17 @@ export async function updateProfileApi(
     previousHost: previous?.host,
     host: url?.host ?? previous?.host,
     followed: { label: followLabel, auth: followAuth },
+    // Only when the host changes: on the same host the scheme was already kept, and said.
     hostDefaultAuth:
-      chosenAuth === undefined && hostDefault !== undefined && hostDefault !== authScheme ? hostDefault : undefined,
+      chosenAuth === undefined &&
+      hostDefault !== undefined &&
+      hostDefault !== authScheme &&
+      url?.host !== previous?.host
+        ? hostDefault
+        : undefined,
     cleartext:
       url !== undefined && sendsKeyInClear(url) && !(previous?.protocol === "http:" && previous.host === url.host),
-    sharedWith: Object.entries(registry.profiles)
-      .filter(
-        ([other, entry]) => other !== id && entry.kind === "api" && sharesSecretSource(entry.api?.secret, api.secret),
-      )
-      .map(([other]) => other),
+    sharedWith: keySharersElsewhere(id, api.secret, baseUrl, registry.profiles),
   };
 }
 
@@ -2118,7 +2149,9 @@ export async function addApiProfile(options: {
     );
   }
   await seedSeenSessions(id, configDir);
-  return { name: options.name, configDir };
+  // The profiles this one now shares its key's variable or command with, on other endpoints:
+  // the state doctor reports, which `add` is the first to see.
+  return { name: options.name, configDir, sharedWith: keySharersElsewhere(id, secret, baseUrl, registry.profiles) };
 }
 
 /**

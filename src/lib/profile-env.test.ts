@@ -164,6 +164,23 @@ describe("buildProfileEnv", () => {
     expect(warnings[0]).toMatch(/not a valid environment variable name/);
   });
 
+  // A key pasted where a name belongs - by hand, or a paste that missed. The warning would
+  // otherwise quote it on every launch, and a POSIX-shaped one would be exported under it.
+  it("drops a name shaped like an API key without quoting any of it", async () => {
+    // Built from pieces, so no line of this file is a token a secret scanner would flag.
+    const dashed = ["sk", "ant", "api03", "F4NAMEq7Rw2Lp9Xz"].join("-");
+    const underscored = ["sk", "live", "Q7wKp2Lm9XzRt4Vb8NcYd3Hf"].join("_");
+    const profile = apiProfile({ env: { [dashed]: "1", [underscored]: "1", ANTHROPIC_MODEL: "glm-5.3" } });
+    const { env, warnings } = await buildProfileEnv("claude:glm", profile, deps);
+
+    expect(Object.keys(env)).not.toContain(underscored);
+    expect(warnings).toHaveLength(2);
+    for (const key of [dashed, underscored]) {
+      for (let i = 0; i + 5 <= key.length; i++) expect(warnings.join("\n")).not.toContain(key.slice(i, i + 5));
+    }
+    expect(warnings[0]).toContain("clausona config claude:glm --edit");
+  });
+
   /**
    * Claude Code reads ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN independently and sends
    * X-Api-Key and Authorization together when both are set. Applying a profile on top of

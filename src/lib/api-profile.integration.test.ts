@@ -955,7 +955,7 @@ describe("addApiProfile", () => {
     const result = await h.service.addApiProfile(apiOptions({ label: "gpu-box", env: { ANTHROPIC_MODEL: "glm-5.3" } }));
 
     const configDir = path.join(h.home, ".claude-glm");
-    expect(result).toEqual({ name: "glm", configDir });
+    expect(result).toEqual({ name: "glm", configDir, sharedWith: [] });
     expect(h.registry().profiles["claude:glm"]).toEqual({
       tool: "claude",
       kind: "api",

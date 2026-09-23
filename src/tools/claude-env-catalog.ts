@@ -1,5 +1,5 @@
 import { isPosixEnvName } from "../core/shell.js";
-import { isReservedEnvKey } from "../lib/profile-env.js";
+import { isReservedEnvKey, shownEnvName } from "../lib/profile-env.js";
 
 export type EnvGroup = "model" | "context" | "limits" | "timeouts" | "compat" | "transport";
 
@@ -178,6 +178,13 @@ function jsonTypeName(value: unknown): string {
 }
 
 export function validateEnvEntry(key: string, value: string): { ok: true } | { ok: false; error: string } {
+  // Before the name rule, whose message quotes the name: this one is a key.
+  if (shownEnvName(key) !== key) {
+    return {
+      ok: false,
+      error: "That setting's name is shaped like an API key. A key never goes in the env map: use --key or --key-from",
+    };
+  }
   if (!isPosixEnvName(key)) {
     return {
       ok: false,
