@@ -512,7 +512,7 @@ profile's key is stored by clausona, the report ends by saying where: the macOS 
 | `clausona add <profile> --api --base-url <url> [...]`               | Add an [API profile](#api-profiles)                  |
 | `clausona remove <profile>`                                         | Remove a profile                                     |
 | `clausona use [profile]`                                            | Switch active profile                                |
-| `clausona run <profile> [-- args...]`                               | Run the tool's CLI with a specific profile           |
+| `clausona run <profile> [-- args...]`                               | Run the tool's CLI with a specific profile (a leading `--` is dropped) |
 | `clausona list [--json] [--refresh] [--no-quota] [--no-renew]`      | List all profiles with plan quota and usage          |
 | `clausona usage [profile] [--period=today\|week\|month\|all]`       | View cost and token usage                            |
 | `clausona current [--json]`                                         | Show active profile                                  |

@@ -782,11 +782,11 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("ARGUMENTS")}`,
         `    ${accent("profile".padEnd(14))}${dim("Profile to use (overrides shell-init env)")}`,
-        `    ${accent("args".padEnd(14))}${dim("Arguments passed through to the tool's CLI")}`,
+        `    ${accent("args".padEnd(14))}${dim("Arguments passed through to the tool's CLI; a leading -- is dropped")}`,
         "",
         `  ${bold("EXAMPLES")}`,
         `    ${dim("clausona run claude:work")}`,
-        `    ${dim("clausona run claude:personal -p /path/to/project")}`,
+        `    ${dim("clausona run claude:personal -p 'summarize this repo'")}`,
         `    ${dim("clausona run codex:personal -- 'review this'")}`,
         "",
       ].join("\n");

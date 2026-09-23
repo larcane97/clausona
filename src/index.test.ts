@@ -23,6 +23,19 @@ describe("parseCommand", () => {
     });
   });
 
+  it("drops the one leading -- that separates the tool's arguments from clausona's", () => {
+    expect(parseCommand(["run", "claude:x", "--", "-p", "q"])).toEqual({
+      kind: "exec",
+      profile: "claude:x",
+      args: ["-p", "q"],
+    });
+    expect(parseCommand(["run", "claude:x", "--", "--", "q"])).toEqual({
+      kind: "exec",
+      profile: "claude:x",
+      args: ["--", "q"],
+    });
+  });
+
   it("parses run without profile as a regular command", () => {
     expect(parseCommand(["run", "--help"])).toEqual({
       kind: "command",

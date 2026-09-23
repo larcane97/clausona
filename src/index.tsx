@@ -21,7 +21,10 @@ export function parseCommand(argv: string[]): ParsedCommand {
     if (!profile || profile.startsWith("-")) {
       return { kind: "command", command: "run", args };
     }
-    return { kind: "exec", profile, args: rest };
+    // `run <profile> -- -p "q"` separates clausona's arguments from the tool's; the `--` is
+    // clausona's, and handed on it would make the tool read `-p` as its prompt. Only the
+    // first goes, so `-- --` still passes one through.
+    return { kind: "exec", profile, args: rest[0] === "--" ? rest.slice(1) : rest };
   }
 
   return { kind: "command", command, args };
