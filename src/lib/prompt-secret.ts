@@ -40,10 +40,31 @@ const PASTE_START = `${ESC}[200~`;
 const PASTE_END = `${ESC}[201~`;
 
 /**
- * An escape sequence longer than this is not one this reader knows how to skip. It gives
+ * A CSI or SS3 sequence longer than this is not one this reader knows how to skip. It gives
  * up rather than guess, because guessing wrong means dropping part of a credential.
  */
 const MAX_ESCAPE_LENGTH = 32;
+
+/**
+ * The same ceiling for a string-terminated sequence, and deliberately a far higher one: the
+ * body of an OSC 52 clipboard reply is the clipboard, so length there is data rather than a
+ * sign the reader has lost the thread. A terminator makes the measurement exact however long
+ * the body runs; the cap only stops a terminator that never comes from buffering forever.
+ */
+const MAX_STRING_ESCAPE_LENGTH = 4096;
+
+/** Ends a string sequence, alongside ST. Only OSC is terminated this way in practice. */
+const BEL = "\u0007";
+/** String terminator (ST), in its two-byte form - the only form a terminal sends here. */
+const ST_FINAL = "\\";
+
+/**
+ * The introducers whose sequence is a *string*: OSC (`]`), DCS (`P`), SOS (`X`), PM (`^`)
+ * and APC (`_`). Unlike a CSI they do not end at the first byte in `@`-`~` - their body is
+ * arbitrary text and they run to a terminator - so measuring one as a CSI would cut it in
+ * half and leave the rest in the key.
+ */
+const STRING_INTRODUCERS = new Set(["]", "P", "X", "^", "_"]);
 
 const UNREADABLE_INPUT =
   'Could not read the key: this terminal sent something the prompt cannot interpret, and a key read from it might be incomplete. Pipe the key in instead: printf %s "$KEY" | clausona … , or point at it with --key-from env:NAME.';
@@ -67,6 +88,9 @@ type EscapeScan =
  *
  * - ESC `[` or ESC `O` begins a CSI or SS3 sequence, which runs to the first byte in the
  *   range `@`-`~`. That covers the arrow keys and both paste markers.
+ * - ESC `]`, `P`, `X`, `^` or `_` begins a string sequence, which runs to a terminator
+ *   instead. `ESC ] 0 ; title BEL` is what a shell sends to set the window title and it
+ *   arrives unasked, so taking the one-byte skip below would leave `0;title` in the key.
  * - Any other ESC is a standalone Escape keypress, and only the ESC is dropped. The byte
  *   after it is real input and is acted on: an Enter still submits, and the first
  *   character of a key typed after a stray Escape is still part of the key. Taking that
@@ -76,34 +100,58 @@ type EscapeScan =
 function scanEscape(buffer: string): EscapeScan {
   if (buffer.length < 2) return "incomplete";
   const second = buffer[1];
-  if (second !== "[" && second !== "O") return { consumed: 1, kind: "skip" };
-  for (let i = 2; i < buffer.length; i++) {
-    const code = buffer.charCodeAt(i);
-    if (code >= 0x40 && code <= 0x7e) {
-      const sequence = buffer.slice(0, i + 1);
-      const kind = sequence === PASTE_START ? "paste-start" : sequence === PASTE_END ? "paste-end" : "skip";
-      return { consumed: i + 1, kind };
+  if (second === "[" || second === "O") {
+    for (let i = 2; i < buffer.length; i++) {
+      const code = buffer.charCodeAt(i);
+      if (code >= 0x40 && code <= 0x7e) {
+        const sequence = buffer.slice(0, i + 1);
+        const kind = sequence === PASTE_START ? "paste-start" : sequence === PASTE_END ? "paste-end" : "skip";
+        return { consumed: i + 1, kind };
+      }
     }
+    return buffer.length > MAX_ESCAPE_LENGTH ? "runaway" : "incomplete";
   }
-  return buffer.length > MAX_ESCAPE_LENGTH ? "runaway" : "incomplete";
+  if (second !== undefined && STRING_INTRODUCERS.has(second)) return scanStringEscape(buffer, second);
+  return { consumed: 1, kind: "skip" };
+}
+
+/**
+ * Measures a string sequence, which ends at a terminator rather than at a final byte.
+ *
+ * ST (`ESC \`) ends all five. BEL ends an OSC as well, because that is the form every shell
+ * actually sends for a window title - and only an OSC, because a BEL inside a DCS body
+ * would then cut the sequence short and spill its tail into the key. Refusing to measure a
+ * BEL-terminated DCS costs a refusal; mis-measuring one costs a credential.
+ */
+function scanStringEscape(buffer: string, introducer: string): EscapeScan {
+  for (let i = 2; i < buffer.length; i++) {
+    if (introducer === "]" && buffer[i] === BEL) return { consumed: i + 1, kind: "skip" };
+    if (buffer[i] === ESC && buffer[i + 1] === ST_FINAL) return { consumed: i + 2, kind: "skip" };
+  }
+  return buffer.length > MAX_STRING_ESCAPE_LENGTH ? "runaway" : "incomplete";
 }
 
 /**
  * What a chunk of terminal input adds to a secret being typed somewhere other than this
- * prompt - the TUI's key field, which reads the same terminal through ink.
+ * prompt - the TUI's key field, which reads the same terminal.
  *
- * It is here rather than there because the grammar above is the thing being reused. The
- * character filter alone is not enough and was the bug: `useInput` strips exactly one
- * leading ESC, so a sequence ink does not have a name for arrives as its own printable
- * body - `[I` from a focus report, `[<0;10;5M` from a mouse report, `[200~` from a paste
- * bracket - and a filter that only drops control characters appends the rest of it to the
- * key. A corrupted credential is then stored and reported as success. `scanEscape`
- * measures those sequences; nothing else here knows how.
+ * It is here rather than there because the grammar above is the thing being reused: a
+ * character filter alone appends `0;title` or `<0;10;5M` to the key the moment the terminal
+ * reports something, and a corrupted credential is then stored and reported as success.
+ *
+ * **The caller must hand over the bytes the terminal sent, ESC included and untouched.**
+ * Nothing below invents a byte it was not given. That is a contract rather than a detail:
+ * ink's `useInput` strips one leading ESC and offers no flag saying it did, so through it a
+ * typed `[` and a stripped `ESC [` are the same string - and a key with `O` in it is an
+ * ordinary key. Reconstructing the ESC ate real key material; not reconstructing it
+ * appended sequence bodies. The only way out is to read the raw stream, which is what
+ * `promptSecret` below already does and what the TUI's key field does too.
  *
  * `pending` carries a sequence that has not finished arriving, so one split across two
  * reads is still measured as one. `pasting` says a paste's opening bracket arrived and its
  * closing one has not: whatever is in the field is the front of a key rather than the key,
- * which is the truncation this reader already refuses to return for its own prompt.
+ * which is the truncation this reader already refuses to return for its own prompt. A
+ * caller with either of them still set at save time is holding a partial key.
  */
 export type SecretInputState = {
   /** An unfinished escape sequence, ESC included. */
@@ -127,11 +175,7 @@ export type SecretChunk = {
 };
 
 export function readSecretChunk(state: SecretInputState, chunk: string): SecretChunk {
-  // The ESC that `useInput` stripped is put back, so one grammar covers both the sequence
-  // at the front of the chunk and any sequence inside it. A continuation is never given a
-  // second ESC - it already carries the one from the read it started in.
-  const head = state.pending === "" && (chunk.startsWith("[") || chunk.startsWith("O")) ? ESC : "";
-  let buffer = `${state.pending}${head}${chunk}`;
+  let buffer = `${state.pending}${chunk}`;
   let pasting = state.pasting;
   let text = "";
 

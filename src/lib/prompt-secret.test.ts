@@ -383,58 +383,92 @@ describe("promptSecret off a terminal", () => {
 });
 
 /**
- * `readSecretChunk`, which is the same grammar applied to input that arrives through ink
- * rather than through the reader above.
+ * `readSecretChunk`, which is the same grammar applied to input that arrives somewhere
+ * other than the reader above - the TUI's key field.
  *
- * The distinction that matters: `useInput` strips exactly one leading ESC, so a sequence
- * ink has no name for arrives as its own printable body. A filter that only drops control
- * characters appends the rest of that body to the key - a corrupted credential, stored and
- * reported as success, with a constant mask giving no sign either way.
+ * Its contract is that it is handed the bytes the terminal sent, ESC included. That is the
+ * whole lesson of this bug's two rounds: ink's `useInput` strips one leading ESC and hands
+ * over no flag saying it did, so a typed `[` and a stripped `ESC [` are the same string.
+ * The first round appended the sequence's body to the key; the second reconstructed the ESC
+ * and ate real key material instead. There is no third guess, so the caller reads the raw
+ * stream and this function never invents a byte it was not given.
  */
 describe("readSecretChunk", () => {
   const KEY = "sk-ant-api03-not-a-real-key-0000000000000000";
   const read = (chunk: string, state: SecretInputState = EMPTY_SECRET_INPUT) => readSecretChunk(state, chunk);
 
+  /** What a person typing produces: one chunk per character, fed through the same state. */
+  function typed(text: string) {
+    let state: SecretInputState = EMPTY_SECRET_INPUT;
+    let out = "";
+    for (const char of text) {
+      const chunk = readSecretChunk(state, char);
+      state = chunk.state;
+      out += chunk.text;
+    }
+    return { text: out, state };
+  }
+
   it("passes an ordinary key through untouched", () => {
     expect(read(KEY).text).toBe(KEY);
+  });
+
+  /**
+   * The positions that are actually at risk: `[` and `O` are ordinary characters in a key,
+   * and they are also the two bytes that follow ESC in a CSI or SS3 sequence. Anything that
+   * treats them as a sequence without an ESC in front of them eats key material - silently,
+   * behind a mask that is the same eight bullets either way.
+   */
+  const AT_RISK: [string, string][] = [
+    ["an O in the middle of a typed key", "sk-OK-abcdef"],
+    ["an O at the end of a typed key", "sk-abcdefO"],
+    ["a bracket in the middle of a typed key", "sk-[AB]-abcdef"],
+    ["a bracket at the end of a typed key", "sk-abcdef["],
+  ];
+
+  it.each(AT_RISK)("keeps %s, typed one character at a time", (_case, text) => {
+    const result = typed(text);
+
+    expect(result.text).toBe(text);
+    // Nothing parked: every byte of a typed key is a byte of the key.
+    expect(result.state).toEqual(EMPTY_SECRET_INPUT);
+  });
+
+  it.each([
+    ["a key pasted whole that starts with O", `OAbCdEfGh-${KEY}`],
+    ["a key pasted whole that starts with a bracket", `[AbCdEfGh-${KEY}`],
+  ])("keeps %s", (_case, text) => {
+    expect(read(text).text).toBe(text);
   });
 
   // Each of these fires without anyone pressing a key. A focus report arrives whenever the
   // window loses or regains focus - alt-tabbing to a password manager to copy the key does
   // it - and a mouse report whenever the pointer moves over the terminal.
   const REPORTS: [string, string][] = [
-    ["a focus-in report", "[I"],
-    ["a focus-out report", "[O"],
-    ["an SGR mouse report", "[<0;10;5M"],
-    ["an SGR mouse release", "[<0;10;5m"],
-    ["a cursor-position report", "[12;40R"],
-    ["a device-attributes reply", "[?1;2c"],
+    ["a focus-in report", "\u001b[I"],
+    ["a focus-out report", "\u001b[O"],
+    ["an SGR mouse report", "\u001b[<0;10;5M"],
+    ["an SGR mouse release", "\u001b[<0;10;5m"],
+    ["a cursor-position report", "\u001b[12;40R"],
+    ["a device-attributes reply", "\u001b[?1;2c"],
+    ["an SS3 function key", "\u001bOP"],
   ];
 
-  it.each(REPORTS)("drops %s that opens the chunk, where ink has stripped the ESC", (_case, body) => {
-    expect(read(body).text).toBe("");
-    expect(read(`${body}${KEY}`).text).toBe(KEY);
+  it.each(REPORTS)("drops %s that opens the chunk", (_case, sequence) => {
+    expect(read(sequence).text).toBe("");
+    expect(read(`${sequence}${KEY}`).text).toBe(KEY);
   });
 
-  it.each(REPORTS)("drops %s that lands inside the chunk, ESC and all", (_case, body) => {
-    // Only the *leading* ESC is stripped, so one arriving mid-read still carries its own.
-    expect(read(`sk-AAA\u001b${body}BBB`).text).toBe("sk-AAABBB");
-  });
-
-  it("leaves a bracket alone when it is not the start of a sequence", () => {
-    expect(read("sk-AAA[BBB").text).toBe("sk-AAA[BBB");
+  it.each(REPORTS)("drops %s that lands inside the chunk", (_case, sequence) => {
+    expect(read(`sk-AAA${sequence}BBB`).text).toBe("sk-AAABBB");
   });
 
   it("drops a bracketed paste's markers and keeps what they wrap", () => {
     expect(read(`\u001b[200~${KEY}\u001b[201~`).text).toBe(KEY);
   });
 
-  it("drops the markers when ink has stripped the opening ESC", () => {
-    expect(read(`[200~${KEY}\u001b[201~`).text).toBe(KEY);
-  });
-
   it("keeps a paste whole across two reads, marker and all", () => {
-    const first = read(`[200~${KEY.slice(0, 20)}`);
+    const first = read(`\u001b[200~${KEY.slice(0, 20)}`);
     const second = readSecretChunk(first.state, `${KEY.slice(20)}\u001b[201~`);
 
     expect(first.text + second.text).toBe(KEY);
@@ -443,7 +477,7 @@ describe("readSecretChunk", () => {
 
   it("keeps a marker split down the middle whole", () => {
     // The worst split: the opening bracket itself arrives in two pieces.
-    const first = read("[20");
+    const first = read("\u001b[20");
     const second = readSecretChunk(first.state, `0~${KEY}\u001b[201~`);
 
     expect(first.text).toBe("");
@@ -452,21 +486,21 @@ describe("readSecretChunk", () => {
 
   it("says a paste is still open when its closing marker has not arrived", () => {
     // The caller refuses to save on this, rather than storing the front of a key.
-    const open = read(`[200~${KEY.slice(0, 20)}`);
+    const open = read(`\u001b[200~${KEY.slice(0, 20)}`);
 
     expect(open.state.pasting).toBe(true);
     expect(open.text).toBe(KEY.slice(0, 20));
   });
 
   it("holds an unfinished sequence back rather than guessing where it ends", () => {
-    const partial = read("[<0;10");
+    const partial = read("\u001b[<0;10");
 
     expect(partial.text).toBe("");
     expect(partial.state.pending).toBe("\u001b[<0;10");
   });
 
   it("refuses input it cannot measure rather than appending part of it", () => {
-    const runaway = read(`[${"9".repeat(40)}`);
+    const runaway = read(`\u001b[${"9".repeat(40)}`);
 
     expect(runaway.problem).toBe("unreadable");
     expect(runaway.text).toBe("");
@@ -474,5 +508,77 @@ describe("readSecretChunk", () => {
 
   it("drops the control characters the prompt drops, newlines included", () => {
     expect(read(`sk-\u0000A\u001fB\rC\nD\u007fE`).text).toBe("sk-ABCDE");
+  });
+});
+
+/**
+ * The string-terminated sequences: OSC, DCS, SOS, PM and APC.
+ *
+ * They do not end at a final byte in `@`-`~` the way a CSI does - they run to a string
+ * terminator - so measuring them as a one-byte skip leaves their whole body in the key.
+ * `ESC ] 0 ; title BEL` is what a shell prompt sends to set the window title, and it
+ * arrives whenever something repaints the title while the field has focus.
+ */
+describe("string-terminated escape sequences", () => {
+  const KEY = "sk-ant-api03-not-a-real-key-0000000000000000";
+  const read = (chunk: string, state: SecretInputState = EMPTY_SECRET_INPUT) => readSecretChunk(state, chunk);
+
+  const STRINGS: [string, string][] = [
+    ["an OSC ended with BEL", "\u001b]0;a title\u0007"],
+    ["an OSC ended with ST", "\u001b]0;a title\u001b\\"],
+    ["an OSC 52 clipboard reply", "\u001b]52;c;c2stZmFrZQ==\u0007"],
+    ["a DCS status reply", "\u001bP1$r0m\u001b\\"],
+    ["an APC string", "\u001b_G i=1,a=T\u001b\\"],
+    ["a PM string", "\u001b^something\u001b\\"],
+    ["an SOS string", "\u001bXsomething\u001b\\"],
+  ];
+
+  it.each(STRINGS)("drops %s that lands in the middle of a key", (_case, sequence) => {
+    expect(read(`sk-ant-api${sequence}03-rest`).text).toBe("sk-ant-api03-rest");
+  });
+
+  it.each(STRINGS)("drops %s at the prompt too", async (_case, sequence) => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type(`sk-ant-api${sequence}03-rest\r`);
+
+    await expect(answer).resolves.toBe("sk-ant-api03-rest");
+  });
+
+  it("joins one split across two reads", () => {
+    const first = read("\u001b]0;a ti");
+    const second = readSecretChunk(first.state, `tle\u0007${KEY}`);
+
+    expect(first.text).toBe("");
+    expect(second.text).toBe(KEY);
+  });
+
+  /**
+   * The length cap is deliberately not the CSI one. An OSC 52 clipboard payload *is* the
+   * body of the sequence, so a long one is data rather than a sign the reader has lost the
+   * thread - measuring it by its terminator is exact however long it runs.
+   */
+  it("skips a string sequence far longer than a CSI is allowed to be", () => {
+    const clipboard = `\u001b]52;c;${"c2stZmFrZQ".repeat(100)}\u0007`;
+
+    expect(read(`${clipboard}${KEY}`).text).toBe(KEY);
+  });
+
+  /** There is still a ceiling, so a terminator that never comes cannot buffer forever. */
+  it("refuses a string sequence whose terminator never arrives", () => {
+    const runaway = read(`\u001b]52;c;${"c2stZmFrZQ".repeat(500)}`);
+
+    expect(runaway.problem).toBe("unreadable");
+    expect(runaway.text).toBe("");
+  });
+
+  it("holds an unterminated string sequence back rather than guessing where it ends", () => {
+    // A key typed after a stray OSC introducer is not lost, it is parked - and the caller
+    // refuses to save a field with anything parked behind it.
+    const partial = read(`\u001b]0;${KEY}`);
+
+    expect(partial.text).toBe("");
+    expect(partial.state.pending).toBe(`\u001b]0;${KEY}`);
   });
 });

@@ -27,7 +27,7 @@ import { Divider } from "./Divider.js";
  *
  * So: nothing while the field is empty, and this the moment it is not, whatever is behind
  * it. The value itself is never put in a Text node, in an error, or in anything this panel
- * keeps - `apiKey` below is read for its emptiness and nothing else.
+ * keeps - the panel is handed `keySet`, a boolean, and never the key.
  */
 const KEY_MASK = "•".repeat(8);
 const KEY_EMPTY_FOCUSED = "type or paste the key";

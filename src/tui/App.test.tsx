@@ -1,3 +1,6 @@
+import { EventEmitter } from "node:events";
+
+import { render as inkRender } from "ink";
 import { render } from "ink-testing-library";
 import { describe, expect, it, vi } from "vitest";
 
@@ -131,6 +134,61 @@ async function moveTo(instance: Instance, label: string) {
     await press(instance, DOWN);
   }
   throw new Error(`the cursor never reached '${label}'`);
+}
+
+/**
+ * A terminal ink can read but the key field cannot.
+ *
+ * ink takes its input through `addListener('readable')` and `read()`, so the rest of the TUI
+ * runs normally. What is missing is `on`, which is how the key field subscribes to the bytes
+ * the terminal actually sent - and those bytes are the only thing it can trust, because
+ * ink's `useInput` strips a leading ESC without saying so. There is no safe fallback, so the
+ * field refuses rather than reading the key through a reader that has to guess.
+ */
+function renderWithoutRawInput(): Instance {
+  const frames: string[] = [];
+  const stdout = Object.assign(new EventEmitter(), {
+    columns: 100,
+    write: (frame: string) => {
+      frames.push(frame);
+    },
+  });
+  const stdin = new (class extends EventEmitter {
+    isTTY = true;
+    buffered: string | null = null;
+    write(data: string) {
+      this.buffered = data;
+      this.emit("readable");
+    }
+    read() {
+      const data = this.buffered;
+      this.buffered = null;
+      return data;
+    }
+    setEncoding() {}
+    setRawMode() {}
+    resume() {}
+    pause() {}
+    ref() {}
+    unref() {}
+  })();
+  // The one thing this terminal cannot do. `addListener` is a separate property on
+  // EventEmitter's prototype, so ink still gets everything it asks for.
+  Object.defineProperty(stdin, "on", { value: undefined });
+  const instance = inkRender(<App initialScreen="use" />, {
+    stdout: stdout as never,
+    stdin: stdin as never,
+    debug: true,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  });
+  return {
+    ...instance,
+    stdin,
+    stdout,
+    frames,
+    lastFrame: () => frames.at(-1),
+  } as unknown as Instance;
 }
 
 /** A key shape. No frame this suite renders may contain it. */
@@ -417,6 +475,95 @@ describe("App add-profile: API endpoint", () => {
       expect(instance.lastFrame()).not.toContain(MASK);
       instance.unmount();
     });
+
+    it("refuses to save when a sequence started and never finished", async () => {
+      // An OSC introducer with no terminator: every byte after it is held back waiting for
+      // the end of a sequence that never comes, so the field is not the key - it is empty
+      // while the key sits unread. Storing on that is the same silent truncation as a
+      // half-arrived paste.
+      const { called, secretValue, frame } = await keyAfter(async (instance) => {
+        await type(instance, `\u001b]0;${KEY}`);
+      });
+
+      expect(called).toBe(0);
+      expect(secretValue).toBeUndefined();
+      expect(frame).toContain("started a sequence and never finished");
+    });
+
+    it("lets the field be emptied with backspace after an unfinished paste", async () => {
+      // ctrl-u already cleared both; backspacing to empty did not, so the form went on
+      // refusing to save while the field read "not set" and there was nothing left to clear.
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const instance = await openApiForm();
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+      await press(instance, "https://gateway.example.com");
+      await moveTo(instance, "API key");
+
+      await type(instance, `\u001b[200~${KEY.slice(0, 5)}`);
+      for (let step = 0; step < 5; step++) await type(instance, "\u007f");
+      expect(instance.lastFrame()).toContain("type or paste the key");
+
+      await press(instance, KEY);
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added claude:gateway"));
+
+      expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(expect.objectContaining({ secretValue: KEY }));
+      instance.unmount();
+    });
+  });
+
+  /**
+   * The characters a key is made of, at the positions where a reader that guesses eats them.
+   *
+   * `[` and `O` are ordinary base64 characters and they are also the two bytes that follow
+   * ESC in a CSI or SS3 sequence. Through ink's `useInput` the two are indistinguishable -
+   * it strips one leading ESC and says nothing about having done it - so the field reads the
+   * terminal's own bytes instead. Each row here is a key that a previous round stored wrong,
+   * behind the same eight bullets and the same "Added".
+   */
+  describe("ordinary characters that look like the start of a sequence", () => {
+    async function keyFrom(send: (instance: Instance) => Promise<void>) {
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const instance = await openApiForm();
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+      await press(instance, "https://gateway.example.com");
+      await moveTo(instance, "API key");
+      await send(instance);
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added") || f.includes("✘"));
+      const call = vi.mocked(addApiProfile).mock.calls[0]?.[0];
+      instance.unmount();
+      return call?.secretValue;
+    }
+
+    it.each([
+      ["an O in the middle", "sk-OK-abcdef"],
+      ["an O at the end", "sk-abcdefO"],
+      ["a bracket in the middle", "sk-[AB]-abcdef"],
+      ["a bracket at the end", "sk-abcdef["],
+    ])("stores a key with %s exactly as it was typed", async (_case, text) => {
+      expect(await keyFrom((instance) => typeSlowly(instance, text))).toBe(text);
+    });
+
+    it.each([
+      ["O", `OAbCdEfGh-${KEY}`],
+      ["a bracket", `[AbCdEfGh-${KEY}`],
+    ])("stores a key pasted whole that starts with %s", async (_case, text) => {
+      expect(await keyFrom((instance) => type(instance, text))).toBe(text);
+    });
+
+    it("appends a typed character once and only once", async () => {
+      // Two readers were live at one point in this task's history - `useInput` and the raw
+      // stream - and two appends of the same keystroke look exactly like one behind a
+      // constant mask. One character in, one character stored.
+      expect(await keyFrom((instance) => type(instance, "x"))).toBe("x");
+    });
   });
 
   it("does not print the key when the save fails with a message carrying it", async () => {
@@ -515,6 +662,24 @@ describe("App add-profile: API endpoint", () => {
     const frame = await waitForFrame(instance.lastFrame, (f) => f.includes("alpha"));
 
     expect(frame).not.toContain("Context window");
+    instance.unmount();
+  });
+
+  it("refuses to read a key at all when the terminal's raw bytes are out of reach", async () => {
+    // No third guess: reading the key through `useInput` appended sequence bodies to it in
+    // one round and ate real characters out of it in the next, both silently. A field that
+    // cannot see what the terminal sent says so and points at a way in that works.
+    const instance = renderWithoutRawInput();
+    await waitForFrame(instance.lastFrame, (frame) => frame.includes("default"));
+    await press(instance, "a");
+    await waitForFrame(instance.lastFrame, (frame) => frame.includes("Choose how to add"));
+    await moveTo(instance, "API endpoint");
+    await press(instance, ENTER);
+    await waitForFrame(instance.lastFrame, (frame) => frame.includes("Create profile"));
+    await moveTo(instance, "API key");
+    const frame = await waitForFrame(instance.lastFrame, (f) => f.includes("cannot be read directly"));
+
+    expect(frame).toContain("--key-from env:NAME");
     instance.unmount();
   });
 

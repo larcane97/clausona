@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
+import { StringDecoder } from "node:string_decoder";
+
 import { Spinner } from "@inkjs/ui";
-import { Box, Text, useApp, useInput, useStdout } from "ink";
+import { Box, Text, useApp, useInput, useStdin, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import { useEffect, useRef, useState } from "react";
 
@@ -196,6 +198,34 @@ const UNREADABLE_KEY_INPUT =
   "This terminal sent something the key field cannot read, so part of the key may be missing. The field has been cleared - paste it again.";
 const UNFINISHED_PASTE =
   "A paste started and never finished, so only part of the key arrived. Nothing was saved - clear the field with ctrl-u and paste it again.";
+const UNFINISHED_SEQUENCE =
+  "The terminal started a sequence and never finished it, so part of the key is still unread. Nothing was saved - clear the field with ctrl-u and paste it again.";
+
+/**
+ * What the key field says when it cannot get at the bytes the terminal sent.
+ *
+ * It reads them directly rather than through ink, because `useInput` strips one leading ESC
+ * and offers no flag saying it did - through it, a typed `[` and a stripped `ESC [` are the
+ * same string, and so are `O` and `ESC O`. Guessing between them corrupted a key twice, in
+ * both directions. So when the raw stream is out of reach there is no reader to fall back
+ * to, and the field says where the key can go in instead of taking one it cannot trust.
+ *
+ * Short on purpose: the panel truncates an error to one line, and the way out is the part
+ * that has to survive the truncation.
+ */
+const NO_RAW_KEY_INPUT = "This terminal cannot be read directly - use clausona add --api --key-from env:NAME.";
+
+/**
+ * Whether the cursor is on the API form's key field.
+ *
+ * It is what gates the raw input listener: attached on this row and on no other, so that a
+ * keystroke meant for the name or the endpoint can never reach the key.
+ */
+function isKeyFieldFocused(screen: Screen, state: AddState | null): boolean {
+  if (screen !== "use" || state === null || state.step !== "api-form") return false;
+  const fields = apiFormFields(state.api);
+  return fields[Math.min(state.api.cursor, fields.length - 1)]?.kind === "secret";
+}
 
 const apiFormHints = [
   { keys: "↑↓/tab", action: "field" },
@@ -215,6 +245,7 @@ const overlayHints = [
 export function App({ initialScreen = "dashboard" }: AppProps) {
   const { exit } = useApp();
   const { stdout, write } = useStdout();
+  const { stdin } = useStdin();
 
   const [screen, setScreen] = useState<Screen>(initialScreen);
   // Force clear the console state to prevent output duplication on terminal resize.
@@ -382,6 +413,67 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     secretInput.current = { ...EMPTY_SECRET_INPUT };
   }
 
+  /**
+   * The key field's text comes from the terminal's own bytes, not from `useInput`.
+   *
+   * `useInput` hands over `keypress.sequence` with one leading ESC removed and nothing in
+   * the `key` object saying it was removed - no `code`, and `meta` false for an unnamed CSI
+   * exactly as for a typed bracket. So through it a focus report `ESC [ I` and a key
+   * containing `[I` are the same three characters, and both of this field's silent
+   * corruptions came from guessing which: the first round appended `[I` to the key, the
+   * second reconstructed an ESC in front of every `[` and `O` and ate the characters after
+   * them. `O` is an ordinary base64 character; there is no third guess.
+   *
+   * `readSecretChunk` is given what the terminal sent, which is what it needs to measure a
+   * sequence rather than guess at one. `useInput` keeps the named keys below - erase,
+   * ctrl-u, return, esc, the arrows - and appends nothing, so there is exactly one writer.
+   *
+   * Attached only while the cursor is on the key field. Everywhere else the terminal's bytes
+   * are none of this listener's business.
+   */
+  const keyFieldFocused = isKeyFieldFocused(screen, addState);
+  const canReadKeyBytes = typeof stdin?.on === "function" && typeof stdin?.off === "function";
+  useEffect(() => {
+    if (!keyFieldFocused) return;
+    if (!canReadKeyBytes) {
+      // No reader at all rather than a guessing one, and the refusal is shown where the key
+      // would have been typed instead of at the save, which is too late to retype anything.
+      setAddState((prev) =>
+        prev ? { ...prev, api: { ...prev.api, errors: { ...prev.api.errors, key: NO_RAW_KEY_INPUT } } } : null,
+      );
+      return;
+    }
+    // Decoded here rather than by `setEncoding`, which would change the shared stdin for
+    // whatever ink and the rest of the process do with it, and re-created with the listener
+    // so a multibyte character split across two reads is joined rather than mangled.
+    const decoder = new StringDecoder("utf8");
+    const onData = (chunk: Buffer | string) => {
+      const bytes = typeof chunk === "string" ? chunk : decoder.write(chunk);
+      if (bytes === "") return;
+      const read = readSecretChunk(secretInput.current, bytes);
+      secretInput.current = read.state;
+      // The same two writes `editApiKey` makes, inlined so that this listener depends on
+      // nothing that changes every render: re-attaching it would drop the decoder, and with
+      // it half of any character that happened to be spanning two reads.
+      if (read.problem === "unreadable") {
+        setApiKey("");
+        setAddState((prev) =>
+          prev ? { ...prev, api: { ...prev.api, errors: { ...prev.api.errors, key: UNREADABLE_KEY_INPUT } } } : null,
+        );
+        return;
+      }
+      if (read.text === "") return;
+      setApiKey((previous) => previous + read.text);
+      setAddState((prev) =>
+        prev ? { ...prev, api: { ...prev.api, errors: withoutKeys(prev.api.errors, "key") } } : null,
+      );
+    };
+    stdin.on("data", onData);
+    return () => {
+      stdin.off("data", onData);
+    };
+  }, [keyFieldFocused, canReadKeyBytes, stdin]);
+
   function editApiField(field: ApiField, value: string) {
     updateApiForm((form) => {
       let next: ApiFormState = form;
@@ -441,6 +533,12 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     // key rather than the key. The prompt refuses to return that rather than have it
     // stored and reported as success, and so does this.
     if (secretInput.current.pasting) errors.key = UNFINISHED_PASTE;
+    // The same refusal one branch out. Since the field reads the terminal's own bytes, a
+    // sequence still half-arrived at save time means real bytes are parked behind it - and
+    // a key is what the terminal sent, not what got as far as the field.
+    if (secretInput.current.pending !== "") errors.key = UNFINISHED_SEQUENCE;
+    // And nothing can be saved at all from a field that never had a reader.
+    if (!canReadKeyBytes) errors.key = NO_RAW_KEY_INPUT;
     if (Object.keys(errors).length > 0) {
       // A setting that is wrong while the section is folded has nowhere to be shown, so
       // the section opens rather than the form refusing to submit for an invisible reason.
@@ -831,28 +929,23 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           // The key field is the one field with no text input behind it, because a text
           // input draws one glyph per character it holds and the length of a key is
           // something this form does not show. So the editing keys are handled here:
-          // erase, kill-line, and otherwise whatever printable characters arrived - a
-          // pasted key arrives as one of those.
+          // erase and kill-line. The characters themselves are not: they come from the raw
+          // stdin listener above, which reads the bytes before ink has edited them.
           if (current?.kind === "secret" && !key.return) {
             if (key.delete || key.backspace) {
-              editApiKey((previous) => previous.slice(0, -1));
+              if (apiKey.length <= 1) {
+                // Erasing the last character empties the field, and an empty field is not
+                // the front of anything: the half-read sequence and the open paste behind
+                // it go with it. Otherwise a stray opening bracket goes on refusing the
+                // save over a field that reads "not set" and has nothing left to clear.
+                clearApiKey();
+                updateApiForm((form) => ({ ...form, errors: withoutKeys(form.errors, "key") }));
+              } else {
+                editApiKey((previous) => previous.slice(0, -1));
+              }
             } else if (key.ctrl && input === "u") {
               clearApiKey();
               updateApiForm((form) => ({ ...form, errors: withoutKeys(form.errors, "key") }));
-            } else if (input !== "" && !key.ctrl && !key.meta) {
-              // Measured rather than filtered by character class. `useInput` strips one
-              // leading ESC, so a sequence ink has no name for arrives as its own
-              // printable body and a character filter appends the rest of it to the key.
-              // `readSecretChunk` is the prompt's own grammar, which knows where a
-              // sequence ends and where a paste's brackets are.
-              const read = readSecretChunk(secretInput.current, input);
-              secretInput.current = read.state;
-              if (read.problem === "unreadable") {
-                setApiKey("");
-                updateApiForm((form) => ({ ...form, errors: { ...form.errors, key: UNREADABLE_KEY_INPUT } }));
-              } else if (read.text !== "") {
-                editApiKey((previous) => previous + read.text);
-              }
             }
             return;
           }
