@@ -260,7 +260,11 @@ belongs in an argument.
 | `env:NAME` | your shell; clausona records only the variable name | at every launch, **in the shell that runs `claude`** — so `NAME` has to be exported there, not only where you ran `clausona add` |
 | `command:"…"` | wherever the command gets it — `op read`, `pass show`, `vault kv get` | at every launch, and on every `clausona doctor`; the first line of its output is the key |
 
-`profiles.json` never holds the key itself, only which of these to use.
+`profiles.json` never holds the key itself, only which of these to use. `env:` takes the
+variable's *name*: many keys are valid names too (`hf_…`, `gsk_…`, `sk_live_…`), so a `NAME`
+that looks like an API key is refused, and one stored before is shown as `env:<hidden>` and
+left out of every message. If a real variable's name is refused, copy it to a plainer one
+(`export GW_KEY="$THAT_VARIABLE"`) and pass that.
 
 Never pass a key as an argument. With the default `keychain` source the key is read from a
 prompt that does not echo it, or from stdin when something is piped in — which is how to

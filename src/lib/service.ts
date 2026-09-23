@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import { checkBaseUrl, hasBareUserinfo, isAnthropicHost, isLoopbackHost } from "../core/api-url.js";
+import { carriesCredentialToken } from "../core/credential-token.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
 import { sharesSecretSource } from "../core/key-source.js";
 import { backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
@@ -1886,7 +1887,15 @@ function checkSecretSource(
       // A pasted key often brings a newline along, and the file backend reads back what it stored.
       return { source: { source: "keychain" }, toStore: value.trim() };
     case "env":
-      // Not echoed: a key pasted where the variable name belongs would land in the error.
+      // Not echoed: a key pasted where the variable name belongs would land in the error. A
+      // key can be a valid name - `hf_…`, `gsk_…`, `sk_live_…` are letters, digits and
+      // underscores - so the name rule alone would store one, and every surface that names
+      // the variable would print it. The shape check comes first, for the message that fits.
+      if (typeof secret.name === "string" && carriesCredentialToken(secret.name)) {
+        throw new Error(
+          "Pass the name of the variable that holds the key - export GW_KEY=… in the shell that runs claude, then --key-from env:GW_KEY. What followed env: looks like an API key rather than a name, so it was not stored. If it is a variable's name, copy the variable to a plainer name the same way and pass that.",
+        );
+      }
       if (typeof secret.name !== "string" || !isPosixEnvName(secret.name)) {
         throw new Error(
           "Invalid key variable name: use letters, digits and underscores, starting with a letter or underscore. Pass the variable's name, not the key.",

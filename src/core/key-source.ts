@@ -1,5 +1,6 @@
 import type { SecretSource } from "../types.js";
 import { HIDDEN } from "./api-url.js";
+import { carriesCredentialToken } from "./credential-token.js";
 import { isPosixEnvName } from "./shell.js";
 
 /**
@@ -14,9 +15,14 @@ export function redactSecretSource(secret: SecretSource | undefined): SecretSour
     case "keychain":
       return { source: "keychain" };
     case "env":
-      // checkSecretSource refuses anything but a name on the way in; a hand edit is how a
-      // key gets into this slot, and the name is the one thing that would print it.
-      return { source: "env", name: isPosixEnvName(secret.name) ? secret.name : HIDDEN };
+      // checkSecretSource refuses anything but a name on the way in; a hand edit, or a
+      // profile stored before that rule, is how a key gets into this slot, and the name is
+      // the one thing that would print it. A key can be a valid name, so it is judged by
+      // its shape as well.
+      return {
+        source: "env",
+        name: isPosixEnvName(secret.name) && !carriesCredentialToken(secret.name) ? secret.name : HIDDEN,
+      };
     case "command":
       // The command line can carry a vault path, a token argument or the key itself.
       return { source: "command", run: HIDDEN };

@@ -489,6 +489,8 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${accent("--auth".padEnd(18))}${dim("bearer | api-key (default: api-key for anthropic.com, else bearer)")}`,
         `    ${" ".repeat(18)}${dim('With api-key, claude asks "Do you want to use this API key?": answer Yes.')}`,
         `    ${accent("--key-from".padEnd(18))}${dim('keychain (default) | env:NAME | command:"<shell command>"')}`,
+        `    ${" ".repeat(18)}${dim("NAME is the variable's name, never the key: one that looks like a key")}`,
+        `    ${" ".repeat(18)}${dim("is refused.")}`,
         `    ${accent("--label".padEnd(18))}${dim("Display name shown in list (default: the endpoint host)")}`,
         `    ${accent("--set".padEnd(18))}${dim("Advanced setting KEY=VALUE; repeatable. For example")}`,
         `    ${" ".repeat(18)}${dim("--set CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144 or --set API_TIMEOUT_MS=600000.")}`,

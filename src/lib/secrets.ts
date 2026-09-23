@@ -2,6 +2,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
+import { carriesCredentialToken } from "../core/credential-token.js";
 import { spawnCommand } from "../core/process.js";
 import { isPosixEnvName } from "../core/shell.js";
 import type { SecretSource } from "../types.js";
@@ -195,6 +196,13 @@ export async function resolveSecret(profileId: string, source: SecretSource, bac
       );
     }
     const value = process.env[source.name];
+    // Read even when the name looks like a key, since a name the shape check is wrong about
+    // must go on working; only the message, which every launch prints, leaves it out.
+    if (!value && carriesCredentialToken(source.name)) {
+      throw new Error(
+        `the key's environment variable is unset, and its name looks like an API key - run 'clausona config ${profileId} --key-from env:<NAME>' with the name of the variable that holds the key`,
+      );
+    }
     if (!value) throw new Error(`environment variable ${source.name} is unset or empty`);
     return value;
   }

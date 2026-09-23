@@ -655,6 +655,90 @@ describe("add --api", () => {
   });
 });
 
+// A key can be a valid variable name - letters, digits and underscores - so `--key-from
+// env:<the key>` passed the name rule, was stored, and was printed by every surface that names
+// the variable, including the warning `_shell-env` repeats at every launch. Joined at run time
+// so the file holds no string a secret scanner would take for a live key.
+describe("--key-from env: given a key where the name belongs", () => {
+  const nameShaped: [string, string][] = [
+    ["a Hugging Face token", ["hf", "WPSXyPafNBzpChzNhlDfqrFDVOBzjXVAuM"].join("_")],
+    ["a Groq key", ["gsk", "F1POSIXKEY0123456789abcdefXYZqRsTuVwXyZ0a1B2c3D4e5F6"].join("_")],
+    ["a 46-character sk_ gateway key", ["sk", "u3HnwbgnFlWdggSOJ1WEy7kjPfP7KSbGvH3ZN0gE4O4"].join("_")],
+  ];
+
+  it.each(nameShaped)("refuses %s on add, printing none of it", async (_shape, key) => {
+    const h = await harness();
+
+    const message = await failure(
+      h.run("add", "claude:gw", "--api", "--base-url", "http://localhost:8000", "--key-from", `env:${key}`),
+    );
+
+    expect(message).toBe(
+      "Pass the name of the variable that holds the key - export GW_KEY=… in the shell that runs claude, then --key-from env:GW_KEY. What followed env: looks like an API key rather than a name, so it was not stored. If it is a variable's name, copy the variable to a plainer name the same way and pass that.",
+    );
+    expect(slicesIn(message, key)).toEqual([]);
+    expect(Object.keys(h.registry().profiles)).toEqual(["claude:default"]);
+    expect(promptCalls).toEqual([]);
+  });
+
+  it("refuses one on config --key-from and leaves the profile as it was", async () => {
+    const [, key] = nameShaped[0];
+    const h = await harness({ "claude:gw": API_PROFILE });
+    const before = h.registryText();
+
+    const message = await failure(h.run("config", "claude:gw", "--key-from", `env:${key}`));
+
+    expect(message).toContain("Pass the name of the variable that holds the key");
+    expect(slicesIn(message, key)).toEqual([]);
+    expect(h.registryText()).toBe(before);
+  });
+
+  it("still takes an ordinary variable name", async () => {
+    const h = await harness();
+
+    await h.run(
+      "add",
+      "claude:gw",
+      "--api",
+      "--base-url",
+      "http://localhost:8000",
+      "--key-from",
+      "env:OPENROUTER_API_KEY",
+    );
+
+    expect(h.profile("claude:gw").api?.secret).toEqual({ source: "env", name: "OPENROUTER_API_KEY" });
+  });
+
+  // Stored before the rule, or by hand: every surface that names the variable, and the
+  // launch warning, say where the key is read from without the name.
+  it("hides one already stored on every surface that names the variable", async () => {
+    const [, key] = nameShaped[0];
+    // Linux, so doctor reads the primary's login from a file rather than spawning `security`.
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const h = await harness({
+      "claude:gw": { ...API_PROFILE, api: { ...API_PROFILE.api, secret: { source: "env", name: key } } },
+    });
+    await h.run("use", "claude:gw");
+
+    const outputs = [
+      await h.run("config", "claude:gw", "--show"),
+      await h.run("config", "claude:gw", "--show", "--json"),
+      await h.run("current", "--json"),
+      await h.run("list", "--json", "--no-quota"),
+      await h.run("doctor"),
+      await h.run("doctor", "--json"),
+      await h.run("_shell-env", "claude"),
+    ].map((output) => stripAnsi(String(output)));
+    const printed = [...outputs, stripAnsi(h.stderr())].join("\n");
+
+    expect(slicesIn(printed, key)).toEqual([]);
+    expect(outputs[0]).toContain("env:<hidden>");
+    // Launch and doctor still say what is wrong and what to run.
+    expect(h.stderr()).toContain("its name looks like an API key");
+    expect(h.stderr()).toContain("clausona config claude:gw --key-from env:<NAME>");
+  });
+});
+
 describe("config --show", () => {
   it("prints an API profile's endpoint, auth and key source", async () => {
     const h = await harness({ "claude:gw": API_PROFILE });
