@@ -62,6 +62,15 @@ export type ApiEndpoint = {
   secret: SecretSource;
 };
 
+/**
+ * A key source as it is printed: `redactSecretSource`'s answer. One clausona does not know - a
+ * hand edit - is `unknown`, which no stored source can be.
+ */
+export type ShownSecretSource = SecretSource | { source: "unknown" };
+
+/** An endpoint as it is printed, by `redactProfile`. */
+export type ShownApiEndpoint = Omit<ApiEndpoint, "secret"> & { secret: ShownSecretSource };
+
 export type Profile = {
   tool: ToolName;
   /** undefined means "subscription" — existing registries carry no kind. */
@@ -136,7 +145,7 @@ export type ProfileListItem = {
    * Present for API profiles, with `listProfiles({ detail: true })` only, and redacted by
    * `redactProfile`: `secret` names where the key is read from, never the key or a command.
    */
-  api?: ApiEndpoint;
+  api?: ShownApiEndpoint;
   /** The env map, with `detail` only, and redacted by `redactProfile`. */
   env?: Record<string, string>;
   quota?: QuotaSnapshot;
