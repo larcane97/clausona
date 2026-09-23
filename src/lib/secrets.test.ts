@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { SecretSource } from "../types.js";
 import { detectBackend, keychainItemFor, resolveSecret, secretStoreName, storeSecret } from "./secrets.js";
 import { keychainStandIn, splitSecurityLine } from "./test-keychain.js";
 
@@ -247,5 +248,32 @@ describe("file backend (forced via the backend override)", () => {
     await expect(resolveSecretFresh("claude:missing", { source: "keychain" }, "file")).rejects.toThrow(
       /no stored secret/,
     );
+  });
+
+  // Doctor reports a source it does not know as an error and never resolves one; launch
+  // reading the store for it anyway would work while doctor calls the profile broken.
+  it.each([
+    ["a source clausona does not know", { source: "vault" }],
+    ["no source at all", undefined],
+  ])("refuses %s rather than reading the store", async (_label, source) => {
+    const home = mkdtempSync(path.join(tmpdir(), "clausona-secrets-home-"));
+    temps.push(home);
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+    vi.resetModules();
+    const { storeSecret, resolveSecret: resolveSecretFresh } = await import("./secrets.js");
+    const stored = ["sk-", "stored-", "0f3a", "9c21"].join("");
+    await storeSecret("claude:x", stored, "file");
+
+    const outcome = await resolveSecretFresh("claude:x", source as unknown as SecretSource, "file").then(
+      (value) => value,
+      (error: Error) => error,
+    );
+
+    expect(outcome).toBeInstanceOf(Error);
+    const message = (outcome as Error).message;
+    expect(message).toMatch(/not keychain, env or command/);
+    expect(message).toContain("clausona config claude:x --key");
+    expect(message).not.toContain(stored);
   });
 });

@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import { carriesCredentialToken } from "../core/credential-token.js";
+import { isKnownSecretSource } from "../core/key-source.js";
 import { spawnCommand } from "../core/process.js";
 import { isPosixEnvName } from "../core/shell.js";
 import type { SecretSource } from "../types.js";
@@ -226,6 +227,15 @@ async function readStoredSecret(profileId: string, backend?: SecretBackend): Pro
  * key in that slot.
  */
 export async function resolveSecret(profileId: string, source: SecretSource, backend?: SecretBackend): Promise<string> {
+  // A hand edit can leave anything in the slot, or nothing. Doctor calls such a source unknown
+  // and never resolves it, so launch does not read the store for it either: a profile would
+  // otherwise work while doctor reported it broken. Not quoted, since it can hold anything.
+  if (!isKnownSecretSource(source)) {
+    throw new Error(
+      `the key source in ~/.clausona/profiles.json is not keychain, env or command, so no key was read - run 'clausona config ${profileId} --key' to store one, or 'clausona config ${profileId} --key-from env:<NAME>' to read one`,
+    );
+  }
+
   if (source.source === "env") {
     if (!isPosixEnvName(source.name)) {
       throw new Error(
