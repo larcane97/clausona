@@ -65,6 +65,12 @@ export const UNREADABLE_KEY_INPUT = "Paste the key again - unreadable input clea
  */
 export const LOST_PASTE_START = "Paste the key again - only its end arrived, so it was cleared.";
 
+/**
+ * Input is going nowhere: a paste that began as the cursor moved is being dropped to its end,
+ * and the end has not arrived. Shown under whichever field has the cursor; an arrow key ends it.
+ */
+export const PASTE_SKIPPED = "Press an arrow key to type here - the rest of a paste is skipped.";
+
 /** A paste whose closing bracket has not arrived: what is in the field is the front of a key. */
 export const UNFINISHED_PASTE = "Clear it with ctrl-u and paste again: the paste never finished.";
 
@@ -83,6 +89,7 @@ export const KEY_FIELD_MESSAGES = {
   KEY_REQUIRED,
   UNREADABLE_KEY_INPUT,
   LOST_PASTE_START,
+  PASTE_SKIPPED,
   UNFINISHED_PASTE,
   UNFINISHED_SEQUENCE,
   NO_RAW_KEY_INPUT,

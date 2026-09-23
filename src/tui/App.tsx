@@ -57,6 +57,7 @@ import {
   keyReadRefusal,
   liveApiFieldError,
   NO_RAW_KEY_INPUT,
+  PASTE_SKIPPED,
   scrubSecret,
   UNFINISHED_PASTE,
   validateApiForm,
@@ -507,6 +508,31 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     }
     inputTarget.current = undefined;
     droppingPaste.current = false;
+    clearPasteSkipped();
+  }
+
+  /**
+   * Says, under the field with the cursor, that what is typed there is going nowhere because a
+   * paste is being dropped, and that an arrow key ends it. Dropping everything until the paste's
+   * end is safe; doing it without a word looked like a form that had stopped working.
+   */
+  function showPasteSkipped() {
+    const field = inputTarget.current;
+    if (field === undefined) return;
+    setAddState((prev) =>
+      !prev || prev.api.errors[field] === PASTE_SKIPPED
+        ? prev
+        : { ...prev, api: { ...prev.api, errors: { ...prev.api.errors, [field]: PASTE_SKIPPED } } },
+    );
+  }
+
+  function clearPasteSkipped() {
+    setAddState((prev) => {
+      if (!prev) return null;
+      const kept = Object.entries(prev.api.errors).filter(([, message]) => message !== PASTE_SKIPPED);
+      if (kept.length === Object.keys(prev.api.errors).length) return prev;
+      return { ...prev, api: { ...prev.api, errors: Object.fromEntries(kept) } };
+    });
   }
 
   /** Every way out of the form: nothing typed may land in it, and the key goes with it. */
@@ -546,7 +572,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    * `useInput` keeps the named keys below - erase, ctrl-u, return, esc, the arrows - and
    * appends nothing, so there is exactly one writer.
    *
-   * Subscribed for as long as the form is open, not while the key field has the cursor. React
+   * Subscribed while the form is open, or the step whose Enter opens it - not while the key
+   * field has the cursor. React
    * runs passive effects a turn of the event loop after the commit that drew their frame, so a
    * listener subscribed on focus was missing for any read that landed in between: the cursor
    * was drawn on the key field and `inputTarget` said so, and nothing took the text. A paste's
@@ -554,15 +581,16 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    * bullets. Now no cursor move changes anything about the listener: `inputTarget` decides, in
    * the same call, whether an event is the key field's - the cursor can also leave in the
    * middle of a read, and this listener hears the rest of that read. A layout effect, for the
-   * same reason: it is subscribed in the commit that opens the form, not a turn after it.
+   * same reason: it is subscribed in the commit that draws the step, not a turn after it.
    *
    * It keeps `droppingPaste` too, which needs every input event while the form is open,
-   * whichever field has the cursor, since a dropped paste's tail can reach any of them. The end
-   * is taken after the rest of the read, so the handlers still to hear the closing bracket - a
-   * TextInput would type it as `[201~` - hear it as part of what is dropped.
+   * whichever field has the cursor, since a dropped paste's tail can reach any of them - and
+   * the read that opens the form, whose Enter is heard on the method step. The end is taken
+   * after the rest of the read, so the handlers still to hear the closing bracket - a TextInput
+   * would type it as `[201~` - hear it as part of what is dropped.
    *
    * `useInput`'s handler hears an event before this listener - it is subscribed for the App's
-   * whole life, this one from when the form opens - and nothing depends on that. The one place
+   * whole life, this one from when the method step is drawn - and nothing depends on that. The one place
    * the two disagree, a keystroke that both ends a parked sequence and moves the cursor, is
    * settled by `releaseApiInput` whichever comes first.
    *
@@ -570,18 +598,40 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    * what it would change into is a credential stored wrong and reported as success.
    */
   const fieldUnderCursor = apiFieldUnderCursor(screen, addState)?.id;
-  const apiFormOpen = fieldUnderCursor !== undefined;
+  const apiFormInReach = screen === "use" && (addState?.step === "api-form" || addState?.step === "method");
   const canReadKeyInput = typeof inputEvents?.on === "function" && typeof inputEvents?.off === "function";
-  // biome-ignore lint/correctness/useExhaustiveDependencies: moveApiCursor touches only refs and state setters, so the first render's is as good as any; re-subscribing every render is the per-frame gap this listener closes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: moveApiCursor and the paste-skipped message's functions touch only refs and state setters, so the first render's are as good as any; re-subscribing every render is the per-frame gap this listener closes
   useLayoutEffect(() => {
-    if (!apiFormOpen || !canReadKeyInput) return;
+    if (!apiFormInReach || !canReadKeyInput) return;
     let ending: NodeJS.Immediate | undefined;
+    /** The front of the end marker, handed over on its own because a slow read split it. */
+    let endSoFar = "";
     function hearApiFormInput(input: string) {
-      if (input === PASTE_START && inputTarget.current === undefined) droppingPaste.current = true;
-      else if (input === PASTE_END && droppingPaste.current) {
-        ending = setImmediate(() => {
-          droppingPaste.current = false;
-        });
+      if (input === PASTE_START && (inputTarget.current === undefined || droppingPaste.current)) {
+        // A paste starting with input nowhere to go is dropped to its end. So is one starting in
+        // the rest of the read that ended a paste being dropped: that end is only taken after the
+        // read, and the new paste would outlive it and land where the cursor did.
+        droppingPaste.current = true;
+        endSoFar = "";
+        if (ending) clearImmediate(ending);
+        ending = undefined;
+      } else if (droppingPaste.current) {
+        // ink hands over a marker a read split as pieces: the ESC alone, or `ESC [20` and then
+        // text. Neither is the marker, and missing it left the drop eating everything typed.
+        const marker = endSoFar + input;
+        if (marker.startsWith(PASTE_END)) {
+          endSoFar = "";
+          ending = setImmediate(() => {
+            ending = undefined;
+            droppingPaste.current = false;
+            clearPasteSkipped();
+          });
+        } else if (PASTE_END.startsWith(marker)) {
+          endSoFar = marker;
+        } else {
+          endSoFar = "";
+          showPasteSkipped();
+        }
       }
       if (inputTarget.current !== KEY_FIELD || droppingPaste.current) return;
       // The writes `editApiKey` makes, inlined so that this listener depends on nothing that
@@ -648,7 +698,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       inputEvents.off("input", hearApiFormInput);
       if (ending) clearImmediate(ending);
     };
-  }, [apiFormOpen, canReadKeyInput, inputEvents]);
+  }, [apiFormInReach, canReadKeyInput, inputEvents]);
 
   // No reader at all rather than a guessing one, and the refusal is shown where the key would
   // have been typed instead of at the save, which is too late to retype anything.
@@ -944,6 +994,12 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             updateApiForm((prev) => ({ ...prev, errors: { ...prev.errors, key: UNFINISHED_PASTE } }));
             return;
           }
+          // The same for a paste being dropped: its end marker split after the ESC is the same
+          // Esc, and it left the form. The message says what does end the drop.
+          if (droppingPaste.current) {
+            showPasteSkipped();
+            return;
+          }
           // The key goes with the step; everything else stays, so a stray esc costs a URL
           // nobody has to retype. Coming back to a mask over a value the user can no
           // longer read is a value they cannot check, and one this component would then
@@ -1096,6 +1152,14 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         // cursor walks them, and nothing but Submit leaves.
         if (addState.step === "api-form") {
           const form = addState.api;
+          // A paste being dropped is dropped to its end, however ink split it: an Enter or a Tab
+          // it handed over alone is pasted text, and acting on it moved the cursor, which ended
+          // the drop and let the rest of the paste into the next field. Only an arrow is taken as
+          // a person's - a paste does not carry one - and it is what ends the drop.
+          if (droppingPaste.current && !key.upArrow && !key.downArrow) {
+            showPasteSkipped();
+            return;
+          }
           // The field under the cursor now, which is not the one in this handler's render if
           // an earlier event in the same read moved it: until a render has drawn where it
           // landed there is no field to act on - see `inputTarget`. An arrow can still move

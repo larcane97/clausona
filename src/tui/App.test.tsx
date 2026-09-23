@@ -48,7 +48,14 @@ vi.mock("../lib/service", () => ({
 }));
 
 import { ADD_METHODS, App } from "./App.js";
-import { KEY_REQUIRED, LOST_PASTE_START, MISPLACED_KEY, UNFINISHED_PASTE, UNREADABLE_KEY_INPUT } from "./api-form.js";
+import {
+  KEY_REQUIRED,
+  LOST_PASTE_START,
+  MISPLACED_KEY,
+  PASTE_SKIPPED,
+  UNFINISHED_PASTE,
+  UNREADABLE_KEY_INPUT,
+} from "./api-form.js";
 import {
   CURSOR,
   DOWN,
@@ -849,10 +856,18 @@ describe("App add-profile: API endpoint", () => {
       instance.unmount();
     });
 
-    it("forgets a dropped paste when the form is left, so the next visit takes what is typed", async () => {
+    it("holds an Esc while a paste is being dropped, says how to get out, and leaves once an arrow has", async () => {
+      // The Esc may be the front of the paste's own end marker, split from it by a slow read -
+      // acting on it left the form. An arrow ends the drop, and then Esc is Esc again.
       const instance = await filledTo("Endpoint");
       await type(instance, `${DOWN}${DOWN}\u001b[200~${KEY.slice(0, 20)}`);
 
+      await press(instance, ESC);
+      const held = await waitForFrame(instance.lastFrame, (f) => f.includes(PASTE_SKIPPED));
+
+      expect(focusedOn(held, "API key")).toBe(true);
+      await press(instance, DOWN);
+      expect(instance.lastFrame()).not.toContain(PASTE_SKIPPED);
       await press(instance, ESC);
       await waitForFrame(instance.lastFrame, (f) => f.includes("Choose how to add"));
       await moveTo(instance, "API endpoint");
@@ -940,9 +955,10 @@ describe("App add-profile: API endpoint", () => {
       instance.unmount();
     });
 
-    it("subscribes the form's listener once a visit, whatever the cursor does, and lets go when the form closes", async () => {
+    it("subscribes the form's listener once a visit, whatever the cursor does, and lets go when the flow closes", async () => {
       // What keeps the gap above shut: nothing about the listener changes when the cursor
-      // moves, so no cursor move can leave a turn in which it is missing. It is found by its
+      // moves, so no cursor move can leave a turn in which it is missing. It is there from the
+      // method step, whose Enter opens the form, so it hears that read too. It is found by its
       // name, so renaming it fails this test rather than letting it pass over nothing.
       const seam: { emitter?: EventEmitter } = {};
       function Seam() {
@@ -959,29 +975,30 @@ describe("App add-profile: API endpoint", () => {
       const listening = () =>
         (seam.emitter?.listeners("input") ?? []).filter((listener) => listener.name === "hearApiFormInput");
       await waitForFrame(instance.lastFrame, (frame) => frame.includes("default"));
-      await press(instance, "a");
-      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Choose how to add"));
-      await moveTo(instance, "API endpoint");
 
       expect(listening()).toHaveLength(0);
-      await press(instance, ENTER);
-      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Create profile"));
+      await press(instance, "a");
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Choose how to add"));
       const [first] = listening();
 
       expect(listening()).toHaveLength(1);
+      await moveTo(instance, "API endpoint");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Create profile"));
       for (const label of ["API key", "Model", "Create profile", "Name", "API key"]) {
         await moveTo(instance, label);
         expect(listening()).toEqual([first]);
       }
-
       await press(instance, ESC);
       await waitForFrame(instance.lastFrame, (frame) => frame.includes("Choose how to add"));
+      expect(listening()).toEqual([first]);
+
+      await press(instance, ESC);
+      await waitForFrame(instance.lastFrame, (frame) => !frame.includes("Choose how to add"));
       expect(listening()).toHaveLength(0);
 
-      await moveTo(instance, "API endpoint");
-      await press(instance, ENTER);
-      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Create profile"));
-      await moveTo(instance, "API key");
+      await press(instance, "a");
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Choose how to add"));
       expect(listening()).toHaveLength(1);
       expect(listening()[0]).not.toBe(first);
 
@@ -1216,6 +1233,158 @@ describe("App add-profile: API endpoint", () => {
   });
 
   /**
+   * A paste dropped whole because it began in the read that moved the cursor (round 4), to its
+   * end marker and no further - however the terminal and ink split what comes in between.
+   */
+  describe("a paste being dropped", () => {
+    const PASTE = (text: string) => `\u001b[200~${text}\u001b[201~`;
+
+    async function methodStep() {
+      const instance = render(<App initialScreen="use" />);
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("default"));
+      await press(instance, "a");
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Choose how to add"));
+      await moveTo(instance, "API endpoint");
+      return instance;
+    }
+
+    async function filledTo(label: string) {
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const instance = await openApiForm();
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+      await press(instance, "https://gateway.example.com");
+      await moveTo(instance, label);
+      return instance;
+    }
+
+    async function submit(instance: Instance) {
+      const { addApiProfile } = await import("../lib/service.js");
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added") || f.includes("\u2718"));
+      return vi.mocked(addApiProfile).mock.calls[0]?.[0];
+    }
+
+    const row = (instance: Instance, label: string) =>
+      (instance.lastFrame() ?? "").split("\n").find((line) => line.includes(label)) ?? "";
+
+    it("goes on dropping a second paste that starts in the read the first one ended in", async () => {
+      // The first paste's end was taken after the rest of the read, and the second paste's start,
+      // in that same rest, did not cancel it: the drop ended under the second paste, and its tail
+      // went to the field the cursor had landed on. Twenty characters, short of the key check.
+      const instance = await filledTo("API key");
+      await press(instance, KEY);
+
+      await type(instance, `${DOWN}${PASTE("AAAA")}\u001b[200~${KEY.slice(0, 20)}`);
+      await type(instance, KEY.slice(20, 40));
+      await type(instance, "\u001b[201~");
+
+      expect(focusedOn(instance.lastFrame() ?? "", "Model")).toBe(true);
+      expect(row(instance, "Model")).not.toContain("[201~");
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+      expect(await submit(instance)).toEqual(expect.objectContaining({ secretValue: KEY, env: {} }));
+      instance.unmount();
+    });
+
+    it("drops the second paste before the key field's reader hears any of it", async () => {
+      // On the key field round 5's lost-start rule would refuse the tail instead; the drop is
+      // what keeps the tail from reaching the field at all.
+      const instance = await filledTo("Auth");
+
+      await type(instance, `${DOWN}${PASTE("AAAA")}\u001b[200~${KEY.slice(0, 20)}`);
+      await type(instance, `${KEY.slice(20)}\u001b[201~`);
+
+      expect(row(instance, "API key")).toContain("type or paste the key");
+      expect(instance.lastFrame()).not.toContain(LOST_PASTE_START);
+      expect(await submit(instance)).toBeUndefined();
+      instance.unmount();
+    });
+
+    it("drops a paste that starts in the read that opens the form", async () => {
+      // The Enter on the method step and a paste together. The form had not been drawn, so
+      // nothing that watches the form's input was listening yet, and the paste's tail landed in
+      // Name - end marker and all.
+      const instance = await methodStep();
+
+      await type(instance, `${ENTER}\u001b[200~${KEY.slice(0, 20)}`);
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Create profile"));
+      await type(instance, KEY.slice(20, 40));
+      await type(instance, "\u001b[201~");
+
+      expect(row(instance, "Name")).not.toContain("[201~");
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+      await press(instance, "gateway");
+      expect(row(instance, "Name")).toContain("gateway");
+      instance.unmount();
+    });
+
+    it("ends the drop at an end marker split after its ESC, without leaving the form", async () => {
+      // ink hands the ESC over alone once a turn passes with nothing after it; the rest of the
+      // marker arrives as text. Taken as Esc, it left the form and threw the key away.
+      const instance = await filledTo("Endpoint");
+
+      await type(instance, `${DOWN}${DOWN}\u001b[200~${KEY.slice(0, 20)}`);
+      await type(instance, "\u001b");
+      await type(instance, "[201~");
+
+      expect(focusedOn(instance.lastFrame() ?? "", "API key")).toBe(true);
+      await press(instance, KEY);
+      expect((await submit(instance))?.secretValue).toBe(KEY);
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+      instance.unmount();
+    });
+
+    it("ends the drop at an end marker split inside its CSI", async () => {
+      // `ESC [20` handed over on its own, then `1~` as text: neither is the marker, and the drop
+      // went on eating what was typed until the cursor moved.
+      const instance = await filledTo("Auth");
+
+      await type(instance, `${DOWN}\u001b[200~${KEY.slice(0, 20)}`);
+      await type(instance, "\u001b[20");
+      await type(instance, "1~");
+      await press(instance, KEY);
+
+      expect((await submit(instance))?.secretValue).toBe(KEY);
+      instance.unmount();
+    });
+
+    it("takes a newline ink hands over alone inside a dropped paste as pasted, not as an Enter", async () => {
+      // A multi-line paste split at its line break: the Enter moved the cursor, which ended the
+      // drop, and the rest of the paste went into Model.
+      const instance = await filledTo("Auth");
+
+      await type(instance, `${DOWN}\u001b[200~line-one`);
+      await type(instance, "\r");
+      await type(instance, `${KEY.slice(0, 20)}\u001b[201~`);
+
+      expect(focusedOn(instance.lastFrame() ?? "", "API key")).toBe(true);
+      expect(row(instance, "Model")).not.toContain("[201~");
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+      instance.unmount();
+    });
+
+    it("says what is being skipped, and how to stop it, when typing goes nowhere", async () => {
+      // A dropped paste whose end never comes eats everything typed until the cursor moves. That
+      // is safe, and it was silent.
+      const instance = await filledTo("Endpoint");
+
+      await type(instance, `${DOWN}${DOWN}\u001b[200~${KEY.slice(0, 20)}`);
+      await press(instance, "x");
+      const told = instance.lastFrame() ?? "";
+
+      expect(told).toContain(PASTE_SKIPPED);
+      expect(focusedOn(told, "API key")).toBe(true);
+      await press(instance, DOWN);
+      expect(instance.lastFrame()).not.toContain(PASTE_SKIPPED);
+      await press(instance, "glm-5");
+      expect(row(instance, "Model")).toContain("glm-5");
+      instance.unmount();
+    });
+  });
+
+  /**
    * Ruling 88's second layer, end to end: a field that draws what it holds never draws a key,
    * whichever way the key got there.
    */
@@ -1300,6 +1469,16 @@ describe("App add-profile: API endpoint", () => {
       await type(instance, `\u001b]${"x".repeat(5000)}`);
 
       await waitForFrame(instance.lastFrame, (f) => f.includes(UNREADABLE_KEY_INPUT));
+      instance.unmount();
+    });
+
+    it("shows the paste-skipped message whole", async () => {
+      const instance = await formAt();
+      await moveTo(instance, "Endpoint");
+      await type(instance, `${DOWN}${DOWN}\u001b[200~abc`);
+      await press(instance, "x");
+
+      await waitForFrame(instance.lastFrame, (f) => f.includes(PASTE_SKIPPED));
       instance.unmount();
     });
 
