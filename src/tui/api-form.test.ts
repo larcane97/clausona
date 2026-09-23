@@ -1,21 +1,31 @@
 import { describe, expect, it } from "vitest";
 
+import { EMPTY_SECRET_INPUT } from "../lib/prompt-secret.js";
 import {
   ADVANCED_ENTRIES,
+  type ApiField,
   type ApiFormState,
   apiFormEnv,
   apiFormFields,
   baseUrlError,
+  concealsValue,
   customEntryError,
   defaultAuthScheme,
   emptyApiForm,
   envError,
+  KEY_FIELD_MESSAGES,
+  keyInputRefusal,
   liveApiFieldError,
+  MISPLACED_KEY,
   MODEL_KEY,
+  NO_RAW_KEY_INPUT,
   nameError,
   plaintextSecretNote,
   scrubSecret,
+  UNFINISHED_PASTE,
+  UNFINISHED_SEQUENCE,
   validateApiForm,
+  withoutMisplacedKeys,
 } from "./api-form.js";
 
 /** A key shape, for the fields it must never reach or be echoed from. */
@@ -153,21 +163,29 @@ describe("an advanced setting", () => {
     expect(envError("DISABLE_AUTO_COMPACT", "yes", [])).toBe("DISABLE_AUTO_COMPACT expects 0 or 1, got 'yes'");
   });
 
-  it("refuses a key mis-pasted into a number field without echoing it back", () => {
+  it.each([
+    ["a number field", "CLAUDE_CODE_MAX_CONTEXT_TOKENS"],
+    ["a bool field", "DISABLE_PROMPT_CACHING"],
+  ])("refuses a key mis-pasted into %s by saying where it goes, without echoing it", (_field, name) => {
     // The shared validator quotes the value it refused, which is right on a command line
     // and wrong here: this is the field next to the masked one, and a mis-pasted key would
     // otherwise be printed in full under it.
-    const message = envError("CLAUDE_CODE_MAX_CONTEXT_TOKENS", KEY, []);
+    const message = envError(name, KEY, []);
 
-    expect(message).toBe("CLAUDE_CODE_MAX_CONTEXT_TOKENS expects a whole number.");
+    expect(message).toBe(MISPLACED_KEY);
     expect(message).not.toContain(KEY);
   });
 
-  it("refuses a key mis-pasted into a bool field without echoing it back", () => {
-    const message = envError("DISABLE_PROMPT_CACHING", KEY, []);
+  it.each([
+    ["a number field", "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "CLAUDE_CODE_MAX_CONTEXT_TOKENS expects a whole number."],
+    ["a bool field", "DISABLE_PROMPT_CACHING", "DISABLE_PROMPT_CACHING expects 0 or 1."],
+  ])("names what %s expects, not the value, for one the name rule calls a key", (_field, name, expected) => {
+    // Too short to be a key by shape, and still `sk-`: the name rule's line, and the
+    // validator would have quoted it.
+    const message = envError(name, "sk-abc", []);
 
-    expect(message).toBe("DISABLE_PROMPT_CACHING expects 0 or 1.");
-    expect(message).not.toContain(KEY);
+    expect(message).toBe(expected);
+    expect(message).not.toContain("sk-abc");
   });
 
   it("never echoes what it could not parse as JSON", () => {
@@ -326,5 +344,190 @@ describe("scrubbing a key out of a message", () => {
   it("leaves a message alone rather than shredding it over something too short to be a key", () => {
     expect(scrubSecret("a b c", "")).toBe("a b c");
     expect(scrubSecret("a b c", "a")).toBe("a b c");
+  });
+});
+
+/**
+ * Ruling 88's second layer: a field that draws what it holds never draws a key.
+ *
+ * The first layer - input goes only to the field under the cursor - is App.tsx's, and is what
+ * keeps a key from landing in the wrong field. This is what happens when one lands anyway: a
+ * key pasted into the wrong row on purpose, or a token that layer did not see. The field shows
+ * a mask instead, and says where the key goes.
+ */
+describe("a key in a field that draws what it holds", () => {
+  const field = (id: string): ApiField => {
+    const found = apiFormFields(form({ advancedOpen: true })).find((candidate) => candidate.id === id);
+    if (!found) throw new Error(`no field ${id}`);
+    return found;
+  };
+  const model = field("model");
+  const headers = field("env:ANTHROPIC_CUSTOM_HEADERS");
+  const body = field("env:CLAUDE_CODE_EXTRA_BODY");
+
+  it.each([
+    ["the name", field("name"), form({ name: KEY })],
+    [
+      "the endpoint, with the key glued to its host",
+      field("baseUrl"),
+      form({ baseUrl: `https://gw.example.com${KEY}` }),
+    ],
+    ["the model", model, form({ env: { [MODEL_KEY]: KEY } })],
+    ["the model, after a model id", model, form({ env: { [MODEL_KEY]: `glm-5${KEY}` } })],
+    ["the free-form row's name", field("customKey"), form({ customKey: KEY })],
+    ["the free-form row's value", field("customValue"), form({ customKey: "MY_VAR", customValue: KEY })],
+  ])("conceals one in %s", (_where, target, state) => {
+    expect(concealsValue(target, state)).toBe(true);
+  });
+
+  it.each([
+    ["a name", field("name"), form({ name: "gpu-box" })],
+    ["an endpoint", field("baseUrl"), form({ baseUrl: "https://gateway.example.com/v1" })],
+    ["a model id", model, form({ env: { [MODEL_KEY]: "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8" } })],
+    ["an empty field", model, form()],
+    ["an ordinary setting", field("customValue"), form({ customKey: "MY_VAR", customValue: "1" })],
+  ])("draws %s as it is", (_what, target, state) => {
+    expect(concealsValue(target, state)).toBe(false);
+  });
+
+  it("conceals a name the name rule already refuses as a key, even one too short to be a token", () => {
+    expect(concealsValue(field("name"), form({ name: "sk-" }))).toBe(true);
+  });
+
+  it.each([
+    ["any value", model, form({ env: { [MODEL_KEY]: KEY } })],
+    ["the name", field("name"), form({ name: `work${KEY}` })],
+  ])("says where the key goes, in words that do not repeat it, for %s", (_what, target, state) => {
+    const message = liveApiFieldError(target, state, []);
+
+    expect(message).toBe(MISPLACED_KEY);
+    expect(message).not.toContain(KEY.slice(13, 25));
+  });
+
+  it("refuses a key in the model at submit, which would store it in plain text", () => {
+    const errors = validateApiForm(
+      form({ name: "gpu-box", baseUrl: "https://gateway.example.com", env: { [MODEL_KEY]: KEY } }),
+      { existingIds: [], hasKey: true },
+    );
+
+    expect(errors).toEqual({ model: MISPLACED_KEY });
+  });
+
+  it("refuses a key typed as a setting's name, without echoing it in the name's messages", () => {
+    expect(customEntryError(form({ customKey: KEY, customValue: "1" }))).toEqual({
+      field: "customKey",
+      message: MISPLACED_KEY,
+    });
+  });
+
+  it("refuses a key as the value of an ordinary setting", () => {
+    expect(customEntryError(form({ customKey: "MY_VAR", customValue: KEY }))).toEqual({
+      field: "customValue",
+      message: MISPLACED_KEY,
+    });
+  });
+
+  /**
+   * The decision the brief asked for. A header carrying a key is what ANTHROPIC_CUSTOM_HEADERS
+   * is for - a gateway that wants `x-api-key` alongside Authorization - and a json body is where
+   * a self-hosted gateway takes its auth field. Every output path already hides both whole
+   * (src/lib/redact.ts), so the form does too: always masked, whatever they hold, and never
+   * refused for holding a key. The plain-text note under the row is still what warns.
+   */
+  describe("where a key belongs: a credential variable and a json setting", () => {
+    it.each([
+      [
+        "a header with a key in it",
+        headers,
+        form({ env: { ANTHROPIC_CUSTOM_HEADERS: `Authorization: Bearer ${KEY}` } }),
+      ],
+      ["a header with no key in it", headers, form({ env: { ANTHROPIC_CUSTOM_HEADERS: "X-Team: infra" } })],
+      ["a request body", body, form({ env: { CLAUDE_CODE_EXTRA_BODY: '{"temperature":0}' } })],
+      [
+        "a credential variable set from the free-form row",
+        field("customValue"),
+        form({ customKey: "ANTHROPIC_AUTH_TOKEN", customValue: "abc" }),
+      ],
+    ])("conceals %s", (_what, target, state) => {
+      expect(concealsValue(target, state)).toBe(true);
+    });
+
+    it.each([
+      ["ANTHROPIC_CUSTOM_HEADERS", `Authorization: Bearer ${KEY}`],
+      ["CLAUDE_CODE_EXTRA_BODY", `{"api_key":"${KEY}"}`],
+      ["ANTHROPIC_AUTH_TOKEN", KEY],
+    ])("takes a key in %s without refusing it", (name, value) => {
+      expect(envError(name, value, [])).toBeUndefined();
+    });
+
+    it("still says the header will sit in plain text", () => {
+      expect(plaintextSecretNote("ANTHROPIC_CUSTOM_HEADERS", `Authorization: Bearer ${KEY}`)).toMatch(/plain text/);
+    });
+  });
+
+  it("forgets every key it refused when the form is left, and nothing else", () => {
+    // The key field is cleared on the way out; a key sitting in a plain field is the same key.
+    const left = withoutMisplacedKeys(
+      form({
+        name: KEY,
+        baseUrl: `https://gw.example.com${KEY}`,
+        env: { [MODEL_KEY]: KEY, API_TIMEOUT_MS: "600000", ANTHROPIC_CUSTOM_HEADERS: `x-api-key: ${KEY}` },
+        customKey: "MY_VAR",
+        customValue: KEY,
+      }),
+    );
+
+    expect(left).toEqual(
+      form({
+        name: "",
+        baseUrl: "",
+        env: { [MODEL_KEY]: "", API_TIMEOUT_MS: "600000", ANTHROPIC_CUSTOM_HEADERS: `x-api-key: ${KEY}` },
+        customKey: "MY_VAR",
+        customValue: "",
+      }),
+    );
+  });
+
+  it("leaves a form with no key in it exactly as it was", () => {
+    const state = form({ name: "gpu-box", baseUrl: "https://gateway.example.com", env: { [MODEL_KEY]: "glm-5" } });
+
+    expect(withoutMisplacedKeys(state)).toEqual(state);
+  });
+});
+
+/**
+ * Why the key field refuses to save beyond being empty. Each comes from the state of the
+ * reader behind the field, and each is a branch that has been reachable at some point in this
+ * field's history and is not reachable through input today - so they are pinned here, one
+ * case per branch, where deleting one fails a test.
+ */
+describe("keyInputRefusal", () => {
+  it("has nothing to say about a reader holding nothing", () => {
+    expect(keyInputRefusal(EMPTY_SECRET_INPUT, true)).toBeUndefined();
+  });
+
+  it("refuses while a paste is open", () => {
+    expect(keyInputRefusal({ pending: "", pasting: true }, true)).toBe(UNFINISHED_PASTE);
+  });
+
+  it("refuses while a sequence is still arriving", () => {
+    expect(keyInputRefusal({ pending: "\u001b]0;", pasting: false }, true)).toBe(UNFINISHED_SEQUENCE);
+  });
+
+  it("refuses a field that never had a reader, whatever the reader says", () => {
+    expect(keyInputRefusal(EMPTY_SECRET_INPUT, false)).toBe(NO_RAW_KEY_INPUT);
+    expect(keyInputRefusal({ pending: "\u001b]", pasting: true }, false)).toBe(NO_RAW_KEY_INPUT);
+  });
+});
+
+/**
+ * The panel cuts an error to one line, so a message that does not fit loses its end - which
+ * is where "ctrl-u" used to be. Every message the key field can show leads with what to do,
+ * and fits the 66 columns the error line has at an 80-column terminal (measured through the
+ * real App in src/tui/App.test.tsx).
+ */
+describe("what the key field says", () => {
+  it.each(Object.entries(KEY_FIELD_MESSAGES))("keeps %s to one line at 80 columns", (_name, message) => {
+    expect(message.length).toBeLessThanOrEqual(66);
   });
 });

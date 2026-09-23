@@ -46,97 +46,28 @@ vi.mock("../lib/service", () => ({
 }));
 
 import { ADD_METHODS, App } from "./App.js";
+import { KEY_REQUIRED, MISPLACED_KEY, UNFINISHED_PASTE, UNREADABLE_KEY_INPUT } from "./api-form.js";
+import {
+  CURSOR,
+  DOWN,
+  ENTER,
+  ESC,
+  focusedOn,
+  type Instance,
+  moveTo,
+  press,
+  renderAt,
+  type,
+  typeSlowly,
+  waitForFrame,
+} from "./test-drive.js";
+import { windowsOnScreen } from "./test-frames.js";
 
 /**
- * Waits for a frame that satisfies `check`, rather than for a fixed number of milliseconds.
- *
- * Every screen here paints from an async read, so a sleep is a guess at how long that
- * takes: too short and the suite flakes under load, too long and every test pays for it.
- * The timeout is a ceiling on failure, not the normal cost.
+ * A key shape, random like a real one so that no eight characters of it turn up in the TUI's
+ * own text. No frame this suite renders may contain any eight characters of it.
  */
-async function waitForFrame(lastFrame: () => string | undefined, check: (frame: string) => boolean, timeout = 3000) {
-  const deadline = Date.now() + timeout;
-  let frame = "";
-  while (Date.now() < deadline) {
-    frame = lastFrame() ?? "";
-    if (check(frame)) return frame;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error(`timed out waiting for a matching frame; last was:\n${frame}`);
-}
-
-const DOWN = "\u001B[B";
-const ENTER = "\r";
-const ESC = "\u001B";
-const CURSOR = "✦";
-
-type Instance = ReturnType<typeof render>;
-
-/**
- * Presses a key and waits for the frame it produced.
- *
- * Not politeness: a handler reads the state of the render it was registered in, so two
- * keys pressed inside one tick are both answered from the state before either of them - a
- * person's keystrokes are separated by a repaint, and the test has to be too.
- */
-async function press(instance: Instance, keys: string, timeout = 3000) {
-  // One turn of the event loop before the key is sent. ink re-subscribes its input handler
-  // in an effect, which runs after the frame has been written - so a key sent the instant a
-  // frame appears is answered by the handler belonging to the frame before it, and a step
-  // that has just been left swallows it.
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  const before = instance.lastFrame();
-  instance.stdin.write(keys);
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 2));
-    if (instance.lastFrame() !== before) return;
-  }
-  throw new Error(`pressing ${JSON.stringify(keys)} redrew nothing within ${timeout}ms`);
-}
-
-/**
- * Sends a key that is not expected to redraw anything.
- *
- * `press` insists on a redraw, which is what makes it safe everywhere else. The key field
- * is the one place where a keystroke deliberately changes nothing on screen - its mask is
- * a constant, so typing into a field that already holds something draws the same frame -
- * and a wait for a frame that is never coming cannot be a poll. What the keystroke did is
- * asserted where it is visible: in the value the save receives.
- */
-async function type(instance: Instance, keys: string) {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  instance.stdin.write(keys);
-  await new Promise((resolve) => setTimeout(resolve, 30));
-}
-
-/**
- * Sends `text` one character at a time.
- *
- * `press` and `type` write a whole string, which ink delivers as one input event - that is
- * a paste, not typing, and the two take different paths through the key field's reader.
- * This is the typing one.
- */
-async function typeSlowly(instance: Instance, text: string) {
-  for (const char of text) await type(instance, char);
-}
-
-/** Whether the cursor is on the row carrying `label`. */
-function focusedOn(frame: string, label: string): boolean {
-  return frame.split("\n").some((line) => line.includes(label) && line.includes(CURSOR));
-}
-
-/** Walks the cursor down to the row carrying `label`, so a test does not count keystrokes. */
-async function moveTo(instance: Instance, label: string) {
-  for (let step = 0; step < 40; step++) {
-    if (focusedOn(instance.lastFrame() ?? "", label)) return;
-    await press(instance, DOWN);
-  }
-  throw new Error(`the cursor never reached '${label}'`);
-}
-
-/** A key shape. No frame this suite renders may contain it. */
-const KEY = "sk-ant-api03-not-a-real-key-0000000000000000";
+const KEY = "sk-ant-api03-fAkE7wvKpLmN8rTyUbHc5dFgA2sE9oIuWqXv3Bn6Mk1Lp8Rt";
 /** The constant the key field shows instead. */
 const MASK = "\u2022".repeat(8);
 
@@ -304,10 +235,7 @@ describe("App add-profile: API endpoint", () => {
     );
     // Not just the last frame: every frame ink drew, which is what a person and their
     // scrollback actually saw.
-    for (const frame of instance.frames) {
-      expect(frame).not.toContain(KEY);
-      expect(frame).not.toContain("sk-");
-    }
+    expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
     instance.unmount();
   });
 
@@ -364,7 +292,7 @@ describe("App add-profile: API endpoint", () => {
     // What the save receives is what accumulated here: the wrong key cleared, the right
     // one typed, the stray character erased.
     expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(expect.objectContaining({ secretValue: KEY }));
-    for (const drawn of instance.frames) expect(drawn).not.toContain(KEY);
+    expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
     instance.unmount();
   });
 
@@ -440,7 +368,7 @@ describe("App add-profile: API endpoint", () => {
       await moveTo(instance, "API key");
       await type(instance, `\u001b[200~${KEY.slice(0, 5)}`);
       await press(instance, DOWN);
-      const frame = await waitForFrame(instance.lastFrame, (f) => f.includes("A paste started and never finished"));
+      const frame = await waitForFrame(instance.lastFrame, (f) => f.includes(UNFINISHED_PASTE));
 
       expect(focusedOn(frame, "API key")).toBe(true);
       instance.unmount();
@@ -457,7 +385,7 @@ describe("App add-profile: API endpoint", () => {
       await moveTo(instance, "API key");
       await type(instance, `\u001b[200~${KEY.slice(0, 20)}`);
       await press(instance, DOWN);
-      await waitForFrame(instance.lastFrame, (f) => f.includes("A paste started and never finished"));
+      await waitForFrame(instance.lastFrame, (f) => f.includes(UNFINISHED_PASTE));
 
       await press(instance, "\u0015");
       await waitForFrame(instance.lastFrame, (f) => !f.includes(MASK));
@@ -499,7 +427,7 @@ describe("App add-profile: API endpoint", () => {
 
       expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(expect.objectContaining({ secretValue: KEY }));
       // The tail of a key drawn in the field the cursor moved to is the leak this prevents.
-      for (const drawn of instance.frames) expect(drawn).not.toContain(KEY.slice(10));
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
       instance.unmount();
     });
 
@@ -514,19 +442,92 @@ describe("App add-profile: API endpoint", () => {
       instance.unmount();
     });
 
-    it("types a stray string introducer, and what followed it, once a keystroke ends it", async () => {
+    it("shows a field holding parked bytes as holding something, and types them once a key ends them", async () => {
       // Alt+] is ESC ], an OSC introducer, and in this form it can only be a keystroke: a
       // real Escape leaves the form, and nothing here asks the terminal for a reply. What
-      // follows it is parked - a real OSC's body arrives as an event of its own - and the
-      // arrow that leaves the field interrupts the sequence, which then resolves as typed:
-      // `]` and then the paste, exactly as a stray `]` would have.
+      // follows it is parked - a real OSC's body arrives as an event of its own - so for a
+      // moment the field holds bytes and no text. It used to say "type or paste the key"
+      // over them, which invited a second paste on top. The arrow that leaves the field
+      // interrupts the sequence, and it resolves as typed: `]` and then the paste, exactly
+      // as a stray `]` would have.
       const { called, secretValue } = await keyAfter(async (instance) => {
         await type(instance, "\u001b]");
         await type(instance, KEY);
+
+        expect(instance.lastFrame()).toContain(MASK);
+        expect(instance.lastFrame()).not.toContain("type or paste the key");
       });
 
       expect(called).toBe(1);
       expect(secretValue).toBe(`]${KEY}`);
+    });
+
+    it.each([
+      ["a string sequence", `\u001b]${"x".repeat(5000)}`],
+      ["a CSI", `\u001b[${"9".repeat(40)}`],
+    ])("clears the field, and saves nothing, when %s runs past what can be measured", async (_kind, runaway) => {
+      // Where such a sequence ended is a guess, and the front of the key typed before it is
+      // not the key. Without this arm the form stored those first twenty characters.
+      const { called, frame } = await keyAfter(async (instance) => {
+        await type(instance, KEY.slice(0, 20));
+        await type(instance, runaway);
+        const refused = await waitForFrame(instance.lastFrame, (f) => f.includes(UNREADABLE_KEY_INPUT));
+
+        expect(refused).toContain("type or paste the key");
+      });
+
+      expect(called).toBe(0);
+      expect(frame).toContain(KEY_REQUIRED);
+    });
+
+    it("clears the unfinished-paste message once the paste does finish", async () => {
+      // The paste's trailing newline arrived as an event of its own, which the hold answers;
+      // the closing bracket arrived after it, with no text of its own to clear the message.
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const instance = await openApiForm();
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+      await press(instance, "https://gateway.example.com");
+      await moveTo(instance, "API key");
+
+      await type(instance, `\u001b[200~${KEY}`);
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes(UNFINISHED_PASTE));
+      await press(instance, "\u001b[201~");
+
+      expect(instance.lastFrame()).not.toContain(UNFINISHED_PASTE);
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added claude:gateway"));
+      expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(expect.objectContaining({ secretValue: KEY }));
+      instance.unmount();
+    });
+
+    it("holds an Esc while a paste is open, so an end marker split after its ESC does not leave the form", async () => {
+      // ink flushes the ESC on its own when the rest of the marker is a read behind, and the
+      // Esc keypress it looks like left the form and took the key with it.
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const instance = await openApiForm();
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+      await press(instance, "https://gateway.example.com");
+      await moveTo(instance, "API key");
+
+      await type(instance, `\u001b[200~${KEY}`);
+      await press(instance, ESC);
+      const held = await waitForFrame(instance.lastFrame, (f) => f.includes(UNFINISHED_PASTE));
+
+      expect(focusedOn(held, "API key")).toBe(true);
+      await press(instance, "[201~");
+      expect(instance.lastFrame()).not.toContain(UNFINISHED_PASTE);
+
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added claude:gateway"));
+      expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(expect.objectContaining({ secretValue: KEY }));
+      instance.unmount();
     });
 
     it("lets the field be emptied with backspace after an unfinished paste", async () => {
@@ -671,10 +672,238 @@ describe("App add-profile: API endpoint", () => {
     await press(instance, ENTER);
     const frame = await waitForFrame(instance.lastFrame, (f) => f.includes("could not store"));
 
-    expect(frame).not.toContain(KEY);
     expect(frame).toContain("<redacted>");
-    for (const drawn of instance.frames) expect(drawn).not.toContain(KEY);
+    expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
     instance.unmount();
+  });
+
+  /**
+   * Ruling 88: input that arrives in the same read as a keystroke moving the cursor.
+   *
+   * ink emits every event of a read synchronously, and a field's handlers are re-subscribed
+   * only after the render that follows - so the rest of a read reaches the handler of the
+   * field the cursor is leaving. A person's keystrokes are separated by a repaint; a laggy
+   * SSH link, a busy event loop or an auto-type tool delivers them together, which is what
+   * `type` does with its whole argument. Each case below is a route that put a key in the
+   * wrong field, and each asserts that no eight characters of it were ever on screen.
+   */
+  describe("input coalesced with a keystroke that moves the cursor", () => {
+    async function filledTo(label: string) {
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const instance = await openApiForm();
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+      await press(instance, "https://gateway.example.com");
+      await moveTo(instance, label);
+      return instance;
+    }
+
+    async function submit(instance: Instance) {
+      const { addApiProfile } = await import("../lib/service.js");
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added") || f.includes("\u2718"));
+      return vi.mocked(addApiProfile).mock.calls[0]?.[0];
+    }
+
+    const row = (instance: Instance, label: string) =>
+      (instance.lastFrame() ?? "").split("\n").find((line) => line.includes(label)) ?? "";
+
+    it("drops a paste that arrives with the arrows leaving the endpoint, rather than drawing it there", async () => {
+      const instance = await filledTo("Endpoint");
+
+      await type(instance, `${DOWN}${DOWN}${KEY}`);
+
+      expect(focusedOn(instance.lastFrame() ?? "", "API key")).toBe(true);
+      expect(row(instance, "Endpoint")).toContain("https://gateway.example.com ");
+      // Dropped where the user can see it: the field it was meant for is still empty.
+      expect(row(instance, "API key")).toContain("type or paste the key");
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+
+      // And a second paste, now that the field has the cursor, is the key - and the endpoint
+      // is only the endpoint. This is where a key used to be stored as the base URL.
+      await press(instance, KEY);
+      const saved = await submit(instance);
+
+      expect(saved).toEqual(expect.objectContaining({ baseUrl: "https://gateway.example.com", secretValue: KEY }));
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+      instance.unmount();
+    });
+
+    it("drops a paste that arrives with the arrows leaving the name", async () => {
+      const instance = await openApiForm();
+
+      await type(instance, `${DOWN}${DOWN}${DOWN}${KEY}`);
+
+      expect(focusedOn(instance.lastFrame() ?? "", "API key")).toBe(true);
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+      instance.unmount();
+    });
+
+    it("keeps typing after an arrow out of the key it follows, and out of the field it was aimed at", async () => {
+      const instance = await filledTo("API key");
+
+      await type(instance, `${KEY}${DOWN}glm-5`);
+
+      expect(focusedOn(instance.lastFrame() ?? "", "Model")).toBe(true);
+      expect(row(instance, "Model")).not.toContain("glm-5");
+      const saved = await submit(instance);
+
+      expect(saved?.secretValue).toBe(KEY);
+      expect(saved?.env).toEqual({});
+      instance.unmount();
+    });
+
+    it("keeps a paste that arrives with the Esc leaving the form out of the key it just cleared", async () => {
+      const instance = await filledTo("API key");
+
+      await type(instance, `${ESC}${ESC}${KEY}`);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Choose how to add"));
+      await moveTo(instance, "API endpoint");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Create profile"));
+
+      expect(instance.lastFrame()).not.toContain(MASK);
+      expect(await submit(instance)).toBeUndefined();
+      expect(instance.lastFrame()).toContain(KEY_REQUIRED);
+      instance.unmount();
+    });
+
+    it("sends a paste that starts in the read that moved the cursor nowhere, not into the key", async () => {
+      // The reviewer's one-read case, x + down + the front of a paste. It reached the key
+      // field's reader after the cursor had left: the key became x plus the paste's front,
+      // with a paste still open, and only the save's refusal stood between that and "Added".
+      // Now the paste is not the key field's at all - it began after the cursor moved - so
+      // the key is the x that was typed into it, and the paste went nowhere visible.
+      const instance = await filledTo("API key");
+
+      await type(instance, `x${DOWN}\u001b[200~${KEY.slice(0, 20)}`);
+
+      expect(focusedOn(instance.lastFrame() ?? "", "Model")).toBe(true);
+      expect(row(instance, "Model")).not.toContain(KEY.slice(0, 8));
+      const saved = await submit(instance);
+
+      expect(saved?.secretValue).toBe("x");
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+      instance.unmount();
+    });
+
+    it("masks the rest of that paste where it does land, and refuses to save it", async () => {
+      // Its next read reaches Model legitimately - the cursor is there by then - so routing
+      // cannot stop it. What stops it being drawn is the model row refusing to draw a key.
+      const instance = await filledTo("API key");
+
+      await type(instance, `${DOWN}\u001b[200~${KEY.slice(0, 20)}`);
+      await type(instance, KEY.slice(20));
+      await type(instance, "\u001b[201~");
+      await waitForFrame(instance.lastFrame, (f) => f.includes(MISPLACED_KEY));
+
+      expect(row(instance, "Model")).toContain(MASK);
+      expect(await submit(instance)).toBeUndefined();
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+      instance.unmount();
+    });
+  });
+
+  /**
+   * Ruling 88's second layer, end to end: a field that draws what it holds never draws a key,
+   * whichever way the key got there.
+   */
+  describe("a key in a field that draws what it holds", () => {
+    it("masks one pasted into the model row, says where it goes, and clears it on the first erase", async () => {
+      const instance = await openApiForm();
+      await moveTo(instance, "Model");
+
+      await press(instance, KEY);
+      const masked = await waitForFrame(instance.lastFrame, (f) => f.includes(MISPLACED_KEY));
+
+      expect(masked.split("\n").find((line) => line.includes("Model"))).toContain(MASK);
+      // Not one character at a time back into view: erasing the key from its end would draw
+      // its head once what was left stopped looking like one.
+      await press(instance, "\u007f");
+
+      expect(instance.lastFrame()).not.toContain(MASK);
+      expect(instance.lastFrame()).not.toContain(MISPLACED_KEY);
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+      instance.unmount();
+    });
+
+    it("takes a key in ANTHROPIC_CUSTOM_HEADERS, masked, without refusing it", async () => {
+      // The decision: a header carrying a key is what the variable is for. It is masked because
+      // every output path hides it; it is not refused because it is not in the wrong place.
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const header = `x-api-key: ${KEY}`;
+      const instance = await openApiForm();
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+      await press(instance, "https://gateway.example.com");
+      await moveTo(instance, "API key");
+      await press(instance, KEY);
+      await moveTo(instance, "Advanced");
+      await press(instance, "a");
+      await moveTo(instance, "Custom headers");
+      await press(instance, header);
+
+      expect(instance.lastFrame()).not.toContain(MISPLACED_KEY);
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added claude:gateway"));
+
+      expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(
+        expect.objectContaining({ env: { ANTHROPIC_CUSTOM_HEADERS: header }, secretValue: KEY }),
+      );
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+      instance.unmount();
+    });
+  });
+
+  /**
+   * The panel cuts an error to one line, and what it cuts is the end - which is where the way
+   * out was. Each message the key field shows is checked whole, on screen, at three widths.
+   */
+  describe.each([80, 100, 120])("what the key field says, at %i columns", (columns) => {
+    async function formAt() {
+      const instance = renderAt(<App initialScreen="use" />, columns);
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("default"));
+      await press(instance, "a");
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Choose how to add"));
+      await moveTo(instance, "API endpoint");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Create profile"));
+      return instance;
+    }
+
+    it("shows the unfinished-paste message whole", async () => {
+      const instance = await formAt();
+      await moveTo(instance, "API key");
+      await type(instance, "\u001b[200~abc");
+      await press(instance, DOWN);
+
+      expect(await waitForFrame(instance.lastFrame, (f) => f.includes(UNFINISHED_PASTE))).toContain("ctrl-u");
+      instance.unmount();
+    });
+
+    it("shows the unreadable-input message whole", async () => {
+      const instance = await formAt();
+      await moveTo(instance, "API key");
+      await type(instance, `\u001b]${"x".repeat(5000)}`);
+
+      await waitForFrame(instance.lastFrame, (f) => f.includes(UNREADABLE_KEY_INPUT));
+      instance.unmount();
+    });
+
+    it("shows the missing-key and misplaced-key messages whole", async () => {
+      const instance = await formAt();
+      await press(instance, KEY);
+      await waitForFrame(instance.lastFrame, (f) => f.includes(MISPLACED_KEY));
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+
+      await waitForFrame(instance.lastFrame, (f) => f.includes(KEY_REQUIRED) && f.includes(MISPLACED_KEY));
+      instance.unmount();
+    });
   });
 
   it("offers Anthropic's own endpoint the scheme it wants, and a gateway the other", async () => {
@@ -705,21 +934,20 @@ describe("App add-profile: API endpoint", () => {
     expect(frame).toContain("not set");
     expect(frame).toContain("https://gateway.example.com");
     expect(frame).toContain("gateway");
-    for (const drawn of instance.frames) expect(drawn).not.toContain(KEY);
+    expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
     instance.unmount();
   });
 
-  it("refuses a key typed into the name field, at the field, and does not repeat it", async () => {
+  it("refuses a key typed into the name field, at the field, and draws a mask in its place", async () => {
     const instance = await openApiForm();
 
     await press(instance, KEY);
-    const frame = await waitForFrame(instance.lastFrame, (f) => f.includes("looks like an API key"));
-    const row = frame.split("\n").find((line) => line.includes("looks like an API key")) ?? "";
+    const frame = await waitForFrame(instance.lastFrame, (f) => f.includes(MISPLACED_KEY));
 
-    // The field shows what was typed into it - it is a plain field and that is what a plain
-    // field does. What must not happen is the message repeating it underneath, which is
-    // what the CLI's own name check is careful about for the same reason.
-    expect(row).not.toContain(KEY);
+    // The name field used to draw what was typed into it, key included, and clear it only on
+    // the way out. It draws the key field's mask now, as every field that shows what it holds
+    // does for a key.
+    expect(frame.split("\n").find((line) => line.includes("Name"))).toContain(MASK);
 
     // And it does not outlive the step: leaving the form takes a key-shaped name with it,
     // the same way it takes the key.
@@ -729,7 +957,8 @@ describe("App add-profile: API endpoint", () => {
     await press(instance, ENTER);
     const back = await waitForFrame(instance.lastFrame, (f) => f.includes("Create profile"));
 
-    expect(back).not.toContain(KEY);
+    expect(back).not.toContain(MASK);
+    expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
     instance.unmount();
   });
 
@@ -767,7 +996,7 @@ describe("App add-profile: API endpoint", () => {
     const frame = await waitForFrame(instance.lastFrame, (f) => f.includes("Enter a profile name."));
 
     expect(frame).toContain("Enter the endpoint's base URL.");
-    expect(frame).toContain("Enter the API key");
+    expect(frame).toContain(KEY_REQUIRED);
     expect(vi.mocked(addApiProfile)).not.toHaveBeenCalled();
     instance.unmount();
   });

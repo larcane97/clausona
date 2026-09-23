@@ -2,6 +2,7 @@ import { render } from "ink-testing-library";
 import { describe, expect, it } from "vitest";
 
 import type { DoctorProfileResult, ProfileListItem, SecretSource } from "../../types.js";
+import { windowsOnScreen } from "../test-frames.js";
 import { ProfilePreview } from "./ProfilePreview.js";
 
 /**
@@ -123,7 +124,7 @@ describe("ProfilePreview for an API profile", () => {
       const frame = panelFor(apiProfile({ source: "command", run: "op read op://vault/key" }));
 
       expect(frame).toContain("command");
-      expect(frame).not.toContain("op://vault/key");
+      expect(windowsOnScreen([frame], "op read op://vault/key")).toEqual([]);
     });
   });
 });

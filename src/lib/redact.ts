@@ -37,21 +37,24 @@ export function isCredentialEnvKey(key: string): boolean {
   return CREDENTIAL_ENV_KEY_SET.has(key);
 }
 
-/** A name whose value is never printed, in part or whole. */
-function hidesValue(key: string): boolean {
+/**
+ * A name whose value is never printed, in part or whole. The API form draws these masked for
+ * the same reason, so a value is on screen exactly where it would be in `config --show`.
+ */
+export function hidesEnvValue(key: string): boolean {
   return isCredentialEnvKey(key) || catalogEntry(key)?.kind === "json";
 }
 
 /** The names `redactEnv` hides the whole value of, in the map's order. */
 export function hiddenEnvKeys(env: Record<string, string>): string[] {
-  return Object.keys(env).filter(hidesValue);
+  return Object.keys(env).filter(hidesEnvValue);
 }
 
 export function redactEnv(env: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(env).map(([key, value]) => [
       key,
-      hidesValue(key) || typeof value !== "string" ? HIDDEN : redactUrlsIn(value),
+      hidesEnvValue(key) || typeof value !== "string" ? HIDDEN : redactUrlsIn(value),
     ]),
   );
 }

@@ -2,7 +2,11 @@ import { render } from "ink-testing-library";
 import { describe, expect, it } from "vitest";
 
 import { type ApiFormState, apiFormFields, emptyApiForm, MODEL_KEY } from "../api-form.js";
+import { windowsOnScreen } from "../test-frames.js";
 import { ApiForm } from "./ApiForm.js";
+
+/** A key shape. The panel may draw a mask in its place, and never any eight characters of it. */
+const KEY = "sk-ant-api03-fAkE7wvKpLmN8rTyUbHc5dFgA2sE9oIuWqXv3Bn6Mk1Lp8Rt";
 
 /** What the key field shows instead of a key - the same, whatever is behind it. */
 const MASK = "\u2022".repeat(8);
@@ -159,5 +163,54 @@ describe("the auth row", () => {
 
     const apiKey = form({ authScheme: "api-key" });
     expect(frameFor({ ...apiKey, cursor: cursorOn(apiKey, "auth") })).toContain("x-api-key");
+  });
+});
+
+/**
+ * Ruling 88's second layer, drawn: a field that shows what it holds shows the key field's mask
+ * instead of a key - the same constant, so neither the key nor its length is on screen.
+ */
+describe("a key in a field that draws what it holds", () => {
+  /** The line carrying `label`, to check a row rather than the whole frame. */
+  const row = (frame: string, label: string) => frame.split("\n").find((line) => line.includes(label)) ?? "";
+
+  it.each([
+    ["Name", form({ name: KEY }), "name"],
+    ["Endpoint", form({ baseUrl: `https://gateway.example.com${KEY}` }), "baseUrl"],
+    ["Model", form({ env: { [MODEL_KEY]: KEY } }), "model"],
+  ])("draws the mask in the %s row, focused or not", (label, state, id) => {
+    for (const cursor of [cursorOn(state, id), cursorOn(state, "submit")]) {
+      const frame = frameFor({ ...state, cursor });
+
+      expect(row(frame, label)).toContain(MASK);
+      expect(windowsOnScreen([frame], KEY)).toEqual([]);
+    }
+  });
+
+  it("draws the same thing for a short key and a long one", () => {
+    const short = form({ env: { [MODEL_KEY]: KEY } });
+    const long = form({ env: { [MODEL_KEY]: KEY.repeat(6) } });
+
+    expect(frameFor({ ...long, cursor: cursorOn(long, "model") })).toBe(
+      frameFor({ ...short, cursor: cursorOn(short, "model") }),
+    );
+  });
+
+  it("draws a model id as it is", () => {
+    const state = form({ env: { [MODEL_KEY]: "z-ai/glm-5.3" } });
+
+    expect(row(frameFor(state), "Model")).toContain("z-ai/glm-5.3");
+  });
+
+  it("masks ANTHROPIC_CUSTOM_HEADERS whatever it holds, and still says it is stored in plain text", () => {
+    // The decision: a key belongs there, so it is not refused - and every output path hides
+    // the value whole, so the form does too.
+    const state = form({ advancedOpen: true, env: { ANTHROPIC_CUSTOM_HEADERS: `Authorization: Bearer ${KEY}` } });
+    const frame = frameFor({ ...state, cursor: cursorOn(state, "env:ANTHROPIC_CUSTOM_HEADERS") });
+
+    expect(row(frame, "Custom headers")).toContain(MASK);
+    expect(row(frame, "Custom headers")).not.toContain("Authorization");
+    expect(windowsOnScreen([frame], KEY)).toEqual([]);
+    expect(frame).toContain("stored in plain text");
   });
 });

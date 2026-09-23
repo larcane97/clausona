@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { Spinner } from "@inkjs/ui";
 import { Box, Text, useApp, useInput, useStdin, useStdout } from "ink";
 import TextInput from "ink-text-input";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { bootstrapInitFromCurrentState } from "../commands.js";
 import {
@@ -16,8 +16,14 @@ import {
   quotaSeverity,
 } from "../lib/format.js";
 import { displayName } from "../lib/profile-env.js";
-import { defaultProfileName, looksLikeCredential, profileId } from "../lib/profile-ref.js";
-import { EMPTY_SECRET_INPUT, readSecretChunk, type SecretInputState } from "../lib/prompt-secret.js";
+import { defaultProfileName, profileId } from "../lib/profile-ref.js";
+import {
+  EMPTY_SECRET_INPUT,
+  readSecretChunk,
+  type SecretChunk,
+  type SecretInputState,
+  settleSecretInput,
+} from "../lib/prompt-secret.js";
 import {
   addApiProfile,
   addProfile,
@@ -40,14 +46,22 @@ import {
   apiFormEnv,
   apiFormFields,
   apiFormHost,
+  concealsValue,
   customEntryError,
   defaultAuthScheme,
   emptyApiForm,
+  fieldValue,
   isTypingField,
+  keyInputRefusal,
   liveApiFieldError,
+  NO_RAW_KEY_INPUT,
   scrubSecret,
+  UNFINISHED_PASTE,
+  UNFINISHED_SEQUENCE,
+  UNREADABLE_KEY_INPUT,
   validateApiForm,
   withoutKeys,
+  withoutMisplacedKeys,
 } from "./api-form.js";
 import { ApiForm } from "./components/ApiForm.js";
 import { Chrome } from "./components/Chrome.js";
@@ -186,48 +200,39 @@ const initNameHints = [
 ];
 
 /**
- * What the key field says when the terminal sent something the reader cannot measure, and
- * when a paste opened and never closed.
+ * The field under the API form's cursor, or undefined when the form is not what is on screen.
  *
- * The situations are `prompt-secret.ts`'s, and so is the refusal: nothing is stored, and a
- * fragment is never reported as success. The wording is not, because the prompt's advice is
- * to pipe the key in instead, and there is no pipe behind a form - only the field the
- * message appears under.
+ * It decides two things, and both off the rendered state: which field's input handlers are
+ * subscribed, and - through `inputTarget` in the App - which field typed input may land in.
  */
-const UNREADABLE_KEY_INPUT =
-  "This terminal sent something the key field cannot read, so part of the key may be missing. The field has been cleared - paste it again.";
-const UNFINISHED_PASTE =
-  "A paste started and never finished, so only part of the key arrived. Nothing was saved - clear the field with ctrl-u and paste it again.";
-const UNFINISHED_SEQUENCE =
-  "The terminal started a sequence and never finished it, so part of the key is still unread. Nothing was saved - clear the field with ctrl-u and paste it again.";
-
-/**
- * What the key field says when it cannot get at the input events behind `useInput`.
- *
- * It reads those rather than `useInput`'s own argument, because `parseKeypress` strips one
- * leading ESC and offers no flag saying it did - through it, a typed `[` and a stripped
- * `ESC [` are the same string, and so are `O` and `ESC O`. Guessing between them corrupted a
- * key twice, in both directions. So when the emitter is out of reach there is no reader to
- * fall back to, and the field says where the key can go in instead of taking one it cannot
- * trust. ink's own App always provides the emitter, so this is for a host that renders its
- * own `StdinContext` - unreachable through `render()`, and kept because the alternative to
- * refusing is guessing.
- *
- * Short on purpose: the panel truncates an error to one line, and the way out is the part
- * that has to survive the truncation.
- */
-const NO_RAW_KEY_INPUT = "This terminal cannot be read directly - use clausona add --api --key-from env:NAME.";
-
-/**
- * Whether the cursor is on the API form's key field.
- *
- * It is what gates the raw input listener: attached on this row and on no other, so that a
- * keystroke meant for the name or the endpoint can never reach the key.
- */
-function isKeyFieldFocused(screen: Screen, state: AddState | null): boolean {
-  if (screen !== "use" || state === null || state.step !== "api-form") return false;
+function apiFieldUnderCursor(screen: Screen, state: AddState | null): ApiField | undefined {
+  if (screen !== "use" || state === null || state.step !== "api-form") return undefined;
   const fields = apiFormFields(state.api);
-  return fields[Math.min(state.api.cursor, fields.length - 1)]?.kind === "secret";
+  return fields[Math.min(state.api.cursor, fields.length - 1)];
+}
+
+/** The key field's id: the one field whose input comes from the reader rather than a TextInput. */
+const KEY_FIELD = "key";
+
+/** Whether the key field's reader holds part of something - a sequence or a paste - rather than nothing. */
+function holdsPartialInput(state: SecretInputState): boolean {
+  return state.pending !== "" || state.pasting;
+}
+
+/**
+ * The key field's errors after a chunk of input, and the same object when nothing changed so
+ * that an event which adds nothing redraws nothing.
+ *
+ * Text arriving answers whatever the field said before. So does the reader letting go of what
+ * a refusal was about: a paste that closed with nothing after its last character still closed,
+ * and "the paste never finished" under a field holding the whole key is a message that lies.
+ */
+function keyErrorsAfter(errors: Record<string, string>, read: SecretChunk): Record<string, string> {
+  const stale =
+    read.text !== "" ||
+    (errors.key === UNFINISHED_PASTE && !read.state.pasting) ||
+    (errors.key === UNFINISHED_SEQUENCE && read.state.pending === "");
+  return stale && errors.key !== undefined ? withoutKeys(errors, KEY_FIELD) : errors;
 }
 
 const apiFormHints = [
@@ -306,10 +311,33 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    */
   const [apiKey, setApiKey] = useState("");
   /**
-   * How far through a terminal escape sequence the key field is. A ref rather than state:
-   * it decides what the next chunk of input means, and nothing on screen is drawn from it.
+   * How far through a terminal escape sequence the key field is. A ref, because it decides
+   * what the next chunk of input means and a handler has to read it the moment it changes.
    */
   const secretInput = useRef<SecretInputState>({ ...EMPTY_SECRET_INPUT });
+  /**
+   * Whether that reader holds part of something: bytes parked behind a sequence introducer, or
+   * a paste still open. The one thing about it the screen shows - a field holding parked bytes
+   * is not empty, and saying "type or paste the key" over them invited a second paste on top.
+   */
+  const [keyPartial, setKeyPartial] = useState(false);
+  /**
+   * The API form field typed input may land in right now: the one under the cursor, or none.
+   *
+   * ink emits every event of a read synchronously, and every handler subscribed when the read
+   * began hears all of them - including the handler of a field the cursor left earlier in the
+   * same read, since handlers are only re-subscribed after the render that follows it. So an
+   * arrow and a paste arriving together sent the paste to the field being left: a key drawn
+   * in the Endpoint row, then stored as part of the base URL.
+   *
+   * Every edit path asks this first - the key's reader, every TextInput in the form, the
+   * form's own keys - and an edit for any other field is dropped. Dropped, not re-routed:
+   * typeahead that went nowhere is an empty field the user can see, and typeahead sent to the
+   * field it was not meant for is a corrupted key, or a key on screen. A handler that moves
+   * the cursor or closes the form empties it first (`releaseApiInput`), in the same call; the
+   * commit that draws the new position sets it again, below.
+   */
+  const inputTarget = useRef<string | undefined>(undefined);
   const [overlay, setOverlay] = useState<OverlayState>(null);
   const lastEscRef = useRef(0);
 
@@ -322,7 +350,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       setMessage("");
       setCursor(0);
       setAddState(null);
-      clearApiKey();
+      leaveApiForm();
       setOverlay(null);
       setScreen("dashboard");
     }
@@ -330,12 +358,12 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
 
   function resetAddState() {
     setAddState(null);
-    clearApiKey();
+    leaveApiForm();
     setCursor(0);
   }
 
   async function startAddFlow() {
-    clearApiKey();
+    leaveApiForm();
     setAddState({
       step: "loading",
       discoveredAccounts: [],
@@ -380,6 +408,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
 
   /** Moves the cursor by `delta`, wrapping, over whatever fields are currently shown. */
   function moveApiCursor(delta: number) {
+    releaseApiInput();
     updateApiForm((form) => {
       const length = apiFormFields(form).length;
       return { ...form, cursor: (Math.min(form.cursor, length - 1) + delta + length) % length };
@@ -387,6 +416,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   }
 
   function toggleApiAdvanced() {
+    releaseApiInput();
     updateApiForm((form) => {
       const before = apiFormFields(form);
       const currentId = before[Math.min(form.cursor, before.length - 1)]?.id;
@@ -414,6 +444,33 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   function clearApiKey() {
     setApiKey("");
     secretInput.current = { ...EMPTY_SECRET_INPUT };
+    setKeyPartial(false);
+  }
+
+  /**
+   * Called by every handler that moves the form's cursor, before it does: from here until the
+   * render that draws the new position, typed input has nowhere it may go.
+   *
+   * Leaving the key field also settles its reader. Leaving is an arrow, a tab or an Enter, and
+   * each interrupts a sequence still open - but the same keystroke reaches this handler and the
+   * reader's, in an order that is ink's to choose. Whichever comes first, the parked bytes come
+   * out as the keystroke would have made them: the reader's version when it heard it, this one
+   * when it is about to be told the input is no longer the key field's.
+   */
+  function releaseApiInput() {
+    if (inputTarget.current === KEY_FIELD) {
+      const settled = settleSecretInput(secretInput.current);
+      secretInput.current = settled.state;
+      setKeyPartial(holdsPartialInput(settled.state));
+      if (settled.text !== "") setApiKey((previous) => previous + settled.text);
+    }
+    inputTarget.current = undefined;
+  }
+
+  /** Every way out of the form: nothing typed may land in it, and the key goes with it. */
+  function leaveApiForm() {
+    inputTarget.current = undefined;
+    clearApiKey();
   }
 
   /**
@@ -445,12 +502,19 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    *
    * `useInput` keeps the named keys below - erase, ctrl-u, return, esc, the arrows - and
    * appends nothing, so there is exactly one writer. Attached only while the cursor is on
-   * the key field; everywhere else these events are none of this listener's business.
+   * the key field, and even then it takes an event only while `inputTarget` says the key
+   * field is where input goes: the cursor can leave in the middle of a read, and this
+   * listener hears the rest of that read.
+   *
+   * Which of this listener and `useInput`'s handler hears an event first is ink's business:
+   * today this one, because ink re-subscribes `useInput` on every render. Nothing depends on
+   * it. The one place the two disagree - a keystroke that both ends a parked sequence and
+   * moves the cursor - is settled by `releaseApiInput`, whichever order they come in.
    *
    * The seam is pinned in src/tui/App.test.tsx: `internal_` is a name that can change, and
    * what it would change into is a credential stored wrong and reported as success.
    */
-  const keyFieldFocused = isKeyFieldFocused(screen, addState);
+  const keyFieldFocused = apiFieldUnderCursor(screen, addState)?.id === KEY_FIELD;
   const canReadKeyInput = typeof inputEvents?.on === "function" && typeof inputEvents?.off === "function";
   useEffect(() => {
     if (!keyFieldFocused) return;
@@ -463,10 +527,12 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       return;
     }
     const onInput = (input: string) => {
+      if (inputTarget.current !== KEY_FIELD) return;
       const read = readSecretChunk(secretInput.current, input, "event");
       secretInput.current = read.state;
-      // The same two writes `editApiKey` makes, inlined so that this listener depends on
-      // nothing that changes every render - it is subscribed once per focus, not per frame.
+      setKeyPartial(holdsPartialInput(read.state));
+      // The writes `editApiKey` makes, inlined so that this listener depends on nothing that
+      // changes every render - it is subscribed once per focus, not per frame.
       if (read.problem === "unreadable") {
         setApiKey("");
         setAddState((prev) =>
@@ -474,11 +540,12 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         );
         return;
       }
-      if (read.text === "") return;
-      setApiKey((previous) => previous + read.text);
-      setAddState((prev) =>
-        prev ? { ...prev, api: { ...prev.api, errors: withoutKeys(prev.api.errors, "key") } } : null,
-      );
+      if (read.text !== "") setApiKey((previous) => previous + read.text);
+      setAddState((prev) => {
+        if (!prev) return null;
+        const errors = keyErrorsAfter(prev.api.errors, read);
+        return errors === prev.api.errors ? prev : { ...prev, api: { ...prev.api, errors } };
+      });
     };
     inputEvents.on("input", onInput);
     return () => {
@@ -486,8 +553,23 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     };
   }, [keyFieldFocused, canReadKeyInput, inputEvents]);
 
-  function editApiField(field: ApiField, value: string) {
+  // What `inputTarget` says between handlers: the field the rendered cursor is on. A layout
+  // effect, so it is set in the same commit that draws the cursor there - before any handler
+  // can hear another event.
+  const fieldUnderCursor = apiFieldUnderCursor(screen, addState)?.id;
+  useLayoutEffect(() => {
+    inputTarget.current = fieldUnderCursor;
+  });
+
+  function editApiField(field: ApiField, edited: string) {
+    // A TextInput of a field the cursor has left is still subscribed until the next render,
+    // and hears the rest of the read that moved the cursor. See `inputTarget`.
+    if (inputTarget.current !== field.id) return;
     updateApiForm((form) => {
+      // A masked value is not shown shrinking back into view: the first erase clears it.
+      // Otherwise erasing a key from the end would draw its head once it stopped looking
+      // like one.
+      const value = concealsValue(field, form) && edited.length < fieldValue(field, form).length ? "" : edited;
       let next: ApiFormState = form;
       if (field.kind === "env" && field.envKey) {
         next = { ...form, env: { ...form.env, [field.envKey]: value } };
@@ -519,6 +601,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
 
   /** Enter on the free-form row: its pair joins the env map and the row clears for another. */
   function commitCustomEntry() {
+    releaseApiInput();
     updateApiForm((form) => {
       const problem = customEntryError(form);
       if (problem) return { ...form, errors: { ...form.errors, [problem.field]: problem.message } };
@@ -541,23 +624,13 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   function submitApiForm(state: AddState) {
     const form = state.api;
     const errors = validateApiForm(form, { existingIds: existingProfileIds, hasKey: apiKey.trim() !== "" });
-    // A paste whose closing bracket never arrived: what is in the field is the front of a
-    // key rather than the key. The prompt refuses to return that rather than have it
-    // stored and reported as success, and so does this.
-    //
-    // Belt and braces now: the key field holds the cursor while a paste is open, so Submit
-    // is not reachable in that state. It stays because what it is guarding is a credential
-    // being stored wrong, and because "unreachable" is a property of the handler above
-    // rather than of this function.
-    if (secretInput.current.pasting) errors.key = UNFINISHED_PASTE;
-    // The same refusal one branch out. A stray OSC introducer parks every byte after it
-    // without opening a paste; the keystroke that leaves the field interrupts it, so this is
-    // reached only if that keystroke never went through the reader. A sequence still
-    // half-arrived at save time means real bytes are parked behind it, and a key is what the
-    // terminal sent rather than what got as far as the field.
-    if (secretInput.current.pending !== "") errors.key = UNFINISHED_SEQUENCE;
-    // And nothing can be saved at all from a field that never had a reader.
-    if (!canReadKeyInput) errors.key = NO_RAW_KEY_INPUT;
+    // The reader behind the key field still holding part of something - an open paste, a
+    // sequence still arriving - or the field never having had a reader. The first two cannot
+    // be reached through the keyboard now (see `keyInputRefusal`); they stay because what they
+    // guard is a credential stored wrong.
+    const refusal = keyInputRefusal(secretInput.current, canReadKeyInput);
+    if (refusal) errors.key = refusal;
+    releaseApiInput();
     if (Object.keys(errors).length > 0) {
       // A setting that is wrong while the section is folded has nowhere to be shown, so
       // the section opens rather than the form refusing to submit for an invisible reason.
@@ -753,27 +826,32 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         } else if (addState.step === "discover-select" || addState.step === "import-path") {
           setAddState((prev) => (prev ? { ...prev, step: "method", cursor: 0 } : null));
         } else if (addState.step === "api-form") {
+          // An Esc while a paste is open is held, as the arrows are below. The terminal has
+          // said every byte until the closing bracket is pasted data, and the likeliest Esc
+          // here is the front of that bracket, split from the rest by a slow read: acting on
+          // it would leave the form and throw the key away with half of it still arriving.
+          // The reader joins it to the rest of the bracket; ctrl-u is the way out of a paste
+          // that really is stuck, and the message says so.
+          if (inputTarget.current === KEY_FIELD && secretInput.current.pasting) {
+            updateApiForm((prev) => ({ ...prev, errors: { ...prev.errors, key: UNFINISHED_PASTE } }));
+            return;
+          }
           // The key goes with the step; everything else stays, so a stray esc costs a URL
           // nobody has to retype. Coming back to a mask over a value the user can no
           // longer read is a value they cannot check, and one this component would then
           // have held for the rest of the session - so the field comes back empty, on a
           // form that is otherwise as they left it.
           //
-          // A name is a plain field and shows what was typed into it, key included, for as
-          // long as it is on screen. It does not outlive the step: a name the form already
-          // refused as key-shaped goes the same way the key does.
-          clearApiKey();
+          // So does a key anywhere else in the form. Those fields are masked while it sits in
+          // them, and it does not outlive the step either.
+          leaveApiForm();
           setAddState((prev) =>
             prev
               ? {
                   ...prev,
                   step: "method",
                   cursor: 0,
-                  api: {
-                    ...prev.api,
-                    name: looksLikeCredential(prev.api.name.trim()) ? "" : prev.api.name,
-                    cursor: 0,
-                  },
+                  api: { ...withoutMisplacedKeys(prev.api), cursor: 0 },
                 }
               : null,
           );
@@ -910,9 +988,16 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         // cursor walks them, and nothing but Submit leaves.
         if (addState.step === "api-form") {
           const form = addState.api;
-          const fields = apiFormFields(form);
-          const index = Math.min(form.cursor, fields.length - 1);
-          const current = fields[index];
+          // The field under the cursor now, which is not the one in this handler's render if
+          // an earlier event in the same read moved it: until a render has drawn where it
+          // landed there is no field to act on - see `inputTarget`. An arrow can still move
+          // on from there; anything that depends on which field this is waits for a frame.
+          const current = apiFormFields(form).find((field) => field.id === inputTarget.current);
+          if (current === undefined) {
+            if (key.upArrow) moveApiCursor(-1);
+            else if (key.downArrow || key.tab) moveApiCursor(1);
+            return;
+          }
           const typing = isTypingField(current);
           /**
            * A paste is open on the key field: its opening bracket arrived and its closing
@@ -925,7 +1010,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
            * cursor stays, and the refusal that would otherwise wait until Submit is shown
            * now, because holding the cursor has to come with a way out: ctrl-u.
            */
-          const openPaste = current?.kind === "secret" && secretInput.current.pasting;
+          const openPaste = current.kind === "secret" && secretInput.current.pasting;
           if (openPaste && (key.upArrow || key.downArrow || key.tab || key.return)) {
             updateApiForm((prev) => ({ ...prev, errors: { ...prev.errors, key: UNFINISHED_PASTE } }));
             return;
@@ -945,7 +1030,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             toggleApiAdvanced();
             return;
           }
-          if (current?.kind === "auth" && (input === " " || key.leftArrow || key.rightArrow)) {
+          if (current.kind === "auth" && (input === " " || key.leftArrow || key.rightArrow)) {
             updateApiForm((prev) => ({
               ...prev,
               authScheme: prev.authScheme === "bearer" ? "api-key" : "bearer",
@@ -953,11 +1038,11 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             }));
             return;
           }
-          if (current?.kind === "sessions" && input === " ") {
+          if (current.kind === "sessions" && input === " ") {
             setAddState((prev) => (prev ? { ...prev, mergeSessions: !prev.mergeSessions } : null));
             return;
           }
-          if (current?.kind === "advanced" && (input === " " || key.return)) {
+          if (current.kind === "advanced" && (input === " " || key.return)) {
             toggleApiAdvanced();
             return;
           }
@@ -966,7 +1051,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           // something this form does not show. So the editing keys are handled here:
           // erase and kill-line. The characters themselves are not: they come from the
           // input-event listener above, which reads them before ink has edited them.
-          if (current?.kind === "secret" && !key.return) {
+          if (current.kind === "secret" && !key.return) {
             if (key.delete || key.backspace) {
               if (apiKey.length <= 1) {
                 // Erasing the last character empties the field, and an empty field is not
@@ -985,11 +1070,11 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             return;
           }
           if (key.return) {
-            if (current?.kind === "submit") {
+            if (current.kind === "submit") {
               submitApiForm(addState);
               return;
             }
-            if (current?.id === "customValue" && form.customKey.trim() !== "") {
+            if (current.id === "customValue" && form.customKey.trim() !== "") {
               commitCustomEntry();
               return;
             }
@@ -1601,7 +1686,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             <ApiForm
               form={addState.api}
               fields={apiFormFields(addState.api)}
-              keySet={apiKey !== ""}
+              keySet={apiKey !== "" || keyPartial}
               mergeSessions={addState.mergeSessions}
               onChange={editApiField}
             />

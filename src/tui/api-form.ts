@@ -14,8 +14,11 @@
  */
 
 import { checkBaseUrl, isAnthropicHost } from "../core/api-url.js";
-import { CREDENTIAL_ENV_KEYS, envKeyCaseTwin, envKeyCaseTwinError } from "../lib/profile-env.js";
+import { carriesCredentialToken } from "../core/credential-token.js";
+import { envKeyCaseTwin, envKeyCaseTwinError } from "../lib/profile-env.js";
 import { foldProfileName, looksLikeCredential, profileId, validateProfileName } from "../lib/profile-ref.js";
+import type { SecretInputState } from "../lib/prompt-secret.js";
+import { hidesEnvValue, isCredentialEnvKey } from "../lib/redact.js";
 import {
   CLAUDE_ENV_CATALOG,
   catalogEntry,
@@ -37,8 +40,63 @@ export const ADVANCED_ENTRIES: EnvCatalogEntry[] = CLAUDE_ENV_CATALOG.filter((en
 
 const MODEL_ENTRY = CLAUDE_ENV_CATALOG.find((entry) => entry.key === MODEL_KEY);
 
-/** A key in a field that draws what it holds, the endpoint among them. */
+// ── What the form says about a key ───────────────────────────────
+//
+// The panel cuts an error to one line, and at an 80-column terminal the line has 66 columns.
+// So each of these fits in 66 and leads with what to do: when one did not fit, the part cut
+// off was the way out - "ctrl-u" was past column 100.
+
+/** A key in a field that draws what it holds, from the name to the free-form row. */
 export const MISPLACED_KEY = "That looks like an API key - it goes in the API key field.";
+
+/** Submit with nothing in the key field. */
+export const KEY_REQUIRED = "Enter the API key. It goes to the credential store.";
+
+/**
+ * The terminal sent something the key field's reader cannot measure, so where it ended is a
+ * guess. The situation, and the refusal, are `prompt-secret.ts`'s; the words are not, because
+ * the prompt's way out is to pipe the key in and a form has no pipe behind it.
+ */
+export const UNREADABLE_KEY_INPUT = "Paste the key again - unreadable input cleared the field.";
+
+/** A paste whose closing bracket has not arrived: what is in the field is the front of a key. */
+export const UNFINISHED_PASTE = "Clear it with ctrl-u and paste again: the paste never finished.";
+
+/** A sequence still arriving: real bytes are parked behind it. */
+export const UNFINISHED_SEQUENCE = "Clear it with ctrl-u and paste again: part of the key is unread.";
+
+/**
+ * The key field could not get at ink's input events, and there is no other reader it would
+ * trust - see App.tsx. The way out is the CLI, so the command is what comes first.
+ */
+export const NO_RAW_KEY_INPUT = "Use clausona add --api --key-from env:NAME instead of this field.";
+
+/** Every message the key field can show, for the test that holds them to one line. */
+export const KEY_FIELD_MESSAGES = {
+  MISPLACED_KEY,
+  KEY_REQUIRED,
+  UNREADABLE_KEY_INPUT,
+  UNFINISHED_PASTE,
+  UNFINISHED_SEQUENCE,
+  NO_RAW_KEY_INPUT,
+} as const;
+
+/**
+ * Why the key field cannot be saved from as it stands, beyond being empty.
+ *
+ * There being no reader at all is reachable, from a host that renders its own StdinContext
+ * without ink's input events. The other two - the reader holding part of something, an open
+ * paste or a sequence still arriving - are not reachable through the keyboard today: the field
+ * holds the cursor while a paste is open, leaving it settles a sequence, and input for a field
+ * the cursor has left is dropped. They stay because what they guard is a credential stored
+ * wrong, and "unreachable" is a property of those three other places rather than of the save.
+ */
+export function keyInputRefusal(input: SecretInputState, canRead: boolean): string | undefined {
+  if (!canRead) return NO_RAW_KEY_INPUT;
+  if (input.pending !== "") return UNFINISHED_SEQUENCE;
+  if (input.pasting) return UNFINISHED_PASTE;
+  return undefined;
+}
 
 export type ApiFormState = {
   name: string;
@@ -151,7 +209,7 @@ export function fieldGroup(field: ApiField): EnvGroup | "custom" | undefined {
 export function nameError(name: string, existingIds: readonly string[]): string | undefined {
   const trimmed = name.trim();
   if (trimmed === "") return "Enter a profile name.";
-  if (looksLikeCredential(trimmed)) return "That looks like an API key, not a name. The key goes in the Key field.";
+  if (looksLikeCredential(trimmed) || carriesCredentialToken(trimmed)) return MISPLACED_KEY;
   const check = validateProfileName(trimmed);
   if (!check.ok) return check.error;
   const id = profileId("claude", trimmed);
@@ -206,6 +264,9 @@ export function baseUrlError(baseUrl: string): string | undefined {
  * the value. The json branch already refuses to echo, for the same reason.
  */
 export function envError(key: string, value: string, others: readonly string[]): string | undefined {
+  // First, so that no message below gets as far as quoting it. Not under a name whose value
+  // is hidden on every output path: a header or a request body is where a gateway takes a key.
+  if (!hidesEnvValue(key) && carriesCredentialToken(value)) return MISPLACED_KEY;
   const result = validateEnvEntry(key, value);
   if (!result.ok) {
     const entry = catalogEntry(key);
@@ -223,6 +284,9 @@ export function envError(key: string, value: string, others: readonly string[]):
 export function customEntryError(form: ApiFormState): { field: string; message: string } | undefined {
   const key = form.customKey.trim();
   const value = form.customValue;
+  // Before anything that names the setting: two of the messages below quote it.
+  if (carriesCredentialToken(key)) return { field: "customKey", message: MISPLACED_KEY };
+  if (!hidesEnvValue(key) && carriesCredentialToken(value)) return { field: "customValue", message: MISPLACED_KEY };
   if (key === "") {
     if (value.trim() === "") return undefined;
     return { field: "customKey", message: "Name the setting before giving it a value." };
@@ -249,9 +313,7 @@ export function validateApiForm(form: ApiFormState, context: ApiFormContext): Re
   if (name) errors.name = name;
   const url = baseUrlError(form.baseUrl);
   if (url) errors.baseUrl = url;
-  if (!context.hasKey) {
-    errors.key = "Enter the API key. It goes to the credential store, never to profiles.json.";
-  }
+  if (!context.hasKey) errors.key = KEY_REQUIRED;
   const keys = Object.keys(form.env);
   for (const key of keys) {
     const value = form.env[key];
@@ -346,6 +408,77 @@ export function withoutKeys(errors: Record<string, string>, ...ids: string[]): R
  * says what happened rather than refusing it. The doctor reports it again afterwards.
  */
 export function plaintextSecretNote(key: string, value: string): string | undefined {
-  if (value.trim() === "" || !(CREDENTIAL_ENV_KEYS as readonly string[]).includes(key)) return undefined;
+  if (value.trim() === "" || !isCredentialEnvKey(key)) return undefined;
   return `${key} is stored in plain text in profiles.json - an API key belongs in the Key field.`;
+}
+
+// ── Fields that draw what they hold ──────────────────────────────
+
+/** What a field other than the key draws: its own value, from wherever the form keeps it. */
+export function fieldValue(field: ApiField, form: ApiFormState): string {
+  if (field.kind === "env") return form.env[field.envKey ?? ""] ?? "";
+  if (field.id === "name") return form.name;
+  if (field.id === "baseUrl") return form.baseUrl;
+  if (field.id === "customKey") return form.customKey;
+  if (field.id === "customValue") return form.customValue;
+  return "";
+}
+
+/** The variable a field's value would be stored under, when it writes the env map at all. */
+function storedUnder(field: ApiField, form: ApiFormState): string | undefined {
+  if (field.kind === "env") return field.envKey;
+  if (field.id === "customValue") return form.customKey.trim();
+  return undefined;
+}
+
+/**
+ * Whether a field shows a mask instead of what it holds.
+ *
+ * Every field but the key draws its value, one glyph per character, and whatever routes input
+ * to them a key can still end up in one: pasted into the wrong row, or routed there by a gap
+ * nobody has found. So none of them draws one:
+ *
+ * - a value stored under a name every output path hides - a credential variable such as
+ *   ANTHROPIC_CUSTOM_HEADERS, or a json setting - is masked whatever it holds. A key is
+ *   legitimate there, and `config --show` would print none of it, so neither does the form;
+ * - a name the name rule refuses as a key is masked, as that rule is the one the field's
+ *   message comes from;
+ * - anything else is masked when it carries something shaped like a key, anywhere in it -
+ *   `carriesCredentialToken`, which says what it misses.
+ *
+ * Masked means the constant the key field shows (ApiForm.tsx), not a glyph per character.
+ */
+export function concealsValue(field: ApiField, form: ApiFormState): boolean {
+  const value = fieldValue(field, form);
+  if (value === "") return false;
+  const under = storedUnder(field, form);
+  if (under && hidesEnvValue(under)) return true;
+  if (field.id === "name" && looksLikeCredential(value.trim())) return true;
+  return carriesCredentialToken(value);
+}
+
+/**
+ * The form as it is left, with every key it holds outside the key field dropped.
+ *
+ * The key field is cleared on every way out of the form; a key sitting in a plain field is
+ * the same key, and the form is remembered for as long as the add flow is open. What stays
+ * is what the form would have taken: a setting where a key belongs keeps it.
+ */
+export function withoutMisplacedKeys(form: ApiFormState): ApiFormState {
+  const misplaced = (value: string) => carriesCredentialToken(value);
+  const env = Object.fromEntries(
+    Object.entries(form.env).map(([key, value]) => [key, !hidesEnvValue(key) && misplaced(value) ? "" : value]),
+  );
+  const next: ApiFormState = {
+    ...form,
+    name: looksLikeCredential(form.name.trim()) || misplaced(form.name) ? "" : form.name,
+    baseUrl: misplaced(form.baseUrl) ? "" : form.baseUrl,
+    env,
+    customKey: misplaced(form.customKey) ? "" : form.customKey,
+    customValue: !hidesEnvValue(form.customKey.trim()) && misplaced(form.customValue) ? "" : form.customValue,
+  };
+  const changed = (Object.keys(next) as (keyof ApiFormState)[]).some(
+    (key) => JSON.stringify(next[key]) !== JSON.stringify(form[key]),
+  );
+  return changed ? next : form;
 }

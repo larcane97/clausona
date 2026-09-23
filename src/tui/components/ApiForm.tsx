@@ -6,7 +6,9 @@ import {
   type ApiField,
   type ApiFormState,
   advancedFieldIndexes,
+  concealsValue,
   fieldGroup,
+  fieldValue,
   MODEL_KEY,
   plaintextSecretNote,
 } from "../api-form.js";
@@ -52,7 +54,10 @@ type ApiFormProps = {
   form: ApiFormState;
   fields: ApiField[];
   /**
-   * Whether the key field holds anything - not what it holds.
+   * Whether the key field holds anything - not what it holds. That includes input still being
+   * read: bytes parked behind a sequence introducer, or a paste that has not finished. A field
+   * holding those is not empty, and saying "type or paste the key" over them invites a second
+   * paste on top of the first.
    *
    * A boolean rather than the key, so that the panel's discipline is not what keeps the
    * key off screen: there is nothing here to render.
@@ -210,16 +215,7 @@ export function ApiForm({ form, fields, keySet, mergeSessions, onChange }: ApiFo
             : field.id === "customValue"
               ? "Value"
               : (field.entry?.label ?? field.envKey ?? field.id);
-    const value =
-      field.kind === "env"
-        ? (form.env[field.envKey ?? ""] ?? "")
-        : field.id === "name"
-          ? form.name
-          : field.id === "baseUrl"
-            ? form.baseUrl
-            : field.id === "customKey"
-              ? form.customKey
-              : form.customValue;
+    const value = fieldValue(field, form);
     const placeholder =
       field.id === "baseUrl"
         ? "https://api.example.com"
@@ -235,13 +231,29 @@ export function ApiForm({ form, fields, keySet, mergeSessions, onChange }: ApiFo
           <Cursor focused={focused} />
           <Label text={label} focused={focused} />
           <Box flexGrow={1} minWidth={0}>
-            <TextInput
-              value={value}
-              onChange={(next) => onChange(field, next)}
-              focus={focused}
-              placeholder={placeholder}
-              showCursor={focused}
-            />
+            {concealsValue(field, form) ? (
+              // Still the field's input, so it can be erased - App.tsx clears a masked value
+              // on the first erase rather than showing it again as it shrinks - but drawn as
+              // the key field's constant: the mask glyph per character, cut to the mask's
+              // width. Anything concealed is at least that long, so the length never shows.
+              <Box width={KEY_MASK.length} height={1} overflow="hidden">
+                <TextInput
+                  value={value}
+                  mask={KEY_MASK[0]}
+                  onChange={(next) => onChange(field, next)}
+                  focus={focused}
+                  showCursor={focused}
+                />
+              </Box>
+            ) : (
+              <TextInput
+                value={value}
+                onChange={(next) => onChange(field, next)}
+                focus={focused}
+                placeholder={placeholder}
+                showCursor={focused}
+              />
+            )}
           </Box>
         </Box>
         <Hint text={field.entry?.hint} />
