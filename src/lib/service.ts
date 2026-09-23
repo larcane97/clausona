@@ -297,6 +297,19 @@ export async function setupSharedLinks(
     linked += 1;
   }
 
+  // The walk above only sees what the primary still has. A link made before its entry
+  // joined the skip set, to a file the primary has since lost, would otherwise outlive
+  // every repair while doctor keeps reporting it as stale_symlink.
+  const primaryNames = new Set(items.map((item) => item.name));
+  for (const name of adapter.sharedSkipSet(mergeSessions)) {
+    if (primaryNames.has(name)) continue;
+    const target = path.join(profileDir, name);
+    const linkInfo = await inspectSharedLink(target, path.join(primarySource, name));
+    if (linkInfo.isSharedLink && linkInfo.pointsToSource) {
+      await rm(target, { force: true, recursive: true });
+    }
+  }
+
   return linked;
 }
 

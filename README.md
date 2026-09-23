@@ -188,6 +188,8 @@ When you register a new profile, clausona symlinks shared resources from your pr
 ~/.claude-work/            (new claude profile)
 ├── .claude.json           ← own account metadata (NOT shared)
 ├── .credentials.json      ← own OAuth tokens outside macOS (NOT shared)
+├── .last-update-result.json, gh-pr-status-cache.json, .session-stats.json
+│                          ← own per-dir state and caches (NOT shared)
 ├── projects/              ← own session history (NOT shared by default)
 ├── jobs/                  ← own background sessions (follows projects/)
 ├── teams/                 ← own team records (follows projects/)
@@ -239,6 +241,12 @@ to the primary's credential; `clausona doctor` reports it as `stale_symlink` and
 that has just had a stale credential link removed reports `missing_oauth` until it signs
 in, so doctor points those findings at `clausona login <profile>` rather than at
 `clausona repair`, which rebuilds shared links and cannot produce a credential.
+
+`.last-update-result.json`, `gh-pr-status-cache.json` and `.session-stats.json` hold
+state or a cache for one config dir, and whatever writes them replaces a shared link with
+a regular file, so they stay profile-local. A profile that still links one of them to the
+primary from an earlier version is reported as `stale_symlink`; `clausona repair
+<profile>` removes the link.
 
 A marketplace registered from a path of your own — rather than installed under
 `plugins/marketplaces/` — is left alone. clausona neither reports it as drift nor
