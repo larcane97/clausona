@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import { evaluateSymlinkHealth } from "../core/doctor.js";
+import { acquireFileLock } from "../core/file-lock.js";
 import { backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
@@ -52,6 +53,13 @@ function isManagedMarketplace(entry: unknown, configDir: string): boolean {
 const CLAUSONA_DIR = path.join(homedir(), ".clausona");
 const REGISTRY_PATH = path.join(CLAUSONA_DIR, "profiles.json");
 const USAGE_PATH = path.join(CLAUSONA_DIR, "usage.json");
+const REGISTRY_LOCK_PATH = path.join(CLAUSONA_DIR, "locks", "registry.lock");
+
+// The registry lock only ever covers re-reading, changing and saving one small file, so
+// a lock this old was left by a process that died holding it. Waiting longer than that
+// lets a writer queued behind such a process take over rather than fail.
+const REGISTRY_LOCK_STALE_MS = 5_000;
+const REGISTRY_LOCK_WAIT_MS = 10_000;
 
 async function exists(targetPath: string) {
   try {
@@ -614,7 +622,8 @@ export async function discoverAccounts(): Promise<DiscoveredAccount[]> {
   return out;
 }
 
-export async function loadRegistry(): Promise<Registry | null> {
+/** Reads the registry, migrating a v1 file in place. Only call it holding the registry lock. */
+async function readRegistryLocked(): Promise<Registry | null> {
   const raw = await readJson<unknown>(REGISTRY_PATH, null);
   if (raw === null) return null;
   if (!isV1Registry(raw)) return raw as Registry;
@@ -669,8 +678,53 @@ export async function loadRegistry(): Promise<Registry | null> {
   return migrated;
 }
 
+export async function loadRegistry(): Promise<Registry | null> {
+  const raw = await readJson<unknown>(REGISTRY_PATH, null);
+  if (raw === null || !isV1Registry(raw)) return raw as Registry | null;
+  // Migrating rewrites the file, which makes it a registry write like any other.
+  return withRegistryLock(readRegistryLocked);
+}
+
 export async function saveRegistry(registry: Registry) {
   await writeJson(REGISTRY_PATH, registry);
+}
+
+async function withRegistryLock<T>(fn: () => Promise<T>): Promise<T> {
+  const release = await acquireFileLock(REGISTRY_LOCK_PATH, {
+    staleMs: REGISTRY_LOCK_STALE_MS,
+    waitMs: REGISTRY_LOCK_WAIT_MS,
+  });
+  if (!release) {
+    throw new Error(
+      `Timed out waiting for another clausona process to release ${REGISTRY_LOCK_PATH}. If none is running, delete that file and try again.`,
+    );
+  }
+
+  try {
+    return await fn();
+  } finally {
+    await release();
+  }
+}
+
+/**
+ * Changes the registry as it stands when the change is written, not as it stood when
+ * the caller started. `update` gets a copy read under the lock and returns the registry
+ * to save, or null to leave the file untouched.
+ *
+ * Every writer goes through here because loading early and saving late silently
+ * reverts whatever was written in between: `add` holds its copy across an interactive
+ * login that takes minutes, and used to drop profiles other adds registered meanwhile.
+ * Keep slow work out of `update` — every other writer waits for it.
+ */
+export async function updateRegistry<R extends Registry | null>(
+  update: (current: Registry | null) => R | Promise<R>,
+): Promise<R> {
+  return withRegistryLock(async () => {
+    const next = await update(await readRegistryLocked());
+    if (next) await saveRegistry(next);
+    return next;
+  });
 }
 
 export async function loadUsageStore() {
@@ -756,7 +810,8 @@ export async function initializeRegistry(options: {
     registry.activeProfiles.codex = profileId("codex", fallback);
   }
 
-  await saveRegistry(registry);
+  // Setting up replaces whatever registry is there, but still waits for other writers.
+  await updateRegistry(() => registry);
   await writeJson(USAGE_PATH, {});
 
   // Seed seenSessions for each registered profile (claude only — codex usage tracking is v1 OOS)
@@ -836,13 +891,12 @@ export async function fetchProfileQuotas(
 }
 
 export async function setActiveProfileByName(id: string) {
-  const registry = await loadRegistry();
-  if (!registry?.profiles[id]) {
-    throw new Error(`Profile '${id}' not found.`);
-  }
-
-  const next = setActiveProfile(registry, id);
-  await saveRegistry(next);
+  const next = await updateRegistry((current) => {
+    if (!current?.profiles[id]) {
+      throw new Error(`Profile '${id}' not found.`);
+    }
+    return setActiveProfile(current, id);
+  });
   return next.profiles[id];
 }
 
@@ -1111,8 +1165,11 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
     await mergeSessionState(profile.configDir, primarySource);
   }
 
-  profile.mergeSessions = next;
-  await saveRegistry(registry);
+  await updateRegistry((current) => {
+    if (!current?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
+    current.profiles[id].mergeSessions = next;
+    return current;
+  });
 
   const name = id.split(":").slice(1).join(":");
   const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
@@ -1182,6 +1239,28 @@ async function cleanupProfile(name: string, profile: Profile, primarySource: str
   }
 }
 
+/**
+ * Records a profile `add` has finished setting up. The id was free when `add` started,
+ * but that can be minutes of login ago, so it is checked again against the registry as
+ * it is now. Returns the profile that took the id in the meantime, and then writes
+ * nothing.
+ */
+async function registerProfile(id: string, profile: Profile, primarySource: string): Promise<Profile | null> {
+  let taken: Profile | null = null;
+  await updateRegistry((current) => {
+    if (!current) throw new Error("clausona is not initialized.");
+    taken = current.profiles[id] ?? null;
+    if (taken) return null;
+
+    current.profiles[id] = profile;
+    if (!current.primarySources[profile.tool]) {
+      current.primarySources[profile.tool] = primarySource;
+    }
+    return current;
+  });
+  return taken;
+}
+
 export async function addProfile(options: {
   tool: ToolName;
   name: string;
@@ -1231,17 +1310,23 @@ export async function addProfile(options: {
         `Failed to set up profile '${options.name}': ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    registry.profiles[id] = {
-      tool: options.tool,
-      configDir,
-      email: accountInfo.email,
-      orgName: accountInfo.orgName,
-      mergeSessions,
-    };
-    if (!registry.primarySources[options.tool]) {
-      registry.primarySources[options.tool] = primarySource;
+    const taken = await registerProfile(
+      id,
+      { tool: options.tool, configDir, email: accountInfo.email, orgName: accountInfo.orgName, mergeSessions },
+      primarySource,
+    );
+    if (taken) {
+      // Undo the setup the way a failed one is undone — unless the profile that took
+      // the id uses this same directory, which then belongs to it.
+      if (taken.configDir !== configDir) {
+        await cleanupProfile(
+          options.name,
+          { tool: options.tool, configDir, email: "", isPrimary: false },
+          primarySource,
+        ).catch(() => {});
+      }
+      throw new Error(`Profile '${id}' already exists.`);
     }
-    await saveRegistry(registry);
     if (options.tool === "claude") await seedSeenSessions(id, configDir);
     return { name: options.name, email: accountInfo.email, configDir, backupDir };
   }
@@ -1322,17 +1407,23 @@ export async function addProfile(options: {
       `Failed to set up profile '${options.name}': ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  registry.profiles[id] = {
-    tool: options.tool,
-    configDir,
-    email: accountInfo.email,
-    orgName: accountInfo.orgName,
-    mergeSessions,
-  };
-  if (!registry.primarySources[options.tool]) {
-    registry.primarySources[options.tool] = primarySource;
+  const taken = await registerProfile(
+    id,
+    { tool: options.tool, configDir, email: accountInfo.email, orgName: accountInfo.orgName, mergeSessions },
+    primarySource,
+  );
+  if (taken) {
+    // As with --from above, and the directory this add created goes too.
+    if (taken.configDir !== configDir) {
+      await cleanupProfile(
+        options.name,
+        { tool: options.tool, configDir, email: "", isPrimary: false },
+        primarySource,
+      ).catch(() => {});
+      await rm(configDir, { force: true, recursive: true }).catch(() => {});
+    }
+    throw new Error(`Profile '${id}' already exists.`);
   }
-  await saveRegistry(registry);
   if (options.tool === "claude") await seedSeenSessions(id, configDir);
   return { name: options.name, email: accountInfo.email, configDir };
 }
@@ -1357,22 +1448,27 @@ export async function removeProfile(id: string) {
   const primarySource = registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
   await cleanupProfile(name, profile, primarySource);
 
-  delete registry.profiles[id];
-  // If the removed profile was the active one for its tool, pick another or clear
-  if (registry.activeProfiles[profile.tool] === id) {
-    const otherKey = Object.keys(registry.profiles).find((k) => registry.profiles[k].tool === profile.tool);
-    if (otherKey) {
-      registry.activeProfiles[profile.tool] = otherKey;
-    } else {
-      delete registry.activeProfiles[profile.tool];
+  await updateRegistry((current) => {
+    // Already removed by another process — nothing left to write.
+    if (!current?.profiles[id]) return null;
+
+    delete current.profiles[id];
+    // If the removed profile was the active one for its tool, pick another or clear
+    if (current.activeProfiles[profile.tool] === id) {
+      const otherKey = Object.keys(current.profiles).find((k) => current.profiles[k].tool === profile.tool);
+      if (otherKey) {
+        current.activeProfiles[profile.tool] = otherKey;
+      } else {
+        delete current.activeProfiles[profile.tool];
+      }
     }
-  }
-  // Clean primarySources if no profile of this tool remains
-  const anyLeftForTool = Object.values(registry.profiles).some((p) => p.tool === profile.tool);
-  if (!anyLeftForTool) {
-    delete registry.primarySources[profile.tool];
-  }
-  await saveRegistry(registry);
+    // Clean primarySources if no profile of this tool remains
+    const anyLeftForTool = Object.values(current.profiles).some((p) => p.tool === profile.tool);
+    if (!anyLeftForTool) {
+      delete current.primarySources[profile.tool];
+    }
+    return current;
+  });
 }
 
 export async function resolveProfileEnv(

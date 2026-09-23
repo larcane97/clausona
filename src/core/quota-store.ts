@@ -1,11 +1,12 @@
 import crypto from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
 import { getAdapter } from "../tools/registry.js";
 import type { ToolCredential } from "../tools/types.js";
 import type { QuotaSnapshot, QuotaWindows, ToolName } from "../types.js";
+import { acquireFileLock } from "./file-lock.js";
 import { cooldownUntil, isFresh, QUOTA_TIMEOUT_MS, QuotaHttpError } from "./quota.js";
 
 const DEFAULT_CACHE_PATH = path.join(homedir(), ".clausona", "quota.json");
@@ -79,32 +80,13 @@ function degraded(state: QuotaSnapshot["state"], cached: QuotaSnapshot | undefin
  */
 async function withRenewalLock<T>(lockDir: string, profileId: string, fn: () => Promise<T>): Promise<T | null> {
   const key = crypto.createHash("sha256").update(profileId).digest("hex").slice(0, 16);
-  const lockPath = path.join(lockDir, `${key}.lock`);
-  await mkdir(lockDir, { recursive: true }).catch(() => {});
-
-  const acquire = async () => {
-    try {
-      await writeFile(lockPath, String(process.pid), { flag: "wx" });
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
-  if (!(await acquire())) {
-    const age = await stat(lockPath)
-      .then((info) => Date.now() - info.mtimeMs)
-      .catch(() => Number.POSITIVE_INFINITY);
-    // Only reclaim a lock old enough that its owner cannot still be mid-renewal.
-    if (age < LOCK_STALE_MS) return null;
-    await rm(lockPath, { force: true }).catch(() => {});
-    if (!(await acquire())) return null;
-  }
+  const release = await acquireFileLock(path.join(lockDir, `${key}.lock`), { staleMs: LOCK_STALE_MS });
+  if (!release) return null;
 
   try {
     return await fn();
   } finally {
-    await rm(lockPath, { force: true }).catch(() => {});
+    await release();
   }
 }
 
