@@ -99,9 +99,20 @@ function runSecurity(args: string[]): Promise<{ code: number; stdout: string }> 
   });
 }
 
+/**
+ * `security find-generic-password -w` prints the data as hex once any byte is outside
+ * printable ASCII, which a single non-ASCII character anywhere in the blob (an MCP
+ * server's entry, say) is enough for. A JSON object printed as-is starts with `{`, never
+ * with the hex digits `7b`, so the two cannot be mistaken for each other.
+ */
+function decodeKeychainOutput(stdout: string): string {
+  const trimmed = stdout.trim();
+  return /^7b(?:[0-9a-f]{2})*$/i.test(trimmed) ? Buffer.from(trimmed, "hex").toString("utf8") : stdout;
+}
+
 async function readKeychainBlob(service: string): Promise<StoredCredentials | null> {
   const { code, stdout } = await runSecurity(["find-generic-password", "-s", service, "-w"]);
-  return code === 0 ? parseStored(stdout) : null;
+  return code === 0 ? parseStored(decodeKeychainOutput(stdout)) : null;
 }
 
 /**
@@ -213,6 +224,10 @@ async function renewClaudeCredential(
     throw new Error("no refresh token stored for this profile");
   }
 
+  // Kept in case the re-read after the refresh fails, since writing back an empty blob
+  // would drop everything besides claudeAiOauth, the profile's MCP OAuth tokens included.
+  const before = await readStoredBlob(configDir);
+
   const response = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -232,9 +247,10 @@ async function renewClaudeCredential(
   const data = (await response.json()) as RefreshResponse;
   if (!data.access_token) throw new Error("refresh response carried no access token");
 
-  // Re-read rather than reusing an earlier copy: another process may have rewritten
-  // unrelated parts of the blob (mcpOAuth) while the request was in flight.
-  const blob = (await readStoredBlob(configDir)) ?? {};
+  // Re-read rather than reusing the earlier copy: another process may have rewritten
+  // unrelated parts of the blob (mcpOAuth) while the request was in flight. The earlier
+  // copy stands in only when this read fails.
+  const blob = (await readStoredBlob(configDir)) ?? before ?? {};
   const previous = blob.claudeAiOauth ?? {};
   const now = Date.now();
 
