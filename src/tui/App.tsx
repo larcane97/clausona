@@ -39,6 +39,7 @@ import {
   initializeRegistry,
   listProfiles,
   loginProfile,
+  registryProblem,
   removeProfile,
   repairProfile,
   setActiveProfileByName,
@@ -329,6 +330,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   /** Registered ids, for the name check the API form runs while a name is being typed. */
   const existingProfileIds = profiles.map((profile) => profile.name);
   const [doctor, setDoctor] = useState<DoctorProfileResult[]>([]);
+  /** Why profiles.json cannot be used, when it is there and cannot be. */
+  const [unreadableRegistry, setUnreadableRegistry] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [cursor, setCursor] = useState(0);
   const [message, setMessage] = useState<string>("");
@@ -1039,8 +1042,12 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       );
       setQuotaEpoch((epoch) => epoch + 1);
       setDoctor(nextDoctor);
+      // A profiles.json that cannot be read lists as no profiles, and init would replace it -
+      // with every API profile in it - so that is said instead of opening init.
+      const problem = nextProfiles.length === 0 ? await registryProblem() : null;
+      setUnreadableRegistry(problem);
       // No registry yet — redirect to init flow
-      if (nextProfiles.length === 0 && screen !== "init") {
+      if (nextProfiles.length === 0 && !problem && screen !== "init") {
         setScreen("init");
       }
     } finally {
@@ -1121,6 +1128,11 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
 
   // Every key the App answers itself, as of the frame on screen: see `useCommittedHandler`.
   const handleInput = useCommittedHandler((input: string, key: Key) => {
+    if (unreadableRegistry) {
+      if (key.escape) exit();
+      return;
+    }
+
     if (screen === "dashboard") {
       if (key.escape) {
         const now = Date.now();
@@ -1937,6 +1949,18 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     return (
       <Chrome title="Loading" hints={[]}>
         <Spinner label="Reading clausona state..." />
+      </Chrome>
+    );
+  }
+
+  // Every screen reads profiles.json, and the init one would replace it.
+  if (unreadableRegistry) {
+    return (
+      <Chrome title="Cannot read profiles" hints={[{ keys: "esc", action: "quit" }]}>
+        <Box gap={1}>
+          <Text color={color.error}>{symbol.cross}</Text>
+          <Text color={color.text}>{unreadableRegistry}</Text>
+        </Box>
       </Chrome>
     );
   }

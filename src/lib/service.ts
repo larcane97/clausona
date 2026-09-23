@@ -700,6 +700,15 @@ export async function registryProblem(): Promise<string | null> {
   return `${REGISTRY_PATH.replace(homedir(), "~")} could not be read: ${reason}. Fix it by hand, or move it aside and run 'clausona init' to set clausona up again.`;
 }
 
+/**
+ * The error for a command that needs the registry and got none from `loadRegistry`. A file
+ * that is there but cannot be read is reported as that, with its remedy: "not initialized"
+ * sent the user to `init`, which replaced the file and every API profile in it.
+ */
+export async function noRegistryError(): Promise<Error> {
+  return new Error((await registryProblem()) ?? "clausona is not initialized. Run `clausona init` first.");
+}
+
 export async function loadRegistry(): Promise<Registry | null> {
   const raw = await readJson<unknown>(REGISTRY_PATH, null);
   if (raw === null) return null;
@@ -773,6 +782,10 @@ export async function initializeRegistry(options: {
   mergeSessions?: boolean;
   mergeSessionsMap?: Record<string, boolean>;
 }) {
+  // A profiles.json that cannot be read loads as no registry, and a registry rebuilt from
+  // that replaces the file - with every API profile in it, which discovery cannot find again.
+  const problem = await registryProblem();
+  if (problem) throw new Error(problem);
   const existing = await loadRegistry();
   // API profiles are not discovered, so a registry rebuilt from what init found would drop
   // them, and with them the only reference to their stored key, config dir and backup.
@@ -1801,7 +1814,7 @@ export async function addProfile(options: {
   if (!nameCheck.ok) throw new Error(nameCheck.error);
 
   const registry = await loadRegistry();
-  if (!registry) throw new Error("clausona is not initialized.");
+  if (!registry) throw await noRegistryError();
 
   const id = profileId(options.tool, options.name);
   assertProfileIdAvailable(registry, id);
@@ -2118,7 +2131,7 @@ export async function addApiProfile(options: {
   }
 
   const registry = await loadRegistry();
-  if (!registry) throw new Error("clausona is not initialized.");
+  if (!registry) throw await noRegistryError();
 
   const id = profileId(options.tool, options.name);
   assertProfileIdAvailable(registry, id);

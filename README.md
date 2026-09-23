@@ -73,6 +73,12 @@ clausona                  # open the interactive dashboard
 clausona add claude:gw --api --base-url https://openrouter.ai/api   # a profile backed by an API endpoint
 ```
 
+clausona starts from a Claude Code account that is already signed in: `clausona init` registers
+the accounts it finds and refuses when there are none, and until it has run the other commands say
+"clausona is not initialized". On a machine where Claude Code has never been signed in, run
+`claude login` once first — also when you mean to use only [API profiles](#api-profiles), which
+are added next to that account.
+
 ## Plan quota
 
 `clausona list` and the dashboard show how much of each account's plan limits are
@@ -149,6 +155,10 @@ API, a gateway such as OpenRouter, or a model you serve yourself. It sits beside
 subscription profiles in `clausona list`, switches the same way, and shares the same
 plugins, MCP servers, and settings. In this version API profiles are for Claude Code only:
 `clausona add codex:<name> --api` is refused, before it asks for a key.
+
+**An API profile needs clausona set up first**: one Claude Code account signed in
+(`claude login`), then `clausona init`. API profiles are added next to that account; in this
+version clausona cannot be set up from API profiles alone.
 
 ```bash
 # a hosted gateway
@@ -709,7 +719,10 @@ A `~/.clausona/profiles.json` that is there but is not valid JSON, or not a JSON
 the first thing `clausona doctor` checks. It says so in one line on stderr, in either output
 form, and exits 1 without checking anything else. The line names the file and what is wrong
 with it, never its contents. Fix the file by hand, or move it aside and run `clausona init`
-to set clausona up again. `~/.clausona/backups` holds no copy of it to restore.
+to set clausona up again. `~/.clausona/backups` holds no copy of it to restore. A command
+that would otherwise stop with "clausona is not initialized" prints the same line instead,
+`clausona init` refuses to replace the file while it is there, and the dashboard shows the
+line instead of opening init.
 
 ### Data Storage
 

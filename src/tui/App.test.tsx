@@ -44,6 +44,7 @@ vi.mock("../lib/service", async (importOriginal) => ({
   ]),
   fetchProfileQuotas: vi.fn(async () => ({})),
   loginProfile: vi.fn(),
+  registryProblem: vi.fn(async () => null),
   initializeRegistry: vi.fn(async () => ({})),
   setActiveProfileByName: vi.fn(async () => ({})),
   discoverAccounts: vi.fn(async () => []),
@@ -2365,6 +2366,20 @@ describe("App doctor screen", () => {
 
     expect(frame).toContain("1 issue, 1 warning");
     expect(frame).not.toContain("All checks passed");
+  });
+});
+
+describe("App over a profiles.json that cannot be read", () => {
+  it("says why, instead of opening init, which would replace the file", async () => {
+    const { listProfiles, registryProblem } = await import("../lib/service.js");
+    // What loadRegistry makes of a file that does not parse: no registry, so no profiles.
+    vi.mocked(listProfiles).mockResolvedValueOnce([]);
+    vi.mocked(registryProblem).mockResolvedValueOnce("profiles.json could not be read: it is not valid JSON.");
+    const { lastFrame } = render(<App initialScreen="dashboard" />);
+
+    const frame = await waitForFrame(lastFrame, (f) => f.includes("could not be read"));
+
+    expect(frame).not.toContain("Initialize");
   });
 });
 

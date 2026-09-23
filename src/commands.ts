@@ -50,6 +50,7 @@ import {
   listProfiles,
   loadRegistry,
   loginProfile,
+  noRegistryError,
   parseBaseUrl,
   proposeInitProfileNames,
   registryProblem,
@@ -482,6 +483,12 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${accent("--auto".padEnd(18))}${dim("Run non-interactively (skip TUI)")}`,
         `    ${accent("--merge-sessions".padEnd(18))}${dim("Share session history across profiles (default: separated)")}`,
         "",
+        `  ${bold("NOTES")}`,
+        `    ${dim("Registers the Claude Code and Codex accounts already signed in; with none,")}`,
+        `    ${dim("run `claude login` first. API profiles already registered are kept.")}`,
+        `    ${dim("A ~/.clausona/profiles.json that cannot be read is refused, not replaced:")}`,
+        `    ${dim("fix it by hand, or move it aside and run init again.")}`,
+        "",
       ].join("\n");
 
     case "add":
@@ -498,6 +505,10 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${" ".repeat(18)}${dim("Letters, digits, '.', '_' and '-', starting with a letter or digit:")}`,
         `    ${" ".repeat(18)}${dim("/^[A-Za-z0-9][A-Za-z0-9._-]*$/. Names are compared without case,")}`,
         `    ${" ".repeat(18)}${dim("so 'Work' and 'work' are the same profile.")}`,
+        "",
+        `  ${bold("REQUIRES")}`,
+        `    ${dim("clausona set up: one Claude Code account signed in (`claude login`), then")}`,
+        `    ${dim("`clausona init`. An API profile is added next to that account.")}`,
         "",
         `  ${bold("OPTIONS")}`,
         `    ${accent("--from".padEnd(18))}${dim("Import configuration from an existing path")}`,
@@ -944,7 +955,7 @@ export async function runCommand(command: string, args: string[]) {
 
     case "current": {
       const registry = await loadRegistry();
-      if (!registry) throw new Error("clausona is not initialized.");
+      if (!registry) throw await noRegistryError();
 
       if (jsonFlag(args)) {
         const out: Record<string, unknown> = {};
@@ -997,7 +1008,7 @@ export async function runCommand(command: string, args: string[]) {
       const [input] = args;
       if (!input) return "__OPEN_TUI__:use";
       const registry = await loadRegistry();
-      if (!registry) throw new Error("clausona is not initialized.");
+      if (!registry) throw await noRegistryError();
       const ref = parseProfileRef(input, registry);
       const profile = await setActiveProfileByName(ref.id);
       return success(`Switched to ${bold(ref.id)} ${dim(`(${displayName(profile)})`)}`);
@@ -1020,7 +1031,7 @@ export async function runCommand(command: string, args: string[]) {
       let id: string | null = null;
       if (input) {
         const registry = await loadRegistry();
-        if (!registry) throw new Error("clausona is not initialized.");
+        if (!registry) throw await noRegistryError();
         const ref = parseProfileRef(input, registry);
         if (ref.tool === "codex") {
           throw new Error("Usage tracking not supported for codex (yet).");
@@ -1056,7 +1067,7 @@ export async function runCommand(command: string, args: string[]) {
       const [input] = args.filter((arg) => !arg.startsWith("--"));
       if (!input) throw new Error("Usage: clausona repair <profile>");
       const registry = await loadRegistry();
-      if (!registry) throw new Error("clausona is not initialized.");
+      if (!registry) throw await noRegistryError();
       const ref = parseProfileRef(input, registry);
       const result = await repairProfile(ref.id);
       return success(`Repaired ${bold(String(result.repaired))} shared item(s) for ${bold(ref.id)}`);
@@ -1066,7 +1077,7 @@ export async function runCommand(command: string, args: string[]) {
       const [input] = args;
       if (!input) throw new Error("Usage: clausona login <profile>");
       const registry = await loadRegistry();
-      if (!registry) throw new Error("clausona is not initialized.");
+      if (!registry) throw await noRegistryError();
       const ref = parseProfileRef(input, registry);
       const result = await loginProfile(ref.id);
       if (result.status === "other_account") {
@@ -1104,7 +1115,7 @@ export async function runCommand(command: string, args: string[]) {
       if (extraArgs.length > 0) throw new Error(CONFIG_EXTRA_ARGUMENT);
 
       const registry = await loadRegistry();
-      if (!registry) throw new Error("clausona is not initialized.");
+      if (!registry) throw await noRegistryError();
       const ref = parseProfileRef(input, registry);
       const profile = registry.profiles[ref.id];
 
@@ -1243,7 +1254,7 @@ export async function runCommand(command: string, args: string[]) {
       const [input] = args.filter((arg) => !arg.startsWith("--"));
       if (!input) throw new Error("Usage: clausona remove <profile>");
       const registry = await loadRegistry();
-      if (!registry) throw new Error("clausona is not initialized.");
+      if (!registry) throw await noRegistryError();
       const ref = parseProfileRef(input, registry);
       await removeProfile(ref.id);
       return success(`Removed ${bold(ref.id)}`);
@@ -1275,7 +1286,7 @@ export async function runCommand(command: string, args: string[]) {
       if (extraArgs.length > 0) throw new Error(ADD_EXTRA_ARGUMENT);
 
       const registry = await loadRegistry();
-      if (!registry) throw new Error("clausona is not initialized.");
+      if (!registry) throw await noRegistryError();
 
       let tool: ToolName;
       let name: string;

@@ -523,3 +523,42 @@ describe("initializeRegistry", () => {
     expect(h.ids()).toEqual(EXPECTED_IDS);
   });
 });
+
+describe("a profiles.json that cannot be read", () => {
+  // It loads as no registry, which every command took for "not set up yet" - and init,
+  // rebuilding from discovery, replaced it and every API profile in it.
+  async function unreadable() {
+    const h = await harness();
+    await h.commands.runCommand("init", ["--auto"]);
+    const registryPath = path.join(h.home, ".clausona", "profiles.json");
+    // A trailing comma: one hand edit away from a file that works.
+    const broken = `${readFileSync(registryPath, "utf8").trimEnd().slice(0, -1)},}`;
+    writeFileSync(registryPath, broken);
+    return { h, registryPath, broken };
+  }
+
+  it("is refused by init --auto and left exactly as it was", async () => {
+    const { h, registryPath, broken } = await unreadable();
+
+    await expect(h.commands.runCommand("init", ["--auto"])).rejects.toThrow(
+      /profiles\.json could not be read: it is not valid JSON\. Fix it by hand, or move it aside/,
+    );
+    expect(readFileSync(registryPath, "utf8")).toBe(broken);
+  });
+
+  it("is what add reports, rather than that clausona is not initialized", async () => {
+    const { h } = await unreadable();
+
+    await expect(
+      h.commands.runCommand("add", ["claude:gw", "--api", "--base-url", "https://openrouter.ai/api"]),
+    ).rejects.toThrow(/profiles\.json could not be read/);
+  });
+
+  it("is told apart from no profiles.json at all, which names init", async () => {
+    const h = await harness();
+
+    await expect(
+      h.commands.runCommand("add", ["claude:gw", "--api", "--base-url", "https://openrouter.ai/api"]),
+    ).rejects.toThrow("clausona is not initialized. Run `clausona init` first.");
+  });
+});
