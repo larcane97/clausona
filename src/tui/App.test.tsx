@@ -1871,6 +1871,9 @@ describe("App add-profile: API endpoint", () => {
       const handlers = () =>
         process.listeners(signal).filter((listener) => listener.name === "turnBracketedPasteOffAndDie");
       const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+      // The POSIX branch on every runner; the Windows one is pinned by the test below.
+      const realPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 
       try {
         expect(handlers()).toHaveLength(1);
@@ -1884,6 +1887,7 @@ describe("App add-profile: API endpoint", () => {
         instance.unmount();
         expect(instance.modes).toEqual([ON, OFF]);
       } finally {
+        Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
         kill.mockRestore();
         instance.unmount();
       }
