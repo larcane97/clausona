@@ -232,18 +232,21 @@ export function ApiForm({ form, fields, keySet, mergeSessions, onChange }: ApiFo
           <Label text={label} focused={focused} />
           <Box flexGrow={1} minWidth={0}>
             {concealsValue(field, form) ? (
-              // Still the field's input, so it can be erased - App.tsx clears a masked value
-              // on the first erase rather than showing it again as it shrinks - but drawn as
-              // the key field's constant: the mask glyph per character, cut to the mask's
-              // width. Anything concealed is at least that long, so the length never shows.
-              <Box width={KEY_MASK.length} height={1} overflow="hidden">
-                <TextInput
-                  value={value}
-                  mask={KEY_MASK[0]}
-                  onChange={(next) => onChange(field, next)}
-                  focus={focused}
-                  showCursor={focused}
-                />
+              // Drawn as the key field's constant, whatever it holds. A mask glyph per character
+              // cut to eight showed the length of anything shorter - `abc` under a header name
+              // drew three - and a value under a hidden name can be any length. The input is
+              // still here, drawn at no width, so the value can still be typed into and erased:
+              // App.tsx clears a masked value on the first erase.
+              <Box>
+                <Text color={color.text}>{KEY_MASK}</Text>
+                <Box width={0} height={1} overflow="hidden">
+                  <TextInput
+                    value={value}
+                    onChange={(next) => onChange(field, next)}
+                    focus={focused}
+                    showCursor={false}
+                  />
+                </Box>
               </Box>
             ) : (
               <TextInput

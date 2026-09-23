@@ -196,6 +196,27 @@ describe("a key in a field that draws what it holds", () => {
     );
   });
 
+  it.each([
+    [
+      "Custom headers",
+      "env:ANTHROPIC_CUSTOM_HEADERS",
+      { ANTHROPIC_CUSTOM_HEADERS: "abc" },
+      { ANTHROPIC_CUSTOM_HEADERS: "X-Team: infrastructure-and-more" },
+    ],
+    ["Model", "model", { [MODEL_KEY]: KEY.slice(0, 40) }, { [MODEL_KEY]: KEY.repeat(3) }],
+  ])("draws the same mask in the %s row for a value shorter than the mask and a longer one", (_row, id, short, long) => {
+    // The mask was a glyph per character cut to eight, so a value under eight drew fewer: `abc`
+    // in Custom headers drew three, and the length the key field never shows was on screen.
+    const shortForm = form({ advancedOpen: true, env: short });
+    const longForm = form({ advancedOpen: true, env: long });
+
+    for (const at of [id, "submit"]) {
+      expect(frameFor({ ...shortForm, cursor: cursorOn(shortForm, at) })).toBe(
+        frameFor({ ...longForm, cursor: cursorOn(longForm, at) }),
+      );
+    }
+  });
+
   it("finds no part of a key on a form that shows none, even where the form says x-api-key", () => {
     // What the helper's window size is for: `-api` is in the key's public prefix and in the
     // auth row's own text, and a shorter window would call this screen a leak.
