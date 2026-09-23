@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -31,7 +31,8 @@ function writeStandIn(bin: string, name: string, log: string, answer: string[]):
  * exits 44 with its "could not be found" message, `secret-tool` exits 1 - and logs its
  * arguments, one call per line, to calls.log in this run's temp dir, or to
  * CLAUSONA_TEST_SHIM_LOG when that is set. A test that puts a stand-in of its own ahead of
- * these on PATH still gets its own.
+ * these on PATH still gets its own. The teardown prints one line counting this run's calls
+ * by command, so a run that reached a stand-in says so even when the log goes with the dir.
  *
  * Windows uses neither binary (secrets go to a file there), so nothing is changed on it.
  */
@@ -41,6 +42,15 @@ export default function setup(): (() => void) | undefined {
   const bin = path.join(dir, "bin");
   mkdirSync(bin);
   const log = process.env.CLAUSONA_TEST_SHIM_LOG || path.join(dir, "calls.log");
+  const logged = (): string[] => {
+    try {
+      return readFileSync(log, "utf8").split("\n").filter(Boolean);
+    } catch {
+      return [];
+    }
+  };
+  // A log named by CLAUSONA_TEST_SHIM_LOG may hold earlier runs' calls.
+  const before = logged().length;
   writeStandIn(bin, "security", log, [
     "echo 'security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.' >&2",
     "exit 44",
@@ -48,5 +58,17 @@ export default function setup(): (() => void) | undefined {
   writeStandIn(bin, "secret-tool", log, ["exit 1"]);
   process.env.PATH = `${bin}${path.delimiter}${process.env.PATH ?? ""}`;
   process.env.CLAUSONA_TEST_SHIM_DIR = bin;
-  return () => rmSync(dir, { recursive: true, force: true });
+  return () => {
+    const calls = logged().slice(before);
+    const byCommand = new Map<string, number>();
+    for (const call of calls) {
+      const command = call.split(" ").slice(0, 2).join(" ");
+      byCommand.set(command, (byCommand.get(command) ?? 0) + 1);
+    }
+    const detail = [...byCommand].map(([command, count]) => `${command} x${count}`).join(", ");
+    process.stdout.write(
+      `credential-store stand-ins: ${calls.length} call(s)${detail ? ` - ${detail}` : ""}${process.env.CLAUSONA_TEST_SHIM_LOG ? `, logged to ${log}` : ""}\n`,
+    );
+    rmSync(dir, { recursive: true, force: true });
+  };
 }
