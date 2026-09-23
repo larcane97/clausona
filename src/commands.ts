@@ -10,7 +10,7 @@ import { isPosixEnvName, renderPosixExports } from "./core/shell.js";
 import { trackUsage } from "./core/track-usage.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import { renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
-import { buildProfileEnv, CREDENTIAL_ENV_KEYS, controlledEnvKeys } from "./lib/profile-env.js";
+import { buildProfileEnv, CREDENTIAL_ENV_KEYS, controlledEnvKeys, displayName } from "./lib/profile-env.js";
 import {
   CREDENTIAL_AS_NAME_ERROR,
   looksLikeCredential,
@@ -310,7 +310,7 @@ function showProfile(id: string, profile: Profile, asJson: boolean): string {
 
   const lines = [
     `${secondary("Kind".padEnd(12))}${profile.kind ?? "subscription"}`,
-    `${secondary("Account".padEnd(12))}${profile.label ?? profile.email}`,
+    `${secondary("Account".padEnd(12))}${displayName(profile)}`,
     `${secondary("Config".padEnd(12))}${dim(profile.configDir)}`,
   ];
   if (profile.api) {
@@ -876,7 +876,7 @@ export async function runCommand(command: string, args: string[]) {
             : profile.configDir;
         blocks.push(
           box(activeId, [
-            `${secondary("Account".padEnd(12))}${profile.email}`,
+            `${secondary("Account".padEnd(12))}${displayName(profile)}`,
             ...(profile.orgName ? [`${secondary("Org".padEnd(12))}${profile.orgName}`] : []),
             `${secondary("Config".padEnd(12))}${dim(configPath)}`,
             ...(!profile.isPrimary
@@ -899,7 +899,7 @@ export async function runCommand(command: string, args: string[]) {
       if (!registry) throw new Error("clausona is not initialized.");
       const ref = parseProfileRef(input, registry);
       const profile = await setActiveProfileByName(ref.id);
-      return success(`Switched to ${bold(ref.id)} ${dim(`(${profile.email})`)}`);
+      return success(`Switched to ${bold(ref.id)} ${dim(`(${displayName(profile)})`)}`);
     }
 
     case "usage": {

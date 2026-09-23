@@ -191,6 +191,66 @@ describe("App", () => {
 });
 
 /**
+ * An API profile has no account email, so every line that names one goes through
+ * `displayName` - its label - as `list`, `config --show` and the doctor already do.
+ */
+describe("App profile list, for an API profile", () => {
+  const usage = { cost: 0, inputTokens: 0, outputTokens: 0 };
+  const gateway = {
+    name: "claude:gw",
+    tool: "claude" as const,
+    kind: "api" as const,
+    email: "",
+    label: "gpu-box",
+    configDir: "/h/.claude-gw",
+    isPrimary: false,
+    isActive: true,
+    today: usage,
+    week: usage,
+    month: usage,
+    total: usage,
+  };
+
+  it("names it by its label", async () => {
+    const { listProfiles } = await import("../lib/service.js");
+    vi.mocked(listProfiles).mockResolvedValueOnce([gateway]);
+
+    const { lastFrame } = render(<App initialScreen="use" />);
+    const frame = await waitForFrame(lastFrame, (f) => f.includes("claude:gw"));
+
+    // The list draws the detail on the line under the name. Checked there, not anywhere in
+    // the frame: the preview beside it already said "gpu-box" before this was fixed.
+    const lines = frame.split("\n");
+    const row = lines.findIndex((line) => line.includes(`${CURSOR}  claude:gw`));
+    expect(lines[row + 1]).toContain("gpu-box");
+  });
+
+  it("says which endpoint it switched to, not an empty ()", async () => {
+    const { listProfiles } = await import("../lib/service.js");
+    vi.mocked(listProfiles).mockResolvedValueOnce([gateway]);
+    const written: string[] = [];
+    const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      written.push(String(chunk));
+      return true;
+    });
+
+    try {
+      const instance = render(<App initialScreen="use" />);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("claude:gw"));
+      await type(instance, ENTER);
+      const deadline = Date.now() + 3000;
+      while (!written.join("").includes("Switched") && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    } finally {
+      write.mockRestore();
+    }
+
+    expect(written.join("")).toContain("Switched to claude:gw (gpu-box)");
+  });
+});
+
+/**
  * Registering an API profile from the dashboard, driven through the keys a person presses.
  *
  * The form's rules and the form's panel are asserted directly, in src/tui/api-form.test.ts

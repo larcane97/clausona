@@ -1493,6 +1493,34 @@ describe("config, the parts that were already there", () => {
   });
 });
 
+// An API profile has no account email. `displayName` is the one rule for what names a
+// profile - its label, else its email - and every line that names one goes through it.
+describe("naming an API profile", () => {
+  it("use says which endpoint it switched to, not an empty ()", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+
+    const output = stripAnsi(String(await h.run("use", "claude:gw")));
+
+    expect(output).toContain("Switched to claude:gw (openrouter.ai)");
+    expect(output).not.toContain("()");
+  });
+
+  it("use still names a subscription profile by its email", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+
+    expect(stripAnsi(String(await h.run("use", "claude:default")))).toContain("(primary@example.com)");
+  });
+
+  it("current's Account row names an API profile by its label", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+    await h.run("use", "claude:gw");
+
+    const output = stripAnsi(String(await h.run("current")));
+
+    expect(output).toMatch(/Account +openrouter\.ai/);
+  });
+});
+
 describe("help", () => {
   it("tells `add` readers how to set up an endpoint without reading the source", async () => {
     const h = await harness();

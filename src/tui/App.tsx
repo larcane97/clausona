@@ -15,6 +15,7 @@ import {
   localTimezoneLabel,
   quotaSeverity,
 } from "../lib/format.js";
+import { displayName } from "../lib/profile-env.js";
 import { defaultProfileName, looksLikeCredential, profileId } from "../lib/profile-ref.js";
 import { EMPTY_SECRET_INPUT, readSecretChunk, type SecretInputState } from "../lib/prompt-secret.js";
 import {
@@ -1256,7 +1257,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           const profile = profiles[cursor];
           await setActiveProfileByName(profile.name);
           if (enteredDirectly) {
-            process.stdout.write(`${symbol.check} Switched to ${profile.name} (${profile.email})\n`);
+            process.stdout.write(`${symbol.check} Switched to ${profile.name} (${displayName(profile)})\n`);
             exit();
           } else {
             setMessage(`${symbol.check} Switched to ${profile.name}`);
@@ -1273,7 +1274,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       } else if (input === "l" && profiles[cursor]) {
         const p = profiles[cursor];
         if (!p.isPrimary) {
-          setOverlay({ kind: "login", profileName: p.name, email: p.email });
+          setOverlay({ kind: "login", profileName: p.name, email: displayName(p) });
         }
       } else if (input === "s" && profiles[cursor] && !profiles[cursor].isPrimary) {
         const p = profiles[cursor];
@@ -1891,7 +1892,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               items={profiles.map((p) => ({
                 id: p.name,
                 label: p.name,
-                detail: p.email,
+                // An API profile has no account email; its label, as everywhere else.
+                detail: displayName(p),
                 badge: p.isActive ? "active" : undefined,
                 badgeVariant: p.isActive ? ("active" as const) : undefined,
                 meta: formatQuotaInline(p.quota),
