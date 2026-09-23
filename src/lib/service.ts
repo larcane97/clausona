@@ -1,3 +1,4 @@
+import { existsSync, rmSync } from "node:fs";
 import {
   chmod,
   cp,
@@ -12,7 +13,7 @@ import {
   rmdir,
   writeFile,
 } from "node:fs/promises";
-import { homedir } from "node:os";
+import { constants, homedir } from "node:os";
 import path from "node:path";
 
 import { checkBaseUrl, hasBareUserinfo, isAnthropicHost, sendsKeyInClear } from "../core/api-url.js";
@@ -97,6 +98,25 @@ const REGISTRY_LOCK_PATH = path.join(CLAUSONA_DIR, "locks", "registry.lock");
 // lets a writer queued behind such a process take over rather than fail.
 const REGISTRY_LOCK_STALE_MS = 5_000;
 const REGISTRY_LOCK_WAIT_MS = 10_000;
+
+/**
+ * Written into a directory `add` creates, before the login starts, and removed once the
+ * profile is registered. A directory that still carries it was left by an add whose
+ * process died mid-login, so the next add can run the login into it again rather than
+ * refuse it. A directory without it is never reused or removed: it predates the marker
+ * or it is the user's own.
+ */
+const ADD_PENDING_MARKER = ".clausona-pending";
+const ADD_PENDING_NOTE =
+  "Created by `clausona add`, which has not finished setting up this directory.\n" +
+  "Running the same add again reuses it.\n";
+
+// The ways a login can be ended from outside that clausona can still react to: SIGHUP
+// when the terminal closes during the browser sign-in, SIGTERM from `kill` or a
+// supervisor. Ctrl+C is not among them — see runLoginRemovingDirOnTermination.
+const TERMINATION_SIGNALS: NodeJS.Signals[] = ["SIGHUP", "SIGTERM"];
+// Kept well inside the ~10s Windows allows a process after its console window closes.
+const LOGIN_EXIT_GRACE_MS = 2_000;
 
 async function exists(targetPath: string) {
   try {
@@ -214,6 +234,9 @@ async function ensureStorage() {
 }
 
 function shouldSkipShare(adapter: ToolAdapter, name: string, mergeSessions: boolean): boolean {
+  // The marker describes the one directory it sits in, for either tool — never state to
+  // share, back up, or hold against a profile in doctor.
+  if (name === ADD_PENDING_MARKER) return true;
   if (adapter.sharedSkipSet(mergeSessions).has(name)) return true;
   if (adapter.shouldSkipName?.(name, mergeSessions)) return true;
   return false;
@@ -991,6 +1014,11 @@ export async function initializeRegistry(options: {
     }
     return registry;
   });
+  // A directory init found can be an interrupted add's, holding the account it signed in
+  // to. Registered, it is that profile's, as a --from import makes it.
+  for (const { account } of planned) {
+    await rm(path.join(account.configDir, ADD_PENDING_MARKER), { force: true }).catch(() => {});
+  }
   await writeJson(USAGE_PATH, {});
 
   // Seed seenSessions for each registered profile (claude only — codex usage tracking is v1 OOS).
@@ -1739,6 +1767,14 @@ async function cleanupProfile(
   // under the backups, backupDirFor throws, and the profile should be left exactly as it was.
   const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
 
+  // The directory stays the user's once the entry goes, never an interrupted add's leftover:
+  // an add of the same name would sign in to it, and delete it with its sessions if that
+  // login failed. So the marker goes first, and one that cannot be removed stops the
+  // removal while the profile is still registered.
+  await rm(path.join(profile.configDir, ADD_PENDING_MARKER), { force: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOTDIR") throw error;
+  });
+
   // The registry entry is about to go; a credential outliving it is a credential nothing
   // will ever clean up. Only an API profile can own one, and gating on that keeps removing
   // a subscription profile from reaching into the credential store at all. An endpoint block
@@ -1999,6 +2035,140 @@ async function registerProfile(
   return saved ? { saved } : { taken: taken as ProfileTaken };
 }
 
+/** A command that deletes `dir`, for the shell clausona's installer targets on this platform. */
+function removeDirCommand(dir: string, home: string): string {
+  if (process.platform === "win32") {
+    return `Remove-Item -LiteralPath '${dir.replace(/'/g, "''")}' -Recurse -Force`;
+  }
+  // The name rule keeps a profile's directory to one shell word today. It is quoted anyway:
+  // this is pasted into a shell, and an unquoted space would make `rm -rf` delete something
+  // else entirely.
+  const quote = (value: string) => (/^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`);
+  return dir.startsWith(home + path.sep) ? `rm -rf ~/${quote(dir.slice(home.length + 1))}` : `rm -rf ${quote(dir)}`;
+}
+
+/**
+ * Whether a new profile's config dir is already there as a leftover of an interrupted add,
+ * to be taken back: false when nothing is at the path, true for a leftover, and a refusal
+ * for anything else there.
+ *
+ * `add` has to create the directory before the login and can only remove it once the
+ * login returns, so a process killed in between leaves it behind. Refusing every
+ * existing directory made that permanent: the retry was refused, and the suggested
+ * `--from` could not import a directory that never got an account.
+ */
+async function isLeftoverToReuse(
+  adapter: ToolAdapter,
+  registry: Registry,
+  configDir: string,
+  primarySource: string,
+  home: string,
+): Promise<boolean> {
+  if (!(await exists(configDir))) return false;
+  // Whatever clausona already manages is never taken back, marker or not: a failed login
+  // deletes the directory it ran into. The same test `--from` applies, by where each resolves.
+  await assertImportable(registry, adapter.name, configDir, primarySource);
+  if (await exists(path.join(configDir, ADD_PENDING_MARKER))) return true;
+
+  const shown = configDir.replace(home, "~");
+  if (await adapter.readAccountInfo(configDir)) {
+    throw new Error(`${shown} already exists. Use --from ${shown} to import it instead.`);
+  }
+  // Not necessarily a leftover: a removed profile keeps its directory, and one with no
+  // account (an API profile, or one signed out) still holds its sessions.
+  throw new Error(
+    `${shown} already exists but has no signed-in account to import. If it is a leftover from an ` +
+      `interrupted add and holds nothing you need, remove it with \`${removeDirCommand(configDir, home)}\` ` +
+      `and run the add again; otherwise choose another profile name.`,
+  );
+}
+
+/** Creates a new profile's config dir, marked as an add's until the profile is registered. */
+async function createPendingDir(configDir: string) {
+  await mkdir(configDir, { recursive: true });
+  try {
+    await writeFile(path.join(configDir, ADD_PENDING_MARKER), ADD_PENDING_NOTE, "utf8");
+  } catch (error) {
+    // Unmarked, the directory would read as the user's own and block every retry.
+    await rm(configDir, { force: true, recursive: true }).catch(() => {});
+    throw error;
+  }
+}
+
+/** Removes the directory an add is setting up, if it still carries the marker. */
+function removePendingDir(configDir: string): void {
+  // Synchronous, because nothing asynchronous gets to run once endBySignal raises the
+  // signal again. Only a directory still marked is removed: this run created it or took
+  // it back as its own leftover, and nothing has registered it since.
+  try {
+    if (existsSync(path.join(configDir, ADD_PENDING_MARKER))) {
+      rmSync(configDir, { force: true, recursive: true });
+    }
+  } catch {
+    // The marker keeps the directory reusable, which is all a retry needs.
+  }
+}
+
+/** Ends the process by `signal`, as it would have ended without clausona intervening. */
+function endBySignal(signal: NodeJS.Signals): void {
+  if (process.platform === "win32") {
+    // Nothing to re-raise here: SIGHUP is Node's emulation of the console window
+    // closing, after which Windows ends the process regardless, SIGTERM never comes from
+    // the OS, and process.kill cannot send SIGHUP at all. Exit with the status a shell
+    // reports for the signal instead.
+    process.exit(128 + (constants.signals[signal] ?? 0));
+  }
+  // With the handlers gone the signal's default action applies again, so the process
+  // still ends by the signal and a parent sees exactly what it would have before.
+  process.kill(process.pid, signal);
+}
+
+/**
+ * Runs the login into a directory an add is setting up, and removes that directory if
+ * the process is told to terminate meanwhile. Best effort only: a directory this misses
+ * still carries the marker, so the next add reuses it.
+ *
+ * A closing terminal signals the login child as well, and the child may still be
+ * writing its config while it exits — removing the directory under it could leave a
+ * fresh, unmarked one behind. So the directory is removed only once the login has
+ * returned. A login that has not returned within LOGIN_EXIT_GRACE_MS is still running
+ * (a SIGTERM aimed at clausona alone, which the child never saw), so the process then
+ * ends by the signal without touching the directory, and leaves it marked for the next
+ * add to take back. A second signal meanwhile ends the process at once. When the child's
+ * exit happens to be seen before the signal is, the handlers are gone by the time the
+ * signal arrives, and the add ends through the ordinary failed-login path instead —
+ * which removes the directory just the same.
+ *
+ * SIGINT is left alone on purpose. Claude Code puts the terminal in raw mode and reads
+ * Ctrl+C itself, then exits non-zero, which the ordinary failed-login path already
+ * cleans up after; clausona handling it too would change how Ctrl+C ends the add. Where
+ * Ctrl+C does reach clausona (a login reading the terminal in cooked mode), the add
+ * ends as it always has and the marker lets the next add reuse the directory.
+ */
+async function runLoginRemovingDirOnTermination(adapter: ToolAdapter, configDir: string): Promise<boolean> {
+  const received: { signal?: NodeJS.Signals; grace?: NodeJS.Timeout } = {};
+  const release = () => {
+    for (const signal of TERMINATION_SIGNALS) process.removeListener(signal, onSignal);
+  };
+  const onSignal = (signal: NodeJS.Signals) => {
+    release();
+    received.signal = signal;
+    received.grace = setTimeout(() => endBySignal(signal), LOGIN_EXIT_GRACE_MS);
+  };
+  for (const signal of TERMINATION_SIGNALS) process.on(signal, onSignal);
+
+  try {
+    return await adapter.runLogin(configDir);
+  } finally {
+    release();
+    if (received.signal) {
+      clearTimeout(received.grace);
+      removePendingDir(configDir);
+      endBySignal(received.signal);
+    }
+  }
+}
+
 export async function addProfile(options: {
   tool: ToolName;
   name: string;
@@ -2064,6 +2234,9 @@ export async function addProfile(options: {
       }
       throw registration.taken.refusal;
     }
+    // An interrupted add's directory can be imported once it holds an account. From here
+    // on it is this profile's, so a later add must not treat it as a leftover to reuse.
+    await rm(path.join(configDir, ADD_PENDING_MARKER), { force: true }).catch(() => {});
     if (options.tool === "claude") await seedSeenSessions(id, configDir);
     return { name: options.name, email: accountInfo.email, configDir, backupDir };
   }
@@ -2071,17 +2244,16 @@ export async function addProfile(options: {
   // New profile with no --from: create a fresh config dir and run login
   const dirSuffix = options.tool === "claude" ? ".claude" : ".codex";
   const configDir = path.join(home, `${dirSuffix}-${options.name}`);
-  if (await exists(configDir)) {
-    throw new Error(
-      `${configDir.replace(home, "~")} already exists. Use --from ${configDir.replace(home, "~")} to import it instead.`,
-    );
-  }
-  // Cleared here as well as where it is created, so a refusal does not come after a sign-in.
+  const reusing = await isLeftoverToReuse(adapter, registry, configDir, primarySource, home);
+  // Cleared here as well as where it is created, so a refusal does not come after a sign-in -
+  // and before the config dir is created, so it leaves nothing new behind. A leftover being
+  // reused keeps its marker, and a later add can take it back.
   const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);
   await clearBackupDir(backupDir, id);
-  await mkdir(configDir, { recursive: true });
+  if (!reusing) await createPendingDir(configDir);
 
-  // Check if credentials already exist for this dir
+  // Check if credentials already exist for this dir — a reclaimed leftover can already
+  // hold the sign-in its interrupted add was waiting for.
   let alreadyAuthenticated = false;
   if (options.tool === "claude") {
     const resolvedDir = await realpath(configDir).catch(() => configDir);
@@ -2099,7 +2271,7 @@ export async function addProfile(options: {
 
   let credentialUnconfirmed: string | undefined;
   if (!alreadyAuthenticated) {
-    const loggedIn = await adapter.runLogin(configDir);
+    const loggedIn = await runLoginRemovingDirOnTermination(adapter, configDir);
     if (!loggedIn) {
       await rm(configDir, { force: true, recursive: true });
       throw new Error(`${options.tool} login failed.`);
@@ -2181,6 +2353,11 @@ export async function addProfile(options: {
     }
     throw registration.taken.refusal;
   }
+  // A registered profile is no longer a leftover a later add may take back. A marker
+  // that fails to go stays inert while the profile is registered, because
+  // isLeftoverToReuse checks registration before it looks for the marker, and removing
+  // the profile drops it before the entry goes.
+  await rm(path.join(configDir, ADD_PENDING_MARKER), { force: true }).catch(() => {});
   if (options.tool === "claude") await seedSeenSessions(id, configDir);
   return { name: options.name, email: accountInfo.email, configDir, credentialUnconfirmed };
 }
