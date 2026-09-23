@@ -471,6 +471,22 @@ describe("a key in a field that draws what it holds", () => {
       expect(envError(name, value, [])).toBeUndefined();
     });
 
+    it.each([
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "ANTHROPIC_IDENTITY_TOKEN",
+    ])("takes a key in the free-form row under %s without refusing it", (name) => {
+      // The other half of the decision: not only the catalog's header row, but any credential
+      // variable a person names themselves.
+      expect(customEntryError(form({ customKey: name, customValue: KEY }))).toBeUndefined();
+    });
+
+    it("keeps a key under a credential name in the free-form row when the form is left", () => {
+      // It was never refused, so it is not one of the misplaced keys leaving the form forgets.
+      const state = form({ customKey: "CLAUDE_CODE_OAUTH_TOKEN", customValue: KEY });
+
+      expect(withoutMisplacedKeys(state)).toEqual(state);
+    });
+
     it("still says the header will sit in plain text", () => {
       expect(plaintextSecretNote("ANTHROPIC_CUSTOM_HEADERS", `Authorization: Bearer ${KEY}`)).toMatch(/plain text/);
     });
