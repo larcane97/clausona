@@ -258,12 +258,16 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     await new Promise((r) => setTimeout(r, 50));
     process.stdin.setRawMode?.(false);
     process.stdout.write("\x1B[2J\x1B[0;0H"); // clear screen
-    const result = await fn();
-    process.stdout.write("\x1B[2J\x1B[0;0H"); // clear screen
-    process.stdin.setRawMode?.(true);
-    process.stdin.resume();
-    setSuspended(false);
-    return result;
+    try {
+      return await fn();
+    } finally {
+      // A failed login must still hand the terminal back, or the TUI stays blank and
+      // deaf to input with the error it caught never shown.
+      process.stdout.write("\x1B[2J\x1B[0;0H"); // clear screen
+      process.stdin.setRawMode?.(true);
+      process.stdin.resume();
+      setSuspended(false);
+    }
   }
 
   async function refreshDashboard() {
@@ -452,14 +456,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             void (async () => {
               try {
                 setOverlay(null);
-                const { profile, signedInAs, accountMismatch } = await suspendTuiAndRun(() =>
-                  loginProfile(overlay.profileName),
-                );
-                setMessage(
-                  accountMismatch
-                    ? `${symbol.diamond} Signed in as ${signedInAs}, but ${overlay.profileName} is registered as ${profile.email}`
-                    : `${symbol.check} Re-login completed for ${overlay.profileName}`,
-                );
+                await suspendTuiAndRun(() => loginProfile(overlay.profileName));
+                setMessage(`${symbol.check} Re-login completed for ${overlay.profileName}`);
                 await refreshDashboard();
               } catch (error) {
                 setMessage(`${symbol.cross} ${error instanceof Error ? error.message : String(error)}`);

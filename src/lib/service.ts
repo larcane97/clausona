@@ -1337,15 +1337,17 @@ export async function addProfile(options: {
   return { name: options.name, email: accountInfo.email, configDir };
 }
 
-export type LoginResult = {
-  profile: Profile;
-  /** Account the sign-in landed on, read back from the store clausona uses; null if unreadable. */
-  signedInAs: string | null;
-  /** True when that account is not the one the profile was registered with. */
-  accountMismatch: boolean;
-};
+/**
+ * Whether a sign-in landed on a different account than the one registered. Only two
+ * email addresses are compared: Codex records the account id instead when its id_token
+ * carries no email, and the two forms of one account must not read as different.
+ */
+export function isOtherAccount(registered: string, signedInAs: string | null): boolean {
+  if (!signedInAs || !registered.includes("@") || !signedInAs.includes("@")) return false;
+  return signedInAs.toLowerCase() !== registered.toLowerCase();
+}
 
-export async function loginProfile(id: string): Promise<LoginResult> {
+export async function loginProfile(id: string) {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
   const profile = registry.profiles[id];
@@ -1356,9 +1358,13 @@ export async function loginProfile(id: string): Promise<LoginResult> {
   // Which account signs in is decided by the browser session, not by this profile, so
   // a successful login is not proof that the registered account is the one now stored.
   const account = await adapter.readAccountInfo(profile.configDir);
-  const signedInAs = account?.email ?? null;
-  const accountMismatch = signedInAs !== null && signedInAs.toLowerCase() !== profile.email.toLowerCase();
-  return { profile, signedInAs, accountMismatch };
+  if (account && isOtherAccount(profile.email, account.email)) {
+    throw new Error(
+      `Signed in as ${account.email}, but ${id} is registered as ${profile.email}. ` +
+        `Sign in to ${profile.email} in your browser, then run 'clausona login ${id}' again.`,
+    );
+  }
+  return profile;
 }
 
 export async function removeProfile(id: string) {

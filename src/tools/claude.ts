@@ -3,7 +3,7 @@ import { readFile, rename, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import path from "node:path";
 
-import { claudeJsonPathForConfigDir } from "../core/paths.js";
+import { claudeJsonPathForConfigDir, isDefaultClaudeConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { parseClaudeQuota, QuotaHttpError } from "../core/quota.js";
 import type { QuotaWindows } from "../types.js";
@@ -31,18 +31,8 @@ const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
-/**
- * Claude Code picks its account file and Keychain item by whether CLAUDE_CONFIG_DIR is
- * set, not by its value: set even to ~/.claude, it uses a separate hashed Keychain item
- * and ~/.claude/.claude.json. clausona reads the primary from the unset-variable stores,
- * so anything that starts Claude Code for the primary has to leave the variable unset.
- */
-function isDefaultConfigDir(homeDir: string, configDir: string): boolean {
-  return configDir === path.join(homeDir, ".claude");
-}
-
 function keychainService(args: { homeDir: string; configDir: string }): string {
-  if (isDefaultConfigDir(args.homeDir, args.configDir)) return "Claude Code-credentials";
+  if (isDefaultClaudeConfigDir(args.homeDir, args.configDir)) return "Claude Code-credentials";
   const hash = crypto.createHash("sha256").update(args.configDir).digest("hex").slice(0, 8);
   return `Claude Code-credentials-${hash}`;
 }
@@ -274,12 +264,13 @@ async function renewClaudeCredential(
 }
 
 async function runLoginInteractive(configDir: string): Promise<boolean> {
-  const env = { ...process.env };
-  if (isDefaultConfigDir(homedir(), configDir)) {
-    delete env.CLAUDE_CONFIG_DIR;
-  } else {
-    env.CLAUDE_CONFIG_DIR = configDir;
-  }
+  // Cleared by assigning undefined rather than deleting: spawnCommand merges this over
+  // process.env when it goes through the Windows .cmd shim, and only an explicit key can
+  // override an inherited value there. Node drops undefined entries when it spawns.
+  const env = {
+    ...process.env,
+    CLAUDE_CONFIG_DIR: isDefaultClaudeConfigDir(homedir(), configDir) ? undefined : configDir,
+  };
   return new Promise<boolean>((resolve) => {
     const child = spawnCommand("claude", ["auth", "login"], { env, stdio: "inherit" });
     child.on("close", (code) => resolve(code === 0));

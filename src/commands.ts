@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { trackUsage } from "./core/track-usage.js";
-import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
+import { accent, bold, box, dim, helpSection, helpUsage, secondary, success } from "./lib/cli-style.js";
 import { renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
 import { parseProfileRef, profileId } from "./lib/profile-ref.js";
 import {
@@ -460,13 +460,7 @@ export async function runCommand(command: string, args: string[]) {
       const registry = await loadRegistry();
       if (!registry) throw new Error("clausona is not initialized.");
       const ref = parseProfileRef(input, registry);
-      const { profile, signedInAs, accountMismatch } = await loginProfile(ref.id);
-      if (accountMismatch) {
-        return [
-          `  ${warnIcon} Signed in as ${bold(signedInAs ?? "")}, but ${bold(ref.id)} is registered as ${bold(profile.email)}`,
-          `       ${dim(`Sign in to ${profile.email} in your browser, then run ${accent(`clausona login ${ref.id}`)} again`)}`,
-        ].join("\n");
-      }
+      const profile = await loginProfile(ref.id);
       return success(`Token refreshed for ${bold(profile.email)}`);
     }
 

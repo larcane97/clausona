@@ -88,7 +88,7 @@ describe("App", () => {
     expect(frame).not.toMatch(/codex:codex:/);
   });
 
-  it("names the account a re-login landed on when it is not the registered one", async () => {
+  it("comes back from a re-login that fails and shows why", async () => {
     const { listProfiles, loginProfile } = await import("../lib/service.js");
     const work = {
       name: "claude:work",
@@ -102,26 +102,26 @@ describe("App", () => {
       month: { cost: 0, inputTokens: 0, outputTokens: 0 },
       total: { cost: 0, inputTokens: 0, outputTokens: 0 },
     };
-    // Once for the initial load, once for the refresh after signing in.
-    vi.mocked(listProfiles).mockResolvedValueOnce([work]).mockResolvedValueOnce([work]);
-    vi.mocked(loginProfile).mockResolvedValueOnce({
-      profile: { tool: "claude", configDir: work.configDir, email: work.email },
-      signedInAs: "other@example.com",
-      accountMismatch: true,
-    });
+    vi.mocked(listProfiles).mockResolvedValueOnce([work]);
+    vi.mocked(loginProfile).mockRejectedValueOnce(
+      new Error("Signed in as other@example.com, but claude:work is registered as work@example.com."),
+    );
 
-    // Signing in hands the terminal over by clearing the real stdout; keep that out of the test output.
+    // Signing in hands the terminal over by clearing the real stdout and switching the
+    // real stdin's mode; keep both out of the test run.
     const clear = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const { lastFrame, stdin } = render(<App initialScreen="use" />);
-    await new Promise((r) => setTimeout(r, 100));
-    stdin.write("l");
-    await new Promise((r) => setTimeout(r, 50));
-    stdin.write("y");
-    await new Promise((r) => setTimeout(r, 300));
-    clear.mockRestore();
+    try {
+      const { lastFrame, stdin } = render(<App initialScreen="use" />);
+      await new Promise((r) => setTimeout(r, 100));
+      stdin.write("l");
+      await new Promise((r) => setTimeout(r, 50));
+      stdin.write("y");
+      await new Promise((r) => setTimeout(r, 300));
 
-    const frame = lastFrame() ?? "";
-    expect(frame).toContain("other@example.com");
-    expect(frame).not.toContain("Re-login completed");
+      expect(lastFrame() ?? "").toContain("other@example.com");
+    } finally {
+      clear.mockRestore();
+      process.stdin.pause();
+    }
   });
 });

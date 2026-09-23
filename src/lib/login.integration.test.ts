@@ -120,11 +120,12 @@ describe("loginProfile", () => {
     SPAWN_TEST_TIMEOUT_MS,
   );
 
-  // The Windows .cmd shim path in spawnCommand rebuilds the child's environment from
-  // process.env, so an inherited value survives there; that is a separate defect.
-  it.skipIf(process.platform === "win32")(
+  it(
     "does not hand an inherited CLAUDE_CONFIG_DIR to the primary's sign-in",
     async () => {
+      // On Windows the .cmd shim is started through PowerShell with an environment that
+      // spawnCommand rebuilds from process.env, so merely leaving the key out of the
+      // child's env would let the inherited value back in.
       const { service, work, spawned } = await setup({ signInAs: "a@example.com" });
       process.env.CLAUDE_CONFIG_DIR = work;
 
@@ -132,33 +133,51 @@ describe("loginProfile", () => {
 
       expect(spawned().configDir).toBeNull();
     },
+    SPAWN_TEST_TIMEOUT_MS,
   );
 
   it(
-    "reports the account the sign-in actually landed on",
+    "fails, naming both accounts, when a different account signed in",
     async () => {
       const { service } = await setup({ signInAs: "b@example.com" });
 
-      const result = await service.loginProfile("claude:default");
+      const error = await service.loginProfile("claude:default").catch((e: unknown) => e);
 
-      expect(result.signedInAs).toBe("b@example.com");
-      expect(result.profile.email).toBe("a@example.com");
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("b@example.com");
+      expect((error as Error).message).toContain("a@example.com");
     },
     SPAWN_TEST_TIMEOUT_MS,
   );
 });
 
+describe("isOtherAccount", () => {
+  it.each([
+    ["a@example.com", "b@example.com", true],
+    // Addresses are case-insensitive in practice, and Claude Code does not normalise them.
+    ["A@Example.com", "a@example.com", false],
+    // Codex falls back to the account id when its id_token carries no email, so the two
+    // forms of the same account must not read as different accounts.
+    ["1f3c9a2e-4b5d-4e6f-8a7b-9c0d1e2f3a4b", "a@example.com", false],
+    ["a@example.com", "1f3c9a2e-4b5d-4e6f-8a7b-9c0d1e2f3a4b", false],
+    // Nothing could be read back, so there is nothing to compare.
+    ["a@example.com", null, false],
+  ])("registered %s, signed in as %s: %s", async (registered, signedInAs, expected) => {
+    const { isOtherAccount } = await import("./service.js");
+
+    expect(isOtherAccount(registered, signedInAs)).toBe(expected);
+  });
+});
+
 describe("clausona login", () => {
   it(
-    "warns instead of reporting success when a different account signed in",
+    "fails instead of reporting success when a different account signed in",
     async () => {
+      // A thrown error is what the CLI entry point turns into stderr output and exit code
+      // 1, so `clausona login x && claude ...` stops rather than running as the wrong account.
       const { runCommand } = await setup({ signInAs: "b@example.com" });
 
-      const out = stripAnsi(await runCommand("login", ["claude:default"]));
-
-      expect(out).toContain("b@example.com");
-      expect(out).toContain("a@example.com");
-      expect(out).not.toContain("Token refreshed");
+      await expect(runCommand("login", ["claude:default"])).rejects.toThrow("b@example.com");
     },
     SPAWN_TEST_TIMEOUT_MS,
   );
