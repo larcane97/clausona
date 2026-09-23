@@ -210,7 +210,7 @@ export function evaluateApiHealth({
     // directory this profile could be missing, so a primary that holds none left a profile
     // pointing at nothing looking healthy. `repair` cannot help - it symlinks into a
     // directory it does not create - so the remedy is to add the profile again, under the
-    // same name: remove leaves a directory that is gone gone, so add finds the name free.
+    // same name: remove does not recreate a directory that is gone, so add finds it free.
     issues.push({
       kind: "missing_config_dir",
       message: `config directory ${profile.configDir} is missing - remove and re-add the profile: 'clausona remove ${id}', then 'clausona add ${id} --api --base-url <url>'`,

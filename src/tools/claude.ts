@@ -140,7 +140,8 @@ async function readStoredBlob(configDir: string): Promise<StoredCredentials | nu
  *
  * On macOS both happen in writeKeychainItem, which hands the blob to `security` on stdin
  * rather than in its arguments, where `ps` would show the tokens to every user on the
- * machine - the same bytes, item and account the `-w <blob>` it replaces wrote.
+ * machine - the same bytes, item and account the `-w <blob>` it replaces wrote. A blob too
+ * long for one `security -i` line still goes in the arguments, as Claude Code's own does.
  */
 async function writeStoredBlob(configDir: string, blob: StoredCredentials): Promise<void> {
   const serialized = JSON.stringify(blob);
