@@ -592,6 +592,11 @@ key resolves, not that the endpoint answered — run `claude` itself to find tha
 profile's key is stored by clausona, the report ends by saying where: the macOS Keychain, or
 `~/.clausona/secrets.json` everywhere else.
 
+In `clausona doctor --json` each profile carries `kind` and `label` exactly as `list --json`
+does: an API profile has `kind: "api"`, its label under `label` and an empty `email`; a
+subscription profile carries neither key. Each finding has a `kind`, a `message`, and
+`severity: "warning"` when it is advice rather than a problem.
+
 ## Commands
 
 `<profile>` accepts either a bare name (e.g. `work`) when it is unique across all tools, or a `tool:name` prefix (e.g. `claude:work`, `codex:work`) when disambiguation is needed.

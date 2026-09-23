@@ -171,13 +171,26 @@ describe("doctor on an API profile", () => {
     expect(results.find((r) => r.name === "claude:glm")?.healthy).toBe(true);
   });
 
-  it("titles the profile with its label, since it has no account email", async () => {
+  // The same fields `list --json` gives it: no account email, so `email` is empty, and the
+  // label and kind under their own names. The text report still titles it with the label.
+  it("carries its kind and label in the JSON, and titles the report with the label", async () => {
     const h = await harness();
     await h.addApi({ label: "gpu-box" });
 
     const results = await h.doctor();
+    const result = results.find((r) => r.name === "claude:glm");
 
-    expect(results.find((r) => r.name === "claude:glm")?.email).toBe("gpu-box");
+    expect(result).toMatchObject({ kind: "api", email: "", label: "gpu-box" });
+    expect(h.render(results)).toContain("claude:glm (gpu-box)");
+    // A subscription profile gains neither key, as in `list --json`.
+    expect(Object.keys(JSON.parse(JSON.stringify(results.find((r) => r.name === "claude:default"))))).toEqual([
+      "name",
+      "email",
+      "configDir",
+      "isPrimary",
+      "healthy",
+      "issues",
+    ]);
   });
 
   it("does not probe the Keychain for it on macOS", async () => {

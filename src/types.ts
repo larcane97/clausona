@@ -199,7 +199,12 @@ export type DoctorIssue = {
 
 export type DoctorProfileResult = {
   name: string;
+  /** As in `list --json`: absent for a subscription profile that stores none. */
+  kind?: ShownKind;
+  /** The account email; empty for an API profile, which has none - `label` names it. */
   email: string;
+  /** Display name for a profile that has no account email. */
+  label?: string;
   configDir: string;
   isPrimary: boolean;
   healthy: boolean;

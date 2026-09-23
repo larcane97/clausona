@@ -48,7 +48,6 @@ import type {
 import {
   buildProfileEnv,
   CREDENTIAL_ENV_KEYS,
-  displayName,
   envKeyCaseTwin,
   envKeyCaseTwinError,
   envMapOf,
@@ -1273,10 +1272,12 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
 
     results.push({
       name: id,
-      // An API profile has no account email; its label stands in, exactly as it does in
-      // `list` and `config --show`. A subscription profile has no label, so its title is
-      // the email it always was.
-      email: displayName(profile),
+      // The fields `list --json` gives a profile: an API profile's `email` is empty and its
+      // label is under `label`. The report's title is `displayName` of these, as before. A
+      // subscription profile has neither `kind` nor `label`, so its JSON is what it was.
+      kind: shownKind(profile.kind),
+      email: profile.email,
+      label: shownLabel(profile.label),
       configDir: profile.configDir,
       isPrimary: Boolean(profile.isPrimary),
       // Warnings do not make a profile unhealthy: it works, and saying otherwise would

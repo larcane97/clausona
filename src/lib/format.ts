@@ -539,7 +539,7 @@ export function doctorSummary(issues: DoctorIssue[]): string {
 
 export function renderDoctor(results: DoctorProfileResult[]) {
   const sections = results.map((result) => {
-    const title = `  ${bold(result.name)} ${dim(`(${result.email})`)}`;
+    const title = `  ${bold(result.name)} ${dim(`(${displayName(result)})`)}`;
     const { errors, warnings } = countIssues(result.issues);
     if (errors === 0 && warnings === 0) {
       return [title, `    ${ok} ${green("healthy")}`].join("\n");

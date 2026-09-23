@@ -2488,7 +2488,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               items={doctor.map((r) => ({
                 id: r.name,
                 label: r.name,
-                detail: r.email,
+                detail: displayName(r),
                 // A warning leaves the profile healthy, but "healthy" alone would hide it
                 // from the only column this list has - and colouring by `healthy` painted a
                 // profile reading "2 warnings" emerald green. Both come from the one rule.
@@ -2518,7 +2518,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                     {currentDoctor.healthy ? symbol.check : symbol.diamond}
                   </Text>
                 </Box>
-                <Text color={color.secondary}>{currentDoctor.email}</Text>
+                <Text color={color.secondary}>{displayName(currentDoctor)}</Text>
                 <Text color={color.muted}>{currentDoctor.configDir.replace(/^\/Users\/[^/]+/, "~")}</Text>
                 {currentDoctor.issues.length > 0 && (
                   <Box flexDirection="column" marginTop={1}>
