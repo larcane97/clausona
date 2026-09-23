@@ -13,12 +13,13 @@
  * right in a form where the offending value is still on screen and still editable.
  */
 
-import { checkBaseUrl, isAnthropicHost } from "../core/api-url.js";
+import { checkBaseUrl, sendsKeyInClear } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
-import { envKeyCaseTwin, envKeyCaseTwinError } from "../lib/profile-env.js";
+import { envKeyCaseTwin, envKeyCaseTwinError, isSecretEnvName } from "../lib/profile-env.js";
 import { foldProfileName, looksLikeCredential, profileId, validateProfileName } from "../lib/profile-ref.js";
 import type { SecretChunk, SecretInputState } from "../lib/prompt-secret.js";
 import { hidesEnvValue, isCredentialEnvKey } from "../lib/redact.js";
+import { defaultAuthScheme } from "../lib/service.js";
 import {
   CLAUDE_ENV_CATALOG,
   catalogEntry,
@@ -51,6 +52,13 @@ export const MISPLACED_KEY = "That looks like an API key - it goes in the API ke
 
 /** Submit with nothing in the key field. */
 export const KEY_REQUIRED = "Enter the API key. It goes to the credential store.";
+
+/**
+ * Ruling 98: the key had a space or a line break inside it once its ends were trimmed - two
+ * pasted lines, or a key and what came after it. `hasInnerWhitespace` is the rule, the prompt's
+ * too; the field is cleared, because what it holds cannot be seen to be fixed.
+ */
+export const KEY_HAS_WHITESPACE = "Paste the key again - it had a space or a line break inside.";
 
 /**
  * The terminal sent something the key field's reader cannot measure, so where it ended is a
@@ -87,6 +95,7 @@ export const NO_RAW_KEY_INPUT = "Use clausona add --api --key-from env:NAME inst
 export const KEY_FIELD_MESSAGES = {
   MISPLACED_KEY,
   KEY_REQUIRED,
+  KEY_HAS_WHITESPACE,
   UNREADABLE_KEY_INPUT,
   LOST_PASTE_START,
   PASTE_SKIPPED,
@@ -145,6 +154,11 @@ export type ApiFormState = {
   customValue: string;
   /** Index into `apiFormFields`. */
   cursor: number;
+  /**
+   * Where the text cursor is inside a field: the field it was last moved or typed in, and the
+   * offset. Every other field has it at the end of its value - see `caretIn`.
+   */
+  caret?: { field: string; at: number };
   /** Field id -> what is wrong with it, shown under that field. */
   errors: Record<string, string>;
 };
@@ -174,7 +188,7 @@ export type ApiField = {
   entry?: EnvCatalogEntry;
 };
 
-/** A field whose keystrokes belong to a TextInput, so no bare letter is a shortcut there. */
+/** A field whose keystrokes belong to a text input, so no bare letter is a shortcut there. */
 export function isTypingField(field: ApiField | undefined): boolean {
   return field?.kind === "text" || field?.kind === "secret" || field?.kind === "env";
 }
@@ -420,10 +434,14 @@ export function apiFormHost(form: ApiFormState): string {
   return checked.ok ? checked.url.host : "";
 }
 
-/** The scheme to offer for an endpoint, while the user has not chosen one. */
-export function defaultAuthScheme(baseUrl: string): "bearer" | "api-key" {
+/**
+ * The scheme to offer for what the Endpoint field holds, while the user has not chosen one:
+ * `defaultAuthScheme`, the rule `add --api` and `config --base-url` apply to a host - and bearer
+ * until the field holds a URL with a host to apply it to.
+ */
+export function offeredAuthScheme(baseUrl: string): "bearer" | "api-key" {
   const checked = checkBaseUrl(baseUrl.trim());
-  return checked.ok && isAnthropicHost(checked.url.hostname) ? "api-key" : "bearer";
+  return checked.ok ? defaultAuthScheme(checked.url.hostname) : "bearer";
 }
 
 /** The same record without the named keys, for clearing an error once its field is fixed. */
@@ -434,16 +452,34 @@ export function withoutKeys(errors: Record<string, string>, ...ids: string[]): R
 }
 
 /**
- * A note under a setting whose name is one Claude Code reads a credential from, and whose
- * value therefore sits in plain text in profiles.json.
+ * A note under a setting whose name says it holds a secret, and whose value therefore sits in
+ * plain text in profiles.json.
  *
- * The same thing `clausona add --api` prints after a `--set`, and non-blocking for the
- * same reason: a legitimate non-secret header override goes through the same map, so this
- * says what happened rather than refusing it. The doctor reports it again afterwards.
+ * What `clausona add --api` prints after a `--set`: for the same names - `isSecretEnvName`, as
+ * the doctor's finding too - and with the same advice for each, in the form's terms. A variable
+ * Claude Code reads its key from gets the Key field, where the CLI names the credential store;
+ * another service's secret gets the shell's environment, and what that costs - every claude
+ * profile launched from that shell gets it - since the Key field is no answer for it.
+ * Non-blocking for the CLI's reason: a legitimate non-secret header override goes through the
+ * same map, so this says what happened rather than refusing it. The doctor reports it again.
  */
 export function plaintextSecretNote(key: string, value: string): string | undefined {
-  if (value.trim() === "" || !isCredentialEnvKey(key)) return undefined;
-  return `${key} is stored in plain text in profiles.json - an API key belongs in the Key field.`;
+  if (value.trim() === "" || !isSecretEnvName(key)) return undefined;
+  const stored = `${key} is stored in plain text in profiles.json`;
+  if (isCredentialEnvKey(key)) return `${stored} - an API key belongs in the Key field.`;
+  return `${stored}. If it carries a secret, your shell's environment can hold it instead - but the hook then passes it to every claude profile launched from that shell, not just this one. If only this profile should have it, leave it here: output hides it.`;
+}
+
+/**
+ * A note under the endpoint when it would carry the key unencrypted off this machine: the words
+ * `config --base-url` prints for the same URL, by the same rule (`sendsKeyInClear`). Not a
+ * refusal - a server on the local network is a legitimate endpoint - and nothing until the URL
+ * parses. The host carries no userinfo: `checkBaseUrl` refuses a URL with any.
+ */
+export function cleartextNote(baseUrl: string): string | undefined {
+  const checked = checkBaseUrl(baseUrl.trim());
+  if (!checked.ok || !sendsKeyInClear(checked.url)) return undefined;
+  return `${checked.url.host} is plain http, so the key crosses the network unencrypted.`;
 }
 
 // ── Fields that draw what they hold ──────────────────────────────
@@ -456,6 +492,16 @@ export function fieldValue(field: ApiField, form: ApiFormState): string {
   if (field.id === "customKey") return form.customKey;
   if (field.id === "customValue") return form.customValue;
   return "";
+}
+
+/**
+ * Where the text cursor is in a field: where it was left, if that was in this field, and at the
+ * end of the value otherwise - where a text input puts it when it is first drawn. Clamped, as a
+ * value can shrink under it (a masked value is cleared on the first erase).
+ */
+export function caretIn(field: ApiField, form: ApiFormState): number {
+  const length = fieldValue(field, form).length;
+  return form.caret?.field === field.id ? Math.max(0, Math.min(form.caret.at, length)) : length;
 }
 
 /** The variable a field's value would be stored under, when it writes the env map at all. */

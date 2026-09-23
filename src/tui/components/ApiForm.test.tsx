@@ -1,11 +1,12 @@
 import { render } from "ink-testing-library";
 import { describe, expect, it } from "vitest";
 
-import { type ApiFormState, apiFormFields, emptyApiForm, MODEL_KEY } from "../api-form.js";
-import { windowsOnScreen } from "../test-frames.js";
+import { type ApiFormState, apiFormFields, emptyApiForm, MODEL_KEY, plaintextSecretNote } from "../api-form.js";
+import { renderAt } from "../test-drive.js";
+import { flatten, windowsOnScreen } from "../test-frames.js";
 import { ApiForm } from "./ApiForm.js";
 
-/** A key shape. The panel may draw a mask in its place, and never any eight characters of it. */
+/** A key shape. The panel may draw a mask in its place, and never any five characters of its body. */
 const KEY = "sk-ant-api03-fAkE7wvKpLmN8rTyUbHc5dFgA2sE9oIuWqXv3Bn6Mk1Lp8Rt";
 
 /** What the key field shows instead of a key - the same, whatever is behind it. */
@@ -154,6 +155,49 @@ describe("the unfolded form", () => {
 
     expect(frame).toContain("stored in plain text");
   });
+
+  it("says the whole of it at 80 columns, advice included", () => {
+    // Cut to one line, the part lost at the panel's edge was the part that says what to do.
+    const state = form({ advancedOpen: true, env: { MY_SERVICE_TOKEN: "abc" } });
+    const note = plaintextSecretNote("MY_SERVICE_TOKEN", "abc") ?? "";
+    const instance = renderAt(
+      <ApiForm
+        form={{ ...state, cursor: cursorOn(state, "env:MY_SERVICE_TOKEN") }}
+        fields={apiFormFields(state)}
+        keySet={false}
+        mergeSessions={false}
+        onChange={() => {}}
+      />,
+      80,
+    );
+    const frame = instance.lastFrame() ?? "";
+    instance.unmount();
+
+    expect(note).not.toBe("");
+    expect(flatten(frame)).toContain(flatten(note));
+  });
+});
+
+/**
+ * #15: the note `config --base-url` prints for a plain-http endpoint off this machine, under
+ * the Endpoint field while it is typed - the form is a route to the same profile.
+ */
+describe("the endpoint row", () => {
+  const CLEARTEXT = "is plain http, so the key crosses the network unencrypted.";
+
+  it("says a plain-http endpoint off this machine sends the key unencrypted", () => {
+    const frame = frameFor(form({ baseUrl: "http://gpu-box:8000" }));
+
+    expect(flatten(frame)).toContain(flatten(`gpu-box:8000 ${CLEARTEXT}`));
+  });
+
+  it.each([
+    ["https", "https://openrouter.ai/api"],
+    ["plain http on this machine", "http://localhost:8000"],
+    ["a URL still being typed", "http://"],
+  ])("says nothing of it for %s", (_case, baseUrl) => {
+    expect(flatten(frameFor(form({ baseUrl })))).not.toContain(flatten(CLEARTEXT));
+  });
 });
 
 describe("the auth row", () => {
@@ -218,8 +262,8 @@ describe("a key in a field that draws what it holds", () => {
   });
 
   it("finds no part of a key on a form that shows none, even where the form says x-api-key", () => {
-    // What the helper's window size is for: `-api` is in the key's public prefix and in the
-    // auth row's own text, and a shorter window would call this screen a leak.
+    // `-api` is in the key's public prefix and in the auth row's own text: a window of the
+    // whole key found it here once. The helper searches the key's random body only.
     const state = form({ authScheme: "api-key" });
 
     expect(windowsOnScreen([frameFor({ ...state, cursor: cursorOn(state, "auth") }, true)], KEY)).toEqual([]);

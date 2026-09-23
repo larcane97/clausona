@@ -15,7 +15,9 @@ vi.mock("../commands", () => ({
   })),
 }));
 
-vi.mock("../lib/service", () => ({
+// The service's one pure rule the form applies itself, as it is: see `offeredAuthScheme`.
+vi.mock("../lib/service", async (importOriginal) => ({
+  defaultAuthScheme: (await importOriginal<typeof import("../lib/service.js")>()).defaultAuthScheme,
   listProfiles: vi.fn(async () => [
     {
       name: "default",
@@ -48,6 +50,7 @@ vi.mock("../lib/service", () => ({
   addApiProfile: vi.fn(async () => ({ name: "gateway", configDir: "/Users/test/.claude-gateway" })),
 }));
 
+import { fitModel } from "../lib/format.js";
 import { BRACKETED_PASTE_OFF, BRACKETED_PASTE_ON } from "../lib/prompt-secret.js";
 
 /**
@@ -60,6 +63,7 @@ vi.setConfig({ testTimeout: 15_000 });
 
 import { ADD_METHODS, App } from "./App.js";
 import {
+  KEY_HAS_WHITESPACE,
   KEY_REQUIRED,
   LOST_PASTE_START,
   MISPLACED_KEY,
@@ -86,8 +90,8 @@ import {
 import { windowsOnScreen } from "./test-frames.js";
 
 /**
- * A key shape, random like a real one so that no eight characters of it turn up in the TUI's
- * own text. No frame this suite renders may contain any eight characters of it.
+ * A key shape, random like a real one so that no five characters of its body turn up in the
+ * TUI's own text. No frame this suite renders may contain any five characters of its body.
  */
 const KEY = "sk-ant-api03-fAkE7wvKpLmN8rTyUbHc5dFgA2sE9oIuWqXv3Bn6Mk1Lp8Rt";
 /** The constant the key field shows instead. */
@@ -245,6 +249,90 @@ describe("App profile list, for an API profile", () => {
     }
 
     expect(written.join("")).toContain("Switched to claude:gw (gpu-box)");
+  });
+
+  /**
+   * The preview's Model row is cut to the width its value has, from the middle so the end of
+   * the id - which tells one model from another - stays. That width was estimated from the
+   * terminal's, one way for two screens that lay the panel out differently: one column too many
+   * below 80 columns, so ink cut the cut id again from the end (`o……`), and one too few at 100,
+   * where the id fits. So the width a row has is read off the frame here - from where its value
+   * starts to the panel's right border, less the padding - and the row must draw exactly what
+   * `fitModel` makes of the id at that width.
+   */
+  describe("the preview's model row", () => {
+    const MODEL = "openrouter/z-ai/glm-5.3";
+    const routed = {
+      ...gateway,
+      api: {
+        baseUrl: "https://openrouter.ai/api",
+        authScheme: "bearer" as const,
+        secret: { source: "keychain" as const },
+      },
+      env: { ANTHROPIC_MODEL: MODEL },
+      model: MODEL,
+    };
+    /** Label column (12) and its gap (1); the panel's right padding (2). */
+    const LABEL = 13;
+    const PADDING = 2;
+
+    it.each([
+      ["use", 60],
+      ["use", 79],
+      ["use", 100],
+      ["dashboard", 60],
+      ["dashboard", 79],
+      ["dashboard", 100],
+    ] as const)("on the %s screen at %i columns draws the id cut to the row's width, and no further", async (screen, columns) => {
+      const { listProfiles } = await import("../lib/service.js");
+      vi.mocked(listProfiles).mockResolvedValueOnce([routed]);
+      const instance = renderAt(<App initialScreen={screen} />, columns);
+
+      const frame = await waitForFrame(instance.lastFrame, (f) => /Model {2,}\S/.test(f));
+      const line = frame.split("\n").find((candidate) => /Model {2,}\S/.test(candidate)) ?? "";
+      const start = line.indexOf("Model") + LABEL;
+      const width = line.indexOf("│", start) - PADDING - start;
+      const drawn = line.slice(start, start + width).trimEnd();
+      instance.unmount();
+
+      expect(drawn).toBe(fitModel(MODEL, width));
+      if (columns === 100) expect(drawn).toBe(MODEL);
+    });
+  });
+
+  /**
+   * Re-login is an OAuth sign-in, and `loginProfile` refuses an API profile: offering it there
+   * got a confirmation and then a refusal. The action is offered for the kind it can work for.
+   */
+  describe("the re-login action", () => {
+    it("is offered for an account, and asks before signing in", async () => {
+      const { listProfiles } = await import("../lib/service.js");
+      vi.mocked(listProfiles).mockResolvedValueOnce([WORK]);
+      const instance = render(<App initialScreen="use" />);
+
+      const frame = await waitForFrame(instance.lastFrame, (f) => f.includes("claude:work"));
+      expect(frame).toContain("re-login");
+      await press(instance, "l");
+      await waitForFrame(instance.lastFrame, (f) => f.includes(OVERLAY));
+    });
+
+    it("is not offered for an API profile, and l asks nothing", async () => {
+      const { listProfiles, loginProfile } = await import("../lib/service.js");
+      vi.mocked(listProfiles).mockResolvedValueOnce([gateway]);
+      vi.mocked(loginProfile).mockClear();
+      const instance = render(<App initialScreen="use" />);
+
+      const frame = await waitForFrame(instance.lastFrame, (f) => f.includes("claude:gw"));
+      expect(frame).not.toContain("re-login");
+      await type(instance, "l");
+      // The sessions action works for this profile, so its overlay says the `l` before it was
+      // heard - and, had that opened the sign-in overlay, `s` would have gone to it instead.
+      await press(instance, "s");
+      await waitForFrame(instance.lastFrame, (f) => f.includes('Change sessions for "claude:gw"'));
+
+      expect(instance.frames.some((f) => f.includes("Re-login"))).toBe(false);
+      expect(vi.mocked(loginProfile)).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -466,10 +554,8 @@ describe("App add-profile: API endpoint", () => {
     });
 
     it.each([
-      ["an Enter", "\r"],
       ["a down arrow", "\u001b[B"],
       ["an up arrow", "\u001b[A"],
-      ["a tab", "\t"],
     ])("keeps a paste on the key field when ink names some of its bytes %s", async (_case, keystroke) => {
       // ink's parser emits a run of text as one event and each escape sequence as its own,
       // so where a read happens to be split decides whether a byte inside a paste is named
@@ -494,6 +580,37 @@ describe("App add-profile: API endpoint", () => {
 
       expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(expect.objectContaining({ secretValue: KEY }));
       // The tail of a key drawn in the field the cursor moved to is the leak this prevents.
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+      instance.unmount();
+    });
+
+    it.each([
+      ["an Enter", "\r"],
+      ["a tab", "\t"],
+    ])("keeps a paste on the key field when ink names %s in it, and refuses the key it is inside", async (_case, keystroke) => {
+      // The cursor stays, as for an arrow; but a pasted Enter or tab is whitespace in the key
+      // (Ruling 98), where an arrow's bytes are a sequence the reader drops.
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const instance = await openApiForm();
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+      await press(instance, "https://gateway.example.com");
+      await moveTo(instance, "API key");
+
+      await type(instance, "\u001b[200~");
+      await type(instance, KEY.slice(0, 10));
+      await type(instance, keystroke);
+      await type(instance, KEY.slice(10));
+      await type(instance, "\u001b[201~");
+      const held = instance.lastFrame() ?? "";
+
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes(KEY_HAS_WHITESPACE));
+
+      expect(focusedOn(held, "API key")).toBe(true);
+      expect(vi.mocked(addApiProfile)).not.toHaveBeenCalled();
       expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
       instance.unmount();
     });
@@ -731,11 +848,13 @@ describe("App add-profile: API endpoint", () => {
       expect(instance.lastFrame()).not.toContain("Context window");
       expect(instance.lastFrame()).toContain("bearer");
 
+      // Taken into the key, the spaces are what the save refuses (Ruling 98) - which is how it
+      // shows they went there rather than to a shortcut.
       await moveTo(instance, "Create profile");
       await press(instance, ENTER);
-      await waitForFrame(instance.lastFrame, (f) => f.includes("Added claude:gateway"));
+      await waitForFrame(instance.lastFrame, (f) => f.includes(KEY_HAS_WHITESPACE));
 
-      expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(expect.objectContaining({ secretValue: "sk a b" }));
+      expect(vi.mocked(addApiProfile)).not.toHaveBeenCalled();
       instance.unmount();
     });
   });
@@ -766,7 +885,7 @@ describe("App add-profile: API endpoint", () => {
    * field the cursor is leaving. A person's keystrokes are separated by a repaint; a laggy
    * SSH link, a busy event loop or an auto-type tool delivers them together, which is what
    * `type` does with its whole argument. Each case below is a route that put a key in the
-   * wrong field, and each asserts that no eight characters of it were ever on screen.
+   * wrong field, and each asserts that no five characters of its body were ever on screen.
    */
   describe("input coalesced with a keystroke that moves the cursor", () => {
     async function filledTo(label: string) {
@@ -1177,11 +1296,11 @@ describe("App add-profile: API endpoint", () => {
       const landed = instance.lastFrame() ?? "";
       await moveTo(instance, "Create profile");
       await press(instance, ENTER);
-      await waitForFrame(instance.lastFrame, (f) => f.includes("Added") || f.includes("✘"));
+      const done = await waitForFrame(instance.lastFrame, (f) => f.includes("Added") || f.includes("✘"));
       const saved = vi.mocked(addApiProfile).mock.calls[0]?.[0];
       const leaked = windowsOnScreen(instance.frames, KEY);
       instance.unmount();
-      return { saved, landed, leaked };
+      return { saved, landed, leaked, done };
     }
 
     const MOVES: [string, string][] = [
@@ -1220,13 +1339,37 @@ describe("App add-profile: API endpoint", () => {
       ["a Ctrl-D", "\u0004"],
     ];
 
-    it.each(ALL)("reads %s between a paste's brackets as pasted data", async (_c, byte) => {
+    it.each(
+      ALL.filter(([, byte]) => !MOVES.some(([, move]) => move === byte)),
+    )("reads %s between a paste's brackets as pasted data", async (_c, byte) => {
       // The terminal has said every byte until the closing bracket is pasted: nothing in it is a
       // keypress, and a key has no control characters in it.
       const { saved, landed, leaked } = await keyAfter(PASTE(`${KEY.slice(0, 20)}${byte}${KEY.slice(20)}`));
 
       expect(saved?.secretValue).toBe(KEY);
       expect(focusedOn(landed, "API key")).toBe(true);
+      expect(leaked).toEqual([]);
+    });
+
+    it.each(
+      MOVES,
+    )("refuses a key with %s between a paste's brackets, which is whitespace inside it", async (_c, byte) => {
+      // Ruling 98. Pasted, it is not a keypress but a line break or a tab in what was copied - two
+      // lines, or a key and something after it - and joining the halves stored neither.
+      const { saved, landed, leaked, done } = await keyAfter(PASTE(`${KEY.slice(0, 20)}${byte}${KEY.slice(20)}`));
+
+      expect(saved).toBeUndefined();
+      expect(focusedOn(landed, "API key")).toBe(true);
+      expect(done).toContain(KEY_HAS_WHITESPACE);
+      expect(focusedOn(done, "API key")).toBe(true);
+      expect(done).not.toContain(MASK);
+      expect(leaked).toEqual([]);
+    });
+
+    it("takes a key pasted with the newline it was copied with, trimmed", async () => {
+      const { saved, leaked } = await keyAfter(PASTE(`${KEY}\n`));
+
+      expect(saved?.secretValue).toBe(KEY);
       expect(leaked).toEqual([]);
     });
 
@@ -1514,6 +1657,33 @@ describe("App add-profile: API endpoint", () => {
       instance.unmount();
     });
 
+    it("puts a paste where the cursor was moved to inside the field, and goes on typing after it", async () => {
+      // #20: the cursor was the text input's own, out of the listener's sight, so a paste went
+      // in at the end whatever the arrows had done.
+      const LEFT = "\u001b[D";
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const instance = await openApiForm();
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+
+      await press(instance, "https://gateway.com");
+      for (let step = 0; step < 4; step++) await type(instance, LEFT);
+      await type(instance, PASTE(".exampl"));
+      await type(instance, "e");
+
+      expect(row(instance, "Endpoint")).toContain("https://gateway.example.com");
+      await moveTo(instance, "API key");
+      await type(instance, PASTE(KEY));
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added claude:gateway"));
+      expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(
+        expect.objectContaining({ baseUrl: "https://gateway.example.com" }),
+      );
+      instance.unmount();
+    });
+
     it("holds the cursor on the field while its paste is open, and says how to get out", async () => {
       // A newline ink hands over alone inside the paste is pasted text, as on the key field.
       const instance = await openApiForm();
@@ -1691,6 +1861,46 @@ describe("App add-profile: API endpoint", () => {
       expect(exitHooks()).toEqual([]);
       instance.unmount();
       expect(instance.modes).toEqual([ON, OFF]);
+    });
+
+    it.each([
+      "SIGTERM",
+      "SIGHUP",
+    ] as const)("turns it off once on %s, lets go of the signal, and raises it again so it still ends the process", async (signal) => {
+      const instance = await onForm();
+      const handlers = () =>
+        process.listeners(signal).filter((listener) => listener.name === "turnBracketedPasteOffAndDie");
+      const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+      try {
+        expect(handlers()).toHaveLength(1);
+        (handlers()[0] as (signal: NodeJS.Signals) => void)(signal);
+
+        expect(instance.modes).toEqual([ON, OFF]);
+        expect(kill).toHaveBeenCalledTimes(1);
+        expect(kill).toHaveBeenCalledWith(process.pid, signal);
+        expect(handlers()).toEqual([]);
+        expect(exitHooks()).toEqual([]);
+        instance.unmount();
+        expect(instance.modes).toEqual([ON, OFF]);
+      } finally {
+        kill.mockRestore();
+        instance.unmount();
+      }
+    });
+
+    it("lets go of both signals when the form closes", async () => {
+      const instance = await onForm();
+
+      await press(instance, ESC);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Choose how to add"));
+
+      for (const signal of ["SIGTERM", "SIGHUP"] as const) {
+        expect(process.listeners(signal).filter((listener) => listener.name === "turnBracketedPasteOffAndDie")).toEqual(
+          [],
+        );
+      }
+      instance.unmount();
     });
 
     it("switches nothing on an output that is not a terminal", async () => {

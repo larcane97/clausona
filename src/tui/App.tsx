@@ -23,6 +23,7 @@ import {
   BRACKETED_PASTE_OFF,
   BRACKETED_PASTE_ON,
   EMPTY_SECRET_INPUT,
+  hasInnerWhitespace,
   PASTE_END,
   PASTE_START,
   readSecretChunk,
@@ -51,16 +52,18 @@ import {
   apiFormEnv,
   apiFormFields,
   apiFormHost,
+  caretIn,
   concealsValue,
   customEntryError,
-  defaultAuthScheme,
   emptyApiForm,
   fieldValue,
   isTypingField,
+  KEY_HAS_WHITESPACE,
   keyInputRefusal,
   keyReadRefusal,
   liveApiFieldError,
   NO_RAW_KEY_INPUT,
+  offeredAuthScheme,
   PASTE_SKIPPED,
   scrubSecret,
   UNFINISHED_PASTE,
@@ -216,7 +219,17 @@ function apiFieldUnderCursor(screen: Screen, state: AddState | null): ApiField |
   return fields[Math.min(state.api.cursor, fields.length - 1)];
 }
 
-/** The key field's id: the one field whose input comes from the reader rather than a TextInput. */
+/**
+ * Whether the profiles screen offers to sign a profile in again. Re-login is an OAuth sign-in,
+ * and only an account profile has one to redo: the primary's is its tool's own, and an API
+ * profile has a key instead, which `loginProfile` refuses. Offering it there asked for a
+ * confirmation and then answered with that refusal.
+ */
+function offersRelogin(profile: ProfileListItem | undefined): boolean {
+  return profile !== undefined && !profile.isPrimary && profile.kind !== "api";
+}
+
+/** The key field's id: the one field whose input comes from the reader rather than a text input. */
 const KEY_FIELD = "key";
 
 /**
@@ -364,7 +377,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    * arrow and a paste arriving together sent the paste to the field being left: a key drawn
    * in the Endpoint row, then stored as part of the base URL.
    *
-   * Every edit path asks this first - the key's reader, every TextInput in the form, the
+   * Every edit path asks this first - the key's reader, every text input in the form, the
    * form's own keys - and an edit for any other field is dropped. Dropped, not re-routed:
    * typeahead that went nowhere is an empty field the user can see, and typeahead sent to the
    * field it was not meant for is a corrupted key, or a key on screen. A handler that moves
@@ -386,13 +399,13 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   const droppingPaste = useRef(false);
   /**
    * A bracketed paste into one of the form's text fields, read by the form's listener instead of
-   * the field's TextInput, and put into the field whole when its closing bracket arrives.
+   * the field's text input, and put into the field whole when its closing bracket arrives.
    *
-   * The TextInput hears a paste as three events of one read - the opening bracket, the text, the
+   * The text input hears a paste as three events of one read - the opening bracket, the text, the
    * closing bracket - and answers each from the value it was last drawn with, so the last one
    * won and the field read `[201~`. The listener reads it with the key field's reader, where
    * brackets are measured and a read split anywhere is joined. Until the rest of the read after
-   * the closing bracket, the TextInput's own edits are the paste's and are ignored.
+   * the closing bracket, the text input's own edits are the paste's and are ignored.
    */
   const fieldPaste = useRef<{ field: string; input: SecretInputState; text: string; closed: boolean } | undefined>(
     undefined,
@@ -565,7 +578,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
 
   /**
    * Ends a text field's paste: its text goes in (unless it was given up), and the paste still
-   * owns the rest of this read, where the TextInput hears the same closing bracket.
+   * owns the rest of this read, where the text input hears the same closing bracket.
    */
   function closeFieldPaste(paste: NonNullable<typeof fieldPaste.current>, keep: boolean) {
     paste.closed = true;
@@ -620,7 +633,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    * It keeps `droppingPaste` too, which needs every input event while the form is open,
    * whichever field has the cursor, since a dropped paste's tail can reach any of them - and
    * the read that opens the form, whose Enter is heard on the method step. The end is taken
-   * after the rest of the read, so the handlers still to hear the closing bracket - a TextInput
+   * after the rest of the read, so the handlers still to hear the closing bracket - a text input
    * would type it as `[201~` - hear it as part of what is dropped.
    *
    * `useInput`'s handler hears an event before this listener - it is subscribed for the App's
@@ -696,7 +709,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         }
         if (read.text !== "") {
           setApiKey((previous) => previous + read.text);
-          edited = true;
+          // Whitespace alone answers nothing the field said: a pasted newline ink handed over on
+          // its own is one the App's hold has just answered with UNFINISHED_PASTE.
+          if (read.text.trim() !== "") edited = true;
         }
         if (!read.keystroke || answeredByApp) break;
         rest = read.keystroke.rest;
@@ -751,7 +766,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           closeFieldPaste(paste, false);
           return true;
         }
-        paste.text += read.text;
+        // The reader keeps a pasted line break or tab for the key's rule on whitespace; a text
+        // field is one line, and takes the text without them, as it always has.
+        paste.text += read.text.replace(/[\t\n\v\f\r]/g, "");
         // Inside the brackets only a Ctrl-C is reported, and here it is pasted data.
         if (!read.keystroke) break;
         rest = read.keystroke.rest;
@@ -773,8 +790,14 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   // begins, so the tail looked like typing. Bracketed, its start says it is a paste, and a paste
   // whose start went nowhere is dropped whole or refused. The mode is the user's terminal's, so
   // it goes off exactly once on every way out: the form closing (Esc, a save that succeeds or
-  // fails, any change of step or screen), the App unmounting (a quit, Ctrl-C), and the process
-  // exiting without either (a crash). Only a terminal is switched.
+  // fails, any change of step or screen), the App unmounting (a quit, Ctrl-C), the process
+  // exiting without either (a crash), and a SIGTERM or SIGHUP - a closed terminal window, a
+  // `kill`. For those two it is written from a handler of its own, which then lets go of the
+  // signal and raises it again, so the process ends by it exactly as it would have: the exit
+  // status is still the signal's. (ink's own exit hook unmounts on them too, as long as nothing
+  // else listens for the signal; this does not lean on that.) SIGKILL cannot be caught, so after
+  // one the mode stays on until the shell's next prompt - zsh, bash 5.1+ and fish switch it off
+  // there. Only a terminal is switched.
   const apiFormOpen = fieldUnderCursor !== undefined;
   useLayoutEffect(() => {
     if (!apiFormOpen || !stdout?.isTTY) return;
@@ -783,10 +806,18 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       if (!on) return;
       on = false;
       process.off("exit", turnBracketedPasteOff);
+      process.off("SIGTERM", turnBracketedPasteOffAndDie);
+      process.off("SIGHUP", turnBracketedPasteOffAndDie);
       stdout.write(BRACKETED_PASTE_OFF);
+    }
+    function turnBracketedPasteOffAndDie(signal: NodeJS.Signals) {
+      turnBracketedPasteOff();
+      process.kill(process.pid, signal);
     }
     stdout.write(BRACKETED_PASTE_ON);
     process.on("exit", turnBracketedPasteOff);
+    process.on("SIGTERM", turnBracketedPasteOffAndDie);
+    process.on("SIGHUP", turnBracketedPasteOffAndDie);
     return turnBracketedPasteOff;
   }, [apiFormOpen, stdout]);
 
@@ -808,19 +839,27 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     fieldAtCursor.current = cursorField;
   });
 
-  function editApiField(field: ApiField, edited: string) {
-    // A TextInput of a field the cursor has left is still subscribed until the next render,
+  function editApiField(field: ApiField, edited: string, caret: number) {
+    // A text input of a field the cursor has left is still subscribed until the next render,
     // and hears the rest of the read that moved the cursor. See `inputTarget`, and
     // `droppingPaste` for the rest of a paste that read began.
     if (inputTarget.current !== field.id || droppingPaste.current || fieldPaste.current) return;
-    updateApiForm((form) => withApiFieldEdit(form, field, edited));
+    updateApiForm((form) => {
+      const moved: ApiFormState = { ...form, caret: { field: field.id, at: caret } };
+      // An arrow moves the text cursor and changes nothing else: the field is not re-judged.
+      return edited === fieldValue(field, form) ? moved : withApiFieldEdit(moved, field, edited);
+    });
   }
 
-  /** A text field's paste, put in whole after what the field holds: see `fieldPaste`. */
+  /** A text field's paste, put in whole at the field's text cursor, which ends up after it: see `fieldPaste`. */
   const pasteIntoApiField = useCommittedHandler((fieldId: string, text: string) => {
     updateApiForm((form) => {
       const field = apiFormFields(form).find((candidate) => candidate.id === fieldId);
-      return field ? withApiFieldEdit(form, field, fieldValue(field, form) + text) : form;
+      if (!field) return form;
+      const value = fieldValue(field, form);
+      const at = caretIn(field, form);
+      const moved: ApiFormState = { ...form, caret: { field: fieldId, at: at + text.length } };
+      return withApiFieldEdit(moved, field, value.slice(0, at) + text + value.slice(at));
     });
   });
 
@@ -838,7 +877,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     } else if (field.id === "baseUrl") {
       // The scheme follows the host until the user picks one, which is the same default
       // `clausona add --api` offers - one rule, so the two cannot disagree about a URL.
-      next = { ...form, baseUrl: value, authScheme: form.authTouched ? form.authScheme : defaultAuthScheme(value) };
+      next = { ...form, baseUrl: value, authScheme: form.authTouched ? form.authScheme : offeredAuthScheme(value) };
     } else if (field.id === "customKey") {
       next = { ...form, customKey: value };
     } else if (field.id === "customValue") {
@@ -889,6 +928,12 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     // guard is a credential stored wrong.
     const refusal = keyInputRefusal(secretInput.current, canReadKeyInput);
     if (refusal) errors.key = refusal;
+    else if (hasInnerWhitespace(apiKey)) {
+      // Ruling 98, the prompt's rule: not a key but two things run together, which nothing on
+      // screen shows - so it goes, and the message says to paste the key alone.
+      errors.key = KEY_HAS_WHITESPACE;
+      clearApiKey();
+    }
     releaseApiInput();
     if (Object.keys(errors).length > 0) {
       // A setting that is wrong while the section is folded has nowhere to be shown, so
@@ -910,8 +955,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     const env = apiFormEnv(form);
     const name = form.name.trim();
     // Taken out of state before the save begins: from here the key exists only as this
-    // local, for as long as the call and its failure message need it.
-    const secretValue = apiKey;
+    // local, for as long as the call and its failure message need it. Trimmed, as the prompt
+    // trims it: a paste keeps the newline a key was copied with.
+    const secretValue = apiKey.trim();
     clearApiKey();
     setAddState((prev) => (prev ? { ...prev, step: "applying", api: { ...prev.api, errors: {} } } : null));
     void (async () => {
@@ -1318,7 +1364,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             return;
           }
           // ctrl-u, the way out that message names, gives up a text field's paste: nothing of it
-          // goes in, and neither does the `u` the TextInput would type for it.
+          // goes in, and neither does the `u` the text input would type for it.
           const textPaste = fieldPaste.current;
           if (textPaste && !textPaste.closed && key.ctrl && input === "u") {
             closeFieldPaste(textPaste, false);
@@ -1668,11 +1714,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       } else if (input === "d" && profiles[cursor]) {
         const p = profiles[cursor];
         setOverlay({ kind: "remove", profileName: p.name, email: p.email, isPrimary: p.isPrimary });
-      } else if (input === "l" && profiles[cursor]) {
+      } else if (input === "l" && offersRelogin(profiles[cursor])) {
         const p = profiles[cursor];
-        if (!p.isPrimary) {
-          setOverlay({ kind: "login", profileName: p.name, email: displayName(p) });
-        }
+        setOverlay({ kind: "login", profileName: p.name, email: displayName(p) });
       } else if (input === "s" && profiles[cursor] && !profiles[cursor].isPrimary) {
         const p = profiles[cursor];
         setOverlay({ kind: "sessions", profileName: p.name, currentMerge: p.mergeSessions ?? false });
@@ -2259,13 +2303,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       { keys: "↑↓", action: "nav" },
       { keys: "enter", action: "switch" },
       { keys: "a", action: "add" },
-      ...(selectedProfile && !selectedProfile.isPrimary
-        ? [
-            { keys: "d", action: "remove" },
-            { keys: "l", action: "re-login" },
-            { keys: "s", action: "sessions" },
-          ]
-        : []),
+      ...(selectedProfile && !selectedProfile.isPrimary ? [{ keys: "d", action: "remove" }] : []),
+      ...(offersRelogin(selectedProfile) ? [{ keys: "l", action: "re-login" }] : []),
+      ...(selectedProfile && !selectedProfile.isPrimary ? [{ keys: "s", action: "sessions" }] : []),
       { keys: "esc", action: "back" },
     ];
 

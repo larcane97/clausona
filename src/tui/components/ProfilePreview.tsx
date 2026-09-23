@@ -1,4 +1,5 @@
-import { Box, Text } from "ink";
+import { Box, type DOMElement, measureElement, Text } from "ink";
+import { type RefObject, useLayoutEffect, useRef, useState } from "react";
 import { truncate } from "../../lib/cli-style.js";
 import {
   doctorSeverity,
@@ -70,32 +71,50 @@ function quotaColor(window: QuotaWindow, live: boolean): string {
   return color.text;
 }
 
-// The detail panel is a fraction of the terminal, and ink gives no width back during
-// render, so the space a Row's value gets is derived from the same layout constants.
-const PREVIEW_PANEL_FRACTION = 0.45; // layout.previewPanelWidth
-const PANEL_CHROME = 10; // outer + inner borders and padding
-const LABEL_COLUMN = 13; // Row's label box plus its gap
+/** Row's label box plus its gap: what a row's value does not get of the panel's width. */
+const LABEL_COLUMN = 13;
 
-function valueWidth(columns: number): number {
-  return Math.max(0, Math.floor(columns * PREVIEW_PANEL_FRACTION) - PANEL_CHROME - LABEL_COLUMN);
+/**
+ * The columns a Row's value has, for the rows that cut their own text to fit - a model id from
+ * the middle, a quota reading by what it drops - rather than leave it to ink, which cuts from
+ * the end and takes the part that tells one value from another.
+ *
+ * Measured, not worked out from the terminal's width: the panel sits in two screens that lay it
+ * out differently, and a width derived from one estimate was a column too wide below 80 columns
+ * (ink then cut the cut text again) and a column short at 100. ink knows the width only once it
+ * has laid a frame out, so until then a row gets all of its text and ink cuts it, as it did before
+ * any of this; the measurement, taken after every layout, redraws it at once.
+ */
+function useValueWidth(): [RefObject<DOMElement | null>, number] {
+  const panel = useRef<DOMElement | null>(null);
+  const [width, setWidth] = useState<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (!panel.current) return;
+    const measured = Math.max(0, measureElement(panel.current).width - LABEL_COLUMN);
+    if (measured !== width) setWidth(measured);
+  });
+  return [panel, width ?? Number.POSITIVE_INFINITY];
 }
 
-function QuotaRow({ label, window, live }: { label: string; window?: QuotaWindow; live: boolean }) {
+function QuotaRow({
+  label,
+  window,
+  live,
+  width,
+}: {
+  label: string;
+  window?: QuotaWindow;
+  live: boolean;
+  width: number;
+}) {
   if (!window) {
     return <Row label={label} value={EM_DASH} valueColor={color.muted} singleLine />;
   }
 
-  return (
-    <Row
-      label={label}
-      value={fitQuotaValue(window, valueWidth(process.stdout.columns ?? 100))}
-      valueColor={quotaColor(window, live)}
-      singleLine
-    />
-  );
+  return <Row label={label} value={fitQuotaValue(window, width)} valueColor={quotaColor(window, live)} singleLine />;
 }
 
-function QuotaSection({ quota }: { quota?: QuotaSnapshot }) {
+function QuotaSection({ quota, width }: { quota?: QuotaSnapshot; width: number }) {
   if (!quota) {
     return <Row label="Quota" value="loading\u2026" valueColor={color.muted} singleLine />;
   }
@@ -104,9 +123,11 @@ function QuotaSection({ quota }: { quota?: QuotaSnapshot }) {
   const hasWindows = Boolean(quota.session ?? quota.weekly ?? quota.scoped);
   return (
     <>
-      <QuotaRow label="Session" window={quota.session} live={live} />
-      <QuotaRow label="Weekly" window={quota.weekly} live={live} />
-      {quota.scoped && <QuotaRow label={truncate(quota.scoped.label, 12)} window={quota.scoped} live={live} />}
+      <QuotaRow label="Session" window={quota.session} live={live} width={width} />
+      <QuotaRow label="Weekly" window={quota.weekly} live={live} width={width} />
+      {quota.scoped && (
+        <QuotaRow label={truncate(quota.scoped.label, 12)} window={quota.scoped} live={live} width={width} />
+      )}
       {quota.state !== "ok" && (
         <Row
           label=""
@@ -129,7 +150,7 @@ function QuotaSection({ quota }: { quota?: QuotaSnapshot }) {
  * Never the key, nor a command line: `profile.api` arrives from listProfiles already through
  * `redactProfile`, and the key row is `describeSecretSource`, the form `config --show` uses.
  */
-function ApiSection({ profile }: { profile: ProfileListItem }) {
+function ApiSection({ profile, width }: { profile: ProfileListItem; width: number }) {
   const api = profile.api;
   if (!api) return null;
   // `profile.model`, as `list` reads it - not the env map read a second way here.
@@ -142,18 +163,14 @@ function ApiSection({ profile }: { profile: ProfileListItem }) {
       <Row label="Endpoint" value={api.baseUrl} singleLine />
       <Row label="Auth" value={api.authScheme} valueColor={color.secondary} />
       <Row label="Key" value={describeSecretSource(api.secret)} valueColor={color.secondary} />
-      <Row
-        label="Model"
-        value={fitModel(model, valueWidth(process.stdout.columns ?? 100))}
-        valueColor={model ? color.text : color.muted}
-        singleLine
-      />
+      <Row label="Model" value={fitModel(model, width)} valueColor={model ? color.text : color.muted} singleLine />
       {others > 0 && <Row label="Settings" value={`${others} set`} valueColor={color.secondary} />}
     </>
   );
 }
 
 export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem; doctor?: DoctorProfileResult }) {
+  const [details, valueWidth] = useValueWidth();
   if (!profile) {
     return (
       <Box
@@ -200,7 +217,7 @@ export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem;
       </Box>
 
       {/* Details */}
-      <Box flexDirection="column" gap={0} marginBottom={1} flexShrink={0}>
+      <Box ref={details} flexDirection="column" gap={0} marginBottom={1} flexShrink={0}>
         {/* An API profile has no account email; its label stands in, exactly as it does in
             `list` and in the doctor. Blank-aware, so a hand-edited blank label does not
             hide a real email behind whitespace. */}
@@ -218,7 +235,7 @@ export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem;
             an endpoint nearly always needs one. For an account, pinning none is the usual
             case - Claude Code picks - so the row is only there when there is a model. */}
         {!isApi && profile.model !== undefined && (
-          <Row label="Model" value={fitModel(profile.model, valueWidth(process.stdout.columns ?? 100))} singleLine />
+          <Row label="Model" value={fitModel(profile.model, valueWidth)} singleLine />
         )}
       </Box>
 
@@ -227,7 +244,11 @@ export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem;
       {/* An endpoint has no plan quota, and nothing ever fetches one for it - so the quota
           rows would sit on "loading…" forever. What it is replaces what it does not have. */}
       <Box flexDirection="column" gap={0} marginBottom={1} flexShrink={0}>
-        {isApi ? <ApiSection profile={profile} /> : <QuotaSection quota={profile.quota} />}
+        {isApi ? (
+          <ApiSection profile={profile} width={valueWidth} />
+        ) : (
+          <QuotaSection quota={profile.quota} width={valueWidth} />
+        )}
       </Box>
 
       <Separator />

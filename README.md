@@ -202,7 +202,10 @@ OpenRouter's Anthropic endpoint all serve natively. An endpoint that only speaks
 format needs a translation proxy of your own (LiteLLM, claude-code-router); point
 `--base-url` at that proxy.
 
-The dashboard registers one too — **Profiles → add → API endpoint** walks the same fields.
+The dashboard registers one too — **Profiles → add → API endpoint** walks the same fields,
+and says under a field what the CLI would print for it: that an `http://` endpoint off this
+machine sends the key unencrypted, or that a setting whose name says it holds a secret is
+stored in plain text.
 
 ### The model
 
@@ -278,6 +281,12 @@ register a profile without a terminal:
 printf %s "$MY_API_KEY" | clausona add claude:gw --api --base-url https://openrouter.ai/api
 printf %s "$MY_API_KEY" | clausona config claude:gw --key     # rotate it later
 ```
+
+The key's ends are trimmed, so one piped or pasted with its newline is fine. A key with a
+space or a line break inside it is refused, whether it was piped, typed, or pasted into the
+dashboard's form: an API key has neither, and two lines run together are not a key.
+`pass show` prints more than the key; `--key-from command:"pass show gw"` takes only its
+first line.
 
 Or keep the key out of clausona entirely:
 

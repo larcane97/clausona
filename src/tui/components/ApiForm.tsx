@@ -1,11 +1,12 @@
 import { Box, Text } from "ink";
-import TextInput from "ink-text-input";
 
 import {
   ADVANCED_ENTRIES,
   type ApiField,
   type ApiFormState,
   advancedFieldIndexes,
+  caretIn,
+  cleartextNote,
   concealsValue,
   fieldGroup,
   fieldValue,
@@ -14,6 +15,7 @@ import {
 } from "../api-form.js";
 import { color, symbol } from "../theme.js";
 import { Divider } from "./Divider.js";
+import { FieldInput } from "./FieldInput.js";
 
 /**
  * What the key field shows instead of the key: a constant, the same width for every key.
@@ -64,7 +66,8 @@ type ApiFormProps = {
    */
   keySet: boolean;
   mergeSessions: boolean;
-  onChange: (field: ApiField, value: string) => void;
+  /** An edit in a text field: its new value, and where the text cursor is in it. */
+  onChange: (field: ApiField, value: string, caret: number) => void;
 };
 
 function Cursor({ focused }: { focused: boolean }) {
@@ -97,11 +100,18 @@ function FieldError({ message }: { message?: string }) {
   );
 }
 
+/**
+ * A line under a field. A plain hint is cut to one line; a warning wraps, because what it says
+ * last is what to do about it, and that is the part a cut takes away.
+ */
 function Hint({ text, tone }: { text?: string; tone?: "warning" }) {
   if (!text) return null;
   return (
     <Box paddingLeft={2 + LABEL_WIDTH}>
-      <Text color={tone === "warning" ? color.warning : color.muted} wrap="truncate-end">
+      <Text
+        color={tone === "warning" ? color.warning : color.muted}
+        wrap={tone === "warning" ? "wrap" : "truncate-end"}
+      >
         {text}
       </Text>
     </Box>
@@ -175,7 +185,7 @@ export function ApiForm({ form, fields, keySet, mergeSessions, onChange }: ApiFo
     }
 
     if (field.kind === "secret") {
-      // Not a TextInput: every text input renders one glyph per character it holds, which
+      // Not a text input: every text input renders one glyph per character it holds, which
       // is the length this field must not show. App.tsx takes the keystrokes instead, and
       // the value never reaches this component at all - only whether there is one.
       return (
@@ -240,18 +250,20 @@ export function ApiForm({ form, fields, keySet, mergeSessions, onChange }: ApiFo
               <Box>
                 <Text color={color.text}>{KEY_MASK}</Text>
                 <Box width={0} height={1} overflow="hidden">
-                  <TextInput
+                  <FieldInput
                     value={value}
-                    onChange={(next) => onChange(field, next)}
+                    cursor={caretIn(field, form)}
+                    onChange={(next, caret) => onChange(field, next, caret)}
                     focus={focused}
                     showCursor={false}
                   />
                 </Box>
               </Box>
             ) : (
-              <TextInput
+              <FieldInput
                 value={value}
-                onChange={(next) => onChange(field, next)}
+                cursor={caretIn(field, form)}
+                onChange={(next, caret) => onChange(field, next, caret)}
                 focus={focused}
                 placeholder={placeholder}
                 showCursor={focused}
@@ -260,6 +272,7 @@ export function ApiForm({ form, fields, keySet, mergeSessions, onChange }: ApiFo
           </Box>
         </Box>
         <Hint text={field.entry?.hint} />
+        {field.id === "baseUrl" && <Hint text={cleartextNote(value)} tone="warning" />}
         {field.kind === "env" && field.envKey && (
           <Hint text={plaintextSecretNote(field.envKey, value)} tone="warning" />
         )}

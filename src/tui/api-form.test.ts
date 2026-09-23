@@ -10,7 +10,6 @@ import {
   baseUrlError,
   concealsValue,
   customEntryError,
-  defaultAuthScheme,
   emptyApiForm,
   envError,
   KEY_FIELD_MESSAGES,
@@ -22,6 +21,7 @@ import {
   MODEL_KEY,
   NO_RAW_KEY_INPUT,
   nameError,
+  offeredAuthScheme,
   plaintextSecretNote,
   scrubSecret,
   UNFINISHED_PASTE,
@@ -138,7 +138,7 @@ describe("the auth scheme offered for an endpoint", () => {
     ["a look-alike domain", "https://evilanthropic.com", "bearer"],
     ["a URL that does not parse yet", "https:/", "bearer"],
   ])("offers %s the %s scheme", (_case, url, expected) => {
-    expect(defaultAuthScheme(url)).toBe(expected);
+    expect(offeredAuthScheme(url)).toBe(expected);
   });
 });
 
@@ -211,6 +211,22 @@ describe("an advanced setting", () => {
     expect(plaintextSecretNote("ANTHROPIC_CUSTOM_HEADERS", "X-Api-Key: abc")).toMatch(/stored in plain text/);
     expect(plaintextSecretNote("ANTHROPIC_CUSTOM_HEADERS", "")).toBeUndefined();
     expect(plaintextSecretNote("CLAUDE_CODE_MAX_RETRIES", "3")).toBeUndefined();
+  });
+
+  it("says it for every name `add --api --set` and doctor call secret, in their words for each", () => {
+    // The CLI and doctor go by `isSecretEnvName`, the form went by the clear list alone - so
+    // another service's token got no note here, and only here.
+    const own = plaintextSecretNote("ANTHROPIC_AUTH_TOKEN", "abc");
+    const other = plaintextSecretNote("MY_SERVICE_TOKEN", "abc");
+
+    expect(own).toMatch(/^ANTHROPIC_AUTH_TOKEN is stored in plain text in profiles\.json/);
+    expect(own).toMatch(/an API key belongs in the Key field/);
+    // Not this profile's key, so the Key field is the wrong advice; the CLI's is the shell.
+    expect(other).toMatch(/^MY_SERVICE_TOKEN is stored in plain text in profiles\.json/);
+    expect(other).toMatch(/your shell's environment can hold it instead/);
+    expect(other).toMatch(/every claude profile launched from that shell/);
+    expect(other).not.toMatch(/Key field/);
+    expect(plaintextSecretNote("MAX_THINKING_TOKENS", "8000")).toBeUndefined();
   });
 });
 
