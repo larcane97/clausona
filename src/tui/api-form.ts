@@ -13,7 +13,7 @@
  * right in a form where the offending value is still on screen and still editable.
  */
 
-import { checkBaseUrl, sendsKeyInClear } from "../core/api-url.js";
+import { checkBaseUrl, redactUrlsIn, sendsKeyInClear } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { envKeyCaseTwin, envKeyCaseTwinError, isSecretEnvName } from "../lib/profile-env.js";
 import { foldProfileName, looksLikeCredential, profileId, validateProfileName } from "../lib/profile-ref.js";
@@ -301,6 +301,16 @@ export function baseUrlError(baseUrl: string): string | undefined {
 }
 
 /**
+ * Whether a setting's value is a key in the wrong field: shaped like one, under a name whose
+ * value output does not hide - a header or a request body is where a gateway takes a key.
+ * Judged as output shows it (`redactUrlsIn`), so a proxy's long random password, which output
+ * hides and `--set` stores, is not taken for a key.
+ */
+function misplacedKeyValue(key: string, value: string): boolean {
+  return !hidesEnvValue(key) && carriesCredentialToken(redactUrlsIn(value));
+}
+
+/**
  * What is wrong with one advanced setting, by the rules `addApiProfile` applies to the
  * same pair: `validateEnvEntry`, and then the case-twin check for a name that would be a
  * managed variable on Windows.
@@ -312,9 +322,8 @@ export function baseUrlError(baseUrl: string): string | undefined {
  * the value. The json branch already refuses to echo, for the same reason.
  */
 export function envError(key: string, value: string, others: readonly string[]): string | undefined {
-  // First, so that no message below gets as far as quoting it. Not under a name whose value
-  // is hidden on every output path: a header or a request body is where a gateway takes a key.
-  if (!hidesEnvValue(key) && carriesCredentialToken(value)) return MISPLACED_KEY;
+  // First, so that no message below gets as far as quoting it.
+  if (misplacedKeyValue(key, value)) return MISPLACED_KEY;
   const result = validateEnvEntry(key, value);
   if (!result.ok) {
     const entry = catalogEntry(key);
@@ -334,7 +343,7 @@ export function customEntryError(form: ApiFormState): { field: string; message: 
   const value = form.customValue;
   // Before anything that names the setting: two of the messages below quote it.
   if (carriesCredentialToken(key)) return { field: "customKey", message: MISPLACED_KEY };
-  if (!hidesEnvValue(key) && carriesCredentialToken(value)) return { field: "customValue", message: MISPLACED_KEY };
+  if (misplacedKeyValue(key, value)) return { field: "customValue", message: MISPLACED_KEY };
   if (key === "") {
     if (value.trim() === "") return undefined;
     return { field: "customKey", message: "Name the setting before giving it a value." };
@@ -547,7 +556,7 @@ export function concealsValue(field: ApiField, form: ApiFormState): boolean {
 export function withoutMisplacedKeys(form: ApiFormState): ApiFormState {
   const misplaced = (value: string) => carriesCredentialToken(value);
   const env = Object.fromEntries(
-    Object.entries(form.env).map(([key, value]) => [key, !hidesEnvValue(key) && misplaced(value) ? "" : value]),
+    Object.entries(form.env).map(([key, value]) => [key, misplacedKeyValue(key, value) ? "" : value]),
   );
   const next: ApiFormState = {
     ...form,
@@ -555,7 +564,7 @@ export function withoutMisplacedKeys(form: ApiFormState): ApiFormState {
     baseUrl: misplaced(form.baseUrl) ? "" : form.baseUrl,
     env,
     customKey: misplaced(form.customKey) ? "" : form.customKey,
-    customValue: !hidesEnvValue(form.customKey.trim()) && misplaced(form.customValue) ? "" : form.customValue,
+    customValue: misplacedKeyValue(form.customKey.trim(), form.customValue) ? "" : form.customValue,
   };
   const changed = (Object.keys(next) as (keyof ApiFormState)[]).some(
     (key) => JSON.stringify(next[key]) !== JSON.stringify(form[key]),

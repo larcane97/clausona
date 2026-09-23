@@ -536,6 +536,22 @@ describe("a key in a field that draws what it holds", () => {
 
     expect(withoutMisplacedKeys(state)).toEqual(state);
   });
+
+  it("takes a proxy whose password looks like a key, as `--set` does, and keeps it masked", () => {
+    // Output hides a URL's password, so the CLI stores this one; judged whole, the form read a
+    // long random password as a key pasted into the wrong field. Built from pieces at run time.
+    const password = ["Qm7", "Zt4", "Kp9", "Wx2", "Rb8", "Nc5", "Hv3", "Jd6", "Ly1", "Fs0", "Gu7"].join("");
+    const proxy = `http://proxy-user:${password}@proxy.example.com:8080`;
+    const state = form({ env: { HTTPS_PROXY: proxy }, customKey: "ALL_PROXY", customValue: proxy });
+
+    expect(envError("HTTPS_PROXY", proxy, [])).toBeUndefined();
+    expect(customEntryError(state)).toBeUndefined();
+    expect(withoutMisplacedKeys(state)).toEqual(state);
+    expect(concealsValue(field("env:HTTPS_PROXY"), state)).toBe(true);
+    expect(concealsValue(field("customValue"), state)).toBe(true);
+    // The password alone is still a key in the wrong field.
+    expect(envError("HTTPS_PROXY", password, [])).toBe(MISPLACED_KEY);
+  });
 });
 
 /**
