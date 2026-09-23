@@ -11,5 +11,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    // Keeps every test off the real `security` and `secret-tool` - see the file.
+    globalSetup: ["./vitest.global-setup.ts"],
   },
 });
