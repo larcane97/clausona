@@ -469,7 +469,8 @@ describe("what every path still says", () => {
 
     expect(report).toContain("can reach https://gw.example.com/api?<hidden>");
     // What failed is the command, whose exit code needs /bin/sh to run it: see NEEDS_SH.
-    if (process.platform !== "win32") expect(report).toContain("secret command exited with 3");
+    // The real platform: inside a test process.platform is the forced linux.
+    if (realPlatform !== "win32") expect(report).toContain("secret command exited with 3");
   });
 
   it("doctor tells a profile whose key variable is not a name how to fix it, and the command runs", async () => {
