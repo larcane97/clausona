@@ -13,7 +13,7 @@
  * right in a form where the offending value is still on screen and still editable.
  */
 
-import { checkBaseUrl, sendsKeyInCleartext } from "../core/api-url.js";
+import { checkBaseUrl, sendsKeyInClear } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { envKeyCaseTwin, envKeyCaseTwinError, isSecretEnvName } from "../lib/profile-env.js";
 import { foldProfileName, looksLikeCredential, profileId, validateProfileName } from "../lib/profile-ref.js";
@@ -471,13 +471,13 @@ export function plaintextSecretNote(key: string, value: string): string | undefi
 
 /**
  * A note under the endpoint when it would carry the key unencrypted off this machine: the words
- * `config --base-url` prints for the same URL, by the same rule (`sendsKeyInCleartext`). Not a
+ * `config --base-url` prints for the same URL, by the same rule (`sendsKeyInClear`). Not a
  * refusal - a server on the local network is a legitimate endpoint - and nothing until the URL
  * parses. The host carries no userinfo: `checkBaseUrl` refuses a URL with any.
  */
 export function cleartextNote(baseUrl: string): string | undefined {
   const checked = checkBaseUrl(baseUrl.trim());
-  if (!checked.ok || !sendsKeyInCleartext(checked.url)) return undefined;
+  if (!checked.ok || !sendsKeyInClear(checked.url)) return undefined;
   return `${checked.url.host} is plain http, so the key crosses the network unencrypted.`;
 }
 

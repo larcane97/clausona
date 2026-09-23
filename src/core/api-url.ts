@@ -164,6 +164,6 @@ export function isLoopbackHost(hostname: string): boolean {
  * that is not loopback. The one rule for every route that sets an endpoint - `add --api`,
  * `config --base-url` and the dashboard's form - so they cannot disagree about a URL.
  */
-export function sendsKeyInCleartext(url: URL): boolean {
+export function sendsKeyInClear(url: URL): boolean {
   return url.protocol === "http:" && !isLoopbackHost(url.hostname);
 }
