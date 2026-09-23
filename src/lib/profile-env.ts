@@ -263,9 +263,9 @@ export function displayName(profile: Pick<Profile, "email" | "label">): string {
  * A stored string as it may be printed: without C0 or C1 control characters - ESC among
  * them, so no terminal escape sequence survives. For the fields a hand edit, or `--set`, can
  * put anything in and that are printed as they are - the label, the kind, the auth scheme,
- * the model id and every env value - so that
- * opening `list` cannot retitle the terminal, clear it or rewrite what came before. Only
- * what is printed changes; anything that is not a string is left as it is.
+ * the model id and every env value - so that opening `list` cannot retitle the terminal,
+ * clear it or rewrite what came before. Only what is printed changes; anything that is not
+ * a string is left as it is.
  */
 export function printable<T>(value: T): T {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes
