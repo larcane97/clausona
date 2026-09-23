@@ -374,6 +374,32 @@ describe("evaluateApiHealth", () => {
       expect(issues.map((issue) => issue.message.split(" ")[0])).toEqual(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]);
     });
 
+    // A key pasted where the name goes: `config --show` and launch already hide it, and
+    // doctor's report is promised safe to paste.
+    it("never prints a name shaped like an API key, and names --edit for it", () => {
+      // Built from pieces, so no line of this file is a token a secret scanner would flag.
+      const pat = [
+        "github",
+        "pat",
+        "11ABCDEFG0Q8r3LmZ7pW2x",
+        "Kd9fT4vYb6NcR1sHjU5wE8aG3mP0qLzXy7Bn2Vt4Rk9Fh6Ds1Wc3Ju",
+      ].join("_");
+      const dashed = ["sk", "ant", "api03", "F4NAMEq7Rw2Lp9XzT5vB8nC1"].join("-");
+      const issues = health({
+        profile: { ...apiProfile, env: { [pat]: "x", [dashed]: "y" } },
+        secretEnvName: (key) => /(^|_)PAT(_|$)/i.test(key),
+      });
+
+      expect(issues.map((issue) => [issue.kind, issue.severity])).toEqual([
+        ["plaintext_env_secret", "warning"],
+        ["plaintext_env_secret", "warning"],
+      ]);
+      const report = JSON.stringify(issues);
+      expect(leakedWindows([report], pat)).toEqual([]);
+      expect(leakedWindows([report], dashed)).toEqual([]);
+      for (const issue of issues) expect(issue.message).toContain("clausona config claude:glm --edit");
+    });
+
     it("says nothing about an env map that holds no credential", () => {
       expect(
         health({

@@ -366,6 +366,17 @@ export function evaluateApiHealth({
 
   // Sorted, so two runs over the same profile read the same way.
   for (const key of Object.keys(profile.env ?? {}).sort()) {
+    if (carriesCredentialToken(key)) {
+      // A key pasted where a name goes. Named, it would be printed: `--help` promises this
+      // report is safe to paste. Launch ignores it, and `--edit` is the one command that can
+      // remove a name no `--unset` could be typed with safely.
+      issues.push({
+        kind: "plaintext_env_secret",
+        severity: "warning",
+        message: `a setting whose name is shaped like an API key is stored in plain text in ${REGISTRY_FILE}, and launch ignores it - remove it with 'clausona config ${id} --edit'`,
+      });
+      continue;
+    }
     if (!secretEnvName(key)) continue;
     // Also a warning: the env map is a documented, supported place to put a value, and a
     // profile that keeps a key there runs exactly as intended.

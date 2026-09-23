@@ -439,7 +439,8 @@ go through one rule for what they print about a profile:
   where a gateway's auth field goes) prints as `<hidden>`;
 - a setting whose *name* is shaped like an API key — a key pasted where the name goes — prints
   as `<hidden>`, value and all. `--set` refuses one, and launch skips one a hand edit left,
-  with a warning that does not quote it;
+  with a warning that does not quote it; `doctor` reports one on an API profile without
+  naming it, with the `config <profile> --edit` that removes it;
 - a URL's userinfo, query and fragment print as `<hidden>`, in the base URL and in any
   setting — `HTTPS_PROXY=http://user:pass@proxy:8080` shows as
   `http://<hidden>@proxy:8080/`. That includes the scheme-less `user:pass@host` form, and a
