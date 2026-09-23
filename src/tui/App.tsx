@@ -18,6 +18,8 @@ import {
 import { displayName } from "../lib/profile-env.js";
 import { defaultProfileName, profileId } from "../lib/profile-ref.js";
 import {
+  BRACKETED_PASTE_OFF,
+  BRACKETED_PASTE_ON,
   EMPTY_SECRET_INPUT,
   PASTE_END,
   PASTE_START,
@@ -762,6 +764,29 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       if (ending) clearImmediate(ending);
     };
   }, [apiFormInReach, canReadKeyInput, inputEvents]);
+
+  // Ruling 94: the terminal brackets pastes while the form is open. An unbracketed paste split
+  // across two reads, whose first read also brought the arrow onto the key field, lost its head
+  // with the rest of that read and had its tail taken as the key - nothing marks where a paste
+  // begins, so the tail looked like typing. Bracketed, its start says it is a paste, and a paste
+  // whose start went nowhere is dropped whole or refused. The mode is the user's terminal's, so
+  // it goes off exactly once on every way out: the form closing (Esc, a save that succeeds or
+  // fails, any change of step or screen), the App unmounting (a quit, Ctrl-C), and the process
+  // exiting without either (a crash). Only a terminal is switched.
+  const apiFormOpen = fieldUnderCursor !== undefined;
+  useLayoutEffect(() => {
+    if (!apiFormOpen || !stdout?.isTTY) return;
+    let on = true;
+    function turnBracketedPasteOff() {
+      if (!on) return;
+      on = false;
+      process.off("exit", turnBracketedPasteOff);
+      stdout.write(BRACKETED_PASTE_OFF);
+    }
+    stdout.write(BRACKETED_PASTE_ON);
+    process.on("exit", turnBracketedPasteOff);
+    return turnBracketedPasteOff;
+  }, [apiFormOpen, stdout]);
 
   // No reader at all rather than a guessing one, and the refusal is shown where the key would
   // have been typed instead of at the save, which is too late to retype anything.

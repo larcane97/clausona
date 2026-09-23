@@ -4,6 +4,8 @@ import { render as inkRender } from "ink";
 import type { render } from "ink-testing-library";
 import type { ReactElement } from "react";
 
+import { BRACKETED_PASTE_OFF, BRACKETED_PASTE_ON } from "../lib/prompt-secret.js";
+
 /**
  * Driving the TUI from a test the way a person does: a key at a time, each one waited on
  * until the frame it produced has been drawn.
@@ -68,18 +70,35 @@ class FakeStdin extends EventEmitter {
 export type WatchedInstance = Instance & {
   /** Calls `listener` with every frame from now on, inside the commit that draws it. */
   watchFrames(listener: (frame: string) => void): () => void;
+  /** The terminal-mode switches written to stdout, in order - kept out of `frames`. */
+  modes: string[];
 };
+
+const MODE_SWITCHES = new Set([BRACKETED_PASTE_ON, BRACKETED_PASTE_OFF]);
 
 /**
  * `render` at a terminal width of the test's choosing. ink-testing-library's is fixed at 100
  * columns, and what a one-line message loses at the panel's edge depends on exactly that.
+ *
+ * `tty` makes stdout say it is a terminal, which is what the App writes a mode switch to; such a
+ * write goes to `modes`, not `frames`. `exitOnCtrlC` is ink's, off unless asked for.
  */
-export function renderAt(tree: ReactElement, columns: number): WatchedInstance {
+export function renderAt(
+  tree: ReactElement,
+  columns: number,
+  options: { tty?: boolean; exitOnCtrlC?: boolean } = {},
+): WatchedInstance {
   const frames: string[] = [];
+  const modes: string[] = [];
   const watchers = new Set<(frame: string) => void>();
   const stdout = Object.assign(new EventEmitter(), {
     columns,
+    isTTY: options.tty === true,
     write: (frame: string) => {
+      if (MODE_SWITCHES.has(frame)) {
+        modes.push(frame);
+        return true;
+      }
       frames.push(frame);
       for (const watcher of [...watchers]) watcher(frame);
       return true;
@@ -92,12 +111,13 @@ export function renderAt(tree: ReactElement, columns: number): WatchedInstance {
     stderr: stderr as unknown as NodeJS.WriteStream,
     stdin: stdin as unknown as NodeJS.ReadStream,
     debug: true,
-    exitOnCtrlC: false,
+    exitOnCtrlC: options.exitOnCtrlC === true,
     patchConsole: false,
   });
   return {
     stdin: stdin as unknown as Instance["stdin"],
     frames,
+    modes,
     lastFrame: () => frames.at(-1),
     unmount: instance.unmount,
     watchFrames(listener) {

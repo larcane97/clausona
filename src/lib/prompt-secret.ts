@@ -31,13 +31,18 @@ const ESC = "\u001b";
 
 /**
  * Bracketed paste (DEC private mode 2004): what a terminal wraps pasted text in so that a
- * program can tell it apart from typing. Nothing in clausona turns the mode on, and the
- * shells disable it around a command, but it is left on by any program that set it and
- * exited without restoring it - so a paste can arrive bracketed, and pasting is how most
+ * program can tell it apart from typing. The TUI's API form turns the mode on while it is
+ * open, and off on every way out of it (Ruling 94). This prompt does not turn it on, and the
+ * shells disable it around a command - but it is left on by any program that set it and exited
+ * without restoring it, so a paste can arrive here bracketed too, and pasting is how most
  * people put a key into a prompt.
  */
 export const PASTE_START = `${ESC}[200~`;
 export const PASTE_END = `${ESC}[201~`;
+
+/** What asks the terminal to bracket pastes, and to stop. */
+export const BRACKETED_PASTE_ON = `${ESC}[?2004h`;
+export const BRACKETED_PASTE_OFF = `${ESC}[?2004l`;
 
 /**
  * A CSI or SS3 sequence longer than this is not one this reader knows how to skip. It gives

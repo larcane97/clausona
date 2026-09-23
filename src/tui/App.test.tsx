@@ -47,6 +47,7 @@ vi.mock("../lib/service", () => ({
   addApiProfile: vi.fn(async () => ({ name: "gateway", configDir: "/Users/test/.claude-gateway" })),
 }));
 
+import { BRACKETED_PASTE_OFF, BRACKETED_PASTE_ON } from "../lib/prompt-secret.js";
 import { ADD_METHODS, App } from "./App.js";
 import {
   KEY_REQUIRED,
@@ -69,6 +70,7 @@ import {
   sendBeforeEffects,
   type,
   typeSlowly,
+  type WatchedInstance,
   waitForFrame,
 } from "./test-drive.js";
 import { windowsOnScreen } from "./test-frames.js";
@@ -1514,6 +1516,137 @@ describe("App add-profile: API endpoint", () => {
       expect(instance.lastFrame()).toContain(MISPLACED_KEY);
       expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
       instance.unmount();
+    });
+  });
+
+  /**
+   * Ruling 94: the form turns bracketed paste on while it is open, and off on every way out.
+   *
+   * An unbracketed paste split across two reads, whose first read also carried the arrow onto
+   * the key field, stored its tail: the arrow's read drops the head, and the tail looks like
+   * typing. With the terminal bracketing the paste, its start marks it as a paste, and the drop
+   * or the lost-start rule takes it. The mode belongs to the user's terminal, so it is switched
+   * off exactly once on every way out, and only a terminal is switched at all.
+   */
+  describe("bracketed paste while the form is open", () => {
+    const ON = BRACKETED_PASTE_ON;
+    const OFF = BRACKETED_PASTE_OFF;
+    const exitHooks = () => process.listeners("exit").filter((hook) => hook.name === "turnBracketedPasteOff");
+
+    async function onForm(options: { tty?: boolean; exitOnCtrlC?: boolean } = { tty: true }) {
+      const instance = renderAt(<App initialScreen="use" />, 100, options);
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("default"));
+      await press(instance, "a");
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Choose how to add"));
+      await moveTo(instance, "API endpoint");
+      expect(instance.modes).toEqual([]);
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Create profile"));
+      expect(instance.modes).toEqual(options.tty ? [ON] : []);
+      return instance;
+    }
+
+    async function filled(instance: WatchedInstance) {
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+      await press(instance, "https://gateway.example.com");
+      await moveTo(instance, "API key");
+      await press(instance, KEY);
+      await moveTo(instance, "Create profile");
+    }
+
+    it("turns it off when Esc leaves the form, and on again only when the form is back", async () => {
+      const instance = await onForm();
+
+      await press(instance, ESC);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Choose how to add"));
+      expect(instance.modes).toEqual([ON, OFF]);
+      expect(exitHooks()).toEqual([]);
+      await moveTo(instance, "API endpoint");
+      expect(instance.modes).toEqual([ON, OFF]);
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Create profile"));
+      expect(instance.modes).toEqual([ON, OFF, ON]);
+      await press(instance, ESC);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Choose how to add"));
+      await press(instance, ESC);
+      await waitForFrame(instance.lastFrame, (f) => !f.includes("Choose how to add"));
+      instance.unmount();
+
+      expect(instance.modes).toEqual([ON, OFF, ON, OFF]);
+    });
+
+    it("turns it off when the profile is saved", async () => {
+      const instance = await onForm();
+      await filled(instance);
+
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added claude:gateway"));
+      instance.unmount();
+
+      expect(instance.modes).toEqual([ON, OFF]);
+    });
+
+    it("turns it off when the save fails, and leaves it on while a refused submit keeps the form", async () => {
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockRejectedValueOnce(new Error("the endpoint said no"));
+      const instance = await onForm();
+
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes(KEY_REQUIRED));
+      expect(instance.modes).toEqual([ON]);
+      await filled(instance);
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("the endpoint said no"));
+      instance.unmount();
+
+      expect(instance.modes).toEqual([ON, OFF]);
+    });
+
+    it("turns it off when the App is unmounted with the form open", async () => {
+      const instance = await onForm();
+
+      instance.unmount();
+
+      expect(instance.modes).toEqual([ON, OFF]);
+      expect(exitHooks()).toEqual([]);
+    });
+
+    it("turns it off when ctrl-c quits with the form open", async () => {
+      const instance = await onForm({ tty: true, exitOnCtrlC: true });
+
+      instance.stdin.write("\u0003");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(instance.modes).toEqual([ON, OFF]);
+      instance.unmount();
+      expect(instance.modes).toEqual([ON, OFF]);
+    });
+
+    it("turns it off from the process's exit hook if the App never unmounts, and only once", async () => {
+      // A crash, or anything that ends the process without React unmounting, must not leave the
+      // user's terminal wrapping every paste in brackets.
+      const instance = await onForm();
+      const hooks = exitHooks();
+
+      expect(hooks).toHaveLength(1);
+      (hooks[0] as () => void)();
+      expect(instance.modes).toEqual([ON, OFF]);
+      expect(exitHooks()).toEqual([]);
+      instance.unmount();
+      expect(instance.modes).toEqual([ON, OFF]);
+    });
+
+    it("switches nothing on an output that is not a terminal", async () => {
+      const instance = await onForm({ tty: false });
+
+      await press(instance, ESC);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Choose how to add"));
+      instance.unmount();
+
+      expect(instance.modes).toEqual([]);
+      expect(exitHooks()).toEqual([]);
     });
   });
 
