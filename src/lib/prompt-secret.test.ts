@@ -296,8 +296,8 @@ describe("promptSecret and a pasted key", () => {
   it.each([
     ["a typed tab", "ab\tc\r"],
     ["a typed space", "ab c\r"],
-    ["a line break inside a paste", "\u001b[200~sk-fake-9xQZ\nurl: https://openrouter.ai\u001b[201~\r"],
-    ["a tab inside a paste", "\u001b[200~sk-fake\t9xQZ\u001b[201~\r"],
+    ["a line break inside a paste", `\u001b[200~${KEY}\nurl: https://openrouter.ai\u001b[201~\r`],
+    ["a tab inside a paste", `\u001b[200~${KEY.slice(0, 8)}\t${KEY.slice(8)}\u001b[201~\r`],
   ])("refuses a key with %s inside it, and says why", async (_case, input) => {
     const tty = fakeTerminal();
 
@@ -438,9 +438,9 @@ describe("promptSecret off a terminal", () => {
   });
 
   it.each([
-    ["a second line", `${KEY}\nGW_KEY=sk-other\n`],
+    ["a second line", `${KEY}\nGW_KEY=second-secret\n`],
     ["the metadata `pass show` prints under the key", `${KEY}\nurl: https://openrouter.ai\nuser: me\n`],
-    ["a space", "sk-fake 9xQZ-0001"],
+    ["a space", `${KEY.slice(0, 8)} ${KEY.slice(8)}`],
   ])("refuses what was piped in when it has %s inside it, rather than store it as the key", async (_case, input) => {
     const piped = pipe([Buffer.from(input, "utf8")]);
 
