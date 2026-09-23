@@ -3,7 +3,6 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { isAnthropicHost } from "./core/api-url.js";
 import { plaintextEnvRemedy } from "./core/doctor.js";
 import { spawnCommandSync } from "./core/process.js";
 import { isPosixEnvName, renderPosixExports } from "./core/shell.js";
@@ -24,6 +23,7 @@ import {
   addApiProfile,
   addProfile,
   checkLabel,
+  defaultAuthScheme,
   discoverAccounts,
   doctorProfiles,
   getUsageSummary,
@@ -35,6 +35,7 @@ import {
   proposeInitProfileNames,
   removeProfile,
   repairProfile,
+  requireEndpoint,
   setActiveProfileByName,
   shellInit,
   syncPluginsJson,
@@ -647,8 +648,11 @@ function subcommandHelpText(command: string): string | undefined {
         `  ${bold("CHANGING THE ENDPOINT")}`,
         `    ${dim("Each value is checked by the rule add --api uses. The key is kept, so after")}`,
         `    ${dim("--base-url the next launch sends the same key to the new host; run --key")}`,
-        `    ${dim("next if that endpoint takes another. A label that is still the old host,")}`,
-        `    ${dim("which is what add chose when --label was left out, follows the new one.")}`,
+        `    ${dim("next if that endpoint takes another. What add chose by itself follows the new")}`,
+        `    ${dim("host while it is still the old host's: a label that is the old host, and the")}`,
+        `    ${dim("auth scheme - api-key for anthropic.com, bearer elsewhere. One that was chosen")}`,
+        `    ${dim("stays, with a note if the new host usually takes the other scheme. A move to")}`,
+        `    ${dim("plain http off this machine is noted too: the key would travel unencrypted.")}`,
         `    ${dim("A subscription profile has no endpoint, and list names it by its account")}`,
         `    ${dim("email, so all three refuse one.")}`,
         "",
@@ -1047,22 +1051,37 @@ export async function runCommand(command: string, args: string[]) {
               `      ${accent(`clausona config ${ref.id} --key`)}\n`,
           );
         }
-        const changed = [
+        if (result.cleartext) {
+          process.stderr.write(
+            `  ${warnIcon} ${result.host} is plain http, so the key crosses the network unencrypted.\n`,
+          );
+        }
+        if (result.hostDefaultAuth !== undefined) {
+          // Kept rather than followed: it was chosen, or there was no old host to judge by.
+          // Said here, because the first sign of a scheme the endpoint does not read is a 401.
+          process.stderr.write(
+            `  ${warnIcon} ${result.host} usually takes ${result.hostDefaultAuth}, and this profile sends its key as ${result.profile.api?.authScheme}.\n` +
+              "    If the endpoint refuses it, switch:\n" +
+              `      ${accent(`clausona config ${ref.id} --auth ${result.hostDefaultAuth}`)}\n`,
+          );
+        }
+        const asked = [
           ...(baseUrl === undefined ? [] : ["base URL"]),
           ...(authArg === undefined ? [] : ["auth"]),
-          ...(label !== undefined
-            ? ["label"]
-            : result.profile.label !== profile.label
-              ? ["label, following the host"]
-              : []),
+          ...(label === undefined ? [] : ["label"]),
         ].join(", ");
-        return success(`Updated ${bold(ref.id)} ${dim(`(${changed})`)}`);
+        const followed = [...(result.followed.label ? ["label"] : []), ...(result.followed.auth ? ["auth"] : [])];
+        const follows =
+          followed.length === 0
+            ? ""
+            : `; ${followed.join(" and ")} ${followed.length === 1 ? "follows" : "follow"} the new host`;
+        return success(`Updated ${bold(ref.id)} ${dim(`(${asked}${follows})`)}`);
       }
 
       if (changeKey) {
         // Checked before the prompt, not after: updateProfileSecret refuses the same
         // thing, but by then the user has typed a key for a profile that has no use for one.
-        if (profile.kind !== "api" || !profile.api) throw new Error(`Profile '${ref.id}' is not an API profile.`);
+        requireEndpoint(ref.id, profile);
         const secret = parseSecretSource(keyFrom ?? "keychain");
         const value = secret.source === "keychain" ? await promptSecret("API key: ") : undefined;
         if (secret.source === "keychain" && !value) throw new Error(NO_KEY_SUPPLIED);
@@ -1151,8 +1170,7 @@ export async function runCommand(command: string, args: string[]) {
         const url = parseBaseUrl(baseUrl.trim());
 
         const authArg = optionValue(args, "--auth");
-        const authScheme =
-          authArg === undefined ? (isAnthropicHost(url.hostname) ? "api-key" : "bearer") : parseAuthScheme(authArg);
+        const authScheme = authArg === undefined ? defaultAuthScheme(url.hostname) : parseAuthScheme(authArg);
         // addApiProfile's own rule again, for the same reason as the URL above.
         const label = optionValue(args, "--label");
         if (label !== undefined) checkLabel(label);

@@ -1488,19 +1488,22 @@ describe("updateProfileApi", () => {
   // subscription profile with a stray block is only a hand edit away, and the case without
   // one cannot tell whether the kind is checked at all.
   it.each([
-    ["a subscription profile", {}],
-    ["a subscription profile carrying a stray endpoint block", { api: { baseUrl: "http://localhost:8000" } }],
-    ["an API profile with no endpoint block", { kind: "api" }],
-  ])("refuses %s and writes nothing", async (_label, extra) => {
+    ["a subscription profile", {}, "Profile 'claude:default' is not an API profile."],
+    [
+      "a subscription profile carrying a stray endpoint block",
+      { api: { baseUrl: "http://localhost:8000" } },
+      "Profile 'claude:default' is not an API profile.",
+    ],
+    // An API profile to doctor and `list`, so it gets doctor's remedy rather than a denial.
+    ["an API profile with no endpoint block", { kind: "api" }, "Profile 'claude:default' has no endpoint"],
+  ])("refuses %s and writes nothing", async (_label, extra, message) => {
     const h = await harness();
     const registry = h.registry();
     registry.profiles["claude:default"] = { ...registry.profiles["claude:default"], ...extra };
     writeFileSync(h.registryPath, JSON.stringify(registry));
     const before = h.registryText();
 
-    await expect(h.service.updateProfileApi("claude:default", { label: "Mine" })).rejects.toThrow(
-      "Profile 'claude:default' is not an API profile.",
-    );
+    await expect(h.service.updateProfileApi("claude:default", { label: "Mine" })).rejects.toThrow(message);
     expect(h.registryText()).toBe(before);
   });
 

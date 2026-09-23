@@ -86,9 +86,15 @@ const REGISTRY_FILE = "~/.clausona/profiles.json";
  * base URL gets broken in the first place.
  */
 function baseUrlRemedy(id: string, hasEndpoint: boolean): string {
-  return hasEndpoint
-    ? `run 'clausona config ${id} --base-url <url>'`
-    : `run 'clausona remove ${id}' and then 'clausona add <new-name> --api --base-url <url>' - remove keeps the config directory, so the old name stays taken`;
+  return hasEndpoint ? `run 'clausona config ${id} --base-url <url>'` : missingEndpointRemedy(id);
+}
+
+/**
+ * What to run for a profile marked `api` with no endpoint block. Shared with `config`, which
+ * refuses to change such a profile and says the same thing doctor does about it.
+ */
+export function missingEndpointRemedy(id: string): string {
+  return `run 'clausona remove ${id}' and then 'clausona add <new-name> --api --base-url <url>' - remove keeps the config directory, so the old name stays taken`;
 }
 
 /**

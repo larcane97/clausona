@@ -327,8 +327,14 @@ can be given together, as one change. Two things happen that you might not expec
 - **The key is kept.** After `--base-url`, the next launch sends the same key to the new
   host, and clausona says so when the host changes. If the new endpoint takes a different
   key, run `clausona config <profile> --key` next.
-- **A label that is still the old host follows the new one.** That is the label `add`
-  chose when you left `--label` out; one you chose stays.
+- **What `add` chose by itself follows the new host** while it is still the old host's:
+  a label that is the old host, and the auth scheme — `api-key` for `anthropic.com`,
+  `bearer` elsewhere — so moving from a gateway to Anthropic's own API does not leave the key
+  in a header Anthropic does not read. A label or scheme you chose stays; when a kept scheme
+  differs from what the new host usually takes, clausona says so and names the `--auth` that
+  would switch it.
+- **A move to plain `http://` is noted** unless the host is this machine (`localhost`,
+  `127.0.0.1`, `::1`): the key would cross the network unencrypted.
 
 A subscription profile has no endpoint, and `list` names it by its account email, so all
 three refuse one. Do not edit `~/.clausona/profiles.json` by hand for any of this — a
@@ -432,7 +438,9 @@ reports neither missing. It checks these instead:
   profile again
 - the base URL, which only a hand-edited `profiles.json` can break. The URL is never quoted
   back, because a hand-edited one can carry a password; `config <profile> --show` is where to
-  read it, and `config <profile> --base-url <url>` is how to put it right
+  read it, and `config <profile> --base-url <url>` is how to put it right. A profile with no
+  endpoint recorded at all has no key source for `config` to keep, so doctor names `remove`
+  and `add` for that one instead
 - that the key resolves. **A `command:` source is executed**, in a shell, every time doctor
   runs — so a vault round-trip or a touch-ID prompt happens on every `clausona doctor`. An
   `env:` source is read from doctor's own environment, which is not necessarily the

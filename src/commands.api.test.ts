@@ -817,6 +817,176 @@ describe("config --base-url / --auth / --label", () => {
         api: { baseUrl: "http://localhost:8000" },
       });
     });
+
+    // The half of the rule the case above cannot reach: with no label at all, "is it the old
+    // host?" would be `undefined === undefined` without the check that there was a host.
+    it("is not invented for a profile with no label and a broken old URL", async () => {
+      const { label: _label, ...unlabelled } = API_PROFILE;
+      const h = await harness({
+        "claude:gw": { ...unlabelled, api: { ...API_PROFILE.api, baseUrl: "openrouter.ai" } },
+      });
+
+      await h.run("config", "claude:gw", "--base-url", "http://localhost:8000");
+
+      expect(h.profile("claude:gw").label).toBeUndefined();
+    });
+  });
+
+  /**
+   * `add` picks the scheme from the host: api-key for Anthropic's own API, bearer for anything
+   * else. Moving the endpoint across that line with the old default left behind sends the key
+   * in the header the new host does not read, and the first sign is a 401. So the scheme gets
+   * the label's rule: while it is still the old host's default, it follows; one that was
+   * chosen stays, with a note when the new host would default to the other one.
+   */
+  describe("the auth scheme add chose for it", () => {
+    const ANTHROPIC = {
+      ...API_PROFILE,
+      label: "api.anthropic.com",
+      api: { ...API_PROFILE.api, baseUrl: "https://api.anthropic.com", authScheme: "api-key" },
+    };
+
+    it("follows from Anthropic to a gateway, and says so", async () => {
+      const h = await harness({ "claude:gw": ANTHROPIC });
+
+      const output = stripAnsi(String(await h.run("config", "claude:gw", "--base-url", "https://openrouter.ai/api")));
+
+      expect(h.profile("claude:gw").api?.authScheme).toBe("bearer");
+      expect(output).toContain("(base URL; label and auth follow the new host)");
+    });
+
+    it("follows from a gateway to Anthropic", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      await h.run("config", "claude:gw", "--base-url", "https://api.anthropic.com");
+
+      expect(h.profile("claude:gw").api?.authScheme).toBe("api-key");
+    });
+
+    it("does not move within one side of the line, and does not mention it", async () => {
+      const h = await harness({ "claude:gw": { ...API_PROFILE, label: "Gateway" } });
+
+      const output = stripAnsi(String(await h.run("config", "claude:gw", "--base-url", "http://localhost:8000")));
+
+      expect(h.profile("claude:gw").api?.authScheme).toBe("bearer");
+      expect(output).toContain("(base URL)");
+      expect(h.stderr()).not.toContain("--auth");
+    });
+
+    it("stays when it was chosen, and says the new host usually takes the other - the command it names runs", async () => {
+      const chosen = { ...API_PROFILE, label: "Gateway", api: { ...API_PROFILE.api, authScheme: "api-key" } };
+      const h = await harness({ "claude:gw": chosen });
+
+      await h.run("config", "claude:gw", "--base-url", "http://localhost:8000");
+
+      expect(h.profile("claude:gw").api?.authScheme).toBe("api-key");
+      const commands = advisedCommands(h.stderr()).filter((argv) => argv.includes("--auth"));
+      expect(commands, h.stderr()).toEqual([["config", "claude:gw", "--auth", "bearer"]]);
+      await h.run(commands[0][0], ...commands[0].slice(1));
+      expect(h.profile("claude:gw").api?.authScheme).toBe("bearer");
+    });
+
+    it("stays when it was chosen and already matches the new host, with no note", async () => {
+      const chosen = { ...API_PROFILE, label: "Gateway", api: { ...API_PROFILE.api, authScheme: "api-key" } };
+      const h = await harness({ "claude:gw": chosen });
+
+      await h.run("config", "claude:gw", "--base-url", "https://api.anthropic.com");
+
+      expect(h.profile("claude:gw").api?.authScheme).toBe("api-key");
+      expect(h.stderr()).not.toContain("--auth");
+    });
+
+    it("gives way to --auth in the same call, with no note and no claim that it followed", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      const output = stripAnsi(
+        String(await h.run("config", "claude:gw", "--base-url", "https://api.anthropic.com", "--auth", "bearer")),
+      );
+
+      expect(h.profile("claude:gw").api?.authScheme).toBe("bearer");
+      expect(h.stderr()).not.toContain("--auth");
+      expect(output).toContain("(base URL, auth; label follows the new host)");
+    });
+
+    it("stays when the old URL is too broken to tell, with a note if the new host would differ", async () => {
+      const broken = { ...API_PROFILE, api: { ...API_PROFILE.api, baseUrl: "openrouter.ai" } };
+      const h = await harness({ "claude:gw": broken });
+
+      await h.run("config", "claude:gw", "--base-url", "https://api.anthropic.com");
+
+      expect(h.profile("claude:gw").api?.authScheme).toBe("bearer");
+      expect(advisedCommands(h.stderr())).toContainEqual(["config", "claude:gw", "--auth", "api-key"]);
+    });
+  });
+
+  describe("the success line", () => {
+    it("says the label followed the host when it did", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      const output = stripAnsi(String(await h.run("config", "claude:gw", "--base-url", "http://localhost:8000")));
+
+      expect(output).toContain("(base URL; label follows the new host)");
+    });
+
+    it("names only what was asked for when nothing followed", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      const output = stripAnsi(String(await h.run("config", "claude:gw", "--label", "Gateway")));
+
+      expect(output).toContain("(label)");
+      expect(output).not.toContain("base URL");
+    });
+  });
+
+  // An http base URL sends the key in the clear. That is normal for a server on this
+  // machine and nothing to remark on anywhere else it newly happens.
+  describe("a move to plain http", () => {
+    const cases: [string, string, string, boolean][] = [
+      ["https to http on the same host", "https://openrouter.ai/api", "http://openrouter.ai/api", true],
+      ["https to http on another host", "https://openrouter.ai/api", "http://gw.example.com/api", true],
+      ["http staying http on the same host", "http://gw.example.com/api", "http://gw.example.com/v2", false],
+      ["http to http on another host", "http://gw.example.com/api", "http://gw2.example.com/api", true],
+      ["https to http on localhost", "https://openrouter.ai/api", "http://localhost:8000", false],
+      ["https to http on 127.0.0.1", "https://openrouter.ai/api", "http://127.0.0.1:8000", false],
+      ["https to http on ::1", "https://openrouter.ai/api", "http://[::1]:8000", false],
+      ["https to https", "https://openrouter.ai/api", "https://gw.example.com/api", false],
+    ];
+
+    for (const [label, from, to, noted] of cases) {
+      it(`${noted ? "notes" : "says nothing about"} ${label}`, async () => {
+        const h = await harness({ "claude:gw": { ...API_PROFILE, api: { ...API_PROFILE.api, baseUrl: from } } });
+
+        await h.run("config", "claude:gw", "--base-url", to);
+
+        if (noted) expect(h.stderr()).toContain("unencrypted");
+        else expect(h.stderr()).not.toContain("unencrypted");
+      });
+    }
+  });
+
+  // Marked `api` with no endpoint block - a hand edit - is still an API profile to doctor and
+  // `list`. Calling it "not an API profile" sent the user nowhere; the doctor's own remedy runs.
+  describe("an API profile with no endpoint block", () => {
+    const NO_BLOCK = { tool: "claude", kind: "api", email: "", label: "gw" };
+
+    for (const args of [["--base-url", "http://localhost:8000"], ["--key"]]) {
+      it(`says why ${args[0]} cannot change it, and the commands it names run`, async () => {
+        const h = await harness({ "claude:gw": NO_BLOCK });
+        promptAnswers.push(KEY);
+
+        const message = await failure(h.run("config", "claude:gw", ...args));
+
+        expect(message).toContain("no endpoint");
+        expect(promptCalls).toEqual([]);
+        for (const argv of advisedCommands(message)) {
+          const filled = argv.map(
+            (arg) => ({ "<new-name>": "claude:gw2", "<url>": "http://localhost:8000" })[arg] ?? arg,
+          );
+          await h.run(filled[0], ...filled.slice(1));
+        }
+        expect(Object.keys(h.registry().profiles)).toEqual(["claude:default", "claude:gw2"]);
+      });
+    }
   });
 
   describe("the key, which stays where it was", () => {
@@ -1595,6 +1765,9 @@ describe("help", () => {
     // The two things a reader cannot guess: what happens to the key, and to a default label.
     expect(help).toContain("The key is kept");
     expect(help).toContain("follows");
+    // The scheme moves with the host the way the label does, and plain http is remarked on.
+    expect(help).toContain("auth scheme");
+    expect(help).toContain("plain http");
     expect(help).toContain("clausona config claude:gw --base-url http://localhost:8000");
   });
 
