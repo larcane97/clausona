@@ -380,6 +380,21 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    * that never arrives does not leave every field refusing what is typed into it.
    */
   const droppingPaste = useRef(false);
+  /**
+   * A bracketed paste into one of the form's text fields, read by the form's listener instead of
+   * the field's TextInput, and put into the field whole when its closing bracket arrives.
+   *
+   * The TextInput hears a paste as three events of one read - the opening bracket, the text, the
+   * closing bracket - and answers each from the value it was last drawn with, so the last one
+   * won and the field read `[201~`. The listener reads it with the key field's reader, where
+   * brackets are measured and a read split anywhere is joined. Until the rest of the read after
+   * the closing bracket, the TextInput's own edits are the paste's and are ignored.
+   */
+  const fieldPaste = useRef<{ field: string; input: SecretInputState; text: string; closed: boolean } | undefined>(
+    undefined,
+  );
+  /** The field `inputTarget` names, as drawn: its kind says whether a paste into it is a text field's. */
+  const fieldAtCursor = useRef<ApiField | undefined>(undefined);
   const [overlay, setOverlay] = useState<OverlayState>(null);
   const lastEscRef = useRef(0);
 
@@ -508,6 +523,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     }
     inputTarget.current = undefined;
     droppingPaste.current = false;
+    fieldPaste.current = undefined;
     clearPasteSkipped();
   }
 
@@ -539,7 +555,21 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   function leaveApiForm() {
     inputTarget.current = undefined;
     droppingPaste.current = false;
+    fieldPaste.current = undefined;
     clearApiKey();
+  }
+
+  /**
+   * Ends a text field's paste: its text goes in (unless it was given up), and the paste still
+   * owns the rest of this read, where the TextInput hears the same closing bracket.
+   */
+  function closeFieldPaste(paste: NonNullable<typeof fieldPaste.current>, keep: boolean) {
+    paste.closed = true;
+    if (keep) pasteIntoApiField(paste.field, paste.text);
+    else updateApiForm((form) => ({ ...form, errors: withoutKeys(form.errors, paste.field) }));
+    setImmediate(() => {
+      if (fieldPaste.current === paste) fieldPaste.current = undefined;
+    });
   }
 
   /**
@@ -597,7 +627,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    * The seam is pinned in src/tui/App.test.tsx: `internal_` is a name that can change, and
    * what it would change into is a credential stored wrong and reported as success.
    */
-  const fieldUnderCursor = apiFieldUnderCursor(screen, addState)?.id;
+  const cursorField = apiFieldUnderCursor(screen, addState);
+  const fieldUnderCursor = cursorField?.id;
   const apiFormInReach = screen === "use" && (addState?.step === "api-form" || addState?.step === "method");
   const canReadKeyInput = typeof inputEvents?.on === "function" && typeof inputEvents?.off === "function";
   // biome-ignore lint/correctness/useExhaustiveDependencies: moveApiCursor and the paste-skipped message's functions touch only refs and state setters, so the first render's are as good as any; re-subscribing every render is the per-frame gap this listener closes
@@ -633,6 +664,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           showPasteSkipped();
         }
       }
+      if (readFieldPaste(input)) return;
       if (inputTarget.current !== KEY_FIELD || droppingPaste.current) return;
       // The writes `editApiKey` makes, inlined so that this listener depends on nothing that
       // changes every render - it is subscribed once a visit to the form, not per frame.
@@ -693,6 +725,37 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         return errors === prev.api.errors ? prev : { ...prev, api: { ...prev.api, errors } };
       });
     }
+    /** A bracketed paste into a text field: see `fieldPaste`. Whether the event was the paste's. */
+    function readFieldPaste(input: string): boolean {
+      let paste = fieldPaste.current;
+      if (paste === undefined) {
+        const field = fieldAtCursor.current;
+        const textField = field !== undefined && isTypingField(field) && field.kind !== "secret";
+        if (input !== PASTE_START || droppingPaste.current || !textField || field.id !== inputTarget.current)
+          return false;
+        paste = { field: field.id, input: { ...EMPTY_SECRET_INPUT }, text: "", closed: false };
+        fieldPaste.current = paste;
+      }
+      if (paste.closed) return true;
+      let rest = input;
+      for (;;) {
+        const read = readSecretChunk(paste.input, rest, "event");
+        paste.input = read.state;
+        // Input that cannot be measured inside a paste: where the paste ends is a guess, and a
+        // text field takes none of it rather than part of it.
+        if (read.problem) {
+          closeFieldPaste(paste, false);
+          return true;
+        }
+        paste.text += read.text;
+        // Inside the brackets only a Ctrl-C is reported, and here it is pasted data.
+        if (!read.keystroke) break;
+        rest = read.keystroke.rest;
+      }
+      if (!paste.input.pasting && paste.input.pending === "") closeFieldPaste(paste, true);
+      return true;
+    }
+
     inputEvents.on("input", hearApiFormInput);
     return () => {
       inputEvents.off("input", hearApiFormInput);
@@ -715,45 +778,57 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   // can hear another event.
   useLayoutEffect(() => {
     inputTarget.current = fieldUnderCursor;
+    fieldAtCursor.current = cursorField;
   });
 
   function editApiField(field: ApiField, edited: string) {
     // A TextInput of a field the cursor has left is still subscribed until the next render,
     // and hears the rest of the read that moved the cursor. See `inputTarget`, and
     // `droppingPaste` for the rest of a paste that read began.
-    if (inputTarget.current !== field.id || droppingPaste.current) return;
+    if (inputTarget.current !== field.id || droppingPaste.current || fieldPaste.current) return;
+    updateApiForm((form) => withApiFieldEdit(form, field, edited));
+  }
+
+  /** A text field's paste, put in whole after what the field holds: see `fieldPaste`. */
+  const pasteIntoApiField = useCommittedHandler((fieldId: string, text: string) => {
     updateApiForm((form) => {
-      // A masked value is not shown shrinking back into view: the first erase clears it.
-      // Otherwise erasing a key from the end would draw its head once it stopped looking
-      // like one.
-      const value = concealsValue(field, form) && edited.length < fieldValue(field, form).length ? "" : edited;
-      let next: ApiFormState = form;
-      if (field.kind === "env" && field.envKey) {
-        next = { ...form, env: { ...form.env, [field.envKey]: value } };
-      } else if (field.id === "name") {
-        next = { ...form, name: value };
-      } else if (field.id === "baseUrl") {
-        // The scheme follows the host until the user picks one, which is the same default
-        // `clausona add --api` offers - one rule, so the two cannot disagree about a URL.
-        next = { ...form, baseUrl: value, authScheme: form.authTouched ? form.authScheme : defaultAuthScheme(value) };
-      } else if (field.id === "customKey") {
-        next = { ...form, customKey: value };
-      } else if (field.id === "customValue") {
-        next = { ...form, customValue: value };
-      }
-      // The free-form row is one setting spread over two fields, and what is wrong with it
-      // is not always wrong at the field being typed in - a name with no value belongs
-      // under the value. So the row is judged as a whole and the message goes where the
-      // row says. Every other field answers for itself.
-      if (field.id === "customKey" || field.id === "customValue") {
-        const row = customEntryError(next);
-        const cleared = withoutKeys(next.errors, "customKey", "customValue");
-        return { ...next, errors: row ? { ...cleared, [row.field]: row.message } : cleared };
-      }
-      const problem = liveApiFieldError(field, next, existingProfileIds);
-      const cleared = withoutKeys(next.errors, field.id);
-      return { ...next, errors: problem ? { ...cleared, [field.id]: problem } : cleared };
+      const field = apiFormFields(form).find((candidate) => candidate.id === fieldId);
+      return field ? withApiFieldEdit(form, field, fieldValue(field, form) + text) : form;
     });
+  });
+
+  /** The form with `field` holding `edited`, and what is now wrong with it said where it belongs. */
+  function withApiFieldEdit(form: ApiFormState, field: ApiField, edited: string): ApiFormState {
+    // A masked value is not shown shrinking back into view: the first erase clears it.
+    // Otherwise erasing a key from the end would draw its head once it stopped looking
+    // like one.
+    const value = concealsValue(field, form) && edited.length < fieldValue(field, form).length ? "" : edited;
+    let next: ApiFormState = form;
+    if (field.kind === "env" && field.envKey) {
+      next = { ...form, env: { ...form.env, [field.envKey]: value } };
+    } else if (field.id === "name") {
+      next = { ...form, name: value };
+    } else if (field.id === "baseUrl") {
+      // The scheme follows the host until the user picks one, which is the same default
+      // `clausona add --api` offers - one rule, so the two cannot disagree about a URL.
+      next = { ...form, baseUrl: value, authScheme: form.authTouched ? form.authScheme : defaultAuthScheme(value) };
+    } else if (field.id === "customKey") {
+      next = { ...form, customKey: value };
+    } else if (field.id === "customValue") {
+      next = { ...form, customValue: value };
+    }
+    // The free-form row is one setting spread over two fields, and what is wrong with it
+    // is not always wrong at the field being typed in - a name with no value belongs
+    // under the value. So the row is judged as a whole and the message goes where the
+    // row says. Every other field answers for itself.
+    if (field.id === "customKey" || field.id === "customValue") {
+      const row = customEntryError(next);
+      const cleared = withoutKeys(next.errors, "customKey", "customValue");
+      return { ...next, errors: row ? { ...cleared, [row.field]: row.message } : cleared };
+    }
+    const problem = liveApiFieldError(field, next, existingProfileIds);
+    const cleared = withoutKeys(next.errors, field.id);
+    return { ...next, errors: problem ? { ...cleared, [field.id]: problem } : cleared };
   }
 
   /** Enter on the free-form row: its pair joins the env map and the row clears for another. */
@@ -994,6 +1069,11 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             updateApiForm((prev) => ({ ...prev, errors: { ...prev.errors, key: UNFINISHED_PASTE } }));
             return;
           }
+          const textPaste = fieldPaste.current;
+          if (textPaste && !textPaste.closed) {
+            updateApiForm((prev) => ({ ...prev, errors: { ...prev.errors, [textPaste.field]: UNFINISHED_PASTE } }));
+            return;
+          }
           // The same for a paste being dropped: its end marker split after the ESC is the same
           // Esc, and it left the form. The message says what does end the drop.
           if (droppingPaste.current) {
@@ -1182,9 +1262,17 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
            * cursor stays, and the refusal that would otherwise wait until Submit is shown
            * now, because holding the cursor has to come with a way out: ctrl-u.
            */
-          const openPaste = current.kind === "secret" && secretInput.current.pasting;
+          const openPaste =
+            (current.kind === "secret" && secretInput.current.pasting) || fieldPaste.current?.closed === false;
           if (openPaste && (key.upArrow || key.downArrow || key.tab || key.return)) {
-            updateApiForm((prev) => ({ ...prev, errors: { ...prev.errors, key: UNFINISHED_PASTE } }));
+            updateApiForm((prev) => ({ ...prev, errors: { ...prev.errors, [current.id]: UNFINISHED_PASTE } }));
+            return;
+          }
+          // ctrl-u, the way out that message names, gives up a text field's paste: nothing of it
+          // goes in, and neither does the `u` the TextInput would type for it.
+          const textPaste = fieldPaste.current;
+          if (textPaste && !textPaste.closed && key.ctrl && input === "u") {
+            closeFieldPaste(textPaste, false);
             return;
           }
 

@@ -1401,6 +1401,123 @@ describe("App add-profile: API endpoint", () => {
   });
 
   /**
+   * A bracketed paste into a field that draws what it holds.
+   *
+   * The TextInput behind the field hears the paste as three events of one read - the opening
+   * bracket, the text, the closing bracket - and answers each from the same stale value, so the
+   * last one won: the field read `[201~`. It only showed when some other program had left the
+   * terminal bracketing pastes; with the form turning that on itself (Ruling 94), it is every
+   * paste. The form's listener reads such a paste instead, as the key field's reader does.
+   */
+  describe("a bracketed paste into a text field", () => {
+    const PASTE = (text: string) => `\u001b[200~${text}\u001b[201~`;
+    const row = (instance: Instance, label: string) =>
+      (instance.lastFrame() ?? "").split("\n").find((line) => line.includes(label)) ?? "";
+
+    it("takes each field's paste whole, with no bracket in it, and saves what was pasted", async () => {
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const instance = await openApiForm();
+
+      await type(instance, PASTE("gateway"));
+      await moveTo(instance, "Endpoint");
+      await type(instance, PASTE("https://gateway.example.com"));
+      await moveTo(instance, "API key");
+      await type(instance, PASTE(KEY));
+      await moveTo(instance, "Model");
+      await type(instance, PASTE("glm-5"));
+
+      expect(row(instance, "Name")).toContain("gateway");
+      expect(row(instance, "Model")).toContain("glm-5");
+      expect(instance.lastFrame()).not.toContain("[20");
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added claude:gateway"));
+      expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "gateway",
+          baseUrl: "https://gateway.example.com",
+          env: { ANTHROPIC_MODEL: "glm-5" },
+          secretValue: KEY,
+        }),
+      );
+      instance.unmount();
+    });
+
+    it("adds a paste to what the field already holds, and takes one split across two reads", async () => {
+      const instance = await openApiForm();
+      await moveTo(instance, "Endpoint");
+
+      await type(instance, "https://");
+      await type(instance, "\u001b[200~gateway.exa");
+      await type(instance, "mple.com\u001b[201~");
+
+      expect(row(instance, "Endpoint")).toContain("https://gateway.example.com");
+      expect(instance.lastFrame()).not.toContain("[20");
+      instance.unmount();
+    });
+
+    it("holds the cursor on the field while its paste is open, and says how to get out", async () => {
+      // A newline ink hands over alone inside the paste is pasted text, as on the key field.
+      const instance = await openApiForm();
+      await moveTo(instance, "Endpoint");
+
+      await type(instance, "\u001b[200~https://gateway");
+      await press(instance, ENTER);
+      const held = instance.lastFrame() ?? "";
+      await type(instance, ".example.com\u001b[201~");
+
+      expect(focusedOn(held, "Endpoint")).toBe(true);
+      expect(held).toContain(UNFINISHED_PASTE);
+      expect(row(instance, "Endpoint")).toContain("https://gateway.example.com");
+      expect(instance.lastFrame()).not.toContain(UNFINISHED_PASTE);
+      instance.unmount();
+    });
+
+    it("holds an Esc while the paste is open, and closes it on an end marker split after its ESC", async () => {
+      const instance = await openApiForm();
+      await moveTo(instance, "Model");
+
+      await type(instance, "\u001b[200~glm-5");
+      await type(instance, "\u001b");
+      await type(instance, "[201~");
+
+      expect(instance.lastFrame()).toContain("Create profile");
+      expect(row(instance, "Model")).toContain("glm-5");
+      expect(row(instance, "Model")).not.toContain("[201~");
+      instance.unmount();
+    });
+
+    it("lets ctrl-u give up a paste whose end never comes, and puts nothing in the field for it", async () => {
+      // The way out the held cursor's message names. Nothing of the paste, and not the `u`
+      // a TextInput would have typed for ctrl-u.
+      const instance = await openApiForm();
+      await moveTo(instance, "Model");
+
+      await type(instance, "\u001b[200~glm-5");
+      await type(instance, "\u0015");
+      await press(instance, "x");
+
+      expect(row(instance, "Model")).toContain("x");
+      expect(row(instance, "Model")).not.toContain("glm");
+      expect(row(instance, "Model")).not.toContain("u");
+      instance.unmount();
+    });
+
+    it("masks a key pasted into the Model row, and says where it goes", async () => {
+      const instance = await openApiForm();
+      await moveTo(instance, "Model");
+
+      await type(instance, PASTE(KEY));
+
+      expect(row(instance, "Model")).toContain(MASK);
+      expect(instance.lastFrame()).toContain(MISPLACED_KEY);
+      expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+      instance.unmount();
+    });
+  });
+
+  /**
    * Ruling 88's second layer, end to end: a field that draws what it holds never draws a key,
    * whichever way the key got there.
    */
