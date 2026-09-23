@@ -277,7 +277,7 @@ belongs in an argument.
 
 | Value | Where the key lives | When it is read |
 | --- | --- | --- |
-| `keychain` (default) | clausona stores it — in the macOS Keychain on a Mac, otherwise in `~/.clausona/secrets.json`, written owner-only. That includes Linux: in this version a stored key goes to that file, readable only by you, not to `secret-tool` or your desktop keyring. `clausona doctor` ends by saying which. On a Mac a key longer than about 2,000 bytes is refused — it does not fit the one line the Keychain is handed it on — so point at such a key with `env:` or `command:` | at every launch, from that store |
+| `keychain` (default) | clausona stores it — in the macOS Keychain on a Mac, otherwise in `~/.clausona/secrets.json`. That includes Linux: in this version a stored key goes to that file, written owner-only (mode 0600) so that only you can read it, not to `secret-tool` or your desktop keyring. On Windows a file mode means nothing; the file is private because it sits inside your user profile, which Windows opens only to you, SYSTEM and administrators. `clausona doctor`'s text report ends by saying which. On a Mac a key longer than about 2,000 bytes is refused — it does not fit the one line the Keychain is handed it on — so point at such a key with `env:` or `command:` | at every launch, from that store |
 | `env:NAME` | your shell; clausona records only the variable name | at every launch, **in the shell that runs `claude`** — so `NAME` has to be exported there, not only where you ran `clausona add` |
 | `command:"…"` | wherever the command gets it — `op read`, `pass show`, `vault kv get` | at every launch, and on every `clausona doctor`; the first line of its output is the key |
 
@@ -740,10 +740,10 @@ that profile's key to Claude Code, which then talks to the endpoint you configur
 
 ```
 ~/.clausona/
-├── profiles.json    # registered profiles and active selection, owner-only (including
-│                    #   each API profile's endpoint and key *source*, never the key)
-├── secrets.json     # API profile keys, owner-only, on Linux and Windows (macOS keeps
-│                    #   them in the Keychain)
+├── profiles.json    # registered profiles and active selection (including each API
+│                    #   profile's endpoint and key *source*, never the key)
+├── secrets.json     # API profile keys on Linux and Windows (macOS keeps them in the
+│                    #   Keychain)
 ├── usage.json       # per-profile usage history
 ├── quota.json       # cached plan-quota readings (5-minute freshness)
 ├── locks/           # short-lived per-profile credential renewal locks
@@ -754,6 +754,10 @@ that profile's key to Claude Code, which then talks to the endpoint you configur
 ~/.claude-<name>/        # claude profile config directories (created by `clausona add`)
 ~/.codex-<name>/         # codex profile config directories (created by `clausona add codex:<name>`)
 ```
+
+`profiles.json` and `secrets.json` are written owner-only (mode 0600) on macOS and Linux. On
+Windows a file mode means nothing: they are private because they sit inside your user profile,
+which Windows opens only to you, SYSTEM and administrators.
 
 ## Migration from 0.0.x
 
