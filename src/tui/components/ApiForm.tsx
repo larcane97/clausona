@@ -14,15 +14,24 @@ import { color, symbol } from "../theme.js";
 import { Divider } from "./Divider.js";
 
 /**
- * What the key field shows instead of the key.
+ * What the key field shows instead of the key: a constant, the same width for every key.
  *
  * `clausona add --api` prints nothing at all while a key is typed, on the grounds that
- * even a count of stars says how long it is. A form is not a one-shot prompt: with no
- * feedback at all the field reads as broken, and the frame is redrawn rather than left in
- * the scrollback. So it is masked rather than blank - and the value behind the mask is
- * never put in a Text node, an error, or anything this panel keeps.
+ * even a count of stars says how long it is - and length is a real signal, since it
+ * narrows down which provider and which key format is in use. That reasoning holds here,
+ * so the mask is not one character per character typed.
+ *
+ * It is not blank either, which is where this differs from the prompt: a form field that
+ * never changes reads as broken, and this one has to show that a paste landed and that
+ * clearing it worked. A one-line prompt that vanishes on Enter does not have that problem.
+ *
+ * So: nothing while the field is empty, and this the moment it is not, whatever is behind
+ * it. The value itself is never put in a Text node, in an error, or in anything this panel
+ * keeps - `apiKey` below is read for its emptiness and nothing else.
  */
-const KEY_MASK = "*";
+const KEY_MASK = "•".repeat(8);
+const KEY_EMPTY_FOCUSED = "type or paste the key";
+const KEY_EMPTY = "not set";
 
 /** How many advanced fields are on screen at once, centred on the cursor. */
 const ADVANCED_WINDOW = 5;
@@ -42,7 +51,7 @@ const LABEL_WIDTH = 16;
 type ApiFormProps = {
   form: ApiFormState;
   fields: ApiField[];
-  /** The typed key. Rendered masked and never read for anything else. */
+  /** The typed key. Read for its emptiness only; it is never rendered. */
   apiKey: string;
   mergeSessions: boolean;
   onChange: (field: ApiField, value: string) => void;
@@ -149,6 +158,26 @@ export function ApiForm({ form, fields, apiKey, mergeSessions, onChange }: ApiFo
       );
     }
 
+    if (field.kind === "secret") {
+      // Not a TextInput: every text input renders one glyph per character it holds, which
+      // is the length this field must not show. App.tsx takes the keystrokes instead, and
+      // the value never reaches this component's output at all.
+      const set = apiKey !== "";
+      return (
+        <Box key={field.id} flexDirection="column">
+          <Box gap={1}>
+            <Cursor focused={focused} />
+            <Label text="API key" focused={focused} />
+            <Text color={set ? color.text : color.muted}>
+              {set ? KEY_MASK : focused ? KEY_EMPTY_FOCUSED : KEY_EMPTY}
+            </Text>
+          </Box>
+          <Hint text="Stored in the credential store. profiles.json only records where to read it." />
+          <FieldError message={form.errors[field.id]} />
+        </Box>
+      );
+    }
+
     if (field.kind === "submit") {
       return (
         <Box key={field.id} gap={1} marginTop={1}>
@@ -166,25 +195,21 @@ export function ApiForm({ form, fields, apiKey, mergeSessions, onChange }: ApiFo
         ? "Name"
         : field.id === "baseUrl"
           ? "Endpoint"
-          : field.id === "key"
-            ? "API key"
-            : field.id === "customKey"
-              ? "Setting"
-              : field.id === "customValue"
-                ? "Value"
-                : (field.entry?.label ?? field.envKey ?? field.id);
+          : field.id === "customKey"
+            ? "Setting"
+            : field.id === "customValue"
+              ? "Value"
+              : (field.entry?.label ?? field.envKey ?? field.id);
     const value =
-      field.kind === "secret"
-        ? apiKey
-        : field.kind === "env"
-          ? (form.env[field.envKey ?? ""] ?? "")
-          : field.id === "name"
-            ? form.name
-            : field.id === "baseUrl"
-              ? form.baseUrl
-              : field.id === "customKey"
-                ? form.customKey
-                : form.customValue;
+      field.kind === "env"
+        ? (form.env[field.envKey ?? ""] ?? "")
+        : field.id === "name"
+          ? form.name
+          : field.id === "baseUrl"
+            ? form.baseUrl
+            : field.id === "customKey"
+              ? form.customKey
+              : form.customValue;
     const placeholder =
       field.id === "baseUrl"
         ? "https://api.example.com"
@@ -204,17 +229,12 @@ export function ApiForm({ form, fields, apiKey, mergeSessions, onChange }: ApiFo
               value={value}
               onChange={(next) => onChange(field, next)}
               focus={focused}
-              mask={field.kind === "secret" ? KEY_MASK : undefined}
               placeholder={placeholder}
               showCursor={focused}
             />
           </Box>
         </Box>
-        {field.kind === "secret" ? (
-          <Hint text="Stored in the credential store. profiles.json only records where to read it." />
-        ) : (
-          <Hint text={field.entry?.hint} />
-        )}
+        <Hint text={field.entry?.hint} />
         {field.kind === "env" && field.envKey && (
           <Hint text={plaintextSecretNote(field.envKey, value)} tone="warning" />
         )}

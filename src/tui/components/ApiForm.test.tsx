@@ -10,6 +10,9 @@ import { ApiForm } from "./ApiForm.js";
  */
 const KEY = "sk-ant-api03-not-a-real-key-0000000000000000";
 
+/** What the field shows instead - the same, whatever is behind it. */
+const MASK = "\u2022".repeat(8);
+
 function form(overrides: Partial<ApiFormState> = {}): ApiFormState {
   return { ...emptyApiForm(), ...overrides };
 }
@@ -36,7 +39,7 @@ describe("the API key field", () => {
     expect(frame).not.toContain(KEY);
     expect(frame).not.toContain("sk-");
     // The field is not simply blank: something has to show that the keystrokes landed.
-    expect(frame).toMatch(/\*{10,}/);
+    expect(frame).toContain(MASK);
   });
 
   it("draws a mask when the cursor has moved on, not the value", () => {
@@ -47,7 +50,27 @@ describe("the API key field", () => {
 
     expect(frame).not.toContain(KEY);
     expect(frame).not.toContain("sk-");
-    expect(frame).toMatch(/\*{10,}/);
+    expect(frame).toContain(MASK);
+  });
+
+  it("draws the same thing for a short key and a long one", () => {
+    // The mask is not one glyph per character typed. `prompt-secret.ts` prints nothing at
+    // all for this reason - a count of stars is a length, and a key's length narrows down
+    // which provider and which format it is. A form field cannot show nothing, so it shows
+    // a constant instead.
+    const state = form();
+    const short = frameFor({ ...state, cursor: cursorOn(state, "key") }, "sk-1");
+    const long = frameFor({ ...state, cursor: cursorOn(state, "key") }, `${KEY}${KEY}`);
+
+    expect(short).toBe(long);
+  });
+
+  it("says the field is empty rather than showing a mask over nothing", () => {
+    const state = form();
+    const empty = frameFor({ ...state, cursor: cursorOn(state, "name") }, "");
+
+    expect(empty).toContain("not set");
+    expect(empty).not.toContain(MASK);
   });
 
   it("draws a mask with the advanced section open, where the field scrolls out of focus", () => {

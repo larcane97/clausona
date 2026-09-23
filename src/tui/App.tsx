@@ -346,14 +346,17 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     });
   }
 
+  /**
+   * The key field's only writer. It is a `useState` of its own rather than part of the
+   * form, so the key is never written into `addState` - it cannot be re-rendered from it,
+   * saved with it, or reported in an error built from it.
+   */
+  function editApiKey(update: (previous: string) => string) {
+    setApiKey(update);
+    updateApiForm((form) => ({ ...form, errors: withoutKeys(form.errors, "key") }));
+  }
+
   function editApiField(field: ApiField, value: string) {
-    // The key is never written into the form, so it cannot be re-rendered from it, saved
-    // with it, or reported in an error built from it.
-    if (field.kind === "secret") {
-      setApiKey(value);
-      updateApiForm((form) => ({ ...form, errors: withoutKeys(form.errors, "key") }));
-      return;
-    }
     updateApiForm((form) => {
       let next: ApiFormState = form;
       if (field.kind === "env" && field.envKey) {
@@ -788,6 +791,26 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           }
           if (current?.kind === "advanced" && (input === " " || key.return)) {
             toggleApiAdvanced();
+            return;
+          }
+          // The key field is the one field with no text input behind it, because a text
+          // input draws one glyph per character it holds and the length of a key is
+          // something this form does not show. So the editing keys are handled here:
+          // erase, kill-line, and otherwise whatever printable characters arrived - a
+          // pasted key arrives as one of those.
+          if (current?.kind === "secret" && !key.return) {
+            if (key.delete || key.backspace) {
+              editApiKey((previous) => previous.slice(0, -1));
+            } else if (key.ctrl && input === "u") {
+              editApiKey(() => "");
+            } else if (input !== "" && !key.ctrl && !key.meta) {
+              // Control characters are not part of a key, and some of them move the cursor
+              // if they reach the terminal. Written the way the CLI's prompt writes it -
+              // `char < " "` and DEL - rather than as a regex, which cannot carry a
+              // control character without a lint suppression.
+              const typed = [...input].filter((char) => char >= " " && char !== "\u007f").join("");
+              if (typed !== "") editApiKey((previous) => previous + typed);
+            }
             return;
           }
           if (key.return) {

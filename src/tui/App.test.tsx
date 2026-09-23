@@ -93,6 +93,21 @@ async function press(instance: Instance, keys: string, timeout = 3000) {
   throw new Error(`pressing ${JSON.stringify(keys)} redrew nothing within ${timeout}ms`);
 }
 
+/**
+ * Sends a key that is not expected to redraw anything.
+ *
+ * `press` insists on a redraw, which is what makes it safe everywhere else. The key field
+ * is the one place where a keystroke deliberately changes nothing on screen - its mask is
+ * a constant, so typing into a field that already holds something draws the same frame -
+ * and a wait for a frame that is never coming cannot be a poll. What the keystroke did is
+ * asserted where it is visible: in the value the save receives.
+ */
+async function type(instance: Instance, keys: string) {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  instance.stdin.write(keys);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+}
+
 /** Whether the cursor is on the row carrying `label`. */
 function focusedOn(frame: string, label: string): boolean {
   return frame.split("\n").some((line) => line.includes(label) && line.includes(CURSOR));
@@ -109,6 +124,8 @@ async function moveTo(instance: Instance, label: string) {
 
 /** A key shape. No frame this suite renders may contain it. */
 const KEY = "sk-ant-api03-not-a-real-key-0000000000000000";
+/** The constant the key field shows instead. */
+const MASK = "\u2022".repeat(8);
 
 describe("App", () => {
   it("offers an API endpoint method", () => {
@@ -189,7 +206,7 @@ describe("App add-profile: API endpoint", () => {
     await press(instance, "https://gateway.example.com");
     await moveTo(instance, "API key");
     await press(instance, KEY);
-    await waitForFrame(instance.lastFrame, (frame) => /\*{10,}/.test(frame));
+    await waitForFrame(instance.lastFrame, (frame) => frame.includes(MASK));
   }
 
   it("registers the endpoint, and never draws the key in any frame along the way", async () => {
@@ -218,6 +235,44 @@ describe("App add-profile: API endpoint", () => {
       expect(frame).not.toContain(KEY);
       expect(frame).not.toContain("sk-");
     }
+    instance.unmount();
+  });
+
+  it("takes the key's keystrokes itself - typing, erasing and clearing", async () => {
+    // The key field has no text input behind it: a text input draws one glyph per
+    // character it holds, which is the length this field must not show. So typing, erasing
+    // and clearing are the step machine's own work, and are asserted rather than taken on
+    // trust from a library. That the display does not grow with the key is asserted in
+    // src/tui/components/ApiForm.test.tsx, where the frames can be compared exactly.
+    const { addApiProfile } = await import("../lib/service.js");
+    vi.mocked(addApiProfile).mockClear();
+    const instance = await openApiForm();
+    await press(instance, "gateway");
+    await moveTo(instance, "Endpoint");
+    await press(instance, "https://gateway.example.com");
+    await moveTo(instance, "API key");
+
+    await press(instance, "sk-wrong"); // empty -> set
+    await waitForFrame(instance.lastFrame, (f) => f.includes(MASK));
+    await press(instance, "\u0015"); // ctrl-u: set -> empty
+    const cleared = await waitForFrame(instance.lastFrame, (f) => !f.includes(MASK));
+
+    expect(cleared).toContain("type or paste the key");
+
+    await press(instance, `${KEY}x`); // empty -> set again
+    await waitForFrame(instance.lastFrame, (f) => f.includes(MASK));
+    await type(instance, "\u007f"); // erase the stray 'x' - and redraw nothing at all
+
+    expect(instance.lastFrame()).toContain(MASK);
+
+    await moveTo(instance, "Create profile");
+    await press(instance, ENTER);
+    await waitForFrame(instance.lastFrame, (f) => f.includes("Added claude:gateway"));
+
+    // What the save receives is what accumulated here: the wrong key cleared, the right
+    // one typed, the stray character erased.
+    expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(expect.objectContaining({ secretValue: KEY }));
+    for (const drawn of instance.frames) expect(drawn).not.toContain(KEY);
     instance.unmount();
   });
 
@@ -264,7 +319,8 @@ describe("App add-profile: API endpoint", () => {
 
     // Coming back to a mask over a value that can no longer be read is a value nobody can
     // check; the field comes back empty on a form that is otherwise as it was left.
-    expect(frame).not.toMatch(/\*{3,}/);
+    expect(frame).not.toContain(MASK);
+    expect(frame).toContain("not set");
     expect(frame).toContain("https://gateway.example.com");
     expect(frame).toContain("gateway");
     for (const drawn of instance.frames) expect(drawn).not.toContain(KEY);
