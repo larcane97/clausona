@@ -1,5 +1,6 @@
 import type { DoctorIssue, Profile } from "../types.js";
 import { checkBaseUrl, redactBaseUrl } from "./api-url.js";
+import { keySourcePhrase } from "./key-source.js";
 
 export function evaluateSymlinkHealth({
   isPrimary,
@@ -250,13 +251,16 @@ export function evaluateApiHealth({
     if (!credentialEnvKeys.includes(key)) continue;
     // Also a warning: the env map is a documented, supported place to put a value, and a
     // profile that keeps a key there runs exactly as intended.
-    const remedy = plaintextEnvRemedy(id, profile.kind, key)
-      .map((command) => `'${command}'`)
-      .join(" and then ");
+    const { commands, keyFrom } = plaintextEnvRemedy(id, profile, key);
+    const remedy = commands.map((command) => `'${command}'`).join(" and then ");
+    const condition =
+      keyFrom === undefined
+        ? "if it holds this profile's API key"
+        : `this profile's key already comes from ${keyFrom}, so if it holds that key`;
     issues.push({
       kind: "plaintext_env_secret",
       severity: "warning",
-      message: `${key} is stored in plain text in ${REGISTRY_FILE} - if it holds this profile's API key, run ${remedy}`,
+      message: `${key} is stored in plain text in ${REGISTRY_FILE} - ${condition}, run ${remedy}`,
     });
   }
 
@@ -265,20 +269,31 @@ export function evaluateApiHealth({
 
 /**
  * The commands that take a credential out of a profile's plain-text env map, in the order
- * to run them. Shared by `doctor` and by the warning `config` and `add` print when the name
- * is written, so the two cannot advise different things for the same finding.
+ * to run them, and - where the key already lives elsewhere - where that is. Shared by
+ * `doctor` and by the warning `config` and `add` print when the name is written, so the two
+ * cannot advise different things for the same finding.
  *
- * Different per kind, because the commands that work are:
+ * Different per kind and per key source, because the commands that work are:
  *
- * - An API profile has a credential store, so the key moves there with `--key`. That alone
- *   is not enough: the env map is applied after the stored key, so a copy left in it is
- *   still what Claude Code is handed - and still in plain text. Hence the `--unset` too.
- * - A subscription profile signs in with its account and has no store to move a key into;
- *   `--key` refuses it. A key there is a mistake or a sign an API profile was wanted, and
- *   either way the copy in the map goes. The second reading is the caller's to point at,
- *   since it is not a step in removing this one.
+ * - An API profile whose key is in the credential store: the key moves there with `--key`.
+ *   That alone is not enough - the env map is applied after the stored key, so a copy left
+ *   in it is still what Claude Code is handed, and still in plain text. Hence the `--unset`.
+ * - An API profile whose key comes from `env:` or `command:`: only the `--unset`. The key
+ *   already lives outside profiles.json, and `--key` would not move it anywhere - it would
+ *   replace the source the user chose with the keychain. `keyFrom` names that source, by
+ *   kind and never by command line.
+ * - Any other profile signs in with its account and has no store to move a key into;
+ *   `--key` refuses it. The copy in the map goes, and what the caller says around it is its
+ *   own business - a Claude subscription may have wanted an API profile, a Codex one cannot.
  */
-export function plaintextEnvRemedy(id: string, kind: Profile["kind"], key: string): string[] {
+export function plaintextEnvRemedy(
+  id: string,
+  profile: Pick<Profile, "kind" | "api">,
+  key: string,
+): { commands: string[]; keyFrom?: string } {
   const unset = `clausona config ${id} --unset ${key}`;
-  return kind === "api" ? [`clausona config ${id} --key`, unset] : [unset];
+  if (profile.kind !== "api") return { commands: [unset] };
+  const secret = profile.api?.secret;
+  if (secret === undefined || secret.source === "keychain") return { commands: [`clausona config ${id} --key`, unset] };
+  return { commands: [unset], keyFrom: keySourcePhrase(secret) };
 }

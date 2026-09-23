@@ -1,7 +1,7 @@
 import { HIDDEN, redactBaseUrl, redactUrlsIn } from "../core/api-url.js";
-import { isPosixEnvName } from "../core/shell.js";
+import { describeSecretSource, redactSecretSource } from "../core/key-source.js";
 import { catalogEntry } from "../tools/claude-env-catalog.js";
-import type { Profile, SecretSource } from "../types.js";
+import type { Profile } from "../types.js";
 import { CREDENTIAL_ENV_KEYS } from "./profile-env.js";
 
 /**
@@ -28,7 +28,7 @@ import { CREDENTIAL_ENV_KEYS } from "./profile-env.js";
  * them to the tool, and `config --edit`, whose file has to round-trip them.
  */
 
-export { HIDDEN };
+export { describeSecretSource, HIDDEN, redactSecretSource };
 
 const CREDENTIAL_ENV_KEY_SET = new Set<string>(CREDENTIAL_ENV_KEYS);
 
@@ -54,28 +54,6 @@ export function redactEnv(env: Record<string, string>): Record<string, string> {
       hidesValue(key) || typeof value !== "string" ? HIDDEN : redactUrlsIn(value),
     ]),
   );
-}
-
-/** Where the key is read from, and nothing the reference could carry. */
-export function redactSecretSource(secret: SecretSource | undefined): SecretSource {
-  switch (secret?.source) {
-    case "keychain":
-      return { source: "keychain" };
-    case "env":
-      return { source: "env", name: isPosixEnvName(secret.name) ? secret.name : HIDDEN };
-    case "command":
-      return { source: "command", run: HIDDEN };
-    default:
-      // A source clausona does not know is one it cannot say anything safe about.
-      return { source: HIDDEN } as unknown as SecretSource;
-  }
-}
-
-/** The one-word form of a key source, for text: `keychain`, `env:NAME` or `command`. */
-export function describeSecretSource(secret: SecretSource | undefined): string {
-  const shown = redactSecretSource(secret);
-  if (shown.source === "env") return `env:${shown.name}`;
-  return shown.source;
 }
 
 /**

@@ -303,10 +303,12 @@ with `CLAUDE_CODE_MAX_CONTEXT_TOKENS`. And a cold GPU server is slow to first by
 belong in it — not as `--set ANTHROPIC_API_KEY=…`, and not as an `Authorization` header under
 `--set ANTHROPIC_CUSTOM_HEADERS=…`. Use `--key` or `--key-from` instead. clausona warns when
 you set one of those names, on any profile, and names the commands that undo it. For an API
-profile that is `config <profile> --key` to store the key, then `config <profile> --unset
-<NAME>` to drop the plain-text copy, which would otherwise still be what Claude Code is
-handed. A subscription profile signs in with its account and has nowhere to store a key, so
-for one it is only the `--unset`. `doctor` keeps warning afterwards — but only for an **API**
+profile whose key is in the credential store that is `config <profile> --key` to store the
+key, then `config <profile> --unset <NAME>` to drop the plain-text copy, which would otherwise
+still be what Claude Code is handed. For an API profile whose key comes from `env:` or
+`command:`, it is only the `--unset`: the key already lives outside `profiles.json`, and
+`--key` would replace the source you chose with the keychain. A subscription profile signs in
+with its account and has nowhere to store a key, so for one it is only the `--unset` too. `doctor` keeps warning afterwards — but only for an **API**
 profile. A subscription profile's env map is never checked, so a clean `doctor` does not mean
 no profile on this machine holds a plaintext key.
 
