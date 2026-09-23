@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { isPosixEnvName } from "../core/shell.js";
@@ -126,7 +127,8 @@ describe("buildProfileEnv", () => {
   });
 
   it("omits the config variable when a non-primary profile points at the tool default", async () => {
-    const profile: Profile = { tool: "claude", configDir: "/home/u/.claude", email: "you@example.com" };
+    // Joined as the adapter joins the default, so on Windows both sides have its separators.
+    const profile: Profile = { tool: "claude", configDir: path.join("/home/u", ".claude"), email: "you@example.com" };
     const { env, warnings } = await buildProfileEnv("claude:default", profile, deps);
     expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
     expect(env).toEqual({});

@@ -2568,7 +2568,9 @@ describe("config --edit", () => {
     expect(JSON.parse(opened)).toEqual({ ANTHROPIC_MODEL: "z-ai/glm-5.3" });
   });
 
-  it("writes the scratch file only for its owner, in a directory of its own", async () => {
+  // Windows has no POSIX modes - stat reports 0o666 for any writable file - so there the file
+  // is kept private by the temp directory's place in the user's own profile, not by a mode.
+  it.skipIf(process.platform === "win32")("writes the scratch file only for its owner", async () => {
     const h = await harness({
       "claude:gw": { ...API_PROFILE, env: { ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer sk-fake-hdr-0003" } },
     });
@@ -2579,6 +2581,15 @@ describe("config --edit", () => {
 
     expect(seen[0].mode).toBe(0o600);
     expect(seen[0].dirMode).toBe(0o700);
+  });
+
+  it("writes the scratch file in a directory of its own", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+    vi.stubEnv("EDITOR", "fake-editor");
+    const seen = fakeEditor(() => {});
+
+    await h.run("config", "claude:gw", "--edit");
+
     // Not the shared temp directory itself, where the name would be guessable and the
     // path a symlink anyone on the machine could plant first.
     expect(seen[0].dir).not.toBe(tmpdir());
