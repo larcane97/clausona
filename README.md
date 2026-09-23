@@ -119,7 +119,10 @@ this code:
 
 Claude credentials stay in the macOS Keychain (or `.credentials.json` elsewhere) and
 Codex credentials in `auth.json`, in place — unrelated contents of those stores, such as
-Claude's `mcpOAuth` block, are preserved.
+Claude's `mcpOAuth` block, are preserved. On macOS, Claude Code saves to
+`.credentials.json` instead when the Keychain refuses its write, and reads that file
+whenever the Keychain has no item; clausona reads in the same order and writes a renewed
+credential back to whichever of the two it came from.
 
 ### When a reading is unavailable
 
@@ -234,11 +237,13 @@ Profiles created by clausona 0.2.2-beta or earlier on Linux and Windows may hold
 to the primary's credential; `clausona doctor` reports it as `stale_symlink` and
 `clausona repair <profile>` removes it, after which that profile signs in on its own.
 
-`clausona doctor` checks whichever store the platform uses: the Keychain item on macOS
-(`missing_keychain`) and the credential file everywhere else (`missing_oauth`). A profile
-that has just had a stale credential link removed reports `missing_oauth` until it signs
-in, so doctor points those findings at `clausona login <profile>` rather than at
-`clausona repair`, which rebuilds shared links and cannot produce a credential.
+`clausona doctor` checks whichever store the platform uses. On macOS that is the Keychain
+item plus the `.credentials.json` Claude Code falls back to, and it reports
+`missing_keychain` only when neither holds a credential; everywhere else it is the
+credential file (`missing_oauth`). A profile that has just had a stale credential link
+removed reports `missing_oauth` until it signs in, so doctor points those findings at
+`clausona login <profile>` rather than at `clausona repair`, which rebuilds shared links
+and cannot produce a credential.
 
 A marketplace registered from a path of your own — rather than installed under
 `plugins/marketplaces/` — is left alone. clausona neither reports it as drift nor

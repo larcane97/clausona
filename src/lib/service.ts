@@ -586,10 +586,15 @@ export async function discoverAccounts(): Promise<DiscoveredAccount[]> {
       );
       const isPrimary = resolvedConfig === resolvedPrimary;
 
-      // Per-tool credential gate (Claude requires Keychain on macOS)
+      // Per-tool credential gate (Claude on macOS: the Keychain, or the plaintext file
+      // Claude Code falls back to when the Keychain refuses its write)
       if (adapter.keychainServiceName && adapter.hasKeychainCredential) {
         const service = adapter.keychainServiceName({ homeDir: home, configDir: resolvedConfig });
-        if (process.platform === "darwin" && !(await adapter.hasKeychainCredential(service))) {
+        if (
+          process.platform === "darwin" &&
+          !(await adapter.hasKeychainCredential(service)) &&
+          !(await adapter.hasFallbackCredential?.(configDir))
+        ) {
           continue;
         }
       }
@@ -899,12 +904,20 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
       // no matter what the profile holds — so running it unconditionally reported every
       // Linux and Windows profile as broken while never saying anything about the store
       // those platforms actually use. Check whichever store the platform keeps tokens in.
+      // On macOS that is the Keychain plus the plaintext file Claude Code falls back to
+      // when the Keychain refuses its write, so only an empty pair is a missing credential.
       if (adapter.keychainServiceName && adapter.hasKeychainCredential) {
         if (process.platform === "darwin") {
           const resolvedDir = await realpath(profile.configDir).catch(() => profile.configDir);
           const keychainService = adapter.keychainServiceName({ homeDir: homedir(), configDir: resolvedDir });
-          if (!(await adapter.hasKeychainCredential(keychainService))) {
-            issues.push({ kind: "missing_keychain", message: `${keychainService} not found in Keychain` });
+          if (
+            !(await adapter.hasKeychainCredential(keychainService)) &&
+            !(await adapter.hasFallbackCredential?.(profile.configDir))
+          ) {
+            issues.push({
+              kind: "missing_keychain",
+              message: `${keychainService} not found in Keychain, and .credentials.json is missing or has no access token`,
+            });
           }
         } else if (adapter.readCredential && !(await adapter.readCredential(profile.configDir))) {
           issues.push({
@@ -1261,7 +1274,10 @@ export async function addProfile(options: {
   if (options.tool === "claude") {
     const resolvedDir = await realpath(configDir).catch(() => configDir);
     const service = adapter.keychainServiceName?.({ homeDir: home, configDir: resolvedDir });
-    const existing = service && adapter.hasKeychainCredential ? await adapter.hasKeychainCredential(service) : false;
+    // On macOS Claude Code also signs in from the plaintext file it falls back to.
+    const existing =
+      (service && adapter.hasKeychainCredential ? await adapter.hasKeychainCredential(service) : false) ||
+      (process.platform === "darwin" && !!(await adapter.hasFallbackCredential?.(configDir)));
     const existingAccount = await adapter.readAccountInfo(configDir);
     alreadyAuthenticated = !!(existingAccount && existing);
   } else {
