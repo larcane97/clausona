@@ -368,14 +368,51 @@ describe("a profile whose config directory is gone", () => {
     // Every shared-link and plugin finding here is a consequence of the one absence, and
     // each carries "run 'clausona repair'" in its own text - a command that fails with
     // ENOENT in exactly this state. Suppressing the footer was not enough: the advice was
-    // still printed inside the message body, which is what a user reads.
+    // still printed inside the message body, which is what a user reads. The one mention of
+    // repair left is the one that comes after the directory is made again.
     expect(kinds(results, "claude:glm")).toEqual(["missing_config_dir"]);
-    expect(rendered).not.toContain("clausona repair");
+    expect(rendered).not.toContain("to fix");
+    expect(rendered).toContain("create the directory again, then run 'clausona repair claude:glm'");
     // remove no longer puts a directory that is gone back from its backup, so the same name
     // is free to add again (src/commands.api.test.ts runs this advice).
     expect(rendered).toContain(
-      "remove and re-add the profile: 'clausona remove claude:glm', then 'clausona add claude:glm --api --base-url <url>'",
+      "remove and re-add the profile, which deletes a stored key: 'clausona remove claude:glm', then 'clausona add claude:glm --api --base-url <url>'",
     );
+  });
+
+  it("comes back with the directory made again and repair, an API profile and a subscription one alike", async () => {
+    // The lossless remedy: remove and re-add deletes a stored key the provider may not show
+    // twice, along with the model, the env map and the label.
+    const h = await harness();
+    await h.addApi({ label: "gpu-box", env: { ANTHROPIC_MODEL: "glm-5.3" } });
+    const work = path.join(h.home, ".claude-work");
+    mkdirSync(work);
+    writeFileSync(path.join(work, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: "w@example.com" } }));
+    writeFileSync(path.join(work, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "W" } }));
+    await h.service.addProfile({ tool: "claude", name: "work", fromPath: work });
+    const before = await h.service.loadRegistry();
+    expect(kinds(await h.doctor(), "claude:glm")).toEqual([]);
+    expect(kinds(await h.doctor(), "claude:work")).toEqual([]);
+
+    for (const [id, dir] of [
+      ["claude:glm", h.apiConfigDir],
+      ["claude:work", work],
+    ] as const) {
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(dir);
+      await h.service.repairProfile(id);
+    }
+    const results = await h.doctor();
+
+    // Nothing lost: the key still resolves and the entry is as it was.
+    expect(kinds(results, "claude:glm")).toEqual([]);
+    expect(await h.secrets.resolveSecret("claude:glm", { source: "keychain" })).toBe(STORED_KEY);
+    expect((await h.service.loadRegistry())?.profiles["claude:glm"]).toEqual(before?.profiles["claude:glm"]);
+    // Linked again too. Its sign-in lived in the directory, so what is left is the login
+    // doctor advises - not a link repair would have to make.
+    expect(kinds(results, "claude:work")).toEqual(["missing_json", "missing_oauth"]);
+    expect(h.render(results)).toContain("Run clausona login claude:work to sign in");
+    expect(h.render(results)).not.toContain("clausona repair claude:work");
   });
 
   it("leaves a subscription profile in the same state reporting exactly what it always did", async () => {

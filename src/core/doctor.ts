@@ -223,12 +223,14 @@ export function evaluateApiHealth({
     // Nothing else looks for it. The account-file check noticed in passing, and it is not
     // run for an API profile; the shared-link checks only speak when the primary holds a
     // directory this profile could be missing, so a primary that holds none left a profile
-    // pointing at nothing looking healthy. `repair` cannot help - it symlinks into a
-    // directory it does not create - so the remedy is to add the profile again, under the
-    // same name: remove does not recreate a directory that is gone, so add finds it free.
+    // pointing at nothing looking healthy. `repair` alone cannot help - it symlinks into a
+    // directory it does not create - but it relinks one made again, and that keeps the key,
+    // the endpoint and every setting. Remove and re-add is the fallback: remove deletes a
+    // stored key, which a provider may not show twice. It works under the same name, since
+    // remove does not recreate a directory that is gone, so add finds it free.
     issues.push({
       kind: "missing_config_dir",
-      message: `config directory ${profile.configDir} is missing - remove and re-add the profile: 'clausona remove ${id}', then 'clausona add ${id} --api --base-url <url>'`,
+      message: `config directory ${profile.configDir} is missing - create the directory again, then run 'clausona repair ${id}'. Failing that, remove and re-add the profile, which deletes a stored key: 'clausona remove ${id}', then 'clausona add ${id} --api --base-url <url>'`,
     });
   }
 

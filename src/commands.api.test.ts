@@ -1895,7 +1895,7 @@ describe("doctor's advice for a broken base URL", () => {
 });
 
 describe("doctor's advice for a config directory that is gone", () => {
-  it("is to remove and re-add the profile under its own name, and following it clears the finding", async () => {
+  async function goneConfigDir() {
     // Linux, so doctor reads the primary's login from a file rather than spawning `security`.
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     const h = await harness();
@@ -1908,9 +1908,28 @@ describe("doctor's advice for a config directory that is gone", () => {
         .flatMap((result) => result.issues)
         .filter((issue) => issue.kind === "missing_config_dir");
     const [finding] = await findings();
+    return { h, findings, advice: advisedCommands(finding?.message ?? "") };
+  }
+
+  it("is first to make the directory again and repair it, which clears the finding and keeps the key", async () => {
+    const { h, findings, advice } = await goneConfigDir();
+    const entry = h.profile("claude:gw");
+
+    mkdirSync(path.join(h.home, ".claude-gw"));
+    const [first] = advice;
+    expect(first).toEqual(["repair", "claude:gw"]);
+    await h.run(first[0], ...first.slice(1));
+
+    expect(await findings()).toEqual([]);
+    expect(h.profile("claude:gw")).toEqual(entry);
+    expect(h.storedSecrets()).toEqual({ "claude:gw": KEY });
+  });
+
+  it("falls back to remove and re-add under its own name, which clears the finding too", async () => {
+    const { h, findings, advice } = await goneConfigDir();
     promptAnswers.push(KEY);
 
-    for (const argv of advisedCommands(finding?.message ?? "")) {
+    for (const argv of advice.filter(([command]) => command !== "repair")) {
       const args = argv.map((arg) => (arg === "<url>" ? "https://openrouter.ai/api" : arg));
       await h.run(args[0] as string, ...args.slice(1));
     }
