@@ -631,7 +631,9 @@ Shell wrappers for `claude` and `codex` are registered via `eval "$(clausona she
    profile, its endpoint and credential
 2. **During** the invocation — those variables exist only for that one run. On zsh/bash the tool
    runs in a subshell, on PowerShell each variable is restored afterwards, so your interactive
-   shell is left exactly as it was
+   shell is left exactly as it was. On PowerShell the environment arrives as ASCII-only JSON,
+   so a config directory under a non-ASCII user folder reaches the tool intact whatever the
+   console's code page
 3. **After** each `claude` invocation — detects usage changes via fingerprint comparison and
    records cost/token usage per profile
 

@@ -389,6 +389,26 @@ describe("_shell-env", () => {
     });
   });
 
+  // PowerShell decodes a native command's output in the console's code page, not UTF-8, so a
+  // Hangul user folder arrived garbled and the tool ran on a fresh account. As escapes, the
+  // output is the same bytes in every code page.
+  it("writes --json in ASCII alone, and a non-ASCII path still round-trips", async () => {
+    const hangul = "홍길동";
+    let configDir = "";
+    const h = await harness((home) => {
+      configDir = path.join(home, hangul, ".claude-work");
+      return registryWith(
+        { tool: "claude", configDir, email: "you@example.com", env: { ANTHROPIC_MODEL: "m-\u{1F600}" } },
+        home,
+      );
+    });
+
+    const raw = await h.run("claude", "--json");
+
+    expect([...Buffer.from(raw, "utf8")].filter((byte) => byte > 0x7e)).toEqual([]);
+    expect(JSON.parse(raw)).toEqual({ CLAUDE_CONFIG_DIR: configDir, ANTHROPIC_MODEL: "m-\u{1F600}" });
+  });
+
   // PowerShell's ConvertFrom-Json refuses an object with two keys that differ only in case,
   // and the hook's catch would then apply no profile at all - default account, no warning.
   it("never emits two JSON keys that are one variable on Windows", async () => {

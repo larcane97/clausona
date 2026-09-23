@@ -7,7 +7,7 @@ import { sendsKeyInClear } from "./core/api-url.js";
 import { plaintextEnvRemedy } from "./core/doctor.js";
 import { isKnownSecretSource, keySourcePhrase } from "./core/key-source.js";
 import { spawnCommandSync } from "./core/process.js";
-import { isPosixEnvName, renderPosixExports } from "./core/shell.js";
+import { isPosixEnvName, renderJsonEnv, renderPosixExports } from "./core/shell.js";
 import { trackUsage } from "./core/track-usage.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import {
@@ -1410,11 +1410,8 @@ export async function runCommand(command: string, args: string[]) {
       // name it cannot export is as bad as one it cannot unset. Windows has no readonly
       // variables, so the JSON form below is unchanged.
       if (!jsonFlag(args)) return renderPosixExports(env, unset, controlledEnvKeys(profile, built));
-      // null is how the PowerShell hook learns to remove a variable: it hands the value to
-      // SetEnvironmentVariable, which deletes the variable for $null. With nothing to clear
-      // this is JSON.stringify(env) exactly, so a subscription profile's output is unchanged.
-      const cleared = Object.fromEntries(unset.map((key) => [key, null]));
-      return JSON.stringify({ ...cleared, ...env });
+      // null names a variable to remove; the output is ASCII, whatever the paths hold.
+      return renderJsonEnv(env, unset);
     }
 
     case "_sync-plugins": {

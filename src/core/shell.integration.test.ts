@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { renderPosixExports, renderPowerShellInit, renderShellInit } from "./shell.js";
+import { renderJsonEnv, renderPosixExports, renderPowerShellInit, renderShellInit } from "./shell.js";
 
 const ZSH_AVAILABLE = spawnSync("which", ["zsh"]).status === 0;
 const BASH_AVAILABLE = spawnSync("which", ["bash"]).status === 0;
@@ -668,6 +668,50 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       expect(result.stdout).toContain("rc=7");
       // ...and the caller's own preference is what it was.
       expect(result.stdout).toContain("pref=Stop");
+      expect(harness.log()).toEqual(["_shell-env claude", "_sync-plugins", "_track-usage"]);
+    },
+    POWERSHELL_TEST_TIMEOUT_MS,
+  );
+
+  /**
+   * PowerShell decodes a native command's stdout with [Console]::OutputEncoding, which is the
+   * console's OEM code page by default - 437 on this runner, 949 on a Korean install - and
+   * not UTF-8. Raw UTF-8 from `_shell-env --json` turned a Hangul user folder into a path
+   * that does not exist. So the stand-in writes exactly what `_shell-env --json` writes, the
+   * way clausona writes it: from node, as UTF-8 bytes - never `echo`, which would write it in
+   * the console's own code page and hide the problem. And the tool reports the directory it
+   * got percent-encoded, so nothing on the way back depends on a code page either.
+   */
+  it(
+    "hands the tool a non-ASCII config directory intact",
+    () => {
+      const workDir = "C:\\clausona-test\\\uD64D\uAE38\uB3D9\\.claude-work";
+      const harness = makeWindowsHarness({});
+      const payload = path.join(path.dirname(harness.binDir), "shell-env.json");
+      writeFileSync(payload, renderJsonEnv({ CLAUDE_CONFIG_DIR: workDir }), "utf8");
+      writeFileSync(
+        path.join(harness.binDir, "clausona.cmd"),
+        [
+          "@echo off",
+          '>>"%CLAUSONA_TEST_LOG%" echo %1 %2',
+          'if not "%1"=="_shell-env" exit /b 0',
+          `node -e "process.stdout.write(require('fs').readFileSync(process.env.CLAUSONA_TEST_PAYLOAD,'utf8'))"`,
+          "exit /b 0",
+        ].join("\r\n"),
+      );
+      writeFileSync(
+        path.join(harness.binDir, "claude.cmd"),
+        [
+          "@echo off",
+          `node -e "process.stdout.write('dir='+encodeURIComponent(String(process.env.CLAUDE_CONFIG_DIR)))"`,
+          "exit /b 0",
+        ].join("\r\n"),
+      );
+
+      const result = runPowerShell(harness, "claude", { CLAUSONA_TEST_PAYLOAD: payload });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(`dir=${encodeURIComponent(workDir)}`);
       expect(harness.log()).toEqual(["_shell-env claude", "_sync-plugins", "_track-usage"]);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
