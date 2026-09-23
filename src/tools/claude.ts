@@ -1,9 +1,8 @@
-import crypto from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import path from "node:path";
 
-import { claudeJsonPathForConfigDir } from "../core/paths.js";
+import { claudeJsonPathForConfigDir, isDefaultClaudeConfigDir, keychainServiceForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { parseClaudeQuota, QuotaHttpError } from "../core/quota.js";
 import type { QuotaWindows } from "../types.js";
@@ -30,13 +29,6 @@ const SESSION_SCOPED = ["projects", "jobs", "teams"] as const;
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-
-function keychainService(args: { homeDir: string; configDir: string }): string {
-  const primary = path.join(args.homeDir, ".claude");
-  if (args.configDir === primary) return "Claude Code-credentials";
-  const hash = crypto.createHash("sha256").update(args.configDir).digest("hex").slice(0, 8);
-  return `Claude Code-credentials-${hash}`;
-}
 
 async function hasKeychain(service: string): Promise<boolean> {
   if (process.platform !== "darwin") return false;
@@ -135,7 +127,7 @@ async function readFileBlob(configDir: string): Promise<StoredCredentials | null
 
 async function readStoredBlob(configDir: string): Promise<StoredCredentials | null> {
   if (process.platform === "darwin") {
-    return readKeychainBlob(keychainService({ homeDir: homedir(), configDir }));
+    return readKeychainBlob(keychainServiceForConfigDir({ homeDir: homedir(), configDir }));
   }
   return readFileBlob(configDir);
 }
@@ -149,7 +141,7 @@ async function writeStoredBlob(configDir: string, blob: StoredCredentials): Prom
   const serialized = JSON.stringify(blob);
 
   if (process.platform === "darwin") {
-    const service = keychainService({ homeDir: homedir(), configDir });
+    const service = keychainServiceForConfigDir({ homeDir: homedir(), configDir });
     const account = await keychainAccount(service);
     const { code } = await runSecurity(["add-generic-password", "-U", "-s", service, "-a", account, "-w", serialized]);
     if (code !== 0) throw new Error(`could not write Keychain item '${service}'`);
@@ -264,12 +256,33 @@ async function renewClaudeCredential(
   };
 }
 
+/**
+ * Environment for `claude auth login` that signs in to the stores clausona reads for
+ * `configDir`: CLAUDE_CONFIG_DIR unset for the default dir, set to the dir otherwise.
+ *
+ * The variable is cleared by assigning undefined rather than deleting it. spawnCommand
+ * merges this over process.env on the Windows .cmd shim path, so only an explicit key can
+ * override an inherited value, and Node drops undefined entries when it spawns. Windows
+ * also treats names case-insensitively, so any other spelling is cleared there as well.
+ */
+export function claudeLoginEnv(
+  configDir: string,
+  { homeDir, env, platform }: { homeDir: string; env: NodeJS.ProcessEnv; platform: NodeJS.Platform },
+): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...env };
+  if (platform === "win32") {
+    for (const key of Object.keys(out)) {
+      if (key.toUpperCase() === "CLAUDE_CONFIG_DIR") out[key] = undefined;
+    }
+  }
+  out.CLAUDE_CONFIG_DIR = isDefaultClaudeConfigDir(homeDir, configDir) ? undefined : configDir;
+  return out;
+}
+
 async function runLoginInteractive(configDir: string): Promise<boolean> {
+  const env = claudeLoginEnv(configDir, { homeDir: homedir(), env: process.env, platform: process.platform });
   return new Promise<boolean>((resolve) => {
-    const child = spawnCommand("claude", ["auth", "login"], {
-      env: { ...process.env, CLAUDE_CONFIG_DIR: configDir },
-      stdio: "inherit",
-    });
+    const child = spawnCommand("claude", ["auth", "login"], { env, stdio: "inherit" });
     child.on("close", (code) => resolve(code === 0));
     child.on("error", () => resolve(false));
   });
@@ -282,7 +295,7 @@ export const claudeAdapter: ToolAdapter = {
   defaultConfigDir: (homeDir) => path.join(homeDir, ".claude"),
   configDirPattern: /^\.claude(-.+)?$/,
   readAccountInfo: readAccount,
-  keychainServiceName: keychainService,
+  keychainServiceName: keychainServiceForConfigDir,
   hasKeychainCredential: hasKeychain,
   sharedSkipSet: (mergeSessions) =>
     mergeSessions ? new Set(BASE_SHARED_LINK_SKIP) : new Set([...BASE_SHARED_LINK_SKIP, ...SESSION_SCOPED]),

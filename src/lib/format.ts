@@ -474,6 +474,16 @@ export function renderUsageSummary(
   ].join("\n");
 }
 
+// ─── Login ──────────────────────────────────────────────────────────
+/** Kept short enough to fit the TUI's one-line status after the header. */
+export function describeOtherAccount(id: string, signedInAs: string, registered: string): string {
+  return `${id} is signed in as ${signedInAs}, not ${registered}`;
+}
+
+export function describeUnverifiedLogin(id: string): string {
+  return `Signed in, but could not read back which account ${id} now uses`;
+}
+
 // ─── Doctor ─────────────────────────────────────────────────────────
 /** Issues that describe a missing credential, which only signing in can resolve. */
 const CREDENTIAL_ISSUE_KINDS = new Set<DoctorIssue["kind"]>(["missing_json", "missing_keychain", "missing_oauth"]);

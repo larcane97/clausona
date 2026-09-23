@@ -3,9 +3,18 @@ import path from "node:path";
 
 import type { ToolName } from "../types.js";
 
+/**
+ * Claude Code picks its account file and Keychain item by whether CLAUDE_CONFIG_DIR is
+ * set, not by its value: set even to ~/.claude, it uses $CLAUDE_CONFIG_DIR/.claude.json
+ * and a hashed Keychain item. clausona reads the dir this returns true for from the
+ * unset-variable stores, so signing in to it must leave the variable unset too.
+ */
+export function isDefaultClaudeConfigDir(homeDir: string, configDir: string): boolean {
+  return configDir === path.join(homeDir, ".claude");
+}
+
 export function claudeJsonPathForConfigDir({ homeDir, configDir }: { homeDir: string; configDir: string }): string {
-  const primary = path.join(homeDir, ".claude");
-  if (configDir === primary) {
+  if (isDefaultClaudeConfigDir(homeDir, configDir)) {
     return path.join(homeDir, ".claude.json");
   }
 
@@ -13,8 +22,7 @@ export function claudeJsonPathForConfigDir({ homeDir, configDir }: { homeDir: st
 }
 
 export function keychainServiceForConfigDir({ homeDir, configDir }: { homeDir: string; configDir: string }): string {
-  const primary = path.join(homeDir, ".claude");
-  if (configDir === primary) {
+  if (isDefaultClaudeConfigDir(homeDir, configDir)) {
     return "Claude Code-credentials";
   }
 

@@ -55,6 +55,8 @@ export type ToolAdapter = {
   // entitled to assume the new credential survived the process.
   renewCredential?(configDir: string, credential: ToolCredential, signal: AbortSignal): Promise<ToolCredential>;
 
-  // Spawns the tool's interactive login with the given config dir as its env-var target.
+  // Spawns the tool's interactive login so that it signs in to the same stores the adapter
+  // reads for `configDir`. That is usually the dir as the env-var target, but for Claude's
+  // default dir the variable must be unset (see isDefaultClaudeConfigDir).
   runLogin(configDir: string): Promise<boolean>;
 };
