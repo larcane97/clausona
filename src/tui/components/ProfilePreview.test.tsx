@@ -152,6 +152,32 @@ describe("ProfilePreview model", () => {
     expect(modelRow({ ...subscription, model: "claude-opus-5-5" })).toBe("claude-opus-5-5");
   });
 
+  // An API profile's model is in its endpoint section; the account block's row is for a
+  // subscription profile only. Two rows would read as two models.
+  it("shows an API profile's model once", () => {
+    const rows = panelFor(endpoint)
+      .split("\n")
+      .filter((line) => line.includes("Model"));
+
+    expect(rows).toHaveLength(1);
+  });
+
+  // Cut by the rule `list` uses, before ink would cut it from the end: the end of an id is
+  // what tells `-flash` from `-air`.
+  it("keeps the end of an id too long for the panel", () => {
+    const columns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+    Object.defineProperty(process.stdout, "columns", { value: 80, configurable: true });
+    try {
+      const row = modelRow({ ...endpoint, model: "openrouter/z-ai/glm-5.3-flash-preview-extended" });
+
+      // 13 characters of room at 80 columns: the start, the ellipsis, and the variant.
+      expect(row).toBe("open…extended");
+    } finally {
+      if (columns) Object.defineProperty(process.stdout, "columns", columns);
+      else delete (process.stdout as { columns?: number }).columns;
+    }
+  });
+
   it("has no model row for a subscription profile that pins none", () => {
     // For an endpoint a missing model is worth a dash; for an account it is the usual case,
     // and Claude Code picks the model itself.

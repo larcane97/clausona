@@ -3,10 +3,10 @@ import { truncate } from "../../lib/cli-style.js";
 import {
   doctorSeverity,
   doctorSummary,
+  fitModel,
   fitQuotaValue,
   formatAge,
   formatCurrency,
-  formatModel,
   localTimezoneLabel,
 } from "../../lib/format.js";
 import { displayName } from "../../lib/profile-env.js";
@@ -142,7 +142,12 @@ function ApiSection({ profile }: { profile: ProfileListItem }) {
       <Row label="Endpoint" value={api.baseUrl} singleLine />
       <Row label="Auth" value={api.authScheme} valueColor={color.secondary} />
       <Row label="Key" value={describeSecretSource(api.secret)} valueColor={color.secondary} />
-      <Row label="Model" value={formatModel(model)} valueColor={model ? color.text : color.muted} singleLine />
+      <Row
+        label="Model"
+        value={fitModel(model, valueWidth(process.stdout.columns ?? 100))}
+        valueColor={model ? color.text : color.muted}
+        singleLine
+      />
       {others > 0 && <Row label="Settings" value={`${others} set`} valueColor={color.secondary} />}
     </>
   );
@@ -212,7 +217,9 @@ export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem;
         {/* An API profile's model is in its endpoint section, with a dash when none is set:
             an endpoint nearly always needs one. For an account, pinning none is the usual
             case - Claude Code picks - so the row is only there when there is a model. */}
-        {!isApi && profile.model !== undefined && <Row label="Model" value={formatModel(profile.model)} singleLine />}
+        {!isApi && profile.model !== undefined && (
+          <Row label="Model" value={fitModel(profile.model, valueWidth(process.stdout.columns ?? 100))} singleLine />
+        )}
       </Box>
 
       <Separator />

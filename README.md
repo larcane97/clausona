@@ -200,8 +200,10 @@ clausona config claude:gw --unset ANTHROPIC_MODEL      # back to Claude Code's o
 reads and the only place clausona keeps the model, so `--set ANTHROPIC_MODEL=…` and `--edit`
 change the same value, and passing `--model` with a `--set` or `--unset` of that variable is
 refused. It works on a subscription profile too, where it pins a model for that account; a
-Codex profile refuses it, because Codex never reads the variable. An empty `--model` is
-refused rather than taken to mean "clear it" — `--unset ANTHROPIC_MODEL` is how to clear it.
+Codex profile refuses it, because Codex never reads the variable. A blank model is refused
+rather than taken to mean "clear it", whether it comes from `--model`, `--set` or `--edit` —
+`--unset ANTHROPIC_MODEL` is how to clear it. A blank one would be exported to Claude Code
+while `list` showed no model at all.
 `clausona list` shows each profile's model in a `MODEL` column, and `list --json` carries it as
 `model`.
 
@@ -417,8 +419,11 @@ claude:gw           openrouter.ai                —          —
 ```
 
 `MODEL`, once any profile pins a model, shows each profile's `ANTHROPIC_MODEL`, subscription
-profiles included; a dash means the profile pins none and Claude Code picks. It is the same
-value the dashboard's preview shows, and `clausona config <profile> --model` changes it.
+profiles included; a dash means the profile pins none and Claude Code picks, or, on a Codex
+row, that Codex does not read the variable. An id too long for the column loses its middle
+rather than its end, so `openrouter/z-ai/glm-5.3-flash` and `…-air` stay told apart;
+`list --json` has the whole id. It is the same value the dashboard's preview shows, cut the
+same way, and `clausona config <profile> --model` changes it.
 
 `COST`, `INPUT` and `OUTPUT` do count for an API profile, but they come from clausona's own
 local record of what ran through it, not from the provider — they are not a bill. Claude

@@ -1317,6 +1317,23 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
   return { name: id, mergeSessions: next, changed: true };
 }
 
+/**
+ * A blank ANTHROPIC_MODEL, by any route that writes it. `list` and the preview read a blank
+ * one as "none pinned" (see `profileModel`), but launch exports it as it is - so letting one
+ * in would make what `list` says differ from what Claude Code gets. `--model ""` was already
+ * refused; `--set`, `--edit` and `add --api --set` are the other doors.
+ *
+ * Worded by where it was written, not by which flag: at `add` there is nothing yet to clear.
+ */
+export function checkModelEntry(key: string, value: string, context: "add" | "config"): void {
+  if (key !== "ANTHROPIC_MODEL" || value.trim() !== "") return;
+  throw new Error(
+    context === "add"
+      ? "A model id cannot be blank. To pin none, leave the model out."
+      : "A model id cannot be blank. To pin none, clear it with clausona config <profile> --unset ANTHROPIC_MODEL.",
+  );
+}
+
 export async function updateProfileEnv(id: string, changes: { set?: Record<string, string>; unset?: string[] }) {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
@@ -1326,6 +1343,7 @@ export async function updateProfileEnv(id: string, changes: { set?: Record<strin
   for (const [key, value] of Object.entries(changes.set ?? {})) {
     const result = validateEnvEntry(key, value);
     if (!result.ok) throw new Error(result.error);
+    checkModelEntry(key, value, "config");
     env[key] = value;
   }
   for (const key of changes.unset ?? []) delete env[key];
@@ -1927,6 +1945,7 @@ export async function addApiProfile(options: {
   for (const [key, value] of Object.entries(env)) {
     const result = validateEnvEntry(key, value);
     if (!result.ok) throw new Error(result.error);
+    checkModelEntry(key, value, "add");
     const twin = envKeyCaseTwin(key, Object.keys(env), "api");
     if (twin !== undefined) throw new Error(envKeyCaseTwinError(key, twin));
   }

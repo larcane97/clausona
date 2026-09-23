@@ -1202,31 +1202,72 @@ describe("config --model", () => {
 
   // Empty is refused rather than read as "clear it": `--model "$MODEL"` with MODEL unset
   // would otherwise drop the profile's model without a word. Clearing has its own spelling.
+  // And by every route that writes the variable, not only --model: a blank one that got in
+  // through --set is exported at launch while `list` and the preview call it "none".
   describe("an empty value", () => {
+    const configRoutes: Record<string, (h: Awaited<ReturnType<typeof harness>>, value: string) => Promise<unknown>> = {
+      "--model": (h, value) => h.run("config", "claude:gw", "--model", value),
+      "--set": (h, value) => h.run("config", "claude:gw", "--set", `ANTHROPIC_MODEL=${value}`),
+      "--edit": (h, value) => {
+        vi.stubEnv("EDITOR", "fake-editor");
+        editor = (argv) => {
+          writeFileSync(argv[argv.length - 1], JSON.stringify({ ANTHROPIC_MODEL: value }));
+          return { status: 0 } as SpawnSyncReturns<string>;
+        };
+        return h.run("config", "claude:gw", "--edit");
+      },
+    };
+    const addRoutes: Record<string, string[]> = {
+      "--model": ["--model"],
+      "--set": ["--set"],
+    };
+
+    const configMessage = async (route: string, value: string) => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+      const before = h.registryText();
+      const message = await failure(configRoutes[route](h, value));
+      expect(h.registryText(), route).toBe(before);
+      return message;
+    };
+    const addMessage = async (route: string, value: string) => {
+      const h = await harness();
+      const arg = route === "--set" ? `ANTHROPIC_MODEL=${value}` : value;
+      const message = await failure(
+        h.run("add", "claude:gw", "--api", "--base-url", "http://localhost:8000", ...addRoutes[route], arg),
+      );
+      expect(promptCalls, route).toEqual([]);
+      expect(Object.keys(h.registry().profiles), route).toEqual(["claude:default"]);
+      return message;
+    };
+
     for (const value of ["", "   "]) {
-      it(`is refused on config (${JSON.stringify(value)}), and names how to clear it`, async () => {
-        const h = await harness({ "claude:gw": API_PROFILE });
-        const before = h.registryText();
+      for (const route of Object.keys(configRoutes)) {
+        it(`is refused by config ${route} (${JSON.stringify(value)}), naming how to clear one`, async () => {
+          const message = await configMessage(route, value);
 
-        const message = await failure(h.run("config", "claude:gw", "--model", value));
+          expect(message).toContain("A model id cannot be blank");
+          expect(message).toContain("clausona config <profile> --unset ANTHROPIC_MODEL");
+        });
+      }
 
-        expect(message).toContain("--model needs a model id");
-        expect(message).toContain("--unset ANTHROPIC_MODEL");
-        expect(h.registryText()).toBe(before);
-      });
+      for (const route of Object.keys(addRoutes)) {
+        it(`is refused by add ${route} (${JSON.stringify(value)}) before the key prompt, with nothing to clear`, async () => {
+          const message = await addMessage(route, value);
 
-      it(`is refused on add (${JSON.stringify(value)}), before it asks for a key`, async () => {
-        const h = await harness();
-
-        const message = await failure(
-          h.run("add", "claude:gw", "--api", "--base-url", "http://localhost:8000", "--model", value),
-        );
-
-        expect(message).toContain("--model needs a model id");
-        expect(promptCalls).toEqual([]);
-        expect(Object.keys(h.registry().profiles)).toEqual(["claude:default"]);
-      });
+          expect(message).toContain("A model id cannot be blank");
+          // At add time there is no model yet, so nothing to clear.
+          expect(message).not.toContain("--unset");
+        });
+      }
     }
+
+    it("says the same thing by every route within a command", async () => {
+      const config = await Promise.all(Object.keys(configRoutes).map((route) => configMessage(route, " ")));
+      const add = await Promise.all(Object.keys(addRoutes).map((route) => addMessage(route, " ")));
+
+      expect(new Set(config).size).toBe(1);
+      expect(new Set(add).size).toBe(1);
+    });
 
     it("leaves --unset ANTHROPIC_MODEL as the way to clear it", async () => {
       const h = await harness({ "claude:gw": API_PROFILE });
@@ -1238,6 +1279,44 @@ describe("config --model", () => {
   });
 
   describe("next to --set or --unset", () => {
+    // Each half of the "one or the other" guard, on config and on add. The first is the
+    // documented way to change a model without --model, and nothing pinned it.
+    it("still takes --set ANTHROPIC_MODEL= on its own, on config", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      await h.run("config", "claude:gw", "--set", "ANTHROPIC_MODEL=z-ai/glm-5.3-flash");
+
+      expect(h.profile("claude:gw").env?.ANTHROPIC_MODEL).toBe("z-ai/glm-5.3-flash");
+    });
+
+    it("still takes --set ANTHROPIC_MODEL= on its own, on add", async () => {
+      const h = await harness();
+      promptAnswers.push(KEY);
+
+      await h.run("add", "claude:gw", "--api", "--base-url", "http://localhost:8000", "--set", "ANTHROPIC_MODEL=m1");
+
+      expect(h.profile("claude:gw").env?.ANTHROPIC_MODEL).toBe("m1");
+    });
+
+    it("takes --model next to another --set on add", async () => {
+      const h = await harness();
+      promptAnswers.push(KEY);
+
+      await h.run(
+        "add",
+        "claude:gw",
+        "--api",
+        "--base-url",
+        "http://localhost:8000",
+        "--model",
+        "m1",
+        "--set",
+        "API_TIMEOUT_MS=600000",
+      );
+
+      expect(h.profile("claude:gw").env).toEqual({ ANTHROPIC_MODEL: "m1", API_TIMEOUT_MS: "600000" });
+    });
+
     it("refuses --set ANTHROPIC_MODEL=, as add does", async () => {
       const h = await harness({ "claude:gw": API_PROFILE });
       const before = h.registryText();
@@ -1887,6 +1966,7 @@ describe("help", () => {
     expect(help).toContain("stored as ANTHROPIC_MODEL");
     expect(help).toContain("--unset ANTHROPIC_MODEL");
     expect(help).toContain("clausona config claude:gw --model z-ai/glm-5.3-flash");
+    expect(help).toContain("--model, --set and --edit alike");
   });
 
   it("tells `list` readers what the MODEL column is, and what its dash means", async () => {
@@ -1897,6 +1977,9 @@ describe("help", () => {
     expect(help).toContain("MODEL");
     expect(help).toContain("ANTHROPIC_MODEL");
     expect(help).toContain("pins none");
+    // A Codex row shows the same dash for another reason, and a long id loses its middle.
+    expect(help).toContain("Codex");
+    expect(help).toContain("middle");
   });
 
   it("tells `add` readers the model can be changed later", async () => {

@@ -24,6 +24,7 @@ import {
   addApiProfile,
   addProfile,
   checkLabel,
+  checkModelEntry,
   defaultAuthScheme,
   discoverAccounts,
   doctorProfiles,
@@ -195,16 +196,12 @@ function parseEnvName(input: string, flag: string): string {
 /**
  * `--model`, for `add` and `config` alike: the id, trimmed. A blank one is refused rather
  * than stored or read as "clear it" - `--model "$MODEL"` with MODEL unset would otherwise
- * pin an empty model, or drop the profile's own without a word. Clearing has its own
- * spelling, and the message names it.
+ * pin an empty model, or drop the profile's own without a word. The refusal is
+ * `checkModelEntry`'s, the one every route that writes the variable goes through.
  */
-function parseModel(input: string): string {
+function parseModel(input: string, context: "add" | "config"): string {
   const model = input.trim();
-  if (model === "") {
-    throw new Error(
-      "--model needs a model id. Leave it out to pin none, or clear one with clausona config <profile> --unset ANTHROPIC_MODEL.",
-    );
-  }
+  checkModelEntry("ANTHROPIC_MODEL", model, context);
   return model;
 }
 
@@ -526,10 +523,13 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("MODEL")}`,
         `    ${dim("The model each profile pins, which is its ANTHROPIC_MODEL. A dash means it")}`,
-        `    ${dim("pins none, and Claude Code picks. The column appears once some profile pins")}`,
-        `    ${dim("a model. On a narrow terminal it outlasts the token counts and cost, and goes")}`,
-        `    ${dim("before the quota columns or their reset times would. --json carries it as")}`,
-        `    ${dim("`model`. Change it with `clausona config <profile> --model <id>`.")}`,
+        `    ${dim("pins none, and Claude Code picks - or, on a Codex row, that Codex does not")}`,
+        `    ${dim("read the variable. The column appears once some profile pins a model. An id")}`,
+        `    ${dim("too long for it loses its middle, so the gateway at the start and the variant")}`,
+        `    ${dim("at the end both stay; --json carries the whole id as `model`. On a narrow")}`,
+        `    ${dim("terminal the column outlasts the token counts and cost, and goes before the")}`,
+        `    ${dim("quota columns or their reset times would. Change it with")}`,
+        `    ${dim("`clausona config <profile> --model <id>`.")}`,
         "",
       ].join("\n");
 
@@ -652,9 +652,10 @@ function subcommandHelpText(command: string): string | undefined {
         `  ${bold("THE MODEL")}`,
         `    ${dim("--model writes ANTHROPIC_MODEL in the env map, the variable Claude Code reads;")}`,
         `    ${dim("there is no second copy, so --set and --edit change the same value. It works on")}`,
-        `    ${dim("subscription profiles too, not on Codex ones, which never read it. An empty")}`,
-        `    ${dim("--model is refused; --unset ANTHROPIC_MODEL clears it. `claude --model <id>`")}`,
-        `    ${dim("changes the model for one session without touching the profile.")}`,
+        `    ${dim("subscription profiles too, not on Codex ones, which never read it. A blank")}`,
+        `    ${dim("model is refused by --model, --set and --edit alike; --unset ANTHROPIC_MODEL")}`,
+        `    ${dim("clears it. `claude --model <id>` changes the model for one session without")}`,
+        `    ${dim("touching the profile.")}`,
         "",
         `  ${bold("CHANGING THE ENDPOINT")}`,
         `    ${dim("Each value is checked by the rule add --api uses. The key is kept, so after")}`,
@@ -1031,7 +1032,7 @@ export async function runCommand(command: string, args: string[]) {
             );
           }
           if (unsetKeys.includes("ANTHROPIC_MODEL")) throw new Error(MODEL_TWICE);
-          set.ANTHROPIC_MODEL = parseModel(modelArg);
+          set.ANTHROPIC_MODEL = parseModel(modelArg, "config");
         }
         for (const assignment of setPairs) {
           const [key, value] = parseAssignment(assignment, "--set");
@@ -1198,12 +1199,13 @@ export async function runCommand(command: string, args: string[]) {
         // a typed key. This is the same validator addApiProfile runs, not a second rule.
         const env: Record<string, string> = {};
         const model = optionValue(args, "--model");
-        if (model !== undefined) env.ANTHROPIC_MODEL = parseModel(model);
+        if (model !== undefined) env.ANTHROPIC_MODEL = parseModel(model, "add");
         for (const assignment of optionValues(args, "--set")) {
           const [key, value] = parseAssignment(assignment, "--set");
           if (key === "ANTHROPIC_MODEL" && model !== undefined) throw new Error(MODEL_TWICE);
           const result = validateEnvEntry(key, value);
           if (!result.ok) throw new Error(result.error);
+          checkModelEntry(key, value, "add");
           env[key] = value;
         }
 

@@ -77,6 +77,23 @@ export function formatModel(model: string | undefined): string {
   return model ?? "—";
 }
 
+/**
+ * A model id cut to `width`, for every surface that has less room than the id: `list`'s
+ * column and the preview's row. From the middle, with twice the room for the end as for the
+ * start - the end is what tells variants apart (`-flash`, `-air`, a date) and the start names
+ * the gateway, while the middle is what two ids share. Cut from the end, as a width limit
+ * would, `openrouter/z-ai/glm-5.3-flash` and `…-air` read the same.
+ */
+export function fitModel(model: string | undefined, width: number): string {
+  const text = formatModel(model);
+  if (text.length <= width) return text;
+  if (width <= 0) return "";
+  if (width === 1) return "…";
+  const keep = width - 1;
+  const tail = Math.ceil((keep * 2) / 3);
+  return `${text.slice(0, keep - tail)}…${text.slice(text.length - tail)}`;
+}
+
 export function formatUsage(summary: UsageSummary) {
   return `${formatCurrency(summary.cost)} | in ${formatCount(summary.inputTokens)} | out ${formatCount(summary.outputTokens)}`;
 }
@@ -367,7 +384,7 @@ export function renderList(items: ProfileListItem[], options: { width?: number }
           return item.isActive ? account : secondary(account);
         }
         case "model": {
-          const model = truncate(formatModel(item.model), FIXED_WIDTHS.model - 1);
+          const model = fitModel(item.model, FIXED_WIDTHS.model - 1);
           if (item.model === undefined) return dim(model);
           return item.isActive ? model : secondary(model);
         }
