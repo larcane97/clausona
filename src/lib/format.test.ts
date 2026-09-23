@@ -734,7 +734,9 @@ describe("renderDoctor next-step hint", () => {
     // reports success and changes nothing is worse than offering none.
     const out = stripAnsi(renderDoctor([result([realApiIssue(kind)])]));
 
-    expect(out).not.toContain("clausona repair");
+    // The footer's wording: missing_config_dir's own message names repair, as the step after
+    // the directory is made again.
+    expect(out).not.toContain("Run clausona repair");
     expect(out).not.toContain("clausona login");
   });
 
@@ -744,7 +746,7 @@ describe("renderDoctor next-step hint", () => {
     // for that reason, so the real report is this issue by itself.
     const out = stripAnsi(renderDoctor([result([realApiIssue("missing_config_dir")])]));
 
-    expect(out).not.toContain("clausona repair");
+    expect(out).not.toContain("Run clausona repair");
     expect(out).toContain("config directory /home/u/.claude-glm is missing");
   });
 
