@@ -68,6 +68,8 @@ const PLANTED = {
   "scheme-less userinfo in a base URL": "S2BUR-1a2b",
   "a / in a scheme-less password in an env value": "S7SLA-3f4a",
   "userinfo in a URL after other words in an env value": "S7EMB-4a5b",
+  "an env map that is a list": "S8ARR-5b6c",
+  "an env map that is a string": "S8STR-6c7d",
 } as const;
 
 /**
@@ -89,8 +91,16 @@ function leaks(printed: string, secret: string): boolean {
   return false;
 }
 
-const API_IDS = ["claude:leaky", "claude:valid", "claude:cmdok", "claude:envsrc", "claude:unparse", "claude:bare"];
-const ALL_IDS = ["claude:default", ...API_IDS];
+const API_IDS = [
+  "claude:leaky",
+  "claude:valid",
+  "claude:cmdok",
+  "claude:envsrc",
+  "claude:unparse",
+  "claude:bare",
+  "claude:envlist",
+];
+const ALL_IDS = ["claude:default", "claude:envstring", ...API_IDS];
 
 async function harness() {
   Object.defineProperty(process, "platform", { value: "linux", configurable: true });
@@ -165,6 +175,22 @@ async function harness() {
       email: "",
       label: "localhost:8000",
       api: api("http://localhost:8000", { source: "command", run: `echo ${PLANTED["the key a command prints"]}` }),
+    },
+    // Env maps a hand edit left as a list and as a string, walked as objects before.
+    "claude:envlist": {
+      tool: "claude",
+      kind: "api",
+      configDir: dir("envlist"),
+      email: "",
+      label: "envlist",
+      api: api("http://localhost:8002", { source: "env", name: "GW_KEY" }),
+      env: [`ANTHROPIC_AUTH_TOKEN=${PLANTED["an env map that is a list"]}`],
+    },
+    "claude:envstring": {
+      tool: "claude",
+      configDir: dir("envstring"),
+      email: "envstring@example.com",
+      env: `ANTHROPIC_AUTH_TOKEN=${PLANTED["an env map that is a string"]}`,
     },
     // Parses, as an opaque URL whose "scheme" is the username and whose host is empty.
     "claude:bare": {

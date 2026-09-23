@@ -372,7 +372,9 @@ go through one rule for what they print about a profile:
 - a `command:` key source shows as `command`. Its command line can carry a vault token or the
   key itself, so it is only in `~/.clausona/profiles.json`, and a message about it says what
   failed ("secret command exited with 1") rather than quoting it;
-- a field clausona does not define is left out.
+- a field clausona does not define is left out, and an env map a hand edit left as a list or
+  a string - not a map of settings - is hidden whole. `doctor` reports that one, with the
+  `config <profile> --edit` that fixes it.
 
 Only what is printed changes, not what is stored or what reaches `claude`. The two
 exceptions are the ones whose job is the values: the shell hook, which hands them to the

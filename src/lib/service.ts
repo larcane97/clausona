@@ -48,6 +48,7 @@ import {
   displayName,
   envKeyCaseTwin,
   envKeyCaseTwinError,
+  isEnvMap,
   isSecretEnvName,
   profileModel,
 } from "./profile-env.js";
@@ -999,6 +1000,17 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
 
   for (const [id, profile] of Object.entries(registry.profiles)) {
     const issues: DoctorIssue[] = [];
+
+    // Any kind. A list or a string where the env map belongs is applied as nothing, and
+    // printed as `<hidden>`, so this is where it is found. The value is never quoted: it is
+    // what the user meant to set, credentials included. --edit opens it and saves the object
+    // it is given.
+    if (profile.env !== undefined && !isEnvMap(profile.env)) {
+      issues.push({
+        kind: "invalid_env_map",
+        message: `the env map in ~/.clausona/profiles.json is not a map of NAME: value, so none of it is applied - run 'clausona config ${id} --edit' and save it as one`,
+      });
+    }
 
     const primarySource = registry.primarySources[profile.tool];
     const adapter = getAdapter(profile.tool);

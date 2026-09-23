@@ -9,7 +9,7 @@ import {
   formatCurrency,
   localTimezoneLabel,
 } from "../../lib/format.js";
-import { displayName } from "../../lib/profile-env.js";
+import { displayName, isEnvMap } from "../../lib/profile-env.js";
 import { describeSecretSource } from "../../lib/redact.js";
 import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot, QuotaWindow } from "../../types.js";
 import { color, symbol } from "../theme.js";
@@ -136,7 +136,7 @@ function ApiSection({ profile }: { profile: ProfileListItem }) {
   const model = profile.model;
   // The model has a row of its own; the rest are counted rather than listed, because the
   // panel is a column and there can be twenty of them.
-  const others = Object.keys(profile.env ?? {}).filter((key) => key !== "ANTHROPIC_MODEL").length;
+  const others = isEnvMap(profile.env) ? Object.keys(profile.env).filter((key) => key !== "ANTHROPIC_MODEL").length : 0;
   return (
     <>
       <Row label="Endpoint" value={api.baseUrl} singleLine />

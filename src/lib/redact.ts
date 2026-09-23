@@ -2,7 +2,7 @@ import { HIDDEN, redactBaseUrl, redactUrlsIn } from "../core/api-url.js";
 import { describeSecretSource, redactSecretSource } from "../core/key-source.js";
 import { catalogEntry } from "../tools/claude-env-catalog.js";
 import type { Profile } from "../types.js";
-import { CREDENTIAL_ENV_KEYS, isSecretEnvName } from "./profile-env.js";
+import { CREDENTIAL_ENV_KEYS, isEnvMap, isSecretEnvName } from "./profile-env.js";
 
 /**
  * What a profile looks like when it leaves the process.
@@ -45,9 +45,9 @@ function hidesValue(key: string): boolean {
   return isSecretEnvName(key) || catalogEntry(key)?.kind === "json";
 }
 
-/** The names `redactEnv` hides the whole value of, in the map's order. */
+/** The names `redactEnv` hides the whole value of, in the map's order. None for a map that is not one. */
 export function hiddenEnvKeys(env: Record<string, string>): string[] {
-  return Object.keys(env).filter(hidesValue);
+  return isEnvMap(env) ? Object.keys(env).filter(hidesValue) : [];
 }
 
 export function redactEnv(env: Record<string, string>): Record<string, string> {
@@ -78,6 +78,13 @@ export function redactProfile(profile: Profile): Profile {
       authScheme: profile.api.authScheme,
       secret: redactSecretSource(profile.api.secret),
     },
-    env: profile.env && redactEnv(profile.env),
+    // An env map that is not a map is hidden whole: its content is not settings, and there
+    // is no key to print a name under. doctor says so, with the command that fixes it.
+    env:
+      profile.env === undefined
+        ? undefined
+        : isEnvMap(profile.env)
+          ? redactEnv(profile.env)
+          : (HIDDEN as unknown as Record<string, string>),
   };
 }

@@ -1,5 +1,14 @@
 import type { SpawnSyncReturns } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1702,6 +1711,69 @@ describe("the plain-text credential warning", () => {
   });
 });
 
+/**
+ * An env map a hand edit left as a list or a string. It is applied as nothing - no key of
+ * it is a variable name - and printed as `<hidden>`, so doctor is where it is found. The
+ * remedy is --edit, which opens what is there and saves the object it is given.
+ */
+describe("an env map that is not a map", () => {
+  for (const [label, env, profile] of [
+    ["a list, on an API profile", ["ANTHROPIC_AUTH_TOKEN=sk-fake-list-0006"], API_PROFILE],
+    [
+      "a string, on a subscription profile",
+      "ANTHROPIC_AUTH_TOKEN=sk-fake-string-0007",
+      { tool: "claude", email: "w@x" },
+    ],
+  ] as const) {
+    it(`is reported by doctor for ${label}, and the --edit it names fixes it`, async () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      const h = await harness({ "claude:gw": { ...profile, env } });
+      const findings = async () =>
+        (JSON.parse(String(await h.run("doctor", "--json"))) as DoctorProfileResult[])
+          .flatMap((result) => result.issues)
+          .filter((issue) => issue.kind === "invalid_env_map");
+
+      const [finding] = await findings();
+      expect(finding?.message).toBeDefined();
+      expect(finding.message).not.toContain("sk-fake");
+      const commands = advisedCommands(finding.message);
+      expect(commands).toEqual([["config", "claude:gw", "--edit"]]);
+      vi.stubEnv("EDITOR", "fake-editor");
+      editor = (argv) => {
+        writeFileSync(argv[argv.length - 1], JSON.stringify({ API_TIMEOUT_MS: "600000" }));
+        return { status: 0 } as SpawnSyncReturns<string>;
+      };
+      await h.run(commands[0][0], ...commands[0].slice(1));
+
+      expect(await findings()).toEqual([]);
+      expect(h.profile("claude:gw").env).toEqual({ API_TIMEOUT_MS: "600000" });
+    });
+  }
+
+  // Its own message names the fix; `repair` rebuilds shared links and cannot touch it.
+  it("is not sent to repair by the doctor report", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const h = await harness({ "claude:gw": { ...API_PROFILE, env: ["ANTHROPIC_AUTH_TOKEN=sk-fake-list-0006"] } });
+    // The primary's shared directory, linked as `add` would have: a missing link is a real
+    // reason to run repair, and would put the suggestion there for a reason of its own.
+    symlinkSync(path.join(h.home, ".claude", "commands"), path.join(h.home, ".claude-gw", "commands"));
+
+    const report = stripAnsi(String(await h.run("doctor")));
+
+    expect(report).toContain("clausona config claude:gw --edit");
+    expect(report).not.toContain("clausona repair claude:gw");
+  });
+
+  it("shows as <hidden> in config --show, not as its characters", async () => {
+    const h = await harness({ "claude:gw": { ...API_PROFILE, env: "ANTHROPIC_AUTH_TOKEN=sk-fake-string-0007" } });
+
+    const shown = stripAnsi(String(await h.run("config", "claude:gw", "--show")));
+
+    expect(shown).toMatch(/Settings +<hidden>/);
+    expect(shown).not.toContain("0=A");
+  });
+});
+
 describe("config --edit", () => {
   /** Stands in for $EDITOR: rewrites the scratch file and reports how it exited. */
   function fakeEditor(write: (file: string) => void, status = 0) {
@@ -2103,6 +2175,7 @@ describe("help", () => {
     expect(help).toContain("apiKeyHelper");
     expect(help).toContain("plain text");
     expect(help).toContain("the --unset alone");
+    expect(help).toContain("a hand edit can leave it a list or a string");
     // Two promises worth making explicit: the key is never printed, and a command key
     // source is executed - doctor is not a read-only inspection of the registry.
     expect(help).toContain("never prints the key");

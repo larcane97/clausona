@@ -302,6 +302,19 @@ describe("redactProfile", () => {
     expect(JSON.stringify(redactProfile(stray))).not.toContain("s-0025");
   });
 
+  // A hand edit can leave the env map a list - the docker-compose habit - or a string.
+  // Walked as an object, the first prints in full under key "0", the second one character
+  // per key. It is not a map of settings, so none of it is printed.
+  it.each([
+    ["a list", ["ANTHROPIC_AUTH_TOKEN=l-0041"]],
+    ["a string", "ANTHROPIC_AUTH_TOKEN=s-0042"],
+    ["a number", 42],
+  ])("hides an env map that is %s, whole", (_label, env) => {
+    const shown = redactProfile({ ...api, env: env as unknown as Record<string, string> });
+
+    expect(shown.env).toBe(HIDDEN);
+  });
+
   it("leaves the profile it was given untouched", () => {
     const before = JSON.stringify(api);
 

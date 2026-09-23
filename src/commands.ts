@@ -10,7 +10,7 @@ import { isPosixEnvName, renderPosixExports } from "./core/shell.js";
 import { trackUsage } from "./core/track-usage.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import { renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
-import { buildProfileEnv, controlledEnvKeys, displayName, isSecretEnvName } from "./lib/profile-env.js";
+import { buildProfileEnv, controlledEnvKeys, displayName, isEnvMap, isSecretEnvName } from "./lib/profile-env.js";
 import {
   CREDENTIAL_AS_NAME_ERROR,
   looksLikeCredential,
@@ -19,7 +19,7 @@ import {
   validateProfileName,
 } from "./lib/profile-ref.js";
 import { promptSecret } from "./lib/prompt-secret.js";
-import { describeSecretSource, hiddenEnvKeys, isCredentialEnvKey, redactProfile } from "./lib/redact.js";
+import { describeSecretSource, HIDDEN, hiddenEnvKeys, isCredentialEnvKey, redactProfile } from "./lib/redact.js";
 import {
   addApiProfile,
   addProfile,
@@ -323,6 +323,14 @@ function showProfile(id: string, profile: Profile, asJson: boolean): string {
   if (!shown.isPrimary) {
     lines.push(`${secondary("Sessions".padEnd(12))}${shown.mergeSessions ? "merged" : "separated"}`);
   }
+  if (!isEnvMap(env)) {
+    // Not a map - a hand edit left it a list or a string. doctor names the fix.
+    lines.push(
+      `${secondary("Settings".padEnd(12))}${HIDDEN} ${dim("(not a map of NAME: value - see clausona doctor)")}`,
+    );
+    lines.push("", dim("Run `clausona config <profile> --show --json` for the full advanced-settings catalog."));
+    return box(id, lines);
+  }
   const keys = Object.keys(env).sort();
   lines.push(`${secondary("Settings".padEnd(12))}${keys.length === 0 ? dim("none") : ""}`);
   for (const key of keys) {
@@ -587,7 +595,9 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("CHECKS")}`,
         `    ${dim("Every profile: the items it shares with the primary, and its plugin state.")}`,
-        `    ${dim("Run `clausona repair <profile>` for what that reports.")}`,
+        `    ${dim("Run `clausona repair <profile>` for what that reports. And that its env map is a")}`,
+        `    ${dim("map of NAME: value - a hand edit can leave it a list or a string, which applies")}`,
+        `    ${dim("nothing; `clausona config <profile> --edit` fixes it.")}`,
         "",
         `    ${dim("A subscription profile: its account file and its stored login. Run")}`,
         `    ${dim("`clausona login <profile>` for what that reports.")}`,

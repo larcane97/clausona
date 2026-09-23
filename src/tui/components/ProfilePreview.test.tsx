@@ -178,6 +178,14 @@ describe("ProfilePreview model", () => {
     }
   });
 
+  // listProfiles hands over `<hidden>` for an env map that is not a map; counting its keys
+  // would count the characters of that.
+  it("counts no settings for an env map that is not a map", () => {
+    const frame = panelFor({ ...endpoint, env: "<hidden>" as unknown as Record<string, string>, model: undefined });
+
+    expect(frame).not.toMatch(/\d+ set/);
+  });
+
   it("has no model row for a subscription profile that pins none", () => {
     // For an endpoint a missing model is worth a dash; for an account it is the usual case,
     // and Claude Code picks the model itself.

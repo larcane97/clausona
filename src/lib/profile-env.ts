@@ -159,6 +159,16 @@ export function controlledEnvKeys(profile: Profile, built: BuiltEnv): string[] {
   return [...built.unset, ...Object.keys(built.env)];
 }
 
+/**
+ * Whether a profile's env map is a map at all. A hand edit can leave it a list - the
+ * docker-compose habit - or a string, and walked as an object either one prints its content
+ * under index keys, the string one character per key. None of it is ever applied: no index
+ * is a variable name.
+ */
+export function isEnvMap(env: unknown): env is Record<string, string> {
+  return typeof env === "object" && env !== null && !Array.isArray(env);
+}
+
 export function displayName(profile: Pick<Profile, "email" | "label">): string {
   // Blank-aware, not just absent-aware: `add --api` refuses an empty label, but a
   // hand-edited profiles.json can carry one, and `label ?? email` would then hide a real
