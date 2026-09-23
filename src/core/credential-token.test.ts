@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { carriesCredentialToken } from "./credential-token.js";
@@ -15,6 +17,25 @@ const OPENROUTER = `sk-or-v1-${"3f9a0c7e1b5d2468".repeat(4)}`;
 const DEEPSEEK = "sk-7c1e9a3f5b2d4086e1f3a5c7b9d0e2f4";
 const OPENAI_PROJECT = "sk-proj-Xy7Qz2Lm9Np4Rs6Tu1Vw3Ab5Cd8Ef0Gh";
 const BASE62 = "xai-Q7mZ2pL9rT4vX1bN6cK8dF3gH5jW0sYe4Ru7Ai2";
+/**
+ * Vendor shapes the prefix-less rule cannot see: letters only, or URL-safe base64 cut by its
+ * own `-` and `_`. Joined at run time so the file holds no string a secret scanner would take
+ * for a live key.
+ */
+const HUGGING_FACE = ["hf", "WPSXyPafNBzpChzNhlDfqrFDVOBzjXVAuM"].join("_");
+const HUGGING_FACE_ORG = ["api_org", "jooYhVkamJvQGTggVyxvDRJwrLocpgcjEa"].join("_");
+const GOOGLE = ["AI", "zaMPnlQrPnp-KFPwE0ivicQU1_kShSkuNwA2p"].join("");
+const FIREWORKS = ["fw", "l0eDurQ2zb97lbGjiyCh4tsE"].join("_");
+const LITELLM = ["sk", "4GJ57uJxbro-kltBX1r8Sj"].join("-");
+/** A gateway key of 46 characters, `sk_` and URL-safe base64 cut into pieces shorter than 16. */
+const GATEWAY = ["sk", "uLoB9T-6aalxY_7UHPFi-70kbiV_AouOIF-TERiG_Vw"].join("_");
+
+/** One string per line, skipping the `#` lines that say where the list came from. */
+function fixture(name: string): string[] {
+  return readFileSync(new URL(`fixtures/${name}`, import.meta.url), "utf8")
+    .split("\n")
+    .filter((line) => line !== "" && !line.startsWith("#"));
+}
 
 describe("carriesCredentialToken", () => {
   it.each([
@@ -24,6 +45,12 @@ describe("carriesCredentialToken", () => {
     ["an OpenAI project key", OPENAI_PROJECT],
     ["a prefix-less base62 body", BASE62],
     ["an sk_ key, underscore form", "sk_live_9aB3cD7eF1gH5jK2mN8pQ4rS6tU0vW"],
+    ["a Hugging Face token, letters only", HUGGING_FACE],
+    ["a Hugging Face organisation token", HUGGING_FACE_ORG],
+    ["a Google key, cut by its own - and _", GOOGLE],
+    ["a Fireworks key", FIREWORKS],
+    ["a LiteLLM virtual key, cut by its own -", LITELLM],
+    ["a 46-character sk_ gateway key cut into short pieces", GATEWAY],
   ])("catches %s on its own", (_shape, token) => {
     expect(carriesCredentialToken(token)).toBe(true);
   });
@@ -36,6 +63,8 @@ describe("carriesCredentialToken", () => {
     ["after a model id", `glm-5${ANTHROPIC}`],
     ["inside a header line", `Authorization: Bearer ${BASE62}`],
     ["as the tail of a paste the key field lost its head to", ANTHROPIC.slice(13)],
+    ["glued to a model id", `glm-5${HUGGING_FACE}`],
+    ["as a URL's query parameter", `https://gateway.example.com/v1?key=${GOOGLE}`],
   ])("catches one %s", (_where, value) => {
     expect(carriesCredentialToken(value)).toBe(true);
   });
@@ -67,6 +96,14 @@ describe("carriesCredentialToken", () => {
     ["a number", "262144"],
     ["a short sk- name", "sk-test"],
     ["the empty string", ""],
+    ["a model id with nsfw_ in it", "Falconsai/nsfw_image_detection"],
+    ["CamelCase after nsfw_", "nsfw_ImageClassifierModelLarge"],
+    ["Hugging Face's own variable", "HF_HUB_ENABLE_HF_TRANSFER"],
+    ["a function name starting hf_", "hf_hub_download"],
+    ["a hyphenated model id after a word ending sk", "multitask-Qwen2-VL-72B-Instruct"],
+    ["an acronym-heavy model id after a word ending sk", "task-GPT-4o-MoE-Q4-K-M-GGUF"],
+    ["CamelCase after a word ending sk", "desk-AssistantProductionBackend"],
+    ["a lowercase variable name with sk_ inside a word", "disk_encryption_key_2024v2abcdefgh"],
   ])("leaves %s alone", (_shape, value) => {
     expect(carriesCredentialToken(value)).toBe(false);
   });
@@ -83,7 +120,22 @@ describe("carriesCredentialToken", () => {
     ["a key cut into pieces shorter than a run by its own separators", "sk-a1b2-c3d4-e5f6-g7h8-i9j0-k1l2"],
     ["a short prefix-less base62 key", "Q7mZ2pL9rT4vX1bN6cK8dF3gH5jW"],
     ["a short key whose prefix is percent-encoded", "%73%6b-ant-api03-QZXJ7wvKpLmN8rTy"],
+    ["a Fireworks key glued straight after a letter, since nsfw_ is a word", `model${FIREWORKS}`],
   ])("misses %s", (_shape, value) => {
     expect(carriesCredentialToken(value)).toBe(false);
+  });
+
+  /**
+   * The reviewer's corpora, trimmed to the strings a rule could come near - the files say how.
+   * These are what a new rule has to leave alone: every one of them is a value someone passes
+   * as `--model`, or a name someone passes as `--key-from env:`.
+   */
+  it.each([
+    ["real model ids and names", "model-ids.txt"],
+    ["environment-variable names", "env-names.txt"],
+  ])("takes none of the %s for a key", (_what, name) => {
+    const values = fixture(name);
+    expect(values.length).toBeGreaterThan(500);
+    expect(values.filter(carriesCredentialToken)).toEqual([]);
   });
 });
