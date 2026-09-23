@@ -8,6 +8,7 @@ import {
   readSecretChunk,
   type SecretInputState,
   type SecretInputStream,
+  settleSecretInput,
 } from "./prompt-secret.js";
 
 /**
@@ -51,6 +52,17 @@ function fakeTerminal(options: { rawMode?: boolean; canSetRawMode?: boolean } = 
     type: (text: string) => input.push(Buffer.from(text, "utf8")),
     close: () => input.push(null),
   };
+}
+
+/**
+ * The answer, or "no answer" if the prompt is still waiting after `ms`.
+ *
+ * A prompt that never answers is one of the failures under test, and awaiting it directly
+ * turns that into a five-second timeout with nothing to say about what happened.
+ */
+async function answerWithin(answer: Promise<string>, ms = 200): Promise<string> {
+  const silence = new Promise<string>((resolve) => setTimeout(() => resolve("no answer"), ms));
+  return Promise.race([answer.catch((error: unknown) => `rejected: ${String(error)}`), silence]);
 }
 
 describe("promptSecret on a terminal", () => {
@@ -395,14 +407,14 @@ describe("promptSecret off a terminal", () => {
  */
 describe("readSecretChunk", () => {
   const KEY = "sk-ant-api03-not-a-real-key-0000000000000000";
-  const read = (chunk: string, state: SecretInputState = EMPTY_SECRET_INPUT) => readSecretChunk(state, chunk);
+  const read = (chunk: string, state: SecretInputState = EMPTY_SECRET_INPUT) => readSecretChunk(state, chunk, "read");
 
   /** What a person typing produces: one chunk per character, fed through the same state. */
   function typed(text: string) {
     let state: SecretInputState = EMPTY_SECRET_INPUT;
     let out = "";
     for (const char of text) {
-      const chunk = readSecretChunk(state, char);
+      const chunk = readSecretChunk(state, char, "read");
       state = chunk.state;
       out += chunk.text;
     }
@@ -469,7 +481,7 @@ describe("readSecretChunk", () => {
 
   it("keeps a paste whole across two reads, marker and all", () => {
     const first = read(`\u001b[200~${KEY.slice(0, 20)}`);
-    const second = readSecretChunk(first.state, `${KEY.slice(20)}\u001b[201~`);
+    const second = readSecretChunk(first.state, `${KEY.slice(20)}\u001b[201~`, "read");
 
     expect(first.text + second.text).toBe(KEY);
     expect(second.state.pasting).toBe(false);
@@ -478,7 +490,7 @@ describe("readSecretChunk", () => {
   it("keeps a marker split down the middle whole", () => {
     // The worst split: the opening bracket itself arrives in two pieces.
     const first = read("\u001b[20");
-    const second = readSecretChunk(first.state, `0~${KEY}\u001b[201~`);
+    const second = readSecretChunk(first.state, `0~${KEY}\u001b[201~`, "read");
 
     expect(first.text).toBe("");
     expect(second.text).toBe(KEY);
@@ -521,7 +533,7 @@ describe("readSecretChunk", () => {
  */
 describe("string-terminated escape sequences", () => {
   const KEY = "sk-ant-api03-not-a-real-key-0000000000000000";
-  const read = (chunk: string, state: SecretInputState = EMPTY_SECRET_INPUT) => readSecretChunk(state, chunk);
+  const read = (chunk: string, state: SecretInputState = EMPTY_SECRET_INPUT) => readSecretChunk(state, chunk, "read");
 
   const STRINGS: [string, string][] = [
     ["an OSC ended with BEL", "\u001b]0;a title\u0007"],
@@ -548,7 +560,7 @@ describe("string-terminated escape sequences", () => {
 
   it("joins one split across two reads", () => {
     const first = read("\u001b]0;a ti");
-    const second = readSecretChunk(first.state, `tle\u0007${KEY}`);
+    const second = readSecretChunk(first.state, `tle\u0007${KEY}`, "read");
 
     expect(first.text).toBe("");
     expect(second.text).toBe(KEY);
@@ -602,7 +614,7 @@ describe("string-terminated escape sequences", () => {
     // event and the rest as another, so the reader only learns this was never a sequence
     // when the line break turns up.
     const first = read(`\u001b${byte}`);
-    const second = readSecretChunk(first.state, "k-fake-9xQZ-0001\r");
+    const second = readSecretChunk(first.state, "k-fake-9xQZ-0001\r", "read");
 
     expect(first.text).toBe("");
     expect(second.text).toBe(`${byte}k-fake-9xQZ-0001`);
@@ -631,5 +643,234 @@ describe("string-terminated escape sequences", () => {
 
     expect(partial.text).toBe("");
     expect(partial.state.pending).toBe(`\u001b]0;${KEY}`);
+  });
+});
+
+/**
+ * A keystroke arriving inside a sequence's body.
+ *
+ * ECMA-48's rule, and the one ink's own parser applies to a CSI: a byte that cannot be part
+ * of the body ends the sequence there, unfinished. No terminal puts a line break, a Ctrl-C or
+ * a second ESC inside a sequence it is sending; a person who pressed Alt+[ or Alt+] and kept
+ * typing does. So the ESC was a keypress - only it is dropped, what followed it is text, and
+ * the interrupting byte is acted on exactly as it would be anywhere else.
+ *
+ * One exception, pinned below: a BEL. It ends an OSC, and inside the other four string types
+ * it is body, not an interruption.
+ */
+describe("a keystroke inside a sequence", () => {
+  const read = (chunk: string, state: SecretInputState = EMPTY_SECRET_INPUT) => readSecretChunk(state, chunk, "read");
+
+  /** Each introducer, with a body it could legitimately have got as far as. */
+  const OPEN: [string, string][] = [
+    ["a CSI", "\u001b[12"],
+    ["an SS3", "\u001bO"],
+    ["an OSC", "\u001b]0;ab"],
+    ["a DCS", "\u001bP1$r"],
+    ["an SOS", "\u001bXab"],
+    ["a PM", "\u001b^ab"],
+    ["an APC", "\u001b_ab"],
+  ];
+
+  /** Every byte a person produces at a prompt that is not a character of the key. */
+  const KEYSTROKES: [string, string][] = [
+    ["an Enter", "\r"],
+    ["a line feed", "\n"],
+    ["a Ctrl-C", "\u0003"],
+    ["a Ctrl-D", "\u0004"],
+    ["a tab", "\t"],
+    ["a Ctrl-U", "\u0015"],
+    ["a backspace sent as BS", "\u0008"],
+    ["a backspace sent as DEL", "\u007f"],
+    ["an arrow key", "\u001b[B"],
+  ];
+
+  const CASES = OPEN.flatMap(([opened, prefix]) =>
+    KEYSTROKES.map(([keystroke, byte]) => [opened, keystroke, prefix, byte] as const),
+  );
+
+  it.each(CASES)("ends %s at %s, and keeps what was typed after the ESC", (_opened, _keystroke, prefix, byte) => {
+    const result = read(`${prefix}${byte}`);
+
+    // The ESC goes; the introducer and whatever followed it were typed.
+    expect(result.text).toBe(prefix.slice(1));
+    expect(result.state).toEqual(EMPTY_SECRET_INPUT);
+    expect(result.problem).toBeUndefined();
+  });
+
+  it("does not let a BEL end a DCS, so the rest of its body stays out of the key", () => {
+    // A BEL ends an OSC because that is how every shell sets a window title. Letting it end
+    // the other four would cut a DCS short at a stray BEL and spill the tail into the key;
+    // taking it as an interruption would put the whole body there.
+    expect(read("sk-ant-api\u001bP1$r\u0007tail\u001b\\03-rest").text).toBe("sk-ant-api03-rest");
+  });
+
+  it("measures a Linux console function key, ESC [ [ A, whole", () => {
+    // ink keeps the second `[` as part of the sequence; taking it as the final byte instead
+    // left the `A` in the key.
+    expect(read("sk-AAA\u001b[[ABBB").text).toBe("sk-AAABBB");
+  });
+
+  it.each(OPEN)("lets ctrl-c out of %s at the prompt, and puts the terminal back", async (_opened, prefix) => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type(prefix);
+    tty.type("\u0003");
+
+    expect(await answerWithin(answer)).toBe("rejected: PromptCancelledError: Cancelled.");
+    expect(tty.rawModeCalls).toEqual([true, false]);
+    expect(tty.screen()).toBe(`${PROMPT}\n`);
+  });
+
+  it("ends the prompt on ctrl-d after a stray DCS introducer", async () => {
+    // Ctrl-D is the prompt's fourth way to finish, and a string body swallowed it.
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type(`\u001bP${KEY}`);
+    tty.type("\u0004");
+
+    expect(await answerWithin(answer)).toBe(`P${KEY}`);
+  });
+
+  it("answers an Enter pressed after a stray CSI introducer", async () => {
+    // Nothing ends a CSI but a final byte, and a C0 is not one: this prompt waited for a
+    // letter that was never coming.
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type("\u001b[");
+    tty.type("\r");
+
+    expect(await answerWithin(answer)).toBe("[");
+  });
+
+  it("keeps a bracketed paste whole after a stray CSI introducer", async () => {
+    // The paste's own ESC ends the stray one, so the paste is read as a paste - rather than
+    // `[ESC[200~` being taken as one long CSI and `200~` put in front of the key.
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type("\u001b[");
+    tty.type(`\u001b[200~${KEY}\u001b[201~\r`);
+
+    expect(await answerWithin(answer)).toBe(`[${KEY}`);
+  });
+});
+
+/**
+ * The key field's input: one of ink's input events at a time, not raw reads.
+ *
+ * ink's parser measures every CSI and SS3 before it emits anything, and holds one that is
+ * still arriving until a `setImmediate` passes with nothing more. So an event that is an
+ * unfinished `ESC [` or `ESC O` is ink saying no more came: it was a keypress, Alt+[ or
+ * Alt+Shift+O, and joining it to the next event is second-guessing a parse that has already
+ * been done. The string family is different - ink does not measure it at all, and hands over
+ * the introducer and the body as separate events - so that is still joined.
+ */
+describe("readSecretChunk on ink's input events", () => {
+  const KEY = "sk-ant-api03-not-a-real-key-0000000000000000";
+
+  function events(...chunks: string[]) {
+    let state: SecretInputState = EMPTY_SECRET_INPUT;
+    let text = "";
+    let problem: string | undefined;
+    for (const chunk of chunks) {
+      const result = readSecretChunk(state, chunk, "event");
+      state = result.state;
+      text += result.text;
+      problem ??= result.problem;
+    }
+    return { state, text, problem };
+  }
+
+  it.each([
+    ["Alt+Shift+O, then a paste", ["\u001bO", KEY], `O${KEY}`],
+    ["Alt+[, then a paste", ["\u001b[", KEY], `[${KEY}`],
+    ["Alt+[, then a bracketed paste", ["\u001b[", "\u001b[200~", KEY, "\u001b[201~"], `[${KEY}`],
+  ])("takes %s as the two keystrokes they were", (_case, chunks, expected) => {
+    const result = events(...chunks);
+
+    // What was typed, and all of the paste: the paste's first character is not eaten as the
+    // final byte of a sequence ink had already given up on.
+    expect(result.text).toBe(expected);
+    expect(result.state).toEqual(EMPTY_SECRET_INPUT);
+  });
+
+  it("types a CSI ink flushed early into the key - the residual this rule costs", () => {
+    // A terminal reply split across two turns of the event loop - a laggy SSH link - reaches
+    // the field as an unfinished CSI and then text, which is indistinguishable from Alt+[
+    // and typing. Pinned so that the cost of the rule is visible rather than discovered.
+    expect(events("\u001b[", "12;40R", KEY).text).toBe(`[12;40R${KEY}`);
+  });
+
+  it("drops a lone Escape and parks nothing", () => {
+    expect(events(KEY, "\u001b")).toEqual({ state: EMPTY_SECRET_INPUT, text: KEY, problem: undefined });
+  });
+
+  it("still joins a string sequence across events, which ink does not measure", () => {
+    expect(events("\u001b]", "0;a title\u0007", KEY).text).toBe(KEY);
+    expect(events("\u001bP", "1$r0m", "\u001b\\", KEY).text).toBe(KEY);
+  });
+
+  it("still joins a string terminator split after its ESC", () => {
+    expect(events("\u001b]", "0;a title", "\u001b", "\\", KEY).text).toBe(KEY);
+  });
+
+  it.each([
+    ["after its ESC", ["\u001b", "[201~"]],
+    ["inside the CSI", ["\u001b[20", "1~"]],
+  ])("closes a paste whose end marker ink flushed early, split %s", (_case, marker) => {
+    // Between the brackets there are no keypresses, so a flush boundary there is only a slow
+    // read: the terminal is still sending its own end marker.
+    const result = events("\u001b[200~", KEY, ...marker);
+
+    expect(result.text).toBe(KEY);
+    expect(result.state).toEqual(EMPTY_SECRET_INPUT);
+  });
+
+  it("refuses an unfinished CSI too long for any keypress", () => {
+    expect(events(KEY.slice(0, 20), `\u001b[${"9".repeat(40)}`)).toEqual({
+      state: EMPTY_SECRET_INPUT,
+      text: KEY.slice(0, 20),
+      problem: "unreadable",
+    });
+  });
+});
+
+/**
+ * What a field's half-read input comes to when the field is left.
+ *
+ * Leaving the key field is an arrow, a tab or an Enter, and each of those interrupts a
+ * sequence still open: whichever of the field's two input handlers runs first, the parked
+ * bytes must come out the same.
+ */
+describe("settleSecretInput", () => {
+  it("resolves a string sequence still waiting for its terminator as the lone Escape it was", () => {
+    expect(settleSecretInput({ pending: "\u001b]0;abc", pasting: false })).toEqual({
+      state: EMPTY_SECRET_INPUT,
+      text: "]0;abc",
+    });
+  });
+
+  it("resolves one whose last byte could have begun a terminator", () => {
+    expect(settleSecretInput({ pending: "\u001bPabc\u001b", pasting: false }).text).toBe("Pabc");
+  });
+
+  it("gives the same text as the arrow key it stands in for", () => {
+    const parked = readSecretChunk(EMPTY_SECRET_INPUT, "\u001b]0;abc", "event").state;
+
+    expect(settleSecretInput(parked).text).toBe(readSecretChunk(parked, "\u001b[B", "event").text);
+  });
+
+  it("leaves an open paste to the caller, which refuses to save one", () => {
+    const open = { pending: "\u001b[20", pasting: true };
+
+    expect(settleSecretInput(open)).toEqual({ state: open, text: "" });
+  });
+
+  it("has nothing to say when nothing is parked", () => {
+    expect(settleSecretInput(EMPTY_SECRET_INPUT)).toEqual({ state: EMPTY_SECRET_INPUT, text: "" });
   });
 });

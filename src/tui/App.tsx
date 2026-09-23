@@ -435,10 +435,13 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    * bytes ink is waiting for or depends on emit ordering that is not ours to rely on. This
    * touches no stream and no raw mode, so there is no refcount to get wrong either.
    *
-   * ink also does the reassembly: an event is a run of plain text or one whole sequence,
-   * with an unfinished one held and rejoined across reads. What it does not measure is the
-   * string family - `ESC ]`, `ESC P`, `ESC X`, `ESC ^`, `ESC _` arrive as a two-character
-   * event with the payload following as text - and joining those is what `pending` is for.
+   * ink also measures the sequences: an event is a run of plain text or one whole CSI or SS3,
+   * with one that is still arriving held until a `setImmediate` passes with nothing more. So
+   * an event's end is authoritative for those - an unfinished `ESC [` handed over on its own
+   * is a keypress, and the reader is told as much (`"event"`, in prompt-secret.ts, which also
+   * says what that costs). What ink does not measure is the string family - `ESC ]`, `ESC P`,
+   * `ESC X`, `ESC ^`, `ESC _` arrive as a two-character event with the payload following as
+   * text - and joining those across events is what `pending` is for.
    *
    * `useInput` keeps the named keys below - erase, ctrl-u, return, esc, the arrows - and
    * appends nothing, so there is exactly one writer. Attached only while the cursor is on
@@ -460,7 +463,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       return;
     }
     const onInput = (input: string) => {
-      const read = readSecretChunk(secretInput.current, input);
+      const read = readSecretChunk(secretInput.current, input, "event");
       secretInput.current = read.state;
       // The same two writes `editApiKey` makes, inlined so that this listener depends on
       // nothing that changes every render - it is subscribed once per focus, not per frame.
@@ -547,11 +550,11 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     // being stored wrong, and because "unreachable" is a property of the handler above
     // rather than of this function.
     if (secretInput.current.pasting) errors.key = UNFINISHED_PASTE;
-    // The same refusal one branch out, and this one is reachable: a stray OSC introducer
-    // parks every byte after it without opening a paste, so the cursor is free to walk to
-    // Submit over a field that looks empty. A sequence still half-arrived at save time
-    // means real bytes are parked behind it, and a key is what the terminal sent rather
-    // than what got as far as the field.
+    // The same refusal one branch out. A stray OSC introducer parks every byte after it
+    // without opening a paste; the keystroke that leaves the field interrupts it, so this is
+    // reached only if that keystroke never went through the reader. A sequence still
+    // half-arrived at save time means real bytes are parked behind it, and a key is what the
+    // terminal sent rather than what got as far as the field.
     if (secretInput.current.pending !== "") errors.key = UNFINISHED_SEQUENCE;
     // And nothing can be saved at all from a field that never had a reader.
     if (!canReadKeyInput) errors.key = NO_RAW_KEY_INPUT;

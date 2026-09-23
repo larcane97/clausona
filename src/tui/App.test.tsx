@@ -514,18 +514,19 @@ describe("App add-profile: API endpoint", () => {
       instance.unmount();
     });
 
-    it("refuses to save when a sequence started and never finished", async () => {
-      // An OSC introducer with no terminator: every byte after it is held back waiting for
-      // the end of a sequence that never comes, so the field is not the key - it is empty
-      // while the key sits unread. Storing on that is the same silent truncation as a
-      // half-arrived paste.
-      const { called, secretValue, frame } = await keyAfter(async (instance) => {
-        await type(instance, `\u001b]0;${KEY}`);
+    it("types a stray string introducer, and what followed it, once a keystroke ends it", async () => {
+      // Alt+] is ESC ], an OSC introducer, and in this form it can only be a keystroke: a
+      // real Escape leaves the form, and nothing here asks the terminal for a reply. What
+      // follows it is parked - a real OSC's body arrives as an event of its own - and the
+      // arrow that leaves the field interrupts the sequence, which then resolves as typed:
+      // `]` and then the paste, exactly as a stray `]` would have.
+      const { called, secretValue } = await keyAfter(async (instance) => {
+        await type(instance, "\u001b]");
+        await type(instance, KEY);
       });
 
-      expect(called).toBe(0);
-      expect(secretValue).toBeUndefined();
-      expect(frame).toContain("started a sequence and never finished");
+      expect(called).toBe(1);
+      expect(secretValue).toBe(`]${KEY}`);
     });
 
     it("lets the field be emptied with backspace after an unfinished paste", async () => {
@@ -840,6 +841,21 @@ describe("ink's input event seam", () => {
     await settle();
 
     expect(events).toEqual(["\u001b[12;40R"]);
+    instance.unmount();
+  });
+
+  it("flushes an unfinished CSI as an event of its own when nothing follows it in time", async () => {
+    // What makes an event's end authoritative for the key field (Ruling 87): ink holds an
+    // unfinished CSI only until a `setImmediate` passes, then hands it over as it is. The
+    // pin above writes both halves in one turn; this one lets the turn pass between them.
+    const { instance, events } = probe();
+    await settle();
+    instance.stdin.write("\u001b[");
+    await settle();
+    instance.stdin.write("12;40R");
+    await settle();
+
+    expect(events).toEqual(["\u001b[", "12;40R"]);
     instance.unmount();
   });
 

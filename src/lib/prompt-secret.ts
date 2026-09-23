@@ -72,14 +72,23 @@ const ST_FINAL = "\\";
 const STRING_INTRODUCERS = new Set(["]", "P", "X", "^", "_"]);
 
 /**
- * Bytes that say the ESC in front of them was a keypress rather than an introducer.
+ * Whether a byte cannot be part of any sequence's body: a C0 control or DEL.
  *
- * No terminal puts a line break in an OSC or DCS body; a person who pressed a stray Escape,
- * typed a key beginning with one of the five introducers and pressed Enter does. Ctrl-C is
- * here for the same reason and one more: a prompt with no way out is the failure this reader
- * gives up a lot to avoid, and 0x03 is a byte rather than a signal once raw mode is on.
+ * Inside a body it means the ESC in front was a keypress rather than an introducer - ECMA-48's
+ * rule, and the one ink's own parser applies to a CSI. No terminal puts a line break, a Ctrl-C
+ * or a backspace inside a sequence it is sending; a person who pressed a stray Alt+[ or Alt+]
+ * and went on typing does. A prompt with no way out is the failure this reader gives up a lot
+ * to avoid, and in raw mode Ctrl-C, Ctrl-D and Enter are all bytes like any other - so it is
+ * every control byte, rather than a list of the ones someone thought of.
+ *
+ * BEL is the one exception, and only inside a string: see `scanStringEscape`.
  */
-const NOT_A_STRING_BODY = new Set(["\r", "\n", CTRL_C]);
+function interruptsSequence(char: string): boolean {
+  return char < " " || char === "\u007f";
+}
+
+/** What a sequence an interruption ended resolves as: the Escape keypress it turned out to be. */
+const LONE_ESCAPE = { consumed: 1, kind: "skip" } as const;
 
 const UNREADABLE_INPUT =
   'Could not read the key: this terminal sent something the prompt cannot interpret, and a key read from it might be incomplete. Pipe the key in instead: printf %s "$KEY" | clausona … , or point at it with --key-from env:NAME.';
@@ -111,46 +120,72 @@ type EscapeScan =
  *   character of a key typed after a stray Escape is still part of the key. Taking that
  *   byte as the second half of an Alt-combo would lose one or the other, and nothing at
  *   this prompt is bound to Alt.
+ *
+ * A sequence a keystroke interrupts resolves the same way as that last case, so an Alt+[
+ * followed by an Enter is a `[` and an Enter, and a stray introducer can never swallow the
+ * keys a person would press to get out.
  */
 function scanEscape(buffer: string): EscapeScan {
   if (buffer.length < 2) return "incomplete";
   const second = buffer[1];
-  if (second === "[" || second === "O") {
-    for (let i = 2; i < buffer.length; i++) {
-      const code = buffer.charCodeAt(i);
-      if (code >= 0x40 && code <= 0x7e) {
-        const sequence = buffer.slice(0, i + 1);
-        const kind = sequence === PASTE_START ? "paste-start" : sequence === PASTE_END ? "paste-end" : "skip";
-        return { consumed: i + 1, kind };
-      }
-    }
-    return buffer.length > MAX_ESCAPE_LENGTH ? "runaway" : "incomplete";
-  }
+  if (second === "[" || second === "O") return scanControlSequence(buffer);
   if (second !== undefined && STRING_INTRODUCERS.has(second)) return scanStringEscape(buffer, second);
-  return { consumed: 1, kind: "skip" };
+  return LONE_ESCAPE;
+}
+
+/**
+ * Measures a CSI or SS3 sequence by ECMA-48's byte classes, as ink's parser does: parameter
+ * and intermediate bytes (`0x20`-`0x3f`) continue it, a final byte (`@`-`~`) ends it, and
+ * anything else - a control byte, DEL, another ESC, a character outside ASCII - interrupts it.
+ *
+ * The one irregular shape is ink's too: a second `[` straight after the first is part of the
+ * sequence, not its end. The Linux console sends its function keys that way, `ESC [ [ A`,
+ * and taking the `[` as the final byte left the `A` in the key.
+ */
+function scanControlSequence(buffer: string): EscapeScan {
+  for (let i = 2; i < buffer.length; i++) {
+    const code = buffer.charCodeAt(i);
+    if (i === 2 && buffer[1] === "[" && code === 0x5b) continue;
+    if (code >= 0x40 && code <= 0x7e) {
+      const sequence = buffer.slice(0, i + 1);
+      const kind = sequence === PASTE_START ? "paste-start" : sequence === PASTE_END ? "paste-end" : "skip";
+      return { consumed: i + 1, kind };
+    }
+    if (code < 0x20 || code > 0x3f) return LONE_ESCAPE;
+  }
+  return buffer.length > MAX_ESCAPE_LENGTH ? "runaway" : "incomplete";
 }
 
 /**
  * Measures a string sequence, which ends at a terminator rather than at a final byte.
  *
  * ST (`ESC \`) ends all five. BEL ends an OSC as well, because that is the form every shell
- * actually sends for a window title - and only an OSC, because a BEL inside a DCS body
- * would then cut the sequence short and spill its tail into the key. Refusing to measure a
- * BEL-terminated DCS costs a refusal; mis-measuring one costs a credential.
+ * actually sends for a window title - and only an OSC. Inside the other four a BEL is body:
+ * letting it end them would cut a DCS short and spill its tail into the key, and taking it
+ * as an interruption would spill the whole body. Refusing to measure a BEL-terminated DCS
+ * costs a refusal; mis-measuring one costs a credential.
  *
- * A line break or a Ctrl-C before either terminator means this was never a sequence, and it
- * resolves as the lone Escape it is: only the ESC is dropped and the introducer is the first
- * character of the key. That arm is the whole reason this function cannot simply wait. Five
- * of the bytes a key can begin with - `]`, `P`, `X`, `^`, `_` - are introducers, and a key
- * beginning with one of them, typed after a stray Escape, would otherwise be swallowed into
- * a payload whose end never comes: no answer, no refusal, and nothing on screen to say why.
+ * Any other control byte, or an ESC that does not begin ST, interrupts the sequence and it
+ * resolves as the lone Escape it was: only the ESC is dropped, and the introducer is the
+ * first character of what was typed. That arm is the whole reason this function cannot
+ * simply wait. Five of the bytes a key can begin with - `]`, `P`, `X`, `^`, `_` - are
+ * introducers, and a key beginning with one of them, typed after a stray Escape, would
+ * otherwise be swallowed into a payload whose end never comes: no answer, no refusal, and
+ * nothing on screen to say why. An ESC with nothing after it yet may be ST's first half, so
+ * that one waits.
  */
 function scanStringEscape(buffer: string, introducer: string): EscapeScan {
   for (let i = 2; i < buffer.length; i++) {
     const char = buffer[i] ?? "";
-    if (introducer === "]" && char === BEL) return { consumed: i + 1, kind: "skip" };
-    if (char === ESC && buffer[i + 1] === ST_FINAL) return { consumed: i + 2, kind: "skip" };
-    if (NOT_A_STRING_BODY.has(char)) return { consumed: 1, kind: "skip" };
+    if (char === ESC) {
+      if (i + 1 === buffer.length) break;
+      return buffer[i + 1] === ST_FINAL ? { consumed: i + 2, kind: "skip" } : LONE_ESCAPE;
+    }
+    if (char === BEL) {
+      if (introducer === "]") return { consumed: i + 1, kind: "skip" };
+      continue;
+    }
+    if (interruptsSequence(char)) return LONE_ESCAPE;
   }
   return buffer.length > MAX_STRING_ESCAPE_LENGTH ? "runaway" : "incomplete";
 }
@@ -172,7 +207,8 @@ function scanStringEscape(buffer: string, introducer: string): EscapeScan {
  * `promptSecret` below already does and what the TUI's key field does too.
  *
  * `pending` carries a sequence that has not finished arriving, so one split across two
- * reads is still measured as one. `pasting` says a paste's opening bracket arrived and its
+ * chunks is still measured as one - which sequences can be split that way is what
+ * `SecretChunkEdge` is about. `pasting` says a paste's opening bracket arrived and its
  * closing one has not: whatever is in the field is the front of a key rather than the key,
  * which is the truncation this reader already refuses to return for its own prompt. A
  * caller with either of them still set at save time is holding a partial key.
@@ -198,16 +234,44 @@ export type SecretChunk = {
   problem?: "unreadable";
 };
 
-export function readSecretChunk(state: SecretInputState, chunk: string): SecretChunk {
+/**
+ * What the end of a chunk handed to `readSecretChunk` means, which the caller has to say
+ * because the reader cannot tell.
+ *
+ * - `"read"`: only where a read from the terminal happened to stop. Nothing has measured the
+ *   bytes, so a sequence cut off there is joined to the next chunk.
+ * - `"event"`: the end of one of ink's input events. ink's parser measures every CSI and SS3
+ *   before it emits anything, and holds one still arriving until a `setImmediate` passes
+ *   with nothing more - so an event that is an unfinished `ESC [` or `ESC O`, or a bare ESC,
+ *   is ink saying nothing followed. It was a keypress, Alt+[ or Alt+Shift+O or Escape, and it
+ *   resolves here as one. Joining it to the next event instead is second-guessing a parse
+ *   already done: Alt+Shift+O and a paste lost the paste's first character to it, taken as
+ *   the SS3's final byte. The string family is not measured by ink at all - the introducer
+ *   and the body arrive as separate events - so it is still joined across events, and so is
+ *   anything inside a paste, where there are no keypresses and a flush boundary is only a
+ *   slow read of the terminal's own end marker.
+ *
+ *   What this costs: a terminal report that does arrive split across two turns of the event
+ *   loop - a laggy SSH link can do it - reaches the field as an unfinished CSI and then text,
+ *   exactly what Alt+[ and typing look like, and its body goes into the key. Outside a paste,
+ *   nothing at this layer can tell the two apart.
+ */
+export type SecretChunkEdge = "read" | "event";
+
+export function readSecretChunk(state: SecretInputState, chunk: string, edge: SecretChunkEdge): SecretChunk {
   let buffer = `${state.pending}${chunk}`;
   let pasting = state.pasting;
   let text = "";
 
   while (buffer.length > 0) {
     if (buffer[0] === ESC) {
-      const sequence = scanEscape(buffer);
-      // Still arriving: keep it whole and wait, which is how a paste keeps its second half.
-      if (sequence === "incomplete") return { state: { pending: buffer, pasting }, text };
+      let sequence = scanEscape(buffer);
+      if (sequence === "incomplete") {
+        // Still arriving: keep it whole and wait, which is how a paste keeps its second half.
+        if (edge === "read" || pasting || isStringSequence(buffer))
+          return { state: { pending: buffer, pasting }, text };
+        sequence = LONE_ESCAPE;
+      }
       if (sequence === "runaway") return { state: { ...EMPTY_SECRET_INPUT }, text: "", problem: "unreadable" };
       buffer = buffer.slice(sequence.consumed);
       if (sequence.kind === "paste-start") pasting = true;
@@ -221,6 +285,27 @@ export function readSecretChunk(state: SecretInputState, chunk: string): SecretC
     if (char >= " " && char !== "\u007f") text += char;
   }
   return { state: { pending: "", pasting }, text };
+}
+
+function isStringSequence(buffer: string): boolean {
+  return buffer[0] === ESC && STRING_INTRODUCERS.has(buffer[1] ?? "");
+}
+
+/**
+ * What a field's half-read input comes to once nothing more is coming for it: the field has
+ * been left.
+ *
+ * Leaving is an arrow, a tab or an Enter, and each of those interrupts a sequence still open
+ * - so this resolves one exactly as that keystroke would have, as a lone Escape followed by
+ * text. The caller needs it because the keystroke reaches two handlers, the reader and the
+ * one that moves the cursor, and the outcome must not depend on which of them hears it first.
+ *
+ * An open paste is left as it is. Its bytes are data, not a sequence a keystroke interrupted,
+ * and a caller holds the field while one is open and refuses to save one.
+ */
+export function settleSecretInput(state: SecretInputState): SecretChunk {
+  if (state.pending === "" || state.pasting) return { state, text: "" };
+  return readSecretChunk(EMPTY_SECRET_INPUT, state.pending.slice(1), "event");
 }
 
 export type SecretInputStream = NodeJS.ReadableStream & {
