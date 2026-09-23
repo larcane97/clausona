@@ -1337,13 +1337,40 @@ export async function addProfile(options: {
   return { name: options.name, email: accountInfo.email, configDir };
 }
 
-export async function loginProfile(id: string) {
+/**
+ * Whether a sign-in landed on a different account than the one registered. Codex records
+ * the account id instead of an email when its id_token carries none, so only values of
+ * the same form are compared: two emails case-insensitively, two ids exactly. An email
+ * against an id could be the same account and is not reported.
+ */
+export function isOtherAccount(registered: string, signedInAs: string): boolean {
+  const isEmail = registered.includes("@");
+  if (isEmail !== signedInAs.includes("@")) return false;
+  return isEmail ? signedInAs.toLowerCase() !== registered.toLowerCase() : signedInAs !== registered;
+}
+
+export type LoginResult =
+  | { status: "ok"; profile: Profile }
+  | { status: "other_account"; profile: Profile; signedInAs: string }
+  /** Nothing could be read back where clausona reads the account, so it is not known. */
+  | { status: "unverified"; profile: Profile };
+
+export async function loginProfile(id: string): Promise<LoginResult> {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
   const profile = registry.profiles[id];
-  const loggedIn = await getAdapter(profile.tool).runLogin(profile.configDir);
+  const adapter = getAdapter(profile.tool);
+  const loggedIn = await adapter.runLogin(profile.configDir);
   if (!loggedIn) throw new Error(`${profile.tool} login failed.`);
-  return profile;
+
+  // Which account signs in is decided by the browser session, not by this profile, so
+  // a successful login is not proof that the registered account is the one now stored.
+  // Reported rather than thrown: the sign-in completed and is what the profile now uses,
+  // and a profile whose account legitimately changed would otherwise fail every time.
+  const signedInAs = (await adapter.readAccountInfo(profile.configDir))?.email;
+  if (!signedInAs) return { status: "unverified", profile };
+  if (isOtherAccount(profile.email, signedInAs)) return { status: "other_account", profile, signedInAs };
+  return { status: "ok", profile };
 }
 
 export async function removeProfile(id: string) {

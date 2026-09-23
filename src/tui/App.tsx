@@ -6,7 +6,15 @@ import TextInput from "ink-text-input";
 import { useEffect, useRef, useState } from "react";
 
 import { bootstrapInitFromCurrentState } from "../commands.js";
-import { formatCount, formatCurrency, formatQuotaInline, localTimezoneLabel, quotaSeverity } from "../lib/format.js";
+import {
+  describeOtherAccount,
+  describeUnverifiedLogin,
+  formatCount,
+  formatCurrency,
+  formatQuotaInline,
+  localTimezoneLabel,
+  quotaSeverity,
+} from "../lib/format.js";
 import { profileId } from "../lib/profile-ref.js";
 import {
   addProfile,
@@ -258,23 +266,33 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     await new Promise((r) => setTimeout(r, 50));
     process.stdin.setRawMode?.(false);
     process.stdout.write("\x1B[2J\x1B[0;0H"); // clear screen
-    const result = await fn();
-    process.stdout.write("\x1B[2J\x1B[0;0H"); // clear screen
-    process.stdin.setRawMode?.(true);
-    process.stdin.resume();
-    setSuspended(false);
-    return result;
+    try {
+      return await fn();
+    } finally {
+      // A failed login must still hand the terminal back, or the TUI stays blank and
+      // deaf to input with the error it caught never shown. The screen is cleared either
+      // way: Ink's first frame after resuming erases the child's last lines regardless.
+      process.stdout.write("\x1B[2J\x1B[0;0H"); // clear screen
+      process.stdin.setRawMode?.(true);
+      process.stdin.resume();
+      setSuspended(false);
+    }
   }
 
   async function refreshDashboard() {
     setLoading(true);
-    const [nextProfiles, nextDoctor] = await Promise.all([listProfiles(), doctorProfiles()]);
-    setProfiles(nextProfiles);
-    setDoctor(nextDoctor);
-    setLoading(false);
-    // No registry yet — redirect to init flow
-    if (nextProfiles.length === 0 && screen !== "init") {
-      setScreen("init");
+    try {
+      const [nextProfiles, nextDoctor] = await Promise.all([listProfiles(), doctorProfiles()]);
+      setProfiles(nextProfiles);
+      setDoctor(nextDoctor);
+      // No registry yet — redirect to init flow
+      if (nextProfiles.length === 0 && screen !== "init") {
+        setScreen("init");
+      }
+    } finally {
+      // A failed reload must not leave the TUI on the Loading screen, where the caller's
+      // error message is never shown.
+      setLoading(false);
     }
   }
 
@@ -450,10 +468,22 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             })();
           } else if (overlay.kind === "login") {
             void (async () => {
+              setOverlay(null);
               try {
-                setOverlay(null);
-                await suspendTuiAndRun(() => loginProfile(overlay.profileName));
-                setMessage(`${symbol.check} Re-login completed for ${overlay.profileName}`);
+                const result = await suspendTuiAndRun(() => loginProfile(overlay.profileName));
+                setMessage(
+                  result.status === "other_account"
+                    ? `${symbol.diamond} ${describeOtherAccount(overlay.profileName, result.signedInAs, result.profile.email)}`
+                    : result.status === "unverified"
+                      ? `${symbol.diamond} ${describeUnverifiedLogin(overlay.profileName)}`
+                      : `${symbol.check} Re-login completed for ${overlay.profileName}`,
+                );
+              } catch (error) {
+                setMessage(`${symbol.cross} ${error instanceof Error ? error.message : String(error)}`);
+              }
+              // A sign-in can fail after it has already replaced the stored account, so the
+              // dashboard is reloaded either way.
+              try {
                 await refreshDashboard();
               } catch (error) {
                 setMessage(`${symbol.cross} ${error instanceof Error ? error.message : String(error)}`);

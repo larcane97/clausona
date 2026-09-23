@@ -2,8 +2,14 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { trackUsage } from "./core/track-usage.js";
-import { accent, bold, box, dim, helpSection, helpUsage, secondary, success } from "./lib/cli-style.js";
-import { renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
+import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
+import {
+  describeOtherAccount,
+  describeUnverifiedLogin,
+  renderDoctor,
+  renderList,
+  renderUsageSummary,
+} from "./lib/format.js";
 import { parseProfileRef, profileId } from "./lib/profile-ref.js";
 import {
   addProfile,
@@ -460,8 +466,17 @@ export async function runCommand(command: string, args: string[]) {
       const registry = await loadRegistry();
       if (!registry) throw new Error("clausona is not initialized.");
       const ref = parseProfileRef(input, registry);
-      const profile = await loginProfile(ref.id);
-      return success(`Token refreshed for ${bold(profile.email)}`);
+      const result = await loginProfile(ref.id);
+      if (result.status === "other_account") {
+        return [
+          `  ${warnIcon} ${describeOtherAccount(ref.id, result.signedInAs, result.profile.email)}`,
+          `       ${dim(`To switch back, sign in to ${result.profile.email} in your browser and run ${accent(`clausona login ${ref.id}`)} again`)}`,
+        ].join("\n");
+      }
+      if (result.status === "unverified") {
+        return `  ${warnIcon} ${describeUnverifiedLogin(ref.id)}`;
+      }
+      return success(`Token refreshed for ${bold(result.profile.email)}`);
     }
 
     case "config": {
