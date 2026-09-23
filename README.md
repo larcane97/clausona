@@ -366,7 +366,9 @@ go through one rule for what they print about a profile:
   prints as `<hidden>`;
 - a URL's userinfo, query and fragment print as `<hidden>`, in the base URL and in any
   setting — `HTTPS_PROXY=http://user:pass@proxy:8080` shows as
-  `http://<hidden>@proxy:8080/`. A base URL that does not parse is hidden whole;
+  `http://<hidden>@proxy:8080/`. That includes the scheme-less `user:pass@host` form, and a
+  URL anywhere in a value, after other words or on another line. A base URL that does not
+  parse is hidden whole;
 - a `command:` key source shows as `command`. Its command line can carry a vault token or the
   key itself, so it is only in `~/.clausona/profiles.json`, and a message about it says what
   failed ("secret command exited with 1") rather than quoting it;

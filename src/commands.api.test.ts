@@ -1093,6 +1093,25 @@ describe("config --base-url / --auth / --label", () => {
       expect(h.registryText()).toBe(before);
     });
 
+    // A token in the username slot: the parser calls it the scheme, and quoting "the scheme"
+    // printed the token, lowercased. It is userinfo, and is refused as userinfo.
+    it("refuses a token given as scheme-less userinfo without printing it", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      const message = await failure(
+        h.run("config", "claude:gw", "--base-url", "sk-ant-api03-TOKENabc123XYZ:@gw.example.com"),
+      );
+
+      expect(message.toLowerCase()).not.toContain("tokenabc");
+      expect(message).toContain("must not carry credentials");
+    });
+
+    it("still names the scheme of a bare host:port, which carries nothing", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      expect(await failure(h.run("config", "claude:gw", "--base-url", "localhost:8000"))).toContain("not 'localhost'");
+    });
+
     it("never prints a key given where a value belongs", async () => {
       const h = await harness({ "claude:gw": API_PROFILE });
 

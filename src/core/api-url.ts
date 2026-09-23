@@ -85,30 +85,58 @@ function withoutUrlSecrets(url: URL, original: string): string {
 export function redactBaseUrl(baseUrl: string): string {
   if (typeof baseUrl !== "string") return HIDDEN;
   if (baseUrl.trim() === "") return baseUrl;
+  let url: URL;
   try {
-    return withoutUrlSecrets(new URL(baseUrl.trim()), baseUrl);
+    url = new URL(baseUrl.trim());
   } catch {
     return HIDDEN;
   }
+  if (url.host !== "") return withoutUrlSecrets(url, baseUrl);
+  // No host: an opaque URL. `admin:pw@host` is one - the parser takes `admin` for the scheme
+  // and reports no userinfo - so the scheme-less rule applies before anything else, and the
+  // query and fragment are cut by hand, there being no host to rebuild around.
+  const bare = baseUrl.replace(BARE_USERINFO, `$1${HIDDEN}@`);
+  if (bare === baseUrl) return withoutUrlSecrets(url, baseUrl);
+  return bare.replace(/\?[^#]*/, `?${HIDDEN}`).replace(/#[\s\S]*$/, `#${HIDDEN}`);
 }
 
-/** `user:pass@host`, with or without a leading `//`, which no URL parser reads as userinfo. */
-const BARE_USERINFO = /^(?:\/\/)?[^\s/@:?#]+:[^\s/@?#]*@/;
+/**
+ * Userinfo that no URL parser reads as userinfo: `user:pass@host`, `:pass@host`, after spaces
+ * or a bare `//`, at the start of any line. The password runs to the last `@` before a space,
+ * so a `/`, `?`, `#` or `@` inside it does not end it early and leave its tail behind. A
+ * `scheme://` is not this form: EMBEDDED_USERINFO has it.
+ */
+const BARE_USERINFO = /^(\s*)(?:\/\/)?(?![a-z][a-z0-9+.-]*:\/\/)[^\s@/]*:[^\s]*@/gim;
+
+/** `scheme://userinfo@` anywhere in a value - after other words, or on any line. */
+const EMBEDDED_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s]*@/gi;
+
+/**
+ * Whether a base URL carries userinfo in the scheme-less form, which the parser reports as a
+ * scheme instead. The caller that would name "the scheme" must not: it is a username, and a
+ * token pasted there comes back lowercased as one.
+ */
+export function hasBareUserinfo(baseUrl: string): boolean {
+  return new RegExp(BARE_USERINFO.source, "im").test(baseUrl);
+}
 
 /**
  * A value from a profile's env map, with any URL credential in it hidden. HTTPS_PROXY is the
  * usual carrier - `http://user:pass@proxy:8080` - and proxies take the scheme-less form too.
+ * A URL is looked for anywhere in the value, not only as the whole of it: after an option
+ * name, or on a second line.
  *
  * Unlike `redactBaseUrl`, a value that is not a URL is left alone: most of the map is model
- * ids and numbers. A query is hidden only on a URL with a host, so a value that merely parses
- * as one - an ARN, `foo:bar?x` - is not rewritten.
+ * ids and numbers. A query is hidden only on a value that is a URL with a host, so one that
+ * merely parses as a URL - an ARN, `foo:bar?x` - is not rewritten.
  */
 export function redactUrlsIn(value: string): string {
+  let shown = value;
   try {
     const url = new URL(value.trim());
-    if (url.host !== "") return withoutUrlSecrets(url, value);
+    if (url.host !== "") shown = withoutUrlSecrets(url, value);
   } catch {
-    // Not a URL; the scheme-less form below is the one left to look for.
+    // Not a URL as a whole; the embedded and scheme-less forms below are what is left.
   }
-  return value.replace(BARE_USERINFO, `${HIDDEN}@`);
+  return shown.replace(EMBEDDED_USERINFO, `$1${HIDDEN}@`).replace(BARE_USERINFO, `$1${HIDDEN}@`);
 }

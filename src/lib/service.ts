@@ -14,7 +14,7 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { checkBaseUrl, isAnthropicHost } from "../core/api-url.js";
+import { checkBaseUrl, hasBareUserinfo, isAnthropicHost } from "../core/api-url.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
 import { backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
@@ -1887,7 +1887,14 @@ export function parseBaseUrl(baseUrl: string): URL {
       case "unparseable":
         throw new Error("Invalid base URL: must be an absolute http:// or https:// URL.");
       case "scheme":
-        throw new Error(`Invalid base URL: the scheme must be http or https, not '${checked.problem.scheme}'.`);
+        // With no `//`, `user:pass@host` parses with the username as its "scheme": naming it
+        // would print a token pasted there. It is userinfo, and is refused as userinfo.
+        if (!hasBareUserinfo(baseUrl)) {
+          throw new Error(`Invalid base URL: the scheme must be http or https, not '${checked.problem.scheme}'.`);
+        }
+        throw new Error(
+          "Invalid base URL: it must not carry credentials. Supply the key through the key source instead.",
+        );
       default:
         throw new Error(
           "Invalid base URL: it must not carry credentials. Supply the key through the key source instead.",

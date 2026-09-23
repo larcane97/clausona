@@ -133,6 +133,15 @@ describe("evaluateApiHealth", () => {
       expect(issues[0].message).not.toContain("gpu-box:30000");
     });
 
+    // Parses with an empty host, and the "scheme" is the username: never quote any of it.
+    it("reports scheme-less userinfo as credentials, quoting none of it", () => {
+      const message = health({ profile: withApi("admin-name:pw-0040@gpu-box/api") })[0].message;
+
+      expect(message).toContain("username or password");
+      expect(message).not.toContain("admin-name");
+      expect(message).not.toContain("pw-0040");
+    });
+
     it("reports a scheme the tool cannot call", () => {
       const issues = health({ profile: withApi("ftp://gpu-box/api") });
 

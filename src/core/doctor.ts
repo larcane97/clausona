@@ -1,5 +1,5 @@
 import type { DoctorIssue, Profile } from "../types.js";
-import { checkBaseUrl, redactBaseUrl } from "./api-url.js";
+import { checkBaseUrl, hasBareUserinfo, redactBaseUrl } from "./api-url.js";
 import { keySourcePhrase } from "./key-source.js";
 
 export function evaluateSymlinkHealth({
@@ -154,8 +154,13 @@ function baseUrlProblem(baseUrl: string, remedy: string): string | undefined {
     case "unparseable":
       return `the base URL is not an absolute http:// or https:// URL - ${remedy}`;
     case "scheme":
-      // A scheme cannot contain userinfo, so naming it gives nothing away.
-      return `the base URL's scheme is '${checked.problem.scheme}', not http or https - ${remedy}`;
+      // A real scheme cannot contain userinfo, so naming it gives nothing away. But with no
+      // `//`, `admin:pw@host` parses with the username as its "scheme" - so that shape is
+      // reported as the credentials it is, and none of it is quoted.
+      if (!hasBareUserinfo(baseUrl)) {
+        return `the base URL's scheme is '${checked.problem.scheme}', not http or https - ${remedy}`;
+      }
+      return `the base URL carries a username or password - put the key in the key source instead, and ${remedy}`;
     default:
       return `the base URL carries a username or password - put the key in the key source instead, and ${remedy}`;
   }

@@ -41,6 +41,20 @@ describe("redactBaseUrl", () => {
     expect(redactBaseUrl(url)).toBe(expected);
   });
 
+  // `admin:pw@host` parses - as an opaque URL whose "scheme" is the username and whose host
+  // is empty - so the parser reports no userinfo. The scheme-less rule has to apply here too.
+  it.each([
+    ["userinfo with no scheme", "admin:pw-0027@gw.example.com", `${HIDDEN}@gw.example.com`],
+    [
+      "the same with a path and a query",
+      "admin:pw-0028@gw.example.com/api?k=q-0029",
+      `${HIDDEN}@gw.example.com/api?${HIDDEN}`,
+    ],
+    ["a token with an empty password", "sk-ant-api03-t-0030:@gw.example.com", `${HIDDEN}@gw.example.com`],
+  ])("hides %s in a base URL", (_label, url, expected) => {
+    expect(redactBaseUrl(url)).toBe(expected);
+  });
+
   // A URL that does not parse cannot be taken apart, and it can still hold a password:
   // `//admin:pw@host` is one. So none of it is printed.
   it("hides a URL that does not parse, whole", () => {
@@ -81,6 +95,24 @@ describe("redactUrlsIn (a value in the env map)", () => {
     ],
     ["the same after a bare //", "//user:pw-0013@proxy.example.com", `${HIDDEN}@proxy.example.com`],
     ["a base URL's query", "https://gw.example.com/api?key=q-0014", `https://gw.example.com/api?${HIDDEN}`],
+    // The forms a password takes that a narrower pattern stopped short of.
+    ["a / in a scheme-less password", "u:pw/0031@proxy.example.com:1080", `${HIDDEN}@proxy.example.com:1080`],
+    ["a ? in a scheme-less password", "u:pw?0032@proxy.example.com", `${HIDDEN}@proxy.example.com`],
+    ["a # in a scheme-less password", "u:pw#0033@proxy.example.com", `${HIDDEN}@proxy.example.com`],
+    ["an @ in a scheme-less password", "u:pw@0034@proxy.example.com", `${HIDDEN}@proxy.example.com`],
+    ["an empty username", ":pw-0035@proxy.example.com:6379", `${HIDDEN}@proxy.example.com:6379`],
+    ["a leading space", " u:pw-0036@proxy.example.com", ` ${HIDDEN}@proxy.example.com`],
+    [
+      "a URL after other words",
+      "--proxy http://u:pw-0037@proxy.example.com",
+      `--proxy http://${HIDDEN}@proxy.example.com`,
+    ],
+    [
+      "an @ in the password of a URL after other words",
+      "x http://u:pw@0038@proxy.example.com",
+      `x http://${HIDDEN}@proxy.example.com`,
+    ],
+    ["userinfo on a second line", "first\nu:pw-0039@proxy.example.com", `first\n${HIDDEN}@proxy.example.com`],
   ])("hides %s", (_label, value, expected) => {
     expect(redactUrlsIn(value)).toBe(expected);
   });
