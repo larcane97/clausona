@@ -324,6 +324,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     }
   }, [stdout, write]);
   const [profiles, setProfiles] = useState<ProfileListItem[]>([]);
+  // Bumped by every reload, so quota is read again after a switch, a sign-in or a repair.
+  const [quotaEpoch, setQuotaEpoch] = useState(0);
   /** Registered ids, for the name check the API form runs while a name is being typed. */
   const existingProfileIds = profiles.map((profile) => profile.name);
   const [doctor, setDoctor] = useState<DoctorProfileResult[]>([]);
@@ -1026,7 +1028,16 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       // `detail` because the preview panel says what an API profile is - its endpoint, its
       // model, and where its key is read from. `list --json` does not ask for it.
       const [nextProfiles, nextDoctor] = await Promise.all([listProfiles({ detail: true }), doctorProfiles()]);
-      setProfiles(nextProfiles);
+      // The list carries no quota - that is fetched after it and merged in. A reload keyed on
+      // the same profile set would not fetch again, so the panel sat on "loading" from the first
+      // switch on. The reading it had stays until the new one lands, and the epoch fetches it.
+      setProfiles((prev) =>
+        nextProfiles.map((next) => {
+          const quota = next.quota ?? prev.find((p) => p.name === next.name)?.quota;
+          return quota === undefined ? next : { ...next, quota };
+        }),
+      );
+      setQuotaEpoch((epoch) => epoch + 1);
       setDoctor(nextDoctor);
       // No registry yet — redirect to init flow
       if (nextProfiles.length === 0 && screen !== "init") {
@@ -1059,7 +1070,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     return () => {
       cancelled = true;
     };
-  }, [profileKey]);
+  }, [profileKey, quotaEpoch]);
 
   useEffect(() => {
     if (screen === "init") {

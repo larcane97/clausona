@@ -5,7 +5,7 @@ import { render } from "ink-testing-library";
 import { useEffect } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { DoctorProfileResult } from "../types.js";
+import type { DoctorProfileResult, QuotaSnapshot } from "../types.js";
 
 vi.mock("../commands", () => ({
   bootstrapInitFromCurrentState: vi.fn(async () => ({
@@ -249,6 +249,40 @@ describe("App profile list, for an API profile", () => {
     }
 
     expect(written.join("")).toContain("Switched to claude:gw (gpu-box)");
+  });
+
+  it("keeps the preview's quota through a switch from the dashboard, and reads it again", async () => {
+    // The reload after a switch replaced the list with one that carries no quota, and the fetch
+    // was keyed on the profile set alone - unchanged by a switch - so the panel read "loading…"
+    // until the TUI was restarted.
+    const { fetchProfileQuotas } = await import("../lib/service.js");
+    const quota: QuotaSnapshot = { state: "ok", fetchedAt: Date.now(), session: { usedPercent: 42, resetsAt: null } };
+    vi.mocked(fetchProfileQuotas).mockImplementation(async () => ({ default: quota }));
+
+    try {
+      const instance = render(<App />);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("42%"));
+      // The dashboard's first action opens the profile list; Enter there switches.
+      await type(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Select a profile"));
+      const fetchesBefore = vi.mocked(fetchProfileQuotas).mock.calls.length;
+      await type(instance, ENTER);
+      const { setActiveProfileByName } = await import("../lib/service.js");
+      await waitForFrame(instance.lastFrame, () => vi.mocked(setActiveProfileByName).mock.calls.length > 0);
+      expect(setActiveProfileByName).toHaveBeenCalledWith("default");
+      const deadline = Date.now() + 3000;
+      while (vi.mocked(fetchProfileQuotas).mock.calls.length === fetchesBefore && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(vi.mocked(fetchProfileQuotas).mock.calls.length).toBeGreaterThan(fetchesBefore);
+      expect(instance.lastFrame()).toContain("42%");
+      expect(instance.lastFrame()).not.toContain("loading");
+      instance.unmount();
+    } finally {
+      vi.mocked(fetchProfileQuotas).mockImplementation(async () => ({}));
+    }
   });
 
   /**

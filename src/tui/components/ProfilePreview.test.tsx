@@ -101,6 +101,12 @@ describe("ProfilePreview for an API profile", () => {
     expect(panelFor(subscription)).toContain("loading");
   });
 
+  it('draws the ellipsis of "loading…", not its escape', () => {
+    // A JSX attribute string keeps `\u2026` as the six characters it is written with.
+    expect(panelFor(subscription)).toContain("loading…");
+    expect(panelFor(subscription)).not.toContain("\\u2026");
+  });
+
   it("leaves the panel standing for an API profile whose endpoint is missing", () => {
     // A hand-edited registry can carry `kind: "api"` with no block under it; the doctor
     // reports that, and the panel has nothing to say about it rather than throwing.

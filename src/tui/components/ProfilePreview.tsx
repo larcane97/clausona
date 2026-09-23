@@ -116,7 +116,8 @@ function QuotaRow({
 
 function QuotaSection({ quota, width }: { quota?: QuotaSnapshot; width: number }) {
   if (!quota) {
-    return <Row label="Quota" value="loading\u2026" valueColor={color.muted} singleLine />;
+    // The character itself: a JSX attribute string keeps a `\u2026` escape as six characters.
+    return <Row label="Quota" value="loading…" valueColor={color.muted} singleLine />;
   }
 
   const live = quota.state === "ok";
