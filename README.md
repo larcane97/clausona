@@ -468,8 +468,9 @@ An API profile has no account file and no stored login, so `doctor` looks for ne
 reports neither missing. It checks these instead:
 
 - that the profile's config directory is still there. `clausona repair` cannot rebuild one —
-  it only links into a directory it did not create — so the fix is to remove and add the
-  profile again
+  it only links into a directory it did not create — so the fix is `clausona remove
+  <profile>` and then `clausona add` under a new name. `remove` puts the directory back from
+  the profile's backup, so the old name stays taken until you delete that directory
 - the base URL, which only a hand-edited `profiles.json` can break. The URL is never quoted
   back, because a hand-edited one can carry a password; `config <profile> --show` is where to
   read it, and `config <profile> --base-url <url>` is how to put it right. A profile with no

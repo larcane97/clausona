@@ -356,7 +356,11 @@ describe("a profile whose config directory is gone", () => {
     // still printed inside the message body, which is what a user reads.
     expect(kinds(results, "claude:glm")).toEqual(["missing_config_dir"]);
     expect(rendered).not.toContain("clausona repair");
-    expect(rendered).toContain("remove and re-add the profile");
+    // Nor "remove and re-add the profile": remove puts the directory back from its backup,
+    // and add refuses a name whose directory exists, so that advice failed at the re-add.
+    expect(rendered).not.toContain("re-add the profile");
+    expect(rendered).toContain("'clausona remove claude:glm' and then 'clausona add <new-name> --api");
+    expect(rendered).toContain("the old name stays taken until you delete it");
   });
 
   it("leaves a subscription profile in the same state reporting exactly what it always did", async () => {

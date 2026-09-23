@@ -209,10 +209,12 @@ export function evaluateApiHealth({
     // run for an API profile; the shared-link checks only speak when the primary holds a
     // directory this profile could be missing, so a primary that holds none left a profile
     // pointing at nothing looking healthy. `repair` cannot help - it symlinks into a
-    // directory it does not create - so the remedy is to add the profile again.
+    // directory it does not create - so the remedy is to add the profile again. Not under
+    // the same name as things stand: remove puts the directory back from the profile's
+    // backup, and add refuses a name whose directory exists.
     issues.push({
       kind: "missing_config_dir",
-      message: `config directory ${profile.configDir} is missing - remove and re-add the profile`,
+      message: `config directory ${profile.configDir} is missing - run 'clausona remove ${id}' and then 'clausona add <new-name> --api --base-url <url>' - remove puts the directory back from its backup, so the old name stays taken until you delete it`,
     });
   }
 
