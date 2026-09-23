@@ -561,8 +561,12 @@ export function renderDoctor(results: DoctorProfileResult[]) {
 
     // repair cannot produce a credential, so a profile that only needs one has to be
     // pointed at login instead of at a command that would report success and change
-    // nothing. A profile carrying both classes of issue needs both steps.
-    const needsLogin = result.issues.some((issue) => CREDENTIAL_ISSUE_KINDS.has(issue.kind));
+    // nothing. A profile carrying both classes of issue needs both steps. Not a kind
+    // clausona does not know: that is why it reads as a subscription missing its login,
+    // and signing one in would put a subscription where an API profile was meant to be.
+    const needsLogin =
+      !result.issues.some((issue) => issue.kind === "invalid_profile_kind") &&
+      result.issues.some((issue) => CREDENTIAL_ISSUE_KINDS.has(issue.kind));
     const needsRepair = offersRepair(result.issues);
     const suggestions: string[] = [];
     if (needsRepair) suggestions.push(`       ${dim(`Run ${accent(`clausona repair ${result.name}`)} to fix`)}`);

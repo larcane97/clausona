@@ -1080,7 +1080,7 @@ export async function doctorProfiles(
     if (profile.kind !== undefined && profile.kind !== "subscription" && profile.kind !== "api") {
       issues.push({
         kind: "invalid_profile_kind",
-        message: `the profile's kind in ~/.clausona/profiles.json is not subscription or api, so clausona treats it as a subscription profile - remove it with 'clausona remove ${id}' and add it again`,
+        message: `the profile's kind in ~/.clausona/profiles.json is not subscription or api, so clausona treats it as a subscription profile - remove it with 'clausona remove ${id}' and add it again under a new name, since remove keeps the config directory and the old name stays taken`,
       });
     }
 
@@ -1623,8 +1623,12 @@ async function cleanupProfile(
 
   // The registry entry is about to go; a credential outliving it is a credential nothing
   // will ever clean up. Only an API profile can own one, and gating on that keeps removing
-  // a subscription profile from reaching into the credential store at all.
-  if (profile.kind === "api") await deleteSecret(profileId(profile.tool, name)).catch(() => {});
+  // a subscription profile from reaching into the credential store at all. An endpoint block
+  // that says the key is stored owns one whatever the kind says: a hand-edited kind is read
+  // as a subscription, and its key was left behind.
+  if (profile.kind === "api" || profile.api?.secret?.source === "keychain") {
+    await deleteSecret(profileId(profile.tool, name)).catch(() => {});
+  }
 
   // 1a. Strip inner symlinks from plugins/ dir (real dir with inner symlinks)
   const profilePlugins = path.join(profile.configDir, "plugins");

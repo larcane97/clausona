@@ -2441,6 +2441,26 @@ describe("a hand-edited kind, label or auth scheme", () => {
     expect(h.profile("claude:gw").api?.authScheme).toBe("bearer");
     expect(await findings("invalid_api_config")).toEqual([]);
   });
+
+  it("gets a remedy that works for a kind that is not one there is, and remove deletes its stored key", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const h = await harness();
+    promptAnswers.push(KEY);
+    await h.run("add", "claude:kc", "--api", "--base-url", "https://openrouter.ai/api");
+    const registry = h.registry();
+    registry.profiles["claude:kc"] = { ...registry.profiles["claude:kc"], kind: "API" as Profile["kind"] };
+    writeFileSync(path.join(h.home, ".clausona", "profiles.json"), JSON.stringify(registry));
+
+    const report = stripAnsi(String(await h.run("doctor")));
+    await h.run("remove", "claude:kc");
+
+    // remove keeps the config directory, so adding it again under its own name is refused.
+    expect(report).toContain("add it again under a new name");
+    // Read as a subscription, it lacks a login - but signing one in would make what was
+    // meant as an API profile's directory a subscription's.
+    expect(report).not.toContain("clausona login claude:kc");
+    expect(h.storedSecrets()).toEqual({});
+  });
 });
 
 /**

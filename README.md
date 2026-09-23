@@ -460,7 +460,9 @@ go through one rule for what they print about a profile:
 - a control character — an escape sequence a hand edit left in a profile's label, kind or
   auth scheme — is dropped, so printing a profile cannot drive your terminal. `doctor`
   reports a kind that is not `subscription` or `api`, and an auth scheme that is not
-  `bearer` or `api-key`, with the command that fixes it.
+  `bearer` or `api-key`, with the command that fixes it. For the kind, the fix is `remove` and
+  then `add` under a new name, since `remove` keeps the config directory; `remove` deletes a key
+  clausona stored for the profile whatever its kind says.
 
 Only what is printed changes, not what is stored or what reaches `claude`. The two
 exceptions are the ones whose job is the values: the shell hook, which hands them to the
