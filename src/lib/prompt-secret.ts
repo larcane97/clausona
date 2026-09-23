@@ -413,6 +413,34 @@ function isStringSequence(buffer: string): boolean {
 }
 
 /**
+ * Whether one of ink's input events is a key chord - ESC and one character - rather than
+ * anything for the TUI's key field to read.
+ *
+ * ink hands a real Escape over on its own, once a `setImmediate` has passed with nothing after
+ * it, and that Escape leaves the form. So an event of ESC and one character is a key pressed
+ * with Alt - or with Option: iTerm2's "Natural Text Editing" sends Option+arrows as ESC b and
+ * ESC f - or an Escape and a key a laggy link ran together, where the Escape was the point.
+ * Neither is part of a key. Read the way `scanEscape` reads it, as a lone Escape and then a
+ * character, Alt+b typed a `b` into the key, and Alt+Backspace erased twice: once through the
+ * App's erase, which ink names it for, and once through the reader.
+ *
+ * Not a string introducer: ink does not measure those, so `ESC ]` and the rest arrive as a
+ * two-character event with the payload after it, for the reader to join. And not while the
+ * reader holds part of a sequence or a paste, where `ESC \` is the terminator it waits for and
+ * every byte between a paste's brackets is data.
+ */
+export function isKeyChordEvent(state: SecretInputState, event: string): boolean {
+  const chars = [...event];
+  return (
+    state.pending === "" &&
+    !state.pasting &&
+    chars.length === 2 &&
+    chars[0] === ESC &&
+    !STRING_INTRODUCERS.has(chars[1] ?? "")
+  );
+}
+
+/**
  * What a field's half-read input comes to once nothing more is coming for it: the field has
  * been left.
  *

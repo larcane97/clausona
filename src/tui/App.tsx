@@ -23,6 +23,7 @@ import {
   BRACKETED_PASTE_OFF,
   BRACKETED_PASTE_ON,
   EMPTY_SECRET_INPUT,
+  isKeyChordEvent,
   keyTextProblem,
   PASTE_END,
   PASTE_START,
@@ -615,9 +616,11 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    * with one that is still arriving held until a `setImmediate` passes with nothing more. So
    * an event's end is authoritative for those - an unfinished `ESC [` handed over on its own
    * is a keypress, and the reader is told as much (`"event"`, in prompt-secret.ts, which also
-   * says what that costs). What ink does not measure is the string family - `ESC ]`, `ESC P`,
-   * `ESC X`, `ESC ^`, `ESC _` arrive as a two-character event with the payload following as
-   * text - and joining those across events is what `pending` is for.
+   * says what that costs). Any ESC and one character on its own is a key chord, Alt+[ among
+   * them, and never reaches the reader (`isKeyChordEvent`). What ink does not measure is the
+   * string family - `ESC ]`, `ESC P`, `ESC X`, `ESC ^`, `ESC _` arrive as a two-character event
+   * with the payload following as text - and joining those across events is what `pending` is
+   * for.
    *
    * `useInput` keeps the named keys below - erase, ctrl-u, return, esc, the arrows - and
    * appends nothing, so there is exactly one writer.
@@ -686,6 +689,15 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       }
       if (readFieldPaste(input)) return;
       if (inputTarget.current !== KEY_FIELD || droppingPaste.current) return;
+      // Alt and a key: not the key's, and an Alt+Backspace is the App's erase already.
+      if (isKeyChordEvent(secretInput.current, input)) return;
+      // A paste is a whole key, never the rest of one: one that begins with no paste open takes
+      // the field's place. Added on, a second paste of the same key stored it twice, behind the
+      // same mask. ink hands the opening bracket over as an event of its own.
+      if (input.startsWith(PASTE_START) && !secretInput.current.pasting) {
+        secretInput.current = { ...EMPTY_SECRET_INPUT };
+        setApiKey("");
+      }
       // The writes `editApiKey` makes, inlined so that this listener depends on nothing that
       // changes every render - it is subscribed once a visit to the form, not per frame.
       //

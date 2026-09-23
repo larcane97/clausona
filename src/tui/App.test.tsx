@@ -854,17 +854,18 @@ describe("App add-profile: API endpoint", () => {
     });
 
     it.each([
-      ["Alt+Shift+O, then a paste", ["\u001bO", KEY], `O${KEY}`],
-      ["Alt+[, then a bracketed paste", ["\u001b[", `\u001b[200~${KEY}\u001b[201~`], `[${KEY}`],
-    ])("takes %s as the two keystrokes they were", async (_case, reads, expected) => {
-      // ink holds the unfinished ESC O or ESC [ for a turn, then hands it over on its own:
-      // a keypress. Joining it to the paste took the paste's first character as the SS3's
-      // final byte, or put `200~` in front of the key.
+      ["Alt+Shift+O, then a paste", ["\u001bO", KEY]],
+      ["Alt+[, then a bracketed paste", ["\u001b[", `\u001b[200~${KEY}\u001b[201~`]],
+    ])("takes %s as a chord that types nothing, and the whole paste", async (_case, reads) => {
+      // ink holds the unfinished ESC O or ESC [ for a turn, then hands it over on its own: a
+      // key chord, which is not the key's (see "a key chord on the key field"). Joining it to
+      // the paste took the paste's first character as the SS3's final byte, or put `200~` in
+      // front of the key.
       expect(
         await keyFrom(async (instance) => {
           for (const read of reads) await type(instance, read);
         }),
-      ).toBe(expected);
+      ).toBe(KEY);
     });
 
     it("takes `a` and space as characters of the key, not as the form's shortcuts", async () => {
@@ -891,6 +892,69 @@ describe("App add-profile: API endpoint", () => {
 
       expect(vi.mocked(addApiProfile)).not.toHaveBeenCalled();
       instance.unmount();
+    });
+  });
+
+  /**
+   * Keys pressed with Alt, and a paste on top of a key. Behind the constant mask neither can be
+   * seen to have gone wrong: the save says "Added", and the first launch gets a 401.
+   */
+  describe("a key chord on the key field", () => {
+    async function keyFrom(send: (instance: Instance) => Promise<void>) {
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const instance = await openApiForm();
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+      await press(instance, "https://gateway.example.com");
+      await moveTo(instance, "API key");
+      await send(instance);
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added") || f.includes("✘"));
+      const call = vi.mocked(addApiProfile).mock.calls[0]?.[0];
+      instance.unmount();
+      return call?.secretValue;
+    }
+
+    // The App's erase answers it, since ink names it Backspace, and the reader erased again.
+    it.each([
+      ["ESC DEL", "\u001b\u007f"],
+      ["ESC BS", "\u001b\b"],
+    ])("erases one character for Alt+Backspace sent as %s", async (_case, chord) => {
+      expect(
+        await keyFrom(async (instance) => {
+          await press(instance, `${KEY}x`);
+          await waitForFrame(instance.lastFrame, (f) => f.includes(MASK));
+          await type(instance, chord);
+        }),
+      ).toBe(KEY);
+    });
+
+    // iTerm2's "Natural Text Editing" sends Option+Left and Option+Right as these two.
+    it.each([
+      ["Alt+b", "\u001bb"],
+      ["Alt+f", "\u001bf"],
+    ])("types nothing into the key for %s", async (_case, chord) => {
+      expect(
+        await keyFrom(async (instance) => {
+          await press(instance, KEY.slice(0, 10));
+          await typeSlowly(instance, KEY.slice(10, 14));
+          await type(instance, chord);
+          await type(instance, KEY.slice(14));
+        }),
+      ).toBe(KEY);
+    });
+
+    // Pasting again - after a refusal, or to be sure - stored the key twice over.
+    it("replaces what the field holds with a second paste, rather than adding to it", async () => {
+      expect(
+        await keyFrom(async (instance) => {
+          await press(instance, `\u001b[200~${KEY.slice(0, 20)}\u001b[201~`);
+          await waitForFrame(instance.lastFrame, (f) => f.includes(MASK));
+          await type(instance, `\u001b[200~${KEY}\u001b[201~`);
+        }),
+      ).toBe(KEY);
     });
   });
 

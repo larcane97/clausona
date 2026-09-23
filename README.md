@@ -207,7 +207,8 @@ format needs a translation proxy of your own (LiteLLM, claude-code-router); poin
 The dashboard registers one too — **Profiles → add → API endpoint** walks the same fields,
 and says under a field what the CLI would print for it: that an `http://` endpoint off this
 machine sends the key unencrypted, or that a setting whose name says it holds a secret is
-stored in plain text.
+stored in plain text. Its key field shows a constant mask, never the key: a paste there
+replaces whatever the field held, and a key pressed with Alt or Option types nothing into it.
 
 ### The model
 
