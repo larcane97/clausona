@@ -1712,6 +1712,41 @@ describe("the plain-text credential warning", () => {
 });
 
 /**
+ * A `command:` key source that fails. Its command line is hidden on every path, so the
+ * message cannot quote it - and must still say where it is and what replaces it. Not
+ * `config --edit`: that opens the env map, and the command lives in the endpoint block.
+ */
+describe.skipIf(process.platform === "win32")("a key command that fails", () => {
+  for (const [label, run, said] of [
+    ["exits non-zero", "exit 3", "exited with 3"],
+    ["prints nothing", "true", "produced no output"],
+  ] as const) {
+    it(`says where the command is when it ${label}, and the command it names fixes it`, async () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      allowShell = true;
+      const h = await harness({
+        "claude:gw": { ...API_PROFILE, api: { ...API_PROFILE.api, secret: { source: "command", run } } },
+      });
+      const findings = async () =>
+        (JSON.parse(String(await h.run("doctor", "--json"))) as DoctorProfileResult[])
+          .flatMap((result) => result.issues)
+          .filter((issue) => issue.kind === "missing_api_secret");
+
+      const [finding] = await findings();
+      expect(finding?.message).toContain(said);
+      expect(finding.message).toContain("~/.clausona/profiles.json");
+      expect(finding.message).not.toContain(run);
+      const commands = advisedCommands(finding.message);
+      expect(commands.length, finding.message).toBe(1);
+      const argv = commands[0].map((arg) => (arg === 'command:"<command>"' ? "command:echo sk-fake-cmd-0008" : arg));
+      await h.run(argv[0], ...argv.slice(1));
+
+      expect(await findings()).toEqual([]);
+    });
+  }
+});
+
+/**
  * An env map a hand edit left as a list or a string. It is applied as nothing - no key of
  * it is a variable name - and printed as `<hidden>`, so doctor is where it is found. The
  * remedy is --edit, which opens what is there and saves the object it is given.

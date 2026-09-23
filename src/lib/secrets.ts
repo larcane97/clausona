@@ -164,9 +164,13 @@ export async function resolveSecret(profileId: string, source: SecretSource, bac
     const shell = process.platform === "win32" ? "powershell" : "/bin/sh";
     const args = process.platform === "win32" ? ["-NoProfile", "-Command", source.run] : ["-c", source.run];
     const { code, stdout } = await run(shell, args);
-    if (code !== 0) throw new Error(`secret command exited with ${code}`);
+    // The command line is not quoted, so the message says where it is instead - profiles.json,
+    // the one place it is shown - and what replaces it. Not `config --edit`: that opens the
+    // env map, and the command lives in the endpoint block.
+    const remedy = `run it yourself to see why - it is in ~/.clausona/profiles.json - or replace it with 'clausona config ${profileId} --key-from command:"<command>"'`;
+    if (code !== 0) throw new Error(`secret command exited with ${code} - ${remedy}`);
     const first = stdout.split(/\r?\n/)[0]?.trim() ?? "";
-    if (first === "") throw new Error("secret command produced no output");
+    if (first === "") throw new Error(`secret command produced no output - ${remedy}`);
     return first;
   }
 
