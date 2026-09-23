@@ -26,9 +26,11 @@ import {
 } from "./lib/profile-ref.js";
 import { promptSecret } from "./lib/prompt-secret.js";
 import { describeSecretSource, HIDDEN, hiddenEnvKeys, isCredentialEnvKey, redactProfile } from "./lib/redact.js";
+import { secretStoreName } from "./lib/secrets.js";
 import {
   addApiProfile,
   addProfile,
+  checkApiTool,
   checkLabel,
   checkModelEntry,
   defaultAuthScheme,
@@ -642,6 +644,9 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("No request is made to the endpoint. A healthy report means the profile is")}`,
         `    ${dim("configured and its key resolves, not that the endpoint answered.")}`,
         "",
+        `    ${dim("When a profile's key is stored by clausona (--key-from keychain), the report")}`,
+        `    ${dim("ends by saying where: the macOS Keychain, or ~/.clausona/secrets.json elsewhere.")}`,
+        "",
       ].join("\n");
 
     case "config":
@@ -721,6 +726,8 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim('--key-from env:NAME and command:"..." store a reference. Each is resolved again')}`,
         `    ${dim("every time the profile is used, in the shell that runs claude, so the variable")}`,
         `    ${dim("has to be exported there. --key stores the key itself and needs nothing set up.")}`,
+        `    ${dim("Moving to env: or command: deletes a stored key, and says so; a variable that")}`,
+        `    ${dim("is not set where you run config gets a warning, not a refusal.")}`,
         "",
         `  ${bold("WHAT --show PRINTS")}`,
         `    ${dim("The same as current, list and the dashboard, in text and in --json: never the")}`,
@@ -781,11 +788,11 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("ARGUMENTS")}`,
         `    ${accent("profile".padEnd(14))}${dim("Profile to use (overrides shell-init env)")}`,
-        `    ${accent("args".padEnd(14))}${dim("Arguments passed through to the tool's CLI")}`,
+        `    ${accent("args".padEnd(14))}${dim("Arguments passed through to the tool's CLI; a leading -- is dropped")}`,
         "",
         `  ${bold("EXAMPLES")}`,
         `    ${dim("clausona run claude:work")}`,
-        `    ${dim("clausona run claude:personal -p /path/to/project")}`,
+        `    ${dim("clausona run claude:personal -p 'summarize this repo'")}`,
         `    ${dim("clausona run codex:personal -- 'review this'")}`,
         "",
       ].join("\n");
@@ -989,7 +996,15 @@ export async function runCommand(command: string, args: string[]) {
 
     case "doctor": {
       const results = await doctorProfiles();
-      return jsonFlag(args) ? JSON.stringify(results, null, 2) : renderDoctor(results);
+      if (jsonFlag(args)) return JSON.stringify(results, null, 2);
+      // Said once, after every profile, and only when some API profile has a key stored:
+      // a registry with none gets the report it always got.
+      const registry = await loadRegistry();
+      const keysStored = Object.values(registry?.profiles ?? {}).some(
+        (profile) => profile.kind === "api" && profile.api?.secret?.source === "keychain",
+      );
+      const rendered = renderDoctor(results);
+      return keysStored ? `${rendered}  ${dim(`Stored API keys are kept in ${secretStoreName()}.`)}\n` : rendered;
     }
 
     case "repair": {
@@ -1155,8 +1170,17 @@ export async function runCommand(command: string, args: string[]) {
         const secret = parseSecretSource(keyFrom ?? "keychain");
         const value = secret.source === "keychain" ? await promptSecret("API key: ") : undefined;
         if (secret.source === "keychain" && !value) throw new Error(NO_KEY_SUPPLIED);
-        await updateProfileSecret(ref.id, secret, value);
-        return success(`Updated the credential for ${bold(ref.id)}`);
+        const { deletedStoredKey } = await updateProfileSecret(ref.id, secret, value);
+        // Warned, not refused: the variable is read at every launch, in the shell that runs
+        // claude, and the user may be about to export it in their rc file.
+        if (secret.source === "env" && !process.env[secret.name]) {
+          process.stderr.write(
+            `  ${warnIcon} The key now comes from ${describeSecretSource(secret)}, which is not set in this shell.\n` +
+              "    Export it where claude runs - in your shell's rc file, for one - or the next launch has no key.\n",
+          );
+        }
+        const deleted = deletedStoredKey ? ` ${dim(`(deleted the key stored in ${secretStoreName()})`)}` : "";
+        return success(`Updated the credential for ${bold(ref.id)}${deleted}`);
       }
 
       if (openEditor) return await editProfileEnv(ref.id, profile);
@@ -1231,6 +1255,9 @@ export async function runCommand(command: string, args: string[]) {
       }
 
       if (api) {
+        // addApiProfile's own check, called here so that a Codex profile is refused before
+        // the key prompt rather than after the key is typed.
+        checkApiTool(tool);
         const baseUrl = optionValue(args, "--base-url");
         if (!baseUrl) throw new Error(ADD_API_USAGE);
         // `parseBaseUrl` is addApiProfile's own check, exported and called here so that a

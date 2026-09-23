@@ -330,6 +330,15 @@ describe("add --api", () => {
       expect(promptCalls).toEqual([]);
     });
 
+    it("refuses a Codex profile before asking for a key", async () => {
+      const h = await harness();
+
+      const message = await failure(h.run("add", "codex:gw", "--api", "--base-url", "https://openrouter.ai/api"));
+
+      expect(message).toBe("API profiles are Claude Code only in this version.");
+      expect(promptCalls).toEqual([]);
+    });
+
     it("says what is missing when --base-url is left out", async () => {
       const h = await harness();
 
@@ -887,6 +896,36 @@ describe("config --key", () => {
 
     expect(h.profile("claude:gw").api?.secret).toEqual({ source: "env", name: "MY_KEY" });
     expect(promptCalls).toEqual([]);
+  });
+
+  // Linux, so the store the line names is the file these tests' key lives in.
+  it("says a stored key was deleted when the source moves off the credential store", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const h = await harness({ "claude:gw": API_PROFILE });
+    promptAnswers.push(KEY);
+    await h.run("config", "claude:gw", "--key");
+    vi.stubEnv("MY_KEY", "set-in-the-shell");
+
+    const output = stripAnsi(String(await h.run("config", "claude:gw", "--key-from", "env:MY_KEY")));
+
+    expect(h.storedSecrets()).toEqual({});
+    expect(output).toBe(
+      "  \u2714 Updated the credential for claude:gw (deleted the key stored in ~/.clausona/secrets.json)",
+    );
+    expect(h.stderr()).toBe("");
+  });
+
+  // Not refused: the variable is read in the shell that runs claude, and the user may be
+  // about to export it in their rc file. A typo, though, would otherwise go unnoticed until
+  // the next launch has no key.
+  it("warns, and still switches, when the variable is not set here", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+    vi.stubEnv("MY_KEY", "");
+
+    await h.run("config", "claude:gw", "--key-from", "env:MY_KEY");
+
+    expect(h.profile("claude:gw").api?.secret).toEqual({ source: "env", name: "MY_KEY" });
+    expect(stripAnsi(h.stderr())).toContain("The key now comes from env:MY_KEY, which is not set in this shell.");
   });
 
   it("refuses a subscription profile before asking for a key", async () => {
@@ -1801,6 +1840,57 @@ describe("doctor's advice for a broken base URL", () => {
     expect(commands.map((argv) => argv[0])).toEqual(["remove", "add"]);
     expect(await findings()).toEqual([]);
     expect(Object.keys(h.registry().profiles)).toEqual(["claude:default", "claude:gw2"]);
+  });
+});
+
+describe("doctor's advice for a config directory that is gone", () => {
+  it("is to remove and re-add the profile under its own name, and following it clears the finding", async () => {
+    // Linux, so doctor reads the primary's login from a file rather than spawning `security`.
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const h = await harness();
+    // Added, not written into the registry: add is what leaves a backup behind to restore.
+    promptAnswers.push(KEY);
+    await h.run("add", "claude:gw", "--api", "--base-url", "https://openrouter.ai/api");
+    rmSync(path.join(h.home, ".claude-gw"), { recursive: true, force: true });
+    const findings = async () =>
+      (JSON.parse(String(await h.run("doctor", "--json"))) as DoctorProfileResult[])
+        .flatMap((result) => result.issues)
+        .filter((issue) => issue.kind === "missing_config_dir");
+    const [finding] = await findings();
+    promptAnswers.push(KEY);
+
+    for (const argv of advisedCommands(finding?.message ?? "")) {
+      const args = argv.map((arg) => (arg === "<url>" ? "https://openrouter.ai/api" : arg));
+      await h.run(args[0] as string, ...args.slice(1));
+    }
+
+    expect(await findings()).toEqual([]);
+    expect(Object.keys(h.registry().profiles)).toEqual(["claude:default", "claude:gw"]);
+  });
+});
+
+/**
+ * The spec's "doctor reports which backend is in use": the one place a user learns whether a
+ * stored key is in the Keychain or in a file in their home directory.
+ */
+describe("doctor's line on where stored keys are kept", () => {
+  // Linux, so doctor reads the primary's login from a file rather than spawning `security`.
+  it("closes the report when an API profile has its key stored", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const h = await harness({ "claude:gw": API_PROFILE });
+
+    const output = stripAnsi(String(await h.run("doctor")));
+
+    expect(output.trimEnd().split("\n").at(-1)).toBe("  Stored API keys are kept in ~/.clausona/secrets.json.");
+  });
+
+  it("is not there when no profile has one", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const h = await harness({
+      "claude:gw": { ...API_PROFILE, api: { ...API_PROFILE.api, secret: { source: "env", name: "GW_KEY" } } },
+    });
+
+    expect(stripAnsi(String(await h.run("doctor")))).not.toContain("Stored API keys");
   });
 });
 

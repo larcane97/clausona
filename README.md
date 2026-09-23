@@ -148,7 +148,7 @@ A profile can be backed by an API endpoint instead of a subscription login — t
 API, a gateway such as OpenRouter, or a model you serve yourself. It sits beside your
 subscription profiles in `clausona list`, switches the same way, and shares the same
 plugins, MCP servers, and settings. In this version API profiles are for Claude Code only:
-`clausona add codex:<name> --api` is refused.
+`clausona add codex:<name> --api` is refused, before it asks for a key.
 
 ```bash
 # a hosted gateway
@@ -260,7 +260,7 @@ belongs in an argument.
 
 | Value | Where the key lives | When it is read |
 | --- | --- | --- |
-| `keychain` (default) | clausona stores it — in the macOS Keychain on a Mac, otherwise in `~/.clausona/secrets.json`, written owner-only. That includes Linux: in this version a stored key goes to that file, readable only by you, not to `secret-tool` or your desktop keyring | at every launch, from that store |
+| `keychain` (default) | clausona stores it — in the macOS Keychain on a Mac, otherwise in `~/.clausona/secrets.json`, written owner-only. That includes Linux: in this version a stored key goes to that file, readable only by you, not to `secret-tool` or your desktop keyring. `clausona doctor` ends by saying which. On a Mac a key longer than about 2,000 bytes is refused — it does not fit the one line the Keychain is handed it on — so point at such a key with `env:` or `command:` | at every launch, from that store |
 | `env:NAME` | your shell; clausona records only the variable name | at every launch, **in the shell that runs `claude`** — so `NAME` has to be exported there, not only where you ran `clausona add` |
 | `command:"…"` | wherever the command gets it — `op read`, `pass show`, `vault kv get` | at every launch, and on every `clausona doctor`; the first line of its output is the key |
 
@@ -292,7 +292,9 @@ pipe the new key into `clausona config <profile> --key`; that always means "stor
 credential store", so on a profile currently reading `env:` or `command:` it switches the
 source to `keychain` as well. `clausona config <profile> --key-from env:NAME` or
 `--key-from command:"…"` moves a profile to that source without typing a key, and deletes
-the stored one when you move away from `keychain`. `--key-from keychain` needs the key,
+the stored one when you move away from `keychain` — its success line says so. A `NAME` that
+is not set in the shell you run it from gets a warning, not a refusal: it only has to be set
+where `claude` runs. `--key-from keychain` needs the key,
 piped in or typed at the prompt, as `--key` does.
 
 `clausona config <profile> --show` prints the endpoint, the auth scheme and the key's
@@ -491,9 +493,10 @@ An API profile has no account file and no stored login, so `doctor` looks for ne
 reports neither missing. It checks these instead:
 
 - that the profile's config directory is still there. `clausona repair` cannot rebuild one —
-  it only links into a directory it did not create — so the fix is `clausona remove
-  <profile>` and then `clausona add` under a new name. `remove` puts the directory back from
-  the profile's backup, so the old name stays taken until you delete that directory
+  it only links into a directory it did not create — so the fix is to remove and re-add the
+  profile: `clausona remove <profile>`, then `clausona add <profile> --api ...` under the same
+  name. `remove` does not bring a deleted directory back; if the profile's backup under
+  `~/.clausona/backups` holds anything, it is left there and `remove` says where
 - the base URL, which only a hand-edited `profiles.json` can break. The URL is never quoted
   back, because a hand-edited one can carry a password; `config <profile> --show` is where to
   read it, and `config <profile> --base-url <url>` is how to put it right. A profile with no
@@ -508,7 +511,9 @@ reports neither missing. It checks these instead:
   so the profile still reads as healthy
 
 No request is made to the endpoint. A healthy report means the profile is configured and its
-key resolves, not that the endpoint answered — run `claude` itself to find that out.
+key resolves, not that the endpoint answered — run `claude` itself to find that out. When a
+profile's key is stored by clausona, the report ends by saying where: the macOS Keychain, or
+`~/.clausona/secrets.json` everywhere else.
 
 ## Commands
 
@@ -522,7 +527,7 @@ key resolves, not that the endpoint answered — run `claude` itself to find tha
 | `clausona add <profile> --api --base-url <url> [...]`               | Add an [API profile](#api-profiles)                  |
 | `clausona remove <profile>`                                         | Remove a profile                                     |
 | `clausona use [profile]`                                            | Switch active profile                                |
-| `clausona run <profile> [-- args...]`                               | Run the tool's CLI with a specific profile           |
+| `clausona run <profile> [-- args...]`                               | Run the tool's CLI with a specific profile (a leading `--` is dropped) |
 | `clausona list [--json] [--refresh] [--no-quota] [--no-renew]`      | List all profiles with plan quota and usage          |
 | `clausona usage [profile] [--period=today\|week\|month\|all]`       | View cost and token usage                            |
 | `clausona current [--json]`                                         | Show active profile                                  |

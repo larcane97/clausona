@@ -1414,7 +1414,12 @@ export function requireEndpoint(id: string, profile: Profile): ApiEndpoint {
   return profile.api;
 }
 
-export async function updateProfileSecret(id: string, secret: SecretSource, value?: string) {
+/** Resolves with whether a key clausona had stored was deleted, which the CLI says. */
+export async function updateProfileSecret(
+  id: string,
+  secret: SecretSource,
+  value?: string,
+): Promise<{ deletedStoredKey: boolean }> {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
   const profile = registry.profiles[id];
@@ -1427,11 +1432,10 @@ export async function updateProfileSecret(id: string, secret: SecretSource, valu
   if (toStore !== null) await storeSecret(id, toStore);
   registry.profiles[id] = { ...profile, api: { ...api, secret: source } };
   await saveRegistry(registry);
-  if (toStore === null) {
-    // Leaving a stored value behind after switching to an env or command source would
-    // keep a credential alive that nothing reads any more.
-    await deleteSecret(id).catch(() => {});
-  }
+  if (toStore !== null) return { deletedStoredKey: false };
+  // Leaving a stored value behind after switching to an env or command source would keep
+  // a credential alive that nothing reads any more.
+  return { deletedStoredKey: await deleteSecret(id).catch(() => false) };
 }
 
 /**
@@ -1569,10 +1573,22 @@ async function cleanupProfile(
   }
 
   // 2. Restore backup if available (original files before clausona setup), unless the
-  // caller found another profile keeping its backup in the same directory.
+  // caller found another profile keeping its backup in the same directory. Never into a
+  // config directory that is gone: that would bring back a directory the user deleted, with
+  // only the backup in it, and keep the name taken - add refuses a name whose directory
+  // exists. An empty backup goes with it; one that holds something is left, and said.
   if (!options.keepBackup && (await exists(backupDir))) {
-    await cp(backupDir, profile.configDir, { recursive: true });
-    await rm(backupDir, { force: true, recursive: true });
+    if (await exists(profile.configDir)) {
+      await cp(backupDir, profile.configDir, { recursive: true });
+      await rm(backupDir, { force: true, recursive: true });
+    } else if (await backupDirOccupied(backupDir)) {
+      const home = homedir();
+      warn(
+        `${profile.configDir.replace(home, "~")} no longer exists, so nothing was restored into it. What clausona set aside from it is still in ${backupDir.replace(home, "~")}: move it somewhere else, or delete it once nothing in it is needed.`,
+      );
+    } else {
+      await rmdir(backupDir).catch(() => {});
+    }
   }
 }
 
@@ -2002,6 +2018,14 @@ function checkAuthScheme(scheme: string): ApiEndpoint["authScheme"] {
   return scheme;
 }
 
+/**
+ * API profiles are Claude Code's alone in this version. Exported so the CLI refuses a Codex
+ * one before its key prompt, as it does with `parseBaseUrl`, rather than after the key is typed.
+ */
+export function checkApiTool(tool: ToolName): void {
+  if (tool !== "claude") throw new Error("API profiles are Claude Code only in this version.");
+}
+
 export async function addApiProfile(options: {
   tool: ToolName;
   name: string;
@@ -2018,9 +2042,7 @@ export async function addApiProfile(options: {
   // directory, stored credential, or registry entry behind.
   const nameCheck = validateProfileName(options.name);
   if (!nameCheck.ok) throw new Error(nameCheck.error);
-  if (options.tool !== "claude") {
-    throw new Error("API profiles are supported for claude only in this version.");
-  }
+  checkApiTool(options.tool);
   const baseUrl = options.baseUrl.trim();
   const url = parseBaseUrl(baseUrl);
   checkAuthScheme(options.authScheme);

@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { detectBackend, keychainItemFor, resolveSecret, storeSecret } from "./secrets.js";
+import { detectBackend, keychainItemFor, resolveSecret, secretStoreName, storeSecret } from "./secrets.js";
+import { keychainStandIn, splitSecurityLine } from "./test-keychain.js";
 
 const temps: string[] = [];
 afterEach(() => {
@@ -19,12 +20,30 @@ describe("keychainItemFor", () => {
 });
 
 describe("detectBackend", () => {
-  it("uses the Keychain on macOS", async () => {
-    await expect(detectBackend("darwin")).resolves.toBe("keychain");
+  it("uses the Keychain on macOS", () => {
+    expect(detectBackend("darwin")).toBe("keychain");
   });
 
-  it("falls back to a file on Windows", async () => {
-    await expect(detectBackend("win32")).resolves.toBe("file");
+  it("falls back to a file on Windows", () => {
+    expect(detectBackend("win32")).toBe("file");
+  });
+
+  // The secret-tool probe it had failed on every real secret-tool, so Linux keys were in the
+  // file all along; one that answered would have sent them to a Secret Service that may not
+  // be running. A secret-tool that answers everything with success is first on PATH here.
+  it.skipIf(process.platform === "win32")("keeps Linux keys in the file even where secret-tool answers", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "clausona-secret-tool-"));
+    temps.push(dir);
+    writeFileSync(path.join(dir, "secret-tool"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${dir}${path.delimiter}${process.env.PATH ?? ""}`);
+
+    expect(detectBackend("linux")).toBe("file");
+  });
+
+  it("names the store doctor reports", () => {
+    expect(secretStoreName("darwin")).toBe("the macOS Keychain");
+    expect(secretStoreName("linux")).toBe("~/.clausona/secrets.json");
+    expect(secretStoreName("win32")).toBe("~/.clausona/secrets.json");
   });
 });
 
@@ -53,65 +72,14 @@ describe("resolveSecret", () => {
 
 /**
  * A stand-in `security` put first on PATH, so the real one - and the user's Keychain - is
- * never reached. It records its arguments (NUL-separated, so a space inside one shows) and
- * whatever it was given on stdin, and exits with `exitCode`.
+ * never reached. It keeps its items in a file and logs every call's argv and stdin.
  */
-function securityShim(exitCode: number) {
-  const dir = mkdtempSync(path.join(tmpdir(), "clausona-security-shim-"));
+function security(writes?: "store" | "drop" | "fail") {
+  const dir = mkdtempSync(path.join(tmpdir(), "clausona-security-stand-in-"));
   temps.push(dir);
-  const argvPath = path.join(dir, "argv");
-  const stdinPath = path.join(dir, "stdin");
-  writeFileSync(
-    path.join(dir, "security"),
-    [
-      "#!/bin/sh",
-      `for arg in "$@"; do printf '%s\\0' "$arg" >> '${argvPath}'; done`,
-      `cat > '${stdinPath}'`,
-      `exit ${exitCode}`,
-      "",
-    ].join("\n"),
-    { mode: 0o755 },
-  );
-  vi.stubEnv("PATH", `${dir}${path.delimiter}${process.env.PATH ?? ""}`);
-  return {
-    called: () => existsSync(argvPath) || existsSync(stdinPath),
-    argv: () => (existsSync(argvPath) ? readFileSync(argvPath, "utf8").split("\0").slice(0, -1) : []),
-    stdin: () => readFileSync(stdinPath, "utf8"),
-  };
-}
-
-/**
- * How `security -i` splits each line it reads into arguments: split_line in Apple's
- * SecurityTool/macOS/security.c. Whitespace separates; an argument that starts with `"` or
- * `'` runs to the same quote; a backslash takes the next character literally, quoted or not.
- */
-function splitSecurityLine(line: string): string[] {
-  const args: string[] = [];
-  let current: string | null = null;
-  let quote: string | null = null;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i] as string;
-    if (current === null) {
-      if (/[ \t\n\v\f\r]/.test(ch)) continue;
-      current = "";
-      if (ch === '"' || ch === "'") {
-        quote = ch;
-        continue;
-      }
-    }
-    if (ch === "\\") {
-      i++;
-      current += line[i] ?? "";
-    } else if (quote === null ? /[ \t\n\v\f\r]/.test(ch) : ch === quote) {
-      args.push(current);
-      current = null;
-      quote = null;
-    } else {
-      current += ch;
-    }
-  }
-  if (current !== null) args.push(current);
-  return args;
+  const standIn = keychainStandIn(dir, { writes });
+  vi.stubEnv("PATH", `${standIn.bin}${path.delimiter}${process.env.PATH ?? ""}`);
+  return standIn;
 }
 
 describe.skipIf(process.platform === "win32")("storeSecret on the Keychain backend", () => {
@@ -120,17 +88,18 @@ describe.skipIf(process.platform === "win32")("storeSecret on the Keychain backe
 
   // `ps` shows every process's arguments to every user on the machine.
   it("never puts the key in security's arguments", async () => {
-    const shim = securityShim(0);
+    const keychain = security();
     await storeSecret("claude:x", KEY, "keychain");
-    expect(shim.called()).toBe(true);
-    for (const arg of shim.argv()) expect(arg).not.toContain(KEY);
+    expect(keychain.calls().length).toBeGreaterThan(0);
+    for (const { argv } of keychain.calls()) for (const arg of argv) expect(arg).not.toContain(KEY);
   });
 
   it("hands security the key intact, as one add-generic-password line on stdin", async () => {
-    const shim = securityShim(0);
+    const keychain = security();
     await storeSecret("claude:x", KEY, "keychain");
-    expect(shim.argv()).toEqual(["-i"]);
-    const input = shim.stdin();
+    const [write] = keychain.calls();
+    expect(write?.argv).toEqual(["-i"]);
+    const input = write?.stdin ?? "";
     expect(input.endsWith("\n")).toBe(true);
     expect(input.split("\n")).toHaveLength(2);
     const args = splitSecurityLine(input.slice(0, -1));
@@ -144,35 +113,60 @@ describe.skipIf(process.platform === "win32")("storeSecret on the Keychain backe
       "-X",
     ]);
     expect(Buffer.from(args.at(-1) as string, "hex").toString("utf8")).toBe(KEY);
+    expect(keychain.stored("clausona-claude:x", "claude:x")).toBe(KEY);
   });
 
   it("quotes a profile id the line splitter would otherwise break apart", async () => {
-    const shim = securityShim(0);
+    const keychain = security();
     const id = `claude:we"ird\\ 'id`;
     await storeSecret(id, KEY, "keychain");
-    const args = splitSecurityLine(shim.stdin().slice(0, -1));
+    const args = splitSecurityLine((keychain.calls()[0]?.stdin ?? "").slice(0, -1));
     expect(args.slice(0, 6)).toEqual(["add-generic-password", "-U", "-s", `clausona-${id}`, "-a", id]);
+    expect(keychain.stored(`clausona-${id}`, id)).toBe(KEY);
   });
 
   it("throws when security reports the write failed", async () => {
-    securityShim(44);
+    security("fail");
     await expect(storeSecret("claude:x", KEY, "keychain")).rejects.toThrow(/could not write Keychain item/);
+  });
+
+  // security's exit status is the OSStatus cut to 8 bits, and `-i` reports a result of -1 as
+  // 0: a write can fail and still exit 0. Reading the item back is what catches it.
+  it("throws when the write did not land although security exited 0", async () => {
+    const keychain = security("drop");
+    const outcome = await storeSecret("claude:x", KEY, "keychain").catch((error: Error) => error);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toBe("Keychain item 'clausona-claude:x' did not take the new value");
+    // Read back by service and account, the value on stdout: the key is in no argument.
+    expect(keychain.calls().map(({ argv }) => argv)).toEqual([
+      ["-i"],
+      ["find-generic-password", "-s", "clausona-claude:x", "-a", "claude:x", "-w"],
+    ]);
+  });
+
+  // find-generic-password -w prints the whole value as hex when any byte is not printable
+  // ASCII, so the read-back compares against that, not against the key as typed.
+  it("accepts the hex security prints back for a key with a non-ASCII character", async () => {
+    const keychain = security();
+    const key = ["sk", "fixture", "\u00e9t\u00e9"].join("-");
+    await expect(storeSecret("claude:x", key, "keychain")).resolves.toBeUndefined();
+    expect(keychain.stored("clausona-claude:x", "claude:x")).toBe(key);
   });
 
   // A line break would end the command there and hand the rest of the id to `security` as
   // a command of its own.
   it("refuses an id with a line break, without running security", async () => {
-    const shim = securityShim(0);
+    const keychain = security();
     await expect(storeSecret("claude:x\ndelete-keychain", KEY, "keychain")).rejects.toThrow(/line break/);
-    expect(shim.called()).toBe(false);
+    expect(keychain.calls()).toEqual([]);
   });
 
   // `security -i` cuts a longer line and runs the rest as a second command, so the item
   // would be overwritten with a truncated key.
   it("refuses a key too long for one security line, without running security", async () => {
-    const shim = securityShim(0);
+    const keychain = security();
     await expect(storeSecret("claude:x", `sk-fixture-${"k".repeat(2100)}`, "keychain")).rejects.toThrow(/too long/);
-    expect(shim.called()).toBe(false);
+    expect(keychain.calls()).toEqual([]);
   });
 });
 

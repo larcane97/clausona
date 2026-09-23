@@ -1032,7 +1032,7 @@ describe("addApiProfile", () => {
     ["the name '..'", { name: ".." }, /Invalid profile name '\.\.'/],
     ["the name '.'", { name: "." }, /Invalid profile name '\.'/],
     ["a name with a space", { name: "my glm" }, /Invalid profile name 'my glm'/],
-    ["a codex profile", { tool: "codex" }, "API profiles are supported for claude only in this version."],
+    ["a codex profile", { tool: "codex" }, "API profiles are Claude Code only in this version."],
     ["an existing id", { name: "default" }, "Profile 'claude:default' already exists."],
     [
       "an id that differs from an existing one only by case",
@@ -1580,6 +1580,40 @@ describe("updateProfileApi", () => {
 });
 
 describe("removing an API profile", () => {
+  // doctor's advice for a profile whose directory is gone is to remove it and add it again.
+  // Restoring the backup used to bring the directory back, and add refuses a name whose
+  // directory exists - so the re-add failed.
+  it("whose config directory is gone leaves it gone, and the name free to add again", async () => {
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions());
+    const configDir = h.registry().profiles["claude:glm"].configDir;
+    rmSync(configDir, { recursive: true, force: true });
+
+    await h.service.removeProfile("claude:glm");
+
+    expect(existsSync(configDir)).toBe(false);
+    expect(existsSync(path.join(h.home, ".clausona", "backups", "claude", "glm"))).toBe(false);
+    await h.service.addApiProfile(apiOptions());
+    expect(h.registry().profiles["claude:glm"].configDir).toBe(configDir);
+  });
+
+  it("whose config directory is gone keeps what its backup holds, and says where", async () => {
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions());
+    const configDir = h.registry().profiles["claude:glm"].configDir;
+    const setAside = path.join(h.home, ".clausona", "backups", "claude", "glm", "settings.json");
+    writeFileSync(setAside, '{"original":true}');
+    rmSync(configDir, { recursive: true, force: true });
+    const stderr = captureStderr();
+
+    await h.service.removeProfile("claude:glm");
+
+    expect(existsSync(configDir)).toBe(false);
+    expect(readFileSync(setAside, "utf8")).toBe('{"original":true}');
+    expect(stderr()).toContain(`is still in ${shownBackupDir("glm")}`);
+    expect(h.registry().profiles["claude:glm"]).toBeUndefined();
+  });
+
   it("deletes its stored key and nobody else's", async () => {
     const h = await harness();
     await h.service.addApiProfile(apiOptions());

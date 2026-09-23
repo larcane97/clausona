@@ -10,7 +10,7 @@ import type { SecretSource } from "../types.js";
 const CLAUSONA_DIR = path.join(homedir(), ".clausona");
 const SECRETS_PATH = path.join(CLAUSONA_DIR, "secrets.json");
 
-export type SecretBackend = "keychain" | "secret-tool" | "file";
+export type SecretBackend = "keychain" | "file";
 
 /** Namespaced so a clausona item is never confused with one Claude Code itself wrote. */
 export function keychainItemFor(profileId: string): string {
@@ -34,10 +34,19 @@ function run(command: string, args: string[], input?: string): Promise<RunResult
   });
 }
 
-export async function detectBackend(platform: NodeJS.Platform = process.platform): Promise<SecretBackend> {
-  if (platform === "darwin") return "keychain";
-  if (platform === "linux" && (await run("secret-tool", ["--version"])).code === 0) return "secret-tool";
-  return "file";
+/**
+ * The Keychain on macOS, and ~/.clausona/secrets.json (0600) everywhere else - Linux
+ * included. Not secret-tool: a probe for it cannot tell a working Secret Service from a
+ * machine with the binary and no daemon behind it, and the one it had (`--version`) failed
+ * on every real secret-tool, so the file was already where every Linux key went.
+ */
+export function detectBackend(platform: NodeJS.Platform = process.platform): SecretBackend {
+  return platform === "darwin" ? "keychain" : "file";
+}
+
+/** Where a stored key is, as doctor says it. */
+export function secretStoreName(platform: NodeJS.Platform = process.platform): string {
+  return detectBackend(platform) === "keychain" ? "the macOS Keychain" : "~/.clausona/secrets.json";
 }
 
 /**
@@ -94,52 +103,88 @@ const SECURITY_MAX_LINE = 4094;
  */
 function securityLineArg(value: string): string {
   if (/[\n\0]/.test(value)) {
-    throw new Error("could not write the Keychain item: the profile id has a line break or a NUL in it");
+    throw new Error("could not write the Keychain item: its name has a line break or a NUL in it");
   }
   return `"${value.replace(/["\\]/g, "\\$&")}"`;
 }
 
-/**
- * The key goes to `security` on stdin, never in its arguments, which `ps` shows to every user
- * on the machine. `security -i` reads commands from stdin, and exits with the status of the
- * last one it ran - so the write is the only line. The key travels as `-X <hex>`, which
- * add-generic-password has taken since macOS 10.15 (Node 20's floor), so the line splitter
- * sees nothing of it but hex digits.
- */
-async function storeKeychainSecret(profileId: string, value: string): Promise<void> {
-  const item = keychainItemFor(profileId);
-  const line = [
+/** A generic password in the login Keychain: `security` finds one by its service and account. */
+export type KeychainItem = { service: string; account: string };
+
+function addGenericPasswordLine(item: KeychainItem, hex: string): string {
+  return [
     "add-generic-password",
     "-U",
     "-s",
-    securityLineArg(item),
+    securityLineArg(item.service),
     "-a",
-    securityLineArg(profileId),
+    securityLineArg(item.account),
     "-X",
-    Buffer.from(value, "utf8").toString("hex"),
+    hex,
   ].join(" ");
+}
+
+/**
+ * How `find-generic-password -w` prints a password: as it is when every byte is printable,
+ * and as lowercase hex when any byte is not, then a newline (do_password_item_printing in
+ * keychain_find.c). Printable is isprint in the C locale - security never sets one - so
+ * 0x20-0x7e: a tab, a line break or any non-ASCII character turns the whole value to hex.
+ */
+function printedPassword(value: string): string {
+  const bytes = Buffer.from(value, "utf8");
+  return `${bytes.every((byte) => byte >= 0x20 && byte <= 0x7e) ? value : bytes.toString("hex")}\n`;
+}
+
+/**
+ * Writes `value` as the password of `item` - a new item, or with -U the one already there -
+ * and reads it back.
+ *
+ * The value goes to `security` on stdin, never in its arguments, which `ps` shows to every
+ * user on the machine. `security -i` reads commands from stdin, and exits with the status of
+ * the last one it ran - so the write is the only line. The value travels as `-X <hex>`, which
+ * add-generic-password has taken since macOS 10.15 (Node 20's floor): the line splitter sees
+ * nothing of it but hex digits, and the item gets the same bytes `-w <value>` gave it.
+ *
+ * A line longer than `security -i` reads whole goes in the arguments instead, still as
+ * `-X <hex>` - what Claude Code itself does with the same item (2.1.280 switches to the
+ * arguments past 4032 characters). Claude Code's credentials are the one value that needs it:
+ * its OAuth tokens and every MCP server's share one item, which outgrows the line, and
+ * refusing would lose a token the provider has already replaced. clausona's own keys are
+ * refused before they get here (storeKeychainSecret).
+ *
+ * The read-back is what makes the result trustworthy. The exit status is the OSStatus cut to
+ * 8 bits, so a failure whose low byte is 0 reads as success, and `-i` turns a result of -1
+ * into 0. It reads by service and account, prints the value on stdout, never in argv.
+ */
+export async function writeKeychainItem(item: KeychainItem, value: string): Promise<void> {
+  const hex = Buffer.from(value, "utf8").toString("hex");
+  const line = addGenericPasswordLine(item, hex);
+  const { code } =
+    Buffer.byteLength(line) <= SECURITY_MAX_LINE
+      ? await run("security", ["-i"], `${line}\n`)
+      : await run("security", ["add-generic-password", "-U", "-s", item.service, "-a", item.account, "-X", hex]);
+  if (code !== 0) throw new Error(`could not write Keychain item '${item.service}'`);
+
+  const readBack = await run("security", ["find-generic-password", "-s", item.service, "-a", item.account, "-w"]);
+  if (readBack.code !== 0 || readBack.stdout !== printedPassword(value)) {
+    throw new Error(`Keychain item '${item.service}' did not take the new value`);
+  }
+}
+
+async function storeKeychainSecret(profileId: string, value: string): Promise<void> {
+  const item = { service: keychainItemFor(profileId), account: profileId };
+  const line = addGenericPasswordLine(item, Buffer.from(value, "utf8").toString("hex"));
   if (Buffer.byteLength(line) > SECURITY_MAX_LINE) {
     throw new Error(
       'the key is too long to store in the Keychain - keep it elsewhere and point at it with --key-from env:NAME or --key-from command:"<command>"',
     );
   }
-  const { code } = await run("security", ["-i"], `${line}\n`);
-  if (code !== 0) throw new Error(`could not write Keychain item '${item}'`);
+  await writeKeychainItem(item, value);
 }
 
 export async function storeSecret(profileId: string, value: string, backend?: SecretBackend): Promise<void> {
-  const resolvedBackend = backend ?? (await detectBackend());
-  if (resolvedBackend === "keychain") {
+  if ((backend ?? detectBackend()) === "keychain") {
     await storeKeychainSecret(profileId, value);
-    return;
-  }
-  if (resolvedBackend === "secret-tool") {
-    const { code } = await run(
-      "secret-tool",
-      ["store", "--label", keychainItemFor(profileId), "clausona", profileId],
-      value,
-    );
-    if (code !== 0) throw new Error(`could not store secret for '${profileId}' via secret-tool`);
     return;
   }
   const values = await readSecretsFile();
@@ -147,30 +192,22 @@ export async function storeSecret(profileId: string, value: string, backend?: Se
   await writeSecretsFile(values);
 }
 
-export async function deleteSecret(profileId: string, backend?: SecretBackend): Promise<void> {
-  const resolvedBackend = backend ?? (await detectBackend());
-  if (resolvedBackend === "keychain") {
-    await run("security", ["delete-generic-password", "-s", keychainItemFor(profileId)]);
-    return;
-  }
-  if (resolvedBackend === "secret-tool") {
-    await run("secret-tool", ["clear", "clausona", profileId]);
-    return;
+/** Resolves true when a stored key was there and is gone, false when there was none to delete. */
+export async function deleteSecret(profileId: string, backend?: SecretBackend): Promise<boolean> {
+  if ((backend ?? detectBackend()) === "keychain") {
+    const { code } = await run("security", ["delete-generic-password", "-s", keychainItemFor(profileId)]);
+    return code === 0;
   }
   const values = await readSecretsFile();
-  if (!(profileId in values)) return;
+  if (!(profileId in values)) return false;
   delete values[profileId];
   await writeSecretsFile(values);
+  return true;
 }
 
 async function readStoredSecret(profileId: string, backend?: SecretBackend): Promise<string | null> {
-  const resolvedBackend = backend ?? (await detectBackend());
-  if (resolvedBackend === "keychain") {
+  if ((backend ?? detectBackend()) === "keychain") {
     const { code, stdout } = await run("security", ["find-generic-password", "-s", keychainItemFor(profileId), "-w"]);
-    return code === 0 && stdout.trim() !== "" ? stdout.trim() : null;
-  }
-  if (resolvedBackend === "secret-tool") {
-    const { code, stdout } = await run("secret-tool", ["lookup", "clausona", profileId]);
     return code === 0 && stdout.trim() !== "" ? stdout.trim() : null;
   }
   const values = await readSecretsFile();

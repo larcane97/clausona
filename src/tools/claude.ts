@@ -5,6 +5,7 @@ import path from "node:path";
 import { claudeJsonPathForConfigDir, isDefaultClaudeConfigDir, keychainServiceForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { parseClaudeQuota, QuotaHttpError } from "../core/quota.js";
+import { writeKeychainItem } from "../lib/secrets.js";
 import type { QuotaWindows } from "../types.js";
 import type { ToolAdapter, ToolCredential } from "./types.js";
 
@@ -136,20 +137,18 @@ async function readStoredBlob(configDir: string): Promise<StoredCredentials | nu
  * Persists the blob and reads it back. The read-back is not paranoia: a refresh has
  * already invalidated the previous token by this point, so a write that silently did
  * not land would leave the profile with no usable credential at all.
+ *
+ * On macOS both happen in writeKeychainItem, which hands the blob to `security` on stdin
+ * rather than in its arguments, where `ps` would show the tokens to every user on the
+ * machine - the same bytes, item and account the `-w <blob>` it replaces wrote. A blob too
+ * long for one `security -i` line still goes in the arguments, as Claude Code's own does.
  */
 async function writeStoredBlob(configDir: string, blob: StoredCredentials): Promise<void> {
   const serialized = JSON.stringify(blob);
 
   if (process.platform === "darwin") {
     const service = keychainServiceForConfigDir({ homeDir: homedir(), configDir });
-    const account = await keychainAccount(service);
-    const { code } = await runSecurity(["add-generic-password", "-U", "-s", service, "-a", account, "-w", serialized]);
-    if (code !== 0) throw new Error(`could not write Keychain item '${service}'`);
-
-    const readBack = await readKeychainBlob(service);
-    if (readBack?.claudeAiOauth?.accessToken !== blob.claudeAiOauth?.accessToken) {
-      throw new Error(`Keychain item '${service}' did not take the renewed credential`);
-    }
+    await writeKeychainItem({ service, account: await keychainAccount(service) }, serialized);
     return;
   }
 
