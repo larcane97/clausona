@@ -675,6 +675,31 @@ export async function discoverAccounts(): Promise<DiscoveredAccount[]> {
   return out;
 }
 
+/**
+ * Why profiles.json cannot be used, as one line with its remedy, or null when it can - or
+ * is not there at all, which is a clausona that has not been set up.
+ *
+ * `loadRegistry` reads a file it cannot use exactly as it reads no file, and the other
+ * commands are content with that. The doctor is not: it printed an empty report, which
+ * says nothing is wrong. JSON.parse's own message is not passed on - it quotes the text
+ * around the error, and the file can hold a key command's command line.
+ */
+export async function registryProblem(): Promise<string | null> {
+  let reason: string;
+  try {
+    const parsed: unknown = JSON.parse(await readFile(REGISTRY_PATH, "utf8"));
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) return null;
+    reason = "it is not a JSON object";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return null;
+    reason = error instanceof SyntaxError ? "it is not valid JSON" : `it could not be opened (${code ?? "unknown"})`;
+  }
+  // There is no copy of it under ~/.clausona/backups to point at: that holds each
+  // profile's own files, never the registry.
+  return `${REGISTRY_PATH.replace(homedir(), "~")} could not be read: ${reason}. Fix it by hand, or move it aside and run 'clausona init' to set clausona up again.`;
+}
+
 export async function loadRegistry(): Promise<Registry | null> {
   const raw = await readJson<unknown>(REGISTRY_PATH, null);
   if (raw === null) return null;

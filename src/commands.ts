@@ -52,6 +52,7 @@ import {
   loginProfile,
   parseBaseUrl,
   proposeInitProfileNames,
+  registryProblem,
   removeProfile,
   repairProfile,
   requireEndpoint,
@@ -632,6 +633,11 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${accent("--json".padEnd(12))}${dim("Output as JSON")}`,
         "",
         `  ${bold("CHECKS")}`,
+        `    ${dim("First, that ~/.clausona/profiles.json can be read: one that is there but is")}`,
+        `    ${dim("not valid JSON, or not a JSON object, is said in one line on stderr, in either")}`,
+        `    ${dim("output form, and doctor exits 1 without checking anything else. The file is")}`,
+        `    ${dim("never quoted.")}`,
+        "",
         `    ${dim("Every profile: the items it shares with the primary, and its plugin state.")}`,
         `    ${dim("Run `clausona repair <profile>` for what that reports. And that its env map is a")}`,
         `    ${dim("map of NAME: value - a hand edit can leave it a list or a string, which applies")}`,
@@ -1028,6 +1034,11 @@ export async function runCommand(command: string, args: string[]) {
     }
 
     case "doctor": {
+      // A profiles.json that cannot be used loads as no registry, which would print an empty
+      // report in either form. The TUI never reaches its doctor screen from there: with no
+      // profiles it opens on init.
+      const problem = await registryProblem();
+      if (problem) throw new Error(problem);
       const results = await doctorProfiles();
       if (jsonFlag(args)) return JSON.stringify(results, null, 2);
       // Said once, after every profile, and only when some API profile has a key stored:

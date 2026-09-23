@@ -705,6 +705,12 @@ exist — the tool creates it locally instead, and the accounts silently stop sh
 state. `clausona doctor` reports these as `missing_shared_link`; `clausona repair
 <profile>` links them.
 
+A `~/.clausona/profiles.json` that is there but is not valid JSON, or not a JSON object, is
+the first thing `clausona doctor` checks. It says so in one line on stderr, in either output
+form, and exits 1 without checking anything else. The line names the file and what is wrong
+with it, never its contents. Fix the file by hand, or move it aside and run `clausona init`
+to set clausona up again. `~/.clausona/backups` holds no copy of it to restore.
+
 ### Data Storage
 
 All data stays local on your machine. clausona has no telemetry and no server of its
