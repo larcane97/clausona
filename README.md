@@ -554,14 +554,14 @@ reports neither missing. It checks these instead:
   warnings: they describe a key that could reach the endpoint, not a profile that is broken,
   so the profile still reads as healthy
 - one `env:` or `command:` key source read by API profiles on different endpoints (compared by
-  scheme, host and port): whichever key it holds goes to both. Also a warning, reported on
+  scheme, host and port): whichever key it holds goes to each of them. Also a warning, reported on
   each of them with the `config <profile> --key-from env:<ANOTHER_NAME>` that separates them.
   `add --api --key-from` says the same when it creates that state
 
 No request is made to the endpoint. A healthy report means the profile is configured and its
 key resolves, not that the endpoint answered — run `claude` itself to find that out. When a
-profile's key is stored by clausona, the report ends by saying where: the macOS Keychain, or
-`~/.clausona/secrets.json` everywhere else.
+profile's key is stored by clausona, the text report ends by saying where: the macOS Keychain,
+or `~/.clausona/secrets.json` everywhere else. `--json` leaves that line out.
 
 ## Commands
 

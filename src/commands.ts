@@ -140,10 +140,10 @@ function validateFlags(command: string, args: string[]) {
 // scrollback. Variable *names* are echoed, because they are validated identifiers.
 
 const ADD_API_USAGE =
-  "Usage: clausona add <profile> --api --base-url <url> [--model <id>] [--auth bearer|api-key] [--key-from <source>]";
+  "Usage: clausona add <profile> --api --base-url <url> [--model <id>] [--auth bearer|api-key] [--key-from <source>] [--label <name>] [--set KEY=VALUE]";
 
 const CONFIG_USAGE =
-  "Usage: clausona config <profile> [--model <id>] [--set KEY=VALUE] [--unset KEY] [--base-url <url>] [--auth bearer|api-key] [--label <name>] [--key] [--edit] [--show] [--merge-sessions | --separate-sessions]";
+  "Usage: clausona config <profile> [--model <id>] [--set KEY=VALUE] [--unset KEY] [--base-url <url>] [--auth bearer|api-key] [--label <name>] [--key | --key-from <source>] [--edit] [--show] [--merge-sessions | --separate-sessions]";
 
 /**
  * An argument nobody asked for is usually a key someone expected an option to take.
@@ -513,7 +513,8 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("USAGE")}`,
         helpUsage("clausona add <profile> [--from <path>] [--merge-sessions]"),
-        helpUsage("clausona add <profile> --api --base-url <url> [--model <id>] [--auth <scheme>] [--merge-sessions]"),
+        helpUsage("clausona add <profile> --api --base-url <url> [--model <id>] [--auth <scheme>]"),
+        helpUsage("    [--key-from <source>] [--label <name>] [--set KEY=VALUE ...] [--merge-sessions]"),
         "",
         `  ${bold("ARGUMENTS")}`,
         `    ${accent("profile".padEnd(18))}${dim("Profile to create (e.g. work or claude:work)")}`,
@@ -535,6 +536,8 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${accent("--auth".padEnd(18))}${dim("bearer | api-key (default: api-key for anthropic.com, else bearer)")}`,
         `    ${" ".repeat(18)}${dim('With api-key, claude asks "Do you want to use this API key?": answer Yes.')}`,
         `    ${accent("--key-from".padEnd(18))}${dim('keychain (default) | env:NAME | command:"<shell command>"')}`,
+        `    ${" ".repeat(18)}${dim("keychain is the macOS Keychain on a Mac, and ~/.clausona/secrets.json,")}`,
+        `    ${" ".repeat(18)}${dim("readable only by you, on Linux and Windows.")}`,
         `    ${" ".repeat(18)}${dim("NAME is the variable's name, never the key: one that looks like a key")}`,
         `    ${" ".repeat(18)}${dim("is refused.")}`,
         `    ${accent("--label".padEnd(18))}${dim("Display name shown in list (default: the endpoint host)")}`,
@@ -560,7 +563,7 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("One that is not set here gets a warning, not a refusal.")}`,
         `    ${dim("keychain stores the key itself, so it needs nothing set up afterwards. When")}`,
         `    ${dim("another API profile reads the same env: or command: for a different endpoint,")}`,
-        `    ${dim("add says so: whichever key it holds would then go to both.")}`,
+        `    ${dim("add says so: whichever key it holds would then go to each of them.")}`,
         "",
       ].join("\n");
 
@@ -692,7 +695,7 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("  reach the profile's endpoint, whatever auth scheme the profile uses.")}`,
         `    ${dim("  A settings.json that cannot be read is reported rather than skipped;")}`,
         `    ${dim("- one env: or command: key source read by API profiles on different")}`,
-        `    ${dim("  endpoints, so one key goes to both. The fix is to give one its own:")}`,
+        `    ${dim("  endpoints, so each gets the same key. The fix is to give one its own:")}`,
         `    ${dim("  `clausona config <profile> --key-from env:<ANOTHER_NAME>`;")}`,
         `    ${dim("- a credential name in the profile's env map, which profiles.json holds")}`,
         `    ${dim("  in plain text. Move it with `clausona config <profile> --key`, then")}`,
@@ -705,8 +708,9 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("No request is made to the endpoint. A healthy report means the profile is")}`,
         `    ${dim("configured and its key resolves, not that the endpoint answered.")}`,
         "",
-        `    ${dim("When a profile's key is stored by clausona (--key-from keychain), the report")}`,
-        `    ${dim("ends by saying where: the macOS Keychain, or ~/.clausona/secrets.json elsewhere.")}`,
+        `    ${dim("When a profile's key is stored by clausona (--key-from keychain), the text")}`,
+        `    ${dim("report ends by saying where: the macOS Keychain, or ~/.clausona/secrets.json")}`,
+        `    ${dim("elsewhere. --json leaves that line out.")}`,
         "",
       ].join("\n");
 
@@ -1397,7 +1401,7 @@ export async function runCommand(command: string, args: string[]) {
           // two endpoints, and each gets whichever key it holds.
           const sharers = result.sharedWith;
           process.stderr.write(
-            `  ${warnIcon} The key comes from ${keySourcePhrase(secret)}, which ${sharers.join(", ")} ${sharers.length === 1 ? "uses" : "use"} too for a different endpoint, so one key now goes to both.\n` +
+            `  ${warnIcon} The key comes from ${keySourcePhrase(secret)}, which ${sharers.join(", ")} ${sharers.length === 1 ? "uses" : "use"} too for a different endpoint, so one key now goes to ${sharers.length === 1 ? "both" : "all of them"}.\n` +
               "    If this endpoint takes a key of its own, give this profile its own:\n" +
               `      ${accent(`clausona config ${id} --key-from env:<ANOTHER_NAME>`)}   ${dim("(or --key, to store it)")}\n`,
           );
