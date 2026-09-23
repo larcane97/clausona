@@ -559,21 +559,11 @@ export function renderDoctor(results: DoctorProfileResult[]) {
       return `    ${dim(connector + symbol.lineH)} ${marker}${issue.message}`;
     });
 
-    // repair rebuilds shared links, folds in session state and re-runs the plugins
-    // setup. It cannot produce a credential, so a profile that only needs one has to be
+    // repair cannot produce a credential, so a profile that only needs one has to be
     // pointed at login instead of at a command that would report success and change
     // nothing. A profile carrying both classes of issue needs both steps.
     const needsLogin = result.issues.some((issue) => CREDENTIAL_ISSUE_KINDS.has(issue.kind));
-    // repair symlinks into the config directory; it cannot create one. With the directory
-    // gone, every shared-link finding is a consequence of that, and repair fails with
-    // ENOENT instead of fixing anything - so the profile is left with the one instruction
-    // that works, which its own message carries.
-    const configDirGone = result.issues.some((issue) => issue.kind === "missing_config_dir");
-    const needsRepair =
-      !configDirGone &&
-      result.issues.some(
-        (issue) => !CREDENTIAL_ISSUE_KINDS.has(issue.kind) && !SELF_DIRECTED_ISSUE_KINDS.has(issue.kind),
-      );
+    const needsRepair = offersRepair(result.issues);
     const suggestions: string[] = [];
     if (needsRepair) suggestions.push(`       ${dim(`Run ${accent(`clausona repair ${result.name}`)} to fix`)}`);
     if (needsLogin) suggestions.push(`       ${dim(`Run ${accent(`clausona login ${result.name}`)} to sign in`)}`);
@@ -582,4 +572,20 @@ export function renderDoctor(results: DoctorProfileResult[]) {
   });
 
   return ["", ...sections, ""].join("\n\n");
+}
+
+/**
+ * Whether `clausona repair` can fix something in a doctor result: the CLI's "Run clausona
+ * repair" line and the TUI doctor screen's `r` both ask this, so neither offers it where the
+ * other would not. repair rebuilds shared links, folds in session state and re-runs the
+ * plugins setup; a missing credential and a finding whose message names its own fix are not
+ * its to fix.
+ */
+export function offersRepair(issues: DoctorIssue[]): boolean {
+  // repair symlinks into the config directory; it cannot create one. With the directory
+  // gone, every shared-link finding is a consequence of that, and repair fails with
+  // ENOENT instead of fixing anything - so the profile is left with the one instruction
+  // that works, which its own message carries.
+  if (issues.some((issue) => issue.kind === "missing_config_dir")) return false;
+  return issues.some((issue) => !CREDENTIAL_ISSUE_KINDS.has(issue.kind) && !SELF_DIRECTED_ISSUE_KINDS.has(issue.kind));
 }

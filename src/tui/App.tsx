@@ -15,6 +15,7 @@ import {
   formatCurrency,
   formatQuotaInline,
   localTimezoneLabel,
+  offersRepair,
   quotaSeverity,
 } from "../lib/format.js";
 import { displayName } from "../lib/profile-env.js";
@@ -1790,7 +1791,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         setCursor((prev) => (prev - 1 + doctor.length) % Math.max(1, doctor.length));
       } else if (key.downArrow) {
         setCursor((prev) => (prev + 1) % Math.max(1, doctor.length));
-      } else if (input === "r" && doctor[cursor] && !doctor[cursor].healthy && !doctor[cursor].isPrimary) {
+      } else if (input === "r" && doctor[cursor] && !doctor[cursor].isPrimary && offersRepair(doctor[cursor].issues)) {
         const d = doctor[cursor];
         void (async () => {
           try {
@@ -2512,8 +2513,13 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     const currentDoctor = doctor[cursor];
     const doctorHints = [
       ...doctorHintsBase,
-      ...(currentDoctor && !currentDoctor.healthy && !currentDoctor.isPrimary ? [{ keys: "r", action: "repair" }] : []),
+      // Only where `clausona doctor` would advise it: repair reports success on a missing key
+      // or a finding that names its own fix, and changes nothing.
+      ...(currentDoctor && !currentDoctor.isPrimary && offersRepair(currentDoctor.issues)
+        ? [{ keys: "r", action: "repair" }]
+        : []),
     ];
+    const currentSeverity = currentDoctor ? doctorSeverity(currentDoctor.issues) : "healthy";
     return (
       <Chrome title="Health Check" subtitle="Inspect profile integrity and symlink status" hints={doctorHints}>
         <Box gap={2} flexDirection="row" width="100%">
@@ -2557,8 +2563,10 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                   <Text color={color.text} bold>
                     {currentDoctor.name}
                   </Text>
-                  <Text color={currentDoctor.healthy ? color.healthy : color.warning}>
-                    {currentDoctor.healthy ? symbol.check : symbol.diamond}
+                  {/* The rule the list badge uses: a warnings-only profile is `healthy`, and a
+                      green check above its findings said there were none. */}
+                  <Text color={color[currentSeverity]}>
+                    {currentSeverity === "healthy" ? symbol.check : symbol.diamond}
                   </Text>
                 </Box>
                 <Text color={color.secondary}>{currentDoctor.email}</Text>

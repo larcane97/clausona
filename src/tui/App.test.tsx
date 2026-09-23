@@ -45,6 +45,7 @@ vi.mock("../lib/service", async (importOriginal) => ({
   fetchProfileQuotas: vi.fn(async () => ({})),
   loginProfile: vi.fn(),
   registryProblem: vi.fn(async () => null),
+  repairProfile: vi.fn(async () => ({ repaired: 0 })),
   initializeRegistry: vi.fn(async () => ({})),
   setActiveProfileByName: vi.fn(async () => ({})),
   discoverAccounts: vi.fn(async () => []),
@@ -2366,6 +2367,38 @@ describe("App doctor screen", () => {
 
     expect(frame).toContain("1 issue, 1 warning");
     expect(frame).not.toContain("All checks passed");
+  });
+
+  it("heads a warnings-only profile's findings with the badge's mark, not a check", async () => {
+    const frame = await doctorFrame([
+      { kind: "plaintext_env_secret", message: "a key sits in the env map", severity: "warning" },
+    ]);
+
+    expect(frame).toMatch(/claude:glm ◈/);
+    expect(frame).not.toMatch(/claude:glm ✔/);
+  });
+
+  it("offers no repair for an API profile whose only error is its key, and `r` runs none", async () => {
+    // `clausona doctor` advises no repair here: repair would report success and change
+    // nothing, the dead end the profiles screen already stopped offering for a re-login.
+    const { doctorProfiles, repairProfile } = await import("../lib/service.js");
+    vi.mocked(repairProfile).mockClear();
+    vi.mocked(doctorProfiles).mockResolvedValueOnce([
+      {
+        name: "claude:glm",
+        email: "gpu-box",
+        configDir: "/Users/test/.claude-glm",
+        isPrimary: false,
+        healthy: false,
+        issues: [{ kind: "missing_api_secret", message: "no stored key" }],
+      },
+    ]);
+    const instance = render(<App initialScreen="doctor" />);
+    const frame = await waitForFrame(instance.lastFrame, (f) => f.includes("no stored key"));
+
+    expect(frame).not.toContain("repair");
+    await type(instance, "r");
+    expect(vi.mocked(repairProfile)).not.toHaveBeenCalled();
   });
 });
 
