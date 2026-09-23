@@ -22,6 +22,7 @@ import { promptSecret } from "./lib/prompt-secret.js";
 import {
   addApiProfile,
   addProfile,
+  checkLabel,
   discoverAccounts,
   doctorProfiles,
   getUsageSummary,
@@ -37,6 +38,7 @@ import {
   shellInit,
   syncPluginsJson,
   uninstallClausona,
+  updateProfileApi,
   updateProfileConfig,
   updateProfileEnv,
   updateProfileSecret,
@@ -59,7 +61,7 @@ function helpFlag(args: string[]) {
  * `--base-urls` is still refused - a bare `--base-url` prefix would accept it.
  */
 const ADD_VALUE_FLAGS = ["--from", "--base-url", "--model", "--auth", "--key-from", "--label", "--set"];
-const CONFIG_VALUE_FLAGS = ["--set", "--unset", "--key-from"];
+const CONFIG_VALUE_FLAGS = ["--set", "--unset", "--key-from", "--base-url", "--auth", "--label"];
 
 /** Every `add` option that only means anything for an API profile. */
 const API_ONLY_FLAGS = ["--base-url", "--model", "--auth", "--key-from", "--label", "--set"];
@@ -118,7 +120,7 @@ const ADD_API_USAGE =
   "Usage: clausona add <profile> --api --base-url <url> [--model <id>] [--auth bearer|api-key] [--key-from <source>]";
 
 const CONFIG_USAGE =
-  "Usage: clausona config <profile> [--set KEY=VALUE] [--unset KEY] [--key] [--edit] [--show] [--merge-sessions | --separate-sessions]";
+  "Usage: clausona config <profile> [--set KEY=VALUE] [--unset KEY] [--base-url <url>] [--auth bearer|api-key] [--label <name>] [--key] [--edit] [--show] [--merge-sessions | --separate-sessions]";
 
 /**
  * An argument nobody asked for is usually a key someone expected an option to take.
@@ -184,6 +186,12 @@ function parseEnvName(input: string, flag: string): string {
   if (!isPosixEnvName(input)) {
     throw new Error(`Expected ${flag} to name an environment variable, for example ${flag} ANTHROPIC_MODEL.`);
   }
+  return input;
+}
+
+/** `--auth`, for `add` and `config` alike. */
+function parseAuthScheme(input: string): "bearer" | "api-key" {
+  if (input !== "bearer" && input !== "api-key") throw new Error("Invalid --auth: use bearer or api-key.");
   return input;
 }
 
@@ -553,7 +561,8 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `    ${dim("- that its config directory is still there;")}`,
         `    ${dim("- its base URL, which only a hand-edited profiles.json can break. The")}`,
-        `    ${dim("  URL is never quoted back: a hand-edited one can carry a password;")}`,
+        `    ${dim("  URL is never quoted back: a hand-edited one can carry a password.")}`,
+        `    ${dim("  `clausona config <profile> --base-url <url>` puts it right;")}`,
         `    ${dim("- whether its key resolves. A command: key source is run, in the shell,")}`,
         `    ${dim("  every time doctor is; an env: one is read from doctor's own environment.")}`,
         `    ${dim("  doctor never prints the key, in either output form;")}`,
@@ -581,6 +590,7 @@ function subcommandHelpText(command: string): string | undefined {
         `  ${bold("USAGE")}`,
         helpUsage("clausona config <profile> --merge-sessions | --separate-sessions"),
         helpUsage("clausona config <profile> --set KEY=VALUE [--set ...] [--unset KEY]"),
+        helpUsage("clausona config <profile> [--base-url <url>] [--auth <scheme>] [--label <name>]"),
         helpUsage("clausona config <profile> --key | --key-from <source>"),
         helpUsage("clausona config <profile> --edit"),
         helpUsage("clausona config <profile> --show [--json]"),
@@ -593,15 +603,28 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${accent("--separate-sessions".padEnd(22))}${dim("Keep sessions isolated (default)")}`,
         `    ${accent("--set".padEnd(22))}${dim("Set an advanced env setting; repeatable")}`,
         `    ${accent("--unset".padEnd(22))}${dim("Remove an advanced env setting; repeatable")}`,
+        `    ${accent("--base-url".padEnd(22))}${dim("Point an API profile at another endpoint, http:// or https://")}`,
+        `    ${accent("--auth".padEnd(22))}${dim("bearer | api-key: how an API profile presents its key")}`,
+        `    ${accent("--label".padEnd(22))}${dim("Name list shows for an API profile; cannot be blank")}`,
         `    ${accent("--key".padEnd(22))}${dim("Re-enter the API key for an API profile")}`,
         `    ${accent("--key-from".padEnd(22))}${dim('Switch the source: keychain | env:NAME | command:"<shell command>"')}`,
         `    ${accent("--edit".padEnd(22))}${dim("Open the profile's env map in $EDITOR")}`,
         `    ${accent("--show".padEnd(22))}${dim("Print the profile's settings (add --json for the full catalog)")}`,
         "",
-        `    ${dim("One change per call, except --show, which only reads.")}`,
+        `    ${dim("One change per call, except --show, which only reads. --base-url, --auth and")}`,
+        `    ${dim("--label count as one: together they are the endpoint `add --api` set up.")}`,
+        "",
+        `  ${bold("CHANGING THE ENDPOINT")}`,
+        `    ${dim("Each value is checked by the rule add --api uses. The key is kept, so after")}`,
+        `    ${dim("--base-url the next launch sends the same key to the new host; run --key")}`,
+        `    ${dim("next if that endpoint takes another. A label that is still the old host,")}`,
+        `    ${dim("which is what add chose when --label was left out, follows the new one.")}`,
+        `    ${dim("A subscription profile has no endpoint, and list names it by its account")}`,
+        `    ${dim("email, so all three refuse one.")}`,
         "",
         `  ${bold("EXAMPLES")}`,
         helpUsage("clausona config claude:gw --set CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144"),
+        helpUsage("clausona config claude:gw --base-url http://localhost:8000"),
         helpUsage("clausona config claude:gw --unset ANTHROPIC_MODEL"),
         helpUsage("clausona config claude:gw --show --json"),
         helpUsage('printf %s "$MY_API_KEY" | clausona config claude:gw --key'),
@@ -904,8 +927,13 @@ export async function runCommand(command: string, args: string[]) {
       const openEditor = args.includes("--edit");
       const mergeSessions = args.includes("--merge-sessions");
       const separateSessions = args.includes("--separate-sessions");
+      const baseUrl = optionValue(args, "--base-url");
+      const authArg = optionValue(args, "--auth");
+      const label = optionValue(args, "--label");
       const changeEnv = setPairs.length > 0 || unsetKeys.length > 0;
       const changeSessions = mergeSessions || separateSessions;
+      // One change, not three: together they are what `add --api` set about the endpoint.
+      const changeEndpoint = baseUrl !== undefined || authArg !== undefined || label !== undefined;
 
       const [input, ...extraArgs] = positionalArgs(args, CONFIG_VALUE_FLAGS);
       if (!input) throw new Error(CONFIG_USAGE);
@@ -923,11 +951,11 @@ export async function runCommand(command: string, args: string[]) {
       // One change per call. Each branch below returns, so a second flag would be dropped
       // without a word - the caller would be told the profile was updated, for the other
       // thing they asked for.
-      const changes = [changeEnv, changeKey, openEditor, changeSessions].filter(Boolean).length;
+      const changes = [changeEnv, changeEndpoint, changeKey, openEditor, changeSessions].filter(Boolean).length;
       if (changes === 0) throw new Error(CONFIG_USAGE);
       if (changes > 1) {
         throw new Error(
-          "Change one thing at a time: --set/--unset, --key/--key-from, --edit, or --merge-sessions/--separate-sessions.",
+          "Change one thing at a time: --set/--unset, --base-url/--auth/--label, --key/--key-from, --edit, or --merge-sessions/--separate-sessions.",
         );
       }
 
@@ -941,6 +969,37 @@ export async function runCommand(command: string, args: string[]) {
         await updateProfileEnv(ref.id, { set, unset: unsetKeys });
         warnPlaintextEnv(ref.id, profile.kind, Object.keys(set));
         const changed = [...Object.keys(set), ...unsetKeys].join(", ");
+        return success(`Updated ${bold(ref.id)} ${dim(`(${changed})`)}`);
+      }
+
+      if (changeEndpoint) {
+        // updateProfileApi refuses a subscription profile for all three: it has no endpoint,
+        // and `list` names it by its account email - a label is by definition the name of a
+        // profile that has none. There is no prompt to get ahead of here, unlike --key, so
+        // the service's check is the only one.
+        const result = await updateProfileApi(ref.id, {
+          baseUrl,
+          authScheme: authArg === undefined ? undefined : parseAuthScheme(authArg),
+          label,
+        });
+        if (baseUrl !== undefined && result.host !== result.previousHost) {
+          // The key is not the endpoint's to keep: it is whatever the profile's key source
+          // holds, and the next launch hands it to the new host. That can be a third party.
+          process.stderr.write(
+            `  ${warnIcon} The key is unchanged, so from the next launch it goes to ${result.host}.\n` +
+              "    If this endpoint takes a different key, store it:\n" +
+              `      ${accent(`clausona config ${ref.id} --key`)}\n`,
+          );
+        }
+        const changed = [
+          ...(baseUrl === undefined ? [] : ["base URL"]),
+          ...(authArg === undefined ? [] : ["auth"]),
+          ...(label !== undefined
+            ? ["label"]
+            : result.profile.label !== profile.label
+              ? ["label, following the host"]
+              : []),
+        ].join(", ");
         return success(`Updated ${bold(ref.id)} ${dim(`(${changed})`)}`);
       }
 
@@ -1036,10 +1095,11 @@ export async function runCommand(command: string, args: string[]) {
         const url = parseBaseUrl(baseUrl.trim());
 
         const authArg = optionValue(args, "--auth");
-        if (authArg !== undefined && authArg !== "bearer" && authArg !== "api-key") {
-          throw new Error("Invalid --auth: use bearer or api-key.");
-        }
-        const authScheme = authArg ?? (isAnthropicHost(url.hostname) ? "api-key" : "bearer");
+        const authScheme =
+          authArg === undefined ? (isAnthropicHost(url.hostname) ? "api-key" : "bearer") : parseAuthScheme(authArg);
+        // addApiProfile's own rule again, for the same reason as the URL above.
+        const label = optionValue(args, "--label");
+        if (label !== undefined) checkLabel(label);
 
         // Built before the key is asked for: a rejected setting should not cost the user
         // a typed key. This is the same validator addApiProfile runs, not a second rule.
@@ -1072,7 +1132,7 @@ export async function runCommand(command: string, args: string[]) {
           authScheme,
           secret,
           secretValue,
-          label: optionValue(args, "--label"),
+          label,
           env,
           mergeSessions: mergeSessions || undefined,
         });

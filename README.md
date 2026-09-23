@@ -267,8 +267,29 @@ for one it is only the `--unset`. `doctor` keeps warning afterwards — but only
 profile. A subscription profile's env map is never checked, so a clean `doctor` does not mean
 no profile on this machine holds a plaintext key.
 
-The endpoint and the label are the two things `config` cannot change. Correcting either means
-editing `~/.clausona/profiles.json` by hand, or removing and re-adding the profile.
+### Changing the endpoint
+
+Everything `add --api` set can be changed afterwards without typing the key again:
+
+```bash
+clausona config claude:gw --base-url http://localhost:8000
+clausona config claude:gw --auth api-key
+clausona config claude:gw --label "Gateway"
+```
+
+Each value goes through the rule `add` applies, so a URL `add` would refuse is refused here
+too, and an empty `--label` is refused rather than leaving a blank row in `list`. The three
+can be given together, as one change. Two things happen that you might not expect:
+
+- **The key is kept.** After `--base-url`, the next launch sends the same key to the new
+  host, and clausona says so when the host changes. If the new endpoint takes a different
+  key, run `clausona config <profile> --key` next.
+- **A label that is still the old host follows the new one.** That is the label `add`
+  chose when you left `--label` out; one you chose stays.
+
+A subscription profile has no endpoint, and `list` names it by its account email, so all
+three refuse one. Do not edit `~/.clausona/profiles.json` by hand for any of this — a
+hand-edited file is the one way a base URL gets broken.
 
 ### What an API profile clears from your environment
 
@@ -311,7 +332,8 @@ removing it removes it for every profile.
 ### What `list` shows
 
 The `ACCOUNT` column holds the account email for a subscription profile and the label for an
-API one — the endpoint's host, unless you passed `--label`. `5H` and `7D` show a dash: those
+API one — the endpoint's host, unless you passed `--label` (or set one since with `config
+--label`). `5H` and `7D` show a dash: those
 are subscription plan windows, an API endpoint bills per token, and there is nothing to read.
 **The dash is not an error** — unlike the dashes described under [When a reading is
 unavailable](#when-a-reading-is-unavailable), no state and no reason line accompany it. The
@@ -342,7 +364,7 @@ reports neither missing. It checks these instead:
   profile again
 - the base URL, which only a hand-edited `profiles.json` can break. The URL is never quoted
   back, because a hand-edited one can carry a password; `config <profile> --show` is where to
-  read it
+  read it, and `config <profile> --base-url <url>` is how to put it right
 - that the key resolves. **A `command:` source is executed**, in a shell, every time doctor
   runs — so a vault round-trip or a touch-ID prompt happens on every `clausona doctor`. An
   `env:` source is read from doctor's own environment, which is not necessarily the
@@ -372,6 +394,7 @@ key resolves, not that the endpoint answered — run `claude` itself to find tha
 | `clausona current [--json]`                                         | Show active profile                                  |
 | `clausona config <profile> --merge-sessions \| --separate-sessions` | Configure session mode                               |
 | `clausona config <profile> --set KEY=VALUE \| --unset KEY \| --edit` | Set [advanced settings](#advanced-settings) per profile |
+| `clausona config <profile> --base-url <url> \| --auth <scheme> \| --label <name>` | [Change an API profile's endpoint](#changing-the-endpoint) |
 | `clausona config <profile> --key \| --key-from <source>`            | Change an API profile's key, or where it is read from |
 | `clausona config <profile> --show [--json]`                         | Print a profile's settings (`--json` adds the catalog) |
 | `clausona doctor [--json]`                                          | Check profile health                                 |

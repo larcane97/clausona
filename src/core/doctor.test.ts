@@ -157,9 +157,22 @@ describe("evaluateApiHealth", () => {
       expect(issues[0].message).not.toContain(baseUrl);
     });
 
-    it("points at the file that holds the endpoint, since no command edits it", () => {
-      // `config --edit` edits the env map; nothing in the CLI rewrites api.baseUrl.
-      expect(health({ profile: withApi("") })[0].message).toContain("profiles.json");
+    it("points at the command that rewrites the endpoint, not at the file", () => {
+      // A hand-edited profiles.json is how a base URL gets broken; `config --base-url`
+      // rewrites it through the rule `add --api` applies.
+      const message = health({ profile: withApi("") })[0].message;
+
+      expect(message).toContain("clausona config claude:glm --base-url <url>");
+      expect(message).not.toContain("profiles.json");
+    });
+
+    it("points at remove and add when there is no endpoint block for config to rewrite", () => {
+      // `config --base-url` refuses a profile with no block: there is no key source to keep.
+      const message = evaluateApiHealth({ id: "claude:glm", profile: { ...apiProfile, api: undefined } })[0].message;
+
+      expect(message).toContain("clausona remove claude:glm");
+      expect(message).toContain("clausona add <new-name> --api --base-url <url>");
+      expect(message).not.toContain("clausona config claude:glm --base-url");
     });
 
     it("flags every base URL that add --api would have refused", async () => {

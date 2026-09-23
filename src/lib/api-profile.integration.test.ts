@@ -1481,6 +1481,63 @@ describe("updateProfileSecret", () => {
   }
 });
 
+// The CLI checks the kind and the scheme before it calls this, so these are the service's
+// own guards - the ones a second caller, the dashboard say, would be relying on.
+describe("updateProfileApi", () => {
+  // Two halves to the guard, one case each: no `kind: "api"`, and no endpoint block. A
+  // subscription profile with a stray block is only a hand edit away, and the case without
+  // one cannot tell whether the kind is checked at all.
+  it.each([
+    ["a subscription profile", {}],
+    ["a subscription profile carrying a stray endpoint block", { api: { baseUrl: "http://localhost:8000" } }],
+    ["an API profile with no endpoint block", { kind: "api" }],
+  ])("refuses %s and writes nothing", async (_label, extra) => {
+    const h = await harness();
+    const registry = h.registry();
+    registry.profiles["claude:default"] = { ...registry.profiles["claude:default"], ...extra };
+    writeFileSync(h.registryPath, JSON.stringify(registry));
+    const before = h.registryText();
+
+    await expect(h.service.updateProfileApi("claude:default", { label: "Mine" })).rejects.toThrow(
+      "Profile 'claude:default' is not an API profile.",
+    );
+    expect(h.registryText()).toBe(before);
+  });
+
+  it("refuses an auth scheme add would refuse, without echoing it, and writes nothing", async () => {
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions());
+    const before = h.registryText();
+
+    const outcome = await h.service.updateProfileApi("claude:glm", { authScheme: KEY }).catch((e: Error) => e);
+
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toBe("Invalid auth scheme: must be 'bearer' or 'api-key'.");
+    expect(h.registryText()).toBe(before);
+  });
+
+  it("checks every value before it writes any", async () => {
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions());
+    const before = h.registryText();
+
+    await expect(
+      h.service.updateProfileApi("claude:glm", { baseUrl: "http://localhost:8000", label: "" }),
+    ).rejects.toThrow("Label cannot be blank");
+    expect(h.registryText()).toBe(before);
+  });
+
+  it("leaves the key and its source alone", async () => {
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions());
+
+    await h.service.updateProfileApi("claude:glm", { baseUrl: "http://localhost:8000", authScheme: "api-key" });
+
+    expect(h.registry().profiles["claude:glm"].api.secret).toEqual({ source: "keychain" });
+    expect(h.storedSecrets()).toEqual({ "claude:glm": KEY });
+  });
+});
+
 describe("removing an API profile", () => {
   it("deletes its stored key and nobody else's", async () => {
     const h = await harness();

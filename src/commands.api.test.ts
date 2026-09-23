@@ -729,6 +729,282 @@ describe("config --key", () => {
 });
 
 /**
+ * What `add --api` set, changed later without re-entering the key. Each value goes through
+ * the rule `add` applies, so `config` cannot store what `add` would refuse.
+ */
+describe("config --base-url / --auth / --label", () => {
+  const SUBSCRIPTION = { tool: "claude", email: "work@example.com" };
+
+  it("points an API profile at another endpoint and keeps everything else", async () => {
+    const h = await harness({ "claude:gw": { ...API_PROFILE, label: "Gateway" } });
+    const before = h.profile("claude:gw");
+
+    const output = await h.run("config", "claude:gw", "--base-url", " http://localhost:8000 ");
+
+    // Trimmed, as add trims it.
+    expect(h.profile("claude:gw")).toEqual({
+      ...before,
+      api: { ...before.api, baseUrl: "http://localhost:8000" },
+    });
+    expect(output).toContain("claude:gw");
+  });
+
+  it("switches how the key is presented", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+
+    await h.run("config", "claude:gw", "--auth", "api-key");
+
+    expect(h.profile("claude:gw").api).toEqual({ ...API_PROFILE.api, authScheme: "api-key" });
+  });
+
+  it("renames it, trimmed as add trims a label", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+
+    await h.run("config", "claude:gw", "--label", "  Gateway  ");
+
+    expect(h.profile("claude:gw").label).toBe("Gateway");
+    expect(h.profile("claude:gw").api).toEqual(API_PROFILE.api);
+  });
+
+  it("changes all three in one call, since together they are one endpoint", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+
+    await h.run("config", "claude:gw", "--base-url=https://api.anthropic.com", "--auth=api-key", "--label=Anthropic");
+
+    expect(h.profile("claude:gw")).toMatchObject({
+      label: "Anthropic",
+      api: { baseUrl: "https://api.anthropic.com", authScheme: "api-key", secret: { source: "keychain" } },
+    });
+  });
+
+  describe("the label add chose for it", () => {
+    // `add` labels a profile with its endpoint's host unless told otherwise. Left alone
+    // after the endpoint moves, `list` would go on naming the old one.
+    it("follows the endpoint when it was still the old host", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      await h.run("config", "claude:gw", "--base-url", "http://localhost:8000");
+
+      expect(h.profile("claude:gw").label).toBe("localhost:8000");
+    });
+
+    it("stays when it was chosen", async () => {
+      const h = await harness({ "claude:gw": { ...API_PROFILE, label: "Gateway" } });
+
+      await h.run("config", "claude:gw", "--base-url", "http://localhost:8000");
+
+      expect(h.profile("claude:gw").label).toBe("Gateway");
+    });
+
+    it("stays when it is given in the same call", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      await h.run("config", "claude:gw", "--base-url", "http://localhost:8000", "--label", "Local");
+
+      expect(h.profile("claude:gw").label).toBe("Local");
+    });
+
+    it("stays when the old URL is too broken to have a host", async () => {
+      // Nothing to compare against, so nothing to say it was the default.
+      const h = await harness({
+        "claude:gw": { ...API_PROFILE, label: "openrouter.ai", api: { ...API_PROFILE.api, baseUrl: "openrouter.ai" } },
+      });
+
+      await h.run("config", "claude:gw", "--base-url", "http://localhost:8000");
+
+      expect(h.profile("claude:gw")).toMatchObject({
+        label: "openrouter.ai",
+        api: { baseUrl: "http://localhost:8000" },
+      });
+    });
+  });
+
+  describe("the key, which stays where it was", () => {
+    // Moving the endpoint does not move the key: the next launch hands the same key to the
+    // new host. Worth a line, since it can be a third party's.
+    it("says when it will now go to another host, and the command it names runs", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      await h.run("config", "claude:gw", "--base-url", "http://localhost:8000");
+
+      expect(h.stderr()).toContain("localhost:8000");
+      const commands = advisedCommands(h.stderr());
+      expect(commands.length, h.stderr()).toBeGreaterThan(0);
+      promptAnswers.push(KEY);
+      for (const argv of commands) await h.run(argv[0], ...argv.slice(1));
+      expect(h.storedSecrets()).toEqual({ "claude:gw": KEY });
+    });
+
+    it("says nothing when the host is the same", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      await h.run("config", "claude:gw", "--base-url", "https://openrouter.ai/api/v2");
+
+      expect(h.stderr()).toBe("");
+    });
+
+    it("says nothing for a label or a scheme", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      await h.run("config", "claude:gw", "--label", "Gateway");
+      await h.run("config", "claude:gw", "--auth", "api-key");
+
+      expect(h.stderr()).toBe("");
+    });
+  });
+
+  describe("an empty or invalid value", () => {
+    // Each is refused with the message add gives, and leaves the profile as it was.
+    const cases: [string, string[], string][] = [
+      ["an empty base URL", ["--base-url", ""], "Invalid base URL: must be an absolute http:// or https:// URL."],
+      [
+        "a base URL without a scheme",
+        ["--base-url", "localhost:8000"],
+        "Invalid base URL: the scheme must be http or https, not 'localhost'.",
+      ],
+      [
+        "a base URL carrying credentials",
+        ["--base-url", "https://u:p@example.com"],
+        "Invalid base URL: it must not carry credentials. Supply the key through the key source instead.",
+      ],
+      ["an empty auth scheme", ["--auth", ""], "Invalid --auth: use bearer or api-key."],
+      ["an unknown auth scheme", ["--auth", "basic"], "Invalid --auth: use bearer or api-key."],
+      // Ruling 7: a blank label would render the profile as an empty row in `list`.
+      ["an empty label", ["--label", ""], "Label cannot be blank"],
+      ["a label of spaces", ["--label", "   "], "Label cannot be blank"],
+    ];
+
+    for (const [label, args, expected] of cases) {
+      it(`refuses ${label}`, async () => {
+        const h = await harness({ "claude:gw": API_PROFILE });
+        const before = h.registryText();
+
+        const message = await failure(h.run("config", "claude:gw", ...args));
+
+        expect(message).toContain(expected);
+        expect(h.registryText()).toBe(before);
+      });
+    }
+
+    it("refuses the whole call when one of three values is bad", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+      const before = h.registryText();
+
+      await failure(h.run("config", "claude:gw", "--base-url", "http://localhost:8000", "--label", " "));
+
+      expect(h.registryText()).toBe(before);
+    });
+
+    it("never prints a key given where a value belongs", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      for (const flag of ["--base-url", "--auth"]) {
+        const message = await failure(h.run("config", "claude:gw", flag, KEY));
+        expect(message, flag).not.toContain(KEY);
+      }
+    });
+  });
+
+  // A subscription profile has no endpoint, and `list` names it by its account email - the
+  // label is by definition the name of a profile that has none. So each of the three is
+  // refused, one case per flag, and nothing is written.
+  describe("on a subscription profile", () => {
+    for (const args of [
+      ["--base-url", "http://localhost:8000"],
+      ["--auth", "bearer"],
+      ["--label", "Work"],
+    ]) {
+      it(`refuses ${args[0]}`, async () => {
+        const h = await harness({ "claude:work": SUBSCRIPTION });
+        const before = h.registryText();
+
+        const message = await failure(h.run("config", "claude:work", ...args));
+
+        expect(message).toBe("Profile 'claude:work' is not an API profile.");
+        expect(h.registryText()).toBe(before);
+      });
+    }
+  });
+
+  it("is one change, refused next to a change of another kind", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+    const before = h.registryText();
+
+    const message = await failure(
+      h.run("config", "claude:gw", "--base-url", "http://localhost:8000", "--set", "API_TIMEOUT_MS=600000"),
+    );
+
+    expect(message).toContain("Change one thing at a time");
+    expect(message).toContain("--base-url");
+    expect(h.registryText()).toBe(before);
+  });
+
+  it("add refuses a blank label with the same rule, before it asks for a key", async () => {
+    const h = await harness();
+
+    const message = await failure(
+      h.run("add", "claude:gw", "--api", "--base-url", "http://localhost:8000", "--label", " "),
+    );
+
+    expect(message).toContain("Label cannot be blank");
+    expect(promptCalls).toEqual([]);
+  });
+});
+
+/**
+ * doctor names a command for a base URL it cannot use. With `config --base-url` there is
+ * one, where the endpoint block exists to be changed; where it does not, there is no key
+ * source for `config` to keep, and `--base-url` would refuse the profile.
+ */
+describe("doctor's advice for a broken base URL", () => {
+  async function brokenEndpoint(api: unknown) {
+    // Linux, so doctor reads the primary's login from a file rather than spawning `security`.
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const h = await harness({ "claude:gw": { ...API_PROFILE, api } });
+    const findings = async () =>
+      (JSON.parse(String(await h.run("doctor", "--json"))) as DoctorProfileResult[])
+        .flatMap((result) => result.issues)
+        .filter((issue) => issue.kind === "invalid_api_config");
+    return { h, findings };
+  }
+
+  /** Runs what the finding says, with its placeholders filled in. */
+  async function follow(h: Awaited<ReturnType<typeof harness>>, findings: () => Promise<unknown[]>) {
+    const [finding] = (await findings()) as { message: string }[];
+    const commands = advisedCommands(finding.message);
+    expect(commands.length, finding.message).toBeGreaterThan(0);
+    const placeholders: Record<string, string> = { "<url>": "https://openrouter.ai/api", "<new-name>": "claude:gw2" };
+    for (const argv of commands) {
+      const args = argv.map((arg) => placeholders[arg] ?? arg);
+      await h.run(args[0], ...args.slice(1));
+    }
+    return commands;
+  }
+
+  it("names config --base-url where there is an endpoint block, and it clears the finding", async () => {
+    const { h, findings } = await brokenEndpoint({ ...API_PROFILE.api, baseUrl: "openrouter.ai/api" });
+
+    const commands = await follow(h, findings);
+
+    expect(commands.flat()).toContain("--base-url");
+    expect(await findings()).toEqual([]);
+    // Nothing had to be typed again: the key source was kept.
+    expect(promptCalls).toEqual([]);
+  });
+
+  it("names remove and add where there is none, and they clear the finding", async () => {
+    const { h, findings } = await brokenEndpoint(undefined);
+    promptAnswers.push(KEY);
+
+    const commands = await follow(h, findings);
+
+    expect(commands.map((argv) => argv[0])).toEqual(["remove", "add"]);
+    expect(await findings()).toEqual([]);
+    expect(Object.keys(h.registry().profiles)).toEqual(["claude:default", "claude:gw2"]);
+  });
+});
+
+/**
  * The warning written when a credential name lands in a profile's env map. It is advice,
  * so it is only right if following it works - and what works depends on the profile's
  * kind: `--key` stores a key for an API profile and refuses a subscription one. One case
@@ -1099,6 +1375,25 @@ describe("help", () => {
     expect(help).toContain("--edit");
     expect(help).toContain("every time the profile is used");
     expect(help).toContain("the shell that runs claude");
+  });
+
+  it("tells `config` readers how to change what add set, without re-adding", async () => {
+    const h = await harness();
+
+    const help = await h.run("config", "--help");
+
+    for (const flag of ["--base-url", "--auth", "--label"]) expect(help, flag).toContain(flag);
+    expect(help).toContain("bearer | api-key");
+    // The two things a reader cannot guess: what happens to the key, and to a default label.
+    expect(help).toContain("The key is kept");
+    expect(help).toContain("follows");
+    expect(help).toContain("clausona config claude:gw --base-url http://localhost:8000");
+  });
+
+  it("tells `doctor` readers which command fixes a base URL", async () => {
+    const h = await harness();
+
+    expect(await h.run("doctor", "--help")).toContain("config <profile> --base-url");
   });
 
   it("tells `list` readers why an API profile's quota columns are a dash", async () => {

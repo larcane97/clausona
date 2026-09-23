@@ -249,8 +249,10 @@ describe("doctor on an API profile", () => {
     const issues = issuesFor(await h.doctor(), "claude:bad");
 
     expect(issues.map((i) => i.kind)).toContain("invalid_api_config");
-    // Nothing in the CLI rewrites api.baseUrl, so the message has to name the file.
-    expect(issues.find((i) => i.kind === "invalid_api_config")?.message).toContain("profiles.json");
+    // The command that rewrites it, rather than the file a hand edit broke it in.
+    expect(issues.find((i) => i.kind === "invalid_api_config")?.message).toContain(
+      "clausona config claude:bad --base-url <url>",
+    );
   });
 
   it("reports apiKeyHelper in the settings the profile shares with the primary", async () => {

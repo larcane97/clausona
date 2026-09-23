@@ -319,9 +319,10 @@ describe("renderList with API profiles", () => {
     expect(out).not.toContain("no stored credential");
   });
 
-  // addApiProfile and `config --label` both refuse a blank label, so only a hand-edited
-  // profiles.json gets here. An empty cell reads as a rendering bug; a dash reads as
-  // "nothing to show", which is what every other empty cell in this table says.
+  // addApiProfile and `config --label` both refuse a blank label - one rule, checkLabel,
+  // pinned for each in src/commands.api.test.ts - so only a hand-edited profiles.json gets
+  // here. An empty cell reads as a rendering bug; a dash reads as "nothing to show", which
+  // is what every other empty cell in this table says.
   it("falls back to a dash when a profile carries neither label nor email", () => {
     expect(rowFor(render([subscription, { ...api, label: "  " }]), "claude:glm")).toBe(
       "    claude:glm          —                               —          —          —           —             —",

@@ -74,13 +74,22 @@ export function countIssues(issues: DoctorIssue[]): { errors: number; warnings: 
   return { errors: issues.length - warnings, warnings };
 }
 
-/**
- * Where an API profile's endpoint and key source live. No command rewrites either one:
- * `config --key` changes the key, `config --edit` the env map, and the rest of the block
- * is only ever written by `add --api`.
- */
+/** Where an API profile's endpoint, key source and env map live. */
 const REGISTRY_FILE = "~/.clausona/profiles.json";
-const FIX_IN_REGISTRY = `fix it in ${REGISTRY_FILE} or remove and re-add the profile`;
+
+/**
+ * What to run for a base URL that cannot be used. `config --base-url` rewrites it and keeps
+ * the key source, but only where there is an endpoint block to rewrite: a profile marked
+ * `api` with no block has no key source for `config` to keep, and `--base-url` refuses it.
+ * That one is added again - under a new name, because `remove` leaves the config directory
+ * in place and `add` will not reuse one. Never "edit profiles.json": a hand edit is how a
+ * base URL gets broken in the first place.
+ */
+function baseUrlRemedy(id: string, hasEndpoint: boolean): string {
+  return hasEndpoint
+    ? `run 'clausona config ${id} --base-url <url>'`
+    : `run 'clausona remove ${id}' and then 'clausona add <new-name> --api --base-url <url>' - remove keeps the config directory, so the old name stays taken`;
+}
 
 /**
  * What resolving a profile's key produced - whether it resolved, and if not, why.
@@ -123,19 +132,19 @@ export type ApiHealthInput = {
  * URL first, not only by the rule that is about credentials, so no branch may quote it.
  * `doctor --help` promises this output is safe to paste into a bug report.
  */
-function baseUrlProblem(baseUrl: string): string | undefined {
+function baseUrlProblem(baseUrl: string, remedy: string): string | undefined {
   const checked = checkBaseUrl(baseUrl);
   if (checked.ok) return undefined;
   switch (checked.problem.reason) {
     case "empty":
-      return `no base URL configured for this API profile - ${FIX_IN_REGISTRY}`;
+      return `no base URL configured for this API profile - ${remedy}`;
     case "unparseable":
-      return `the base URL is not an absolute http:// or https:// URL - ${FIX_IN_REGISTRY}`;
+      return `the base URL is not an absolute http:// or https:// URL - ${remedy}`;
     case "scheme":
       // A scheme cannot contain userinfo, so naming it gives nothing away.
-      return `the base URL's scheme is '${checked.problem.scheme}', not http or https - ${FIX_IN_REGISTRY}`;
+      return `the base URL's scheme is '${checked.problem.scheme}', not http or https - ${remedy}`;
     default:
-      return `the base URL carries a username or password - put the key in the key source instead, and ${FIX_IN_REGISTRY}`;
+      return `the base URL carries a username or password - put the key in the key source instead, and ${remedy}`;
   }
 }
 
@@ -181,7 +190,7 @@ export function evaluateApiHealth({
   }
 
   const baseUrl = profile.api?.baseUrl ?? "";
-  const urlProblem = baseUrlProblem(baseUrl);
+  const urlProblem = baseUrlProblem(baseUrl, baseUrlRemedy(id, profile.api !== undefined));
   if (urlProblem) issues.push({ kind: "invalid_api_config", message: urlProblem });
 
   if (secret && !secret.ok) {

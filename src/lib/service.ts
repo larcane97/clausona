@@ -28,6 +28,7 @@ import { validateEnvEntry } from "../tools/claude-env-catalog.js";
 import { ALL_TOOLS, allAdapters, getAdapter } from "../tools/registry.js";
 import type { ToolAdapter } from "../tools/types.js";
 import type {
+  ApiEndpoint,
   DiscoveredAccount,
   DoctorIssue,
   DoctorProfileResult,
@@ -1352,6 +1353,48 @@ export async function updateProfileSecret(id: string, secret: SecretSource, valu
   }
 }
 
+/**
+ * Changes what `add --api` set besides the key: the endpoint, how the key is presented, and
+ * the label. Every value goes through the rule `addApiProfile` applies, and all of them are
+ * checked before anything is written, so a call that is refused changes nothing. The key
+ * and where it is read from are `updateProfileSecret`'s, and are left alone.
+ *
+ * A label that is still the old endpoint's host is the one `add` defaulted to, so it moves
+ * with the endpoint; otherwise `list` would go on naming a host the profile no longer talks
+ * to. A label that was chosen stays. When the stored URL is too broken to have a host there
+ * is nothing to compare, and the label stays too.
+ *
+ * Returns the host the key went to before and goes to now, so the caller can say when the
+ * same key is about to reach a different endpoint. Either is undefined for a stored URL that
+ * does not parse.
+ */
+export async function updateProfileApi(
+  id: string,
+  changes: { baseUrl?: string; authScheme?: string; label?: string },
+): Promise<{ profile: Profile; previousHost?: string; host?: string }> {
+  const registry = await loadRegistry();
+  if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
+  const profile = registry.profiles[id];
+  if (profile.kind !== "api" || !profile.api) throw new Error(`Profile '${id}' is not an API profile.`);
+
+  const baseUrl = changes.baseUrl?.trim() ?? profile.api.baseUrl;
+  const url = changes.baseUrl === undefined ? undefined : parseBaseUrl(baseUrl);
+  const authScheme = changes.authScheme === undefined ? profile.api.authScheme : checkAuthScheme(changes.authScheme);
+  const chosenLabel = changes.label === undefined ? undefined : checkLabel(changes.label);
+
+  const before = checkBaseUrl(profile.api.baseUrl);
+  const previousHost = before.ok ? before.url.host : undefined;
+  let label = chosenLabel ?? profile.label;
+  if (chosenLabel === undefined && url && previousHost !== undefined && profile.label === previousHost) {
+    label = url.host;
+  }
+
+  registry.profiles[id] = { ...profile, label, api: { ...profile.api, baseUrl, authScheme } };
+  await saveRegistry(registry);
+  const after = checkBaseUrl(baseUrl);
+  return { profile: registry.profiles[id], previousHost, host: after.ok ? after.url.host : undefined };
+}
+
 async function cleanupProfile(
   name: string,
   profile: Profile,
@@ -1763,6 +1806,27 @@ export function parseBaseUrl(baseUrl: string): URL {
   return checked.url;
 }
 
+/**
+ * The label rule, for `add --api` and `config --label` alike. Exported so the CLI can apply
+ * it before asking for a key, as it does `parseBaseUrl`.
+ *
+ * A blank label would render the profile as an empty row in `list`, since an API profile
+ * has no account email for `displayName` to fall back on.
+ */
+export function checkLabel(label: string): string {
+  const trimmed = label.trim();
+  if (trimmed === "") throw new Error("Label cannot be blank: it is the name `clausona list` shows for this profile.");
+  return trimmed;
+}
+
+function checkAuthScheme(scheme: string): ApiEndpoint["authScheme"] {
+  // Not echoed: arguments passed in the wrong order would put the key here.
+  if (scheme !== "bearer" && scheme !== "api-key") {
+    throw new Error("Invalid auth scheme: must be 'bearer' or 'api-key'.");
+  }
+  return scheme;
+}
+
 export async function addApiProfile(options: {
   tool: ToolName;
   name: string;
@@ -1784,15 +1848,9 @@ export async function addApiProfile(options: {
   }
   const baseUrl = options.baseUrl.trim();
   const url = parseBaseUrl(baseUrl);
-  if (options.authScheme !== "bearer" && options.authScheme !== "api-key") {
-    // Not echoed: arguments passed in the wrong order would put the key here.
-    throw new Error("Invalid auth scheme: must be 'bearer' or 'api-key'.");
-  }
-  // A blank label would render the profile as an empty row; absent means "use the host".
-  if (options.label !== undefined && options.label.trim() === "") {
-    throw new Error("Label cannot be blank. Leave it out to use the endpoint's host.");
-  }
-  const label = options.label?.trim() ?? url.host;
+  checkAuthScheme(options.authScheme);
+  // Absent means "use the host".
+  const label = options.label === undefined ? url.host : checkLabel(options.label);
   const { source: secret, toStore } = checkSecretSource(options.secret, options.secretValue);
   const env = { ...options.env };
   for (const [key, value] of Object.entries(env)) {
