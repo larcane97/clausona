@@ -5,7 +5,7 @@ import { HIDDEN } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { isPosixEnvName } from "../core/shell.js";
 import { getAdapter } from "../tools/registry.js";
-import type { Profile } from "../types.js";
+import type { Profile, ShownKind } from "../types.js";
 import { resolveSecret } from "./secrets.js";
 
 /**
@@ -222,6 +222,15 @@ export function shownEnvName(key: string): string {
 export function shownLabel(label: string | undefined): string | undefined {
   const shown = printable(label);
   return shown !== undefined && carriesCredentialToken(shown) ? HIDDEN : shown;
+}
+
+/**
+ * A kind as it may be printed. A hand edit can leave anything in the slot; one that is neither
+ * kind launches as a subscription and doctor reports it, so it is shown as `unknown` - never
+ * stripped of its control characters, which would turn `api\u0007` into a valid-looking `api`.
+ */
+export function shownKind(kind: unknown): ShownKind | undefined {
+  return kind === undefined || kind === "subscription" || kind === "api" ? kind : "unknown";
 }
 
 export function displayName(profile: Pick<Profile, "email" | "label">): string {

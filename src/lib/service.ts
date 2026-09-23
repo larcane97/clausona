@@ -54,8 +54,8 @@ import {
   envMapOf,
   invalidEnvMapMessage,
   isSecretEnvName,
-  printable,
   profileModel,
+  shownKind,
   shownLabel,
 } from "./profile-env.js";
 import { foldProfileName, initProfileNames, parseProfileRef, profileId, validateProfileName } from "./profile-ref.js";
@@ -961,7 +961,7 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
     return {
       name: id,
       tool: profile.tool,
-      kind: printable(profile.kind),
+      kind: shownKind(profile.kind),
       email: profile.email,
       // Stored before `checkLabel` refused a key-shaped one, or by hand.
       label: shownLabel(profile.label),

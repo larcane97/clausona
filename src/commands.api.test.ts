@@ -2394,6 +2394,30 @@ describe("a hand-edited kind, label or auth scheme", () => {
     expect(outputs[2]).toContain("gw]0;owned");
   });
 
+  // Stripped of its control character, `api\u0007` would print as a valid `api` while launch
+  // treats it as a subscription. It is neither, so it is shown as neither.
+  it("shows a kind that is neither as unknown, not as the kind it resembles", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const h = await harness({ "claude:odd": { ...API_PROFILE, kind: "api\u0007" } });
+    await h.run("use", "claude:odd");
+
+    const listed = JSON.parse(String(await h.run("list", "--json", "--no-quota"))) as { name: string; kind?: string }[];
+    const shown = JSON.parse(String(await h.run("config", "claude:odd", "--show", "--json"))) as {
+      profile: { kind: string };
+    };
+    const current = JSON.parse(String(await h.run("current", "--json"))) as Record<string, { kind?: string }>;
+    const text = stripAnsi(String(await h.run("config", "claude:odd", "--show")));
+
+    expect(listed.find((item) => item.name === "claude:odd")?.kind).toBe("unknown");
+    expect(shown.profile.kind).toBe("unknown");
+    expect(current.claude?.kind).toBe("unknown");
+    expect(text).toMatch(/Kind\s+unknown/);
+    const doctor = JSON.parse(String(await h.run("doctor", "--json"))) as DoctorProfileResult[];
+    expect(doctor.find((result) => result.name === "claude:odd")?.issues.map((issue) => issue.kind)).toContain(
+      "invalid_profile_kind",
+    );
+  });
+
   it("is reported by doctor when the kind or the scheme is not one there is, and --auth fixes the scheme", async () => {
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     const h = await harness({

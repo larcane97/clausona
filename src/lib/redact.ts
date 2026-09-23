@@ -2,7 +2,7 @@ import { HIDDEN, redactBaseUrl, redactUrlsIn } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { describeSecretSource, redactSecretSource } from "../core/key-source.js";
 import { catalogEntry } from "../tools/claude-env-catalog.js";
-import type { Profile } from "../types.js";
+import type { Profile, ShownKind } from "../types.js";
 import {
   envMapOf,
   isCredentialEnvKey,
@@ -10,6 +10,7 @@ import {
   isSecretEnvName,
   printable,
   shownEnvName,
+  shownKind,
   shownLabel,
 } from "./profile-env.js";
 
@@ -90,10 +91,10 @@ export function redactEnv(env: Record<string, string>): Record<string, string> {
  * The profile, built from the fields the registry defines rather than spread: a field added
  * to profiles.json by hand is not one clausona can vouch for. Never mutates its argument.
  */
-export function redactProfile(profile: Profile): Profile {
+export function redactProfile(profile: Profile): Omit<Profile, "kind"> & { kind?: ShownKind } {
   return {
     tool: profile.tool,
-    kind: printable(profile.kind),
+    kind: shownKind(profile.kind),
     configDir: profile.configDir,
     email: profile.email,
     label: shownLabel(profile.label),

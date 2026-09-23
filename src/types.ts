@@ -110,11 +110,14 @@ export type DiscoveredAccount = {
   isPrimary: boolean;
 };
 
+/** A profile's kind as printed: `unknown` for a stored one that is neither, which only a hand edit leaves. */
+export type ShownKind = "subscription" | "api" | "unknown";
+
 export type ProfileListItem = {
   name: string;
   tool: ToolName;
   /** undefined means "subscription", as on Profile. */
-  kind?: "subscription" | "api";
+  kind?: ShownKind;
   email: string;
   /** Display name for profiles that have no account email. */
   label?: string;
