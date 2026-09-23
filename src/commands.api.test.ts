@@ -1672,6 +1672,90 @@ describe("config --model", () => {
  * one, where the endpoint block exists to be changed; where it does not, there is no key
  * source for `config` to keep, and `--base-url` would refuse the profile.
  */
+// `--model "$KEY"` or `--label "$KEY"` with the wrong variable stored the key where every
+// `list` prints it - and a model id is sent to the endpoint with every request.
+describe("a key given as the model or the label", () => {
+  it.each([
+    ["add --model", ["add", "claude:gw", "--api", "--base-url", "http://localhost:8000", "--model", KEY_SHAPED]],
+    ["add --label", ["add", "claude:gw", "--api", "--base-url", "http://localhost:8000", "--label", KEY_SHAPED]],
+    [
+      "add --set ANTHROPIC_MODEL=",
+      ["add", "claude:gw", "--api", "--base-url", "http://localhost:8000", "--set", `ANTHROPIC_MODEL=${KEY_SHAPED}`],
+    ],
+  ])("is refused by %s before the prompt, printing none of it", async (_route, argv) => {
+    const h = await harness();
+
+    const message = await failure(h.run(argv[0], ...argv.slice(1)));
+
+    expect(message).toContain("looks like an API key, so it was not stored");
+    expect(slicesIn(message, KEY_SHAPED)).toEqual([]);
+    expect(Object.keys(h.registry().profiles)).toEqual(["claude:default"]);
+    expect(promptCalls).toEqual([]);
+  });
+
+  it.each([
+    ["config --model", ["--model", KEY_SHAPED]],
+    ["config --set ANTHROPIC_MODEL=", ["--set", `ANTHROPIC_MODEL=${KEY_SHAPED}`]],
+    ["config --label", ["--label", KEY_SHAPED]],
+  ])("is refused by %s, leaving the profile as it was", async (_route, args) => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+    const before = h.registryText();
+
+    const message = await failure(h.run("config", "claude:gw", ...args));
+
+    expect(message).toContain("looks like an API key, so it was not stored");
+    expect(slicesIn(message, KEY_SHAPED)).toEqual([]);
+    expect(h.registryText()).toBe(before);
+  });
+
+  it("says where the model id and the key each go", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+
+    const message = await failure(h.run("config", "claude:gw", "--model", KEY_SHAPED));
+
+    expect(message).toBe(
+      "Give the model's id as your endpoint names it, such as z-ai/glm-5.3, and the key through the key source - the prompt or --key, or --key-from env:NAME. This value for ANTHROPIC_MODEL looks like an API key, so it was not stored. If it is the model's id, pick it for one session with `claude --model` instead.",
+    );
+  });
+
+  // Stored before the rule, or by hand: every surface that shows the model or the label.
+  it("is hidden on every surface when one is already stored", async () => {
+    const h = await harness({
+      "claude:gw": { ...API_PROFILE, label: KEY_SHAPED, env: { ANTHROPIC_MODEL: KEY_SHAPED } },
+    });
+    await h.run("use", "claude:gw");
+    const columns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+    Object.defineProperty(process.stdout, "columns", { value: 200, configurable: true });
+    const table = await h.run("list", "--no-quota").then(
+      (out) => stripAnsi(String(out)),
+      (error) => error,
+    );
+    if (columns) Object.defineProperty(process.stdout, "columns", columns);
+    else delete (process.stdout as { columns?: number }).columns;
+    if (table instanceof Error) throw table;
+
+    const printed = [
+      table,
+      await h.run("list", "--json", "--no-quota"),
+      await h.run("config", "claude:gw", "--show"),
+      await h.run("config", "claude:gw", "--show", "--json"),
+      await h.run("current"),
+      await h.run("current", "--json"),
+    ]
+      .map((output) => stripAnsi(String(output)))
+      .join("\n");
+
+    expect(slicesIn(printed, KEY_SHAPED)).toEqual([]);
+    expect(table).toContain("<hidden>");
+    const listed = JSON.parse(String(await h.run("list", "--json", "--no-quota"))) as {
+      name: string;
+      model?: string;
+      label?: string;
+    }[];
+    expect(listed.find((item) => item.name === "claude:gw")).toMatchObject({ model: "<hidden>", label: "<hidden>" });
+  });
+});
+
 describe("doctor's advice for a broken base URL", () => {
   async function brokenEndpoint(api: unknown) {
     // Linux, so doctor reads the primary's login from a file rather than spawning `security`.

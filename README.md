@@ -218,7 +218,11 @@ refused. It works on a subscription profile too, where it pins a model for that 
 Codex profile refuses it, because Codex never reads the variable. A blank model is refused
 rather than taken to mean "clear it", whether it comes from `--model`, `--set` or `--edit` —
 `--unset ANTHROPIC_MODEL` is how to clear it. A blank one would be exported to Claude Code
-while `list` showed no model at all.
+while `list` showed no model at all. A model id that looks like an API key is refused too,
+by the same routes — `--model "$KEY"` with the wrong variable would send the key as the
+model's name — and so is a `--label` that does; one stored before that is shown as
+`<hidden>`. If the check is wrong about a model id, `claude --model <id>` takes it for a
+session.
 `clausona list` shows each profile's model in a `MODEL` column, and `list --json` carries it as
 `model`.
 

@@ -15,7 +15,7 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { checkBaseUrl, hasBareUserinfo, isAnthropicHost, isLoopbackHost } from "../core/api-url.js";
+import { checkBaseUrl, HIDDEN, hasBareUserinfo, isAnthropicHost, isLoopbackHost } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
 import { sharesSecretSource } from "../core/key-source.js";
@@ -935,7 +935,8 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
       tool: profile.tool,
       kind: profile.kind,
       email: profile.email,
-      label: profile.label,
+      // Stored before `checkLabel` refused a key-shaped one, or by hand.
+      label: carriesCredentialToken(profile.label ?? "") ? HIDDEN : profile.label,
       orgName: profile.orgName,
       configDir: profile.configDir,
       isPrimary: Boolean(profile.isPrimary),
@@ -1356,7 +1357,15 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
  * Worded by where it was written, not by which flag: at `add` there is nothing yet to clear.
  */
 export function checkModelEntry(key: string, value: string, context: "add" | "config"): void {
-  if (key !== "ANTHROPIC_MODEL" || value.trim() !== "") return;
+  if (key !== "ANTHROPIC_MODEL") return;
+  // Not echoed, and refused rather than stored: `--model "$KEY"` with the wrong variable would
+  // put the key in list's MODEL column and send it to the endpoint as the model's name.
+  if (carriesCredentialToken(value)) {
+    throw new Error(
+      `Give the model's id as your endpoint names it, such as z-ai/glm-5.3, and the key through ${KEY_SOURCE_ROUTES}. This value for ANTHROPIC_MODEL looks like an API key, so it was not stored. If it is the model's id, pick it for one session with \`claude --model\` instead.`,
+    );
+  }
+  if (value.trim() !== "") return;
   throw new Error(
     context === "add"
       ? "A model id cannot be blank. To pin none, leave the model out."
@@ -1972,6 +1981,13 @@ export function parseBaseUrl(baseUrl: string): URL {
  */
 export function checkLabel(label: string, context: "add" | "config" = "config"): string {
   const trimmed = label.trim();
+  // Not echoed: a label is printed wherever the profile is named, so a key given as one would
+  // be on every `list`.
+  if (carriesCredentialToken(trimmed)) {
+    throw new Error(
+      `Choose a label that reads as a name, such as --label "OpenRouter GLM", and pass the key through ${KEY_SOURCE_ROUTES}. This label looks like an API key, so it was not stored.`,
+    );
+  }
   if (trimmed === "") {
     // At add, leaving the label out gets the endpoint's host; at config there is no such
     // default to fall back on, only the label the profile already has.

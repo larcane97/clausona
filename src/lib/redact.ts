@@ -1,4 +1,5 @@
 import { HIDDEN, redactBaseUrl, redactUrlsIn } from "../core/api-url.js";
+import { carriesCredentialToken } from "../core/credential-token.js";
 import { describeSecretSource, redactSecretSource } from "../core/key-source.js";
 import { catalogEntry } from "../tools/claude-env-catalog.js";
 import type { Profile } from "../types.js";
@@ -47,16 +48,24 @@ export function hidesEnvValue(key: string): boolean {
   return isSecretEnvName(key) || catalogEntry(key)?.kind === "json";
 }
 
+/**
+ * Whether a value is hidden whole under any name: one shaped like a key - `--model "$KEY"`
+ * stored before `checkModelEntry` refused one - by the rule the API form masks a field by.
+ */
+function keyShapedValue(value: unknown): boolean {
+  return typeof value === "string" && carriesCredentialToken(value);
+}
+
 /** The names `redactEnv` hides the whole value of, in the map's order. None for a map that is not one. */
 export function hiddenEnvKeys(env: Record<string, string>): string[] {
-  return isEnvMap(env) ? Object.keys(env).filter(hidesEnvValue) : [];
+  return isEnvMap(env) ? Object.keys(env).filter((key) => hidesEnvValue(key) || keyShapedValue(env[key])) : [];
 }
 
 export function redactEnv(env: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(env).map(([key, value]) => [
       key,
-      hidesEnvValue(key) || typeof value !== "string" ? HIDDEN : redactUrlsIn(value),
+      hidesEnvValue(key) || typeof value !== "string" || keyShapedValue(value) ? HIDDEN : redactUrlsIn(value),
     ]),
   );
 }
@@ -71,7 +80,7 @@ export function redactProfile(profile: Profile): Profile {
     kind: profile.kind,
     configDir: profile.configDir,
     email: profile.email,
-    label: profile.label,
+    label: carriesCredentialToken(profile.label ?? "") ? HIDDEN : profile.label,
     orgName: profile.orgName,
     isPrimary: profile.isPrimary,
     mergeSessions: profile.mergeSessions,

@@ -1,6 +1,8 @@
 import { realpath as fsRealpath } from "node:fs/promises";
 import { homedir } from "node:os";
 
+import { HIDDEN } from "../core/api-url.js";
+import { carriesCredentialToken } from "../core/credential-token.js";
 import { isPosixEnvName } from "../core/shell.js";
 import { getAdapter } from "../tools/registry.js";
 import type { Profile } from "../types.js";
@@ -172,8 +174,11 @@ export function isEnvMap(env: unknown): env is Record<string, string> {
 export function displayName(profile: Pick<Profile, "email" | "label">): string {
   // Blank-aware, not just absent-aware: `add --api` refuses an empty label, but a
   // hand-edited profiles.json can carry one, and `label ?? email` would then hide a real
-  // account email behind whitespace wherever a profile is named.
-  return profile.label?.trim() || profile.email;
+  // account email behind whitespace wherever a profile is named. A key-shaped one is refused
+  // too, and one stored before that, or by hand, is not printed.
+  const label = profile.label?.trim();
+  if (label && carriesCredentialToken(label)) return HIDDEN;
+  return label || profile.email;
 }
 
 /**
@@ -184,12 +189,14 @@ export function displayName(profile: Pick<Profile, "email" | "label">): string {
  *
  * Undefined for a Codex profile, which does not read the variable, and for a blank value -
  * blank-aware for the same reason as `displayName`, since only a hand edit or `--set`
- * stores one and a blank cell reads as a rendering bug.
+ * stores one and a blank cell reads as a rendering bug. HIDDEN for a key-shaped one, which
+ * `checkModelEntry` refuses now and a profile stored before that can still hold.
  */
 export function profileModel(profile: Pick<Profile, "tool" | "env">): string | undefined {
   if (profile.tool !== "claude") return undefined;
   const model = profile.env?.ANTHROPIC_MODEL;
-  return model?.trim() ? model : undefined;
+  if (!model?.trim()) return undefined;
+  return carriesCredentialToken(model) ? HIDDEN : model;
 }
 
 /**
