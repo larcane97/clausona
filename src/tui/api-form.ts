@@ -273,6 +273,7 @@ export function baseUrlError(baseUrl: string): string | undefined {
     case "credentials":
       return "The URL must not carry a user or password. Put the key in the Key field.";
     case "key-shaped":
+    case "key-parameter":
       return MISPLACED_KEY;
     default: {
       // Every reason, and a default that cannot be reached: a fifth one added to

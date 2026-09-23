@@ -191,6 +191,15 @@ async function failure(promise: Promise<unknown>): Promise<string> {
 }
 
 /**
+ * The five-character slices of `secret` that `text` repeats, compared without case: a
+ * refusal may not print what it refused, nor any piece of it long enough to recognise.
+ */
+function slicesIn(text: string, secret: string): string[] {
+  const slices = Array.from({ length: secret.length - 4 }, (_, i) => secret.slice(i, i + 5));
+  return slices.filter((slice) => text.toLowerCase().includes(slice.toLowerCase()));
+}
+
+/**
  * Every `clausona …` command a piece of advice names, as argv for `runCommand`, in the
  * order it names them. Advice is tested by running what it says rather than by matching
  * its words: a warning that names a command which refuses the profile it is about reads
@@ -419,10 +428,54 @@ describe("add --api", () => {
 
       const message = await failure(h.run("add", "claude:gw", "--api", "--base-url", url));
 
+      // The way out first - where the key goes - then what was wrong, and what to do when
+      // the check is wrong: a URL with a random-looking segment in it has no other route.
       expect(message).toBe(
-        "Invalid base URL: it carries something shaped like an API key. Supply the key through the key source instead.",
+        "Invalid base URL: give the endpoint without the key, and the key through the key source - the prompt or --key, or --key-from env:NAME. Part of this URL looks like an API key, so it was not stored. If none of it is one, write the URL into api.baseUrl in ~/.clausona/profiles.json by hand (for a new profile, after adding it with any other URL).",
       );
-      expect(message).not.toContain(KEY_SHAPED.slice(13, 25));
+      expect(slicesIn(message, KEY_SHAPED)).toEqual([]);
+      expect(promptCalls).toEqual([]);
+      expect(existsSync(path.join(h.home, ".claude-gw"))).toBe(false);
+    });
+
+    // With no `//`, what comes before the first colon is what the parser calls the scheme, and
+    // quoting "the scheme" printed the key's beginning, lowercased. KEY is too short for the
+    // shape check, so this is the rule that starts from `sk-`.
+    it("refuses a key with a colon after it as a key, not by naming it as the scheme", async () => {
+      const h = await harness();
+
+      const message = await failure(h.run("add", "claude:gw", "--api", "--base-url", `${KEY}:xyz`));
+
+      expect(message).toContain("looks like an API key");
+      expect(message).not.toContain("scheme");
+      expect(slicesIn(message, KEY)).toEqual([]);
+      expect(promptCalls).toEqual([]);
+    });
+
+    // A gateway that takes its key in the URL takes it under a name like these, and a short or
+    // hex key under one is no less a key for missing the shape check.
+    it.each([
+      "api_key",
+      "API-Key",
+      "apikey",
+      "key",
+      "token",
+      "access_token",
+      "secret",
+      "password",
+      "sig",
+      "signature",
+    ])("refuses a base URL with a %s query parameter, whatever its value, without printing the value", async (name) => {
+      const h = await harness();
+
+      const message = await failure(
+        h.run("add", "claude:gw", "--api", "--base-url", `https://gw.example.com/v1?${name}=f00d42`),
+      );
+
+      expect(message).toBe(
+        `Invalid base URL: give the endpoint without its '${name}' parameter, and the key through the key source - the prompt or --key, or --key-from env:NAME. A query parameter by that name carries a credential, so the URL was not stored.`,
+      );
+      expect(message).not.toContain("f00d42");
       expect(promptCalls).toEqual([]);
       expect(existsSync(path.join(h.home, ".claude-gw"))).toBe(false);
     });
@@ -1150,12 +1203,17 @@ describe("config --base-url / --auth / --label", () => {
       [
         "a base URL carrying a key in its query",
         ["--base-url", `https://gateway.example.com/v1?key=${KEY_SHAPED}`],
-        "Invalid base URL: it carries something shaped like an API key. Supply the key through the key source instead.",
+        "Invalid base URL: give the endpoint without the key",
       ],
       [
         "a base URL with a key glued to its host",
         ["--base-url", `https://gateway.example.com${KEY_SHAPED}`],
-        "Invalid base URL: it carries something shaped like an API key. Supply the key through the key source instead.",
+        "Invalid base URL: give the endpoint without the key",
+      ],
+      [
+        "a base URL with a credential-named query parameter",
+        ["--base-url", "https://gateway.example.com/v1?access_token=f00d42"],
+        "Invalid base URL: give the endpoint without its 'access_token' parameter",
       ],
       ["an empty auth scheme", ["--auth", ""], "Invalid --auth: use bearer or api-key."],
       ["an unknown auth scheme", ["--auth", "basic"], "Invalid --auth: use bearer or api-key."],
@@ -1175,6 +1233,16 @@ describe("config --base-url / --auth / --label", () => {
         expect(h.registryText()).toBe(before);
       });
     }
+
+    // The rule is the parameter's name, not "any query": an Azure-style endpoint carries its
+    // API version in one.
+    it("accepts a query parameter that names no credential", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      await h.run("config", "claude:gw", "--base-url", "https://gw.example.com/v1?api-version=2024-10-21");
+
+      expect(h.profile("claude:gw").api?.baseUrl).toBe("https://gw.example.com/v1?api-version=2024-10-21");
+    });
 
     it("refuses the whole call when one of three values is bad", async () => {
       const h = await harness({ "claude:gw": API_PROFILE });
@@ -1204,9 +1272,8 @@ describe("config --base-url / --auth / --label", () => {
 
       const message = await failure(h.run("config", "claude:gw", "--base-url", `${KEY_SHAPED}:@gw.example.com`));
 
-      expect(message).toContain("shaped like an API key");
-      const slices = Array.from({ length: KEY_SHAPED.length - 4 }, (_, i) => KEY_SHAPED.slice(i, i + 5));
-      expect(slices.filter((slice) => message.toLowerCase().includes(slice.toLowerCase()))).toEqual([]);
+      expect(message).toContain("looks like an API key");
+      expect(slicesIn(message, KEY_SHAPED)).toEqual([]);
     });
 
     it("still names the scheme of a bare host:port, which carries nothing", async () => {

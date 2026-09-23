@@ -173,9 +173,20 @@ describe("evaluateApiHealth", () => {
       const issues = health({ profile: withApi(`https://gateway.example.com/v1?key=${key}`) });
 
       expect(issues[0].kind).toBe("invalid_api_config");
-      expect(issues[0].message).toContain("shaped like an API key");
+      expect(issues[0].message).toContain("looks like an API key");
       expect(issues[0].message).not.toContain("username or password");
       expect(issues[0].message).not.toContain(key.slice(13, 25));
+      // The way out comes first, and a check that is wrong about a URL is said to be survivable.
+      expect(issues[0].message).toMatch(/^give the base URL without the key/);
+      expect(issues[0].message).toContain("if none of it is one, the profile works as it is");
+    });
+
+    it("reports a query parameter named for a credential by its name, and never its value", () => {
+      const issues = health({ profile: withApi("https://gateway.example.com/v1?token=f00d42") });
+
+      expect(issues[0].kind).toBe("invalid_api_config");
+      expect(issues[0].message).toContain("'token' parameter");
+      expect(issues[0].message).not.toContain("f00d42");
     });
 
     it("points at the command that rewrites the endpoint, not at the file", () => {

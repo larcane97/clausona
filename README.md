@@ -173,9 +173,14 @@ a shell without the hook, `use` changes nothing `claude` sees — `clausona run 
 applies a profile for one run without it. See [Profile Switching](#profile-switching).
 
 `--base-url` must be an absolute `http://` or `https://` URL carrying no username or
-password, and nothing shaped like an API key anywhere in it, query included — a credential in
-the URL would be stored in `profiles.json` in plain text, which is exactly what the key source
-exists to avoid. `--auth` picks how the key is presented:
+password, no query parameter named for a credential (`key`, `api_key`, `apikey`, `token`,
+`access_token`, `secret`, `password`, `sig`, `signature` or `subscription_key`, matched
+without case and with `-` read as `_`), and nothing shaped like an API key anywhere in it — a
+credential in the URL would be stored in `profiles.json` in plain text, which is exactly what
+the key source exists to avoid. The shape check can be wrong about a URL with a long
+random-looking segment in it; if none of it is a key, write the URL into `api.baseUrl` in
+`~/.clausona/profiles.json` by hand, and `doctor` will go on naming it. `--auth` picks how the
+key is presented:
 `api-key` passes it as `ANTHROPIC_API_KEY`, which Claude Code sends as Anthropic's
 `X-Api-Key` header, and is the default for `anthropic.com` and its subdomains; `bearer`
 passes it as `ANTHROPIC_AUTH_TOKEN`, sent as `Authorization: Bearer`, and is the default

@@ -1903,6 +1903,9 @@ function checkSecretSource(
   }
 }
 
+/** Where a key goes instead of wherever it was just refused, said the same way each time. */
+const KEY_SOURCE_ROUTES = "the key source - the prompt or --key, or --key-from env:NAME";
+
 /**
  * Exported so the CLI can apply this rule before it asks for a key, rather than after -
  * a rejected base URL should not cost the user a typed key. It is the definition, not a
@@ -1932,8 +1935,15 @@ export function parseBaseUrl(baseUrl: string): URL {
           "Invalid base URL: it must not carry credentials. Supply the key through the key source instead.",
         );
       case "key-shaped":
+        // The way out first. The shape check can be wrong about a URL - a long random-looking
+        // path segment is one - and there is no flag to overrule it, so the one way to use
+        // such an endpoint is said too: by hand, which doctor then reports without blocking.
         throw new Error(
-          "Invalid base URL: it carries something shaped like an API key. Supply the key through the key source instead.",
+          `Invalid base URL: give the endpoint without the key, and the key through ${KEY_SOURCE_ROUTES}. Part of this URL looks like an API key, so it was not stored. If none of it is one, write the URL into api.baseUrl in ~/.clausona/profiles.json by hand (for a new profile, after adding it with any other URL).`,
+        );
+      case "key-parameter":
+        throw new Error(
+          `Invalid base URL: give the endpoint without its '${checked.problem.parameter}' parameter, and the key through ${KEY_SOURCE_ROUTES}. A query parameter by that name carries a credential, so the URL was not stored.`,
         );
       default: {
         const unhandled: never = checked.problem;

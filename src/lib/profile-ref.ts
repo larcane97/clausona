@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { looksLikeCredential } from "../core/credential-token.js";
 import { ALL_TOOLS } from "../tools/registry.js";
 import type { DiscoveredAccount, Registry, ToolName } from "../types.js";
 
@@ -21,23 +22,15 @@ export function profileId(tool: ToolName, name: string): string {
 const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
- * A name a profile may not take, because it is how an API key is spelled.
+ * A name a profile may not take, because it is how an API key is spelled: `looksLikeCredential`,
+ * which lives beside the other key-shape rules in core so the endpoint rule can use it too.
  *
  * A key passes the allowlist above - it is letters, digits and dashes - so without this a
  * key typed into the positional slot becomes a profile id in profiles.json, a directory
  * name under the home directory, and a line of stdout. That is the one slip that puts a
  * credential in the file this feature promises never holds one.
- *
- * Two tests, because a prefix list dates: `sk-`, which every Anthropic and OpenAI key
- * starts with (`sk-ant-api03`, `sk-ant-api02`, `sk-ant-admin`) and no profile sensibly
- * does, and a length ceiling, since a key is around a hundred characters and a name a
- * person types is not. Neither echoes what it refused.
  */
-const MAX_PROFILE_NAME_LENGTH = 64;
-
-export function looksLikeCredential(value: string): boolean {
-  return typeof value === "string" && (value.toLowerCase().startsWith("sk-") || value.length > MAX_PROFILE_NAME_LENGTH);
-}
+export { looksLikeCredential };
 
 /**
  * Said instead of the name, wherever a name that looks like a key would be printed. It

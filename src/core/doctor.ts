@@ -164,7 +164,9 @@ function baseUrlProblem(baseUrl: string, remedy: string): string | undefined {
     case "credentials":
       return `the base URL carries a username or password - put the key in the key source instead, and ${remedy}`;
     case "key-shaped":
-      return `the base URL carries something shaped like an API key - put the key in the key source instead, and ${remedy}`;
+      return `give the base URL without the key and keep the key in the key source - ${remedy} - since part of it looks like an API key; if none of it is one, the profile works as it is`;
+    case "key-parameter":
+      return `give the base URL without its '${checked.problem.parameter}' parameter and keep the key in the key source - ${remedy} - since a query parameter by that name carries a credential`;
     default: {
       // A new reason would otherwise take the last case's words, which describe a different
       // URL - the way "key-shaped" briefly read as "a username or password".

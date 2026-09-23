@@ -7,13 +7,13 @@
  * which will not draw a key in a field that shows what it holds. It lives in core because the
  * endpoint rule does, and nothing here depends on anything but the string.
  *
- * "Anywhere" is the point. The name rule in profile-ref.ts asks whether a whole value
- * *starts* like a key, which is right for a name and misses the case that matters here:
+ * "Anywhere" is the point. The name rule, `looksLikeCredential` below, asks whether a whole
+ * value *starts* like a key, which is right for a name and misses the case that matters here:
  * input routed to the wrong field lands at the end of what was already there, and a key
  * appended to an endpoint is `https://gateway.example.comsk-ant-...` - a single hostname,
  * as far as a URL parser is concerned.
  *
- * Caught - the share in brackets is measured over 20000 random keys of each shape:
+ * Caught - the share in parentheses is measured over 20000 random keys of each shape:
  * - `sk-ant-`, `sk-or-` or `sk-proj-` followed by 16 key characters: Anthropic, OpenRouter
  *   and OpenAI project keys, whatever surrounds them (all).
  * - `sk-` or `sk_` followed by key characters that include a run of 16 or more letters and
@@ -68,6 +68,19 @@ export function carriesCredentialToken(value: string): boolean {
   }
   return runs(value, 32).some(looksRandom);
 }
+
+/**
+ * Whether a whole value *starts* like a key, for a slot that holds a name: a profile's name,
+ * or what the URL parser took for a scheme. Two tests, because a prefix list dates: `sk-`,
+ * which every Anthropic and OpenAI key starts with (`sk-ant-api03`, `sk-ant-api02`,
+ * `sk-ant-admin`) and no name sensibly does, and a length ceiling, since a key is around a
+ * hundred characters and a name a person types is not. Neither echoes what it refused.
+ */
+export function looksLikeCredential(value: string): boolean {
+  return typeof value === "string" && (value.toLowerCase().startsWith("sk-") || value.length > MAX_NAME_LENGTH);
+}
+
+const MAX_NAME_LENGTH = 64;
 
 const VENDOR_KEY = /sk-(?:ant|or|proj)-[A-Za-z0-9_-]{16}/;
 

@@ -1,19 +1,42 @@
-import { carriesCredentialToken } from "./credential-token.js";
+import { carriesCredentialToken, looksLikeCredential } from "./credential-token.js";
 
 /**
  * What is wrong with a base URL. Never the URL itself, and never anything taken from the
  * part of it that can hold a password: a caller cannot echo a credential by repeating what
- * it was told here. The one exception is `scheme`, which is whatever the parser took for the
- * scheme: with no `//` the URL is opaque, and `admin:pw@host` parses with the username as its
- * scheme. So a caller checks `hasBareUserinfo` before it names the scheme, and reports that
- * shape as the credentials it is.
+ * it was told here. Two exceptions:
+ * - `scheme`, which is whatever the parser took for the scheme: with no `//` the URL is
+ *   opaque, and `admin:pw@host` parses with the username as its scheme. So a caller checks
+ *   `hasBareUserinfo` before it names the scheme, and reports that shape as the credentials
+ *   it is. A scheme that starts like a key is reported as `key-shaped` instead;
+ * - `parameter`, the name of a query parameter that carries a credential, as typed - which
+ *   can only be one of the names in CREDENTIAL_PARAMETERS - and never its value.
  */
 export type BaseUrlProblem =
   | { reason: "empty" }
   | { reason: "key-shaped" }
   | { reason: "unparseable" }
   | { reason: "scheme"; scheme: string }
-  | { reason: "credentials" };
+  | { reason: "credentials" }
+  | { reason: "key-parameter"; parameter: string };
+
+/**
+ * Query parameter names that carry a credential, compared without case and with `-` read as
+ * `_`. A gateway that takes its key in the URL takes it under one of these, and the name says
+ * more than the value's shape can: a short or hex key misses the shape check, and is no less
+ * a key for it.
+ */
+const CREDENTIAL_PARAMETERS = new Set([
+  "api_key",
+  "apikey",
+  "key",
+  "token",
+  "access_token",
+  "secret",
+  "password",
+  "sig",
+  "signature",
+  "subscription_key",
+]);
 
 /**
  * The one definition of a base URL clausona will accept, shared by the command that stores
@@ -23,12 +46,13 @@ export type BaseUrlProblem =
  * round, and a second copy of these rules in the doctor drifted the moment one side was
  * hardened - a URL `add --api` refuses would have gone on being reported healthy.
  *
- * The rules: absolute, http or https, and carrying no userinfo and nothing shaped like an API
- * key - in the host, the path, the query or anywhere else. A password or a key in the URL
- * would be persisted to profiles.json and exported in plain text with it, which is exactly
- * what the key source exists to avoid; and a query is where a gateway that takes its key as a
- * parameter would have one. The key check runs first, because a key pasted where the URL goes
- * is better answered with where it belongs than with "not a URL".
+ * The rules: absolute, http or https, and carrying no userinfo, no query parameter named for a
+ * credential, and nothing shaped like an API key - in the host, the path, the query or
+ * anywhere else. A password or a key in the URL would be persisted to profiles.json and
+ * exported in plain text with it, which is exactly what the key source exists to avoid; and a
+ * query is where a gateway that takes its key as a parameter would have one. The key check
+ * runs first, because a key pasted where the URL goes is better answered with where it
+ * belongs than with "not a URL".
  */
 export function checkBaseUrl(baseUrl: string): { ok: true; url: URL } | { ok: false; problem: BaseUrlProblem } {
   if (baseUrl.trim() === "") return { ok: false, problem: { reason: "empty" } };
@@ -41,10 +65,21 @@ export function checkBaseUrl(baseUrl: string): { ok: true; url: URL } | { ok: fa
     return { ok: false, problem: { reason: "unparseable" } };
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
+    // With no `//` the "scheme" is whatever came before the first colon, and `sk-…:…` is a
+    // key with a colon after it - one too short for the check above, which is still a key's
+    // beginning to quote back. What was typed is judged, since the parser lowercases it.
+    if (looksLikeCredential(baseUrl.trim().split(":")[0] ?? "")) {
+      return { ok: false, problem: { reason: "key-shaped" } };
+    }
     return { ok: false, problem: { reason: "scheme", scheme: url.protocol.slice(0, -1) } };
   }
   if (url.username !== "" || url.password !== "") {
     return { ok: false, problem: { reason: "credentials" } };
+  }
+  for (const parameter of url.searchParams.keys()) {
+    if (CREDENTIAL_PARAMETERS.has(parameter.toLowerCase().replaceAll("-", "_"))) {
+      return { ok: false, problem: { reason: "key-parameter", parameter } };
+    }
   }
   return { ok: true, url };
 }
