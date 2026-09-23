@@ -7,7 +7,7 @@ import { sendsKeyInClear } from "./core/api-url.js";
 import { plaintextEnvRemedy } from "./core/doctor.js";
 import { isKnownSecretSource, keySourcePhrase } from "./core/key-source.js";
 import { spawnCommandSync } from "./core/process.js";
-import { isPosixEnvName, renderPosixExports } from "./core/shell.js";
+import { isPosixEnvName, renderJsonEnv, renderPosixExports } from "./core/shell.js";
 import { trackUsage } from "./core/track-usage.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import {
@@ -24,6 +24,7 @@ import {
   envMapOf,
   isEnvMap,
   isSecretEnvName,
+  nonStringEnvKeys,
   printable,
 } from "./lib/profile-env.js";
 import {
@@ -361,11 +362,15 @@ function showProfile(id: string, profile: Profile, asJson: boolean): string {
   }
   const keys = Object.keys(env).sort();
   lines.push(`${secondary("Settings".padEnd(12))}${keys.length === 0 ? dim("none") : ""}`);
+  // A hand edit's number or boolean: hidden like a credential, but for a different reason.
+  const notApplied = new Set(nonStringEnvKeys(envMapOf(profile.env) ?? {}));
   for (const key of keys) {
     lines.push(
-      hidden.includes(key)
-        ? `  ${accent(key)} ${dim("(set; not shown - it can hold a credential)")}`
-        : `  ${accent(key)}=${env[key]}`,
+      notApplied.has(key)
+        ? `  ${accent(key)} ${dim("(not a string, so not applied - see clausona doctor)")}`
+        : hidden.includes(key)
+          ? `  ${accent(key)} ${dim("(set; not shown - it can hold a credential)")}`
+          : `  ${accent(key)}=${env[key]}`,
     );
   }
   lines.push("", dim("Run `clausona config <profile> --show --json` for the full advanced-settings catalog."));
@@ -641,7 +646,8 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("Every profile: the items it shares with the primary, and its plugin state.")}`,
         `    ${dim("Run `clausona repair <profile>` for what that reports. And that its env map is a")}`,
         `    ${dim("map of NAME: value - a hand edit can leave it a list or a string, which applies")}`,
-        `    ${dim("nothing; `clausona config <profile> --edit` fixes it. And that its kind is")}`,
+        `    ${dim("nothing, or a value that is not a string, which is skipped; `clausona config")}`,
+        `    ${dim("<profile> --edit` fixes either. And that its kind is")}`,
         `    ${dim("subscription or api: any other is listed as unknown and launched as a")}`,
         `    ${dim("subscription.")}`,
         "",
@@ -664,6 +670,10 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("  the --key or --key-from that gives it one.")}`,
         `    ${dim("  doctor never prints the key, or a key command's command line, in either")}`,
         `    ${dim("  output form;")}`,
+        `    ${dim("- an env block in settings.json, which profiles share with the primary,")}`,
+        `    ${dim("  that sets the base URL, a credential or a provider switch: Claude Code")}`,
+        `    ${dim("  applies it over the profile. ANTHROPIC_MODEL there is a warning. Move it")}`,
+        `    ${dim("  into the profile that needs it: `clausona config <that profile> --set`;")}`,
         `    ${dim("- apiKeyHelper in settings.json, which profiles share with the primary:")}`,
         `    ${dim("  Claude Code runs it for this profile too and the key it prints can")}`,
         `    ${dim("  reach the profile's endpoint, whatever auth scheme the profile uses.")}`,
@@ -1326,9 +1336,10 @@ export async function runCommand(command: string, args: string[]) {
         for (const assignment of optionValues(args, "--set")) {
           const [key, value] = parseAssignment(assignment, "--set");
           if (key === "ANTHROPIC_MODEL" && model !== undefined) throw new Error(MODEL_TWICE);
-          const result = validateEnvEntry(key, value);
-          if (!result.ok) throw new Error(result.error);
+          // The model's own words first, for a key given as the model.
           checkModelEntry(key, value, "add");
+          const result = validateEnvEntry(key, value, "api");
+          if (!result.ok) throw new Error(result.error);
           env[key] = value;
         }
 
@@ -1399,11 +1410,8 @@ export async function runCommand(command: string, args: string[]) {
       // name it cannot export is as bad as one it cannot unset. Windows has no readonly
       // variables, so the JSON form below is unchanged.
       if (!jsonFlag(args)) return renderPosixExports(env, unset, controlledEnvKeys(profile, built));
-      // null is how the PowerShell hook learns to remove a variable: it hands the value to
-      // SetEnvironmentVariable, which deletes the variable for $null. With nothing to clear
-      // this is JSON.stringify(env) exactly, so a subscription profile's output is unchanged.
-      const cleared = Object.fromEntries(unset.map((key) => [key, null]));
-      return JSON.stringify({ ...cleared, ...env });
+      // null names a variable to remove; the output is ASCII, whatever the paths hold.
+      return renderJsonEnv(env, unset);
     }
 
     case "_sync-plugins": {

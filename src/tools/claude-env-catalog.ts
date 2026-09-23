@@ -1,5 +1,8 @@
+import { redactUrlsIn } from "../core/api-url.js";
+import { carriesCredentialToken, looksLikeCredential } from "../core/credential-token.js";
 import { isPosixEnvName } from "../core/shell.js";
-import { isReservedEnvKey, shownEnvName } from "../lib/profile-env.js";
+import { isReservedEnvKey, isSecretEnvName, printable, shownEnvName } from "../lib/profile-env.js";
+import type { Profile } from "../types.js";
 
 export type EnvGroup = "model" | "context" | "limits" | "timeouts" | "compat" | "transport";
 
@@ -171,13 +174,64 @@ export function catalogEntry(key: string): EnvCatalogEntry | undefined {
   return BY_KEY.get(key);
 }
 
+/**
+ * A name whose value is never printed, in part or whole: any name that says it holds a
+ * secret (`isSecretEnvName`, which is wider than the clear list), and a json setting. The API
+ * form draws these masked for the same reason, so a value is on screen exactly where it would
+ * be in `config --show`. Here rather than beside `redactProfile`, which re-exports it, because
+ * `validateEnvEntry` needs it too and redact.ts already reads this catalog.
+ */
+export function hidesEnvValue(key: string): boolean {
+  return isSecretEnvName(key) || catalogEntry(key)?.kind === "json" || shownEnvName(key) !== key;
+}
+
+/**
+ * Whether a setting's value is a key in the wrong field: shaped like one, under a name whose
+ * value output does not hide - a header or a request body is where a gateway takes a key.
+ * Judged as output shows it, so a proxy's long random password, which output hides and `--set`
+ * stores, is not taken for a key.
+ */
+export function misplacedKeyValue(key: string, value: string): boolean {
+  return !hidesEnvValue(key) && carriesCredentialToken(redactUrlsIn(printable(value)));
+}
+
+/** `validateEnvEntry`'s refusal of one. The value is not quoted: it is the key. */
+export const MISPLACED_KEY_VALUE =
+  "That setting's value is shaped like an API key, so it was not stored. A key never goes in the env map: an API profile takes it through --key or --key-from";
+
+/**
+ * How a refused number or bool entry names what it was given: quoted, so it can be corrected,
+ * unless it could be a key - one too short for the shape check that still begins like one.
+ */
+function quotedValue(value: string): string {
+  return looksLikeCredential(value) ? "." : `, got '${value}'`;
+}
+
 function jsonTypeName(value: unknown): string {
   if (value === null) return "null";
   if (Array.isArray(value)) return "array";
   return typeof value;
 }
 
-export function validateEnvEntry(key: string, value: string): { ok: true } | { ok: false; error: string } {
+/**
+ * Whether a name is the base URL's variable, in any case. An API profile's endpoint is its
+ * `api.baseUrl`, which `list`, `config --show` and doctor show and `--base-url` checks; the env
+ * map is applied after it, so the variable there would move the key to a host none of them
+ * name, past every note `--base-url` prints.
+ */
+export function isBaseUrlEnvKey(key: string): boolean {
+  return key.toUpperCase() === "ANTHROPIC_BASE_URL";
+}
+
+/**
+ * `kind` is the profile's: an API profile refuses its endpoint as a setting. Any other kind
+ * has no endpoint of clausona's, and a user who points a subscription at a proxy may set it.
+ */
+export function validateEnvEntry(
+  key: string,
+  value: string,
+  kind?: Profile["kind"],
+): { ok: true } | { ok: false; error: string } {
   // Before the name rule, whose message quotes the name: this one is a key.
   if (shownEnvName(key) !== key) {
     return {
@@ -185,6 +239,9 @@ export function validateEnvEntry(key: string, value: string): { ok: true } | { o
       error: "That setting's name is shaped like an API key. A key never goes in the env map: use --key or --key-from",
     };
   }
+  // Before anything that could quote the value: no route may print a key back, and on
+  // `--edit` the value was never on a command line, so the message would be where it shows.
+  if (misplacedKeyValue(key, value)) return { ok: false, error: MISPLACED_KEY_VALUE };
   if (!isPosixEnvName(key)) {
     return {
       ok: false,
@@ -195,18 +252,21 @@ export function validateEnvEntry(key: string, value: string): { ok: true } | { o
   if (isReservedEnvKey(key)) {
     return { ok: false, error: `${key} is managed by clausona and cannot be set on a profile` };
   }
+  if (kind === "api" && isBaseUrlEnvKey(key)) {
+    return { ok: false, error: `${key} is this profile's endpoint - set the endpoint with --base-url` };
+  }
 
   const entry = BY_KEY.get(key);
   if (!entry) return { ok: true };
 
   if (entry.kind === "number" && !/^(?:0|[1-9]\d*)$/.test(value)) {
-    return { ok: false, error: `${key} expects a whole number, got '${value}'` };
+    return { ok: false, error: `${key} expects a whole number${quotedValue(value)}` };
   }
   if (entry.kind === "bool" && value !== "0" && value !== "1") {
-    return { ok: false, error: `${key} expects 0 or 1, got '${value}'` };
+    return { ok: false, error: `${key} expects 0 or 1${quotedValue(value)}` };
   }
   if (entry.kind === "json") {
-    // Unlike the number and bool branches above, this one never echoes the value. A json
+    // Unlike the number and bool branches above, this one never echoes any value. A json
     // entry is where someone pastes a request-body fragment for a self-hosted gateway,
     // auth field included, so a malformed paste must not land in an error string the CLI
     // prints. A JSON type name carries no content, so naming the shape is safe. Do not

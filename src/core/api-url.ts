@@ -11,7 +11,7 @@ import { carriesCredentialToken, looksLikeCredential } from "./credential-token.
  *   could not be a scheme's name - a token with a colon typed after it - is left undefined,
  *   for the caller to say there is no http(s) scheme without quoting anything;
  * - `parameter`, the name of a query parameter that carries a credential, as typed - which
- *   can only be one of the names in CREDENTIAL_PARAMETERS - and never its value.
+ *   `isCredentialParameter` has judged to be one - and never its value.
  */
 export type BaseUrlProblem =
   | { reason: "empty" }
@@ -26,6 +26,13 @@ export type BaseUrlProblem =
  * `_`. A gateway that takes its key in the URL takes it under one of these, and the name says
  * more than the value's shape can: a short or hex key misses the shape check, and is no less
  * a key for it.
+ *
+ * The exact names, and any name with a credential word as one of its `_`-separated parts:
+ * `x-api-key` (Anthropic's own header name), `client_secret`, `auth_token`, `api_token`,
+ * `access_key`. A whole part, so `monkey` or `tokenizer` is not one. The cost is a few
+ * ordinary names that have such a part - a pagination `page_token` or `next_token`, a
+ * `key_id`, a `sort_key`, an `auth_type` - which `add` then refuses as a base URL's query,
+ * where none of them is expected.
  */
 const CREDENTIAL_PARAMETERS = new Set([
   "api_key",
@@ -39,6 +46,13 @@ const CREDENTIAL_PARAMETERS = new Set([
   "signature",
   "subscription_key",
 ]);
+
+const CREDENTIAL_PARAMETER_WORD = /(^|_)(key|token|secret|password|passwd|sig|signature|auth|credential)s?(_|$)/;
+
+function isCredentialParameter(name: string): boolean {
+  const normalized = name.toLowerCase().replaceAll("-", "_");
+  return CREDENTIAL_PARAMETERS.has(normalized) || CREDENTIAL_PARAMETER_WORD.test(normalized);
+}
 
 /** What could be a URL scheme's name, and is short enough that a token is not one. */
 const SCHEME_NAME = /^[a-z][a-z0-9+.-]{0,9}$/;
@@ -60,6 +74,9 @@ const SCHEME_NAME = /^[a-z][a-z0-9+.-]{0,9}$/;
  * belongs than with "not a URL".
  */
 export function checkBaseUrl(baseUrl: string): { ok: true; url: URL } | { ok: false; problem: BaseUrlProblem } {
+  // A hand edit's `8000`. Typed as a string, and still checked: doctor and `config --base-url`
+  // pass whatever is stored, and a throw here took the whole report down with it.
+  if (typeof baseUrl !== "string") return { ok: false, problem: { reason: "unparseable" } };
   if (baseUrl.trim() === "") return { ok: false, problem: { reason: "empty" } };
   if (carriesCredentialToken(baseUrl)) return { ok: false, problem: { reason: "key-shaped" } };
 
@@ -86,7 +103,7 @@ export function checkBaseUrl(baseUrl: string): { ok: true; url: URL } | { ok: fa
     return { ok: false, problem: { reason: "credentials" } };
   }
   for (const parameter of url.searchParams.keys()) {
-    if (CREDENTIAL_PARAMETERS.has(parameter.toLowerCase().replaceAll("-", "_"))) {
+    if (isCredentialParameter(parameter)) {
       return { ok: false, problem: { reason: "key-parameter", parameter } };
     }
   }

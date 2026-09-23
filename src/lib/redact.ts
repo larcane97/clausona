@@ -1,13 +1,12 @@
 import { HIDDEN, redactBaseUrl, redactUrlsIn } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { describeSecretSource, redactSecretSource } from "../core/key-source.js";
-import { catalogEntry } from "../tools/claude-env-catalog.js";
-import type { Profile, ShownKind } from "../types.js";
+import { hidesEnvValue } from "../tools/claude-env-catalog.js";
+import type { Profile, ShownApiEndpoint, ShownKind } from "../types.js";
 import {
   envMapOf,
   isCredentialEnvKey,
   isEnvMap,
-  isSecretEnvName,
   printable,
   shownEnvName,
   shownKind,
@@ -42,17 +41,7 @@ import {
  * them to the tool, and `config --edit`, whose file has to round-trip them.
  */
 
-export { describeSecretSource, HIDDEN, isCredentialEnvKey, redactSecretSource };
-
-/**
- * A name whose value is never printed, in part or whole: any name that says it holds a
- * secret (`isSecretEnvName`, which is wider than the clear list), and a json setting. The API
- * form draws these masked for the same reason, so a value is on screen exactly where it would
- * be in `config --show`.
- */
-export function hidesEnvValue(key: string): boolean {
-  return isSecretEnvName(key) || catalogEntry(key)?.kind === "json" || shownEnvName(key) !== key;
-}
+export { describeSecretSource, HIDDEN, hidesEnvValue, isCredentialEnvKey, redactSecretSource };
 
 /**
  * Whether a value is hidden whole under any name: one shaped like a key - `--model "$KEY"`
@@ -60,6 +49,15 @@ export function hidesEnvValue(key: string): boolean {
  */
 function keyShapedValue(value: unknown): boolean {
   return typeof value === "string" && carriesCredentialToken(value);
+}
+
+/**
+ * Whether `redactEnv` hides a value whole: by its name, or because it is not a string - a
+ * hand edit's number, which launch drops and doctor reports - or is shaped like a key, as
+ * stored or once its control characters are gone, which is how it would be printed.
+ */
+function hidesWholeValue(key: string, value: unknown): boolean {
+  return hidesEnvValue(key) || typeof value !== "string" || keyShapedValue(value) || keyShapedValue(printable(value));
 }
 
 /**
@@ -71,7 +69,7 @@ export function hiddenEnvKeys(env: Record<string, string>): string[] {
     ? [
         ...new Set(
           Object.keys(env)
-            .filter((key) => hidesEnvValue(key) || keyShapedValue(env[key]))
+            .filter((key) => hidesWholeValue(key, env[key]))
             .map(shownEnvName),
         ),
       ]
@@ -82,7 +80,9 @@ export function redactEnv(env: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(env).map(([key, value]) => [
       shownEnvName(key),
-      hidesEnvValue(key) || typeof value !== "string" || keyShapedValue(value) ? HIDDEN : redactUrlsIn(value),
+      // Without control characters, like the label: `--set X=$'\e[2J'` must not clear the
+      // screen of whoever runs `config --show`.
+      hidesWholeValue(key, value) ? HIDDEN : redactUrlsIn(printable(value)),
     ]),
   );
 }
@@ -91,7 +91,9 @@ export function redactEnv(env: Record<string, string>): Record<string, string> {
  * The profile, built from the fields the registry defines rather than spread: a field added
  * to profiles.json by hand is not one clausona can vouch for. Never mutates its argument.
  */
-export function redactProfile(profile: Profile): Omit<Profile, "kind"> & { kind?: ShownKind } {
+export function redactProfile(
+  profile: Profile,
+): Omit<Profile, "kind" | "api"> & { kind?: ShownKind; api?: ShownApiEndpoint } {
   return {
     tool: profile.tool,
     kind: shownKind(profile.kind),

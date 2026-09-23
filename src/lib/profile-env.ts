@@ -1,8 +1,10 @@
-import { realpath as fsRealpath } from "node:fs/promises";
+import { readFile as fsReadFile, realpath as fsRealpath } from "node:fs/promises";
 import { homedir } from "node:os";
+import path from "node:path";
 
 import { HIDDEN } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
+import { settingsEnvOverrides } from "../core/doctor.js";
 import { isPosixEnvName } from "../core/shell.js";
 import { getAdapter } from "../tools/registry.js";
 import type { Profile, ShownKind } from "../types.js";
@@ -206,6 +208,20 @@ export function invalidEnvMapMessage(id: string): string {
 }
 
 /**
+ * The names in an env map whose value is not a string: a hand edit's `"API_TIMEOUT_MS":
+ * 600000`, which is how the catalog describes the setting. Launch drops each one rather than
+ * converting it, so the hook and `run` apply exactly the same thing, and doctor reports it.
+ */
+export function nonStringEnvKeys(env: Record<string, unknown>): string[] {
+  return Object.keys(env).filter((key) => typeof env[key] !== "string");
+}
+
+/** doctor's finding for one of those names. The name as it may be printed; never the value. */
+export function nonStringEnvValueMessage(id: string, key: string): string {
+  return `${shownEnvName(key)} in the env map is not a string in quotes, so it is not applied - run 'clausona config ${id} --edit' and quote its value`;
+}
+
+/**
  * A name in the env map as it may be printed: itself, or `<hidden>` when it is shaped like an
  * API key. No variable is named that way, so it is a key pasted where the name goes - a hand
  * edit, or a paste that missed - and printing the name would print the key.
@@ -245,10 +261,11 @@ export function displayName(profile: Pick<Profile, "email" | "label">): string {
 
 /**
  * A stored string as it may be printed: without C0 or C1 control characters - ESC among
- * them, so no terminal escape sequence survives. For the fields a hand edit can put anything
- * in and that are printed as they are - the label, the kind, the auth scheme - so that
- * opening `list` cannot retitle the terminal, clear it or rewrite what came before. Only
- * what is printed changes; anything that is not a string is left as it is.
+ * them, so no terminal escape sequence survives. For the fields a hand edit, or `--set`, can
+ * put anything in and that are printed as they are - the label, the kind, the auth scheme,
+ * the model id and every env value - so that opening `list` cannot retitle the terminal,
+ * clear it or rewrite what came before. Only what is printed changes; anything that is not
+ * a string is left as it is.
  */
 export function printable<T>(value: T): T {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes
@@ -268,8 +285,9 @@ export function printable<T>(value: T): T {
  */
 export function profileModel(profile: Pick<Profile, "tool" | "env">): string | undefined {
   if (profile.tool !== "claude") return undefined;
-  const model = profile.env?.ANTHROPIC_MODEL;
-  if (!model?.trim()) return undefined;
+  // A hand edit can leave a number here, which launch does not apply either.
+  const model = printable(profile.env?.ANTHROPIC_MODEL);
+  if (typeof model !== "string" || !model.trim()) return undefined;
   return carriesCredentialToken(model) ? HIDDEN : model;
 }
 
@@ -283,7 +301,36 @@ type Deps = {
   resolveSecret?: typeof resolveSecret;
   realpath?: (target: string) => Promise<string>;
   homedir?: () => string;
+  readFile?: (target: string) => Promise<string>;
 };
+
+/**
+ * What launch says about the settings.json an API profile reads - normally the primary's,
+ * through a shared link: each name in its `env` block that Claude Code would apply over the
+ * endpoint, the key or the routing clausona just set or cleared. Said on every launch, like
+ * any other warning here, because the run it precedes sends the key or the traffic elsewhere.
+ *
+ * One small file read, for an API profile only. ANTHROPIC_MODEL there is left to doctor: it
+ * changes what is asked for, not where the key goes, and a subscription setup commonly pins
+ * one. A file that is missing or does not parse says nothing here; doctor reports the second.
+ */
+async function settingsEnvWarnings(
+  id: string,
+  configDir: string,
+  readFile: (target: string) => Promise<string>,
+): Promise<string[]> {
+  let settings: unknown;
+  try {
+    settings = JSON.parse(await readFile(path.join(configDir, "settings.json")));
+  } catch {
+    return [];
+  }
+  const env = typeof settings === "object" && settings !== null ? (settings as { env?: unknown }).env : undefined;
+  return settingsEnvOverrides(env, API_MANAGED_ENV_KEYS).map(
+    (key) =>
+      `${id}: ${shownEnvName(key)} is set in the env block of settings.json, and Claude Code applies it over this profile - run 'clausona doctor' for the fix`,
+  );
+}
 
 /**
  * Turns one profile into the environment a single tool run needs.
@@ -296,6 +343,7 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
   const resolve = deps.resolveSecret ?? resolveSecret;
   const realpath = deps.realpath ?? ((target: string) => fsRealpath(target));
   const home = deps.homedir ?? homedir;
+  const readFile = deps.readFile ?? ((target: string) => fsReadFile(target, "utf8"));
   const adapter = getAdapter(profile.tool);
   const env: Record<string, string> = {};
   const warnings: string[] = [];
@@ -310,7 +358,9 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
   }
 
   if (profile.kind === "api" && profile.api) {
-    env.ANTHROPIC_BASE_URL = profile.api.baseUrl;
+    // String() for a hand edit's `8000`: a URL the tool refuses to start with, which doctor
+    // reports - never a missing one, which would send the key to Anthropic's own API.
+    env.ANTHROPIC_BASE_URL = String(profile.api.baseUrl);
     try {
       const secret = await resolve(id, profile.api.secret);
       env[profile.api.authScheme === "bearer" ? "ANTHROPIC_AUTH_TOKEN" : "ANTHROPIC_API_KEY"] = secret;
@@ -319,9 +369,14 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
       // is more actionable than a shell function that silently does nothing.
       warnings.push(`${id}: ${error instanceof Error ? error.message : String(error)}`);
     }
+    warnings.push(...(await settingsEnvWarnings(id, profile.configDir, readFile)));
   }
 
-  for (const [key, value] of Object.entries(profile.env ?? {})) {
+  // A map that is not one is applied as nothing, and said once: walked as an object, a string
+  // gives one index key per character, and a warning for each.
+  const map = envMapOf(profile.env);
+  if (map === undefined) warnings.push(`${id}: ${invalidEnvMapMessage(id)}`);
+  for (const [key, value] of Object.entries(map ?? {})) {
     if (shownEnvName(key) !== key) {
       // Even where the shell could export it, a variable named after a key hands the key to
       // every process the tool starts. Said without the name: it is the key.
@@ -348,6 +403,14 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
     if (twin !== undefined) {
       warnings.push(
         `${id}: ignoring '${key}' from the env map - it differs from ${twin} only in case, and Windows treats the two as one variable`,
+      );
+      continue;
+    }
+    if (typeof value !== "string") {
+      // Dropped, not converted: `run` would pass String(value) and the POSIX hook could not
+      // print one at all, and the two launch paths must apply the same profile.
+      warnings.push(
+        `${id}: ignoring ${key} from the env map - its value is not a string; run 'clausona config ${id} --edit' and quote it`,
       );
       continue;
     }

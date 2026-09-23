@@ -171,13 +171,26 @@ describe("doctor on an API profile", () => {
     expect(results.find((r) => r.name === "claude:glm")?.healthy).toBe(true);
   });
 
-  it("titles the profile with its label, since it has no account email", async () => {
+  // The same fields `list --json` gives it: no account email, so `email` is empty, and the
+  // label and kind under their own names. The text report still titles it with the label.
+  it("carries its kind and label in the JSON, and titles the report with the label", async () => {
     const h = await harness();
     await h.addApi({ label: "gpu-box" });
 
     const results = await h.doctor();
+    const result = results.find((r) => r.name === "claude:glm");
 
-    expect(results.find((r) => r.name === "claude:glm")?.email).toBe("gpu-box");
+    expect(result).toMatchObject({ kind: "api", email: "", label: "gpu-box" });
+    expect(h.render(results)).toContain("claude:glm (gpu-box)");
+    // A subscription profile gains neither key, as in `list --json`.
+    expect(Object.keys(JSON.parse(JSON.stringify(results.find((r) => r.name === "claude:default"))))).toEqual([
+      "name",
+      "email",
+      "configDir",
+      "isPrimary",
+      "healthy",
+      "issues",
+    ]);
   });
 
   it("does not probe the Keychain for it on macOS", async () => {
@@ -306,6 +319,43 @@ describe("doctor on an API profile", () => {
     expect(issues[0].message).toContain("apiKeyHelper");
   });
 
+  // Claude Code copies settings.json's env block over its own environment at startup, so a key
+  // or an endpoint there beats everything the profile set and cleared.
+  it("reports an env block in the shared settings that overrides the profile, by name only", async () => {
+    const settingsKey = ["sk", "ant", "api03", "SETTINGSENVBLOCK0001"].join("-");
+    const h = await harness({
+      settings: {
+        env: {
+          ANTHROPIC_API_KEY: settingsKey,
+          ANTHROPIC_BASE_URL: "http://localhost:47812",
+          claude_code_use_bedrock: "1",
+          ANTHROPIC_MODEL: "opus",
+          DISABLE_TELEMETRY: "1",
+        },
+      },
+    });
+    await h.addApi();
+
+    const results = await h.doctor();
+    const overrides = issuesFor(results, "claude:glm").filter((i) => i.kind === "settings_env_override");
+
+    expect(overrides.map((i) => [i.message.split(" ")[0], i.severity])).toEqual([
+      ["ANTHROPIC_API_KEY", undefined],
+      ["ANTHROPIC_BASE_URL", undefined],
+      ["ANTHROPIC_MODEL", "warning"],
+      ["claude_code_use_bedrock", undefined],
+    ]);
+    expect(overrides[0].message).toContain("(shared with the primary)");
+    expect(overrides[0].message).toContain("Claude Code applies it over this profile");
+    expect(overrides[0].message).toContain("clausona config <that profile> --set ANTHROPIC_API_KEY=VALUE");
+    expect(results.find((r) => r.name === "claude:glm")?.healthy).toBe(false);
+    const text = JSON.stringify(results) + h.render(results);
+    expect(text).not.toContain(settingsKey);
+    expect(text).not.toContain("47812");
+    // The primary is what the file was written for.
+    expect(kinds(results, "claude:default")).toEqual([]);
+  });
+
   it("warns about the helper whatever auth scheme the profile uses", async () => {
     const h = await harness({ settings: { apiKeyHelper: "op read op://vault/anthropic" } });
     await h.addApi({ authScheme: "api-key" });
@@ -323,6 +373,37 @@ describe("doctor on an API profile", () => {
     expect(kinds(results, "claude:glm")).toEqual(["plaintext_env_secret"]);
     expect(issuesFor(results, "claude:glm")[0].message).toContain("ANTHROPIC_AUTH_TOKEN");
     expect(JSON.stringify(results)).not.toContain("sk-in-the-registry-0002");
+  });
+});
+
+// Launch drops such an entry, so a profile carrying one does not run as its map says.
+describe("an env-map value that is not a string", () => {
+  it.each([
+    ["a subscription profile", { tool: "claude", configDir: "WORK_DIR", email: "work@example.com" }],
+    [
+      "an API profile",
+      {
+        tool: "claude",
+        kind: "api",
+        configDir: "WORK_DIR",
+        email: "",
+        label: "local",
+        api: { baseUrl: "http://localhost:8000", authScheme: "bearer", secret: { source: "env", name: "SET_BELOW" } },
+      },
+    ],
+  ])("is reported on %s, by name, with the edit that fixes it", async (_kind, profile) => {
+    const h = await harness({
+      profiles: { "claude:work": { ...profile, env: { API_TIMEOUT_MS: 600000, ANTHROPIC_MODEL: "m" } } },
+    });
+    vi.stubEnv("SET_BELOW", STORED_KEY);
+
+    const issues = issuesFor(await h.doctor(), "claude:work").filter((issue) => issue.kind === "invalid_env_map");
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0].message).toContain("API_TIMEOUT_MS");
+    expect(issues[0].message).toContain("clausona config claude:work --edit");
+    expect(issues[0].message).not.toContain("600000");
+    expect(issues[0].severity).toBeUndefined();
   });
 });
 

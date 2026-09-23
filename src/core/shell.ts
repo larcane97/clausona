@@ -62,6 +62,26 @@ export function renderPosixExports(
 }
 
 /**
+ * `_shell-env --json`, which the PowerShell hook reads: the profile's variables, and null for
+ * each one the run must not inherit - the hook hands the value to SetEnvironmentVariable,
+ * which deletes the variable for $null. With nothing to clear and nothing past ASCII, this
+ * is JSON.stringify(env) exactly, so a subscription profile's output is what it was.
+ *
+ * ASCII only: every character past `~` is written as a `\uXXXX` escape, so the output is the
+ * same bytes in every code page. PowerShell decodes a native command's output with
+ * [Console]::OutputEncoding - the console's OEM code page by default, 437 or 949, not UTF-8 -
+ * so a Hangul user folder in CLAUDE_CONFIG_DIR arrived as a directory that does not exist,
+ * and the tool ran on a fresh account. ConvertFrom-Json decodes the escapes on 5.1 and 7 alike.
+ */
+export function renderJsonEnv(env: Record<string, string>, unset: readonly string[] = []): string {
+  const cleared = Object.fromEntries(unset.map((key) => [key, null]));
+  return JSON.stringify({ ...cleared, ...env }).replace(
+    /[\u007f-\uffff]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+/**
  * The wrapper asks `clausona _shell-env <tool>` for the whole environment a run needs and
  * evals it inside a subshell, so the variables live exactly as long as the tool does.
  * Nothing is unset by hand: there is no ledger of what was set to drift out of date, and a

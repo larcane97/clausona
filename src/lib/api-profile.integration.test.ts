@@ -1388,7 +1388,12 @@ describe("updateProfileEnv", () => {
       { anthropic_custom_headers: "x" },
       /differs from ANTHROPIC_CUSTOM_HEADERS only in case/,
     ],
-    ["a miscased name the profile sets", { Anthropic_Base_Url: "x" }, /differs from ANTHROPIC_BASE_URL only in case/],
+    // Not the base URL's: every spelling of that one is refused as the endpoint instead.
+    [
+      "a miscased name the profile sets",
+      { Anthropic_Auth_Token: "x" },
+      /differs from ANTHROPIC_AUTH_TOKEN only in case/,
+    ],
     ["any spelling of a variable clausona owns", { claude_config_dir: "/tmp/elsewhere" }, /is managed by clausona/],
   ];
   for (const [label, set, message] of caseClashes) {

@@ -10,6 +10,7 @@ import {
   baseUrlError,
   concealsValue,
   customEntryError,
+  ENDPOINT_AS_SETTING,
   emptyApiForm,
   envError,
   KEY_FIELD_MESSAGES,
@@ -156,7 +157,16 @@ describe("an advanced setting", () => {
   });
 
   it("refuses a name that differs from a managed one only in case", () => {
-    expect(envError("anthropic_base_url", "https://x.example.com", [])).toMatch(/differs from ANTHROPIC_BASE_URL/);
+    expect(envError("claude_code_use_bedrock", "1", [])).toMatch(/differs from CLAUDE_CODE_USE_BEDROCK/);
+  });
+
+  // The CLI's rule for an API profile, in the form's words: the Endpoint field is the endpoint.
+  it.each(["ANTHROPIC_BASE_URL", "anthropic_base_url"])("refuses %s as a setting", (name) => {
+    expect(envError(name, "https://x.example.com", [])).toBe(ENDPOINT_AS_SETTING);
+    expect(customEntryError({ ...emptyApiForm(), customKey: name, customValue: "https://x.example.com" })).toEqual({
+      field: "customValue",
+      message: ENDPOINT_AS_SETTING,
+    });
   });
 
   it("refuses a value of the wrong shape, quoting it so the field can be corrected", () => {

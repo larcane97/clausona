@@ -173,9 +173,11 @@ a shell without the hook, `use` changes nothing `claude` sees — `clausona run 
 applies a profile for one run without it. See [Profile Switching](#profile-switching).
 
 `--base-url` must be an absolute `http://` or `https://` URL carrying no username or
-password, no query parameter named for a credential (`key`, `api_key`, `apikey`, `token`,
-`access_token`, `secret`, `password`, `sig`, `signature` or `subscription_key`, matched
-without case and with `-` read as `_`), and nothing shaped like an API key anywhere in it — a
+password, no query parameter named for a credential (`apikey`, or any name with `key`,
+`token`, `secret`, `password`, `passwd`, `sig`, `signature`, `auth` or `credential` — or its
+plural — as one of its `_`-separated parts, such as `api_key`, `x-api-key`, `client_secret`
+or `auth_token`; matched without case and with `-` read as `_`, so `page_token` and `key_id`
+are refused too), and nothing shaped like an API key anywhere in it — a
 credential in the URL would be stored in `profiles.json` in plain text, which is exactly what
 the key source exists to avoid. The shape check can be wrong about a URL with a long
 random-looking segment in it; if none of it is a key, write the URL into `api.baseUrl` in
@@ -340,11 +342,18 @@ clausona config claude:gw --show          # what this profile sets
 clausona config claude:gw --show --json   # the same, plus every variable clausona knows about
 ```
 
-`--show --json` is the discovery mechanism: next to the profile it prints the full catalog —
-each variable's key, a one-line hint, its type (`number`, `bool`, `string`, `json`) and its
-group (model, context, limits, timeouts, compat, transport). The catalog is a convenience,
+`--show --json` is the discovery mechanism: next to the profile it prints the full catalog
+under `catalog` — for each variable its `key`, a short `label`, a one-line `hint`, its `kind`
+(`number`, `bool`, `string` or `json`) and its `group` (`model`, `context`, `limits`,
+`timeouts`, `compat` or `transport`). The catalog is a convenience,
 not an allowlist: a variable a future Claude Code release introduces can be set today, as
 long as the name is one a shell can export.
+
+An API profile's endpoint is not one of these settings. `--set ANTHROPIC_BASE_URL=…` is
+refused on an API profile, in any case — set the endpoint with `--base-url`, which checks the
+URL and says when the key would go to a new host. The env map is applied after the endpoint,
+so one a hand edit leaves there still wins at launch; `doctor` warns about it, with
+`config <profile> --unset ANTHROPIC_BASE_URL` and then `--base-url`.
 
 Two are worth knowing about for a self-hosted model. Claude Code assumes a conservative
 context window for a model it does not recognise and compacts early, so declare the real one
@@ -353,8 +362,11 @@ with `CLAUDE_CODE_MAX_CONTEXT_TOKENS`. And a cold GPU server is slow to first by
 
 **The env map is stored in plain text** in `~/.clausona/profiles.json`. The API key does not
 belong in it — not as `--set ANTHROPIC_API_KEY=…`, and not as an `Authorization` header under
-`--set ANTHROPIC_CUSTOM_HEADERS=…`. Use `--key` or `--key-from` instead. clausona warns when
-you set one of those names, on any profile, and names the commands that undo it:
+`--set ANTHROPIC_CUSTOM_HEADERS=…`. Use `--key` or `--key-from` instead. A value shaped like
+an API key under a name that does not say it holds a secret — `CLAUDE_CODE_MAX_CONTEXT_TOKENS`,
+say — is refused by `add --set`, `config --set` and `config --edit` alike, and no refusal
+repeats the value. clausona warns when you set one of those credential names, on any profile,
+and names the commands that undo it:
 
 - an API profile whose key is in the credential store: `config <profile> --key` to store the
   key, then `config <profile> --unset <NAME>` to drop the plain-text copy, which would
@@ -433,7 +445,8 @@ go through one rule for what they print about a profile:
   where a gateway's auth field goes) prints as `<hidden>`;
 - a setting whose *name* is shaped like an API key — a key pasted where the name goes — prints
   as `<hidden>`, value and all. `--set` refuses one, and launch skips one a hand edit left,
-  with a warning that does not quote it;
+  with a warning that does not quote it; `doctor` reports one on an API profile without
+  naming it, with the `config <profile> --edit` that removes it;
 - a URL's userinfo, query and fragment print as `<hidden>`, in the base URL and in any
   setting — `HTTPS_PROXY=http://user:pass@proxy:8080` shows as
   `http://<hidden>@proxy:8080/`. That includes the scheme-less `user:pass@host` form, and a
@@ -446,9 +459,14 @@ go through one rule for what they print about a profile:
 - a field clausona does not define is left out, and an env map a hand edit left as a list or
   a string — not a map of settings — is hidden whole. `doctor` reports that one, with the
   `config <profile> --edit` that fixes it; until then `--set`, `--unset` and `--model` refuse
-  to change it. An empty list or `null` applies what `{}` does, and is read as that;
+  to change it. An empty list or `null` applies what `{}` does, and is read as that. A value
+  that is not a string in quotes — a hand edit's `"API_TIMEOUT_MS": 600000` — is hidden too
+  and listed in `hiddenEnvKeys`; launch skips that one entry, with a warning, and applies the
+  rest, and `doctor` reports it with the same `--edit`;
 - a control character — an escape sequence a hand edit left in a profile's label, kind or
-  auth scheme — is dropped, so printing a profile cannot drive your terminal. `doctor`
+  auth scheme, or one given in a model id or a setting's value — is dropped, so printing a
+  profile cannot drive your terminal. Only the printed copy loses it; the stored value and
+  what reaches `claude` keep it. `doctor`
   reports a kind that is not `subscription` or `api`, and an auth scheme that is not
   `bearer` or `api-key`, with the command that fixes it.
 
@@ -493,6 +511,16 @@ cover.** `settings.json` is shared with your primary profile, so a helper writte
 subscription account also runs for every API profile, and the key it prints can reach that
 profile's endpoint — whatever auth scheme the profile uses. `clausona doctor` reports it;
 removing it removes it for every profile.
+
+**So is an `env` block in that `settings.json`.** Claude Code applies it over the environment
+it was started with, so over everything the profile sets and clears: an `ANTHROPIC_API_KEY`
+there reaches this profile's endpoint next to the profile's key, an `ANTHROPIC_BASE_URL` sends
+the profile's key to another host, and a provider switch such as `CLAUDE_CODE_USE_BEDROCK`
+routes the run away from the endpoint. `clausona doctor` reports each such name, in any case,
+as an error — `ANTHROPIC_MODEL` there as a warning — without quoting its value, and each
+launch of an API profile warns about the ones that move the key or the traffic. The fix is to
+move the setting out of `settings.json` into the profile that needs it:
+`clausona config <that profile> --set KEY=VALUE`.
 
 ### What `list` shows
 
@@ -552,6 +580,9 @@ reports neither missing. It checks these instead:
 - `apiKeyHelper` in `settings.json`, and a credential name in the profile's env map. Both are
   warnings: they describe a key that could reach the endpoint, not a profile that is broken,
   so the profile still reads as healthy
+- an `env` block in `settings.json` that sets the base URL, a credential or a provider switch,
+  which Claude Code applies over the profile: an error, since the key or the traffic then goes
+  somewhere else. `ANTHROPIC_MODEL` there is a warning
 - one `env:` or `command:` key source read by API profiles on different endpoints (compared by
   scheme, host and port): whichever key it holds goes to both. Also a warning, reported on
   each of them with the `config <profile> --key-from env:<ANOTHER_NAME>` that separates them.
@@ -561,6 +592,11 @@ No request is made to the endpoint. A healthy report means the profile is config
 key resolves, not that the endpoint answered — run `claude` itself to find that out. When a
 profile's key is stored by clausona, the report ends by saying where: the macOS Keychain, or
 `~/.clausona/secrets.json` everywhere else.
+
+In `clausona doctor --json` each profile carries `kind` and `label` exactly as `list --json`
+does: an API profile has `kind: "api"`, its label under `label` and an empty `email`; a
+subscription profile carries neither key. Each finding has a `kind`, a `message`, and
+`severity: "warning"` when it is advice rather than a problem.
 
 ## Commands
 
@@ -601,7 +637,9 @@ Shell wrappers for `claude` and `codex` are registered via `eval "$(clausona she
    profile, its endpoint and credential
 2. **During** the invocation — those variables exist only for that one run. On zsh/bash the tool
    runs in a subshell, on PowerShell each variable is restored afterwards, so your interactive
-   shell is left exactly as it was
+   shell is left exactly as it was. On PowerShell the environment arrives as ASCII-only JSON,
+   so a config directory under a non-ASCII user folder reaches the tool intact whatever the
+   console's code page
 3. **After** each `claude` invocation — detects usage changes via fingerprint comparison and
    records cost/token usage per profile
 

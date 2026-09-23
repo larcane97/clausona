@@ -2366,6 +2366,27 @@ describe("App doctor screen", () => {
     expect(frame).toContain("1 issue, 1 warning");
     expect(frame).not.toContain("All checks passed");
   });
+
+  // doctor's result carries an API profile's label under `label`, with `email` empty.
+  it("names an API profile by its label", async () => {
+    const { doctorProfiles } = await import("../lib/service.js");
+    vi.mocked(doctorProfiles).mockResolvedValueOnce([
+      {
+        name: "claude:glm",
+        kind: "api",
+        email: "",
+        label: "gpu-box",
+        configDir: "/Users/test/.claude-glm",
+        isPrimary: false,
+        healthy: true,
+        issues: [],
+      },
+    ]);
+    const { lastFrame } = render(<App initialScreen="doctor" />);
+    const frame = await waitForFrame(lastFrame, (f) => f.includes("claude:glm"));
+
+    expect(frame.split("gpu-box").length - 1).toBe(2);
+  });
 });
 
 describe("App after a re-login", () => {

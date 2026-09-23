@@ -1,4 +1,4 @@
-import type { Profile, SecretSource } from "../types.js";
+import type { Profile, SecretSource, ShownSecretSource } from "../types.js";
 import { checkBaseUrl, HIDDEN } from "./api-url.js";
 import { carriesCredentialToken } from "./credential-token.js";
 import { isPosixEnvName } from "./shell.js";
@@ -19,7 +19,7 @@ export function isKnownSecretSource(secret: SecretSource | undefined): secret is
 }
 
 /** Where the key is read from, and nothing the reference could carry. */
-export function redactSecretSource(secret: SecretSource | undefined): SecretSource {
+export function redactSecretSource(secret: ShownSecretSource | undefined): ShownSecretSource {
   switch (secret?.source) {
     case "keychain":
       return { source: "keychain" };
@@ -37,12 +37,12 @@ export function redactSecretSource(secret: SecretSource | undefined): SecretSour
       return { source: "command", run: HIDDEN };
     default:
       // A source clausona does not know is one it cannot say anything safe about, beyond that.
-      return { source: "unknown" } as unknown as SecretSource;
+      return { source: "unknown" };
   }
 }
 
 /** The one-word form of a key source, for text: `keychain`, `env:NAME`, `command` or `unknown`. */
-export function describeSecretSource(secret: SecretSource | undefined): string {
+export function describeSecretSource(secret: ShownSecretSource | undefined): string {
   const shown = redactSecretSource(secret);
   if (shown.source === "env") return `env:${shown.name}`;
   return shown.source;

@@ -134,6 +134,31 @@ describe("evaluateApiHealth", () => {
       expect(issues[0].message).not.toContain("gpu-box:30000");
     });
 
+    // checkBaseUrl called `.trim()` on it, and the throw took every profile's report with it.
+    it("reports a base URL a hand edit left as a number, rather than crashing", () => {
+      const issues = health({ profile: withApi(8000 as unknown as string) });
+
+      expect(issues.map((issue) => issue.kind)).toEqual(["invalid_api_config"]);
+      expect(issues[0].message).toContain("not an absolute http:// or https:// URL");
+      expect(issues[0].message).toContain("clausona config claude:glm --base-url <url>");
+    });
+
+    // `--set` refuses it now; one stored before, or by hand, still wins at launch.
+    it("warns that an ANTHROPIC_BASE_URL in the env map overrides the endpoint shown", () => {
+      const issues = health({
+        profile: { ...apiProfile, env: { ANTHROPIC_BASE_URL: "http://elsewhere.example.com" } },
+      });
+
+      expect(issues.map((issue) => [issue.kind, issue.severity])).toEqual([["env_overrides_endpoint", "warning"]]);
+      expect(issues[0].message).toContain("clausona config claude:glm --unset ANTHROPIC_BASE_URL");
+      expect(issues[0].message).toContain("clausona config claude:glm --base-url <url>");
+      expect(issues[0].message).not.toContain("elsewhere");
+      // A miscased one is dropped at launch, with a warning of its own, so it overrides nothing.
+      expect(
+        health({ profile: { ...apiProfile, env: { anthropic_base_url: "http://elsewhere.example.com" } } }),
+      ).toEqual([]);
+    });
+
     // Parses with an empty host, and the "scheme" is the username: never quote any of it.
     it("reports scheme-less userinfo as credentials, quoting none of it", () => {
       const message = health({ profile: withApi("admin-name:pw-0040@gpu-box/api") })[0].message;
@@ -347,6 +372,32 @@ describe("evaluateApiHealth", () => {
       });
 
       expect(issues.map((issue) => issue.message.split(" ")[0])).toEqual(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]);
+    });
+
+    // A key pasted where the name goes: `config --show` and launch already hide it, and
+    // doctor's report is promised safe to paste.
+    it("never prints a name shaped like an API key, and names --edit for it", () => {
+      // Built from pieces, so no line of this file is a token a secret scanner would flag.
+      const pat = [
+        "github",
+        "pat",
+        "11ABCDEFG0Q8r3LmZ7pW2x",
+        "Kd9fT4vYb6NcR1sHjU5wE8aG3mP0qLzXy7Bn2Vt4Rk9Fh6Ds1Wc3Ju",
+      ].join("_");
+      const dashed = ["sk", "ant", "api03", "F4NAMEq7Rw2Lp9XzT5vB8nC1"].join("-");
+      const issues = health({
+        profile: { ...apiProfile, env: { [pat]: "x", [dashed]: "y" } },
+        secretEnvName: (key) => /(^|_)PAT(_|$)/i.test(key),
+      });
+
+      expect(issues.map((issue) => [issue.kind, issue.severity])).toEqual([
+        ["plaintext_env_secret", "warning"],
+        ["plaintext_env_secret", "warning"],
+      ]);
+      const report = JSON.stringify(issues);
+      expect(leakedWindows([report], pat)).toEqual([]);
+      expect(leakedWindows([report], dashed)).toEqual([]);
+      for (const issue of issues) expect(issue.message).toContain("clausona config claude:glm --edit");
     });
 
     it("says nothing about an env map that holds no credential", () => {

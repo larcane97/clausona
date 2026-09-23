@@ -502,17 +502,14 @@ const SELF_DIRECTED_ISSUE_KINDS = new Set<DoctorIssue["kind"]>([
   "unreadable_settings",
   "plaintext_env_secret",
   "shared_key_source",
+  "settings_env_override",
+  "env_overrides_endpoint",
   "invalid_env_map",
   "invalid_profile_kind",
 ]);
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
 
-/**
- * What a doctor result amounts to, in one unstyled phrase: `healthy`, `2 warnings`,
- * `1 issue`, or `1 issue, 2 warnings`. Shared with the TUI, which has one column for it
- * and would otherwise label a profile carrying only warnings "healthy" and show nothing.
- */
 /**
  * Which of the three states a doctor result is in, for anything that colours by it - the
  * same shape as `quotaSeverity`, and the same reason: two surfaces writing this rule out by
@@ -527,6 +524,11 @@ export function doctorSeverity(issues: DoctorIssue[]): "healthy" | "warning" | "
   return warnings > 0 ? "warning" : "healthy";
 }
 
+/**
+ * What a doctor result amounts to, in one unstyled phrase: `healthy`, `2 warnings`,
+ * `1 issue`, or `1 issue, 2 warnings`. Shared with the TUI, which has one column for it
+ * and would otherwise label a profile carrying only warnings "healthy" and show nothing.
+ */
 export function doctorSummary(issues: DoctorIssue[]): string {
   const { errors, warnings } = countIssues(issues);
   if (errors > 0) {
@@ -537,7 +539,7 @@ export function doctorSummary(issues: DoctorIssue[]): string {
 
 export function renderDoctor(results: DoctorProfileResult[]) {
   const sections = results.map((result) => {
-    const title = `  ${bold(result.name)} ${dim(`(${result.email})`)}`;
+    const title = `  ${bold(result.name)} ${dim(`(${displayName(result)})`)}`;
     const { errors, warnings } = countIssues(result.issues);
     if (errors === 0 && warnings === 0) {
       return [title, `    ${ok} ${green("healthy")}`].join("\n");

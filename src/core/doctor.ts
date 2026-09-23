@@ -1,5 +1,6 @@
 import type { DoctorIssue, Profile } from "../types.js";
-import { checkBaseUrl, hasBareUserinfo, redactBaseUrl } from "./api-url.js";
+import { checkBaseUrl, HIDDEN, hasBareUserinfo, redactBaseUrl } from "./api-url.js";
+import { carriesCredentialToken } from "./credential-token.js";
 import { isKnownSecretSource, keySourcePhrase } from "./key-source.js";
 
 export function evaluateSymlinkHealth({
@@ -130,6 +131,8 @@ export type ApiHealthInput = {
    * the layer lib is built on. The caller holds the one true list; this holds the rule.
    */
   credentialEnvKeys?: readonly string[];
+  /** ROUTING_ENV_KEYS, passed in for the same reason. */
+  routingEnvKeys?: readonly string[];
   /**
    * Names that say their value is a secret, wider than `credentialEnvKeys`: `isSecretEnvName`.
    * Passed in for the same reason. A name on it but not on the credential list is another
@@ -189,6 +192,21 @@ function baseUrlProblem(baseUrl: string, remedy: string): string | undefined {
 }
 
 /**
+ * The names in a settings.json `env` block that are one of `names`, in any case, sorted: what
+ * Claude Code applies over an API profile's own environment. Windows reads the names without
+ * case, so a lowercase one is found too. Nothing for a block that is not a map.
+ *
+ * Shared by doctor and by launch, which warns about the ones that move the key or the traffic.
+ */
+export function settingsEnvOverrides(env: unknown, names: readonly string[]): string[] {
+  if (typeof env !== "object" || env === null || Array.isArray(env)) return [];
+  const wanted = new Set(names);
+  return Object.keys(env)
+    .filter((key) => wanted.has(key.toUpperCase()))
+    .sort();
+}
+
+/**
  * The health checks that apply to an API profile, and only to one.
  *
  * An API profile has no account JSON and no Claude Code Keychain item by design, so the
@@ -210,6 +228,7 @@ export function evaluateApiHealth({
   settingsPath = "settings.json",
   settingsShared = false,
   credentialEnvKeys = [],
+  routingEnvKeys = [],
   secretEnvName = (key) => credentialEnvKeys.includes(key),
   keySharers = [],
 }: ApiHealthInput): DoctorIssue[] {
@@ -235,6 +254,18 @@ export function evaluateApiHealth({
   const baseUrl = profile.api?.baseUrl ?? "";
   const urlProblem = baseUrlProblem(baseUrl, baseUrlRemedy(id, profile.api !== undefined));
   if (urlProblem) issues.push({ kind: "invalid_api_config", message: urlProblem });
+
+  if (Object.hasOwn(profile.env ?? {}, "ANTHROPIC_BASE_URL")) {
+    // `--set` refuses it for an API profile now; a hand edit, or a profile set before that,
+    // can still hold one. The env map is applied after the endpoint, so this is where the key
+    // goes - a host that list, config --show and the checks above never name. Not quoted, like
+    // any base URL. A miscased spelling is not here: launch drops that one, and says so.
+    issues.push({
+      kind: "env_overrides_endpoint",
+      severity: "warning",
+      message: `ANTHROPIC_BASE_URL in this profile's env map overrides the endpoint shown for it, so the key goes wherever that says - run 'clausona config ${id} --unset ANTHROPIC_BASE_URL', then 'clausona config ${id} --base-url <url>' to change the endpoint`,
+    });
+  }
 
   if (profile.api && profile.api.authScheme !== "bearer" && profile.api.authScheme !== "api-key") {
     // A hand edit. Launch sends the key as ANTHROPIC_API_KEY for anything but `bearer`, which
@@ -286,9 +317,30 @@ export function evaluateApiHealth({
     issues.push({
       kind: "unreadable_settings",
       severity: "warning",
-      message: `${settingsPath} could not be read, so apiKeyHelper was not checked - fix or remove it`,
+      message: `${settingsPath} could not be read, so apiKeyHelper and its env block were not checked - fix or remove it`,
     });
   } else {
+    const where = settingsShared ? `${settingsPath} (shared with the primary)` : settingsPath;
+    // Claude Code copies this block into its own environment at startup, over whatever it was
+    // started with - so over everything clausona sets and clears for the profile. A key or a
+    // provider switch there sends the profile's traffic, or a second key, somewhere else.
+    for (const key of settingsEnvOverrides(settings.env, [
+      "ANTHROPIC_BASE_URL",
+      ...credentialEnvKeys,
+      ...routingEnvKeys,
+      "ANTHROPIC_MODEL",
+    ])) {
+      const model = key.toUpperCase() === "ANTHROPIC_MODEL";
+      // Only the name, and only as other names are printed: the value can be the key.
+      const shown = carriesCredentialToken(key) ? HIDDEN : key;
+      issues.push({
+        kind: "settings_env_override",
+        // The model changes what is asked for, not where it goes or with which key.
+        ...(model ? { severity: "warning" as const } : {}),
+        message: `${shown} is set in the env block of ${where}, and Claude Code applies it over this profile - move it out of that settings.json into the profile that needs it: 'clausona config <that profile> --set ${shown}=VALUE'`,
+      });
+    }
+
     const helper = settings.apiKeyHelper;
     if (typeof helper === "string" && helper.trim() !== "") {
       // Claude Code runs apiKeyHelper and sends what it prints, and settings.json is
@@ -304,7 +356,6 @@ export function evaluateApiHealth({
       //
       // A warning: the profile works, and whether a second key reaching this endpoint is a
       // problem is the user's call, not doctor's.
-      const where = settingsShared ? `${settingsPath} (shared with the primary)` : settingsPath;
       issues.push({
         kind: "shared_api_key_helper",
         severity: "warning",
@@ -315,6 +366,17 @@ export function evaluateApiHealth({
 
   // Sorted, so two runs over the same profile read the same way.
   for (const key of Object.keys(profile.env ?? {}).sort()) {
+    if (carriesCredentialToken(key)) {
+      // A key pasted where a name goes. Named, it would be printed: `--help` promises this
+      // report is safe to paste. Launch ignores it, and `--edit` is the one command that can
+      // remove a name no `--unset` could be typed with safely.
+      issues.push({
+        kind: "plaintext_env_secret",
+        severity: "warning",
+        message: `a setting whose name is shaped like an API key is stored in plain text in ${REGISTRY_FILE}, and launch ignores it - remove it with 'clausona config ${id} --edit'`,
+      });
+      continue;
+    }
     if (!secretEnvName(key)) continue;
     // Also a warning: the env map is a documented, supported place to put a value, and a
     // profile that keeps a key there runs exactly as intended.

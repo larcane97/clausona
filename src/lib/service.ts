@@ -48,13 +48,15 @@ import type {
 import {
   buildProfileEnv,
   CREDENTIAL_ENV_KEYS,
-  displayName,
   envKeyCaseTwin,
   envKeyCaseTwinError,
   envMapOf,
   invalidEnvMapMessage,
   isSecretEnvName,
+  nonStringEnvKeys,
+  nonStringEnvValueMessage,
   profileModel,
+  ROUTING_ENV_KEYS,
   shownKind,
   shownLabel,
 } from "./profile-env.js";
@@ -1049,8 +1051,14 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
     // Any kind. A list or a string where the env map belongs is applied as nothing, and
     // printed as `<hidden>`, so this is where it is found. `null` and `[]` are not: they
     // apply exactly what `{}` does.
-    if (envMapOf(profile.env) === undefined) {
+    const envMap = envMapOf(profile.env);
+    if (envMap === undefined) {
       issues.push({ kind: "invalid_env_map", message: invalidEnvMapMessage(id) });
+    } else {
+      // A map with a number, a boolean or null in it: launch drops those entries.
+      for (const key of nonStringEnvKeys(envMap)) {
+        issues.push({ kind: "invalid_env_map", message: nonStringEnvValueMessage(id, key) });
+      }
     }
     // Any kind but the two there are - a hand edit - is read as a subscription everywhere,
     // which a profile meant as an API one is not. Not quoted: it can carry anything.
@@ -1110,6 +1118,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
             ? (await inspectSharedLink(settingsPath, path.join(primarySource, "settings.json"))).pointsToSource
             : false,
           credentialEnvKeys: CREDENTIAL_ENV_KEYS,
+          routingEnvKeys: ROUTING_ENV_KEYS,
           secretEnvName: isSecretEnvName,
           keySharers: profile.api
             ? keySharersElsewhere(id, profile.api.secret, profile.api.baseUrl, registry.profiles)
@@ -1263,10 +1272,12 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
 
     results.push({
       name: id,
-      // An API profile has no account email; its label stands in, exactly as it does in
-      // `list` and `config --show`. A subscription profile has no label, so its title is
-      // the email it always was.
-      email: displayName(profile),
+      // The fields `list --json` gives a profile: an API profile's `email` is empty and its
+      // label is under `label`. The report's title is `displayName` of these, as before. A
+      // subscription profile has neither `kind` nor `label`, so its JSON is what it was.
+      kind: shownKind(profile.kind),
+      email: profile.email,
+      label: shownLabel(profile.label),
       configDir: profile.configDir,
       isPrimary: Boolean(profile.isPrimary),
       // Warnings do not make a profile unhealthy: it works, and saying otherwise would
@@ -1432,9 +1443,10 @@ export async function updateProfileEnv(
   const env = changes.replace ? {} : { ...current };
 
   for (const [key, value] of Object.entries(changes.set ?? {})) {
-    const result = validateEnvEntry(key, value);
-    if (!result.ok) throw new Error(result.error);
+    // The model's own words first, for a key given as the model.
     checkModelEntry(key, value, "config");
+    const result = validateEnvEntry(key, value, profile.kind);
+    if (!result.ok) throw new Error(result.error);
     env[key] = value;
   }
   for (const key of changes.unset ?? []) delete env[key];
@@ -2110,9 +2122,9 @@ export async function addApiProfile(options: {
   const { source: secret, toStore } = checkSecretSource(options.secret, options.secretValue);
   const env = { ...options.env };
   for (const [key, value] of Object.entries(env)) {
-    const result = validateEnvEntry(key, value);
-    if (!result.ok) throw new Error(result.error);
     checkModelEntry(key, value, "add");
+    const result = validateEnvEntry(key, value, "api");
+    if (!result.ok) throw new Error(result.error);
     const twin = envKeyCaseTwin(key, Object.keys(env), "api");
     if (twin !== undefined) throw new Error(envKeyCaseTwinError(key, twin));
   }

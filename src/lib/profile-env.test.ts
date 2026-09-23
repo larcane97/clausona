@@ -8,6 +8,7 @@ import {
   CREDENTIAL_ENV_KEYS,
   controlledEnvKeys,
   displayName,
+  profileModel,
   RESERVED_ENV_KEYS,
   ROUTING_ENV_KEYS,
 } from "./profile-env.js";
@@ -79,10 +80,32 @@ describe("displayName", () => {
   });
 });
 
+describe("profileModel", () => {
+  // `list`'s MODEL column, its --json and the dashboard's preview all print this.
+  it("drops control characters, so a model id cannot drive the terminal", () => {
+    const model = profileModel({ tool: "claude", env: { ANTHROPIC_MODEL: "glm\u001b]0;retitled\u0007-5.3\u009b2J" } });
+
+    expect(model).toBe("glm]0;retitled-5.32J");
+  });
+
+  it("reads no model from a value that is not a string, which launch does not apply either", () => {
+    expect(profileModel({ tool: "claude", env: { ANTHROPIC_MODEL: 5 as unknown as string } })).toBeUndefined();
+  });
+});
+
 describe("buildProfileEnv", () => {
   // homedir is pinned so the tool's default config dir - and therefore the branch that
   // suppresses the config variable - is the same on every machine.
-  const deps = { resolveSecret: fakeSecret, realpath: identityRealpath, homedir: () => "/home/u" };
+  // settings.json is read for an API profile; none exists unless a test says so.
+  const noSettings = async (): Promise<string> => {
+    throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+  };
+  const deps = {
+    resolveSecret: fakeSecret,
+    realpath: identityRealpath,
+    homedir: () => "/home/u",
+    readFile: noSettings,
+  };
 
   it("emits only CLAUDE_CONFIG_DIR for a subscription profile", async () => {
     const profile: Profile = { tool: "claude", configDir: "/home/u/.claude-work", email: "you@example.com" };
@@ -181,6 +204,34 @@ describe("buildProfileEnv", () => {
       for (let i = 0; i + 5 <= key.length; i++) expect(warnings.join("\n")).not.toContain(key.slice(i, i + 5));
     }
     expect(warnings[0]).toContain("clausona config claude:glm --edit");
+  });
+
+  // Claude Code applies settings.json's env block over the environment it was started with,
+  // so a key or an endpoint there undoes the profile - said at launch, not only by doctor.
+  it("warns about an env block in the settings it reads that overrides the profile", async () => {
+    const settingsKey = ["sk", "ant", "api03", "SETTINGSENVBLOCK0002"].join("-");
+    const read: string[] = [];
+    const readFile = async (target: string) => {
+      read.push(target);
+      return JSON.stringify({
+        env: { ANTHROPIC_API_KEY: settingsKey, CLAUDE_CODE_USE_VERTEX: "1", ANTHROPIC_MODEL: "opus", FOO: "1" },
+      });
+    };
+
+    const { env, warnings } = await buildProfileEnv("claude:glm", apiProfile(), { ...deps, readFile });
+
+    expect(read).toEqual([path.join("/home/u/.claude-glm", "settings.json")]);
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe("sk-test");
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toMatch(/^claude:glm: ANTHROPIC_API_KEY is set in the env block of settings\.json/);
+    expect(warnings[1]).toContain("CLAUDE_CODE_USE_VERTEX");
+    expect(warnings.join("\n")).not.toContain(settingsKey);
+
+    // A subscription profile's settings are its own business: nothing is read.
+    read.length = 0;
+    const subscription: Profile = { tool: "claude", configDir: "/home/u/.claude-work", email: "you@example.com" };
+    expect((await buildProfileEnv("claude:work", subscription, { ...deps, readFile })).warnings).toEqual([]);
+    expect(read).toEqual([]);
   });
 
   /**
