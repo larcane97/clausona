@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -195,6 +195,31 @@ describe("file backend (forced via the backend override)", () => {
       /no stored secret/,
     );
   });
+
+  // Off macOS this file is all that keeps a stored key from other users on the machine, and
+  // nothing else pinned it: a writer without the mode shipped with every test green. Windows has
+  // no mode bits to check; there the file is private because it sits in the user's profile.
+  it.skipIf(process.platform === "win32")(
+    "writes secrets.json for its owner alone, and rewrites a looser one so",
+    async () => {
+      const home = mkdtempSync(path.join(tmpdir(), "clausona-secrets-home-"));
+      temps.push(home);
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("USERPROFILE", home);
+      vi.resetModules();
+      const { storeSecret } = await import("./secrets.js");
+      const secretsPath = path.join(home, ".clausona", "secrets.json");
+
+      await storeSecret("claude:a", "secret-a", "file");
+      const written = statSync(secretsPath).mode & 0o777;
+      chmodSync(secretsPath, 0o644);
+      await storeSecret("claude:b", "secret-b", "file");
+      const rewritten = statSync(secretsPath).mode & 0o777;
+
+      expect(written.toString(8)).toBe("600");
+      expect(rewritten.toString(8)).toBe("600");
+    },
+  );
 
   // Regression test for a data-loss bug: readSecretsFile used to collapse every read
   // failure (corrupt file, EACCES, ...) into `{}`, and storeSecret/deleteSecret do a
