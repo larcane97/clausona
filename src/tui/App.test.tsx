@@ -1889,6 +1889,39 @@ describe("App add-profile: API endpoint", () => {
       }
     });
 
+    // Windows raises only SIGINT, SIGTERM and SIGKILL: libuv's kill answers SIGHUP with ENOSYS,
+    // and a throw inside a signal listener is an uncaught exception in a closing console.
+    it.each([
+      ["raises SIGINT in place of SIGHUP", (signal: string) => signal !== "SIGINT", undefined],
+      ["exits with the signal's status when raising fails anyway", () => true, 129],
+    ] as const)("on Windows, %s", async (_label, killThrows, status) => {
+      const instance = await onForm();
+      const realPlatform = process.platform;
+      const handler = process
+        .listeners("SIGHUP")
+        .find((listener) => listener.name === "turnBracketedPasteOffAndDie") as (signal: NodeJS.Signals) => void;
+      const kill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+        if (killThrows(String(signal))) throw Object.assign(new Error("kill ENOSYS"), { code: "ENOSYS" });
+        return true;
+      });
+      const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+      try {
+        expect(() => handler("SIGHUP")).not.toThrow();
+
+        expect(instance.modes).toEqual([ON, OFF]);
+        expect(kill).toHaveBeenCalledWith(process.pid, "SIGINT");
+        if (status === undefined) expect(exit).not.toHaveBeenCalled();
+        else expect(exit).toHaveBeenCalledWith(status);
+      } finally {
+        Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+        kill.mockRestore();
+        exit.mockRestore();
+        instance.unmount();
+      }
+    });
+
     it("lets go of both signals when the form closes", async () => {
       const instance = await onForm();
 

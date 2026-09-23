@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import { homedir, constants as osConstants } from "node:os";
 
 import { Spinner } from "@inkjs/ui";
 import { Box, type Key, Text, useApp, useInput, useStdin, useStdout } from "ink";
@@ -812,7 +812,15 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     }
     function turnBracketedPasteOffAndDie(signal: NodeJS.Signals) {
       turnBracketedPasteOff();
-      process.kill(process.pid, signal);
+      // Windows raises only SIGINT, SIGTERM and SIGKILL - SIGHUP throws ENOSYS there - so it
+      // raises SIGINT in its place, as signal-exit (ink's own dependency) does. Should raising
+      // fail anyway, the process still ends, with the status a shell gives that signal: a
+      // throw here would be an uncaught exception.
+      try {
+        process.kill(process.pid, process.platform === "win32" && signal === "SIGHUP" ? "SIGINT" : signal);
+      } catch {
+        process.exit(128 + (osConstants.signals[signal] ?? 0));
+      }
     }
     stdout.write(BRACKETED_PASTE_ON);
     process.on("exit", turnBracketedPasteOff);
