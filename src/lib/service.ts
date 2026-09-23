@@ -16,6 +16,7 @@ import path from "node:path";
 
 import { checkBaseUrl, hasBareUserinfo, isAnthropicHost } from "../core/api-url.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
+import { sharesSecretSource } from "../core/key-source.js";
 import { backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
@@ -1438,6 +1439,11 @@ export type ProfileApiUpdate = {
   hostDefaultAuth?: ApiEndpoint["authScheme"];
   /** The new base URL sends the key unencrypted to somewhere off this machine, and did not before. */
   cleartext: boolean;
+  /**
+   * The other API profiles whose key comes from the same variable or command. Changing
+   * what that source gives changes their key too, and they still send it to their own host.
+   */
+  sharedWith: string[];
 };
 
 /**
@@ -1495,6 +1501,11 @@ export async function updateProfileApi(
       url.protocol === "http:" &&
       !isLoopbackHost(url.hostname) &&
       !(previous?.protocol === "http:" && previous.host === url.host),
+    sharedWith: Object.entries(registry.profiles)
+      .filter(
+        ([other, entry]) => other !== id && entry.kind === "api" && sharesSecretSource(entry.api?.secret, api.secret),
+      )
+      .map(([other]) => other),
   };
 }
 

@@ -1040,19 +1040,37 @@ describe("config --base-url / --auth / --label", () => {
     });
 
     // `--key` would replace a source the user chose, so for these the note says where the key
-    // still comes from and advises nothing that moves it.
-    for (const [label, secret, said] of [
-      ["env:", { source: "env", name: "GW_KEY" }, "env:GW_KEY"],
-      ["command:", { source: "command", run: "exit 7" }, "a command"],
+    // still comes from and advises nothing that moves it. A neighbour reading another variable
+    // or command does not share the source, so the advice is to change it.
+    for (const [label, secret, neighbour, said, advice] of [
+      [
+        "env:",
+        { source: "env", name: "GW_KEY" },
+        { source: "env", name: "GW_KEY2" },
+        "env:GW_KEY",
+        "set that variable",
+      ],
+      [
+        "command:",
+        { source: "command", run: "exit 7" },
+        { source: "command", run: "exit 8" },
+        "a command",
+        "the command print",
+      ],
     ] as const) {
       it(`says where a key from ${label} still comes from, and moves nothing`, async () => {
-        const h = await harness({ "claude:gw": { ...API_PROFILE, api: { ...API_PROFILE.api, secret } } });
+        const h = await harness({
+          "claude:gw": { ...API_PROFILE, api: { ...API_PROFILE.api, secret } },
+          "claude:other": { ...API_PROFILE, api: { ...API_PROFILE.api, secret: neighbour } },
+        });
 
         await h.run("config", "claude:gw", "--base-url", "https://gw.example.com/api");
 
         const note = stripAnsi(h.stderr());
         expect(note).toContain("gw.example.com");
         expect(note).toContain(`still comes from ${said}`);
+        expect(note).toContain(advice);
+        expect(note).not.toContain("claude:other");
         expect(note).not.toContain("exit 7");
         for (const argv of advisedCommands(note)) {
           expect(argv, note).not.toContain("--key");
@@ -1060,6 +1078,35 @@ describe("config --base-url / --auth / --label", () => {
         }
         expect(h.profile("claude:gw").api?.secret).toEqual(secret);
         expect(h.storedSecrets()).toEqual({});
+      });
+    }
+
+    // A source another profile reads too is not this profile's to change: the new endpoint's
+    // key would reach the other profile's endpoint as well. So the note names the other
+    // profile, and the command that gives this one a key of its own.
+    for (const [label, secret] of [
+      ["env:", { source: "env", name: "GW_KEY" }],
+      ["command:", { source: "command", run: "exit 7" }],
+    ] as const) {
+      it(`gives a profile sharing a key from ${label} its own, and leaves the other's alone`, async () => {
+        const shared = { ...API_PROFILE, api: { ...API_PROFILE.api, secret } };
+        const h = await harness({ "claude:glm": shared, "claude:flash": shared });
+
+        await h.run("config", "claude:flash", "--base-url", "http://localhost:8000");
+
+        const note = stripAnsi(h.stderr());
+        expect(note).toContain("claude:glm");
+        expect(note).not.toContain("set that variable");
+        expect(note).not.toContain("the command print");
+        expect(note).toContain("--key-from env:");
+        expect(note).toMatch(/--key\b(?!-)/);
+        expect(note).not.toContain("exit 7");
+        for (const argv of advisedCommands(note)) {
+          const filled = argv.map((arg) => arg.replace(/<[A-Z_]+>/, "FLASH_KEY"));
+          await h.run(filled[0], ...filled.slice(1));
+        }
+        expect(h.profile("claude:flash").api?.secret).toEqual({ source: "env", name: "FLASH_KEY" });
+        expect(h.profile("claude:glm").api?.secret).toEqual(secret);
       });
     }
 
@@ -2177,8 +2224,11 @@ describe("help", () => {
     // The scheme moves with the host the way the label does, and plain http is remarked on.
     expect(help).toContain("auth scheme");
     expect(help).toContain("plain http");
-    // --key would replace an env: or command: source, so the help says what to do instead.
+    // --key would replace an env: or command: source, so the help says what to do instead -
+    // and, for a source another profile reads too, gives this one its own, as the note does.
     expect(help).toContain("env: or command:");
+    expect(help).toContain("another profile");
+    expect(help).toContain("--key-from env:<ANOTHER_NAME>");
     expect(help).toContain("clausona config claude:gw --base-url http://localhost:8000");
   });
 

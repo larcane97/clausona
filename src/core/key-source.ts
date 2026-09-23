@@ -43,3 +43,13 @@ export function keySourcePhrase(secret: SecretSource | undefined): string {
   if (shown.source === "keychain") return "the credential store";
   return describeSecretSource(shown);
 }
+
+/**
+ * Whether two key sources give the same key: one variable, or one command line. A stored
+ * key is filed under its profile's id, so two `keychain` sources never do.
+ */
+export function sharesSecretSource(a: SecretSource | undefined, b: SecretSource | undefined): boolean {
+  if (a?.source === "env" && b?.source === "env") return a.name === b.name;
+  if (a?.source === "command" && b?.source === "command") return a.run === b.run;
+  return false;
+}

@@ -676,14 +676,17 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("CHANGING THE ENDPOINT")}`,
         `    ${dim("Each value is checked by the rule add --api uses. The key is kept, so after")}`,
-        `    ${dim("--base-url the next launch sends the same key to the new host: run --key next")}`,
-        `    ${dim("if that endpoint takes another - or, for a key read from env: or command:,")}`,
-        `    ${dim("change what that variable or command gives. What add chose by itself follows")}`,
-        `    ${dim("the new host while it is still the old host's: a label that is the old host,")}`,
-        `    ${dim("and the auth scheme - api-key for anthropic.com, bearer elsewhere. One that was")}`,
-        `    ${dim("chosen stays, with a note if the new host usually takes the other scheme. A")}`,
-        `    ${dim("move to plain http off this machine is noted too: the key would travel")}`,
-        `    ${dim("unencrypted.")}`,
+        `    ${dim("--base-url the next launch sends the same key to the new host. If that endpoint")}`,
+        `    ${dim("takes another: for a stored key, run --key; for one read from env: or command:,")}`,
+        `    ${dim("change what that variable or command gives - unless another profile reads it")}`,
+        `    ${dim("too, since that profile would then send the new key to its own endpoint. Give")}`,
+        `    ${dim("this one its own instead: --key-from env:<ANOTHER_NAME>, or --key to store it.")}`,
+        `    ${dim("The note --base-url prints names the profiles that share it. What add chose by")}`,
+        `    ${dim("itself follows the new host while it is still the old host's: a label that is")}`,
+        `    ${dim("the old host, and the auth scheme - api-key for anthropic.com, bearer")}`,
+        `    ${dim("elsewhere. One that was chosen stays, with a note if the new host usually takes")}`,
+        `    ${dim("the other scheme. A move to plain http off this machine is noted too: the key")}`,
+        `    ${dim("would travel unencrypted.")}`,
         `    ${dim("A subscription profile has no endpoint, and list names it by its account")}`,
         `    ${dim("email, so all three refuse one.")}`,
         "",
@@ -1078,15 +1081,21 @@ export async function runCommand(command: string, args: string[]) {
           // The key is not the endpoint's to keep: it is whatever the profile's key source
           // holds, and the next launch hands it to the new host. That can be a third party.
           // For a key read from env: or command:, `--key` would replace the source the user
-          // chose, so the note says where the key comes from and leaves the change to them.
+          // chose, so the note says where the key comes from and leaves the change to them -
+          // unless another profile reads that source too. Then changing it sends this
+          // endpoint's key to theirs, so this profile is the one to get a key of its own.
           const secret = result.profile.api?.secret;
+          const sharers = result.sharedWith;
           process.stderr.write(
             secret === undefined || secret.source === "keychain"
               ? `  ${warnIcon} The key is unchanged, so from the next launch it goes to ${result.host}.\n` +
                   "    If this endpoint takes a different key, store it:\n" +
                   `      ${accent(`clausona config ${ref.id} --key`)}\n`
               : `  ${warnIcon} The key still comes from ${keySourcePhrase(secret)}, so from the next launch it goes to ${result.host}.\n` +
-                  `    If this endpoint takes a different key, ${secret.source === "env" ? "set that variable to it" : "have the command print it"}.\n`,
+                  (sharers.length === 0
+                    ? `    If this endpoint takes a different key, ${secret.source === "env" ? "set that variable to it" : "have the command print it"}.\n`
+                    : `    ${sharers.join(", ")} ${sharers.length === 1 ? "reads" : "read"} it too, so if this endpoint takes a different key, give this profile its own:\n` +
+                      `      ${accent(`clausona config ${ref.id} --key-from env:<ANOTHER_NAME>`)}   ${dim("(or --key, to store it)")}\n`),
           );
         }
         if (result.cleartext) {
