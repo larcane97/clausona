@@ -10,7 +10,6 @@ import {
   baseUrlError,
   concealsValue,
   customEntryError,
-  defaultAuthScheme,
   emptyApiForm,
   envError,
   KEY_FIELD_MESSAGES,
@@ -22,6 +21,7 @@ import {
   MODEL_KEY,
   NO_RAW_KEY_INPUT,
   nameError,
+  offeredAuthScheme,
   plaintextSecretNote,
   scrubSecret,
   UNFINISHED_PASTE,
@@ -138,7 +138,7 @@ describe("the auth scheme offered for an endpoint", () => {
     ["a look-alike domain", "https://evilanthropic.com", "bearer"],
     ["a URL that does not parse yet", "https:/", "bearer"],
   ])("offers %s the %s scheme", (_case, url, expected) => {
-    expect(defaultAuthScheme(url)).toBe(expected);
+    expect(offeredAuthScheme(url)).toBe(expected);
   });
 });
 

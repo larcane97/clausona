@@ -13,12 +13,13 @@
  * right in a form where the offending value is still on screen and still editable.
  */
 
-import { checkBaseUrl, isAnthropicHost } from "../core/api-url.js";
+import { checkBaseUrl } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { envKeyCaseTwin, envKeyCaseTwinError } from "../lib/profile-env.js";
 import { foldProfileName, looksLikeCredential, profileId, validateProfileName } from "../lib/profile-ref.js";
 import type { SecretChunk, SecretInputState } from "../lib/prompt-secret.js";
 import { hidesEnvValue, isCredentialEnvKey } from "../lib/redact.js";
+import { defaultAuthScheme } from "../lib/service.js";
 import {
   CLAUDE_ENV_CATALOG,
   catalogEntry,
@@ -419,10 +420,14 @@ export function apiFormHost(form: ApiFormState): string {
   return checked.ok ? checked.url.host : "";
 }
 
-/** The scheme to offer for an endpoint, while the user has not chosen one. */
-export function defaultAuthScheme(baseUrl: string): "bearer" | "api-key" {
+/**
+ * The scheme to offer for what the Endpoint field holds, while the user has not chosen one:
+ * `defaultAuthScheme`, the rule `add --api` and `config --base-url` apply to a host - and bearer
+ * until the field holds a URL with a host to apply it to.
+ */
+export function offeredAuthScheme(baseUrl: string): "bearer" | "api-key" {
   const checked = checkBaseUrl(baseUrl.trim());
-  return checked.ok && isAnthropicHost(checked.url.hostname) ? "api-key" : "bearer";
+  return checked.ok ? defaultAuthScheme(checked.url.hostname) : "bearer";
 }
 
 /** The same record without the named keys, for clearing an error once its field is fixed. */

@@ -53,7 +53,6 @@ import {
   apiFormHost,
   concealsValue,
   customEntryError,
-  defaultAuthScheme,
   emptyApiForm,
   fieldValue,
   isTypingField,
@@ -61,6 +60,7 @@ import {
   keyReadRefusal,
   liveApiFieldError,
   NO_RAW_KEY_INPUT,
+  offeredAuthScheme,
   PASTE_SKIPPED,
   scrubSecret,
   UNFINISHED_PASTE,
@@ -838,7 +838,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     } else if (field.id === "baseUrl") {
       // The scheme follows the host until the user picks one, which is the same default
       // `clausona add --api` offers - one rule, so the two cannot disagree about a URL.
-      next = { ...form, baseUrl: value, authScheme: form.authTouched ? form.authScheme : defaultAuthScheme(value) };
+      next = { ...form, baseUrl: value, authScheme: form.authTouched ? form.authScheme : offeredAuthScheme(value) };
     } else if (field.id === "customKey") {
       next = { ...form, customKey: value };
     } else if (field.id === "customValue") {

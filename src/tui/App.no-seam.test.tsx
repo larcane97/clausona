@@ -19,7 +19,9 @@ vi.mock("../commands", () => ({
   bootstrapInitFromCurrentState: vi.fn(async () => ({ accounts: [], profileNames: {}, defaultProfile: "default" })),
 }));
 
-vi.mock("../lib/service", () => ({
+// The service's one pure rule the form applies itself, as it is: see `offeredAuthScheme`.
+vi.mock("../lib/service", async (importOriginal) => ({
+  defaultAuthScheme: (await importOriginal<typeof import("../lib/service.js")>()).defaultAuthScheme,
   listProfiles: vi.fn(async () => [
     {
       name: "default",
