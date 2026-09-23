@@ -741,9 +741,10 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${accent("--edit".padEnd(22))}${dim("Open the profile's env map in $VISUAL or $EDITOR")}`,
         `    ${accent("--show".padEnd(22))}${dim("Print the profile's settings (add --json for the full catalog)")}`,
         "",
-        `    ${dim("One change per call, except --show, which only reads. --base-url, --auth and")}`,
-        `    ${dim("--label count as one: together they are the endpoint `add --api` set up.")}`,
-        `    ${dim("--model counts with --set and --unset, since it is a setting too.")}`,
+        `    ${dim("One change per call. --show only reads, and is refused next to a change.")}`,
+        `    ${dim("--base-url, --auth and --label count as one: together they are the endpoint")}`,
+        `    ${dim("`add --api` set up. --model counts with --set and --unset, since it is a")}`,
+        `    ${dim("setting too.")}`,
         "",
         `  ${bold("THE MODEL")}`,
         `    ${dim("--model writes ANTHROPIC_MODEL in the env map, the variable Claude Code reads;")}`,
@@ -1131,14 +1132,18 @@ export async function runCommand(command: string, args: string[]) {
       const ref = parseProfileRef(input, registry);
       const profile = registry.profiles[ref.id];
 
-      // A read, and it wins over everything else: `--show` next to a change is a caller
-      // asking what is there, and answering that is always safe.
-      if (args.includes("--show")) return showProfile(ref.id, profile, jsonFlag(args));
-
       // One change per call. Each branch below returns, so a second flag would be dropped
       // without a word - the caller would be told the profile was updated, for the other
       // thing they asked for.
       const changes = [changeEnv, changeEndpoint, changeKey, openEditor, changeSessions].filter(Boolean).length;
+
+      // A read, and nothing else: next to a change it printed the profile, exited 0 and
+      // dropped the change, which is the same silence as a second change.
+      if (args.includes("--show")) {
+        if (changes > 0) throw new Error("--show only reads; run the change on its own.");
+        return showProfile(ref.id, profile, jsonFlag(args));
+      }
+
       if (changes === 0) throw new Error(CONFIG_USAGE);
       if (changes > 1) {
         throw new Error(

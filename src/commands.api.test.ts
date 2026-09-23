@@ -896,11 +896,13 @@ describe("config --show", () => {
     expect(shown.profile.api).toBeUndefined();
   });
 
-  it("reads rather than writes when it is passed next to a change", async () => {
+  // It used to print the profile and exit 0, and the change was dropped without a word.
+  it("refuses a change passed next to it, and changes nothing", async () => {
     const h = await harness({ "claude:gw": API_PROFILE });
 
-    await h.run("config", "claude:gw", "--show", "--set", "API_TIMEOUT_MS=600000");
+    const message = await failure(h.run("config", "claude:gw", "--show", "--set", "API_TIMEOUT_MS=600000"));
 
+    expect(message).toBe("--show only reads; run the change on its own.");
     expect(h.profile("claude:gw").env).toEqual({ ANTHROPIC_MODEL: "z-ai/glm-5.3" });
   });
 });

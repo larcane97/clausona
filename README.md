@@ -322,6 +322,7 @@ piped in or typed at the prompt, as `--key` does.
 `clausona config <profile> --show` prints the endpoint, the auth scheme and the key's
 *source* — never the key, and for a `command:` source not the command line either. Neither
 does `doctor`, in either output form; see [What clausona prints](#what-clausona-prints).
+`--show` only reads, so next to a change it is refused and nothing is changed.
 
 The credential reaches Claude Code through its environment, so **processes Claude Code
 starts — including its own Bash tool calls — can read it**. Use `env:` or `command:` with a
