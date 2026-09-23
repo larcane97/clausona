@@ -573,6 +573,21 @@ describe("string-terminated escape sequences", () => {
     expect(runaway.text).toBe("");
   });
 
+  it("still lets ctrl-c out of a string sequence whose terminator never arrives", async () => {
+    // The cost of the ceiling above: until it is reached, an unterminated sequence absorbs
+    // every byte after it - and raw mode makes Ctrl-C one of those bytes rather than a
+    // signal. Four thousand characters of no way out is worse than mis-measuring a string
+    // whose body carries a raw 0x03, which is not a thing a terminal sends.
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type(`\u001b]0;${KEY}`);
+    tty.type("\u0003");
+
+    await expect(answer).rejects.toBeInstanceOf(PromptCancelledError);
+    expect(tty.rawModeCalls).toEqual([true, false]);
+  });
+
   it("holds an unterminated string sequence back rather than guessing where it ends", () => {
     // A key typed after a stray OSC introducer is not lost, it is parked - and the caller
     // refuses to save a field with anything parked behind it.
