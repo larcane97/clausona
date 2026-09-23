@@ -1617,6 +1617,61 @@ describe("the plain-text credential warning", () => {
     );
   }
 
+  // A name that says it holds a secret but is not one Claude Code takes an Anthropic key
+  // from - OTEL's headers, a Bedrock token. It is not the profile's key, so `--key` is not
+  // where it goes: it belongs in the shell's environment, which the hook passes through.
+  describe("for a secret that is not the profile's key", () => {
+    const OTEL = "OTEL_EXPORTER_OTLP_HEADERS";
+
+    for (const [label, id, profile] of [
+      ["an API profile", "claude:gw", API_PROFILE],
+      ["a subscription profile", "claude:work", SUBSCRIPTION],
+    ] as const) {
+      it(`warns on ${label}, says to keep it in the shell, and names only --unset`, async () => {
+        const h = await harness({ [id]: profile });
+        await routes["config --set"](h, id, OTEL);
+        const warning = stripAnsi(h.stderr());
+
+        await followAdvice(h);
+
+        expect(warning).toContain(`${OTEL} is stored in plain text`);
+        expect(warning).toContain("shell's environment");
+        expect(advisedCommands(warning)).toEqual([["config", id, "--unset", OTEL]]);
+        expect(h.registryText()).not.toContain(PLAINTEXT);
+        expect(promptCalls).toEqual([]);
+        expect(h.profile(id).api?.secret).toEqual((profile as { api?: { secret: unknown } }).api?.secret);
+      });
+    }
+
+    it("gives doctor's finding the same advice, and it clears it", async () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      const h = await harness({
+        "claude:gw": { ...API_PROFILE, env: { [OTEL]: `Authorization=Bearer ${PLAINTEXT}` } },
+      });
+      const findings = async () =>
+        (JSON.parse(String(await h.run("doctor", "--json"))) as DoctorProfileResult[])
+          .flatMap((result) => result.issues)
+          .filter((issue) => issue.kind === "plaintext_env_secret");
+
+      const [finding] = await findings();
+      expect(finding?.message).toContain("shell's environment");
+      const commands = advisedCommands(finding.message);
+      expect(commands).toEqual([["config", "claude:gw", "--unset", OTEL]]);
+      for (const argv of commands) await h.run(argv[0], ...argv.slice(1));
+
+      expect(await findings()).toEqual([]);
+      expect(h.profile("claude:gw").api?.secret).toEqual(API_PROFILE.api.secret);
+    });
+
+    it("does not warn about a count of tokens", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      await h.run("config", "claude:gw", "--set", "CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144");
+
+      expect(h.stderr()).toBe("");
+    });
+  });
+
   it("never prints the value it warns about, for either kind", async () => {
     const h = await harness({ "claude:gw": API_PROFILE, "claude:work": SUBSCRIPTION });
 

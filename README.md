@@ -305,15 +305,23 @@ with `CLAUDE_CODE_MAX_CONTEXT_TOKENS`. And a cold GPU server is slow to first by
 **The env map is stored in plain text** in `~/.clausona/profiles.json`. The API key does not
 belong in it — not as `--set ANTHROPIC_API_KEY=…`, and not as an `Authorization` header under
 `--set ANTHROPIC_CUSTOM_HEADERS=…`. Use `--key` or `--key-from` instead. clausona warns when
-you set one of those names, on any profile, and names the commands that undo it. For an API
-profile whose key is in the credential store that is `config <profile> --key` to store the
-key, then `config <profile> --unset <NAME>` to drop the plain-text copy, which would otherwise
-still be what Claude Code is handed. For an API profile whose key comes from `env:` or
-`command:`, it is only the `--unset`: the key already lives outside `profiles.json`, and
-`--key` would replace the source you chose with the keychain. A subscription profile signs in
-with its account and has nowhere to store a key, so for one it is only the `--unset` too. `doctor` keeps warning afterwards — but only for an **API**
-profile. A subscription profile's env map is never checked, so a clean `doctor` does not mean
-no profile on this machine holds a plaintext key.
+you set one of those names, on any profile, and names the commands that undo it:
+
+- an API profile whose key is in the credential store: `config <profile> --key` to store the
+  key, then `config <profile> --unset <NAME>` to drop the plain-text copy, which would
+  otherwise still be what Claude Code is handed;
+- an API profile whose key comes from `env:` or `command:`: only the `--unset`. The key
+  already lives outside `profiles.json`, and `--key` would replace the source you chose with
+  the keychain;
+- a subscription profile, which signs in with its account and has nowhere to store a key:
+  only the `--unset`.
+
+It warns too for a secret that is not the profile's key — any name that says it holds one,
+such as `OTEL_EXPORTER_OTLP_HEADERS` or `AWS_BEARER_TOKEN_BEDROCK`. For that the advice is to
+keep it in your shell's environment, which the hook passes through to the tool, and to
+`--unset` the copy. `doctor` keeps warning afterwards — but only for an **API** profile. A
+subscription profile's env map is never checked, so a clean `doctor` does not mean no profile
+on this machine holds a plaintext key.
 
 ### Changing the endpoint
 
@@ -351,7 +359,10 @@ hand-edited file is the one way a base URL gets broken.
 go through one rule for what they print about a profile:
 
 - the value under a credential name (`ANTHROPIC_API_KEY`, `ANTHROPIC_CUSTOM_HEADERS` and the
-  rest) and under a json setting (`CLAUDE_CODE_EXTRA_BODY`, where a gateway's auth field goes)
+  rest), under any name that says it holds a secret (a `TOKEN`, `SECRET`, `PASSWORD`,
+  `API_KEY`, `HEADERS` and the like, so `OTEL_EXPORTER_OTLP_HEADERS` and
+  `AWS_BEARER_TOKEN_BEDROCK` too, but not a count such as `CLAUDE_CODE_MAX_CONTEXT_TOKENS`),
+  and under a json setting (`CLAUDE_CODE_EXTRA_BODY`, where a gateway's auth field goes)
   prints as `<hidden>`;
 - a URL's userinfo, query and fragment print as `<hidden>`, in the base URL and in any
   setting — `HTTPS_PROXY=http://user:pass@proxy:8080` shows as

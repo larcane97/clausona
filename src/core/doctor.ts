@@ -125,6 +125,12 @@ export type ApiHealthInput = {
    * the layer lib is built on. The caller holds the one true list; this holds the rule.
    */
   credentialEnvKeys?: readonly string[];
+  /**
+   * Names that say their value is a secret, wider than `credentialEnvKeys`: `isSecretEnvName`.
+   * Passed in for the same reason. A name on it but not on the credential list is another
+   * service's secret rather than the profile's key, and is advised on differently.
+   */
+  secretEnvName?: (key: string) => boolean;
 };
 
 /**
@@ -177,6 +183,7 @@ export function evaluateApiHealth({
   settingsPath = "settings.json",
   settingsShared = false,
   credentialEnvKeys = [],
+  secretEnvName = (key) => credentialEnvKeys.includes(key),
 }: ApiHealthInput): DoctorIssue[] {
   // `kind` is tri-state: undefined means subscription, and a subscription profile's
   // report has to stay exactly what it was.
@@ -248,13 +255,14 @@ export function evaluateApiHealth({
 
   // Sorted, so two runs over the same profile read the same way.
   for (const key of Object.keys(profile.env ?? {}).sort()) {
-    if (!credentialEnvKeys.includes(key)) continue;
+    if (!secretEnvName(key)) continue;
     // Also a warning: the env map is a documented, supported place to put a value, and a
     // profile that keeps a key there runs exactly as intended.
-    const { commands, keyFrom } = plaintextEnvRemedy(id, profile, key);
+    const { commands, keyFrom, keepInShell } = plaintextEnvRemedy(id, profile, key, credentialEnvKeys.includes(key));
     const remedy = commands.map((command) => `'${command}'`).join(" and then ");
-    const condition =
-      keyFrom === undefined
+    const condition = keepInShell
+      ? "if it holds a secret, keep it in your shell's environment, which the hook passes through,"
+      : keyFrom === undefined
         ? "if it holds this profile's API key"
         : `this profile's key already comes from ${keyFrom}, so if it holds that key`;
     issues.push({
@@ -290,8 +298,13 @@ export function plaintextEnvRemedy(
   id: string,
   profile: Pick<Profile, "kind" | "api">,
   key: string,
-): { commands: string[]; keyFrom?: string } {
+  /** On the clear list: one of the variables Claude Code takes an Anthropic key from. */
+  anthropicCredential = true,
+): { commands: string[]; keyFrom?: string; keepInShell?: true } {
   const unset = `clausona config ${id} --unset ${key}`;
+  // Another service's secret is not the profile's key, so `--key` is no place for it. The
+  // hook passes the shell's environment through, so that is where it can live instead.
+  if (!anthropicCredential) return { commands: [unset], keepInShell: true };
   if (profile.kind !== "api") return { commands: [unset] };
   const secret = profile.api?.secret;
   if (secret === undefined || secret.source === "keychain") return { commands: [`clausona config ${id} --key`, unset] };

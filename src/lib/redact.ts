@@ -2,7 +2,7 @@ import { HIDDEN, redactBaseUrl, redactUrlsIn } from "../core/api-url.js";
 import { describeSecretSource, redactSecretSource } from "../core/key-source.js";
 import { catalogEntry } from "../tools/claude-env-catalog.js";
 import type { Profile } from "../types.js";
-import { CREDENTIAL_ENV_KEYS } from "./profile-env.js";
+import { CREDENTIAL_ENV_KEYS, isSecretEnvName } from "./profile-env.js";
 
 /**
  * What a profile looks like when it leaves the process.
@@ -37,9 +37,12 @@ export function isCredentialEnvKey(key: string): boolean {
   return CREDENTIAL_ENV_KEY_SET.has(key);
 }
 
-/** A name whose value is never printed, in part or whole. */
+/**
+ * A name whose value is never printed, in part or whole: any name that says it holds a
+ * secret (`isSecretEnvName`, which is wider than the clear list), and a json setting.
+ */
 function hidesValue(key: string): boolean {
-  return isCredentialEnvKey(key) || catalogEntry(key)?.kind === "json";
+  return isSecretEnvName(key) || catalogEntry(key)?.kind === "json";
 }
 
 /** The names `redactEnv` hides the whole value of, in the map's order. */

@@ -10,7 +10,7 @@ import { isPosixEnvName, renderPosixExports } from "./core/shell.js";
 import { trackUsage } from "./core/track-usage.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import { renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
-import { buildProfileEnv, controlledEnvKeys, displayName } from "./lib/profile-env.js";
+import { buildProfileEnv, controlledEnvKeys, displayName, isSecretEnvName } from "./lib/profile-env.js";
 import {
   CREDENTIAL_AS_NAME_ERROR,
   looksLikeCredential,
@@ -236,6 +236,9 @@ function parseSecretSource(input: string): SecretSource {
  * that nothing treats as a secret. Warn, never block: a legitimate non-secret header
  * override goes through the same map.
  *
+ * It fires for any name that says it holds a secret (`isSecretEnvName`), which is wider
+ * than the credential names: another service's token is no less plain text.
+ *
  * The commands come from `plaintextEnvRemedy`, which doctor's finding uses too, and they
  * differ by kind and key source, because `--key` only works on an API profile and on one
  * reading its key from `env:` or `command:` it would replace that source. The words around
@@ -245,11 +248,15 @@ function parseSecretSource(input: string): SecretSource {
  */
 function warnPlaintextEnv(id: string, profile: Pick<Profile, "tool" | "kind" | "api">, keys: string[]) {
   for (const key of keys) {
-    if (!isCredentialEnvKey(key)) continue;
-    const { commands, keyFrom } = plaintextEnvRemedy(id, profile, key);
+    if (!isSecretEnvName(key)) continue;
+    const credential = isCredentialEnvKey(key);
+    const { commands, keyFrom } = plaintextEnvRemedy(id, profile, key, credential);
     const listed = commands.map((command) => `      ${accent(command)}\n`).join("");
     let advice: string;
-    if (profile.kind === "api") {
+    if (!credential) {
+      // Another service's secret - OTEL's headers, a Bedrock token - not the profile's key.
+      advice = `    If it carries a secret, keep it in your shell's environment instead - the hook passes that through to ${profile.tool} - and remove this copy:\n${listed}`;
+    } else if (profile.kind === "api") {
       advice =
         keyFrom === undefined
           ? `    If it carries this profile's API key, move the key to the credential store and remove this copy:\n${listed}`
@@ -690,8 +697,9 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("WHAT --show PRINTS")}`,
         `    ${dim("The same as current, list and the dashboard, in text and in --json: never the")}`,
-        `    ${dim("key, and <hidden> for a value that can hold one - a credential setting, a json")}`,
-        `    ${dim("setting, a URL's userinfo, query and fragment. A command key source shows as")}`,
+        `    ${dim("key, and <hidden> for a value that can hold one - a setting whose name says it")}`,
+        `    ${dim("is a secret (TOKEN, SECRET, PASSWORD, API_KEY, HEADERS...), a json setting, a")}`,
+        `    ${dim("URL's userinfo, query and fragment. A command key source shows as")}`,
         `    ${dim("`command`: its command line can carry a token or the key itself, so it is only")}`,
         `    ${dim("in ~/.clausona/profiles.json. The profile still works exactly as stored.")}`,
         "",

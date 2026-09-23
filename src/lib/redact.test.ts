@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { HIDDEN, redactBaseUrl, redactUrlsIn } from "../core/api-url.js";
+import { CLAUDE_ENV_CATALOG } from "../tools/claude-env-catalog.js";
 import type { Profile, SecretSource } from "../types.js";
+import { CREDENTIAL_ENV_KEYS, isSecretEnvName } from "./profile-env.js";
 import { describeSecretSource, hiddenEnvKeys, redactEnv, redactProfile, redactSecretSource } from "./redact.js";
 
 /**
@@ -125,6 +127,75 @@ describe("redactEnv", () => {
         ANTHROPIC_AUTH_TOKEN: "t",
       }),
     ).toEqual(["CLAUDE_CODE_EXTRA_BODY", "ANTHROPIC_AUTH_TOKEN"]);
+  });
+});
+
+/**
+ * The redact list is not the clear list. CREDENTIAL_ENV_KEYS is what an API profile's launch
+ * CLEARS - the variables Claude Code takes an Anthropic credential from - and it has to stay
+ * exactly that, or launch changes. What is HIDDEN on the way out is wider: any name that
+ * says its value is a secret, so another service's token set through `config --set` does not
+ * print on every path.
+ */
+describe("which names are hidden", () => {
+  it.each([
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "ANTHROPIC_FOUNDRY_API_KEY",
+    "CLAUDE_CODE_CLIENT_KEY_PASSPHRASE",
+    "GITHUB_TOKEN",
+    "DB_PASSWORD",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+  ])("hides %s, which is on no clear list", (key) => {
+    expect(isSecretEnvName(key)).toBe(true);
+    expect(redactEnv({ [key]: "v-0026" })).toEqual({ [key]: HIDDEN });
+  });
+
+  // A count of tokens is not a token.
+  it.each([
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+    "MAX_THINKING_TOKENS",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+    "NO_PROXY",
+  ])("leaves %s visible", (key) => {
+    expect(isSecretEnvName(key)).toBe(false);
+  });
+
+  it("hides no catalog setting except the one that is a credential", () => {
+    const hidden = CLAUDE_ENV_CATALOG.map((entry) => entry.key).filter((key) => isSecretEnvName(key));
+
+    expect(hidden).toEqual(["ANTHROPIC_CUSTOM_HEADERS"]);
+  });
+
+  it("still hides every name on the clear list", () => {
+    for (const key of CREDENTIAL_ENV_KEYS) expect(isSecretEnvName(key), key).toBe(true);
+  });
+
+  // Pinned because launch reads it: a name added here would be unset for every API profile.
+  it("leaves the clear list exactly as it was", () => {
+    expect([...CREDENTIAL_ENV_KEYS]).toEqual([
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "ANTHROPIC_CUSTOM_HEADERS",
+      "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+      "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+      "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+      "CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR",
+      "CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR",
+      "ANTHROPIC_IDENTITY_TOKEN",
+      "ANTHROPIC_IDENTITY_TOKEN_FILE",
+      "ANTHROPIC_FEDERATION_RULE_ID",
+      "ANTHROPIC_ORGANIZATION_ID",
+      "CLAUDE_CODE_HOST_AUTH_ENV_VAR",
+      "CLAUDE_CODE_HOST_CREDS_FILE",
+      "CLAUDE_CODE_SESSION_ACCESS_TOKEN",
+      "CLAUDE_SESSION_INGRESS_TOKEN_FILE",
+      "CLAUDE_BG_AUTH_SNAPSHOT_PATH",
+    ]);
   });
 });
 

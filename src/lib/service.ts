@@ -48,6 +48,7 @@ import {
   displayName,
   envKeyCaseTwin,
   envKeyCaseTwinError,
+  isSecretEnvName,
   profileModel,
 } from "./profile-env.js";
 import { foldProfileName, initProfileNames, parseProfileRef, profileId, validateProfileName } from "./profile-ref.js";
@@ -1046,6 +1047,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
             ? (await inspectSharedLink(settingsPath, path.join(primarySource, "settings.json"))).pointsToSource
             : false,
           credentialEnvKeys: CREDENTIAL_ENV_KEYS,
+          secretEnvName: isSecretEnvName,
         }),
       );
     } else {

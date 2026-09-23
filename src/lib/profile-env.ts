@@ -84,6 +84,26 @@ export const CREDENTIAL_ENV_KEYS = [
  * Taken from the Claude Code 2.1.278 binary. Re-check it whenever Claude Code adds a
  * provider or another way to route around the base URL.
  */
+const CREDENTIAL_ENV_KEY_SET = new Set<string>(CREDENTIAL_ENV_KEYS);
+
+/**
+ * A name that says its value is a secret. Built for redaction and for the plain-text warning,
+ * not for launch: CREDENTIAL_ENV_KEYS above is what an API profile CLEARS, and it is the
+ * Anthropic credentials only. Another service's token under a name of its own - OTEL's
+ * exporter headers, a Bedrock bearer token, an AWS secret key - is not cleared and should not
+ * be, but it is no less a secret in profiles.json or on a screen.
+ *
+ * Whole words only, so a count of tokens is not a token: CLAUDE_CODE_MAX_CONTEXT_TOKENS and
+ * MAX_THINKING_TOKENS stay visible, and of the catalog only ANTHROPIC_CUSTOM_HEADERS matches,
+ * which the clear list already has. Hiding one too many costs a `<hidden>` the user can
+ * still read in `config --edit`; one too few prints a secret.
+ */
+const SECRET_ENV_NAME = /(^|_)(TOKEN|SECRET|PASSWORD|PASSPHRASE|API_KEY|ACCESS_KEY|HEADERS|CREDENTIALS?)(_|$)/;
+
+export function isSecretEnvName(key: string): boolean {
+  return CREDENTIAL_ENV_KEY_SET.has(key) || SECRET_ENV_NAME.test(key);
+}
+
 export const ROUTING_ENV_KEYS = [
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_VERTEX",
