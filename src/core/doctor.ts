@@ -1,5 +1,6 @@
 import type { DoctorIssue, Profile } from "../types.js";
-import { checkBaseUrl, hasBareUserinfo, redactBaseUrl } from "./api-url.js";
+import { checkBaseUrl, HIDDEN, hasBareUserinfo, redactBaseUrl } from "./api-url.js";
+import { carriesCredentialToken } from "./credential-token.js";
 import { isKnownSecretSource, keySourcePhrase } from "./key-source.js";
 
 export function evaluateSymlinkHealth({
@@ -130,6 +131,8 @@ export type ApiHealthInput = {
    * the layer lib is built on. The caller holds the one true list; this holds the rule.
    */
   credentialEnvKeys?: readonly string[];
+  /** ROUTING_ENV_KEYS, passed in for the same reason. */
+  routingEnvKeys?: readonly string[];
   /**
    * Names that say their value is a secret, wider than `credentialEnvKeys`: `isSecretEnvName`.
    * Passed in for the same reason. A name on it but not on the credential list is another
@@ -189,6 +192,21 @@ function baseUrlProblem(baseUrl: string, remedy: string): string | undefined {
 }
 
 /**
+ * The names in a settings.json `env` block that are one of `names`, in any case, sorted: what
+ * Claude Code applies over an API profile's own environment. Windows reads the names without
+ * case, so a lowercase one is found too. Nothing for a block that is not a map.
+ *
+ * Shared by doctor and by launch, which warns about the ones that move the key or the traffic.
+ */
+export function settingsEnvOverrides(env: unknown, names: readonly string[]): string[] {
+  if (typeof env !== "object" || env === null || Array.isArray(env)) return [];
+  const wanted = new Set(names);
+  return Object.keys(env)
+    .filter((key) => wanted.has(key.toUpperCase()))
+    .sort();
+}
+
+/**
  * The health checks that apply to an API profile, and only to one.
  *
  * An API profile has no account JSON and no Claude Code Keychain item by design, so the
@@ -210,6 +228,7 @@ export function evaluateApiHealth({
   settingsPath = "settings.json",
   settingsShared = false,
   credentialEnvKeys = [],
+  routingEnvKeys = [],
   secretEnvName = (key) => credentialEnvKeys.includes(key),
   keySharers = [],
 }: ApiHealthInput): DoctorIssue[] {
@@ -286,9 +305,30 @@ export function evaluateApiHealth({
     issues.push({
       kind: "unreadable_settings",
       severity: "warning",
-      message: `${settingsPath} could not be read, so apiKeyHelper was not checked - fix or remove it`,
+      message: `${settingsPath} could not be read, so apiKeyHelper and its env block were not checked - fix or remove it`,
     });
   } else {
+    const where = settingsShared ? `${settingsPath} (shared with the primary)` : settingsPath;
+    // Claude Code copies this block into its own environment at startup, over whatever it was
+    // started with - so over everything clausona sets and clears for the profile. A key or a
+    // provider switch there sends the profile's traffic, or a second key, somewhere else.
+    for (const key of settingsEnvOverrides(settings.env, [
+      "ANTHROPIC_BASE_URL",
+      ...credentialEnvKeys,
+      ...routingEnvKeys,
+      "ANTHROPIC_MODEL",
+    ])) {
+      const model = key.toUpperCase() === "ANTHROPIC_MODEL";
+      // Only the name, and only as other names are printed: the value can be the key.
+      const shown = carriesCredentialToken(key) ? HIDDEN : key;
+      issues.push({
+        kind: "settings_env_override",
+        // The model changes what is asked for, not where it goes or with which key.
+        ...(model ? { severity: "warning" as const } : {}),
+        message: `${shown} is set in the env block of ${where}, and Claude Code applies it over this profile - move it out of that settings.json into the profile that needs it: 'clausona config <that profile> --set ${shown}=VALUE'`,
+      });
+    }
+
     const helper = settings.apiKeyHelper;
     if (typeof helper === "string" && helper.trim() !== "") {
       // Claude Code runs apiKeyHelper and sends what it prints, and settings.json is
@@ -304,7 +344,6 @@ export function evaluateApiHealth({
       //
       // A warning: the profile works, and whether a second key reaching this endpoint is a
       // problem is the user's call, not doctor's.
-      const where = settingsShared ? `${settingsPath} (shared with the primary)` : settingsPath;
       issues.push({
         kind: "shared_api_key_helper",
         severity: "warning",

@@ -497,6 +497,16 @@ subscription account also runs for every API profile, and the key it prints can 
 profile's endpoint — whatever auth scheme the profile uses. `clausona doctor` reports it;
 removing it removes it for every profile.
 
+**So is an `env` block in that `settings.json`.** Claude Code applies it over the environment
+it was started with, so over everything the profile sets and clears: an `ANTHROPIC_API_KEY`
+there reaches this profile's endpoint next to the profile's key, an `ANTHROPIC_BASE_URL` sends
+the profile's key to another host, and a provider switch such as `CLAUDE_CODE_USE_BEDROCK`
+routes the run away from the endpoint. `clausona doctor` reports each such name, in any case,
+as an error — `ANTHROPIC_MODEL` there as a warning — without quoting its value, and each
+launch of an API profile warns about the ones that move the key or the traffic. The fix is to
+move the setting out of `settings.json` into the profile that needs it:
+`clausona config <that profile> --set KEY=VALUE`.
+
 ### What `list` shows
 
 The `ACCOUNT` column holds the account email for a subscription profile and the label for an
@@ -555,6 +565,9 @@ reports neither missing. It checks these instead:
 - `apiKeyHelper` in `settings.json`, and a credential name in the profile's env map. Both are
   warnings: they describe a key that could reach the endpoint, not a profile that is broken,
   so the profile still reads as healthy
+- an `env` block in `settings.json` that sets the base URL, a credential or a provider switch,
+  which Claude Code applies over the profile: an error, since the key or the traffic then goes
+  somewhere else. `ANTHROPIC_MODEL` there is a warning
 - one `env:` or `command:` key source read by API profiles on different endpoints (compared by
   scheme, host and port): whichever key it holds goes to both. Also a warning, reported on
   each of them with the `config <profile> --key-from env:<ANOTHER_NAME>` that separates them.

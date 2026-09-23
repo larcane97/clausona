@@ -167,8 +167,11 @@ export type DoctorIssue = {
     | "unreadable_settings"
     | "plaintext_env_secret"
     | "shared_key_source"
-    // Any profile: an env map a hand edit left as something other than a map, or a kind
-    // that is neither subscription nor api.
+    // API profiles only: a settings.json `env` block that Claude Code applies over the
+    // profile's endpoint, key or routing (an error), or its model (a warning).
+    | "settings_env_override"
+    // Any profile: an env map a hand edit left as something other than a map, or holding a
+    // value that is not a string; or a kind that is neither subscription nor api.
     | "invalid_env_map"
     | "invalid_profile_kind";
   message: string;

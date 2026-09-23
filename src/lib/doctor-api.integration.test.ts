@@ -306,6 +306,43 @@ describe("doctor on an API profile", () => {
     expect(issues[0].message).toContain("apiKeyHelper");
   });
 
+  // Claude Code copies settings.json's env block over its own environment at startup, so a key
+  // or an endpoint there beats everything the profile set and cleared.
+  it("reports an env block in the shared settings that overrides the profile, by name only", async () => {
+    const settingsKey = ["sk", "ant", "api03", "SETTINGSENVBLOCK0001"].join("-");
+    const h = await harness({
+      settings: {
+        env: {
+          ANTHROPIC_API_KEY: settingsKey,
+          ANTHROPIC_BASE_URL: "http://localhost:47812",
+          claude_code_use_bedrock: "1",
+          ANTHROPIC_MODEL: "opus",
+          DISABLE_TELEMETRY: "1",
+        },
+      },
+    });
+    await h.addApi();
+
+    const results = await h.doctor();
+    const overrides = issuesFor(results, "claude:glm").filter((i) => i.kind === "settings_env_override");
+
+    expect(overrides.map((i) => [i.message.split(" ")[0], i.severity])).toEqual([
+      ["ANTHROPIC_API_KEY", undefined],
+      ["ANTHROPIC_BASE_URL", undefined],
+      ["ANTHROPIC_MODEL", "warning"],
+      ["claude_code_use_bedrock", undefined],
+    ]);
+    expect(overrides[0].message).toContain("(shared with the primary)");
+    expect(overrides[0].message).toContain("Claude Code applies it over this profile");
+    expect(overrides[0].message).toContain("clausona config <that profile> --set ANTHROPIC_API_KEY=VALUE");
+    expect(results.find((r) => r.name === "claude:glm")?.healthy).toBe(false);
+    const text = JSON.stringify(results) + h.render(results);
+    expect(text).not.toContain(settingsKey);
+    expect(text).not.toContain("47812");
+    // The primary is what the file was written for.
+    expect(kinds(results, "claude:default")).toEqual([]);
+  });
+
   it("warns about the helper whatever auth scheme the profile uses", async () => {
     const h = await harness({ settings: { apiKeyHelper: "op read op://vault/anthropic" } });
     await h.addApi({ authScheme: "api-key" });

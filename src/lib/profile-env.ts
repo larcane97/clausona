@@ -1,8 +1,10 @@
-import { realpath as fsRealpath } from "node:fs/promises";
+import { readFile as fsReadFile, realpath as fsRealpath } from "node:fs/promises";
 import { homedir } from "node:os";
+import path from "node:path";
 
 import { HIDDEN } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
+import { settingsEnvOverrides } from "../core/doctor.js";
 import { isPosixEnvName } from "../core/shell.js";
 import { getAdapter } from "../tools/registry.js";
 import type { Profile, ShownKind } from "../types.js";
@@ -298,7 +300,36 @@ type Deps = {
   resolveSecret?: typeof resolveSecret;
   realpath?: (target: string) => Promise<string>;
   homedir?: () => string;
+  readFile?: (target: string) => Promise<string>;
 };
+
+/**
+ * What launch says about the settings.json an API profile reads - normally the primary's,
+ * through a shared link: each name in its `env` block that Claude Code would apply over the
+ * endpoint, the key or the routing clausona just set or cleared. Said on every launch, like
+ * any other warning here, because the run it precedes sends the key or the traffic elsewhere.
+ *
+ * One small file read, for an API profile only. ANTHROPIC_MODEL there is left to doctor: it
+ * changes what is asked for, not where the key goes, and a subscription setup commonly pins
+ * one. A file that is missing or does not parse says nothing here; doctor reports the second.
+ */
+async function settingsEnvWarnings(
+  id: string,
+  configDir: string,
+  readFile: (target: string) => Promise<string>,
+): Promise<string[]> {
+  let settings: unknown;
+  try {
+    settings = JSON.parse(await readFile(path.join(configDir, "settings.json")));
+  } catch {
+    return [];
+  }
+  const env = typeof settings === "object" && settings !== null ? (settings as { env?: unknown }).env : undefined;
+  return settingsEnvOverrides(env, API_MANAGED_ENV_KEYS).map(
+    (key) =>
+      `${id}: ${shownEnvName(key)} is set in the env block of settings.json, and Claude Code applies it over this profile - run 'clausona doctor' for the fix`,
+  );
+}
 
 /**
  * Turns one profile into the environment a single tool run needs.
@@ -311,6 +342,7 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
   const resolve = deps.resolveSecret ?? resolveSecret;
   const realpath = deps.realpath ?? ((target: string) => fsRealpath(target));
   const home = deps.homedir ?? homedir;
+  const readFile = deps.readFile ?? ((target: string) => fsReadFile(target, "utf8"));
   const adapter = getAdapter(profile.tool);
   const env: Record<string, string> = {};
   const warnings: string[] = [];
@@ -336,6 +368,7 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
       // is more actionable than a shell function that silently does nothing.
       warnings.push(`${id}: ${error instanceof Error ? error.message : String(error)}`);
     }
+    warnings.push(...(await settingsEnvWarnings(id, profile.configDir, readFile)));
   }
 
   // A map that is not one is applied as nothing, and said once: walked as an object, a string

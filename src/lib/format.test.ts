@@ -560,6 +560,7 @@ const API_ISSUE_INPUTS = {
   missing_api_secret: { profile: API_PROFILE, secret: { ok: false, error: "no stored secret" } },
   invalid_api_config: { profile: { ...API_PROFILE, api: { ...API_ENDPOINT, baseUrl: "" } } },
   shared_api_key_helper: { profile: API_PROFILE, settings: { apiKeyHelper: "op read op://vault/key" } },
+  settings_env_override: { profile: API_PROFILE, settings: { env: { ANTHROPIC_BASE_URL: "http://localhost:1" } } },
   plaintext_env_secret: {
     profile: { ...API_PROFILE, env: { ANTHROPIC_API_KEY: "sk-plain" } },
     credentialEnvKeys: ["ANTHROPIC_API_KEY"],

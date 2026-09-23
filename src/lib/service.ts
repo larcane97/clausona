@@ -57,6 +57,7 @@ import {
   nonStringEnvKeys,
   nonStringEnvValueMessage,
   profileModel,
+  ROUTING_ENV_KEYS,
   shownKind,
   shownLabel,
 } from "./profile-env.js";
@@ -1118,6 +1119,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
             ? (await inspectSharedLink(settingsPath, path.join(primarySource, "settings.json"))).pointsToSource
             : false,
           credentialEnvKeys: CREDENTIAL_ENV_KEYS,
+          routingEnvKeys: ROUTING_ENV_KEYS,
           secretEnvName: isSecretEnvName,
           keySharers: profile.api
             ? keySharersElsewhere(id, profile.api.secret, profile.api.baseUrl, registry.profiles)
