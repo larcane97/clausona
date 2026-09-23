@@ -176,7 +176,9 @@ export function baseUrlError(baseUrl: string): string | undefined {
       return "Not a URL - it must be absolute, like https://api.example.com.";
     case "scheme":
       return `The scheme must be http or https, not '${checked.problem.scheme}'.`;
-    default:
+    // Every reason, and no default: a fifth one added to `BaseUrlProblem` should fail to
+    // compile here rather than quietly inherit whichever message came last.
+    case "credentials":
       return "The URL must not carry a user or password. Put the key in the Key field.";
   }
 }

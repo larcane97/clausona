@@ -108,6 +108,17 @@ async function type(instance: Instance, keys: string) {
   await new Promise((resolve) => setTimeout(resolve, 30));
 }
 
+/**
+ * Sends `text` one character at a time.
+ *
+ * `press` and `type` write a whole string, which ink delivers as one input event - that is
+ * a paste, not typing, and the two take different paths through the key field's reader.
+ * This is the typing one.
+ */
+async function typeSlowly(instance: Instance, text: string) {
+  for (const char of text) await type(instance, char);
+}
+
 /** Whether the cursor is on the row carrying `label`. */
 function focusedOn(frame: string, label: string): boolean {
   return frame.split("\n").some((line) => line.includes(label) && line.includes(CURSOR));
@@ -238,6 +249,24 @@ describe("App add-profile: API endpoint", () => {
     instance.unmount();
   });
 
+  it("draws the same thing for a one-character key and a four-hundred-character one", async () => {
+    // The panel cannot be handed a key any more - it takes a boolean - so the width
+    // guarantee is asserted here, where the real key goes through the real state. Clearing
+    // between the two is what makes both frames a redraw that can be waited for.
+    const instance = await openApiForm();
+    await moveTo(instance, "API key");
+
+    await press(instance, "x");
+    const short = await waitForFrame(instance.lastFrame, (f) => f.includes(MASK));
+    await press(instance, "\u0015");
+    await waitForFrame(instance.lastFrame, (f) => !f.includes(MASK));
+    await press(instance, "y".repeat(400));
+    const long = await waitForFrame(instance.lastFrame, (f) => f.includes(MASK));
+
+    expect(long).toBe(short);
+    instance.unmount();
+  });
+
   it("takes the key's keystrokes itself - typing, erasing and clearing", async () => {
     // The key field has no text input behind it: a text input draws one glyph per
     // character it holds, which is the length this field must not show. So typing, erasing
@@ -259,8 +288,9 @@ describe("App add-profile: API endpoint", () => {
 
     expect(cleared).toContain("type or paste the key");
 
-    await press(instance, `${KEY}x`); // empty -> set again
+    await press(instance, `${KEY.slice(0, 10)}`); // empty -> set again
     await waitForFrame(instance.lastFrame, (f) => f.includes(MASK));
+    await typeSlowly(instance, `${KEY.slice(10)}x`); // one character at a time, no redraw
     await type(instance, "\u007f"); // erase the stray 'x' - and redraw nothing at all
 
     expect(instance.lastFrame()).toContain(MASK);
@@ -274,6 +304,119 @@ describe("App add-profile: API endpoint", () => {
     expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(expect.objectContaining({ secretValue: KEY }));
     for (const drawn of instance.frames) expect(drawn).not.toContain(KEY);
     instance.unmount();
+  });
+
+  /**
+   * What the terminal sends that nobody pressed.
+   *
+   * `useInput` strips exactly one leading ESC, so a sequence ink has no name for arrives as
+   * its own printable body - and a filter that only drops control characters appends the
+   * rest of it to the key. The user sees the same eight bullets either way, the save
+   * succeeds, and the failure surfaces later as a 401 pointing at nothing. Each case is
+   * asserted against what `addApiProfile` receives, because the screen deliberately shows
+   * nothing that could be checked.
+   */
+  describe("terminal noise arriving mid-key", () => {
+    async function keyAfter(send: (instance: Instance) => Promise<void>) {
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const instance = await openApiForm();
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+      await press(instance, "https://gateway.example.com");
+      await moveTo(instance, "API key");
+      await send(instance);
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added") || f.includes("✘"));
+      const call = vi.mocked(addApiProfile).mock.calls[0]?.[0];
+      const frame = instance.lastFrame() ?? "";
+      instance.unmount();
+      return { secretValue: call?.secretValue, frame, called: vi.mocked(addApiProfile).mock.calls.length };
+    }
+
+    it.each([
+      ["a focus-in report", "\u001b[I"],
+      ["a focus-out report", "\u001b[O"],
+      ["an SGR mouse report", "\u001b[<0;10;5M"],
+      ["a cursor-position report", "\u001b[12;40R"],
+    ])("keeps %s out of the key", async (_case, sequence) => {
+      const { secretValue } = await keyAfter(async (instance) => {
+        await type(instance, KEY.slice(0, 20));
+        await type(instance, sequence);
+        await type(instance, KEY.slice(20));
+      });
+
+      expect(secretValue).toBe(KEY);
+    });
+
+    it("keeps a bracketed paste's markers out of the key", async () => {
+      // Nothing in clausona turns mode 2004 on and ink neither sets nor clears it, so
+      // whether the brackets arrive is decided by whatever ran in this terminal before.
+      const { secretValue } = await keyAfter(async (instance) => {
+        await type(instance, `\u001b[200~${KEY}\u001b[201~`);
+      });
+
+      expect(secretValue).toBe(KEY);
+    });
+
+    it("keeps a paste whole when it is split across two reads", async () => {
+      const { secretValue } = await keyAfter(async (instance) => {
+        await type(instance, `\u001b[200~${KEY.slice(0, 20)}`);
+        await type(instance, `${KEY.slice(20)}\u001b[201~`);
+      });
+
+      expect(secretValue).toBe(KEY);
+    });
+
+    it("refuses to save the front of a key when a paste never finished", async () => {
+      // The closing bracket never arrives, so what is in the field is a fragment. The
+      // prompt refuses to return one rather than have it stored and reported as success.
+      const { secretValue, called, frame } = await keyAfter(async (instance) => {
+        await type(instance, `\u001b[200~${KEY.slice(0, 20)}`);
+      });
+
+      expect(called).toBe(0);
+      expect(secretValue).toBeUndefined();
+      expect(frame).toContain("A paste started and never finished");
+    });
+
+    it("lets the field be cleared and pasted again after an unfinished paste", async () => {
+      // Otherwise a stray opening bracket would lock the form for the rest of the session.
+      const { addApiProfile } = await import("../lib/service.js");
+      vi.mocked(addApiProfile).mockClear();
+      const instance = await openApiForm();
+      await press(instance, "gateway");
+      await moveTo(instance, "Endpoint");
+      await press(instance, "https://gateway.example.com");
+      await moveTo(instance, "API key");
+      await type(instance, `\u001b[200~${KEY.slice(0, 20)}`);
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("A paste started and never finished"));
+
+      await moveTo(instance, "API key");
+      await press(instance, "\u0015");
+      await waitForFrame(instance.lastFrame, (f) => !f.includes(MASK));
+      await press(instance, KEY);
+      await moveTo(instance, "Create profile");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Added claude:gateway"));
+
+      expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(expect.objectContaining({ secretValue: KEY }));
+      instance.unmount();
+    });
+
+    it("erases nothing when the field is already empty", async () => {
+      const instance = await openApiForm();
+      await moveTo(instance, "API key");
+      await type(instance, "\u007f");
+      await type(instance, "\u007f");
+
+      expect(instance.lastFrame()).toContain("type or paste the key");
+      expect(instance.lastFrame()).not.toContain(MASK);
+      instance.unmount();
+    });
   });
 
   it("does not print the key when the save fails with a message carrying it", async () => {

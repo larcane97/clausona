@@ -1,7 +1,14 @@
 import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 
-import { PromptCancelledError, promptSecret, type SecretInputStream } from "./prompt-secret.js";
+import {
+  EMPTY_SECRET_INPUT,
+  PromptCancelledError,
+  promptSecret,
+  readSecretChunk,
+  type SecretInputState,
+  type SecretInputStream,
+} from "./prompt-secret.js";
 
 /**
  * The property under test is the one a screenshot would show: nothing the user types
@@ -372,5 +379,100 @@ describe("promptSecret off a terminal", () => {
 
     await expect(promptSecret(PROMPT, piped)).resolves.toBe("");
     expect(piped.screen()).toBe("");
+  });
+});
+
+/**
+ * `readSecretChunk`, which is the same grammar applied to input that arrives through ink
+ * rather than through the reader above.
+ *
+ * The distinction that matters: `useInput` strips exactly one leading ESC, so a sequence
+ * ink has no name for arrives as its own printable body. A filter that only drops control
+ * characters appends the rest of that body to the key - a corrupted credential, stored and
+ * reported as success, with a constant mask giving no sign either way.
+ */
+describe("readSecretChunk", () => {
+  const KEY = "sk-ant-api03-not-a-real-key-0000000000000000";
+  const read = (chunk: string, state: SecretInputState = EMPTY_SECRET_INPUT) => readSecretChunk(state, chunk);
+
+  it("passes an ordinary key through untouched", () => {
+    expect(read(KEY).text).toBe(KEY);
+  });
+
+  // Each of these fires without anyone pressing a key. A focus report arrives whenever the
+  // window loses or regains focus - alt-tabbing to a password manager to copy the key does
+  // it - and a mouse report whenever the pointer moves over the terminal.
+  const REPORTS: [string, string][] = [
+    ["a focus-in report", "[I"],
+    ["a focus-out report", "[O"],
+    ["an SGR mouse report", "[<0;10;5M"],
+    ["an SGR mouse release", "[<0;10;5m"],
+    ["a cursor-position report", "[12;40R"],
+    ["a device-attributes reply", "[?1;2c"],
+  ];
+
+  it.each(REPORTS)("drops %s that opens the chunk, where ink has stripped the ESC", (_case, body) => {
+    expect(read(body).text).toBe("");
+    expect(read(`${body}${KEY}`).text).toBe(KEY);
+  });
+
+  it.each(REPORTS)("drops %s that lands inside the chunk, ESC and all", (_case, body) => {
+    // Only the *leading* ESC is stripped, so one arriving mid-read still carries its own.
+    expect(read(`sk-AAA\u001b${body}BBB`).text).toBe("sk-AAABBB");
+  });
+
+  it("leaves a bracket alone when it is not the start of a sequence", () => {
+    expect(read("sk-AAA[BBB").text).toBe("sk-AAA[BBB");
+  });
+
+  it("drops a bracketed paste's markers and keeps what they wrap", () => {
+    expect(read(`\u001b[200~${KEY}\u001b[201~`).text).toBe(KEY);
+  });
+
+  it("drops the markers when ink has stripped the opening ESC", () => {
+    expect(read(`[200~${KEY}\u001b[201~`).text).toBe(KEY);
+  });
+
+  it("keeps a paste whole across two reads, marker and all", () => {
+    const first = read(`[200~${KEY.slice(0, 20)}`);
+    const second = readSecretChunk(first.state, `${KEY.slice(20)}\u001b[201~`);
+
+    expect(first.text + second.text).toBe(KEY);
+    expect(second.state.pasting).toBe(false);
+  });
+
+  it("keeps a marker split down the middle whole", () => {
+    // The worst split: the opening bracket itself arrives in two pieces.
+    const first = read("[20");
+    const second = readSecretChunk(first.state, `0~${KEY}\u001b[201~`);
+
+    expect(first.text).toBe("");
+    expect(second.text).toBe(KEY);
+  });
+
+  it("says a paste is still open when its closing marker has not arrived", () => {
+    // The caller refuses to save on this, rather than storing the front of a key.
+    const open = read(`[200~${KEY.slice(0, 20)}`);
+
+    expect(open.state.pasting).toBe(true);
+    expect(open.text).toBe(KEY.slice(0, 20));
+  });
+
+  it("holds an unfinished sequence back rather than guessing where it ends", () => {
+    const partial = read("[<0;10");
+
+    expect(partial.text).toBe("");
+    expect(partial.state.pending).toBe("\u001b[<0;10");
+  });
+
+  it("refuses input it cannot measure rather than appending part of it", () => {
+    const runaway = read(`[${"9".repeat(40)}`);
+
+    expect(runaway.problem).toBe("unreadable");
+    expect(runaway.text).toBe("");
+  });
+
+  it("drops the control characters the prompt drops, newlines included", () => {
+    expect(read(`sk-\u0000A\u001fB\rC\nD\u007fE`).text).toBe("sk-ABCDE");
   });
 });

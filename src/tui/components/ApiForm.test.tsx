@@ -4,23 +4,17 @@ import { describe, expect, it } from "vitest";
 import { type ApiFormState, apiFormFields, emptyApiForm, MODEL_KEY } from "../api-form.js";
 import { ApiForm } from "./ApiForm.js";
 
-/**
- * A key shape. Every assertion below that this string is absent from a frame is one branch
- * of the same rule: whatever the form does with a key, it does not draw it.
- */
-const KEY = "sk-ant-api03-not-a-real-key-0000000000000000";
-
-/** What the field shows instead - the same, whatever is behind it. */
+/** What the key field shows instead of a key - the same, whatever is behind it. */
 const MASK = "\u2022".repeat(8);
 
 function form(overrides: Partial<ApiFormState> = {}): ApiFormState {
   return { ...emptyApiForm(), ...overrides };
 }
 
-function frameFor(state: ApiFormState, apiKey = ""): string {
+function frameFor(state: ApiFormState, keySet = false): string {
   return (
     render(
-      <ApiForm form={state} fields={apiFormFields(state)} apiKey={apiKey} mergeSessions={false} onChange={() => {}} />,
+      <ApiForm form={state} fields={apiFormFields(state)} keySet={keySet} mergeSessions={false} onChange={() => {}} />,
     ).lastFrame() ?? ""
   );
 }
@@ -31,82 +25,48 @@ function cursorOn(state: ApiFormState, id: string): number {
 }
 
 describe("the API key field", () => {
-  it("draws a mask instead of what was typed", () => {
+  it("draws a constant, and cannot draw anything else", () => {
+    // The panel is handed a boolean, not the key - so the guarantee is the prop's type
+    // rather than this component's discipline, and there is nothing here to leak. That the
+    // constant is the same width for any key is asserted end to end in src/tui/App.test.tsx,
+    // where a real key goes through the real state.
     const state = form();
-    const frame = frameFor({ ...state, cursor: cursorOn(state, "key") }, KEY);
+    const frame = frameFor({ ...state, cursor: cursorOn(state, "key") }, true);
 
     expect(frame).toContain("API key");
-    expect(frame).not.toContain(KEY);
-    expect(frame).not.toContain("sk-");
-    // The field is not simply blank: something has to show that the keystrokes landed.
     expect(frame).toContain(MASK);
   });
 
-  it("draws a mask when the cursor has moved on, not the value", () => {
-    // A different branch of the same rule: `focus` changes what ink-text-input renders, so
-    // an unfocused field is its own chance to print the value.
+  it("draws the same constant when the cursor has moved on", () => {
     const state = form();
-    const frame = frameFor({ ...state, cursor: cursorOn(state, "name") }, KEY);
 
-    expect(frame).not.toContain(KEY);
-    expect(frame).not.toContain("sk-");
-    expect(frame).toContain(MASK);
+    expect(frameFor({ ...state, cursor: cursorOn(state, "name") }, true)).toContain(MASK);
   });
 
-  it("draws the same thing for a short key and a long one", () => {
-    // The mask is not one glyph per character typed. `prompt-secret.ts` prints nothing at
-    // all for this reason - a count of stars is a length, and a key's length narrows down
-    // which provider and which format it is. A form field cannot show nothing, so it shows
-    // a constant instead.
-    const state = form();
-    const short = frameFor({ ...state, cursor: cursorOn(state, "key") }, "sk-1");
-    const long = frameFor({ ...state, cursor: cursorOn(state, "key") }, `${KEY}${KEY}`);
+  it("draws it with the advanced section open, where the field scrolls out of focus", () => {
+    const state = form({ advancedOpen: true });
 
-    expect(short).toBe(long);
+    expect(frameFor({ ...state, cursor: cursorOn(state, "submit") }, true)).toContain(MASK);
   });
 
   it("says the field is empty rather than showing a mask over nothing", () => {
     const state = form();
-    const empty = frameFor({ ...state, cursor: cursorOn(state, "name") }, "");
 
-    expect(empty).toContain("not set");
-    expect(empty).not.toContain(MASK);
+    expect(frameFor({ ...state, cursor: cursorOn(state, "name") })).toContain("not set");
+    expect(frameFor({ ...state, cursor: cursorOn(state, "name") })).not.toContain(MASK);
+    expect(frameFor({ ...state, cursor: cursorOn(state, "key") })).toContain("type or paste the key");
   });
 
-  it("draws a mask with the advanced section open, where the field scrolls out of focus", () => {
-    const state = form({ advancedOpen: true });
-    const frame = frameFor({ ...state, cursor: cursorOn(state, "submit") }, KEY);
+  it("shows the error under the field, with the field still masked", () => {
+    const state = form({ errors: { key: "Enter the API key." } });
+    const frame = frameFor({ ...state, cursor: cursorOn(state, "key") }, true);
 
-    expect(frame).not.toContain(KEY);
-    expect(frame).not.toContain("sk-");
-  });
-
-  it("does not put the key in the error it shows under the field", () => {
-    const state = form({
-      errors: { key: "Enter the API key. It goes to the credential store, never to profiles.json." },
-    });
-    const frame = frameFor({ ...state, cursor: cursorOn(state, "key") }, KEY);
-
-    expect(frame).toContain("Enter the API key");
-    expect(frame).not.toContain(KEY);
-  });
-
-  it("does not put the key in an error about another field either", () => {
-    // The form renders whatever `errors` holds. Nothing it holds is built from the key,
-    // and that is the branch this covers: every field's error, with a key typed.
-    const state = form({
-      name: "gpu-box",
-      errors: {
-        name: "Profile 'claude:gpu-box' already exists.",
-        baseUrl: "The scheme must be http or https, not 'ftp'.",
-      },
-    });
-
-    expect(frameFor(state, KEY)).not.toContain(KEY);
+    expect(frame).toContain("Enter the API key.");
+    expect(frame).toContain(MASK);
   });
 
   it("says where the key goes, so the mask is not the only thing the field explains", () => {
-    expect(frameFor(form(), KEY)).toContain("credential store");
+    expect(frameFor(form(), true)).toContain("credential store");
   });
 });
 
@@ -134,7 +94,9 @@ describe("the folded form", () => {
   });
 
   it("counts the settings that are set once some are", () => {
-    expect(frameFor(form({ env: { API_TIMEOUT_MS: "600000", [MODEL_KEY]: "glm-4.6" } }))).toContain("1 set of 20");
+    expect(frameFor(form({ env: { API_TIMEOUT_MS: "600000", [MODEL_KEY]: "glm-4.6" } }))).toContain(
+      "1 set · 20 settings",
+    );
   });
 });
 

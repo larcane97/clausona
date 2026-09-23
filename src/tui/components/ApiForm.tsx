@@ -51,8 +51,13 @@ const LABEL_WIDTH = 16;
 type ApiFormProps = {
   form: ApiFormState;
   fields: ApiField[];
-  /** The typed key. Read for its emptiness only; it is never rendered. */
-  apiKey: string;
+  /**
+   * Whether the key field holds anything - not what it holds.
+   *
+   * A boolean rather than the key, so that the panel's discipline is not what keeps the
+   * key off screen: there is nothing here to render.
+   */
+  keySet: boolean;
   mergeSessions: boolean;
   onChange: (field: ApiField, value: string) => void;
 };
@@ -98,13 +103,17 @@ function Hint({ text, tone }: { text?: string; tone?: "warning" }) {
   );
 }
 
-export function ApiForm({ form, fields, apiKey, mergeSessions, onChange }: ApiFormProps) {
+export function ApiForm({ form, fields, keySet, mergeSessions, onChange }: ApiFormProps) {
   const cursor = Math.min(form.cursor, fields.length - 1);
   const advanced = advancedFieldIndexes(fields);
   // The window follows the cursor, and sits at the top of the list while the cursor is
   // still above it - which is where it is the moment the section unfolds.
+  // With the cursor outside the advanced run the window has nothing to centre on, so it
+  // stays at the end the cursor left by: stepping down onto Create profile should not
+  // throw the list back to the top.
   const active = advanced.indexOf(cursor);
-  const start = Math.max(0, Math.min(active <= 0 ? 0 : active - 2, advanced.length - ADVANCED_WINDOW));
+  const anchor = active >= 0 ? active - 2 : cursor > (advanced.at(-1) ?? -1) ? advanced.length : 0;
+  const start = Math.max(0, Math.min(anchor, advanced.length - ADVANCED_WINDOW));
   const visible = new Set(advanced.slice(start, start + ADVANCED_WINDOW));
   const setCount = Object.entries(form.env).filter(([key, value]) => key !== MODEL_KEY && value.trim() !== "").length;
 
@@ -150,7 +159,9 @@ export function ApiForm({ form, fields, apiKey, mergeSessions, onChange }: ApiFo
           <Cursor focused={focused} />
           <Label text={`${form.advancedOpen ? "▾" : "▸"} Advanced`} focused={focused} />
           <Text color={color.muted}>
-            {setCount > 0 ? `${setCount} set of ` : ""}
+            {/* Two counts rather than "n of m": a committed free-form setting is set, and
+                is not one of the catalog's. */}
+            {setCount > 0 ? `${setCount} set · ` : ""}
             {ADVANCED_ENTRIES.length} settings
           </Text>
           <Text color={color.muted}>{form.advancedOpen ? "· a to fold" : "· a to open"}</Text>
@@ -161,15 +172,14 @@ export function ApiForm({ form, fields, apiKey, mergeSessions, onChange }: ApiFo
     if (field.kind === "secret") {
       // Not a TextInput: every text input renders one glyph per character it holds, which
       // is the length this field must not show. App.tsx takes the keystrokes instead, and
-      // the value never reaches this component's output at all.
-      const set = apiKey !== "";
+      // the value never reaches this component at all - only whether there is one.
       return (
         <Box key={field.id} flexDirection="column">
           <Box gap={1}>
             <Cursor focused={focused} />
             <Label text="API key" focused={focused} />
-            <Text color={set ? color.text : color.muted}>
-              {set ? KEY_MASK : focused ? KEY_EMPTY_FOCUSED : KEY_EMPTY}
+            <Text color={keySet ? color.text : color.muted}>
+              {keySet ? KEY_MASK : focused ? KEY_EMPTY_FOCUSED : KEY_EMPTY}
             </Text>
           </Box>
           <Hint text="Stored in the credential store. profiles.json only records where to read it." />

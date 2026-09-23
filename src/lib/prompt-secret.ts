@@ -88,6 +88,73 @@ function scanEscape(buffer: string): EscapeScan {
   return buffer.length > MAX_ESCAPE_LENGTH ? "runaway" : "incomplete";
 }
 
+/**
+ * What a chunk of terminal input adds to a secret being typed somewhere other than this
+ * prompt - the TUI's key field, which reads the same terminal through ink.
+ *
+ * It is here rather than there because the grammar above is the thing being reused. The
+ * character filter alone is not enough and was the bug: `useInput` strips exactly one
+ * leading ESC, so a sequence ink does not have a name for arrives as its own printable
+ * body - `[I` from a focus report, `[<0;10;5M` from a mouse report, `[200~` from a paste
+ * bracket - and a filter that only drops control characters appends the rest of it to the
+ * key. A corrupted credential is then stored and reported as success. `scanEscape`
+ * measures those sequences; nothing else here knows how.
+ *
+ * `pending` carries a sequence that has not finished arriving, so one split across two
+ * reads is still measured as one. `pasting` says a paste's opening bracket arrived and its
+ * closing one has not: whatever is in the field is the front of a key rather than the key,
+ * which is the truncation this reader already refuses to return for its own prompt.
+ */
+export type SecretInputState = {
+  /** An unfinished escape sequence, ESC included. */
+  pending: string;
+  /** Between a paste's brackets. */
+  pasting: boolean;
+};
+
+export const EMPTY_SECRET_INPUT: SecretInputState = Object.freeze({ pending: "", pasting: false });
+
+export type SecretChunk = {
+  state: SecretInputState;
+  /** Characters to append to the secret. Never part of an escape sequence. */
+  text: string;
+  /**
+   * Set when the input cannot be measured, so where the sequence ended is a guess and a
+   * guess would take part of a credential with it. The caller says so and stores nothing;
+   * the wording is the caller's, because the way out differs between a prompt and a form.
+   */
+  problem?: "unreadable";
+};
+
+export function readSecretChunk(state: SecretInputState, chunk: string): SecretChunk {
+  // The ESC that `useInput` stripped is put back, so one grammar covers both the sequence
+  // at the front of the chunk and any sequence inside it. A continuation is never given a
+  // second ESC - it already carries the one from the read it started in.
+  const head = state.pending === "" && (chunk.startsWith("[") || chunk.startsWith("O")) ? ESC : "";
+  let buffer = `${state.pending}${head}${chunk}`;
+  let pasting = state.pasting;
+  let text = "";
+
+  while (buffer.length > 0) {
+    if (buffer[0] === ESC) {
+      const sequence = scanEscape(buffer);
+      // Still arriving: keep it whole and wait, which is how a paste keeps its second half.
+      if (sequence === "incomplete") return { state: { pending: buffer, pasting }, text };
+      if (sequence === "runaway") return { state: { ...EMPTY_SECRET_INPUT }, text: "", problem: "unreadable" };
+      buffer = buffer.slice(sequence.consumed);
+      if (sequence.kind === "paste-start") pasting = true;
+      else if (sequence.kind === "paste-end") pasting = false;
+      continue;
+    }
+    const char = buffer[0];
+    buffer = buffer.slice(1);
+    // Control characters are not part of a key, and some of them move the cursor if they
+    // are written back out. A newline is one of them, bracketed or not: a key has none.
+    if (char >= " " && char !== "\u007f") text += char;
+  }
+  return { state: { pending: "", pasting }, text };
+}
+
 export type SecretInputStream = NodeJS.ReadableStream & {
   isTTY?: boolean;
   isRaw?: boolean;

@@ -15,6 +15,7 @@ import {
   quotaSeverity,
 } from "../lib/format.js";
 import { defaultProfileName, looksLikeCredential, profileId } from "../lib/profile-ref.js";
+import { EMPTY_SECRET_INPUT, readSecretChunk, type SecretInputState } from "../lib/prompt-secret.js";
 import {
   addApiProfile,
   addProfile,
@@ -182,8 +183,22 @@ const initNameHints = [
   { keys: "esc", action: "back" },
 ];
 
+/**
+ * What the key field says when the terminal sent something the reader cannot measure, and
+ * when a paste opened and never closed.
+ *
+ * The situations are `prompt-secret.ts`'s, and so is the refusal: nothing is stored, and a
+ * fragment is never reported as success. The wording is not, because the prompt's advice is
+ * to pipe the key in instead, and there is no pipe behind a form - only the field the
+ * message appears under.
+ */
+const UNREADABLE_KEY_INPUT =
+  "This terminal sent something the key field cannot read, so part of the key may be missing. The field has been cleared - paste it again.";
+const UNFINISHED_PASTE =
+  "A paste started and never finished, so only part of the key arrived. Nothing was saved - clear the field with ctrl-u and paste it again.";
+
 const apiFormHints = [
-  { keys: "↑↓", action: "field" },
+  { keys: "↑↓/tab", action: "field" },
   { keys: "enter", action: "next" },
   { keys: "space", action: "toggle" },
   { keys: "a", action: "advanced" },
@@ -256,6 +271,11 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    * user can no longer see, check, or be sure is still the one they meant.
    */
   const [apiKey, setApiKey] = useState("");
+  /**
+   * How far through a terminal escape sequence the key field is. A ref rather than state:
+   * it decides what the next chunk of input means, and nothing on screen is drawn from it.
+   */
+  const secretInput = useRef<SecretInputState>({ ...EMPTY_SECRET_INPUT });
   const [overlay, setOverlay] = useState<OverlayState>(null);
   const lastEscRef = useRef(0);
 
@@ -268,7 +288,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       setMessage("");
       setCursor(0);
       setAddState(null);
-      setApiKey("");
+      clearApiKey();
       setOverlay(null);
       setScreen("dashboard");
     }
@@ -276,12 +296,12 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
 
   function resetAddState() {
     setAddState(null);
-    setApiKey("");
+    clearApiKey();
     setCursor(0);
   }
 
   async function startAddFlow() {
-    setApiKey("");
+    clearApiKey();
     setAddState({
       step: "loading",
       discoveredAccounts: [],
@@ -356,6 +376,12 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     updateApiForm((form) => ({ ...form, errors: withoutKeys(form.errors, "key") }));
   }
 
+  /** Drops the key and the half-read terminal input behind it, on every way out. */
+  function clearApiKey() {
+    setApiKey("");
+    secretInput.current = { ...EMPTY_SECRET_INPUT };
+  }
+
   function editApiField(field: ApiField, value: string) {
     updateApiForm((form) => {
       let next: ApiFormState = form;
@@ -393,19 +419,28 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       const problem = customEntryError(form);
       if (problem) return { ...form, errors: { ...form.errors, [problem.field]: problem.message } };
       const key = form.customKey.trim();
-      return {
+      const next: ApiFormState = {
         ...form,
         env: { ...form.env, [key]: form.customValue },
         customKey: "",
         customValue: "",
         errors: withoutKeys(form.errors, "customKey", "customValue"),
       };
+      // Committing inserts a row above the free-form pair, so holding the index would
+      // slide the cursor onto whatever moved into it. It goes back to the name half,
+      // ready for another - chosen rather than wherever the shift happened to leave it.
+      next.cursor = apiFormFields(next).findIndex((field) => field.id === "customKey");
+      return next;
     });
   }
 
   function submitApiForm(state: AddState) {
     const form = state.api;
     const errors = validateApiForm(form, { existingIds: existingProfileIds, hasKey: apiKey.trim() !== "" });
+    // A paste whose closing bracket never arrived: what is in the field is the front of a
+    // key rather than the key. The prompt refuses to return that rather than have it
+    // stored and reported as success, and so does this.
+    if (secretInput.current.pasting) errors.key = UNFINISHED_PASTE;
     if (Object.keys(errors).length > 0) {
       // A setting that is wrong while the section is folded has nowhere to be shown, so
       // the section opens rather than the form refusing to submit for an invisible reason.
@@ -428,7 +463,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     // Taken out of state before the save begins: from here the key exists only as this
     // local, for as long as the call and its failure message need it.
     const secretValue = apiKey;
-    setApiKey("");
+    clearApiKey();
     setAddState((prev) => (prev ? { ...prev, step: "applying", api: { ...prev.api, errors: {} } } : null));
     void (async () => {
       try {
@@ -610,7 +645,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           // A name is a plain field and shows what was typed into it, key included, for as
           // long as it is on screen. It does not outlive the step: a name the form already
           // refused as key-shaped goes the same way the key does.
-          setApiKey("");
+          clearApiKey();
           setAddState((prev) =>
             prev
               ? {
@@ -802,14 +837,22 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             if (key.delete || key.backspace) {
               editApiKey((previous) => previous.slice(0, -1));
             } else if (key.ctrl && input === "u") {
-              editApiKey(() => "");
+              clearApiKey();
+              updateApiForm((form) => ({ ...form, errors: withoutKeys(form.errors, "key") }));
             } else if (input !== "" && !key.ctrl && !key.meta) {
-              // Control characters are not part of a key, and some of them move the cursor
-              // if they reach the terminal. Written the way the CLI's prompt writes it -
-              // `char < " "` and DEL - rather than as a regex, which cannot carry a
-              // control character without a lint suppression.
-              const typed = [...input].filter((char) => char >= " " && char !== "\u007f").join("");
-              if (typed !== "") editApiKey((previous) => previous + typed);
+              // Measured rather than filtered by character class. `useInput` strips one
+              // leading ESC, so a sequence ink has no name for arrives as its own
+              // printable body and a character filter appends the rest of it to the key.
+              // `readSecretChunk` is the prompt's own grammar, which knows where a
+              // sequence ends and where a paste's brackets are.
+              const read = readSecretChunk(secretInput.current, input);
+              secretInput.current = read.state;
+              if (read.problem === "unreadable") {
+                setApiKey("");
+                updateApiForm((form) => ({ ...form, errors: { ...form.errors, key: UNREADABLE_KEY_INPUT } }));
+              } else if (read.text !== "") {
+                editApiKey((previous) => previous + read.text);
+              }
             }
             return;
           }
@@ -1430,7 +1473,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             <ApiForm
               form={addState.api}
               fields={apiFormFields(addState.api)}
-              apiKey={apiKey}
+              keySet={apiKey !== ""}
               mergeSessions={addState.mergeSessions}
               onChange={editApiField}
             />
