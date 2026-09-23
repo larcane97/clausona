@@ -254,16 +254,24 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
 
   async function suspendTuiAndRun<T>(fn: () => Promise<T>): Promise<T> {
     setSuspended(true);
-    // Wait a tick for Ink to render empty output before we hand over stdout
-    await new Promise((r) => setTimeout(r, 50));
-    process.stdin.setRawMode?.(false);
-    process.stdout.write("\x1B[2J\x1B[0;0H"); // clear screen
-    const result = await fn();
-    process.stdout.write("\x1B[2J\x1B[0;0H"); // clear screen
-    process.stdin.setRawMode?.(true);
-    process.stdin.resume();
-    setSuspended(false);
-    return result;
+    try {
+      // Wait a tick for Ink to render empty output and release stdin before we hand it over
+      await new Promise((r) => setTimeout(r, 50));
+      process.stdin.setRawMode?.(false);
+      // The child shares our terminal, so stop reading it ourselves: a stdin that is still
+      // reading races the child for keystrokes, e.g. the code pasted into `claude auth login`.
+      // This only takes effect once Ink has dropped its 'readable' listener (see useInput).
+      process.stdin.pause();
+      process.stdout.write("\x1B[2J\x1B[0;0H"); // clear screen
+      return await fn();
+    } finally {
+      // Restore even when fn rejects (a failed login): otherwise `suspended` stays set, the
+      // app keeps rendering nothing with raw mode off, and the caller's error never shows.
+      process.stdout.write("\x1B[2J\x1B[0;0H"); // clear screen
+      process.stdin.setRawMode?.(true);
+      process.stdin.resume();
+      setSuspended(false);
+    }
   }
 
   async function refreshDashboard() {
@@ -347,6 +355,11 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     { id: "quit", label: "Quit", detail: "Exit clausona" },
   ];
 
+  // This hook runs before the `suspended` early return, so switch it off explicitly while a
+  // child owns the terminal. Going inactive makes Ink drop its stdin listener, which lets
+  // suspendTuiAndRun's pause() stop the reads; otherwise keys meant for the child (a pasted
+  // login code, Enter, Esc) would be taken and handled as TUI input.
+  const inputOptions = { isActive: !suspended };
   useInput((input, key) => {
     if (screen === "dashboard") {
       if (key.escape) {
@@ -985,7 +998,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         }
       }
     }
-  });
+  }, inputOptions);
 
   // ── Screens ──
 
