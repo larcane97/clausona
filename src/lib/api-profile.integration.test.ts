@@ -1481,6 +1481,27 @@ describe("updateProfileSecret", () => {
   }
 });
 
+// The CLI refuses a blank model before its key prompt, so this is the service's own check -
+// the one the dashboard's form, which calls addApiProfile directly, would rely on.
+describe("a blank model, refused by the service itself", () => {
+  it("is refused by addApiProfile, with add's wording, and nothing is created", async () => {
+    const h = await harness();
+
+    await expect(h.service.addApiProfile(apiOptions({ env: { ANTHROPIC_MODEL: " " } }))).rejects.toThrow(
+      "A model id cannot be blank. To pin none, leave the model out.",
+    );
+    expect(Object.keys(h.registry().profiles)).toEqual(["claude:default"]);
+  });
+
+  it("is refused by updateProfileEnv, with config's wording", async () => {
+    const h = await harness();
+
+    await expect(h.service.updateProfileEnv("claude:default", { set: { ANTHROPIC_MODEL: " " } })).rejects.toThrow(
+      "clausona config <profile> --unset ANTHROPIC_MODEL",
+    );
+  });
+});
+
 // The CLI checks the kind and the scheme before it calls this, so these are the service's
 // own guards - the ones a second caller, the dashboard say, would be relying on.
 describe("updateProfileApi", () => {
@@ -1488,19 +1509,22 @@ describe("updateProfileApi", () => {
   // subscription profile with a stray block is only a hand edit away, and the case without
   // one cannot tell whether the kind is checked at all.
   it.each([
-    ["a subscription profile", {}],
-    ["a subscription profile carrying a stray endpoint block", { api: { baseUrl: "http://localhost:8000" } }],
-    ["an API profile with no endpoint block", { kind: "api" }],
-  ])("refuses %s and writes nothing", async (_label, extra) => {
+    ["a subscription profile", {}, "Profile 'claude:default' is not an API profile."],
+    [
+      "a subscription profile carrying a stray endpoint block",
+      { api: { baseUrl: "http://localhost:8000" } },
+      "Profile 'claude:default' is not an API profile.",
+    ],
+    // An API profile to doctor and `list`, so it gets doctor's remedy rather than a denial.
+    ["an API profile with no endpoint block", { kind: "api" }, "Profile 'claude:default' has no endpoint"],
+  ])("refuses %s and writes nothing", async (_label, extra, message) => {
     const h = await harness();
     const registry = h.registry();
     registry.profiles["claude:default"] = { ...registry.profiles["claude:default"], ...extra };
     writeFileSync(h.registryPath, JSON.stringify(registry));
     const before = h.registryText();
 
-    await expect(h.service.updateProfileApi("claude:default", { label: "Mine" })).rejects.toThrow(
-      "Profile 'claude:default' is not an API profile.",
-    );
+    await expect(h.service.updateProfileApi("claude:default", { label: "Mine" })).rejects.toThrow(message);
     expect(h.registryText()).toBe(before);
   });
 
@@ -1645,9 +1669,13 @@ describe("listProfiles with an API profile", () => {
     expect(items.find((item) => item.name === "claude:glm")).not.toHaveProperty("model");
   });
 
+  // Every command refuses to write one now, so only a hand-edited profiles.json holds one.
   it("reads a blank model as none", async () => {
     const h = await harness();
-    await h.service.addApiProfile(apiOptions({ env: { ANTHROPIC_MODEL: "  " } }));
+    await h.service.addApiProfile(apiOptions());
+    const registry = h.registry();
+    registry.profiles["claude:glm"].env = { ANTHROPIC_MODEL: "  " };
+    writeFileSync(h.registryPath, JSON.stringify(registry));
 
     const items = await h.service.listProfiles();
 

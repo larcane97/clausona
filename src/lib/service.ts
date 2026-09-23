@@ -14,8 +14,8 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { checkBaseUrl } from "../core/api-url.js";
-import { countIssues, evaluateApiHealth, evaluateSymlinkHealth } from "../core/doctor.js";
+import { checkBaseUrl, hasBareUserinfo, isAnthropicHost } from "../core/api-url.js";
+import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
 import { backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
@@ -48,6 +48,8 @@ import {
   displayName,
   envKeyCaseTwin,
   envKeyCaseTwinError,
+  isEnvMap,
+  isSecretEnvName,
   profileModel,
 } from "./profile-env.js";
 import { foldProfileName, initProfileNames, parseProfileRef, profileId, validateProfileName } from "./profile-ref.js";
@@ -999,6 +1001,17 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
   for (const [id, profile] of Object.entries(registry.profiles)) {
     const issues: DoctorIssue[] = [];
 
+    // Any kind. A list or a string where the env map belongs is applied as nothing, and
+    // printed as `<hidden>`, so this is where it is found. The value is never quoted: it is
+    // what the user meant to set, credentials included. --edit opens it and saves the object
+    // it is given.
+    if (profile.env !== undefined && !isEnvMap(profile.env)) {
+      issues.push({
+        kind: "invalid_env_map",
+        message: `the env map in ~/.clausona/profiles.json is not a map of NAME: value, so none of it is applied - run 'clausona config ${id} --edit' and save it as one`,
+      });
+    }
+
     const primarySource = registry.primarySources[profile.tool];
     const adapter = getAdapter(profile.tool);
 
@@ -1046,6 +1059,7 @@ export async function doctorProfiles(): Promise<DoctorProfileResult[]> {
             ? (await inspectSharedLink(settingsPath, path.join(primarySource, "settings.json"))).pointsToSource
             : false,
           credentialEnvKeys: CREDENTIAL_ENV_KEYS,
+          secretEnvName: isSecretEnvName,
         }),
       );
     } else {
@@ -1317,6 +1331,23 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
   return { name: id, mergeSessions: next, changed: true };
 }
 
+/**
+ * A blank ANTHROPIC_MODEL, by any route that writes it. `list` and the preview read a blank
+ * one as "none pinned" (see `profileModel`), but launch exports it as it is - so letting one
+ * in would make what `list` says differ from what Claude Code gets. `--model ""` was already
+ * refused; `--set`, `--edit` and `add --api --set` are the other doors.
+ *
+ * Worded by where it was written, not by which flag: at `add` there is nothing yet to clear.
+ */
+export function checkModelEntry(key: string, value: string, context: "add" | "config"): void {
+  if (key !== "ANTHROPIC_MODEL" || value.trim() !== "") return;
+  throw new Error(
+    context === "add"
+      ? "A model id cannot be blank. To pin none, leave the model out."
+      : "A model id cannot be blank. To pin none, clear it with clausona config <profile> --unset ANTHROPIC_MODEL.",
+  );
+}
+
 export async function updateProfileEnv(id: string, changes: { set?: Record<string, string>; unset?: string[] }) {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
@@ -1326,6 +1357,7 @@ export async function updateProfileEnv(id: string, changes: { set?: Record<strin
   for (const [key, value] of Object.entries(changes.set ?? {})) {
     const result = validateEnvEntry(key, value);
     if (!result.ok) throw new Error(result.error);
+    checkModelEntry(key, value, "config");
     env[key] = value;
   }
   for (const key of changes.unset ?? []) delete env[key];
@@ -1341,18 +1373,34 @@ export async function updateProfileEnv(id: string, changes: { set?: Record<strin
   return registry.profiles[id];
 }
 
+/**
+ * The endpoint block a change to an API profile works on, or why there is none. Two
+ * different answers: a subscription profile is not an API profile at all, while one marked
+ * `api` with no block - a hand edit - is an API profile to doctor and `list`, and has a
+ * remedy, the one doctor gives for it.
+ */
+export function requireEndpoint(id: string, profile: Profile): ApiEndpoint {
+  if (profile.kind !== "api") throw new Error(`Profile '${id}' is not an API profile.`);
+  if (!profile.api) {
+    throw new Error(
+      `Profile '${id}' has no endpoint in ~/.clausona/profiles.json, so there is nothing for config to change - ${missingEndpointRemedy(id)}.`,
+    );
+  }
+  return profile.api;
+}
+
 export async function updateProfileSecret(id: string, secret: SecretSource, value?: string) {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
   const profile = registry.profiles[id];
-  if (profile.kind !== "api" || !profile.api) throw new Error(`Profile '${id}' is not an API profile.`);
+  const api = requireEndpoint(id, profile);
   const { source, toStore } = checkSecretSource(secret, value);
 
   // Ordered so the registry never names a credential that is not there: a new value is
   // stored before the registry points at it, and an old one is deleted only after the
   // registry has stopped pointing at it.
   if (toStore !== null) await storeSecret(id, toStore);
-  registry.profiles[id] = { ...profile, api: { ...profile.api, secret: source } };
+  registry.profiles[id] = { ...profile, api: { ...api, secret: source } };
   await saveRegistry(registry);
   if (toStore === null) {
     // Leaving a stored value behind after switching to an env or command source would
@@ -1362,45 +1410,92 @@ export async function updateProfileSecret(id: string, secret: SecretSource, valu
 }
 
 /**
+ * The scheme `add --api` picks for a host when `--auth` is not given: Anthropic's own API
+ * reads X-Api-Key, and gateways, proxies and self-hosted servers overwhelmingly take a Bearer
+ * token. One rule for `add` and for `config --base-url`, which is what keeps the two from
+ * producing different profiles for the same URL.
+ */
+export function defaultAuthScheme(hostname: string): ApiEndpoint["authScheme"] {
+  return isAnthropicHost(hostname) ? "api-key" : "bearer";
+}
+
+/** A host an http URL can reach without the key leaving the machine. */
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "[::1]" || /^127\./.test(hostname);
+}
+
+export type ProfileApiUpdate = {
+  profile: Profile;
+  /** The host the key went to before, and goes to now. Undefined for a URL that does not parse. */
+  previousHost?: string;
+  host?: string;
+  /** What `add`'s defaults moved with a new base URL, because they were still the old host's. */
+  followed: { label: boolean; auth: boolean };
+  /**
+   * The scheme the new host would default to, when a base URL change kept a scheme that
+   * differs from it: one that was chosen, or one there was no old host to judge by.
+   */
+  hostDefaultAuth?: ApiEndpoint["authScheme"];
+  /** The new base URL sends the key unencrypted to somewhere off this machine, and did not before. */
+  cleartext: boolean;
+};
+
+/**
  * Changes what `add --api` set besides the key: the endpoint, how the key is presented, and
  * the label. Every value goes through the rule `addApiProfile` applies, and all of them are
  * checked before anything is written, so a call that is refused changes nothing. The key
  * and where it is read from are `updateProfileSecret`'s, and are left alone.
  *
- * A label that is still the old endpoint's host is the one `add` defaulted to, so it moves
- * with the endpoint; otherwise `list` would go on naming a host the profile no longer talks
- * to. A label that was chosen stays. When the stored URL is too broken to have a host there
- * is nothing to compare, and the label stays too.
- *
- * Returns the host the key went to before and goes to now, so the caller can say when the
- * same key is about to reach a different endpoint. Either is undefined for a stored URL that
- * does not parse.
+ * `add`'s two defaults move with a new base URL while they are still the old host's: the
+ * label, which is the host, and the auth scheme, which the host decides. Left behind, `list`
+ * names a host the profile no longer talks to, and the key goes in a header the new host
+ * does not read - a 401 with nothing to explain it. One that was chosen stays; a scheme that
+ * stays and differs from the new host's default is reported, so the caller can say so. With
+ * a stored URL too broken to have a host there is nothing to compare, and both stay.
  */
 export async function updateProfileApi(
   id: string,
   changes: { baseUrl?: string; authScheme?: string; label?: string },
-): Promise<{ profile: Profile; previousHost?: string; host?: string }> {
+): Promise<ProfileApiUpdate> {
   const registry = await loadRegistry();
   if (!registry?.profiles[id]) throw new Error(`Profile '${id}' not found.`);
   const profile = registry.profiles[id];
-  if (profile.kind !== "api" || !profile.api) throw new Error(`Profile '${id}' is not an API profile.`);
+  const api = requireEndpoint(id, profile);
 
-  const baseUrl = changes.baseUrl?.trim() ?? profile.api.baseUrl;
+  const baseUrl = changes.baseUrl?.trim() ?? api.baseUrl;
   const url = changes.baseUrl === undefined ? undefined : parseBaseUrl(baseUrl);
-  const authScheme = changes.authScheme === undefined ? profile.api.authScheme : checkAuthScheme(changes.authScheme);
+  const chosenAuth = changes.authScheme === undefined ? undefined : checkAuthScheme(changes.authScheme);
   const chosenLabel = changes.label === undefined ? undefined : checkLabel(changes.label);
 
-  const before = checkBaseUrl(profile.api.baseUrl);
-  const previousHost = before.ok ? before.url.host : undefined;
-  let label = chosenLabel ?? profile.label;
-  if (chosenLabel === undefined && url && previousHost !== undefined && profile.label === previousHost) {
-    label = url.host;
-  }
+  const before = checkBaseUrl(api.baseUrl);
+  const previous = before.ok ? before.url : undefined;
+  const followLabel =
+    chosenLabel === undefined && url !== undefined && previous !== undefined && profile.label === previous.host;
+  const followAuth =
+    chosenAuth === undefined &&
+    url !== undefined &&
+    previous !== undefined &&
+    api.authScheme === defaultAuthScheme(previous.hostname) &&
+    defaultAuthScheme(url.hostname) !== api.authScheme;
+  const label = followLabel && url ? url.host : (chosenLabel ?? profile.label);
+  const authScheme = chosenAuth ?? (followAuth && url ? defaultAuthScheme(url.hostname) : api.authScheme);
+  const hostDefault = url ? defaultAuthScheme(url.hostname) : undefined;
 
-  registry.profiles[id] = { ...profile, label, api: { ...profile.api, baseUrl, authScheme } };
+  registry.profiles[id] = { ...profile, label, api: { ...api, baseUrl, authScheme } };
   await saveRegistry(registry);
-  const after = checkBaseUrl(baseUrl);
-  return { profile: registry.profiles[id], previousHost, host: after.ok ? after.url.host : undefined };
+  return {
+    profile: registry.profiles[id],
+    previousHost: previous?.host,
+    host: url?.host ?? previous?.host,
+    followed: { label: followLabel, auth: followAuth },
+    hostDefaultAuth:
+      chosenAuth === undefined && hostDefault !== undefined && hostDefault !== authScheme ? hostDefault : undefined,
+    cleartext:
+      url !== undefined &&
+      url.protocol === "http:" &&
+      !isLoopbackHost(url.hostname) &&
+      !(previous?.protocol === "http:" && previous.host === url.host),
+  };
 }
 
 async function cleanupProfile(
@@ -1804,7 +1899,14 @@ export function parseBaseUrl(baseUrl: string): URL {
       case "unparseable":
         throw new Error("Invalid base URL: must be an absolute http:// or https:// URL.");
       case "scheme":
-        throw new Error(`Invalid base URL: the scheme must be http or https, not '${checked.problem.scheme}'.`);
+        // With no `//`, `user:pass@host` parses with the username as its "scheme": naming it
+        // would print a token pasted there. It is userinfo, and is refused as userinfo.
+        if (!hasBareUserinfo(baseUrl)) {
+          throw new Error(`Invalid base URL: the scheme must be http or https, not '${checked.problem.scheme}'.`);
+        }
+        throw new Error(
+          "Invalid base URL: it must not carry credentials. Supply the key through the key source instead.",
+        );
       case "credentials":
         throw new Error(
           "Invalid base URL: it must not carry credentials. Supply the key through the key source instead.",
@@ -1829,9 +1931,14 @@ export function parseBaseUrl(baseUrl: string): URL {
  * A blank label would render the profile as an empty row in `list`, since an API profile
  * has no account email for `displayName` to fall back on.
  */
-export function checkLabel(label: string): string {
+export function checkLabel(label: string, context: "add" | "config" = "config"): string {
   const trimmed = label.trim();
-  if (trimmed === "") throw new Error("Label cannot be blank: it is the name `clausona list` shows for this profile.");
+  if (trimmed === "") {
+    // At add, leaving the label out gets the endpoint's host; at config there is no such
+    // default to fall back on, only the label the profile already has.
+    const hint = context === "add" ? " Leave --label out to use the endpoint's host." : "";
+    throw new Error(`Label cannot be blank: it is the name \`clausona list\` shows for this profile.${hint}`);
+  }
   return trimmed;
 }
 
@@ -1866,12 +1973,13 @@ export async function addApiProfile(options: {
   const url = parseBaseUrl(baseUrl);
   checkAuthScheme(options.authScheme);
   // Absent means "use the host".
-  const label = options.label === undefined ? url.host : checkLabel(options.label);
+  const label = options.label === undefined ? url.host : checkLabel(options.label, "add");
   const { source: secret, toStore } = checkSecretSource(options.secret, options.secretValue);
   const env = { ...options.env };
   for (const [key, value] of Object.entries(env)) {
     const result = validateEnvEntry(key, value);
     if (!result.ok) throw new Error(result.error);
+    checkModelEntry(key, value, "add");
     const twin = envKeyCaseTwin(key, Object.keys(env), "api");
     if (twin !== undefined) throw new Error(envKeyCaseTwinError(key, twin));
   }

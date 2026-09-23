@@ -1,8 +1,8 @@
 import { HIDDEN, redactBaseUrl, redactUrlsIn } from "../core/api-url.js";
-import { isPosixEnvName } from "../core/shell.js";
+import { describeSecretSource, redactSecretSource } from "../core/key-source.js";
 import { catalogEntry } from "../tools/claude-env-catalog.js";
-import type { Profile, SecretSource } from "../types.js";
-import { CREDENTIAL_ENV_KEYS } from "./profile-env.js";
+import type { Profile } from "../types.js";
+import { CREDENTIAL_ENV_KEYS, isEnvMap, isSecretEnvName } from "./profile-env.js";
 
 /**
  * What a profile looks like when it leaves the process.
@@ -28,7 +28,7 @@ import { CREDENTIAL_ENV_KEYS } from "./profile-env.js";
  * them to the tool, and `config --edit`, whose file has to round-trip them.
  */
 
-export { HIDDEN };
+export { describeSecretSource, HIDDEN, redactSecretSource };
 
 const CREDENTIAL_ENV_KEY_SET = new Set<string>(CREDENTIAL_ENV_KEYS);
 
@@ -38,16 +38,18 @@ export function isCredentialEnvKey(key: string): boolean {
 }
 
 /**
- * A name whose value is never printed, in part or whole. The API form draws these masked for
- * the same reason, so a value is on screen exactly where it would be in `config --show`.
+ * A name whose value is never printed, in part or whole: any name that says it holds a
+ * secret (`isSecretEnvName`, which is wider than the clear list), and a json setting. The API
+ * form draws these masked for the same reason, so a value is on screen exactly where it would
+ * be in `config --show`.
  */
 export function hidesEnvValue(key: string): boolean {
-  return isCredentialEnvKey(key) || catalogEntry(key)?.kind === "json";
+  return isSecretEnvName(key) || catalogEntry(key)?.kind === "json";
 }
 
-/** The names `redactEnv` hides the whole value of, in the map's order. */
+/** The names `redactEnv` hides the whole value of, in the map's order. None for a map that is not one. */
 export function hiddenEnvKeys(env: Record<string, string>): string[] {
-  return Object.keys(env).filter(hidesEnvValue);
+  return isEnvMap(env) ? Object.keys(env).filter(hidesEnvValue) : [];
 }
 
 export function redactEnv(env: Record<string, string>): Record<string, string> {
@@ -57,28 +59,6 @@ export function redactEnv(env: Record<string, string>): Record<string, string> {
       hidesEnvValue(key) || typeof value !== "string" ? HIDDEN : redactUrlsIn(value),
     ]),
   );
-}
-
-/** Where the key is read from, and nothing the reference could carry. */
-export function redactSecretSource(secret: SecretSource | undefined): SecretSource {
-  switch (secret?.source) {
-    case "keychain":
-      return { source: "keychain" };
-    case "env":
-      return { source: "env", name: isPosixEnvName(secret.name) ? secret.name : HIDDEN };
-    case "command":
-      return { source: "command", run: HIDDEN };
-    default:
-      // A source clausona does not know is one it cannot say anything safe about.
-      return { source: HIDDEN } as unknown as SecretSource;
-  }
-}
-
-/** The one-word form of a key source, for text: `keychain`, `env:NAME` or `command`. */
-export function describeSecretSource(secret: SecretSource | undefined): string {
-  const shown = redactSecretSource(secret);
-  if (shown.source === "env") return `env:${shown.name}`;
-  return shown.source;
 }
 
 /**
@@ -100,6 +80,13 @@ export function redactProfile(profile: Profile): Profile {
       authScheme: profile.api.authScheme,
       secret: redactSecretSource(profile.api.secret),
     },
-    env: profile.env && redactEnv(profile.env),
+    // An env map that is not a map is hidden whole: its content is not settings, and there
+    // is no key to print a name under. doctor says so, with the command that fixes it.
+    env:
+      profile.env === undefined
+        ? undefined
+        : isEnvMap(profile.env)
+          ? redactEnv(profile.env)
+          : (HIDDEN as unknown as Record<string, string>),
   };
 }

@@ -165,10 +165,11 @@ clausona add claude:local --api \
 clausona use claude:gw
 ```
 
-`clausona use` records which profile is active; it is the shell hook the installer adds to
-your rc file (`eval "$(clausona shell-init)"`) that applies it each time `claude` starts. In a
-shell without the hook, `use` changes nothing `claude` sees — `clausona run claude:gw` applies
-a profile for one run without it. See [Profile Switching](#profile-switching).
+`clausona use` records which profile is active; it is the shell hook the installer adds that
+applies it each time `claude` starts — `eval "$(clausona shell-init)"` in your zsh or bash rc
+file, `Invoke-Expression (& clausona shell-init | Out-String)` in your PowerShell profile. In
+a shell without the hook, `use` changes nothing `claude` sees — `clausona run claude:gw`
+applies a profile for one run without it. See [Profile Switching](#profile-switching).
 
 `--base-url` must be an absolute `http://` or `https://` URL carrying no username or
 password, and nothing shaped like an API key anywhere in it, query included — a credential in
@@ -201,8 +202,10 @@ clausona config claude:gw --unset ANTHROPIC_MODEL      # back to Claude Code's o
 reads and the only place clausona keeps the model, so `--set ANTHROPIC_MODEL=…` and `--edit`
 change the same value, and passing `--model` with a `--set` or `--unset` of that variable is
 refused. It works on a subscription profile too, where it pins a model for that account; a
-Codex profile refuses it, because Codex never reads the variable. An empty `--model` is
-refused rather than taken to mean "clear it" — `--unset ANTHROPIC_MODEL` is how to clear it.
+Codex profile refuses it, because Codex never reads the variable. A blank model is refused
+rather than taken to mean "clear it", whether it comes from `--model`, `--set` or `--edit` —
+`--unset ANTHROPIC_MODEL` is how to clear it. A blank one would be exported to Claude Code
+while `list` showed no model at all.
 `clausona list` shows each profile's model in a `MODEL` column, and `list --json` carries it as
 `model`.
 
@@ -303,13 +306,23 @@ with `CLAUDE_CODE_MAX_CONTEXT_TOKENS`. And a cold GPU server is slow to first by
 **The env map is stored in plain text** in `~/.clausona/profiles.json`. The API key does not
 belong in it — not as `--set ANTHROPIC_API_KEY=…`, and not as an `Authorization` header under
 `--set ANTHROPIC_CUSTOM_HEADERS=…`. Use `--key` or `--key-from` instead. clausona warns when
-you set one of those names, on any profile, and names the commands that undo it. For an API
-profile that is `config <profile> --key` to store the key, then `config <profile> --unset
-<NAME>` to drop the plain-text copy, which would otherwise still be what Claude Code is
-handed. A subscription profile signs in with its account and has nowhere to store a key, so
-for one it is only the `--unset`. `doctor` keeps warning afterwards — but only for an **API**
-profile. A subscription profile's env map is never checked, so a clean `doctor` does not mean
-no profile on this machine holds a plaintext key.
+you set one of those names, on any profile, and names the commands that undo it:
+
+- an API profile whose key is in the credential store: `config <profile> --key` to store the
+  key, then `config <profile> --unset <NAME>` to drop the plain-text copy, which would
+  otherwise still be what Claude Code is handed;
+- an API profile whose key comes from `env:` or `command:`: only the `--unset`. The key
+  already lives outside `profiles.json`, and `--key` would replace the source you chose with
+  the keychain;
+- a subscription profile, which signs in with its account and has nowhere to store a key:
+  only the `--unset`.
+
+It warns too for a secret that is not the profile's key — any name that says it holds one,
+such as `OTEL_EXPORTER_OTLP_HEADERS` or `AWS_BEARER_TOKEN_BEDROCK`. For that the advice is to
+keep it in your shell's environment, which the hook passes through to the tool, and to
+`--unset` the copy. `doctor` keeps warning afterwards — but only for an **API** profile. A
+subscription profile's env map is never checked, so a clean `doctor` does not mean no profile
+on this machine holds a plaintext key.
 
 ### Changing the endpoint
 
@@ -328,8 +341,14 @@ can be given together, as one change. Two things happen that you might not expec
 - **The key is kept.** After `--base-url`, the next launch sends the same key to the new
   host, and clausona says so when the host changes. If the new endpoint takes a different
   key, run `clausona config <profile> --key` next.
-- **A label that is still the old host follows the new one.** That is the label `add`
-  chose when you left `--label` out; one you chose stays.
+- **What `add` chose by itself follows the new host** while it is still the old host's:
+  a label that is the old host, and the auth scheme — `api-key` for `anthropic.com`,
+  `bearer` elsewhere — so moving from a gateway to Anthropic's own API does not leave the key
+  in a header Anthropic does not read. A label or scheme you chose stays; when a kept scheme
+  differs from what the new host usually takes, clausona says so and names the `--auth` that
+  would switch it.
+- **A move to plain `http://` is noted** unless the host is this machine (`localhost`,
+  `127.0.0.1`, `::1`): the key would cross the network unencrypted.
 
 A subscription profile has no endpoint, and `list` names it by its account email, so all
 three refuse one. Do not edit `~/.clausona/profiles.json` by hand for any of this — a
@@ -341,16 +360,22 @@ hand-edited file is the one way a base URL gets broken.
 go through one rule for what they print about a profile:
 
 - the value under a credential name (`ANTHROPIC_API_KEY`, `ANTHROPIC_CUSTOM_HEADERS` and the
-  rest) and under a json setting (`CLAUDE_CODE_EXTRA_BODY`, where a gateway's auth field goes)
+  rest), under any name that says it holds a secret (a `TOKEN`, `SECRET`, `PASSWORD`,
+  `API_KEY`, `HEADERS` and the like, so `OTEL_EXPORTER_OTLP_HEADERS` and
+  `AWS_BEARER_TOKEN_BEDROCK` too, but not a count such as `CLAUDE_CODE_MAX_CONTEXT_TOKENS`),
+  and under a json setting (`CLAUDE_CODE_EXTRA_BODY`, where a gateway's auth field goes)
   prints as `<hidden>`;
 - a URL's userinfo, query and fragment print as `<hidden>`, in the base URL and in any
   setting — `HTTPS_PROXY=http://user:pass@proxy:8080` shows as
-  `http://<hidden>@proxy:8080/`. A base URL that does not parse, or that carries something
-  shaped like an API key, is hidden whole;
+  `http://<hidden>@proxy:8080/`. That includes the scheme-less `user:pass@host` form, and a
+  URL anywhere in a value, after other words or on another line. A base URL that does not
+  parse, or that carries something shaped like an API key, is hidden whole;
 - a `command:` key source shows as `command`. Its command line can carry a vault token or the
   key itself, so it is only in `~/.clausona/profiles.json`, and a message about it says what
   failed ("secret command exited with 1") rather than quoting it;
-- a field clausona does not define is left out.
+- a field clausona does not define is left out, and an env map a hand edit left as a list or
+  a string - not a map of settings - is hidden whole. `doctor` reports that one, with the
+  `config <profile> --edit` that fixes it.
 
 Only what is printed changes, not what is stored or what reaches `claude`. The two
 exceptions are the ones whose job is the values: the shell hook, which hands them to the
@@ -397,22 +422,25 @@ removing it removes it for every profile.
 ### What `list` shows
 
 The `ACCOUNT` column holds the account email for a subscription profile and the label for an
-API one — the endpoint's host, unless you passed `--label` (or set one since with `config
---label`). `5H` and `7D` show a dash: those
-are subscription plan windows, an API endpoint bills per token, and there is nothing to read.
+API one — the endpoint's host, unless you passed `--label` (or set one since with
+`config --label`). `5H` and `7D` show a dash: those are subscription plan windows, an API
+endpoint bills per token, and there is nothing to read.
 **The dash is not an error** — unlike the dashes described under [When a reading is
 unavailable](#when-a-reading-is-unavailable), no state and no reason line accompany it. The
 profile is never queried, so `--refresh` and `--no-quota` change nothing for it.
 
 ```
-PROFILE             ACCOUNT                      5H         7D
-claude:work         you@example.com              6% 23m     46% 13h
-claude:gw           openrouter.ai                —          —
+PROFILE             ACCOUNT                      MODEL                   5H         7D
+claude:work         you@example.com              —                       6% 23m     46% 13h
+claude:gw           openrouter.ai                z-ai/glm-5.3            —          —
 ```
 
 `MODEL`, once any profile pins a model, shows each profile's `ANTHROPIC_MODEL`, subscription
-profiles included; a dash means the profile pins none and Claude Code picks. It is the same
-value the dashboard's preview shows, and `clausona config <profile> --model` changes it.
+profiles included; a dash means the profile pins none and Claude Code picks, or, on a Codex
+row, that Codex does not read the variable. An id too long for the column loses its middle
+rather than its end, so `openrouter/z-ai/glm-5.3-flash` and `…-air` stay told apart;
+`list --json` has the whole id. It is the same value the dashboard's preview shows, cut the
+same way, and `clausona config <profile> --model` changes it.
 
 `COST`, `INPUT` and `OUTPUT` do count for an API profile, but they come from clausona's own
 local record of what ran through it, not from the provider — they are not a bill. Claude
@@ -434,7 +462,9 @@ reports neither missing. It checks these instead:
   profile again
 - the base URL, which only a hand-edited `profiles.json` can break. The URL is never quoted
   back, because a hand-edited one can carry a password; `config <profile> --show` is where to
-  read it, and `config <profile> --base-url <url>` is how to put it right
+  read it, and `config <profile> --base-url <url>` is how to put it right. A profile with no
+  endpoint recorded at all has no key source for `config` to keep, so doctor names `remove`
+  and `add` for that one instead
 - that the key resolves. **A `command:` source is executed**, in a shell, every time doctor
   runs — so a vault round-trip or a touch-ID prompt happens on every `clausona doctor`. An
   `env:` source is read from doctor's own environment, which is not necessarily the

@@ -12,6 +12,7 @@ import { stripAnsi } from "./cli-style.js";
 import {
   doctorSeverity,
   doctorSummary,
+  fitModel,
   fitQuotaValue,
   formatAge,
   formatModel,
@@ -358,12 +359,23 @@ describe("renderList with a model", () => {
     }
   });
 
-  it("cuts a long model id inside its column, with an ellipsis", () => {
+  it("cuts a long model id from the middle, keeping the variant at the end", () => {
     const long = row("long", { model: "openrouter/deepseek/deepseek-v4.1-flash-preview-2026" });
     const out = stripAnsi(renderList([long], { width: 200 }));
 
-    // 23 characters and the ellipsis: one column short of the width, as every cell here is.
-    expect(lineFor(out, "long@example.com")).toContain("long@example.com                openrouter/deepseek/de… 6%");
+    // 23 characters with the ellipsis: one column short of the width, as every cell here is.
+    expect(lineFor(out, "long@example.com")).toContain("long@example.com                openrou…sh-preview-2026 6%");
+  });
+
+  // The pair this is for: the same model on one gateway, flash and not. Cut from the end,
+  // both read `openrouter/z-ai/glm-5.…`.
+  it("keeps two ids that differ only at the end apart", () => {
+    const flash = row("flash", { model: "openrouter/z-ai/glm-5.3-flash" });
+    const air = row("air", { model: "openrouter/z-ai/glm-5.3-air" });
+    const out = stripAnsi(renderList([flash, air], { width: 200 }));
+
+    expect(lineFor(out, "flash@example.com")).toContain("glm-5.3-flash");
+    expect(lineFor(out, "air@example.com")).toContain("glm-5.3-air");
   });
 
   it("does not move the guaranteed minimum width", () => {
@@ -375,6 +387,36 @@ describe("formatModel", () => {
   it("is the id as stored, or a dash when none is pinned", () => {
     expect(formatModel("z-ai/glm-5.3")).toBe("z-ai/glm-5.3");
     expect(formatModel(undefined)).toBe("—");
+  });
+});
+
+/**
+ * The one rule for cutting a model id to a width, used by `list` and the preview alike. The
+ * end of an id is what tells one variant from another - `-flash`, `-air`, a date - and the
+ * start says which gateway; the middle is the part two ids share. So the middle goes.
+ */
+describe("fitModel", () => {
+  it("leaves an id that fits exactly as it is", () => {
+    expect(fitModel("openrouter/z-ai/glm-5.3", 23)).toBe("openrouter/z-ai/glm-5.3");
+    expect(fitModel(undefined, 23)).toBe("—");
+  });
+
+  it("cuts from the middle, giving the end twice the room of the start", () => {
+    expect(fitModel("openrouter/z-ai/glm-5.3-flash", 23)).toBe("openrou…i/glm-5.3-flash");
+    expect(fitModel("openrouter/z-ai/glm-5.3-flash", 23)).toHaveLength(23);
+    expect(fitModel("openrouter/z-ai/glm-5.3-flash", 10)).toBe("ope…-flash");
+  });
+
+  it("never exceeds the width it is given", () => {
+    const id = "openrouter/deepseek/deepseek-v4.1-flash-preview-2026";
+    for (let width = 0; width <= id.length + 2; width++) {
+      expect(fitModel(id, width).length, `width ${width}`).toBeLessThanOrEqual(width);
+    }
+  });
+
+  it("is only an ellipsis at a width of one, and nothing at zero", () => {
+    expect(fitModel("openrouter/z-ai/glm-5.3-flash", 1)).toBe("…");
+    expect(fitModel("openrouter/z-ai/glm-5.3-flash", 0)).toBe("");
   });
 });
 

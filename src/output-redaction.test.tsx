@@ -44,7 +44,7 @@ afterEach(() => {
   expect(unexpected, "a test spawned a process").toEqual([]);
 });
 
-/** One secret per shape. Each is searched for by its first eight characters, not whole. */
+/** One secret per shape. Each is searched for by every 5-character window of it - see `leaks`. */
 const PLANTED = {
   "a credential env value": "S1HDR-1d5e",
   "a second credential env value": "S1TOK-2e6f",
@@ -55,19 +55,52 @@ const PLANTED = {
   "a base URL's query": "S2QUERY-7e1f",
   "a base URL's fragment": "S2FRAG-8f2a",
   "the query of a base URL that is otherwise valid": "S2VQ-9a3b",
-  "URL userinfo inside an env value": "S2PROXY-0b4c",
+  "URL userinfo inside an env value": "S2PRX-0b4c",
   "URL userinfo without a scheme, inside an env value": "S2BARE-1c5d",
   "a command key source's command line": "S3CMD-2d6e",
   "an env key source whose name is a key": "S3ENV-3e7f",
   "a stored key": "S4STORED-4f8a",
   "the key a command prints": "S4CMDKEY-5a9b",
   "a field added to profiles.json by hand": "S5STRAY-6b0c",
+  "the userinfo of a base URL that does not parse": "S2UNP-7c8d",
+  "a secret under a name that is on no clear list (OTEL)": "S6OTL-8d9e",
+  "a secret under a name that is on no clear list (Bedrock)": "S6BDK-9e0f",
+  "scheme-less userinfo in a base URL": "S2BUR-1a2b",
+  "a / in a scheme-less password in an env value": "S7SLA-3f4a",
+  "userinfo in a URL after other words in an env value": "S7EMB-4a5b",
+  "an env map that is a list": "S8ARR-5b6c",
+  "an env map that is a string": "S8STR-6c7d",
 } as const;
 
-const slice = (secret: string) => secret.slice(0, 8);
+/**
+ * Whether any part of `secret` is in `printed`. Not a prefix: a display that shows the last
+ * few characters of a hidden value - "ends in …2e6f" - leaks as surely as one that shows the
+ * first few, so every 5-character window is searched. Five, because that is the usual length
+ * of such a hint, and every planted secret is at least twice it.
+ *
+ * And a second time with JSON punctuation, whitespace and numeric keys taken out, because a
+ * string walked as if it were an object prints one character per key - `{"0":"S","1":"2"…}` -
+ * which no substring search of the raw text finds.
+ */
+function leaks(printed: string, secret: string): boolean {
+  const compact = printed.replace(/"\d+":/g, "").replace(/[\s"{}[\],:]/g, "");
+  for (let start = 0; start + 5 <= secret.length; start++) {
+    const window = secret.slice(start, start + 5);
+    if (printed.includes(window) || compact.includes(window.replace(/[\s"{}[\],:]/g, ""))) return true;
+  }
+  return false;
+}
 
-const API_IDS = ["claude:leaky", "claude:valid", "claude:cmdok", "claude:envsrc"];
-const ALL_IDS = ["claude:default", ...API_IDS];
+const API_IDS = [
+  "claude:leaky",
+  "claude:valid",
+  "claude:cmdok",
+  "claude:envsrc",
+  "claude:unparse",
+  "claude:bare",
+  "claude:envlist",
+];
+const ALL_IDS = ["claude:default", "claude:envstring", ...API_IDS];
 
 async function harness() {
   Object.defineProperty(process, "platform", { value: "linux", configurable: true });
@@ -116,6 +149,10 @@ async function harness() {
         HTTPS_PROXY: `http://proxyuser:${PLANTED["URL userinfo inside an env value"]}@proxy.example.com:8080`,
         ALL_PROXY: `proxyuser:${PLANTED["URL userinfo without a scheme, inside an env value"]}@proxy.example.com:1080`,
         ANTHROPIC_MODEL: "z-ai/glm-5.3",
+        OTEL_EXPORTER_OTLP_HEADERS: `Authorization=Bearer ${PLANTED["a secret under a name that is on no clear list (OTEL)"]}`,
+        AWS_BEARER_TOKEN_BEDROCK: PLANTED["a secret under a name that is on no clear list (Bedrock)"],
+        SOCKS_PROXY: `u:${PLANTED["a / in a scheme-less password in an env value"]}/x@proxy.example.com:1080`,
+        CURL_ARGS: `--proxy http://u:${PLANTED["userinfo in a URL after other words in an env value"]}@proxy.example.com`,
       },
       apiKey: PLANTED["a field added to profiles.json by hand"],
     },
@@ -138,6 +175,46 @@ async function harness() {
       email: "",
       label: "localhost:8000",
       api: api("http://localhost:8000", { source: "command", run: `echo ${PLANTED["the key a command prints"]}` }),
+    },
+    // Env maps a hand edit left as a list and as a string, walked as objects before.
+    "claude:envlist": {
+      tool: "claude",
+      kind: "api",
+      configDir: dir("envlist"),
+      email: "",
+      label: "envlist",
+      api: api("http://localhost:8002", { source: "env", name: "GW_KEY" }),
+      env: [`ANTHROPIC_AUTH_TOKEN=${PLANTED["an env map that is a list"]}`],
+    },
+    "claude:envstring": {
+      tool: "claude",
+      configDir: dir("envstring"),
+      email: "envstring@example.com",
+      env: `ANTHROPIC_AUTH_TOKEN=${PLANTED["an env map that is a string"]}`,
+    },
+    // Parses, as an opaque URL whose "scheme" is the username and whose host is empty.
+    "claude:bare": {
+      tool: "claude",
+      kind: "api",
+      configDir: dir("bare"),
+      email: "",
+      label: "bare",
+      api: api(`admin:${PLANTED["scheme-less userinfo in a base URL"]}@gw.example.com/api`, {
+        source: "env",
+        name: "GW_KEY",
+      }),
+    },
+    // Task 9's canonical shape: a URL that does not parse, so nothing can take it apart.
+    "claude:unparse": {
+      tool: "claude",
+      kind: "api",
+      configDir: dir("unparse"),
+      email: "",
+      label: "unparse",
+      api: api(`//admin:${PLANTED["the userinfo of a base URL that does not parse"]}@gw.example.com/api`, {
+        source: "env",
+        name: "GW_KEY",
+      }),
     },
     "claude:envsrc": {
       tool: "claude",
@@ -285,12 +362,16 @@ describe.skipIf(process.platform === "win32")("every output path, every secret s
     it(`${name} prints none of them`, async () => {
       const h = await harness();
 
-      const printed = stripAnsi(`${await produce(h)}\n${h.takeStderr()}`);
+      // The temp HOME's random suffix is the one thing in the output that could match a
+      // window by chance, so it is taken out first.
+      const printed = stripAnsi(`${await produce(h)}\n${h.takeStderr()}`)
+        .split(h.home)
+        .join("~");
 
       expect(printed.length, name).toBeGreaterThan(0);
       // Every cell of the row at once, so a failure names all the shapes that got out.
       const leaked = Object.entries(PLANTED)
-        .filter(([, secret]) => printed.includes(slice(secret)))
+        .filter(([, secret]) => leaks(printed, secret))
         .map(([shape]) => shape);
       expect(leaked, name).toEqual([]);
     });
@@ -313,6 +394,8 @@ describe.skipIf(process.platform === "win32")("what every path still says", () =
     expect(shown).toContain("CLAUDE_CODE_EXTRA_BODY (set; not shown");
     expect(shown).toContain("HTTPS_PROXY=http://<hidden>@proxy.example.com:8080/");
     expect(shown).toContain("ALL_PROXY=<hidden>@proxy.example.com:1080");
+    expect(shown).toContain("SOCKS_PROXY=<hidden>@proxy.example.com:1080");
+    expect(shown).toContain("CURL_ARGS=--proxy http://<hidden>@proxy.example.com");
     expect(shown).toContain("ANTHROPIC_MODEL=z-ai/glm-5.3");
   });
 
@@ -333,11 +416,17 @@ describe.skipIf(process.platform === "win32")("what every path still says", () =
       "HTTPS_PROXY",
       "ALL_PROXY",
       "ANTHROPIC_MODEL",
+      "OTEL_EXPORTER_OTLP_HEADERS",
+      "AWS_BEARER_TOKEN_BEDROCK",
+      "SOCKS_PROXY",
+      "CURL_ARGS",
     ]);
     expect(profile.hiddenEnvKeys).toEqual([
       "ANTHROPIC_CUSTOM_HEADERS",
       "ANTHROPIC_AUTH_TOKEN",
       "CLAUDE_CODE_EXTRA_BODY",
+      "OTEL_EXPORTER_OTLP_HEADERS",
+      "AWS_BEARER_TOKEN_BEDROCK",
     ]);
   });
 
@@ -417,16 +506,20 @@ describe.skipIf(process.platform === "win32")("_shell-env's stdout, the one path
     expect(out).toContain(PLANTED["URL userinfo inside an env value"]);
     expect(out).not.toContain("<hidden>");
     expect(out).toMatchInlineSnapshot(`
-      "if ( unset ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_REFRESH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR ANTHROPIC_IDENTITY_TOKEN ANTHROPIC_IDENTITY_TOKEN_FILE ANTHROPIC_FEDERATION_RULE_ID ANTHROPIC_ORGANIZATION_ID CLAUDE_CODE_HOST_AUTH_ENV_VAR CLAUDE_CODE_HOST_CREDS_FILE CLAUDE_CODE_SESSION_ACCESS_TOKEN CLAUDE_SESSION_INGRESS_TOKEN_FILE CLAUDE_BG_AUTH_SNAPSHOT_PATH CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_GATEWAY CLAUDE_CODE_USE_MANTLE CLAUDE_CODE_USE_FOUNDRY CLAUDE_CODE_USE_ANTHROPIC_AWS CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD ANTHROPIC_UNIX_SOCKET CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST CLAUDE_CODE_CUSTOM_OAUTH_URL CLAUDE_CONFIG_DIR ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_EXTRA_BODY HTTPS_PROXY ALL_PROXY ANTHROPIC_MODEL ) 2>/dev/null; then :; else for _clausona_name in ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_REFRESH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR ANTHROPIC_IDENTITY_TOKEN ANTHROPIC_IDENTITY_TOKEN_FILE ANTHROPIC_FEDERATION_RULE_ID ANTHROPIC_ORGANIZATION_ID CLAUDE_CODE_HOST_AUTH_ENV_VAR CLAUDE_CODE_HOST_CREDS_FILE CLAUDE_CODE_SESSION_ACCESS_TOKEN CLAUDE_SESSION_INGRESS_TOKEN_FILE CLAUDE_BG_AUTH_SNAPSHOT_PATH CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_GATEWAY CLAUDE_CODE_USE_MANTLE CLAUDE_CODE_USE_FOUNDRY CLAUDE_CODE_USE_ANTHROPIC_AWS CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD ANTHROPIC_UNIX_SOCKET CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST CLAUDE_CODE_CUSTOM_OAUTH_URL CLAUDE_CONFIG_DIR ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_EXTRA_BODY HTTPS_PROXY ALL_PROXY ANTHROPIC_MODEL; do ( unset $_clausona_name ) 2>/dev/null || printf 'clausona: %s is read-only in this shell, so clausona cannot set or clear it for this profile. Not starting the tool.\\n' $_clausona_name >&2; done; exit 1; fi
+      "if ( unset ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_REFRESH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR ANTHROPIC_IDENTITY_TOKEN ANTHROPIC_IDENTITY_TOKEN_FILE ANTHROPIC_FEDERATION_RULE_ID ANTHROPIC_ORGANIZATION_ID CLAUDE_CODE_HOST_AUTH_ENV_VAR CLAUDE_CODE_HOST_CREDS_FILE CLAUDE_CODE_SESSION_ACCESS_TOKEN CLAUDE_SESSION_INGRESS_TOKEN_FILE CLAUDE_BG_AUTH_SNAPSHOT_PATH CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_GATEWAY CLAUDE_CODE_USE_MANTLE CLAUDE_CODE_USE_FOUNDRY CLAUDE_CODE_USE_ANTHROPIC_AWS CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD ANTHROPIC_UNIX_SOCKET CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST CLAUDE_CODE_CUSTOM_OAUTH_URL CLAUDE_CONFIG_DIR ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_EXTRA_BODY HTTPS_PROXY ALL_PROXY ANTHROPIC_MODEL OTEL_EXPORTER_OTLP_HEADERS AWS_BEARER_TOKEN_BEDROCK SOCKS_PROXY CURL_ARGS ) 2>/dev/null; then :; else for _clausona_name in ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_REFRESH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR ANTHROPIC_IDENTITY_TOKEN ANTHROPIC_IDENTITY_TOKEN_FILE ANTHROPIC_FEDERATION_RULE_ID ANTHROPIC_ORGANIZATION_ID CLAUDE_CODE_HOST_AUTH_ENV_VAR CLAUDE_CODE_HOST_CREDS_FILE CLAUDE_CODE_SESSION_ACCESS_TOKEN CLAUDE_SESSION_INGRESS_TOKEN_FILE CLAUDE_BG_AUTH_SNAPSHOT_PATH CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_GATEWAY CLAUDE_CODE_USE_MANTLE CLAUDE_CODE_USE_FOUNDRY CLAUDE_CODE_USE_ANTHROPIC_AWS CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD ANTHROPIC_UNIX_SOCKET CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST CLAUDE_CODE_CUSTOM_OAUTH_URL CLAUDE_CONFIG_DIR ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_EXTRA_BODY HTTPS_PROXY ALL_PROXY ANTHROPIC_MODEL OTEL_EXPORTER_OTLP_HEADERS AWS_BEARER_TOKEN_BEDROCK SOCKS_PROXY CURL_ARGS; do ( unset $_clausona_name ) 2>/dev/null || printf 'clausona: %s is read-only in this shell, so clausona cannot set or clear it for this profile. Not starting the tool.\\n' $_clausona_name >&2; done; exit 1; fi
       unset ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_REFRESH_TOKEN CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR ANTHROPIC_IDENTITY_TOKEN ANTHROPIC_IDENTITY_TOKEN_FILE ANTHROPIC_FEDERATION_RULE_ID ANTHROPIC_ORGANIZATION_ID CLAUDE_CODE_HOST_AUTH_ENV_VAR CLAUDE_CODE_HOST_CREDS_FILE CLAUDE_CODE_SESSION_ACCESS_TOKEN CLAUDE_SESSION_INGRESS_TOKEN_FILE CLAUDE_BG_AUTH_SNAPSHOT_PATH CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_GATEWAY CLAUDE_CODE_USE_MANTLE CLAUDE_CODE_USE_FOUNDRY CLAUDE_CODE_USE_ANTHROPIC_AWS CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD ANTHROPIC_UNIX_SOCKET CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST CLAUDE_CODE_CUSTOM_OAUTH_URL
       export CLAUDE_CONFIG_DIR='~/.claude-leaky'
       export ANTHROPIC_BASE_URL='https://S2USER-5c9d:S2PASS-6d0e@gw.example.com/api?key=S2QUERY-7e1f#S2FRAG-8f2a'
       export ANTHROPIC_CUSTOM_HEADERS='Authorization: Bearer S1HDR-1d5e'
       export ANTHROPIC_AUTH_TOKEN='S1TOK-2e6f'
       export CLAUDE_CODE_EXTRA_BODY='{"api_key":"S1BODY-4b8c"}'
-      export HTTPS_PROXY='http://proxyuser:S2PROXY-0b4c@proxy.example.com:8080'
+      export HTTPS_PROXY='http://proxyuser:S2PRX-0b4c@proxy.example.com:8080'
       export ALL_PROXY='proxyuser:S2BARE-1c5d@proxy.example.com:1080'
-      export ANTHROPIC_MODEL='z-ai/glm-5.3'"
+      export ANTHROPIC_MODEL='z-ai/glm-5.3'
+      export OTEL_EXPORTER_OTLP_HEADERS='Authorization=Bearer S6OTL-8d9e'
+      export AWS_BEARER_TOKEN_BEDROCK='S6BDK-9e0f'
+      export SOCKS_PROXY='u:S7SLA-3f4a/x@proxy.example.com:1080'
+      export CURL_ARGS='--proxy http://u:S7EMB-4a5b@proxy.example.com'"
     `);
   });
 

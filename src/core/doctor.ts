@@ -1,5 +1,6 @@
 import type { DoctorIssue, Profile } from "../types.js";
-import { checkBaseUrl, redactBaseUrl } from "./api-url.js";
+import { checkBaseUrl, hasBareUserinfo, redactBaseUrl } from "./api-url.js";
+import { keySourcePhrase } from "./key-source.js";
 
 export function evaluateSymlinkHealth({
   isPrimary,
@@ -86,9 +87,15 @@ const REGISTRY_FILE = "~/.clausona/profiles.json";
  * base URL gets broken in the first place.
  */
 function baseUrlRemedy(id: string, hasEndpoint: boolean): string {
-  return hasEndpoint
-    ? `run 'clausona config ${id} --base-url <url>'`
-    : `run 'clausona remove ${id}' and then 'clausona add <new-name> --api --base-url <url>' - remove keeps the config directory, so the old name stays taken`;
+  return hasEndpoint ? `run 'clausona config ${id} --base-url <url>'` : missingEndpointRemedy(id);
+}
+
+/**
+ * What to run for a profile marked `api` with no endpoint block. Shared with `config`, which
+ * refuses to change such a profile and says the same thing doctor does about it.
+ */
+export function missingEndpointRemedy(id: string): string {
+  return `run 'clausona remove ${id}' and then 'clausona add <new-name> --api --base-url <url>' - remove keeps the config directory, so the old name stays taken`;
 }
 
 /**
@@ -118,6 +125,12 @@ export type ApiHealthInput = {
    * the layer lib is built on. The caller holds the one true list; this holds the rule.
    */
   credentialEnvKeys?: readonly string[];
+  /**
+   * Names that say their value is a secret, wider than `credentialEnvKeys`: `isSecretEnvName`.
+   * Passed in for the same reason. A name on it but not on the credential list is another
+   * service's secret rather than the profile's key, and is advised on differently.
+   */
+  secretEnvName?: (key: string) => boolean;
 };
 
 /**
@@ -141,8 +154,13 @@ function baseUrlProblem(baseUrl: string, remedy: string): string | undefined {
     case "unparseable":
       return `the base URL is not an absolute http:// or https:// URL - ${remedy}`;
     case "scheme":
-      // A scheme cannot contain userinfo, so naming it gives nothing away.
-      return `the base URL's scheme is '${checked.problem.scheme}', not http or https - ${remedy}`;
+      // A real scheme cannot contain userinfo, so naming it gives nothing away. But with no
+      // `//`, `admin:pw@host` parses with the username as its "scheme" - so that shape is
+      // reported as the credentials it is, and none of it is quoted.
+      if (!hasBareUserinfo(baseUrl)) {
+        return `the base URL's scheme is '${checked.problem.scheme}', not http or https - ${remedy}`;
+      }
+      return `the base URL carries a username or password - put the key in the key source instead, and ${remedy}`;
     case "credentials":
       return `the base URL carries a username or password - put the key in the key source instead, and ${remedy}`;
     case "key-shaped":
@@ -178,6 +196,7 @@ export function evaluateApiHealth({
   settingsPath = "settings.json",
   settingsShared = false,
   credentialEnvKeys = [],
+  secretEnvName = (key) => credentialEnvKeys.includes(key),
 }: ApiHealthInput): DoctorIssue[] {
   // `kind` is tri-state: undefined means subscription, and a subscription profile's
   // report has to stay exactly what it was.
@@ -249,16 +268,20 @@ export function evaluateApiHealth({
 
   // Sorted, so two runs over the same profile read the same way.
   for (const key of Object.keys(profile.env ?? {}).sort()) {
-    if (!credentialEnvKeys.includes(key)) continue;
+    if (!secretEnvName(key)) continue;
     // Also a warning: the env map is a documented, supported place to put a value, and a
     // profile that keeps a key there runs exactly as intended.
-    const remedy = plaintextEnvRemedy(id, profile.kind, key)
-      .map((command) => `'${command}'`)
-      .join(" and then ");
+    const { commands, keyFrom, keepInShell } = plaintextEnvRemedy(id, profile, key, credentialEnvKeys.includes(key));
+    const remedy = commands.map((command) => `'${command}'`).join(" and then ");
+    const advice = keepInShell
+      ? `if it holds a secret, keep it in your shell's environment, which the hook passes through, and run ${remedy}`
+      : keyFrom === undefined
+        ? `if it holds this profile's API key, run ${remedy}`
+        : `this profile's key already comes from ${keyFrom}, so if it holds that key, run ${remedy}`;
     issues.push({
       kind: "plaintext_env_secret",
       severity: "warning",
-      message: `${key} is stored in plain text in ${REGISTRY_FILE} - if it holds this profile's API key, run ${remedy}`,
+      message: `${key} is stored in plain text in ${REGISTRY_FILE} - ${advice}`,
     });
   }
 
@@ -267,20 +290,36 @@ export function evaluateApiHealth({
 
 /**
  * The commands that take a credential out of a profile's plain-text env map, in the order
- * to run them. Shared by `doctor` and by the warning `config` and `add` print when the name
- * is written, so the two cannot advise different things for the same finding.
+ * to run them, and - where the key already lives elsewhere - where that is. Shared by
+ * `doctor` and by the warning `config` and `add` print when the name is written, so the two
+ * cannot advise different things for the same finding.
  *
- * Different per kind, because the commands that work are:
+ * Different per kind and per key source, because the commands that work are:
  *
- * - An API profile has a credential store, so the key moves there with `--key`. That alone
- *   is not enough: the env map is applied after the stored key, so a copy left in it is
- *   still what Claude Code is handed - and still in plain text. Hence the `--unset` too.
- * - A subscription profile signs in with its account and has no store to move a key into;
- *   `--key` refuses it. A key there is a mistake or a sign an API profile was wanted, and
- *   either way the copy in the map goes. The second reading is the caller's to point at,
- *   since it is not a step in removing this one.
+ * - An API profile whose key is in the credential store: the key moves there with `--key`.
+ *   That alone is not enough - the env map is applied after the stored key, so a copy left
+ *   in it is still what Claude Code is handed, and still in plain text. Hence the `--unset`.
+ * - An API profile whose key comes from `env:` or `command:`: only the `--unset`. The key
+ *   already lives outside profiles.json, and `--key` would not move it anywhere - it would
+ *   replace the source the user chose with the keychain. `keyFrom` names that source, by
+ *   kind and never by command line.
+ * - Any other profile signs in with its account and has no store to move a key into;
+ *   `--key` refuses it. The copy in the map goes, and what the caller says around it is its
+ *   own business - a Claude subscription may have wanted an API profile, a Codex one cannot.
  */
-export function plaintextEnvRemedy(id: string, kind: Profile["kind"], key: string): string[] {
+export function plaintextEnvRemedy(
+  id: string,
+  profile: Pick<Profile, "kind" | "api">,
+  key: string,
+  /** On the clear list: one of the variables Claude Code takes an Anthropic key from. */
+  anthropicCredential = true,
+): { commands: string[]; keyFrom?: string; keepInShell?: true } {
   const unset = `clausona config ${id} --unset ${key}`;
-  return kind === "api" ? [`clausona config ${id} --key`, unset] : [unset];
+  // Another service's secret is not the profile's key, so `--key` is no place for it. The
+  // hook passes the shell's environment through, so that is where it can live instead.
+  if (!anthropicCredential) return { commands: [unset], keepInShell: true };
+  if (profile.kind !== "api") return { commands: [unset] };
+  const secret = profile.api?.secret;
+  if (secret === undefined || secret.source === "keychain") return { commands: [`clausona config ${id} --key`, unset] };
+  return { commands: [unset], keyFrom: keySourcePhrase(secret) };
 }

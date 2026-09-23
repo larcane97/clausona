@@ -161,7 +161,9 @@ export type DoctorIssue = {
     | "invalid_api_config"
     | "shared_api_key_helper"
     | "unreadable_settings"
-    | "plaintext_env_secret";
+    | "plaintext_env_secret"
+    // Any profile: an env map a hand edit left as something other than a map.
+    | "invalid_env_map";
   message: string;
   /**
    * Absent means this is an error: the profile does not work until it is resolved, and

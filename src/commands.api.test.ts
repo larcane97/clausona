@@ -1,5 +1,14 @@
 import type { SpawnSyncReturns } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -38,6 +47,8 @@ let spawned: string[] = [];
 let promptAnswers: string[] = [];
 let promptCalls: string[] = [];
 let editor: ((argv: string[]) => SpawnSyncReturns<string>) | null = null;
+/** Lets `/bin/sh` through, for a test where doctor runs a `command:` key source. */
+let allowShell = false;
 const realPlatform = process.platform;
 
 afterEach(() => {
@@ -52,6 +63,7 @@ afterEach(() => {
   promptAnswers = [];
   promptCalls = [];
   editor = null;
+  allowShell = false;
   const unexpected = spawned;
   spawned = [];
   expect(unexpected, "a test spawned a process").toEqual([]);
@@ -121,7 +133,8 @@ async function harness(extraProfiles: Record<string, unknown> = {}) {
     };
     return {
       ...actual,
-      spawnCommand: refuse,
+      spawnCommand: (...args: Parameters<typeof actual.spawnCommand>) =>
+        allowShell && args[0] === "/bin/sh" ? actual.spawnCommand(...args) : refuse(args[0]),
       spawnCommandSync: (command: string, args: string[] = []) => {
         if (editor) return editor([command, ...args]);
         return refuse(command);
@@ -838,6 +851,176 @@ describe("config --base-url / --auth / --label", () => {
         api: { baseUrl: "http://localhost:8000" },
       });
     });
+
+    // The half of the rule the case above cannot reach: with no label at all, "is it the old
+    // host?" would be `undefined === undefined` without the check that there was a host.
+    it("is not invented for a profile with no label and a broken old URL", async () => {
+      const { label: _label, ...unlabelled } = API_PROFILE;
+      const h = await harness({
+        "claude:gw": { ...unlabelled, api: { ...API_PROFILE.api, baseUrl: "openrouter.ai" } },
+      });
+
+      await h.run("config", "claude:gw", "--base-url", "http://localhost:8000");
+
+      expect(h.profile("claude:gw").label).toBeUndefined();
+    });
+  });
+
+  /**
+   * `add` picks the scheme from the host: api-key for Anthropic's own API, bearer for anything
+   * else. Moving the endpoint across that line with the old default left behind sends the key
+   * in the header the new host does not read, and the first sign is a 401. So the scheme gets
+   * the label's rule: while it is still the old host's default, it follows; one that was
+   * chosen stays, with a note when the new host would default to the other one.
+   */
+  describe("the auth scheme add chose for it", () => {
+    const ANTHROPIC = {
+      ...API_PROFILE,
+      label: "api.anthropic.com",
+      api: { ...API_PROFILE.api, baseUrl: "https://api.anthropic.com", authScheme: "api-key" },
+    };
+
+    it("follows from Anthropic to a gateway, and says so", async () => {
+      const h = await harness({ "claude:gw": ANTHROPIC });
+
+      const output = stripAnsi(String(await h.run("config", "claude:gw", "--base-url", "https://openrouter.ai/api")));
+
+      expect(h.profile("claude:gw").api?.authScheme).toBe("bearer");
+      expect(output).toContain("(base URL; label and auth follow the new host)");
+    });
+
+    it("follows from a gateway to Anthropic", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      await h.run("config", "claude:gw", "--base-url", "https://api.anthropic.com");
+
+      expect(h.profile("claude:gw").api?.authScheme).toBe("api-key");
+    });
+
+    it("does not move within one side of the line, and does not mention it", async () => {
+      const h = await harness({ "claude:gw": { ...API_PROFILE, label: "Gateway" } });
+
+      const output = stripAnsi(String(await h.run("config", "claude:gw", "--base-url", "http://localhost:8000")));
+
+      expect(h.profile("claude:gw").api?.authScheme).toBe("bearer");
+      expect(output).toContain("(base URL)");
+      expect(h.stderr()).not.toContain("--auth");
+    });
+
+    it("stays when it was chosen, and says the new host usually takes the other - the command it names runs", async () => {
+      const chosen = { ...API_PROFILE, label: "Gateway", api: { ...API_PROFILE.api, authScheme: "api-key" } };
+      const h = await harness({ "claude:gw": chosen });
+
+      await h.run("config", "claude:gw", "--base-url", "http://localhost:8000");
+
+      expect(h.profile("claude:gw").api?.authScheme).toBe("api-key");
+      const commands = advisedCommands(h.stderr()).filter((argv) => argv.includes("--auth"));
+      expect(commands, h.stderr()).toEqual([["config", "claude:gw", "--auth", "bearer"]]);
+      await h.run(commands[0][0], ...commands[0].slice(1));
+      expect(h.profile("claude:gw").api?.authScheme).toBe("bearer");
+    });
+
+    it("stays when it was chosen and already matches the new host, with no note", async () => {
+      const chosen = { ...API_PROFILE, label: "Gateway", api: { ...API_PROFILE.api, authScheme: "api-key" } };
+      const h = await harness({ "claude:gw": chosen });
+
+      await h.run("config", "claude:gw", "--base-url", "https://api.anthropic.com");
+
+      expect(h.profile("claude:gw").api?.authScheme).toBe("api-key");
+      expect(h.stderr()).not.toContain("--auth");
+    });
+
+    it("gives way to --auth in the same call, with no note and no claim that it followed", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      const output = stripAnsi(
+        String(await h.run("config", "claude:gw", "--base-url", "https://api.anthropic.com", "--auth", "bearer")),
+      );
+
+      expect(h.profile("claude:gw").api?.authScheme).toBe("bearer");
+      expect(h.stderr()).not.toContain("--auth");
+      expect(output).toContain("(base URL, auth; label follows the new host)");
+    });
+
+    it("stays when the old URL is too broken to tell, with a note if the new host would differ", async () => {
+      const broken = { ...API_PROFILE, api: { ...API_PROFILE.api, baseUrl: "openrouter.ai" } };
+      const h = await harness({ "claude:gw": broken });
+
+      await h.run("config", "claude:gw", "--base-url", "https://api.anthropic.com");
+
+      expect(h.profile("claude:gw").api?.authScheme).toBe("bearer");
+      expect(advisedCommands(h.stderr())).toContainEqual(["config", "claude:gw", "--auth", "api-key"]);
+    });
+  });
+
+  describe("the success line", () => {
+    it("says the label followed the host when it did", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      const output = stripAnsi(String(await h.run("config", "claude:gw", "--base-url", "http://localhost:8000")));
+
+      expect(output).toContain("(base URL; label follows the new host)");
+    });
+
+    it("names only what was asked for when nothing followed", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      const output = stripAnsi(String(await h.run("config", "claude:gw", "--label", "Gateway")));
+
+      expect(output).toContain("(label)");
+      expect(output).not.toContain("base URL");
+    });
+  });
+
+  // An http base URL sends the key in the clear. That is normal for a server on this
+  // machine and nothing to remark on anywhere else it newly happens.
+  describe("a move to plain http", () => {
+    const cases: [string, string, string, boolean][] = [
+      ["https to http on the same host", "https://openrouter.ai/api", "http://openrouter.ai/api", true],
+      ["https to http on another host", "https://openrouter.ai/api", "http://gw.example.com/api", true],
+      ["http staying http on the same host", "http://gw.example.com/api", "http://gw.example.com/v2", false],
+      ["http to http on another host", "http://gw.example.com/api", "http://gw2.example.com/api", true],
+      ["https to http on localhost", "https://openrouter.ai/api", "http://localhost:8000", false],
+      ["https to http on 127.0.0.1", "https://openrouter.ai/api", "http://127.0.0.1:8000", false],
+      ["https to http on ::1", "https://openrouter.ai/api", "http://[::1]:8000", false],
+      ["https to https", "https://openrouter.ai/api", "https://gw.example.com/api", false],
+    ];
+
+    for (const [label, from, to, noted] of cases) {
+      it(`${noted ? "notes" : "says nothing about"} ${label}`, async () => {
+        const h = await harness({ "claude:gw": { ...API_PROFILE, api: { ...API_PROFILE.api, baseUrl: from } } });
+
+        await h.run("config", "claude:gw", "--base-url", to);
+
+        if (noted) expect(h.stderr()).toContain("unencrypted");
+        else expect(h.stderr()).not.toContain("unencrypted");
+      });
+    }
+  });
+
+  // Marked `api` with no endpoint block - a hand edit - is still an API profile to doctor and
+  // `list`. Calling it "not an API profile" sent the user nowhere; the doctor's own remedy runs.
+  describe("an API profile with no endpoint block", () => {
+    const NO_BLOCK = { tool: "claude", kind: "api", email: "", label: "gw" };
+
+    for (const args of [["--base-url", "http://localhost:8000"], ["--key"]]) {
+      it(`says why ${args[0]} cannot change it, and the commands it names run`, async () => {
+        const h = await harness({ "claude:gw": NO_BLOCK });
+        promptAnswers.push(KEY);
+
+        const message = await failure(h.run("config", "claude:gw", ...args));
+
+        expect(message).toContain("no endpoint");
+        expect(promptCalls).toEqual([]);
+        for (const argv of advisedCommands(message)) {
+          const filled = argv.map(
+            (arg) => ({ "<new-name>": "claude:gw2", "<url>": "http://localhost:8000" })[arg] ?? arg,
+          );
+          await h.run(filled[0], ...filled.slice(1));
+        }
+        expect(Object.keys(h.registry().profiles)).toEqual(["claude:default", "claude:gw2"]);
+      });
+    }
   });
 
   describe("the key, which stays where it was", () => {
@@ -855,6 +1038,30 @@ describe("config --base-url / --auth / --label", () => {
       for (const argv of commands) await h.run(argv[0], ...argv.slice(1));
       expect(h.storedSecrets()).toEqual({ "claude:gw": KEY });
     });
+
+    // `--key` would replace a source the user chose, so for these the note says where the key
+    // still comes from and advises nothing that moves it.
+    for (const [label, secret, said] of [
+      ["env:", { source: "env", name: "GW_KEY" }, "env:GW_KEY"],
+      ["command:", { source: "command", run: "exit 7" }, "a command"],
+    ] as const) {
+      it(`says where a key from ${label} still comes from, and moves nothing`, async () => {
+        const h = await harness({ "claude:gw": { ...API_PROFILE, api: { ...API_PROFILE.api, secret } } });
+
+        await h.run("config", "claude:gw", "--base-url", "https://gw.example.com/api");
+
+        const note = stripAnsi(h.stderr());
+        expect(note).toContain("gw.example.com");
+        expect(note).toContain(`still comes from ${said}`);
+        expect(note).not.toContain("exit 7");
+        for (const argv of advisedCommands(note)) {
+          expect(argv, note).not.toContain("--key");
+          await h.run(argv[0], ...argv.slice(1));
+        }
+        expect(h.profile("claude:gw").api?.secret).toEqual(secret);
+        expect(h.storedSecrets()).toEqual({});
+      });
+    }
 
     it("says nothing when the host is the same", async () => {
       const h = await harness({ "claude:gw": API_PROFILE });
@@ -926,6 +1133,24 @@ describe("config --base-url / --auth / --label", () => {
       expect(h.registryText()).toBe(before);
     });
 
+    // A token in the username slot: the parser calls it the scheme, and quoting "the scheme"
+    // printed the token, lowercased. It is userinfo, and is refused as userinfo. The token is
+    // not key-shaped: a key-shaped one is answered by the key check, which runs first.
+    it("refuses a token given as scheme-less userinfo without printing it", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      const message = await failure(h.run("config", "claude:gw", "--base-url", "TOKENabc123XYZ:@gw.example.com"));
+
+      expect(message.toLowerCase()).not.toContain("tokenabc");
+      expect(message).toContain("must not carry credentials");
+    });
+
+    it("still names the scheme of a bare host:port, which carries nothing", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      expect(await failure(h.run("config", "claude:gw", "--base-url", "localhost:8000"))).toContain("not 'localhost'");
+    });
+
     it("never prints a key given where a value belongs", async () => {
       const h = await harness({ "claude:gw": API_PROFILE });
 
@@ -978,7 +1203,18 @@ describe("config --base-url / --auth / --label", () => {
     );
 
     expect(message).toContain("Label cannot be blank");
+    // At add, leaving it out is the way to get the host; at config there is no such default.
+    expect(message).toContain("Leave --label out to use the endpoint's host.");
     expect(promptCalls).toEqual([]);
+  });
+
+  it("config's blank-label refusal does not offer add's default", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+
+    const message = await failure(h.run("config", "claude:gw", "--label", " "));
+
+    expect(message).toContain("Label cannot be blank");
+    expect(message).not.toContain("Leave --label out");
   });
 });
 
@@ -1035,31 +1271,72 @@ describe("config --model", () => {
 
   // Empty is refused rather than read as "clear it": `--model "$MODEL"` with MODEL unset
   // would otherwise drop the profile's model without a word. Clearing has its own spelling.
+  // And by every route that writes the variable, not only --model: a blank one that got in
+  // through --set is exported at launch while `list` and the preview call it "none".
   describe("an empty value", () => {
+    const configRoutes: Record<string, (h: Awaited<ReturnType<typeof harness>>, value: string) => Promise<unknown>> = {
+      "--model": (h, value) => h.run("config", "claude:gw", "--model", value),
+      "--set": (h, value) => h.run("config", "claude:gw", "--set", `ANTHROPIC_MODEL=${value}`),
+      "--edit": (h, value) => {
+        vi.stubEnv("EDITOR", "fake-editor");
+        editor = (argv) => {
+          writeFileSync(argv[argv.length - 1], JSON.stringify({ ANTHROPIC_MODEL: value }));
+          return { status: 0 } as SpawnSyncReturns<string>;
+        };
+        return h.run("config", "claude:gw", "--edit");
+      },
+    };
+    const addRoutes: Record<string, string[]> = {
+      "--model": ["--model"],
+      "--set": ["--set"],
+    };
+
+    const configMessage = async (route: string, value: string) => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+      const before = h.registryText();
+      const message = await failure(configRoutes[route](h, value));
+      expect(h.registryText(), route).toBe(before);
+      return message;
+    };
+    const addMessage = async (route: string, value: string) => {
+      const h = await harness();
+      const arg = route === "--set" ? `ANTHROPIC_MODEL=${value}` : value;
+      const message = await failure(
+        h.run("add", "claude:gw", "--api", "--base-url", "http://localhost:8000", ...addRoutes[route], arg),
+      );
+      expect(promptCalls, route).toEqual([]);
+      expect(Object.keys(h.registry().profiles), route).toEqual(["claude:default"]);
+      return message;
+    };
+
     for (const value of ["", "   "]) {
-      it(`is refused on config (${JSON.stringify(value)}), and names how to clear it`, async () => {
-        const h = await harness({ "claude:gw": API_PROFILE });
-        const before = h.registryText();
+      for (const route of Object.keys(configRoutes)) {
+        it(`is refused by config ${route} (${JSON.stringify(value)}), naming how to clear one`, async () => {
+          const message = await configMessage(route, value);
 
-        const message = await failure(h.run("config", "claude:gw", "--model", value));
+          expect(message).toContain("A model id cannot be blank");
+          expect(message).toContain("clausona config <profile> --unset ANTHROPIC_MODEL");
+        });
+      }
 
-        expect(message).toContain("--model needs a model id");
-        expect(message).toContain("--unset ANTHROPIC_MODEL");
-        expect(h.registryText()).toBe(before);
-      });
+      for (const route of Object.keys(addRoutes)) {
+        it(`is refused by add ${route} (${JSON.stringify(value)}) before the key prompt, with nothing to clear`, async () => {
+          const message = await addMessage(route, value);
 
-      it(`is refused on add (${JSON.stringify(value)}), before it asks for a key`, async () => {
-        const h = await harness();
-
-        const message = await failure(
-          h.run("add", "claude:gw", "--api", "--base-url", "http://localhost:8000", "--model", value),
-        );
-
-        expect(message).toContain("--model needs a model id");
-        expect(promptCalls).toEqual([]);
-        expect(Object.keys(h.registry().profiles)).toEqual(["claude:default"]);
-      });
+          expect(message).toContain("A model id cannot be blank");
+          // At add time there is no model yet, so nothing to clear.
+          expect(message).not.toContain("--unset");
+        });
+      }
     }
+
+    it("says the same thing by every route within a command", async () => {
+      const config = await Promise.all(Object.keys(configRoutes).map((route) => configMessage(route, " ")));
+      const add = await Promise.all(Object.keys(addRoutes).map((route) => addMessage(route, " ")));
+
+      expect(new Set(config).size).toBe(1);
+      expect(new Set(add).size).toBe(1);
+    });
 
     it("leaves --unset ANTHROPIC_MODEL as the way to clear it", async () => {
       const h = await harness({ "claude:gw": API_PROFILE });
@@ -1071,6 +1348,44 @@ describe("config --model", () => {
   });
 
   describe("next to --set or --unset", () => {
+    // Each half of the "one or the other" guard, on config and on add. The first is the
+    // documented way to change a model without --model, and nothing pinned it.
+    it("still takes --set ANTHROPIC_MODEL= on its own, on config", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      await h.run("config", "claude:gw", "--set", "ANTHROPIC_MODEL=z-ai/glm-5.3-flash");
+
+      expect(h.profile("claude:gw").env?.ANTHROPIC_MODEL).toBe("z-ai/glm-5.3-flash");
+    });
+
+    it("still takes --set ANTHROPIC_MODEL= on its own, on add", async () => {
+      const h = await harness();
+      promptAnswers.push(KEY);
+
+      await h.run("add", "claude:gw", "--api", "--base-url", "http://localhost:8000", "--set", "ANTHROPIC_MODEL=m1");
+
+      expect(h.profile("claude:gw").env?.ANTHROPIC_MODEL).toBe("m1");
+    });
+
+    it("takes --model next to another --set on add", async () => {
+      const h = await harness();
+      promptAnswers.push(KEY);
+
+      await h.run(
+        "add",
+        "claude:gw",
+        "--api",
+        "--base-url",
+        "http://localhost:8000",
+        "--model",
+        "m1",
+        "--set",
+        "API_TIMEOUT_MS=600000",
+      );
+
+      expect(h.profile("claude:gw").env).toEqual({ ANTHROPIC_MODEL: "m1", API_TIMEOUT_MS: "600000" });
+    });
+
     it("refuses --set ANTHROPIC_MODEL=, as add does", async () => {
       const h = await harness({ "claude:gw": API_PROFILE });
       const before = h.registryText();
@@ -1201,23 +1516,49 @@ describe("the plain-text credential warning", () => {
   const SUBSCRIPTION = { tool: "claude", email: "work@example.com" };
   const PLAINTEXT = "sk-fake-plain-0004";
 
+  /**
+   * The three places an API profile's key can come from, and how `add` is told each. The
+   * advice differs between them: `--key` moves a key into the store for a keychain profile,
+   * and for the other two it would quietly replace the source the user chose.
+   */
+  const SOURCES: Record<string, { secret: SecretSource; addArgs: string[]; said?: string }> = {
+    keychain: { secret: { source: "keychain" }, addArgs: [] },
+    "env:": { secret: { source: "env", name: "GW_KEY" }, addArgs: ["--key-from", "env:GW_KEY"], said: "env:GW_KEY" },
+    "command:": {
+      secret: { source: "command", run: "exit 7" },
+      addArgs: ["--key-from", "command:exit 7"],
+      said: "a command",
+    },
+  };
+
   /** Writes `{ [key]: PLAINTEXT }` into the map through one of the three routes that warn. */
-  const routes: Record<string, (h: Awaited<ReturnType<typeof harness>>, id: string, key: string) => Promise<unknown>> =
-    {
-      "config --set": (h, id, key) => h.run("config", id, "--set", `${key}=${PLAINTEXT}`),
-      "config --edit": (h, id, key) => {
-        vi.stubEnv("EDITOR", "fake-editor");
-        editor = (argv) => {
-          writeFileSync(argv[argv.length - 1], JSON.stringify({ [key]: PLAINTEXT }));
-          return { status: 0 } as SpawnSyncReturns<string>;
-        };
-        return h.run("config", id, "--edit");
-      },
-      "add --api --set": (h, id, key) => {
-        promptAnswers.push(KEY);
-        return h.run("add", id, "--api", "--base-url", "http://localhost:8000", "--set", `${key}=${PLAINTEXT}`);
-      },
-    };
+  const routes: Record<
+    string,
+    (h: Awaited<ReturnType<typeof harness>>, id: string, key: string, addArgs?: string[]) => Promise<unknown>
+  > = {
+    "config --set": (h, id, key) => h.run("config", id, "--set", `${key}=${PLAINTEXT}`),
+    "config --edit": (h, id, key) => {
+      vi.stubEnv("EDITOR", "fake-editor");
+      editor = (argv) => {
+        writeFileSync(argv[argv.length - 1], JSON.stringify({ [key]: PLAINTEXT }));
+        return { status: 0 } as SpawnSyncReturns<string>;
+      };
+      return h.run("config", id, "--edit");
+    },
+    "add --api --set": (h, id, key, addArgs = []) => {
+      if (addArgs.length === 0) promptAnswers.push(KEY);
+      return h.run(
+        "add",
+        id,
+        "--api",
+        "--base-url",
+        "http://localhost:8000",
+        ...addArgs,
+        "--set",
+        `${key}=${PLAINTEXT}`,
+      );
+    },
+  };
 
   async function followAdvice(h: Awaited<ReturnType<typeof harness>>) {
     const commands = advisedCommands(h.stderr());
@@ -1230,20 +1571,40 @@ describe("the plain-text credential warning", () => {
     return outputs;
   }
 
-  for (const route of ["config --set", "config --edit", "add --api --set"]) {
-    it(`gives an API profile advice that moves the key, via ${route}`, async () => {
-      const h = await harness(route.startsWith("add") ? {} : { "claude:gw": API_PROFILE });
-      await routes[route](h, "claude:gw", "ANTHROPIC_AUTH_TOKEN");
-      expect(h.registryText()).toContain(PLAINTEXT);
+  // One case per (source, route). Each runs what the warning says, then checks the two things
+  // that make it right: the plain-text copy is gone, and the source is the one the user chose.
+  for (const [source, { secret, addArgs, said }] of Object.entries(SOURCES)) {
+    for (const route of ["config --set", "config --edit", "add --api --set"]) {
+      it(`gives an API profile whose key comes from ${source} advice that works, via ${route}`, async () => {
+        const seeded = { ...API_PROFILE, api: { ...API_PROFILE.api, secret } };
+        const h = await harness(route.startsWith("add") ? {} : { "claude:gw": seeded });
+        await routes[route](h, "claude:gw", "ANTHROPIC_AUTH_TOKEN", addArgs);
+        expect(h.registryText()).toContain(PLAINTEXT);
+        const warning = stripAnsi(h.stderr());
+        const promptsBefore = promptCalls.length;
 
-      promptAnswers.push(PLAINTEXT);
-      await followAdvice(h);
+        promptAnswers.push(PLAINTEXT);
+        await followAdvice(h);
 
-      // Moved, not copied: the env map is applied after the stored key, so a copy left
-      // there would still be what Claude Code is handed - and still in plain text.
-      expect(h.registryText()).not.toContain(PLAINTEXT);
-      expect(h.storedSecrets()["claude:gw"]).toBe(PLAINTEXT);
-    });
+        expect(h.registryText()).not.toContain(PLAINTEXT);
+        expect(h.profile("claude:gw").api?.secret).toEqual(secret);
+        // An API profile's advice, not a subscription profile's.
+        expect(warning).not.toContain("subscription");
+        expect(warning).not.toContain("add --help");
+        if (secret.source === "keychain") {
+          // Moved, not copied: the env map is applied after the stored key, so a copy left
+          // there would still be what Claude Code is handed - and still in plain text.
+          expect(h.storedSecrets()["claude:gw"]).toBe(PLAINTEXT);
+        } else {
+          // Nothing asked for a key, and nothing stored one: the key already lives outside
+          // profiles.json, and the warning says where - by kind, never the command line.
+          expect(promptCalls.length).toBe(promptsBefore);
+          expect(h.storedSecrets()).toEqual({});
+          expect(warning).toContain(`already comes from ${said}`);
+          expect(warning).not.toContain("exit 7");
+        }
+      });
+    }
   }
 
   for (const route of ["config --set", "config --edit"]) {
@@ -1262,25 +1623,114 @@ describe("the plain-text credential warning", () => {
     });
   }
 
+  // API profiles are Claude-only, so pointing a Codex profile at one is advice it cannot take.
+  it("gives a Codex profile advice without an API profile it cannot have", async () => {
+    const h = await harness({ "codex:personal": { tool: "codex", email: "me@example.com" } });
+    await routes["config --set"](h, "codex:personal", "ANTHROPIC_API_KEY");
+    const warning = stripAnsi(h.stderr());
+
+    await followAdvice(h);
+
+    expect(h.registryText()).not.toContain(PLAINTEXT);
+    expect(warning).not.toContain("add --help");
+    expect(warning).toContain("Codex");
+  });
+
   // doctor keeps reporting the same condition after the fact, so its advice has to clear
   // it too - and doctor looks again, so here "it worked" is doctor saying so.
-  it("gives doctor's finding advice that clears it", async () => {
-    // Linux, so doctor reads the primary's login from a file rather than spawning `security`.
-    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-    const h = await harness({ "claude:gw": { ...API_PROFILE, env: { ANTHROPIC_AUTH_TOKEN: PLAINTEXT } } });
-    const findings = async () =>
-      (JSON.parse(String(await h.run("doctor", "--json"))) as DoctorProfileResult[])
-        .flatMap((result) => result.issues)
-        .filter((issue) => issue.kind === "plaintext_env_secret");
+  for (const [source, { secret, said }] of Object.entries(SOURCES)) {
+    it.skipIf(process.platform === "win32" && source === "command:")(
+      `gives doctor's finding advice that clears it, for a key from ${source}`,
+      async () => {
+        // Linux, so doctor reads the primary's login from a file rather than spawning `security`.
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+        allowShell = true;
+        vi.stubEnv("GW_KEY", "sk-fake-env-0005");
+        const seeded = {
+          ...API_PROFILE,
+          api: { ...API_PROFILE.api, secret },
+          env: { ANTHROPIC_AUTH_TOKEN: PLAINTEXT },
+        };
+        const h = await harness({ "claude:gw": seeded });
+        const findings = async () =>
+          (JSON.parse(String(await h.run("doctor", "--json"))) as DoctorProfileResult[])
+            .flatMap((result) => result.issues)
+            .filter((issue) => issue.kind === "plaintext_env_secret");
 
-    const [finding] = await findings();
-    const commands = advisedCommands(finding.message);
-    expect(commands.length, finding.message).toBeGreaterThan(0);
-    promptAnswers.push(PLAINTEXT);
-    for (const argv of commands) await h.run(argv[0], ...argv.slice(1));
+        const [finding] = await findings();
+        const commands = advisedCommands(finding.message);
+        expect(commands.length, finding.message).toBeGreaterThan(0);
+        promptAnswers.push(PLAINTEXT);
+        for (const argv of commands) await h.run(argv[0], ...argv.slice(1));
 
-    expect(await findings()).toEqual([]);
-    expect(h.registryText()).not.toContain(PLAINTEXT);
+        expect(await findings()).toEqual([]);
+        expect(h.registryText()).not.toContain(PLAINTEXT);
+        expect(h.profile("claude:gw").api?.secret).toEqual(secret);
+        if (said) {
+          expect(finding.message).toContain(`already comes from ${said}`);
+          expect(finding.message).not.toContain("--key'");
+          expect(finding.message).not.toContain("exit 7");
+        }
+      },
+    );
+  }
+
+  // A name that says it holds a secret but is not one Claude Code takes an Anthropic key
+  // from - OTEL's headers, a Bedrock token. It is not the profile's key, so `--key` is not
+  // where it goes: it belongs in the shell's environment, which the hook passes through.
+  describe("for a secret that is not the profile's key", () => {
+    const OTEL = "OTEL_EXPORTER_OTLP_HEADERS";
+
+    for (const [label, id, profile] of [
+      ["an API profile", "claude:gw", API_PROFILE],
+      ["a subscription profile", "claude:work", SUBSCRIPTION],
+    ] as const) {
+      it(`warns on ${label}, says to keep it in the shell, and names only --unset`, async () => {
+        const h = await harness({ [id]: profile });
+        await routes["config --set"](h, id, OTEL);
+        const warning = stripAnsi(h.stderr());
+
+        await followAdvice(h);
+
+        expect(warning).toContain(`${OTEL} is stored in plain text`);
+        expect(warning).toContain("shell's environment");
+        expect(advisedCommands(warning)).toEqual([["config", id, "--unset", OTEL]]);
+        expect(h.registryText()).not.toContain(PLAINTEXT);
+        expect(promptCalls).toEqual([]);
+        expect(h.profile(id).api?.secret).toEqual((profile as { api?: { secret: unknown } }).api?.secret);
+      });
+    }
+
+    it("gives doctor's finding the same advice, and it clears it", async () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      const h = await harness({
+        "claude:gw": { ...API_PROFILE, env: { [OTEL]: `Authorization=Bearer ${PLAINTEXT}` } },
+      });
+      const findings = async () =>
+        (JSON.parse(String(await h.run("doctor", "--json"))) as DoctorProfileResult[])
+          .flatMap((result) => result.issues)
+          .filter((issue) => issue.kind === "plaintext_env_secret");
+
+      const [finding] = await findings();
+      // The whole sentence, since the parts were right and the joint between them was not.
+      expect(finding?.message).toBe(
+        `${OTEL} is stored in plain text in ~/.clausona/profiles.json - if it holds a secret, keep it in your shell's environment, which the hook passes through, and run 'clausona config claude:gw --unset ${OTEL}'`,
+      );
+      const commands = advisedCommands(finding.message);
+      expect(commands).toEqual([["config", "claude:gw", "--unset", OTEL]]);
+      for (const argv of commands) await h.run(argv[0], ...argv.slice(1));
+
+      expect(await findings()).toEqual([]);
+      expect(h.profile("claude:gw").api?.secret).toEqual(API_PROFILE.api.secret);
+    });
+
+    it("does not warn about a count of tokens", async () => {
+      const h = await harness({ "claude:gw": API_PROFILE });
+
+      await h.run("config", "claude:gw", "--set", "CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144");
+
+      expect(h.stderr()).toBe("");
+    });
   });
 
   it("never prints the value it warns about, for either kind", async () => {
@@ -1291,6 +1741,104 @@ describe("the plain-text credential warning", () => {
 
     expect(h.stderr()).not.toContain(PLAINTEXT);
     expect(h.stderr()).not.toContain(PLAINTEXT.slice(0, 10));
+  });
+});
+
+/**
+ * A `command:` key source that fails. Its command line is hidden on every path, so the
+ * message cannot quote it - and must still say where it is and what replaces it. Not
+ * `config --edit`: that opens the env map, and the command lives in the endpoint block.
+ */
+describe.skipIf(process.platform === "win32")("a key command that fails", () => {
+  for (const [label, run, said] of [
+    ["exits non-zero", "exit 3", "exited with 3"],
+    ["prints nothing", "true", "produced no output"],
+  ] as const) {
+    it(`says where the command is when it ${label}, and the command it names fixes it`, async () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      allowShell = true;
+      const h = await harness({
+        "claude:gw": { ...API_PROFILE, api: { ...API_PROFILE.api, secret: { source: "command", run } } },
+      });
+      const findings = async () =>
+        (JSON.parse(String(await h.run("doctor", "--json"))) as DoctorProfileResult[])
+          .flatMap((result) => result.issues)
+          .filter((issue) => issue.kind === "missing_api_secret");
+
+      const [finding] = await findings();
+      expect(finding?.message).toContain(said);
+      expect(finding.message).toContain("~/.clausona/profiles.json");
+      expect(finding.message).not.toContain(run);
+      const commands = advisedCommands(finding.message);
+      expect(commands.length, finding.message).toBe(1);
+      const argv = commands[0].map((arg) => (arg === 'command:"<command>"' ? "command:echo sk-fake-cmd-0008" : arg));
+      await h.run(argv[0], ...argv.slice(1));
+
+      expect(await findings()).toEqual([]);
+    });
+  }
+});
+
+/**
+ * An env map a hand edit left as a list or a string. It is applied as nothing - no key of
+ * it is a variable name - and printed as `<hidden>`, so doctor is where it is found. The
+ * remedy is --edit, which opens what is there and saves the object it is given.
+ */
+describe("an env map that is not a map", () => {
+  for (const [label, env, profile] of [
+    ["a list, on an API profile", ["ANTHROPIC_AUTH_TOKEN=sk-fake-list-0006"], API_PROFILE],
+    [
+      "a string, on a subscription profile",
+      "ANTHROPIC_AUTH_TOKEN=sk-fake-string-0007",
+      { tool: "claude", email: "w@x" },
+    ],
+  ] as const) {
+    it(`is reported by doctor for ${label}, and the --edit it names fixes it`, async () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      const h = await harness({ "claude:gw": { ...profile, env } });
+      const findings = async () =>
+        (JSON.parse(String(await h.run("doctor", "--json"))) as DoctorProfileResult[])
+          .flatMap((result) => result.issues)
+          .filter((issue) => issue.kind === "invalid_env_map");
+
+      const [finding] = await findings();
+      expect(finding?.message).toBeDefined();
+      expect(finding.message).not.toContain("sk-fake");
+      const commands = advisedCommands(finding.message);
+      expect(commands).toEqual([["config", "claude:gw", "--edit"]]);
+      vi.stubEnv("EDITOR", "fake-editor");
+      editor = (argv) => {
+        writeFileSync(argv[argv.length - 1], JSON.stringify({ API_TIMEOUT_MS: "600000" }));
+        return { status: 0 } as SpawnSyncReturns<string>;
+      };
+      await h.run(commands[0][0], ...commands[0].slice(1));
+
+      expect(await findings()).toEqual([]);
+      expect(h.profile("claude:gw").env).toEqual({ API_TIMEOUT_MS: "600000" });
+    });
+  }
+
+  // Its own message names the fix; `repair` rebuilds shared links and cannot touch it.
+  it("is not sent to repair by the doctor report", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const h = await harness({ "claude:gw": { ...API_PROFILE, env: ["ANTHROPIC_AUTH_TOKEN=sk-fake-list-0006"] } });
+    // The primary's shared directory, linked as `add` would have: a missing link is a real
+    // reason to run repair, and would put the suggestion there for a reason of its own.
+    symlinkSync(path.join(h.home, ".claude", "commands"), path.join(h.home, ".claude-gw", "commands"));
+
+    const report = stripAnsi(String(await h.run("doctor")));
+
+    expect(report).toContain("clausona config claude:gw --edit");
+    expect(report).not.toContain("clausona repair claude:gw");
+  });
+
+  it("shows as <hidden> in config --show, not as its characters", async () => {
+    const h = await harness({ "claude:gw": { ...API_PROFILE, env: "ANTHROPIC_AUTH_TOKEN=sk-fake-string-0007" } });
+
+    const shown = stripAnsi(String(await h.run("config", "claude:gw", "--show")));
+
+    expect(shown).toMatch(/Settings +<hidden>/);
+    expect(shown).not.toContain("0=A");
   });
 });
 
@@ -1626,6 +2174,11 @@ describe("help", () => {
     // The two things a reader cannot guess: what happens to the key, and to a default label.
     expect(help).toContain("The key is kept");
     expect(help).toContain("follows");
+    // The scheme moves with the host the way the label does, and plain http is remarked on.
+    expect(help).toContain("auth scheme");
+    expect(help).toContain("plain http");
+    // --key would replace an env: or command: source, so the help says what to do instead.
+    expect(help).toContain("env: or command:");
     expect(help).toContain("clausona config claude:gw --base-url http://localhost:8000");
   });
 
@@ -1638,6 +2191,7 @@ describe("help", () => {
     expect(help).toContain("stored as ANTHROPIC_MODEL");
     expect(help).toContain("--unset ANTHROPIC_MODEL");
     expect(help).toContain("clausona config claude:gw --model z-ai/glm-5.3-flash");
+    expect(help).toContain("--model, --set and --edit alike");
   });
 
   it("tells `list` readers what the MODEL column is, and what its dash means", async () => {
@@ -1648,6 +2202,9 @@ describe("help", () => {
     expect(help).toContain("MODEL");
     expect(help).toContain("ANTHROPIC_MODEL");
     expect(help).toContain("pins none");
+    // A Codex row shows the same dash for another reason, and a long id loses its middle.
+    expect(help).toContain("Codex");
+    expect(help).toContain("middle");
   });
 
   it("tells `add` readers the model can be changed later", async () => {
@@ -1685,6 +2242,8 @@ describe("help", () => {
     expect(help).toContain("base URL");
     expect(help).toContain("apiKeyHelper");
     expect(help).toContain("plain text");
+    expect(help).toContain("the --unset alone");
+    expect(help).toContain("a hand edit can leave it a list or a string");
     // Two promises worth making explicit: the key is never printed, and a command key
     // source is executed - doctor is not a read-only inspection of the registry.
     expect(help).toContain("never prints the key");

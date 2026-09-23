@@ -3,14 +3,14 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { isAnthropicHost } from "./core/api-url.js";
 import { plaintextEnvRemedy } from "./core/doctor.js";
+import { keySourcePhrase } from "./core/key-source.js";
 import { spawnCommandSync } from "./core/process.js";
 import { isPosixEnvName, renderPosixExports } from "./core/shell.js";
 import { trackUsage } from "./core/track-usage.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import { renderDoctor, renderList, renderUsageSummary } from "./lib/format.js";
-import { buildProfileEnv, controlledEnvKeys, displayName } from "./lib/profile-env.js";
+import { buildProfileEnv, controlledEnvKeys, displayName, isEnvMap, isSecretEnvName } from "./lib/profile-env.js";
 import {
   CREDENTIAL_AS_NAME_ERROR,
   looksLikeCredential,
@@ -19,11 +19,13 @@ import {
   validateProfileName,
 } from "./lib/profile-ref.js";
 import { promptSecret } from "./lib/prompt-secret.js";
-import { describeSecretSource, hiddenEnvKeys, isCredentialEnvKey, redactProfile } from "./lib/redact.js";
+import { describeSecretSource, HIDDEN, hiddenEnvKeys, isCredentialEnvKey, redactProfile } from "./lib/redact.js";
 import {
   addApiProfile,
   addProfile,
   checkLabel,
+  checkModelEntry,
+  defaultAuthScheme,
   discoverAccounts,
   doctorProfiles,
   getUsageSummary,
@@ -35,6 +37,7 @@ import {
   proposeInitProfileNames,
   removeProfile,
   repairProfile,
+  requireEndpoint,
   setActiveProfileByName,
   shellInit,
   syncPluginsJson,
@@ -193,16 +196,12 @@ function parseEnvName(input: string, flag: string): string {
 /**
  * `--model`, for `add` and `config` alike: the id, trimmed. A blank one is refused rather
  * than stored or read as "clear it" - `--model "$MODEL"` with MODEL unset would otherwise
- * pin an empty model, or drop the profile's own without a word. Clearing has its own
- * spelling, and the message names it.
+ * pin an empty model, or drop the profile's own without a word. The refusal is
+ * `checkModelEntry`'s, the one every route that writes the variable goes through.
  */
-function parseModel(input: string): string {
+function parseModel(input: string, context: "add" | "config"): string {
   const model = input.trim();
-  if (model === "") {
-    throw new Error(
-      "--model needs a model id. Leave it out to pin none, or clear one with clausona config <profile> --unset ANTHROPIC_MODEL.",
-    );
-  }
+  checkModelEntry("ANTHROPIC_MODEL", model, context);
   return model;
 }
 
@@ -237,23 +236,39 @@ function parseSecretSource(input: string): SecretSource {
  * that nothing treats as a secret. Warn, never block: a legitimate non-secret header
  * override goes through the same map.
  *
+ * It fires for any name that says it holds a secret (`isSecretEnvName`), which is wider
+ * than the credential names: another service's token is no less plain text.
+ *
  * The commands come from `plaintextEnvRemedy`, which doctor's finding uses too, and they
- * differ by kind because `--key` only works on an API profile. A subscription profile is
- * also pointed at `add --help`: a key in its map most likely means an API profile was
- * wanted, and that is where to find out how to make one.
+ * differ by kind and key source, because `--key` only works on an API profile and on one
+ * reading its key from `env:` or `command:` it would replace that source. The words around
+ * them differ by tool as well: a Claude subscription profile is pointed at `add --help`,
+ * since a key in its map most likely means an API profile was wanted, and a Codex profile
+ * is not, since API profiles are Claude-only.
  */
-function warnPlaintextEnv(id: string, kind: Profile["kind"], keys: string[]) {
+function warnPlaintextEnv(id: string, profile: Pick<Profile, "tool" | "kind" | "api">, keys: string[]) {
   for (const key of keys) {
-    if (!isCredentialEnvKey(key)) continue;
-    const commands = plaintextEnvRemedy(id, kind, key).map((command) => `      ${accent(command)}\n`);
-    const advice =
-      kind === "api"
-        ? "    If it carries this profile's API key, move the key to the credential store and remove this copy:\n" +
-          commands.join("")
-        : "    A subscription profile signs in with its account, so if it carries an API key it does not belong here:\n" +
-          commands.join("") +
-          "    To use an API key instead, give it an API profile of its own:\n" +
-          `      ${accent("clausona add --help")}\n`;
+    if (!isSecretEnvName(key)) continue;
+    const credential = isCredentialEnvKey(key);
+    const { commands, keyFrom } = plaintextEnvRemedy(id, profile, key, credential);
+    const listed = commands.map((command) => `      ${accent(command)}\n`).join("");
+    let advice: string;
+    if (!credential) {
+      // Another service's secret - OTEL's headers, a Bedrock token - not the profile's key.
+      advice = `    If it carries a secret, keep it in your shell's environment instead - the hook passes that through to ${profile.tool} - and remove this copy:\n${listed}`;
+    } else if (profile.kind === "api") {
+      advice =
+        keyFrom === undefined
+          ? `    If it carries this profile's API key, move the key to the credential store and remove this copy:\n${listed}`
+          : `    This profile's key already comes from ${keyFrom}, so if it carries that key, remove this copy:\n${listed}`;
+    } else if (profile.tool === "codex") {
+      advice = `    Codex does not read this variable, so here it only sits in plain text. Remove it:\n${listed}`;
+    } else {
+      advice =
+        `    A subscription profile signs in with its account, so if it carries an API key it does not belong here:\n${listed}` +
+        "    To use an API key instead, give it an API profile of its own:\n" +
+        `      ${accent("clausona add --help")}\n`;
+    }
     process.stderr.write(`  ${warnIcon} ${key} is stored in plain text in ~/.clausona/profiles.json.\n${advice}`);
   }
 }
@@ -307,6 +322,14 @@ function showProfile(id: string, profile: Profile, asJson: boolean): string {
   }
   if (!shown.isPrimary) {
     lines.push(`${secondary("Sessions".padEnd(12))}${shown.mergeSessions ? "merged" : "separated"}`);
+  }
+  if (!isEnvMap(env)) {
+    // Not a map - a hand edit left it a list or a string. doctor names the fix.
+    lines.push(
+      `${secondary("Settings".padEnd(12))}${HIDDEN} ${dim("(not a map of NAME: value - see clausona doctor)")}`,
+    );
+    lines.push("", dim("Run `clausona config <profile> --show --json` for the full advanced-settings catalog."));
+    return box(id, lines);
   }
   const keys = Object.keys(env).sort();
   lines.push(`${secondary("Settings".padEnd(12))}${keys.length === 0 ? dim("none") : ""}`);
@@ -406,7 +429,7 @@ async function editProfileEnv(id: string, profile: Profile): Promise<string> {
     const edited = parseEditedEnv(await readFile(scratchPath, "utf8"));
     const removed = Object.keys(current).filter((key) => !(key in edited));
     await updateProfileEnv(id, { set: edited, unset: removed });
-    warnPlaintextEnv(id, profile.kind, Object.keys(edited));
+    warnPlaintextEnv(id, profile, Object.keys(edited));
     return success(`Updated ${bold(id)} ${dim(`(${Object.keys(edited).length} setting(s))`)}`);
   } finally {
     detachSignals();
@@ -515,10 +538,13 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("MODEL")}`,
         `    ${dim("The model each profile pins, which is its ANTHROPIC_MODEL. A dash means it")}`,
-        `    ${dim("pins none, and Claude Code picks. The column appears once some profile pins")}`,
-        `    ${dim("a model. On a narrow terminal it outlasts the token counts and cost, and goes")}`,
-        `    ${dim("before the quota columns or their reset times would. --json carries it as")}`,
-        `    ${dim("`model`. Change it with `clausona config <profile> --model <id>`.")}`,
+        `    ${dim("pins none, and Claude Code picks - or, on a Codex row, that Codex does not")}`,
+        `    ${dim("read the variable. The column appears once some profile pins a model. An id")}`,
+        `    ${dim("too long for it loses its middle, so the gateway at the start and the variant")}`,
+        `    ${dim("at the end both stay; --json carries the whole id as `model`. On a narrow")}`,
+        `    ${dim("terminal the column outlasts the token counts and cost, and goes before the")}`,
+        `    ${dim("quota columns or their reset times would. Change it with")}`,
+        `    ${dim("`clausona config <profile> --model <id>`.")}`,
         "",
       ].join("\n");
 
@@ -569,7 +595,9 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("CHECKS")}`,
         `    ${dim("Every profile: the items it shares with the primary, and its plugin state.")}`,
-        `    ${dim("Run `clausona repair <profile>` for what that reports.")}`,
+        `    ${dim("Run `clausona repair <profile>` for what that reports. And that its env map is a")}`,
+        `    ${dim("map of NAME: value - a hand edit can leave it a list or a string, which applies")}`,
+        `    ${dim("nothing; `clausona config <profile> --edit` fixes it.")}`,
         "",
         `    ${dim("A subscription profile: its account file and its stored login. Run")}`,
         `    ${dim("`clausona login <profile>` for what that reports.")}`,
@@ -592,7 +620,8 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("  A settings.json that cannot be read is reported rather than skipped;")}`,
         `    ${dim("- a credential name in the profile's env map, which profiles.json holds")}`,
         `    ${dim("  in plain text. Move it with `clausona config <profile> --key`, then")}`,
-        `    ${dim("  drop the copy with `clausona config <profile> --unset <NAME>`.")}`,
+        `    ${dim("  drop the copy with `clausona config <profile> --unset <NAME>`. For a key")}`,
+        `    ${dim("  read from env: or command:, the --unset alone - --key would replace it.")}`,
         "",
         `    ${dim("The last two are warnings. They describe a key that could reach the")}`,
         `    ${dim("endpoint, not a profile that is broken, so the profile stays healthy.")}`,
@@ -640,15 +669,21 @@ function subcommandHelpText(command: string): string | undefined {
         `  ${bold("THE MODEL")}`,
         `    ${dim("--model writes ANTHROPIC_MODEL in the env map, the variable Claude Code reads;")}`,
         `    ${dim("there is no second copy, so --set and --edit change the same value. It works on")}`,
-        `    ${dim("subscription profiles too, not on Codex ones, which never read it. An empty")}`,
-        `    ${dim("--model is refused; --unset ANTHROPIC_MODEL clears it. `claude --model <id>`")}`,
-        `    ${dim("changes the model for one session without touching the profile.")}`,
+        `    ${dim("subscription profiles too, not on Codex ones, which never read it. A blank")}`,
+        `    ${dim("model is refused by --model, --set and --edit alike; --unset ANTHROPIC_MODEL")}`,
+        `    ${dim("clears it. `claude --model <id>` changes the model for one session without")}`,
+        `    ${dim("touching the profile.")}`,
         "",
         `  ${bold("CHANGING THE ENDPOINT")}`,
         `    ${dim("Each value is checked by the rule add --api uses. The key is kept, so after")}`,
-        `    ${dim("--base-url the next launch sends the same key to the new host; run --key")}`,
-        `    ${dim("next if that endpoint takes another. A label that is still the old host,")}`,
-        `    ${dim("which is what add chose when --label was left out, follows the new one.")}`,
+        `    ${dim("--base-url the next launch sends the same key to the new host: run --key next")}`,
+        `    ${dim("if that endpoint takes another - or, for a key read from env: or command:,")}`,
+        `    ${dim("change what that variable or command gives. What add chose by itself follows")}`,
+        `    ${dim("the new host while it is still the old host's: a label that is the old host,")}`,
+        `    ${dim("and the auth scheme - api-key for anthropic.com, bearer elsewhere. One that was")}`,
+        `    ${dim("chosen stays, with a note if the new host usually takes the other scheme. A")}`,
+        `    ${dim("move to plain http off this machine is noted too: the key would travel")}`,
+        `    ${dim("unencrypted.")}`,
         `    ${dim("A subscription profile has no endpoint, and list names it by its account")}`,
         `    ${dim("email, so all three refuse one.")}`,
         "",
@@ -672,8 +707,9 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("WHAT --show PRINTS")}`,
         `    ${dim("The same as current, list and the dashboard, in text and in --json: never the")}`,
-        `    ${dim("key, and <hidden> for a value that can hold one - a credential setting, a json")}`,
-        `    ${dim("setting, a URL's userinfo, query and fragment. A command key source shows as")}`,
+        `    ${dim("key, and <hidden> for a value that can hold one - a setting whose name says it")}`,
+        `    ${dim("is a secret (TOKEN, SECRET, PASSWORD, API_KEY, HEADERS...), a json setting, a")}`,
+        `    ${dim("URL's userinfo, query and fragment. A command key source shows as")}`,
         `    ${dim("`command`: its command line can carry a token or the key itself, so it is only")}`,
         `    ${dim("in ~/.clausona/profiles.json. The profile still works exactly as stored.")}`,
         "",
@@ -1014,7 +1050,7 @@ export async function runCommand(command: string, args: string[]) {
             );
           }
           if (unsetKeys.includes("ANTHROPIC_MODEL")) throw new Error(MODEL_TWICE);
-          set.ANTHROPIC_MODEL = parseModel(modelArg);
+          set.ANTHROPIC_MODEL = parseModel(modelArg, "config");
         }
         for (const assignment of setPairs) {
           const [key, value] = parseAssignment(assignment, "--set");
@@ -1023,7 +1059,7 @@ export async function runCommand(command: string, args: string[]) {
         }
         // updateProfileEnv validates every entry through validateEnvEntry before it saves.
         await updateProfileEnv(ref.id, { set, unset: unsetKeys });
-        warnPlaintextEnv(ref.id, profile.kind, Object.keys(set));
+        warnPlaintextEnv(ref.id, profile, Object.keys(set));
         const changed = [...Object.keys(set), ...unsetKeys].join(", ");
         return success(`Updated ${bold(ref.id)} ${dim(`(${changed})`)}`);
       }
@@ -1041,28 +1077,49 @@ export async function runCommand(command: string, args: string[]) {
         if (baseUrl !== undefined && result.host !== result.previousHost) {
           // The key is not the endpoint's to keep: it is whatever the profile's key source
           // holds, and the next launch hands it to the new host. That can be a third party.
+          // For a key read from env: or command:, `--key` would replace the source the user
+          // chose, so the note says where the key comes from and leaves the change to them.
+          const secret = result.profile.api?.secret;
           process.stderr.write(
-            `  ${warnIcon} The key is unchanged, so from the next launch it goes to ${result.host}.\n` +
-              "    If this endpoint takes a different key, store it:\n" +
-              `      ${accent(`clausona config ${ref.id} --key`)}\n`,
+            secret === undefined || secret.source === "keychain"
+              ? `  ${warnIcon} The key is unchanged, so from the next launch it goes to ${result.host}.\n` +
+                  "    If this endpoint takes a different key, store it:\n" +
+                  `      ${accent(`clausona config ${ref.id} --key`)}\n`
+              : `  ${warnIcon} The key still comes from ${keySourcePhrase(secret)}, so from the next launch it goes to ${result.host}.\n` +
+                  `    If this endpoint takes a different key, ${secret.source === "env" ? "set that variable to it" : "have the command print it"}.\n`,
           );
         }
-        const changed = [
+        if (result.cleartext) {
+          process.stderr.write(
+            `  ${warnIcon} ${result.host} is plain http, so the key crosses the network unencrypted.\n`,
+          );
+        }
+        if (result.hostDefaultAuth !== undefined) {
+          // Kept rather than followed: it was chosen, or there was no old host to judge by.
+          // Said here, because the first sign of a scheme the endpoint does not read is a 401.
+          process.stderr.write(
+            `  ${warnIcon} ${result.host} usually takes ${result.hostDefaultAuth}, and this profile sends its key as ${result.profile.api?.authScheme}.\n` +
+              "    If the endpoint refuses it, switch:\n" +
+              `      ${accent(`clausona config ${ref.id} --auth ${result.hostDefaultAuth}`)}\n`,
+          );
+        }
+        const asked = [
           ...(baseUrl === undefined ? [] : ["base URL"]),
           ...(authArg === undefined ? [] : ["auth"]),
-          ...(label !== undefined
-            ? ["label"]
-            : result.profile.label !== profile.label
-              ? ["label, following the host"]
-              : []),
+          ...(label === undefined ? [] : ["label"]),
         ].join(", ");
-        return success(`Updated ${bold(ref.id)} ${dim(`(${changed})`)}`);
+        const followed = [...(result.followed.label ? ["label"] : []), ...(result.followed.auth ? ["auth"] : [])];
+        const follows =
+          followed.length === 0
+            ? ""
+            : `; ${followed.join(" and ")} ${followed.length === 1 ? "follows" : "follow"} the new host`;
+        return success(`Updated ${bold(ref.id)} ${dim(`(${asked}${follows})`)}`);
       }
 
       if (changeKey) {
         // Checked before the prompt, not after: updateProfileSecret refuses the same
         // thing, but by then the user has typed a key for a profile that has no use for one.
-        if (profile.kind !== "api" || !profile.api) throw new Error(`Profile '${ref.id}' is not an API profile.`);
+        requireEndpoint(ref.id, profile);
         const secret = parseSecretSource(keyFrom ?? "keychain");
         const value = secret.source === "keychain" ? await promptSecret("API key: ") : undefined;
         if (secret.source === "keychain" && !value) throw new Error(NO_KEY_SUPPLIED);
@@ -1151,22 +1208,22 @@ export async function runCommand(command: string, args: string[]) {
         const url = parseBaseUrl(baseUrl.trim());
 
         const authArg = optionValue(args, "--auth");
-        const authScheme =
-          authArg === undefined ? (isAnthropicHost(url.hostname) ? "api-key" : "bearer") : parseAuthScheme(authArg);
+        const authScheme = authArg === undefined ? defaultAuthScheme(url.hostname) : parseAuthScheme(authArg);
         // addApiProfile's own rule again, for the same reason as the URL above.
         const label = optionValue(args, "--label");
-        if (label !== undefined) checkLabel(label);
+        if (label !== undefined) checkLabel(label, "add");
 
         // Built before the key is asked for: a rejected setting should not cost the user
         // a typed key. This is the same validator addApiProfile runs, not a second rule.
         const env: Record<string, string> = {};
         const model = optionValue(args, "--model");
-        if (model !== undefined) env.ANTHROPIC_MODEL = parseModel(model);
+        if (model !== undefined) env.ANTHROPIC_MODEL = parseModel(model, "add");
         for (const assignment of optionValues(args, "--set")) {
           const [key, value] = parseAssignment(assignment, "--set");
           if (key === "ANTHROPIC_MODEL" && model !== undefined) throw new Error(MODEL_TWICE);
           const result = validateEnvEntry(key, value);
           if (!result.ok) throw new Error(result.error);
+          checkModelEntry(key, value, "add");
           env[key] = value;
         }
 
@@ -1191,7 +1248,7 @@ export async function runCommand(command: string, args: string[]) {
           mergeSessions: mergeSessions || undefined,
         });
         const id = profileId(tool, result.name);
-        warnPlaintextEnv(id, "api", Object.keys(env));
+        warnPlaintextEnv(id, { tool, kind: "api", api: { baseUrl, authScheme, secret } }, Object.keys(env));
         return success(`Added ${bold(id)} ${dim(`(${url.host})`)}\n  ${dim(`Config: ${result.configDir}`)}`);
       }
 
