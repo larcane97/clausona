@@ -1,3 +1,4 @@
+import { Box } from "ink";
 import { render } from "ink-testing-library";
 import { describe, expect, it } from "vitest";
 
@@ -166,17 +167,20 @@ describe("ProfilePreview model", () => {
   // Cut by the rule `list` uses, before ink would cut it from the end: the end of an id is
   // what tells `-flash` from `-air`.
   it("keeps the end of an id too long for the panel", () => {
-    const columns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
-    Object.defineProperty(process.stdout, "columns", { value: 80, configurable: true });
-    try {
-      const row = modelRow({ ...endpoint, model: "openrouter/z-ai/glm-5.3-flash-preview-extended" });
+    const frame =
+      render(
+        <Box width={32}>
+          <ProfilePreview profile={{ ...endpoint, model: "openrouter/z-ai/glm-5.3-flash-preview-extended" }} />
+        </Box>,
+      ).lastFrame() ?? "";
+    const row = frame
+      .split("\n")
+      .find((line) => line.includes("Model"))
+      ?.replace(/^.*Model\s+/, "")
+      .replace(/[\s│]+$/, "");
 
-      // 13 characters of room at 80 columns: the start, the ellipsis, and the variant.
-      expect(row).toBe("open…extended");
-    } finally {
-      if (columns) Object.defineProperty(process.stdout, "columns", columns);
-      else delete (process.stdout as { columns?: number }).columns;
-    }
+    // A panel 32 columns wide leaves its value 13: the start, the ellipsis, and the variant.
+    expect(row).toBe("open…extended");
   });
 
   // listProfiles hands over `<hidden>` for an env map that is not a map; counting its keys

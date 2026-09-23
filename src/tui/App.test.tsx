@@ -50,6 +50,7 @@ vi.mock("../lib/service", async (importOriginal) => ({
   addApiProfile: vi.fn(async () => ({ name: "gateway", configDir: "/Users/test/.claude-gateway" })),
 }));
 
+import { fitModel } from "../lib/format.js";
 import { BRACKETED_PASTE_OFF, BRACKETED_PASTE_ON } from "../lib/prompt-secret.js";
 
 /**
@@ -247,6 +248,55 @@ describe("App profile list, for an API profile", () => {
     }
 
     expect(written.join("")).toContain("Switched to claude:gw (gpu-box)");
+  });
+
+  /**
+   * The preview's Model row is cut to the width its value has, from the middle so the end of
+   * the id - which tells one model from another - stays. That width was estimated from the
+   * terminal's, one way for two screens that lay the panel out differently: one column too many
+   * below 80 columns, so ink cut the cut id again from the end (`o……`), and one too few at 100,
+   * where the id fits. So the width a row has is read off the frame here - from where its value
+   * starts to the panel's right border, less the padding - and the row must draw exactly what
+   * `fitModel` makes of the id at that width.
+   */
+  describe("the preview's model row", () => {
+    const MODEL = "openrouter/z-ai/glm-5.3";
+    const routed = {
+      ...gateway,
+      api: {
+        baseUrl: "https://openrouter.ai/api",
+        authScheme: "bearer" as const,
+        secret: { source: "keychain" as const },
+      },
+      env: { ANTHROPIC_MODEL: MODEL },
+      model: MODEL,
+    };
+    /** Label column (12) and its gap (1); the panel's right padding (2). */
+    const LABEL = 13;
+    const PADDING = 2;
+
+    it.each([
+      ["use", 60],
+      ["use", 79],
+      ["use", 100],
+      ["dashboard", 60],
+      ["dashboard", 79],
+      ["dashboard", 100],
+    ] as const)("on the %s screen at %i columns draws the id cut to the row's width, and no further", async (screen, columns) => {
+      const { listProfiles } = await import("../lib/service.js");
+      vi.mocked(listProfiles).mockResolvedValueOnce([routed]);
+      const instance = renderAt(<App initialScreen={screen} />, columns);
+
+      const frame = await waitForFrame(instance.lastFrame, (f) => /Model {2,}\S/.test(f));
+      const line = frame.split("\n").find((candidate) => /Model {2,}\S/.test(candidate)) ?? "";
+      const start = line.indexOf("Model") + LABEL;
+      const width = line.indexOf("│", start) - PADDING - start;
+      const drawn = line.slice(start, start + width).trimEnd();
+      instance.unmount();
+
+      expect(drawn).toBe(fitModel(MODEL, width));
+      if (columns === 100) expect(drawn).toBe(MODEL);
+    });
   });
 
   /**
