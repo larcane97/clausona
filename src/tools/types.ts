@@ -28,6 +28,10 @@ export type ToolAdapter = {
   // Optional Keychain probe (Claude only on macOS).
   keychainServiceName?(args: { homeDir: string; configDir: string }): string;
   hasKeychainCredential?(service: string): Promise<boolean>;
+  // The plaintext file Claude Code falls back to on macOS when a Keychain write fails,
+  // and reads whenever the Keychain has no item. A profile whose token landed there is
+  // signed in, so a caller gating on the Keychain probe has to accept this too.
+  hasFallbackCredential?(configDir: string): Promise<boolean>;
 
   // Files/dirs under the profile's config dir that must NOT be symlinked to primary.
   sharedSkipSet(mergeSessions: boolean): Set<string>;

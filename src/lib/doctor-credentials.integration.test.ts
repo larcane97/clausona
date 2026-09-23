@@ -115,13 +115,28 @@ describe("doctorProfiles credential check off macOS", () => {
   });
 });
 
+// The temporary profile's Keychain service name is derived from a throwaway path, so it
+// has no Keychain item on a Mac, and off a Mac `security` does not exist at all. Either
+// way the Keychain comes up empty and the credential file decides.
 describe("doctorProfiles credential check on macOS", () => {
-  it("still probes the Keychain rather than the credential file", async () => {
-    // A .credentials.json is present, but on macOS the tokens live in the Keychain and
-    // the temporary profile has no Keychain item, so the Keychain finding must win.
+  it("accepts the plaintext file Claude Code falls back to when the Keychain has no item", async () => {
     const results = await runDoctor({ platform: "darwin", credential: WITH_TOKEN });
 
-    expect(kinds(results, "claude:work")).toContain("missing_keychain");
+    expect(kinds(results, "claude:work")).not.toContain("missing_keychain");
     expect(kinds(results, "claude:work")).not.toContain("missing_oauth");
+  });
+
+  it("reports the profile when neither the Keychain nor the file holds a credential", async () => {
+    const results = await runDoctor({ platform: "darwin", credential: null });
+
+    expect(kinds(results, "claude:work")).toContain("missing_keychain");
+    // One finding for the one missing credential, not one per store.
+    expect(kinds(results, "claude:work")).not.toContain("missing_oauth");
+  });
+
+  it("reports a fallback file that carries no access token", async () => {
+    const results = await runDoctor({ platform: "darwin", credential: JSON.stringify({ claudeAiOauth: {} }) });
+
+    expect(kinds(results, "claude:work")).toContain("missing_keychain");
   });
 });
