@@ -126,8 +126,11 @@ async function harness(options: HarnessOptions = {}) {
     secrets,
     /** The config dir `addApi` creates, so a test can break it after the fact. */
     apiConfigDir: path.join(home, ".claude-glm"),
-    /** Paths under the temp HOME are replaced with `~`, so output can be compared literally. */
-    normalize: (text: string) => text.split(home).join("~"),
+    /**
+     * Paths under the temp HOME are replaced with `~`, so output can be compared literally -
+     * JSON too, which spells a Windows home with its backslashes doubled.
+     */
+    normalize: (text: string) => text.split(JSON.stringify(home).slice(1, -1)).join("~").split(home).join("~"),
     doctor: () => service.doctorProfiles(),
     render: (results: DoctorProfileResult[]) => stripAnsi(renderDoctor(results)),
     /** The API profile every test starts from: one endpoint, one stored key. */
@@ -471,11 +474,13 @@ describe("doctor on a subscription-only registry", () => {
     const h = await harness({
       profiles: { "claude:work": { tool: "claude", configDir: "WORK_DIR", email: "work@example.com" } },
     });
-    // The registry is rewritten with a real path now that the temp home is known.
+    // The registry is rewritten with a real path now that the temp home is known - through
+    // JSON, not into its text, where a Windows path's backslashes would be escapes.
     const registryPath = path.join(h.home, ".clausona", "profiles.json");
     const { readFileSync, writeFileSync: write } = await import("node:fs");
-    const raw = readFileSync(registryPath, "utf8").replace("WORK_DIR", path.join(h.home, ".claude-work"));
-    write(registryPath, raw);
+    const registry = JSON.parse(readFileSync(registryPath, "utf8"));
+    registry.profiles["claude:work"].configDir = path.join(h.home, ".claude-work");
+    write(registryPath, JSON.stringify(registry));
     mkdirSync(path.join(h.home, ".claude-work"), { recursive: true });
     return h;
   }
@@ -514,7 +519,7 @@ describe("doctor on a subscription-only registry", () => {
       {
         name: "claude:default",
         email: "primary@example.com",
-        configDir: "~/.claude",
+        configDir: path.join("~", ".claude"),
         isPrimary: true,
         healthy: true,
         issues: [],
@@ -522,7 +527,7 @@ describe("doctor on a subscription-only registry", () => {
       {
         name: "claude:work",
         email: "work@example.com",
-        configDir: "~/.claude-work",
+        configDir: path.join("~", ".claude-work"),
         isPrimary: false,
         healthy: false,
         issues: [
