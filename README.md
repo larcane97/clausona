@@ -314,9 +314,9 @@ pipe the new key into `clausona config <profile> --key`; that always means "stor
 credential store", so on a profile currently reading `env:` or `command:` it switches the
 source to `keychain` as well. `clausona config <profile> --key-from env:NAME` or
 `--key-from command:"…"` moves a profile to that source without typing a key, and deletes
-the stored one when you move away from `keychain` — its success line says so. A `NAME` that
-is not set in the shell you run it from gets a warning, not a refusal: it only has to be set
-where `claude` runs. `--key-from keychain` needs the key,
+the stored one when you move away from `keychain` — its success line says so. Here and on
+`add`, a `NAME` that is not set in the shell you run it from gets a warning, not a refusal: it
+only has to be set where `claude` runs. `--key-from keychain` needs the key,
 piped in or typed at the prompt, as `--key` does.
 
 `clausona config <profile> --show` prints the endpoint, the auth scheme and the key's

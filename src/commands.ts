@@ -305,6 +305,19 @@ function warnPlaintextEnv(id: string, profile: Pick<Profile, "tool" | "kind" | "
   }
 }
 
+/**
+ * Said by `add --api` and `config --key-from` alike when an env: source names a variable this
+ * shell does not have. Warned, not refused: the variable is read at every launch, in the shell
+ * that runs claude, and the user may be about to export it in their rc file.
+ */
+function warnUnsetKeyVariable(secret: SecretSource) {
+  if (secret.source !== "env" || process.env[secret.name]) return;
+  process.stderr.write(
+    `  ${warnIcon} The key now comes from ${describeSecretSource(secret)}, which is not set in this shell.\n` +
+      "    Export it where claude runs - in your shell's rc file, for one - or the next launch has no key.\n",
+  );
+}
+
 /** Said by `add --api` and `config --base-url` alike, whenever `sendsKeyInClear` holds. */
 function cleartextNote(host: string) {
   process.stderr.write(`  ${warnIcon} ${host} is plain http, so the key crosses the network unencrypted.\n`);
@@ -544,6 +557,7 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim('env:NAME and command:"..." store a reference, not the key. Each one is resolved')}`,
         `    ${dim("again every time the profile is used, in the shell that runs claude - so the")}`,
         `    ${dim("variable has to be exported there, not only in the shell that ran this command.")}`,
+        `    ${dim("One that is not set here gets a warning, not a refusal.")}`,
         `    ${dim("keychain stores the key itself, so it needs nothing set up afterwards. When")}`,
         `    ${dim("another API profile reads the same env: or command: for a different endpoint,")}`,
         `    ${dim("add says so: whichever key it holds would then go to both.")}`,
@@ -1226,14 +1240,7 @@ export async function runCommand(command: string, args: string[]) {
         const value = secret.source === "keychain" ? await promptSecret("API key: ") : undefined;
         if (secret.source === "keychain" && !value) throw new Error(NO_KEY_SUPPLIED);
         const { deletedStoredKey } = await updateProfileSecret(ref.id, secret, value);
-        // Warned, not refused: the variable is read at every launch, in the shell that runs
-        // claude, and the user may be about to export it in their rc file.
-        if (secret.source === "env" && !process.env[secret.name]) {
-          process.stderr.write(
-            `  ${warnIcon} The key now comes from ${describeSecretSource(secret)}, which is not set in this shell.\n` +
-              "    Export it where claude runs - in your shell's rc file, for one - or the next launch has no key.\n",
-          );
-        }
+        warnUnsetKeyVariable(secret);
         const deleted = deletedStoredKey ? ` ${dim(`(deleted the key stored in ${secretStoreName()})`)}` : "";
         return success(`Updated the credential for ${bold(ref.id)}${deleted}`);
       }
@@ -1370,6 +1377,7 @@ export async function runCommand(command: string, args: string[]) {
         });
         const id = profileId(tool, result.name);
         warnPlaintextEnv(id, { tool, kind: "api", api: { baseUrl, authScheme, secret } }, Object.keys(env));
+        warnUnsetKeyVariable(secret);
         if (sendsKeyInClear(url)) cleartextNote(url.host);
         if (result.sharedWith.length > 0) {
           // The same finding doctor makes, said when `add` creates it: the source now feeds

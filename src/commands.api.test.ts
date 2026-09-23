@@ -252,6 +252,17 @@ describe("add --api", () => {
     expect(h.storedSecrets()).toEqual({});
   });
 
+  // config --key-from says so; add said nothing, and the first sign was a launch with no key.
+  it("warns, and still adds, when the variable is not set here", async () => {
+    const h = await harness();
+    vi.stubEnv("MY_KEY", "");
+
+    await h.run("add", "claude:gw", "--api", "--base-url", "https://openrouter.ai/api", "--key-from", "env:MY_KEY");
+
+    expect(h.profile("claude:gw").api?.secret).toEqual({ source: "env", name: "MY_KEY" });
+    expect(stripAnsi(h.stderr())).toContain("The key now comes from env:MY_KEY, which is not set in this shell.");
+  });
+
   it('takes --key-from command:"..." without asking for a key', async () => {
     const h = await harness();
 
@@ -2335,6 +2346,8 @@ describe("one key source read for two endpoints", () => {
 
   it("is not noted for two profiles on one endpoint", async () => {
     const h = await harness({ "claude:glm": ON_OPENROUTER });
+    // Set, so that the one note an unset variable gets is not what this reads.
+    vi.stubEnv("OR_KEY", "or-key-value");
 
     await h.run(
       "add",
