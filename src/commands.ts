@@ -26,6 +26,7 @@ import {
   isSecretEnvName,
   nonStringEnvKeys,
   printable,
+  shownEnvName,
 } from "./lib/profile-env.js";
 import {
   CREDENTIAL_AS_NAME_ERROR,
@@ -428,7 +429,7 @@ function parseEditedEnv(raw: string): Record<string, string> {
   const entries = Object.entries(parsed as Record<string, unknown>);
   for (const [key, value] of entries) {
     if (typeof value !== "string") {
-      throw new Error(`${key} must be a string in quotes, so nothing was changed.`);
+      throw new Error(`${shownEnvName(key)} must be a string in quotes, so nothing was changed.`);
     }
   }
   return Object.fromEntries(entries) as Record<string, string>;

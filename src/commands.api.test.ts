@@ -2801,6 +2801,20 @@ describe("config --edit", () => {
     expect(h.profile("claude:gw").env).toEqual({ ANTHROPIC_MODEL: "z-ai/glm-5.3" });
   });
 
+  // A key pasted as a name, with a value that is not a string: the refusal names the setting,
+  // and that name is the key.
+  it("refuses a value that is not a string without printing a key-shaped name", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+    vi.stubEnv("EDITOR", "fake-editor");
+    fakeEditor((file) => writeFileSync(file, JSON.stringify({ [KEY_SHAPED]: 600000 })));
+
+    const message = await failure(h.run("config", "claude:gw", "--edit"));
+
+    expect(message).toContain("must be a string in quotes");
+    expect(slicesIn(message, randomBody(KEY_SHAPED))).toEqual([]);
+    expect(h.profile("claude:gw").env).toEqual({ ANTHROPIC_MODEL: "z-ai/glm-5.3" });
+  });
+
   it("opens the map the profile already has", async () => {
     const h = await harness({ "claude:gw": API_PROFILE });
     vi.stubEnv("EDITOR", "fake-editor");
