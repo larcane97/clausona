@@ -147,7 +147,8 @@ being blanked out.
 A profile can be backed by an API endpoint instead of a subscription login — the Anthropic
 API, a gateway such as OpenRouter, or a model you serve yourself. It sits beside your
 subscription profiles in `clausona list`, switches the same way, and shares the same
-plugins, MCP servers, and settings.
+plugins, MCP servers, and settings. In this version API profiles are for Claude Code only:
+`clausona add codex:<name> --api` is refused.
 
 ```bash
 # a hosted gateway
@@ -183,6 +184,13 @@ the model; clausona never contacts the endpoint, so a typo there surfaces as an 
 `claude` rather than from `clausona add`; [it can be changed later](#the-model). `--label`
 sets the name shown in `list`, which otherwise defaults to the endpoint's host. All of these
 can be [changed later](#changing-the-endpoint) without typing the key again.
+
+**An `api-key` profile's first `claude` session asks about the key — answer Yes.** Claude
+Code (as of 2.1.278) shows "Detected a custom API key in your environment" and asks "Do you
+want to use this API key?", with the cursor on "No (recommended)", so pressing Enter answers
+No. No makes that profile ignore its key from then on. It asks again after the key changes,
+such as after `config --key`. To change the answer later, run `/config` in Claude Code and
+set "Use custom API key". A `bearer` profile is not asked.
 
 Claude Code speaks the Anthropic Messages format, which recent SGLang, vLLM, llama.cpp and
 OpenRouter's Anthropic endpoint all serve natively. An endpoint that only speaks the OpenAI
@@ -243,7 +251,7 @@ belongs in an argument.
 
 | Value | Where the key lives | When it is read |
 | --- | --- | --- |
-| `keychain` (default) | clausona stores it — macOS Keychain, `secret-tool` on Linux where it is installed, otherwise `~/.clausona/secrets.json`, written owner-only | at every launch, from that store |
+| `keychain` (default) | clausona stores it — in the macOS Keychain on a Mac, otherwise in `~/.clausona/secrets.json`, written owner-only. That includes Linux: in this version a stored key goes to that file, readable only by you, not to `secret-tool` or your desktop keyring | at every launch, from that store |
 | `env:NAME` | your shell; clausona records only the variable name | at every launch, **in the shell that runs `claude`** — so `NAME` has to be exported there, not only where you ran `clausona add` |
 | `command:"…"` | wherever the command gets it — `op read`, `pass show`, `vault kv get` | at every launch, and on every `clausona doctor`; the first line of its output is the key |
 
@@ -269,9 +277,10 @@ Rotating depends on the source. With `env:` or `command:` there is nothing to ru
 the variable, or what the command returns, and the next launch picks it up. With `keychain`,
 pipe the new key into `clausona config <profile> --key`; that always means "store this in the
 credential store", so on a profile currently reading `env:` or `command:` it switches the
-source to `keychain` as well. `clausona config <profile> --key-from <source>` moves a profile
-between the three without typing a key, and deletes the stored one when you move away from
-`keychain`.
+source to `keychain` as well. `clausona config <profile> --key-from env:NAME` or
+`--key-from command:"…"` moves a profile to that source without typing a key, and deletes
+the stored one when you move away from `keychain`. `--key-from keychain` needs the key,
+piped in or typed at the prompt, as `--key` does.
 
 `clausona config <profile> --show` prints the endpoint, the auth scheme and the key's
 *source* — never the key, and for a `command:` source not the command line either. Neither
@@ -646,7 +655,8 @@ that profile's key to Claude Code, which then talks to the endpoint you configur
 ~/.clausona/
 ├── profiles.json    # registered profiles and active selection, owner-only (including
 │                    #   each API profile's endpoint and key *source*, never the key)
-├── secrets.json     # API profile keys, owner-only, where no OS credential store is used
+├── secrets.json     # API profile keys, owner-only, on Linux and Windows (macOS keeps
+│                    #   them in the Keychain)
 ├── usage.json       # per-profile usage history
 ├── quota.json       # cached plan-quota readings (5-minute freshness)
 ├── locks/           # short-lived per-profile credential renewal locks
