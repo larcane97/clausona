@@ -97,11 +97,18 @@ function FieldError({ message }: { message?: string }) {
   );
 }
 
+/**
+ * A line under a field. A plain hint is cut to one line; a warning wraps, because what it says
+ * last is what to do about it, and that is the part a cut takes away.
+ */
 function Hint({ text, tone }: { text?: string; tone?: "warning" }) {
   if (!text) return null;
   return (
     <Box paddingLeft={2 + LABEL_WIDTH}>
-      <Text color={tone === "warning" ? color.warning : color.muted} wrap="truncate-end">
+      <Text
+        color={tone === "warning" ? color.warning : color.muted}
+        wrap={tone === "warning" ? "wrap" : "truncate-end"}
+      >
         {text}
       </Text>
     </Box>

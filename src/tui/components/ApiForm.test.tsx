@@ -1,8 +1,9 @@
 import { render } from "ink-testing-library";
 import { describe, expect, it } from "vitest";
 
-import { type ApiFormState, apiFormFields, emptyApiForm, MODEL_KEY } from "../api-form.js";
-import { windowsOnScreen } from "../test-frames.js";
+import { type ApiFormState, apiFormFields, emptyApiForm, MODEL_KEY, plaintextSecretNote } from "../api-form.js";
+import { renderAt } from "../test-drive.js";
+import { flatten, windowsOnScreen } from "../test-frames.js";
 import { ApiForm } from "./ApiForm.js";
 
 /** A key shape. The panel may draw a mask in its place, and never any eight characters of it. */
@@ -153,6 +154,27 @@ describe("the unfolded form", () => {
     const frame = frameFor({ ...state, cursor: cursorOn(state, "env:ANTHROPIC_CUSTOM_HEADERS") });
 
     expect(frame).toContain("stored in plain text");
+  });
+
+  it("says the whole of it at 80 columns, advice included", () => {
+    // Cut to one line, the part lost at the panel's edge was the part that says what to do.
+    const state = form({ advancedOpen: true, env: { MY_SERVICE_TOKEN: "abc" } });
+    const note = plaintextSecretNote("MY_SERVICE_TOKEN", "abc") ?? "";
+    const instance = renderAt(
+      <ApiForm
+        form={{ ...state, cursor: cursorOn(state, "env:MY_SERVICE_TOKEN") }}
+        fields={apiFormFields(state)}
+        keySet={false}
+        mergeSessions={false}
+        onChange={() => {}}
+      />,
+      80,
+    );
+    const frame = instance.lastFrame() ?? "";
+    instance.unmount();
+
+    expect(note).not.toBe("");
+    expect(flatten(frame)).toContain(flatten(note));
   });
 });
 

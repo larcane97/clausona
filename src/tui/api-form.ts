@@ -15,7 +15,7 @@
 
 import { checkBaseUrl } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
-import { envKeyCaseTwin, envKeyCaseTwinError } from "../lib/profile-env.js";
+import { envKeyCaseTwin, envKeyCaseTwinError, isSecretEnvName } from "../lib/profile-env.js";
 import { foldProfileName, looksLikeCredential, profileId, validateProfileName } from "../lib/profile-ref.js";
 import type { SecretChunk, SecretInputState } from "../lib/prompt-secret.js";
 import { hidesEnvValue, isCredentialEnvKey } from "../lib/redact.js";
@@ -438,16 +438,21 @@ export function withoutKeys(errors: Record<string, string>, ...ids: string[]): R
 }
 
 /**
- * A note under a setting whose name is one Claude Code reads a credential from, and whose
- * value therefore sits in plain text in profiles.json.
+ * A note under a setting whose name says it holds a secret, and whose value therefore sits in
+ * plain text in profiles.json.
  *
- * The same thing `clausona add --api` prints after a `--set`, and non-blocking for the
- * same reason: a legitimate non-secret header override goes through the same map, so this
- * says what happened rather than refusing it. The doctor reports it again afterwards.
+ * What `clausona add --api` prints after a `--set`: for the same names - `isSecretEnvName`, as
+ * the doctor's finding too - and with the same advice for each, in the form's terms. A variable
+ * Claude Code reads its key from gets the Key field, where the CLI names the credential store;
+ * another service's secret gets the shell's environment, which the Key field is no answer for.
+ * Non-blocking for the CLI's reason: a legitimate non-secret header override goes through the
+ * same map, so this says what happened rather than refusing it. The doctor reports it again.
  */
 export function plaintextSecretNote(key: string, value: string): string | undefined {
-  if (value.trim() === "" || !isCredentialEnvKey(key)) return undefined;
-  return `${key} is stored in plain text in profiles.json - an API key belongs in the Key field.`;
+  if (value.trim() === "" || !isSecretEnvName(key)) return undefined;
+  const stored = `${key} is stored in plain text in profiles.json`;
+  if (isCredentialEnvKey(key)) return `${stored} - an API key belongs in the Key field.`;
+  return `${stored}. If it carries a secret, keep it in your shell's environment instead - the hook passes that through to claude - and clear it here.`;
 }
 
 // ── Fields that draw what they hold ──────────────────────────────

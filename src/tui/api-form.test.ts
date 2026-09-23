@@ -212,6 +212,21 @@ describe("an advanced setting", () => {
     expect(plaintextSecretNote("ANTHROPIC_CUSTOM_HEADERS", "")).toBeUndefined();
     expect(plaintextSecretNote("CLAUDE_CODE_MAX_RETRIES", "3")).toBeUndefined();
   });
+
+  it("says it for every name `add --api --set` and doctor call secret, in their words for each", () => {
+    // The CLI and doctor go by `isSecretEnvName`, the form went by the clear list alone - so
+    // another service's token got no note here, and only here.
+    const own = plaintextSecretNote("ANTHROPIC_AUTH_TOKEN", "abc");
+    const other = plaintextSecretNote("MY_SERVICE_TOKEN", "abc");
+
+    expect(own).toMatch(/^ANTHROPIC_AUTH_TOKEN is stored in plain text in profiles\.json/);
+    expect(own).toMatch(/an API key belongs in the Key field/);
+    // Not this profile's key, so the Key field is the wrong advice; the CLI's is the shell.
+    expect(other).toMatch(/^MY_SERVICE_TOKEN is stored in plain text in profiles\.json/);
+    expect(other).toMatch(/keep it in your shell's environment/);
+    expect(other).not.toMatch(/Key field/);
+    expect(plaintextSecretNote("MAX_THINKING_TOKENS", "8000")).toBeUndefined();
+  });
 });
 
 describe("the free-form row", () => {
