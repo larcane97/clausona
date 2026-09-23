@@ -36,8 +36,8 @@ const ESC = "\u001b";
  * exited without restoring it - so a paste can arrive bracketed, and pasting is how most
  * people put a key into a prompt.
  */
-const PASTE_START = `${ESC}[200~`;
-const PASTE_END = `${ESC}[201~`;
+export const PASTE_START = `${ESC}[200~`;
+export const PASTE_END = `${ESC}[201~`;
 
 /**
  * A CSI or SS3 sequence longer than this is not one this reader knows how to skip. It gives

@@ -19,6 +19,8 @@ import { displayName } from "../lib/profile-env.js";
 import { defaultProfileName, profileId } from "../lib/profile-ref.js";
 import {
   EMPTY_SECRET_INPUT,
+  PASTE_END,
+  PASTE_START,
   readSecretChunk,
   type SecretChunk,
   type SecretInputState,
@@ -334,6 +336,18 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    * commit that draws the new position sets it again, below.
    */
   const inputTarget = useRef<string | undefined>(undefined);
+  /**
+   * A bracketed paste that began while input had nowhere to go - in the read that moved the
+   * cursor - is being dropped, and so is the rest of it.
+   *
+   * A paste is one thing, and dropping its first read is not dropping it: the tail arrives a
+   * read later, when the cursor is somewhere and that field's handler is listening. Delivered
+   * there it was the back half of a key, drawn in the Model row, or kept as the whole key by a
+   * key field that never saw the paste begin. So everything until its closing bracket goes the
+   * same way the head did. A real keystroke that moves the cursor ends it too, so a bracket
+   * that never arrives does not leave every field refusing what is typed into it.
+   */
+  const droppingPaste = useRef(false);
   const [overlay, setOverlay] = useState<OverlayState>(null);
   const lastEscRef = useRef(0);
 
@@ -461,11 +475,13 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       if (settled.text !== "") setApiKey((previous) => previous + settled.text);
     }
     inputTarget.current = undefined;
+    droppingPaste.current = false;
   }
 
   /** Every way out of the form: nothing typed may land in it, and the key goes with it. */
   function leaveApiForm() {
     inputTarget.current = undefined;
+    droppingPaste.current = false;
     clearApiKey();
   }
 
@@ -523,7 +539,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       return;
     }
     const onInput = (input: string) => {
-      if (inputTarget.current !== KEY_FIELD) return;
+      if (inputTarget.current !== KEY_FIELD || droppingPaste.current) return;
       const read = readSecretChunk(secretInput.current, input, "event");
       secretInput.current = read.state;
       setKeyPartial(holdsPartialInput(read.state));
@@ -557,10 +573,34 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     inputTarget.current = fieldUnderCursor;
   });
 
+  // Where `droppingPaste` begins and ends: every input event while the form is open, whichever
+  // field has the cursor, since the paste's tail can reach any of them. The end is taken after
+  // the rest of the read, so the handlers still to hear the closing bracket - a TextInput
+  // would type it as `[201~` - hear it as part of what is dropped.
+  const apiFormOpen = fieldUnderCursor !== undefined;
+  useEffect(() => {
+    if (!apiFormOpen || !canReadKeyInput) return;
+    let ending: NodeJS.Immediate | undefined;
+    const onInput = (input: string) => {
+      if (input === PASTE_START && inputTarget.current === undefined) droppingPaste.current = true;
+      else if (input === PASTE_END && droppingPaste.current) {
+        ending = setImmediate(() => {
+          droppingPaste.current = false;
+        });
+      }
+    };
+    inputEvents.on("input", onInput);
+    return () => {
+      inputEvents.off("input", onInput);
+      if (ending) clearImmediate(ending);
+    };
+  }, [apiFormOpen, canReadKeyInput, inputEvents]);
+
   function editApiField(field: ApiField, edited: string) {
     // A TextInput of a field the cursor has left is still subscribed until the next render,
-    // and hears the rest of the read that moved the cursor. See `inputTarget`.
-    if (inputTarget.current !== field.id) return;
+    // and hears the rest of the read that moved the cursor. See `inputTarget`, and
+    // `droppingPaste` for the rest of a paste that read began.
+    if (inputTarget.current !== field.id || droppingPaste.current) return;
     updateApiForm((form) => {
       // A masked value is not shown shrinking back into view: the first erase clears it.
       // Otherwise erasing a key from the end would draw its head once it stopped looking

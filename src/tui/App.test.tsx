@@ -817,19 +817,60 @@ describe("App add-profile: API endpoint", () => {
       instance.unmount();
     });
 
-    it("masks the rest of that paste where it does land, and refuses to save it", async () => {
-      // Its next read reaches Model legitimately - the cursor is there by then - so routing
-      // cannot stop it. What stops it being drawn is the model row refusing to draw a key.
+    it("drops the rest of that paste too, wherever the cursor is when it arrives", async () => {
+      // A paste is one thing. Its head went nowhere, and its tail arrives a read later, when
+      // the cursor is on Model and Model's handler is listening: delivering it there put the
+      // back half of a key in a row that draws what it holds. Twenty characters, so that it is
+      // the paste's routing being tested here and not the token check, which would miss them.
       const instance = await filledTo("API key");
 
       await type(instance, `${DOWN}\u001b[200~${KEY.slice(0, 20)}`);
-      await type(instance, KEY.slice(20));
+      await type(instance, KEY.slice(20, 40));
       await type(instance, "\u001b[201~");
-      await waitForFrame(instance.lastFrame, (f) => f.includes(MISPLACED_KEY));
 
-      expect(row(instance, "Model")).toContain(MASK);
-      expect(await submit(instance)).toBeUndefined();
+      expect(focusedOn(instance.lastFrame() ?? "", "Model")).toBe(true);
+      expect(row(instance, "Model")).not.toContain("[201~");
       expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+      expect(await submit(instance)).toBeUndefined();
+      instance.unmount();
+    });
+
+    it("drops the rest of a paste that began with the arrow onto the key field, rather than keep its tail as the key", async () => {
+      const instance = await filledTo("Auth");
+
+      await type(instance, `${DOWN}\u001b[200~${KEY.slice(0, 20)}`);
+      await type(instance, `${KEY.slice(20)}\u001b[201~`);
+
+      expect(focusedOn(instance.lastFrame() ?? "", "API key")).toBe(true);
+      expect(row(instance, "API key")).toContain("type or paste the key");
+      expect(await submit(instance)).toBeUndefined();
+      instance.unmount();
+    });
+
+    it("forgets a dropped paste when the form is left, so the next visit takes what is typed", async () => {
+      const instance = await filledTo("Endpoint");
+      await type(instance, `${DOWN}${DOWN}\u001b[200~${KEY.slice(0, 20)}`);
+
+      await press(instance, ESC);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Choose how to add"));
+      await moveTo(instance, "API endpoint");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Create profile"));
+      await press(instance, "-two");
+
+      expect(row(instance, "Name")).toContain("gateway-two");
+      instance.unmount();
+    });
+
+    it("lets a real keystroke end a dropped paste whose closing bracket never comes", async () => {
+      // Otherwise every field would go on dropping what was typed into it.
+      const instance = await filledTo("Endpoint");
+
+      await type(instance, `${DOWN}${DOWN}\u001b[200~${KEY.slice(0, 20)}`);
+      await press(instance, DOWN);
+      await press(instance, "glm-5");
+
+      expect(row(instance, "Model")).toContain("glm-5");
       instance.unmount();
     });
   });
