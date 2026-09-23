@@ -1705,12 +1705,20 @@ async function cleanupProfile(
  * A new profile's id must differ from every existing one by more than case. Its backup
  * directory is backups/<tool>/<name>, and on a case-insensitive filesystem - macOS and
  * Windows by default - `Work` names the directory `work` already owns.
+ *
+ * `signingIn` is for an add that signs a new profile in. Re-running it is the natural retry
+ * when a profile's sign-in looks wrong, but add never touches an existing profile, so the
+ * refusal names the command that does, for a profile that has a sign-in to redo.
  */
-function assertProfileIdAvailable(registry: Registry, id: string) {
-  if (registry.profiles[id]) throw new Error(`Profile '${id}' already exists.`);
+function assertProfileIdAvailable(registry: Registry, id: string, { signingIn = false } = {}) {
+  const relogin = (existing: string) =>
+    signingIn && registry.profiles[existing]?.kind !== "api"
+      ? ` Run \`clausona login ${existing}\` to sign in again.`
+      : "";
+  if (registry.profiles[id]) throw new Error(`Profile '${id}' already exists.${relogin(id)}`);
   const folded = foldProfileName(id);
   const clash = Object.keys(registry.profiles).find((existing) => foldProfileName(existing) === folded);
-  if (clash) throw new Error(`Profile '${clash}' already exists (names are compared without case).`);
+  if (clash) throw new Error(`Profile '${clash}' already exists (names are compared without case).${relogin(clash)}`);
 }
 
 /**
@@ -1857,7 +1865,7 @@ export async function addProfile(options: {
   if (!registry) throw await noRegistryError();
 
   const id = profileId(options.tool, options.name);
-  assertProfileIdAvailable(registry, id);
+  assertProfileIdAvailable(registry, id, { signingIn: !options.fromPath });
 
   const adapter = getAdapter(options.tool);
   const home = homedir();
