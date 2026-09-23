@@ -22,7 +22,6 @@ import {
   PASTE_END,
   PASTE_START,
   readSecretChunk,
-  type SecretChunk,
   type SecretInputState,
   settleSecretInput,
 } from "../lib/prompt-secret.js";
@@ -228,8 +227,12 @@ function holdsPartialInput(state: SecretInputState): boolean {
  * a refusal was about: a paste that closed with nothing after its last character still closed,
  * and "the paste never finished" under a field holding the whole key is a message that lies.
  */
-function keyErrorsAfter(errors: Record<string, string>, read: SecretChunk): Record<string, string> {
-  const stale = read.text !== "" || (errors.key === UNFINISHED_PASTE && !read.state.pasting);
+function keyErrorsAfter(
+  errors: Record<string, string>,
+  edited: boolean,
+  input: SecretInputState,
+): Record<string, string> {
+  const stale = edited || (errors.key === UNFINISHED_PASTE && !input.pasting);
   return stale && errors.key !== undefined ? withoutKeys(errors, KEY_FIELD) : errors;
 }
 
@@ -572,25 +575,36 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
         });
       }
       if (inputTarget.current !== KEY_FIELD || droppingPaste.current) return;
-      const read = readSecretChunk(secretInput.current, input, "event");
-      secretInput.current = read.state;
-      setKeyPartial(holdsPartialInput(read.state));
       // The writes `editApiKey` makes, inlined so that this listener depends on nothing that
       // changes every render - it is subscribed once a visit to the form, not per frame.
-      if (read.problem) {
-        // What the field holds is not a key - where input stopped is a guess, or a paste ended
-        // whose start went somewhere else - so it goes, and the message says to paste again.
-        const refusal = keyReadRefusal(read.problem);
-        setApiKey("");
-        setAddState((prev) =>
-          prev ? { ...prev, api: { ...prev.api, errors: { ...prev.api.errors, key: refusal } } } : null,
-        );
-        return;
+      let rest = input;
+      let edited = false;
+      for (;;) {
+        const read = readSecretChunk(secretInput.current, rest, "event");
+        secretInput.current = read.state;
+        if (read.problem) {
+          // What the field holds is not a key - where input stopped is a guess, or a paste ended
+          // whose start went somewhere else - so it goes, and the message says to paste again.
+          const refusal = keyReadRefusal(read.problem);
+          setKeyPartial(false);
+          setApiKey("");
+          setAddState((prev) =>
+            prev ? { ...prev, api: { ...prev.api, errors: { ...prev.api.errors, key: refusal } } } : null,
+          );
+          return;
+        }
+        if (read.text !== "") {
+          setApiKey((previous) => previous + read.text);
+          edited = true;
+        }
+        if (!read.keystroke) break;
+        // A keystroke inside a run of text: dropped, as every control character in it was.
+        rest = read.keystroke.rest;
       }
-      if (read.text !== "") setApiKey((previous) => previous + read.text);
+      setKeyPartial(holdsPartialInput(secretInput.current));
       setAddState((prev) => {
         if (!prev) return null;
-        const errors = keyErrorsAfter(prev.api.errors, read);
+        const errors = keyErrorsAfter(prev.api.errors, edited, secretInput.current);
         return errors === prev.api.errors ? prev : { ...prev, api: { ...prev.api, errors } };
       });
     }

@@ -96,6 +96,9 @@ const UNREADABLE_INPUT =
 const TRUNCATED_PASTE =
   'Could not read the key: the input ended in the middle of a paste, so only part of the key arrived. Nothing was saved. Try again, or pipe the key in: printf %s "$KEY" | clausona … .';
 
+const LOST_PASTE_START =
+  'Could not read the key: a paste ended whose start never arrived, so only part of the key did. Nothing was saved. Try again, or pipe the key in: printf %s "$KEY" | clausona … .';
+
 type EscapeScan =
   | { consumed: number; kind: "paste-start" | "paste-end" | "skip" }
   /** The sequence has not finished arriving; wait for the next read. */
@@ -191,12 +194,15 @@ function scanStringEscape(buffer: string, introducer: string): EscapeScan {
 }
 
 /**
- * What a chunk of terminal input adds to a secret being typed somewhere other than this
- * prompt - the TUI's key field, which reads the same terminal.
+ * What a chunk of terminal input adds to a secret being typed: the one reader behind both this
+ * prompt and the TUI's key field, which reads the same terminal.
  *
- * It is here rather than there because the grammar above is the thing being reused: a
- * character filter alone appends `0;title` or `<0;10;5M` to the key the moment the terminal
- * reports something, and a corrupted credential is then stored and reported as success.
+ * One reader, because the grammar above is the thing being reused: a character filter alone
+ * appends `0;title` or `<0;10;5M` to the key the moment the terminal reports something, and a
+ * corrupted credential is then stored and reported as success. And because the two callers
+ * once drifted apart on the bytes that are keystrokes, not characters - the prompt acted on
+ * an Enter, a Ctrl-U or a Backspace wherever it fell, and the key field dropped one that
+ * arrived inside a run of text and appended what came after it.
  *
  * **The caller must hand over the bytes the terminal sent, ESC included and untouched.**
  * Nothing below invents a byte it was not given. That is a contract rather than a detail:
@@ -239,14 +245,48 @@ export type SecretChunk = {
    *   the chunk is kept, and the caller clears what it already took.
    */
   problem?: "unreadable" | "lost-paste-start";
+  /**
+   * Set when the reader stopped at a keystroke: `text` is everything before it, and `rest` is
+   * everything after it, not yet read. The caller acts on the key and, if it is still reading,
+   * hands `rest` back.
+   */
+  keystroke?: { key: SecretKeystroke; rest: string };
 };
+
+/**
+ * A byte a person presses that is not a character of the key, and that a caller has to act on
+ * where it falls: text before it and text after it can belong to different things.
+ *
+ * - `"enter"`: CR or LF.
+ * - `"tab"`: Tab.
+ * - `"erase"`: Backspace, sent as DEL by most terminals and as BS by some.
+ * - `"clear"`: Ctrl-U, kill-line.
+ * - `"interrupt"`: Ctrl-C. Raw mode makes it a byte, not a signal.
+ * - `"end"`: Ctrl-D.
+ *
+ * Between a paste's brackets every byte is pasted data, not a keypress, so only an interrupt
+ * is reported there: a paste whose end never comes would otherwise leave no way out. Pasted
+ * control characters are dropped either way - a key has no whitespace in it.
+ */
+export type SecretKeystroke = "enter" | "tab" | "erase" | "clear" | "interrupt" | "end";
+
+function keystrokeOf(char: string, pasting: boolean): SecretKeystroke | undefined {
+  if (char === CTRL_C) return "interrupt";
+  if (pasting) return undefined;
+  if (ENTER.has(char)) return "enter";
+  if (char === "\t") return "tab";
+  if (ERASE.has(char)) return "erase";
+  if (char === CTRL_U) return "clear";
+  if (char === CTRL_D) return "end";
+  return undefined;
+}
 
 /**
  * What the end of a chunk handed to `readSecretChunk` means, which the caller has to say
  * because the reader cannot tell.
  *
- * - `"read"`: only where a read from the terminal happened to stop. Nothing has measured the
- *   bytes, so a sequence cut off there is joined to the next chunk.
+ * - `"read"`: only where a read from the terminal happened to stop - `promptSecret`'s reads.
+ *   Nothing has measured the bytes, so a sequence cut off there is joined to the next chunk.
  * - `"event"`: the end of one of ink's input events. ink's parser measures every CSI and SS3
  *   before it emits anything, and holds one still arriving until a `setImmediate` passes
  *   with nothing more - so an event that is an unfinished `ESC [` or `ESC O`, or a bare ESC,
@@ -287,10 +327,12 @@ export function readSecretChunk(state: SecretInputState, chunk: string, edge: Se
       else if (sequence.kind === "paste-end") pasting = false;
       continue;
     }
-    const char = buffer[0];
+    const char = buffer[0] ?? "";
     buffer = buffer.slice(1);
-    // Control characters are not part of a key, and some of them move the cursor if they
-    // are written back out. A newline is one of them, bracketed or not: a key has none.
+    const key = keystrokeOf(char, pasting);
+    if (key) return { state: { pending: "", pasting }, text, keystroke: { key, rest: buffer } };
+    // Every other control character is not part of a key, and some of them move the cursor if
+    // they are written back out.
     if (char >= " " && char !== "\u007f") text += char;
   }
   return { state: { pending: "", pasting }, text };
@@ -379,10 +421,8 @@ function readTypedSecret(prompt: string, input: SecretInputStream, output: Secre
     const decoder = new StringDecoder("utf8");
     let typed = "";
     let settled = false;
-    /** What has arrived and not been consumed: at most one unfinished escape sequence. */
-    let buffer = "";
-    /** Between a paste's brackets, where every byte is text rather than a keypress. */
-    let pasting = false;
+    /** How far through a sequence or a paste the reader is: `readSecretChunk`'s state. */
+    let reader: SecretInputState = { ...EMPTY_SECRET_INPUT };
 
     const finish = (settle: () => void) => {
       if (settled) return;
@@ -401,75 +441,69 @@ function readTypedSecret(prompt: string, input: SecretInputStream, output: Secre
       settle();
     };
 
+    const refuse = (message: string) =>
+      finish(() => {
+        output.write("\n");
+        reject(new Error(message));
+      });
+
+    // The grammar is `readSecretChunk`'s, with a read's end meaning only that the read stopped
+    // there: a sequence cut off by it is joined to the next one. What is this prompt's own is
+    // what each keystroke does here.
     const onData = (chunk: Buffer | string) => {
-      buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
-      while (buffer.length > 0 && !settled) {
-        if (buffer[0] === ESC) {
-          const sequence = scanEscape(buffer);
-          // The sequence is still arriving: keep it whole and wait. A sequence split
-          // across two reads is how a paste loses its second half otherwise.
-          if (sequence === "incomplete") return;
-          if (sequence === "runaway") {
+      let rest = typeof chunk === "string" ? chunk : decoder.write(chunk);
+      while (!settled) {
+        const read = readSecretChunk(reader, rest, "read");
+        reader = read.state;
+        switch (read.problem) {
+          case undefined:
+            break;
+          case "unreadable":
+            refuse(UNREADABLE_INPUT);
+            return;
+          case "lost-paste-start":
+            refuse(LOST_PASTE_START);
+            return;
+          default: {
+            const unhandled: never = read.problem;
+            throw new Error(`unhandled key input problem: ${JSON.stringify(unhandled)}`);
+          }
+        }
+        typed += read.text;
+        if (!read.keystroke) return;
+        rest = read.keystroke.rest;
+        switch (read.keystroke.key) {
+          // Enter, or Ctrl-D: on an empty line the shell's EOF, otherwise "I am done typing".
+          case "enter":
+          case "end":
             finish(() => {
               output.write("\n");
-              reject(new Error(UNREADABLE_INPUT));
+              resolve(typed.trim());
             });
             return;
+          // Honoured even between a paste's brackets. A paste whose closing marker never
+          // arrives would otherwise leave the prompt with no way out at all, and a raw 0x03
+          // byte inside a pasted API key is not a thing; being stuck is.
+          case "interrupt":
+            finish(() => {
+              output.write("\n");
+              reject(new PromptCancelledError());
+            });
+            return;
+          case "erase":
+            typed = typed.slice(0, -1);
+            break;
+          case "clear":
+            typed = "";
+            break;
+          // Not part of a key, and nothing at this prompt is bound to it.
+          case "tab":
+            break;
+          default: {
+            const unhandled: never = read.keystroke.key;
+            throw new Error(`unhandled keystroke: ${JSON.stringify(unhandled)}`);
           }
-          buffer = buffer.slice(sequence.consumed);
-          if (sequence.kind === "paste-start") pasting = true;
-          else if (sequence.kind === "paste-end") pasting = false;
-          continue;
         }
-
-        const char = buffer[0];
-        buffer = buffer.slice(1);
-
-        // Ctrl-C is honoured even between the brackets. A paste whose closing marker never
-        // arrives would otherwise leave the prompt with no way out at all, and a raw 0x03
-        // byte inside a pasted API key is not a thing; being stuck is.
-        if (char === CTRL_C) {
-          finish(() => {
-            output.write("\n");
-            reject(new PromptCancelledError());
-          });
-          return;
-        }
-
-        if (pasting) {
-          // Otherwise nothing between the brackets is a keypress - that is what bracketing
-          // is for - so a newline in pasted text does not submit. Control characters are
-          // not part of a key either way, so they are dropped.
-          if (char >= " " && char !== "\u007f") typed += char;
-          continue;
-        }
-
-        if (ENTER.has(char)) {
-          finish(() => {
-            output.write("\n");
-            resolve(typed.trim());
-          });
-          return;
-        }
-        if (char === CTRL_D) {
-          finish(() => {
-            output.write("\n");
-            resolve(typed.trim());
-          });
-          return;
-        }
-        if (ERASE.has(char)) {
-          typed = typed.slice(0, -1);
-          continue;
-        }
-        if (char === CTRL_U) {
-          typed = "";
-          continue;
-        }
-        // Every other control character: not part of a key, and some of them move the
-        // cursor if written back out.
-        if (char < " ") continue;
-        typed += char;
       }
     };
 
@@ -484,7 +518,7 @@ function readTypedSecret(prompt: string, input: SecretInputStream, output: Secre
         // paste, so what arrived is the front of the key and not the key. Returning it
         // would be the silent truncation this reader exists to stop - a fragment stored
         // and reported as success, then a 401 that points at nothing.
-        if (pasting) {
+        if (reader.pasting) {
           reject(new Error(TRUNCATED_PASTE));
           return;
         }

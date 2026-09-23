@@ -8,6 +8,7 @@ import {
   readSecretChunk,
   type SecretInputState,
   type SecretInputStream,
+  type SecretKeystroke,
   settleSecretInput,
 } from "./prompt-secret.js";
 
@@ -285,6 +286,28 @@ describe("promptSecret and a pasted key", () => {
     await expect(answer).resolves.toBe("abc");
   });
 
+  it("drops a tab, which nothing at this prompt is bound to", async () => {
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type("ab\tc\r");
+
+    await expect(answer).resolves.toBe("abc");
+  });
+
+  it("refuses a paste whose end arrives without its start, rather than returning its back half", async () => {
+    // The key field's rule, through the same reader: what came before the closing bracket is
+    // the tail of something whose head went elsewhere.
+    const tty = fakeTerminal();
+
+    const answer = promptSecret(PROMPT, tty);
+    tty.type(`${KEY.slice(6)}\u001b[201~\r`);
+
+    expect(await answerWithin(answer)).toMatch(/^rejected: Error: Could not read the key: a paste ended whose start/);
+    expect(tty.rawModeCalls).toEqual([true, false]);
+    expect(tty.screen()).toBe(`${PROMPT}\n`);
+  });
+
   it("puts the terminal back the way it found it", async () => {
     const tty = fakeTerminal();
 
@@ -518,8 +541,54 @@ describe("readSecretChunk", () => {
     expect(runaway.text).toBe("");
   });
 
-  it("drops the control characters the prompt drops, newlines included", () => {
-    expect(read(`sk-\u0000A\u001fB\rC\nD\u007fE`).text).toBe("sk-ABCDE");
+  it("drops the control characters that are not keystrokes", () => {
+    expect(read("sk-\u0000A\u001fB\u0007C\u001aD")).toEqual({ state: EMPTY_SECRET_INPUT, text: "sk-ABCD" });
+  });
+
+  const KEYSTROKES: [string, string, SecretKeystroke][] = [
+    ["an Enter", "\r", "enter"],
+    ["a line feed", "\n", "enter"],
+    ["a tab", "\t", "tab"],
+    ["a backspace sent as DEL", "\u007f", "erase"],
+    ["a backspace sent as BS", "\u0008", "erase"],
+    ["a Ctrl-U", "\u0015", "clear"],
+    ["a Ctrl-C", "\u0003", "interrupt"],
+    ["a Ctrl-D", "\u0004", "end"],
+  ];
+
+  it.each(KEYSTROKES)("stops at %s where it falls, and hands back what follows it unread", (_case, byte, key) => {
+    // Dropping it and reading on is how a key became `<KEY>glm-5`: the Tab that moved the
+    // cursor was gone, and the model id typed after it was appended to the key.
+    expect(read(`${KEY.slice(0, 20)}${byte}glm-5`)).toEqual({
+      state: EMPTY_SECRET_INPUT,
+      text: KEY.slice(0, 20),
+      keystroke: { key, rest: "glm-5" },
+    });
+  });
+
+  it.each(
+    KEYSTROKES.filter(([, , key]) => key !== "interrupt"),
+  )("reads %s between a paste's brackets as pasted data, and drops it", (_case, byte) => {
+    expect(read(`\u001b[200~${KEY.slice(0, 20)}${byte}${KEY.slice(20)}\u001b[201~`)).toEqual({
+      state: EMPTY_SECRET_INPUT,
+      text: KEY,
+    });
+  });
+
+  it("stops at a Ctrl-C even between a paste's brackets, so a paste that never ends is not a trap", () => {
+    expect(read(`\u001b[200~${KEY.slice(0, 20)}\u0003${KEY.slice(20)}`)).toEqual({
+      state: { pending: "", pasting: true },
+      text: KEY.slice(0, 20),
+      keystroke: { key: "interrupt", rest: KEY.slice(20) },
+    });
+  });
+
+  it("stops at a keystroke right after a paste closes", () => {
+    expect(read(`\u001b[200~${KEY}\u001b[201~\tglm-5`)).toEqual({
+      state: EMPTY_SECRET_INPUT,
+      text: KEY,
+      keystroke: { key: "tab", rest: "glm-5" },
+    });
   });
 
   it("gives up on a paste's closing marker when no paste is open, and keeps nothing it came with", () => {
@@ -893,8 +962,12 @@ describe("settleSecretInput", () => {
     });
   });
 
-  it("resolves one whose last byte could have begun a terminator", () => {
-    expect(settleSecretInput({ pending: "\u001bPabc\u001b", pasting: false }).text).toBe("Pabc");
+  it("resolves one whose last byte could have begun a terminator, and parks nothing", () => {
+    // The field has been left, so that ESC is not the front of anything still to come.
+    expect(settleSecretInput({ pending: "\u001bPabc\u001b", pasting: false })).toEqual({
+      state: EMPTY_SECRET_INPUT,
+      text: "Pabc",
+    });
   });
 
   it("gives the same text as the arrow key it stands in for", () => {
