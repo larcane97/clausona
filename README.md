@@ -165,6 +165,11 @@ clausona add claude:local --api \
 clausona use claude:gw
 ```
 
+`clausona use` records which profile is active; it is the shell hook the installer adds to
+your rc file (`eval "$(clausona shell-init)"`) that applies it each time `claude` starts. In a
+shell without the hook, `use` changes nothing `claude` sees — `clausona run claude:gw` applies
+a profile for one run without it. See [Profile Switching](#profile-switching).
+
 `--base-url` must be an absolute `http://` or `https://` URL carrying no username or
 password — a credential in the URL would be stored in `profiles.json` in plain text, which
 is exactly what the key source exists to avoid. `--auth` picks how the key is presented:
