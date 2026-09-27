@@ -6,6 +6,7 @@ import type {
   ProfileListItem,
   QuotaSnapshot,
   QuotaWindow,
+  ToolName,
   UsageSummary,
 } from "../types.js";
 
@@ -482,6 +483,24 @@ export function describeOtherAccount(id: string, signedInAs: string, registered:
 
 export function describeUnverifiedLogin(id: string): string {
   return `Signed in, but could not read back which account ${id} now uses`;
+}
+
+/** The product name a tool's messages use. */
+export function toolProduct(tool: ToolName): string {
+  return tool === "claude" ? "Claude Code" : "Codex";
+}
+
+/**
+ * A sign-in whose stored credential the tool could not confirm, without saying there is none
+ * (#24). `detail` says why.
+ */
+export function describeUnconfirmedCredential(tool: ToolName, id: string, detail: string): string {
+  return `Signed in, but could not confirm that ${toolProduct(tool)} stored a credential for ${id} (${detail})`;
+}
+
+/** What to do about it. `command` is `clausona login <id>`, styled for where it is shown. */
+export function unconfirmedCredentialHint(tool: ToolName, command: string): string {
+  return `If ${tool} asks you to sign in, run ${command}`;
 }
 
 // ─── Doctor ─────────────────────────────────────────────────────────

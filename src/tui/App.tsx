@@ -8,6 +8,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { bootstrapInitFromCurrentState } from "../commands.js";
 import {
   describeOtherAccount,
+  describeUnconfirmedCredential,
   describeUnverifiedLogin,
   doctorSeverity,
   doctorSummary,
@@ -17,6 +18,7 @@ import {
   localTimezoneLabel,
   offersRepair,
   quotaSeverity,
+  unconfirmedCredentialHint,
 } from "../lib/format.js";
 import { displayName } from "../lib/profile-env.js";
 import { defaultProfileName, profileId } from "../lib/profile-ref.js";
@@ -152,7 +154,14 @@ type AddState = {
   /** The API form's fields. The key it collects is deliberately not among them. */
   api: ApiFormState;
   message?: string;
+  /** Shown under the done step's message: the profile was added, with this caveat. */
+  warning?: string;
 };
+
+/** The TUI's one-string form of `add` and `login`'s unconfirmed-credential warning (#24). */
+function unconfirmedCredentialText(tool: ToolName, id: string, detail: string): string {
+  return `${describeUnconfirmedCredential(tool, id, detail)}. ${unconfirmedCredentialHint(tool, `'clausona login ${id}'`)}.`;
+}
 
 type OverlayState =
   | null
@@ -1322,12 +1331,20 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               setOverlay(null);
               try {
                 const result = await suspendTuiAndRun(() => loginProfile(overlay.profileName));
-                setMessage(
+                const notes = [
                   result.status === "other_account"
-                    ? `${symbol.diamond} ${describeOtherAccount(overlay.profileName, result.signedInAs, result.profile.email)}`
+                    ? describeOtherAccount(overlay.profileName, result.signedInAs, result.profile.email)
                     : result.status === "unverified"
-                      ? `${symbol.diamond} ${describeUnverifiedLogin(overlay.profileName)}`
-                      : `${symbol.check} Re-login completed for ${overlay.profileName}`,
+                      ? describeUnverifiedLogin(overlay.profileName)
+                      : null,
+                  result.credentialUnconfirmed === undefined
+                    ? null
+                    : unconfirmedCredentialText(result.profile.tool, overlay.profileName, result.credentialUnconfirmed),
+                ].filter((note): note is string => note !== null);
+                setMessage(
+                  notes.length > 0
+                    ? `${symbol.diamond} ${notes.join(". ")}`
+                    : `${symbol.check} Re-login completed for ${overlay.profileName}`,
                 );
               } catch (error) {
                 setMessage(`${symbol.cross} ${error instanceof Error ? error.message : String(error)}`);
@@ -1671,8 +1688,16 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               const result = await suspendTuiAndRun(() =>
                 addProfile({ tool: addState.selectedTool, name, mergeSessions: addState.mergeSessions || undefined }),
               );
+              const warning =
+                result.credentialUnconfirmed === undefined
+                  ? undefined
+                  : unconfirmedCredentialText(
+                      addState.selectedTool,
+                      profileId(addState.selectedTool, result.name),
+                      result.credentialUnconfirmed,
+                    );
               setAddState((prev) =>
-                prev ? { ...prev, step: "done", message: `Added ${result.name} (${result.email})` } : null,
+                prev ? { ...prev, step: "done", message: `Added ${result.name} (${result.email})`, warning } : null,
               );
               await refreshDashboard();
             } catch (error) {
@@ -2084,7 +2109,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               flexDirection="column"
               gap={1}
               borderStyle="round"
-              borderColor={color.healthy}
+              borderColor={addState.warning ? color.warning : color.healthy}
               paddingX={2}
               paddingY={1}
             >
@@ -2094,6 +2119,12 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
                   {addState.message}
                 </Text>
               </Box>
+              {addState.warning && (
+                <Box gap={1}>
+                  <Text color={color.warning}>{symbol.diamond}</Text>
+                  <Text color={color.warning}>{addState.warning}</Text>
+                </Box>
+              )}
             </Box>
           </Chrome>
         );

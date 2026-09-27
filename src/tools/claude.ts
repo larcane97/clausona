@@ -7,7 +7,7 @@ import { spawnCommand } from "../core/process.js";
 import { parseClaudeQuota, QuotaHttpError } from "../core/quota.js";
 import { writeKeychainItem } from "../lib/secrets.js";
 import type { QuotaWindows } from "../types.js";
-import type { ToolAdapter, ToolCredential } from "./types.js";
+import type { SignInCheck, ToolAdapter, ToolCredential } from "./types.js";
 
 // `.credentials.json` is the OAuth token store Claude Code uses wherever there is no
 // system keychain — on macOS the tokens live in the Keychain under a per-config-dir
@@ -287,27 +287,137 @@ async function renewClaudeCredential(
   };
 }
 
+type EnvOptions = { homeDir: string; env: NodeJS.ProcessEnv; platform: NodeJS.Platform };
+
+/**
+ * Clears each of `keys` in `env`, in place, by assigning undefined rather than deleting it.
+ * spawnCommand merges the env over process.env on the Windows .cmd shim path, so only an
+ * explicit key can override an inherited value, and Node drops undefined entries when it
+ * spawns. Windows also treats names case-insensitively, so any other spelling is cleared
+ * there as well.
+ */
+function clearEnv(env: NodeJS.ProcessEnv, keys: readonly string[], platform: NodeJS.Platform): void {
+  if (platform === "win32") {
+    const upper = new Set(keys.map((key) => key.toUpperCase()));
+    for (const key of Object.keys(env)) {
+      if (upper.has(key.toUpperCase())) env[key] = undefined;
+    }
+  }
+  for (const key of keys) env[key] = undefined;
+}
+
 /**
  * Environment for `claude auth login` that signs in to the stores clausona reads for
  * `configDir`: CLAUDE_CONFIG_DIR unset for the default dir, set to the dir otherwise.
- *
- * The variable is cleared by assigning undefined rather than deleting it. spawnCommand
- * merges this over process.env on the Windows .cmd shim path, so only an explicit key can
- * override an inherited value, and Node drops undefined entries when it spawns. Windows
- * also treats names case-insensitively, so any other spelling is cleared there as well.
+ * Unset means cleared as clearEnv clears, in any spelling on Windows.
  */
-export function claudeLoginEnv(
-  configDir: string,
-  { homeDir, env, platform }: { homeDir: string; env: NodeJS.ProcessEnv; platform: NodeJS.Platform },
-): NodeJS.ProcessEnv {
+export function claudeLoginEnv(configDir: string, { homeDir, env, platform }: EnvOptions): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = { ...env };
-  if (platform === "win32") {
-    for (const key of Object.keys(out)) {
-      if (key.toUpperCase() === "CLAUDE_CONFIG_DIR") out[key] = undefined;
-    }
-  }
-  out.CLAUDE_CONFIG_DIR = isDefaultClaudeConfigDir(homeDir, configDir) ? undefined : configDir;
+  clearEnv(out, ["CLAUDE_CONFIG_DIR"], platform);
+  if (!isDefaultClaudeConfigDir(homeDir, configDir)) out.CLAUDE_CONFIG_DIR = configDir;
   return out;
+}
+
+/**
+ * Environment for `claude auth status` after a sign-in: the login's own, so it reads the
+ * stores the login wrote, with every variable in `clearKeys` cleared as well. An inherited
+ * ANTHROPIC_API_KEY, OAuth token or provider switch would otherwise answer "logged in" for
+ * a profile with nothing stored. Bare mode (`--bare` sets CLAUDE_CODE_SIMPLE) goes too: it
+ * skips the stored sign-in altogether, so it would answer "not logged in" whatever is stored.
+ */
+export function claudeAuthStatusEnv(
+  configDir: string,
+  { clearKeys, ...options }: EnvOptions & { clearKeys: readonly string[] },
+): NodeJS.ProcessEnv {
+  const out = claudeLoginEnv(configDir, options);
+  clearEnv(out, [...clearKeys, "CLAUDE_CODE_SIMPLE"], options.platform);
+  return out;
+}
+
+// Reading the Keychain can wait on a prompt; an answer that has not come by then is treated
+// as no answer, not as a pass.
+const AUTH_STATUS_TIMEOUT_MS = 30_000;
+
+type AuthStatusRun = { code: number | null; stdout: string } | { error: string };
+
+function runAuthStatus(env: NodeJS.ProcessEnv): Promise<AuthStatusRun> {
+  // The first of the three outcomes wins; a later resolve is a no-op.
+  return new Promise((resolve) => {
+    const child = spawnCommand("claude", ["auth", "status", "--json"], { env, stdio: ["ignore", "pipe", "ignore"] });
+    const timer = setTimeout(() => {
+      resolve({ error: `'claude auth status' did not answer within ${AUTH_STATUS_TIMEOUT_MS / 1000}s` });
+      child.kill();
+      // On Windows the kill ends the shim, not the claude it started, which would hold the
+      // pipe - and with it clausona's exit - open until it ends.
+      child.stdout?.destroy();
+    }, AUTH_STATUS_TIMEOUT_MS);
+    let stdout = "";
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ code, stdout });
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      resolve({ error: `could not run 'claude auth status': ${error.message}` });
+    });
+  });
+}
+
+/** The JSON object `claude auth status --json` printed, taken from its first `{` to its last `}`. */
+function parseAuthStatus(stdout: string): { loggedIn?: unknown; authMethod?: unknown } | null {
+  try {
+    const parsed: unknown = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    return typeof parsed === "object" && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `claude auth login` is no proof of a stored token. Claude Code writes the account to
+ * .claude.json before it stores the token, and a failed store - on macOS a Keychain write
+ * that times out on a locked keychain skips the plaintext fallback - still prints "Login
+ * successful." and exits 0. So Claude Code is asked, through the same stores the login
+ * used, and only a claude.ai sign-in passes: with no token but an API key it would answer
+ * `loggedIn: true` with `authMethod: "api_key"`.
+ */
+async function verifyClaudeSignIn(
+  configDir: string,
+  { clearEnvKeys }: { clearEnvKeys: readonly string[] },
+): Promise<SignInCheck> {
+  const env = claudeAuthStatusEnv(configDir, {
+    homeDir: homedir(),
+    env: process.env,
+    platform: process.platform,
+    clearKeys: clearEnvKeys,
+  });
+  const run = await runAuthStatus(env);
+  if ("error" in run) return { ok: false, reason: "unknown", detail: run.error };
+  const status = parseAuthStatus(run.stdout);
+  if (!status) {
+    return { ok: false, reason: "unknown", detail: `'claude auth status' exited ${run.code} with no JSON answer` };
+  }
+  // Only an answer that says so is taken as no credential: it deletes a new profile's dir.
+  if (status.loggedIn === false) {
+    return { ok: false, reason: "signed_out", detail: "'claude auth status' reports it is not logged in" };
+  }
+  if (status.loggedIn !== true) {
+    return { ok: false, reason: "unknown", detail: "'claude auth status' did not say whether it is logged in" };
+  }
+  if (status.authMethod !== "claude.ai") {
+    return {
+      ok: false,
+      reason: "unknown",
+      detail: `'claude auth status' reports sign-in method ${JSON.stringify(status.authMethod ?? null)}, not claude.ai`,
+    };
+  }
+  if (run.code !== 0) {
+    return { ok: false, reason: "unknown", detail: `'claude auth status' exited ${run.code}` };
+  }
+  return { ok: true };
 }
 
 async function runLoginInteractive(configDir: string): Promise<boolean> {
@@ -337,4 +447,5 @@ export const claudeAdapter: ToolAdapter = {
   fetchQuota: fetchClaudeQuota,
   renewCredential: renewClaudeCredential,
   runLogin: runLoginInteractive,
+  verifySignIn: verifyClaudeSignIn,
 };

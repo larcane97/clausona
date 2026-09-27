@@ -15,6 +15,14 @@ export type ToolCredential = {
   headers?: Record<string, string>;
 };
 
+/**
+ * Whether a finished sign-in left a credential the tool itself can use. `signed_out` is the
+ * tool's own answer that it has none; `unknown` is every case where no usable answer came
+ * back (the check failed to run, timed out, could not be read, or named another sign-in
+ * method). `detail` says which, for the error the caller raises.
+ */
+export type SignInCheck = { ok: true } | { ok: false; reason: "signed_out" | "unknown"; detail: string };
+
 export type ToolAdapter = {
   name: ToolName;
   binary: string;
@@ -59,4 +67,14 @@ export type ToolAdapter = {
   // reads for `configDir`. That is usually the dir as the env-var target, but for Claude's
   // default dir the variable must be unset (see isDefaultClaudeConfigDir).
   runLogin(configDir: string): Promise<boolean>;
+
+  // Asks the tool, after runLogin returned true, whether `configDir` now holds a stored
+  // credential. The login's exit code is not enough where the tool can report success
+  // without having stored its token (Claude Code: #24). `clearEnvKeys` are the variables that
+  // would let the tool authenticate without that credential; the check runs with each one
+  // unset, so only the stored credential can pass it. Passed in rather than imported: the
+  // list lives in src/lib/profile-env, which imports this adapter through the registry.
+  // Optional: Codex reads its account from the same auth.json that holds its tokens, so an
+  // account read back there already proves the store.
+  verifySignIn?(configDir: string, options: { clearEnvKeys: readonly string[] }): Promise<SignInCheck>;
 };

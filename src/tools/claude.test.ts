@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { keychainServiceForConfigDir } from "../core/paths.js";
 import { keychainStandIn, splitSecurityLine } from "../lib/test-keychain.js";
-import { claudeAdapter, claudeLoginEnv } from "./claude.js";
+import { claudeAdapter, claudeAuthStatusEnv, claudeLoginEnv } from "./claude.js";
 
 /** Entries a child would actually receive for the variable, in any spelling. */
 function configDirEntries(env: NodeJS.ProcessEnv): Array<[string, string]> {
@@ -40,6 +40,24 @@ describe("claudeLoginEnv", () => {
 
     expect(env.claude_config_dir).toBe(work);
     expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+  });
+});
+
+describe("claudeAuthStatusEnv", () => {
+  it("clears each named variable and bare mode in any spelling on Windows, keeping the login's CLAUDE_CONFIG_DIR", () => {
+    const homeDir = "/h";
+    const work = path.join(homeDir, ".claude-work");
+    const env = claudeAuthStatusEnv(work, {
+      homeDir,
+      env: { Anthropic_Api_Key: "from-the-shell", CLAUDE_CODE_USE_BEDROCK: "1", Claude_Code_Simple: "1", PATH: "p" },
+      platform: "win32",
+      clearKeys: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK"],
+    });
+
+    expect(Object.entries(env).filter(([, value]) => value !== undefined)).toEqual([
+      ["PATH", "p"],
+      ["CLAUDE_CONFIG_DIR", work],
+    ]);
   });
 });
 
