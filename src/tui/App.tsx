@@ -664,7 +664,8 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
    * would type it as `[201~` - hear it as part of what is dropped.
    *
    * `useInput`'s handler hears an event before this listener - it is subscribed for the App's
-   * whole life, this one from when the method step is drawn - and nothing depends on that. The one place
+   * whole life except while a sign-in holds the terminal, which never happens with the form
+   * in reach; this one from when the method step is drawn - and nothing depends on that. The one place
    * the two disagree, a keystroke that both ends a parked sequence and moves the cursor, is
    * settled by `releaseApiInput` whichever comes first.
    *
@@ -1041,9 +1042,13 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
 
   async function suspendTuiAndRun<T>(fn: () => Promise<T>): Promise<T> {
     setSuspended(true);
-    // Wait a tick for Ink to render empty output before we hand over stdout
+    // Wait a tick for Ink to render empty output and release stdin before we hand it over
     await new Promise((r) => setTimeout(r, 50));
     process.stdin.setRawMode?.(false);
+    // The child shares our terminal, so stop reading it ourselves: a stdin that is still
+    // reading races the child for keystrokes, e.g. the code pasted into `claude auth login`.
+    // This only takes effect once Ink has dropped its 'readable' listener (see useInput).
+    process.stdin.pause();
     process.stdout.write("\x1B[2J\x1B[0;0H"); // clear screen
     try {
       return await fn();
@@ -2004,7 +2009,11 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
       }
     }
   });
-  useInput(handleInput);
+  // This hook runs before the `suspended` early return, so switch it off explicitly while a
+  // child owns the terminal. Going inactive makes Ink drop its stdin listener, which lets
+  // suspendTuiAndRun's pause() stop the reads; otherwise keys meant for the child (a pasted
+  // login code, Enter, Esc) would be taken and handled as TUI input.
+  useInput(handleInput, { isActive: !suspended });
 
   // ── Screens ──
 
