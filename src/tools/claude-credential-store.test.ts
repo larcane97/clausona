@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { splitSecurityLine } from "../lib/test-keychain.js";
 import { claudeAdapter } from "./claude.js";
@@ -13,9 +13,11 @@ import { claudeAdapter } from "./claude.js";
 // given exit status. `nextReadFails` fails only the next secret read, and `writeFails`
 // every write, with the given status. A write arrives as `security -i` with the command on
 // stdin, or in the arguments when it is too long for one line; `calls` logs each command
-// as it would run.
+// as it would run. Items are keyed on service and account, as the Keychain's are. A lookup
+// by service alone takes the first one added: the real order is undocumented, and the cases
+// only need another account's item to be what such a lookup finds.
 const keychain = vi.hoisted(() => ({
-  items: new Map<string, string>(),
+  items: [] as Array<{ service: string; account: string; secret: string }>,
   calls: [] as string[][],
   mode: "normal" as "normal" | "not-installed" | number,
   nextReadFails: undefined as number | undefined,
@@ -33,22 +35,31 @@ function runFake(args: string[]): { code: number; out: string } {
   const [verb, ...rest] = args;
   const option = (flag: string) => (rest.includes(flag) ? rest[rest.indexOf(flag) + 1] : undefined);
   const service = option("-s") ?? "";
+  const account = option("-a");
+  // find takes the first item with the service, and with the account too when one is given.
+  const at = keychain.items.findIndex(
+    (item) => item.service === service && (account === undefined || item.account === account),
+  );
   if (verb === "find-generic-password") {
     const wantsSecret = rest.includes("-w");
-    const secret = keychain.items.get(service);
     if (wantsSecret && keychain.nextReadFails !== undefined) {
       const code = keychain.nextReadFails;
       keychain.nextReadFails = undefined;
       return { code, out: "" };
     }
     if (wantsSecret && typeof keychain.mode === "number") return { code: keychain.mode, out: "" };
-    if (secret === undefined) return { code: 44, out: "" };
-    return { code: 0, out: wantsSecret ? `${secret}\n` : `    "acct"<blob>="tester"\n` };
+    const item = keychain.items[at];
+    if (item === undefined) return { code: 44, out: "" };
+    return { code: 0, out: wantsSecret ? `${item.secret}\n` : "" };
   }
   if (verb === "add-generic-password") {
     if (keychain.writeFails !== undefined) return { code: keychain.writeFails, out: "" };
     const hex = option("-X");
-    keychain.items.set(service, hex === undefined ? (option("-w") ?? "") : Buffer.from(hex, "hex").toString("utf8"));
+    const secret = hex === undefined ? (option("-w") ?? "") : Buffer.from(hex, "hex").toString("utf8");
+    // -U replaces the item with this service and account, and no other.
+    const same = keychain.items.find((item) => item.service === service && item.account === (account ?? ""));
+    if (same) same.secret = secret;
+    else keychain.items.push({ service, account: account ?? "", secret });
     return { code: 0, out: "" };
   }
   return { code: 1, out: "" };
@@ -91,11 +102,18 @@ const realPlatform = process.platform;
 const setPlatform = (platform: NodeJS.Platform) =>
   Object.defineProperty(process, "platform", { value: platform, configurable: true });
 
+// Claude Code files its item under the login name in USER, so every case runs as this one.
+const ACCOUNT = "fixture-user";
+beforeEach(() => {
+  vi.stubEnv("USER", ACCOUNT);
+});
+
 const temps: string[] = [];
 afterEach(() => {
   setPlatform(realPlatform);
   vi.unstubAllGlobals();
-  keychain.items.clear();
+  vi.unstubAllEnvs();
+  keychain.items.length = 0;
   keychain.calls.length = 0;
   keychain.mode = "normal";
   keychain.nextReadFails = undefined;
@@ -110,6 +128,14 @@ function profileDir(): string {
 }
 
 const serviceFor = (configDir: string) => claudeAdapter.keychainServiceName?.({ homeDir: homedir(), configDir }) ?? "";
+
+/** Leaves an item for the profile's service, under Claude Code's account unless told otherwise. */
+const seedItem = (configDir: string, secret: string, account = ACCOUNT) =>
+  keychain.items.push({ service: serviceFor(configDir), account, secret });
+
+/** What the profile's item under `account` holds, or undefined when there is no such item. */
+const storedItem = (configDir: string, account = ACCOUNT) =>
+  keychain.items.find((item) => item.service === serviceFor(configDir) && item.account === account)?.secret;
 
 const blobWith = (accessToken: string) =>
   JSON.stringify({
@@ -140,10 +166,7 @@ function stubRefresh(inFlight?: () => void) {
  * the file is deleted.
  */
 function moveToKeychain(configDir: string) {
-  keychain.items.set(
-    serviceFor(configDir),
-    JSON.stringify({ ...readFileBlob(configDir), mcpOAuth: { server: "moved" } }),
-  );
+  seedItem(configDir, JSON.stringify({ ...readFileBlob(configDir), mcpOAuth: { server: "moved" } }));
   rmSync(credentialsFile(configDir));
 }
 
@@ -157,7 +180,7 @@ describe("Claude credential store on macOS", () => {
   it("reads the Keychain item when there is one", async () => {
     setPlatform("darwin");
     const dir = profileDir();
-    keychain.items.set(serviceFor(dir), blobWith("from-keychain"));
+    seedItem(dir, blobWith("from-keychain"));
     // Claude Code reads the Keychain first, so a leftover file must not win.
     writeFileSync(credentialsFile(dir), blobWith("from-file"));
 
@@ -203,7 +226,7 @@ describe("Claude credential store on macOS", () => {
     setPlatform("darwin");
     keychain.mode = 51;
     const dir = profileDir();
-    keychain.items.set(serviceFor(dir), blobWith("from-keychain"));
+    seedItem(dir, blobWith("from-keychain"));
     writeFileSync(credentialsFile(dir), blobWith("from-file"));
 
     expect(await claudeAdapter.readCredential?.(dir)).toBeNull();
@@ -213,7 +236,7 @@ describe("Claude credential store on macOS", () => {
     // Claude Code's read of such an item comes back empty, so it moves on to the file.
     setPlatform("darwin");
     const dir = profileDir();
-    keychain.items.set(serviceFor(dir), "not a credential");
+    seedItem(dir, "not a credential");
     writeFileSync(credentialsFile(dir), blobWith("from-file"));
 
     expect((await claudeAdapter.readCredential?.(dir))?.accessToken).toBe("from-file");
@@ -239,7 +262,7 @@ describe("Claude credential store on macOS", () => {
     // The rest of the blob is carried over untouched.
     expect(stored.mcpOAuth).toEqual({ server: "kept" });
     expect(keychainWrites()).toEqual([]);
-    expect(keychain.items.size).toBe(0);
+    expect(keychain.items.length).toBe(0);
     // Read back from where it was written, so the next reading uses the renewed token.
     expect((await claudeAdapter.readCredential?.(dir))?.accessToken).toBe("renewed");
   });
@@ -266,7 +289,7 @@ describe("Claude credential store on macOS", () => {
     expect(stored.claudeAiOauth).toMatchObject({ accessToken: "renewed", refreshToken: "renewed-refresh" });
     expect(stored.mcpOAuth).toEqual({ server: "kept" });
     expect(keychainWrites()).toEqual([]);
-    expect(keychain.items.size).toBe(0);
+    expect(keychain.items.length).toBe(0);
   });
 
   it("renews into the Keychain when the credential moves there while the request is in flight", async () => {
@@ -279,7 +302,7 @@ describe("Claude credential store on macOS", () => {
 
     await renew(dir, "from-file-refresh");
 
-    const stored = JSON.parse(keychain.items.get(serviceFor(dir)) ?? "{}");
+    const stored = JSON.parse(storedItem(dir) ?? "{}");
     expect(stored.claudeAiOauth).toMatchObject({ accessToken: "renewed", refreshToken: "renewed-refresh" });
     // The blob it re-read, with what was added to it in the meantime.
     expect(stored.mcpOAuth).toEqual({ server: "moved" });
@@ -300,7 +323,7 @@ describe("Claude credential store on macOS", () => {
 
     await renew(dir, "from-file-refresh");
 
-    const stored = JSON.parse(keychain.items.get(serviceFor(dir)) ?? "{}");
+    const stored = JSON.parse(storedItem(dir) ?? "{}");
     expect(stored.claudeAiOauth).toMatchObject({ accessToken: "renewed", refreshToken: "renewed-refresh" });
     // The earlier copy stands in for the blob that could not be read, MCP tokens and all.
     expect(stored.mcpOAuth).toEqual({ server: "kept" });
@@ -321,7 +344,7 @@ describe("Claude credential store on macOS", () => {
     await renew(dir, "from-file-refresh");
 
     expect(keychainWrites()).toHaveLength(1);
-    expect(keychain.items.size).toBe(0);
+    expect(keychain.items.length).toBe(0);
     const stored = readFileBlob(dir);
     expect(stored.claudeAiOauth).toMatchObject({ accessToken: "renewed", refreshToken: "renewed-refresh" });
     expect(stored.mcpOAuth).toEqual({ server: "kept" });
@@ -330,15 +353,37 @@ describe("Claude credential store on macOS", () => {
   it("renews a Keychain-sourced credential into the Keychain, not the file", async () => {
     setPlatform("darwin");
     const dir = profileDir();
-    const service = serviceFor(dir);
-    keychain.items.set(service, blobWith("from-keychain"));
+    seedItem(dir, blobWith("from-keychain"));
     stubRefresh();
 
     await renew(dir, "from-keychain-refresh");
 
     expect(keychainWrites()).toHaveLength(1);
-    expect(JSON.parse(keychain.items.get(service) ?? "{}").claudeAiOauth.accessToken).toBe("renewed");
+    expect(JSON.parse(storedItem(dir) ?? "{}").claudeAiOauth.accessToken).toBe("renewed");
     expect(existsSync(credentialsFile(dir))).toBe(false);
+  });
+
+  it("reads and renews the item under Claude Code's account when another account has one for the service", async () => {
+    // Another account's item, added first so that a lookup by service alone finds it. It is
+    // not the profile's credential, and renewing it instead would leave Claude Code's own
+    // item holding the refresh token the provider has just rotated out.
+    setPlatform("darwin");
+    const dir = profileDir();
+    seedItem(dir, blobWith("other-account"), "other-user");
+    expect(await claudeAdapter.hasKeychainCredential?.(serviceFor(dir))).toBe(false);
+
+    seedItem(dir, blobWith("from-keychain"));
+    expect(await claudeAdapter.hasKeychainCredential?.(serviceFor(dir))).toBe(true);
+    expect((await claudeAdapter.readCredential?.(dir))?.accessToken).toBe("from-keychain");
+    stubRefresh();
+
+    await renew(dir, "from-keychain-refresh");
+
+    expect(JSON.parse(storedItem(dir) ?? "{}").claudeAiOauth).toMatchObject({
+      accessToken: "renewed",
+      refreshToken: "renewed-refresh",
+    });
+    expect(storedItem(dir, "other-user")).toBe(blobWith("other-account"));
   });
 
   it("probes the fallback file for an access token", async () => {

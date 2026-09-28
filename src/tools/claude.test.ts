@@ -1,11 +1,17 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { keychainServiceForConfigDir } from "../core/paths.js";
 import { keychainStandIn, splitSecurityLine } from "../lib/test-keychain.js";
-import { claudeAdapter, claudeAuthStatusEnv, claudeLoginEnv } from "./claude.js";
+import { claudeAdapter, claudeAuthStatusEnv, claudeKeychainAccount, claudeLoginEnv } from "./claude.js";
+
+// The OS's user name can be set per case, so the case for it does not depend on who runs it.
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, userInfo: vi.fn(actual.userInfo) };
+});
 
 /** Entries a child would actually receive for the variable, in any spelling. */
 function configDirEntries(env: NodeJS.ProcessEnv): Array<[string, string]> {
@@ -58,6 +64,36 @@ describe("claudeAuthStatusEnv", () => {
       ["PATH", "p"],
       ["CLAUDE_CONFIG_DIR", work],
     ]);
+  });
+});
+
+describe("claudeKeychainAccount", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("is the login name in USER", () => {
+    vi.stubEnv("USER", "fixture.user_1-a");
+    expect(claudeKeychainAccount()).toBe("fixture.user_1-a");
+  });
+
+  it("is claude-code-user for a name Claude Code will not use", () => {
+    vi.stubEnv("USER", "fixture user");
+    expect(claudeKeychainAccount()).toBe("claude-code-user");
+  });
+
+  it("is the OS's user name when USER is not set", () => {
+    vi.stubEnv("USER", undefined);
+    vi.mocked(userInfo).mockReturnValueOnce({ username: "os-user", uid: 501, gid: 20, shell: null, homedir: "/h" });
+    expect(claudeKeychainAccount()).toBe("os-user");
+  });
+
+  it("is claude-code-user when the OS cannot say who the user is", () => {
+    vi.stubEnv("USER", undefined);
+    vi.mocked(userInfo).mockImplementationOnce(() => {
+      throw new Error("no passwd entry");
+    });
+    expect(claudeKeychainAccount()).toBe("claude-code-user");
   });
 });
 
@@ -153,6 +189,8 @@ describe.skipIf(process.platform === "win32")("renewing a Claude credential in t
     const keychain = keychainStandIn(path.join(home, "keychain"));
     const service = keychainServiceForConfigDir({ homeDir: home, configDir });
     keychain.seed(service, "fixture-user", JSON.stringify(stored));
+    // The account Claude Code files its item under.
+    vi.stubEnv("USER", "fixture-user");
     vi.stubEnv("HOME", home);
     vi.stubEnv("PATH", `${keychain.bin}${path.delimiter}${process.env.PATH ?? ""}`);
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });

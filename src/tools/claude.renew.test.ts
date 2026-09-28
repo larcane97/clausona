@@ -34,6 +34,7 @@ beforeEach(() => {
 afterEach(() => {
   forcePlatform(realPlatform);
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -84,6 +85,7 @@ describe("claudeAdapter.renewCredential", () => {
 describe("claudeAdapter.readCredential on macOS", () => {
   it("reads a Keychain blob that `security` prints as hex", async () => {
     forcePlatform("darwin");
+    vi.stubEnv("USER", "fixture-user");
     const accessToken = token("oat01", "hex");
     // One non-ASCII character anywhere is enough for `security -w` to print hex.
     const blob = { claudeAiOauth: { accessToken }, mcpOAuth: { "café|abc123": { accessToken: "mcp-token" } } };
@@ -100,7 +102,7 @@ describe("claudeAdapter.readCredential on macOS", () => {
 
     expect(spawnCommand).toHaveBeenCalledWith(
       "security",
-      ["find-generic-password", "-s", expect.stringMatching(/^Claude Code-credentials-/), "-w"],
+      ["find-generic-password", "-s", expect.stringMatching(/^Claude Code-credentials-/), "-a", "fixture-user", "-w"],
       expect.anything(),
     );
     expect(credential?.accessToken).toBe(accessToken);
