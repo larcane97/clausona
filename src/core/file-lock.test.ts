@@ -10,14 +10,33 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { acquireFileLock } from "./file-lock.js";
+import { acquireFileLock, type ReleaseFileLock } from "./file-lock.js";
 
 const STALE_MS = 60_000;
 
+// Runs `run` once, just after the `nth` stat of `path` from now returns: when a waiter has
+// looked at the lock but not yet acted on what it saw, which is the gap another waiter can
+// get into.
+let afterStat: { path: string; nth: number; run: () => Promise<void> } | null = null;
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const stat = async (filePath: string) => {
+    const info = await actual.stat(filePath);
+    const hook = afterStat;
+    if (hook?.path === filePath && --hook.nth === 0) {
+      afterStat = null;
+      await hook.run();
+    }
+    return info;
+  };
+  return { ...actual, stat };
+});
+
 const temps: string[] = [];
 afterEach(() => {
+  afterStat = null;
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -26,6 +45,18 @@ function freshLockPath() {
   const root = mkdtempSync(path.join(tmpdir(), "clausona-lock-"));
   temps.push(root);
   return path.join(root, "locks", "test.lock");
+}
+
+/** Writes `content` to `filePath` as a process that took a lock `ageMs` ago would have left it. */
+function writeAged(filePath: string, content: string, ageMs: number) {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, content);
+  age(filePath, ageMs);
+}
+
+function age(filePath: string, ageMs: number) {
+  const then = new Date(Date.now() - ageMs);
+  utimesSync(filePath, then, then);
 }
 
 describe("acquireFileLock", () => {
@@ -95,15 +126,74 @@ describe("acquireFileLock", () => {
 
   it("takes over a lock older than the stale threshold", async () => {
     const lockPath = freshLockPath();
-    mkdirSync(path.dirname(lockPath), { recursive: true });
-    writeFileSync(lockPath, "99999");
-    const then = new Date(Date.now() - 2 * STALE_MS);
-    utimesSync(lockPath, then, then);
+    writeAged(lockPath, "99999", 2 * STALE_MS);
 
     const release = await acquireFileLock(lockPath, { staleMs: STALE_MS });
 
     expect(release).not.toBeNull();
-    expect(readFileSync(lockPath, "utf8")).toBe(String(process.pid));
+    expect(readFileSync(lockPath, "utf8")).toMatch(new RegExp(`^${process.pid}-`));
     await release?.();
+  });
+
+  it("leaves a successor's lock alone when a holder that overran the stale threshold releases", async () => {
+    const lockPath = freshLockPath();
+    const late = await acquireFileLock(lockPath, { staleMs: STALE_MS });
+    age(lockPath, 2 * STALE_MS);
+    const successor = await acquireFileLock(lockPath, { staleMs: STALE_MS });
+    expect(successor).not.toBeNull();
+    const taken = readFileSync(lockPath, "utf8");
+
+    await late?.();
+
+    expect(readFileSync(lockPath, "utf8")).toBe(taken);
+    expect(await acquireFileLock(lockPath, { staleMs: STALE_MS })).toBeNull();
+    await successor?.();
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it("lets only one of two waiters take over the same stale lock", async () => {
+    const lockPath = freshLockPath();
+    writeAged(lockPath, "99999", 2 * STALE_MS);
+
+    // A waiter looks at the lock twice: once to find it stale, then again just before it
+    // removes it. Another waiter arrives between that second look and the removal, where
+    // only the steal lock keeps it from taking over the same lock too.
+    let other = null as ReleaseFileLock | null;
+    afterStat = {
+      path: lockPath,
+      nth: 2,
+      run: async () => {
+        other = await acquireFileLock(lockPath, { staleMs: STALE_MS });
+      },
+    };
+    const release = await acquireFileLock(lockPath, { staleMs: STALE_MS });
+
+    // The other waiter did get into that gap.
+    expect(afterStat).toBeNull();
+    expect(other).toBeNull();
+    expect(release).not.toBeNull();
+    expect(readFileSync(lockPath, "utf8")).toMatch(new RegExp(`^${process.pid}-`));
+    await release?.();
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it("waits for a takeover in progress, but not for one whose process died", async () => {
+    const lockPath = freshLockPath();
+    const stealPath = `${lockPath}.steal`;
+    writeAged(lockPath, "99999", 2 * STALE_MS);
+    // Another waiter is part way through taking the lock over.
+    writeAged(stealPath, "88888", 0);
+
+    expect(await acquireFileLock(lockPath, { staleMs: STALE_MS })).toBeNull();
+
+    // A steal lock as old as the lock's own stale threshold is abandoned, whatever
+    // threshold the steal lock uses.
+    age(stealPath, STALE_MS);
+    const release = await acquireFileLock(lockPath, { staleMs: STALE_MS });
+
+    expect(release).not.toBeNull();
+    expect(existsSync(stealPath)).toBe(false);
+    await release?.();
+    expect(existsSync(lockPath)).toBe(false);
   });
 });
