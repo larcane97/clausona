@@ -134,7 +134,10 @@ this code:
   never a silent fallback.
 - **Renewal is locked per profile**, so two clausona processes cannot both rotate the
   same credential and leave one of them holding a token the provider has already
-  invalidated.
+  invalidated. It also takes Claude Code's own refresh and credential-write locks in the
+  profile's config dir: while a running Claude Code is renewing the same sign-in, clausona
+  leaves it to Claude Code and uses the token it stores, and neither overwrites the other's
+  write.
 
 Claude credentials stay in the macOS Keychain (or `.credentials.json` elsewhere) and
 Codex credentials in `auth.json`, in place — unrelated contents of those stores, such as

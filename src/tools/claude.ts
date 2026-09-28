@@ -1,7 +1,8 @@
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import path from "node:path";
 
+import { acquireDirLock, type ReleaseDirLock } from "../core/dir-lock.js";
 import { claudeJsonPathForConfigDir, isDefaultClaudeConfigDir, keychainServiceForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { parseClaudeQuota, QuotaHttpError } from "../core/quota.js";
@@ -287,32 +288,101 @@ type RefreshResponse = {
   scope?: string;
 };
 
+// Claude Code's own locks on a config dir's credential, which it takes with proper-lockfile
+// (2.1.283) and acquireDirLock takes the same way; the stale and update times are its own.
+// It refreshes under two, taken in this order: `.oauth_refresh.lock` in the config dir,
+// then the legacy `<config dir>.lock` next to it. Every write to the store - its own
+// renewal's, an MCP server's token - is a re-read, merge and write under a third,
+// `.storage-write.lock` in the config dir.
+const REFRESH_LOCK = { staleMs: 60_000, updateMs: 5_000 };
+// Claude Code holds this one for a single store write at a time. A renewal waits for it long
+// enough for a dead holder's lock to go stale and be taken over: a holder refreshes the mtime
+// 7.5 s after taking the lock and every 7.5 s after that, so one that dies just after a
+// refresh leaves it fresh for up to 22.5 s from when the wait began, and a second more where
+// the filesystem keeps whole seconds.
+const STORAGE_WRITE_LOCK = { staleMs: 15_000, updateMs: 7_500, waitMs: 25_000, retryMs: 100 };
+
 /**
- * Renews via the OAuth refresh grant and stores the result.
+ * Takes Claude Code's two refresh locks in its order, resolving to the function that
+ * releases both, or to null while another process holds either. The legacy lock sits in the
+ * config dir's parent, which need not be writable, so one that cannot be created at all is
+ * done without, as Claude Code does.
+ */
+async function acquireRefreshLocks(configDir: string): Promise<ReleaseDirLock | null> {
+  const releaseCurrent = await acquireDirLock(path.join(configDir, ".oauth_refresh.lock"), REFRESH_LOCK);
+  if (!releaseCurrent) return null;
+
+  const legacyPath = `${await realpath(configDir).catch(() => configDir)}.lock`;
+  // Undefined, as opposed to null for a held lock, when it could not be created.
+  const releaseLegacy = await acquireDirLock(legacyPath, REFRESH_LOCK).catch(() => undefined);
+  if (releaseLegacy === null) {
+    await releaseCurrent();
+    return null;
+  }
+
+  return async () => {
+    await releaseLegacy?.();
+    await releaseCurrent();
+  };
+}
+
+/**
+ * Renews via the OAuth refresh grant and stores the result, or resolves to null, having
+ * changed nothing, while a running Claude Code holds its refresh lock for this config dir.
  *
  * The provider rotates the refresh token and rejects the previous one immediately —
  * there is no reuse window — so the response is persisted before this returns and any
- * persistence failure is raised rather than swallowed.
+ * persistence failure is raised rather than swallowed. The same goes for a running Claude
+ * Code: if it spends the same refresh token at the same moment, whichever of the two comes
+ * second is refused, and a Claude Code that loses can lose its session's sign-in. So the
+ * renewal happens under Claude Code's own refresh locks, and backs off while it holds them.
  */
 async function renewClaudeCredential(
   configDir: string,
   credential: ToolCredential,
   signal: AbortSignal,
-): Promise<ToolCredential> {
+): Promise<ToolCredential | null> {
   if (!credential.refreshToken) {
     throw new Error("no refresh token stored for this profile");
   }
 
-  // Kept in case the re-read after the refresh fails, since writing back an empty blob
+  const releaseRefreshLocks = await acquireRefreshLocks(configDir);
+  if (!releaseRefreshLocks) return null;
+  try {
+    return await renewUnderRefreshLocks(configDir, credential, signal);
+  } finally {
+    await releaseRefreshLocks();
+  }
+}
+
+async function renewUnderRefreshLocks(
+  configDir: string,
+  credential: ToolCredential,
+  signal: AbortSignal,
+): Promise<ToolCredential> {
+  // Read again under the locks, as Claude Code does. An access token other than the one
+  // being renewed means another process renewed it since it was read: its refresh token is
+  // spent, and what is stored now is the credential to use. A store that cannot be read, or
+  // that holds nothing, cannot say, and a signed-out profile must stay signed out, so
+  // neither is renewed.
+  //
+  // Also kept in case the re-read after the refresh fails, since writing back an empty blob
   // would drop everything besides claudeAiOauth, the profile's MCP OAuth tokens included.
-  const before = await readStoredBlob(configDir);
+  const before = await lookupStoredBlob(configDir);
+  if (before === "unreadable") throw new Error("the stored credential could not be read to check it before renewal");
+  const current = toCredential(before?.blob ?? null);
+  if (!before || !current) throw new Error("no credential is stored for this profile any more");
+  if (current.accessToken !== credential.accessToken) return current;
+  // The refresh token posted is the one stored now, which the save below checks is still there.
+  const postedRefreshToken = current.refreshToken;
+  if (!postedRefreshToken) throw new Error("no refresh token stored for this profile");
 
   const response = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       grant_type: "refresh_token",
-      refresh_token: credential.refreshToken,
+      refresh_token: postedRefreshToken,
       client_id: OAUTH_CLIENT_ID,
     }),
     signal,
@@ -326,51 +396,80 @@ async function renewClaudeCredential(
   const data = (await response.json()) as RefreshResponse;
   if (!data.access_token) throw new Error("refresh response carried no access token");
 
-  // Re-read rather than reusing the earlier copy: another process may have rewritten
-  // unrelated parts of the blob (mcpOAuth) while the request was in flight. The earlier
-  // copy stands in only when this read fails, and it brings the store it was read from,
-  // unless it was the Keychain that failed.
-  const reread = await lookupStoredBlob(configDir);
-  const stored = (reread === "unreadable" ? null : reread) ?? before;
-  const blob = stored?.blob ?? {};
-  const previous = blob.claudeAiOauth ?? {};
-  const now = Date.now();
-
-  blob.claudeAiOauth = {
-    ...previous,
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token ?? credential.refreshToken,
-    ...(data.expires_in ? { expiresAt: now + data.expires_in * 1000 } : {}),
-    ...(data.refresh_token_expires_in ? { refreshTokenExpiresAt: now + data.refresh_token_expires_in * 1000 } : {}),
-    ...(data.scope ? { scopes: data.scope.split(" ") } : {}),
-  };
-
-  // Back to the store it came from. On macOS a blob read from the plaintext file means the
-  // Keychain held no item: Claude Code keeps reading the file for as long as that stays
-  // true, and the Keychain is the store that refused its write in the first place. That
-  // holds for the earlier copy as well - a file that is mid-rewrite when it is re-read
-  // does not make the Keychain the right place. With nothing stored at all, the
-  // platform's primary store is the one it reads first.
+  // The re-read, merge and write happen under Claude Code's write lock, so no write of its
+  // own - an MCP server's token, say - lands between them and is overwritten. It is not held
+  // across the request above, which would hold up every such write for as long as that took.
   //
-  // A Keychain that failed the re-read is different: the credential can have moved into it
-  // since the earlier copy was read, and Claude Code reads it before the file, so the
-  // earlier copy's store proves nothing. Write the way Claude Code does - the Keychain,
-  // and the file only when the Keychain refuses the write.
-  if (reread === "unreadable") {
-    try {
-      await writeStoredBlob(configDir, blob, "keychain");
-    } catch {
-      await writeStoredBlob(configDir, blob, "file");
-    }
-  } else {
-    await writeStoredBlob(configDir, blob, stored?.store ?? (process.platform === "darwin" ? "keychain" : "file"));
-  }
+  // A lock that is still held after the wait, or that cannot be taken at all, is written
+  // without. The refresh token has rotated by now, so a write given up loses the sign-in for
+  // certain, while one made without the lock risks at most a write of Claude Code's that
+  // lands at the same moment.
+  const releaseWriteLock = await acquireDirLock(path.join(configDir, ".storage-write.lock"), STORAGE_WRITE_LOCK).catch(
+    () => null,
+  );
+  try {
+    // Re-read rather than reusing the earlier copy: another process may have rewritten
+    // unrelated parts of the blob (mcpOAuth) while the request was in flight. The earlier
+    // copy stands in only when this read fails, and it brings the store it was read from,
+    // unless it was the Keychain that failed.
+    const reread = await lookupStoredBlob(configDir);
 
-  return {
-    accessToken: data.access_token,
-    refreshToken: blob.claudeAiOauth.refreshToken,
-    expiresAt: blob.claudeAiOauth.expiresAt,
-  };
+    // Saved only over the sign-in that was renewed, as Claude Code's own save after a refresh
+    // is. A stored refresh token other than the one posted - from a `/login` that saved new
+    // tokens while the request was in flight, which takes the write lock alone - is newer
+    // than this renewal, so it is kept and used instead. An empty one is how Claude Code
+    // marks a refresh token the provider refused, and the renewal does replace that.
+    if (reread && reread !== "unreadable") {
+      const storedRefreshToken = reread.blob.claudeAiOauth?.refreshToken;
+      if (storedRefreshToken !== postedRefreshToken && storedRefreshToken !== "") {
+        const newer = toCredential(reread.blob);
+        if (!newer) throw new Error("the sign-in was removed while it was being renewed");
+        return newer;
+      }
+    }
+
+    const stored = (reread === "unreadable" ? null : reread) ?? before;
+    const blob = stored.blob;
+    const previous = blob.claudeAiOauth ?? {};
+    const now = Date.now();
+
+    blob.claudeAiOauth = {
+      ...previous,
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token ?? postedRefreshToken,
+      ...(data.expires_in ? { expiresAt: now + data.expires_in * 1000 } : {}),
+      ...(data.refresh_token_expires_in ? { refreshTokenExpiresAt: now + data.refresh_token_expires_in * 1000 } : {}),
+      ...(data.scope ? { scopes: data.scope.split(" ") } : {}),
+    };
+
+    // Back to the store it came from. On macOS a blob read from the plaintext file means the
+    // Keychain held no item: Claude Code keeps reading the file for as long as that stays
+    // true, and the Keychain is the store that refused its write in the first place. That
+    // holds for the earlier copy as well - a file that is mid-rewrite when it is re-read
+    // does not make the Keychain the right place.
+    //
+    // A Keychain that failed the re-read is different: the credential can have moved into it
+    // since the earlier copy was read, and Claude Code reads it before the file, so the
+    // earlier copy's store proves nothing. Write the way Claude Code does - the Keychain,
+    // and the file only when the Keychain refuses the write.
+    if (reread === "unreadable") {
+      try {
+        await writeStoredBlob(configDir, blob, "keychain");
+      } catch {
+        await writeStoredBlob(configDir, blob, "file");
+      }
+    } else {
+      await writeStoredBlob(configDir, blob, stored.store);
+    }
+
+    return {
+      accessToken: data.access_token,
+      refreshToken: blob.claudeAiOauth.refreshToken,
+      expiresAt: blob.claudeAiOauth.expiresAt,
+    };
+  } finally {
+    await releaseWriteLock?.();
+  }
 }
 
 type EnvOptions = { homeDir: string; env: NodeJS.ProcessEnv; platform: NodeJS.Platform };

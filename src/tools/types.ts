@@ -66,8 +66,9 @@ export type ToolAdapter = {
   // Rotation has no grace period: the moment the provider answers, the old refresh
   // token is dead. An implementation MUST therefore persist the response before it
   // returns, and MUST throw if it cannot — a caller that sees a return value is
-  // entitled to assume the new credential survived the process.
-  renewCredential?(configDir: string, credential: ToolCredential, signal: AbortSignal): Promise<ToolCredential>;
+  // entitled to assume the new credential survived the process. Null means it changed
+  // nothing because the tool itself was renewing the same credential at the time.
+  renewCredential?(configDir: string, credential: ToolCredential, signal: AbortSignal): Promise<ToolCredential | null>;
 
   // Spawns the tool's interactive login so that it signs in to the same stores the adapter
   // reads for `configDir`. That is usually the dir as the env-var target, but for Claude's
