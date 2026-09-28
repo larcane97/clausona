@@ -7,10 +7,10 @@
  * ever reaches GitHub.
  */
 
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
-import { rename, rm, writeFile } from "node:fs/promises";
+import { readdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -235,18 +235,53 @@ function digestIn(text: string): string | null {
   return /\b[0-9a-f]{64}\b/i.exec(text)?.[0].toLowerCase() ?? null;
 }
 
+/** What `node <candidate> --version` printed; rejected with why, when it did not answer. */
+function runVersion(nodePath: string, candidate: string, version: string, signal: AbortSignal | undefined) {
+  return new Promise<string>((resolve, reject) => {
+    execFile(
+      nodePath,
+      [candidate, "--version"],
+      { encoding: "utf8", timeout: VERIFY_TIMEOUT_MS, signal },
+      (error, stdout) => {
+        if (!error) {
+          resolve(stdout);
+        } else if (signal?.aborted) {
+          // Node reports the call-off as an AbortError of its own, whose string code would read as
+          // a filesystem refusal; the caller's reason is what performUpdate passes on.
+          reject(signal.reason);
+        } else if (typeof error.code === "string") {
+          // A string code is the spawn's own errno (ENOENT, EACCES); an exit has a number, or none.
+          reject(new Error(`The downloaded v${version} did not start: ${error.message}`));
+        } else if (error.killed) {
+          reject(
+            new Error(`The downloaded v${version} did not answer --version within ${VERIFY_TIMEOUT_MS / 1000} s.`),
+          );
+        } else {
+          reject(new Error(`The downloaded v${version} exited with ${error.code ?? error.signal} on --version.`));
+        }
+      },
+    );
+  });
+}
+
 /**
  * Runs the downloaded bundle once, as the launcher will, and requires it to report the version
  * that was offered. The checksum proves the bytes are the ones published; this proves they start
  * on this machine's node and are the release the user said yes to.
+ *
+ * The run does not block, and `signal` kills it. Run synchronously, it held the event loop for as
+ * long as the child took - up to the timeout where a scanner inspects each new process - so the
+ * spinner froze, and a Ctrl+C typed meanwhile was read only once the swap had begun.
  */
-function verifyCandidate(nodePath: string, candidate: string, version: string) {
-  const result = spawnSync(nodePath, [candidate, "--version"], { encoding: "utf8", timeout: VERIFY_TIMEOUT_MS });
-  if (result.error) throw new Error(`The downloaded v${version} did not start: ${result.error.message}`);
-  if (result.status !== 0) {
-    throw new Error(`The downloaded v${version} exited with ${result.status ?? result.signal} on --version.`);
-  }
-  const reported = /\bv(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(result.stdout.replace(ANSI, ""))?.[1];
+async function verifyCandidate(
+  nodePath: string,
+  candidate: string,
+  version: string,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const stdout = await runVersion(nodePath, candidate, version, signal);
+  // Build metadata included: a `+build` tag is one VERSION_PATTERN and tagFromLocation accept.
+  const reported = /\bv(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)/.exec(stdout.replace(ANSI, ""))?.[1];
   if (reported !== version) {
     throw new Error(`The downloaded file reports ${reported ? `v${reported}` : "no version"}, not v${version}.`);
   }
@@ -254,7 +289,8 @@ function verifyCandidate(nodePath: string, candidate: string, version: string) {
 
 /**
  * `rename`, retried on Windows while something holds the file. An antivirus scanner opening a
- * freshly written executable is the usual cause, and it lets go within a second.
+ * freshly written executable is the usual cause, and it lets go within a second. `signal` stops
+ * the retries: one that went ahead after it would swap in an update the user had called off.
  */
 export async function replaceFile(
   from: string,
@@ -263,6 +299,7 @@ export async function replaceFile(
     platform: NodeJS.Platform;
     delaysMs: readonly number[];
     rename?: (from: string, to: string) => Promise<void>;
+    signal?: AbortSignal;
   },
 ): Promise<void> {
   const renameFile = options.rename ?? rename;
@@ -274,9 +311,57 @@ export async function replaceFile(
       const code = (error as NodeJS.ErrnoException).code;
       const held = options.platform === "win32" && (code === "EPERM" || code === "EBUSY");
       if (!held || attempt >= options.delaysMs.length) throw error;
+      options.signal?.throwIfAborted();
       await new Promise((resolve) => setTimeout(resolve, options.delaysMs[attempt]));
+      options.signal?.throwIfAborted();
     }
   }
+}
+
+/** The name an update writes its candidate under, beside the installed `index.js`: one per process. */
+function candidateName(pid: number): string {
+  return `index.update-${pid}.js`;
+}
+
+/** `candidateName`'s names and nothing else, so the sweep below leaves every other file alone. */
+const CANDIDATE_NAME = /^index\.update-(\d+)\.js$/;
+
+/**
+ * Whether process `pid` is running. Signal 0 sends nothing and only asks: ESRCH is the one answer
+ * that means there is no such process, and EPERM is a running one that belongs to someone else.
+ * Any other answer counts as running: a leftover kept costs some disk, while a candidate removed
+ * from under a live update costs that update.
+ */
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+/**
+ * Removes the candidates of updates that died before their rename. `clausona update` stopped by
+ * Ctrl+C (it has no handler to clean up), SIGKILL or a power cut leaves `index.update-<pid>.js`
+ * behind, and nothing else would ever remove it. A candidate whose process still runs is another
+ * update in progress, and is left to it. Best effort: a leftover it cannot remove must not cost
+ * the user this update.
+ */
+async function removeStaleCandidates(directory: string): Promise<void> {
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch {
+    return;
+  }
+  await Promise.all(
+    names.map(async (name) => {
+      const pid = Number(CANDIDATE_NAME.exec(name)?.[1]);
+      if (!pid || pid === process.pid || isRunning(pid)) return;
+      await rm(path.join(directory, name), { force: true }).catch(() => {});
+    }),
+  );
 }
 
 /**
@@ -291,8 +376,8 @@ export async function replaceFile(
  * (ERR_UNKNOWN_FILE_EXTENSION).
  *
  * `signal` calls the update off - the dashboard's, when csn is closed with Ctrl+C mid-install. A
- * download stops at once; after the downloads, the update stops before the write and again before
- * the swap, and in every case leaves `target` as it was.
+ * download or the `--version` run stops at once; otherwise the update stops before the write,
+ * before the swap and between the swap's retries, and in every case leaves `target` as it was.
  */
 export async function performUpdate(options: {
   tag: string;
@@ -313,25 +398,28 @@ export async function performUpdate(options: {
   const version = versionOfTag(tag);
   const base = `${RELEASES_URL}/download/${encodeURIComponent(tag)}`;
 
-  const bundle = await download(fetchFn, `${base}/clausona.js`, `clausona ${tag}`, signal);
   // Required, not best-effort: the release that ships this updater is the first to publish one,
-  // so every release an updater can be offered has it.
+  // so every release an updater can be offered has it. Fetched first, so a release without one
+  // fails before its 2.3 MB bundle is downloaded for nothing.
   const published = digestIn(
     new TextDecoder().decode(await download(fetchFn, `${base}/clausona.js.sha256`, `the checksum for ${tag}`, signal)),
   );
   if (!published) throw new Error(`The checksum published for ${tag} is not a SHA-256 digest.`);
+  const bundle = await download(fetchFn, `${base}/clausona.js`, `clausona ${tag}`, signal);
   if (createHash("sha256").update(bundle).digest("hex") !== published) {
     throw new Error(`The download of ${tag} does not match its published checksum.`);
   }
 
-  const candidate = path.join(path.dirname(target), `index.update-${process.pid}.js`);
+  const directory = path.dirname(target);
+  await removeStaleCandidates(directory);
+  const candidate = path.join(directory, candidateName(process.pid));
   try {
     signal?.throwIfAborted();
     await writeFile(candidate, bundle);
-    verifyCandidate(nodePath, candidate, version);
-    // spawnSync blocks, so a call-off that arrived during the write or the `--version` run is seen only here.
+    await verifyCandidate(nodePath, candidate, version, signal);
+    // The `--version` run can end just as the call-off arrives; this is the last point before the swap.
     signal?.throwIfAborted();
-    await replaceFile(candidate, target, { platform, delaysMs: RENAME_RETRY_DELAYS_MS });
+    await replaceFile(candidate, target, { platform, delaysMs: RENAME_RETRY_DELAYS_MS, signal });
   } catch (error) {
     await rm(candidate, { force: true }).catch(() => {});
     // A filesystem refusal (EACCES on a root-owned install, say) says which file it was about. Its

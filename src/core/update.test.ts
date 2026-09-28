@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -288,6 +289,29 @@ describe("replaceFile", () => {
     await expect(replaceFile("a", "b", { platform, delaysMs: [0, 0, 0], rename })).rejects.toThrow(code);
     expect(rename).toHaveBeenCalledTimes(1);
   });
+
+  // Ctrl+C on the dashboard while a scanner holds the new file: a retry after it would swap in the
+  // update the user has just called off.
+  it.each([
+    ["as a rename is refused", (controller: AbortController) => controller.abort()],
+    ["while it waits to retry", (controller: AbortController) => setTimeout(() => controller.abort(), 0)],
+  ])("renames nothing more once the caller gives up %s", async (_when, giveUp) => {
+    const controller = new AbortController();
+    const rename = vi.fn(async (_from: string, _to: string) => {
+      giveUp(controller);
+      throw refusal("EPERM");
+    });
+
+    const error = await replaceFile("a", "b", {
+      platform: "win32",
+      delaysMs: [50, 50, 50],
+      rename,
+      signal: controller.signal,
+    }).catch((e) => e);
+
+    expect(error).toBe(controller.signal.reason);
+    expect(rename).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("performUpdate", () => {
@@ -350,10 +374,23 @@ describe("performUpdate", () => {
 
     expect(readFileSync(target, "utf8")).toBe(bundle);
     expect(leftovers()).toEqual([]);
+    // The checksum first: a release without one then fails before the bundle is downloaded.
     expect(urls).toEqual([
-      "https://github.com/larcane97/clausona/releases/download/v0.3.1-beta/clausona.js",
       "https://github.com/larcane97/clausona/releases/download/v0.3.1-beta/clausona.js.sha256",
+      "https://github.com/larcane97/clausona/releases/download/v0.3.1-beta/clausona.js",
     ]);
+  });
+
+  // The regex that reads `--version` stopped at `+`, so a release with build metadata never matched its tag.
+  it.each([
+    ["v0.3.1+build.1", "0.3.1+build.1"],
+    ["v0.3.1-beta+exp.sha.5114f85", "0.3.1-beta+exp.sha.5114f85"],
+  ])("installs %s, whose version carries build metadata", async (tag, version) => {
+    const bundle = bundleReporting(version);
+    const { fetch } = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
+
+    await performUpdate({ tag, target, fetch });
+    expect(readFileSync(target, "utf8")).toBe(bundle);
   });
 
   it("accepts a checksum in upper case with CRLF and a binary marker", async () => {
@@ -375,12 +412,13 @@ describe("performUpdate", () => {
     await expectUntouched(performUpdate({ tag: TAG, target, fetch }), /does not match its published checksum/);
   });
 
-  it("refuses a release without a checksum", async () => {
-    const { fetch } = release({ "clausona.js": bundleReporting("0.3.1-beta") });
+  it("refuses a release without a checksum, without downloading its bundle", async () => {
+    const { fetch, urls } = release({ "clausona.js": bundleReporting("0.3.1-beta") });
     await expectUntouched(
       performUpdate({ tag: TAG, target, fetch }),
       /Could not download the checksum for v0\.3\.1-beta: HTTP 404/,
     );
+    expect(urls).toEqual(["https://github.com/larcane97/clausona/releases/download/v0.3.1-beta/clausona.js.sha256"]);
   });
 
   it("refuses a checksum file with no digest in it", async () => {
@@ -392,7 +430,7 @@ describe("performUpdate", () => {
   });
 
   it("fails when the bundle cannot be downloaded", async () => {
-    const { fetch } = release({ "clausona.js": 500 });
+    const { fetch } = release({ "clausona.js": 500, "clausona.js.sha256": `${sha256("any")}  clausona.js\n` });
     await expectUntouched(
       performUpdate({ tag: TAG, target, fetch }),
       /Could not download clausona v0\.3\.1-beta: HTTP 500/,
@@ -411,6 +449,15 @@ describe("performUpdate", () => {
     await expectUntouched(performUpdate({ tag: TAG, target, fetch }), /exited with 3/);
   });
 
+  it("says the bundle did not start when node cannot be run", async () => {
+    const bundle = bundleReporting("0.3.1-beta");
+    const { fetch } = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
+    await expectUntouched(
+      performUpdate({ tag: TAG, target, fetch, nodePath: path.join(dir, "no-such-node") }),
+      /The downloaded v0\.3\.1-beta did not start: .*ENOENT/,
+    );
+  });
+
   // Ctrl+C on the dashboard while it installs: the download stops then, not at its 30 s timeout.
   it("stops a download at once when the caller gives up", async () => {
     const controller = new AbortController();
@@ -424,17 +471,44 @@ describe("performUpdate", () => {
     expect(urls).toHaveLength(1);
     controller.abort();
 
-    await expectUntouched(update, /Could not download clausona v0\.3\.1-beta/);
+    await expectUntouched(update, /Could not download the checksum for v0\.3\.1-beta/);
+  });
+
+  // The `--version` run held the event loop while it ran, so a Ctrl+C typed then was read only
+  // after it, and the swap it should have stopped was already under way.
+  it("stops the --version run at once when the caller gives up during it", async () => {
+    const markers = mkdtempSync(path.join(tmpdir(), "clausona-verify-"));
+    const started = path.join(markers, "started");
+    try {
+      // Says that it is running, then never answers.
+      const bundle = `require("node:fs").writeFileSync(${JSON.stringify(started)}, "");\nsetInterval(() => {}, 1000);\n`;
+      const controller = new AbortController();
+      const { fetch } = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
+
+      const update = performUpdate({ tag: TAG, target, fetch, signal: controller.signal }).catch((e) => e);
+      await vi.waitFor(() => expect(existsSync(started)).toBe(true), { timeout: 5000, interval: 20 });
+      const abortedAt = Date.now();
+      controller.abort();
+      const error = await update;
+
+      // The abort itself, not a "did not start" or "exited with" that would blame the release.
+      expect(error).toBe(controller.signal.reason);
+      expect(Date.now() - abortedAt).toBeLessThan(2000);
+      expect(readFileSync(target, "utf8")).toBe(OLD);
+      expect(leftovers()).toEqual([]);
+    } finally {
+      rmSync(markers, { recursive: true, force: true });
+    }
   });
 
   it("swaps nothing in when the caller gives up after the downloads", async () => {
     const bundle = bundleReporting("0.3.1-beta");
     const controller = new AbortController();
     const served = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
-    // The checksum is the last download, and it arrives whole: only the write and the swap are left to stop.
+    // The bundle is the last download, and it arrives whole: only the write and the swap are left to stop.
     const fetch: FetchLike = async (url, init) => {
       const response = await served.fetch(url, init);
-      if (url.endsWith(".sha256")) controller.abort();
+      if (url.endsWith("/clausona.js")) controller.abort();
       return response;
     };
 
@@ -445,6 +519,43 @@ describe("performUpdate", () => {
     expect(error).toBe(controller.signal.reason);
     expect(readFileSync(target, "utf8")).toBe(OLD);
     expect(leftovers()).toEqual([]);
+  });
+
+  /** A pid no process can have: past Linux's pid_max, and not a multiple of 4 as Windows pids are. */
+  const NO_SUCH_PID = 2_147_483_646;
+
+  // An update killed between its write and its rename - Ctrl+C in the CLI, SIGKILL, a power cut -
+  // leaves its candidate behind, and nothing else would ever remove it.
+  it("removes candidates left by updates no longer running, and nothing else", async () => {
+    const bundle = bundleReporting("0.3.1-beta");
+    const { fetch } = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
+    // The process that started this test runs for as long as it does: an update still in progress.
+    const running = `index.update-${process.ppid}.js`;
+    const unrelated = [
+      "index.update-abc.js",
+      `index.update-${NO_SUCH_PID}.js.bak`,
+      `old-index.update-${NO_SUCH_PID}.js`,
+      "notes.txt",
+    ];
+    for (const name of [`index.update-${NO_SUCH_PID}.js`, running, ...unrelated]) {
+      writeFileSync(path.join(dir, name), "// left behind\n");
+    }
+
+    await performUpdate({ tag: TAG, target, fetch });
+
+    expect(readFileSync(target, "utf8")).toBe(bundle);
+    expect(leftovers().sort()).toEqual([running, ...unrelated].sort());
+  });
+
+  it("still updates when a stale candidate cannot be removed", async () => {
+    const bundle = bundleReporting("0.3.1-beta");
+    const { fetch } = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
+    // A directory by a candidate's name: removing a file there fails, on every platform.
+    mkdirSync(path.join(dir, `index.update-${NO_SUCH_PID}.js`));
+
+    await performUpdate({ tag: TAG, target, fetch });
+
+    expect(readFileSync(target, "utf8")).toBe(bundle);
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
