@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +28,19 @@ vi.mock("../core/process.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../core/process.js")>()),
   spawnCommand: (command: string, args: string[]) => fakeSecurity(command, args),
 }));
+
+// The real locks, with every wait cut to `maxWaitMs`, so a case can keep a lock held past
+// the wait without waiting as long as a renewal would.
+const lockWait = vi.hoisted(() => ({ maxWaitMs: Number.POSITIVE_INFINITY }));
+
+vi.mock("../core/dir-lock.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../core/dir-lock.js")>();
+  return {
+    ...actual,
+    acquireDirLock: (lockPath: string, options: import("../core/dir-lock.js").DirLockOptions) =>
+      actual.acquireDirLock(lockPath, { ...options, waitMs: Math.min(options.waitMs ?? 0, lockWait.maxWaitMs) }),
+  };
+});
 
 /** Runs one command and returns its exit status and stdout. */
 function runFake(args: string[]): { code: number; out: string } {
@@ -118,12 +131,16 @@ afterEach(() => {
   keychain.mode = "normal";
   keychain.nextReadFails = undefined;
   keychain.writeFails = undefined;
+  lockWait.maxWaitMs = Number.POSITIVE_INFINITY;
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+/** A config dir inside a temp dir of its own, where the legacy refresh lock next to it also lands. */
 function profileDir(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "clausona-credstore-"));
-  temps.push(dir);
+  const root = mkdtempSync(path.join(tmpdir(), "clausona-credstore-"));
+  temps.push(root);
+  const dir = path.join(root, ".claude-work");
+  mkdirSync(dir);
   return dir;
 }
 
@@ -170,10 +187,15 @@ function moveToKeychain(configDir: string) {
   rmSync(credentialsFile(configDir));
 }
 
-async function renew(configDir: string, refreshToken: string) {
+/** Renews the credential blobWith(accessToken) holds, as a lookup that read it would. */
+async function renew(configDir: string, accessToken: string) {
   const renewCredential = claudeAdapter.renewCredential;
   if (!renewCredential) throw new Error("claudeAdapter has no renewCredential");
-  return renewCredential(configDir, { accessToken: "stale", refreshToken }, new AbortController().signal);
+  return renewCredential(
+    configDir,
+    { accessToken, refreshToken: `${accessToken}-refresh` },
+    new AbortController().signal,
+  );
 }
 
 describe("Claude credential store on macOS", () => {
@@ -253,7 +275,7 @@ describe("Claude credential store on macOS", () => {
     writeFileSync(credentialsFile(dir), blobWith("from-file"), { mode: 0o600 });
     const fetchMock = stubRefresh();
 
-    const renewed = await renew(dir, "from-file-refresh");
+    const renewed = await renew(dir, "from-file");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(renewed).toMatchObject({ accessToken: "renewed", refreshToken: "renewed-refresh" });
@@ -283,7 +305,7 @@ describe("Claude credential store on macOS", () => {
       }),
     );
 
-    await renew(dir, "from-file-refresh");
+    await renew(dir, "from-file");
 
     const stored = readFileBlob(dir);
     expect(stored.claudeAiOauth).toMatchObject({ accessToken: "renewed", refreshToken: "renewed-refresh" });
@@ -300,7 +322,7 @@ describe("Claude credential store on macOS", () => {
     writeFileSync(credentialsFile(dir), blobWith("from-file"), { mode: 0o600 });
     stubRefresh(() => moveToKeychain(dir));
 
-    await renew(dir, "from-file-refresh");
+    await renew(dir, "from-file");
 
     const stored = JSON.parse(storedItem(dir) ?? "{}");
     expect(stored.claudeAiOauth).toMatchObject({ accessToken: "renewed", refreshToken: "renewed-refresh" });
@@ -321,7 +343,7 @@ describe("Claude credential store on macOS", () => {
       keychain.nextReadFails = 51;
     });
 
-    await renew(dir, "from-file-refresh");
+    await renew(dir, "from-file");
 
     const stored = JSON.parse(storedItem(dir) ?? "{}");
     expect(stored.claudeAiOauth).toMatchObject({ accessToken: "renewed", refreshToken: "renewed-refresh" });
@@ -341,7 +363,7 @@ describe("Claude credential store on macOS", () => {
       keychain.writeFails = 51;
     });
 
-    await renew(dir, "from-file-refresh");
+    await renew(dir, "from-file");
 
     expect(keychainWrites()).toHaveLength(1);
     expect(keychain.items.length).toBe(0);
@@ -356,7 +378,7 @@ describe("Claude credential store on macOS", () => {
     seedItem(dir, blobWith("from-keychain"));
     stubRefresh();
 
-    await renew(dir, "from-keychain-refresh");
+    await renew(dir, "from-keychain");
 
     expect(keychainWrites()).toHaveLength(1);
     expect(JSON.parse(storedItem(dir) ?? "{}").claudeAiOauth.accessToken).toBe("renewed");
@@ -377,7 +399,7 @@ describe("Claude credential store on macOS", () => {
     expect((await claudeAdapter.readCredential?.(dir))?.accessToken).toBe("from-keychain");
     stubRefresh();
 
-    await renew(dir, "from-keychain-refresh");
+    await renew(dir, "from-keychain");
 
     expect(JSON.parse(storedItem(dir) ?? "{}").claudeAiOauth).toMatchObject({
       accessToken: "renewed",
@@ -416,9 +438,139 @@ describe.each(["linux", "win32"] as const)("Claude credential store on %s", (pla
     writeFileSync(credentialsFile(dir), blobWith("from-file"), { mode: 0o600 });
     stubRefresh();
 
-    await renew(dir, "from-file-refresh");
+    await renew(dir, "from-file");
 
     expect(readFileBlob(dir).claudeAiOauth.accessToken).toBe("renewed");
     expect(keychain.calls).toEqual([]);
+  });
+});
+
+/**
+ * Claude Code takes these locks itself: the two refresh locks to renew the same credential,
+ * and the write lock for every write to the store. A lock another holder has is a directory
+ * made here, fresh, so it counts as held.
+ */
+describe("renewing a Claude credential alongside a running Claude Code", () => {
+  const refreshLock = (configDir: string) => path.join(configDir, ".oauth_refresh.lock");
+  const legacyRefreshLock = (configDir: string) => `${realpathSync(configDir)}.lock`;
+  const writeLock = (configDir: string) => path.join(configDir, ".storage-write.lock");
+  const locksLeft = (configDir: string) =>
+    [refreshLock(configDir), legacyRefreshLock(configDir), writeLock(configDir)].filter((lock) => existsSync(lock));
+
+  it.each([
+    ["refresh lock", refreshLock],
+    ["legacy refresh lock", legacyRefreshLock],
+  ])("leaves the renewal to Claude Code while it holds its %s", async (_name, heldLock) => {
+    setPlatform("darwin");
+    const dir = profileDir();
+    seedItem(dir, blobWith("from-keychain"));
+    mkdirSync(heldLock(dir));
+    const fetchMock = stubRefresh();
+
+    expect(await renew(dir, "from-keychain")).toBeNull();
+
+    // Spending the refresh token as well would get one of the two refused.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(keychainWrites()).toEqual([]);
+    // Its lock stays its own, and none of this renewal's is left behind.
+    expect(locksLeft(dir)).toEqual([heldLock(dir)]);
+  });
+
+  it("takes the credential another process renewed instead of renewing it again", async () => {
+    setPlatform("darwin");
+    const dir = profileDir();
+    // Renewed by Claude Code since the lookup read "from-keychain": that refresh token is spent.
+    seedItem(dir, blobWith("renewed-elsewhere"));
+    const fetchMock = stubRefresh();
+
+    const renewed = await renew(dir, "from-keychain");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(renewed).toMatchObject({ accessToken: "renewed-elsewhere", refreshToken: "renewed-elsewhere-refresh" });
+    expect(keychainWrites()).toEqual([]);
+    expect(locksLeft(dir)).toEqual([]);
+  });
+
+  it("holds both refresh locks through the request, and the write lock only for the write", async () => {
+    setPlatform("darwin");
+    const dir = profileDir();
+    seedItem(dir, blobWith("from-keychain"));
+    let heldInFlight: string[] = [];
+    stubRefresh(() => {
+      heldInFlight = locksLeft(dir);
+    });
+
+    await renew(dir, "from-keychain");
+
+    expect(heldInFlight).toEqual([refreshLock(dir), legacyRefreshLock(dir)]);
+    expect(JSON.parse(storedItem(dir) ?? "{}").claudeAiOauth.accessToken).toBe("renewed");
+    expect(locksLeft(dir)).toEqual([]);
+  });
+
+  it("stores the renewal once a write Claude Code has under way is done", async () => {
+    setPlatform("darwin");
+    const dir = profileDir();
+    seedItem(dir, blobWith("from-keychain"));
+    // Claude Code starts a write while the request is in flight and finishes it a little later.
+    let storedAtRelease: string | undefined;
+    let writeDone: Promise<void> = Promise.resolve();
+    stubRefresh(() => {
+      mkdirSync(writeLock(dir));
+      writeDone = new Promise((resolve) =>
+        setTimeout(() => {
+          storedAtRelease = JSON.parse(storedItem(dir) ?? "{}").claudeAiOauth.accessToken;
+          rmSync(writeLock(dir), { recursive: true });
+          resolve();
+        }, 300),
+      );
+    });
+
+    const renewed = await renew(dir, "from-keychain");
+    await writeDone;
+
+    // Nothing was written while its lock was held, and the renewal landed after it.
+    expect(storedAtRelease).toBe("from-keychain");
+    expect(renewed).toMatchObject({ accessToken: "renewed" });
+    const stored = JSON.parse(storedItem(dir) ?? "{}");
+    expect(stored.claudeAiOauth.accessToken).toBe("renewed");
+    expect(stored.mcpOAuth).toEqual({ server: "kept" });
+    expect(locksLeft(dir)).toEqual([]);
+  });
+
+  it("stores the renewal without the write lock when it stays held past the wait", async () => {
+    // The refresh token has rotated by then, so giving up the write would lose the sign-in.
+    setPlatform("darwin");
+    const dir = profileDir();
+    seedItem(dir, blobWith("from-keychain"));
+    lockWait.maxWaitMs = 200;
+    stubRefresh(() => mkdirSync(writeLock(dir)));
+
+    const renewed = await renew(dir, "from-keychain");
+
+    expect(renewed).toMatchObject({ accessToken: "renewed", refreshToken: "renewed-refresh" });
+    const stored = JSON.parse(storedItem(dir) ?? "{}");
+    expect(stored.claudeAiOauth).toMatchObject({ accessToken: "renewed", refreshToken: "renewed-refresh" });
+    expect(stored.mcpOAuth).toEqual({ server: "kept" });
+    // The lock is its holder's, still.
+    expect(locksLeft(dir)).toEqual([writeLock(dir)]);
+  });
+
+  it("keeps a sign-in saved while the request was in flight rather than overwriting it", async () => {
+    // A `/login` takes the write lock alone, so it can save new tokens during the request. They
+    // are newer than the renewal, which is dropped, as Claude Code's own save drops it.
+    setPlatform("linux");
+    const dir = profileDir();
+    writeFileSync(credentialsFile(dir), blobWith("from-file"), { mode: 0o600 });
+    stubRefresh(() => writeFileSync(credentialsFile(dir), blobWith("signed-in-again")));
+
+    const renewed = await renew(dir, "from-file");
+
+    expect(renewed).toEqual({
+      accessToken: "signed-in-again",
+      refreshToken: "signed-in-again-refresh",
+      expiresAt: 1,
+    });
+    expect(readFileSync(credentialsFile(dir), "utf8")).toBe(blobWith("signed-in-again"));
+    expect(locksLeft(dir)).toEqual([]);
   });
 });
