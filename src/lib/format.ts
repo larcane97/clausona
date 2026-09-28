@@ -21,6 +21,7 @@ import {
   padEnd as pad,
   red,
   secondary,
+  stripAnsi,
   styledCost,
   styledCount,
   truncate,
@@ -47,6 +48,18 @@ export function formatCurrency(value: number) {
 
 export function formatCount(value: number) {
   return value > 0 ? value.toLocaleString("en-US") : "—";
+}
+
+const COMPACT = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+
+/** A count in a few characters - `12.2B` - for a column with no room for every digit. */
+export function formatCompactCount(value: number) {
+  return value > 0 ? COMPACT.format(value) : "—";
+}
+
+/** A cost in a few characters - `$218.1K` - for a column with no room for every digit. */
+export function formatCompactCurrency(value: number) {
+  return value >= 1000 ? `$${COMPACT.format(value)}` : formatCurrency(value);
 }
 
 /** Compact one-line quota for dense rows, e.g. `5h 61% | 7d 100%`. */
@@ -443,24 +456,34 @@ export function renderUsageSummary(
 
   // All profiles
   const entries = data as Record<string, UsageSummary>;
+  const totalCost = Object.values(entries).reduce((sum, s) => sum + s.cost, 0);
+  const totalIn = Object.values(entries).reduce((sum, s) => sum + s.inputTokens, 0);
+  const totalOut = Object.values(entries).reduce((sum, s) => sum + s.outputTokens, 0);
+
+  const rowCells = [
+    ...Object.entries(entries).map(([name, s]) => [
+      name,
+      styledCost(s.cost),
+      styledCount(s.inputTokens),
+      styledCount(s.outputTokens),
+    ]),
+    [bold("Total"), bold(styledCost(totalCost)), styledCount(totalIn), styledCount(totalOut)],
+  ];
+  // Each column as wide as its widest cell and two more, never narrower than it always was.
+  // At a fixed width, a name or a count as long as its column ran straight into the next one.
   const cols = [
     { label: "PROFILE", w: 16 },
     { label: "COST", w: 14 },
     { label: "INPUT", w: 14 },
     { label: "OUTPUT", w: 14 },
-  ];
+  ].map((col, i) => ({ ...col, w: Math.max(col.w, ...rowCells.map((cells) => stripAnsi(cells[i] ?? "").length + 2)) }));
   const headerLine = `    ${cols.map((c) => secondary(c.label.padEnd(c.w))).join("")}`;
   const sep = `    ${dimmer("─".repeat(cols.reduce((s, c) => s + c.w, 0)))}`;
 
-  const rows = Object.entries(entries).map(([name, s]) => {
-    return `    ${name.padEnd(cols[0].w)}${pad(styledCost(s.cost), cols[1].w)}${pad(styledCount(s.inputTokens), cols[2].w)}${styledCount(s.outputTokens)}`;
-  });
-
-  const totalCost = Object.values(entries).reduce((sum, s) => sum + s.cost, 0);
-  const totalIn = Object.values(entries).reduce((sum, s) => sum + s.inputTokens, 0);
-  const totalOut = Object.values(entries).reduce((sum, s) => sum + s.outputTokens, 0);
-
-  const totalRow = `    ${pad(bold("Total"), cols[0].w)}${pad(bold(styledCost(totalCost)), cols[1].w)}${pad(styledCount(totalIn), cols[2].w)}${styledCount(totalOut)}`;
+  const line = (cells: string[]) =>
+    `    ${cells.map((cell, i) => (i === cells.length - 1 ? cell : pad(cell, cols[i].w))).join("")}`;
+  const rows = rowCells.slice(0, -1).map(line);
+  const totalRow = line(rowCells.at(-1) ?? []);
 
   return [
     "",

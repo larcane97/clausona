@@ -1,5 +1,6 @@
 import { Box, Text } from "ink";
 import { color, symbol } from "../theme.js";
+import { useWidth } from "../use-width.js";
 
 export type SelectListItem = {
   id: string;
@@ -22,6 +23,49 @@ const badgeColorMap: Record<string, string> = {
   primary: color.accent,
 };
 
+/** The cursor's column and the gap after it; the checkbox's, in a multi-select list. */
+const MARK_COLUMN = 3;
+
+/**
+ * What a label keeps however long its badge and meta are: enough of a profile name to tell it
+ * from the next one. Without a floor the label was the only part of a row allowed to shrink, so
+ * a quota reading or a doctor summary beside it squeezed the name to `cl…`, or off the row.
+ */
+const LABEL_FLOOR = 16;
+
+/**
+ * The fewest columns a cut badge or meta is drawn in - three characters and the ellipsis. With
+ * less it is left out: `●…` beside a name says nothing.
+ */
+const PART_FLOOR = 4;
+
+/** The columns each part of a row gets: the label, then the badge and the meta (0 for none). */
+type RowFit = { label: number; badge: number; meta: number };
+
+/**
+ * How a row's label, badge and meta share `space` columns when they do not all fit: the label
+ * keeps its floor, the badge comes next - `active` is short and says the most - then the meta,
+ * and whatever is left goes back to the label. Worked out here rather than left to ink: yoga
+ * does not honour a floor on one child of a row while it shrinks the others, and drew such a
+ * row at its full width, past the panel's edge.
+ */
+function fitRow(label: number, badge: number, meta: number, space: number): RowFit {
+  const floor = Math.min(label, LABEL_FLOOR, Math.max(0, space));
+  let left = space - floor;
+  // A part is drawn whole, or cut to no fewer than PART_FLOOR columns, after a gap - or not at all.
+  const share = (want: number) => {
+    const room = left - 1;
+    if (want <= 0) return 0;
+    if (room >= want) return want;
+    return room >= PART_FLOOR ? room : 0;
+  };
+  const badgeFit = share(badge);
+  if (badgeFit > 0) left -= badgeFit + 1;
+  const metaFit = share(meta);
+  if (metaFit > 0) left -= metaFit + 1;
+  return { label: Math.min(label, floor + Math.max(0, left)), badge: badgeFit, meta: metaFit };
+}
+
 export function SelectList({
   items,
   index,
@@ -31,10 +75,20 @@ export function SelectList({
   index: number;
   multi?: boolean;
 }) {
+  const [list, width] = useWidth();
+  const space = width - MARK_COLUMN - (multi ? MARK_COLUMN : 0);
+
   return (
-    <Box flexDirection="column" gap={0}>
+    <Box ref={list} flexDirection="column" gap={0}>
       {items.map((item, i) => {
         const focused = i === index;
+        const badge = item.badge ? `${symbol.dot} ${item.badge}` : "";
+        const meta = item.meta ?? "";
+        const whole = item.label.length + (badge ? badge.length + 1 : 0) + (meta ? meta.length + 1 : 0);
+        // Only a row that has more than its label, and does not fit, is laid out by hand; a label
+        // alone is cut by ink as it always was.
+        const fit =
+          (badge || meta) && whole > space ? fitRow(item.label.length, badge.length, meta.length, space) : null;
 
         return (
           <Box key={item.id} gap={1} width="100%" flexWrap="nowrap">
@@ -57,24 +111,24 @@ export function SelectList({
             <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
               {/* Label + Badge + Meta — one line, never wrapped */}
               <Box gap={1} width="100%" flexWrap="nowrap" overflow="hidden">
-                <Box flexShrink={1} minWidth={0} overflow="hidden">
+                <Box flexShrink={fit ? 0 : 1} width={fit ? fit.label : undefined} minWidth={0} overflow="hidden">
                   <Text color={focused ? color.text : color.secondary} bold={focused} wrap="truncate-end">
                     {item.label}
                   </Text>
                 </Box>
 
-                {item.badge ? (
-                  <Box flexShrink={0}>
+                {badge && (!fit || fit.badge > 0) ? (
+                  <Box flexShrink={0} width={fit ? fit.badge : undefined} overflow="hidden">
                     <Text color={badgeColorMap[item.badgeVariant ?? "muted"] ?? color.muted} wrap="truncate-end">
-                      {symbol.dot} {item.badge}
+                      {badge}
                     </Text>
                   </Box>
                 ) : null}
 
-                {item.meta ? (
-                  <Box flexShrink={0}>
+                {meta && (!fit || fit.meta > 0) ? (
+                  <Box flexShrink={0} width={fit ? fit.meta : undefined} overflow="hidden">
                     <Text color={badgeColorMap[item.metaVariant ?? "muted"] ?? color.muted} wrap="truncate-end">
-                      {item.meta}
+                      {meta}
                     </Text>
                   </Box>
                 ) : null}

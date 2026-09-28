@@ -238,3 +238,49 @@ describe("ProfilePreview health", () => {
     expect(frameFor(undefined)).not.toContain("Health");
   });
 });
+
+/** The panel `columns` wide, split into lines. */
+const linesAt = (columns: number, item: ProfileListItem, result?: DoctorProfileResult) =>
+  (
+    render(
+      <Box width={columns}>
+        <ProfilePreview profile={item} doctor={result} />
+      </Box>,
+    ).lastFrame() ?? ""
+  ).split("\n");
+
+/** A row's value: what follows its label, without the panel's border. */
+const rowValue = (line: string | undefined, label: string) =>
+  line?.replace(new RegExp(`^.*${label}\\s+`), "").replace(/[\s│]+$/, "");
+
+describe("ProfilePreview in a narrow panel", () => {
+  const long: ProfileListItem = {
+    ...subscription,
+    email: "jaewon.someone@example-company.com",
+    configDir: "/h/.claude-jaewon-yanolja-team",
+  };
+
+  // An address or a path has no space to wrap at, so ink broke it wherever the column ended:
+  // `jaewon.someon` over `e@example-com` over `pany.com`.
+  it("keeps the account and the config dir on one line each, with both of their ends", () => {
+    const lines = linesAt(32, long);
+    const account = lines.findIndex((line) => line.includes("Account"));
+
+    expect(lines[account + 1]).toContain("Config");
+    expect(rowValue(lines[account], "Account")).toMatch(/^jaewon.*….*\.com$/);
+    expect(rowValue(lines[account + 1], "Config")).toMatch(/^\/h\/.*….*-team$/);
+  });
+
+  it("keeps a space between an issue's arrow and a message longer than the line", () => {
+    const issue = {
+      kind: "local_override",
+      severity: "warning",
+      message: "/h/.claude-work/.session-stats.json replaced a link",
+    } as const;
+    const arrow = linesAt(40, subscription, { ...doctor([issue]), name: "claude:work" }).find((line) =>
+      line.includes("➔"),
+    );
+
+    expect(arrow).toMatch(/➔ \/h\//);
+  });
+});

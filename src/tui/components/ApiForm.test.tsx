@@ -305,3 +305,15 @@ describe("a key in a field that draws what it holds", () => {
     }
   });
 });
+
+describe("the hints under a field", () => {
+  it("start in the column the field's value starts in", () => {
+    const state = form({ authScheme: "api-key" });
+    const lines = frameFor(state).split("\n");
+    const auth = lines.findIndex((line) => line.includes("Auth"));
+    const value = lines[auth]?.indexOf("api-key");
+    const hint = lines[auth + 1]?.search(/[^\s│]/);
+
+    expect(hint).toBe(value);
+  });
+});
