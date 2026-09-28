@@ -45,6 +45,7 @@ import type {
   UsagePeriod,
   UsageStore,
 } from "../types.js";
+import { toolProduct } from "./format.js";
 import {
   buildProfileEnv,
   CREDENTIAL_ENV_KEYS,
@@ -1941,12 +1942,21 @@ export async function addProfile(options: {
     alreadyAuthenticated = !!existingAccount;
   }
 
+  let credentialUnconfirmed: string | undefined;
   if (!alreadyAuthenticated) {
     const loggedIn = await adapter.runLogin(configDir);
     if (!loggedIn) {
       await rm(configDir, { force: true, recursive: true });
       throw new Error(`${options.tool} login failed.`);
     }
+    // Undone as a failed login is: registering it would leave a profile with no credential
+    // that a second `add` then refuses as already existing.
+    const unconfirmed = await unconfirmedSignIn(adapter, configDir);
+    if (unconfirmed?.reason === "signed_out") {
+      await rm(configDir, { force: true, recursive: true });
+      throw noCredentialError(options.tool, id, unconfirmed.detail, `clausona add ${id}`);
+    }
+    credentialUnconfirmed = unconfirmed?.detail;
   }
 
   // Merge onboarding state for Claude (skip for codex — no equivalent)
@@ -2007,7 +2017,7 @@ export async function addProfile(options: {
   }
   await saveRegistry(registry);
   if (options.tool === "claude") await seedSeenSessions(id, configDir);
-  return { name: options.name, email: accountInfo.email, configDir };
+  return { name: options.name, email: accountInfo.email, configDir, credentialUnconfirmed };
 }
 
 /**
@@ -2266,11 +2276,51 @@ export function isOtherAccount(registered: string, signedInAs: string): boolean 
   return isEmail ? signedInAs.toLowerCase() !== registered.toLowerCase() : signedInAs !== registered;
 }
 
-export type LoginResult =
+/**
+ * After a login that reported success: why the tool does not confirm a stored credential for
+ * `configDir`, or null when it does or has no way to check (#24). The check runs with every
+ * variable that could authenticate or route the tool without that credential cleared.
+ *
+ * Only `signed_out` - the tool's own answer that it holds nothing - proves the sign-in was
+ * lost, and only it is fatal. `unknown` is a check that gave no such answer: a timeout,
+ * output that could not be read, or another sign-in method (an apiKeyHelper in settings or
+ * managed settings, say) outranking the stored token. Callers report it and carry on.
+ */
+async function unconfirmedSignIn(adapter: ToolAdapter, configDir: string) {
+  const check = await adapter
+    .verifySignIn?.(configDir, { clearEnvKeys: [...CREDENTIAL_ENV_KEYS, ...ROUTING_ENV_KEYS] })
+    .catch((error: unknown) => ({
+      ok: false as const,
+      reason: "unknown" as const,
+      detail: error instanceof Error ? error.message : String(error),
+    }));
+  return check && !check.ok ? check : null;
+}
+
+/** The error for `signed_out`. `retry` is the command the user is told to run again. */
+function noCredentialError(tool: ToolName, id: string, detail: string, retry: string): Error {
+  const next =
+    process.platform === "darwin"
+      ? `Check that the login Keychain is unlocked, then run '${retry}' again.`
+      : `Run '${retry}' again.`;
+  return new Error(
+    `The sign-in finished, but ${toolProduct(tool)} stored no credential for ${id} (${detail}). ${next}`,
+  );
+}
+
+export type LoginResult = (
   | { status: "ok"; profile: Profile }
   | { status: "other_account"; profile: Profile; signedInAs: string }
   /** Nothing could be read back where clausona reads the account, so it is not known. */
-  | { status: "unverified"; profile: Profile };
+  | { status: "unverified"; profile: Profile }
+) & {
+  /**
+   * Why the tool could not confirm that it stored a credential, when it could not without
+   * saying it has none (`unconfirmedSignIn`'s `unknown`). Reported alongside the account
+   * check rather than instead of it: a wrong browser account is worth telling apart either way.
+   */
+  credentialUnconfirmed?: string;
+};
 
 export async function loginProfile(id: string): Promise<LoginResult> {
   const registry = await loadRegistry();
@@ -2282,15 +2332,20 @@ export async function loginProfile(id: string): Promise<LoginResult> {
   const adapter = getAdapter(profile.tool);
   const loggedIn = await adapter.runLogin(profile.configDir);
   if (!loggedIn) throw new Error(`${profile.tool} login failed.`);
+  const unconfirmed = await unconfirmedSignIn(adapter, profile.configDir);
+  if (unconfirmed?.reason === "signed_out") {
+    throw noCredentialError(profile.tool, id, unconfirmed.detail, `clausona login ${id}`);
+  }
+  const caveat = unconfirmed ? { credentialUnconfirmed: unconfirmed.detail } : {};
 
   // Which account signs in is decided by the browser session, not by this profile, so
   // a successful login is not proof that the registered account is the one now stored.
   // Reported rather than thrown: the sign-in completed and is what the profile now uses,
   // and a profile whose account legitimately changed would otherwise fail every time.
   const signedInAs = (await adapter.readAccountInfo(profile.configDir))?.email;
-  if (!signedInAs) return { status: "unverified", profile };
-  if (isOtherAccount(profile.email, signedInAs)) return { status: "other_account", profile, signedInAs };
-  return { status: "ok", profile };
+  if (!signedInAs) return { status: "unverified", profile, ...caveat };
+  if (isOtherAccount(profile.email, signedInAs)) return { status: "other_account", profile, signedInAs, ...caveat };
+  return { status: "ok", profile, ...caveat };
 }
 
 export async function removeProfile(id: string) {

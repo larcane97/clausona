@@ -12,10 +12,12 @@ import { trackUsage } from "./core/track-usage.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import {
   describeOtherAccount,
+  describeUnconfirmedCredential,
   describeUnverifiedLogin,
   renderDoctor,
   renderList,
   renderUsageSummary,
+  unconfirmedCredentialHint,
 } from "./lib/format.js";
 import {
   buildProfileEnv,
@@ -324,6 +326,14 @@ function warnUnsetKeyVariable(secret: SecretSource) {
 /** Said by `add --api` and `config --base-url` alike, whenever `sendsKeyInClear` holds. */
 function cleartextNote(host: string) {
   process.stderr.write(`  ${warnIcon} ${host} is plain http, so the key crosses the network unencrypted.\n`);
+}
+
+/** Said by `add` and `login` alike when the tool could not confirm a stored credential (#24). */
+function unconfirmedCredentialWarning(tool: ToolName, id: string, detail: string): string {
+  return [
+    `  ${warnIcon} ${describeUnconfirmedCredential(tool, id, detail)}`,
+    `       ${dim(unconfirmedCredentialHint(tool, accent(`clausona login ${id}`)))}`,
+  ].join("\n");
 }
 
 /**
@@ -1145,15 +1155,21 @@ export async function runCommand(command: string, args: string[]) {
       if (!registry) throw await noRegistryError();
       const ref = parseProfileRef(input, registry);
       const result = await loginProfile(ref.id);
+      const caveat =
+        result.credentialUnconfirmed === undefined
+          ? []
+          : [unconfirmedCredentialWarning(result.profile.tool, ref.id, result.credentialUnconfirmed)];
       if (result.status === "other_account") {
         return [
           `  ${warnIcon} ${describeOtherAccount(ref.id, result.signedInAs, result.profile.email)}`,
           `       ${dim(`To switch back, sign in to ${result.profile.email} in your browser and run ${accent(`clausona login ${ref.id}`)} again`)}`,
+          ...caveat,
         ].join("\n");
       }
       if (result.status === "unverified") {
-        return `  ${warnIcon} ${describeUnverifiedLogin(ref.id)}`;
+        return [`  ${warnIcon} ${describeUnverifiedLogin(ref.id)}`, ...caveat].join("\n");
       }
+      if (caveat.length > 0) return caveat.join("\n");
       return success(`Token refreshed for ${bold(result.profile.email)}`);
     }
 
@@ -1462,7 +1478,11 @@ export async function runCommand(command: string, args: string[]) {
 
       // addProfile enforces the name rule before it touches anything.
       const added = await addProfile({ tool, name, fromPath, mergeSessions: mergeSessions || undefined });
-      return success(`Added ${bold(profileId(tool, added.name))} ${dim(`(${added.email})`)}`);
+      const addedId = profileId(tool, added.name);
+      const addedLine = success(`Added ${bold(addedId)} ${dim(`(${added.email})`)}`);
+      return added.credentialUnconfirmed === undefined
+        ? addedLine
+        : `${addedLine}\n${unconfirmedCredentialWarning(tool, addedId, added.credentialUnconfirmed)}`;
     }
 
     case "run": {

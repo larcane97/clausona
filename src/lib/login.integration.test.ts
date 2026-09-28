@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +17,15 @@ vi.mock("node:os", async (importOriginal) => {
 // A cold powershell.exe start for the .cmd shim took over 20s on a contended runner.
 const SPAWN_TEST_TIMEOUT_MS = 60_000;
 
-const ENV_KEYS = ["PATH", "CLAUDE_CONFIG_DIR", "FAKE_CLAUDE_LOG", "FAKE_CLAUDE_EMAIL", "FAKE_HOME"] as const;
+const ENV_KEYS = [
+  "PATH",
+  "CLAUDE_CONFIG_DIR",
+  "ANTHROPIC_API_KEY",
+  "FAKE_CLAUDE_LOG",
+  "FAKE_CLAUDE_EMAIL",
+  "FAKE_CLAUDE_STATUS",
+  "FAKE_HOME",
+] as const;
 const savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 
 const temps: string[] = [];
@@ -30,14 +38,34 @@ afterEach(() => {
   vi.resetModules();
 });
 
-// Stands in for `claude auth login`. It records the environment it was started with and
-// then does what Claude Code does on a successful sign-in: writes the account to
-// $CLAUDE_CONFIG_DIR/.claude.json, or to ~/.claude.json when the variable is unset.
+// Stands in for `claude auth login` and `claude auth status --json`. Each records the
+// environment it was started with, the login to FAKE_CLAUDE_LOG and the status check next to
+// it. The login then does what Claude Code does on a sign-in: writes the account to
+// $CLAUDE_CONFIG_DIR/.claude.json, or to ~/.claude.json when the variable is unset. The
+// status check answers as Claude Code 2.1.278 does in the state FAKE_CLAUDE_STATUS names.
 const FAKE_CLAUDE = `
 const fs = require("node:fs");
 const path = require("node:path");
+const args = process.argv.slice(2);
 const configDir = process.env.CLAUDE_CONFIG_DIR;
-fs.writeFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ args: process.argv.slice(2), configDir: configDir ?? null }));
+if (args[1] === "status") {
+  fs.writeFileSync(
+    process.env.FAKE_CLAUDE_LOG + ".status",
+    JSON.stringify({ args, configDir: configDir ?? null, apiKey: process.env.ANTHROPIC_API_KEY ?? null }),
+  );
+  const answers = {
+    signed_in: [{ loggedIn: true, authMethod: "claude.ai", email: process.env.FAKE_CLAUDE_EMAIL }, 0],
+    no_token: [{ loggedIn: false, authMethod: "none", apiProvider: "firstParty" }, 1],
+    api_key: [{ loggedIn: true, authMethod: "api_key", apiProvider: "firstParty" }, 0],
+    // Not a shape Claude Code 2.1.278 prints: one that no longer says whether it is logged in.
+    no_login_field: [{ authMethod: "none" }, 1],
+  };
+  const [answer, code] = answers[process.env.FAKE_CLAUDE_STATUS || "signed_in"];
+  process.stdout.write(JSON.stringify(answer, null, 2) + "\\n");
+  process.exitCode = code;
+  return;
+}
+fs.writeFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ args, configDir: configDir ?? null }));
 const accountDir = configDir || process.env.FAKE_HOME;
 if (process.env.FAKE_CLAUDE_EMAIL) {
   fs.writeFileSync(
@@ -52,9 +80,11 @@ type Setup = {
   signInAs: string | null;
   /** Email the primary profile was registered with. */
   primaryEmail?: string;
+  /** What `claude auth status` finds after the sign-in; a stored claude.ai token by default. */
+  status?: "signed_in" | "no_token" | "api_key" | "no_login_field";
 };
 
-async function setup({ signInAs, primaryEmail = "a@example.com" }: Setup) {
+async function setup({ signInAs, primaryEmail = "a@example.com", status = "signed_in" }: Setup) {
   currentHome = mkdtempSync(path.join(tmpdir(), "clausona-loginhome-"));
   temps.push(currentHome);
 
@@ -85,14 +115,23 @@ async function setup({ signInAs, primaryEmail = "a@example.com" }: Setup) {
   process.env.FAKE_CLAUDE_LOG = log;
   if (signInAs === null) delete process.env.FAKE_CLAUDE_EMAIL;
   else process.env.FAKE_CLAUDE_EMAIL = signInAs;
+  process.env.FAKE_CLAUDE_STATUS = status;
   process.env.FAKE_HOME = currentHome;
   delete process.env.CLAUDE_CONFIG_DIR;
+  delete process.env.ANTHROPIC_API_KEY;
 
   vi.resetModules();
   const service = await import("./service.js");
   const { runCommand } = await import("../commands.js");
   const spawned = () => JSON.parse(readFileSync(log, "utf8")) as { args: string[]; configDir: string | null };
-  return { service, runCommand, primary, work, spawned };
+  const probed = () =>
+    JSON.parse(readFileSync(`${log}.status`, "utf8")) as {
+      args: string[];
+      configDir: string | null;
+      apiKey: string | null;
+    };
+  const registered = async () => (await service.loadRegistry())?.profiles ?? {};
+  return { service, runCommand, primary, work, spawned, probed, registered };
 }
 
 describe("loginProfile", () => {
@@ -165,6 +204,122 @@ describe("loginProfile", () => {
       const result = await service.loginProfile("claude:default");
 
       expect(result.status).toBe("unverified");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "fails instead of reporting success when Claude Code stored no token (#24)",
+    async () => {
+      // `claude auth login` writes the account, fails to store the token, and still exits 0.
+      const { service } = await setup({ signInAs: "a@example.com", status: "no_token" });
+
+      await expect(service.loginProfile("claude:default")).rejects.toThrow(
+        "The sign-in finished, but Claude Code stored no credential for claude:default",
+      );
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "reports, without failing, a sign-in whose stored credential Claude Code could not confirm",
+    async () => {
+      const { service } = await setup({ signInAs: "a@example.com", status: "api_key" });
+
+      const result = await service.loginProfile("claude:default");
+
+      expect(result).toMatchObject({ status: "ok", credentialUnconfirmed: expect.stringContaining('"api_key"') });
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "takes only an explicit loggedIn: false as no credential",
+    async () => {
+      const { service } = await setup({ signInAs: "a@example.com", status: "no_login_field" });
+
+      const result = await service.loginProfile("claude:default");
+
+      expect(result).toMatchObject({ status: "ok", credentialUnconfirmed: expect.any(String) });
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "still names the other account when the stored credential could not be confirmed either",
+    async () => {
+      const { runCommand } = await setup({ signInAs: "b@example.com", status: "api_key" });
+
+      const out = stripAnsi(await runCommand("login", ["claude:default"]));
+
+      expect(out).toContain("b@example.com");
+      expect(out).toContain("To switch back, sign in to a@example.com");
+      expect(out).toMatch(/could not confirm that Claude Code stored a credential for claude:default/);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "asks the primary's stored credential only: CLAUDE_CONFIG_DIR and the caller's API key cleared",
+    async () => {
+      // Either one inherited would make `auth status` answer for something other than the
+      // store the sign-in just wrote: another dir, or a key that logs in without any token.
+      const { service, work, probed } = await setup({ signInAs: "a@example.com" });
+      process.env.CLAUDE_CONFIG_DIR = work;
+      process.env.ANTHROPIC_API_KEY = "key-from-the-callers-shell";
+
+      await service.loginProfile("claude:default");
+
+      expect(probed()).toEqual({ args: ["auth", "status", "--json"], configDir: null, apiKey: null });
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+});
+
+describe("addProfile", () => {
+  it(
+    "removes the new dir and registers nothing when Claude Code stored no token (#24)",
+    async () => {
+      const { service, registered } = await setup({ signInAs: "new@example.com", status: "no_token" });
+      const configDir = path.join(currentHome, ".claude-new");
+
+      await expect(service.addProfile({ tool: "claude", name: "new" })).rejects.toThrow(
+        "The sign-in finished, but Claude Code stored no credential for claude:new",
+      );
+
+      expect(existsSync(configDir)).toBe(false);
+      expect(Object.keys(await registered())).not.toContain("claude:new");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "adds the profile but warns when Claude Code answers with another sign-in method",
+    async () => {
+      // Not proof the token is missing - an apiKeyHelper in managed settings answers this way
+      // with the token stored - so it is reported, not fatal. Still not taken as a pass.
+      const { runCommand, registered } = await setup({ signInAs: "new@example.com", status: "api_key" });
+
+      const out = stripAnsi(await runCommand("add", ["claude:new"]));
+
+      expect(out).toContain("Added claude:new (new@example.com)");
+      expect(out).toMatch(/could not confirm that Claude Code stored a credential for claude:new \(.*"api_key"/);
+      expect(out).toContain("If claude asks you to sign in, run clausona login claude:new");
+      expect(Object.keys(await registered())).toContain("claude:new");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "registers the profile when Claude Code confirms the sign-in, asking in the new dir",
+    async () => {
+      const { service, registered, probed } = await setup({ signInAs: "new@example.com" });
+      const configDir = path.join(currentHome, ".claude-new");
+
+      await service.addProfile({ tool: "claude", name: "new" });
+
+      expect(probed().configDir).toBe(configDir);
+      expect((await registered())["claude:new"]).toMatchObject({ configDir, email: "new@example.com" });
     },
     SPAWN_TEST_TIMEOUT_MS,
   );
