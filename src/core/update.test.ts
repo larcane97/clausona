@@ -69,6 +69,14 @@ describe("tagFromLocation", () => {
   });
 });
 
+/** A request that never answers, and fails the way fetch does once its signal aborts. */
+const hanging: FetchLike = (_url, init) =>
+  new Promise((_resolve, reject) => {
+    const signal = init?.signal;
+    if (signal?.aborted) reject(signal.reason);
+    signal?.addEventListener("abort", () => reject(signal.reason));
+  });
+
 describe("checkLatestTag", () => {
   it("reads the tag the latest-release redirect points at", async () => {
     const calls: Array<[string, RequestInit | undefined]> = [];
@@ -102,14 +110,30 @@ describe("checkLatestTag", () => {
   });
 
   it("is null when GitHub does not answer in time", async () => {
-    const hanging: FetchLike = (_url, init) =>
-      new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
-      });
     const started = Date.now();
 
     expect(await checkLatestTag({ fetch: hanging, timeoutMs: 20 })).toBeNull();
     expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it("still gives up in time when the caller has not", async () => {
+    const started = Date.now();
+
+    expect(await checkLatestTag({ fetch: hanging, timeoutMs: 20, signal: new AbortController().signal })).toBeNull();
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  // csn quitting while the check waits: the check must not hold the shell prompt for its 3 s.
+  it.each([
+    ["before it asks", (controller: AbortController) => controller.abort()],
+    ["while it waits", (controller: AbortController) => setTimeout(() => controller.abort(), 20)],
+  ])("is null at once when the caller gives up %s", async (_when, giveUp) => {
+    const controller = new AbortController();
+    giveUp(controller);
+    const started = Date.now();
+
+    expect(await checkLatestTag({ fetch: hanging, signal: controller.signal })).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 });
 
@@ -137,6 +161,14 @@ describe("findUpdate", () => {
     ["no answer", "0.3.0-beta", null],
   ])("offers nothing for %s", async (_case, current, tag) => {
     expect(await findUpdate({ current, target: "/x/index.js", check: async () => tag })).toBeNull();
+  });
+
+  it("hands the caller's signal to the check", async () => {
+    const { signal } = new AbortController();
+    const check = vi.fn(async (_signal?: AbortSignal) => null);
+
+    await findUpdate({ current: "0.3.0-beta", target: "/x/index.js", check, signal });
+    expect(check).toHaveBeenCalledWith(signal);
   });
 });
 
@@ -377,6 +409,42 @@ describe("performUpdate", () => {
     const bundle = "process.exit(3);\n";
     const { fetch } = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
     await expectUntouched(performUpdate({ tag: TAG, target, fetch }), /exited with 3/);
+  });
+
+  // Ctrl+C on the dashboard while it installs: the download stops then, not at its 30 s timeout.
+  it("stops a download at once when the caller gives up", async () => {
+    const controller = new AbortController();
+    const urls: string[] = [];
+    const fetch: FetchLike = (url, init) => {
+      urls.push(url);
+      return hanging(url, init);
+    };
+
+    const update = performUpdate({ tag: TAG, target, fetch, signal: controller.signal });
+    expect(urls).toHaveLength(1);
+    controller.abort();
+
+    await expectUntouched(update, /Could not download clausona v0\.3\.1-beta/);
+  });
+
+  it("swaps nothing in when the caller gives up after the downloads", async () => {
+    const bundle = bundleReporting("0.3.1-beta");
+    const controller = new AbortController();
+    const served = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
+    // The checksum is the last download, and it arrives whole: only the write and the swap are left to stop.
+    const fetch: FetchLike = async (url, init) => {
+      const response = await served.fetch(url, init);
+      if (url.endsWith(".sha256")) controller.abort();
+      return response;
+    };
+
+    const error = await performUpdate({ tag: TAG, target, fetch, signal: controller.signal }).catch((e) => e);
+
+    expect(served.urls).toHaveLength(2);
+    // The abort itself, not a "Could not replace" that would blame the file.
+    expect(error).toBe(controller.signal.reason);
+    expect(readFileSync(target, "utf8")).toBe(OLD);
+    expect(leftovers()).toEqual([]);
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(

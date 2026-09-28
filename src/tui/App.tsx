@@ -464,12 +464,21 @@ export function App({ initialScreen = "dashboard", updater, onRestart }: AppProp
    * frame that asked, and each would start its own install.
    */
   const installingRef = useRef(false);
+  /**
+   * Calls off the install in flight when the App unmounts. Ctrl+C is answered by ink itself, which
+   * unmounts the App, and an install left running kept csn alive on a blank screen and then
+   * swapped the new version in unasked. Aborted, it stops and leaves the installed bundle alone.
+   */
+  const installAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => installAbortRef.current?.abort(), []);
 
-  // Once per process: moving between screens does not ask GitHub again.
+  // Once per process: moving between screens does not ask GitHub again. Quitting while it waits
+  // calls the check off, so a slow network does not hold the shell prompt.
   useEffect(() => {
     if (!updater) return;
     let live = true;
-    updater.find().then(
+    const controller = new AbortController();
+    updater.find(controller.signal).then(
       (offer) => {
         if (live && offer) setUpdateOffer(offer);
       },
@@ -477,15 +486,18 @@ export function App({ initialScreen = "dashboard", updater, onRestart }: AppProp
     );
     return () => {
       live = false;
+      controller.abort();
     };
   }, [updater]);
 
   async function installUpdate(offer: UpdateOffer) {
     if (!updater || installingRef.current) return;
     installingRef.current = true;
+    const controller = new AbortController();
+    installAbortRef.current = controller;
     setUpdatePhase({ kind: "installing" });
     try {
-      await updater.install(offer);
+      await updater.install(offer, controller.signal);
     } catch (error) {
       installingRef.current = false;
       setUpdatePhase({ kind: "failed", message: error instanceof Error ? error.message : String(error) });
@@ -1257,6 +1269,10 @@ export function App({ initialScreen = "dashboard", updater, onRestart }: AppProp
     }
 
     if (screen === "dashboard") {
+      // An install in flight takes every key, from the Enter that started it. A key in the same
+      // read is answered from the question's frame, and an n there closed the panel while the
+      // install ran on, and its exit later pulled the user out of whatever screen they were on.
+      if (installingRef.current) return;
       // An open update panel takes every key.
       if (updatePhase.kind === "installing") return;
       if (updatePhase.kind === "confirm") {

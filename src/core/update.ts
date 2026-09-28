@@ -22,6 +22,23 @@ const CHECK_TIMEOUT_MS = 3_000;
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
+/**
+ * A signal that aborts when `signal` does or once `timeoutMs` has passed, whichever comes first.
+ * `AbortSignal.any` does this from Node 20.3; clausona supports every Node 20.
+ */
+function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  if (!signal) return timeout;
+  const linked = new AbortController();
+  const follow = (source: AbortSignal) => {
+    if (source.aborted) linked.abort(source.reason);
+    else source.addEventListener("abort", () => linked.abort(source.reason), { once: true });
+  };
+  follow(signal);
+  follow(timeout);
+  return linked.signal;
+}
+
 type ParsedVersion = { core: [number, number, number]; pre: string[] };
 
 const VERSION_PATTERN = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/;
@@ -106,15 +123,17 @@ export function tagFromLocation(location: string | null): string | null {
  * without the REST API, whose unauthenticated limit of 60 requests an hour per IP a shared office
  * address runs through. `redirect: "manual"` makes Node's fetch hand back the 302 itself, headers
  * and all. Every failure is `null`: the dashboard then shows nothing, and the CLI says it could
- * not check.
+ * not check. `signal` gives up early, as the dashboard does when csn quits while it waits.
  */
-export async function checkLatestTag(options: { fetch?: FetchLike; timeoutMs?: number } = {}): Promise<string | null> {
-  const { fetch: fetchFn = globalThis.fetch, timeoutMs = CHECK_TIMEOUT_MS } = options;
+export async function checkLatestTag(
+  options: { fetch?: FetchLike; timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<string | null> {
+  const { fetch: fetchFn = globalThis.fetch, timeoutMs = CHECK_TIMEOUT_MS, signal } = options;
   try {
     const response = await fetchFn(`${RELEASES_URL}/latest`, {
       method: "HEAD",
       redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: withTimeout(signal, timeoutMs),
     });
     if (response.status < 300 || response.status >= 400) return null;
     return tagFromLocation(response.headers.get("location"));
@@ -129,9 +148,11 @@ export type UpdateOffer = { current: string; latest: string; tag: string; target
 export async function findUpdate(options: {
   current: string;
   target: string | null;
-  check?: () => Promise<string | null>;
+  check?: (signal?: AbortSignal) => Promise<string | null>;
+  signal?: AbortSignal;
 }): Promise<UpdateOffer | null> {
-  const tag = await (options.check ?? checkLatestTag)();
+  const check = options.check ?? ((signal) => checkLatestTag({ signal }));
+  const tag = await check(options.signal);
   if (!tag || !isNewer(tag, options.current)) return null;
   return { current: options.current, latest: versionOfTag(tag), tag, target: options.target };
 }
@@ -194,9 +215,14 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function download(fetchFn: FetchLike, url: string, what: string): Promise<Uint8Array> {
+async function download(
+  fetchFn: FetchLike,
+  url: string,
+  what: string,
+  signal: AbortSignal | undefined,
+): Promise<Uint8Array> {
   try {
-    const response = await fetchFn(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+    const response = await fetchFn(url, { signal: withTimeout(signal, DOWNLOAD_TIMEOUT_MS) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return new Uint8Array(await response.arrayBuffer());
   } catch (error) {
@@ -263,6 +289,10 @@ export async function replaceFile(
  * this program before every `claude` and `codex`, and it reads either the whole old file or the
  * whole new one. And the new file keeps a `.js` name, without which node refuses to run it
  * (ERR_UNKNOWN_FILE_EXTENSION).
+ *
+ * `signal` calls the update off - the dashboard's, when csn is closed with Ctrl+C mid-install. A
+ * download stops at once; after the downloads, the update stops before the write and again before
+ * the swap, and in every case leaves `target` as it was.
  */
 export async function performUpdate(options: {
   tag: string;
@@ -270,6 +300,7 @@ export async function performUpdate(options: {
   fetch?: FetchLike;
   nodePath?: string;
   platform?: NodeJS.Platform;
+  signal?: AbortSignal;
 }): Promise<void> {
   const {
     tag,
@@ -277,15 +308,16 @@ export async function performUpdate(options: {
     fetch: fetchFn = globalThis.fetch,
     nodePath = process.execPath,
     platform = process.platform,
+    signal,
   } = options;
   const version = versionOfTag(tag);
   const base = `${RELEASES_URL}/download/${encodeURIComponent(tag)}`;
 
-  const bundle = await download(fetchFn, `${base}/clausona.js`, `clausona ${tag}`);
+  const bundle = await download(fetchFn, `${base}/clausona.js`, `clausona ${tag}`, signal);
   // Required, not best-effort: the release that ships this updater is the first to publish one,
   // so every release an updater can be offered has it.
   const published = digestIn(
-    new TextDecoder().decode(await download(fetchFn, `${base}/clausona.js.sha256`, `the checksum for ${tag}`)),
+    new TextDecoder().decode(await download(fetchFn, `${base}/clausona.js.sha256`, `the checksum for ${tag}`, signal)),
   );
   if (!published) throw new Error(`The checksum published for ${tag} is not a SHA-256 digest.`);
   if (createHash("sha256").update(bundle).digest("hex") !== published) {
@@ -294,30 +326,39 @@ export async function performUpdate(options: {
 
   const candidate = path.join(path.dirname(target), `index.update-${process.pid}.js`);
   try {
+    signal?.throwIfAborted();
     await writeFile(candidate, bundle);
     verifyCandidate(nodePath, candidate, version);
+    // spawnSync blocks, so a call-off that arrived during the write or the `--version` run is seen only here.
+    signal?.throwIfAborted();
     await replaceFile(candidate, target, { platform, delaysMs: RENAME_RETRY_DELAYS_MS });
   } catch (error) {
     await rm(candidate, { force: true }).catch(() => {});
-    // A filesystem refusal (EACCES on a root-owned install, say) says which file it was about.
-    if ((error as NodeJS.ErrnoException).code) throw new Error(`Could not replace ${target}: ${messageOf(error)}`);
+    // A filesystem refusal (EACCES on a root-owned install, say) says which file it was about. Its
+    // code is a string; an abort's DOMException has a numeric one and is passed on as it is.
+    if (typeof (error as NodeJS.ErrnoException).code === "string") {
+      throw new Error(`Could not replace ${target}: ${messageOf(error)}`);
+    }
     throw error;
   }
 }
 
-/** What the dashboard needs to offer an update. index.tsx hands it the real one; tests hand it a fake. */
+/**
+ * What the dashboard needs to offer an update. index.tsx hands it the real one; tests hand it a
+ * fake. Each takes a signal the dashboard aborts when it closes, so neither outlives csn.
+ */
 export type Updater = {
-  find: () => Promise<UpdateOffer | null>;
-  install: (offer: UpdateOffer) => Promise<void>;
+  find: (signal?: AbortSignal) => Promise<UpdateOffer | null>;
+  install: (offer: UpdateOffer, signal?: AbortSignal) => Promise<void>;
 };
 
 export function createUpdater(): Updater {
   const target = currentInstallTarget();
   return {
-    find: () => findUpdate({ current: __CLAUSONA_VERSION__, target }),
-    install: (offer) =>
+    find: (signal) => findUpdate({ current: __CLAUSONA_VERSION__, target, signal }),
+    install: (offer, signal) =>
       offer.target
-        ? performUpdate({ tag: offer.tag, target: offer.target })
+        ? performUpdate({ tag: offer.tag, target: offer.target, signal })
         : Promise.reject(new Error("This clausona was not installed by the installer, so it cannot replace itself.")),
   };
 }

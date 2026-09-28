@@ -147,7 +147,7 @@ describe("the dashboard's update", () => {
 
     await vi.waitFor(() => expect(onRestart).toHaveBeenCalledWith(OFFER));
     expect(install).toHaveBeenCalledTimes(1);
-    expect(install).toHaveBeenCalledWith(OFFER);
+    expect(install).toHaveBeenCalledWith(OFFER, expect.any(AbortSignal));
   });
 
   it("installs once however fast Enter is pressed", async () => {
@@ -173,6 +173,79 @@ describe("the dashboard's update", () => {
     expect(install).toHaveBeenCalledTimes(1);
     finish();
     await vi.waitFor(() => expect(onRestart).toHaveBeenCalledTimes(1));
+  });
+
+  // Enter then n, typed fast, arrive in one read and are both answered from the question's frame.
+  // Without the guard, the n closed the panel while the install ran on, and its exit later pulled
+  // the user out of whatever screen they had moved to. Ink holds a lone ESC until the next turn,
+  // so ESC is answered from the frame after; it is here so that stays true.
+  it.each([
+    ["n", "n"],
+    ["esc", ESC],
+  ])("keeps the install on screen when %s follows Enter in the same read", async (_name, key) => {
+    let finish: () => void = () => {};
+    const install = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const onRestart = vi.fn();
+    const instance = render(
+      <App initialScreen="dashboard" updater={{ find: async () => OFFER, install }} onRestart={onRestart} />,
+    );
+    await openConfirm(instance);
+
+    instance.stdin.write(ENTER);
+    instance.stdin.write(key);
+    await waitForFrame(instance.lastFrame, (f) => f.includes("Updating to v0.3.1-beta"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(instance.lastFrame()).toContain("Updating to v0.3.1-beta");
+    expect(install).toHaveBeenCalledTimes(1);
+    finish();
+    await vi.waitFor(() => expect(onRestart).toHaveBeenCalledTimes(1));
+  });
+
+  // Ctrl+C, which ink answers itself by unmounting the App: the install must stop with it, not
+  // swap the new bundle in after csn has gone.
+  it("stops an install still running when the App goes away", async () => {
+    let signal: AbortSignal | undefined;
+    const install = vi.fn((_offer: UpdateOffer, given?: AbortSignal) => {
+      signal = given;
+      return new Promise<void>(() => {});
+    });
+    const onRestart = vi.fn();
+    const instance = render(
+      <App initialScreen="dashboard" updater={{ find: async () => OFFER, install }} onRestart={onRestart} />,
+    );
+    await openConfirm(instance);
+    await press(instance, ENTER);
+    await waitForFrame(instance.lastFrame, (f) => f.includes("Updating to v0.3.1-beta"));
+    expect(signal?.aborted).toBe(false);
+
+    instance.unmount();
+
+    await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+    expect(onRestart).not.toHaveBeenCalled();
+  });
+
+  it("stops the check when the App goes away before GitHub answers", async () => {
+    let signal: AbortSignal | undefined;
+    const updater: Updater = {
+      find: (given) => {
+        signal = given;
+        return new Promise(() => {});
+      },
+      install: vi.fn(async () => {}),
+    };
+    const instance = render(<App initialScreen="dashboard" updater={updater} />);
+    await waitForFrame(instance.lastFrame, (f) => f.includes("Dashboard") && f.includes("Usage"));
+    expect(signal?.aborted).toBe(false);
+
+    instance.unmount();
+
+    await vi.waitFor(() => expect(signal?.aborted).toBe(true));
   });
 
   it("shows a failed install in full, and keeps Update to try again", async () => {
