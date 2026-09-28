@@ -49,6 +49,7 @@ vi.mock("../lib/service", async (importOriginal) => ({
   initializeRegistry: vi.fn(async () => ({})),
   setActiveProfileByName: vi.fn(async () => ({})),
   discoverAccounts: vi.fn(async () => []),
+  addProfile: vi.fn(),
   addApiProfile: vi.fn(async () => ({ name: "gateway", configDir: "/Users/test/.claude-gateway" })),
 }));
 
@@ -192,6 +193,75 @@ describe("App", () => {
 
       await pressUntil(stdin, "l", () => frame().includes(OVERLAY));
     });
+  });
+
+  it("comes back from an add via sign-in that fails, shows why, and takes input again", async () => {
+    const { addProfile } = await import("../lib/service.js");
+    vi.mocked(addProfile).mockRejectedValueOnce(new Error("claude login failed."));
+
+    await withTerminalHandOver(async () => {
+      const instance = render(<App initialScreen="use" />);
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("default@example.com"));
+      await press(instance, "a");
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Choose how to add"));
+      await moveTo(instance, "Login as new account");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Choose tool"));
+      await press(instance, ENTER); // claude
+      await press(instance, "work2");
+      await press(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("claude login failed."));
+      expect(instance.lastFrame()).toContain("Add Profile");
+
+      await press(instance, "r");
+      await waitForFrame(instance.lastFrame, (frame) => frame.includes("Choose how to add"));
+      instance.unmount();
+    });
+  });
+
+  it("leaves keys typed during a sign-in to the sign-in, not the TUI", async () => {
+    const { listProfiles, loginProfile } = await import("../lib/service.js");
+    vi.mocked(listProfiles).mockResolvedValueOnce([WORK]).mockResolvedValueOnce([WORK]);
+    // Ink going deaf is not enough: the real stdin reads the terminal until it is paused, and
+    // takes keys from the child with no one listening. Here it is not the stdin ink reads, so
+    // the pause is checked on the calls instead.
+    const pause = vi.spyOn(process.stdin, "pause").mockImplementation(() => process.stdin);
+    const resume = vi.spyOn(process.stdin, "resume").mockImplementation(() => process.stdin);
+    let loginStarted = false;
+    let pausedForLogin = false;
+    let failLogin: (error: Error) => void = () => {};
+    vi.mocked(loginProfile).mockImplementationOnce(() => {
+      loginStarted = true;
+      pausedForLogin = pause.mock.calls.length > 0 && resume.mock.calls.length === 0;
+      return new Promise<never>((_, reject) => {
+        failLogin = reject;
+      });
+    });
+
+    try {
+      await withTerminalHandOver(async () => {
+        const { lastFrame, stdin } = render(<App initialScreen="use" />);
+        const frame = () => lastFrame() ?? "";
+        await until(() => frame().includes("claude:work"));
+        await pressUntil(stdin, "l", () => frame().includes(OVERLAY));
+        await pressUntil(stdin, "y", () => !frame().includes(OVERLAY));
+        await until(() => loginStarted);
+
+        // `a` opens the add flow on this screen. The child owns the terminal now - it would be
+        // a character of a pasted code - so the TUI must not hear it.
+        stdin.write("a");
+        failLogin(new Error("claude login failed."));
+        await until(() => frame().includes("claude login failed.") || frame().includes("Add Profile"));
+
+        expect(frame()).not.toContain("Add Profile");
+        expect(frame()).toContain("claude login failed.");
+        expect(pausedForLogin).toBe(true);
+        expect(resume).toHaveBeenCalled();
+      });
+    } finally {
+      pause.mockRestore();
+      resume.mockRestore();
+    }
   });
 });
 
