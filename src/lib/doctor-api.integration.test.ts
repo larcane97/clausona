@@ -29,11 +29,13 @@ const temps: string[] = [];
 let spawned: string[] = [];
 const realPlatform = process.platform;
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.doUnmock("./secrets.js");
   vi.doUnmock("../core/process.js");
+  // As in api-profile.integration.test.ts: the graph's dir-lock exit listener goes with it.
+  process.off("exit", (await import("../core/dir-lock.js")).removeHeldDirLocks);
   vi.resetModules();
   Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });

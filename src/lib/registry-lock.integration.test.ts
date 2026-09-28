@@ -1,10 +1,12 @@
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -34,10 +36,12 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 const temps: string[] = [];
-afterEach(() => {
+afterEach(async () => {
   unremovable = "";
   vi.restoreAllMocks();
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
+  // As in api-profile.integration.test.ts: the graph's dir-lock exit listener goes with it.
+  process.off("exit", (await import("../core/dir-lock.js")).removeHeldDirLocks);
   vi.resetModules();
 });
 
@@ -67,6 +71,29 @@ function holdLock(ageMs = 0) {
     const then = new Date(Date.now() - ageMs);
     utimesSync(lockPath(), then, then);
   }
+}
+
+const addLockPath = (name: string) => path.join(currentHome, ".clausona", "locks", `add-claude-${name}.lock`);
+
+/**
+ * Backdates the add lock for `name` past its stale time, as it is once the add holding it has
+ * stopped refreshing it - that add died, or was suspended mid-sign-in - so that the next add of
+ * the name takes it over.
+ */
+function staleAddLock(name: string) {
+  const then = new Date(Date.now() - 10 * 60_000);
+  utimesSync(addLockPath(name), then, then);
+}
+
+/** Every path under the home, with each file's content: what a refused add must leave as it was. */
+function homeTree(): Record<string, string> {
+  const entries = readdirSync(currentHome, { recursive: true, encoding: "utf8" });
+  return Object.fromEntries(
+    entries.map((entry) => {
+      const full = path.join(currentHome, entry);
+      return [entry, lstatSync(full).isFile() ? readFileSync(full, "utf8") : "not a file"];
+    }),
+  );
 }
 
 /**
@@ -101,11 +128,12 @@ async function setup() {
   const { claudeAdapter } = await import("../tools/claude.js");
 
   const logins = new Map<string, { started: Deferred; finish: Deferred }>();
-  vi.spyOn(claudeAdapter, "runLogin").mockImplementation(async (configDir) => {
+  const login = vi.spyOn(claudeAdapter, "runLogin").mockImplementation(async (configDir) => {
     const name = path.basename(configDir).replace(/^\.claude-/, "");
     writeAccount(configDir, `${name}@example.com`);
     writeFileSync(path.join(configDir, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: name } }));
     const gate = logins.get(name);
+    logins.delete(name);
     gate?.started.resolve();
     await gate?.finish.promise;
     return true;
@@ -114,14 +142,14 @@ async function setup() {
   // would find no token where the stand-in wrote one.
   vi.spyOn(claudeAdapter, "verifySignIn").mockResolvedValue({ ok: true });
 
-  /** Holds the login for profile `name` open until `finish` is called. */
+  /** Holds the next login for profile `name` open until `finish` is called. */
   const holdLogin = (name: string) => {
     const gate = { started: deferred(), finish: deferred() };
     logins.set(name, gate);
     return { started: gate.started.promise, finish: gate.finish.resolve };
   };
 
-  return { service, holdLogin, primary };
+  return { service, holdLogin, login, primary };
 }
 
 // Writers poll for the lock, and a loaded Windows runner is slow enough that a few
@@ -207,6 +235,8 @@ describe("registry writes", { timeout: 30_000 }, () => {
 
     const addingX = service.addProfile({ tool: "claude", name: "x" });
     await x.started;
+    // Another add of the name gets in only once this one's lock has gone stale.
+    staleAddLock("x");
     await service.addProfile({ tool: "claude", name: "x", fromPath: elsewhere });
     x.finish();
 
@@ -229,6 +259,7 @@ describe("registry writes", { timeout: 30_000 }, () => {
 
     const addingX = service.addProfile({ tool: "claude", name: "x" });
     await x.started;
+    staleAddLock("x");
     await service.addProfile({ tool: "claude", name: "x", fromPath: elsewhere });
     unremovable = dir;
     x.finish();
@@ -256,6 +287,7 @@ describe("registry writes", { timeout: 30_000 }, () => {
         writeFileSync(path.join(dir, "settings.json"), '{"theme":"x"}');
       }
       // The stand-in login has already stored the account, so importing the directory works.
+      staleAddLock("x");
       await service.addProfile({ tool: "claude", name: "x", fromPath: dir });
       x.finish();
 
@@ -267,6 +299,27 @@ describe("registry writes", { timeout: 30_000 }, () => {
       expect(existsSync(path.join(dir, ".claude.json"))).toBe(true);
     });
   }
+
+  it("leaves the directory alone when the profile that took the name registered it by another path", async () => {
+    const { service, holdLogin } = await setup();
+    const dir = path.join(currentHome, ".claude-x");
+    const link = path.join(currentHome, "link-to-x");
+    const x = holdLogin("x");
+
+    const addingX = service.addProfile({ tool: "claude", name: "x" });
+    await x.started;
+    // Another clausona process registers the directory under the name, spelled another way: a
+    // link here, which a case-sensitive filesystem has too; on a case-insensitive one, the same
+    // name in another case is such a spelling.
+    symlinkSync(dir, link, process.platform === "win32" ? "junction" : "dir");
+    const registry = readRegistry();
+    registry.profiles["claude:x"] = { tool: "claude", configDir: link, email: "x@example.com" };
+    writeFileSync(registryPath(), JSON.stringify(registry));
+    x.finish();
+
+    await expect(addingX).rejects.toThrow(`${path.join("~", ".claude-x")} is now that profile's.`);
+    expect(existsSync(path.join(dir, ".claude.json"))).toBe(true);
+  });
 
   // Another clausona process registers the name, or one that differs only by case, while the
   // import is being set up: the stand-in writes the registry as that process would. The
@@ -424,5 +477,59 @@ describe("registry writes", { timeout: 30_000 }, () => {
     expect(readRegistry().version).toBe(2);
     const notices = stderr.mock.calls.filter(([chunk]) => String(chunk).includes("migrated registry"));
     expect(notices).toHaveLength(1);
+  });
+});
+
+describe("adds of one name", { timeout: 30_000 }, () => {
+  // Names that differ only by case are one directory on a case-insensitive filesystem, so they
+  // are one name here too.
+  for (const second of [
+    { name: "x", from: false },
+    { name: "X", from: false },
+    { name: "x", from: true },
+  ]) {
+    const how = second.from ? " with --from" : "";
+    it(`refuses an add of '${second.name}'${how} at once while one of 'x' is signing in, and changes nothing`, async () => {
+      const { service, holdLogin, login } = await setup();
+      const elsewhere = path.join(currentHome, "elsewhere");
+      writeAccount(elsewhere, "elsewhere@example.com");
+      const x = holdLogin("x");
+
+      const addingX = service.addProfile({ tool: "claude", name: "x" });
+      await x.started;
+      const before = homeTree();
+
+      await expect(
+        service.addProfile({ tool: "claude", name: second.name, fromPath: second.from ? elsewhere : undefined }),
+      ).rejects.toThrow(
+        `Another \`clausona add\` of 'claude:${second.name}' (or of the same name in another case) is in progress. Wait for it to finish; if it was interrupted, try again in 30 seconds.`,
+      );
+      expect(homeTree()).toEqual(before);
+      expect(login).toHaveBeenCalledTimes(1);
+
+      x.finish();
+      await expect(addingX).resolves.toMatchObject({ email: "x@example.com" });
+      expect(readRegistry().profiles["claude:x"]?.configDir).toBe(path.join(currentHome, ".claude-x"));
+      expect(existsSync(addLockPath("x"))).toBe(false);
+    });
+  }
+
+  it("takes over the lock an add that died left behind, once it has gone stale", async () => {
+    const { service, login } = await setup();
+    // What an add killed mid-sign-in leaves: its directory, still marked, and its lock.
+    const dir = path.join(currentHome, ".claude-x");
+    mkdirSync(dir);
+    writeFileSync(path.join(dir, ".clausona-pending"), "");
+    mkdirSync(addLockPath("x"), { recursive: true });
+
+    await expect(service.addProfile({ tool: "claude", name: "x" })).rejects.toThrow("is in progress");
+    expect(login).not.toHaveBeenCalled();
+
+    staleAddLock("x");
+    await service.addProfile({ tool: "claude", name: "x" });
+
+    expect(login).toHaveBeenCalledWith(dir);
+    expect(readRegistry().profiles["claude:x"]?.configDir).toBe(dir);
+    expect(existsSync(addLockPath("x"))).toBe(false);
   });
 });
