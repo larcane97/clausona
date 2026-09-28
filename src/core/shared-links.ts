@@ -21,7 +21,9 @@ function samePath(left: string, right: string): boolean {
 }
 
 export async function inspectSharedLink(target: string, source: string): Promise<SharedLinkInfo> {
-  const targetStats = await lstat(target).catch(() => null);
+  // Read as bigints: a Windows file index is 64 bits, and as a number one above 2^53 is
+  // rounded, so two files made one after the other could read as the same file.
+  const targetStats = await lstat(target, { bigint: true }).catch(() => null);
   if (!targetStats) {
     return { isSharedLink: false, pointsToSource: false, targetExists: false };
   }
@@ -47,7 +49,7 @@ export async function inspectSharedLink(target: string, source: string): Promise
   }
 
   if (targetStats.isFile()) {
-    const sourceStats = await stat(source).catch(() => null);
+    const sourceStats = await stat(source, { bigint: true }).catch(() => null);
     // A zero inode means the filesystem could not report a file index (some Windows
     // network drives). Comparing 0 === 0 would call two unrelated files the same file,
     // and setupSharedLinks deletes what it believes is a shared link without backing
