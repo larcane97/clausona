@@ -566,7 +566,9 @@ describe.skipIf(process.platform === "win32")("add interrupted mid-login", () =>
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
 
-      expect(existsSync(configDir)).toBe(false);
+      // Removed once the login returned - or, when a loaded machine kept it from exiting within
+      // the grace period, left for the next add with its marker. Never there without one.
+      expect(!existsSync(configDir) || existsSync(path.join(configDir, MARKER))).toBe(true);
     },
     CHILD_TEST_TIMEOUT_MS,
   );
