@@ -20,6 +20,8 @@ const STALE_MS = 60_000;
 // looked at the lock but not yet acted on what it saw, which is the gap another waiter can
 // get into.
 let afterStat: { path: string; nth: number; run: () => Promise<void> } | null = null;
+// Every file the lock writes, so a case can tell whether the steal lock was used at all.
+const written: string[] = [];
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   const stat = async (filePath: string) => {
@@ -31,12 +33,17 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     }
     return info;
   };
-  return { ...actual, stat };
+  const writeFile = (async (filePath: string, ...rest: unknown[]) => {
+    written.push(String(filePath));
+    return (actual.writeFile as (...args: unknown[]) => Promise<void>)(filePath, ...rest);
+  }) as typeof actual.writeFile;
+  return { ...actual, stat, writeFile };
 });
 
 const temps: string[] = [];
 afterEach(() => {
   afterStat = null;
+  written.length = 0;
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -133,6 +140,29 @@ describe("acquireFileLock", () => {
     expect(release).not.toBeNull();
     expect(readFileSync(lockPath, "utf8")).toMatch(new RegExp(`^${process.pid}-`));
     await release?.();
+  });
+
+  it("releases a lock held briefly without going through the steal lock", async () => {
+    // On Windows every extra file created and deleted is one a scanner can hold open, and a
+    // release that then could not get the steal lock left its lock to go stale.
+    const lockPath = freshLockPath();
+    const release = await acquireFileLock(lockPath, { staleMs: STALE_MS });
+
+    await release?.();
+
+    expect(existsSync(lockPath)).toBe(false);
+    expect(written.filter((file) => file.endsWith(".steal"))).toEqual([]);
+  });
+
+  it("still releases through the steal lock once the lock is past half its stale threshold", async () => {
+    const lockPath = freshLockPath();
+    const release = await acquireFileLock(lockPath, { staleMs: STALE_MS });
+    age(lockPath, STALE_MS * 0.6);
+
+    await release?.();
+
+    expect(existsSync(lockPath)).toBe(false);
+    expect(written.filter((file) => file.endsWith(".steal"))).toHaveLength(1);
   });
 
   it("leaves a successor's lock alone when a holder that overran the stale threshold releases", async () => {
