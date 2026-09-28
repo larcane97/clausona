@@ -35,10 +35,19 @@ async function inspect(filePath: string): Promise<HeldFile> {
   return { token, mtimeMs };
 }
 
+/**
+ * Removes one of the lock's files. On Windows a scanner or a pending delete can refuse that
+ * for a moment, with EBUSY or EPERM, and a refusal taken as final leaves the file in the
+ * way until it goes stale. rm retries those only when recursive, which a file never needs.
+ */
+async function removeFile(filePath: string) {
+  await rm(filePath, { force: true, recursive: true, maxRetries: 3, retryDelay: 50 }).catch(() => {});
+}
+
 /** Removes `filePath` if what it holds now still passes `check`. Never rejects. */
 async function removeIf(filePath: string, check: (held: HeldFile) => boolean) {
   const held = await inspect(filePath).catch(() => null);
-  if (held && check(held)) await rm(filePath, { force: true }).catch(() => {});
+  if (held && check(held)) await removeFile(filePath);
 }
 
 /**
@@ -146,6 +155,19 @@ export async function acquireFileLock(lockPath: string, options: FileLockOptions
   }
 
   return async () => {
+    // A lock released well within `staleMs` cannot be taken over meanwhile: a takeover needs
+    // it stale, and checks that again under the steal lock before removing it. So a holder
+    // in time removes its own lock directly, and only one that ran late goes through the
+    // steal lock. That keeps the steal lock off every ordinary release, where on Windows
+    // each file created and deleted is one more that a scanner or a pending delete can keep
+    // in the way - and a release that could not get the steal lock left its lock to go stale.
+    const held = await inspect(lockPath).catch((error: NodeJS.ErrnoException) => error);
+    // Gone, or another holder's since this one ran late: nothing of this holder's to remove.
+    if (held instanceof Error ? held.code === "ENOENT" : held.token !== token) return;
+    if (!(held instanceof Error) && Date.now() - held.mtimeMs < options.staleMs / 2) {
+      await removeFile(lockPath);
+      return;
+    }
     // Waiting out the steal lock's own threshold is long enough for one left by a dead
     // taker to be removed. Failing that, the lock is left to go stale, as it would be had
     // this process died holding it.
