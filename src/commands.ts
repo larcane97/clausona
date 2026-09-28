@@ -1029,6 +1029,9 @@ export async function runCommand(command: string, args: string[]) {
     case "--help":
       return usageText();
 
+    // A contract between releases: installed updaters run the next release with `--version` and
+    // require exit 0 with `v<version>` on stdout, or they refuse it. Change this and every copy
+    // already installed refuses every later release.
     case "version":
     case "-v":
     case "--version":

@@ -108,6 +108,11 @@ describe("clausona update", () => {
     );
   });
 
+  // Changing this output would make every installed updater refuse every later release.
+  it("prints v<version> for --version, which every installed updater checks the next release against", async () => {
+    expect(stripAnsi(await runCommand("--version", []))).toContain(`v${__CLAUSONA_VERSION__}`);
+  });
+
   it("is listed, has help, and refuses an unknown option", async () => {
     expect(stripAnsi(await runCommand("help", []))).toContain("update");
     expect(stripAnsi(await runCommand("update", ["--help"]))).toContain("clausona update [--yes]");
