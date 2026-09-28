@@ -33,6 +33,12 @@ const MARK_COLUMN = 3;
  */
 const LABEL_FLOOR = 16;
 
+/**
+ * The fewest columns a cut badge or meta is drawn in - three characters and the ellipsis. With
+ * less it is left out: `●…` beside a name says nothing.
+ */
+const PART_FLOOR = 4;
+
 /** The columns each part of a row gets: the label, then the badge and the meta (0 for none). */
 type RowFit = { label: number; badge: number; meta: number };
 
@@ -46,8 +52,13 @@ type RowFit = { label: number; badge: number; meta: number };
 function fitRow(label: number, badge: number, meta: number, space: number): RowFit {
   const floor = Math.min(label, LABEL_FLOOR, Math.max(0, space));
   let left = space - floor;
-  // A part is only drawn with room for itself and the gap before it.
-  const share = (want: number) => (want > 0 ? Math.max(0, Math.min(want, left - 1)) : 0);
+  // A part is drawn whole, or cut to no fewer than PART_FLOOR columns, after a gap - or not at all.
+  const share = (want: number) => {
+    const room = left - 1;
+    if (want <= 0) return 0;
+    if (room >= want) return want;
+    return room >= PART_FLOOR ? room : 0;
+  };
   const badgeFit = share(badge);
   if (badgeFit > 0) left -= badgeFit + 1;
   const metaFit = share(meta);

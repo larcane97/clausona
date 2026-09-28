@@ -72,6 +72,8 @@ export type WatchedInstance = Instance & {
   watchFrames(listener: (frame: string) => void): () => void;
   /** The terminal-mode switches written to stdout, in order - kept out of `frames`. */
   modes: string[];
+  /** Resizes the terminal to `columns`, as a terminal does: the width changes, then `resize` fires. */
+  resize(columns: number): void;
 };
 
 const MODE_SWITCHES = new Set([BRACKETED_PASTE_ON, BRACKETED_PASTE_OFF]);
@@ -123,6 +125,10 @@ export function renderAt(
     watchFrames(listener) {
       watchers.add(listener);
       return () => watchers.delete(listener);
+    },
+    resize(width) {
+      stdout.columns = width;
+      stdout.emit("resize");
     },
   };
 }

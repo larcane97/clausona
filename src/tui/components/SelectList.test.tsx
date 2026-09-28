@@ -42,9 +42,21 @@ describe("SelectList", () => {
     expect(line).toMatch(/codex:company-\S* ● active 5h \S.*…/);
   });
 
-  it("leaves a row that fits exactly as it is", async () => {
-    const line = await row({ id: "a", label: "claude:default", badge: "active", meta: "5h 61% | 7d 12%" }, 60);
+  // 39 columns of row, and the cursor's three: 42 is an exact fit.
+  const FITS = { id: "a", label: "claude:default", badge: "active", meta: "5h 61% | 7d 12%" };
 
-    expect(line).toContain("claude:default ● active 5h 61% | 7d 12%");
+  it("leaves a row that fits exactly as it is", async () => {
+    expect(await row(FITS, 42)).toContain("claude:default ● active 5h 61% | 7d 12%");
+  });
+
+  it("cuts the meta, not the name or the badge, one column short of that", async () => {
+    expect(await row(FITS, 41)).toContain("claude:default ● active 5h 61% | 7d 1…");
+  });
+
+  it("leaves out a meta with no room for three characters, rather than draw a sliver of it", async () => {
+    // The name at its floor and the badge whole leave the meta a column, and the name takes it back.
+    const line = await row({ id: "a", label: "claude:jaewon-yanolja-team", badge: "active", meta: QUOTA }, 30);
+
+    expect(line).toMatch(/claude:jaewon-\S*… ● active\s*$/);
   });
 });

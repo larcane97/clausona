@@ -35,8 +35,9 @@ type Fit = { name: number; widths: number[]; cells: Cells[] };
 
 /**
  * The table's columns in `space` columns: each as wide as its widest value, the name column
- * cut first - down to its floor - and then the numbers put in their short form. A number is
- * never cut: a count missing its last digits reads as a different count.
+ * cut first - down to its floor - and then the numbers put in their short form, rather than
+ * cut: a count missing its last digits reads as a different count. Only a terminal too narrow
+ * for even the short form (about 33 columns) has the row clipped at its edge.
  *
  * `names` and `usages` include the total row.
  */

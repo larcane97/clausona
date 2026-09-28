@@ -149,6 +149,45 @@ describe("Usage", () => {
     expect(rows.Total?.slice(2)).toEqual(["12,310,375,024", "518,104,593"]);
   });
 
+  // Between the two, a name is cut to make room for the numbers in full; below that, the
+  // numbers take their short form so a name keeps its sixteen columns.
+  it("cuts a long name with an ellipsis before it shortens any number", async () => {
+    const rows = await table(72);
+
+    expect(Object.values(rows).find((row) => row[0]?.startsWith("claude:jaewon"))).toEqual([
+      "claude:jaewon-yanol…",
+      "$1111593.89",
+      "80,951,966",
+      "368,296,625",
+    ]);
+  });
+
+  it("puts the numbers in their short form once the name is down to its floor", async () => {
+    const rows = await table(50);
+
+    expect(Object.values(rows).find((row) => row[0]?.startsWith("claude:jaewon"))).toEqual([
+      "claude:jaewon-ya…",
+      "$1.1M",
+      "81M",
+      "368.3M",
+    ]);
+  });
+
+  it("fits itself again when the terminal is resized", async () => {
+    const app = renderAt(<App initialScreen="usage" />, 100);
+    await waitForFrame(app.lastFrame, (f) => f.includes("136,038,742"));
+    app.resize(60);
+    const narrow = await waitForFrame(app.lastFrame, (f) => f.includes("136M"));
+    app.resize(100);
+    const wide = await waitForFrame(app.lastFrame, (f) => f.includes("136,038,742"));
+    app.unmount();
+
+    const row = (frame: string) => cells(lines(frame).find((line) => line.includes("claude:default")) ?? "");
+    // Measured at 100 and never measured again, the counts were cut to `70,959,95`.
+    expect(row(narrow)).toEqual(["claude:default", "$30.1K", "71M", "136M"]);
+    expect(row(wide)).toEqual(["claude:default", "$30068.38", "70,959,950", "136,038,742"]);
+  });
+
   it("never cuts a number to fit a narrow terminal: it shortens the name, then the numbers' form", async () => {
     const rows = await table(60);
     const all = Object.values(rows);

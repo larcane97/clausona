@@ -21,7 +21,7 @@ function Row({
   label,
   value,
   valueColor,
-  truncate,
+  cut,
 }: {
   label: string;
   value: string;
@@ -32,15 +32,15 @@ function Row({
    * wherever the column ended. `middle` keeps both ends - the domain, the directory's suffix -
    * which is what tells one of them from the next.
    */
-  truncate?: "end" | "middle";
+  cut?: "end" | "middle";
 }) {
   return (
     <Box gap={1} width="100%" flexDirection="row">
       <Box width={12} flexShrink={0}>
         <Text color={color.muted}>{label}</Text>
       </Box>
-      <Box flexGrow={1} flexShrink={1} minWidth={0} overflow={truncate ? "hidden" : undefined}>
-        <Text color={valueColor ?? color.text} wrap={truncate ? `truncate-${truncate}` : undefined}>
+      <Box flexGrow={1} flexShrink={1} minWidth={0} overflow={cut ? "hidden" : undefined}>
+        <Text color={valueColor ?? color.text} wrap={cut ? `truncate-${cut}` : undefined}>
           {value}
         </Text>
       </Box>
@@ -103,18 +103,16 @@ function QuotaRow({
   width: number;
 }) {
   if (!window) {
-    return <Row label={label} value={EM_DASH} valueColor={color.muted} truncate="end" />;
+    return <Row label={label} value={EM_DASH} valueColor={color.muted} cut="end" />;
   }
 
-  return (
-    <Row label={label} value={fitQuotaValue(window, width)} valueColor={quotaColor(window, live)} truncate="end" />
-  );
+  return <Row label={label} value={fitQuotaValue(window, width)} valueColor={quotaColor(window, live)} cut="end" />;
 }
 
 function QuotaSection({ quota, width }: { quota?: QuotaSnapshot; width: number }) {
   if (!quota) {
     // The character itself: a JSX attribute string keeps a `\u2026` escape as six characters.
-    return <Row label="Quota" value="loading…" valueColor={color.muted} truncate="end" />;
+    return <Row label="Quota" value="loading…" valueColor={color.muted} cut="end" />;
   }
 
   const live = quota.state === "ok";
@@ -136,7 +134,7 @@ function QuotaSection({ quota, width }: { quota?: QuotaSnapshot; width: number }
               : QUOTA_STATE_NOTE[quota.state]
           }
           valueColor={color.warning}
-          truncate="end"
+          cut="end"
         />
       )}
     </>
@@ -158,10 +156,10 @@ function ApiSection({ profile, width }: { profile: ProfileListItem; width: numbe
   const others = isEnvMap(profile.env) ? Object.keys(profile.env).filter((key) => key !== "ANTHROPIC_MODEL").length : 0;
   return (
     <>
-      <Row label="Endpoint" value={api.baseUrl} truncate="end" />
+      <Row label="Endpoint" value={api.baseUrl} cut="end" />
       <Row label="Auth" value={api.authScheme} valueColor={color.secondary} />
       <Row label="Key" value={describeSecretSource(api.secret)} valueColor={color.secondary} />
-      <Row label="Model" value={fitModel(model, width)} valueColor={model ? color.text : color.muted} truncate="end" />
+      <Row label="Model" value={fitModel(model, width)} valueColor={model ? color.text : color.muted} cut="end" />
       {others > 0 && <Row label="Settings" value={`${others} set`} valueColor={color.secondary} />}
     </>
   );
@@ -219,13 +217,13 @@ export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem;
         {/* An API profile has no account email; its label stands in, exactly as it does in
             `list` and in the doctor. Blank-aware, so a hand-edited blank label does not
             hide a real email behind whitespace. */}
-        <Row label="Account" value={displayName(profile)} truncate="middle" />
+        <Row label="Account" value={displayName(profile)} cut="middle" />
         {profile.orgName && <Row label="Org" value={profile.orgName} />}
         <Row
           label="Config"
           value={profile.configDir.replace(/^\/Users\/[^/]+/, "~")}
           valueColor={color.muted}
-          truncate="middle"
+          cut="middle"
         />
         {!profile.isPrimary && (
           <Row
@@ -238,7 +236,7 @@ export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem;
             an endpoint nearly always needs one. For an account, pinning none is the usual
             case - Claude Code picks - so the row is only there when there is a model. */}
         {!isApi && profile.model !== undefined && (
-          <Row label="Model" value={fitModel(profile.model, valueWidth)} truncate="end" />
+          <Row label="Model" value={fitModel(profile.model, valueWidth)} cut="end" />
         )}
       </Box>
 
