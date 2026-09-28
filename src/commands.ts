@@ -1632,25 +1632,46 @@ export type UpdateCommandDeps = {
   install: (tag: string, target: string) => Promise<void>;
 };
 
-/** `(Y/n)`: an empty answer is a yes. */
-function askYesNo(question: string): Promise<boolean> {
+/**
+ * `(Y/n)`: an empty answer is a yes. Ctrl+D, or Ctrl+C at the prompt, closes it unanswered, and
+ * that is a no: readline calls the question back for neither, and the command waited forever.
+ */
+export function askYesNo(
+  question: string,
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stdout,
+): Promise<boolean> {
   return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    rl.question(question, (answer) => {
+    const rl = createInterface({ input, output });
+    let answered = false;
+    const answer = (yes: boolean) => {
+      if (answered) return;
+      answered = true;
+      resolve(yes);
+      // Closing emits `close`, which the flag above has already made a no-op.
       rl.close();
-      const reply = answer.trim().toLowerCase();
-      resolve(reply === "" || reply === "y" || reply === "yes");
+    };
+    rl.on("close", () => answer(false));
+    rl.on("SIGINT", () => answer(false));
+    rl.question(question, (reply) => {
+      const normalized = reply.trim().toLowerCase();
+      answer(normalized === "" || normalized === "y" || normalized === "yes");
     });
   });
 }
+
+/** Asked for, unlike the dashboard's 3 s background check, so a slow network is worth waiting out. */
+const UPDATE_COMMAND_CHECK_TIMEOUT_MS = 15_000;
 
 function defaultUpdateDeps(): UpdateCommandDeps {
   return {
     current: __CLAUSONA_VERSION__,
     target: currentInstallTarget(),
     platform: process.platform,
-    interactive: process.stdin.isTTY === true,
-    checkLatest: () => checkLatestTag(),
+    // The question goes to stdout and the answer comes from stdin. With stdout redirected,
+    // `clausona update > log` wrote the question into the file and sat waiting on its answer.
+    interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
+    checkLatest: () => checkLatestTag({ timeoutMs: UPDATE_COMMAND_CHECK_TIMEOUT_MS }),
     confirm: askYesNo,
     install: (tag, target) => performUpdate({ tag, target }),
   };
@@ -1663,6 +1684,11 @@ function defaultUpdateDeps(): UpdateCommandDeps {
  * script's next line of input as the answer.
  */
 export async function runUpdateCommand(args: string[], deps: UpdateCommandDeps): Promise<string> {
+  // `clausona update v0.3.1-beta` reads as installing that release, and it would have installed
+  // whatever is latest instead.
+  if (args.some((arg) => !arg.startsWith("-"))) {
+    throw new Error("clausona update takes no arguments: it always installs the latest release.");
+  }
   if (!deps.target) {
     throw new Error(
       `This clausona was not installed by the installer, so it cannot replace itself. To update, run:\n    ${reinstallCommand(deps.platform)}`,

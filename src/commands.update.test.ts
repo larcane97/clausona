@@ -1,6 +1,7 @@
+import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 
-import { runCommand, runUpdateCommand, type UpdateCommandDeps } from "./commands.js";
+import { askYesNo, runCommand, runUpdateCommand, type UpdateCommandDeps } from "./commands.js";
 import { stripAnsi } from "./lib/cli-style.js";
 
 const TARGET = "/home/u/.local/share/clausona/index.js";
@@ -78,6 +79,18 @@ describe("clausona update", () => {
     expect(install).not.toHaveBeenCalled();
   });
 
+  // `clausona update v0.3.1-beta --yes` installed whatever was latest, which need not be what it named.
+  it("refuses an argument, before asking GitHub anything", async () => {
+    const { deps, checkLatest, confirm, install } = setup();
+
+    expect(await failure(runUpdateCommand(["v0.3.1-beta", "--yes"], deps))).toBe(
+      "clausona update takes no arguments: it always installs the latest release.",
+    );
+    expect(checkLatest).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(install).not.toHaveBeenCalled();
+  });
+
   it("says when GitHub cannot be reached", async () => {
     const { deps } = setup({ checkLatest: async () => null });
     expect(await failure(runUpdateCommand([], deps))).toBe("Could not reach GitHub to check for updates.");
@@ -117,5 +130,40 @@ describe("clausona update", () => {
     expect(stripAnsi(await runCommand("help", []))).toContain("update");
     expect(stripAnsi(await runCommand("update", ["--help"]))).toContain("clausona update [--yes]");
     expect(await failure(runCommand("update", ["--bogus"]))).toContain("Unknown option: --bogus");
+  });
+});
+
+describe("the update question", () => {
+  /**
+   * The question on streams of the test's own. readline reads Ctrl+C as a key only when the output
+   * is a terminal, so `terminal` makes it one.
+   */
+  function ask(options: { terminal?: boolean } = {}) {
+    const input = new PassThrough();
+    const output = Object.assign(new PassThrough(), options.terminal ? { isTTY: true, columns: 80 } : {});
+    return { input, answer: askYesNo("  Update v0.3.0-beta → v0.3.1-beta? (Y/n) ", input, output) };
+  }
+
+  it.each([
+    ["", true],
+    ["y", true],
+    ["n", false],
+  ])("reads %j as %s", async (reply, expected) => {
+    const { input, answer } = ask();
+    input.write(`${reply}\n`);
+    expect(await answer).toBe(expected);
+  });
+
+  // Neither calls the question back, so the command waited on an answer that never came.
+  it("is a no when the input ends unanswered, as on Ctrl+D", async () => {
+    const { input, answer } = ask();
+    input.end();
+    expect(await answer).toBe(false);
+  });
+
+  it("is a no on Ctrl+C at the prompt", async () => {
+    const { input, answer } = ask({ terminal: true });
+    input.write("\x03");
+    expect(await answer).toBe(false);
   });
 });
