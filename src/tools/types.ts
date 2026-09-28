@@ -35,6 +35,8 @@ export type ToolAdapter = {
 
   // Optional Keychain probe (Claude only on macOS).
   keychainServiceName?(args: { homeDir: string; configDir: string }): string;
+  // The account the tool files its item under: the probe looks for the service under it only.
+  keychainAccount?(): string;
   hasKeychainCredential?(service: string): Promise<boolean>;
   // The plaintext file Claude Code falls back to on macOS when a Keychain write fails,
   // and reads whenever the Keychain has no item. A profile whose token landed there is

@@ -47,10 +47,35 @@ const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
+const CLAUDE_KEYCHAIN_FALLBACK_ACCOUNT = "claude-code-user";
+
+/**
+ * The account Claude Code keeps its Keychain item under, derived the way it derives it
+ * (2.1.283): the login name in USER, else the OS's name for the user, and
+ * "claude-code-user" when neither can be had or the name has a character outside
+ * [a-zA-Z0-9._-]. Claude Code reads, writes and deletes the item by service and this
+ * account, so clausona names both wherever it touches that item. By service alone
+ * `security` takes the first item it finds, which can be another account's when two share
+ * the service, and `add-generic-password -U` replaces only the item with the same service
+ * and account. A renewal read from or written to another account's item would leave Claude
+ * Code's own holding a refresh token the provider has already rotated out.
+ */
+export function claudeKeychainAccount(): string {
+  let name: string;
+  try {
+    name = process.env.USER || userInfo().username;
+  } catch {
+    // userInfo throws for a user with no entry in the user database, as in some containers.
+    name = CLAUDE_KEYCHAIN_FALLBACK_ACCOUNT;
+  }
+  return /^[a-zA-Z0-9._-]+$/.test(name) ? name : CLAUDE_KEYCHAIN_FALLBACK_ACCOUNT;
+}
+
 async function hasKeychain(service: string): Promise<boolean> {
   if (process.platform !== "darwin") return false;
   return new Promise<boolean>((resolve) => {
-    const child = spawnCommand("security", ["find-generic-password", "-s", service], { stdio: "ignore" });
+    const args = ["find-generic-password", "-s", service, "-a", claudeKeychainAccount()];
+    const child = spawnCommand("security", args, { stdio: "ignore" });
     child.on("close", (code) => resolve(code === 0));
     child.on("error", () => resolve(false));
   });
@@ -144,7 +169,8 @@ type KeychainLookup =
   | { state: "unreadable" };
 
 async function readKeychainBlob(service: string): Promise<KeychainLookup> {
-  const { code, stdout, launched } = await runSecurity(["find-generic-password", "-s", service, "-w"]);
+  const account = claudeKeychainAccount();
+  const { code, stdout, launched } = await runSecurity(["find-generic-password", "-s", service, "-a", account, "-w"]);
   if (code === 0) {
     // Claude Code falls through on an item it cannot parse as well.
     const blob = parseStored(decodeKeychainOutput(stdout));
@@ -153,17 +179,6 @@ async function readKeychainBlob(service: string): Promise<KeychainLookup> {
   // Without a `security` binary there is no Keychain to hold the item.
   if (!launched || KEYCHAIN_ABSENT_CODES.has(code)) return { state: "absent" };
   return { state: "unreadable" };
-}
-
-/**
- * `security add-generic-password -U` keys on both service and account, so writing
- * under a different account would add a second entry instead of replacing the entry
- * Claude Code reads.
- */
-async function keychainAccount(service: string): Promise<string> {
-  const { code, stdout } = await runSecurity(["find-generic-password", "-s", service]);
-  const match = code === 0 ? /"acct"<blob>="([^"]*)"/.exec(stdout) : null;
-  return match?.[1] || userInfo().username;
 }
 
 const credentialsFilePath = (configDir: string) => path.join(configDir, ".credentials.json");
@@ -223,7 +238,7 @@ async function writeStoredBlob(configDir: string, blob: StoredCredentials, store
 
   if (store === "keychain") {
     const service = keychainServiceForConfigDir({ homeDir: homedir(), configDir });
-    await writeKeychainItem({ service, account: await keychainAccount(service) }, serialized);
+    await writeKeychainItem({ service, account: claudeKeychainAccount() }, serialized);
     return;
   }
 
@@ -508,6 +523,7 @@ export const claudeAdapter: ToolAdapter = {
   configDirPattern: /^\.claude(-.+)?$/,
   readAccountInfo: readAccount,
   keychainServiceName: keychainServiceForConfigDir,
+  keychainAccount: claudeKeychainAccount,
   hasKeychainCredential: hasKeychain,
   hasFallbackCredential,
   sharedSkipSet: (mergeSessions) =>

@@ -1286,9 +1286,12 @@ export async function doctorProfiles(
             !(await adapter.hasKeychainCredential(keychainService)) &&
             !(await adapter.hasFallbackCredential?.(profile.configDir))
           ) {
+            // The account is named because an item filed under another one - visible in
+            // Keychain Access under the same service - is one the tool does not read.
+            const account = adapter.keychainAccount?.();
             issues.push({
               kind: "missing_keychain",
-              message: `${keychainService} not found in Keychain, and .credentials.json is missing or has no access token`,
+              message: `${keychainService}${account ? ` (account ${account})` : ""} not found in Keychain, and .credentials.json is missing or has no access token`,
             });
           }
         } else if (adapter.readCredential && !(await adapter.readCredential(profile.configDir))) {
