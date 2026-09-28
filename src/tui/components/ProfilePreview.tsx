@@ -1,5 +1,5 @@
-import { Box, type DOMElement, measureElement, Text } from "ink";
-import { type RefObject, useLayoutEffect, useRef, useState } from "react";
+import { Box, type DOMElement, Text } from "ink";
+import type { RefObject } from "react";
 import { truncate } from "../../lib/cli-style.js";
 import {
   doctorSeverity,
@@ -14,27 +14,33 @@ import { displayName, isEnvMap } from "../../lib/profile-env.js";
 import { describeSecretSource } from "../../lib/redact.js";
 import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot, QuotaWindow } from "../../types.js";
 import { color, symbol } from "../theme.js";
+import { useWidth } from "../use-width.js";
 import { Badge } from "./Badge.js";
 
 function Row({
   label,
   value,
   valueColor,
-  singleLine = false,
+  truncate,
 }: {
   label: string;
   value: string;
   valueColor?: string;
-  /** Keep the value on one line. Prevents character-by-character wrapping in a narrow panel. */
-  singleLine?: boolean;
+  /**
+   * Keep the value on one line, cut where it is least missed. Prevents character-by-character
+   * wrapping in a narrow panel: an address or a path has no space to wrap at, so ink broke it
+   * wherever the column ended. `middle` keeps both ends - the domain, the directory's suffix -
+   * which is what tells one of them from the next.
+   */
+  truncate?: "end" | "middle";
 }) {
   return (
     <Box gap={1} width="100%" flexDirection="row">
       <Box width={12} flexShrink={0}>
         <Text color={color.muted}>{label}</Text>
       </Box>
-      <Box flexGrow={1} flexShrink={1} minWidth={0} overflow={singleLine ? "hidden" : undefined}>
-        <Text color={valueColor ?? color.text} wrap={singleLine ? "truncate-end" : undefined}>
+      <Box flexGrow={1} flexShrink={1} minWidth={0} overflow={truncate ? "hidden" : undefined}>
+        <Text color={valueColor ?? color.text} wrap={truncate ? `truncate-${truncate}` : undefined}>
           {value}
         </Text>
       </Box>
@@ -77,23 +83,12 @@ const LABEL_COLUMN = 13;
 /**
  * The columns a Row's value has, for the rows that cut their own text to fit - a model id from
  * the middle, a quota reading by what it drops - rather than leave it to ink, which cuts from
- * the end and takes the part that tells one value from another.
- *
- * Measured, not worked out from the terminal's width: the panel sits in two screens that lay it
- * out differently, and a width derived from one estimate was a column too wide below 80 columns
- * (ink then cut the cut text again) and a column short at 100. ink knows the width only once it
- * has laid a frame out, so until then a row gets all of its text and ink cuts it, as it did before
- * any of this; the measurement, taken after every layout, redraws it at once.
+ * the end and takes the part that tells one value from another. Measured: the panel sits in two
+ * screens that lay it out differently (see `useWidth`).
  */
 function useValueWidth(): [RefObject<DOMElement | null>, number] {
-  const panel = useRef<DOMElement | null>(null);
-  const [width, setWidth] = useState<number | undefined>(undefined);
-  useLayoutEffect(() => {
-    if (!panel.current) return;
-    const measured = Math.max(0, measureElement(panel.current).width - LABEL_COLUMN);
-    if (measured !== width) setWidth(measured);
-  });
-  return [panel, width ?? Number.POSITIVE_INFINITY];
+  const [panel, width] = useWidth();
+  return [panel, Math.max(0, width - LABEL_COLUMN)];
 }
 
 function QuotaRow({
@@ -108,16 +103,18 @@ function QuotaRow({
   width: number;
 }) {
   if (!window) {
-    return <Row label={label} value={EM_DASH} valueColor={color.muted} singleLine />;
+    return <Row label={label} value={EM_DASH} valueColor={color.muted} truncate="end" />;
   }
 
-  return <Row label={label} value={fitQuotaValue(window, width)} valueColor={quotaColor(window, live)} singleLine />;
+  return (
+    <Row label={label} value={fitQuotaValue(window, width)} valueColor={quotaColor(window, live)} truncate="end" />
+  );
 }
 
 function QuotaSection({ quota, width }: { quota?: QuotaSnapshot; width: number }) {
   if (!quota) {
     // The character itself: a JSX attribute string keeps a `\u2026` escape as six characters.
-    return <Row label="Quota" value="loading…" valueColor={color.muted} singleLine />;
+    return <Row label="Quota" value="loading…" valueColor={color.muted} truncate="end" />;
   }
 
   const live = quota.state === "ok";
@@ -139,7 +136,7 @@ function QuotaSection({ quota, width }: { quota?: QuotaSnapshot; width: number }
               : QUOTA_STATE_NOTE[quota.state]
           }
           valueColor={color.warning}
-          singleLine
+          truncate="end"
         />
       )}
     </>
@@ -161,10 +158,10 @@ function ApiSection({ profile, width }: { profile: ProfileListItem; width: numbe
   const others = isEnvMap(profile.env) ? Object.keys(profile.env).filter((key) => key !== "ANTHROPIC_MODEL").length : 0;
   return (
     <>
-      <Row label="Endpoint" value={api.baseUrl} singleLine />
+      <Row label="Endpoint" value={api.baseUrl} truncate="end" />
       <Row label="Auth" value={api.authScheme} valueColor={color.secondary} />
       <Row label="Key" value={describeSecretSource(api.secret)} valueColor={color.secondary} />
-      <Row label="Model" value={fitModel(model, width)} valueColor={model ? color.text : color.muted} singleLine />
+      <Row label="Model" value={fitModel(model, width)} valueColor={model ? color.text : color.muted} truncate="end" />
       {others > 0 && <Row label="Settings" value={`${others} set`} valueColor={color.secondary} />}
     </>
   );
@@ -222,9 +219,14 @@ export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem;
         {/* An API profile has no account email; its label stands in, exactly as it does in
             `list` and in the doctor. Blank-aware, so a hand-edited blank label does not
             hide a real email behind whitespace. */}
-        <Row label="Account" value={displayName(profile)} />
+        <Row label="Account" value={displayName(profile)} truncate="middle" />
         {profile.orgName && <Row label="Org" value={profile.orgName} />}
-        <Row label="Config" value={profile.configDir.replace(/^\/Users\/[^/]+/, "~")} valueColor={color.muted} />
+        <Row
+          label="Config"
+          value={profile.configDir.replace(/^\/Users\/[^/]+/, "~")}
+          valueColor={color.muted}
+          truncate="middle"
+        />
         {!profile.isPrimary && (
           <Row
             label="Sessions"
@@ -236,7 +238,7 @@ export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem;
             an endpoint nearly always needs one. For an account, pinning none is the usual
             case - Claude Code picks - so the row is only there when there is a model. */}
         {!isApi && profile.model !== undefined && (
-          <Row label="Model" value={fitModel(profile.model, valueWidth)} singleLine />
+          <Row label="Model" value={fitModel(profile.model, valueWidth)} truncate="end" />
         )}
       </Box>
 
@@ -293,7 +295,11 @@ export function ProfilePreview({ profile, doctor }: { profile?: ProfileListItem;
           />
           {doctor.issues.map((issue) => (
             <Box key={issue.message} gap={1} marginTop={1}>
-              <Text color={color.warning}>{symbol.arrow}</Text>
+              {/* Fixed: beside a message longer than the line, a shrinkable arrow is given
+                  its share of the shrink, rounds to no width, and the message runs into it. */}
+              <Box flexShrink={0}>
+                <Text color={color.warning}>{symbol.arrow}</Text>
+              </Box>
               <Text color={color.warning}>{issue.message}</Text>
             </Box>
           ))}

@@ -52,6 +52,9 @@ const GROUP_TITLE: Record<string, string> = {
 
 const LABEL_WIDTH = 16;
 
+/** Where a field's value starts: its cursor, a gap, its label and a gap. */
+const VALUE_COLUMN = 2 + 1 + LABEL_WIDTH + 1;
+
 type ApiFormProps = {
   form: ApiFormState;
   fields: ApiField[];
@@ -92,7 +95,9 @@ function FieldError({ message }: { message?: string }) {
   if (!message) return null;
   return (
     <Box gap={1} paddingLeft={2}>
-      <Text color={color.error}>{symbol.cross}</Text>
+      <Box flexShrink={0}>
+        <Text color={color.error}>{symbol.cross}</Text>
+      </Box>
       <Text color={color.error} wrap="truncate-end">
         {message}
       </Text>
@@ -107,7 +112,7 @@ function FieldError({ message }: { message?: string }) {
 function Hint({ text, tone }: { text?: string; tone?: "warning" }) {
   if (!text) return null;
   return (
-    <Box paddingLeft={2 + LABEL_WIDTH}>
+    <Box paddingLeft={VALUE_COLUMN}>
       <Text
         color={tone === "warning" ? color.warning : color.muted}
         wrap={tone === "warning" ? "wrap" : "truncate-end"}

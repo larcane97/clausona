@@ -27,6 +27,7 @@ import {
   quotaSeverity,
   renderDoctor,
   renderList,
+  renderUsageSummary,
 } from "./format.js";
 
 function snapshot(overrides: Partial<QuotaSnapshot> = {}): QuotaSnapshot {
@@ -777,5 +778,30 @@ describe("renderDoctor next-step hint", () => {
 
     expect(out).toContain("clausona repair claude:work");
     expect(out).not.toContain("clausona login");
+  });
+});
+
+describe("renderUsageSummary for every profile", () => {
+  // Each column was padded to a fixed width and nothing was cut, so a name or a count as
+  // long as its column ran straight into the next one.
+  it("keeps a long name and a long count apart from the columns after them", () => {
+    const out = stripAnsi(
+      renderUsageSummary(
+        {
+          "claude:jaewon-yanolja-team": { cost: 1111593.89, inputTokens: 12_158_463_108, outputTokens: 368_296_625 },
+          "claude:default": { cost: 1.5, inputTokens: 10, outputTokens: 5 },
+        },
+        undefined,
+        "today",
+      ),
+    );
+    const row = out.split("\n").find((line) => line.includes("claude:jaewon-yanolja-team"));
+
+    expect(row?.trim().split(/\s{2,}/)).toEqual([
+      "claude:jaewon-yanolja-team",
+      "$1111593.89",
+      "12,158,463,108",
+      "368,296,625",
+    ]);
   });
 });

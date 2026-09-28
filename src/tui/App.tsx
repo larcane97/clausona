@@ -12,8 +12,6 @@ import {
   describeUnverifiedLogin,
   doctorSeverity,
   doctorSummary,
-  formatCount,
-  formatCurrency,
   formatQuotaInline,
   localTimezoneLabel,
   offersRepair,
@@ -83,6 +81,7 @@ import { Divider } from "./components/Divider.js";
 import { ProfilePreview } from "./components/ProfilePreview.js";
 import { SelectList, type SelectListItem } from "./components/SelectList.js";
 import { StepIndicator } from "./components/StepIndicator.js";
+import { UsageTable } from "./components/UsageTable.js";
 import { color, symbol } from "./theme.js";
 
 type Screen = "dashboard" | "use" | "doctor" | "init" | "usage";
@@ -2036,7 +2035,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     return (
       <Chrome title="Cannot read profiles" hints={[{ keys: "esc", action: "quit" }]}>
         <Box gap={1}>
-          <Text color={color.error}>{symbol.cross}</Text>
+          <Box flexShrink={0}>
+            <Text color={color.error}>{symbol.cross}</Text>
+          </Box>
           <Text color={color.text}>{unreadableRegistry}</Text>
         </Box>
       </Chrome>
@@ -2103,7 +2104,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           >
             <Box flexDirection="column" gap={1} borderStyle="round" borderColor={color.error} paddingX={2} paddingY={1}>
               <Box gap={1}>
-                <Text color={color.error}>{symbol.cross}</Text>
+                <Box flexShrink={0}>
+                  <Text color={color.error}>{symbol.cross}</Text>
+                </Box>
                 <Text color={color.error}>{addState.message}</Text>
               </Box>
             </Box>
@@ -2123,14 +2126,18 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               paddingY={1}
             >
               <Box gap={1}>
-                <Text color={color.healthy}>{symbol.check}</Text>
+                <Box flexShrink={0}>
+                  <Text color={color.healthy}>{symbol.check}</Text>
+                </Box>
                 <Text color={color.healthy} bold>
                   {addState.message}
                 </Text>
               </Box>
               {addState.warning && (
                 <Box gap={1}>
-                  <Text color={color.warning}>{symbol.diamond}</Text>
+                  <Box flexShrink={0}>
+                    <Text color={color.warning}>{symbol.diamond}</Text>
+                  </Box>
                   <Text color={color.warning}>{addState.warning}</Text>
                 </Box>
               )}
@@ -2214,13 +2221,18 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               >
                 {currentAccount ? (
                   <>
-                    <Text color={color.text} bold>
+                    {/* Cut from the middle rather than broken mid-word: see the doctor's panel. */}
+                    <Text color={color.text} bold wrap="truncate-middle">
                       {currentAccount.configDir.replace(homedir(), "~")}
                     </Text>
-                    <Text color={color.secondary}>{currentAccount.email}</Text>
+                    <Text color={color.secondary} wrap="truncate-middle">
+                      {currentAccount.email}
+                    </Text>
                     {currentAccount.orgName && <Text color={color.muted}>{currentAccount.orgName}</Text>}
                     <Box marginTop={1} gap={1}>
-                      <Text color={color.healthy}>{symbol.check}</Text>
+                      <Box flexShrink={0}>
+                        <Text color={color.healthy}>{symbol.check}</Text>
+                      </Box>
                       <Text color={color.secondary}>Credentials verified</Text>
                     </Box>
                   </>
@@ -2245,25 +2257,35 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               </Text>
               <Box flexDirection="column">
                 <Box gap={1}>
-                  <Text color={color.muted}>Account </Text>
+                  <Box width={8} flexShrink={0}>
+                    <Text color={color.muted}>Account</Text>
+                  </Box>
                   <Text color={color.text}>{account?.email}</Text>
                 </Box>
                 <Box gap={1}>
-                  <Text color={color.muted}>Config </Text>
+                  <Box width={8} flexShrink={0}>
+                    <Text color={color.muted}>Config</Text>
+                  </Box>
                   <Text color={color.secondary}>{currentDir?.replace(homedir(), "~")}</Text>
                 </Box>
               </Box>
               {addState.message && (
                 <Box gap={1}>
-                  <Text color={color.error}>{symbol.cross}</Text>
+                  <Box flexShrink={0}>
+                    <Text color={color.error}>{symbol.cross}</Text>
+                  </Box>
                   <Text color={color.error}>{addState.message}</Text>
                 </Box>
               )}
               <Box gap={1}>
-                <Text color={addState.nameField === 0 ? color.cursor : color.dim}>
-                  {addState.nameField === 0 ? symbol.cursor : " "}
-                </Text>
-                <Text color={color.text}>Name: </Text>
+                <Box flexShrink={0}>
+                  <Text color={addState.nameField === 0 ? color.cursor : color.dim}>
+                    {addState.nameField === 0 ? symbol.cursor : " "}
+                  </Text>
+                </Box>
+                <Box flexShrink={0}>
+                  <Text color={color.text}>Name: </Text>
+                </Box>
                 <TextInput
                   value={addState.nameDraft}
                   onChange={(value) =>
@@ -2313,15 +2335,21 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               </Text>
               {addState.message && (
                 <Box gap={1}>
-                  <Text color={color.error}>{symbol.cross}</Text>
+                  <Box flexShrink={0}>
+                    <Text color={color.error}>{symbol.cross}</Text>
+                  </Box>
                   <Text color={color.error}>{addState.message}</Text>
                 </Box>
               )}
               <Box gap={1}>
-                <Text color={addState.nameField === 0 ? color.cursor : color.dim}>
-                  {addState.nameField === 0 ? symbol.cursor : " "}
-                </Text>
-                <Text color={color.text}>Name: </Text>
+                <Box flexShrink={0}>
+                  <Text color={addState.nameField === 0 ? color.cursor : color.dim}>
+                    {addState.nameField === 0 ? symbol.cursor : " "}
+                  </Text>
+                </Box>
+                <Box flexShrink={0}>
+                  <Text color={color.text}>Name: </Text>
+                </Box>
                 <TextInput
                   value={addState.nameDraft}
                   onChange={(value) =>
@@ -2351,8 +2379,12 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             <Box flexDirection="column" gap={1} borderStyle="round" borderColor={color.dim} paddingX={2} paddingY={1}>
               <Text color={color.secondary}>Enter the config directory path:</Text>
               <Box gap={1}>
-                <Text color={color.cursor}>{symbol.cursor}</Text>
-                <Text color={color.text}>Path: </Text>
+                <Box flexShrink={0}>
+                  <Text color={color.cursor}>{symbol.cursor}</Text>
+                </Box>
+                <Box flexShrink={0}>
+                  <Text color={color.text}>Path: </Text>
+                </Box>
                 <TextInput
                   value={addState.importPath}
                   onChange={(value) =>
@@ -2362,7 +2394,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               </Box>
               {addState.importError ? (
                 <Box gap={1}>
-                  <Text color={color.error}>{symbol.cross}</Text>
+                  <Box flexShrink={0}>
+                    <Text color={color.error}>{symbol.cross}</Text>
+                  </Box>
                   <Text color={color.error}>{addState.importError}</Text>
                 </Box>
               ) : (
@@ -2381,25 +2415,35 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             <Box flexDirection="column" gap={1} borderStyle="round" borderColor={color.dim} paddingX={2} paddingY={1}>
               <Box flexDirection="column">
                 <Box gap={1}>
-                  <Text color={color.muted}>Account </Text>
+                  <Box width={8} flexShrink={0}>
+                    <Text color={color.muted}>Account</Text>
+                  </Box>
                   <Text color={color.text}>{addState.importAccount?.email}</Text>
                 </Box>
                 <Box gap={1}>
-                  <Text color={color.muted}>Config </Text>
+                  <Box width={8} flexShrink={0}>
+                    <Text color={color.muted}>Config</Text>
+                  </Box>
                   <Text color={color.secondary}>{addState.importAccount?.configDir.replace(homedir(), "~")}</Text>
                 </Box>
               </Box>
               {addState.message && (
                 <Box gap={1}>
-                  <Text color={color.error}>{symbol.cross}</Text>
+                  <Box flexShrink={0}>
+                    <Text color={color.error}>{symbol.cross}</Text>
+                  </Box>
                   <Text color={color.error}>{addState.message}</Text>
                 </Box>
               )}
               <Box gap={1}>
-                <Text color={addState.nameField === 0 ? color.cursor : color.dim}>
-                  {addState.nameField === 0 ? symbol.cursor : " "}
-                </Text>
-                <Text color={color.text}>Name: </Text>
+                <Box flexShrink={0}>
+                  <Text color={addState.nameField === 0 ? color.cursor : color.dim}>
+                    {addState.nameField === 0 ? symbol.cursor : " "}
+                  </Text>
+                </Box>
+                <Box flexShrink={0}>
+                  <Text color={color.text}>Name: </Text>
+                </Box>
                 <TextInput
                   value={addState.nameDraft}
                   onChange={(value) =>
@@ -2467,16 +2511,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               index={cursor}
             />
           </Box>
-          <Box
-            flexGrow={1}
-            flexShrink={1}
-            minWidth={1}
-            borderStyle="round"
-            borderColor={color.dim}
-            paddingX={1}
-            flexDirection="column"
-            overflow="hidden"
-          >
+          {/* As on the dashboard: the preview draws its own border, and a second one around it
+              only took four columns from a panel that is already half the screen. */}
+          <Box flexGrow={1} flexShrink={1} minWidth={1} overflow="hidden">
             <ProfilePreview profile={profiles[cursor]} doctor={doctor.find((d) => d.name === profiles[cursor]?.name)} />
           </Box>
         </Box>
@@ -2492,7 +2529,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             {overlay.isPrimary ? (
               <>
                 <Box gap={1}>
-                  <Text color={color.error}>{symbol.cross}</Text>
+                  <Box flexShrink={0}>
+                    <Text color={color.error}>{symbol.cross}</Text>
+                  </Box>
                   <Text color={color.error}>Cannot remove the primary profile.</Text>
                 </Box>
                 <Text color={color.muted} dimColor>
@@ -2624,23 +2663,38 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             {currentDoctor ? (
               <>
                 <Box gap={1}>
-                  <Text color={color.text} bold>
-                    {currentDoctor.name}
-                  </Text>
+                  <Box flexShrink={1} minWidth={0} overflow="hidden">
+                    <Text color={color.text} bold wrap="truncate-end">
+                      {currentDoctor.name}
+                    </Text>
+                  </Box>
                   {/* The rule the list badge uses: a warnings-only profile is `healthy`, and a
                       green check above its findings said there were none. */}
-                  <Text color={color[currentSeverity]}>
-                    {currentSeverity === "healthy" ? symbol.check : symbol.diamond}
-                  </Text>
+                  <Box flexShrink={0}>
+                    <Text color={color[currentSeverity]}>
+                      {currentSeverity === "healthy" ? symbol.check : symbol.diamond}
+                    </Text>
+                  </Box>
                 </Box>
-                <Text color={color.secondary}>{displayName(currentDoctor)}</Text>
-                <Text color={color.muted}>{currentDoctor.configDir.replace(/^\/Users\/[^/]+/, "~")}</Text>
+                {/* Cut from the middle, as the preview's rows are: an address or a path has no
+                    space to wrap at, and its two ends are what tell it from the next. */}
+                <Text color={color.secondary} wrap="truncate-middle">
+                  {displayName(currentDoctor)}
+                </Text>
+                <Text color={color.muted} wrap="truncate-middle">
+                  {currentDoctor.configDir.replace(/^\/Users\/[^/]+/, "~")}
+                </Text>
                 {currentDoctor.issues.length > 0 && (
                   <Box flexDirection="column" marginTop={1}>
                     <Divider title="Issues" />
                     {currentDoctor.issues.map((issue) => (
                       <Box key={issue.message} gap={1}>
-                        <Text color={color.warning}>{symbol.arrow}</Text>
+                        {/* Fixed, as every icon beside a message here is: shrinkable, it took
+                            its share of a long message's overflow, rounded to no width, and the
+                            message ran into it. */}
+                        <Box flexShrink={0}>
+                          <Text color={color.warning}>{symbol.arrow}</Text>
+                        </Box>
                         <Text color={color.secondary}>{issue.message}</Text>
                       </Box>
                     ))}
@@ -2727,65 +2781,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             {usagePeriod !== "all" && <Text color={color.dim}>{localTimezoneLabel()}</Text>}
           </Box>
 
-          <Box flexDirection="row" width="100%" overflow="hidden" height={1}>
-            <Box width={14} flexShrink={0}>
-              <Text color={color.muted}>PROFILE</Text>
-            </Box>
-            <Box width={14} flexShrink={0}>
-              <Text color={color.muted}>COST</Text>
-            </Box>
-            <Box width={14} flexShrink={0}>
-              <Text color={color.muted}>INPUT</Text>
-            </Box>
-            <Box width={14} flexShrink={0}>
-              <Text color={color.muted}>OUTPUT</Text>
-            </Box>
-          </Box>
-          <Divider />
-          {profiles.map((p) => {
-            const d = getData(p);
-            return (
-              <Box key={p.name} flexDirection="row" width="100%" overflow="hidden" height={1}>
-                <Box width={14} flexShrink={0}>
-                  <Text color={p.isActive ? color.brand : color.text} bold={p.isActive}>
-                    {p.name}
-                  </Text>
-                </Box>
-                <Box width={14} flexShrink={0}>
-                  <Text color={d.cost > 0 ? color.text : color.muted}>{formatCurrency(d.cost)}</Text>
-                </Box>
-                <Box width={14} flexShrink={0}>
-                  <Text color={d.inputTokens > 0 ? color.text : color.muted}>{formatCount(d.inputTokens)}</Text>
-                </Box>
-                <Box width={14} flexShrink={0}>
-                  <Text color={d.outputTokens > 0 ? color.text : color.muted}>{formatCount(d.outputTokens)}</Text>
-                </Box>
-              </Box>
-            );
-          })}
-          <Divider />
-          <Box flexDirection="row" width="100%" overflow="hidden" height={1}>
-            <Box width={14} flexShrink={0}>
-              <Text color={color.text} bold>
-                Total
-              </Text>
-            </Box>
-            <Box width={14} flexShrink={0}>
-              <Text color={color.brand} bold>
-                {formatCurrency(profiles.reduce((s, p) => s + getData(p).cost, 0))}
-              </Text>
-            </Box>
-            <Box width={14} flexShrink={0}>
-              <Text color={color.secondary}>
-                {formatCount(profiles.reduce((s, p) => s + getData(p).inputTokens, 0))}
-              </Text>
-            </Box>
-            <Box width={14} flexShrink={0}>
-              <Text color={color.secondary}>
-                {formatCount(profiles.reduce((s, p) => s + getData(p).outputTokens, 0))}
-              </Text>
-            </Box>
-          </Box>
+          <UsageTable rows={profiles.map((p) => ({ name: p.name, isActive: p.isActive, usage: getData(p) }))} />
         </Box>
       </Chrome>
     );
@@ -2811,7 +2807,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     return (
       <Chrome title="Initialize" subtitle="Something went wrong" hints={[]}>
         <Box gap={1}>
-          <Text color={color.error}>{symbol.cross}</Text>
+          <Box flexShrink={0}>
+            <Text color={color.error}>{symbol.cross}</Text>
+          </Box>
           <Text color={color.error}>{initState.message}</Text>
         </Box>
       </Chrome>
@@ -2866,19 +2864,27 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             </Text>
             <Box flexDirection="column">
               <Box gap={1}>
-                <Text color={color.muted}>Account </Text>
+                <Box width={8} flexShrink={0}>
+                  <Text color={color.muted}>Account</Text>
+                </Box>
                 <Text color={color.text}>{account?.email}</Text>
               </Box>
               <Box gap={1}>
-                <Text color={color.muted}>Config </Text>
+                <Box width={8} flexShrink={0}>
+                  <Text color={color.muted}>Config</Text>
+                </Box>
                 <Text color={color.secondary}>{currentConfig?.replace(homedir(), "~")}</Text>
               </Box>
             </Box>
             <Box gap={1}>
-              <Text color={initState.nameField === 0 ? color.cursor : color.dim}>
-                {initState.nameField === 0 ? symbol.cursor : " "}
-              </Text>
-              <Text color={color.text}>Name: </Text>
+              <Box flexShrink={0}>
+                <Text color={initState.nameField === 0 ? color.cursor : color.dim}>
+                  {initState.nameField === 0 ? symbol.cursor : " "}
+                </Text>
+              </Box>
+              <Box flexShrink={0}>
+                <Text color={color.text}>Name: </Text>
+              </Box>
               <TextInput
                 value={initState.nameDraft}
                 onChange={(value) => setInitState((prev) => ({ ...prev, nameDraft: value }))}
@@ -2947,28 +2953,41 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
               const account = initState.accounts.find((item) => item.configDir === configDir);
               const profileName = initState.profileNames[configDir];
               const isDefault = profileName === initState.defaultProfile;
+              // Two lines, as a list row has: on one, the name had sixteen columns, a longer one
+              // wrapped inside them, and each row's account started in a different column.
               return (
-                <Box key={configDir} gap={1} marginBottom={1}>
-                  <Box width={16}>
-                    <Text color={isDefault ? color.brandLight : color.text} bold={isDefault}>
-                      {profileName}
-                    </Text>
+                <Box key={configDir} flexDirection="column" marginBottom={1}>
+                  <Box gap={1}>
+                    <Box flexShrink={1} minWidth={0} overflow="hidden">
+                      <Text color={isDefault ? color.brandLight : color.text} bold={isDefault} wrap="truncate-end">
+                        {profileName}
+                      </Text>
+                    </Box>
+                    {isDefault && (
+                      <Box flexShrink={0}>
+                        <Text color={color.brandLight}>{symbol.dot} default</Text>
+                      </Box>
+                    )}
+                    {!account?.isPrimary && (
+                      <Box flexShrink={0}>
+                        <Text color={color.muted}>
+                          {symbol.dot} {initState.mergeSessionsMap[configDir] ? "merged" : "separated"}
+                        </Text>
+                      </Box>
+                    )}
                   </Box>
-                  <Text color={color.secondary}>{account?.email}</Text>
-                  {isDefault && <Text color={color.brandLight}> {symbol.dot} default</Text>}
-                  {!account?.isPrimary && (
-                    <Text color={color.muted}>
-                      {" "}
-                      {symbol.dot} {initState.mergeSessionsMap[configDir] ? "merged" : "separated"}
-                    </Text>
-                  )}
+                  <Text color={color.secondary} wrap="truncate-middle">
+                    {account?.email}
+                  </Text>
                 </Box>
               );
             })}
           </Box>
           {initState.step === "done" && (
             <Box gap={1} marginTop={1}>
-              <Text color={color.healthy}>{symbol.check}</Text>
+              <Box flexShrink={0}>
+                <Text color={color.healthy}>{symbol.check}</Text>
+              </Box>
               <Text color={color.healthy} bold>
                 Profiles initialized successfully.
               </Text>
