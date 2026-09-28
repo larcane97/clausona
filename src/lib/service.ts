@@ -23,7 +23,7 @@ import { acquireDirLock, removeHeldDirLocks } from "../core/dir-lock.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
 import { acquireFileLock } from "../core/file-lock.js";
 import { isKnownSecretSource, keySharersElsewhere } from "../core/key-source.js";
-import { backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
+import { appDir, backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
 import { isV1Registry, migrateRegistryV1toV2, setActiveProfile } from "../core/registry.js";
@@ -3046,14 +3046,11 @@ export async function uninstallClausona() {
     removed.push(`data: ${CLAUSONA_DIR}`);
   }
 
-  // 4. Remove app directory
-  const appDir =
-    process.platform === "win32"
-      ? path.join(process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local"), "clausona")
-      : path.join(process.env.XDG_DATA_HOME ?? path.join(home, ".local", "share"), "clausona");
-  if (await exists(appDir)) {
-    await rm(appDir, { force: true, recursive: true });
-    removed.push(`app: ${appDir}`);
+  // 4. Remove app directory - the one the installer wrote to, which `clausona update` replaces in.
+  const appDirectory = appDir({ platform: process.platform, env: process.env, homeDir: home });
+  if (await exists(appDirectory)) {
+    await rm(appDirectory, { force: true, recursive: true });
+    removed.push(`app: ${appDirectory}`);
   }
 
   // 5. Remove launcher binaries

@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   checkLatestTag,
   compareVersions,
   type FetchLike,
   findUpdate,
+  installTarget,
   isNewer,
   reinstallCommand,
   tagFromLocation,
@@ -132,6 +136,80 @@ describe("reinstallCommand", () => {
     expect(reinstallCommand("linux")).toBe(reinstallCommand("darwin"));
     expect(reinstallCommand("win32")).toBe(
       "irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex",
+    );
+  });
+});
+
+describe("installTarget", () => {
+  const platform = process.platform;
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), "clausona-target-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  /** The variable the installer reads, pointed at `dir`. */
+  function dataEnv(dir: string): NodeJS.ProcessEnv {
+    return platform === "win32" ? { LOCALAPPDATA: dir } : { XDG_DATA_HOME: dir };
+  }
+
+  /** An install laid out as the installer lays it out, under `root`. */
+  function install(): string {
+    const file = path.join(root, "clausona", "index.js");
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, "// bundle\n");
+    return file;
+  }
+
+  it("is the installed file when that is what runs", () => {
+    const file = install();
+    expect(installTarget({ entryPath: file, platform, env: dataEnv(root), homeDir: root })).toBe(file);
+  });
+
+  it("is null for a bundle run from anywhere else", () => {
+    install();
+    const elsewhere = path.join(root, "checkout", "dist", "index.js");
+    mkdirSync(path.dirname(elsewhere), { recursive: true });
+    writeFileSync(elsewhere, "// build\n");
+
+    expect(installTarget({ entryPath: elsewhere, platform, env: dataEnv(root), homeDir: root })).toBeNull();
+  });
+
+  it("is null when nothing is installed", () => {
+    const entryPath = path.join(root, "clausona", "index.js");
+    expect(installTarget({ entryPath, platform, env: dataEnv(root), homeDir: root })).toBeNull();
+  });
+
+  it("is null without an entry path", () => {
+    install();
+    expect(installTarget({ entryPath: undefined, platform, env: dataEnv(root), homeDir: root })).toBeNull();
+  });
+
+  it.skipIf(process.platform === "win32")("is null when the installed index.js is a symlink", () => {
+    const build = path.join(root, "checkout", "index.js");
+    mkdirSync(path.dirname(build), { recursive: true });
+    writeFileSync(build, "// build\n");
+    const link = path.join(root, "clausona", "index.js");
+    mkdirSync(path.dirname(link));
+    symlinkSync(build, link);
+
+    expect(installTarget({ entryPath: link, platform, env: dataEnv(root), homeDir: root })).toBeNull();
+  });
+
+  it.skipIf(process.platform === "win32")("matches through a symlinked data directory", () => {
+    const realData = path.join(root, "real-data");
+    const file = path.join(realData, "clausona", "index.js");
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, "// bundle\n");
+    const linkedData = path.join(root, "linked-data");
+    symlinkSync(realData, linkedData);
+
+    expect(installTarget({ entryPath: file, platform, env: dataEnv(linkedData), homeDir: root })).toBe(
+      path.join(linkedData, "clausona", "index.js"),
     );
   });
 });

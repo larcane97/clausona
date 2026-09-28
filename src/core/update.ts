@@ -7,6 +7,12 @@
  * ever reaches GitHub.
  */
 
+import { lstatSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
+
+import { appDir } from "./paths.js";
+
 export const RELEASES_URL = "https://github.com/larcane97/clausona/releases";
 
 const CHECK_TIMEOUT_MS = 3_000;
@@ -132,4 +138,43 @@ export function reinstallCommand(platform: NodeJS.Platform): string {
   return platform === "win32"
     ? `irm ${RELEASES_URL}/latest/download/install.ps1 | iex`
     : `curl -fsSL ${RELEASES_URL}/latest/download/install.sh | bash`;
+}
+
+/**
+ * The installed bundle this process runs from, or `null` when the installer did not put it there.
+ *
+ * Only `<appDir>/index.js` is ever replaced. A bundle run from a checkout (`node dist/index.js`)
+ * or copied elsewhere belongs to whoever put it there. The installed file must also be a regular
+ * file: the installer writes one, and renaming over a symlink would replace the link, not what it
+ * points at, undoing someone's setup. Both sides go through realpath, so a symlinked data
+ * directory still matches, and Windows paths compare without case, as its filesystem does.
+ */
+export function installTarget(options: {
+  entryPath: string | undefined;
+  platform: NodeJS.Platform;
+  env: NodeJS.ProcessEnv;
+  homeDir: string;
+}): string | null {
+  const { entryPath, platform } = options;
+  if (!entryPath) return null;
+  const expected = (platform === "win32" ? path.win32 : path.posix).join(appDir(options), "index.js");
+  try {
+    if (!lstatSync(expected).isFile()) return null;
+    const running = realpathSync(entryPath);
+    const installed = realpathSync(expected);
+    const same = platform === "win32" ? running.toLowerCase() === installed.toLowerCase() : running === installed;
+    return same ? expected : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `installTarget` for this process: the launcher runs `node <appDir>/index.js`, so that is argv[1]. */
+export function currentInstallTarget(): string | null {
+  return installTarget({
+    entryPath: process.argv[1],
+    platform: process.platform,
+    env: process.env,
+    homeDir: homedir(),
+  });
 }

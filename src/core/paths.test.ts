@@ -1,7 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { backupDirFor, claudeJsonPathForConfigDir, keychainServiceForConfigDir } from "./paths.js";
+import { appDir, backupDirFor, claudeJsonPathForConfigDir, keychainServiceForConfigDir } from "./paths.js";
 
 describe("paths", () => {
   const homeDir = path.join(path.parse(process.cwd()).root, "Users", "test");
@@ -86,5 +86,26 @@ describe("backupDirFor", () => {
     for (const name of ["work", "Work", "..work", "glm-5.3", ".codex-work"]) {
       expect(backupDirFor(clausonaDir, "claude", name), name).toBe(path.join(base, name));
     }
+  });
+});
+
+describe("appDir", () => {
+  const cases: Array<[string, NodeJS.Platform, NodeJS.ProcessEnv, string, string]> = [
+    ["the XDG default", "linux", {}, "/home/u", "/home/u/.local/share/clausona"],
+    ["XDG_DATA_HOME", "darwin", { XDG_DATA_HOME: "/data" }, "/Users/u", "/data/clausona"],
+    ["an empty XDG_DATA_HOME as unset", "linux", { XDG_DATA_HOME: "" }, "/home/u", "/home/u/.local/share/clausona"],
+    ["LOCALAPPDATA", "win32", { LOCALAPPDATA: "D:\\Local" }, "C:\\Users\\u", "D:\\Local\\clausona"],
+    ["the Windows default", "win32", {}, "C:\\Users\\u", "C:\\Users\\u\\AppData\\Local\\clausona"],
+    [
+      "an empty LOCALAPPDATA as unset",
+      "win32",
+      { LOCALAPPDATA: "" },
+      "C:\\Users\\u",
+      "C:\\Users\\u\\AppData\\Local\\clausona",
+    ],
+  ];
+
+  it.each(cases)("follows %s, as the installers do", (_case, platform, env, homeDir, expected) => {
+    expect(appDir({ platform, env, homeDir })).toBe(expected);
   });
 });
