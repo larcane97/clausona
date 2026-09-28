@@ -162,6 +162,14 @@ type OverlayState =
 
 const INIT_STEPS = [{ label: "Select" }, { label: "Name" }, { label: "Default" }, { label: "Review" }];
 
+// "Login as new account" with a registered name is how a user would retry a sign-in, but it
+// does not sign that profile in again. Point at the Profiles screen's re-login key instead,
+// wherever that key is offered.
+function profileExistsMessage(name: string, existing: ProfileListItem) {
+  if (!offersRelogin(existing)) return `Profile "${name}" already exists`;
+  return `Profile "${name}" already exists. Press l on it in Profiles to re-login`;
+}
+
 // ── Hint sets ──
 
 const dashboardHints = [
@@ -1652,8 +1660,9 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           const name = addState.nameDraft.trim();
           if (!name) return;
           const newLoginId = profileId(addState.selectedTool, name);
-          if (profiles.some((p) => p.name === newLoginId)) {
-            setAddState((prev) => (prev ? { ...prev, message: `Profile "${name}" already exists` } : null));
+          const existing = profiles.find((p) => p.name === newLoginId);
+          if (existing) {
+            setAddState((prev) => (prev ? { ...prev, message: profileExistsMessage(name, existing) } : null));
             return;
           }
           setAddState((prev) => (prev ? { ...prev, step: "applying" } : null));
