@@ -1,7 +1,17 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   checkLatestTag,
@@ -10,7 +20,9 @@ import {
   findUpdate,
   installTarget,
   isNewer,
+  performUpdate,
   reinstallCommand,
+  replaceFile,
   tagFromLocation,
 } from "./update.js";
 
@@ -212,4 +224,174 @@ describe("installTarget", () => {
       path.join(linkedData, "clausona", "index.js"),
     );
   });
+});
+
+describe("replaceFile", () => {
+  const refusal = (code: string) => Object.assign(new Error(`${code}: rename refused`), { code });
+
+  it("retries while Windows refuses the rename, then succeeds", async () => {
+    const rename = vi
+      .fn<(from: string, to: string) => Promise<void>>()
+      .mockRejectedValueOnce(refusal("EPERM"))
+      .mockRejectedValueOnce(refusal("EBUSY"))
+      .mockResolvedValueOnce(undefined);
+
+    await replaceFile("a", "b", { platform: "win32", delaysMs: [0, 0, 0], rename });
+    expect(rename).toHaveBeenCalledTimes(3);
+  });
+
+  it("gives up after the last retry", async () => {
+    const rename = vi.fn<(from: string, to: string) => Promise<void>>().mockRejectedValue(refusal("EPERM"));
+
+    await expect(replaceFile("a", "b", { platform: "win32", delaysMs: [0, 0, 0], rename })).rejects.toThrow("EPERM");
+    expect(rename).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    ["EPERM on POSIX", "linux", "EPERM"],
+    ["EACCES on Windows", "win32", "EACCES"],
+  ] as const)("does not retry %s", async (_case, platform, code) => {
+    const rename = vi.fn<(from: string, to: string) => Promise<void>>().mockRejectedValue(refusal(code));
+
+    await expect(replaceFile("a", "b", { platform, delaysMs: [0, 0, 0], rename })).rejects.toThrow(code);
+    expect(rename).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("performUpdate", () => {
+  const OLD = "// the installed bundle\n";
+  const TAG = "v0.3.1-beta";
+  let dir: string;
+  let target: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "clausona-update-"));
+    target = path.join(dir, "index.js");
+    writeFileSync(target, OLD);
+  });
+
+  afterEach(() => {
+    chmodSync(dir, 0o755);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+
+  /**
+   * A release bundle that answers `--version` the way clausona does, colours included - a user's
+   * FORCE_COLOR reaches the child, and `\bv` does not match right after an escape code's `m`.
+   */
+  const bundleReporting = (version: string) =>
+    `console.log("  \\x1b[38;2;129;140;248mclausona\\x1b[39m \\x1b[38;2;113;113;122mv${version}\\x1b[39m");\n`;
+
+  /** A GitHub release serving `files` by name; a number is a status with an empty body. */
+  function release(files: Record<string, string | number>) {
+    const urls: string[] = [];
+    const fetch: FetchLike = async (url) => {
+      urls.push(url);
+      const body = files[url.slice(url.lastIndexOf("/") + 1)];
+      if (body === undefined) return new Response("Not Found", { status: 404 });
+      if (typeof body === "number") return new Response("", { status: body });
+      return new Response(body, { status: 200 });
+    };
+    return { fetch, urls };
+  }
+
+  function leftovers(): string[] {
+    return readdirSync(dir).filter((name) => name !== "index.js");
+  }
+
+  async function expectUntouched(update: Promise<void>, message: RegExp) {
+    await expect(update).rejects.toThrow(message);
+    expect(readFileSync(target, "utf8")).toBe(OLD);
+    expect(leftovers()).toEqual([]);
+  }
+
+  it("replaces the installed bundle with the release's", async () => {
+    const bundle = bundleReporting("0.3.1-beta");
+    const { fetch, urls } = release({
+      "clausona.js": bundle,
+      "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n`,
+    });
+
+    await performUpdate({ tag: TAG, target, fetch });
+
+    expect(readFileSync(target, "utf8")).toBe(bundle);
+    expect(leftovers()).toEqual([]);
+    expect(urls).toEqual([
+      "https://github.com/larcane97/clausona/releases/download/v0.3.1-beta/clausona.js",
+      "https://github.com/larcane97/clausona/releases/download/v0.3.1-beta/clausona.js.sha256",
+    ]);
+  });
+
+  it("accepts a checksum in upper case with CRLF and a binary marker", async () => {
+    const bundle = bundleReporting("0.3.1-beta");
+    const { fetch } = release({
+      "clausona.js": bundle,
+      "clausona.js.sha256": `${sha256(bundle).toUpperCase()} *clausona.js\r\n`,
+    });
+
+    await performUpdate({ tag: TAG, target, fetch });
+    expect(readFileSync(target, "utf8")).toBe(bundle);
+  });
+
+  it("refuses a download that does not match its checksum", async () => {
+    const { fetch } = release({
+      "clausona.js": bundleReporting("0.3.1-beta"),
+      "clausona.js.sha256": `${sha256("something else")}  clausona.js\n`,
+    });
+    await expectUntouched(performUpdate({ tag: TAG, target, fetch }), /does not match its published checksum/);
+  });
+
+  it("refuses a release without a checksum", async () => {
+    const { fetch } = release({ "clausona.js": bundleReporting("0.3.1-beta") });
+    await expectUntouched(
+      performUpdate({ tag: TAG, target, fetch }),
+      /Could not download the checksum for v0\.3\.1-beta: HTTP 404/,
+    );
+  });
+
+  it("refuses a checksum file with no digest in it", async () => {
+    const { fetch } = release({
+      "clausona.js": bundleReporting("0.3.1-beta"),
+      "clausona.js.sha256": "not a checksum\n",
+    });
+    await expectUntouched(performUpdate({ tag: TAG, target, fetch }), /is not a SHA-256 digest/);
+  });
+
+  it("fails when the bundle cannot be downloaded", async () => {
+    const { fetch } = release({ "clausona.js": 500 });
+    await expectUntouched(
+      performUpdate({ tag: TAG, target, fetch }),
+      /Could not download clausona v0\.3\.1-beta: HTTP 500/,
+    );
+  });
+
+  it("refuses a bundle that reports another version", async () => {
+    const bundle = bundleReporting("0.3.0-beta");
+    const { fetch } = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
+    await expectUntouched(performUpdate({ tag: TAG, target, fetch }), /reports v0\.3\.0-beta, not v0\.3\.1-beta/);
+  });
+
+  it("refuses a bundle that does not run", async () => {
+    const bundle = "process.exit(3);\n";
+    const { fetch } = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
+    await expectUntouched(performUpdate({ tag: TAG, target, fetch }), /exited with 3/);
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "fails without touching anything when the directory cannot be written",
+    async () => {
+      const bundle = bundleReporting("0.3.1-beta");
+      const { fetch } = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
+      chmodSync(dir, 0o555);
+
+      await expect(performUpdate({ tag: TAG, target, fetch })).rejects.toThrow(
+        /Could not replace .*index\.js: .*EACCES/,
+      );
+      chmodSync(dir, 0o755);
+      expect(readFileSync(target, "utf8")).toBe(OLD);
+      expect(leftovers()).toEqual([]);
+    },
+  );
 });

@@ -7,7 +7,10 @@
  * ever reaches GitHub.
  */
 
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
+import { rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -177,4 +180,127 @@ export function currentInstallTarget(): string | null {
     env: process.env,
     homeDir: homedir(),
   });
+}
+
+const DOWNLOAD_TIMEOUT_MS = 30_000;
+const VERIFY_TIMEOUT_MS = 10_000;
+/** Pauses between renames on Windows, where a scanner still holding the new file fails one with EPERM or EBUSY. */
+const RENAME_RETRY_DELAYS_MS = [100, 300, 1000] as const;
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: ESC (\x1b) is required to match ANSI escape sequences
+const ANSI = /\x1b\[[0-9;]*m/g;
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function download(fetchFn: FetchLike, url: string, what: string): Promise<Uint8Array> {
+  try {
+    const response = await fetchFn(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return new Uint8Array(await response.arrayBuffer());
+  } catch (error) {
+    throw new Error(`Could not download ${what}: ${messageOf(error)}`);
+  }
+}
+
+/** The digest in a `sha256sum` line: `<hex>  clausona.js`, or `<hex> *clausona.js` in binary mode. */
+function digestIn(text: string): string | null {
+  return /\b[0-9a-f]{64}\b/i.exec(text)?.[0].toLowerCase() ?? null;
+}
+
+/**
+ * Runs the downloaded bundle once, as the launcher will, and requires it to report the version
+ * that was offered. The checksum proves the bytes are the ones published; this proves they start
+ * on this machine's node and are the release the user said yes to.
+ */
+function verifyCandidate(nodePath: string, candidate: string, version: string) {
+  const result = spawnSync(nodePath, [candidate, "--version"], { encoding: "utf8", timeout: VERIFY_TIMEOUT_MS });
+  if (result.error) throw new Error(`The downloaded v${version} did not start: ${result.error.message}`);
+  if (result.status !== 0) {
+    throw new Error(`The downloaded v${version} exited with ${result.status ?? result.signal} on --version.`);
+  }
+  const reported = /\bv(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(result.stdout.replace(ANSI, ""))?.[1];
+  if (reported !== version) {
+    throw new Error(`The downloaded file reports ${reported ? `v${reported}` : "no version"}, not v${version}.`);
+  }
+}
+
+/**
+ * `rename`, retried on Windows while something holds the file. An antivirus scanner opening a
+ * freshly written executable is the usual cause, and it lets go within a second.
+ */
+export async function replaceFile(
+  from: string,
+  to: string,
+  options: {
+    platform: NodeJS.Platform;
+    delaysMs: readonly number[];
+    rename?: (from: string, to: string) => Promise<void>;
+  },
+): Promise<void> {
+  const renameFile = options.rename ?? rename;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await renameFile(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const held = options.platform === "win32" && (code === "EPERM" || code === "EBUSY");
+      if (!held || attempt >= options.delaysMs.length) throw error;
+      await new Promise((resolve) => setTimeout(resolve, options.delaysMs[attempt]));
+    }
+  }
+}
+
+/**
+ * Replaces the installed bundle at `target` with release `tag`'s `clausona.js`, or throws and
+ * leaves it exactly as it was.
+ *
+ * The download names the tag rather than `latest`, so a release published since the check cannot
+ * swap in a version other than the one offered. The new file is written beside the old one, for
+ * two reasons. The final rename then stays on one filesystem and is atomic: the shell hook runs
+ * this program before every `claude` and `codex`, and it reads either the whole old file or the
+ * whole new one. And the new file keeps a `.js` name, without which node refuses to run it
+ * (ERR_UNKNOWN_FILE_EXTENSION).
+ */
+export async function performUpdate(options: {
+  tag: string;
+  target: string;
+  fetch?: FetchLike;
+  nodePath?: string;
+  platform?: NodeJS.Platform;
+}): Promise<void> {
+  const {
+    tag,
+    target,
+    fetch: fetchFn = globalThis.fetch,
+    nodePath = process.execPath,
+    platform = process.platform,
+  } = options;
+  const version = versionOfTag(tag);
+  const base = `${RELEASES_URL}/download/${encodeURIComponent(tag)}`;
+
+  const bundle = await download(fetchFn, `${base}/clausona.js`, `clausona ${tag}`);
+  // Required, not best-effort: the release that ships this updater is the first to publish one,
+  // so every release an updater can be offered has it.
+  const published = digestIn(
+    new TextDecoder().decode(await download(fetchFn, `${base}/clausona.js.sha256`, `the checksum for ${tag}`)),
+  );
+  if (!published) throw new Error(`The checksum published for ${tag} is not a SHA-256 digest.`);
+  if (createHash("sha256").update(bundle).digest("hex") !== published) {
+    throw new Error(`The download of ${tag} does not match its published checksum.`);
+  }
+
+  const candidate = path.join(path.dirname(target), `index.update-${process.pid}.js`);
+  try {
+    await writeFile(candidate, bundle);
+    verifyCandidate(nodePath, candidate, version);
+    await replaceFile(candidate, target, { platform, delaysMs: RENAME_RETRY_DELAYS_MS });
+  } catch (error) {
+    await rm(candidate, { force: true }).catch(() => {});
+    // A filesystem refusal (EACCES on a root-owned install, say) says which file it was about.
+    if ((error as NodeJS.ErrnoException).code) throw new Error(`Could not replace ${target}: ${messageOf(error)}`);
+    throw error;
+  }
 }
