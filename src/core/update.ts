@@ -304,3 +304,20 @@ export async function performUpdate(options: {
     throw error;
   }
 }
+
+/** What the dashboard needs to offer an update. index.tsx hands it the real one; tests hand it a fake. */
+export type Updater = {
+  find: () => Promise<UpdateOffer | null>;
+  install: (offer: UpdateOffer) => Promise<void>;
+};
+
+export function createUpdater(): Updater {
+  const target = currentInstallTarget();
+  return {
+    find: () => findUpdate({ current: __CLAUSONA_VERSION__, target }),
+    install: (offer) =>
+      offer.target
+        ? performUpdate({ tag: offer.tag, target: offer.target })
+        : Promise.reject(new Error("This clausona was not installed by the installer, so it cannot replace itself.")),
+  };
+}
