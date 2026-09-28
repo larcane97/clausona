@@ -138,7 +138,12 @@ this code:
 
 Claude credentials stay in the macOS Keychain (or `.credentials.json` elsewhere) and
 Codex credentials in `auth.json`, in place — unrelated contents of those stores, such as
-Claude's `mcpOAuth` block, are preserved.
+Claude's `mcpOAuth` block, are preserved. On macOS, Claude Code saves to
+`.credentials.json` instead when the Keychain refuses its write, and reads that file
+whenever the Keychain has no item; clausona reads in the same order and writes a renewed
+credential back to whichever of the two it came from. When the Keychain cannot be read at
+that point, clausona writes the way Claude Code does: to the Keychain, and to the file only
+if the Keychain refuses it.
 
 ### When a reading is unavailable
 
@@ -714,7 +719,8 @@ When you register a new profile, clausona symlinks shared resources from your pr
 ```
 ~/.claude-work/            (new claude profile)
 ├── .claude.json           ← own account metadata (NOT shared)
-├── .credentials.json      ← own OAuth tokens outside macOS (NOT shared)
+├── .credentials.json      ← own OAuth tokens outside macOS, and on macOS when the
+│                            Keychain refuses them (NOT shared)
 ├── .last-update-result.json, gh-pr-status-cache.json, .session-stats.json
 │                          ← own per-dir state and caches (NOT shared)
 ├── projects/              ← own session history (NOT shared by default)
@@ -757,17 +763,20 @@ profile switches to shared sessions or has its links rebuilt.
 
 **Credentials are never shared.** On macOS Claude Code keeps its OAuth tokens in the
 Keychain under a service name derived from the config directory, so each profile is
-isolated by the tool itself. Everywhere else the tokens are a plain
-`.credentials.json` next to the config, and clausona keeps that file profile-local.
+isolated by the tool itself, and puts them in a plain `.credentials.json` next to the
+config only when the Keychain refuses its write. Everywhere else that file is the only
+store. clausona keeps the file profile-local on every platform.
 Profiles created by clausona 0.2.2-beta or earlier on Linux and Windows may hold a link
 to the primary's credential; `clausona doctor` reports it as `stale_symlink` and
 `clausona repair <profile>` removes it, after which that profile signs in on its own.
 
-`clausona doctor` checks whichever store the platform uses: the Keychain item on macOS
-(`missing_keychain`) and the credential file everywhere else (`missing_oauth`). A profile
-that has just had a stale credential link removed reports `missing_oauth` until it signs
-in, so doctor points those findings at `clausona login <profile>` rather than at
-`clausona repair`, which rebuilds shared links and cannot produce a credential.
+`clausona doctor` checks whichever store the platform uses. On macOS that is the Keychain
+item plus the `.credentials.json` Claude Code falls back to, and it reports
+`missing_keychain` only when neither holds a credential; everywhere else it is the
+credential file (`missing_oauth`). A profile that has just had a stale credential link
+removed reports `missing_oauth` until it signs in, so doctor points those findings at
+`clausona login <profile>` rather than at `clausona repair`, which rebuilds shared links
+and cannot produce a credential.
 
 `.last-update-result.json`, `gh-pr-status-cache.json` and `.session-stats.json` hold
 state or a cache for one config dir, and whatever writes them replaces a shared link with

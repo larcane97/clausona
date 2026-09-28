@@ -102,7 +102,7 @@ function toCredential(stored: StoredCredentials | null): ToolCredential | null {
   };
 }
 
-function runSecurity(args: string[]): Promise<{ code: number; stdout: string }> {
+function runSecurity(args: string[]): Promise<{ code: number; stdout: string; launched: boolean }> {
   return new Promise((resolve) => {
     const child = spawnCommand("security", args, { stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
@@ -111,8 +111,8 @@ function runSecurity(args: string[]): Promise<{ code: number; stdout: string }> 
     child.stdout?.on("data", (chunk) => {
       out += chunk;
     });
-    child.on("close", (code) => resolve({ code: code ?? 1, stdout: out }));
-    child.on("error", () => resolve({ code: 1, stdout: "" }));
+    child.on("close", (code) => resolve({ code: code ?? 1, stdout: out, launched: true }));
+    child.on("error", () => resolve({ code: 1, stdout: "", launched: false }));
   });
 }
 
@@ -127,9 +127,32 @@ function decodeKeychainOutput(stdout: string): string {
   return /^7b(?:[0-9a-f]{2})*$/i.test(trimmed) ? Buffer.from(trimmed, "hex").toString("utf8") : stdout;
 }
 
-async function readKeychainBlob(service: string): Promise<StoredCredentials | null> {
-  const { code, stdout } = await runSecurity(["find-generic-password", "-s", service, "-w"]);
-  return code === 0 ? parseStored(decodeKeychainOutput(stdout)) : null;
+// `security` exit statuses that Claude Code's strict read, the one it makes before a write,
+// takes for an empty Keychain: errSecItemNotFound, and errSecInteractionNotAllowed — a
+// Keychain that cannot be opened without a prompt, as over SSH, which is also what makes
+// its own writes fall back to the file.
+const KEYCHAIN_ABSENT_CODES = new Set([44, 36]);
+
+type KeychainLookup =
+  | { state: "found"; blob: StoredCredentials }
+  | { state: "absent" }
+  // Any other failure, such as a denied access prompt, says nothing about the item.
+  // Claude Code's everyday read moves on to the file after any failure, but its strict
+  // read counts these as failures rather than as an empty Keychain, and so does this: the
+  // failure can be this process's alone, with the item Claude Code reads first still
+  // there - the file would then be stale, and a renewed token written to it never read.
+  | { state: "unreadable" };
+
+async function readKeychainBlob(service: string): Promise<KeychainLookup> {
+  const { code, stdout, launched } = await runSecurity(["find-generic-password", "-s", service, "-w"]);
+  if (code === 0) {
+    // Claude Code falls through on an item it cannot parse as well.
+    const blob = parseStored(decodeKeychainOutput(stdout));
+    return blob ? { state: "found", blob } : { state: "absent" };
+  }
+  // Without a `security` binary there is no Keychain to hold the item.
+  if (!launched || KEYCHAIN_ABSENT_CODES.has(code)) return { state: "absent" };
+  return { state: "unreadable" };
 }
 
 /**
@@ -153,11 +176,36 @@ async function readFileBlob(configDir: string): Promise<StoredCredentials | null
   }
 }
 
-async function readStoredBlob(configDir: string): Promise<StoredCredentials | null> {
+async function hasFallbackCredential(configDir: string): Promise<boolean> {
+  return toCredential(await readFileBlob(configDir)) !== null;
+}
+
+type CredentialStore = "keychain" | "file";
+
+type StoredBlob = { blob: StoredCredentials; store: CredentialStore };
+
+/**
+ * Reads in Claude Code's order. On macOS its store is the Keychain wrapped with a
+ * plaintext fallback: a Keychain write that fails for any reason but a timeout, or a
+ * locked Keychain it knows holds the item, lands in .credentials.json instead, and reads
+ * try the Keychain first, then that file. Elsewhere the file is the only store. The store
+ * comes back with the blob so a renewal can put its result where Claude Code will look
+ * for it, and "unreadable" when the Keychain failed in a way that leaves the store
+ * unknown.
+ */
+async function lookupStoredBlob(configDir: string): Promise<StoredBlob | "unreadable" | null> {
   if (process.platform === "darwin") {
-    return readKeychainBlob(keychainServiceForConfigDir({ homeDir: homedir(), configDir }));
+    const lookup = await readKeychainBlob(keychainServiceForConfigDir({ homeDir: homedir(), configDir }));
+    if (lookup.state === "found") return { blob: lookup.blob, store: "keychain" };
+    if (lookup.state === "unreadable") return "unreadable";
   }
-  return readFileBlob(configDir);
+  const blob = await readFileBlob(configDir);
+  return blob ? { blob, store: "file" } : null;
+}
+
+async function readStoredBlob(configDir: string): Promise<StoredBlob | null> {
+  const stored = await lookupStoredBlob(configDir);
+  return stored === "unreadable" ? null : stored;
 }
 
 /**
@@ -165,15 +213,15 @@ async function readStoredBlob(configDir: string): Promise<StoredCredentials | nu
  * already invalidated the previous token by this point, so a write that silently did
  * not land would leave the profile with no usable credential at all.
  *
- * On macOS both happen in writeKeychainItem, which hands the blob to `security` on stdin
- * rather than in its arguments, where `ps` would show the tokens to every user on the
+ * For the Keychain both happen in writeKeychainItem, which hands the blob to `security` on
+ * stdin rather than in its arguments, where `ps` would show the tokens to every user on the
  * machine - the same bytes, item and account the `-w <blob>` it replaces wrote. A blob too
  * long for one `security -i` line still goes in the arguments, as Claude Code's own does.
  */
-async function writeStoredBlob(configDir: string, blob: StoredCredentials): Promise<void> {
+async function writeStoredBlob(configDir: string, blob: StoredCredentials, store: CredentialStore): Promise<void> {
   const serialized = JSON.stringify(blob);
 
-  if (process.platform === "darwin") {
+  if (store === "keychain") {
     const service = keychainServiceForConfigDir({ homeDir: homedir(), configDir });
     await writeKeychainItem({ service, account: await keychainAccount(service) }, serialized);
     return;
@@ -192,11 +240,12 @@ async function writeStoredBlob(configDir: string, blob: StoredCredentials): Prom
 
 /**
  * macOS keeps the OAuth tokens in the Keychain, keyed by the same per-config-dir
- * service name the rest of clausona already derives. Everywhere else Claude Code
- * writes them next to the config as .credentials.json.
+ * service name the rest of clausona already derives, or in .credentials.json when the
+ * Keychain refused Claude Code's write. Everywhere else Claude Code writes them next to
+ * the config as .credentials.json.
  */
 async function readClaudeCredential(configDir: string): Promise<ToolCredential | null> {
-  return toCredential(await readStoredBlob(configDir));
+  return toCredential((await readStoredBlob(configDir))?.blob ?? null);
 }
 
 async function fetchClaudeQuota(credential: ToolCredential, signal: AbortSignal): Promise<QuotaWindows | null> {
@@ -264,8 +313,11 @@ async function renewClaudeCredential(
 
   // Re-read rather than reusing the earlier copy: another process may have rewritten
   // unrelated parts of the blob (mcpOAuth) while the request was in flight. The earlier
-  // copy stands in only when this read fails.
-  const blob = (await readStoredBlob(configDir)) ?? before ?? {};
+  // copy stands in only when this read fails, and it brings the store it was read from,
+  // unless it was the Keychain that failed.
+  const reread = await lookupStoredBlob(configDir);
+  const stored = (reread === "unreadable" ? null : reread) ?? before;
+  const blob = stored?.blob ?? {};
   const previous = blob.claudeAiOauth ?? {};
   const now = Date.now();
 
@@ -278,7 +330,26 @@ async function renewClaudeCredential(
     ...(data.scope ? { scopes: data.scope.split(" ") } : {}),
   };
 
-  await writeStoredBlob(configDir, blob);
+  // Back to the store it came from. On macOS a blob read from the plaintext file means the
+  // Keychain held no item: Claude Code keeps reading the file for as long as that stays
+  // true, and the Keychain is the store that refused its write in the first place. That
+  // holds for the earlier copy as well - a file that is mid-rewrite when it is re-read
+  // does not make the Keychain the right place. With nothing stored at all, the
+  // platform's primary store is the one it reads first.
+  //
+  // A Keychain that failed the re-read is different: the credential can have moved into it
+  // since the earlier copy was read, and Claude Code reads it before the file, so the
+  // earlier copy's store proves nothing. Write the way Claude Code does - the Keychain,
+  // and the file only when the Keychain refuses the write.
+  if (reread === "unreadable") {
+    try {
+      await writeStoredBlob(configDir, blob, "keychain");
+    } catch {
+      await writeStoredBlob(configDir, blob, "file");
+    }
+  } else {
+    await writeStoredBlob(configDir, blob, stored?.store ?? (process.platform === "darwin" ? "keychain" : "file"));
+  }
 
   return {
     accessToken: data.access_token,
@@ -438,6 +509,7 @@ export const claudeAdapter: ToolAdapter = {
   readAccountInfo: readAccount,
   keychainServiceName: keychainServiceForConfigDir,
   hasKeychainCredential: hasKeychain,
+  hasFallbackCredential,
   sharedSkipSet: (mergeSessions) =>
     mergeSessions ? new Set(BASE_SHARED_LINK_SKIP) : new Set([...BASE_SHARED_LINK_SKIP, ...SESSION_SCOPED]),
   // postSetup is left undefined here — service.ts's syncPluginsJson is wired into the
