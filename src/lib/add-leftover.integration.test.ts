@@ -24,8 +24,10 @@ function scratch(label: string) {
   temps.push(dir);
   return dir;
 }
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  // As in api-profile.integration.test.ts: the graph's dir-lock exit listener goes with it.
+  process.off("exit", (await import("../core/dir-lock.js")).removeHeldDirLocks);
   vi.resetModules();
 });
 afterAll(() => {
@@ -484,6 +486,8 @@ describe.skipIf(process.platform === "win32")("add interrupted mid-login", () =>
     return signal ? `signal ${signal}` : `exit ${code}`;
   }
 
+  const addLockPath = (home: string) => path.join(home, ".clausona", "locks", "add-claude-hup.lock");
+
   function groupAlive(group: number): boolean {
     try {
       process.kill(-group, 0);
@@ -522,6 +526,8 @@ describe.skipIf(process.platform === "win32")("add interrupted mid-login", () =>
       // The login never saw the signal and is still running into the directory; removed
       // under it, the directory could come back unmarked. Marked, the next add reuses it.
       expect(existsSync(path.join(configDir, MARKER))).toBe(true);
+      // Ending by the signal runs no exit listener, so the add's lock is removed before it.
+      expect(existsSync(addLockPath(home))).toBe(false);
     },
     CHILD_TEST_TIMEOUT_MS,
   );
@@ -537,6 +543,7 @@ describe.skipIf(process.platform === "win32")("add interrupted mid-login", () =>
 
       expect(howItEnded(await ended)).toMatch(HUNG_UP);
       expect(existsSync(configDir)).toBe(false);
+      expect(existsSync(addLockPath(home))).toBe(false);
     },
     CHILD_TEST_TIMEOUT_MS,
   );

@@ -11,6 +11,7 @@ import {
   rename,
   rm,
   rmdir,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { constants, homedir } from "node:os";
@@ -18,6 +19,7 @@ import path from "node:path";
 
 import { checkBaseUrl, hasBareUserinfo, isAnthropicHost, sendsKeyInClear } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
+import { acquireDirLock, removeHeldDirLocks } from "../core/dir-lock.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
 import { acquireFileLock } from "../core/file-lock.js";
 import { isKnownSecretSource, keySharersElsewhere } from "../core/key-source.js";
@@ -98,6 +100,12 @@ const REGISTRY_LOCK_PATH = path.join(CLAUSONA_DIR, "locks", "registry.lock");
 // lets a writer queued behind such a process take over rather than fail.
 const REGISTRY_LOCK_STALE_MS = 5_000;
 const REGISTRY_LOCK_WAIT_MS = 10_000;
+
+// An add holds its name's lock throughout, sign-in included, and a sign-in can take minutes.
+// So the lock is kept alive by refreshing it rather than by a long stale time: a holder that
+// died stops refreshing, and another add can have the name half a minute later. Refreshing
+// three times per stale period lets a refresh or two run late without losing the lock.
+const ADD_LOCK = { staleMs: 30_000, updateMs: 10_000 };
 
 /**
  * Written into a directory `add` creates, before the login starts, and removed once the
@@ -1989,7 +1997,7 @@ async function assertImportable(registry: Registry, tool: ToolName, configDir: s
   }
 }
 
-/** An add whose id was taken while it was setting up, most often by another add. */
+/** An add whose id was taken while it was setting up, by init or by another add. */
 type ProfileTaken = {
   /** What the add's first check would have said, had the id been taken then. */
   refusal: Error;
@@ -2000,22 +2008,45 @@ type ProfileTaken = {
 };
 
 /**
- * Whether an add that found `id` free can still register it for `configDir`. An add checks
- * before it starts, but it can be minutes of login later that it registers, and in that time
- * another add can take the id - and even register this same directory with `--from`.
+ * Whether two paths name one directory. Compared by device and inode, so that another
+ * spelling of it - a link to it, or its name in another case on a case-insensitive
+ * filesystem - still counts as the same directory. Where either cannot be read, as when it
+ * is gone, or the filesystem reports no inode (some Windows network drives do), the resolved
+ * paths are compared instead. Read as bigints: a Windows file index is 64 bits, which a
+ * number cannot always hold exactly.
  */
-function profileTaken(registry: Registry, id: string, configDir: string): ProfileTaken | undefined {
+async function sameDirectory(a: string, b: string): Promise<boolean> {
+  const [first, second] = await Promise.all([
+    stat(a, { bigint: true }).catch(() => null),
+    stat(b, { bigint: true }).catch(() => null),
+  ]);
+  if (first?.ino && second?.ino) return first.dev === second.dev && first.ino === second.ino;
+  return path.resolve(a) === path.resolve(b);
+}
+
+/**
+ * Whether an add that found `id` free can still register it for `configDir`. An add checks
+ * before it starts, but it can be minutes of login later that it registers. The add lock
+ * keeps every other add of the name out meanwhile, but not `init`, and not an add that took
+ * the lock over after this one stalled past its stale time - a suspended process refreshes
+ * nothing. Either can take the id, and even register this same directory.
+ *
+ * Whether one did decides whether the add may remove the directory, so it is answered by the
+ * directory's identity rather than by how its path is spelled.
+ */
+async function profileTaken(registry: Registry, id: string, configDir: string): Promise<ProfileTaken | undefined> {
   try {
     assertProfileIdAvailable(registry, id);
     return undefined;
   } catch (refusal) {
-    const dir = path.resolve(configDir);
+    const registeredDirs = Object.values(registry.profiles)
+      .map((other) => other?.configDir)
+      .filter((dir): dir is string => typeof dir === "string");
+    const matches = await Promise.all(registeredDirs.map((dir) => sameDirectory(dir, configDir)));
     return {
       refusal: refusal as Error,
       caseClash: registry.profiles[id] ? undefined : profileIdClash(registry, id),
-      dirRegistered: Object.values(registry.profiles).some(
-        (other) => typeof other?.configDir === "string" && path.resolve(other.configDir) === dir,
-      ),
+      dirRegistered: matches.includes(true),
     };
   }
 }
@@ -2033,7 +2064,7 @@ async function registerProfile(
   let taken: ProfileTaken | undefined;
   const saved = await updateRegistry(async (current) => {
     if (!current) throw await noRegistryError();
-    taken = profileTaken(current, id, profile.configDir);
+    taken = await profileTaken(current, id, profile.configDir);
     if (taken) return null;
 
     current.profiles[id] = profile;
@@ -2163,13 +2194,20 @@ function removePendingDir(configDir: string): void {
   }
 }
 
-/** Ends the process by `signal`, as it would have ended without clausona intervening. */
+/**
+ * Ends the process by `signal`, as it would have ended without clausona intervening. The
+ * directory locks it holds, an add's own among them, are removed first: a signal's default
+ * action runs no exit listener, and a lock left behind would turn away a retry of the add
+ * until it went stale.
+ */
 function endBySignal(signal: NodeJS.Signals): void {
+  removeHeldDirLocks();
   if (process.platform === "win32") {
     // Nothing to re-raise here: SIGHUP is Node's emulation of the console window
     // closing, after which Windows ends the process regardless, SIGTERM never comes from
-    // the OS, and process.kill cannot send SIGHUP at all. Exit with the status a shell
-    // reports for the signal instead.
+    // the OS, and process.kill cannot send SIGHUP at all. SIGINT is Node's emulation of
+    // Ctrl+C, which would have ended the process with STATUS_CONTROL_C_EXIT. Exit with the
+    // status a shell reports for the signal instead.
     process.exit(128 + (constants.signals[signal] ?? 0));
   }
   // With the handlers gone the signal's default action applies again, so the process
@@ -2197,7 +2235,8 @@ function endBySignal(signal: NodeJS.Signals): void {
  * Ctrl+C itself, then exits non-zero, which the ordinary failed-login path already
  * cleans up after; clausona handling it too would change how Ctrl+C ends the add. Where
  * Ctrl+C does reach clausona (a login reading the terminal in cooked mode), the add
- * ends as it always has and the marker lets the next add reuse the directory.
+ * ends at once as it always has - withAddLock only removes its lock on the way - and the
+ * marker lets the next add reuse the directory.
  */
 async function runLoginRemovingDirOnTermination(adapter: ToolAdapter, configDir: string): Promise<boolean> {
   const received: { signal?: NodeJS.Signals; grace?: NodeJS.Timeout } = {};
@@ -2223,12 +2262,55 @@ async function runLoginRemovingDirOnTermination(adapter: ToolAdapter, configDir:
   }
 }
 
-export async function addProfile(options: {
+/**
+ * Runs `add` holding the add lock for `tool:name`, and refuses at once while another add of
+ * that name holds it. The marker cannot tell an add that died mid-login from one still
+ * signing in, so a second add of the name used to take the first one's directory back while
+ * it was in use: both logins ran into one directory, and either add's cleanup could remove
+ * the directory or the backup directory the other one registered.
+ *
+ * The lock is named after the folded name, because names that differ only by case are one
+ * directory on a case-insensitive filesystem. The name rule already keeps a name safe as a
+ * path segment, and folding keeps it so.
+ *
+ * It goes on every way out of `add`, and with the process: on exit through dir-lock's own
+ * listener, through endBySignal when a signal ends the login, and on SIGINT (Ctrl+C) through
+ * the listener here, which then lets the signal end the process as it would have anyway.
+ * Anything else that ends the process - a crash, SIGKILL, a SIGHUP or SIGTERM outside the
+ * login - leaves it to go stale.
+ */
+async function withAddLock<T>(tool: ToolName, name: string, add: () => Promise<T>): Promise<T> {
+  const lockPath = path.join(CLAUSONA_DIR, "locks", `add-${tool}-${foldProfileName(name)}.lock`);
+  await mkdir(path.dirname(lockPath), { recursive: true });
+  const release = await acquireDirLock(lockPath, ADD_LOCK);
+  if (!release) {
+    // A holder that died without releasing - a crash, SIGKILL, a closed terminal outside the
+    // login - looks the same from here until its lock goes stale, hence the second clause.
+    throw new Error(
+      `Another \`clausona add\` of '${profileId(tool, name)}' (or of the same name in another case) is in progress. Wait for it to finish; if it was interrupted, try again in ${ADD_LOCK.staleMs / 1000} seconds.`,
+    );
+  }
+  const onInterrupt = (signal: NodeJS.Signals) => {
+    process.off("SIGINT", onInterrupt);
+    endBySignal(signal);
+  };
+  process.on("SIGINT", onInterrupt);
+  try {
+    return await add();
+  } finally {
+    process.off("SIGINT", onInterrupt);
+    await release();
+  }
+}
+
+type AddProfileOptions = {
   tool: ToolName;
   name: string;
   fromPath?: string;
   mergeSessions?: boolean;
-}) {
+};
+
+export async function addProfile(options: AddProfileOptions) {
   const nameCheck = validateProfileName(options.name);
   if (!nameCheck.ok) throw new Error(nameCheck.error);
 
@@ -2236,6 +2318,18 @@ export async function addProfile(options: {
   if (!registry) throw await noRegistryError();
 
   const id = profileId(options.tool, options.name);
+  assertProfileIdAvailable(registry, id, { signingIn: !options.fromPath });
+
+  // Before anything is changed: clearing the backup directory, creating the config directory,
+  // or taking one back as a leftover is only safe with no other add of the name under way.
+  return withAddLock(options.tool, options.name, () => addProfileHoldingLock(options, id));
+}
+
+async function addProfileHoldingLock(options: AddProfileOptions, id: string) {
+  // Read again now that the lock is held: an add of the name that finished between the check
+  // above and the lock has registered it, which every decision from here on has to see.
+  const registry = await loadRegistry();
+  if (!registry) throw await noRegistryError();
   assertProfileIdAvailable(registry, id, { signingIn: !options.fromPath });
 
   const adapter = getAdapter(options.tool);
@@ -2368,10 +2462,11 @@ export async function addProfile(options: {
   }
 
   await claimBackupDir(backupDir, id).catch(async (error) => {
-    // Refused after the login most often because another add of this name finished during
-    // it. Then that is what is said, and the directory stays if that add registered it.
+    // Refused after the login most often because another clausona process registered this
+    // name during it: init, or an add that took this one's lock over. Then that is what is
+    // said, and the directory stays if that profile registered it.
     const now = await loadRegistry().catch(() => null);
-    const taken = now ? profileTaken(now, id, configDir) : undefined;
+    const taken = now ? await profileTaken(now, id, configDir) : undefined;
     if (!taken?.dirRegistered) await rm(configDir, { force: true, recursive: true });
     if (!taken) throw error;
     throw takenDuringAdd(id, taken, configDir, { undone: !(await exists(configDir)) });
@@ -2608,77 +2703,86 @@ export async function addApiProfile(options: {
   if (!registry) throw await noRegistryError();
 
   const id = profileId(options.tool, options.name);
-  const configDir = await freeApiConfigDir(registry, options.tool, options.name);
+  await freeApiConfigDir(registry, options.tool, options.name);
 
-  const adapter = getAdapter(options.tool);
-  const home = homedir();
-  const primarySource = registry.primarySources[options.tool] ?? adapter.defaultConfigDir(home);
+  // Taken, and the registry read again under it, for the reasons addProfile has. An API
+  // profile has no sign-in to wait for, but an add of the name running meanwhile would still
+  // share its backup directory and config directory.
+  return withAddLock(options.tool, options.name, async () => {
+    const current = await loadRegistry();
+    if (!current) throw await noRegistryError();
+    const configDir = await freeApiConfigDir(current, options.tool, options.name);
 
-  const mergeSessions = options.mergeSessions ?? false;
-  const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);
-  // The first side effect, so a backup directory that is already there changes nothing.
-  await claimBackupDir(backupDir, id);
-  let taken: ProfileTaken | undefined;
-  let saved: Registry;
-  try {
-    await mkdir(configDir, { recursive: true });
-    // Carry the primary's onboarding state across. An API profile has no login step, so an
-    // onboarding wizard on first launch is even more jarring than it is for a new account.
-    const primaryJsonPath = claudeJsonPathForConfigDir({ homeDir: home, configDir: primarySource });
-    const jsonPath = path.join(configDir, ".claude.json");
-    const primaryJson = await readJson<Record<string, unknown>>(primaryJsonPath, {});
-    const profileJson = await readJson<Record<string, unknown>>(jsonPath, {});
-    for (const key of ["hasCompletedOnboarding", "lastOnboardingVersion"] as const) {
-      if (primaryJson[key] !== undefined && profileJson[key] === undefined) profileJson[key] = primaryJson[key];
-    }
-    await writeJson(jsonPath, profileJson);
+    const adapter = getAdapter(options.tool);
+    const home = homedir();
+    const primarySource = current.primarySources[options.tool] ?? adapter.defaultConfigDir(home);
 
-    await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
-    await setupPluginsDir(configDir, primarySource);
-    if (toStore !== null) await storeSecret(id, toStore);
+    const mergeSessions = options.mergeSessions ?? false;
+    const backupDir = backupDirFor(CLAUSONA_DIR, options.tool, options.name);
+    // The first side effect, so a backup directory that is already there changes nothing.
+    await claimBackupDir(backupDir, id);
+    let taken: ProfileTaken | undefined;
+    let saved: Registry;
+    try {
+      await mkdir(configDir, { recursive: true });
+      // Carry the primary's onboarding state across. An API profile has no login step, so an
+      // onboarding wizard on first launch is even more jarring than it is for a new account.
+      const primaryJsonPath = claudeJsonPathForConfigDir({ homeDir: home, configDir: primarySource });
+      const jsonPath = path.join(configDir, ".claude.json");
+      const primaryJson = await readJson<Record<string, unknown>>(primaryJsonPath, {});
+      const profileJson = await readJson<Record<string, unknown>>(jsonPath, {});
+      for (const key of ["hasCompletedOnboarding", "lastOnboardingVersion"] as const) {
+        if (primaryJson[key] !== undefined && profileJson[key] === undefined) profileJson[key] = primaryJson[key];
+      }
+      await writeJson(jsonPath, profileJson);
 
-    // Inside the try: neither a registry write that fails nor an id another add took meanwhile
-    // may strand the credential above.
-    const registration = await registerProfile(
-      id,
-      {
-        tool: options.tool,
-        kind: "api",
-        configDir,
-        email: "",
-        label,
-        mergeSessions,
-        api: { baseUrl, authScheme: options.authScheme, secret },
-        env,
-      },
-      primarySource,
-    );
-    if ("taken" in registration) {
-      taken = registration.taken;
-      throw taken.refusal;
-    }
-    saved = registration.saved;
-  } catch (error) {
-    // Unless the add that took the id registered this same directory: then the directory, and
-    // the key stored under the id, are that profile's.
-    if (!taken?.dirRegistered) {
-      await cleanupProfile(
-        options.name,
-        { tool: options.tool, kind: "api", configDir, email: "", isPrimary: false },
+      await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
+      await setupPluginsDir(configDir, primarySource);
+      if (toStore !== null) await storeSecret(id, toStore);
+
+      // Inside the try: neither a registry write that fails nor an id another add took meanwhile
+      // may strand the credential above.
+      const registration = await registerProfile(
+        id,
+        {
+          tool: options.tool,
+          kind: "api",
+          configDir,
+          email: "",
+          label,
+          mergeSessions,
+          api: { baseUrl, authScheme: options.authScheme, secret },
+          env,
+        },
         primarySource,
-      ).catch(() => {});
-      await rm(configDir, { force: true, recursive: true }).catch(() => {});
+      );
+      if ("taken" in registration) {
+        taken = registration.taken;
+        throw taken.refusal;
+      }
+      saved = registration.saved;
+    } catch (error) {
+      // Unless the add that took the id registered this same directory: then the directory, and
+      // the key stored under the id, are that profile's.
+      if (!taken?.dirRegistered) {
+        await cleanupProfile(
+          options.name,
+          { tool: options.tool, kind: "api", configDir, email: "", isPrimary: false },
+          primarySource,
+        ).catch(() => {});
+        await rm(configDir, { force: true, recursive: true }).catch(() => {});
+      }
+      // A taken id is refused in the words of the check before the setup.
+      if (taken) throw taken.refusal;
+      throw new Error(
+        `Failed to set up profile '${options.name}': ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
-    // A taken id is refused in the words of the check before the setup.
-    if (taken) throw taken.refusal;
-    throw new Error(
-      `Failed to set up profile '${options.name}': ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  await seedSeenSessions(id, configDir);
-  // The profiles this one now shares its key's variable or command with, on other endpoints:
-  // the state doctor reports, which `add` is the first to see.
-  return { name: options.name, configDir, sharedWith: keySharersElsewhere(id, secret, baseUrl, saved.profiles) };
+    await seedSeenSessions(id, configDir);
+    // The profiles this one now shares its key's variable or command with, on other endpoints:
+    // the state doctor reports, which `add` is the first to see.
+    return { name: options.name, configDir, sharedWith: keySharersElsewhere(id, secret, baseUrl, saved.profiles) };
+  });
 }
 
 /**

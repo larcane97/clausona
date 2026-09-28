@@ -37,12 +37,15 @@ import type { DiscoveredAccount, Profile, SecretSource } from "../types.js";
 const temps: string[] = [];
 let spawned: string[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.doUnmock("./secrets.js");
   vi.doUnmock("../core/process.js");
   vi.doUnmock("../core/quota-store.js");
+  // Each module graph a case loads adds dir-lock's exit listener once an add takes its lock.
+  // It goes with the graph, or they pile up past Node's listener warning.
+  process.off("exit", (await import("../core/dir-lock.js")).removeHeldDirLocks);
   vi.resetModules();
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
   const unexpected = spawned;
@@ -124,9 +127,13 @@ async function harness() {
 
 function snapshotTree(root: string): Record<string, string> {
   const out: Record<string, string> = {};
+  // An add creates this to hold its lock in, and it stays behind once the lock is released.
+  // Left out only while empty, so that a lock an add failed to release still shows.
+  const locks = path.join(root, ".clausona", "locks");
   const walk = (dir: string) => {
     for (const name of readdirSync(dir)) {
       const full = path.join(dir, name);
+      if (full === locks && readdirSync(full).length === 0) continue;
       const rel = path.relative(root, full);
       const stats = lstatSync(full);
       if (stats.isSymbolicLink()) out[rel] = `-> ${readlinkSync(full)}`;
