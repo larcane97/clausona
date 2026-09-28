@@ -1848,9 +1848,14 @@ function assertProfileIdAvailable(registry: Registry, id: string, { signingIn = 
       ? ` Run \`clausona login ${existing}\` to sign in again.`
       : "";
   if (registry.profiles[id]) throw new Error(`Profile '${id}' already exists.${relogin(id)}`);
-  const folded = foldProfileName(id);
-  const clash = Object.keys(registry.profiles).find((existing) => foldProfileName(existing) === folded);
+  const clash = profileIdClash(registry, id);
   if (clash) throw new Error(`Profile '${clash}' already exists (names are compared without case).${relogin(clash)}`);
+}
+
+/** The registered profile whose id is `id` once case is set aside, if there is one. */
+function profileIdClash(registry: Registry, id: string): string | undefined {
+  const folded = foldProfileName(id);
+  return Object.keys(registry.profiles).find((existing) => foldProfileName(existing) === folded);
 }
 
 /**
@@ -1988,6 +1993,8 @@ async function assertImportable(registry: Registry, tool: ToolName, configDir: s
 type ProfileTaken = {
   /** What the add's first check would have said, had the id been taken then. */
   refusal: Error;
+  /** The profile that took it under a name differing only by case, when none has the id itself. */
+  caseClash?: string;
   /** A registered profile uses the add's config directory, which is then that profile's. */
   dirRegistered: boolean;
 };
@@ -2005,6 +2012,7 @@ function profileTaken(registry: Registry, id: string, configDir: string): Profil
     const dir = path.resolve(configDir);
     return {
       refusal: refusal as Error,
+      caseClash: registry.profiles[id] ? undefined : profileIdClash(registry, id),
       dirRegistered: Object.values(registry.profiles).some(
         (other) => typeof other?.configDir === "string" && path.resolve(other.configDir) === dir,
       ),
@@ -2036,6 +2044,49 @@ async function registerProfile(
   });
   // The update writes nothing only when it found the id taken, and it said so above.
   return saved ? { saved } : { taken: taken as ProfileTaken };
+}
+
+/**
+ * The refusal for an add whose id another clausona process - another add, or init -
+ * registered while this add was signing in, or with `--from` setting up. The first check's
+ * "already exists" reads as a mistyped name, when what the user loses is the sign-in or
+ * setup they have just been through. So this says that, and what became of the config
+ * directory: a new one is removed and an imported one kept, unless the profile that took
+ * the id registered it.
+ *
+ * `undone` is whether that undoing finished: the new directory is gone, or the import's
+ * links came out again. The cleanup swallows its failures so that this refusal still
+ * comes, and the refusal then says what is left rather than claim a directory is gone
+ * that is still there. It goes unread for a directory the other profile registered, which
+ * is left alone.
+ */
+function takenDuringAdd(
+  id: string,
+  taken: ProfileTaken,
+  configDir: string,
+  { imported = false, undone }: { imported?: boolean; undone: boolean },
+): Error {
+  const home = homedir();
+  const shown = configDir.replace(home, "~");
+  const byCase = taken.caseClash ? " (names are compared without case)" : "";
+  const lost = imported
+    ? `while this import was being set up${byCase}, so the import was not saved`
+    : `while this sign-in was in progress${byCase}, so this sign-in was not saved`;
+  let dir: string;
+  if (taken.dirRegistered) {
+    dir = `${shown} is now that profile's.`;
+  } else if (imported) {
+    dir = undone
+      ? `${shown} was kept, and the links this import made in it were undone.`
+      : `${shown} was kept, but undoing this import did not finish, so it may still hold links to the primary: remove them before using it again.`;
+  } else {
+    dir = undone
+      ? `${shown} was removed.`
+      : `${shown} could not be removed: delete it with \`${removeDirCommand(configDir, home)}\`.`;
+  }
+  return new Error(
+    `Profile '${taken.caseClash ?? id}' was registered by another clausona process ${lost}. ${dir} Run \`clausona list\` to see that profile.`,
+  );
 }
 
 /** A command that deletes `dir`, for the shell clausona's installer targets on this platform. */
@@ -2228,14 +2279,18 @@ export async function addProfile(options: {
     if ("taken" in registration) {
       // Another add took the id during the setup above. Undone the way a failed setup is -
       // unless a registered profile now uses this directory, which then belongs to it.
+      let undone = false;
       if (!registration.taken.dirRegistered) {
-        await cleanupProfile(
+        undone = await cleanupProfile(
           options.name,
           { tool: options.tool, configDir, email: "", isPrimary: false },
           primarySource,
-        ).catch(() => {});
+        ).then(
+          () => true,
+          () => false,
+        );
       }
-      throw registration.taken.refusal;
+      throw takenDuringAdd(id, registration.taken, configDir, { imported: true, undone });
     }
     // An interrupted add's directory can be imported once it holds an account. From here
     // on it is this profile's, so a later add must not treat it as a leftover to reuse.
@@ -2318,7 +2373,8 @@ export async function addProfile(options: {
     const now = await loadRegistry().catch(() => null);
     const taken = now ? profileTaken(now, id, configDir) : undefined;
     if (!taken?.dirRegistered) await rm(configDir, { force: true, recursive: true });
-    throw taken?.refusal ?? error;
+    if (!taken) throw error;
+    throw takenDuringAdd(id, taken, configDir, { undone: !(await exists(configDir)) });
   });
   // Per-item backup happens inside setupSharedLinks; no need to copy the full dir.
 
@@ -2354,7 +2410,7 @@ export async function addProfile(options: {
       ).catch(() => {});
       await rm(configDir, { force: true, recursive: true }).catch(() => {});
     }
-    throw registration.taken.refusal;
+    throw takenDuringAdd(id, registration.taken, configDir, { undone: !(await exists(configDir)) });
   }
   // A registered profile is no longer a leftover a later add may take back. A marker
   // that fails to go stays inert while the profile is registered, because

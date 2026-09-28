@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,8 +22,20 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, default: { ...actual, homedir: () => currentHome }, homedir: () => currentHome };
 });
 
+// A path whose removal fails, as one in use does on Windows. Every other removal is real.
+let unremovable = "";
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const rm: typeof actual.rm = (target, options) =>
+    target === unremovable
+      ? Promise.reject(Object.assign(new Error(`EBUSY: resource busy or locked, rm '${target}'`), { code: "EBUSY" }))
+      : actual.rm(target, options);
+  return { ...actual, default: { ...actual, rm }, rm };
+});
+
 const temps: string[] = [];
 afterEach(() => {
+  unremovable = "";
   vi.restoreAllMocks();
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
   vi.resetModules();
@@ -189,10 +210,34 @@ describe("registry writes", { timeout: 30_000 }, () => {
     await service.addProfile({ tool: "claude", name: "x", fromPath: elsewhere });
     x.finish();
 
-    await expect(addingX).rejects.toThrow("Profile 'claude:x' already exists.");
+    // Not the first check's "already exists", which reads as a mistyped name: what was thrown
+    // away is the sign-in the user had just finished.
+    await expect(addingX).rejects.toThrow(
+      `Profile 'claude:x' was registered by another clausona process while this sign-in was in progress, so this sign-in was not saved. ${path.join("~", ".claude-x")} was removed. Run \`clausona list\` to see that profile.`,
+    );
     expect(existsSync(path.join(currentHome, ".claude-x"))).toBe(false);
     expect(readRegistry().profiles["claude:x"]?.configDir).toBe(elsewhere);
     expect(existsSync(path.join(elsewhere, ".claude.json"))).toBe(true);
+  });
+
+  it("says the directory is still there when that add could not remove it", async () => {
+    const { service, holdLogin } = await setup();
+    const dir = path.join(currentHome, ".claude-x");
+    const elsewhere = path.join(currentHome, "elsewhere");
+    writeAccount(elsewhere, "elsewhere@example.com");
+    const x = holdLogin("x");
+
+    const addingX = service.addProfile({ tool: "claude", name: "x" });
+    await x.started;
+    await service.addProfile({ tool: "claude", name: "x", fromPath: elsewhere });
+    unremovable = dir;
+    x.finish();
+
+    // The command that deletes it is the platform's own.
+    await expect(addingX).rejects.toThrow(
+      `so this sign-in was not saved. ${path.join("~", ".claude-x")} could not be removed: delete it with \``,
+    );
+    expect(existsSync(dir)).toBe(true);
   });
 
   // With nothing to set aside, the import leaves the shared backup directory empty and the
@@ -214,10 +259,56 @@ describe("registry writes", { timeout: 30_000 }, () => {
       await service.addProfile({ tool: "claude", name: "x", fromPath: dir });
       x.finish();
 
-      await expect(addingX).rejects.toThrow("Profile 'claude:x' already exists.");
+      await expect(addingX).rejects.toThrow(
+        `Profile 'claude:x' was registered by another clausona process while this sign-in was in progress, so this sign-in was not saved. ${path.join("~", ".claude-x")} is now that profile's.`,
+      );
       // Deleting it would leave the registered profile pointing at nothing.
       expect(readRegistry().profiles["claude:x"]?.configDir).toBe(dir);
       expect(existsSync(path.join(dir, ".claude.json"))).toBe(true);
+    });
+  }
+
+  // Another clausona process registers the name, or one that differs only by case, while the
+  // import is being set up: the stand-in writes the registry as that process would. The
+  // import's links are undone, but the directory is the user's own and stays.
+  for (const { taker, undo } of [
+    { taker: "claude:x", undo: "finishes" },
+    { taker: "claude:X", undo: "finishes" },
+    { taker: "claude:x", undo: "fails" },
+  ] as const) {
+    it(`rejects an import whose name was taken during its setup as ${taker} and keeps the directory (undo ${undo})`, async () => {
+      const { service, primary } = await setup();
+      // Something the primary shares, so the import makes a link for the undo to take out.
+      writeFileSync(path.join(primary, "settings.json"), "{}");
+      const elsewhere = path.join(currentHome, "elsewhere");
+      writeAccount(elsewhere, "elsewhere@example.com");
+      if (undo === "fails") unremovable = path.join(elsewhere, "settings.json");
+      const { claudeAdapter } = await import("../tools/claude.js");
+      const skipSet = claudeAdapter.sharedSkipSet.bind(claudeAdapter);
+      vi.spyOn(claudeAdapter, "sharedSkipSet").mockImplementationOnce((mergeSessions) => {
+        const registry = readRegistry();
+        registry.profiles[taker] = {
+          tool: "claude",
+          configDir: path.join(currentHome, ".claude-x"),
+          email: "x@example.com",
+        };
+        writeFileSync(registryPath(), JSON.stringify(registry));
+        return skipSet(mergeSessions);
+      });
+
+      const byCase = taker === "claude:x" ? "" : " (names are compared without case)";
+      const kept =
+        undo === "finishes"
+          ? "was kept, and the links this import made in it were undone."
+          : "was kept, but undoing this import did not finish, so it may still hold links to the primary: remove them before using it again.";
+      await expect(service.addProfile({ tool: "claude", name: "x", fromPath: elsewhere })).rejects.toThrow(
+        `Profile '${taker}' was registered by another clausona process while this import was being set up${byCase}, so the import was not saved. ${path.join("~", "elsewhere")} ${kept} Run \`clausona list\` to see that profile.`,
+      );
+      expect(readRegistry().profiles[taker]?.configDir).toBe(path.join(currentHome, ".claude-x"));
+      // It held nothing but its account, so anything more is a link the import left.
+      expect(readdirSync(elsewhere).sort()).toEqual(
+        undo === "finishes" ? [".claude.json"] : [".claude.json", "settings.json"],
+      );
     });
   }
 
