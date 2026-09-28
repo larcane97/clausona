@@ -59,6 +59,13 @@ Windows PowerShell:
 irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex
 ```
 
+**Updating.** When a newer release is out, the dashboard (`csn`) says so in its header and lists
+**Update** above Profiles; choose it and answer `Y`, and csn restarts on the new version. From a
+script or another shell, `clausona update` does the same (`--yes` skips the question). Either way
+the download is checked against the release's published SHA-256 before the installed copy is
+replaced. Only a copy the installer put in place updates itself; any other is pointed at the
+installer.
+
 **After upgrading, open a new shell** — or re-run the hook in each shell that is already open:
 `eval "$(clausona shell-init)"` on zsh/bash, `Invoke-Expression (& clausona shell-init | Out-String)`
 on PowerShell. A shell keeps the hook it loaded when it started, and an older hook can apply less
@@ -669,6 +676,7 @@ subscription profile carries neither key. Each finding has a `kind`, a `message`
 | `clausona doctor [--json]`                                          | Check profile health                                 |
 | `clausona repair <profile>`                                         | Fix broken shared links                              |
 | `clausona login <profile>`                                          | Re-authenticate a profile                            |
+| `clausona update [--yes]`                                           | Update to the latest release (asks first; `--yes` skips) |
 | `clausona uninstall`                                                | Uninstall clausona completely                        |
 
 ## How It Works

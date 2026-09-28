@@ -26,17 +26,21 @@ jobs:
       - run: pnpm build
       - run: pnpm test
       - run: cp dist/index.js dist/clausona.js
+      # `clausona update` refuses a release without this file, so every release ships one.
+      - run: cd dist && sha256sum clausona.js > clausona.js.sha256
 
       - name: Create or update Release
         run: |
           gh release create ${{ github.ref_name }} \
             dist/clausona.js \
+            dist/clausona.js.sha256 \
             install.sh \
             install.ps1 \
             --title "${{ github.ref_name }}" \
             --generate-notes || \
           gh release upload ${{ github.ref_name }} \
             dist/clausona.js \
+            dist/clausona.js.sha256 \
             install.sh \
             install.ps1 \
             --clobber
