@@ -8,13 +8,15 @@ type KeyHint = { keys: string; action: string };
 type ChromeProps = PropsWithChildren<{
   title: string;
   subtitle?: string;
+  /** Something to act on, after the title: the dashboard's "update available". */
+  notice?: string;
   footer?: string;
   hints?: KeyHint[];
 }>;
 
 // Use fixed long width that flex container shrinks down gracefully
 // to prevent ink size recalculation bugs and nested redraws on resize
-export function Chrome({ title, subtitle, footer, hints, children }: ChromeProps) {
+export function Chrome({ title, subtitle, notice, footer, hints, children }: ChromeProps) {
   const lineWidth = 150;
 
   return (
@@ -44,6 +46,18 @@ export function Chrome({ title, subtitle, footer, hints, children }: ChromeProps
               <Box flexGrow={1} flexShrink={1} overflow="hidden">
                 <Text color={color.secondary} wrap="truncate-end">
                   {subtitle}
+                </Text>
+              </Box>
+            </>
+          ) : null}
+          {notice ? (
+            <>
+              <Box flexShrink={0}>
+                <Text color={color.dim}>{symbol.sep}</Text>
+              </Box>
+              <Box flexShrink={0}>
+                <Text color={color.accent} bold>
+                  {notice}
                 </Text>
               </Box>
             </>

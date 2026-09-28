@@ -6,6 +6,7 @@ import TextInput from "ink-text-input";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { bootstrapInitFromCurrentState } from "../commands.js";
+import { reinstallCommand, type UpdateOffer, type Updater } from "../core/update.js";
 import {
   describeOtherAccount,
   describeUnconfirmedCredential,
@@ -81,6 +82,7 @@ import { Divider } from "./components/Divider.js";
 import { ProfilePreview } from "./components/ProfilePreview.js";
 import { SelectList, type SelectListItem } from "./components/SelectList.js";
 import { StepIndicator } from "./components/StepIndicator.js";
+import { UpdatePanel, type UpdatePhase } from "./components/UpdatePanel.js";
 import { UsageTable } from "./components/UsageTable.js";
 import { color, symbol } from "./theme.js";
 
@@ -89,6 +91,13 @@ type InitStep = "loading" | "select" | "name" | "default" | "review" | "applying
 
 type AppProps = {
   initialScreen?: Screen;
+  /**
+   * Finds and installs a newer release for the dashboard. When it is left out, nothing is
+   * checked, which keeps every test that is not about updating off the network.
+   */
+  updater?: Updater;
+  /** Called once an update is installed, just before the App exits: index.tsx then starts the new version. */
+  onRestart?: (offer: UpdateOffer) => void;
 };
 
 type InitState = {
@@ -295,6 +304,17 @@ const overlayHints = [
   { keys: "esc", action: "cancel" },
 ];
 
+/** The dashboard's keys while the update panel is open, by what it shows. */
+const updatePanelHints: Record<Exclude<UpdatePhase["kind"], "idle">, { keys: string; action: string }[]> = {
+  confirm: [
+    { keys: "y/enter", action: "update" },
+    { keys: "n/esc", action: "cancel" },
+  ],
+  installing: [],
+  failed: [{ keys: "esc", action: "dismiss" }],
+  manual: [{ keys: "esc", action: "dismiss" }],
+};
+
 /**
  * `handler` as of the last frame React committed, behind one function that never changes -
  * for `useInput`, so the App's keys are answered with the state on screen.
@@ -317,7 +337,7 @@ function useCommittedHandler<Args extends unknown[]>(handler: (...args: Args) =>
 
 // ── App ──
 
-export function App({ initialScreen = "dashboard" }: AppProps) {
+export function App({ initialScreen = "dashboard", updater, onRestart }: AppProps) {
   const { exit } = useApp();
   const { stdout, write } = useStdout();
   const { internal_eventEmitter: inputEvents } = useStdin();
@@ -437,6 +457,56 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   /** The field `inputTarget` names, as drawn: its kind says whether a paste into it is a text field's. */
   const fieldAtCursor = useRef<ApiField | undefined>(undefined);
   const [overlay, setOverlay] = useState<OverlayState>(null);
+  const [updateOffer, setUpdateOffer] = useState<UpdateOffer | null>(null);
+  const [updatePhase, setUpdatePhase] = useState<UpdatePhase>({ kind: "idle" });
+  /**
+   * Set from the first Enter on the question. Two keys inside one tick are both answered from the
+   * frame that asked, and each would start its own install.
+   */
+  const installingRef = useRef(false);
+  /**
+   * Calls off the install in flight when the App unmounts. Ctrl+C is answered by ink itself, which
+   * unmounts the App, and an install left running kept csn alive on a blank screen and then
+   * swapped the new version in unasked. Aborted, it stops and leaves the installed bundle alone.
+   */
+  const installAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => installAbortRef.current?.abort(), []);
+
+  // Once per process: moving between screens does not ask GitHub again. Quitting while it waits
+  // calls the check off, so a slow network does not hold the shell prompt.
+  useEffect(() => {
+    if (!updater) return;
+    let live = true;
+    const controller = new AbortController();
+    updater.find(controller.signal).then(
+      (offer) => {
+        if (live && offer) setUpdateOffer(offer);
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+      controller.abort();
+    };
+  }, [updater]);
+
+  async function installUpdate(offer: UpdateOffer) {
+    if (!updater || installingRef.current) return;
+    installingRef.current = true;
+    const controller = new AbortController();
+    installAbortRef.current = controller;
+    setUpdatePhase({ kind: "installing" });
+    try {
+      await updater.install(offer, controller.signal);
+    } catch (error) {
+      installingRef.current = false;
+      setUpdatePhase({ kind: "failed", message: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    onRestart?.(offer);
+    exit();
+  }
+
   const lastEscRef = useRef(0);
 
   const enteredDirectly = initialScreen !== "dashboard";
@@ -1180,6 +1250,17 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     { id: "quit", label: "Quit", detail: "Exit clausona" },
   ];
 
+  /**
+   * With a newer release out, Update is listed above Profiles at cursor -1. Every way back to the
+   * dashboard sets the cursor to 0, so it still opens on Profiles, and it stays where it is when
+   * the check answers after the list is drawn. An Enter out of habit opens Profiles, never the
+   * update.
+   */
+  const dashboardItems: SelectListItem[] = updateOffer
+    ? [{ id: "update", label: "⬆ Update", detail: `v${updateOffer.current} → v${updateOffer.latest}` }, ...actions]
+    : actions;
+  const dashboardOffset = updateOffer ? 1 : 0;
+
   // Every key the App answers itself, as of the frame on screen: see `useCommittedHandler`.
   const handleInput = useCommittedHandler((input: string, key: Key) => {
     if (unreadableRegistry) {
@@ -1188,6 +1269,21 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
     }
 
     if (screen === "dashboard") {
+      // An install in flight takes every key, from the Enter that started it. A key in the same
+      // read is answered from the question's frame, and an n there closed the panel while the
+      // install ran on, and its exit later pulled the user out of whatever screen they were on.
+      if (installingRef.current) return;
+      // An open update panel takes every key.
+      if (updatePhase.kind === "confirm") {
+        if (updateOffer && (key.return || input === "y" || input === "Y")) void installUpdate(updateOffer);
+        else if (key.escape || input === "n" || input === "N") setUpdatePhase({ kind: "idle" });
+        return;
+      }
+      if (updatePhase.kind === "failed" || updatePhase.kind === "manual") {
+        if (key.escape || key.return) setUpdatePhase({ kind: "idle" });
+        return;
+      }
+
       if (key.escape) {
         const now = Date.now();
         if (now - lastEscRef.current < 1500) {
@@ -1197,10 +1293,19 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
           setMessage("Press ESC again to quit");
         }
       } else if (key.upArrow) {
-        setCursor((prev) => (prev - 1 + actions.length) % actions.length);
+        setCursor(
+          (prev) => ((prev + dashboardOffset - 1 + dashboardItems.length) % dashboardItems.length) - dashboardOffset,
+        );
       } else if (key.downArrow) {
-        setCursor((prev) => (prev + 1) % actions.length);
+        setCursor((prev) => ((prev + dashboardOffset + 1) % dashboardItems.length) - dashboardOffset);
       } else if (key.return) {
+        if (cursor === -1 && updateOffer) {
+          setMessage("");
+          setUpdatePhase(
+            updateOffer.target ? { kind: "confirm" } : { kind: "manual", command: reinstallCommand(process.platform) },
+          );
+          return;
+        }
         const selectedAction = actions[cursor]?.id;
         if (selectedAction === "quit") {
           exit();
@@ -2048,7 +2153,12 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
   if (screen === "dashboard") {
     const activeProfile = profiles.find((p) => p.isActive) ?? profiles[0];
     return (
-      <Chrome title="Dashboard" footer={message || undefined} hints={dashboardHints}>
+      <Chrome
+        title="Dashboard"
+        notice={updateOffer ? `⬆ v${updateOffer.latest} available` : undefined}
+        footer={message || undefined}
+        hints={updatePhase.kind === "idle" ? dashboardHints : updatePanelHints[updatePhase.kind]}
+      >
         <Box gap={2} flexDirection="row" width="100%">
           <Box
             flexDirection="column"
@@ -2060,7 +2170,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             paddingX={1}
             paddingY={0}
           >
-            <SelectList items={actions} index={cursor} />
+            <SelectList items={dashboardItems} index={cursor + dashboardOffset} />
           </Box>
           <Box flexGrow={1} flexShrink={1} minWidth={1} overflow="hidden">
             <ProfilePreview
@@ -2069,6 +2179,7 @@ export function App({ initialScreen = "dashboard" }: AppProps) {
             />
           </Box>
         </Box>
+        {updateOffer ? <UpdatePanel phase={updatePhase} offer={updateOffer} /> : null}
       </Chrome>
     );
   }

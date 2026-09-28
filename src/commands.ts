@@ -9,6 +9,14 @@ import { isKnownSecretSource, keySourcePhrase } from "./core/key-source.js";
 import { spawnCommandSync } from "./core/process.js";
 import { isPosixEnvName, renderJsonEnv, renderPosixExports } from "./core/shell.js";
 import { trackUsage } from "./core/track-usage.js";
+import {
+  checkLatestTag,
+  currentInstallTarget,
+  isNewer,
+  performUpdate,
+  reinstallCommand,
+  versionOfTag,
+} from "./core/update.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import {
   describeOtherAccount,
@@ -116,6 +124,7 @@ const commandFlags: Record<string, { flags: string[]; prefixes?: string[] }> = {
   run: { flags: [] },
   "shell-init": { flags: [] },
   uninstall: { flags: [] },
+  update: { flags: ["--yes", "-y"] },
   version: { flags: [] },
   "_shell-env": { flags: ["--json"] },
 };
@@ -927,6 +936,20 @@ function subcommandHelpText(command: string): string | undefined {
         "",
       ].join("\n");
 
+    case "update":
+      return [
+        "",
+        `  ${accent("clausona update")} ${dim("— Update clausona to the latest release")}`,
+        "",
+        `  ${bold("USAGE")}`,
+        helpUsage("clausona update [--yes]"),
+        "",
+        `  ${bold("DESCRIPTION")}`,
+        `    ${dim("Replaces the installed clausona with the latest GitHub release, once its published")}`,
+        `    ${dim("SHA-256 matches and it runs. Asks first; --yes (-y) goes ahead without asking.")}`,
+        "",
+      ].join("\n");
+
     case "uninstall":
       return [
         "",
@@ -979,6 +1002,7 @@ function usageText() {
       ["repair <profile>", "Repair shared links"],
       ["login <profile>", "Re-authenticate a profile"],
       ["remove <profile>", "Remove a profile"],
+      ["update", "Update clausona to the latest release"],
       ["uninstall", "Uninstall clausona completely"],
       ["shell-init", "Print shell integration"],
       ["version", "Show version"],
@@ -1005,6 +1029,9 @@ export async function runCommand(command: string, args: string[]) {
     case "--help":
       return usageText();
 
+    // A contract between releases: installed updaters run the next release with `--version` and
+    // require exit 0 with `v<version>` on stdout, or they refuse it. Change this and every copy
+    // already installed refuses every later release.
     case "version":
     case "-v":
     case "--version":
@@ -1529,6 +1556,9 @@ export async function runCommand(command: string, args: string[]) {
       return "";
     }
 
+    case "update":
+      return runUpdateCommand(args, defaultUpdateDeps());
+
     case "uninstall": {
       process.stdout.write(
         `${[
@@ -1587,6 +1617,102 @@ export async function runCommand(command: string, args: string[]) {
     default:
       return usageText();
   }
+}
+
+/** What `clausona update` needs from outside itself, so a test can stand in for all of it. */
+export type UpdateCommandDeps = {
+  current: string;
+  /** The installed bundle to replace, or `null` when the installer did not put this one there. */
+  target: string | null;
+  platform: NodeJS.Platform;
+  /** Whether there is a terminal to ask on. */
+  interactive: boolean;
+  checkLatest: () => Promise<string | null>;
+  confirm: (question: string) => Promise<boolean>;
+  install: (tag: string, target: string) => Promise<void>;
+};
+
+/**
+ * `(Y/n)`: an empty answer is a yes. Ctrl+D, or Ctrl+C at the prompt, closes it unanswered, and
+ * that is a no: readline calls the question back for neither, and the command waited forever.
+ */
+export function askYesNo(
+  question: string,
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stdout,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const rl = createInterface({ input, output });
+    let answered = false;
+    const answer = (yes: boolean) => {
+      if (answered) return;
+      answered = true;
+      resolve(yes);
+      // Closing emits `close`, which the flag above has already made a no-op.
+      rl.close();
+    };
+    rl.on("close", () => answer(false));
+    rl.on("SIGINT", () => answer(false));
+    rl.question(question, (reply) => {
+      const normalized = reply.trim().toLowerCase();
+      answer(normalized === "" || normalized === "y" || normalized === "yes");
+    });
+  });
+}
+
+/** Asked for, unlike the dashboard's 3 s background check, so a slow network is worth waiting out. */
+const UPDATE_COMMAND_CHECK_TIMEOUT_MS = 15_000;
+
+function defaultUpdateDeps(): UpdateCommandDeps {
+  return {
+    current: __CLAUSONA_VERSION__,
+    target: currentInstallTarget(),
+    platform: process.platform,
+    // The question goes to stdout and the answer comes from stdin. With stdout redirected,
+    // `clausona update > log` wrote the question into the file and sat waiting on its answer.
+    interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
+    checkLatest: () => checkLatestTag({ timeoutMs: UPDATE_COMMAND_CHECK_TIMEOUT_MS }),
+    confirm: askYesNo,
+    install: (tag, target) => performUpdate({ tag, target }),
+  };
+}
+
+/**
+ * `clausona update`. Only the installer's own install is replaced (see `installTarget`); any other
+ * copy is pointed at the installer. It asks before replacing, `(Y/n)`, so a bare Enter goes
+ * ahead. Without a terminal to ask on, it goes ahead only with `--yes`, rather than reading a
+ * script's next line of input as the answer.
+ */
+export async function runUpdateCommand(args: string[], deps: UpdateCommandDeps): Promise<string> {
+  // `clausona update v0.3.1-beta` reads as installing that release, and it would have installed
+  // whatever is latest instead.
+  if (args.some((arg) => !arg.startsWith("-"))) {
+    throw new Error("clausona update takes no arguments: it always installs the latest release.");
+  }
+  if (!deps.target) {
+    throw new Error(
+      `This clausona was not installed by the installer, so it cannot replace itself. To update, run:\n    ${reinstallCommand(deps.platform)}`,
+    );
+  }
+  const tag = await deps.checkLatest();
+  if (!tag) throw new Error("Could not reach GitHub to check for updates.");
+  if (!isNewer(tag, deps.current)) return success(`Already up to date (v${deps.current})`);
+
+  const latest = versionOfTag(tag);
+  if (!args.includes("--yes") && !args.includes("-y")) {
+    if (!deps.interactive) {
+      throw new Error(`v${latest} is available. Run 'clausona update --yes' to update non-interactively.`);
+    }
+    if (!(await deps.confirm(`  Update v${deps.current} → v${latest}? ${accent("(Y/n)")} `))) {
+      return dim("  Cancelled.");
+    }
+  }
+
+  await deps.install(tag, deps.target);
+  // A shell keeps the hook it loaded at startup; the README says the same after any upgrade.
+  return [success(`Updated v${deps.current} → v${latest}`), dim("    Open a new shell to load its shell hook.")].join(
+    "\n",
+  );
 }
 
 export async function bootstrapInitFromCurrentState() {

@@ -4,7 +4,8 @@ import { pathToFileURL } from "node:url";
 import { runCommand } from "./commands.js";
 import { spawnCommandSync } from "./core/process.js";
 import { trackUsage } from "./core/track-usage.js";
-import { accent, fail as xMark } from "./lib/cli-style.js";
+import { createUpdater, type UpdateOffer } from "./core/update.js";
+import { accent, ok, fail as xMark } from "./lib/cli-style.js";
 import { parseProfileRef } from "./lib/profile-ref.js";
 import { loadRegistry, noRegistryError, resolveProfileEnv } from "./lib/service.js";
 import type { ParsedCommand } from "./types.js";
@@ -48,15 +49,27 @@ async function renderTui(screen: TuiScreen): Promise<void> {
     process.stdout.write("\x1bc"); // FULL reset
   }
 
+  // The dashboard is the one screen that offers an update; `csn use` and the rest open on a task.
+  // `handoff` is an object so the callback's write is visible below; a `let` would be narrowed to `null`.
+  const handoff: { offer: UpdateOffer | null } = { offer: null };
   // Pass the real streams so ink does not throw Raw mode errors when piped.
-  const { waitUntilExit } = render(<App initialScreen={screen} />, {
-    stdout: process.stdout,
-    stdin: process.stdin,
-  });
+  const { waitUntilExit } = render(
+    <App
+      initialScreen={screen}
+      updater={screen === "dashboard" ? createUpdater() : undefined}
+      onRestart={(offer) => {
+        handoff.offer = offer;
+      }}
+    />,
+    { stdout: process.stdout, stdin: process.stdin },
+  );
 
   await waitUntilExit();
   if (process.stdout.isTTY) {
     process.stdout.write("\x1bc"); // Full clear on exit
+  }
+  if (handoff.offer?.target) {
+    process.exitCode = relaunch(handoff.offer.target, handoff.offer.latest);
   }
 }
 
@@ -129,6 +142,30 @@ export async function runProfile(
   const result = spawnCommandSync(binary, args, { stdio: "inherit", env }, platform);
   if (ref.tool === "claude") {
     await trackUsage(ref.id).catch(() => {});
+  }
+  return result.status ?? 1;
+}
+
+/**
+ * After an update, the App exits and this starts the version it installed: the same node, the
+ * same arguments, and the terminal handed straight over, as `run` hands it to a tool. It returns
+ * the exit code to leave with. If the new version cannot be started, the update itself still
+ * stands, and this only says so.
+ */
+export function relaunch(
+  target: string,
+  latest: string,
+  options: {
+    argv?: string[];
+    spawn?: typeof spawnCommandSync;
+    out?: { write(chunk: string): unknown };
+  } = {},
+): number {
+  const { argv = process.argv.slice(2), spawn = spawnCommandSync, out = process.stdout } = options;
+  const result = spawn(process.execPath, [target, ...argv], { stdio: "inherit" });
+  if (result.error) {
+    out.write(`  ${ok} Updated to v${latest}. Run csn again.\n`);
+    return 0;
   }
   return result.status ?? 1;
 }

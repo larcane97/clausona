@@ -49,3 +49,26 @@ export function backupDirFor(clausonaDir: string, tool: ToolName, name: string):
   }
   return dir;
 }
+
+/**
+ * Where the installers put the app. `index.js` there is the whole program.
+ *
+ * `||` rather than `??`, because the installers treat an empty variable as unset
+ * (`${XDG_DATA_HOME:-…}` in install.sh, `if ($env:LOCALAPPDATA)` in install.ps1), and this has to
+ * name the directory they wrote to. The path flavour follows `platform`, not the OS running this,
+ * so it answers for either on any machine.
+ */
+export function appDir({
+  platform,
+  env,
+  homeDir,
+}: {
+  platform: NodeJS.Platform;
+  env: NodeJS.ProcessEnv;
+  homeDir: string;
+}): string {
+  if (platform === "win32") {
+    return path.win32.join(env.LOCALAPPDATA || path.win32.join(homeDir, "AppData", "Local"), "clausona");
+  }
+  return path.posix.join(env.XDG_DATA_HOME || path.posix.join(homeDir, ".local", "share"), "clausona");
+}
