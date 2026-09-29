@@ -85,7 +85,7 @@ Enter
 Wait+Screen@60s /Email:/
 # annotate.py lets the panel stand on its own for a moment, then fades in an outline around
 # the account rows and keeps it until the panel closes.
-Sleep 4s
+Sleep 2.8s
 # The panel says "Esc to cancel"; then /exit, typed, quits.
 Escape
 Sleep 500ms
@@ -122,7 +122,7 @@ Enter
 Wait+Screen@60s /Email:/
 # annotate.py lets the panel stand on its own for a moment, then fades in an outline around
 # the account rows and keeps it until the panel closes.
-Sleep 4s
+Sleep 2.8s
 # The panel says "Esc to cancel"; then /exit, typed, quits.
 Escape
 Sleep 500ms
@@ -139,7 +139,7 @@ Sleep 800ms
 Type "csn"
 Sleep 300ms
 Enter
-Sleep 300ms
+# Cut straight to the drawn dashboard; its "Loading" screen would only flash by.
 Hide
 Wait+Screen@60s /Session.+96%/
 Show

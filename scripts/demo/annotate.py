@@ -50,11 +50,11 @@ DIM = 0.55  # brightness outside the outline, once faded in
 
 # How the highlight arrives: the panel is shown untouched first, so it reads as Claude Code's own
 # screen, then the outline fades in (0 -> full opacity) while the rest dims (1.0 -> DIM), and it
-# stays until the panel closes. demo.tape holds each panel 4 s so the highlighted part lasts at
-# least MIN_HOLD_S.
+# stays until the panel closes. demo.tape holds each panel 2.8 s: 0.8 s plain, 0.3 s fading in,
+# about 1.7 s fully on. MIN_HOLD_S (fade included) catches a panel cut too short.
 DELAY_S = 0.8
 FADE_S = 0.3
-MIN_HOLD_S = 2.5
+MIN_HOLD_S = 1.8
 
 
 def run(*args: str) -> str:
