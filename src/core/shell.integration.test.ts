@@ -3,6 +3,7 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -12,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -24,6 +26,7 @@ import {
 } from "./launch-cache.js";
 import {
   LAUNCH_MARKER,
+  posixQuote,
   renderLaunchJson,
   renderPosixExports,
   renderPowerShellInit,
@@ -46,6 +49,30 @@ const describeIfBash = POSIX_HOST && BASH_AVAILABLE ? describe : describe.skip;
 
 const UNSET = "<unset>";
 
+/** What the stand-in `_track-usage` logs when the hook calls it outside the tool's subshell. */
+const TRACKED = `track-usage CLAUDE_CONFIG_DIR=${UNSET}`;
+
+/**
+ * How long a case waits for `_track-usage`, which the hook starts in the background, so the
+ * shell can exit before it has run. Generous, because only a call that never comes waits it
+ * out, and a loaded runner can take seconds to start a process.
+ */
+const TRACK_WAIT_MS = 10_000;
+
+/**
+ * Polls `read` until `done` holds for what it returns, or TRACK_WAIT_MS has passed, and
+ * returns the last reading either way - so a call that never came fails the assertion that
+ * follows, with the reading in its message, rather than timing the case out.
+ */
+async function waitFor<T>(read: () => T, done: (value: T) => boolean): Promise<T> {
+  const deadline = Date.now() + TRACK_WAIT_MS;
+  for (;;) {
+    const value = read();
+    if (done(value) || Date.now() >= deadline) return value;
+    await sleep(25);
+  }
+}
+
 /**
  * A profile's environment as the API-backed case produces it: a config dir, a base URL,
  * and a token whose value carries a single quote and a newline. Everything here is a
@@ -60,7 +87,9 @@ const tmpDirs: string[] = [];
 afterEach(() => {
   while (tmpDirs.length > 0) {
     const dir = tmpDirs.pop();
-    if (dir) rmSync(dir, { recursive: true, force: true });
+    // Retried as well: a process the case started that is still writing here - which every
+    // case waits out, see STDIO_AWAITING_BACKGROUND - would otherwise fail the removal.
+    if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -75,6 +104,8 @@ type Harness = {
   /** The config dir and primary the stand-in `_launch` script's plugin check points at. */
   plugins: { configDir: string; primary: string };
   log(): string[];
+  /** The log once `_track-usage` has written to it, which it does in the background. */
+  logTracked(): Promise<string[]>;
 };
 
 /** Whole seconds: bash 3.2, macOS's own, compares mtimes to the second. */
@@ -122,6 +153,8 @@ const FAKE_CLAUSONA = [
   `    printf "sync-plugins CLAUDE_CONFIG_DIR=%s\\n" "${expand("CLAUDE_CONFIG_DIR", UNSET)}" >> "$log"`,
   "    ;;",
   "  _track-usage)",
+  // Slowed down by CLAUSONA_TEST_TRACK_DELAY, to show that the hook does not wait for it.
+  `    sleep "${expand("CLAUSONA_TEST_TRACK_DELAY", "0")}"`,
   `    printf "track-usage CLAUDE_CONFIG_DIR=%s\\n" "${expand("CLAUDE_CONFIG_DIR", UNSET)}" >> "$log"`,
   "    ;;",
   "esac",
@@ -192,6 +225,10 @@ function makeHarness(env: { claude?: ToolEnv; codex?: ToolEnv } = {}): Harness {
 
   const logPath = path.join(root, "calls.log");
   writeFileSync(logPath, "");
+  const log = () =>
+    readFileSync(logPath, "utf8")
+      .split("\n")
+      .filter((line) => line !== "");
 
   return {
     root,
@@ -206,10 +243,8 @@ function makeHarness(env: { claude?: ToolEnv; codex?: ToolEnv } = {}): Harness {
       home,
     },
     plugins,
-    log: () =>
-      readFileSync(logPath, "utf8")
-        .split("\n")
-        .filter((line) => line !== ""),
+    log,
+    logTracked: () => waitFor(log, (lines) => lines.includes(TRACKED)),
   };
 }
 
@@ -222,17 +257,30 @@ const NO_RC_ARGS: Record<ShellName, string[]> = {
   bash: ["--noprofile", "--norc"],
 };
 
+/**
+ * stdio for a shell whose background work - the hook's `_track-usage` - must be over when
+ * spawnSync returns. The hook points only fds 0-2 of that job at /dev/null, so it inherits the
+ * spare pipe on fd 3 like every other process the shell starts, and spawnSync reads each pipe
+ * to its end: it returns once the last of them has exited. Without this the stand-in could
+ * still be writing its log line into the case's directory while afterEach removes it.
+ */
+const STDIO_AWAITING_BACKGROUND = ["pipe", "pipe", "pipe", "pipe"] as const;
+
 function runShell(
   shell: ShellName,
   harness: Harness,
   body: string,
   extraEnv: Record<string, string> = {},
   extraArgs: string[] = [],
+  // Only for a case that shows the hook returns before `_track-usage` is done, and that waits
+  // for its log line itself.
+  { awaitBackground = true }: { awaitBackground?: boolean } = {},
 ): { status: number | null; stdout: string; stderr: string } {
   const script = `${renderShellInit(process.platform, harness.paths)}\n${body}\n`;
   const result = spawnSync(shell, [...NO_RC_ARGS[shell], ...extraArgs, "-c", script], {
     encoding: "utf8",
     timeout: 15_000,
+    stdio: awaitBackground ? [...STDIO_AWAITING_BACKGROUND] : "pipe",
     env: {
       PATH: `${harness.binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       HOME: harness.home,
@@ -336,7 +384,7 @@ for (const shell of ["zsh", "bash"] as const) {
      * abandons the eval and the tool runs on the default account - so the run has to stop
      * instead, and say which variable stopped it.
      */
-    it("refuses to start the tool when a variable the profile clears is read-only", () => {
+    it("refuses to start the tool when a variable the profile clears is read-only", async () => {
       const parentKey = "sk-ant-parent-sentinel";
       const harness = makeHarness({
         claude: {
@@ -365,7 +413,7 @@ for (const shell of ["zsh", "bash"] as const) {
       expect(result.stderr).not.toContain(parentKey);
       expect(result.stdout).toContain(`parent ANTHROPIC_API_KEY=${parentKey}`);
       // The plugin sync inside the subshell never ran; usage tracking after it still did.
-      expect(harness.log()).toEqual(["launch claude", `track-usage CLAUDE_CONFIG_DIR=${UNSET}`]);
+      expect(await harness.logTracked()).toEqual(["launch claude", TRACKED]);
     });
 
     it("propagates a non-zero exit code out of the subshell", () => {
@@ -384,21 +432,61 @@ for (const shell of ["zsh", "bash"] as const) {
       expect(chained.status).toBe(42);
     });
 
-    it("runs a due plugin sync inside the subshell, and _track-usage after it", () => {
+    it("runs a due plugin sync inside the subshell, and _track-usage after it", async () => {
       const workDir = "/tmp/clausona-test-claude-work";
       const harness = makeHarness({ claude: { CLAUDE_CONFIG_DIR: workDir } });
 
       const result = runShell(shell, harness, "claude");
 
       expect(result.status).toBe(0);
-      expect(harness.log()).toEqual([
+      expect(await harness.logTracked()).toEqual([
         "launch claude",
         // Inside the subshell, so the plugin sync sees the profile's config dir...
         `sync-plugins CLAUDE_CONFIG_DIR=${workDir}`,
         // ...while usage tracking runs in the parent, which never had it.
-        `track-usage CLAUDE_CONFIG_DIR=${UNSET}`,
+        TRACKED,
       ]);
     });
+
+    /**
+     * `_track-usage` is another Node start, so the hook no longer waits for it: the prompt comes
+     * back as soon as the tool exits, with the tool's exit code, and the usage is recorded after.
+     * Here it takes seconds, and has still not written when the next command runs. Its streams
+     * are not the shell's either, so the shell's own caller is not kept waiting for it - which is
+     * why this case alone runs the shell without the spare pipe that waits background work out,
+     * and waits for the log line itself instead.
+     */
+    it("returns the tool's exit code without waiting for _track-usage", async () => {
+      const workDir = "/tmp/clausona-test-claude-work";
+      const harness = makeHarness({ claude: { CLAUDE_CONFIG_DIR: workDir } });
+      const delaySeconds = 5;
+
+      const started = Date.now();
+      const result = runShell(
+        shell,
+        harness,
+        [
+          "claude",
+          'printf "rc=%s\\n" "$?"',
+          'if grep -q track-usage "$CLAUSONA_TEST_LOG"; then printf "waited\\n"; else printf "returned first\\n"; fi',
+        ].join("\n"),
+        { CLAUSONA_TEST_TOOL_EXIT: "42", CLAUSONA_TEST_TRACK_DELAY: String(delaySeconds) },
+        [],
+        { awaitBackground: false },
+      );
+      const elapsed = Date.now() - started;
+
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("rc=42");
+      expect(result.stdout).toContain("returned first");
+      expect(elapsed).toBeLessThan(delaySeconds * 1000);
+      // ...and it did run, once, outside the tool's subshell.
+      expect(await harness.logTracked()).toEqual([
+        "launch claude",
+        `sync-plugins CLAUDE_CONFIG_DIR=${workDir}`,
+        TRACKED,
+      ]);
+    }, 30_000);
 
     it("steps aside entirely when the user set CLAUDE_CONFIG_DIR", () => {
       const userDir = "/tmp/clausona-test-user-dir";
@@ -429,7 +517,7 @@ for (const shell of ["zsh", "bash"] as const) {
       expect(chained.status).toBe(9);
     });
 
-    it("sets nothing at all when the profile resolves to an empty environment", () => {
+    it("sets nothing at all when the profile resolves to an empty environment", async () => {
       // The primary/subscription case: `_launch` prints no exports, so the tool must run
       // exactly as it would without clausona - and usage tracking still happens.
       const harness = makeHarness();
@@ -439,7 +527,7 @@ for (const shell of ["zsh", "bash"] as const) {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(`CLAUDE_CONFIG_DIR=${UNSET}`);
       expect(result.stdout).toContain(`parent CLAUDE_CONFIG_DIR=${UNSET}`);
-      expect(harness.log()).toContain("track-usage CLAUDE_CONFIG_DIR=<unset>");
+      expect(await harness.logTracked()).toContain(TRACKED);
     });
 
     it("drives codex on the same mechanism, without usage tracking", () => {
@@ -456,7 +544,7 @@ for (const shell of ["zsh", "bash"] as const) {
     });
 
     // The point of the cache: nothing runs before the tool starts.
-    it("starts each tool from its cached launch script, calling no clausona before it", () => {
+    it("starts each tool from its cached launch script, calling no clausona before it", async () => {
       const harness = makeHarness({
         claude: { CLAUDE_CONFIG_DIR: "/tmp/clausona-test-from-launch" },
         codex: { CODEX_HOME: "/tmp/clausona-test-codex-from-launch" },
@@ -471,7 +559,7 @@ for (const shell of ["zsh", "bash"] as const) {
       expect(result.stdout).toContain("CLAUDE_CONFIG_DIR=/tmp/clausona-test-from-cache");
       expect(result.stdout).toContain("CODEX_HOME=/tmp/clausona-test-codex-from-cache");
       expect(result.stdout).toContain(`parent CLAUDE_CONFIG_DIR=${UNSET}`);
-      expect(harness.log()).toEqual([`track-usage CLAUDE_CONFIG_DIR=${UNSET}`]);
+      expect(await harness.logTracked()).toEqual([TRACKED]);
     });
 
     /**
@@ -555,7 +643,8 @@ for (const shell of ["zsh", "bash"] as const) {
     /**
      * A caller's `set -e` (zsh's ERR_EXIT). A clausona that fails - here every call exits 1 -
      * must not end the hook's subshell before the tool starts: not from the cached script's
-     * plugin sync, and not from `_launch`.
+     * plugin sync, and not from `_launch`. Nor may `_track-usage` end the caller's own shell
+     * after it, as the foreground call did: the hook returns, and the next command runs.
      */
     it("starts the tool under set -e when clausona fails", () => {
       const harness = makeHarness();
@@ -568,8 +657,10 @@ for (const shell of ["zsh", "bash"] as const) {
       );
       writeCache(harness, "claude", cached, NOW - 50);
 
-      const hit = runShell(shell, harness, "set -e\nclaude");
+      const hit = runShell(shell, harness, 'set -e\nclaude\nprintf "after claude\\n"');
       expect(hit.stdout).toContain(`CLAUDE_CONFIG_DIR=${configDir}`);
+      expect(hit.stdout).toContain("after claude");
+      expect(hit.status).toBe(0);
 
       // With no cache, `_launch` itself fails, and the tool starts with no profile.
       rmSync(harness.paths.cachePath("claude", "posix"));
@@ -694,6 +785,67 @@ describeIfZsh("posix shell integration (interactive zsh)", () => {
   });
 });
 
+const SCRIPT_AVAILABLE = spawnSync("which", ["script"]).status === 0;
+
+/**
+ * `argv` run on a pseudo-terminal of its own, the way a terminal emulator runs a shell. BSD
+ * `script`, on macOS, takes the command as words; util-linux `script`, on Linux, as one
+ * string for a shell to run.
+ */
+function onTerminal(argv: string[]): [string, string[]] {
+  if (process.platform === "linux") return ["script", ["-qec", argv.map(posixQuote).join(" "), "/dev/null"]];
+  return ["script", ["-q", "/dev/null", ...argv]];
+}
+
+for (const shell of ["zsh", "bash"] as const) {
+  const available = POSIX_HOST && SCRIPT_AVAILABLE && (shell === "zsh" ? ZSH_AVAILABLE : BASH_AVAILABLE);
+
+  describe.skipIf(!available)(`posix shell integration (interactive ${shell} on a terminal)`, () => {
+    /**
+     * An interactive shell announces each job it starts in the background, `[1] 12345`, and
+     * again when it ends, `[1] + done ...` - over the user's prompt, after every claude run.
+     * The hook starts `_track-usage` from a subshell that exits at once, so the job is the
+     * subshell's, and the shell the user types in has none to announce. Only a terminal shows
+     * it: without one, zsh has no job control to announce anything with.
+     */
+    it("announces no background job when it records usage", async () => {
+      const harness = makeHarness({ claude: { CLAUDE_CONFIG_DIR: "/tmp/clausona-test-claude-work" } });
+      const script = [
+        renderShellInit(process.platform, harness.paths),
+        "claude >/dev/null",
+        // Until the tracker has written, then a little past it, and one more command: a shell
+        // announces a job's end as it happens (zsh) or once the next command is done (bash).
+        "_i=0",
+        'until grep -q track-usage "$CLAUSONA_TEST_LOG" || [ "$_i" -ge 100 ]; do sleep 0.1; _i=$((_i + 1)); done',
+        "sleep 0.5",
+        "true",
+        'printf "END\\n"',
+      ].join("\n");
+      const [file, args] = onTerminal([shell, ...NO_RC_ARGS[shell], "-i", "-c", script]);
+
+      const result = spawnSync(file, args, {
+        encoding: "utf8",
+        timeout: 20_000,
+        // Not a pipe: macOS's `script` cannot read terminal settings from a socket, and exits.
+        // The spare pipe on fd 3 is STDIO_AWAITING_BACKGROUND's, where `script` passes it on.
+        stdio: ["ignore", "pipe", "pipe", "pipe"],
+        env: {
+          PATH: `${harness.binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+          HOME: harness.home,
+          CLAUSONA_TEST_LOG: harness.logPath,
+          CLAUSONA_TEST_ENV_DIR: harness.envDir,
+        },
+      });
+      const output = result.stdout.replaceAll("\r", "");
+
+      expect(output).toContain("END");
+      expect(output).not.toMatch(/\[\d+\]/);
+      expect(output).not.toMatch(/\bdone\b/i);
+      expect(await harness.logTracked()).toContain(TRACKED);
+    }, 30_000);
+  });
+}
+
 const describeIfPowerShell = process.platform === "win32" ? describe : describe.skip;
 
 /**
@@ -717,11 +869,37 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
     paths: ShellInitPaths;
     /** The plugin check the stand-in `_launch` hands back: its stamp does not exist yet. */
     sync: { stamp: string; watch: string[] };
+    /** Where each `_track-usage` call leaves an entry of its own; see TRACK_USAGE_CMD. */
+    trackedDir: string;
+    /** The calls the hook waited for, in order: everything but `_track-usage`. */
     log(): string[];
+    /** How many `_track-usage` calls there have been, once there are `count`, or at the deadline. */
+    tracked(count: number): Promise<number>;
   };
 
   /** A string as a PowerShell literal, for the test bodies below. */
   const psQuote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+
+  /**
+   * The stand-in's `_track-usage`, from its `:track` label. The hook starts it without waiting,
+   * so it can run while the next call - or the test body's own Add-Content - writes the log,
+   * and cmd.exe's `>>` and Add-Content both refuse a file another process has open for writing:
+   * a line would go missing, or the body would throw. So each call makes a directory of its own
+   * instead, numbered by the first free name: mkdir fails on one that exists, so two calls at
+   * once never take the same number. CLAUSONA_TEST_TRACK_DELAY slows it down by that many
+   * seconds, give or take one, to show the hook does not wait for it.
+   */
+  const TRACK_USAGE_CMD = [
+    "exit /b 0",
+    ":track",
+    "if defined CLAUSONA_TEST_TRACK_DELAY ping -n %CLAUSONA_TEST_TRACK_DELAY% 127.0.0.1 >nul",
+    "set /a n=0",
+    ":next",
+    "set /a n+=1",
+    "if %n% GTR 50 exit /b 1",
+    'mkdir "%CLAUSONA_TEST_TRACKED%\\%n%" 2>nul || goto next',
+    "exit /b 0",
+  ];
 
   /**
    * A cached launch script, as `_launch --json` would have left it, `seconds` old: stamped
@@ -759,7 +937,8 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
     tmpDirs.push(root);
     const binDir = path.join(root, "bin");
     const clausonaDir = path.join(root, "clausona");
-    for (const dir of [binDir, clausonaDir]) mkdirSync(dir, { recursive: true });
+    const trackedDir = path.join(root, "tracked");
+    for (const dir of [binDir, clausonaDir, trackedDir]) mkdirSync(dir, { recursive: true });
     const logPath = path.join(root, "calls.log");
     writeFileSync(logPath, "");
     const registryPath = path.join(clausonaDir, "profiles.json");
@@ -769,22 +948,24 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
     const primary = path.join(root, "claude-primary");
     const sync = { stamp: pluginSyncStampPath(configDir), watch: pluginSyncWatchList(configDir, primary) };
 
-    // Logs every subcommand the hook asks for, with the tool it names, so the call sequence
-    // can be asserted the way the POSIX harness does; `_launch <tool> --json` is the only one
-    // that answers, with the environment and a plugin check whose stamp is missing, so the
-    // sync is due. The redirect leads the line so `echo` never ends in a bare digit that
-    // cmd.exe would read as a handle to redirect. The hook only ever passes fixed words here,
-    // so the arguments need no escaping. With CLAUSONA_TEST_WARN set, every subcommand also
-    // writes that word to stderr, the way a real profile warning does.
+    // Logs every other subcommand the hook asks for, with the tool it names, so the call
+    // sequence can be asserted the way the POSIX harness does; `_track-usage` goes to
+    // TRACK_USAGE_CMD. `_launch <tool> --json` is the only one that answers, with the
+    // environment and a plugin check whose stamp is missing, so the sync is due. The redirect
+    // leads the line so `echo` never ends in a bare digit that cmd.exe would read as a handle
+    // to redirect. The hook only ever passes fixed words here, so the arguments need no
+    // escaping. With CLAUSONA_TEST_WARN set, every subcommand also writes that word to stderr,
+    // the way a real profile warning does.
     writeFileSync(
       path.join(binDir, "clausona.cmd"),
       [
         "@echo off",
-        '>>"%CLAUSONA_TEST_LOG%" echo %1 %2',
         "if defined CLAUSONA_TEST_WARN echo %CLAUSONA_TEST_WARN% 1>&2",
+        'if "%1"=="_track-usage" goto track',
+        '>>"%CLAUSONA_TEST_LOG%" echo %1 %2',
         'if not "%1"=="_launch" exit /b 0',
         `echo ${escapeForCmdEcho(JSON.stringify({ env, sync }))}`,
-        "exit /b 0",
+        ...TRACK_USAGE_CMD,
       ].join("\r\n"),
     );
     for (const [tool, configVar] of [
@@ -812,11 +993,17 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
         home: process.env.USERPROFILE ?? "",
       },
       sync,
+      trackedDir,
       log: () =>
         readFileSync(logPath, "utf8")
           .split("\n")
           .map((line) => line.trim())
           .filter((line) => line !== ""),
+      tracked: (count) =>
+        waitFor(
+          () => readdirSync(trackedDir).length,
+          (seen) => seen >= count,
+        ),
     };
   }
 
@@ -843,6 +1030,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
           CLAUSONA_TEST_TOOL_EXIT: "0",
           ...extraEnv,
           CLAUSONA_TEST_LOG: harness.logPath,
+          CLAUSONA_TEST_TRACKED: harness.trackedDir,
           PATH: `${harness.binDir}${path.delimiter}${process.env.PATH ?? ""}`,
         },
         timeout: POWERSHELL_SPAWN_TIMEOUT_MS,
@@ -852,7 +1040,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
 
   it(
     "applies the profile environment and preserves metacharacters in arguments",
-    () => {
+    async () => {
       const workDir = "C:\\clausona-test\\work";
       const harness = makeWindowsHarness({
         CLAUDE_CONFIG_DIR: workDir,
@@ -868,8 +1056,9 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       // A value carrying a single quote and a newline must survive ConvertFrom-Json.
       expect(result.stdout).toContain(JSON.stringify(AWKWARD_TOKEN));
       expect(result.stdout).toContain("hello & echo INJECTED");
-      // The same call sequence the POSIX tests pin, in the same order.
-      expect(harness.log()).toEqual(["_launch claude", "_sync-plugins", "_track-usage"]);
+      // The same call sequence the POSIX tests pin, in the same order, and usage recorded after.
+      expect(harness.log()).toEqual(["_launch claude", "_sync-plugins"]);
+      expect(await harness.tracked(1)).toBe(1);
     },
     // Cold powershell.exe startup on a CI runner took 5.4s, over vitest's 5s default, so
     // the test was killed before it could assert. Must exceed the spawn timeout above.
@@ -878,7 +1067,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
 
   it(
     "restores a previously unset variable to unset, not to an empty string",
-    () => {
+    async () => {
       const harness = makeWindowsHarness({ ANTHROPIC_BASE_URL: LOCAL_BASE_URL });
 
       const result = runPowerShell(
@@ -897,9 +1086,10 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       expect(result.stdout).not.toContain("STILL_SET");
       // A variable the user set is restored to its own value, never blanked.
       expect(result.stdout).toContain("C:\\mine");
-      // Three calls from the first invocation and none from the second: once the user has
-      // set CLAUDE_CONFIG_DIR the wrapper steps aside and asks clausona for nothing.
-      expect(harness.log()).toEqual(["_launch claude", "_sync-plugins", "_track-usage"]);
+      // The first invocation's calls and none from the second: once the user has set
+      // CLAUDE_CONFIG_DIR the wrapper steps aside and asks clausona for nothing.
+      expect(harness.log()).toEqual(["_launch claude", "_sync-plugins"]);
+      expect(await harness.tracked(1)).toBe(1);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );
@@ -912,7 +1102,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
    */
   it(
     "removes a variable _launch names with null, for the run only",
-    () => {
+    async () => {
       const parentKey = "sk-ant-parent-sentinel";
       const harness = makeWindowsHarness({
         ANTHROPIC_BASE_URL: LOCAL_BASE_URL,
@@ -943,13 +1133,15 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       // ...and a variable that was absent before the run is absent after it.
       expect(result.stdout).toContain("OAUTH_ABSENT");
       expect(result.stdout).not.toContain("OAUTH_SET");
+      // Waited for, so the case's directory is not removed under it.
+      expect(await harness.tracked(1)).toBe(1);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );
 
   it(
     "propagates a non-zero exit code through LASTEXITCODE",
-    () => {
+    async () => {
       const harness = makeWindowsHarness({ CLAUDE_CONFIG_DIR: "C:\\clausona-test\\work" });
 
       const result = runPowerShell(harness, "claude | Out-Null\n$LASTEXITCODE", {
@@ -958,13 +1150,43 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout.trim()).toBe("42");
+      expect(await harness.tracked(1)).toBe(1);
+    },
+    POWERSHELL_TEST_TIMEOUT_MS,
+  );
+
+  /**
+   * `_track-usage` is another Node start, so the hook does not wait for it: the prompt comes
+   * back as soon as the tool exits, with the tool's exit code in $LASTEXITCODE, and the usage is
+   * recorded after. Here it takes seconds, and has still not recorded when the next line runs.
+   */
+  it(
+    "returns the tool's exit code without waiting for _track-usage",
+    async () => {
+      const harness = makeWindowsHarness({ CLAUDE_CONFIG_DIR: "C:\\clausona-test\\work" });
+
+      const result = runPowerShell(
+        harness,
+        [
+          "claude | Out-Null",
+          '"rc=$LASTEXITCODE"',
+          "if (Test-Path -LiteralPath (Join-Path $env:CLAUSONA_TEST_TRACKED '1')) { 'waited' } else { 'returned first' }",
+        ].join("\n"),
+        { CLAUSONA_TEST_TOOL_EXIT: "42", CLAUSONA_TEST_TRACK_DELAY: "4" },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("rc=42");
+      expect(result.stdout).toContain("returned first");
+      // ...and it did run, once.
+      expect(await harness.tracked(1)).toBe(1);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );
 
   it(
     "survives a caller's ErrorActionPreference of Stop when every clausona step warns",
-    () => {
+    async () => {
       // 5.1 turns a redirected native stderr line into a terminating error under Stop. Each
       // clausona call redirects stderr, so without the Continue override the lookup would
       // die before applying the profile, and the sync would stop the tool from starting.
@@ -983,11 +1205,12 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       // ...the lookup's warning was replayed rather than thrown...
       expect(result.stderr).toContain(warning);
       expect(result.stderr).not.toContain("NativeCommandError");
-      // ...the one from _track-usage after the tool neither threw nor replaced its exit code...
+      // ...starting _track-usage after the tool neither threw nor replaced its exit code...
       expect(result.stdout).toContain("rc=7");
       // ...and the caller's own preference is what it was.
       expect(result.stdout).toContain("pref=Stop");
-      expect(harness.log()).toEqual(["_launch claude", "_sync-plugins", "_track-usage"]);
+      expect(harness.log()).toEqual(["_launch claude", "_sync-plugins"]);
+      expect(await harness.tracked(1)).toBe(1);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );
@@ -1003,7 +1226,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
   for (const host of ["powershell.exe", "pwsh.exe"] as const) {
     it.skipIf(host === "pwsh.exe" && !PWSH_AVAILABLE)(
       `replays a _launch warning as exactly the lines it wrote (${host})`,
-      () => {
+      async () => {
         const workDir = "C:\\clausona-test\\work";
         const warning = "  ! clausona-test-warning one\n\n  ! clausona-test-warning two\n";
         const harness = makeWindowsHarness({});
@@ -1016,10 +1239,11 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
           path.join(harness.binDir, "clausona.cmd"),
           [
             "@echo off",
+            'if "%1"=="_track-usage" goto track',
             '>>"%CLAUSONA_TEST_LOG%" echo %1 %2',
             'if not "%1"=="_launch" exit /b 0',
             `node -e "const fs=require('fs');process.stderr.write(fs.readFileSync(process.env.CLAUSONA_TEST_STDERR,'utf8'));process.stdout.write(fs.readFileSync(process.env.CLAUSONA_TEST_PAYLOAD,'utf8'))"`,
-            "exit /b 0",
+            ...TRACK_USAGE_CMD,
           ].join("\r\n"),
         );
 
@@ -1041,7 +1265,8 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
         expect(stderr.split("clausona-test-warning")).toHaveLength(3);
         // ...as the very lines _launch wrote, from the start of a line.
         expect(stderr).toContain(`\n${warning}`);
-        expect(harness.log()).toEqual(["_launch claude", "_sync-plugins", "_track-usage"]);
+        expect(harness.log()).toEqual(["_launch claude", "_sync-plugins"]);
+        expect(await harness.tracked(1)).toBe(1);
       },
       POWERSHELL_TEST_TIMEOUT_MS,
     );
@@ -1058,7 +1283,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
    */
   it(
     "hands the tool a non-ASCII config directory intact",
-    () => {
+    async () => {
       const workDir = "C:\\clausona-test\\\uD64D\uAE38\uB3D9\\.claude-work";
       const harness = makeWindowsHarness({});
       const payload = path.join(path.dirname(harness.binDir), "launch.json");
@@ -1067,10 +1292,11 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
         path.join(harness.binDir, "clausona.cmd"),
         [
           "@echo off",
+          'if "%1"=="_track-usage" goto track',
           '>>"%CLAUSONA_TEST_LOG%" echo %1 %2',
           'if not "%1"=="_launch" exit /b 0',
           `node -e "process.stdout.write(require('fs').readFileSync(process.env.CLAUSONA_TEST_PAYLOAD,'utf8'))"`,
-          "exit /b 0",
+          ...TRACK_USAGE_CMD,
         ].join("\r\n"),
       );
       writeFileSync(
@@ -1086,7 +1312,8 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(`dir=${encodeURIComponent(workDir)}`);
-      expect(harness.log()).toEqual(["_launch claude", "_sync-plugins", "_track-usage"]);
+      expect(harness.log()).toEqual(["_launch claude", "_sync-plugins"]);
+      expect(await harness.tracked(1)).toBe(1);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );
@@ -1102,7 +1329,8 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(codexHome);
       expect(result.stdout).toContain("exec");
-      // _sync-plugins and _track-usage are claude-only on this platform too.
+      // _sync-plugins is claude-only on this platform too. So is _track-usage, which shell.test.ts
+      // pins: started without waiting, it could not be told apart from a late one here.
       expect(harness.log()).toEqual(["_launch codex"]);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
@@ -1116,7 +1344,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
    */
   it(
     "starts from the cached launch script, and asks _launch once profiles.json is another file",
-    () => {
+    async () => {
       const warning = "clausona-test-warning";
       const harness = makeWindowsHarness({ CLAUDE_CONFIG_DIR: "C:\\clausona-test\\from-launch" });
       writeJsonCache(harness, { env: { CLAUDE_CONFIG_DIR: "C:\\clausona-test\\from-cache" } }, NOW - 50);
@@ -1142,9 +1370,11 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       expect(fromLaunch).toBeGreaterThan(fromCache);
       expect(result.stdout).toContain("RESTORED");
       expect(result.stdout).not.toContain("LEFT_SET");
-      // Only the second run asked clausona anything before the tool...
-      expect(harness.log()).toEqual(["_track-usage", "_launch claude", "_sync-plugins", "_track-usage"]);
-      // ...and its warning reached the console, once.
+      // Only the second run asked clausona anything before the tool, and both recorded usage...
+      expect(harness.log()).toEqual(["_launch claude", "_sync-plugins"]);
+      expect(await harness.tracked(2)).toBe(2);
+      // ...and its warning reached the console, once: the ones _track-usage printed in its own
+      // hidden window did not.
       expect(result.stderr.split(warning)).toHaveLength(2);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
@@ -1158,7 +1388,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
    */
   it(
     "syncs plugins only when the stamp is stale, whatever the caller's ErrorActionPreference",
-    () => {
+    async () => {
       const harness = makeWindowsHarness({});
       const { stamp, watch } = harness.sync;
       for (const target of watch) {
@@ -1197,15 +1427,8 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("pref=Stop");
-      expect(harness.log()).toEqual([
-        "_sync-plugins",
-        "_track-usage",
-        "MARK fresh",
-        "_track-usage",
-        "MARK touched",
-        "_sync-plugins",
-        "_track-usage",
-      ]);
+      expect(harness.log()).toEqual(["_sync-plugins", "MARK fresh", "MARK touched", "_sync-plugins"]);
+      expect(await harness.tracked(3)).toBe(3);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );
