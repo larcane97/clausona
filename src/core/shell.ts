@@ -196,7 +196,9 @@ export function renderLaunchJson(
  * /dev/null, so it cannot write over the prompt or hold a pipe open - `claude | tee log` ends
  * when claude does. It runs outside the tool's subshell, in the caller's own environment, as
  * it always has: it reads which profile to record from the registry, not from the environment.
- * The function returns the tool's exit code, captured before it starts.
+ * The function returns the tool's exit code, captured before it starts. Starting a job cannot
+ * fail, so under a caller's `set -e` a clausona that fails or is gone no longer ends the
+ * caller's shell once the tool has exited, as the foreground call did.
  *
  * Two rules the generated script must keep:
  * - no `!` inside a double-quoted string, because zsh history-expands it when the function

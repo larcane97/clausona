@@ -624,7 +624,8 @@ for (const shell of ["zsh", "bash"] as const) {
     /**
      * A caller's `set -e` (zsh's ERR_EXIT). A clausona that fails - here every call exits 1 -
      * must not end the hook's subshell before the tool starts: not from the cached script's
-     * plugin sync, and not from `_launch`.
+     * plugin sync, and not from `_launch`. Nor may `_track-usage` end the caller's own shell
+     * after it, as the foreground call did: the hook returns, and the next command runs.
      */
     it("starts the tool under set -e when clausona fails", () => {
       const harness = makeHarness();
@@ -637,8 +638,10 @@ for (const shell of ["zsh", "bash"] as const) {
       );
       writeCache(harness, "claude", cached, NOW - 50);
 
-      const hit = runShell(shell, harness, "set -e\nclaude");
+      const hit = runShell(shell, harness, 'set -e\nclaude\nprintf "after claude\\n"');
       expect(hit.stdout).toContain(`CLAUDE_CONFIG_DIR=${configDir}`);
+      expect(hit.stdout).toContain("after claude");
+      expect(hit.status).toBe(0);
 
       // With no cache, `_launch` itself fails, and the tool starts with no profile.
       rmSync(harness.paths.cachePath("claude", "posix"));
