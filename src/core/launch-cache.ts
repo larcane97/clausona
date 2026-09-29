@@ -4,7 +4,7 @@ import path from "node:path";
 import { type BuiltEnv, isSecretEnvName } from "../lib/profile-env.js";
 import type { Profile, ToolName } from "../types.js";
 import { carriesCredentialToken } from "./credential-token.js";
-import { posixQuote } from "./shell.js";
+import { posixQuote, type ShellInitPaths } from "./shell.js";
 
 /**
  * The launch cache: the script `clausona _launch <tool>` printed last time, kept where the
@@ -193,6 +193,16 @@ export async function invalidateLaunchCache(clausonaDir: string): Promise<void> 
 }
 
 /**
+ * Removes one tool's launch scripts, in both formats, and its ref, for the version `paths`
+ * belongs to. Never rejects. Needs no lock: a missing script is only ever a miss.
+ */
+export async function removeLaunchCache(paths: ShellInitPaths, tool: ToolName): Promise<void> {
+  await Promise.all(
+    [paths.cachePath(tool, "posix"), paths.cachePath(tool, "json"), paths.refPath(tool)].map(removeFile),
+  );
+}
+
+/**
  * On Windows a scanner or a pending delete can refuse a delete for a moment, with EBUSY or
  * EPERM; rm retries those only when recursive, which a file never needs.
  */
@@ -214,20 +224,48 @@ export function pluginSyncStampPath(configDir: string): string {
  * - the profile's own known_marketplaces.json and installed_plugins.json;
  * - the primary's marketplaces directory, whose listing it reads;
  * - the primary's installed_plugins.json, which it reads when the profile has none;
- * - the primary's plugin cache, where every installPath it resolves lives.
+ * - the primary's plugin cache, and `cacheDirs`: its marketplace and plugin directories as
+ *   they were when the list was made (see pluginCacheWatchDirs). An installPath is
+ *   `cache/<marketplace>/<plugin>/<version>`, and the sync drops an entry whose path is gone,
+ *   so a version added or removed has to change the mtime of something watched - which is
+ *   the plugin directory holding it, not `cache` itself.
  *
- * It also reads other profiles' known_marketplaces.json, but only for a marketplace on disk
- * that the profile's JSON lacks - and that marketplace appearing is already a change to the
- * listing. A path that does not exist is never newer than the stamp.
+ * Not watched: anything deeper than a version directory, which does not decide whether an
+ * installPath exists, and a marketplace or plugin directory created after the list was made
+ * - its parent's mtime changes, so the sync is due, and a sync that changes anything drops
+ * the launch cache so the next launch lists it. It also reads other profiles'
+ * known_marketplaces.json, but only for a marketplace on disk that the profile's JSON lacks -
+ * and that marketplace appearing is already a change to the listing. A path that does not
+ * exist is never due.
  */
-export function pluginSyncWatchList(configDir: string, primary: string): string[] {
+export function pluginSyncWatchList(configDir: string, primary: string, cacheDirs: readonly string[] = []): string[] {
   return [
     path.join(configDir, "plugins", "known_marketplaces.json"),
     path.join(configDir, "plugins", "installed_plugins.json"),
     path.join(primary, "plugins", "marketplaces"),
     path.join(primary, "plugins", "installed_plugins.json"),
     path.join(primary, "plugins", "cache"),
+    ...cacheDirs,
   ];
+}
+
+/**
+ * The primary's `plugins/cache/<marketplace>` and `plugins/cache/<marketplace>/<plugin>`
+ * directories that exist now, for pluginSyncWatchList. Two readdirs deep, at `_launch` time
+ * only; the hook then checks them with a builtin per path.
+ */
+export async function pluginCacheWatchDirs(primary: string): Promise<string[]> {
+  const cache = path.join(primary, "plugins", "cache");
+  const dirs: string[] = [];
+  for (const marketplace of await readdir(cache, { withFileTypes: true }).catch(() => [])) {
+    if (!marketplace.isDirectory()) continue;
+    const marketplaceDir = path.join(cache, marketplace.name);
+    dirs.push(marketplaceDir);
+    for (const plugin of await readdir(marketplaceDir, { withFileTypes: true }).catch(() => [])) {
+      if (plugin.isDirectory()) dirs.push(path.join(marketplaceDir, plugin.name));
+    }
+  }
+  return dirs;
 }
 
 const STAMP_NOTE =
@@ -275,9 +313,9 @@ export async function syncWithStamp<T extends { ok: boolean }>(configDir: string
  * `[[ ... -nt ... ]]` is a builtin in both zsh and bash, so a fresh stamp costs no process at
  * all. Every path is single-quoted, so no `!` can reach a double-quoted string.
  */
-export function renderPosixSyncCheck(configDir: string, primary: string): string {
+export function renderPosixSyncCheck(configDir: string, primary: string, cacheDirs: readonly string[] = []): string {
   const stamp = posixQuote(pluginSyncStampPath(configDir));
-  const due = pluginSyncWatchList(configDir, primary).map((watched) => {
+  const due = pluginSyncWatchList(configDir, primary, cacheDirs).map((watched) => {
     const quoted = posixQuote(watched);
     return `( -e ${quoted} && ! ${stamp} -nt ${quoted} )`;
   });

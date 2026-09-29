@@ -8,9 +8,11 @@ import { plaintextEnvRemedy } from "./core/doctor.js";
 import { isKnownSecretSource, keySourcePhrase } from "./core/key-source.js";
 import {
   isCacheable,
+  pluginCacheWatchDirs,
   pluginSyncStampPath,
   pluginSyncWatchList,
   registryStamp,
+  removeLaunchCache,
   renderPosixSyncCheck,
   statRegistry,
   syncWithStamp,
@@ -1589,16 +1591,17 @@ export async function runCommand(command: string, args: string[]) {
       const { tool, registry, profile, built } = active;
       const guard = controlledEnvKeys(profile, built);
 
-      let sync: { configDir: string; primary: string } | undefined;
+      let sync: { configDir: string; primary: string; cacheDirs: string[] } | undefined;
       if (tool === "claude") {
         // The config dir _sync-plugins would find in CLAUDE_CONFIG_DIR once these exports are
         // applied: the profile's own, or the primary's, which exports none.
         const primary = claudePrimaryDir(registry);
-        sync = { configDir: built.env.CLAUDE_CONFIG_DIR ?? primary, primary };
+        const configDir = built.env.CLAUDE_CONFIG_DIR ?? primary;
         // Synced here, where Node is running anyway, and stamped if it worked, so the check the
         // script carries finds nothing due and starts no second process.
-        const { configDir, primary: primaryDir } = sync;
-        await syncWithStamp(configDir, () => syncPluginsJson(configDir, primaryDir));
+        await syncWithStamp(configDir, () => syncPluginsJson(configDir, primary));
+        // Listed after the sync, as they are now, for the script to watch.
+        sync = { configDir, primary, cacheDirs: await pluginCacheWatchDirs(primary) };
       }
 
       const format = jsonFlag(args) ? "json" : "posix";
@@ -1609,14 +1612,14 @@ export async function runCommand(command: string, args: string[]) {
               built.unset,
               sync && {
                 stamp: pluginSyncStampPath(sync.configDir),
-                watch: pluginSyncWatchList(sync.configDir, sync.primary),
+                watch: pluginSyncWatchList(sync.configDir, sync.primary, sync.cacheDirs),
               },
               // What a cached copy must still find profiles.json to be; see writeLaunchCache.
               before === null ? undefined : registryStamp(before),
             )
           : [
               renderPosixExports(built.env, built.unset, guard),
-              sync ? renderPosixSyncCheck(sync.configDir, sync.primary) : "",
+              sync ? renderPosixSyncCheck(sync.configDir, sync.primary, sync.cacheDirs) : "",
             ]
               .filter((part) => part !== "")
               .join("\n");
@@ -1644,7 +1647,11 @@ export async function runCommand(command: string, args: string[]) {
       const configDir = process.env.CLAUDE_CONFIG_DIR ?? claudePrimary;
       // Stamped here too, so a shell still running an old hook - which calls this on every
       // launch - also keeps the new hook's check fresh.
-      await syncWithStamp(configDir, () => syncPluginsJson(configDir, claudePrimary));
+      const result = await syncWithStamp(configDir, () => syncPluginsJson(configDir, claudePrimary));
+      // A sync that changed something most likely answered a plugin or marketplace directory
+      // that is new, and the cached script's watch list, made before it existed, does not
+      // have it. Dropping claude's script sends the next launch to _launch, which lists it.
+      if (result.changed) await removeLaunchCache(launchPaths(), "claude");
       return "";
     }
 
