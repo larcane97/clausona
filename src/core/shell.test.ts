@@ -5,49 +5,76 @@ import {
   renderPosixShellInit,
   renderPowerShellInit,
   renderShellInit,
+  type ShellInitPaths,
 } from "./shell.js";
 
+/** Paths with a quote in them, so every place they land has to quote them properly. */
+const PATHS: ShellInitPaths = {
+  cachePath: (tool, format) =>
+    `/home/o'brien/.clausona/cache/launch-9.9.9-${tool}.${format === "posix" ? "sh" : "json"}`,
+  registryPath: "/home/o'brien/.clausona/profiles.json",
+};
+const quoted = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
+
 describe("renderShellInit", () => {
-  const out = renderPosixShellInit();
+  const out = renderPosixShellInit(PATHS);
+  const claudeBlock = out.split(/^claude\(\)\s*\{/m)[1]?.split(/^\}/m)[0] ?? "";
+  const codexBlock = out.split(/^codex\(\)\s*\{/m)[1] ?? "";
+  // From the subshell's opening paren to the `)` that closes it on its own line.
+  const subshell =
+    claudeBlock
+      .split(/^\s*\(\s*$/m)
+      .slice(1)
+      .join("(")
+      .split(/^\s*\)\s*$/m)[0] ?? "";
 
   it("no longer defines the inline node resolver", () => {
     expect(out).not.toMatch(/_clausona_resolve/);
     expect(out).not.toMatch(/node -e/);
   });
 
-  it("evaluates _shell-env inside a subshell so exports do not leak", () => {
-    const claudeBlock = out.split(/^claude\(\)\s*\{/m)[1]?.split(/^\}/m)[0] ?? "";
-    expect(claudeBlock).toMatch(/\(\s*\n\s*eval "\$\(clausona _shell-env claude\)"/);
+  it("evaluates the launch script inside a subshell so exports do not leak", () => {
+    expect(subshell).toMatch(/eval "\$_clausona_launch"/);
+    expect(subshell).toMatch(/eval "\$\(clausona _launch claude\)"/);
+    expect(subshell).toMatch(/command claude "\$@"/);
     expect(claudeBlock).not.toMatch(/unset CLAUDE_CONFIG_DIR/);
+  });
+
+  /**
+   * The common path starts no process: the cached script is read by the shell itself, and
+   * only while it is strictly newer than profiles.json - a registry that is missing or as
+   * new as the script sends the run to `_launch`, which is slower and never wrong. The paths
+   * are baked in single-quoted, so a home directory holding a quote or a `!` stays literal.
+   */
+  it("reads the cached launch script only while it is newer than an existing registry", () => {
+    const cache = quoted(PATHS.cachePath("claude", "posix"));
+    const registry = quoted(PATHS.registryPath);
+    expect(subshell).toContain(
+      `if [[ -f ${registry} && ${cache} -nt ${registry} ]] && { _clausona_launch=$(<${cache}); } 2>/dev/null; then`,
+    );
+    expect(codexBlock).toContain(`${quoted(PATHS.cachePath("codex", "posix"))} -nt ${registry}`);
   });
 
   it("steps aside when the user set CLAUDE_CONFIG_DIR themselves", () => {
     expect(out).toMatch(/if \[\[ -n "\$\{CLAUDE_CONFIG_DIR:-\}" \]\]/);
   });
 
-  it("runs _sync-plugins inside the subshell, where CLAUDE_CONFIG_DIR is set", () => {
-    const claudeBlock = out.split(/^claude\(\)\s*\{/m)[1]?.split(/^\}/m)[0] ?? "";
-    // From the subshell's opening paren to the `)` that closes it on its own line.
-    const subshell =
-      claudeBlock
-        .split("(")
-        .slice(1)
-        .join("(")
-        .split(/^\s*\)/m)[0] ?? "";
-    expect(subshell).toMatch(/clausona _sync-plugins/);
+  // The launch script carries its own staleness check, so the hook itself no longer starts a
+  // process for the plugin sync, and never calls the command old hooks used.
+  it("leaves the plugin sync to the launch script", () => {
+    expect(out).not.toMatch(/_sync-plugins/);
+    expect(out).not.toMatch(/_shell-env/);
     // _track-usage belongs after the subshell, so it still runs once the variables are gone.
     expect(subshell).not.toMatch(/clausona _track-usage/);
   });
 
   it("keeps _track-usage outside the subshell and claude-only", () => {
     expect(out).toMatch(/clausona _track-usage/);
-    const codexBlock = out.split(/^codex\(\)\s*\{/m)[1] ?? "";
     expect(codexBlock).not.toMatch(/_track-usage/);
   });
 
   it("defines a codex wrapper on the same mechanism", () => {
-    const codexBlock = out.split(/^codex\(\)\s*\{/m)[1] ?? "";
-    expect(codexBlock).toMatch(/clausona _shell-env codex/);
+    expect(codexBlock).toMatch(/eval "\$\(clausona _launch codex\)"/);
   });
 
   it("retains csn alias", () => {
@@ -77,8 +104,8 @@ describe("renderShellInit", () => {
   });
 
   it("selects PowerShell integration on Windows", () => {
-    expect(renderShellInit("win32")).toBe(renderPowerShellInit());
-    expect(renderShellInit("darwin")).toBe(renderPosixShellInit());
+    expect(renderShellInit("win32", PATHS)).toBe(renderPowerShellInit());
+    expect(renderShellInit("darwin", PATHS)).toBe(renderPosixShellInit(PATHS));
   });
 });
 

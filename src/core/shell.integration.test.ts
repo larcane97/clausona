@@ -1,10 +1,17 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { renderJsonEnv, renderPosixExports, renderPowerShellInit, renderShellInit } from "./shell.js";
+import { launchCachePath, pluginSyncStampPath, pluginSyncWatchList, renderPosixSyncCheck } from "./launch-cache.js";
+import {
+  renderJsonEnv,
+  renderPosixExports,
+  renderPowerShellInit,
+  renderShellInit,
+  type ShellInitPaths,
+} from "./shell.js";
 
 const ZSH_AVAILABLE = spawnSync("which", ["zsh"]).status === 0;
 const BASH_AVAILABLE = spawnSync("which", ["bash"]).status === 0;
@@ -45,8 +52,30 @@ type Harness = {
   binDir: string;
   envDir: string;
   logPath: string;
+  /** The cache and registry paths the hook is rendered with, all under `root`. */
+  paths: ShellInitPaths;
+  /** The config dir and primary the stand-in `_launch` script's plugin check points at. */
+  plugins: { configDir: string; primary: string };
   log(): string[];
 };
+
+/** Whole seconds: bash 3.2, macOS's own, compares mtimes to the second. */
+const NOW = Math.floor(Date.now() / 1000);
+
+/** A cached script that must never be applied. */
+const STALE = "export CLAUDE_CONFIG_DIR='/tmp/clausona-test-stale-cache'";
+
+function setMtime(target: string, seconds: number) {
+  utimesSync(target, seconds, seconds);
+}
+
+/** A launch script in the hook's cache, as `_launch` would have left it, `seconds` old. */
+function writeCache(harness: Harness, tool: "claude" | "codex", content: string, seconds: number) {
+  const cachePath = harness.paths.cachePath(tool, "posix");
+  mkdirSync(path.dirname(cachePath), { recursive: true });
+  writeFileSync(cachePath, content);
+  setMtime(cachePath, seconds);
+}
 
 /**
  * A POSIX `${NAME:-fallback}` expansion. Assembled rather than written literally so it is
@@ -61,8 +90,8 @@ const FAKE_CLAUSONA = [
   "#!/bin/sh",
   'log="$CLAUSONA_TEST_LOG"',
   'case "$1" in',
-  "  _shell-env)",
-  '    printf "shell-env %s\\n" "$2" >> "$log"',
+  "  _launch)",
+  '    printf "launch %s\\n" "$2" >> "$log"',
   '    if [ -f "$CLAUSONA_TEST_ENV_DIR/$2.env" ]; then cat "$CLAUSONA_TEST_ENV_DIR/$2.env"; fi',
   "    ;;",
   "  _sync-plugins)",
@@ -90,10 +119,10 @@ function fakeTool(configVar: string): string {
   ].join("\n");
 }
 
-/** A tool's `_shell-env` payload, as `--json` spells it: null means "must not be inherited". */
+/** A tool's environment, as `--json` spells it: null means "must not be inherited". */
 type ToolEnv = Record<string, string | null>;
 
-/** Splits a payload the way `_shell-env` does, and renders it through the real renderer. */
+/** Splits a payload the way `_launch` does, and renders it through the real renderer. */
 function renderToolEnv(env: ToolEnv = {}): string {
   const exports: Record<string, string> = {};
   const unset: string[] = [];
@@ -104,22 +133,38 @@ function renderToolEnv(env: ToolEnv = {}): string {
   return renderPosixExports(exports, unset);
 }
 
+/** Script lines joined as `_launch` joins them, leaving out an empty part. */
+function launchScript(...parts: string[]): string {
+  return parts.filter((part) => part !== "").join("\n");
+}
+
 function makeHarness(env: { claude?: ToolEnv; codex?: ToolEnv } = {}): Harness {
   const root = mkdtempSync(path.join(tmpdir(), "clausona-shell-"));
   tmpDirs.push(root);
   const home = path.join(root, "home");
   const binDir = path.join(root, "bin");
   const envDir = path.join(root, "env");
-  for (const dir of [home, binDir, envDir]) mkdirSync(dir, { recursive: true });
+  const clausonaDir = path.join(root, "clausona");
+  const plugins = { configDir: path.join(root, "claude-work"), primary: path.join(root, "claude-primary") };
+  for (const dir of [home, binDir, envDir, clausonaDir]) mkdirSync(dir, { recursive: true });
 
   writeFileSync(path.join(binDir, "clausona"), FAKE_CLAUSONA, { mode: 0o755 });
   writeFileSync(path.join(binDir, "claude"), fakeTool("CLAUDE_CONFIG_DIR"), { mode: 0o755 });
   writeFileSync(path.join(binDir, "codex"), fakeTool("CODEX_HOME"), { mode: 0o755 });
 
-  // Written through the real renderer, so the eval in the hook consumes exactly the
-  // bytes `clausona _shell-env` would have produced.
-  writeFileSync(path.join(envDir, "claude.env"), renderToolEnv(env.claude));
+  // Written through the real renderers, so the eval in the hook consumes exactly the bytes
+  // `clausona _launch` would have produced: claude's ends in the plugin check, whose stamp
+  // does not exist yet, so the sync is due.
+  writeFileSync(
+    path.join(envDir, "claude.env"),
+    launchScript(renderToolEnv(env.claude), renderPosixSyncCheck(plugins.configDir, plugins.primary)),
+  );
   writeFileSync(path.join(envDir, "codex.env"), renderToolEnv(env.codex));
+
+  // A registry, and no cache: the hook has to ask `_launch` until a test writes one.
+  const registryPath = path.join(clausonaDir, "profiles.json");
+  writeFileSync(registryPath, "{}");
+  setMtime(registryPath, NOW - 100);
 
   const logPath = path.join(root, "calls.log");
   writeFileSync(logPath, "");
@@ -130,6 +175,11 @@ function makeHarness(env: { claude?: ToolEnv; codex?: ToolEnv } = {}): Harness {
     binDir,
     envDir,
     logPath,
+    paths: {
+      cachePath: (tool, format) => launchCachePath(clausonaDir, tool, format, "0.0.0-test"),
+      registryPath,
+    },
+    plugins,
     log: () =>
       readFileSync(logPath, "utf8")
         .split("\n")
@@ -153,7 +203,7 @@ function runShell(
   extraEnv: Record<string, string> = {},
   extraArgs: string[] = [],
 ): { status: number | null; stdout: string; stderr: string } {
-  const script = `${renderShellInit()}\n${body}\n`;
+  const script = `${renderShellInit(process.platform, harness.paths)}\n${body}\n`;
   const result = spawnSync(shell, [...NO_RC_ARGS[shell], ...extraArgs, "-c", script], {
     encoding: "utf8",
     timeout: 15_000,
@@ -289,7 +339,7 @@ for (const shell of ["zsh", "bash"] as const) {
       expect(result.stderr).not.toContain(parentKey);
       expect(result.stdout).toContain(`parent ANTHROPIC_API_KEY=${parentKey}`);
       // The plugin sync inside the subshell never ran; usage tracking after it still did.
-      expect(harness.log()).toEqual(["shell-env claude", `track-usage CLAUDE_CONFIG_DIR=${UNSET}`]);
+      expect(harness.log()).toEqual(["launch claude", `track-usage CLAUDE_CONFIG_DIR=${UNSET}`]);
     });
 
     it("propagates a non-zero exit code out of the subshell", () => {
@@ -308,7 +358,7 @@ for (const shell of ["zsh", "bash"] as const) {
       expect(chained.status).toBe(42);
     });
 
-    it("runs _sync-plugins inside the subshell and _track-usage after it", () => {
+    it("runs a due plugin sync inside the subshell, and _track-usage after it", () => {
       const workDir = "/tmp/clausona-test-claude-work";
       const harness = makeHarness({ claude: { CLAUDE_CONFIG_DIR: workDir } });
 
@@ -316,7 +366,7 @@ for (const shell of ["zsh", "bash"] as const) {
 
       expect(result.status).toBe(0);
       expect(harness.log()).toEqual([
-        "shell-env claude",
+        "launch claude",
         // Inside the subshell, so the plugin sync sees the profile's config dir...
         `sync-plugins CLAUDE_CONFIG_DIR=${workDir}`,
         // ...while usage tracking runs in the parent, which never had it.
@@ -354,7 +404,7 @@ for (const shell of ["zsh", "bash"] as const) {
     });
 
     it("sets nothing at all when the profile resolves to an empty environment", () => {
-      // The primary/subscription case: `_shell-env` prints nothing, so the tool must run
+      // The primary/subscription case: `_launch` prints no exports, so the tool must run
       // exactly as it would without clausona - and usage tracking still happens.
       const harness = makeHarness();
 
@@ -376,7 +426,100 @@ for (const shell of ["zsh", "bash"] as const) {
       expect(result.stdout).toContain("args=exec");
       expect(result.stdout).toContain(`CODEX_HOME=${codexDir}`);
       expect(result.stdout).toContain(`parent CODEX_HOME=${UNSET}`);
-      expect(harness.log()).toEqual(["shell-env codex"]);
+      expect(harness.log()).toEqual(["launch codex"]);
+    });
+
+    // The point of the cache: nothing runs before the tool starts.
+    it("starts each tool from its cached launch script, calling no clausona before it", () => {
+      const harness = makeHarness({
+        claude: { CLAUDE_CONFIG_DIR: "/tmp/clausona-test-from-launch" },
+        codex: { CODEX_HOME: "/tmp/clausona-test-codex-from-launch" },
+      });
+      writeCache(harness, "claude", renderToolEnv({ CLAUDE_CONFIG_DIR: "/tmp/clausona-test-from-cache" }), NOW - 50);
+      writeCache(harness, "codex", renderToolEnv({ CODEX_HOME: "/tmp/clausona-test-codex-from-cache" }), NOW - 50);
+
+      const result = runShell(shell, harness, ["claude", "codex", reportParent("CLAUDE_CONFIG_DIR")].join("\n"));
+
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("CLAUDE_CONFIG_DIR=/tmp/clausona-test-from-cache");
+      expect(result.stdout).toContain("CODEX_HOME=/tmp/clausona-test-codex-from-cache");
+      expect(result.stdout).toContain(`parent CLAUDE_CONFIG_DIR=${UNSET}`);
+      expect(harness.log()).toEqual([`track-usage CLAUDE_CONFIG_DIR=${UNSET}`]);
+    });
+
+    /**
+     * After `csn use work` the very next run must start as work. A save deletes the cache, and
+     * the hook also refuses one that is not strictly newer than profiles.json - equal times
+     * included, since a filesystem that keeps whole seconds cannot order two writes in one -
+     * and one with no profiles.json to be newer than, which bash's own `-nt` would accept.
+     */
+    for (const [label, arrange] of [
+      ["missing", () => {}],
+      ["older than the registry", (h: Harness) => writeCache(h, "claude", STALE, NOW - 150)],
+      ["as old as the registry", (h: Harness) => writeCache(h, "claude", STALE, NOW - 100)],
+      [
+        "there with no registry",
+        (h: Harness) => {
+          writeCache(h, "claude", STALE, NOW - 50);
+          rmSync(h.paths.registryPath);
+        },
+      ],
+    ] as const) {
+      it(`asks _launch when the cached script is ${label}`, () => {
+        const harness = makeHarness({ claude: { CLAUDE_CONFIG_DIR: "/tmp/clausona-test-from-launch" } });
+        arrange(harness);
+
+        const result = runShell(shell, harness, "claude");
+
+        expect(result.stderr).toBe("");
+        expect(result.stdout).toContain("CLAUDE_CONFIG_DIR=/tmp/clausona-test-from-launch");
+        expect(harness.log()[0]).toBe("launch claude");
+      });
+    }
+
+    /**
+     * The cached script's last line decides the plugin sync on its own: due when the stamp is
+     * missing or anything the sync reads is newer, and otherwise not run at all. Each watched
+     * path is touched in turn, so a path dropped from the list, or quoted wrongly, fails here.
+     */
+    it("syncs plugins from the cached script only when the stamp is missing or stale", () => {
+      const harness = makeHarness();
+      const { configDir, primary } = harness.plugins;
+      writeCache(
+        harness,
+        "claude",
+        launchScript(renderToolEnv({ CLAUDE_CONFIG_DIR: configDir }), renderPosixSyncCheck(configDir, primary)),
+        NOW - 50,
+      );
+      const synced = () => harness.log().filter((line) => line.startsWith("sync-plugins"));
+      const run = () => {
+        writeFileSync(harness.logPath, "");
+        expect(runShell(shell, harness, "claude").stderr).toBe("");
+        return synced();
+      };
+
+      // No stamp yet: due.
+      expect(run()).toEqual([`sync-plugins CLAUDE_CONFIG_DIR=${configDir}`]);
+
+      const watched = pluginSyncWatchList(configDir, primary);
+      for (const target of watched) {
+        mkdirSync(path.dirname(target), { recursive: true });
+        if (target.endsWith(".json")) writeFileSync(target, "{}");
+        else mkdirSync(target, { recursive: true });
+        setMtime(target, NOW - 30);
+      }
+      const stamp = pluginSyncStampPath(configDir);
+      writeFileSync(stamp, "");
+      setMtime(stamp, NOW - 20);
+
+      // Stamp newer than everything it watches: nothing to do.
+      expect(run()).toEqual([]);
+
+      for (const target of watched) {
+        setMtime(target, NOW - 10);
+        expect(run(), target).toEqual([`sync-plugins CLAUDE_CONFIG_DIR=${configDir}`]);
+        setMtime(target, NOW - 30);
+      }
     });
 
     it("steps aside for codex too, exit code intact", () => {

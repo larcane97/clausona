@@ -132,18 +132,42 @@ export function renderLaunchJson(
 }
 
 /**
- * The wrapper asks `clausona _shell-env <tool>` for the whole environment a run needs and
- * evals it inside a subshell, so the variables live exactly as long as the tool does.
+ * The wrapper evals the launch script - the whole environment a run needs, and for claude the
+ * plugin check - inside a subshell, so the variables live exactly as long as the tool does.
  * Nothing is unset by hand: there is no ledger of what was set to drift out of date, and a
  * value the user exported in their own profile is untouched when the call returns.
  *
+ * The script comes from the launch cache when there is one it can trust, and from
+ * `clausona _launch <tool>` otherwise, which also caches it when it can. Trusted means
+ * strictly newer than profiles.json, which has to exist: every registry save deletes the
+ * cache anyway, and this check also covers a hand edit and a delete that failed. Equal times
+ * are refused, since a filesystem that keeps whole seconds cannot order two writes in one;
+ * a missing registry is refused because bash's `-nt` is true for any file against a missing
+ * one. The file is read by the shell itself - `$(<file)` - so the common path starts no
+ * process before the tool, and a read that fails, a cache deleted since the check, falls
+ * through to `_launch` rather than to no profile at all.
+ *
+ * Both paths are absolute and baked in when `shell-init` runs, so finding them costs nothing
+ * either; a hook only ever reads the cache its own version writes.
+ *
  * Two rules the generated script must keep:
  * - no `!` inside a double-quoted string, because zsh history-expands it when the function
- *   is *defined*, which breaks sourcing the init for every user at shell startup;
+ *   is *defined*, which breaks sourcing the init for every user at shell startup - so the
+ *   baked paths, which can hold one, are single-quoted and never double-quoted;
  * - no credential on a command line (`env KEY=VALUE cmd`), because `ps` shows it to every
  *   user on the machine. The eval keeps secrets inside the subshell's own environment.
  */
-export function renderPosixShellInit() {
+export function renderPosixShellInit(paths: ShellInitPaths) {
+  const registry = posixQuote(paths.registryPath);
+  // The first lines of the subshell for one tool: its launch script, from the cache or not.
+  const launch = (tool: ToolName) => {
+    const cache = posixQuote(paths.cachePath(tool, "posix"));
+    return `    if [[ -f ${registry} && ${cache} -nt ${registry} ]] && { _clausona_launch=$(<${cache}); } 2>/dev/null; then
+      eval "$_clausona_launch"
+    else
+      eval "$(clausona _launch ${tool})"
+    fi`;
+  };
   return `# clausona shell integration
 unalias claude 2>/dev/null
 claude() {
@@ -153,8 +177,7 @@ claude() {
     return $?
   fi
   (
-    eval "$(clausona _shell-env claude)"
-    clausona _sync-plugins 2>/dev/null
+${launch("claude")}
     command claude "$@"
   )
   local rc=$?
@@ -169,7 +192,7 @@ codex() {
     return $?
   fi
   (
-    eval "$(clausona _shell-env codex)"
+${launch("codex")}
     command codex "$@"
   )
   return $?
@@ -315,6 +338,6 @@ Set-Alias -Name csn -Value clausona -Scope Global
 `;
 }
 
-export function renderShellInit(platform: NodeJS.Platform = process.platform) {
-  return platform === "win32" ? renderPowerShellInit() : renderPosixShellInit();
+export function renderShellInit(platform: NodeJS.Platform, paths: ShellInitPaths) {
+  return platform === "win32" ? renderPowerShellInit() : renderPosixShellInit(paths);
 }

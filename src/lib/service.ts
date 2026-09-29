@@ -3030,7 +3030,7 @@ export function launchPaths(): ShellInitPaths {
 }
 
 export function shellInit() {
-  return renderShellInit();
+  return renderShellInit(process.platform, launchPaths());
 }
 
 export async function uninstallClausona() {

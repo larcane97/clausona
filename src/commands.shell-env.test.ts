@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { renderPosixShellInit } from "./core/shell.js";
+import { renderPosixShellInit, type ShellInitPaths } from "./core/shell.js";
 
 /**
  * `_shell-env` is the one command whose stdout the user's shell runs:
@@ -919,11 +919,19 @@ function hookRunner(h: Harness, out: string) {
   mkdirSync(bin, { recursive: true });
   const outPath = path.join(h.home, "shell-env.sh");
   writeFileSync(outPath, out);
+  // The hook asks `_launch`, whose exports are `_shell-env`'s: an API profile is never
+  // cached, so every one of its runs goes through here.
   writeFileSync(
     path.join(bin, "clausona"),
-    ["#!/bin/sh", 'case "$1" in', "  _shell-env)", `    cat '${outPath}'`, "    ;;", "esac", "exit 0", ""].join("\n"),
+    ["#!/bin/sh", 'case "$1" in', "  _shell-env|_launch)", `    cat '${outPath}'`, "    ;;", "esac", "exit 0", ""].join(
+      "\n",
+    ),
     { mode: 0o755 },
   );
+  const paths: ShellInitPaths = {
+    cachePath: (tool, format) => path.join(h.home, ".clausona", "cache", `launch-test-${tool}.${format}`),
+    registryPath: path.join(h.home, ".clausona", "profiles.json"),
+  };
   writeFileSync(
     path.join(bin, "claude"),
     [
@@ -938,7 +946,7 @@ function hookRunner(h: Harness, out: string) {
   );
   return (shell: "zsh" | "bash", body: string, env: Record<string, string>) => {
     const args = shell === "zsh" ? ["-f"] : ["--noprofile", "--norc"];
-    return spawnSync(shell, [...args, "-c", `${renderPosixShellInit()}\n${body}\n`], {
+    return spawnSync(shell, [...args, "-c", `${renderPosixShellInit(paths)}\n${body}\n`], {
       encoding: "utf8",
       timeout: 15_000,
       env: { PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, HOME: h.home, ...env },
