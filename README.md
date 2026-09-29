@@ -48,28 +48,6 @@ No re-login. No reinstalling plugins. Just switch and go.
 - **Usage tracking** — per-profile cost and token usage, tracked locally (Claude Code only for now)
 - **Interactive dashboard** — TUI for managing profiles, viewing usage, and running health checks
 
-## How clausona compares
-
-|  | clausona | [claude-swap](https://github.com/realiti4/claude-swap) | [codex-auth](https://github.com/Loongphy/codex-auth) | [aisw](https://github.com/burakdede/aisw) | [claude-code-profiles](https://github.com/quinnjr/claude-code-profiles) |
-| --- | --- | --- | --- | --- | --- |
-| Claude Code | ✓ | ✓ | — | ✓ | ✓ |
-| Codex CLI | ✓ | — | ✓ | ✓ | — |
-| How it switches | a config directory per account | swaps the login inside one `~/.claude` | copies `auth.json` into `~/.codex` | writes each tool's own credential store, plus a config-dir shell hook | a config directory per profile, through a `claude()` wrapper |
-| History kept per account, plugins and settings shared | ✓ | partly: `cswap run` sessions share settings and skills, not plugins | — (one `~/.codex` for all accounts) | — | skills only |
-| Plan quota for every account | ✓ | ✓ | ✓ | — | — |
-| Switches on its own when a limit runs out | — | ✓ `cswap auto` | ✓ `switch --live` | — | — |
-| Two accounts at once | ✓ `clausona run` | ✓ `cswap run` | — | — | ✓ per shell |
-| API-key profiles | ✓ Claude Code, any Anthropic-format endpoint | ✓ | ✓ | ✓ | — |
-| Install | installer script | uv or pipx | npm | Homebrew, cargo or script | script |
-
-Compared from each project's README and docs in September 2026; — means we found no mention of
-it. Corrections are welcome.
-
-clausona is built around one idea: keep accounts apart where they have to be — sign-in and
-history — and shared everywhere else, for Claude Code and Codex alike. If you want the CLI to
-move to another account on its own when a limit runs out, claude-swap (Claude Code) and
-codex-auth (Codex) do that today; clausona does not.
-
 ## Install
 
 **Requirements:** Node.js >= 20, and at least one of:
@@ -256,6 +234,22 @@ provider, which `clausona list --no-quota` skips.
 
 Session separation, Windows links, how credentials are kept apart, what `doctor` and `repair`
 look at, and where clausona stores its data: **[docs/how-it-works.md](docs/how-it-works.md)**.
+
+## How clausona compares
+
+|  | clausona | [claude-swap](https://github.com/realiti4/claude-swap) | [codex-auth](https://github.com/Loongphy/codex-auth) | [aisw](https://github.com/burakdede/aisw) | [claude-code-profiles](https://github.com/quinnjr/claude-code-profiles) |
+| --- | --- | --- | --- | --- | --- |
+| Claude Code | ✓ | ✓ | — | ✓ | ✓ |
+| Codex CLI | ✓ | — | ✓ | ✓ | — |
+| How it switches | a config directory per account | swaps the login inside one `~/.claude` | copies `auth.json` into `~/.codex` | writes each tool's own credential store, plus a config-dir shell hook | a config directory per profile, through a `claude()` wrapper |
+| History kept per account, plugins and settings shared | ✓ | partly: `cswap run` sessions share settings and skills, not plugins | — (one `~/.codex` for all accounts) | — | skills only |
+| Plan quota for every account | ✓ | ✓ | ✓ | — | — |
+
+Compared from each project's README and docs in September 2026; — means we found no mention of
+it. Corrections are welcome.
+
+clausona is built around one idea: keep accounts apart where they have to be — sign-in and
+history — and shared everywhere else, for Claude Code and Codex alike.
 
 ## FAQ
 
