@@ -178,6 +178,15 @@ export async function writeLaunchCache(opts: {
       }
       // writeFile applies the mode only to a file it creates, so it is asserted again.
       await chmod(opts.path, 0o600).catch(() => {});
+      // The lock should have kept profiles.json still. It cannot if another process took it
+      // over as stale - this one stalled past REGISTRY_LOCK_STALE_MS on a loaded machine -
+      // and saved meanwhile; that save's invalidation may have run before the script was in
+      // place. So look once more, and take the script back if the registry moved.
+      if (!sameRegistry(await statRegistry(opts.registryPath), opts.before)) {
+        await removeFile(opts.path);
+        if (opts.refPath !== undefined) await removeFile(opts.refPath);
+        return false;
+      }
       if (opts.keepVersion !== undefined) await removeOtherVersions(dir, opts.keepVersion);
       return true;
     });

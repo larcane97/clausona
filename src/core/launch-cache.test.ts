@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -12,7 +13,21 @@ import {
 import { rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * A seam into the cache write: `afterWrite` runs once a file has been written, which lets a
+ * test do what another process could do at that moment. Everything else is the real thing.
+ */
+const fsHooks = vi.hoisted(() => ({ afterWrite: undefined as ((target: string) => void) | undefined }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const writeFile: typeof actual.writeFile = async (...args) => {
+    await actual.writeFile(...args);
+    fsHooks.afterWrite?.(String(args[0]));
+  };
+  return { ...actual, default: { ...actual, writeFile }, writeFile };
+});
 
 import type { BuiltEnv } from "../lib/profile-env.js";
 import type { Profile } from "../types.js";
@@ -34,6 +49,7 @@ import {
 const temps: string[] = [];
 
 afterEach(() => {
+  fsHooks.afterWrite = undefined;
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -173,6 +189,29 @@ describe("writeLaunchCache", () => {
     const stamp = registryStamp({ dev: 1n, ino: 2n, size: 42n, mtimeNs: 1_700_000_000_123_456_700n });
     // 2023-11-14T22:13:20.1234567Z, as DateTime.Ticks.
     expect(stamp).toEqual({ ticks: "638355968001234567", length: "42" });
+  });
+
+  /**
+   * The lock should hold profiles.json still, but a process that finds it stale takes it over,
+   * and a writer stalled that long on a loaded machine may be saving meanwhile. A save landing
+   * while the script is written takes the script back, and its ref.
+   */
+  it("takes the script back when profiles.json moved while it was written", async () => {
+    const { root, registryPath, cachePath } = setup();
+    const refPath = launchRefPath(root, "claude", "9.9.9");
+    const before = await statRegistry(registryPath);
+    fsHooks.afterWrite = (target) => {
+      if (!target.startsWith(`${cachePath}.tmp.`)) return;
+      fsHooks.afterWrite = undefined;
+      writeFileSync(`${registryPath}.saved`, '{"version":2}');
+      renameSync(`${registryPath}.saved`, registryPath);
+    };
+
+    const wrote = await writeLaunchCache({ path: cachePath, content: "x", registryPath, before, withLock, refPath });
+
+    expect(wrote).toBe(false);
+    expect(existsSync(cachePath)).toBe(false);
+    expect(existsSync(refPath)).toBe(false);
   });
 
   it("writes nothing when the registry lock is taken", async () => {
