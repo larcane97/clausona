@@ -235,11 +235,18 @@ async function removeFile(filePath: string): Promise<void> {
 }
 
 /**
+ * The stamp's name, which also starts the name of one being written (`<stamp>.tmp-<pid>`).
+ * Each profile's is its own: setupPluginsDir, which links everything else in the primary's
+ * plugins/ into a profile, leaves every name starting with it alone.
+ */
+export const PLUGIN_SYNC_STAMP_NAME = ".clausona-synced";
+
+/**
  * The plugin sync is due only when something it reads has changed since it last ran. It
  * leaves this stamp behind, and the hook compares the stamp's mtime with the watch list's.
  */
 export function pluginSyncStampPath(configDir: string): string {
-  return path.join(configDir, "plugins", ".clausona-synced");
+  return path.join(configDir, "plugins", PLUGIN_SYNC_STAMP_NAME);
 }
 
 /**

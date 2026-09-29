@@ -23,7 +23,7 @@ import { acquireDirLock, removeHeldDirLocks } from "../core/dir-lock.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
 import { acquireFileLock } from "../core/file-lock.js";
 import { isKnownSecretSource, keySharersElsewhere } from "../core/key-source.js";
-import { invalidateLaunchCache, launchCachePath, launchRefPath } from "../core/launch-cache.js";
+import { invalidateLaunchCache, launchCachePath, launchRefPath, PLUGIN_SYNC_STAMP_NAME } from "../core/launch-cache.js";
 import { appDir, backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
@@ -674,6 +674,9 @@ async function setupPluginsDir(profileDir: string, primarySource: string): Promi
   const items = await readdir(primaryPlugins, { withFileTypes: true });
   for (const item of items) {
     if (PLUGINS_PATH_FILES.has(item.name)) continue; // syncPluginsJson handles these
+    // The primary's own plugin sync stamp, or one being written. Linked, every profile's stamp
+    // would be the primary's, and a sync of one would mark them all done.
+    if (item.name.startsWith(PLUGIN_SYNC_STAMP_NAME)) continue;
 
     const source = path.join(primaryPlugins, item.name);
     const target = path.join(profilePlugins, item.name);

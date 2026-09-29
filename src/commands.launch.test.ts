@@ -359,6 +359,28 @@ describe("_launch", () => {
 });
 
 /**
+ * A profile's plugins/ links everything in the primary's but the two JSON files. The sync
+ * stamp is each profile's own: linked, every profile's stamp would be the primary's, and a
+ * sync of one would mark them all done.
+ */
+describe("a profile's plugins directory", () => {
+  it("links the primary's plugin files, but not its sync stamp", async () => {
+    const h = await harness((home) => subscription(home));
+    const primaryPlugins = path.join(h.primary, "plugins");
+    mkdirSync(path.join(primaryPlugins, "cache"), { recursive: true });
+    for (const name of [".clausona-synced", ".clausona-synced.tmp-4242"]) {
+      writeFileSync(path.join(primaryPlugins, name), "");
+    }
+
+    await h.service.repairProfile("claude:work");
+
+    const linked = readdirSync(path.join(h.workDir, "plugins"));
+    expect(linked).toContain("cache");
+    expect(linked.filter((name) => name.startsWith(".clausona-synced"))).toEqual([]);
+  });
+});
+
+/**
  * A hook reads a command's stdout as a script. An internal command this version does not have
  * - a hook from another version asking - fails, with its usage on stderr, instead of printing
  * that usage where the hook would run it, as 0.4.0-beta did for `_launch`.
