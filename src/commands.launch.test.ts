@@ -476,6 +476,24 @@ describe("_sync-plugins", () => {
     expect(due()).toBe(false);
   });
 
+  // Claude Code rewrites these files in its own layout. The same JSON is no change: not
+  // rewritten, and not reported as one.
+  it("leaves a file with the same JSON in another layout alone", async () => {
+    const h = await harness((home) => subscription(home));
+    await h.service.syncPluginsJson(h.workDir, h.primary);
+    const own = pluginSyncWatchList(h.workDir, h.primary).slice(0, 2);
+    const then = Math.floor(Date.now() / 1000) - 5;
+    for (const file of own) {
+      // Compact, with no trailing newline, where clausona indents by two and ends with one.
+      writeFileSync(file, JSON.stringify(JSON.parse(readFileSync(file, "utf8"))));
+      utimesSync(file, then, then);
+    }
+
+    expect(await h.service.syncPluginsJson(h.workDir, h.primary)).toEqual({ ok: true, changed: false });
+
+    for (const file of own) expect(statSync(file).mtimeMs, file).toBe(then * 1000);
+  });
+
   /**
    * A sync that changed something most likely answered a directory the cached script does
    * not watch yet, so claude's script goes and the next launch lists it. One that changed

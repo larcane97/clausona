@@ -424,14 +424,23 @@ export async function setupSharedLinks(
 export type PluginSyncResult = { ok: boolean; changed: boolean };
 
 /**
- * Writes `value` as writeJson does, unless the file already holds exactly that, and resolves
+ * Writes `value` as writeJson does, unless the file already holds the same JSON, and resolves
  * to whether it wrote. The plugin sync's own files are on its watch list, so rewriting them
  * unchanged would make the next launch find the sync due again, every time.
+ *
+ * The same JSON, not the same bytes: Claude Code rewrites these files in its own layout, and
+ * a byte comparison took each of its rewrites for a change and rewrote the file in clausona's.
+ * A file that does not parse is rewritten.
  */
 async function writeJsonIfChanged(targetPath: string, value: unknown): Promise<boolean> {
-  const next = `${JSON.stringify(value, null, 2)}\n`;
   const current = await readFile(targetPath, "utf8").catch(() => null);
-  if (current === next) return false;
+  if (current !== null) {
+    try {
+      if (JSON.stringify(JSON.parse(current)) === JSON.stringify(value)) return false;
+    } catch {
+      // Not JSON: written over below.
+    }
+  }
   await writeJson(targetPath, value);
   return true;
 }
