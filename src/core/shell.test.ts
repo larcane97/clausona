@@ -20,7 +20,7 @@ const PATHS: ShellInitPaths = {
 };
 const quoted = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
 /** A string as a regular expression that matches exactly it. */
-const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const regexLiteral = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 describe("renderShellInit", () => {
   const out = renderPosixShellInit(PATHS);
@@ -55,7 +55,7 @@ describe("renderShellInit", () => {
     const marked = `${quoted(LAUNCH_MARKER)}*`;
     expect(subshell).toMatch(
       new RegExp(
-        `if \\[\\[ \\$_clausona_launch != ${escape(marked)} \\]\\]; then\\s*\\n\\s*_clausona_launch=\\$\\(clausona _launch claude\\)\\s*\\n\\s*fi\\s*\\n\\s*if \\[\\[ \\$_clausona_launch == ${escape(marked)} \\]\\]; then\\s*\\n\\s*eval "\\$_clausona_launch"\\s*\\n\\s*fi`,
+        `if \\[\\[ \\$_clausona_launch != ${regexLiteral(marked)} \\]\\]; then\\s*\\n\\s*_clausona_launch=\\$\\(clausona _launch claude\\)\\s*\\n\\s*fi\\s*\\n\\s*if \\[\\[ \\$_clausona_launch == ${regexLiteral(marked)} \\]\\]; then\\s*\\n\\s*eval "\\$_clausona_launch"\\s*\\n\\s*fi`,
       ),
     );
     expect(subshell.match(/eval /g)).toHaveLength(1);
