@@ -5,7 +5,7 @@
 A profile can be backed by an API endpoint instead of a subscription login — the Anthropic
 API, a gateway such as OpenRouter, or a model you serve yourself. It sits beside your
 subscription profiles in `clausona list`, switches the same way, and shares the same
-plugins, MCP servers, and settings. In this version API profiles are for Claude Code only:
+plugins and settings. In this version API profiles are for Claude Code only:
 `clausona add codex:<name> --api` is refused, before it asks for a key.
 
 **An API profile needs clausona set up first**: one Claude Code account signed in

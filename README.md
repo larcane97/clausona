@@ -1,6 +1,6 @@
 # clausona
 
-**Switch between multiple Claude Code and OpenAI Codex CLI accounts on one machine — plugins, MCP servers, and settings stay shared.**
+**Switch between multiple Claude Code and OpenAI Codex CLI accounts on one machine — plugins, settings, and skills stay shared.**
 
 <p align="center">
   <a href="https://github.com/larcane97/clausona/releases/latest"><img src="https://img.shields.io/github/v/release/larcane97/clausona?include_prereleases&label=release" alt="Latest release" /></a>
@@ -23,9 +23,9 @@ shows how much of every account's 5-hour and weekly plan limits is left, side by
 You have multiple Claude Code or OpenAI Codex CLI accounts (personal, work, different orgs), but switching between them on a single machine is tedious:
 
 - **Switching is manual.** You need to log out, log back in, or juggle `CLAUDE_CONFIG_DIR` (Claude) or `CODEX_HOME` (Codex) yourself.
-- **Settings don't carry over.** Each account gets its own config directory, so your MCP servers, plugins, permissions, and settings have to be set up from scratch — every time.
+- **Settings don't carry over.** Each account gets its own config directory, so your plugins, permissions, settings, and skills have to be set up from scratch — every time.
 
-clausona fixes both. Switch profiles with one command — your entire environment carries over.
+clausona fixes both. Switch profiles with one command — your plugins, settings, and skills carry over.
 
 ```bash
 csn use work             # switch to work account — done
@@ -39,7 +39,7 @@ No re-login. No reinstalling plugins. Just switch and go.
 ## Features
 
 - **One-command switching** — `clausona use <name>` and you're on a different account
-- **Shared environment** — MCP servers, plugins, permissions, settings (Claude) and config.toml, skills, hooks (Codex) are symlinked across profiles within each tool. Set up once, use everywhere.
+- **Shared environment** — plugins (and the MCP servers they bring), permissions, settings, and skills (Claude), and config.toml (MCP servers included), skills, and hooks (Codex) are symlinked across profiles within each tool. Set up once, use everywhere. MCP servers added with `claude mcp add` stay per account — [see the FAQ](#do-my-mcp-servers-plugins-and-settings-carry-over-when-i-switch).
 - **Plan quota at a glance** — session and weekly limit usage for every account, read live from each tool's own usage endpoint (Claude and Codex)
 - **Two accounts at once** — `clausona run claude:personal` starts one session under another profile without switching, so two terminals can run two accounts side by side
 - **API profiles** — a profile can point at an API endpoint instead of a subscription login: the Anthropic API, a gateway, or a model you serve yourself
@@ -134,7 +134,7 @@ How lapsed tokens are renewed, and what a dash in the table means:
 A profile can be backed by an API endpoint instead of a subscription login — the Anthropic
 API, a gateway such as OpenRouter, or a model you serve yourself. It sits beside your
 subscription profiles in `clausona list`, switches the same way, and shares the same
-plugins, MCP servers, and settings. In this version API profiles are for Claude Code only.
+plugins and settings. In this version API profiles are for Claude Code only.
 
 ```bash
 # a hosted gateway
@@ -217,7 +217,7 @@ links back to your primary directory, so what you set up once is there for every
 
 ```
 ~/.claude-work/            (new claude profile)
-├── .claude.json           ← own account metadata (NOT shared)
+├── .claude.json           ← own account metadata and `claude mcp add` servers (NOT shared)
 ├── .credentials.json      ← own OAuth tokens outside macOS, and on macOS when the
 │                            Keychain refuses them (NOT shared)
 ├── projects/              ← own session history (NOT shared by default)

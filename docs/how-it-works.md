@@ -50,7 +50,7 @@ When you register a new profile, clausona symlinks shared resources from your pr
 
 ```
 ~/.claude-work/            (new claude profile)
-├── .claude.json           ← own account metadata (NOT shared)
+├── .claude.json           ← own account metadata and `claude mcp add` servers (NOT shared)
 ├── .credentials.json      ← own OAuth tokens outside macOS, and on macOS when the
 │                            Keychain refuses them (NOT shared)
 ├── .last-update-result.json, gh-pr-status-cache.json, .session-stats.json
