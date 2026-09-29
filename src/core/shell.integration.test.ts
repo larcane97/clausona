@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { launchCachePath, pluginSyncStampPath, pluginSyncWatchList, renderPosixSyncCheck } from "./launch-cache.js";
 import {
-  renderJsonEnv,
+  renderLaunchJson,
   renderPosixExports,
   renderPowerShellInit,
   renderShellInit,
@@ -586,7 +586,26 @@ const describeIfPowerShell = process.platform === "win32" ? describe : describe.
  * the generated script's shape is also pinned statically in shell.test.ts.
  */
 describeIfPowerShell("PowerShell wrapper integration", () => {
-  type WindowsHarness = { binDir: string; logPath: string; log(): string[] };
+  type WindowsHarness = {
+    binDir: string;
+    logPath: string;
+    /** The cache and registry paths the hook is rendered with; no cache exists at first. */
+    paths: ShellInitPaths;
+    /** The plugin check the stand-in `_launch` hands back: its stamp does not exist yet. */
+    sync: { stamp: string; watch: string[] };
+    log(): string[];
+  };
+
+  /** A string as a PowerShell literal, for the test bodies below. */
+  const psQuote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+
+  /** A cached launch script, as `_launch --json` would have left it, `seconds` old. */
+  function writeJsonCache(harness: WindowsHarness, document: unknown, seconds: number) {
+    const cachePath = harness.paths.cachePath("claude", "json");
+    mkdirSync(path.dirname(cachePath), { recursive: true });
+    writeFileSync(cachePath, JSON.stringify(document));
+    setMtime(cachePath, seconds);
+  }
 
   /**
    * `echo` is the only way to emit the payload from a .cmd, and cmd.exe reads these as
@@ -611,13 +630,21 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
     const root = mkdtempSync(path.join(tmpdir(), "clausona-shell-ps-"));
     tmpDirs.push(root);
     const binDir = path.join(root, "bin");
-    mkdirSync(binDir, { recursive: true });
+    const clausonaDir = path.join(root, "clausona");
+    for (const dir of [binDir, clausonaDir]) mkdirSync(dir, { recursive: true });
     const logPath = path.join(root, "calls.log");
     writeFileSync(logPath, "");
+    const registryPath = path.join(clausonaDir, "profiles.json");
+    writeFileSync(registryPath, "{}");
+    setMtime(registryPath, NOW - 100);
+    const configDir = path.join(root, "claude-work");
+    const primary = path.join(root, "claude-primary");
+    const sync = { stamp: pluginSyncStampPath(configDir), watch: pluginSyncWatchList(configDir, primary) };
 
     // Logs every subcommand the hook asks for, with the tool it names, so the call sequence
-    // can be asserted the way the POSIX harness does; `_shell-env <tool> --json` is the only
-    // one that answers. The redirect leads the line so `echo` never ends in a bare digit that
+    // can be asserted the way the POSIX harness does; `_launch <tool> --json` is the only one
+    // that answers, with the environment and a plugin check whose stamp is missing, so the
+    // sync is due. The redirect leads the line so `echo` never ends in a bare digit that
     // cmd.exe would read as a handle to redirect. The hook only ever passes fixed words here,
     // so the arguments need no escaping. With CLAUSONA_TEST_WARN set, every subcommand also
     // writes that word to stderr, the way a real profile warning does.
@@ -627,8 +654,8 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
         "@echo off",
         '>>"%CLAUSONA_TEST_LOG%" echo %1 %2',
         "if defined CLAUSONA_TEST_WARN echo %CLAUSONA_TEST_WARN% 1>&2",
-        'if not "%1"=="_shell-env" exit /b 0',
-        `echo ${escapeForCmdEcho(JSON.stringify(env))}`,
+        'if not "%1"=="_launch" exit /b 0',
+        `echo ${escapeForCmdEcho(JSON.stringify({ env, sync }))}`,
         "exit /b 0",
       ].join("\r\n"),
     );
@@ -649,6 +676,11 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
     return {
       binDir,
       logPath,
+      paths: {
+        cachePath: (tool, format) => launchCachePath(clausonaDir, tool, format, "0.0.0-test"),
+        registryPath,
+      },
+      sync,
       log: () =>
         readFileSync(logPath, "utf8")
           .split("\n")
@@ -660,7 +692,14 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
   function runPowerShell(harness: WindowsHarness, body: string, extraEnv: Record<string, string> = {}) {
     return spawnSync(
       "powershell.exe",
-      ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `${renderPowerShellInit()}\n${body}`],
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `${renderPowerShellInit(harness.paths)}\n${body}`,
+      ],
       {
         encoding: "utf8",
         env: {
@@ -694,7 +733,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       expect(result.stdout).toContain(JSON.stringify(AWKWARD_TOKEN));
       expect(result.stdout).toContain("hello & echo INJECTED");
       // The same call sequence the POSIX tests pin, in the same order.
-      expect(harness.log()).toEqual(["_shell-env claude", "_sync-plugins", "_track-usage"]);
+      expect(harness.log()).toEqual(["_launch claude", "_sync-plugins", "_track-usage"]);
     },
     // Cold powershell.exe startup on a CI runner took 5.4s, over vitest's 5s default, so
     // the test was killed before it could assert. Must exceed the spawn timeout above.
@@ -724,19 +763,19 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       expect(result.stdout).toContain("C:\\mine");
       // Three calls from the first invocation and none from the second: once the user has
       // set CLAUDE_CONFIG_DIR the wrapper steps aside and asks clausona for nothing.
-      expect(harness.log()).toEqual(["_shell-env claude", "_sync-plugins", "_track-usage"]);
+      expect(harness.log()).toEqual(["_launch claude", "_sync-plugins", "_track-usage"]);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );
 
   /**
-   * `_shell-env --json` gives a credential the run must not inherit the value null. The
+   * `_launch --json` gives a credential the run must not inherit the value null. The
    * hook hands that straight to SetEnvironmentVariable, which removes the variable, and
    * the restore in its finally puts back the caller's own value - or, for a variable that
    * was absent, removes it again rather than leaving an empty one behind.
    */
   it(
-    "removes a variable _shell-env names with null, for the run only",
+    "removes a variable _launch names with null, for the run only",
     () => {
       const parentKey = "sk-ant-parent-sentinel";
       const harness = makeWindowsHarness({
@@ -811,7 +850,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       expect(result.stdout).toContain("rc=7");
       // ...and the caller's own preference is what it was.
       expect(result.stdout).toContain("pref=Stop");
-      expect(harness.log()).toEqual(["_shell-env claude", "_sync-plugins", "_track-usage"]);
+      expect(harness.log()).toEqual(["_launch claude", "_sync-plugins", "_track-usage"]);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );
@@ -820,7 +859,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
    * PowerShell decodes a native command's stdout with [Console]::OutputEncoding, which is the
    * console's OEM code page by default - 437 on this runner, 949 on a Korean install - and
    * not UTF-8. Raw UTF-8 from `_shell-env --json` turned a Hangul user folder into a path
-   * that does not exist. So the stand-in writes exactly what `_shell-env --json` writes, the
+   * that does not exist. So the stand-in writes exactly what `_launch --json` writes, the
    * way clausona writes it: from node, as UTF-8 bytes - never `echo`, which would write it in
    * the console's own code page and hide the problem. And the tool reports the directory it
    * got percent-encoded, so nothing on the way back depends on a code page either.
@@ -830,14 +869,14 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
     () => {
       const workDir = "C:\\clausona-test\\\uD64D\uAE38\uB3D9\\.claude-work";
       const harness = makeWindowsHarness({});
-      const payload = path.join(path.dirname(harness.binDir), "shell-env.json");
-      writeFileSync(payload, renderJsonEnv({ CLAUDE_CONFIG_DIR: workDir }), "utf8");
+      const payload = path.join(path.dirname(harness.binDir), "launch.json");
+      writeFileSync(payload, renderLaunchJson({ CLAUDE_CONFIG_DIR: workDir }, [], harness.sync), "utf8");
       writeFileSync(
         path.join(harness.binDir, "clausona.cmd"),
         [
           "@echo off",
           '>>"%CLAUSONA_TEST_LOG%" echo %1 %2',
-          'if not "%1"=="_shell-env" exit /b 0',
+          'if not "%1"=="_launch" exit /b 0',
           `node -e "process.stdout.write(require('fs').readFileSync(process.env.CLAUSONA_TEST_PAYLOAD,'utf8'))"`,
           "exit /b 0",
         ].join("\r\n"),
@@ -855,7 +894,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(`dir=${encodeURIComponent(workDir)}`);
-      expect(harness.log()).toEqual(["_shell-env claude", "_sync-plugins", "_track-usage"]);
+      expect(harness.log()).toEqual(["_launch claude", "_sync-plugins", "_track-usage"]);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );
@@ -872,7 +911,105 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       expect(result.stdout).toContain(codexHome);
       expect(result.stdout).toContain("exec");
       // _sync-plugins and _track-usage are claude-only on this platform too.
-      expect(harness.log()).toEqual(["_shell-env codex"]);
+      expect(harness.log()).toEqual(["_launch codex"]);
+    },
+    POWERSHELL_TEST_TIMEOUT_MS,
+  );
+
+  /**
+   * One PowerShell start, two runs: first from a cache newer than the registry - no clausona
+   * before the tool, no warning, and the variable gone again afterwards - then, with the
+   * registry made newer the way a save leaves it, from `_launch`, whose warning is replayed.
+   */
+  it(
+    "starts from the cached launch script, and asks _launch once the registry is newer",
+    () => {
+      const warning = "clausona-test-warning";
+      const harness = makeWindowsHarness({ CLAUDE_CONFIG_DIR: "C:\\clausona-test\\from-launch" });
+      writeJsonCache(harness, { env: { CLAUDE_CONFIG_DIR: "C:\\clausona-test\\from-cache" } }, NOW - 50);
+      const registry = psQuote(harness.paths.registryPath);
+
+      const result = runPowerShell(
+        harness,
+        [
+          "claude",
+          "if (Test-Path Env:CLAUDE_CONFIG_DIR) { 'LEFT_SET' } else { 'RESTORED' }",
+          `$registry = Get-Item -LiteralPath ${registry}`,
+          "$registry.LastWriteTimeUtc = $registry.LastWriteTimeUtc.AddSeconds(100)",
+          "claude",
+        ].join("\n"),
+        { CLAUSONA_TEST_WARN: warning },
+      );
+
+      expect(result.status).toBe(0);
+      const fromCache = result.stdout.indexOf("C:\\clausona-test\\from-cache");
+      const fromLaunch = result.stdout.indexOf("C:\\clausona-test\\from-launch");
+      expect(fromCache).toBeGreaterThan(-1);
+      expect(fromLaunch).toBeGreaterThan(fromCache);
+      expect(result.stdout).toContain("RESTORED");
+      expect(result.stdout).not.toContain("LEFT_SET");
+      // Only the second run asked clausona anything before the tool, and only it warned.
+      expect(harness.log()).toEqual(["_track-usage", "_launch claude", "_sync-plugins", "_track-usage"]);
+      expect(result.stderr.split(warning)).toHaveLength(2);
+    },
+    POWERSHELL_TEST_TIMEOUT_MS,
+  );
+
+  /**
+   * The hook's own staleness check, on a cache hit and under a caller's Stop: a stale stamp
+   * syncs, a fresh one does not, and a watched path touched after it syncs again. One
+   * PowerShell start for all three, with a marker in the log between them.
+   */
+  it(
+    "syncs plugins only when the stamp is stale, whatever the caller's ErrorActionPreference",
+    () => {
+      const harness = makeWindowsHarness({});
+      const { stamp, watch } = harness.sync;
+      for (const target of watch) {
+        mkdirSync(path.dirname(target), { recursive: true });
+        if (target.endsWith(".json")) writeFileSync(target, "{}");
+        else mkdirSync(target, { recursive: true });
+        setMtime(target, NOW - 30);
+      }
+      writeFileSync(stamp, "");
+      setMtime(stamp, NOW - 40);
+      writeJsonCache(harness, { env: {}, sync: harness.sync }, NOW - 50);
+      const mark = (label: string) => `Add-Content -LiteralPath $env:CLAUSONA_TEST_LOG -Value ${psQuote(label)}`;
+      const bump = (target: string) =>
+        [
+          `$item = Get-Item -LiteralPath ${psQuote(target)}`,
+          "$item.LastWriteTimeUtc = $item.LastWriteTimeUtc.AddSeconds(20)",
+        ].join("\n");
+
+      const result = runPowerShell(
+        harness,
+        [
+          "$ErrorActionPreference = 'Stop'",
+          // Stamp older than what it watches: due.
+          "claude | Out-Null",
+          mark("MARK fresh"),
+          bump(stamp),
+          // Stamp newer than everything: nothing to do.
+          "claude | Out-Null",
+          mark("MARK touched"),
+          bump(watch[4] as string),
+          // The plugin cache changed after the stamp: due again.
+          "claude | Out-Null",
+          '"pref=$ErrorActionPreference"',
+        ].join("\n"),
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("pref=Stop");
+      expect(harness.log()).toEqual([
+        "_sync-plugins",
+        "_track-usage",
+        "MARK fresh",
+        "_track-usage",
+        "MARK touched",
+        "_sync-plugins",
+        "_track-usage",
+      ]);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );

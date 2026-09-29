@@ -210,9 +210,21 @@ alias csn=clausona
  * string - and passing that same `$null` back to `SetEnvironmentVariable` removes the
  * variable, which is what restoring "it was not set" has to mean.
  *
+ * The environment comes from the launch cache when there is a script it can trust - the
+ * `.json` one, strictly newer than an existing profiles.json, the same rule as the POSIX
+ * hook - and from `clausona _launch <tool> --json` otherwise. A hit starts no process before
+ * the tool; for claude the hook then does the plugin check the POSIX script carries, from
+ * the script's `sync` block, and runs `_sync-plugins` only when it is due.
+ *
+ * The cache and registry paths are baked in when `shell-init` runs, as ASCII-only literals
+ * (see powerShellLiteral), because the profile reads the hook as a native command's output.
+ *
  * Targets Windows PowerShell 5.1, so no null-coalescing and no ternary operator.
  */
-export function renderPowerShellInit() {
+export function renderPowerShellInit(paths: ShellInitPaths) {
+  const claudeCache = powerShellLiteral(paths.cachePath("claude", "json"));
+  const codexCache = powerShellLiteral(paths.cachePath("codex", "json"));
+  const registry = powerShellLiteral(paths.registryPath);
   return `# clausona PowerShell integration
 function global:Invoke-ClausonaTool {
   param(
@@ -222,75 +234,131 @@ function global:Invoke-ClausonaTool {
 
   # $env: is process-global here, so the previous values are captured and restored.
   $applied = @{}
-  # A warning from _shell-env means a persistent misconfiguration - a credential that will
-  # not resolve, a key clausona cannot export - so it has to reach the user on every run,
-  # exactly as it does on POSIX. stderr cannot be merged into stdout, which carries the
-  # JSON, and 5.1 cannot split a native command's streams inline; so stderr goes to a temp
-  # file and is replayed to the console afterwards.
-  #
-  # Creating that file is the one step that can fail before the lookup runs, so it is
-  # guarded and the lookup has a branch for each outcome. Losing the warnings is bad;
-  # running the tool against the default account without saying so would be worse, and
-  # that is what a lookup skipped over a temp file would cause. Exactly one branch runs,
-  # so a run still makes exactly one _shell-env call.
-  $stderrPath = $null
-  try {
-    $stderrPath = [System.IO.Path]::GetTempFileName()
-  } catch {
-    $stderrPath = $null
-  }
   # A caller's $ErrorActionPreference = 'Stop' must not let a clausona step cut the run short.
   # 5.1 turns each line a native command writes to a redirected stderr into an error record,
   # so under Stop the first warning would throw - here, before $raw is assigned; 7.3+ can do
-  # the same to a non-zero exit. Every clausona call below runs under Continue; only the tool
+  # the same to a non-zero exit. Every clausona step below runs under Continue; only the tool
   # itself gets the caller's own preference back.
   $callerErrorAction = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
+
+  # The launch script clausona cached for this profile, while it is strictly newer than
+  # profiles.json. Every step is told to stop on an error, and caught: a cache that cannot be
+  # read - deleted by a save in another window between the check and the read, say - is a
+  # miss, never a run with no profile, and never an error printed in the caller's console.
+  $parsed = $null
+  if ($Tool -eq "claude") {
+    $cachePath = ${claudeCache}
+  } else {
+    $cachePath = ${codexCache}
+  }
+  $registryPath = ${registry}
   try {
-    if ($stderrPath) {
-      $raw = & clausona _shell-env $Tool --json 2>$stderrPath
-    } else {
-      $raw = & clausona _shell-env $Tool --json 2>$null
+    if ((Test-Path -LiteralPath $cachePath) -and (Test-Path -LiteralPath $registryPath)) {
+      $cacheTime = (Get-Item -LiteralPath $cachePath -ErrorAction Stop).LastWriteTimeUtc
+      if ($cacheTime -gt (Get-Item -LiteralPath $registryPath -ErrorAction Stop).LastWriteTimeUtc) {
+        $parsed = Get-Content -LiteralPath $cachePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+      }
     }
-    if ($raw) {
-      $parsed = $raw | ConvertFrom-Json
-      foreach ($property in $parsed.PSObject.Properties) {
+  } catch {
+    $parsed = $null
+  }
+
+  if (-not $parsed) {
+    # A warning from _launch means a persistent misconfiguration - a credential that will
+    # not resolve, a key clausona cannot export - so it has to reach the user on every run,
+    # exactly as it does on POSIX. stderr cannot be merged into stdout, which carries the
+    # JSON, and 5.1 cannot split a native command's streams inline; so stderr goes to a temp
+    # file and is replayed to the console afterwards.
+    #
+    # Creating that file is the one step that can fail before the lookup runs, so it is
+    # guarded and the lookup has a branch for each outcome. Losing the warnings is bad;
+    # running the tool against the default account without saying so would be worse, and
+    # that is what a lookup skipped over a temp file would cause. Exactly one branch runs,
+    # so a miss still makes exactly one _launch call.
+    $stderrPath = $null
+    try {
+      $stderrPath = [System.IO.Path]::GetTempFileName()
+    } catch {
+      $stderrPath = $null
+    }
+    try {
+      if ($stderrPath) {
+        $raw = & clausona _launch $Tool --json 2>$stderrPath
+      } else {
+        $raw = & clausona _launch $Tool --json 2>$null
+      }
+      if ($raw) { $parsed = $raw | ConvertFrom-Json }
+    } catch {
+      # A failed lookup must never stop the tool from starting.
+    } finally {
+      # Neither must reporting one, hence the inner try. [Console]::Error keeps the warning
+      # on stderr, where Write-Host would put it on stdout and corrupt a piped run.
+      #
+      # -LiteralPath throughout: a temp directory under a user name containing [ or ] would
+      # otherwise read as a wildcard, and the file would be neither reported nor deleted.
+      try {
+        if ($stderrPath) {
+          if (Test-Path -LiteralPath $stderrPath) {
+            $warning = Get-Content -LiteralPath $stderrPath -Raw
+            if ($warning) { [Console]::Error.Write($warning) }
+          }
+        }
+      } catch {
+        # Nothing left to do about a warning that cannot be printed.
+      }
+      # Its own try, so a read that threw above still deletes the file it read from.
+      try {
+        if ($stderrPath) { Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue }
+      } catch {
+        # Nothing left to do about a temp file that cannot be deleted.
+      }
+    }
+  }
+
+  try {
+    if ($parsed) {
+      foreach ($property in $parsed.env.PSObject.Properties) {
         $name = $property.Name
         $applied[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
         [Environment]::SetEnvironmentVariable($name, $property.Value, "Process")
       }
     }
   } catch {
-    # A failed lookup must never stop the tool from starting.
-  } finally {
-    # Neither must reporting one, hence the inner try. [Console]::Error keeps the warning
-    # on stderr, where Write-Host would put it on stdout and corrupt a piped run.
-    #
-    # -LiteralPath throughout: a temp directory under a user name containing [ or ] would
-    # otherwise read as a wildcard, and the file would be neither reported nor deleted.
-    try {
-      if ($stderrPath) {
-        if (Test-Path -LiteralPath $stderrPath) {
-          $warning = Get-Content -LiteralPath $stderrPath -Raw
-          if ($warning) { [Console]::Error.Write($warning) }
-        }
-      }
-    } catch {
-      # Nothing left to do about a warning that cannot be printed.
-    }
-    # Its own try, so a read that threw above still deletes the file it read from.
-    try {
-      if ($stderrPath) { Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue }
-    } catch {
-      # Nothing left to do about a temp file that cannot be deleted.
-    }
+    # Nor must applying it. Whatever was applied before a throw is restored below.
   }
 
   try {
     # Still under Continue, and caught, so neither a warning from the sync nor a clausona that
     # has gone from PATH can stop the tool from starting.
+    #
+    # The sync is due when its stamp is missing or anything it watches is newer, and when the
+    # check itself fails: syncing once too often costs a second, missing a plugin costs a
+    # broken session. With no launch script at all there is nothing to check, and nothing is
+    # synced - as on POSIX, where the check is part of the script.
     if ($Tool -eq "claude") {
-      try { clausona _sync-plugins *> $null } catch { }
+      $syncDue = $false
+      try {
+        if ($parsed) {
+          if ($parsed.sync) {
+            $syncDue = $true
+            if (Test-Path -LiteralPath $parsed.sync.stamp) {
+              $stampTime = (Get-Item -LiteralPath $parsed.sync.stamp -ErrorAction Stop).LastWriteTimeUtc
+              $syncDue = $false
+              foreach ($watched in $parsed.sync.watch) {
+                if (Test-Path -LiteralPath $watched) {
+                  if ((Get-Item -LiteralPath $watched -ErrorAction Stop).LastWriteTimeUtc -gt $stampTime) { $syncDue = $true }
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        $syncDue = $true
+      }
+      if ($syncDue) {
+        try { clausona _sync-plugins *> $null } catch { }
+      }
     }
     # The tool runs under the caller's own preference, exactly as it would without clausona.
     $ErrorActionPreference = $callerErrorAction
@@ -338,6 +406,36 @@ Set-Alias -Name csn -Value clausona -Scope Global
 `;
 }
 
+/**
+ * A string as a PowerShell expression that evaluates to exactly it, in ASCII alone.
+ *
+ * The profile runs the hook as `Invoke-Expression (& clausona shell-init | Out-String)`, and
+ * PowerShell decodes a native command's output in the console's code page - 437 or 949, not
+ * UTF-8 - so a path under a Hangul user folder, baked in as UTF-8, would name a folder that
+ * does not exist. So every character past ASCII, and every control character, is spelled as
+ * a `[char]`, which reads the same in every code page. That also takes care of the curly
+ * quotes PowerShell accepts as single quotes, which could otherwise end the literal early.
+ * The ASCII runs are single-quoted, where nothing but `'` is special, and that is doubled.
+ *
+ * The concatenation always starts from a string, because `[char] + [char]` adds numbers.
+ */
+export function powerShellLiteral(value: string): string {
+  const parts: string[] = [];
+  let run = "";
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code >= 0x20 && code <= 0x7e) {
+      run += value[i] === "'" ? "''" : value[i];
+      continue;
+    }
+    if (run !== "" || parts.length === 0) parts.push(`'${run}'`);
+    run = "";
+    parts.push(`[char]0x${code.toString(16).padStart(4, "0")}`);
+  }
+  if (run !== "" || parts.length === 0) parts.push(`'${run}'`);
+  return parts.length === 1 ? (parts[0] as string) : `(${parts.join(" + ")})`;
+}
+
 export function renderShellInit(platform: NodeJS.Platform, paths: ShellInitPaths) {
-  return platform === "win32" ? renderPowerShellInit() : renderPosixShellInit(paths);
+  return platform === "win32" ? renderPowerShellInit(paths) : renderPosixShellInit(paths);
 }
