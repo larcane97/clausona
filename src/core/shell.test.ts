@@ -197,62 +197,48 @@ describe("renderPowerShellInit", () => {
     // An exact match, not an ordering: a backup moved back over the file is older, not newer.
     expect(helper).not.toMatch(/LastWriteTimeUtc -gt \(Get-Item -LiteralPath \$registryPath/);
     // Only a miss asks clausona, which also rules out a second lookup after a hit.
-    expect(helper).toMatch(/if \(-not \$parsed\) \{\s*\n(?:\s*#.*\n)*\s*\$stderrPath = \$null/);
-  });
-
-  // `_launch` warns on every run so a broken profile keeps announcing itself. Merging stderr
-  // into stdout would corrupt the JSON, so it is captured and replayed instead - and
-  // discarding it, as `2>$null` alone did, voided the contract on Windows.
-  it("replays _launch warnings to stderr instead of discarding them", () => {
-    expect(out).toMatch(/_launch \$Tool --json 2>\$stderrPath/);
-    // Not Write-Host: that writes to stdout and would corrupt `claude | Something`.
-    expect(out).toMatch(/\[Console\]::Error\.Write\(\$warning\)/);
-    expect(out).toMatch(/Remove-Item -LiteralPath \$stderrPath -Force/);
-    // stdout carries the JSON; merging the two streams would break ConvertFrom-Json.
-    expect(out).not.toMatch(/2>&1/);
+    expect(helper).toMatch(
+      /if \(-not \$parsed\) \{\s*\n(?:\s*#.*\n)*\s*try \{\s*\n\s*\$output = & clausona _launch \$Tool --json 2>&1\n/,
+    );
   });
 
   /**
-   * The rule: the diagnostic path must never be able to break the env-application path.
-   * Creating the capture file is the one step that can fail before the lookup runs, so a
-   * failure there degrades to the old behaviour - environment applied, warnings lost -
-   * never to no environment at all, which would launch the tool against the default
-   * account with nothing said.
+   * `_launch` warns on every run so a broken profile keeps announcing itself, and discarding
+   * its stderr, as `2>$null` alone did, voided that contract on Windows. Merged with 2>&1,
+   * each stderr line comes back as an ErrorRecord and each stdout line as a string, so the
+   * two are split by type: the strings are the JSON, and each record is replayed as the line
+   * it wraps. Rendering the record instead - which is what printing back a `2>file` capture
+   * amounts to - shows 5.1's `clausona.cmd : <line>` and NativeCommandError lines around it.
    */
-  it("still applies the environment when the capture file cannot be created", () => {
-    // Creating it cannot throw out of the lookup, and leaves $stderrPath falsy if it fails.
+  it("replays each _launch stderr line as itself and parses only stdout as JSON", () => {
     expect(helper).toMatch(
-      /\$stderrPath = \$null\s*\n\s*try \{\s*\n\s*\$stderrPath = \[System\.IO\.Path\]::GetTempFileName\(\)\s*\n\s*\} catch \{\s*\n\s*\$stderrPath = \$null\s*\n\s*\}/,
+      /\$output = & clausona _launch \$Tool --json 2>&1\s*\n\s*\$raw = @\(\)\s*\n\s*foreach \(\$line in \$output\) \{\s*\n\s*if \(\$line -is \[System\.Management\.Automation\.ErrorRecord\]\) \{\s*\n\s*try \{ \[Console\]::Error\.WriteLine\(\$line\.Exception\.Message\) \} catch \{ \}\s*\n\s*\} else \{\s*\n\s*\$raw \+= \$line\s*\n\s*\}\s*\n\s*\}\s*\n\s*if \(\$raw\) \{ \$parsed = \$raw \| ConvertFrom-Json \}/,
     );
-    // Exactly two spellings of the lookup, one per branch, and every one assigns $raw - so
-    // no path through this block leaves the profile environment unread.
-    const lookups = helper.match(/.*clausona _launch \$Tool --json.*/g) ?? [];
-    expect(lookups).toEqual([
-      "        $raw = & clausona _launch $Tool --json 2>$stderrPath",
-      "        $raw = & clausona _launch $Tool --json 2>$null",
-    ]);
-    // ...and they are the two arms of one if/else, so a run makes exactly one call. Fix 2
-    // cut this command's cost in half; a second invocation would hand it straight back.
-    expect(helper).toMatch(
-      /if \(\$stderrPath\) \{\s*\n\s*\$raw = & clausona _launch \$Tool --json 2>\$stderrPath\s*\n\s*\} else \{\s*\n\s*\$raw = & clausona _launch \$Tool --json 2>\$null\s*\n\s*\}\s*\n\s*if \(\$raw\) \{ \$parsed = \$raw \| ConvertFrom-Json \}/,
-    );
+    // The comments name what the code must not do, so those checks read the code alone.
+    const code = helper
+      .split("\n")
+      .filter((line) => !/^\s*#/.test(line))
+      .join("\n");
+    // Not ToString(): on 5.1 an empty stderr line's record says System.Management.Automation.RemoteException.
+    expect(code).not.toMatch(/ToString\(\)/);
+    // Not Write-Host: that writes to stdout and would corrupt `claude | Something`.
+    expect(code).not.toMatch(/Write-Host/);
+    // No capture file, so nothing to create before the lookup, and nothing to fail doing so.
+    expect(code).not.toMatch(/GetTempFileName|stderrPath|2>\$null/);
   });
 
-  it("cannot let the diagnostic path stop the tool from launching", () => {
-    // Both the lookup and the replay of its warnings are wrapped, and the replay runs in a
-    // finally so the temp file is cleaned up even when the lookup threw.
-    expect(helper).toMatch(/catch \{[\s\S]*?\} finally \{[\s\S]*?Test-Path -LiteralPath \$stderrPath/);
-    // The read and the delete are separate try blocks, in that order, so a read that threw
-    // still deletes the file it was reading.
+  /**
+   * The rule: the diagnostic path must never be able to break the env-application path. A
+   * miss makes exactly one call - a second would hand back the cost the launch cache saves -
+   * a warning that cannot be printed is caught on its own, and a failed lookup or unparseable
+   * output is caught around the whole of it.
+   */
+  it("makes one lookup per miss and cannot let the diagnostic path stop the tool from launching", () => {
+    const lookups = helper.match(/.*clausona _launch \$Tool --json.*/g) ?? [];
+    expect(lookups).toEqual(["      $output = & clausona _launch $Tool --json 2>&1"]);
     expect(helper).toMatch(
-      /Get-Content -LiteralPath \$stderrPath[\s\S]*?\} catch \{[\s\S]*?\}[\s\S]*?try \{[\s\S]*?Remove-Item -LiteralPath \$stderrPath -Force/,
+      /if \(-not \$parsed\) \{\s*\n(?:\s*#.*\n)*\s*try \{\s*\n\s*\$output = & clausona _launch[\s\S]*?ConvertFrom-Json \}\s*\n\s*\} catch \{\s*\n\s*#.*\n\s*\}\s*\n\s*\}/,
     );
-    // Both file blocks sit under `if ($stderrPath)`, so the fallback branch - which has no
-    // capture file - touches no file at all.
-    expect(helper).toMatch(
-      /if \(\$stderrPath\) \{\s*\n\s*if \(Test-Path -LiteralPath \$stderrPath\) \{\s*\n\s*\$warning = Get-Content -LiteralPath \$stderrPath -Raw/,
-    );
-    expect(helper).toMatch(/if \(\$stderrPath\) \{ Remove-Item -LiteralPath \$stderrPath -Force/);
   });
 
   /**
@@ -291,8 +277,6 @@ describe("renderPowerShellInit", () => {
       "Continue",
       // The cache is read under Continue too, although each of its steps says Stop itself.
       "cache",
-      // The two arms of the lookup's if/else.
-      "_launch",
       "_launch",
       // No restore in between: the sync still runs under Continue.
       "_sync-plugins",
