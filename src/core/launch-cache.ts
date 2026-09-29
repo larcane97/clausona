@@ -339,7 +339,8 @@ export async function syncWithStamp<T extends { ok: boolean }>(configDir: string
  * missing or anything it watches is at least as new as the stamp - "the stamp is not newer",
  * so a change in the same tick as the stamp counts as due (see syncWithStamp). A watched path
  * that does not exist is never due. It runs after the exports, so `_sync-plugins` finds the
- * profile's CLAUDE_CONFIG_DIR, as it always has.
+ * profile's CLAUDE_CONFIG_DIR, as it always has. `|| :` keeps a failed sync from ending the
+ * hook's subshell under a caller's `set -e`, before the tool starts.
  *
  * `[[ ... -nt ... ]]` is a builtin in both zsh and bash, so a fresh stamp costs no process at
  * all. Every path is single-quoted, so no `!` can reach a double-quoted string.
@@ -350,5 +351,5 @@ export function renderPosixSyncCheck(configDir: string, primary: string, cacheDi
     const quoted = posixQuote(watched);
     return `( -e ${quoted} && ! ${stamp} -nt ${quoted} )`;
   });
-  return `if [[ ! -e ${stamp} || ${due.join(" || ")} ]]; then clausona _sync-plugins 2>/dev/null; fi`;
+  return `if [[ ! -e ${stamp} || ${due.join(" || ")} ]]; then clausona _sync-plugins 2>/dev/null || :; fi`;
 }

@@ -185,6 +185,10 @@ export function renderLaunchJson(
  * on stderr that it is starting the tool without a profile, rather than letting it run on the
  * default account unannounced. Nothing printed at all stays silent, as clausona gone does.
  *
+ * Both reads end in `|| :`, as does the plugin sync the script may run, so a caller's
+ * `set -e` (zsh's ERR_EXIT) does not end the subshell on a cache that vanished or a clausona
+ * that failed or is gone: the tool still starts.
+ *
  * Two rules the generated script must keep:
  * - no `!` inside a double-quoted string, because zsh history-expands it when the function
  *   is *defined*, which breaks sourcing the init for every user at shell startup - so the
@@ -203,10 +207,10 @@ export function renderPosixShellInit(paths: ShellInitPaths) {
     const ref = posixQuote(paths.refPath(tool));
     return `    _clausona_launch=
     if [[ $HOME == ${home} && -f ${registry} && ${registry} -ef ${ref} && ${cache} -nt ${registry} ]]; then
-      { _clausona_launch=$(<${cache}); } 2>/dev/null
+      { _clausona_launch=$(<${cache}); } 2>/dev/null || :
     fi
     if [[ $_clausona_launch != ${marked} ]]; then
-      _clausona_launch=$(clausona _launch ${tool})
+      _clausona_launch=$(clausona _launch ${tool}) || :
     fi
     if [[ $_clausona_launch == ${marked} ]]; then
       eval "$_clausona_launch"

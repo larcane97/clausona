@@ -56,7 +56,7 @@ describe("renderShellInit", () => {
     const marked = `${quoted(LAUNCH_MARKER)}*`;
     expect(subshell).toMatch(
       new RegExp(
-        `if \\[\\[ \\$_clausona_launch != ${regexLiteral(marked)} \\]\\]; then\\s*\\n\\s*_clausona_launch=\\$\\(clausona _launch claude\\)\\s*\\n\\s*fi\\s*\\n\\s*if \\[\\[ \\$_clausona_launch == ${regexLiteral(marked)} \\]\\]; then\\s*\\n\\s*eval "\\$_clausona_launch"\\s*\\n\\s*elif \\[\\[ -n \\$_clausona_launch \\]\\]; then\\s*\\n\\s*printf 'clausona: unexpected output from clausona _launch; starting claude without a profile\\\\n' >&2\\s*\\n\\s*fi`,
+        `if \\[\\[ \\$_clausona_launch != ${regexLiteral(marked)} \\]\\]; then\\s*\\n\\s*_clausona_launch=\\$\\(clausona _launch claude\\) \\|\\| :\\s*\\n\\s*fi\\s*\\n\\s*if \\[\\[ \\$_clausona_launch == ${regexLiteral(marked)} \\]\\]; then\\s*\\n\\s*eval "\\$_clausona_launch"\\s*\\n\\s*elif \\[\\[ -n \\$_clausona_launch \\]\\]; then\\s*\\n\\s*printf 'clausona: unexpected output from clausona _launch; starting claude without a profile\\\\n' >&2\\s*\\n\\s*fi`,
       ),
     );
     expect(subshell.match(/eval /g)).toHaveLength(1);
@@ -76,7 +76,7 @@ describe("renderShellInit", () => {
     expect(subshell).toContain(
       `if [[ $HOME == ${quoted(PATHS.home)} && -f ${registry} && ${registry} -ef ${ref} && ${cache} -nt ${registry} ]]; then`,
     );
-    expect(subshell).toContain(`{ _clausona_launch=$(<${cache}); } 2>/dev/null`);
+    expect(subshell).toContain(`{ _clausona_launch=$(<${cache}); } 2>/dev/null || :`);
     expect(codexBlock).toContain(
       `${registry} -ef ${quoted(PATHS.refPath("codex"))} && ${quoted(PATHS.cachePath("codex", "posix"))} -nt ${registry}`,
     );

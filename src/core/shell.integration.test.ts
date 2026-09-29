@@ -552,6 +552,32 @@ for (const shell of ["zsh", "bash"] as const) {
       expect(silent.stderr).toBe("");
     });
 
+    /**
+     * A caller's `set -e` (zsh's ERR_EXIT). A clausona that fails - here every call exits 1 -
+     * must not end the hook's subshell before the tool starts: not from the cached script's
+     * plugin sync, and not from `_launch`.
+     */
+    it("starts the tool under set -e when clausona fails", () => {
+      const harness = makeHarness();
+      writeFileSync(path.join(harness.binDir, "clausona"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      const { configDir, primary } = harness.plugins;
+      // A cached script whose plugin check is due, so it runs the failing clausona.
+      const cached = launchScript(
+        renderToolEnv({ CLAUDE_CONFIG_DIR: configDir }),
+        renderPosixSyncCheck(configDir, primary),
+      );
+      writeCache(harness, "claude", cached, NOW - 50);
+
+      const hit = runShell(shell, harness, "set -e\nclaude");
+      expect(hit.stdout).toContain(`CLAUDE_CONFIG_DIR=${configDir}`);
+
+      // With no cache, `_launch` itself fails, and the tool starts with no profile.
+      rmSync(harness.paths.cachePath("claude", "posix"));
+      const miss = runShell(shell, harness, "set -e\nclaude");
+      expect(miss.stdout).toContain("args=");
+      expect(miss.stdout).toContain(`CLAUDE_CONFIG_DIR=${UNSET}`);
+    });
+
     // `HOME=/tmp/x claude`: the paths baked into the hook are not that home's, and `_launch`
     // looks where it says - for a registry that is most likely not there.
     it("asks _launch under another HOME than the hook was rendered for", () => {

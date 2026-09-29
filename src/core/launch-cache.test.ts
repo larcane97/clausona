@@ -307,7 +307,7 @@ describe("the plugin sync check", () => {
     const watched = pluginSyncWatchList("/home/o'brien/.claude-work", "/home/o'brien/.claude").map(quote);
     // Due when a watched path exists and the stamp is not newer than it.
     const due = watched.map((w) => `( -e ${w} && ! ${stamp} -nt ${w} )`).join(" || ");
-    expect(line).toBe(`if [[ ! -e ${stamp} || ${due} ]]; then clausona _sync-plugins 2>/dev/null; fi`);
+    expect(line).toBe(`if [[ ! -e ${stamp} || ${due} ]]; then clausona _sync-plugins 2>/dev/null || :; fi`);
     expect(line).not.toContain('"');
   });
 
