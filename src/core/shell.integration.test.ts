@@ -87,7 +87,9 @@ const tmpDirs: string[] = [];
 afterEach(() => {
   while (tmpDirs.length > 0) {
     const dir = tmpDirs.pop();
-    if (dir) rmSync(dir, { recursive: true, force: true });
+    // Retried as well: a process the case started that is still writing here - which every
+    // case waits out, see STDIO_AWAITING_BACKGROUND - would otherwise fail the removal.
+    if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -255,17 +257,30 @@ const NO_RC_ARGS: Record<ShellName, string[]> = {
   bash: ["--noprofile", "--norc"],
 };
 
+/**
+ * stdio for a shell whose background work - the hook's `_track-usage` - must be over when
+ * spawnSync returns. The hook points only fds 0-2 of that job at /dev/null, so it inherits the
+ * spare pipe on fd 3 like every other process the shell starts, and spawnSync reads each pipe
+ * to its end: it returns once the last of them has exited. Without this the stand-in could
+ * still be writing its log line into the case's directory while afterEach removes it.
+ */
+const STDIO_AWAITING_BACKGROUND = ["pipe", "pipe", "pipe", "pipe"] as const;
+
 function runShell(
   shell: ShellName,
   harness: Harness,
   body: string,
   extraEnv: Record<string, string> = {},
   extraArgs: string[] = [],
+  // Only for a case that shows the hook returns before `_track-usage` is done, and that waits
+  // for its log line itself.
+  { awaitBackground = true }: { awaitBackground?: boolean } = {},
 ): { status: number | null; stdout: string; stderr: string } {
   const script = `${renderShellInit(process.platform, harness.paths)}\n${body}\n`;
   const result = spawnSync(shell, [...NO_RC_ARGS[shell], ...extraArgs, "-c", script], {
     encoding: "utf8",
     timeout: 15_000,
+    stdio: awaitBackground ? [...STDIO_AWAITING_BACKGROUND] : "pipe",
     env: {
       PATH: `${harness.binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       HOME: harness.home,
@@ -437,7 +452,9 @@ for (const shell of ["zsh", "bash"] as const) {
      * `_track-usage` is another Node start, so the hook no longer waits for it: the prompt comes
      * back as soon as the tool exits, with the tool's exit code, and the usage is recorded after.
      * Here it takes seconds, and has still not written when the next command runs. Its streams
-     * are not the shell's either, so the shell's own caller is not kept waiting for it.
+     * are not the shell's either, so the shell's own caller is not kept waiting for it - which is
+     * why this case alone runs the shell without the spare pipe that waits background work out,
+     * and waits for the log line itself instead.
      */
     it("returns the tool's exit code without waiting for _track-usage", async () => {
       const workDir = "/tmp/clausona-test-claude-work";
@@ -454,6 +471,8 @@ for (const shell of ["zsh", "bash"] as const) {
           'if grep -q track-usage "$CLAUSONA_TEST_LOG"; then printf "waited\\n"; else printf "returned first\\n"; fi',
         ].join("\n"),
         { CLAUSONA_TEST_TOOL_EXIT: "42", CLAUSONA_TEST_TRACK_DELAY: String(delaySeconds) },
+        [],
+        { awaitBackground: false },
       );
       const elapsed = Date.now() - started;
 
@@ -808,7 +827,8 @@ for (const shell of ["zsh", "bash"] as const) {
         encoding: "utf8",
         timeout: 20_000,
         // Not a pipe: macOS's `script` cannot read terminal settings from a socket, and exits.
-        stdio: ["ignore", "pipe", "pipe"],
+        // The spare pipe on fd 3 is STDIO_AWAITING_BACKGROUND's, where `script` passes it on.
+        stdio: ["ignore", "pipe", "pipe", "pipe"],
         env: {
           PATH: `${harness.binDir}${path.delimiter}${process.env.PATH ?? ""}`,
           HOME: harness.home,
