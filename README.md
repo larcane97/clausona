@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/demo.gif" alt="clausona listing Claude Code and Codex accounts with their plan quota, switching accounts, and opening the dashboard" width="800" />
+  <img src="assets/demo.gif" alt="clausona listing Claude Code and Codex accounts with their plan quota, switching to the work account so that plain claude starts signed in as it, switching back, and opening the dashboard" width="800" />
 </p>
 
 clausona is a profile manager for the Claude Code and OpenAI Codex CLIs. Each account gets its
