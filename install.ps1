@@ -72,7 +72,17 @@ New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 Write-Host "  Downloading clausona ($Version)..."
 Invoke-WebRequest -Uri $DownloadUrl -OutFile $EntryPoint -UseBasicParsing
 
-$Launcher = '@echo off' + "`r`n" + 'node "%LOCALAPPDATA%\clausona\index.js" %*' + "`r`n"
+# The launcher points Node's compile cache (Node 22.1+; older Node ignores it) at
+# ~\.clausona\cache\node unless one is already set, which makes each start after the first
+# cheaper. `setlocal` keeps that from outliving the run in a cmd.exe session, where it would
+# reach every other Node program started there. Keep it in step with renderWindowsLauncher
+# in src/installer.ts.
+$Launcher = (@(
+  '@echo off',
+  'setlocal',
+  'if not defined NODE_COMPILE_CACHE set "NODE_COMPILE_CACHE=%USERPROFILE%\.clausona\cache\node"',
+  'node "%LOCALAPPDATA%\clausona\index.js" %*'
+) -join "`r`n") + "`r`n"
 Set-Content -LiteralPath (Join-Path $BinDir "clausona.cmd") -Value $Launcher -Encoding Ascii -NoNewline
 Set-Content -LiteralPath (Join-Path $BinDir "csn.cmd") -Value $Launcher -Encoding Ascii -NoNewline
 

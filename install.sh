@@ -92,12 +92,17 @@ if ! curl -fsSL "$DOWNLOAD_URL" -o "$APP_DIR/index.js"; then
   exit 1
 fi
 
-# Create launcher
+# Create launcher. It points Node's compile cache (Node 22.1+; older Node ignores it) at
+# ~/.clausona/cache/node unless one is already set, which makes each start after the first
+# cheaper. Keep it in step with renderLauncher in src/installer.ts.
 LAUNCHER="$(mktemp)"
 cat > "$LAUNCHER" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ -n "\${HOME:-}" ]]; then
+  export NODE_COMPILE_CACHE="\${NODE_COMPILE_CACHE:-\$HOME/.clausona/cache/node}"
+fi
 exec "$NODE_BIN" "$APP_DIR/index.js" "\$@"
 EOF
 

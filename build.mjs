@@ -25,6 +25,11 @@ await build({
     ].join("\n"),
   },
   jsx: "automatic",
+  // The shell hook starts this bundle around every `claude` and `codex` run, and Node parses
+  // all of it on each start, so a smaller file is a cheaper start. keepNames keeps function
+  // and class `.name`, which React's component names and error names read.
+  minify: true,
+  keepNames: true,
   // Single source of truth: `clausona --version` must not drift from package.json.
   define: { __CLAUSONA_VERSION__: JSON.stringify(version) },
   alias: {
