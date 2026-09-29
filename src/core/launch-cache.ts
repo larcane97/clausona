@@ -240,31 +240,46 @@ const STAMP_NOTE =
  * refused with EBUSY, say) would mark it done, and it would never be tried again until
  * something it watches changed.
  *
- * The stamp is written, not merely touched, after the sync's own writes: the kernel's clock
- * then gives it an mtime no earlier than theirs, where a time taken in JavaScript is in
- * milliseconds and could land just before the file the sync wrote last. Never rejects.
+ * The stamp's time is taken before the sync reads anything: it is written aside first, as
+ * `<stamp>.tmp-<pid>`, and renamed into place, which keeps that time, once the sync has
+ * worked. A watched file that changes while the sync runs, or after it within the same tick
+ * of a coarse clock - a whole second on bash 3.2 or some filesystems - is then at least as
+ * new as the stamp, which the check counts as due. A stamp taken after the sync would have
+ * counted it synced. It is written, not merely touched, so the kernel's clock gives it its
+ * time, the clock the watched files' times come from. Never rejects.
  */
 export async function syncWithStamp<T extends { ok: boolean }>(configDir: string, sync: () => Promise<T>): Promise<T> {
+  const stampPath = pluginSyncStampPath(configDir);
+  const pendingPath = `${stampPath}.tmp-${process.pid}`;
+  const pending = await mkdir(path.dirname(stampPath), { recursive: true })
+    .then(() => writeFile(pendingPath, STAMP_NOTE, "utf8"))
+    .then(
+      () => true,
+      () => false,
+    );
   const result = await sync();
-  if (result.ok) {
-    const stampPath = pluginSyncStampPath(configDir);
-    await mkdir(path.dirname(stampPath), { recursive: true })
-      .then(() => writeFile(stampPath, STAMP_NOTE, "utf8"))
-      .catch(() => {});
+  if (pending) {
+    if (result.ok) await rename(pendingPath, stampPath).catch(() => removeFile(pendingPath));
+    else await removeFile(pendingPath);
   }
   return result;
 }
 
 /**
  * The POSIX launch script's last line for claude: run the plugin sync when the stamp is
- * missing or anything it watches is newer. It runs after the exports, so `_sync-plugins`
- * finds the profile's CLAUDE_CONFIG_DIR, as it always has.
+ * missing or anything it watches is at least as new as the stamp - "the stamp is not newer",
+ * so a change in the same tick as the stamp counts as due (see syncWithStamp). A watched path
+ * that does not exist is never due. It runs after the exports, so `_sync-plugins` finds the
+ * profile's CLAUDE_CONFIG_DIR, as it always has.
  *
  * `[[ ... -nt ... ]]` is a builtin in both zsh and bash, so a fresh stamp costs no process at
  * all. Every path is single-quoted, so no `!` can reach a double-quoted string.
  */
 export function renderPosixSyncCheck(configDir: string, primary: string): string {
   const stamp = posixQuote(pluginSyncStampPath(configDir));
-  const newer = pluginSyncWatchList(configDir, primary).map((watched) => `${posixQuote(watched)} -nt ${stamp}`);
-  return `if [[ ! -e ${stamp} || ${newer.join(" || ")} ]]; then clausona _sync-plugins 2>/dev/null; fi`;
+  const due = pluginSyncWatchList(configDir, primary).map((watched) => {
+    const quoted = posixQuote(watched);
+    return `( -e ${quoted} && ! ${stamp} -nt ${quoted} )`;
+  });
+  return `if [[ ! -e ${stamp} || ${due.join(" || ")} ]]; then clausona _sync-plugins 2>/dev/null; fi`;
 }

@@ -310,7 +310,7 @@ describe("renderPowerShellInit", () => {
    */
   it("runs _sync-plugins only when the launch script's sync check says it is due", () => {
     expect(helper).toMatch(
-      /if \(\$Tool -eq "claude"\) \{\s*\n\s*\$syncDue = \$false\s*\n\s*try \{\s*\n\s*if \(\$parsed\) \{\s*\n\s*if \(\$parsed\.sync\) \{\s*\n\s*\$syncDue = \$true\s*\n\s*if \(Test-Path -LiteralPath \$parsed\.sync\.stamp\) \{\s*\n\s*\$stampTime = \(Get-Item -LiteralPath \$parsed\.sync\.stamp -ErrorAction Stop\)\.LastWriteTimeUtc\s*\n\s*\$syncDue = \$false\s*\n\s*foreach \(\$watched in \$parsed\.sync\.watch\) \{\s*\n\s*if \(Test-Path -LiteralPath \$watched\) \{\s*\n\s*if \(\(Get-Item -LiteralPath \$watched -ErrorAction Stop\)\.LastWriteTimeUtc -gt \$stampTime\) \{ \$syncDue = \$true \}/,
+      /if \(\$Tool -eq "claude"\) \{\s*\n\s*\$syncDue = \$false\s*\n\s*try \{\s*\n\s*if \(\$parsed\) \{\s*\n\s*if \(\$parsed\.sync\) \{\s*\n\s*\$syncDue = \$true\s*\n\s*if \(Test-Path -LiteralPath \$parsed\.sync\.stamp\) \{\s*\n\s*\$stampTime = \(Get-Item -LiteralPath \$parsed\.sync\.stamp -ErrorAction Stop\)\.LastWriteTimeUtc\s*\n\s*\$syncDue = \$false\s*\n\s*foreach \(\$watched in \$parsed\.sync\.watch\) \{\s*\n\s*if \(Test-Path -LiteralPath \$watched\) \{\s*\n\s*if \(\(Get-Item -LiteralPath \$watched -ErrorAction Stop\)\.LastWriteTimeUtc -ge \$stampTime\) \{ \$syncDue = \$true \}/,
     );
     expect(helper).toMatch(
       /\} catch \{\s*\n\s*\$syncDue = \$true\s*\n\s*\}\s*\n\s*if \(\$syncDue\) \{\s*\n\s*try \{ clausona _sync-plugins \*> \$null \} catch \{ \}\s*\n\s*\}/,

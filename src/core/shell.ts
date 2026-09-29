@@ -347,9 +347,10 @@ function global:Invoke-ClausonaTool {
     # Still under Continue, and caught, so neither a warning from the sync nor a clausona that
     # has gone from PATH can stop the tool from starting.
     #
-    # The sync is due when its stamp is missing or anything it watches is newer, and when the
-    # check itself fails: syncing once too often costs a second, missing a plugin costs a
-    # broken session. With no launch script at all there is nothing to check, and nothing is
+    # The sync is due when its stamp is missing or anything it watches is at least as new as
+    # the stamp - the stamp's time is taken before the sync reads, so a change in the same
+    # tick is one it may have missed - and when the check itself fails: syncing once too often
+    # costs a second, missing a plugin costs a broken session. With no launch script at all there is nothing to check, and nothing is
     # synced - as on POSIX, where the check is part of the script.
     if ($Tool -eq "claude") {
       $syncDue = $false
@@ -362,7 +363,7 @@ function global:Invoke-ClausonaTool {
               $syncDue = $false
               foreach ($watched in $parsed.sync.watch) {
                 if (Test-Path -LiteralPath $watched) {
-                  if ((Get-Item -LiteralPath $watched -ErrorAction Stop).LastWriteTimeUtc -gt $stampTime) { $syncDue = $true }
+                  if ((Get-Item -LiteralPath $watched -ErrorAction Stop).LastWriteTimeUtc -ge $stampTime) { $syncDue = $true }
                 }
               }
             }

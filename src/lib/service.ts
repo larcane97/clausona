@@ -417,8 +417,24 @@ export async function setupSharedLinks(
   return linked;
 }
 
-/** How a plugin sync went: `ok` is false when any step of it failed. */
-export type PluginSyncResult = { ok: boolean };
+/**
+ * How a plugin sync went: `ok` is false when any step of it failed, and `changed` says whether
+ * it rewrote a file - even one that failed half way may have.
+ */
+export type PluginSyncResult = { ok: boolean; changed: boolean };
+
+/**
+ * Writes `value` as writeJson does, unless the file already holds exactly that, and resolves
+ * to whether it wrote. The plugin sync's own files are on its watch list, so rewriting them
+ * unchanged would make the next launch find the sync due again, every time.
+ */
+async function writeJsonIfChanged(targetPath: string, value: unknown): Promise<boolean> {
+  const next = `${JSON.stringify(value, null, 2)}\n`;
+  const current = await readFile(targetPath, "utf8").catch(() => null);
+  if (current === next) return false;
+  await writeJson(targetPath, value);
+  return true;
+}
 
 /**
  * Rewrites a profile's known_marketplaces.json and installed_plugins.json so every path in
@@ -426,6 +442,7 @@ export type PluginSyncResult = { ok: boolean };
  * it runs on the way to starting Claude, and a failure must not stop that.
  */
 export async function syncPluginsJson(configDir: string, primarySource: string): Promise<PluginSyncResult> {
+  let changed = false;
   try {
     const knownPath = path.join(configDir, "plugins", "known_marketplaces.json");
     const knownJson = await readJson<Record<string, unknown>>(knownPath, {});
@@ -503,7 +520,7 @@ export async function syncPluginsJson(configDir: string, primarySource: string):
       };
     }
 
-    await writeJson(knownPath, syncedKnown);
+    if (await writeJsonIfChanged(knownPath, syncedKnown)) changed = true;
 
     // Sync installed_plugins.json (v2 format: { version, plugins: { name: [entries] } })
     const installedPath = path.join(configDir, "plugins", "installed_plugins.json");
@@ -537,11 +554,13 @@ export async function syncPluginsJson(configDir: string, primarySource: string):
       }
     }
 
-    await writeJson(installedPath, { version: installedJson.version ?? 2, plugins: syncedPlugins });
-    return { ok: true };
+    if (await writeJsonIfChanged(installedPath, { version: installedJson.version ?? 2, plugins: syncedPlugins })) {
+      changed = true;
+    }
+    return { ok: true, changed };
   } catch {
     // Never block Claude from launching - but say it failed, so the sync is not stamped done.
-    return { ok: false };
+    return { ok: false, changed };
   }
 }
 

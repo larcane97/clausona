@@ -266,9 +266,9 @@ describe("the plugin sync check", () => {
     const quote = (p: string) => `'${p.replace(/'/g, "'\\''")}'`;
     const stamp = quote(pluginSyncStampPath("/home/o'brien/.claude-work"));
     const watched = pluginSyncWatchList("/home/o'brien/.claude-work", "/home/o'brien/.claude").map(quote);
-    expect(line).toBe(
-      `if [[ ! -e ${stamp} || ${watched.map((w) => `${w} -nt ${stamp}`).join(" || ")} ]]; then clausona _sync-plugins 2>/dev/null; fi`,
-    );
+    // Due when a watched path exists and the stamp is not newer than it.
+    const due = watched.map((w) => `( -e ${w} && ! ${stamp} -nt ${w} )`).join(" || ");
+    expect(line).toBe(`if [[ ! -e ${stamp} || ${due} ]]; then clausona _sync-plugins 2>/dev/null; fi`);
     expect(line).not.toContain('"');
   });
 

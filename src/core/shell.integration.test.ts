@@ -551,8 +551,10 @@ for (const shell of ["zsh", "bash"] as const) {
       // Stamp newer than everything it watches: nothing to do.
       expect(run()).toEqual([]);
 
+      // Each watched path in turn made exactly as new as the stamp: due, since the stamp's time
+      // is taken before the sync reads, and a change in that same tick may have been missed.
       for (const target of watched) {
-        setMtime(target, NOW - 10);
+        setMtime(target, NOW - 20);
         expect(run(), target).toEqual([`sync-plugins CLAUDE_CONFIG_DIR=${configDir}`]);
         setMtime(target, NOW - 30);
       }
@@ -1002,8 +1004,9 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
 
   /**
    * The hook's own staleness check, on a cache hit and under a caller's Stop: a stale stamp
-   * syncs, a fresh one does not, and a watched path touched after it syncs again. One
-   * PowerShell start for all three, with a marker in the log between them.
+   * syncs, a fresh one does not, and a watched path brought up to the stamp's own time syncs
+   * again - the stamp's time is taken before the sync reads, so a change in that tick may have
+   * been missed. One PowerShell start for all three, with a marker in the log between them.
    */
   it(
     "syncs plugins only when the stamp is stale, whatever the caller's ErrorActionPreference",
@@ -1020,10 +1023,10 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       setMtime(stamp, NOW - 40);
       writeJsonCache(harness, { env: {}, sync: harness.sync }, NOW - 50);
       const mark = (label: string) => `Add-Content -LiteralPath $env:CLAUSONA_TEST_LOG -Value ${psQuote(label)}`;
-      const bump = (target: string) =>
+      const bump = (target: string, seconds: number) =>
         [
           `$item = Get-Item -LiteralPath ${psQuote(target)}`,
-          "$item.LastWriteTimeUtc = $item.LastWriteTimeUtc.AddSeconds(20)",
+          `$item.LastWriteTimeUtc = $item.LastWriteTimeUtc.AddSeconds(${seconds})`,
         ].join("\n");
 
       const result = runPowerShell(
@@ -1033,12 +1036,12 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
           // Stamp older than what it watches: due.
           "claude | Out-Null",
           mark("MARK fresh"),
-          bump(stamp),
-          // Stamp newer than everything: nothing to do.
+          // To NOW-20, newer than everything it watches: nothing to do.
+          bump(stamp, 20),
           "claude | Out-Null",
           mark("MARK touched"),
-          bump(watch[4] as string),
-          // The plugin cache changed after the stamp: due again.
+          // The plugin cache to NOW-20, exactly the stamp's time: due again.
+          bump(watch[4] as string, 10),
           "claude | Out-Null",
           '"pref=$ErrorActionPreference"',
         ].join("\n"),

@@ -6,6 +6,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,6 +18,7 @@ import {
   launchCachePath,
   launchRefPath,
   pluginSyncStampPath,
+  pluginSyncWatchList,
   registryStamp,
   renderPosixSyncCheck,
 } from "./core/launch-cache.js";
@@ -298,6 +300,37 @@ describe("_sync-plugins", () => {
     expect(await h.runCommand("_sync-plugins", [])).toBe("");
 
     expect(existsSync(pluginSyncStampPath(h.workDir))).toBe(true);
+  });
+
+  /**
+   * A sync that rewrote the profile's files leaves them at least as new as its stamp, whose
+   * time is taken before it reads anything, so one more sync is due; that one finds nothing to
+   * write, and after it nothing is due. `due` is the hook's rule: no stamp, or a watched path
+   * at least as new as it.
+   */
+  it("converges: one more sync after a sync that changed files, and then none", async () => {
+    const h = await harness((home) => subscription(home));
+    vi.stubEnv("CLAUDE_CONFIG_DIR", h.workDir);
+    const stamp = pluginSyncStampPath(h.workDir);
+    const watched = pluginSyncWatchList(h.workDir, h.primary);
+    const mtime = (target: string) => statSync(target, { bigint: true }).mtimeNs;
+    const due = () => !existsSync(stamp) || watched.some((w) => existsSync(w) && mtime(w) >= mtime(stamp));
+    const own = watched.slice(0, 2);
+
+    // The first sync writes the profile's two files.
+    await h.runCommand("_sync-plugins", []);
+    expect(due()).toBe(true);
+
+    // Time passes before the next launch, keeping the order the sync left them in.
+    const now = Math.floor(Date.now() / 1000);
+    utimesSync(stamp, now - 10, now - 10);
+    for (const file of own) utimesSync(file, now - 5, now - 5);
+
+    await h.runCommand("_sync-plugins", []);
+    // Nothing to write this time...
+    for (const file of own) expect(statSync(file).mtimeMs, file).toBe((now - 5) * 1000);
+    // ...and nothing due after it.
+    expect(due()).toBe(false);
   });
 
   // A sync that could not write its files is not done, and must run again next launch.
