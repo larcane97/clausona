@@ -17,9 +17,9 @@
 # fullscreen renderer its users have (`"tui": "fullscreen"` in the shared settings.json): it takes
 # the whole terminal while it runs, and the shell's lines come back when it quits. With no network
 # it still opens, and its /status reads the account from the profile's own config dir.
-# Some steps happen off camera, between Hide and Show: waiting for a program to start (Claude
-# Code, the dashboard), so a busy machine does not stretch the GIF; typing /status, whose
-# command menu would cover the screen; and quitting Claude Code. Every frame shown is what the
+# Only waiting happens off camera, between Hide and Show - for Claude Code or the dashboard to
+# start, and for the shell prompt after Claude Code quits - so a busy machine does not stretch the
+# GIF. Every keystroke that changes the screen is on camera. Every frame shown is what the
 # programs drew; the only thing added afterwards is annotate.py's outline.
 #
 # The size is tuned: Menlo 20 at 1200px wide is an 88-column terminal. There `list` shows
@@ -71,28 +71,28 @@ Sleep 400ms
 Type "claude"
 Sleep 300ms
 Enter
+# Waiting for Claude Code to start is cut; nothing typed is.
 Sleep 300ms
 Hide
 Wait+Screen@120s /Claude Max/
 Show
 # Claude Code's fullscreen renderer has the whole terminal: the shell's lines are gone for now.
 Sleep 1s
-# /status is typed off camera (typing it pops up the command menu); its panel names the account.
-# annotate.py outlines the account rows while the panel is up.
-Hide
-Type "/status"
-Sleep 300ms
+# Typed where the viewer can read it; the command menu narrows to /status as it goes.
+Type@90ms "/status"
+Sleep 500ms
 Enter
 Wait+Screen@60s /Email:/
-Show
+# annotate.py outlines the account rows while the panel is up.
 Sleep 3s
-# Quit off camera; the shell comes back with its earlier lines.
-Hide
+# The panel says "Esc to cancel"; then /exit, typed, quits.
 Escape
-Sleep 300ms
-Ctrl+C
+Sleep 500ms
+Type@90ms "/exit"
 Sleep 400ms
-Ctrl+C
+Enter
+# The shell comes back with its earlier lines once the hook has recorded the run's usage.
+Hide
 Wait+Screen@60s /\n\$\s*$/
 Show
 Sleep 1s
@@ -107,28 +107,28 @@ Sleep 400ms
 Type "claude"
 Sleep 300ms
 Enter
+# Waiting for Claude Code to start is cut; nothing typed is.
 Sleep 300ms
 Hide
 Wait+Screen@120s /Claude Max/
 Show
 # Claude Code's fullscreen renderer has the whole terminal: the shell's lines are gone for now.
 Sleep 1s
-# /status is typed off camera (typing it pops up the command menu); its panel names the account.
-# annotate.py outlines the account rows while the panel is up.
-Hide
-Type "/status"
-Sleep 300ms
+# Typed where the viewer can read it; the command menu narrows to /status as it goes.
+Type@90ms "/status"
+Sleep 500ms
 Enter
 Wait+Screen@60s /Email:/
-Show
+# annotate.py outlines the account rows while the panel is up.
 Sleep 3s
-# Quit off camera; the shell comes back with its earlier lines.
-Hide
+# The panel says "Esc to cancel"; then /exit, typed, quits.
 Escape
-Sleep 300ms
-Ctrl+C
+Sleep 500ms
+Type@90ms "/exit"
 Sleep 400ms
-Ctrl+C
+Enter
+# The shell comes back with its earlier lines once the hook has recorded the run's usage.
+Hide
 Wait+Screen@60s /\n\$\s*$/
 Show
 Sleep 800ms
