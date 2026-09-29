@@ -80,8 +80,10 @@ function claudeAccount(configDir, jsonPath, account) {
   });
 }
 
-// The primary config dir: what every other Claude profile shares.
-write(path.join(home, ".claude", "settings.json"), { theme: "dark" });
+// The primary config dir: what every other Claude profile shares - settings.json included, which
+// clausona links into each profile. `tui: "fullscreen"` is Claude Code's alt-screen renderer, as
+// its users have it: set by /tui fullscreen, and the default for accounts first used since May.
+write(path.join(home, ".claude", "settings.json"), { tui: "fullscreen" });
 write(path.join(home, ".claude", "CLAUDE.md"), "# House rules\n\n- Run the tests before calling it done.\n");
 write(path.join(home, ".claude", "commands", "review.md"), "Review the staged diff.\n");
 claudeAccount(path.join(home, ".claude"), path.join(home, ".claude.json"), {
