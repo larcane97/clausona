@@ -9,6 +9,6 @@ CLAUSONA_DEMO=1 node /opt/demo/seed.mjs /opt/clausona/index.js >/dev/null
 
 eval "$(clausona shell-init)"
 
-cd ~ || exit 1
+cd ~/app || exit 1
 PS1='$ '
 clear

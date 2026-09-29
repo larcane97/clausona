@@ -6,7 +6,10 @@
 //
 //   node seed.mjs <path to dist/index.js>
 //
-// Every account, email and number here is made up. The accounts are registered by the real
+// Every account, email and number here is made up. Each Claude Code account is the state a
+// signed-in, already-onboarded account leaves in its config dir, so the real `claude` in the
+// image opens on it with no prompts; its credential is a placeholder, which works because the
+// container has no network to try it on. The accounts are registered by the real
 // `clausona init --auto`, so the profiles, shared links and health checks are the product's own;
 // only the two things that normally come from outside are written directly:
 //   - ~/.clausona/quota.json, the plan-quota cache, stamped with the current time. A reading
@@ -46,12 +49,34 @@ function write(file, content) {
 }
 
 // ─── Claude Code accounts ────────────────────────────────────────────
-// A signed-in account is its .claude.json (who) plus a stored credential. Outside macOS Claude
-// Code keeps the credential in .credentials.json, which is where clausona looks for it here.
-function claudeAccount(configDir, jsonPath, email, orgName) {
-  write(jsonPath, { oauthAccount: { emailAddress: email, ...(orgName ? { organizationName: orgName } : {}) } });
+// A signed-in account is its .claude.json (who, and Claude Code's own state) plus a stored
+// credential; outside macOS Claude Code keeps that in .credentials.json. The state is what an
+// account that has been used for a while holds: onboarding done, a theme picked, and the demo's
+// project trusted - so the real `claude` opens straight onto its welcome screen.
+const PROJECT = path.join(home, "app");
+const claudeVersion = process.env.CLAUDE_CODE_VERSION;
+
+function claudeAccount(configDir, jsonPath, account) {
+  write(jsonPath, {
+    numStartups: 42,
+    theme: "dark",
+    hasCompletedOnboarding: true,
+    // The one-time "Auto mode is now Claude Code's default permission mode." announcement.
+    hasSeenAutoDefaultNotice: true,
+    ...(claudeVersion ? { lastOnboardingVersion: claudeVersion, lastReleaseNotesSeen: claudeVersion } : {}),
+    oauthAccount: account,
+    projects: {
+      [PROJECT]: { allowedTools: [], hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true },
+    },
+  });
   write(path.join(configDir, ".credentials.json"), {
-    claudeAiOauth: { accessToken: PLACEHOLDER, refreshToken: PLACEHOLDER, expiresAt: now + 30 * DAY },
+    claudeAiOauth: {
+      accessToken: PLACEHOLDER,
+      refreshToken: PLACEHOLDER,
+      expiresAt: now + 365 * DAY,
+      scopes: ["user:inference", "user:profile", "user:sessions:claude_code"],
+      subscriptionType: "max",
+    },
   });
 }
 
@@ -59,13 +84,20 @@ function claudeAccount(configDir, jsonPath, email, orgName) {
 write(path.join(home, ".claude", "settings.json"), { theme: "dark" });
 write(path.join(home, ".claude", "CLAUDE.md"), "# House rules\n\n- Run the tests before calling it done.\n");
 write(path.join(home, ".claude", "commands", "review.md"), "Review the staged diff.\n");
-claudeAccount(path.join(home, ".claude"), path.join(home, ".claude.json"), "alex@home.example");
-claudeAccount(
-  path.join(home, ".claude-work"),
-  path.join(home, ".claude-work", ".claude.json"),
-  "alex@work.example",
-  "Acme Corp",
-);
+claudeAccount(path.join(home, ".claude"), path.join(home, ".claude.json"), {
+  accountUuid: "00000000-0000-4000-8000-00000000a1e1",
+  emailAddress: "alex@home.example",
+  displayName: "Alex",
+  organizationUuid: "00000000-0000-4000-8000-00000000a1e2",
+});
+claudeAccount(path.join(home, ".claude-work"), path.join(home, ".claude-work", ".claude.json"), {
+  accountUuid: "00000000-0000-4000-8000-00000000c0a1",
+  emailAddress: "alex@work.example",
+  displayName: "Alex",
+  organizationUuid: "00000000-0000-4000-8000-00000000c0a2",
+  organizationName: "Acme Corp",
+});
+write(path.join(PROJECT, "README.md"), "# app\n");
 
 // ─── Codex accounts ──────────────────────────────────────────────────
 // Codex names its account in the id_token inside auth.json. Only the payload is read, so the
