@@ -53,9 +53,11 @@ in `~/.clausona/cache/`, and the next launch reads that file in the shell itself
 - **What is cached** — only a script that holds nothing to be worked out afresh at each launch.
   An API profile is never cached, because its key is read from the Keychain, `secrets.json`, an
   environment variable or a command each time, and must not be copied anywhere else. Neither is
-  a profile whose environment produced a warning, which has to print on every launch, nor one
-  whose env map holds something that looks like a secret. Those profiles launch through
-  `clausona _launch` every time, as they always did.
+  a profile whose environment produced a warning, which has to print on every launch, one whose
+  env map holds something that looks like a secret, nor one whose config directory - or
+  `~/.claude` or `~/.codex` - is reached through a symlink, which can be repointed without
+  `profiles.json` changing. Those profiles launch through `clausona _launch` every time, as they
+  always did. So does a run under another `HOME` than the shell hook was set up with.
 - **When it is used** — only while `profiles.json` is still the very file the script was
   rendered from and has not changed since: on zsh/bash the script keeps a hard link to that
   file and must be newer than it, on PowerShell it records the file's exact write time and
@@ -70,12 +72,12 @@ in `~/.clausona/cache/`, and the next launch reads that file in the shell itself
   a script the new version wrote, or the reverse.
 
 For claude, the launch script also decides whether the plugin files need syncing, without
-starting clausona. Each sync leaves a stamp, `plugins/.clausona-synced`, in the profile's config
-directory, and the script runs `clausona _sync-plugins` only when that stamp is missing or
-something the sync reads is newer than it: the profile's `known_marketplaces.json` or
-`installed_plugins.json`, or the primary's marketplaces, `installed_plugins.json` or plugin
-cache. A plugin installed under the primary, or under the profile itself, is therefore picked up
-on the next launch.
+starting clausona. Each sync that works leaves a stamp, `plugins/.clausona-synced`, in the
+profile's config directory, and the script runs `clausona _sync-plugins` only when that stamp is
+missing or something the sync reads is at least as new as it: the profile's
+`known_marketplaces.json` or `installed_plugins.json`, or the primary's marketplaces,
+`installed_plugins.json`, plugin cache, or the cache's marketplace and plugin directories. When
+any of those changes, the sync runs on the next launch.
 
 ## Shared Environment
 
