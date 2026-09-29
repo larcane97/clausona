@@ -15,6 +15,7 @@ const PATHS: ShellInitPaths = {
     `/home/o'brien/.clausona/cache/launch-9.9.9-${tool}.${format === "posix" ? "sh" : "json"}`,
   refPath: (tool) => `/home/o'brien/.clausona/cache/launch-9.9.9-${tool}.ref`,
   registryPath: "/home/o'brien/.clausona/profiles.json",
+  home: "/home/o'brien",
 };
 const quoted = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
 
@@ -44,17 +45,17 @@ describe("renderShellInit", () => {
 
   /**
    * The common path starts no process: the cached script is read by the shell itself, and
-   * only while profiles.json is the file it was rendered from and older than it - a registry
-   * that is missing, another file, or as new as the script sends the run to `_launch`, which
-   * is slower and never wrong. The paths are baked in single-quoted, so a home directory
-   * holding a quote or a `!` stays literal.
+   * only under the HOME the hook was rendered for, while profiles.json is the file it was
+   * rendered from and older than it - a registry that is missing, another file, or as new as
+   * the script sends the run to `_launch`, which is slower and never wrong. The paths are
+   * baked in single-quoted, so a home directory holding a quote or a `!` stays literal.
    */
   it("reads the cached launch script only while the registry is the one it was rendered from", () => {
     const cache = quoted(PATHS.cachePath("claude", "posix"));
     const ref = quoted(PATHS.refPath("claude"));
     const registry = quoted(PATHS.registryPath);
     expect(subshell).toContain(
-      `if [[ -f ${registry} && ${registry} -ef ${ref} && ${cache} -nt ${registry} ]] && { _clausona_launch=$(<${cache}); } 2>/dev/null; then`,
+      `if [[ $HOME == ${quoted(PATHS.home)} && -f ${registry} && ${registry} -ef ${ref} && ${cache} -nt ${registry} ]] && { _clausona_launch=$(<${cache}); } 2>/dev/null; then`,
     );
     expect(codexBlock).toContain(
       `${registry} -ef ${quoted(PATHS.refPath("codex"))} && ${quoted(PATHS.cachePath("codex", "posix"))} -nt ${registry}`,
@@ -167,8 +168,10 @@ describe("renderPowerShellInit", () => {
     expect(helper).toContain(`$cachePath = ${powerShellLiteral(PATHS.cachePath("claude", "json"))}`);
     expect(helper).toContain(`$cachePath = ${powerShellLiteral(PATHS.cachePath("codex", "json"))}`);
     expect(helper).toContain(`$registryPath = ${powerShellLiteral(PATHS.registryPath)}`);
+    // $HOME is PowerShell's own, and read-only; the baked home has a name of its own.
+    expect(helper).toContain(`$clausonaHome = ${powerShellLiteral(PATHS.home)}`);
     expect(helper).toMatch(
-      /try \{\s*\n\s*if \(\(Test-Path -LiteralPath \$cachePath\) -and \(Test-Path -LiteralPath \$registryPath\)\) \{\s*\n\s*\$registryItem = Get-Item -LiteralPath \$registryPath -ErrorAction Stop\s*\n\s*\$parsed = Get-Content -LiteralPath \$cachePath -Raw -ErrorAction Stop \| ConvertFrom-Json -ErrorAction Stop\s*\n\s*\$sameTicks = \$parsed\.registry\.ticks -eq \[string\]\$registryItem\.LastWriteTimeUtc\.Ticks\s*\n\s*\$sameLength = \$parsed\.registry\.length -eq \[string\]\$registryItem\.Length\s*\n\s*if \(-not \(\$sameTicks -and \$sameLength\)\) \{ \$parsed = \$null \}\s*\n\s*\}\s*\n\s*\} catch \{\s*\n\s*\$parsed = \$null\s*\n\s*\}/,
+      /try \{\s*\n\s*if \(\(\$env:USERPROFILE -eq \$clausonaHome\) -and \(Test-Path -LiteralPath \$cachePath\) -and \(Test-Path -LiteralPath \$registryPath\)\) \{\s*\n\s*\$registryItem = Get-Item -LiteralPath \$registryPath -ErrorAction Stop\s*\n\s*\$parsed = Get-Content -LiteralPath \$cachePath -Raw -ErrorAction Stop \| ConvertFrom-Json -ErrorAction Stop\s*\n\s*\$sameTicks = \$parsed\.registry\.ticks -eq \[string\]\$registryItem\.LastWriteTimeUtc\.Ticks\s*\n\s*\$sameLength = \$parsed\.registry\.length -eq \[string\]\$registryItem\.Length\s*\n\s*if \(-not \(\$sameTicks -and \$sameLength\)\) \{ \$parsed = \$null \}\s*\n\s*\}\s*\n\s*\} catch \{\s*\n\s*\$parsed = \$null\s*\n\s*\}/,
     );
     // An exact match, not an ordering: a backup moved back over the file is older, not newer.
     expect(helper).not.toMatch(/LastWriteTimeUtc -gt \(Get-Item -LiteralPath \$registryPath/);

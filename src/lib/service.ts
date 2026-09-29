@@ -3056,6 +3056,7 @@ export function launchPaths(): ShellInitPaths {
     cachePath: (tool, format) => launchCachePath(CLAUSONA_DIR, tool, format, __CLAUSONA_VERSION__),
     refPath: (tool) => launchRefPath(CLAUSONA_DIR, tool, __CLAUSONA_VERSION__),
     registryPath: REGISTRY_PATH,
+    home: homedir(),
   };
 }
 

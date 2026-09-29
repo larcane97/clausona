@@ -202,6 +202,7 @@ function makeHarness(env: { claude?: ToolEnv; codex?: ToolEnv } = {}): Harness {
       cachePath: (tool, format) => launchCachePath(clausonaDir, tool, format, "0.0.0-test"),
       refPath: (tool) => launchRefPath(clausonaDir, tool, "0.0.0-test"),
       registryPath,
+      home,
     },
     plugins,
     log: () =>
@@ -513,6 +514,19 @@ for (const shell of ["zsh", "bash"] as const) {
       });
     }
 
+    // `HOME=/tmp/x claude`: the paths baked into the hook are not that home's, and `_launch`
+    // looks where it says - for a registry that is most likely not there.
+    it("asks _launch under another HOME than the hook was rendered for", () => {
+      const harness = makeHarness({ claude: { CLAUDE_CONFIG_DIR: "/tmp/clausona-test-from-launch" } });
+      writeCache(harness, "claude", STALE, NOW - 50);
+
+      const result = runShell(shell, harness, "claude", { HOME: path.join(harness.root, "elsewhere") });
+
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("CLAUDE_CONFIG_DIR=/tmp/clausona-test-from-launch");
+      expect(harness.log()[0]).toBe("launch claude");
+    });
+
     /**
      * The cached script's last line decides the plugin sync on its own: due when the stamp is
      * missing or anything the sync reads is newer, and otherwise not run at all. Each watched
@@ -722,6 +736,8 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
         cachePath: (tool, format) => launchCachePath(clausonaDir, tool, format, "0.0.0-test"),
         refPath: (tool) => launchRefPath(clausonaDir, tool, "0.0.0-test"),
         registryPath,
+        // runPowerShell hands the hook this process's own environment, USERPROFILE included.
+        home: process.env.USERPROFILE ?? "",
       },
       sync,
       log: () =>

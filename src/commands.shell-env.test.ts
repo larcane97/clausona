@@ -932,6 +932,7 @@ function hookRunner(h: Harness, out: string) {
     cachePath: (tool, format) => path.join(h.home, ".clausona", "cache", `launch-test-${tool}.${format}`),
     refPath: (tool) => path.join(h.home, ".clausona", "cache", `launch-test-${tool}.ref`),
     registryPath: path.join(h.home, ".clausona", "profiles.json"),
+    home: h.home,
   };
   writeFileSync(
     path.join(bin, "claude"),

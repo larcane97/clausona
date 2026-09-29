@@ -112,6 +112,13 @@ export type ShellInitPaths = {
   cachePath: (tool: ToolName, format: LaunchFormat) => string;
   refPath: (tool: ToolName) => string;
   registryPath: string;
+  /**
+   * The home directory the paths above were derived from: HOME on POSIX, USERPROFILE on
+   * Windows, which is where Node's homedir() reads it. A run under another one - `HOME=/tmp/x
+   * claude` - is not a run these paths describe, so it goes to `_launch`, which looks where
+   * that home says, as the hook always did.
+   */
+  home: string;
 };
 
 /** Where the plugin sync last left its stamp, and the paths that make it stale. */
@@ -158,8 +165,10 @@ export function renderLaunchJson(
  * tool, and a read that fails, a cache deleted since the check, falls through to `_launch`
  * rather than to no profile at all.
  *
- * Both paths are absolute and baked in when `shell-init` runs, so finding them costs nothing
- * either; a hook only ever reads the cache its own version writes.
+ * The paths are absolute and baked in when `shell-init` runs, so finding them costs nothing
+ * either; a hook only ever reads the cache its own version writes. So is HOME, and a run
+ * under another one (`HOME=/tmp/x claude`) skips the cache: the baked paths are not that
+ * home's, and `_launch` looks where it says.
  *
  * Two rules the generated script must keep:
  * - no `!` inside a double-quoted string, because zsh history-expands it when the function
@@ -169,12 +178,13 @@ export function renderLaunchJson(
  *   user on the machine. The eval keeps secrets inside the subshell's own environment.
  */
 export function renderPosixShellInit(paths: ShellInitPaths) {
+  const home = posixQuote(paths.home);
   const registry = posixQuote(paths.registryPath);
   // The first lines of the subshell for one tool: its launch script, from the cache or not.
   const launch = (tool: ToolName) => {
     const cache = posixQuote(paths.cachePath(tool, "posix"));
     const ref = posixQuote(paths.refPath(tool));
-    return `    if [[ -f ${registry} && ${registry} -ef ${ref} && ${cache} -nt ${registry} ]] && { _clausona_launch=$(<${cache}); } 2>/dev/null; then
+    return `    if [[ $HOME == ${home} && -f ${registry} && ${registry} -ef ${ref} && ${cache} -nt ${registry} ]] && { _clausona_launch=$(<${cache}); } 2>/dev/null; then
       eval "$_clausona_launch"
     else
       eval "$(clausona _launch ${tool})"
@@ -237,6 +247,7 @@ export function renderPowerShellInit(paths: ShellInitPaths) {
   const claudeCache = powerShellLiteral(paths.cachePath("claude", "json"));
   const codexCache = powerShellLiteral(paths.cachePath("codex", "json"));
   const registry = powerShellLiteral(paths.registryPath);
+  const home = powerShellLiteral(paths.home);
   return `# clausona PowerShell integration
 function global:Invoke-ClausonaTool {
   param(
@@ -256,9 +267,10 @@ function global:Invoke-ClausonaTool {
 
   # The launch script clausona cached for this profile, while profiles.json is exactly the
   # file it was rendered from: the same write time, to the tick, and the same length. A save
-  # changes the time, and so does a backup moved back over the file, however old. Every step
-  # is told to stop on an error, and caught: a cache that cannot be read - deleted by a save
-  # in another window between the check and the read, say - is a miss, never a run with no
+  # changes the time, and so does a backup moved back over the file, however old. A run under
+  # another USERPROFILE is not one these paths describe, and skips the cache. Every step is
+  # told to stop on an error, and caught: a cache that cannot be read - deleted by a save in
+  # another window between the check and the read, say - is a miss, never a run with no
   # profile, and never an error printed in the caller's console.
   $parsed = $null
   if ($Tool -eq "claude") {
@@ -267,8 +279,9 @@ function global:Invoke-ClausonaTool {
     $cachePath = ${codexCache}
   }
   $registryPath = ${registry}
+  $clausonaHome = ${home}
   try {
-    if ((Test-Path -LiteralPath $cachePath) -and (Test-Path -LiteralPath $registryPath)) {
+    if (($env:USERPROFILE -eq $clausonaHome) -and (Test-Path -LiteralPath $cachePath) -and (Test-Path -LiteralPath $registryPath)) {
       $registryItem = Get-Item -LiteralPath $registryPath -ErrorAction Stop
       $parsed = Get-Content -LiteralPath $cachePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
       $sameTicks = $parsed.registry.ticks -eq [string]$registryItem.LastWriteTimeUtc.Ticks
