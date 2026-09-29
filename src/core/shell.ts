@@ -189,6 +189,15 @@ export function renderLaunchJson(
  * `set -e` (zsh's ERR_EXIT) does not end the subshell on a cache that vanished or a clausona
  * that failed or is gone: the tool still starts.
  *
+ * After claude exits, `_track-usage` records the session in the background, so the prompt
+ * comes back without waiting for another Node start. It is started from a subshell that exits
+ * at once, which keeps it out of this shell's job table: an interactive shell prints no
+ * `[1] 12345` when it starts and no `done` when it ends. Its stdin, stdout and stderr go to
+ * /dev/null, so it cannot write over the prompt or hold a pipe open - `claude | tee log` ends
+ * when claude does. It runs outside the tool's subshell, in the caller's own environment, as
+ * it always has: it reads which profile to record from the registry, not from the environment.
+ * The function returns the tool's exit code, captured before it starts.
+ *
  * Two rules the generated script must keep:
  * - no `!` inside a double-quoted string, because zsh history-expands it when the function
  *   is *defined*, which breaks sourcing the init for every user at shell startup - so the
@@ -231,7 +240,7 @@ ${launch("claude")}
     command claude "$@"
   )
   local rc=$?
-  clausona _track-usage 2>/dev/null
+  ( clausona _track-usage </dev/null >/dev/null 2>&1 & )
   return $rc
 }
 
@@ -268,6 +277,9 @@ alias csn=clausona
  *
  * The cache and registry paths are baked in when `shell-init` runs, as ASCII-only literals
  * (see powerShellLiteral), because the profile reads the hook as a native command's output.
+ *
+ * After claude exits, `_track-usage` is started in a hidden window and not waited for, as the
+ * POSIX hook starts it in the background.
  *
  * Targets Windows PowerShell 5.1, so no null-coalescing and no ternary operator.
  */
@@ -408,7 +420,16 @@ function global:Invoke-ClausonaTool {
     # and hand the caller an error, or clausona's exit code, in place of the tool's.
     $ErrorActionPreference = "Continue"
     if ($Tool -eq "claude") {
-      try { clausona _track-usage *> $null } catch { }
+      # Usage is recorded without waiting for it, so the prompt comes back as soon as the tool
+      # exits. Start-Process gives it a hidden window of its own, so nothing flashes and
+      # nothing it prints reaches this console; it is a cmdlet, not a native call, so
+      # $LASTEXITCODE stays the tool's. It starts the launcher on PATH - the .cmd, not a
+      # clausona.ps1 beside it, which Start-Process would open in an editor - and both steps
+      # say Stop, so a clausona gone from PATH ends in the catch rather than on the console.
+      try {
+        $tracker = Get-Command clausona -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        Start-Process -FilePath $tracker.Source -ArgumentList '_track-usage' -WindowStyle Hidden -ErrorAction Stop
+      } catch { }
     }
     $global:LASTEXITCODE = $exitCode
   } finally {

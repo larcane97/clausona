@@ -100,6 +100,18 @@ describe("renderShellInit", () => {
     expect(codexBlock).not.toMatch(/_track-usage/);
   });
 
+  /**
+   * The prompt comes back as soon as the tool exits: `_track-usage` starts in the background,
+   * from a subshell of its own so an interactive shell has no job to announce, with every
+   * stream on /dev/null. The tool's exit code is taken before it and returned after it.
+   */
+  it("records usage in the background, silently, and returns the tool's exit code", () => {
+    expect(claudeBlock).toMatch(
+      /\n\s*\)\s*\n\s*local rc=\$\?\s*\n\s*\( clausona _track-usage <\/dev\/null >\/dev\/null 2>&1 & \)\s*\n\s*return \$rc\s*\n$/,
+    );
+    expect(out.match(/_track-usage/g)).toHaveLength(1);
+  });
+
   it("defines a codex wrapper on the same mechanism", () => {
     expect(codexBlock).toMatch(/_clausona_launch=\$\(clausona _launch codex\)/);
     expect(codexBlock).toMatch(/eval "\$_clausona_launch"/);
@@ -268,7 +280,7 @@ describe("renderPowerShellInit", () => {
         if (/\$command = Get-Command/.test(line)) return ["Get-Command"];
         if (/& \$command\.Source @ToolArgs/.test(line)) return ["tool"];
         if (/^\s*\$exitCode = \$LASTEXITCODE\s*$/.test(line)) return ["exitCode"];
-        if (/clausona _track-usage/.test(line)) return ["_track-usage"];
+        if (/Start-Process .*'_track-usage'/.test(line)) return ["_track-usage"];
         if (/\$global:LASTEXITCODE = \$exitCode/.test(line)) return ["LASTEXITCODE"];
         return [];
       });
@@ -283,7 +295,7 @@ describe("renderPowerShellInit", () => {
       "caller's",
       "Get-Command",
       "tool",
-      // Captured before _track-usage, which is itself a native call and resets $LASTEXITCODE.
+      // Captured before the bookkeeping, so nothing it does can change what the caller gets.
       "exitCode",
       "Continue",
       "_track-usage",
@@ -306,7 +318,24 @@ describe("renderPowerShellInit", () => {
     // Continue alone does not cover a clausona that is no longer on PATH, so each helper call
     // is also caught - neither can stop the tool from starting or skip LASTEXITCODE.
     expect(helper).toMatch(/try \{ clausona _sync-plugins \*> \$null \} catch \{ \}/);
-    expect(helper).toMatch(/try \{ clausona _track-usage \*> \$null \} catch \{ \}/);
+    expect(helper).toMatch(/try \{\s*\n\s*\$tracker = Get-Command[^\n]*\n\s*Start-Process [^\n]*\n\s*\} catch \{ \}/);
+  });
+
+  /**
+   * `_track-usage` starts without the hook waiting for it: a detached, hidden process, so the
+   * prompt comes back as soon as the tool exits and no window flashes. It is found as an
+   * application, so a clausona.ps1 on PATH - which Start-Process would open in an editor - is
+   * passed over for the .cmd launcher, and both steps stop on an error, so under Continue a
+   * missing clausona still ends in the catch rather than printing.
+   */
+  it("starts _track-usage in a hidden window without waiting for it", () => {
+    expect(helper).toMatch(
+      /\n\s*\$tracker = Get-Command clausona -CommandType Application -ErrorAction Stop \| Select-Object -First 1\s*\n\s*Start-Process -FilePath \$tracker\.Source -ArgumentList '_track-usage' -WindowStyle Hidden -ErrorAction Stop\s*\n/,
+    );
+    // Not waited for, and nothing on the pipeline: the function's output is the tool's alone.
+    expect(helper).not.toMatch(/Start-Process[^\n]*-(?:Wait|PassThru|NoNewWindow)/);
+    // Not a native call either, which would wait, and would reset $LASTEXITCODE.
+    expect(helper).not.toMatch(/clausona _track-usage/);
   });
 
   /**
@@ -359,7 +388,8 @@ describe("renderPowerShellInit", () => {
   it("keeps _sync-plugins and _track-usage claude-only and preserves the exit code", () => {
     expect(out.match(/clausona _sync-plugins/g)).toHaveLength(1);
     expect(out).toMatch(/if \(\$Tool -eq "claude"\) \{\s*\n\s*\$syncDue = \$false/);
-    expect(out).toMatch(/if \(\$Tool -eq "claude"\) \{\s*\n\s*try \{ clausona _track-usage/);
+    expect(out).toMatch(/if \(\$Tool -eq "claude"\) \{\s*\n(?:\s*#.*\n)*\s*try \{\s*\n\s*\$tracker = Get-Command/);
+    expect(out.match(/_track-usage/g)).toHaveLength(1);
     expect(out).toMatch(/\$global:LASTEXITCODE = \$exitCode/);
   });
 
