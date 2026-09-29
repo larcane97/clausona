@@ -1206,7 +1206,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
   for (const host of ["powershell.exe", "pwsh.exe"] as const) {
     it.skipIf(host === "pwsh.exe" && !PWSH_AVAILABLE)(
       `replays a _launch warning as exactly the lines it wrote (${host})`,
-      () => {
+      async () => {
         const workDir = "C:\\clausona-test\\work";
         const warning = "  ! clausona-test-warning one\n\n  ! clausona-test-warning two\n";
         const harness = makeWindowsHarness({});
@@ -1219,10 +1219,11 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
           path.join(harness.binDir, "clausona.cmd"),
           [
             "@echo off",
+            'if "%1"=="_track-usage" goto track',
             '>>"%CLAUSONA_TEST_LOG%" echo %1 %2',
             'if not "%1"=="_launch" exit /b 0',
             `node -e "const fs=require('fs');process.stderr.write(fs.readFileSync(process.env.CLAUSONA_TEST_STDERR,'utf8'));process.stdout.write(fs.readFileSync(process.env.CLAUSONA_TEST_PAYLOAD,'utf8'))"`,
-            "exit /b 0",
+            ...TRACK_USAGE_CMD,
           ].join("\r\n"),
         );
 
@@ -1244,7 +1245,8 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
         expect(stderr.split("clausona-test-warning")).toHaveLength(3);
         // ...as the very lines _launch wrote, from the start of a line.
         expect(stderr).toContain(`\n${warning}`);
-        expect(harness.log()).toEqual(["_launch claude", "_sync-plugins", "_track-usage"]);
+        expect(harness.log()).toEqual(["_launch claude", "_sync-plugins"]);
+        expect(await harness.tracked(1)).toBe(1);
       },
       POWERSHELL_TEST_TIMEOUT_MS,
     );
