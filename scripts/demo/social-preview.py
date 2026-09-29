@@ -76,7 +76,7 @@ def main():
 
     draw.text(
         (fx, top + group_h + 24),
-        "plugins, MCP servers and settings stay shared  \u00b7  plan quota for every account",
+        "plugins, settings and skills stay shared  \u00b7  plan quota for every account",
         font=font(19),
         fill=SECONDARY,
     )
