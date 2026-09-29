@@ -49,13 +49,14 @@ describe("renderShellInit", () => {
   /**
    * A clausona older than `_launch` answers it with its usage text on stdout and exit 0, and
    * eval'ing that runs its words. Only a script that opens with the marker is eval'd; the
-   * cache is asked for it too, and one without it goes to `_launch`.
+   * cache is asked for it too, and one without it goes to `_launch`. Output that is not a
+   * launch script is announced on stderr, since the tool then runs without a profile.
    */
   it("evaluates nothing that does not open with the launch marker", () => {
     const marked = `${quoted(LAUNCH_MARKER)}*`;
     expect(subshell).toMatch(
       new RegExp(
-        `if \\[\\[ \\$_clausona_launch != ${regexLiteral(marked)} \\]\\]; then\\s*\\n\\s*_clausona_launch=\\$\\(clausona _launch claude\\)\\s*\\n\\s*fi\\s*\\n\\s*if \\[\\[ \\$_clausona_launch == ${regexLiteral(marked)} \\]\\]; then\\s*\\n\\s*eval "\\$_clausona_launch"\\s*\\n\\s*fi`,
+        `if \\[\\[ \\$_clausona_launch != ${regexLiteral(marked)} \\]\\]; then\\s*\\n\\s*_clausona_launch=\\$\\(clausona _launch claude\\)\\s*\\n\\s*fi\\s*\\n\\s*if \\[\\[ \\$_clausona_launch == ${regexLiteral(marked)} \\]\\]; then\\s*\\n\\s*eval "\\$_clausona_launch"\\s*\\n\\s*elif \\[\\[ -n \\$_clausona_launch \\]\\]; then\\s*\\n\\s*printf 'clausona: unexpected output from clausona _launch; starting claude without a profile\\\\n' >&2\\s*\\n\\s*fi`,
       ),
     );
     expect(subshell.match(/eval /g)).toHaveLength(1);

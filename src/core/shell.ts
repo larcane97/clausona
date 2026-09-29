@@ -180,7 +180,10 @@ export function renderLaunchJson(
  * clausona older than `_launch` - after a downgrade, with this hook still in a shell - answers
  * it with its usage text on stdout and exit 0, and eval'ing that would run its words as
  * commands. Without the marker the tool starts with no profile applied, as it would with
- * clausona gone from PATH; a cache that somehow lacks it goes to `_launch` first.
+ * clausona gone from PATH; a cache that somehow lacks it goes to `_launch` first. When
+ * `_launch` did print something - that usage, or a wrapper's banner on stdout - the hook says
+ * on stderr that it is starting the tool without a profile, rather than letting it run on the
+ * default account unannounced. Nothing printed at all stays silent, as clausona gone does.
  *
  * Two rules the generated script must keep:
  * - no `!` inside a double-quoted string, because zsh history-expands it when the function
@@ -207,6 +210,8 @@ export function renderPosixShellInit(paths: ShellInitPaths) {
     fi
     if [[ $_clausona_launch == ${marked} ]]; then
       eval "$_clausona_launch"
+    elif [[ -n $_clausona_launch ]]; then
+      printf 'clausona: unexpected output from clausona _launch; starting ${tool} without a profile\\n' >&2
     fi`;
   };
   return `# clausona shell integration

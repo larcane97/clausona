@@ -523,13 +523,16 @@ for (const shell of ["zsh", "bash"] as const) {
 
     /**
      * A clausona older than `_launch` - after a downgrade, with this hook still in the shell -
-     * answers it with its usage text on stdout and exit 0. None of it may run: the tool starts
-     * with no profile applied, as it would with clausona gone from PATH.
+     * answers it with its usage text on stdout and exit 0; so does anything that prints a
+     * banner there. None of it may run, and the tool starts with no profile applied - but not
+     * unannounced, or it would be on the default account without a word. Nothing printed at
+     * all stays silent, as it does with clausona gone from PATH.
      */
-    it("evaluates nothing from a _launch that answers without the marker", () => {
+    it("evaluates nothing from a _launch that answers without the marker, and says so", () => {
       const harness = makeHarness();
+      const envFile = path.join(harness.envDir, "claude.env");
       writeFileSync(
-        path.join(harness.envDir, "claude.env"),
+        envFile,
         "Usage: clausona [command]\nprintf 'INJECTED\\n'\nexport CLAUDE_CONFIG_DIR=/tmp/clausona-test-usage",
       );
 
@@ -538,8 +541,15 @@ for (const shell of ["zsh", "bash"] as const) {
       expect(result.stdout).not.toContain("INJECTED");
       expect(result.stdout).toContain(`CLAUDE_CONFIG_DIR=${UNSET}`);
       expect(result.stdout).toContain("rc=0");
-      expect(result.stderr).toBe("");
+      expect(result.stderr).toBe(
+        "clausona: unexpected output from clausona _launch; starting claude without a profile\n",
+      );
       expect(harness.log()[0]).toBe("launch claude");
+
+      writeFileSync(envFile, "");
+      const silent = runShell(shell, harness, "claude");
+      expect(silent.stdout).toContain(`CLAUDE_CONFIG_DIR=${UNSET}`);
+      expect(silent.stderr).toBe("");
     });
 
     // `HOME=/tmp/x claude`: the paths baked into the hook are not that home's, and `_launch`
