@@ -1,4 +1,4 @@
-import { chmod, link, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { type BuiltEnv, isSecretEnvName } from "../lib/profile-env.js";
@@ -85,6 +85,21 @@ export function isCacheable(profile: Profile, built: BuiltEnv, guard: readonly s
   if (profile.kind === "api" || profile.api !== undefined) return false;
   if (built.warnings.length > 0 || built.unset.length > 0 || guard.length > 0) return false;
   return !Object.entries(built.env).some(([key, value]) => isSecretEnvName(key) || carriesCredentialToken(value));
+}
+
+/**
+ * Whether `target` exists and resolves to exactly itself, with no symlink anywhere along it.
+ *
+ * Whether a profile exports CLAUDE_CONFIG_DIR or CODEX_HOME at all turns on comparing the
+ * realpaths of its config dir and of the tool's default dir (see buildProfileEnv), and a
+ * symlink can be pointed elsewhere without profiles.json changing. `_launch` caches a script
+ * only when both are plain paths, so that comparison cannot change behind the cache.
+ */
+export async function resolvesToItself(target: string): Promise<boolean> {
+  return realpath(target).then(
+    (resolved) => resolved === target,
+    () => false,
+  );
 }
 
 /**

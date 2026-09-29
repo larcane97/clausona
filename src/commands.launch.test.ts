@@ -4,8 +4,10 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -44,12 +46,17 @@ afterEach(() => {
 });
 
 async function harness(makeRegistry: (home: string) => unknown) {
-  const home = mkdtempSync(path.join(tmpdir(), "clausona-launch-"));
+  // Resolved, because _launch caches nothing for a config dir reached through a symlink, and
+  // the temp dir often is one: /var on macOS, an 8.3 short name on a Windows runner.
+  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), "clausona-launch-")));
   temps.push(home);
   const clausonaDir = path.join(home, ".clausona");
   const primary = path.join(home, ".claude");
   const workDir = path.join(home, ".claude-work");
-  for (const dir of [clausonaDir, primary, workDir]) mkdirSync(dir, { recursive: true });
+  // Every profile below lives in a directory that exists, as a real one does; ~/.codex is
+  // codex's default dir, which _launch has to find a plain path too.
+  const dirs = [clausonaDir, primary, workDir, path.join(home, ".codex"), path.join(home, ".codex-work")];
+  for (const dir of dirs) mkdirSync(dir, { recursive: true });
 
   const registry = makeRegistry(home);
   const registryPath = path.join(clausonaDir, "profiles.json");
@@ -157,6 +164,7 @@ describe("_launch", () => {
     let configDir = "";
     const h = await harness((home) => {
       configDir = path.join(home, hangul, ".claude-work");
+      mkdirSync(configDir, { recursive: true });
       return registryWith({ tool: "claude", configDir, email: "you@example.com" }, home);
     });
 
@@ -240,6 +248,41 @@ describe("_launch", () => {
     expect(existsSync(launchCacheDir(h.clausonaDir)) ? h.launchFiles().map((e) => e.name) : []).toEqual([]);
     for (const file of filesUnder(h.clausonaDir)) expect(readFileSync(file, "utf8"), file).not.toContain(key);
   });
+
+  /**
+   * Whether CLAUDE_CONFIG_DIR is exported at all turns on the realpaths of the config dir and
+   * of ~/.claude, and a symlink can be pointed elsewhere without profiles.json changing. A
+   * junction on Windows, which needs no privilege and resolves the same way.
+   */
+  for (const [label, arrange] of [
+    [
+      "the config dir",
+      (h: Awaited<ReturnType<typeof harness>>) => {
+        const real = path.join(h.home, "real-work");
+        mkdirSync(real);
+        rmSync(h.workDir, { recursive: true });
+        symlinkSync(real, h.workDir, "junction");
+      },
+    ],
+    [
+      "~/.claude",
+      (h: Awaited<ReturnType<typeof harness>>) => {
+        const real = path.join(h.home, "real-claude");
+        mkdirSync(real);
+        rmSync(h.primary, { recursive: true });
+        symlinkSync(real, h.primary, "junction");
+      },
+    ],
+  ] as const) {
+    it(`caches nothing when ${label} is reached through a symlink`, async () => {
+      const h = await harness((home) => subscription(home));
+      arrange(h);
+
+      expect(await h.launch("claude")).toContain(`export CLAUDE_CONFIG_DIR='${h.workDir}'`);
+
+      expect(existsSync(h.cachePath("claude", "posix"))).toBe(false);
+    });
+  }
 
   it("warns on every launch, and never caches, for a profile that warns", async () => {
     const h = await harness((home) => subscription(home, { env: "API_TIMEOUT_MS=1" }));

@@ -14,6 +14,7 @@ import {
   registryStamp,
   removeLaunchCache,
   renderPosixSyncCheck,
+  resolvesToItself,
   statRegistry,
   syncWithStamp,
   writeLaunchCache,
@@ -94,7 +95,7 @@ import {
   updateProfileSecret,
 } from "./lib/service.js";
 import { CLAUDE_ENV_CATALOG, validateEnvEntry } from "./tools/claude-env-catalog.js";
-import { ALL_TOOLS } from "./tools/registry.js";
+import { ALL_TOOLS, getAdapter } from "./tools/registry.js";
 import type { Profile, Registry, SecretSource, ToolName } from "./types.js";
 
 function jsonFlag(args: string[]) {
@@ -1624,7 +1625,13 @@ export async function runCommand(command: string, args: string[]) {
               .filter((part) => part !== "")
               .join("\n");
 
-      if (isCacheable(profile, built, guard)) {
+      // Plain paths only: a symlinked config dir or default dir decides whether the config
+      // variable is exported at all, and can change without profiles.json changing.
+      const cacheable =
+        isCacheable(profile, built, guard) &&
+        (await resolvesToItself(profile.configDir)) &&
+        (await resolvesToItself(getAdapter(tool).defaultConfigDir(homedir())));
+      if (cacheable) {
         await writeLaunchCache({
           path: paths.cachePath(tool, format),
           content: script,
