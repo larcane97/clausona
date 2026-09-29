@@ -10,6 +10,7 @@ import {
   isCacheable,
   pluginSyncStampPath,
   pluginSyncWatchList,
+  registryStamp,
   renderPosixSyncCheck,
   statRegistry,
   touchPluginSyncStamp,
@@ -1610,6 +1611,8 @@ export async function runCommand(command: string, args: string[]) {
                 stamp: pluginSyncStampPath(sync.configDir),
                 watch: pluginSyncWatchList(sync.configDir, sync.primary),
               },
+              // What a cached copy must still find profiles.json to be; see writeLaunchCache.
+              before === null ? undefined : registryStamp(before),
             )
           : [
               renderPosixExports(built.env, built.unset, guard),
@@ -1625,6 +1628,9 @@ export async function runCommand(command: string, args: string[]) {
           registryPath: paths.registryPath,
           before,
           withLock: tryWithRegistryLock,
+          // The POSIX hook tells the registry apart by this link; the JSON one carries
+          // profiles.json's time and length instead.
+          refPath: format === "posix" ? paths.refPath(tool) : undefined,
           keepVersion: __CLAUSONA_VERSION__,
         });
       }

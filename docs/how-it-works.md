@@ -56,10 +56,14 @@ in `~/.clausona/cache/`, and the next launch reads that file in the shell itself
   a profile whose environment produced a warning, which has to print on every launch, nor one
   whose env map holds something that looks like a secret. Those profiles launch through
   `clausona _launch` every time, as they always did.
-- **When it is used** — only while the cached file is strictly newer than `profiles.json`.
-  Every change clausona makes to `profiles.json` (`clausona use`, `config`, `add`, `remove`)
-  deletes the cache as it saves, so the very next launch after `clausona use work` starts as
-  `work`; the time check also covers a hand edit of the file. A cache written while another
+- **When it is used** — only while `profiles.json` is still the very file the script was
+  rendered from and has not changed since: on zsh/bash the script keeps a hard link to that
+  file and must be newer than it, on PowerShell it records the file's exact write time and
+  size. Every change clausona makes to `profiles.json` (`clausona use`, `config`, `add`,
+  `remove`) deletes the cache as it saves, so the very next launch after `clausona use work`
+  starts as `work`. An editor saving the file, or a backup moved back over it, also sends the
+  next launch to clausona; copying another file over it in place with its old time kept
+  (`cp -p`) does not, until the next change clausona makes. A cache written while another
   command was changing `profiles.json` is not saved at all.
 - **Per version** — the file name carries clausona's version, and a shell hook only reads the
   cache of the version that rendered it, so a shell opened before `clausona update` never reads

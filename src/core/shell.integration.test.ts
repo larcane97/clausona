@@ -1,10 +1,27 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { launchCachePath, pluginSyncStampPath, pluginSyncWatchList, renderPosixSyncCheck } from "./launch-cache.js";
+import {
+  launchCachePath,
+  launchRefPath,
+  pluginSyncStampPath,
+  pluginSyncWatchList,
+  registryStamp,
+  renderPosixSyncCheck,
+} from "./launch-cache.js";
 import {
   renderLaunchJson,
   renderPosixExports,
@@ -69,12 +86,18 @@ function setMtime(target: string, seconds: number) {
   utimesSync(target, seconds, seconds);
 }
 
-/** A launch script in the hook's cache, as `_launch` would have left it, `seconds` old. */
+/**
+ * A launch script in the hook's cache, as `_launch` would have left it, `seconds` old: with
+ * its ref, a hard link to the profiles.json there is now.
+ */
 function writeCache(harness: Harness, tool: "claude" | "codex", content: string, seconds: number) {
   const cachePath = harness.paths.cachePath(tool, "posix");
   mkdirSync(path.dirname(cachePath), { recursive: true });
   writeFileSync(cachePath, content);
   setMtime(cachePath, seconds);
+  const refPath = harness.paths.refPath(tool);
+  rmSync(refPath, { force: true });
+  linkSync(harness.paths.registryPath, refPath);
 }
 
 /**
@@ -177,6 +200,7 @@ function makeHarness(env: { claude?: ToolEnv; codex?: ToolEnv } = {}): Harness {
     logPath,
     paths: {
       cachePath: (tool, format) => launchCachePath(clausonaDir, tool, format, "0.0.0-test"),
+      refPath: (tool) => launchRefPath(clausonaDir, tool, "0.0.0-test"),
       registryPath,
     },
     plugins,
@@ -464,6 +488,18 @@ for (const shell of ["zsh", "bash"] as const) {
           rmSync(h.paths.registryPath);
         },
       ],
+      // A backup moved back over profiles.json: another file, and older than the script, so a
+      // time comparison alone would have trusted the script rendered from the file it replaced.
+      [
+        "rendered from another profiles.json, even an older one",
+        (h: Harness) => {
+          writeCache(h, "claude", STALE, NOW - 50);
+          const backup = `${h.paths.registryPath}.bak`;
+          writeFileSync(backup, "{}");
+          setMtime(backup, NOW - 200);
+          renameSync(backup, h.paths.registryPath);
+        },
+      ],
     ] as const) {
       it(`asks _launch when the cached script is ${label}`, () => {
         const harness = makeHarness({ claude: { CLAUDE_CONFIG_DIR: "/tmp/clausona-test-from-launch" } });
@@ -599,11 +635,15 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
   /** A string as a PowerShell literal, for the test bodies below. */
   const psQuote = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
-  /** A cached launch script, as `_launch --json` would have left it, `seconds` old. */
-  function writeJsonCache(harness: WindowsHarness, document: unknown, seconds: number) {
+  /**
+   * A cached launch script, as `_launch --json` would have left it, `seconds` old: stamped
+   * with the time and length of the profiles.json there is now, as Node reads them.
+   */
+  function writeJsonCache(harness: WindowsHarness, document: object, seconds: number) {
     const cachePath = harness.paths.cachePath("claude", "json");
     mkdirSync(path.dirname(cachePath), { recursive: true });
-    writeFileSync(cachePath, JSON.stringify(document));
+    const registry = registryStamp(statSync(harness.paths.registryPath, { bigint: true }));
+    writeFileSync(cachePath, JSON.stringify({ ...document, registry }));
     setMtime(cachePath, seconds);
   }
 
@@ -678,6 +718,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       logPath,
       paths: {
         cachePath: (tool, format) => launchCachePath(clausonaDir, tool, format, "0.0.0-test"),
+        refPath: (tool) => launchRefPath(clausonaDir, tool, "0.0.0-test"),
         registryPath,
       },
       sync,
@@ -917,25 +958,27 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
   );
 
   /**
-   * One PowerShell start, two runs: first from a cache newer than the registry - no clausona
-   * before the tool, no warning, and the variable gone again afterwards - then, with the
-   * registry made newer the way a save leaves it, from `_launch`, whose warning is replayed.
+   * One PowerShell start, two runs: first from a cache stamped with the registry as it is - no
+   * clausona before the tool, and the variable gone again afterwards - then, with an older
+   * backup moved back over profiles.json, from `_launch`, whose warning is replayed. The backup
+   * is older than the cache, so a time comparison alone would have trusted the cache.
    */
   it(
-    "starts from the cached launch script, and asks _launch once the registry is newer",
+    "starts from the cached launch script, and asks _launch once profiles.json is another file",
     () => {
       const warning = "clausona-test-warning";
       const harness = makeWindowsHarness({ CLAUDE_CONFIG_DIR: "C:\\clausona-test\\from-launch" });
       writeJsonCache(harness, { env: { CLAUDE_CONFIG_DIR: "C:\\clausona-test\\from-cache" } }, NOW - 50);
-      const registry = psQuote(harness.paths.registryPath);
+      const backup = `${harness.paths.registryPath}.bak`;
+      writeFileSync(backup, "{}");
+      setMtime(backup, NOW - 200);
 
       const result = runPowerShell(
         harness,
         [
           "claude",
           "if (Test-Path Env:CLAUDE_CONFIG_DIR) { 'LEFT_SET' } else { 'RESTORED' }",
-          `$registry = Get-Item -LiteralPath ${registry}`,
-          "$registry.LastWriteTimeUtc = $registry.LastWriteTimeUtc.AddSeconds(100)",
+          `Move-Item -LiteralPath ${psQuote(backup)} -Destination ${psQuote(harness.paths.registryPath)} -Force`,
           "claude",
         ].join("\n"),
         { CLAUSONA_TEST_WARN: warning },
@@ -948,9 +991,11 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       expect(fromLaunch).toBeGreaterThan(fromCache);
       expect(result.stdout).toContain("RESTORED");
       expect(result.stdout).not.toContain("LEFT_SET");
-      // Only the second run asked clausona anything before the tool, and only it warned.
+      // Only the second run asked clausona anything before the tool...
       expect(harness.log()).toEqual(["_track-usage", "_launch claude", "_sync-plugins", "_track-usage"]);
-      expect(result.stderr.split(warning)).toHaveLength(2);
+      // ...and its warning reached the console. How often the word appears is 5.1's business:
+      // it replays redirected native stderr as an error record that quotes the line twice.
+      expect(result.stderr).toContain(warning);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );

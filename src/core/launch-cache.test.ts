@@ -21,8 +21,10 @@ import {
   isCacheable,
   launchCacheDir,
   launchCachePath,
+  launchRefPath,
   pluginSyncStampPath,
   pluginSyncWatchList,
+  registryStamp,
   renderPosixSyncCheck,
   statRegistry,
   touchPluginSyncStamp,
@@ -131,6 +133,48 @@ describe("writeLaunchCache", () => {
     expect(existsSync(cachePath)).toBe(false);
   });
 
+  // The POSIX hook trusts a script only while profiles.json is the very file the ref links to.
+  it("links the registry it was rendered from next to the POSIX script", async () => {
+    const { root, registryPath, cachePath } = setup();
+    const refPath = launchRefPath(root, "claude", "9.9.9");
+
+    const wrote = await writeLaunchCache({
+      path: cachePath,
+      content: "export A='1'",
+      registryPath,
+      before: await statRegistry(registryPath),
+      withLock,
+      refPath,
+    });
+
+    expect(wrote).toBe(true);
+    const [registry, ref] = [statSync(registryPath, { bigint: true }), statSync(refPath, { bigint: true })];
+    expect([ref.dev, ref.ino]).toEqual([registry.dev, registry.ino]);
+    expect(readdirSync(path.dirname(cachePath)).sort()).toEqual(["launch-9.9.9-claude.ref", "launch-9.9.9-claude.sh"]);
+  });
+
+  it("writes no script when the registry cannot be linked", async () => {
+    const { root, registryPath, cachePath } = setup();
+
+    const wrote = await writeLaunchCache({
+      path: cachePath,
+      content: "export A='1'",
+      registryPath,
+      before: await statRegistry(registryPath),
+      withLock,
+      refPath: path.join(root, "no-such-dir", "launch-9.9.9-claude.ref"),
+    });
+
+    expect(wrote).toBe(false);
+    expect(existsSync(cachePath)).toBe(false);
+  });
+
+  it("gives the PowerShell hook profiles.json's time in .NET ticks, and its length", () => {
+    const stamp = registryStamp({ dev: 1n, ino: 2n, size: 42n, mtimeNs: 1_700_000_000_123_456_700n });
+    // 2023-11-14T22:13:20.1234567Z, as DateTime.Ticks.
+    expect(stamp).toEqual({ ticks: "638355968001234567", length: "42" });
+  });
+
   it("writes nothing when the registry lock is taken", async () => {
     const { registryPath, cachePath } = setup();
     const before = await statRegistry(registryPath);
@@ -151,7 +195,14 @@ describe("writeLaunchCache", () => {
     const { root, registryPath, cachePath } = setup();
     const cacheDir = launchCacheDir(root);
     mkdirSync(cacheDir, { recursive: true });
-    for (const name of ["launch-9.9.9-codex.json", "launch-9.9.8-claude.sh", "launch-9.9.9-beta-claude.sh", "node"]) {
+    for (const name of [
+      "launch-9.9.9-codex.json",
+      "launch-9.9.9-codex.ref",
+      "launch-9.9.8-claude.sh",
+      "launch-9.9.8-claude.ref",
+      "launch-9.9.9-beta-claude.sh",
+      "node",
+    ]) {
       writeFileSync(path.join(cacheDir, name), "");
     }
 
@@ -164,7 +215,12 @@ describe("writeLaunchCache", () => {
       keepVersion: "9.9.9",
     });
 
-    expect(readdirSync(cacheDir).sort()).toEqual(["launch-9.9.9-claude.sh", "launch-9.9.9-codex.json", "node"]);
+    expect(readdirSync(cacheDir).sort()).toEqual([
+      "launch-9.9.9-claude.sh",
+      "launch-9.9.9-codex.json",
+      "launch-9.9.9-codex.ref",
+      "node",
+    ]);
   });
 });
 
@@ -173,7 +229,13 @@ describe("invalidateLaunchCache", () => {
     const root = tempDir();
     const cacheDir = launchCacheDir(root);
     mkdirSync(path.join(cacheDir, "node"), { recursive: true });
-    for (const name of ["launch-1-claude.sh", "launch-1-codex.json", "launch-2-claude.sh.tmp.42", "other.txt"]) {
+    for (const name of [
+      "launch-1-claude.sh",
+      "launch-1-claude.ref",
+      "launch-1-codex.json",
+      "launch-2-claude.sh.tmp.42",
+      "other.txt",
+    ]) {
       writeFileSync(path.join(cacheDir, name), "");
     }
 

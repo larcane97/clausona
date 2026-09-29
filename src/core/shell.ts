@@ -105,29 +105,39 @@ function asciiJson(value: unknown): string {
 
 /**
  * The absolute paths a hook is rendered with: where this version keeps each tool's launch
- * script in each format, and the registry a script must be newer than to be trusted.
+ * script in each format and, for the POSIX script, the link to the registry it was rendered
+ * from; and the registry itself.
  */
 export type ShellInitPaths = {
   cachePath: (tool: ToolName, format: LaunchFormat) => string;
+  refPath: (tool: ToolName) => string;
   registryPath: string;
 };
 
 /** Where the plugin sync last left its stamp, and the paths that make it stale. */
 export type PluginSyncCheck = { stamp: string; watch: string[] };
 
+/** profiles.json's LastWriteTimeUtc.Ticks and Length when the script was rendered. */
+export type RegistryStampJson = { ticks: string; length: string };
+
 /**
  * `_launch <tool> --json`, which the new PowerShell hook reads: the environment exactly as
- * renderJsonEnv spells it, under `env`, and for claude the plugin sync's stamp and watch list
- * under `sync`, so the hook can tell for itself whether a sync is due. ASCII only, for the
+ * renderJsonEnv spells it, under `env`; for claude the plugin sync's stamp and watch list
+ * under `sync`, so the hook can tell for itself whether a sync is due; and the registry it was
+ * rendered from under `registry`, which a cached copy must still match. ASCII only, for the
  * same code-page reason as renderJsonEnv - the paths in `sync` sit under the same user folder.
  */
 export function renderLaunchJson(
   env: Record<string, string>,
   unset: readonly string[],
   sync: PluginSyncCheck | undefined,
+  registry?: RegistryStampJson,
 ): string {
-  const document: { env: Record<string, string | null>; sync?: PluginSyncCheck } = { env: jsonEnv(env, unset) };
+  const document: { env: Record<string, string | null>; sync?: PluginSyncCheck; registry?: RegistryStampJson } = {
+    env: jsonEnv(env, unset),
+  };
   if (sync) document.sync = sync;
+  if (registry) document.registry = registry;
   return asciiJson(document);
 }
 
@@ -138,14 +148,15 @@ export function renderLaunchJson(
  * value the user exported in their own profile is untouched when the call returns.
  *
  * The script comes from the launch cache when there is one it can trust, and from
- * `clausona _launch <tool>` otherwise, which also caches it when it can. Trusted means
- * strictly newer than profiles.json, which has to exist: every registry save deletes the
- * cache anyway, and this check also covers a hand edit and a delete that failed. Equal times
- * are refused, since a filesystem that keeps whole seconds cannot order two writes in one;
- * a missing registry is refused because bash's `-nt` is true for any file against a missing
- * one. The file is read by the shell itself - `$(<file)` - so the common path starts no
- * process before the tool, and a read that fails, a cache deleted since the check, falls
- * through to `_launch` rather than to no profile at all.
+ * `clausona _launch <tool>` otherwise, which also caches it when it can. Trusted means that
+ * profiles.json exists, is the very file the script was rendered from - `-ef` its ref, the
+ * hard link written with the script - and is older than the script. Every registry save
+ * deletes the cache anyway; the ref also catches a delete that failed and a backup moved back
+ * over profiles.json, and the time an edit of the file in place. Equal times are refused,
+ * since a filesystem that keeps whole seconds cannot order two writes in one. The file is
+ * read by the shell itself - `$(<file)` - so the common path starts no process before the
+ * tool, and a read that fails, a cache deleted since the check, falls through to `_launch`
+ * rather than to no profile at all.
  *
  * Both paths are absolute and baked in when `shell-init` runs, so finding them costs nothing
  * either; a hook only ever reads the cache its own version writes.
@@ -162,7 +173,8 @@ export function renderPosixShellInit(paths: ShellInitPaths) {
   // The first lines of the subshell for one tool: its launch script, from the cache or not.
   const launch = (tool: ToolName) => {
     const cache = posixQuote(paths.cachePath(tool, "posix"));
-    return `    if [[ -f ${registry} && ${cache} -nt ${registry} ]] && { _clausona_launch=$(<${cache}); } 2>/dev/null; then
+    const ref = posixQuote(paths.refPath(tool));
+    return `    if [[ -f ${registry} && ${registry} -ef ${ref} && ${cache} -nt ${registry} ]] && { _clausona_launch=$(<${cache}); } 2>/dev/null; then
       eval "$_clausona_launch"
     else
       eval "$(clausona _launch ${tool})"
@@ -242,10 +254,12 @@ function global:Invoke-ClausonaTool {
   $callerErrorAction = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
 
-  # The launch script clausona cached for this profile, while it is strictly newer than
-  # profiles.json. Every step is told to stop on an error, and caught: a cache that cannot be
-  # read - deleted by a save in another window between the check and the read, say - is a
-  # miss, never a run with no profile, and never an error printed in the caller's console.
+  # The launch script clausona cached for this profile, while profiles.json is exactly the
+  # file it was rendered from: the same write time, to the tick, and the same length. A save
+  # changes the time, and so does a backup moved back over the file, however old. Every step
+  # is told to stop on an error, and caught: a cache that cannot be read - deleted by a save
+  # in another window between the check and the read, say - is a miss, never a run with no
+  # profile, and never an error printed in the caller's console.
   $parsed = $null
   if ($Tool -eq "claude") {
     $cachePath = ${claudeCache}
@@ -255,10 +269,11 @@ function global:Invoke-ClausonaTool {
   $registryPath = ${registry}
   try {
     if ((Test-Path -LiteralPath $cachePath) -and (Test-Path -LiteralPath $registryPath)) {
-      $cacheTime = (Get-Item -LiteralPath $cachePath -ErrorAction Stop).LastWriteTimeUtc
-      if ($cacheTime -gt (Get-Item -LiteralPath $registryPath -ErrorAction Stop).LastWriteTimeUtc) {
-        $parsed = Get-Content -LiteralPath $cachePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-      }
+      $registryItem = Get-Item -LiteralPath $registryPath -ErrorAction Stop
+      $parsed = Get-Content -LiteralPath $cachePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+      $sameTicks = $parsed.registry.ticks -eq [string]$registryItem.LastWriteTimeUtc.Ticks
+      $sameLength = $parsed.registry.length -eq [string]$registryItem.Length
+      if (-not ($sameTicks -and $sameLength)) { $parsed = $null }
     }
   } catch {
     $parsed = $null

@@ -23,7 +23,7 @@ import { acquireDirLock, removeHeldDirLocks } from "../core/dir-lock.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
 import { acquireFileLock } from "../core/file-lock.js";
 import { isKnownSecretSource, keySharersElsewhere } from "../core/key-source.js";
-import { invalidateLaunchCache, launchCachePath } from "../core/launch-cache.js";
+import { invalidateLaunchCache, launchCachePath, launchRefPath } from "../core/launch-cache.js";
 import { appDir, backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
@@ -3025,6 +3025,7 @@ export async function resolveProfileEnv(
 export function launchPaths(): ShellInitPaths {
   return {
     cachePath: (tool, format) => launchCachePath(CLAUSONA_DIR, tool, format, __CLAUSONA_VERSION__),
+    refPath: (tool) => launchRefPath(CLAUSONA_DIR, tool, __CLAUSONA_VERSION__),
     registryPath: REGISTRY_PATH,
   };
 }

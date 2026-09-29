@@ -12,7 +12,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { launchCacheDir, launchCachePath, pluginSyncStampPath, renderPosixSyncCheck } from "./core/launch-cache.js";
+import {
+  launchCacheDir,
+  launchCachePath,
+  launchRefPath,
+  pluginSyncStampPath,
+  registryStamp,
+  renderPosixSyncCheck,
+} from "./core/launch-cache.js";
 
 /**
  * `_launch <tool>` is what the new hook runs on a cache miss: the environment `_shell-env`
@@ -108,6 +115,11 @@ describe("_launch", () => {
 
     expect(out).toBe(`${exports}\n${renderPosixSyncCheck(h.workDir, h.primary)}`);
     expect(readFileSync(h.cachePath("claude", "posix"), "utf8")).toBe(out);
+    // Next to it, a hard link to the profiles.json it was rendered from.
+    const [registry, ref] = [h.registryPath, launchRefPath(h.clausonaDir, "claude", VERSION)].map((p) =>
+      statSync(p, { bigint: true }),
+    );
+    expect([ref?.dev, ref?.ino]).toEqual([registry?.dev, registry?.ino]);
     // The sync ran for the profile's own config dir, and stamped it.
     expect(existsSync(pluginSyncStampPath(h.workDir))).toBe(true);
     expect(existsSync(path.join(h.workDir, "plugins", "installed_plugins.json"))).toBe(true);
@@ -162,6 +174,8 @@ describe("_launch", () => {
           path.join(primary, "plugins", "cache"),
         ],
       },
+      // The profiles.json it was rendered from, as the PowerShell hook will compare it.
+      registry: registryStamp(statSync(h.registryPath, { bigint: true })),
     });
     expect(readFileSync(h.cachePath("claude", "json"), "utf8")).toBe(raw);
     expect(existsSync(h.cachePath("claude", "posix"))).toBe(false);
@@ -174,6 +188,7 @@ describe("_launch", () => {
 
     expect(JSON.parse(await h.launch("codex", "--json"))).toEqual({
       env: { CODEX_HOME: path.join(h.home, ".codex-work") },
+      registry: registryStamp(statSync(h.registryPath, { bigint: true })),
     });
   });
 

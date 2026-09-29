@@ -1,4 +1,4 @@
-import { chmod, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { type BuiltEnv, isSecretEnvName } from "../lib/profile-env.js";
@@ -18,8 +18,14 @@ import { posixQuote } from "./shell.js";
  * - it is written under the registry lock, and only if profiles.json is still the file the
  *   script was rendered from, so a `csn use` that lands meanwhile cannot be undone by it;
  * - every registry save deletes it, still under the lock;
- * - the hook trusts it only while it is strictly newer than profiles.json, which also covers
- *   a hand edit, and a delete that failed.
+ * - the hook trusts it only while profiles.json is still the very file it was rendered from,
+ *   and not changed since. POSIX: a hard link to profiles.json sits next to the script (see
+ *   `launchRefPath`), and the hook wants profiles.json to be that same file and the script to
+ *   be newer than it. PowerShell: the script carries profiles.json's exact write time and
+ *   length, and the hook wants both to match. Either way a delete that failed is covered, and
+ *   so is a backup moved back over profiles.json, whose older time a plain time comparison
+ *   would have trusted. Not covered: a copy that keeps its time written over profiles.json in
+ *   place (`cp -p`), which leaves the same file with an old time and the same length.
  *
  * The file name carries the version, because a hook is rendered by one version and must
  * only ever read what that same version wrote.
@@ -28,7 +34,7 @@ import { posixQuote } from "./shell.js";
 export type LaunchFormat = "posix" | "json";
 
 const LAUNCH_PREFIX = "launch-";
-const LAUNCH_NAME = /^launch-(.+)-([a-z]+)\.(sh|json)$/;
+const LAUNCH_NAME = /^launch-(.+)-([a-z]+)\.(sh|json|ref)$/;
 
 export function launchCacheDir(clausonaDir: string): string {
   return path.join(clausonaDir, "cache");
@@ -37,6 +43,28 @@ export function launchCacheDir(clausonaDir: string): string {
 export function launchCachePath(clausonaDir: string, tool: ToolName, format: LaunchFormat, version: string): string {
   const extension = format === "posix" ? "sh" : "json";
   return path.join(launchCacheDir(clausonaDir), `${LAUNCH_PREFIX}${version}-${tool}.${extension}`);
+}
+
+/**
+ * A hard link to the profiles.json a tool's POSIX script was rendered from. It is that file,
+ * not a note of its inode number, so the number cannot be handed to another file while the
+ * script is still around; a save renames a new file into place, so profiles.json stops being
+ * this one, and `[[ profiles.json -ef ref ]]` - a builtin in bash 3.2 and zsh - says so.
+ */
+export function launchRefPath(clausonaDir: string, tool: ToolName, version: string): string {
+  return path.join(launchCacheDir(clausonaDir), `${LAUNCH_PREFIX}${version}-${tool}.ref`);
+}
+
+/** Ticks - 100 ns since 0001-01-01, .NET's DateTime - at the Unix epoch. */
+const UNIX_EPOCH_TICKS = 621_355_968_000_000_000n;
+
+/**
+ * profiles.json as the PowerShell hook sees it: LastWriteTimeUtc.Ticks and Length, both as
+ * strings, because ticks run past 2^53. NTFS keeps times in 100 ns units and Node reports
+ * them exactly, so these are the very numbers Get-Item gives.
+ */
+export function registryStamp(stat: NonNullable<RegistryStat>): { ticks: string; length: string } {
+  return { ticks: String(stat.mtimeNs / 100n + UNIX_EPOCH_TICKS), length: String(stat.size) };
 }
 
 /**
@@ -89,6 +117,10 @@ function sameRegistry(a: RegistryStat, b: RegistryStat): boolean {
  * holds it is most likely changing the registry, and the script about to be written would
  * describe the registry as it was.
  *
+ * With `refPath`, for the POSIX script, profiles.json is also hard-linked there (see
+ * `launchRefPath`); a link that cannot be made means no script is written, since the hook
+ * would never trust it.
+ *
  * With `keepVersion`, every other version's launch scripts go once this one is written. They
  * are housekeeping only: no hook of this version reads them.
  */
@@ -98,6 +130,7 @@ export async function writeLaunchCache(opts: {
   registryPath: string;
   before: RegistryStat;
   withLock: (fn: () => Promise<boolean>) => Promise<boolean | undefined>;
+  refPath?: string;
   keepVersion?: string;
 }): Promise<boolean> {
   if (opts.before === null) return false;
@@ -110,13 +143,22 @@ export async function writeLaunchCache(opts: {
       await mkdir(dir, { recursive: true, mode: 0o700 });
       await chmod(dir, 0o700).catch(() => {});
       // Written aside and renamed into place, so the hook never reads half a script. The
-      // name starts with the prefix so that an invalidation also sweeps a leftover one.
+      // names start with the prefix so that an invalidation also sweeps a leftover one.
       const tmpPath = `${opts.path}.tmp.${process.pid}`;
+      const refTmpPath = opts.refPath === undefined ? undefined : `${opts.refPath}.tmp.${process.pid}`;
       try {
+        if (refTmpPath !== undefined) {
+          await rm(refTmpPath, { force: true });
+          await link(opts.registryPath, refTmpPath);
+        }
         await writeFile(tmpPath, opts.content, { encoding: "utf8", mode: 0o600 });
         await rename(tmpPath, opts.path);
+        // The script first and its ref second: in between, the old ref names another file
+        // or this same one, and either way the hook reads nothing it should not.
+        if (refTmpPath !== undefined && opts.refPath !== undefined) await rename(refTmpPath, opts.refPath);
       } catch (error) {
         await rm(tmpPath, { force: true }).catch(() => {});
+        if (refTmpPath !== undefined) await rm(refTmpPath, { force: true }).catch(() => {});
         throw error;
       }
       // writeFile applies the mode only to a file it creates, so it is asserted again.
@@ -137,10 +179,10 @@ async function removeOtherVersions(dir: string, version: string): Promise<void> 
 }
 
 /**
- * Removes every launch script, of every version, and the temp file of a write that died.
- * Never rejects. Run after each registry save, holding the registry lock; one it could not
- * remove is still ignored by the hook, which reads a cache only while it is newer than
- * profiles.json.
+ * Removes every launch script and ref, of every version, and the temp file of a write that
+ * died. Never rejects. Run after each registry save, holding the registry lock; a script it
+ * could not remove is still ignored by the hook, whose profiles.json is no longer the file
+ * the script was rendered from.
  */
 export async function invalidateLaunchCache(clausonaDir: string): Promise<void> {
   const dir = launchCacheDir(clausonaDir);
