@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { renderLauncher, renderWindowsLauncher, resolveInstallDir } from "./installer.js";
+import { dropLauncherCompileCache, renderLauncher, renderWindowsLauncher, resolveInstallDir } from "./installer.js";
 
 describe("installer helpers", () => {
   const homeDir = path.join(path.parse(process.cwd()).root, "Users", "test");
@@ -124,6 +124,42 @@ describe("installer helpers", () => {
       const { cache, argv } = run({}, ["--version"]);
       expect(argv).toEqual(["--version"]);
       expect(cache === "<unset>" || /^\/.+\/\.clausona\/cache\/node$/.test(cache ?? "")).toBe(true);
+    });
+  });
+
+  // The launcher's cache is clausona's own; the tools clausona starts must not inherit it.
+  describe("dropLauncherCompileCache", () => {
+    it("removes the launcher's default, however the path is spelled", () => {
+      for (const value of ["/home/u/.clausona/cache/node", "/home/u//.clausona/cache/node/"]) {
+        const env: NodeJS.ProcessEnv = { NODE_COMPILE_CACHE: value, KEEP: "1" };
+        dropLauncherCompileCache(env, "/home/u", "linux");
+        expect(env).toEqual({ KEEP: "1" });
+      }
+    });
+
+    it("removes the Windows launcher's %USERPROFILE% form", () => {
+      for (const value of [String.raw`C:\Users\Test\.clausona\cache\node`, "c:/users/test/.clausona/cache/node/"]) {
+        const env: NodeJS.ProcessEnv = { NODE_COMPILE_CACHE: value };
+        dropLauncherCompileCache(env, String.raw`C:\Users\Test`, "win32");
+        expect(env).toEqual({});
+      }
+    });
+
+    it("keeps a cache directory the caller chose", () => {
+      const env: NodeJS.ProcessEnv = { NODE_COMPILE_CACHE: "/home/u/.cache/node" };
+      dropLauncherCompileCache(env, "/home/u", "linux");
+      expect(env).toEqual({ NODE_COMPILE_CACHE: "/home/u/.cache/node" });
+
+      const other: NodeJS.ProcessEnv = { NODE_COMPILE_CACHE: String.raw`D:\cache\node` };
+      dropLauncherCompileCache(other, String.raw`C:\Users\Test`, "win32");
+      expect(other).toEqual({ NODE_COMPILE_CACHE: String.raw`D:\cache\node` });
+    });
+
+    it("leaves an unset variable unset", () => {
+      const env: NodeJS.ProcessEnv = {};
+      dropLauncherCompileCache(env, "/home/u", "linux");
+      expect(env).toEqual({});
+      expect(Object.hasOwn(env, "NODE_COMPILE_CACHE")).toBe(false);
     });
   });
 });

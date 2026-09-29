@@ -5,6 +5,7 @@ import { runCommand } from "./commands.js";
 import { spawnCommandSync } from "./core/process.js";
 import { trackUsage } from "./core/track-usage.js";
 import { createUpdater, type UpdateOffer } from "./core/update.js";
+import { dropLauncherCompileCache } from "./installer.js";
 import { accent, ok, fail as xMark } from "./lib/cli-style.js";
 import { parseProfileRef } from "./lib/profile-ref.js";
 import { loadRegistry, noRegistryError, resolveProfileEnv } from "./lib/service.js";
@@ -187,5 +188,7 @@ export function isMainModule(moduleUrl: string, entryPath: string | undefined): 
 }
 
 if (isMainModule(import.meta.url, process.argv[1])) {
+  // Before anything can start a child: the launcher's compile cache is for clausona alone.
+  dropLauncherCompileCache();
   void main();
 }

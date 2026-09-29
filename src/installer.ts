@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import path from "node:path";
 
 export function resolveInstallDir({
@@ -37,6 +38,32 @@ if [[ -n "\${HOME:-}" ]]; then
 fi
 exec "${nodeBin}" "${appDir}/index.js" "$@"
 `;
+}
+
+/**
+ * Takes the launcher's NODE_COMPILE_CACHE back out of this process's environment, so the tools
+ * clausona starts - claude and codex, their logins, and what they start in turn, MCP servers
+ * among them - do not write their own compiled code into clausona's cache. Node reads the
+ * variable once, at startup, so this process keeps using the cache. Any other directory is the
+ * caller's choice and stays: the launchers set theirs only when the variable is unset.
+ */
+export function dropLauncherCompileCache(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir: string = homedir(),
+  platform: NodeJS.Platform = process.platform,
+): void {
+  const value = env.NODE_COMPILE_CACHE;
+  if (!value) return;
+  const paths = platform === "win32" ? path.win32 : path.posix;
+  // `%USERPROFILE%` and `$HOME` are what homedir() reads, but separators, a trailing slash
+  // and, on Windows, letter case can still differ.
+  const normal = (dir: string) => {
+    const resolved = paths.resolve(dir);
+    return platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  if (normal(value) === normal(paths.join(homeDir, ".clausona", "cache", "node"))) {
+    delete env.NODE_COMPILE_CACHE;
+  }
 }
 
 function escapeCmdValue(value: string): string {

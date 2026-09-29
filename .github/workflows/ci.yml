@@ -86,6 +86,22 @@ jobs:
           # Not a terminal, so the dashboard must take its way out, not load the TUI.
           run 0
           expect "requires a terminal"
+          # The launcher's compile cache is clausona's own: a tool clausona starts must not
+          # inherit it and fill it with its own code. A stand-in claude reports what it got.
+          # Checked where that stand-in is a plain script; on Windows it would be a .cmd that
+          # clausona starts through PowerShell, and the unit tests cover the Windows path form.
+          if [ "${RUNNER_OS:-}" != "Windows" ]; then
+            mkdir -p "$home/bin" "$home/.clausona" "$home/.claude-smoke"
+            printf '#!/bin/sh\nprintf "child cache=[%%s]\\n" "${NODE_COMPILE_CACHE-}"\n' > "$home/bin/claude"
+            chmod +x "$home/bin/claude"
+            printf '{"version":2,"primarySources":{},"activeProfiles":{},"profiles":{"claude:smoke":{"tool":"claude","configDir":"%s","email":"smoke@example.com"}}}\n' \
+              "$home/.claude-smoke" > "$home/.clausona/profiles.json"
+            (
+              export PATH="$home/bin:$PATH" NODE_COMPILE_CACHE="$home/.clausona/cache/node"
+              run 0 run claude:smoke
+              expect "child cache=[]"
+            )
+          fi
           echo "bundle smoke checks OK"
 
       # The installers ship as release assets and are never exercised by the unit
