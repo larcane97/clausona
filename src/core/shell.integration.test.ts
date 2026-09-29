@@ -23,6 +23,7 @@ import {
   renderPosixSyncCheck,
 } from "./launch-cache.js";
 import {
+  LAUNCH_MARKER,
   renderLaunchJson,
   renderPosixExports,
   renderPowerShellInit,
@@ -79,8 +80,8 @@ type Harness = {
 /** Whole seconds: bash 3.2, macOS's own, compares mtimes to the second. */
 const NOW = Math.floor(Date.now() / 1000);
 
-/** A cached script that must never be applied. */
-const STALE = "export CLAUDE_CONFIG_DIR='/tmp/clausona-test-stale-cache'";
+/** A cached script that must never be applied, marker and all, so nothing but its age stops it. */
+const STALE = `${LAUNCH_MARKER}\nexport CLAUDE_CONFIG_DIR='/tmp/clausona-test-stale-cache'`;
 
 function setMtime(target: string, seconds: number) {
   utimesSync(target, seconds, seconds);
@@ -156,9 +157,9 @@ function renderToolEnv(env: ToolEnv = {}): string {
   return renderPosixExports(exports, unset);
 }
 
-/** Script lines joined as `_launch` joins them, leaving out an empty part. */
+/** Script lines joined as `_launch` joins them, after its marker, leaving out an empty part. */
 function launchScript(...parts: string[]): string {
-  return parts.filter((part) => part !== "").join("\n");
+  return [LAUNCH_MARKER, ...parts].filter((part) => part !== "").join("\n");
 }
 
 function makeHarness(env: { claude?: ToolEnv; codex?: ToolEnv } = {}): Harness {
@@ -182,7 +183,7 @@ function makeHarness(env: { claude?: ToolEnv; codex?: ToolEnv } = {}): Harness {
     path.join(envDir, "claude.env"),
     launchScript(renderToolEnv(env.claude), renderPosixSyncCheck(plugins.configDir, plugins.primary)),
   );
-  writeFileSync(path.join(envDir, "codex.env"), renderToolEnv(env.codex));
+  writeFileSync(path.join(envDir, "codex.env"), launchScript(renderToolEnv(env.codex)));
 
   // A registry, and no cache: the hook has to ask `_launch` until a test writes one.
   const registryPath = path.join(clausonaDir, "profiles.json");
@@ -460,8 +461,9 @@ for (const shell of ["zsh", "bash"] as const) {
         claude: { CLAUDE_CONFIG_DIR: "/tmp/clausona-test-from-launch" },
         codex: { CODEX_HOME: "/tmp/clausona-test-codex-from-launch" },
       });
-      writeCache(harness, "claude", renderToolEnv({ CLAUDE_CONFIG_DIR: "/tmp/clausona-test-from-cache" }), NOW - 50);
-      writeCache(harness, "codex", renderToolEnv({ CODEX_HOME: "/tmp/clausona-test-codex-from-cache" }), NOW - 50);
+      const fromCache = (env: ToolEnv) => launchScript(renderToolEnv(env));
+      writeCache(harness, "claude", fromCache({ CLAUDE_CONFIG_DIR: "/tmp/clausona-test-from-cache" }), NOW - 50);
+      writeCache(harness, "codex", fromCache({ CODEX_HOME: "/tmp/clausona-test-codex-from-cache" }), NOW - 50);
 
       const result = runShell(shell, harness, ["claude", "codex", reportParent("CLAUDE_CONFIG_DIR")].join("\n"));
 
@@ -501,6 +503,11 @@ for (const shell of ["zsh", "bash"] as const) {
           renameSync(backup, h.paths.registryPath);
         },
       ],
+      // Fresh and trusted, but not a launch script: nothing but the marker says one is.
+      [
+        "without the launch marker",
+        (h: Harness) => writeCache(h, "claude", "export CLAUDE_CONFIG_DIR='/tmp/clausona-test-stale-cache'", NOW - 50),
+      ],
     ] as const) {
       it(`asks _launch when the cached script is ${label}`, () => {
         const harness = makeHarness({ claude: { CLAUDE_CONFIG_DIR: "/tmp/clausona-test-from-launch" } });
@@ -513,6 +520,27 @@ for (const shell of ["zsh", "bash"] as const) {
         expect(harness.log()[0]).toBe("launch claude");
       });
     }
+
+    /**
+     * A clausona older than `_launch` - after a downgrade, with this hook still in the shell -
+     * answers it with its usage text on stdout and exit 0. None of it may run: the tool starts
+     * with no profile applied, as it would with clausona gone from PATH.
+     */
+    it("evaluates nothing from a _launch that answers without the marker", () => {
+      const harness = makeHarness();
+      writeFileSync(
+        path.join(harness.envDir, "claude.env"),
+        "Usage: clausona [command]\nprintf 'INJECTED\\n'\nexport CLAUDE_CONFIG_DIR=/tmp/clausona-test-usage",
+      );
+
+      const result = runShell(shell, harness, 'claude\nprintf "rc=%s\\n" "$?"');
+
+      expect(result.stdout).not.toContain("INJECTED");
+      expect(result.stdout).toContain(`CLAUDE_CONFIG_DIR=${UNSET}`);
+      expect(result.stdout).toContain("rc=0");
+      expect(result.stderr).toBe("");
+      expect(harness.log()[0]).toBe("launch claude");
+    });
 
     // `HOME=/tmp/x claude`: the paths baked into the hook are not that home's, and `_launch`
     // looks where it says - for a registry that is most likely not there.

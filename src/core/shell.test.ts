@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isPosixEnvName,
+  LAUNCH_MARKER,
   powerShellLiteral,
   renderPosixExports,
   renderPosixShellInit,
@@ -18,6 +19,8 @@ const PATHS: ShellInitPaths = {
   home: "/home/o'brien",
 };
 const quoted = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
+/** A string as a regular expression that matches exactly it. */
+const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 describe("renderShellInit", () => {
   const out = renderPosixShellInit(PATHS);
@@ -38,9 +41,24 @@ describe("renderShellInit", () => {
 
   it("evaluates the launch script inside a subshell so exports do not leak", () => {
     expect(subshell).toMatch(/eval "\$_clausona_launch"/);
-    expect(subshell).toMatch(/eval "\$\(clausona _launch claude\)"/);
+    expect(subshell).toMatch(/_clausona_launch=\$\(clausona _launch claude\)/);
     expect(subshell).toMatch(/command claude "\$@"/);
     expect(claudeBlock).not.toMatch(/unset CLAUDE_CONFIG_DIR/);
+  });
+
+  /**
+   * A clausona older than `_launch` answers it with its usage text on stdout and exit 0, and
+   * eval'ing that runs its words. Only a script that opens with the marker is eval'd; the
+   * cache is asked for it too, and one without it goes to `_launch`.
+   */
+  it("evaluates nothing that does not open with the launch marker", () => {
+    const marked = `${quoted(LAUNCH_MARKER)}*`;
+    expect(subshell).toMatch(
+      new RegExp(
+        `if \\[\\[ \\$_clausona_launch != ${escape(marked)} \\]\\]; then\\s*\\n\\s*_clausona_launch=\\$\\(clausona _launch claude\\)\\s*\\n\\s*fi\\s*\\n\\s*if \\[\\[ \\$_clausona_launch == ${escape(marked)} \\]\\]; then\\s*\\n\\s*eval "\\$_clausona_launch"\\s*\\n\\s*fi`,
+      ),
+    );
+    expect(subshell.match(/eval /g)).toHaveLength(1);
   });
 
   /**
@@ -55,8 +73,9 @@ describe("renderShellInit", () => {
     const ref = quoted(PATHS.refPath("claude"));
     const registry = quoted(PATHS.registryPath);
     expect(subshell).toContain(
-      `if [[ $HOME == ${quoted(PATHS.home)} && -f ${registry} && ${registry} -ef ${ref} && ${cache} -nt ${registry} ]] && { _clausona_launch=$(<${cache}); } 2>/dev/null; then`,
+      `if [[ $HOME == ${quoted(PATHS.home)} && -f ${registry} && ${registry} -ef ${ref} && ${cache} -nt ${registry} ]]; then`,
     );
+    expect(subshell).toContain(`{ _clausona_launch=$(<${cache}); } 2>/dev/null`);
     expect(codexBlock).toContain(
       `${registry} -ef ${quoted(PATHS.refPath("codex"))} && ${quoted(PATHS.cachePath("codex", "posix"))} -nt ${registry}`,
     );
@@ -81,7 +100,8 @@ describe("renderShellInit", () => {
   });
 
   it("defines a codex wrapper on the same mechanism", () => {
-    expect(codexBlock).toMatch(/eval "\$\(clausona _launch codex\)"/);
+    expect(codexBlock).toMatch(/_clausona_launch=\$\(clausona _launch codex\)/);
+    expect(codexBlock).toMatch(/eval "\$_clausona_launch"/);
   });
 
   it("retains csn alias", () => {

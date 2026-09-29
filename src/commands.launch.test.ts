@@ -24,6 +24,7 @@ import {
   registryStamp,
   renderPosixSyncCheck,
 } from "./core/launch-cache.js";
+import { LAUNCH_MARKER } from "./core/shell.js";
 
 /**
  * `_launch <tool>` is what the new hook runs on a cache miss: the environment `_shell-env`
@@ -116,13 +117,13 @@ function filesUnder(dir: string): string[] {
 }
 
 describe("_launch", () => {
-  it("prints _shell-env's exports and the plugin check, and caches exactly that", async () => {
+  it("prints the marker, _shell-env's exports and the plugin check, and caches exactly that", async () => {
     const h = await harness((home) => subscription(home, { env: { ANTHROPIC_MODEL: "m" } }));
 
     const exports = await h.runCommand("_shell-env", ["claude"]);
     const out = await h.launch("claude");
 
-    expect(out).toBe(`${exports}\n${renderPosixSyncCheck(h.workDir, h.primary)}`);
+    expect(out).toBe(`${LAUNCH_MARKER}\n${exports}\n${renderPosixSyncCheck(h.workDir, h.primary)}`);
     expect(readFileSync(h.cachePath("claude", "posix"), "utf8")).toBe(out);
     // Next to it, a hard link to the profiles.json it was rendered from.
     const [registry, ref] = [h.registryPath, launchRefPath(h.clausonaDir, "claude", VERSION)].map((p) =>
@@ -142,7 +143,7 @@ describe("_launch", () => {
 
     const out = await h.launch("claude");
 
-    expect(out).toBe(renderPosixSyncCheck(h.primary, h.primary));
+    expect(out).toBe(`${LAUNCH_MARKER}\n${renderPosixSyncCheck(h.primary, h.primary)}`);
     expect(existsSync(pluginSyncStampPath(h.primary))).toBe(true);
     expect(readFileSync(h.cachePath("claude", "posix"), "utf8")).toBe(out);
   });
@@ -154,7 +155,7 @@ describe("_launch", () => {
 
     const out = await h.launch("codex");
 
-    expect(out).toBe(`export CODEX_HOME='${path.join(h.home, ".codex-work")}'`);
+    expect(out).toBe(`${LAUNCH_MARKER}\nexport CODEX_HOME='${path.join(h.home, ".codex-work")}'`);
     expect(readFileSync(h.cachePath("codex", "posix"), "utf8")).toBe(out);
     expect(existsSync(h.cachePath("claude", "posix"))).toBe(false);
   });
@@ -331,23 +332,43 @@ describe("_launch", () => {
     }
   });
 
+  /**
+   * The hook evals only what opens with the marker, so a script with nothing to set is the
+   * marker alone - not empty output, which the hook would take for an older clausona's.
+   * `--json` has no comment to open with, and stays empty.
+   */
   describe("degenerate input", () => {
-    it("prints nothing, and caches nothing, with no registry at all", async () => {
+    it("prints only the marker, and caches nothing, with no registry at all", async () => {
       const h = await harness(() => undefined);
-      expect(await h.launch("claude")).toBe("");
+      expect(await h.launch("claude")).toBe(LAUNCH_MARKER);
+      expect(await h.launch("claude", "--json")).toBe("");
       expect(existsSync(launchCacheDir(h.clausonaDir))).toBe(false);
     });
 
-    it("prints nothing when the tool has no active profile", async () => {
+    it("prints only the marker when the tool has no active profile", async () => {
       const h = await harness((home) => ({ ...subscription(home), activeProfiles: {} }));
-      expect(await h.launch("claude")).toBe("");
+      expect(await h.launch("claude")).toBe(LAUNCH_MARKER);
       expect(existsSync(launchCacheDir(h.clausonaDir))).toBe(false);
     });
 
-    it("prints nothing for a tool clausona does not manage", async () => {
+    it("prints only the marker for a tool clausona does not manage", async () => {
       const h = await harness((home) => subscription(home));
-      expect(await h.launch("gemini")).toBe("");
+      expect(await h.launch("gemini")).toBe(LAUNCH_MARKER);
     });
+  });
+});
+
+/**
+ * A hook reads a command's stdout as a script. An internal command this version does not have
+ * - a hook from another version asking - fails, with its usage on stderr, instead of printing
+ * that usage where the hook would run it, as 0.4.0-beta did for `_launch`.
+ */
+describe("an unknown internal command", () => {
+  it("fails instead of printing usage on stdout", async () => {
+    const h = await harness((home) => subscription(home));
+    await expect(h.runCommand("_no-such-command", [])).rejects.toThrow(/Unknown command: _no-such-command/);
+    // A mistyped public command still just gets the usage, as before.
+    expect(await h.runCommand("no-such-command", [])).toContain("USAGE");
   });
 });
 

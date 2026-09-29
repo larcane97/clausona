@@ -25,6 +25,12 @@ export function posixQuote(value: string): string {
 }
 
 /**
+ * The first line of every POSIX launch script `_launch` prints or caches, and the only thing
+ * the hook evals; see renderPosixShellInit. A comment, so it does nothing when eval'd.
+ */
+export const LAUNCH_MARKER = "# clausona launch";
+
+/**
  * Emits the environment one run needs: a guard over every name the profile must control,
  * then the `unset`s, then `export KEY='VALUE'` lines. The hook evals all of it inside its
  * subshell, so the caller's own shell is untouched.
@@ -170,6 +176,12 @@ export function renderLaunchJson(
  * under another one (`HOME=/tmp/x claude`) skips the cache: the baked paths are not that
  * home's, and `_launch` looks where it says.
  *
+ * Nothing is eval'd unless it starts with LAUNCH_MARKER, which every launch script does. A
+ * clausona older than `_launch` - after a downgrade, with this hook still in a shell - answers
+ * it with its usage text on stdout and exit 0, and eval'ing that would run its words as
+ * commands. Without the marker the tool starts with no profile applied, as it would with
+ * clausona gone from PATH; a cache that somehow lacks it goes to `_launch` first.
+ *
  * Two rules the generated script must keep:
  * - no `!` inside a double-quoted string, because zsh history-expands it when the function
  *   is *defined*, which breaks sourcing the init for every user at shell startup - so the
@@ -180,14 +192,21 @@ export function renderLaunchJson(
 export function renderPosixShellInit(paths: ShellInitPaths) {
   const home = posixQuote(paths.home);
   const registry = posixQuote(paths.registryPath);
+  // A pattern: the quoted marker, then anything.
+  const marked = `${posixQuote(LAUNCH_MARKER)}*`;
   // The first lines of the subshell for one tool: its launch script, from the cache or not.
   const launch = (tool: ToolName) => {
     const cache = posixQuote(paths.cachePath(tool, "posix"));
     const ref = posixQuote(paths.refPath(tool));
-    return `    if [[ $HOME == ${home} && -f ${registry} && ${registry} -ef ${ref} && ${cache} -nt ${registry} ]] && { _clausona_launch=$(<${cache}); } 2>/dev/null; then
+    return `    _clausona_launch=
+    if [[ $HOME == ${home} && -f ${registry} && ${registry} -ef ${ref} && ${cache} -nt ${registry} ]]; then
+      { _clausona_launch=$(<${cache}); } 2>/dev/null
+    fi
+    if [[ $_clausona_launch != ${marked} ]]; then
+      _clausona_launch=$(clausona _launch ${tool})
+    fi
+    if [[ $_clausona_launch == ${marked} ]]; then
       eval "$_clausona_launch"
-    else
-      eval "$(clausona _launch ${tool})"
     fi`;
   };
   return `# clausona shell integration

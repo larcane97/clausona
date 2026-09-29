@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { renderPosixShellInit, type ShellInitPaths } from "./core/shell.js";
+import { LAUNCH_MARKER, renderPosixShellInit, type ShellInitPaths } from "./core/shell.js";
 
 /**
  * `_shell-env` is the one command whose stdout the user's shell runs:
@@ -917,15 +917,13 @@ const HOOK_SHELLS = (["zsh", "bash"] as const).map((shell) => ({
 function hookRunner(h: Harness, out: string) {
   const bin = path.join(h.home, "bin");
   mkdirSync(bin, { recursive: true });
-  const outPath = path.join(h.home, "shell-env.sh");
-  writeFileSync(outPath, out);
-  // The hook asks `_launch`, whose exports are `_shell-env`'s: an API profile is never
-  // cached, so every one of its runs goes through here.
+  // The hook asks `_launch`, whose exports are `_shell-env`'s after its marker: an API profile
+  // is never cached, so every one of its runs goes through here.
+  const outPath = path.join(h.home, "launch.sh");
+  writeFileSync(outPath, `${LAUNCH_MARKER}\n${out}`);
   writeFileSync(
     path.join(bin, "clausona"),
-    ["#!/bin/sh", 'case "$1" in', "  _shell-env|_launch)", `    cat '${outPath}'`, "    ;;", "esac", "exit 0", ""].join(
-      "\n",
-    ),
+    ["#!/bin/sh", 'case "$1" in', "  _launch)", `    cat '${outPath}'`, "    ;;", "esac", "exit 0", ""].join("\n"),
     { mode: 0o755 },
   );
   const paths: ShellInitPaths = {

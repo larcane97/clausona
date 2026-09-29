@@ -20,7 +20,7 @@ import {
   writeLaunchCache,
 } from "./core/launch-cache.js";
 import { spawnCommandSync } from "./core/process.js";
-import { isPosixEnvName, renderJsonEnv, renderLaunchJson, renderPosixExports } from "./core/shell.js";
+import { isPosixEnvName, LAUNCH_MARKER, renderJsonEnv, renderLaunchJson, renderPosixExports } from "./core/shell.js";
 import { trackUsage } from "./core/track-usage.js";
 import {
   checkLatestTag,
@@ -1585,10 +1585,13 @@ export async function runCommand(command: string, args: string[]) {
       //
       // profiles.json is stat'ed before it is read, so the cache write below can tell whether
       // the script it is about to save still describes the file as it is now.
+      //
+      // The POSIX script always opens with LAUNCH_MARKER, even with nothing to set, because the
+      // hook evals nothing else: an older clausona answers `_launch` with its usage text.
       const paths = launchPaths();
       const before = await statRegistry(paths.registryPath);
       const active = await activeProfileEnv(args);
-      if (!active) return "";
+      if (!active) return jsonFlag(args) ? "" : LAUNCH_MARKER;
       const { tool, registry, profile, built } = active;
       const guard = controlledEnvKeys(profile, built);
 
@@ -1619,6 +1622,7 @@ export async function runCommand(command: string, args: string[]) {
               before === null ? undefined : registryStamp(before),
             )
           : [
+              LAUNCH_MARKER,
               renderPosixExports(built.env, built.unset, guard),
               sync ? renderPosixSyncCheck(sync.configDir, sync.primary, sync.cacheDirs) : "",
             ]
@@ -1726,6 +1730,11 @@ export async function runCommand(command: string, args: string[]) {
     }
 
     default:
+      // An internal command this version does not have is a hook from another version asking
+      // for it, and a hook reads stdout as a script to run. So the usage goes to stderr, by way
+      // of the error, and the exit status says it failed: a 0.4.0-beta answered `_launch` with
+      // its usage on stdout and exit 0.
+      if (command.startsWith("_")) throw new Error(`Unknown command: ${command}\n${usageText()}`);
       return usageText();
   }
 }
