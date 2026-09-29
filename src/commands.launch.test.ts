@@ -5,6 +5,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -36,10 +37,27 @@ import { LAUNCH_MARKER } from "./core/shell.js";
  * at a temp directory.
  */
 
+/**
+ * A seam into every file read: `afterRead` runs once a read has finished, before the reader
+ * sees the result, which lets a test do what another process could do at that moment.
+ * Everything else is the real thing.
+ */
+const fsHooks = vi.hoisted(() => ({ afterRead: undefined as ((target: string) => void) | undefined }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const readFile = (async (...args: Parameters<typeof actual.readFile>) => {
+    const content = await actual.readFile(...args);
+    fsHooks.afterRead?.(String(args[0]));
+    return content;
+  }) as typeof actual.readFile;
+  return { ...actual, default: { ...actual, readFile }, readFile };
+});
+
 const VERSION = __CLAUSONA_VERSION__;
 const temps: string[] = [];
 
 afterEach(() => {
+  fsHooks.afterRead = undefined;
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.resetModules();
@@ -293,6 +311,28 @@ describe("_launch", () => {
 
     expect(h.warnings).toHaveLength(2);
     expect(h.warnings[0]).toContain("clausona config claude:work --edit");
+    expect(existsSync(h.cachePath("claude", "posix"))).toBe(false);
+  });
+
+  /**
+   * `csn use` in another shell, landing just after this launch read profiles.json: the script
+   * about to be cached describes the file that is gone. profiles.json is stat'ed before it is
+   * read, so the write sees it changed and caches nothing. Stat'ed after, it would have seen
+   * the new file and cached the old profile's script under it.
+   */
+  it("caches nothing when profiles.json is replaced between its stat and its read", async () => {
+    const h = await harness((home) => subscription(home));
+    let replaced = false;
+    fsHooks.afterRead = (target) => {
+      if (target !== h.registryPath || replaced) return;
+      replaced = true;
+      writeFileSync(`${h.registryPath}.saved`, readFileSync(h.registryPath, "utf8"));
+      renameSync(`${h.registryPath}.saved`, h.registryPath);
+    };
+
+    expect(await h.launch("claude")).toContain(`export CLAUDE_CONFIG_DIR='${h.workDir}'`);
+
+    expect(replaced).toBe(true);
     expect(existsSync(h.cachePath("claude", "posix"))).toBe(false);
   });
 
