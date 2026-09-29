@@ -18,14 +18,17 @@ Shell wrappers for `claude` and `codex` are registered via `eval "$(clausona she
    so a config directory under a non-ASCII user folder reaches the tool intact whatever the
    console's code page
 3. **After** each `claude` invocation — detects usage changes via fingerprint comparison and
-   records cost/token usage per profile
+   records cost/token usage per profile. This runs in the background, so your prompt comes back
+   as soon as the tool exits: zsh and bash print no job notices for it, and PowerShell starts it
+   in a hidden window. Two sessions that end at the same moment are both recorded, because each
+   takes a lock on `usage.json` before writing to it
 
 ```
 clausona use work
 ↓
 claude             ← wrapper applies the work profile's env, then runs claude
 ↓
-_track-usage       ← on exit, records any new cost/token usage
+_track-usage       ← on exit, records any new cost/token usage in the background
 
 clausona use codex:personal
 ↓
@@ -198,7 +201,8 @@ that profile's key to Claude Code, which then talks to the endpoint you configur
 ├── quota.json       # cached plan-quota readings (5-minute freshness)
 ├── cache/           # launch scripts the shell hook reads (owner-only; never an API
 │                    #   profile's, so never a key)
-├── locks/           # short-lived per-profile credential renewal locks
+├── locks/           # short-lived locks: registry and usage.json writes, per-profile
+│                    #   credential renewal
 └── backups/
     ├── claude/      # backups of imported claude profile directories
     └── codex/       # backups of imported codex profile directories
