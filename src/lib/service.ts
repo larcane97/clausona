@@ -23,12 +23,13 @@ import { acquireDirLock, removeHeldDirLocks } from "../core/dir-lock.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
 import { acquireFileLock } from "../core/file-lock.js";
 import { isKnownSecretSource, keySharersElsewhere } from "../core/key-source.js";
+import { invalidateLaunchCache, launchCachePath, launchRefPath, PLUGIN_SYNC_STAMP_NAME } from "../core/launch-cache.js";
 import { appDir, backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
 import { isV1Registry, migrateRegistryV1toV2, setActiveProfile } from "../core/registry.js";
 import { createSharedLink, inspectSharedLink } from "../core/shared-links.js";
-import { isPosixEnvName, renderShellInit } from "../core/shell.js";
+import { isPosixEnvName, renderShellInit, type ShellInitPaths } from "../core/shell.js";
 import { seedSeenSessions } from "../core/track-usage.js";
 import { summarizeUsage } from "../core/usage.js";
 import { validateEnvEntry } from "../tools/claude-env-catalog.js";
@@ -416,7 +417,41 @@ export async function setupSharedLinks(
   return linked;
 }
 
-export async function syncPluginsJson(configDir: string, primarySource: string): Promise<void> {
+/**
+ * How a plugin sync went: `ok` is false when any step of it failed, and `changed` says whether
+ * it rewrote a file - even one that failed half way may have.
+ */
+export type PluginSyncResult = { ok: boolean; changed: boolean };
+
+/**
+ * Writes `value` as writeJson does, unless the file already holds the same JSON, and resolves
+ * to whether it wrote. The plugin sync's own files are on its watch list, so rewriting them
+ * unchanged would make the next launch find the sync due again, every time.
+ *
+ * The same JSON, not the same bytes: Claude Code rewrites these files in its own layout, and
+ * a byte comparison took each of its rewrites for a change and rewrote the file in clausona's.
+ * A file that does not parse is rewritten.
+ */
+async function writeJsonIfChanged(targetPath: string, value: unknown): Promise<boolean> {
+  const current = await readFile(targetPath, "utf8").catch(() => null);
+  if (current !== null) {
+    try {
+      if (JSON.stringify(JSON.parse(current)) === JSON.stringify(value)) return false;
+    } catch {
+      // Not JSON: written over below.
+    }
+  }
+  await writeJson(targetPath, value);
+  return true;
+}
+
+/**
+ * Rewrites a profile's known_marketplaces.json and installed_plugins.json so every path in
+ * them points into its own config dir, and drops what is no longer on disk. Never rejects:
+ * it runs on the way to starting Claude, and a failure must not stop that.
+ */
+export async function syncPluginsJson(configDir: string, primarySource: string): Promise<PluginSyncResult> {
+  let changed = false;
   try {
     const knownPath = path.join(configDir, "plugins", "known_marketplaces.json");
     const knownJson = await readJson<Record<string, unknown>>(knownPath, {});
@@ -494,7 +529,7 @@ export async function syncPluginsJson(configDir: string, primarySource: string):
       };
     }
 
-    await writeJson(knownPath, syncedKnown);
+    if (await writeJsonIfChanged(knownPath, syncedKnown)) changed = true;
 
     // Sync installed_plugins.json (v2 format: { version, plugins: { name: [entries] } })
     const installedPath = path.join(configDir, "plugins", "installed_plugins.json");
@@ -528,9 +563,13 @@ export async function syncPluginsJson(configDir: string, primarySource: string):
       }
     }
 
-    await writeJson(installedPath, { version: installedJson.version ?? 2, plugins: syncedPlugins });
+    if (await writeJsonIfChanged(installedPath, { version: installedJson.version ?? 2, plugins: syncedPlugins })) {
+      changed = true;
+    }
+    return { ok: true, changed };
   } catch {
-    // Never block Claude from launching
+    // Never block Claude from launching - but say it failed, so the sync is not stamped done.
+    return { ok: false, changed };
   }
 }
 
@@ -644,6 +683,9 @@ async function setupPluginsDir(profileDir: string, primarySource: string): Promi
   const items = await readdir(primaryPlugins, { withFileTypes: true });
   for (const item of items) {
     if (PLUGINS_PATH_FILES.has(item.name)) continue; // syncPluginsJson handles these
+    // The primary's own plugin sync stamp, or one being written. Linked, every profile's stamp
+    // would be the primary's, and a sync of one would mark them all done.
+    if (item.name.startsWith(PLUGIN_SYNC_STAMP_NAME)) continue;
 
     const source = path.join(primaryPlugins, item.name);
     const target = path.join(profilePlugins, item.name);
@@ -788,6 +830,9 @@ async function readRegistryLocked(): Promise<Registry | null> {
   const v1 = raw as RegistryV1;
   const migrated = migrateRegistryV1toV2(v1);
   await writeJson(REGISTRY_PATH, migrated);
+  // A registry write like any other, so it takes the launch scripts rendered from the old
+  // file with it, as saveRegistry does - and, like it, under the lock.
+  await invalidateLaunchCache(CLAUSONA_DIR);
 
   // 2. Backup directory layout migration: backups/<name>/ → backups/claude/<name>/
   const backupsDir = path.join(CLAUSONA_DIR, "backups");
@@ -837,6 +882,27 @@ async function saveRegistry(registry: Registry) {
   // Owner-only: it holds each API profile's command: key source, whose command line can
   // carry a vault token, and every env map in plain text.
   await writeJson(REGISTRY_PATH, registry, 0o600);
+  // Every launch script in the cache was rendered from the file just replaced. They go after
+  // the rename and before the lock does: a launch rendering meanwhile sees profiles.json
+  // change under it and writes nothing, and a hook that looks in between finds its script
+  // older than profiles.json and does not read it.
+  await invalidateLaunchCache(CLAUSONA_DIR);
+}
+
+/**
+ * Runs `fn` holding the registry lock, or resolves to undefined without running it while
+ * another process holds the lock. For work worth doing only when it costs the caller nothing:
+ * writing the launch cache, which a launch must never wait for, and which is better skipped
+ * while someone else is changing the registry the script was rendered from.
+ */
+export async function tryWithRegistryLock<T>(fn: () => Promise<T>): Promise<T | undefined> {
+  const release = await acquireFileLock(REGISTRY_LOCK_PATH, { staleMs: REGISTRY_LOCK_STALE_MS, waitMs: 0 });
+  if (!release) return undefined;
+  try {
+    return await fn();
+  } finally {
+    await release();
+  }
 }
 
 async function withRegistryLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -2992,8 +3058,22 @@ export async function resolveProfileEnv(
   return { tool: profile.tool, binary: adapter.binary, configDir: profile.configDir, env };
 }
 
+/**
+ * Where this version's launch scripts live, and the registry the hook compares them with.
+ * `shell-init` bakes both into the hook as absolute paths, so the common path starts no
+ * process to find them, and `_launch` writes to the same places.
+ */
+export function launchPaths(): ShellInitPaths {
+  return {
+    cachePath: (tool, format) => launchCachePath(CLAUSONA_DIR, tool, format, __CLAUSONA_VERSION__),
+    refPath: (tool) => launchRefPath(CLAUSONA_DIR, tool, __CLAUSONA_VERSION__),
+    registryPath: REGISTRY_PATH,
+    home: homedir(),
+  };
+}
+
 export function shellInit() {
-  return renderShellInit();
+  return renderShellInit(process.platform, launchPaths());
 }
 
 export async function uninstallClausona() {

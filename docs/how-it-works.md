@@ -7,9 +7,11 @@
 Shell wrappers for `claude` and `codex` are registered via `eval "$(clausona shell-init)"` on zsh/bash or
 `Invoke-Expression (& clausona shell-init | Out-String)` on PowerShell:
 
-1. **Before** each invocation — asks clausona for the active profile's environment: the config
-   directory (`CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME` for codex) and, for an API-backed
-   profile, its endpoint and credential
+1. **Before** each invocation — applies the active profile's launch script: the config directory
+   (`CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME` for codex) and, for an API-backed profile, its
+   endpoint and credential, plus a check on the plugin files for claude. The script comes from
+   clausona's launch cache when it can, so no clausona process runs before the tool (see
+   [The launch cache](#the-launch-cache) below), and from `clausona _launch` otherwise
 2. **During** the invocation — those variables exist only for that one run. On zsh/bash the tool
    runs in a subshell, on PowerShell each variable is restored afterwards, so your interactive
    shell is left exactly as it was. On PowerShell the environment arrives as ASCII-only JSON,
@@ -41,6 +43,43 @@ warning to stderr before every invocation, and still runs the tool. The warning 
 profile is fixed; it is not a one-off notice. The one exception is Windows when PowerShell cannot
 create a temp file to capture it: the warning is dropped, but the tool still launches with the
 right account.
+
+### The launch cache
+
+Starting clausona costs a Node process, a tenth of a second or more, before the tool even
+starts. So when `clausona _launch` works out a profile's launch script, it also saves a copy
+in `~/.clausona/cache/`, and the next launch reads that file in the shell itself.
+
+- **What is cached** — only a script that holds nothing to be worked out afresh at each launch.
+  An API profile is never cached, because its key is read from the Keychain, `secrets.json`, an
+  environment variable or a command each time, and must not be copied anywhere else. Neither is
+  a profile whose environment produced a warning, which has to print on every launch, one whose
+  env map holds something that looks like a secret, nor one whose config directory - or
+  `~/.claude` or `~/.codex` - is missing or reached through a symlink, which can be created or
+  repointed without `profiles.json` changing. Those profiles launch through `clausona _launch`
+  every time, as they always did. So does a run under another `HOME` than the shell hook was
+  set up with.
+- **When it is used** — only while `profiles.json` is still the very file the script was
+  rendered from and has not changed since: on zsh/bash the script keeps a hard link to that
+  file and must be newer than it, on PowerShell it records the file's exact write time and
+  size. Every change clausona makes to `profiles.json` (`clausona use`, `config`, `add`,
+  `remove`) deletes the cache as it saves, so the very next launch after `clausona use work`
+  starts as `work`. An editor saving the file, or a backup moved back over it, also sends the
+  next launch to clausona. On zsh/bash, copying another file over it in place with its old time
+  kept (`cp -p`) does not, until the next change clausona makes; PowerShell's exact time check
+  catches that too. A cache written while another command was changing `profiles.json` is not
+  saved at all.
+- **Per version** — the file name carries clausona's version, and a shell hook only reads the
+  cache of the version that rendered it, so a shell opened before `clausona update` never reads
+  a script the new version wrote, or the reverse.
+
+For claude, the launch script also decides whether the plugin files need syncing, without
+starting clausona. Each sync that works leaves a stamp, `plugins/.clausona-synced`, in the
+profile's config directory, and the script runs `clausona _sync-plugins` only when that stamp is
+missing or something the sync reads is at least as new as it: the profile's
+`known_marketplaces.json` or `installed_plugins.json`, or the primary's marketplaces,
+`installed_plugins.json`, plugin cache, or the cache's marketplace and plugin directories. When
+any of those changes, the sync runs on the next launch.
 
 ## Shared Environment
 
@@ -159,6 +198,8 @@ that profile's key to Claude Code, which then talks to the endpoint you configur
 │                    #   Keychain)
 ├── usage.json       # per-profile usage history
 ├── quota.json       # cached plan-quota readings (5-minute freshness)
+├── cache/           # launch scripts the shell hook reads (owner-only; never an API
+│                    #   profile's, so never a key)
 ├── locks/           # short-lived per-profile credential renewal locks
 └── backups/
     ├── claude/      # backups of imported claude profile directories

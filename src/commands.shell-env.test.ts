@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { renderPosixShellInit } from "./core/shell.js";
+import { LAUNCH_MARKER, renderPosixShellInit, type ShellInitPaths } from "./core/shell.js";
 
 /**
  * `_shell-env` is the one command whose stdout the user's shell runs:
@@ -917,13 +917,21 @@ const HOOK_SHELLS = (["zsh", "bash"] as const).map((shell) => ({
 function hookRunner(h: Harness, out: string) {
   const bin = path.join(h.home, "bin");
   mkdirSync(bin, { recursive: true });
-  const outPath = path.join(h.home, "shell-env.sh");
-  writeFileSync(outPath, out);
+  // The hook asks `_launch`, whose exports are `_shell-env`'s after its marker: an API profile
+  // is never cached, so every one of its runs goes through here.
+  const outPath = path.join(h.home, "launch.sh");
+  writeFileSync(outPath, `${LAUNCH_MARKER}\n${out}`);
   writeFileSync(
     path.join(bin, "clausona"),
-    ["#!/bin/sh", 'case "$1" in', "  _shell-env)", `    cat '${outPath}'`, "    ;;", "esac", "exit 0", ""].join("\n"),
+    ["#!/bin/sh", 'case "$1" in', "  _launch)", `    cat '${outPath}'`, "    ;;", "esac", "exit 0", ""].join("\n"),
     { mode: 0o755 },
   );
+  const paths: ShellInitPaths = {
+    cachePath: (tool, format) => path.join(h.home, ".clausona", "cache", `launch-test-${tool}.${format}`),
+    refPath: (tool) => path.join(h.home, ".clausona", "cache", `launch-test-${tool}.ref`),
+    registryPath: path.join(h.home, ".clausona", "profiles.json"),
+    home: h.home,
+  };
   writeFileSync(
     path.join(bin, "claude"),
     [
@@ -938,7 +946,7 @@ function hookRunner(h: Harness, out: string) {
   );
   return (shell: "zsh" | "bash", body: string, env: Record<string, string>) => {
     const args = shell === "zsh" ? ["-f"] : ["--noprofile", "--norc"];
-    return spawnSync(shell, [...args, "-c", `${renderPosixShellInit()}\n${body}\n`], {
+    return spawnSync(shell, [...args, "-c", `${renderPosixShellInit(paths)}\n${body}\n`], {
       encoding: "utf8",
       timeout: 15_000,
       env: { PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, HOME: h.home, ...env },

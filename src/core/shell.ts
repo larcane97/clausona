@@ -1,3 +1,6 @@
+import type { ToolName } from "../types.js";
+import type { LaunchFormat } from "./launch-cache.js";
+
 /**
  * The one definition of a name a shell can export. Every layer that puts a profile's
  * free-form env map onto a command line checks a key against this: `validateEnvEntry`
@@ -11,6 +14,21 @@ const POSIX_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export function isPosixEnvName(key: string): boolean {
   return POSIX_ENV_NAME.test(key);
 }
+
+/**
+ * A string as one POSIX shell word that means exactly itself. Single quotes are the only
+ * form in which no character is special, so a value can carry `$`, backticks, `!` and
+ * newlines untouched; an embedded quote is closed, escaped, and reopened.
+ */
+export function posixQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * The first line of every POSIX launch script `_launch` prints or caches, and the only thing
+ * the hook evals; see renderPosixShellInit. A comment, so it does nothing when eval'd.
+ */
+export const LAUNCH_MARKER = "# clausona launch";
 
 /**
  * Emits the environment one run needs: a guard over every name the profile must control,
@@ -56,7 +74,7 @@ export function renderPosixExports(
   }
   if (cleared.length > 0) lines.push(`unset ${cleared.join(" ")}`);
   for (const [key, value] of Object.entries(env)) {
-    if (isPosixEnvName(key)) lines.push(`export ${key}='${value.replace(/'/g, "'\\''")}'`);
+    if (isPosixEnvName(key)) lines.push(`export ${key}=${posixQuote(value)}`);
   }
   return lines.join("\n");
 }
@@ -74,26 +92,132 @@ export function renderPosixExports(
  * and the tool ran on a fresh account. ConvertFrom-Json decodes the escapes on 5.1 and 7 alike.
  */
 export function renderJsonEnv(env: Record<string, string>, unset: readonly string[] = []): string {
+  return asciiJson(jsonEnv(env, unset));
+}
+
+/** What the PowerShell hook applies: the profile's variables, and null for each one to remove. */
+function jsonEnv(env: Record<string, string>, unset: readonly string[]): Record<string, string | null> {
   const cleared = Object.fromEntries(unset.map((key) => [key, null]));
-  return JSON.stringify({ ...cleared, ...env }).replace(
+  return { ...cleared, ...env };
+}
+
+/** JSON with every character past `~` written as a `\uXXXX` escape; see renderJsonEnv. */
+function asciiJson(value: unknown): string {
+  return JSON.stringify(value).replace(
     /[\u007f-\uffff]/g,
     (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
 }
 
 /**
- * The wrapper asks `clausona _shell-env <tool>` for the whole environment a run needs and
- * evals it inside a subshell, so the variables live exactly as long as the tool does.
+ * The absolute paths a hook is rendered with: where this version keeps each tool's launch
+ * script in each format and, for the POSIX script, the link to the registry it was rendered
+ * from; and the registry itself.
+ */
+export type ShellInitPaths = {
+  cachePath: (tool: ToolName, format: LaunchFormat) => string;
+  refPath: (tool: ToolName) => string;
+  registryPath: string;
+  /**
+   * The home directory the paths above were derived from: HOME on POSIX, USERPROFILE on
+   * Windows, which is where Node's homedir() reads it. A run under another one - `HOME=/tmp/x
+   * claude` - is not a run these paths describe, so it goes to `_launch`, which looks where
+   * that home says, as the hook always did.
+   */
+  home: string;
+};
+
+/** Where the plugin sync last left its stamp, and the paths that make it stale. */
+export type PluginSyncCheck = { stamp: string; watch: string[] };
+
+/** profiles.json's LastWriteTimeUtc.Ticks and Length when the script was rendered. */
+export type RegistryStampJson = { ticks: string; length: string };
+
+/**
+ * `_launch <tool> --json`, which the new PowerShell hook reads: the environment exactly as
+ * renderJsonEnv spells it, under `env`; for claude the plugin sync's stamp and watch list
+ * under `sync`, so the hook can tell for itself whether a sync is due; and the registry it was
+ * rendered from under `registry`, which a cached copy must still match. ASCII only, for the
+ * same code-page reason as renderJsonEnv - the paths in `sync` sit under the same user folder.
+ */
+export function renderLaunchJson(
+  env: Record<string, string>,
+  unset: readonly string[],
+  sync: PluginSyncCheck | undefined,
+  registry?: RegistryStampJson,
+): string {
+  const document: { env: Record<string, string | null>; sync?: PluginSyncCheck; registry?: RegistryStampJson } = {
+    env: jsonEnv(env, unset),
+  };
+  if (sync) document.sync = sync;
+  if (registry) document.registry = registry;
+  return asciiJson(document);
+}
+
+/**
+ * The wrapper evals the launch script - the whole environment a run needs, and for claude the
+ * plugin check - inside a subshell, so the variables live exactly as long as the tool does.
  * Nothing is unset by hand: there is no ledger of what was set to drift out of date, and a
  * value the user exported in their own profile is untouched when the call returns.
  *
+ * The script comes from the launch cache when there is one it can trust, and from
+ * `clausona _launch <tool>` otherwise, which also caches it when it can. Trusted means that
+ * profiles.json exists, is the very file the script was rendered from - `-ef` its ref, the
+ * hard link written with the script - and is older than the script. Every registry save
+ * deletes the cache anyway; the ref also catches a delete that failed and a backup moved back
+ * over profiles.json, and the time an edit of the file in place. Equal times are refused,
+ * since a filesystem that keeps whole seconds cannot order two writes in one. The file is
+ * read by the shell itself - `$(<file)` - so the common path starts no process before the
+ * tool, and a read that fails, a cache deleted since the check, falls through to `_launch`
+ * rather than to no profile at all.
+ *
+ * The paths are absolute and baked in when `shell-init` runs, so finding them costs nothing
+ * either; a hook only ever reads the cache its own version writes. So is HOME, and a run
+ * under another one (`HOME=/tmp/x claude`) skips the cache: the baked paths are not that
+ * home's, and `_launch` looks where it says.
+ *
+ * Nothing is eval'd unless it starts with LAUNCH_MARKER, which every launch script does. A
+ * clausona older than `_launch` - after a downgrade, with this hook still in a shell - answers
+ * it with its usage text on stdout and exit 0, and eval'ing that would run its words as
+ * commands. Without the marker the tool starts with no profile applied, as it would with
+ * clausona gone from PATH; a cache that somehow lacks it goes to `_launch` first. When
+ * `_launch` did print something - that usage, or a wrapper's banner on stdout - the hook says
+ * on stderr that it is starting the tool without a profile, rather than letting it run on the
+ * default account unannounced. Nothing printed at all stays silent, as clausona gone does.
+ *
+ * Both reads end in `|| :`, as does the plugin sync the script may run, so a caller's
+ * `set -e` (zsh's ERR_EXIT) does not end the subshell on a cache that vanished or a clausona
+ * that failed or is gone: the tool still starts.
+ *
  * Two rules the generated script must keep:
  * - no `!` inside a double-quoted string, because zsh history-expands it when the function
- *   is *defined*, which breaks sourcing the init for every user at shell startup;
+ *   is *defined*, which breaks sourcing the init for every user at shell startup - so the
+ *   baked paths, which can hold one, are single-quoted and never double-quoted;
  * - no credential on a command line (`env KEY=VALUE cmd`), because `ps` shows it to every
  *   user on the machine. The eval keeps secrets inside the subshell's own environment.
  */
-export function renderPosixShellInit() {
+export function renderPosixShellInit(paths: ShellInitPaths) {
+  const home = posixQuote(paths.home);
+  const registry = posixQuote(paths.registryPath);
+  // A pattern: the quoted marker, then anything.
+  const marked = `${posixQuote(LAUNCH_MARKER)}*`;
+  // The first lines of the subshell for one tool: its launch script, from the cache or not.
+  const launch = (tool: ToolName) => {
+    const cache = posixQuote(paths.cachePath(tool, "posix"));
+    const ref = posixQuote(paths.refPath(tool));
+    return `    _clausona_launch=
+    if [[ $HOME == ${home} && -f ${registry} && ${registry} -ef ${ref} && ${cache} -nt ${registry} ]]; then
+      { _clausona_launch=$(<${cache}); } 2>/dev/null || :
+    fi
+    if [[ $_clausona_launch != ${marked} ]]; then
+      _clausona_launch=$(clausona _launch ${tool}) || :
+    fi
+    if [[ $_clausona_launch == ${marked} ]]; then
+      eval "$_clausona_launch"
+    elif [[ -n $_clausona_launch ]]; then
+      printf 'clausona: unexpected output from clausona _launch; starting ${tool} without a profile\\n' >&2
+    fi`;
+  };
   return `# clausona shell integration
 unalias claude 2>/dev/null
 claude() {
@@ -103,8 +227,7 @@ claude() {
     return $?
   fi
   (
-    eval "$(clausona _shell-env claude)"
-    clausona _sync-plugins 2>/dev/null
+${launch("claude")}
     command claude "$@"
   )
   local rc=$?
@@ -119,7 +242,7 @@ codex() {
     return $?
   fi
   (
-    eval "$(clausona _shell-env codex)"
+${launch("codex")}
     command codex "$@"
   )
   return $?
@@ -137,9 +260,22 @@ alias csn=clausona
  * string - and passing that same `$null` back to `SetEnvironmentVariable` removes the
  * variable, which is what restoring "it was not set" has to mean.
  *
+ * The environment comes from the launch cache when there is a script it can trust - the
+ * `.json` one, strictly newer than an existing profiles.json, the same rule as the POSIX
+ * hook - and from `clausona _launch <tool> --json` otherwise. A hit starts no process before
+ * the tool; for claude the hook then does the plugin check the POSIX script carries, from
+ * the script's `sync` block, and runs `_sync-plugins` only when it is due.
+ *
+ * The cache and registry paths are baked in when `shell-init` runs, as ASCII-only literals
+ * (see powerShellLiteral), because the profile reads the hook as a native command's output.
+ *
  * Targets Windows PowerShell 5.1, so no null-coalescing and no ternary operator.
  */
-export function renderPowerShellInit() {
+export function renderPowerShellInit(paths: ShellInitPaths) {
+  const claudeCache = powerShellLiteral(paths.cachePath("claude", "json"));
+  const codexCache = powerShellLiteral(paths.cachePath("codex", "json"));
+  const registry = powerShellLiteral(paths.registryPath);
+  const home = powerShellLiteral(paths.home);
   return `# clausona PowerShell integration
 function global:Invoke-ClausonaTool {
   param(
@@ -149,75 +285,137 @@ function global:Invoke-ClausonaTool {
 
   # $env: is process-global here, so the previous values are captured and restored.
   $applied = @{}
-  # A warning from _shell-env means a persistent misconfiguration - a credential that will
-  # not resolve, a key clausona cannot export - so it has to reach the user on every run,
-  # exactly as it does on POSIX. stderr cannot be merged into stdout, which carries the
-  # JSON, and 5.1 cannot split a native command's streams inline; so stderr goes to a temp
-  # file and is replayed to the console afterwards.
-  #
-  # Creating that file is the one step that can fail before the lookup runs, so it is
-  # guarded and the lookup has a branch for each outcome. Losing the warnings is bad;
-  # running the tool against the default account without saying so would be worse, and
-  # that is what a lookup skipped over a temp file would cause. Exactly one branch runs,
-  # so a run still makes exactly one _shell-env call.
-  $stderrPath = $null
-  try {
-    $stderrPath = [System.IO.Path]::GetTempFileName()
-  } catch {
-    $stderrPath = $null
-  }
   # A caller's $ErrorActionPreference = 'Stop' must not let a clausona step cut the run short.
   # 5.1 turns each line a native command writes to a redirected stderr into an error record,
   # so under Stop the first warning would throw - here, before $raw is assigned; 7.3+ can do
-  # the same to a non-zero exit. Every clausona call below runs under Continue; only the tool
+  # the same to a non-zero exit. Every clausona step below runs under Continue; only the tool
   # itself gets the caller's own preference back.
   $callerErrorAction = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
+
+  # The launch script clausona cached for this profile, while profiles.json is exactly the
+  # file it was rendered from: the same write time, to the tick, and the same length. A save
+  # changes the time, and so does a backup moved back over the file, however old. A run under
+  # another USERPROFILE is not one these paths describe, and skips the cache. Every step is
+  # told to stop on an error, and caught: a cache that cannot be read - deleted by a save in
+  # another window between the check and the read, say - is a miss, never a run with no
+  # profile, and never an error printed in the caller's console.
+  $parsed = $null
+  if ($Tool -eq "claude") {
+    $cachePath = ${claudeCache}
+  } else {
+    $cachePath = ${codexCache}
+  }
+  $registryPath = ${registry}
+  $clausonaHome = ${home}
   try {
-    if ($stderrPath) {
-      $raw = & clausona _shell-env $Tool --json 2>$stderrPath
-    } else {
-      $raw = & clausona _shell-env $Tool --json 2>$null
+    if (($env:USERPROFILE -eq $clausonaHome) -and (Test-Path -LiteralPath $cachePath) -and (Test-Path -LiteralPath $registryPath)) {
+      $registryItem = Get-Item -LiteralPath $registryPath -ErrorAction Stop
+      $parsed = Get-Content -LiteralPath $cachePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+      $sameTicks = $parsed.registry.ticks -eq [string]$registryItem.LastWriteTimeUtc.Ticks
+      $sameLength = $parsed.registry.length -eq [string]$registryItem.Length
+      if (-not ($sameTicks -and $sameLength)) { $parsed = $null }
     }
-    if ($raw) {
-      $parsed = $raw | ConvertFrom-Json
-      foreach ($property in $parsed.PSObject.Properties) {
+  } catch {
+    $parsed = $null
+  }
+
+  if (-not $parsed) {
+    # A warning from _launch means a persistent misconfiguration - a credential that will
+    # not resolve, a key clausona cannot export - so it has to reach the user on every run,
+    # exactly as it does on POSIX. stderr cannot be merged into stdout, which carries the
+    # JSON, and 5.1 cannot split a native command's streams inline; so stderr goes to a temp
+    # file and is replayed to the console afterwards.
+    #
+    # Creating that file is the one step that can fail before the lookup runs, so it is
+    # guarded and the lookup has a branch for each outcome. Losing the warnings is bad;
+    # running the tool against the default account without saying so would be worse, and
+    # that is what a lookup skipped over a temp file would cause. Exactly one branch runs,
+    # so a miss still makes exactly one _launch call.
+    $stderrPath = $null
+    try {
+      $stderrPath = [System.IO.Path]::GetTempFileName()
+    } catch {
+      $stderrPath = $null
+    }
+    try {
+      if ($stderrPath) {
+        $raw = & clausona _launch $Tool --json 2>$stderrPath
+      } else {
+        $raw = & clausona _launch $Tool --json 2>$null
+      }
+      if ($raw) { $parsed = $raw | ConvertFrom-Json }
+    } catch {
+      # A failed lookup must never stop the tool from starting.
+    } finally {
+      # Neither must reporting one, hence the inner try. [Console]::Error keeps the warning
+      # on stderr, where Write-Host would put it on stdout and corrupt a piped run.
+      #
+      # -LiteralPath throughout: a temp directory under a user name containing [ or ] would
+      # otherwise read as a wildcard, and the file would be neither reported nor deleted.
+      try {
+        if ($stderrPath) {
+          if (Test-Path -LiteralPath $stderrPath) {
+            $warning = Get-Content -LiteralPath $stderrPath -Raw
+            if ($warning) { [Console]::Error.Write($warning) }
+          }
+        }
+      } catch {
+        # Nothing left to do about a warning that cannot be printed.
+      }
+      # Its own try, so a read that threw above still deletes the file it read from.
+      try {
+        if ($stderrPath) { Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue }
+      } catch {
+        # Nothing left to do about a temp file that cannot be deleted.
+      }
+    }
+  }
+
+  try {
+    if ($parsed) {
+      foreach ($property in $parsed.env.PSObject.Properties) {
         $name = $property.Name
         $applied[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
         [Environment]::SetEnvironmentVariable($name, $property.Value, "Process")
       }
     }
   } catch {
-    # A failed lookup must never stop the tool from starting.
-  } finally {
-    # Neither must reporting one, hence the inner try. [Console]::Error keeps the warning
-    # on stderr, where Write-Host would put it on stdout and corrupt a piped run.
-    #
-    # -LiteralPath throughout: a temp directory under a user name containing [ or ] would
-    # otherwise read as a wildcard, and the file would be neither reported nor deleted.
-    try {
-      if ($stderrPath) {
-        if (Test-Path -LiteralPath $stderrPath) {
-          $warning = Get-Content -LiteralPath $stderrPath -Raw
-          if ($warning) { [Console]::Error.Write($warning) }
-        }
-      }
-    } catch {
-      # Nothing left to do about a warning that cannot be printed.
-    }
-    # Its own try, so a read that threw above still deletes the file it read from.
-    try {
-      if ($stderrPath) { Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue }
-    } catch {
-      # Nothing left to do about a temp file that cannot be deleted.
-    }
+    # Nor must applying it. Whatever was applied before a throw is restored below.
   }
 
   try {
     # Still under Continue, and caught, so neither a warning from the sync nor a clausona that
     # has gone from PATH can stop the tool from starting.
+    #
+    # The sync is due when its stamp is missing or anything it watches is at least as new as
+    # the stamp - the stamp's time is taken before the sync reads, so a change in the same
+    # tick is one it may have missed - and when the check itself fails: syncing once too often
+    # costs a second, missing a plugin costs a broken session. With no launch script at all there is nothing to check, and nothing is
+    # synced - as on POSIX, where the check is part of the script.
     if ($Tool -eq "claude") {
-      try { clausona _sync-plugins *> $null } catch { }
+      $syncDue = $false
+      try {
+        if ($parsed) {
+          if ($parsed.sync) {
+            $syncDue = $true
+            if (Test-Path -LiteralPath $parsed.sync.stamp) {
+              $stampTime = (Get-Item -LiteralPath $parsed.sync.stamp -ErrorAction Stop).LastWriteTimeUtc
+              $syncDue = $false
+              foreach ($watched in $parsed.sync.watch) {
+                if (Test-Path -LiteralPath $watched) {
+                  if ((Get-Item -LiteralPath $watched -ErrorAction Stop).LastWriteTimeUtc -ge $stampTime) { $syncDue = $true }
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        $syncDue = $true
+      }
+      if ($syncDue) {
+        try { clausona _sync-plugins *> $null } catch { }
+      }
     }
     # The tool runs under the caller's own preference, exactly as it would without clausona.
     $ErrorActionPreference = $callerErrorAction
@@ -265,6 +463,36 @@ Set-Alias -Name csn -Value clausona -Scope Global
 `;
 }
 
-export function renderShellInit(platform: NodeJS.Platform = process.platform) {
-  return platform === "win32" ? renderPowerShellInit() : renderPosixShellInit();
+/**
+ * A string as a PowerShell expression that evaluates to exactly it, in ASCII alone.
+ *
+ * The profile runs the hook as `Invoke-Expression (& clausona shell-init | Out-String)`, and
+ * PowerShell decodes a native command's output in the console's code page - 437 or 949, not
+ * UTF-8 - so a path under a Hangul user folder, baked in as UTF-8, would name a folder that
+ * does not exist. So every character past ASCII, and every control character, is spelled as
+ * a `[char]`, which reads the same in every code page. That also takes care of the curly
+ * quotes PowerShell accepts as single quotes, which could otherwise end the literal early.
+ * The ASCII runs are single-quoted, where nothing but `'` is special, and that is doubled.
+ *
+ * The concatenation always starts from a string, because `[char] + [char]` adds numbers.
+ */
+export function powerShellLiteral(value: string): string {
+  const parts: string[] = [];
+  let run = "";
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code >= 0x20 && code <= 0x7e) {
+      run += value[i] === "'" ? "''" : value[i];
+      continue;
+    }
+    if (run !== "" || parts.length === 0) parts.push(`'${run}'`);
+    run = "";
+    parts.push(`[char]0x${code.toString(16).padStart(4, "0")}`);
+  }
+  if (run !== "" || parts.length === 0) parts.push(`'${run}'`);
+  return parts.length === 1 ? (parts[0] as string) : `(${parts.join(" + ")})`;
+}
+
+export function renderShellInit(platform: NodeJS.Platform, paths: ShellInitPaths) {
+  return platform === "win32" ? renderPowerShellInit(paths) : renderPosixShellInit(paths);
 }

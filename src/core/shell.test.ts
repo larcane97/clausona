@@ -1,53 +1,108 @@
 import { describe, expect, it } from "vitest";
 import {
   isPosixEnvName,
+  LAUNCH_MARKER,
+  powerShellLiteral,
   renderPosixExports,
   renderPosixShellInit,
   renderPowerShellInit,
   renderShellInit,
+  type ShellInitPaths,
 } from "./shell.js";
 
+/** Paths with a quote in them, so every place they land has to quote them properly. */
+const PATHS: ShellInitPaths = {
+  cachePath: (tool, format) =>
+    `/home/o'brien/.clausona/cache/launch-9.9.9-${tool}.${format === "posix" ? "sh" : "json"}`,
+  refPath: (tool) => `/home/o'brien/.clausona/cache/launch-9.9.9-${tool}.ref`,
+  registryPath: "/home/o'brien/.clausona/profiles.json",
+  home: "/home/o'brien",
+};
+const quoted = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
+/** A string as a regular expression that matches exactly it. */
+const regexLiteral = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 describe("renderShellInit", () => {
-  const out = renderPosixShellInit();
+  const out = renderPosixShellInit(PATHS);
+  const claudeBlock = out.split(/^claude\(\)\s*\{/m)[1]?.split(/^\}/m)[0] ?? "";
+  const codexBlock = out.split(/^codex\(\)\s*\{/m)[1] ?? "";
+  // From the subshell's opening paren to the `)` that closes it on its own line.
+  const subshell =
+    claudeBlock
+      .split(/^\s*\(\s*$/m)
+      .slice(1)
+      .join("(")
+      .split(/^\s*\)\s*$/m)[0] ?? "";
 
   it("no longer defines the inline node resolver", () => {
     expect(out).not.toMatch(/_clausona_resolve/);
     expect(out).not.toMatch(/node -e/);
   });
 
-  it("evaluates _shell-env inside a subshell so exports do not leak", () => {
-    const claudeBlock = out.split(/^claude\(\)\s*\{/m)[1]?.split(/^\}/m)[0] ?? "";
-    expect(claudeBlock).toMatch(/\(\s*\n\s*eval "\$\(clausona _shell-env claude\)"/);
+  it("evaluates the launch script inside a subshell so exports do not leak", () => {
+    expect(subshell).toMatch(/eval "\$_clausona_launch"/);
+    expect(subshell).toMatch(/_clausona_launch=\$\(clausona _launch claude\)/);
+    expect(subshell).toMatch(/command claude "\$@"/);
     expect(claudeBlock).not.toMatch(/unset CLAUDE_CONFIG_DIR/);
+  });
+
+  /**
+   * A clausona older than `_launch` answers it with its usage text on stdout and exit 0, and
+   * eval'ing that runs its words. Only a script that opens with the marker is eval'd; the
+   * cache is asked for it too, and one without it goes to `_launch`. Output that is not a
+   * launch script is announced on stderr, since the tool then runs without a profile.
+   */
+  it("evaluates nothing that does not open with the launch marker", () => {
+    const marked = `${quoted(LAUNCH_MARKER)}*`;
+    expect(subshell).toMatch(
+      new RegExp(
+        `if \\[\\[ \\$_clausona_launch != ${regexLiteral(marked)} \\]\\]; then\\s*\\n\\s*_clausona_launch=\\$\\(clausona _launch claude\\) \\|\\| :\\s*\\n\\s*fi\\s*\\n\\s*if \\[\\[ \\$_clausona_launch == ${regexLiteral(marked)} \\]\\]; then\\s*\\n\\s*eval "\\$_clausona_launch"\\s*\\n\\s*elif \\[\\[ -n \\$_clausona_launch \\]\\]; then\\s*\\n\\s*printf 'clausona: unexpected output from clausona _launch; starting claude without a profile\\\\n' >&2\\s*\\n\\s*fi`,
+      ),
+    );
+    expect(subshell.match(/eval /g)).toHaveLength(1);
+  });
+
+  /**
+   * The common path starts no process: the cached script is read by the shell itself, and
+   * only under the HOME the hook was rendered for, while profiles.json is the file it was
+   * rendered from and older than it - a registry that is missing, another file, or as new as
+   * the script sends the run to `_launch`, which is slower and never wrong. The paths are
+   * baked in single-quoted, so a home directory holding a quote or a `!` stays literal.
+   */
+  it("reads the cached launch script only while the registry is the one it was rendered from", () => {
+    const cache = quoted(PATHS.cachePath("claude", "posix"));
+    const ref = quoted(PATHS.refPath("claude"));
+    const registry = quoted(PATHS.registryPath);
+    expect(subshell).toContain(
+      `if [[ $HOME == ${quoted(PATHS.home)} && -f ${registry} && ${registry} -ef ${ref} && ${cache} -nt ${registry} ]]; then`,
+    );
+    expect(subshell).toContain(`{ _clausona_launch=$(<${cache}); } 2>/dev/null || :`);
+    expect(codexBlock).toContain(
+      `${registry} -ef ${quoted(PATHS.refPath("codex"))} && ${quoted(PATHS.cachePath("codex", "posix"))} -nt ${registry}`,
+    );
   });
 
   it("steps aside when the user set CLAUDE_CONFIG_DIR themselves", () => {
     expect(out).toMatch(/if \[\[ -n "\$\{CLAUDE_CONFIG_DIR:-\}" \]\]/);
   });
 
-  it("runs _sync-plugins inside the subshell, where CLAUDE_CONFIG_DIR is set", () => {
-    const claudeBlock = out.split(/^claude\(\)\s*\{/m)[1]?.split(/^\}/m)[0] ?? "";
-    // From the subshell's opening paren to the `)` that closes it on its own line.
-    const subshell =
-      claudeBlock
-        .split("(")
-        .slice(1)
-        .join("(")
-        .split(/^\s*\)/m)[0] ?? "";
-    expect(subshell).toMatch(/clausona _sync-plugins/);
+  // The launch script carries its own staleness check, so the hook itself no longer starts a
+  // process for the plugin sync, and never calls the command old hooks used.
+  it("leaves the plugin sync to the launch script", () => {
+    expect(out).not.toMatch(/_sync-plugins/);
+    expect(out).not.toMatch(/_shell-env/);
     // _track-usage belongs after the subshell, so it still runs once the variables are gone.
     expect(subshell).not.toMatch(/clausona _track-usage/);
   });
 
   it("keeps _track-usage outside the subshell and claude-only", () => {
     expect(out).toMatch(/clausona _track-usage/);
-    const codexBlock = out.split(/^codex\(\)\s*\{/m)[1] ?? "";
     expect(codexBlock).not.toMatch(/_track-usage/);
   });
 
   it("defines a codex wrapper on the same mechanism", () => {
-    const codexBlock = out.split(/^codex\(\)\s*\{/m)[1] ?? "";
-    expect(codexBlock).toMatch(/clausona _shell-env codex/);
+    expect(codexBlock).toMatch(/_clausona_launch=\$\(clausona _launch codex\)/);
+    expect(codexBlock).toMatch(/eval "\$_clausona_launch"/);
   });
 
   it("retains csn alias", () => {
@@ -77,20 +132,42 @@ describe("renderShellInit", () => {
   });
 
   it("selects PowerShell integration on Windows", () => {
-    expect(renderShellInit("win32")).toBe(renderPowerShellInit());
-    expect(renderShellInit("darwin")).toBe(renderPosixShellInit());
+    expect(renderShellInit("win32", PATHS)).toBe(renderPowerShellInit(PATHS));
+    expect(renderShellInit("darwin", PATHS)).toBe(renderPosixShellInit(PATHS));
+  });
+});
+
+describe("powerShellLiteral", () => {
+  it("single-quotes an ASCII string, doubling its quotes", () => {
+    expect(powerShellLiteral("C:\\Users\\o'brien\\$x`y")).toBe("'C:\\Users\\o''brien\\$x`y'");
+    expect(powerShellLiteral("")).toBe("''");
+  });
+
+  /**
+   * The hook reaches PowerShell as a native command's output, which it decodes in the
+   * console's code page - so a Hangul user folder baked in as UTF-8 would name a folder that
+   * does not exist. Every character past ASCII is spelled as a [char] instead; that also
+   * covers the curly quotes PowerShell accepts as single quotes, which could otherwise end the
+   * literal early.
+   */
+  it("spells everything past ASCII as [char]s, starting from a string", () => {
+    expect(powerShellLiteral("C:\\Users\\\uD64D\uAE38\\x")).toBe(
+      "('C:\\Users\\' + [char]0xd64d + [char]0xae38 + '\\x')",
+    );
+    expect(powerShellLiteral("\u2019a")).toBe("('' + [char]0x2019 + 'a')");
   });
 });
 
 describe("renderPowerShellInit", () => {
-  const out = renderPowerShellInit();
+  const out = renderPowerShellInit(PATHS);
 
   it("consumes the JSON form and restores every variable it set", () => {
     // One helper serves both tools, so the tool name is the $Tool parameter.
-    expect(out).toMatch(/& clausona _shell-env \$Tool --json/);
+    expect(out).toMatch(/& clausona _launch \$Tool --json/);
     expect(out).toMatch(/Invoke-ClausonaTool -Tool claude/);
     expect(out).toMatch(/ConvertFrom-Json/);
     expect(out).toMatch(/finally/);
+    expect(out).not.toMatch(/_shell-env/);
   });
 
   it("avoids the null-coalescing operator (PowerShell 5.1 floor)", () => {
@@ -102,12 +179,32 @@ describe("renderPowerShellInit", () => {
 
   const helper = out.split("function global:Invoke-ClausonaTool")[1]?.split("function global:claude")[0] ?? "";
 
-  // Task 4 emits a warning on every _shell-env run so a broken profile keeps announcing
-  // itself. Merging stderr into stdout would corrupt the JSON, so it is captured and
-  // replayed instead - and discarding it, as `2>$null` alone did, voided the contract on
-  // Windows.
-  it("replays _shell-env warnings to stderr instead of discarding them", () => {
-    expect(out).toMatch(/_shell-env \$Tool --json 2>\$stderrPath/);
+  /**
+   * The PowerShell form of the POSIX hook's rule: the cached script is used only while
+   * profiles.json has exactly the write time and length it was rendered from, and every file
+   * step is told to stop on an error and caught, so a cache deleted mid-read is a miss -
+   * `_launch` - never a run with no profile, and never an error printed in the caller's console.
+   */
+  it("reads the cached launch script only while the registry is the one it was rendered from", () => {
+    expect(helper).toContain(`$cachePath = ${powerShellLiteral(PATHS.cachePath("claude", "json"))}`);
+    expect(helper).toContain(`$cachePath = ${powerShellLiteral(PATHS.cachePath("codex", "json"))}`);
+    expect(helper).toContain(`$registryPath = ${powerShellLiteral(PATHS.registryPath)}`);
+    // $HOME is PowerShell's own, and read-only; the baked home has a name of its own.
+    expect(helper).toContain(`$clausonaHome = ${powerShellLiteral(PATHS.home)}`);
+    expect(helper).toMatch(
+      /try \{\s*\n\s*if \(\(\$env:USERPROFILE -eq \$clausonaHome\) -and \(Test-Path -LiteralPath \$cachePath\) -and \(Test-Path -LiteralPath \$registryPath\)\) \{\s*\n\s*\$registryItem = Get-Item -LiteralPath \$registryPath -ErrorAction Stop\s*\n\s*\$parsed = Get-Content -LiteralPath \$cachePath -Raw -ErrorAction Stop \| ConvertFrom-Json -ErrorAction Stop\s*\n\s*\$sameTicks = \$parsed\.registry\.ticks -eq \[string\]\$registryItem\.LastWriteTimeUtc\.Ticks\s*\n\s*\$sameLength = \$parsed\.registry\.length -eq \[string\]\$registryItem\.Length\s*\n\s*if \(-not \(\$sameTicks -and \$sameLength\)\) \{ \$parsed = \$null \}\s*\n\s*\}\s*\n\s*\} catch \{\s*\n\s*\$parsed = \$null\s*\n\s*\}/,
+    );
+    // An exact match, not an ordering: a backup moved back over the file is older, not newer.
+    expect(helper).not.toMatch(/LastWriteTimeUtc -gt \(Get-Item -LiteralPath \$registryPath/);
+    // Only a miss asks clausona, which also rules out a second lookup after a hit.
+    expect(helper).toMatch(/if \(-not \$parsed\) \{\s*\n(?:\s*#.*\n)*\s*\$stderrPath = \$null/);
+  });
+
+  // `_launch` warns on every run so a broken profile keeps announcing itself. Merging stderr
+  // into stdout would corrupt the JSON, so it is captured and replayed instead - and
+  // discarding it, as `2>$null` alone did, voided the contract on Windows.
+  it("replays _launch warnings to stderr instead of discarding them", () => {
+    expect(out).toMatch(/_launch \$Tool --json 2>\$stderrPath/);
     // Not Write-Host: that writes to stdout and would corrupt `claude | Something`.
     expect(out).toMatch(/\[Console\]::Error\.Write\(\$warning\)/);
     expect(out).toMatch(/Remove-Item -LiteralPath \$stderrPath -Force/);
@@ -129,15 +226,15 @@ describe("renderPowerShellInit", () => {
     );
     // Exactly two spellings of the lookup, one per branch, and every one assigns $raw - so
     // no path through this block leaves the profile environment unread.
-    const lookups = helper.match(/.*clausona _shell-env \$Tool --json.*/g) ?? [];
+    const lookups = helper.match(/.*clausona _launch \$Tool --json.*/g) ?? [];
     expect(lookups).toEqual([
-      "      $raw = & clausona _shell-env $Tool --json 2>$stderrPath",
-      "      $raw = & clausona _shell-env $Tool --json 2>$null",
+      "        $raw = & clausona _launch $Tool --json 2>$stderrPath",
+      "        $raw = & clausona _launch $Tool --json 2>$null",
     ]);
     // ...and they are the two arms of one if/else, so a run makes exactly one call. Fix 2
     // cut this command's cost in half; a second invocation would hand it straight back.
     expect(helper).toMatch(
-      /if \(\$stderrPath\) \{\s*\n\s*\$raw = & clausona _shell-env \$Tool --json 2>\$stderrPath\s*\n\s*\} else \{\s*\n\s*\$raw = & clausona _shell-env \$Tool --json 2>\$null\s*\n\s*\}/,
+      /if \(\$stderrPath\) \{\s*\n\s*\$raw = & clausona _launch \$Tool --json 2>\$stderrPath\s*\n\s*\} else \{\s*\n\s*\$raw = & clausona _launch \$Tool --json 2>\$null\s*\n\s*\}\s*\n\s*if \(\$raw\) \{ \$parsed = \$raw \| ConvertFrom-Json \}/,
     );
   });
 
@@ -179,7 +276,8 @@ describe("renderPowerShellInit", () => {
         // Any other mention - a scope-qualified `$global:ErrorActionPreference`, a Set-Variable,
         // an assignment tucked inside a block - is a stray step that fails the list below.
         if (/ErrorActionPreference/.test(line)) return [`other: ${line.trim()}`];
-        if (/clausona _shell-env/.test(line)) return ["_shell-env"];
+        if (/Test-Path -LiteralPath \$cachePath/.test(line)) return ["cache"];
+        if (/clausona _launch/.test(line)) return ["_launch"];
         if (/clausona _sync-plugins/.test(line)) return ["_sync-plugins"];
         if (/\$command = Get-Command/.test(line)) return ["Get-Command"];
         if (/& \$command\.Source @ToolArgs/.test(line)) return ["tool"];
@@ -191,9 +289,11 @@ describe("renderPowerShellInit", () => {
     expect(steps).toEqual([
       "save",
       "Continue",
+      // The cache is read under Continue too, although each of its steps says Stop itself.
+      "cache",
       // The two arms of the lookup's if/else.
-      "_shell-env",
-      "_shell-env",
+      "_launch",
+      "_launch",
       // No restore in between: the sync still runs under Continue.
       "_sync-plugins",
       "caller's",
@@ -208,9 +308,9 @@ describe("renderPowerShellInit", () => {
       "caller's",
     ]);
 
-    // Saved and overridden immediately before the try that holds the lookup...
+    // Saved and overridden as the first thing the helper does after setting up its table...
     expect(helper).toMatch(
-      /\$callerErrorAction = \$ErrorActionPreference\s*\n\s*\$ErrorActionPreference = "Continue"\s*\n\s*try \{\s*\n\s*if \(\$stderrPath\) \{\s*\n\s*\$raw = & clausona _shell-env/,
+      /\$applied = @\{\}\s*\n(?:\s*#.*\n)*\s*\$callerErrorAction = \$ErrorActionPreference\s*\n\s*\$ErrorActionPreference = "Continue"\s*\n/,
     );
     // ...handed back on the line before the tool is looked up...
     expect(helper).toMatch(/\$ErrorActionPreference = \$callerErrorAction\s*\n\s*\$command = Get-Command/);
@@ -226,7 +326,23 @@ describe("renderPowerShellInit", () => {
   });
 
   /**
-   * `_shell-env --json` gives a variable the run must not inherit - a credential the caller
+   * The same staleness check the POSIX launch script carries, done by the hook from the
+   * `sync` block: due when the stamp is missing or anything watched is newer, and when the
+   * check itself fails - running the sync once too often costs a second, missing a plugin
+   * costs the user a broken session. Nothing is synced when there is no script at all, which
+   * is what the POSIX hook does too.
+   */
+  it("runs _sync-plugins only when the launch script's sync check says it is due", () => {
+    expect(helper).toMatch(
+      /if \(\$Tool -eq "claude"\) \{\s*\n\s*\$syncDue = \$false\s*\n\s*try \{\s*\n\s*if \(\$parsed\) \{\s*\n\s*if \(\$parsed\.sync\) \{\s*\n\s*\$syncDue = \$true\s*\n\s*if \(Test-Path -LiteralPath \$parsed\.sync\.stamp\) \{\s*\n\s*\$stampTime = \(Get-Item -LiteralPath \$parsed\.sync\.stamp -ErrorAction Stop\)\.LastWriteTimeUtc\s*\n\s*\$syncDue = \$false\s*\n\s*foreach \(\$watched in \$parsed\.sync\.watch\) \{\s*\n\s*if \(Test-Path -LiteralPath \$watched\) \{\s*\n\s*if \(\(Get-Item -LiteralPath \$watched -ErrorAction Stop\)\.LastWriteTimeUtc -ge \$stampTime\) \{ \$syncDue = \$true \}/,
+    );
+    expect(helper).toMatch(
+      /\} catch \{\s*\n\s*\$syncDue = \$true\s*\n\s*\}\s*\n\s*if \(\$syncDue\) \{\s*\n\s*try \{ clausona _sync-plugins \*> \$null \} catch \{ \}\s*\n\s*\}/,
+    );
+  });
+
+  /**
+   * `_launch --json` gives a variable the run must not inherit - a credential the caller
    * exported for something else - the value null. ConvertFrom-Json turns that into $null,
    * and SetEnvironmentVariable removes a variable it is handed $null (or "") for. So the
    * removal works only while every property takes the same unfiltered path: previous value
@@ -235,7 +351,7 @@ describe("renderPowerShellInit", () => {
    */
   it("applies every property as is, so a null removes the variable for the run", () => {
     expect(helper).toMatch(
-      /foreach \(\$property in \$parsed\.PSObject\.Properties\) \{\s*\n\s*\$name = \$property\.Name\s*\n\s*\$applied\[\$name\] = \[Environment\]::GetEnvironmentVariable\(\$name, "Process"\)\s*\n\s*\[Environment\]::SetEnvironmentVariable\(\$name, \$property\.Value, "Process"\)\s*\n\s*\}/,
+      /foreach \(\$property in \$parsed\.env\.PSObject\.Properties\) \{\s*\n\s*\$name = \$property\.Name\s*\n\s*\$applied\[\$name\] = \[Environment\]::GetEnvironmentVariable\(\$name, "Process"\)\s*\n\s*\[Environment\]::SetEnvironmentVariable\(\$name, \$property\.Value, "Process"\)\s*\n\s*\}/,
     );
     // ...and the restore hands back whatever was captured: the caller's value, or its absence.
     expect(helper).toMatch(
@@ -257,7 +373,8 @@ describe("renderPowerShellInit", () => {
   });
 
   it("keeps _sync-plugins and _track-usage claude-only and preserves the exit code", () => {
-    expect(out).toMatch(/if \(\$Tool -eq "claude"\) \{\s*\n\s*try \{ clausona _sync-plugins/);
+    expect(out.match(/clausona _sync-plugins/g)).toHaveLength(1);
+    expect(out).toMatch(/if \(\$Tool -eq "claude"\) \{\s*\n\s*\$syncDue = \$false/);
     expect(out).toMatch(/if \(\$Tool -eq "claude"\) \{\s*\n\s*try \{ clausona _track-usage/);
     expect(out).toMatch(/\$global:LASTEXITCODE = \$exitCode/);
   });
