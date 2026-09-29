@@ -287,8 +287,8 @@ function global:Invoke-ClausonaTool {
   $applied = @{}
   # A caller's $ErrorActionPreference = 'Stop' must not let a clausona step cut the run short.
   # 5.1 turns each line a native command writes to a redirected stderr into an error record,
-  # so under Stop the first warning would throw - here, before $raw is assigned; 7.3+ can do
-  # the same to a non-zero exit. Every clausona step below runs under Continue; only the tool
+  # so under Stop the first warning would throw - here, before $output is assigned; 7.3+ can
+  # do the same to a non-zero exit. Every clausona step below runs under Continue; only the tool
   # itself gets the caller's own preference back.
   $callerErrorAction = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
@@ -323,52 +323,34 @@ function global:Invoke-ClausonaTool {
   if (-not $parsed) {
     # A warning from _launch means a persistent misconfiguration - a credential that will
     # not resolve, a key clausona cannot export - so it has to reach the user on every run,
-    # exactly as it does on POSIX. stderr cannot be merged into stdout, which carries the
-    # JSON, and 5.1 cannot split a native command's streams inline; so stderr goes to a temp
-    # file and is replayed to the console afterwards.
+    # exactly as it does on POSIX, and on stderr: stdout carries the JSON.
     #
-    # Creating that file is the one step that can fail before the lookup runs, so it is
-    # guarded and the lookup has a branch for each outcome. Losing the warnings is bad;
-    # running the tool against the default account without saying so would be worse, and
-    # that is what a lookup skipped over a temp file would cause. Exactly one branch runs,
-    # so a miss still makes exactly one _launch call.
-    $stderrPath = $null
+    # 2>&1 hands back both streams in one list, on 5.1 and 7 alike: each stdout line as a
+    # string, each stderr line wrapped in an ErrorRecord. The strings are the JSON, read as
+    # they would be without the redirect; each record is replayed as the line it wraps. Only
+    # the line: 5.1 renders a record from a redirected stderr as "clausona.cmd : <line>" and
+    # then At line:, CategoryInfo and FullyQualifiedErrorId lines, so a warning captured to a
+    # file and printed back - as this hook once did - showed twice, dressed as a crash. The
+    # line is Exception.Message on both versions; not ToString(), which on 5.1 spells an empty
+    # line as the exception's type name.
+    #
+    # [Console]::Error, because Write-Host would put the warning on stdout and corrupt a piped
+    # run; in a try of its own, because a warning that cannot be printed must not cost the run
+    # its profile. One call per miss, and a failed one - a clausona gone from PATH, output that
+    # is not JSON - is caught: a failed lookup must never stop the tool from starting.
     try {
-      $stderrPath = [System.IO.Path]::GetTempFileName()
-    } catch {
-      $stderrPath = $null
-    }
-    try {
-      if ($stderrPath) {
-        $raw = & clausona _launch $Tool --json 2>$stderrPath
-      } else {
-        $raw = & clausona _launch $Tool --json 2>$null
+      $output = & clausona _launch $Tool --json 2>&1
+      $raw = @()
+      foreach ($line in $output) {
+        if ($line -is [System.Management.Automation.ErrorRecord]) {
+          try { [Console]::Error.WriteLine($line.Exception.Message) } catch { }
+        } else {
+          $raw += $line
+        }
       }
       if ($raw) { $parsed = $raw | ConvertFrom-Json }
     } catch {
       # A failed lookup must never stop the tool from starting.
-    } finally {
-      # Neither must reporting one, hence the inner try. [Console]::Error keeps the warning
-      # on stderr, where Write-Host would put it on stdout and corrupt a piped run.
-      #
-      # -LiteralPath throughout: a temp directory under a user name containing [ or ] would
-      # otherwise read as a wildcard, and the file would be neither reported nor deleted.
-      try {
-        if ($stderrPath) {
-          if (Test-Path -LiteralPath $stderrPath) {
-            $warning = Get-Content -LiteralPath $stderrPath -Raw
-            if ($warning) { [Console]::Error.Write($warning) }
-          }
-        }
-      } catch {
-        # Nothing left to do about a warning that cannot be printed.
-      }
-      # Its own try, so a read that threw above still deletes the file it read from.
-      try {
-        if ($stderrPath) { Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue }
-      } catch {
-        # Nothing left to do about a temp file that cannot be deleted.
-      }
     }
   }
 

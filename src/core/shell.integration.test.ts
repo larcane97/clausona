@@ -697,6 +697,14 @@ describeIfZsh("posix shell integration (interactive zsh)", () => {
 const describeIfPowerShell = process.platform === "win32" ? describe : describe.skip;
 
 /**
+ * Windows PowerShell 5.1, which every Windows has and every case below runs on, and PowerShell
+ * 7, which a case runs on as well when it rests on something the two versions do differently,
+ * and the runner has it.
+ */
+type PowerShellHost = "powershell.exe" | "pwsh.exe";
+const PWSH_AVAILABLE = process.platform === "win32" && spawnSync("where.exe", ["pwsh.exe"]).status === 0;
+
+/**
  * Windows-only: the PowerShell hook has no subshell to throw away, so it captures and
  * restores each variable by hand. These run only on win32 - everything they assert about
  * the generated script's shape is also pinned statically in shell.test.ts.
@@ -812,9 +820,14 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
     };
   }
 
-  function runPowerShell(harness: WindowsHarness, body: string, extraEnv: Record<string, string> = {}) {
+  function runPowerShell(
+    harness: WindowsHarness,
+    body: string,
+    extraEnv: Record<string, string> = {},
+    host: PowerShellHost = "powershell.exe",
+  ) {
     return spawnSync(
-      "powershell.exe",
+      host,
       [
         "-NoLogo",
         "-NoProfile",
@@ -969,6 +982,7 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       expect(result.stdout).toContain(workDir);
       // ...the lookup's warning was replayed rather than thrown...
       expect(result.stderr).toContain(warning);
+      expect(result.stderr).not.toContain("NativeCommandError");
       // ...the one from _track-usage after the tool neither threw nor replaced its exit code...
       expect(result.stdout).toContain("rc=7");
       // ...and the caller's own preference is what it was.
@@ -977,6 +991,61 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );
+
+  /**
+   * PowerShell wraps each line a native command writes to a redirected stderr in an ErrorRecord,
+   * and 5.1 renders one as `clausona.cmd : <line>` followed by At line:, CategoryInfo and
+   * FullyQualifiedErrorId lines - so a hook that renders them shows every warning twice, dressed
+   * as a crash. stderr must hold exactly what `_launch` wrote: each line once, its leading spaces
+   * kept, and an empty line empty, which 5.1's ErrorRecord.ToString() spells as the exception's
+   * type name. The stand-in writes both streams from node, so the bytes are exactly these.
+   */
+  for (const host of ["powershell.exe", "pwsh.exe"] as const) {
+    it.skipIf(host === "pwsh.exe" && !PWSH_AVAILABLE)(
+      `replays a _launch warning as exactly the lines it wrote (${host})`,
+      () => {
+        const workDir = "C:\\clausona-test\\work";
+        const warning = "  ! clausona-test-warning one\n\n  ! clausona-test-warning two\n";
+        const harness = makeWindowsHarness({});
+        const root = path.dirname(harness.binDir);
+        const payload = path.join(root, "launch.json");
+        const stderrText = path.join(root, "launch.stderr");
+        writeFileSync(payload, renderLaunchJson({ CLAUDE_CONFIG_DIR: workDir }, [], harness.sync), "utf8");
+        writeFileSync(stderrText, warning, "utf8");
+        writeFileSync(
+          path.join(harness.binDir, "clausona.cmd"),
+          [
+            "@echo off",
+            '>>"%CLAUSONA_TEST_LOG%" echo %1 %2',
+            'if not "%1"=="_launch" exit /b 0',
+            `node -e "const fs=require('fs');process.stderr.write(fs.readFileSync(process.env.CLAUSONA_TEST_STDERR,'utf8'));process.stdout.write(fs.readFileSync(process.env.CLAUSONA_TEST_PAYLOAD,'utf8'))"`,
+            "exit /b 0",
+          ].join("\r\n"),
+        );
+
+        const result = runPowerShell(
+          harness,
+          "claude",
+          { CLAUSONA_TEST_PAYLOAD: payload, CLAUSONA_TEST_STDERR: stderrText },
+          host,
+        );
+
+        expect(result.status).toBe(0);
+        // The JSON on stdout still applied the profile...
+        expect(result.stdout).toContain(workDir);
+        // ...and stderr has the warning once, with none of PowerShell's error formatting...
+        const stderr = `\n${result.stderr.replaceAll("\r\n", "\n")}`;
+        expect(stderr).not.toContain("NativeCommandError");
+        expect(stderr).not.toContain("CategoryInfo");
+        expect(stderr).not.toContain("RemoteException");
+        expect(stderr.split("clausona-test-warning")).toHaveLength(3);
+        // ...as the very lines _launch wrote, from the start of a line.
+        expect(stderr).toContain(`\n${warning}`);
+        expect(harness.log()).toEqual(["_launch claude", "_sync-plugins", "_track-usage"]);
+      },
+      POWERSHELL_TEST_TIMEOUT_MS,
+    );
+  }
 
   /**
    * PowerShell decodes a native command's stdout with [Console]::OutputEncoding, which is the
@@ -1075,9 +1144,8 @@ describeIfPowerShell("PowerShell wrapper integration", () => {
       expect(result.stdout).not.toContain("LEFT_SET");
       // Only the second run asked clausona anything before the tool...
       expect(harness.log()).toEqual(["_track-usage", "_launch claude", "_sync-plugins", "_track-usage"]);
-      // ...and its warning reached the console. How often the word appears is 5.1's business:
-      // it replays redirected native stderr as an error record that quotes the line twice.
-      expect(result.stderr).toContain(warning);
+      // ...and its warning reached the console, once.
+      expect(result.stderr.split(warning)).toHaveLength(2);
     },
     POWERSHELL_TEST_TIMEOUT_MS,
   );
