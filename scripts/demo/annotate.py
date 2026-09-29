@@ -4,8 +4,9 @@
     python3 scripts/demo/annotate.py    # needs ffmpeg and Pillow
 
 The frames are the recording's own. The only change is drawn over the frames where Claude Code's
-/status panel is up: a rounded outline around the rows that name the account, with everything
-outside it dimmed a little so the eye goes there. The terminal's content is not touched.
+/status panel is up: after the panel has stood on its own for a moment, a rounded outline fades
+in around the rows that name the account, with everything outside it dimmed a little so the eye
+goes there. The terminal's content is not touched.
 """
 
 import shutil
@@ -45,7 +46,14 @@ HIGHLIGHTS = [
 OUTLINE_RGB = (251, 191, 36)  # amber-400: stands apart from the panel's lavender and grey
 OUTLINE_WIDTH = 3
 OUTLINE_RADIUS = 8
-DIM = 0.55  # brightness outside the outline
+DIM = 0.55  # brightness outside the outline, once faded in
+
+# How the highlight arrives: the panel is shown untouched first, so it reads as Claude Code's own
+# screen, then the outline fades in (0 -> full opacity) while the rest dims (1.0 -> DIM), and it
+# stays until the panel closes. demo.tape holds each panel 4 s so the highlighted part lasts at
+# least MIN_HOLD_S.
+DELAY_S = 0.8
+FADE_S = 0.3
 MIN_HOLD_S = 2.5
 
 
@@ -67,13 +75,17 @@ def shows_status_panel(frame: Image.Image) -> bool:
     return close >= STATUS_TAB["share"] * (right - left) * (bottom - top)
 
 
-def highlight(frame: Image.Image, box: tuple[int, int, int, int]) -> Image.Image:
-    dimmed = frame.point(lambda v: int(v * DIM))
-    mask = Image.new("L", frame.size, 0)
-    ImageDraw.Draw(mask).rounded_rectangle(box, radius=OUTLINE_RADIUS, fill=255)
-    out = Image.composite(frame, dimmed, mask)
-    ImageDraw.Draw(out).rounded_rectangle(box, radius=OUTLINE_RADIUS, outline=OUTLINE_RGB, width=OUTLINE_WIDTH)
-    return out
+def highlight(frame: Image.Image, box: tuple[int, int, int, int], strength: float) -> Image.Image:
+    """The frame with the highlight at `strength` (0 = none, 1 = full outline and dim)."""
+    brightness = 1 - (1 - DIM) * strength
+    dimmed = frame.point(lambda v: int(v * brightness))
+    inside = Image.new("L", frame.size, 0)
+    ImageDraw.Draw(inside).rounded_rectangle(box, radius=OUTLINE_RADIUS, fill=255)
+    out = Image.composite(frame, dimmed, inside)
+    outline = Image.new("L", frame.size, 0)
+    ImageDraw.Draw(outline).rounded_rectangle(box, radius=OUTLINE_RADIUS, outline=255, width=OUTLINE_WIDTH)
+    outline = outline.point(lambda v: int(v * strength))
+    return Image.composite(Image.new("RGB", frame.size, OUTLINE_RGB), out, outline)
 
 
 def main() -> None:
@@ -101,13 +113,21 @@ def main() -> None:
     if len(runs) != len(HIGHLIGHTS):
         raise SystemExit(f"found {len(runs)} /status panels in the recording, expected {len(HIGHLIGHTS)}")
 
+    frames_for = lambda secs: round(secs * num / den)  # noqa: E731
+    delay, fade = frames_for(DELAY_S), max(1, frames_for(FADE_S))
     for (label, box), (first, last) in zip(HIGHLIGHTS, runs):
-        held = seconds(last - first + 1)
-        print(f"{label}: {seconds(first):.2f}s-{seconds(last + 1):.2f}s ({held:.2f}s)")
+        start = first + delay  # first frame the highlight shows in, faintly
+        full = start + fade - 1  # first frame at full strength
+        held = seconds(last - start + 1)
+        print(
+            f"{label}: panel {seconds(first):.2f}s-{seconds(last + 1):.2f}s, highlight fades in "
+            f"{seconds(start):.2f}s-{seconds(full + 1):.2f}s, holds to {seconds(last + 1):.2f}s ({held:.2f}s)"
+        )
         if held < MIN_HOLD_S:
-            raise SystemExit(f"that panel is up for {held:.2f}s; demo.tape should hold it at least {MIN_HOLD_S}s")
-        for path in paths[first : last + 1]:
-            highlight(Image.open(path).convert("RGB"), box).save(path)
+            raise SystemExit(f"that highlight is up for {held:.2f}s; hold the panel longer in demo.tape (>= {MIN_HOLD_S}s)")
+        for index in range(start, last + 1):
+            strength = min(1.0, (index - start + 1) / fade)
+            highlight(Image.open(paths[index]).convert("RGB"), box, strength).save(paths[index])
 
     # One palette for the whole GIF, and no dithering, so text stays crisp.
     palette = FRAMES.parent / "palette.png"

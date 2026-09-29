@@ -83,8 +83,9 @@ Type@90ms "/status"
 Sleep 500ms
 Enter
 Wait+Screen@60s /Email:/
-# annotate.py outlines the account rows while the panel is up.
-Sleep 3s
+# annotate.py lets the panel stand on its own for a moment, then fades in an outline around
+# the account rows and keeps it until the panel closes.
+Sleep 4s
 # The panel says "Esc to cancel"; then /exit, typed, quits.
 Escape
 Sleep 500ms
@@ -119,8 +120,9 @@ Type@90ms "/status"
 Sleep 500ms
 Enter
 Wait+Screen@60s /Email:/
-# annotate.py outlines the account rows while the panel is up.
-Sleep 3s
+# annotate.py lets the panel stand on its own for a moment, then fades in an outline around
+# the account rows and keeps it until the panel closes.
+Sleep 4s
 # The panel says "Esc to cancel"; then /exit, typed, quits.
 Escape
 Sleep 500ms
