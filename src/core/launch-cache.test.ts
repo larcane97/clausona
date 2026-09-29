@@ -27,7 +27,7 @@ import {
   registryStamp,
   renderPosixSyncCheck,
   statRegistry,
-  touchPluginSyncStamp,
+  syncWithStamp,
   writeLaunchCache,
 } from "./launch-cache.js";
 
@@ -273,7 +273,7 @@ describe("the plugin sync check", () => {
   });
 
   it.skipIf(process.platform === "win32" || spawnSync("which", ["bash"]).status !== 0)(
-    "runs in bash, and checks the very stamp that touchPluginSyncStamp writes",
+    "runs in bash, and checks the very stamp that syncWithStamp writes",
     async () => {
       const configDir = path.join(tempDir(), "it's");
       const check = () =>
@@ -289,7 +289,7 @@ describe("the plugin sync check", () => {
         );
 
       expect(check().stdout).toBe("SYNC _sync-plugins\n");
-      await touchPluginSyncStamp(configDir);
+      await syncWithStamp(configDir, async () => ({ ok: true }));
       expect(existsSync(pluginSyncStampPath(configDir))).toBe(true);
       // Stamped, and none of the watched paths exist, so none is newer: nothing to sync.
       const fresh = check();
@@ -297,4 +297,17 @@ describe("the plugin sync check", () => {
       expect(fresh.stdout).toBe("");
     },
   );
+
+  // The sync swallows its errors so a launch never stops on one; stamping it anyway would mark
+  // a failed sync done, and it would not be tried again until a watched file changed.
+  it("stamps a sync that worked, and not one that failed", async () => {
+    const failed = path.join(tempDir(), "failed");
+    const worked = path.join(tempDir(), "worked");
+
+    expect(await syncWithStamp(failed, async () => ({ ok: false }))).toEqual({ ok: false });
+    await syncWithStamp(worked, async () => ({ ok: true }));
+
+    expect(existsSync(pluginSyncStampPath(failed))).toBe(false);
+    expect(existsSync(pluginSyncStampPath(worked))).toBe(true);
+  });
 });

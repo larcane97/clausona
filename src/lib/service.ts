@@ -417,7 +417,15 @@ export async function setupSharedLinks(
   return linked;
 }
 
-export async function syncPluginsJson(configDir: string, primarySource: string): Promise<void> {
+/** How a plugin sync went: `ok` is false when any step of it failed. */
+export type PluginSyncResult = { ok: boolean };
+
+/**
+ * Rewrites a profile's known_marketplaces.json and installed_plugins.json so every path in
+ * them points into its own config dir, and drops what is no longer on disk. Never rejects:
+ * it runs on the way to starting Claude, and a failure must not stop that.
+ */
+export async function syncPluginsJson(configDir: string, primarySource: string): Promise<PluginSyncResult> {
   try {
     const knownPath = path.join(configDir, "plugins", "known_marketplaces.json");
     const knownJson = await readJson<Record<string, unknown>>(knownPath, {});
@@ -530,8 +538,10 @@ export async function syncPluginsJson(configDir: string, primarySource: string):
     }
 
     await writeJson(installedPath, { version: installedJson.version ?? 2, plugins: syncedPlugins });
+    return { ok: true };
   } catch {
-    // Never block Claude from launching
+    // Never block Claude from launching - but say it failed, so the sync is not stamped done.
+    return { ok: false };
   }
 }
 

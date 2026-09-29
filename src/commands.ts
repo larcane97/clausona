@@ -13,7 +13,7 @@ import {
   registryStamp,
   renderPosixSyncCheck,
   statRegistry,
-  touchPluginSyncStamp,
+  syncWithStamp,
   writeLaunchCache,
 } from "./core/launch-cache.js";
 import { spawnCommandSync } from "./core/process.js";
@@ -1595,10 +1595,10 @@ export async function runCommand(command: string, args: string[]) {
         // applied: the profile's own, or the primary's, which exports none.
         const primary = claudePrimaryDir(registry);
         sync = { configDir: built.env.CLAUDE_CONFIG_DIR ?? primary, primary };
-        // Synced here, where Node is running anyway, and stamped, so the check the script
-        // carries finds nothing due and starts no second process.
-        await syncPluginsJson(sync.configDir, sync.primary).catch(() => {});
-        await touchPluginSyncStamp(sync.configDir).catch(() => {});
+        // Synced here, where Node is running anyway, and stamped if it worked, so the check the
+        // script carries finds nothing due and starts no second process.
+        const { configDir, primary: primaryDir } = sync;
+        await syncWithStamp(configDir, () => syncPluginsJson(configDir, primaryDir));
       }
 
       const format = jsonFlag(args) ? "json" : "posix";
@@ -1642,10 +1642,9 @@ export async function runCommand(command: string, args: string[]) {
       if (!registry) return "";
       const claudePrimary = claudePrimaryDir(registry);
       const configDir = process.env.CLAUDE_CONFIG_DIR ?? claudePrimary;
-      await syncPluginsJson(configDir, claudePrimary).catch(() => {});
       // Stamped here too, so a shell still running an old hook - which calls this on every
       // launch - also keeps the new hook's check fresh.
-      await touchPluginSyncStamp(configDir).catch(() => {});
+      await syncWithStamp(configDir, () => syncPluginsJson(configDir, claudePrimary));
       return "";
     }
 

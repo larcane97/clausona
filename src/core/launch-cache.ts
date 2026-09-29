@@ -235,15 +235,24 @@ const STAMP_NOTE =
   "their times with this file's to tell whether they need syncing again.\n";
 
 /**
- * Stamps a sync that just finished. It is written, not merely touched, after the sync's own
- * writes: the kernel's clock then gives it an mtime no earlier than theirs, where a time taken
- * in JavaScript is in milliseconds and could land just before the file the sync wrote last,
- * which would make every launch sync again.
+ * Runs a plugin sync and stamps it - only if it succeeded. The sync swallows its own errors so
+ * that it never stops a launch, and a stamp written over a failed one (a rename Windows
+ * refused with EBUSY, say) would mark it done, and it would never be tried again until
+ * something it watches changed.
+ *
+ * The stamp is written, not merely touched, after the sync's own writes: the kernel's clock
+ * then gives it an mtime no earlier than theirs, where a time taken in JavaScript is in
+ * milliseconds and could land just before the file the sync wrote last. Never rejects.
  */
-export async function touchPluginSyncStamp(configDir: string): Promise<void> {
-  const stampPath = pluginSyncStampPath(configDir);
-  await mkdir(path.dirname(stampPath), { recursive: true });
-  await writeFile(stampPath, STAMP_NOTE, "utf8");
+export async function syncWithStamp<T extends { ok: boolean }>(configDir: string, sync: () => Promise<T>): Promise<T> {
+  const result = await sync();
+  if (result.ok) {
+    const stampPath = pluginSyncStampPath(configDir);
+    await mkdir(path.dirname(stampPath), { recursive: true })
+      .then(() => writeFile(stampPath, STAMP_NOTE, "utf8"))
+      .catch(() => {});
+  }
+  return result;
 }
 
 /**

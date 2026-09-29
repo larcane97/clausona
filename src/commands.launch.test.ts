@@ -299,4 +299,16 @@ describe("_sync-plugins", () => {
 
     expect(existsSync(pluginSyncStampPath(h.workDir))).toBe(true);
   });
+
+  // A sync that could not write its files is not done, and must run again next launch.
+  it("does not stamp a sync that failed", async () => {
+    const h = await harness((home) => subscription(home));
+    vi.stubEnv("CLAUDE_CONFIG_DIR", h.workDir);
+    // A directory where the sync has to write a file: the rename into place fails.
+    mkdirSync(path.join(h.workDir, "plugins", "known_marketplaces.json", "in-the-way"), { recursive: true });
+
+    expect(await h.runCommand("_sync-plugins", [])).toBe("");
+
+    expect(existsSync(pluginSyncStampPath(h.workDir))).toBe(false);
+  });
 });
