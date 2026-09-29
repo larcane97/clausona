@@ -23,12 +23,13 @@ import { acquireDirLock, removeHeldDirLocks } from "../core/dir-lock.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
 import { acquireFileLock } from "../core/file-lock.js";
 import { isKnownSecretSource, keySharersElsewhere } from "../core/key-source.js";
+import { invalidateLaunchCache, launchCachePath } from "../core/launch-cache.js";
 import { appDir, backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
 import { spawnCommand } from "../core/process.js";
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
 import { isV1Registry, migrateRegistryV1toV2, setActiveProfile } from "../core/registry.js";
 import { createSharedLink, inspectSharedLink } from "../core/shared-links.js";
-import { isPosixEnvName, renderShellInit } from "../core/shell.js";
+import { isPosixEnvName, renderShellInit, type ShellInitPaths } from "../core/shell.js";
 import { seedSeenSessions } from "../core/track-usage.js";
 import { summarizeUsage } from "../core/usage.js";
 import { validateEnvEntry } from "../tools/claude-env-catalog.js";
@@ -788,6 +789,9 @@ async function readRegistryLocked(): Promise<Registry | null> {
   const v1 = raw as RegistryV1;
   const migrated = migrateRegistryV1toV2(v1);
   await writeJson(REGISTRY_PATH, migrated);
+  // A registry write like any other, so it takes the launch scripts rendered from the old
+  // file with it, as saveRegistry does - and, like it, under the lock.
+  await invalidateLaunchCache(CLAUSONA_DIR);
 
   // 2. Backup directory layout migration: backups/<name>/ → backups/claude/<name>/
   const backupsDir = path.join(CLAUSONA_DIR, "backups");
@@ -837,6 +841,27 @@ async function saveRegistry(registry: Registry) {
   // Owner-only: it holds each API profile's command: key source, whose command line can
   // carry a vault token, and every env map in plain text.
   await writeJson(REGISTRY_PATH, registry, 0o600);
+  // Every launch script in the cache was rendered from the file just replaced. They go after
+  // the rename and before the lock does: a launch rendering meanwhile sees profiles.json
+  // change under it and writes nothing, and a hook that looks in between finds its script
+  // older than profiles.json and does not read it.
+  await invalidateLaunchCache(CLAUSONA_DIR);
+}
+
+/**
+ * Runs `fn` holding the registry lock, or resolves to undefined without running it while
+ * another process holds the lock. For work worth doing only when it costs the caller nothing:
+ * writing the launch cache, which a launch must never wait for, and which is better skipped
+ * while someone else is changing the registry the script was rendered from.
+ */
+export async function tryWithRegistryLock<T>(fn: () => Promise<T>): Promise<T | undefined> {
+  const release = await acquireFileLock(REGISTRY_LOCK_PATH, { staleMs: REGISTRY_LOCK_STALE_MS, waitMs: 0 });
+  if (!release) return undefined;
+  try {
+    return await fn();
+  } finally {
+    await release();
+  }
 }
 
 async function withRegistryLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -2990,6 +3015,18 @@ export async function resolveProfileEnv(
     );
   }
   return { tool: profile.tool, binary: adapter.binary, configDir: profile.configDir, env };
+}
+
+/**
+ * Where this version's launch scripts live, and the registry the hook compares them with.
+ * `shell-init` bakes both into the hook as absolute paths, so the common path starts no
+ * process to find them, and `_launch` writes to the same places.
+ */
+export function launchPaths(): ShellInitPaths {
+  return {
+    cachePath: (tool, format) => launchCachePath(CLAUSONA_DIR, tool, format, __CLAUSONA_VERSION__),
+    registryPath: REGISTRY_PATH,
+  };
 }
 
 export function shellInit() {

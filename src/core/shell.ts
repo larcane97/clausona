@@ -1,3 +1,6 @@
+import type { ToolName } from "../types.js";
+import type { LaunchFormat } from "./launch-cache.js";
+
 /**
  * The one definition of a name a shell can export. Every layer that puts a profile's
  * free-form env map onto a command line checks a key against this: `validateEnvEntry`
@@ -10,6 +13,15 @@ const POSIX_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function isPosixEnvName(key: string): boolean {
   return POSIX_ENV_NAME.test(key);
+}
+
+/**
+ * A string as one POSIX shell word that means exactly itself. Single quotes are the only
+ * form in which no character is special, so a value can carry `$`, backticks, `!` and
+ * newlines untouched; an embedded quote is closed, escaped, and reopened.
+ */
+export function posixQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 /**
@@ -56,7 +68,7 @@ export function renderPosixExports(
   }
   if (cleared.length > 0) lines.push(`unset ${cleared.join(" ")}`);
   for (const [key, value] of Object.entries(env)) {
-    if (isPosixEnvName(key)) lines.push(`export ${key}='${value.replace(/'/g, "'\\''")}'`);
+    if (isPosixEnvName(key)) lines.push(`export ${key}=${posixQuote(value)}`);
   }
   return lines.join("\n");
 }
@@ -74,11 +86,49 @@ export function renderPosixExports(
  * and the tool ran on a fresh account. ConvertFrom-Json decodes the escapes on 5.1 and 7 alike.
  */
 export function renderJsonEnv(env: Record<string, string>, unset: readonly string[] = []): string {
+  return asciiJson(jsonEnv(env, unset));
+}
+
+/** What the PowerShell hook applies: the profile's variables, and null for each one to remove. */
+function jsonEnv(env: Record<string, string>, unset: readonly string[]): Record<string, string | null> {
   const cleared = Object.fromEntries(unset.map((key) => [key, null]));
-  return JSON.stringify({ ...cleared, ...env }).replace(
+  return { ...cleared, ...env };
+}
+
+/** JSON with every character past `~` written as a `\uXXXX` escape; see renderJsonEnv. */
+function asciiJson(value: unknown): string {
+  return JSON.stringify(value).replace(
     /[\u007f-\uffff]/g,
     (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
+}
+
+/**
+ * The absolute paths a hook is rendered with: where this version keeps each tool's launch
+ * script in each format, and the registry a script must be newer than to be trusted.
+ */
+export type ShellInitPaths = {
+  cachePath: (tool: ToolName, format: LaunchFormat) => string;
+  registryPath: string;
+};
+
+/** Where the plugin sync last left its stamp, and the paths that make it stale. */
+export type PluginSyncCheck = { stamp: string; watch: string[] };
+
+/**
+ * `_launch <tool> --json`, which the new PowerShell hook reads: the environment exactly as
+ * renderJsonEnv spells it, under `env`, and for claude the plugin sync's stamp and watch list
+ * under `sync`, so the hook can tell for itself whether a sync is due. ASCII only, for the
+ * same code-page reason as renderJsonEnv - the paths in `sync` sit under the same user folder.
+ */
+export function renderLaunchJson(
+  env: Record<string, string>,
+  unset: readonly string[],
+  sync: PluginSyncCheck | undefined,
+): string {
+  const document: { env: Record<string, string | null>; sync?: PluginSyncCheck } = { env: jsonEnv(env, unset) };
+  if (sync) document.sync = sync;
+  return asciiJson(document);
 }
 
 /**

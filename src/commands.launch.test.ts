@@ -1,0 +1,287 @@
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { launchCacheDir, launchCachePath, pluginSyncStampPath, renderPosixSyncCheck } from "./core/launch-cache.js";
+
+/**
+ * `_launch <tool>` is what the new hook runs on a cache miss: the environment `_shell-env`
+ * prints, the plugin sync `_sync-plugins` does, and - when the script holds nothing that must
+ * be worked out afresh each launch - a copy of it in the launch cache for the next run.
+ *
+ * Same seam as commands.shell-env.test.ts: service.ts derives ~/.clausona from homedir() at
+ * import time, so stubbing HOME and re-importing the module graph points the whole command
+ * at a temp directory.
+ */
+
+const VERSION = __CLAUSONA_VERSION__;
+const temps: string[] = [];
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  vi.resetModules();
+  for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+async function harness(makeRegistry: (home: string) => unknown) {
+  const home = mkdtempSync(path.join(tmpdir(), "clausona-launch-"));
+  temps.push(home);
+  const clausonaDir = path.join(home, ".clausona");
+  const primary = path.join(home, ".claude");
+  const workDir = path.join(home, ".claude-work");
+  for (const dir of [clausonaDir, primary, workDir]) mkdirSync(dir, { recursive: true });
+
+  const registry = makeRegistry(home);
+  const registryPath = path.join(clausonaDir, "profiles.json");
+  if (registry !== undefined) writeFileSync(registryPath, JSON.stringify(registry));
+
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("USERPROFILE", home);
+  vi.resetModules();
+  const { runCommand } = await import("./commands.js");
+  const service = await import("./lib/service.js");
+
+  const warnings: string[] = [];
+  vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+    warnings.push(String(chunk));
+    return true;
+  });
+
+  return {
+    home,
+    clausonaDir,
+    primary,
+    workDir,
+    registryPath,
+    warnings,
+    service,
+    runCommand,
+    launch: (...args: string[]) => runCommand("_launch", args),
+    cachePath: (tool: "claude" | "codex", format: "posix" | "json") =>
+      launchCachePath(clausonaDir, tool, format, VERSION),
+    launchFiles: () => readdirSync(launchCacheDir(clausonaDir), { withFileTypes: true }).filter((e) => e.isFile()),
+  };
+}
+
+function registryWith(profile: Record<string, unknown>, home: string, id = "claude:work") {
+  const tool = id.split(":")[0] as string;
+  return {
+    version: 2,
+    primarySources: { claude: path.join(home, ".claude") },
+    activeProfiles: { [tool]: id },
+    profiles: { [id]: profile },
+  };
+}
+
+const subscription = (home: string, extra: Record<string, unknown> = {}) =>
+  registryWith(
+    { tool: "claude", configDir: path.join(home, ".claude-work"), email: "you@example.com", ...extra },
+    home,
+  );
+
+/** Every file under `dir`, recursively. */
+function filesUnder(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = path.join(dir, entry.name);
+    return entry.isDirectory() ? filesUnder(full) : [full];
+  });
+}
+
+describe("_launch", () => {
+  it("prints _shell-env's exports and the plugin check, and caches exactly that", async () => {
+    const h = await harness((home) => subscription(home, { env: { ANTHROPIC_MODEL: "m" } }));
+
+    const exports = await h.runCommand("_shell-env", ["claude"]);
+    const out = await h.launch("claude");
+
+    expect(out).toBe(`${exports}\n${renderPosixSyncCheck(h.workDir, h.primary)}`);
+    expect(readFileSync(h.cachePath("claude", "posix"), "utf8")).toBe(out);
+    // The sync ran for the profile's own config dir, and stamped it.
+    expect(existsSync(pluginSyncStampPath(h.workDir))).toBe(true);
+    expect(existsSync(path.join(h.workDir, "plugins", "installed_plugins.json"))).toBe(true);
+    expect(h.warnings).toEqual([]);
+  });
+
+  it("syncs and checks the primary's plugins for the primary profile, which exports nothing", async () => {
+    const h = await harness((home) =>
+      registryWith({ tool: "claude", configDir: path.join(home, ".claude"), email: "a@b.c", isPrimary: true }, home),
+    );
+
+    const out = await h.launch("claude");
+
+    expect(out).toBe(renderPosixSyncCheck(h.primary, h.primary));
+    expect(existsSync(pluginSyncStampPath(h.primary))).toBe(true);
+    expect(readFileSync(h.cachePath("claude", "posix"), "utf8")).toBe(out);
+  });
+
+  it("prints only the exports for codex, and caches them", async () => {
+    const h = await harness((home) =>
+      registryWith({ tool: "codex", configDir: path.join(home, ".codex-work"), email: "c@d.e" }, home, "codex:work"),
+    );
+
+    const out = await h.launch("codex");
+
+    expect(out).toBe(`export CODEX_HOME='${path.join(h.home, ".codex-work")}'`);
+    expect(readFileSync(h.cachePath("codex", "posix"), "utf8")).toBe(out);
+    expect(existsSync(h.cachePath("claude", "posix"))).toBe(false);
+  });
+
+  it("prints --json in ASCII alone, with the sync check, and caches it", async () => {
+    const hangul = "홍길동";
+    let configDir = "";
+    const h = await harness((home) => {
+      configDir = path.join(home, hangul, ".claude-work");
+      return registryWith({ tool: "claude", configDir, email: "you@example.com" }, home);
+    });
+
+    const raw = await h.launch("claude", "--json");
+
+    expect([...Buffer.from(raw, "utf8")].filter((byte) => byte > 0x7e)).toEqual([]);
+    const primary = h.primary;
+    expect(JSON.parse(raw)).toEqual({
+      env: { CLAUDE_CONFIG_DIR: configDir },
+      sync: {
+        stamp: pluginSyncStampPath(configDir),
+        watch: [
+          path.join(configDir, "plugins", "known_marketplaces.json"),
+          path.join(configDir, "plugins", "installed_plugins.json"),
+          path.join(primary, "plugins", "marketplaces"),
+          path.join(primary, "plugins", "installed_plugins.json"),
+          path.join(primary, "plugins", "cache"),
+        ],
+      },
+    });
+    expect(readFileSync(h.cachePath("claude", "json"), "utf8")).toBe(raw);
+    expect(existsSync(h.cachePath("claude", "posix"))).toBe(false);
+  });
+
+  it("gives codex's --json no sync block", async () => {
+    const h = await harness((home) =>
+      registryWith({ tool: "codex", configDir: path.join(home, ".codex-work"), email: "c@d.e" }, home, "codex:work"),
+    );
+
+    expect(JSON.parse(await h.launch("codex", "--json"))).toEqual({
+      env: { CODEX_HOME: path.join(h.home, ".codex-work") },
+    });
+  });
+
+  // The whole point of the rule: the key an API profile resolves at launch must stay in the
+  // store it came from.
+  it("prints an API profile's key but never writes it anywhere", async () => {
+    const key = ["sk", "or", "v1", "0123456789abcdef0123456789abcdef"].join("-");
+    const h = await harness((home) =>
+      registryWith(
+        {
+          tool: "claude",
+          kind: "api",
+          configDir: path.join(home, ".claude-work"),
+          email: "",
+          label: "router",
+          api: {
+            baseUrl: "https://openrouter.ai/api",
+            authScheme: "bearer",
+            secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
+          },
+        },
+        home,
+      ),
+    );
+    vi.stubEnv("CLAUSONA_TEST_SECRET", key);
+
+    expect(await h.launch("claude")).toContain(key);
+    expect(await h.launch("claude", "--json")).toContain(key);
+
+    expect(existsSync(launchCacheDir(h.clausonaDir)) ? h.launchFiles().map((e) => e.name) : []).toEqual([]);
+    for (const file of filesUnder(h.clausonaDir)) expect(readFileSync(file, "utf8"), file).not.toContain(key);
+  });
+
+  it("warns on every launch, and never caches, for a profile that warns", async () => {
+    const h = await harness((home) => subscription(home, { env: "API_TIMEOUT_MS=1" }));
+
+    await h.launch("claude");
+    await h.launch("claude");
+
+    expect(h.warnings).toHaveLength(2);
+    expect(h.warnings[0]).toContain("clausona config claude:work --edit");
+    expect(existsSync(h.cachePath("claude", "posix"))).toBe(false);
+  });
+
+  // `csn use`, `config` and every other writer save through updateRegistry. The next launch
+  // must see what they wrote, whatever the cache held.
+  it("loses its cache as soon as the registry is saved", async () => {
+    const h = await harness((home) => subscription(home));
+    await h.launch("claude");
+    await h.launch("claude", "--json");
+    expect(existsSync(h.cachePath("claude", "posix"))).toBe(true);
+
+    await h.service.updateRegistry((current) => current);
+
+    expect(h.launchFiles()).toEqual([]);
+  });
+
+  it("loses its cache when a v1 registry is migrated", async () => {
+    const h = await harness((home) => ({
+      primarySource: path.join(home, ".claude"),
+      activeProfile: "default",
+      profiles: { default: { configDir: path.join(home, ".claude"), email: "a@b.c", isPrimary: true } },
+    }));
+    mkdirSync(launchCacheDir(h.clausonaDir), { recursive: true });
+    writeFileSync(h.cachePath("claude", "posix"), "export STALE='1'");
+
+    await h.service.loadRegistry();
+
+    expect(existsSync(h.cachePath("claude", "posix"))).toBe(false);
+  });
+
+  it("keeps the cache owner-only", async () => {
+    const h = await harness((home) => subscription(home));
+    await h.launch("claude");
+    if (process.platform !== "win32") {
+      expect(statSync(h.cachePath("claude", "posix")).mode & 0o777).toBe(0o600);
+      expect(statSync(launchCacheDir(h.clausonaDir)).mode & 0o777).toBe(0o700);
+    }
+  });
+
+  describe("degenerate input", () => {
+    it("prints nothing, and caches nothing, with no registry at all", async () => {
+      const h = await harness(() => undefined);
+      expect(await h.launch("claude")).toBe("");
+      expect(existsSync(launchCacheDir(h.clausonaDir))).toBe(false);
+    });
+
+    it("prints nothing when the tool has no active profile", async () => {
+      const h = await harness((home) => ({ ...subscription(home), activeProfiles: {} }));
+      expect(await h.launch("claude")).toBe("");
+      expect(existsSync(launchCacheDir(h.clausonaDir))).toBe(false);
+    });
+
+    it("prints nothing for a tool clausona does not manage", async () => {
+      const h = await harness((home) => subscription(home));
+      expect(await h.launch("gemini")).toBe("");
+    });
+  });
+});
+
+describe("_sync-plugins", () => {
+  // Old hooks still call it on every launch; stamping keeps the new hook's check fresh too.
+  it("stamps the profile it synced", async () => {
+    const h = await harness((home) => subscription(home));
+    vi.stubEnv("CLAUDE_CONFIG_DIR", h.workDir);
+
+    expect(await h.runCommand("_sync-plugins", [])).toBe("");
+
+    expect(existsSync(pluginSyncStampPath(h.workDir))).toBe(true);
+  });
+});

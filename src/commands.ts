@@ -6,8 +6,17 @@ import { createInterface } from "node:readline";
 import { sendsKeyInClear } from "./core/api-url.js";
 import { plaintextEnvRemedy } from "./core/doctor.js";
 import { isKnownSecretSource, keySourcePhrase } from "./core/key-source.js";
+import {
+  isCacheable,
+  pluginSyncStampPath,
+  pluginSyncWatchList,
+  renderPosixSyncCheck,
+  statRegistry,
+  touchPluginSyncStamp,
+  writeLaunchCache,
+} from "./core/launch-cache.js";
 import { spawnCommandSync } from "./core/process.js";
-import { isPosixEnvName, renderJsonEnv, renderPosixExports } from "./core/shell.js";
+import { isPosixEnvName, renderJsonEnv, renderLaunchJson, renderPosixExports } from "./core/shell.js";
 import { trackUsage } from "./core/track-usage.js";
 import {
   checkLatestTag,
@@ -60,6 +69,7 @@ import {
   freeApiConfigDir,
   getUsageSummary,
   initializeRegistry,
+  launchPaths,
   listProfiles,
   loadRegistry,
   loginProfile,
@@ -73,6 +83,7 @@ import {
   setActiveProfileByName,
   shellInit,
   syncPluginsJson,
+  tryWithRegistryLock,
   uninstallClausona,
   updateProfileApi,
   updateProfileConfig,
@@ -81,10 +92,38 @@ import {
 } from "./lib/service.js";
 import { CLAUDE_ENV_CATALOG, validateEnvEntry } from "./tools/claude-env-catalog.js";
 import { ALL_TOOLS } from "./tools/registry.js";
-import type { Profile, SecretSource, ToolName } from "./types.js";
+import type { Profile, Registry, SecretSource, ToolName } from "./types.js";
 
 function jsonFlag(args: string[]) {
   return args.includes("--json");
+}
+
+function claudePrimaryDir(registry: Registry): string {
+  return registry.primarySources.claude ?? path.join(homedir(), ".claude");
+}
+
+/**
+ * The active profile for the tool named in a hook command's arguments, and the environment a
+ * run of it needs - or undefined for no such tool, no usable registry, or no active profile,
+ * each of which the hook commands answer with empty output.
+ *
+ * The build's warnings go to stderr here, on every launch on purpose: a warning means a
+ * persistent misconfiguration, and it should keep showing until the profile is fixed.
+ */
+async function activeProfileEnv(args: string[]) {
+  const [toolArg] = args.filter((arg) => !arg.startsWith("-"));
+  if (!toolArg || !(ALL_TOOLS as readonly string[]).includes(toolArg)) return undefined;
+  const tool = toolArg as ToolName;
+
+  const registry = await loadRegistry();
+  if (!registry) return undefined;
+  const id = registry.activeProfiles[tool];
+  const profile = id ? registry.profiles[id] : undefined;
+  if (!id || !profile) return undefined;
+
+  const built = await buildProfileEnv(id, profile);
+  for (const warning of built.warnings) process.stderr.write(`  ${warnIcon} ${warning}\n`);
+  return { tool, registry, profile, built };
 }
 
 function helpFlag(args: string[]) {
@@ -127,6 +166,7 @@ const commandFlags: Record<string, { flags: string[]; prefixes?: string[] }> = {
   update: { flags: ["--yes", "-y"] },
   version: { flags: [] },
   "_shell-env": { flags: ["--json"] },
+  _launch: { flags: ["--json"] },
 };
 
 function validateFlags(command: string, args: string[]) {
@@ -1517,37 +1557,89 @@ export async function runCommand(command: string, args: string[]) {
     }
 
     case "_shell-env": {
-      // Internal: the shell wrapper runs this as `eval "$(clausona _shell-env claude)"`, so
-      // stdout carries export lines and nothing else — every diagnostic goes to stderr, and
-      // an unusable registry resolves to empty output rather than an error the shell would eval.
-      const [toolArg] = args.filter((arg) => !arg.startsWith("-"));
-      if (!toolArg || !(ALL_TOOLS as readonly string[]).includes(toolArg)) return "";
-
-      const registry = await loadRegistry();
-      if (!registry) return "";
-      const id = registry.activeProfiles[toolArg as ToolName];
-      const profile = id ? registry.profiles[id] : undefined;
-      if (!id || !profile) return "";
-
-      const built = await buildProfileEnv(id, profile);
-      const { env, unset, warnings } = built;
-      // Repeated on every launch on purpose: a warning here means a persistent
-      // misconfiguration, and it should keep showing until the profile is fixed.
-      for (const warning of warnings) process.stderr.write(`  ${warnIcon} ${warning}\n`);
+      // Internal: hooks rendered before `_launch` existed run this as
+      // `eval "$(clausona _shell-env claude)"`, and a shell opened before an update keeps its
+      // old hook, so its output stays exactly what it was. stdout carries export lines and
+      // nothing else — every diagnostic goes to stderr, and an unusable registry resolves to
+      // empty output rather than an error the shell would eval.
+      const active = await activeProfileEnv(args);
+      if (!active) return "";
+      const { profile, built } = active;
       // The guard list covers what the profile sets as well as what it clears: on POSIX a
       // name it cannot export is as bad as one it cannot unset. Windows has no readonly
       // variables, so the JSON form below is unchanged.
-      if (!jsonFlag(args)) return renderPosixExports(env, unset, controlledEnvKeys(profile, built));
+      if (!jsonFlag(args)) return renderPosixExports(built.env, built.unset, controlledEnvKeys(profile, built));
       // null names a variable to remove; the output is ASCII, whatever the paths hold.
-      return renderJsonEnv(env, unset);
+      return renderJsonEnv(built.env, built.unset);
+    }
+
+    case "_launch": {
+      // Internal: what the hook runs when it has no launch script it can trust, as
+      // `eval "$(clausona _launch claude)"`, or `_launch claude --json` from PowerShell. The
+      // same stdout contract as _shell-env - the script and nothing else, empty for an unusable
+      // registry - and the same environment, plus claude's plugin sync, all in one process.
+      //
+      // profiles.json is stat'ed before it is read, so the cache write below can tell whether
+      // the script it is about to save still describes the file as it is now.
+      const paths = launchPaths();
+      const before = await statRegistry(paths.registryPath);
+      const active = await activeProfileEnv(args);
+      if (!active) return "";
+      const { tool, registry, profile, built } = active;
+      const guard = controlledEnvKeys(profile, built);
+
+      let sync: { configDir: string; primary: string } | undefined;
+      if (tool === "claude") {
+        // The config dir _sync-plugins would find in CLAUDE_CONFIG_DIR once these exports are
+        // applied: the profile's own, or the primary's, which exports none.
+        const primary = claudePrimaryDir(registry);
+        sync = { configDir: built.env.CLAUDE_CONFIG_DIR ?? primary, primary };
+        // Synced here, where Node is running anyway, and stamped, so the check the script
+        // carries finds nothing due and starts no second process.
+        await syncPluginsJson(sync.configDir, sync.primary).catch(() => {});
+        await touchPluginSyncStamp(sync.configDir).catch(() => {});
+      }
+
+      const format = jsonFlag(args) ? "json" : "posix";
+      const script =
+        format === "json"
+          ? renderLaunchJson(
+              built.env,
+              built.unset,
+              sync && {
+                stamp: pluginSyncStampPath(sync.configDir),
+                watch: pluginSyncWatchList(sync.configDir, sync.primary),
+              },
+            )
+          : [
+              renderPosixExports(built.env, built.unset, guard),
+              sync ? renderPosixSyncCheck(sync.configDir, sync.primary) : "",
+            ]
+              .filter((part) => part !== "")
+              .join("\n");
+
+      if (isCacheable(profile, built, guard)) {
+        await writeLaunchCache({
+          path: paths.cachePath(tool, format),
+          content: script,
+          registryPath: paths.registryPath,
+          before,
+          withLock: tryWithRegistryLock,
+          keepVersion: __CLAUSONA_VERSION__,
+        });
+      }
+      return script;
     }
 
     case "_sync-plugins": {
       const registry = await loadRegistry();
       if (!registry) return "";
-      const claudePrimary = registry.primarySources.claude ?? path.join(homedir(), ".claude");
+      const claudePrimary = claudePrimaryDir(registry);
       const configDir = process.env.CLAUDE_CONFIG_DIR ?? claudePrimary;
       await syncPluginsJson(configDir, claudePrimary).catch(() => {});
+      // Stamped here too, so a shell still running an old hook - which calls this on every
+      // launch - also keeps the new hook's check fresh.
+      await touchPluginSyncStamp(configDir).catch(() => {});
       return "";
     }
 
