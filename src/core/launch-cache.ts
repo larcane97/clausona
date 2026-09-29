@@ -263,8 +263,8 @@ export function pluginSyncStampPath(configDir: string): string {
  *
  * Not watched: anything deeper than a version directory, which does not decide whether an
  * installPath exists, and a marketplace or plugin directory created after the list was made
- * - its parent's mtime changes, so the sync is due, and a sync that changes anything drops
- * the launch cache so the next launch lists it. It also reads other profiles'
+ * - its parent's mtime changes, so the sync is due, and every `_sync-plugins` run drops
+ * claude's launch script so the next launch lists it. It also reads other profiles'
  * known_marketplaces.json, but only for a marketplace on disk that the profile's JSON lacks -
  * and that marketplace appearing is already a change to the listing. A path that does not
  * exist is never due.

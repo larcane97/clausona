@@ -1658,11 +1658,13 @@ export async function runCommand(command: string, args: string[]) {
       const configDir = process.env.CLAUDE_CONFIG_DIR ?? claudePrimary;
       // Stamped here too, so a shell still running an old hook - which calls this on every
       // launch - also keeps the new hook's check fresh.
-      const result = await syncWithStamp(configDir, () => syncPluginsJson(configDir, claudePrimary));
-      // A sync that changed something most likely answered a plugin or marketplace directory
-      // that is new, and the cached script's watch list, made before it existed, does not
-      // have it. Dropping claude's script sends the next launch to _launch, which lists it.
-      if (result.changed) await removeLaunchCache(launchPaths(), "claude");
+      await syncWithStamp(configDir, () => syncPluginsJson(configDir, claudePrimary));
+      // A sync runs because something it watches changed - often a marketplace or plugin
+      // directory that is new, which the cached script's watch list, made before it existed,
+      // does not have, whether or not this profile's files changed with it. Dropping claude's
+      // script every time sends the next launch to _launch, which lists it; the sync only runs
+      // when due, so that is one extra _launch per change.
+      await removeLaunchCache(launchPaths(), "claude");
       return "";
     }
 

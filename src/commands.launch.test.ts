@@ -495,28 +495,31 @@ describe("_sync-plugins", () => {
   });
 
   /**
-   * A sync that changed something most likely answered a directory the cached script does
-   * not watch yet, so claude's script goes and the next launch lists it. One that changed
-   * nothing leaves the script alone.
+   * A sync runs because something it watches changed - often a marketplace or plugin
+   * directory the cached script does not watch yet, whether or not this profile's files
+   * changed with it. So claude's script goes every time, with its ref, and the next launch
+   * lists the directory; codex's is not the sync's business.
    */
-  it("drops claude's launch script when it changed something, and only then", async () => {
-    const h = await harness((home) => subscription(home));
+  it("drops claude's launch script every time it runs", async () => {
+    const h = await harness((home) => ({
+      ...subscription(home),
+      activeProfiles: { claude: "claude:work", codex: "codex:work" },
+      profiles: {
+        "claude:work": { tool: "claude", configDir: path.join(home, ".claude-work"), email: "you@example.com" },
+        "codex:work": { tool: "codex", configDir: path.join(home, ".codex-work"), email: "c@d.e" },
+      },
+    }));
     vi.stubEnv("CLAUDE_CONFIG_DIR", h.workDir);
     await h.launch("claude");
-    const cached = h.cachePath("claude", "posix");
-    expect(existsSync(cached)).toBe(true);
+    await h.launch("codex");
+    expect(existsSync(h.cachePath("claude", "posix"))).toBe(true);
 
-    await h.runCommand("_sync-plugins", []);
-    expect(existsSync(cached)).toBe(true);
-
-    // An entry whose version directory is gone: the sync drops it.
-    const installed = path.join(h.workDir, "plugins", "installed_plugins.json");
-    const gone = path.join(h.primary, "plugins", "cache", "market", "plugin", "1.0.0");
-    writeFileSync(installed, JSON.stringify({ version: 2, plugins: { "plugin@market": [{ installPath: gone }] } }));
+    // The sync finds nothing to change, and the script still goes.
     await h.runCommand("_sync-plugins", []);
 
-    expect(existsSync(cached)).toBe(false);
+    expect(existsSync(h.cachePath("claude", "posix"))).toBe(false);
     expect(existsSync(launchRefPath(h.clausonaDir, "claude", VERSION))).toBe(false);
+    expect(existsSync(h.cachePath("codex", "posix"))).toBe(true);
   });
 
   // A sync that could not write its files is not done, and must run again next launch.
