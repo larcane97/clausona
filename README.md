@@ -44,7 +44,7 @@ No re-login. No reinstalling plugins. Just switch and go.
 - **Two accounts at once** — `clausona run claude:personal` starts one session under another profile without switching, so two terminals can run two accounts side by side
 - **API profiles** — a profile can point at an API endpoint instead of a subscription login: the Anthropic API, a gateway, or a model you serve yourself
 - **Pure CLI passthrough** — no wrapping, no proxying, no background process. `claude` and `codex` run directly and unmodified. Compatible with oh-my-claudecode, Cline, codex plugins, and any other tool in your stack.
-- **Lightweight** — a single shell hook and a few symlinks. No daemon, no server, and no startup overhead: `claude` and `codex` start from a small cached script, and clausona runs first only on the first launch after a profile change, or on every launch of a profile it cannot cache, such as an API profile whose key is read fresh each time.
+- **Lightweight** — a single shell hook and a few symlinks. No daemon, no server, and no startup overhead: `claude` and `codex` start from a small cached script, and clausona itself runs only when something changed — a profile switch, a plugin install — or for a profile it can't cache, such as an API profile ([details](docs/how-it-works.md#the-launch-cache)).
 - **Usage tracking** — per-profile cost and token usage, tracked locally (Claude Code only for now)
 - **Interactive dashboard** — TUI for managing profiles, viewing usage, and running health checks
 

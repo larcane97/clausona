@@ -55,18 +55,20 @@ in `~/.clausona/cache/`, and the next launch reads that file in the shell itself
   environment variable or a command each time, and must not be copied anywhere else. Neither is
   a profile whose environment produced a warning, which has to print on every launch, one whose
   env map holds something that looks like a secret, nor one whose config directory - or
-  `~/.claude` or `~/.codex` - is reached through a symlink, which can be repointed without
-  `profiles.json` changing. Those profiles launch through `clausona _launch` every time, as they
-  always did. So does a run under another `HOME` than the shell hook was set up with.
+  `~/.claude` or `~/.codex` - is missing or reached through a symlink, which can be created or
+  repointed without `profiles.json` changing. Those profiles launch through `clausona _launch`
+  every time, as they always did. So does a run under another `HOME` than the shell hook was
+  set up with.
 - **When it is used** — only while `profiles.json` is still the very file the script was
   rendered from and has not changed since: on zsh/bash the script keeps a hard link to that
   file and must be newer than it, on PowerShell it records the file's exact write time and
   size. Every change clausona makes to `profiles.json` (`clausona use`, `config`, `add`,
   `remove`) deletes the cache as it saves, so the very next launch after `clausona use work`
   starts as `work`. An editor saving the file, or a backup moved back over it, also sends the
-  next launch to clausona; copying another file over it in place with its old time kept
-  (`cp -p`) does not, until the next change clausona makes. A cache written while another
-  command was changing `profiles.json` is not saved at all.
+  next launch to clausona. On zsh/bash, copying another file over it in place with its old time
+  kept (`cp -p`) does not, until the next change clausona makes; PowerShell's exact time check
+  catches that too. A cache written while another command was changing `profiles.json` is not
+  saved at all.
 - **Per version** — the file name carries clausona's version, and a shell hook only reads the
   cache of the version that rendered it, so a shell opened before `clausona update` never reads
   a script the new version wrote, or the reverse.
