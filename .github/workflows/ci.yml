@@ -38,6 +38,72 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
 
+      - run: pnpm build
+
+      # The release ships dist/index.js, minified, and the unit tests never run it. A name the
+      # minifier broke would only surface as a ReferenceError or TypeError on a user's machine,
+      # so each OS starts the bundle a few ways here. HOME (and USERPROFILE, which Node reads on
+      # Windows) is an empty temp dir: no registry, so nothing here touches a real account.
+      - name: Smoke-test the bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          home="$(node -e "console.log(require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'clausona-smoke-')))")"
+          export HOME="$home" USERPROFILE="$home"
+          # run <status> <args...>: runs the bundle, and fails on a JS crash or any other exit status.
+          run() {
+            want="$1"; shift
+            status=0
+            out="$(node dist/index.js "$@" 2>&1)" || status=$?
+            printf '$ clausona %s  (exit %s)\n%s\n' "$*" "$status" "$out"
+            case "$out" in
+              *ReferenceError*|*SyntaxError*|*TypeError*)
+                echo "::error::clausona $* crashed in the bundle"; exit 1 ;;
+            esac
+            if [ "$status" -ne "$want" ]; then
+              echo "::error::clausona $* exited with $status, not $want"; exit 1
+            fi
+          }
+          expect() {
+            case "$out" in
+              *"$1"*) : ;;
+              *) echo "::error::expected the output to contain: $1"; exit 1 ;;
+            esac
+          }
+          node --check dist/index.js
+          # `clausona update` accepts a download only when its --version names the offered release.
+          run 0 --version
+          expect "v$(node -p "require('./package.json').version")"
+          run 0 shell-init
+          # What the shell hook runs before every claude: with no registry, nothing to apply.
+          run 0 _shell-env claude
+          [ -z "$out" ] || { echo "::error::_shell-env printed something with no registry"; exit 1; }
+          # With no registry `list` lists nothing, and `current` stops at clausona's own error.
+          run 0 list --json --no-quota
+          [ "$out" = "[]" ] || { echo "::error::list --json did not print an empty list"; exit 1; }
+          run 1 current
+          expect "clausona is not initialized"
+          # Not a terminal, so the dashboard must take its way out, not load the TUI.
+          run 0
+          expect "requires a terminal"
+          # The launcher's compile cache is clausona's own: a tool clausona starts must not
+          # inherit it and fill it with its own code. A stand-in claude reports what it got.
+          # Checked where that stand-in is a plain script; on Windows it would be a .cmd that
+          # clausona starts through PowerShell, and the unit tests cover the Windows path form.
+          if [ "${RUNNER_OS:-}" != "Windows" ]; then
+            mkdir -p "$home/bin" "$home/.clausona" "$home/.claude-smoke"
+            printf '#!/bin/sh\nprintf "child cache=[%%s]\\n" "${NODE_COMPILE_CACHE-}"\n' > "$home/bin/claude"
+            chmod +x "$home/bin/claude"
+            printf '{"version":2,"primarySources":{},"activeProfiles":{},"profiles":{"claude:smoke":{"tool":"claude","configDir":"%s","email":"smoke@example.com"}}}\n' \
+              "$home/.claude-smoke" > "$home/.clausona/profiles.json"
+            (
+              export PATH="$home/bin:$PATH" NODE_COMPILE_CACHE="$home/.clausona/cache/node"
+              run 0 run claude:smoke
+              expect "child cache=[]"
+            )
+          fi
+          echo "bundle smoke checks OK"
+
       # The installers ship as release assets and are never exercised by the unit
       # tests, so a broken one only surfaces when a user runs it.
       - name: Check installer (POSIX)
