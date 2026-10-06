@@ -472,6 +472,20 @@ async function restoreSkippedFromBackup(
   }
 }
 
+/**
+ * Whether deleting `target`, which inspectSharedLink called a link to `source`, loses
+ * nothing: it is a symbolic link, or a second name of a file the primary holds under a name
+ * of its own. inspectSharedLink follows `source`, so a primary entry that is itself a link
+ * into the profile makes the profile's own file - the only copy - read as a shared link.
+ */
+async function holdsNothingOfItsOwn(target: string, source: string): Promise<boolean> {
+  const targetStats = await lstat(target).catch(() => null);
+  if (targetStats?.isSymbolicLink()) return true;
+  if (!targetStats?.isFile() || targetStats.nlink < 2) return false;
+  const sourceStats = await lstat(source).catch(() => null);
+  return Boolean(sourceStats?.isFile());
+}
+
 /** Whether a backup is only a link to the primary's entry of that name - nothing of the profile's own. */
 async function isLinkToPrimaryEntry(backupItem: string, primarySource: string, itemName: string): Promise<boolean> {
   const stats = await lstat(backupItem).catch(() => null);
@@ -516,7 +530,7 @@ export async function setupSharedLinks(
       // holds nothing of its own: the entry stays in the primary.
       const target = path.join(profileDir, item.name);
       const linkInfo = await inspectSharedLink(target, source);
-      if (linkInfo.isSharedLink && linkInfo.pointsToSource) {
+      if (linkInfo.isSharedLink && linkInfo.pointsToSource && (await holdsNothingOfItsOwn(target, source))) {
         await rm(target, { force: true, recursive: true });
       }
       continue;
@@ -544,8 +558,9 @@ export async function setupSharedLinks(
   for (const name of adapter.sharedSkipSet(mergeSessions)) {
     if (primaryNames.has(name)) continue;
     const target = path.join(profileDir, name);
-    const linkInfo = await inspectSharedLink(target, path.join(primarySource, name));
-    if (linkInfo.isSharedLink && linkInfo.pointsToSource) {
+    const source = path.join(primarySource, name);
+    const linkInfo = await inspectSharedLink(target, source);
+    if (linkInfo.isSharedLink && linkInfo.pointsToSource && (await holdsNothingOfItsOwn(target, source))) {
       await rm(target, { force: true, recursive: true });
     }
   }
@@ -1579,8 +1594,9 @@ export async function doctorProfiles(
         const pointsToPrimary = linkInfo.pointsToSource;
 
         if (isSkipped(entry.name)) {
-          // Items in skip set should NOT be symlinked to primary
-          if (!profile.isPrimary && pointsToPrimary) {
+          // Items in skip set should NOT be symlinked to primary. Only what repair takes out is
+          // reported: not the profile's own file that a primary entry links to.
+          if (!profile.isPrimary && pointsToPrimary && (await holdsNothingOfItsOwn(targetPath, sourcePath))) {
             issues.push({
               kind: "stale_symlink",
               message: `${entry.name} is symlinked to primary but should not be shared`,
@@ -2048,7 +2064,7 @@ async function cleanupProfile(
       const p = path.join(profilePlugins, entry.name);
       const source = path.join(primarySource, "plugins", entry.name);
       const linkInfo = await inspectSharedLink(p, source);
-      if (linkInfo.isSharedLink) {
+      if (linkInfo.isSharedLink && (await holdsNothingOfItsOwn(p, source))) {
         await rm(p, { force: true, recursive: true });
       }
     }
@@ -2060,7 +2076,7 @@ async function cleanupProfile(
     const p = path.join(profile.configDir, entry.name);
     const source = path.join(primarySource, entry.name);
     const linkInfo = await inspectSharedLink(p, source);
-    if (linkInfo.isSharedLink) {
+    if (linkInfo.isSharedLink && (await holdsNothingOfItsOwn(p, source))) {
       await rm(p, { force: true, recursive: true });
     }
   }

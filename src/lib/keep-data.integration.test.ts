@@ -202,6 +202,21 @@ describe("repair over the profile's own data", () => {
     expect(readFileSync(path.join(h.dirs.codex, "sessions", "primary.jsonl"), "utf8")).toBe("primary");
   });
 
+  it("keeps a private file the primary's entry is only a link to", async () => {
+    const h = await workHarness();
+    // The primary's auth.json leads into the profile, so the profile holds the only copy.
+    const own = path.join(h.dirs.codexWork, "auth.json");
+    rmSync(path.join(h.dirs.codex, "auth.json"));
+    symlinkSync(own, path.join(h.dirs.codex, "auth.json"));
+    const before = readFileSync(own, "utf8");
+
+    await h.service.repairProfile("codex:work");
+    expect(lstatSync(own).isFile() && readFileSync(own, "utf8"), "repair deleted it").toBe(before);
+
+    await h.service.removeProfile("codex:work");
+    expect(lstatSync(own).isFile() && readFileSync(own, "utf8"), "remove deleted it").toBe(before);
+  });
+
   it("remove puts no backup over what the profile has written since, and keeps that backup", async () => {
     const h = await workHarness();
     mkdirSync(path.join(h.dirs.codex, "sessions"));
