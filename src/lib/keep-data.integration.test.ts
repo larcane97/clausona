@@ -388,7 +388,8 @@ describe("doctor and a shared link whose target is gone", () => {
 
     expect(existsSync(h.backups("work"))).toBe(false);
     await h.commands.runCommand("add", ["codex:work", "--from", "~/.codex-work"]);
-    expect(h.registry().profiles["codex:work"]?.configDir).toBe(h.dirs.codexWork);
+    // Resolved: on Windows the `--from` path keeps the separator it was typed with.
+    expect(path.resolve(h.registry().profiles["codex:work"]?.configDir ?? "")).toBe(h.dirs.codexWork);
   });
 
   it("whose break is the primary's own: repair leaves the link, and doctor points at the primary", async () => {
