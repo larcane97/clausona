@@ -117,6 +117,7 @@ When you register a new profile, clausona symlinks shared resources from your pr
 ├── sessions/, history.jsonl, ...
 │                          ← own conversation history (NOT shared by default)
 ├── packages/              ← own app-server daemon install (NOT shared)
+├── .env                   ← own, started from a copy of the primary's (NOT shared)
 ├── config.toml  →  ~/.codex/config.toml      (symlink to primary)
 ├── hooks.json   →  ~/.codex/hooks.json       (symlink to primary)
 ├── skills/      →  ~/.codex/skills           (symlink to primary)
@@ -240,15 +241,44 @@ of those entries show what goes wrong:
 Codex home. Sharing it would save that space, but the profiles would then share one updater,
 which replaces the daemon every one of them runs.
 
+`.env` is not shared, but a profile starts from a copy of it. Codex loads `$CODEX_HOME/.env`
+into its environment at start, so it can hold one account's own API keys. A profile that has no
+`.env` gets a copy of the primary's when it is added or repaired, and keeps its own after that.
+Changing one copy doesn't change the other.
+
+While a profile shares sessions, what Codex writes to `archived_sessions/` and `attachments/` lands
+in the primary's directories. Separating sessions again unlinks them, and that work stays in the
+primary's. clausona doesn't split it back out.
+
 Profiles set up by clausona 0.5.0-beta or earlier link some entries that are not on the list to
-the primary's. `clausona doctor` reports each such link: `wrong_account_link` for the daemon's directories and
-the credential stores, `shared_account_state` for the rest. `clausona repair <profile>` and the
-session-mode toggle unlink it. If clausona set aside the profile's own copy when it made the
-link, repair moves the newest one back from `~/.clausona/backups/codex/<profile>/`. A database
-comes back with the `-wal`, `-shm` and `-journal` files set aside with it, never with ones written
-beside another copy of it. If there is no backup, the entry stays absent and Codex starts a fresh
-one. The primary is never changed. SQLite through a link was never a corruption risk, because the
+the primary's. `clausona doctor` reports each such link: `wrong_account_link` for the daemon's
+directories, `.env` and the credential stores, and `shared_account_state` for the rest.
+`clausona repair <profile>`, the session-mode toggle and `clausona init` unlink them:
+
+- If clausona set aside the profile's own copy when it made the link, the newest one is moved
+  back from `~/.clausona/backups/codex/<profile>/`.
+- A database comes back together with the `-wal`, `-shm` and `-journal` set aside in the same
+  pass, never with ones written beside another copy. A backup made before backups were
+  timestamped pairs only with another such backup, and timestamped ones pair only when they were
+  set aside within seconds of each other.
+- If a companion was set aside on its own, so that it could belong to the database or not, the
+  database and its companions all stay in the backups and repair says so.
+- A `-wal` or `-journal` already in the profile that was written after the database was set aside
+  belongs to another copy, such as the primary's reached through an old hard link. It is moved
+  into a backup before the database comes back. One left untouched since then is kept, and repair
+  says so.
+- If moving a companion fails, the database goes back into its backup too, so the next repair
+  finds them together again.
+- If there is no backup, the entry stays absent, Codex starts a fresh one, and repair names each
+  link it removed that way.
+
+The primary is never changed. SQLite through a link was never a corruption risk, because the
 write-ahead log goes next to the file the link leads to. The problem was isolation only.
+
+Quit Codex in a profile before you repair it, and stop its daemon with
+`CODEX_HOME=<profile dir> codex app-server daemon stop`, because repair moves files a running Codex
+holds open. On macOS and Linux, repair looks for a `codex` process running with the profile's
+`CODEX_HOME`, and warns before it goes on if it finds one.
 
 ## Data Storage
 
