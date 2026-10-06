@@ -5,35 +5,46 @@ import { spawnCommand } from "../core/process.js";
 import { parseCodexQuota, QuotaHttpError } from "../core/quota.js";
 import type { QuotaWindows } from "../types.js";
 import { decodeJwtPayload } from "./codex-jwt.js";
-import type { AccountInfo, ToolAdapter, ToolCredential } from "./types.js";
+import type { AccountInfo, ToolAdapter, ToolCredential, UnsharedRisk } from "./types.js";
 
-// Files/dirs under $CODEX_HOME that are credential or per-account state and must not be shared.
-const BASE_SKIP = new Set([
-  "auth.json",
-  "sessions",
-  "session_index.jsonl",
-  "history.jsonl",
-  "log",
-  "logs",
-  "shell_snapshots",
-  "installation_id",
-  ".codex-global-state.json",
-  ".codex-global-state.json.bak",
-  "cloud-requirements-cache.json",
-  "external_agent_session_imports.json",
-  "models_cache.json",
-  "cache",
-  "tmp",
-  ".tmp",
-  "computer-use",
-  "sqlite",
-  "version.json",
+// What a Codex profile shares with the primary's CODEX_HOME, and nothing else (#74). Codex
+// keeps adding state of one account's there - 0.148 to 0.159 added the app-server daemon's
+// control and pid directories, the memories databases, goal and queue databases, browser and
+// lock directories - and a list of what not to share linked each of them into every profile
+// until someone added it. A list of what to share leaves a name nobody has looked at in the
+// profile it belongs to: a new config file is not shared until it is added here, which is
+// the safe way to be wrong.
+
+// The configuration the user writes, and what it names: shared by every profile.
+const SHARED = new Set([
+  "config.toml",
+  "hooks.json",
+  "rules",
+  ".sandbox_migration",
+  "skills",
+  "plugins",
+  "agents",
+  "prompts",
+  "vendor_imports",
+  "pets",
+  ".personality_migration",
 ]);
 
-// Name prefixes that indicate per-profile state (sqlite WAL/SHM siblings, log/state DBs).
-const SKIP_PREFIXES = ["state_", "logs_", "sessions_"];
+// Config profiles beside config.toml (`<name>.config.toml`), and AGENTS.md with its variants
+// (AGENTS.override.md).
+const SHARED_PATTERNS = [/\.config\.toml$/, /^AGENTS.*\.md$/];
 
-const SESSION_SKIP = new Set(["sessions", "session_index.jsonl", "history.jsonl"]);
+// Conversation history, shared only by a profile that merges sessions with the primary.
+const SESSION_SET = new Set([
+  "sessions",
+  "archived_sessions",
+  "session_index.jsonl",
+  "history.jsonl",
+  "attachments",
+  "visualizations",
+  "thread-writer-locks",
+  "rollout-migrations",
+]);
 
 /**
  * Codex writes its config files to a temp file and renames that over the original (checked
@@ -52,17 +63,86 @@ const CODEX_UNIX_SOCKETS = [
   { path: "app-server-daemon/daemon-updater.sock", purpose: "the app-server daemon's auto-update" },
 ] as const;
 
-/**
- * Returns the skip set for symlinking decisions.
- * Literal set members are exact filenames; prefix-based names (e.g. state_5.sqlite)
- * must be checked via shouldSkipForCodex().
- */
-function buildSkipSet(mergeSessions: boolean): Set<string> {
-  const set = new Set(BASE_SKIP);
-  if (mergeSessions) {
-    for (const item of SESSION_SKIP) set.delete(item);
+// Every SQLite database and the files SQLite keeps beside one, whatever the database is
+// named: threads, goals, queues, memories, logs, state. Matched by suffix, since each
+// release brings databases under new names.
+const SQLITE_FILE = /\.sqlite(-wal|-shm|-journal)?$/;
+
+// Codex's thread store, which goes with the conversation history it indexes and is shared
+// with it, as one unit: threads (state_5), the goal each thread carries (goals_1, keyed by
+// thread id), and the history index into the shared rollout files (thread_history_1). Shared
+// apart from them, `codex resume --last` and the picker miss the other account's threads, and
+// a resumed thread loses its goal (codex-rs, rust-v0.159.3). The queue (queue_1) stays per
+// profile: each Codex takes an item off it under a lock of its own process.
+//
+// Only the database is linked, never its -wal, -shm or -journal: through a symbolic link SQLite
+// keeps those beside the file the link leads to. That is Unix's SQLite; Windows' names them
+// after the path the database was opened by, so two profiles would write two logs for one
+// database - there, nothing of the store is shared.
+const SESSION_DATABASES: ReadonlySet<string> = new Set(
+  process.platform === "win32" ? [] : ["state_5.sqlite", "goals_1.sqlite", "thread_history_1.sqlite"],
+);
+
+function codexSharedAllow(name: string, mergeSessions: boolean): boolean {
+  if (SQLITE_FILE.test(name)) return mergeSessions && SESSION_DATABASES.has(name);
+  if (SHARED.has(name) || SHARED_PATTERNS.some((pattern) => pattern.test(name))) return true;
+  return mergeSessions && SESSION_SET.has(name);
+}
+
+// Codex loads $CODEX_HOME/.env into its environment at start (codex-rs arg0, rust-v0.159.3),
+// so it can carry an account's own API keys and is never shared. A profile that linked the
+// primary's keeps a copy of it in place of the link; no other profile gets one.
+const COPIED_WHEN_UNLINKED = [".env"] as const;
+
+// Where Codex keeps credentials: its sign-in in auth.json, and other tokens and secrets in
+// the other two.
+const CREDENTIAL_STORES = new Set(["auth.json", ".credentials.json", "secrets"]);
+
+/** What a profile's link to the primary's `name` does, for an entry Codex keeps for each CODEX_HOME. */
+function codexUnsharedRisk(name: string): UnsharedRisk {
+  if (CREDENTIAL_STORES.has(name)) {
+    return { risk: "wrong_account", why: "so Codex in this profile uses the primary's credentials" };
   }
-  return set;
+  if (name === ".env") {
+    return {
+      risk: "wrong_account",
+      why: "so Codex in this profile loads the primary's .env, and any API keys in it, at start",
+    };
+  }
+  // Codex finds the daemon's control socket through $CODEX_HOME/app-server-control/: its path
+  // is a hash of that directory's real path, so a link to the primary's leads to the daemon
+  // the primary started, which serves the primary's auth.json and quota (codex-cli 0.159.3).
+  if (name === "app-server-control") {
+    return {
+      risk: "wrong_account",
+      why: "so Codex in this profile talks to the primary's app-server daemon and runs on the primary's account and quota",
+    };
+  }
+  if (name === "app-server-daemon") {
+    return {
+      risk: "wrong_account",
+      why: "so this profile and the primary share one app-server daemon's pid files and lock, and stopping or starting the daemon in one does it to the other's",
+    };
+  }
+  if (name.startsWith("memories")) {
+    return {
+      risk: "isolation",
+      why: "so the conversation summaries Codex adds to future prompts are shared: one account's conversations reach the other account's prompts",
+    };
+  }
+  if (SESSION_SET.has(name) || SESSION_DATABASES.has(name)) {
+    return { risk: "isolation", why: "but this profile keeps its sessions separate from the primary's" };
+  }
+  if (SQLITE_FILE.test(name)) {
+    return {
+      risk: "isolation",
+      why: "so this profile reads and writes the primary's Codex database (threads, goals, queues) instead of its own",
+    };
+  }
+  return {
+    risk: "isolation",
+    why: "but Codex keeps it for each CODEX_HOME, so this profile shares it with the primary's account",
+  };
 }
 
 async function readCodexAccount(configDir: string): Promise<AccountInfo | null> {
@@ -240,8 +320,9 @@ export const codexAdapter: ToolAdapter = {
   defaultConfigDir: (homeDir) => path.join(homeDir, ".codex"),
   configDirPattern: /^\.codex(-.+)?$/,
   readAccountInfo: readCodexAccount,
-  sharedSkipSet: buildSkipSet,
-  shouldSkipName: (name, _mergeSessions) => SKIP_PREFIXES.some((p) => name.startsWith(p)),
+  sharedAllow: codexSharedAllow,
+  unsharedRisk: codexUnsharedRisk,
+  copiedWhenUnlinked: COPIED_WHEN_UNLINKED,
   rewritesWhole: codexRewritesWhole,
   unixSockets: CODEX_UNIX_SOCKETS,
   readCredential: readCodexCredential,

@@ -283,7 +283,7 @@ describe("repair over the profile's own data", () => {
     linkSync(shared, profileAuth);
 
     const work = (await h.service.doctorProfiles()).find((result) => result.name === "codex:work");
-    expect(work?.issues.map((issue) => issue.kind)).toContain("stale_symlink");
+    expect(work?.issues.map((issue) => issue.kind)).toContain("wrong_account_link");
 
     await h.service.repairProfile("codex:work");
 
@@ -312,12 +312,16 @@ describe("repair over the profile's own data", () => {
     mkdirSync(path.join(h.dirs.codexWork, "sessions"));
     writeFileSync(path.join(h.dirs.codexWork, "sessions", "mine.jsonl"), "old");
     writeFileSync(path.join(h.dirs.codexWork, "history.jsonl"), "old history");
-    // Merged sets both aside; separated copies them back from their backups.
+    // Merged sets both aside. The profile then writes its own where the links were, as a tool
+    // writing locally would, so separating has nothing to bring back: a codex profile's
+    // backups are moved back, and would leave none for remove to weigh.
     await h.service.updateProfileConfig("codex:work", { mergeSessions: true });
-    await h.service.updateProfileConfig("codex:work", { mergeSessions: false });
-    // The profile goes on writing.
+    rmSync(path.join(h.dirs.codexWork, "sessions"), { recursive: true, force: true });
+    mkdirSync(path.join(h.dirs.codexWork, "sessions"));
     writeFileSync(path.join(h.dirs.codexWork, "sessions", "mine.jsonl"), "newer");
+    rmSync(path.join(h.dirs.codexWork, "history.jsonl"));
     writeFileSync(path.join(h.dirs.codexWork, "history.jsonl"), "newer history");
+    await h.service.updateProfileConfig("codex:work", { mergeSessions: false });
 
     await h.service.removeProfile("codex:work");
 

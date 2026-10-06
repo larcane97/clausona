@@ -64,40 +64,135 @@ describe("codexAdapter.readAccountInfo", () => {
   });
 });
 
-describe("codexAdapter.sharedSkipSet", () => {
-  it("isolates auth + sessions + state DB by default", () => {
-    const skip = codexAdapter.sharedSkipSet(false);
-    // Literal members in the set
-    for (const item of [
-      "auth.json",
-      "sessions",
-      "session_index.jsonl",
-      "history.jsonl",
-      "log",
-      "logs",
-      "shell_snapshots",
-      "installation_id",
-      ".codex-global-state.json",
-      "models_cache.json",
-      "cache",
-      "tmp",
-      ".tmp",
-      "version.json",
+describe("codexAdapter.sharedAllow", () => {
+  const shared = (name: string, mergeSessions = false) => codexAdapter.sharedAllow?.(name, mergeSessions);
+
+  it("shares the configuration the user writes, and what it names", () => {
+    for (const name of [
+      "config.toml",
+      "work.config.toml",
+      "hooks.json",
+      "AGENTS.md",
+      "AGENTS.override.md",
+      "rules",
+      ".sandbox_migration",
+      "skills",
+      "plugins",
+      "agents",
+      "prompts",
+      "vendor_imports",
+      "pets",
+      ".personality_migration",
     ]) {
-      expect(skip.has(item), `expected skip.has("${item}") to be true`).toBe(true);
+      expect(shared(name), name).toBe(true);
+      expect(shared(name, true), name).toBe(true);
     }
-    // Prefix-pattern members — checked via shouldSkipName
-    expect(codexAdapter.shouldSkipName?.("state_5.sqlite", false)).toBe(true);
-    expect(codexAdapter.shouldSkipName?.("logs_2.sqlite", false)).toBe(true);
   });
 
-  it("with mergeSessions=true, removes sessions/history from skip", () => {
-    const skip = codexAdapter.sharedSkipSet(true);
-    expect(skip.has("sessions")).toBe(false);
-    expect(skip.has("history.jsonl")).toBe(false);
-    expect(skip.has("session_index.jsonl")).toBe(false);
-    // auth.json is still always isolated
-    expect(skip.has("auth.json")).toBe(true);
+  it("keeps every other entry for the profile, including names it has never seen", () => {
+    for (const name of [
+      "auth.json",
+      ".env",
+      ".credentials.json",
+      "secrets",
+      "app-server-control",
+      "app-server-daemon",
+      "memories",
+      ".chatgpt-projects",
+      "browser",
+      "mcp-oauth-locks",
+      "project-metadata-locks",
+      "ipc",
+      "node_repl",
+      "code-review-plugin",
+      "packages",
+      "cloud-config-bundle-cache.json",
+      "claude-cowork-import-history.json",
+      "chrome-native-hosts-v2.json",
+      "installation_id",
+      "log",
+      "cache",
+      "config.toml.tmp-123",
+      "something-codex-0.200-adds",
+    ]) {
+      expect(shared(name), name).toBe(false);
+      expect(shared(name, true), name).toBe(false);
+    }
+  });
+
+  it("keeps every SQLite database and its companion files, by suffix rather than by name", () => {
+    for (const db of ["memories_1", "memories_v2_1", "queue_1", "logs_2", "new_9"]) {
+      for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+        expect(shared(`${db}.sqlite${suffix}`), `${db}.sqlite${suffix}`).toBe(false);
+        expect(shared(`${db}.sqlite${suffix}`, true), `${db}.sqlite${suffix}`).toBe(false);
+      }
+    }
+  });
+
+  it("shares the thread store with merged sessions, the databases alone and never their -wal or -shm", () => {
+    // Windows' SQLite would keep a second -wal beside a link, so there the store stays in each profile.
+    const merged = process.platform !== "win32";
+    for (const db of ["state_5", "goals_1", "thread_history_1"]) {
+      expect(shared(`${db}.sqlite`), db).toBe(false);
+      expect(shared(`${db}.sqlite`, true), db).toBe(merged);
+      for (const suffix of ["-wal", "-shm", "-journal"]) {
+        expect(shared(`${db}.sqlite${suffix}`, true), `${db}.sqlite${suffix}`).toBe(false);
+      }
+    }
+  });
+
+  it("shares conversation history only with mergeSessions", () => {
+    for (const name of [
+      "sessions",
+      "archived_sessions",
+      "session_index.jsonl",
+      "history.jsonl",
+      "attachments",
+      "visualizations",
+      "thread-writer-locks",
+      "rollout-migrations",
+    ]) {
+      expect(shared(name, false), name).toBe(false);
+      expect(shared(name, true), name).toBe(true);
+    }
+  });
+
+  it("names no skip set, so nothing reads one for codex", () => {
+    expect(codexAdapter.sharedSkipSet).toBeUndefined();
+    expect(codexAdapter.shouldSkipName).toBeUndefined();
+  });
+});
+
+describe("codexAdapter.copiedWhenUnlinked", () => {
+  it("keeps a copy of the primary's .env, which Codex loads at start, in place of a link to it", () => {
+    expect(codexAdapter.copiedWhenUnlinked).toEqual([".env"]);
+  });
+});
+
+describe("codexAdapter.unsharedRisk", () => {
+  const risk = (name: string) => codexAdapter.unsharedRisk?.(name);
+
+  it("calls the daemon's directories and the credential stores a wrong account", () => {
+    for (const name of [
+      "app-server-control",
+      "app-server-daemon",
+      "auth.json",
+      ".env",
+      ".credentials.json",
+      "secrets",
+    ]) {
+      expect(risk(name)?.risk, name).toBe("wrong_account");
+    }
+    expect(risk("app-server-control")?.why).toContain("the primary's app-server daemon");
+    expect(risk("app-server-control")?.why).toContain("account and quota");
+  });
+
+  it("calls memories and every other per-home entry an isolation risk", () => {
+    expect(risk("memories_1.sqlite")).toEqual({ risk: "isolation", why: expect.stringContaining("prompts") });
+    expect(risk("memories")?.why).toContain("conversation summaries");
+    for (const name of ["goals_1.sqlite", "browser", "sessions", "node_repl"]) {
+      expect(risk(name)?.risk, name).toBe("isolation");
+    }
   });
 });
 

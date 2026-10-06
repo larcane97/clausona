@@ -23,6 +23,13 @@ export type ToolCredential = {
  */
 export type SignInCheck = { ok: true } | { ok: false; reason: "signed_out" | "unknown"; detail: string };
 
+/**
+ * What a profile's link to one of the primary's entries does when the entry is not one to
+ * share. `wrong_account`: the tool acts as the primary's account through it - its credential,
+ * or a daemon signed in as it. `isolation`: one account's state reaches the other's.
+ */
+export type UnsharedRisk = { risk: "wrong_account" | "isolation"; why: string };
+
 export type ToolAdapter = {
   name: ToolName;
   binary: string;
@@ -43,8 +50,27 @@ export type ToolAdapter = {
   // signed in, so a caller gating on the Keychain probe has to accept this too.
   hasFallbackCredential?(configDir: string): Promise<boolean>;
 
+  // A tool names either what a profile does not share (sharedSkipSet, with shouldSkipName) or
+  // the only entries it shares (sharedAllow), never both. The second is for a tool whose
+  // releases keep adding state of one account's to its config dir: a name no one has looked
+  // at yet stays the profile's own, rather than being linked into the primary's.
+  //
+  // Whether the primary's entry `name` is linked into a profile. Every other entry is the
+  // profile's own, and one linked by an earlier clausona is unlinked by repair.
+  sharedAllow?(name: string, mergeSessions: boolean): boolean;
+
+  // With sharedAllow: what linking `name` into the primary's does - acting as the primary's
+  // account, or sharing one account's state with another - for doctor to say when a profile
+  // links it. `why` follows "<name> links to the primary's, ".
+  unsharedRisk?(name: string): UnsharedRisk;
+
+  // With sharedAllow: entries the profile keeps for itself - setup the tool reads, which may
+  // hold an account's own keys - that a profile which linked the primary's keeps as a copy of
+  // it, in place of the link. No other profile gets one.
+  copiedWhenUnlinked?: readonly string[];
+
   // Files/dirs under the profile's config dir that must NOT be symlinked to primary.
-  sharedSkipSet(mergeSessions: boolean): Set<string>;
+  sharedSkipSet?(mergeSessions: boolean): Set<string>;
 
   // Optional per-name predicate for skip patterns the Set can't express
   // (e.g. sqlite WAL/SHM siblings of state_*.sqlite).

@@ -151,7 +151,7 @@ function valuePrefixes(flags: string[]): string[] {
 }
 
 const commandFlags: Record<string, { flags: string[]; prefixes?: string[] }> = {
-  init: { flags: ["--auto", "--merge-sessions"] },
+  init: { flags: ["--auto", "--merge-sessions", "--force"] },
   add: { flags: ["--merge-sessions", "--api", ...ADD_VALUE_FLAGS], prefixes: valuePrefixes(ADD_VALUE_FLAGS) },
   use: { flags: [] },
   list: { flags: ["--json", "--no-quota", "--no-renew", "--refresh"] },
@@ -159,10 +159,19 @@ const commandFlags: Record<string, { flags: string[]; prefixes?: string[] }> = {
   current: { flags: ["--json"] },
   doctor: { flags: ["--json"] },
   config: {
-    flags: ["--merge-sessions", "--separate-sessions", "--key", "--edit", "--show", "--json", ...CONFIG_VALUE_FLAGS],
+    flags: [
+      "--merge-sessions",
+      "--separate-sessions",
+      "--force",
+      "--key",
+      "--edit",
+      "--show",
+      "--json",
+      ...CONFIG_VALUE_FLAGS,
+    ],
     prefixes: valuePrefixes(CONFIG_VALUE_FLAGS),
   },
-  repair: { flags: [] },
+  repair: { flags: ["--force"] },
   login: { flags: [] },
   remove: { flags: [] },
   run: { flags: [] },
@@ -569,11 +578,12 @@ function subcommandHelpText(command: string): string | undefined {
         `  ${accent("clausona init")} ${dim("— Discover accounts interactively")}`,
         "",
         `  ${bold("USAGE")}`,
-        helpUsage("clausona init [--auto] [--merge-sessions]"),
+        helpUsage("clausona init [--auto] [--merge-sessions] [--force]"),
         "",
         `  ${bold("OPTIONS")}`,
         `    ${accent("--auto".padEnd(18))}${dim("Run non-interactively (skip TUI)")}`,
         `    ${accent("--merge-sessions".padEnd(18))}${dim("Share session history across profiles (default: separated)")}`,
+        `    ${accent("--force".padEnd(18))}${dim("Go ahead while Codex runs in a profile init would move files in")}`,
         "",
         `  ${bold("NOTES")}`,
         `    ${dim("Registers the Claude Code and Codex accounts already signed in; with none,")}`,
@@ -819,7 +829,7 @@ function subcommandHelpText(command: string): string | undefined {
         `  ${accent("clausona config")} ${dim("— Configure profile settings")}`,
         "",
         `  ${bold("USAGE")}`,
-        helpUsage("clausona config <profile> --merge-sessions | --separate-sessions"),
+        helpUsage("clausona config <profile> --merge-sessions | --separate-sessions [--force]"),
         helpUsage("clausona config <profile> --model <id>"),
         helpUsage("clausona config <profile> --set KEY=VALUE [--set ...] [--unset KEY]"),
         helpUsage("clausona config <profile> [--base-url <url>] [--auth <scheme>] [--label <name>]"),
@@ -833,6 +843,7 @@ function subcommandHelpText(command: string): string | undefined {
         `  ${bold("OPTIONS")}`,
         `    ${accent("--merge-sessions".padEnd(22))}${dim("Share sessions with primary profile")}`,
         `    ${accent("--separate-sessions".padEnd(22))}${dim("Keep sessions isolated (default)")}`,
+        `    ${accent("--force".padEnd(22))}${dim("Change session mode while Codex runs in the profile")}`,
         `    ${accent("--model".padEnd(22))}${dim("The model the profile uses, stored as ANTHROPIC_MODEL")}`,
         `    ${accent("--set".padEnd(22))}${dim("Set an advanced env setting; repeatable")}`,
         `    ${accent("--unset".padEnd(22))}${dim("Remove an advanced env setting; repeatable. A name")}`,
@@ -914,10 +925,17 @@ function subcommandHelpText(command: string): string | undefined {
         `  ${accent("clausona repair")} ${dim("— Repair shared links for a profile")}`,
         "",
         `  ${bold("USAGE")}`,
-        helpUsage("clausona repair <profile>"),
+        helpUsage("clausona repair <profile> [--force]"),
         "",
         `  ${bold("ARGUMENTS")}`,
         `    ${accent("profile".padEnd(12))}${dim("Profile to repair")}`,
+        "",
+        `  ${bold("OPTIONS")}`,
+        `    ${accent("--force".padEnd(12))}${dim("Repair a Codex profile while Codex runs in it")}`,
+        "",
+        `    ${dim("Repair refuses a Codex profile where Codex is running when it would move files")}`,
+        `    ${dim("Codex has open: its databases, the app-server daemon's directories. Quit Codex in")}`,
+        `    ${dim("that profile first, or pass --force.")}`,
         "",
       ].join("\n");
 
@@ -1216,7 +1234,7 @@ export async function runCommand(command: string, args: string[]) {
       const registry = await loadRegistry();
       if (!registry) throw await noRegistryError();
       const ref = parseProfileRef(input, registry);
-      const result = await repairProfile(ref.id);
+      const result = await repairProfile(ref.id, { force: args.includes("--force") });
       return success(`Repaired ${bold(String(result.repaired))} shared item(s) for ${bold(ref.id)}`);
     }
 
@@ -1285,6 +1303,9 @@ export async function runCommand(command: string, args: string[]) {
       }
 
       if (changes === 0) throw new Error(CONFIG_USAGE);
+      if (args.includes("--force") && !changeSessions) {
+        throw new Error("--force goes with --merge-sessions or --separate-sessions.");
+      }
       if (changes > 1) {
         throw new Error(
           "Change one thing at a time: --model/--set/--unset, --base-url/--auth/--label, --key/--key-from, --edit, or --merge-sessions/--separate-sessions.",
@@ -1405,7 +1426,7 @@ export async function runCommand(command: string, args: string[]) {
       if (mergeSessions && separateSessions) {
         throw new Error("Pass --merge-sessions or --separate-sessions, not both.");
       }
-      const result = await updateProfileConfig(ref.id, { mergeSessions });
+      const result = await updateProfileConfig(ref.id, { mergeSessions, force: args.includes("--force") });
       if (!result.changed) return dim(`${ref.id} is already ${mergeSessions ? "merged" : "separated"}`);
       return success(`${bold(ref.id)} sessions set to ${result.mergeSessions ? "merged" : "separated"}`);
     }
@@ -1729,7 +1750,7 @@ export async function runCommand(command: string, args: string[]) {
       const mergeSessions = args.includes("--merge-sessions") || undefined;
       const profileNames = await proposeInitProfileNames(accounts, await loadRegistry());
       // No default: nobody was asked, so each tool keeps the profile that was active.
-      await initializeRegistry({ accounts, profileNames, mergeSessions });
+      await initializeRegistry({ accounts, profileNames, mergeSessions, force: args.includes("--force") });
       for (const account of accounts) {
         for (const warning of await configDirWarnings(account.tool, account.configDir)) {
           process.stderr.write(`  ${warnIcon} ${warning}\n`);
