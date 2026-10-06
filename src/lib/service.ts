@@ -2436,7 +2436,8 @@ async function cleanupProfile(
   if (!options.keepBackup && (await exists(backupDir))) {
     if (await exists(profile.configDir)) {
       const notPutBack: string[] = [];
-      for (const [itemName, copies] of await backupsByName(backupDir)) {
+      const backups = await backupsByName(backupDir);
+      for (const [itemName, copies] of backups) {
         const target = path.join(profile.configDir, itemName);
         // A link into the primary, which repair set aside dangling, holds nothing of the
         // profile's: brought back, it would be the very link removing the profile strips. Kept,
@@ -2449,8 +2450,11 @@ async function cleanupProfile(
         }
         const newest = own.at(-1);
         if (!newest) continue;
+        // Put back with its database, by moveBackCompanions, or not at all.
+        if (SQLITE_COMPANION.test(itemName)) continue;
         if (!(await exists(target))) {
           await moveTo(newest, target);
+          await moveBackCompanions(backups, itemName, own, profile.configDir, primarySource);
           continue;
         }
         // plugins/ is the profile's own directory, never a link, so it is always there by now.

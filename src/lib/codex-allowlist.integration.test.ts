@@ -312,4 +312,16 @@ describe("repairing a profile an older clausona linked", () => {
       ].sort(),
     );
   });
+
+  it("and neither does remove", async () => {
+    const h = await harness(linkedByOlderClausona);
+    twoCopies(h.backups("work"));
+
+    await h.service.removeProfile("codex:work");
+
+    expect(readFileSync(path.join(h.dirs.work, "memories_1.sqlite"), "utf8")).toBe("newer copy");
+    expect(lstatOrNull(path.join(h.dirs.work, "memories_1.sqlite-wal"))).toBeNull();
+    expect(readdirSync(h.backups("work"))).toContain(stamped("memories_1.sqlite-wal", "2026-08-01T10:00:00.004Z"));
+    expect(snapshot(h.dirs.codex)).toEqual(h.primaryBefore);
+  });
 });
