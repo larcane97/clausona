@@ -253,7 +253,7 @@ describe("repairing a profile an older clausona linked", () => {
 
   it.each([
     ["timestamped", (name: string) => stamped(name, "2026-09-01T10:00:00.000Z")],
-    ["from before backups were timestamped", (name: string) => name],
+    ["untimestamped", (name: string) => name],
   ])("unlinks memories_1.sqlite and puts its own copy back with its -wal (%s backups)", async (_layout, backupName) => {
     const h = await harness(linkedByOlderClausona);
     mkdirSync(h.backups("work"), { recursive: true });
