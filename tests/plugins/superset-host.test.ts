@@ -281,3 +281,146 @@ describe("workspaces and terminals", () => {
     ]);
   });
 });
+
+describe("agents", () => {
+  it("lists configs with env keys but never env values", async () => {
+    const value = ["value", "that", "must", "not", "print"].join("-");
+    replies["settings.agentConfigs.list"] = {
+      json: [
+        {
+          id: "c1",
+          label: "Claude · work",
+          command: "clausona",
+          args: ["run", "claude:work"],
+          env: { API_KEY: value },
+        },
+      ],
+    };
+    const r = await run(["agents", "configs"]);
+    expect(JSON.parse(r.stdout)).toEqual([
+      { id: "c1", label: "Claude · work", command: "clausona", args: ["run", "claude:work"], envKeys: ["API_KEY"] },
+    ]);
+    expect(r.stdout).not.toContain(value);
+  });
+
+  it("adds a clausona config, with the claude args after --", async () => {
+    replies["settings.agentConfigs.add"] = { json: { id: "c2", label: "Claude · work (Sonnet 5.5)", env: {} } };
+    const r = await run([
+      "agents",
+      "add-config",
+      "--label",
+      "Claude · work (Sonnet 5.5)",
+      "--profile",
+      "claude:work",
+      "--",
+      "--model",
+      "claude-sonnet-5-5",
+      "--effort",
+      "high",
+    ]);
+    expect(JSON.parse(r.stdout)).toEqual({ id: "c2", label: "Claude · work (Sonnet 5.5)", envKeys: [] });
+    await run(["agents", "add-config", "--label", "X", "--profile", "claude:glm", "--command", "/opt/bin/clausona"]);
+    expect(seen.map((s) => s.input)).toEqual([
+      {
+        label: "Claude · work (Sonnet 5.5)",
+        command: "clausona",
+        args: ["run", "claude:work", "--", "--model", "claude-sonnet-5-5", "--effort", "high"],
+        promptTransport: "argv",
+        promptArgs: [],
+        env: {},
+        presetId: "custom",
+      },
+      {
+        label: "X",
+        command: "/opt/bin/clausona",
+        args: ["run", "claude:glm", "--"],
+        promptTransport: "argv",
+        promptArgs: [],
+        env: {},
+        presetId: "custom",
+      },
+    ]);
+  });
+
+  it("removes a config", async () => {
+    replies["settings.agentConfigs.remove"] = { json: { success: true } };
+    await run(["agents", "remove-config", "c2"]);
+    expect(seen.map((s) => [s.method, s.procedure, s.input])).toEqual([
+      ["POST", "settings.agentConfigs.remove", { id: "c2" }],
+    ]);
+  });
+
+  it("starts an agent with a brief file, byte for byte", async () => {
+    replies["agents.run"] = { json: { kind: "terminal", sessionId: "t1", label: "Claude · work" } };
+    const brief = 'Fix `parse()` in src/parse.ts.\nRun $(npm test) && echo "done"\n\tKeep \\n literal.\n';
+    const file = path.join(home, "brief.md");
+    writeFileSync(file, brief);
+    const r = await run(["agents", "run", "--workspace", "w1", "--agent", "c1", "--prompt-file", file]);
+    expect(JSON.parse(r.stdout)).toEqual({ kind: "terminal", sessionId: "t1", label: "Claude · work" });
+    expect(seen).toEqual([
+      {
+        method: "POST",
+        procedure: "agents.run",
+        input: { workspaceId: "w1", agent: "c1", prompt: brief },
+        auth: `Bearer ${TOKEN}`,
+      },
+    ]);
+  });
+
+  it("refuses both --prompt and --prompt-file, and no prompt at all", async () => {
+    const file = path.join(home, "brief.md");
+    writeFileSync(file, "x");
+    const both = await run([
+      "agents",
+      "run",
+      "--workspace",
+      "w1",
+      "--agent",
+      "c1",
+      "--prompt",
+      "x",
+      "--prompt-file",
+      file,
+    ]);
+    const none = await run(["agents", "run", "--workspace", "w1", "--agent", "c1"]);
+    expect(both.code).toBe(1);
+    expect(none.code).toBe(1);
+    expect(none.stderr).toMatch(/pass --prompt, --prompt-file or --from-terminal/);
+    expect(seen).toEqual([]);
+  });
+
+  it("hands a task over from another terminal", async () => {
+    replies["terminal.transcript"] = { json: { terminalId: "t1", text: "step 3 of 5 done; usage limit reached" } };
+    replies["agents.run"] = { json: { kind: "terminal", sessionId: "t2", label: "Claude · side" } };
+    await run([
+      "agents",
+      "run",
+      "--workspace",
+      "w1",
+      "--agent",
+      "c-side",
+      "--from-terminal",
+      "t1",
+      "--prompt",
+      "Finish step 4 and 5.",
+    ]);
+    expect(seen[0]).toMatchObject({
+      method: "GET",
+      procedure: "terminal.transcript",
+      input: { terminalId: "t1", workspaceId: "w1", maxChars: 36000 },
+    });
+    expect(seen[1]).toMatchObject({ method: "POST", procedure: "agents.run" });
+    const prompt = (seen[1].input as { prompt: string }).prompt;
+    expect(prompt).toContain("Superset terminal t1");
+    expect(prompt).toContain("step 3 of 5 done; usage limit reached");
+    expect(prompt.endsWith("Finish step 4 and 5.")).toBe(true);
+  });
+
+  it("will not hand over a terminal that has printed nothing", async () => {
+    replies["terminal.transcript"] = { json: { terminalId: "t1", text: "  \n" } };
+    const r = await run(["agents", "run", "--workspace", "w1", "--agent", "c1", "--from-terminal", "t1"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/terminal t1 has no output to hand off yet/);
+    expect(seen.map((s) => s.procedure)).toEqual(["terminal.transcript"]);
+  });
+});

@@ -109,6 +109,40 @@ function positiveInt(text, flag) {
   return Number(text);
 }
 
+// Config env can hold API keys, so only the keys are shown.
+function hideEnv({ env, ...rest }) {
+  return { ...rest, envKeys: Object.keys(env ?? {}) };
+}
+
+// The CLI's own cap on the context it hands from one terminal to a new agent.
+const HANDOFF_MAX_CHARS = 36_000;
+
+function readPromptFile(file) {
+  try {
+    return readFileSync(file, "utf8");
+  } catch (err) {
+    throw new CliError(`cannot read ${file}: ${err.code ?? err.message}`);
+  }
+}
+
+// Mirrors `superset agents create --from-terminal`: the new agent starts from the old
+// terminal's recent output, read from the host's transcript of that terminal.
+async function handoffPrompt(host, workspaceId, terminalId, extra) {
+  const transcript = await call(host, "terminal.transcript", { terminalId, workspaceId, maxChars: HANDOFF_MAX_CHARS });
+  const text = transcript?.text ?? "";
+  if (!text.trim()) throw new CliError(`terminal ${terminalId} has no output to hand off yet`);
+  const lines = [
+    `You are taking over a task that another agent was working on in this workspace (Superset terminal ${terminalId}).`,
+    "Its recent terminal output is below. Check the worktree's git state, then carry the task on from where it stopped. Do not redo finished steps.",
+    "",
+    "<previous-terminal-output>",
+    text,
+    "</previous-terminal-output>",
+  ];
+  if (extra?.trim()) lines.push("", extra);
+  return lines.join("\n");
+}
+
 const str = { type: "string" };
 
 const COMMANDS = {
@@ -186,6 +220,48 @@ const COMMANDS = {
     required: ["workspace", "terminal"],
     run: (host, v) =>
       call(host, "terminal.killSession", { terminalId: v.terminal, workspaceId: v.workspace }, { mutation: true }),
+  },
+  "agents configs": {
+    run: async (host) => (await call(host, "settings.agentConfigs.list")).map(hideEnv),
+  },
+  "agents add-config": {
+    options: { label: str, profile: str, command: str },
+    required: ["label", "profile"],
+    passthrough: true,
+    run: async (host, v, _p, extra) =>
+      hideEnv(
+        await call(
+          host,
+          "settings.agentConfigs.add",
+          {
+            label: v.label,
+            command: v.command ?? "clausona",
+            args: ["run", v.profile, "--", ...extra],
+            promptTransport: "argv",
+            promptArgs: [],
+            env: {},
+            presetId: "custom",
+          },
+          { mutation: true },
+        ),
+      ),
+  },
+  "agents remove-config": {
+    positionals: 1,
+    run: (host, _v, [id]) => call(host, "settings.agentConfigs.remove", { id }, { mutation: true }),
+  },
+  "agents run": {
+    options: { workspace: str, agent: str, prompt: str, "prompt-file": str, "from-terminal": str },
+    required: ["workspace", "agent"],
+    run: async (host, v) => {
+      if (v.prompt !== undefined && v["prompt-file"] !== undefined) {
+        throw new CliError("pass --prompt or --prompt-file, not both");
+      }
+      let prompt = v["prompt-file"] !== undefined ? readPromptFile(v["prompt-file"]) : v.prompt;
+      if (v["from-terminal"] !== undefined) prompt = await handoffPrompt(host, v.workspace, v["from-terminal"], prompt);
+      if (!prompt?.trim()) throw new CliError("pass --prompt, --prompt-file or --from-terminal");
+      return call(host, "agents.run", { workspaceId: v.workspace, agent: v.agent, prompt }, { mutation: true });
+    },
   },
 };
 
