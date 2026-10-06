@@ -55,6 +55,11 @@ export type ToolAdapter = {
   // the primary's at the first save - so these are shared by a symbolic link or not at all.
   rewritesWhole?(name: string): boolean;
 
+  // Unix sockets the tool binds inside its config dir, relative to it, and what each is for.
+  // A socket's whole path has to fit in sun_path, so a config dir that is too long stops the
+  // tool binding it.
+  unixSockets?: ReadonlyArray<{ path: string; purpose: string }>;
+
   // Per-tool post-link setup (e.g. Claude's plugins JSON path-rewrite).
   postSetup?(profileDir: string, primaryDir: string): Promise<void>;
 

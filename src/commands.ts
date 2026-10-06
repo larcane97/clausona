@@ -67,6 +67,7 @@ import {
   checkApiTool,
   checkLabel,
   checkModelEntry,
+  configDirWarnings,
   defaultAuthScheme,
   discoverAccounts,
   doctorProfiles,
@@ -1549,6 +1550,7 @@ export async function runCommand(command: string, args: string[]) {
 
       // addProfile enforces the name rule before it touches anything.
       const added = await addProfile({ tool, name, fromPath, mergeSessions: mergeSessions || undefined });
+      for (const warning of added.warnings) process.stderr.write(`  ${warnIcon} ${warning}\n`);
       const addedId = profileId(tool, added.name);
       const addedLine = success(`Added ${bold(addedId)} ${dim(`(${added.email})`)}`);
       return added.credentialUnconfirmed === undefined
@@ -1728,6 +1730,11 @@ export async function runCommand(command: string, args: string[]) {
       const profileNames = await proposeInitProfileNames(accounts, await loadRegistry());
       // No default: nobody was asked, so each tool keeps the profile that was active.
       await initializeRegistry({ accounts, profileNames, mergeSessions });
+      for (const account of accounts) {
+        for (const warning of await configDirWarnings(account.tool, account.configDir)) {
+          process.stderr.write(`  ${warnIcon} ${warning}\n`);
+        }
+      }
       return success(`Initialized ${bold(String(accounts.length))} profile(s)`);
     }
 

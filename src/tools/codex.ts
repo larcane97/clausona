@@ -45,6 +45,14 @@ function codexRewritesWhole(name: string): boolean {
 }
 
 /**
+ * The app-server daemon's updater binds this socket under CODEX_HOME (codex-cli 0.159.3). The
+ * daemon's auto-update stops, with nothing said, when the path does not fit in sun_path.
+ */
+const CODEX_UNIX_SOCKETS = [
+  { path: "app-server-daemon/daemon-updater.sock", purpose: "the app-server daemon's auto-update" },
+] as const;
+
+/**
  * Returns the skip set for symlinking decisions.
  * Literal set members are exact filenames; prefix-based names (e.g. state_5.sqlite)
  * must be checked via shouldSkipForCodex().
@@ -235,6 +243,7 @@ export const codexAdapter: ToolAdapter = {
   sharedSkipSet: buildSkipSet,
   shouldSkipName: (name, _mergeSessions) => SKIP_PREFIXES.some((p) => name.startsWith(p)),
   rewritesWhole: codexRewritesWhole,
+  unixSockets: CODEX_UNIX_SOCKETS,
   readCredential: readCodexCredential,
   fetchQuota: fetchCodexQuota,
   renewCredential: renewCodexCredential,

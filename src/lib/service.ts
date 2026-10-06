@@ -31,6 +31,7 @@ import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
 import { isV1Registry, migrateRegistryV1toV2, setActiveProfile } from "../core/registry.js";
 import { createSharedLink, inspectSharedLink } from "../core/shared-links.js";
 import { isPosixEnvName, renderShellInit, type ShellInitPaths } from "../core/shell.js";
+import { overlongSocketPath, socketPathLimit } from "../core/socket-path.js";
 import { seedSeenSessions } from "../core/track-usage.js";
 import { summarizeUsage } from "../core/usage.js";
 import { validateEnvEntry } from "../tools/claude-env-catalog.js";
@@ -937,6 +938,36 @@ async function setupPluginsDir(profileDir: string, primarySource: string, backup
   await syncPluginsJson(profileDir, primarySource);
 }
 
+const PLATFORM_NAMES: Partial<Record<NodeJS.Platform, string>> = { darwin: "macOS", linux: "Linux" };
+
+/**
+ * What to know about a profile's config directory that does not stop it working: that it is
+ * too long a path for a Unix socket the tool binds inside it. A socket path has to fit in
+ * sun_path, and the tool does not say when it does not. Said by add, add --from and init as
+ * a warning - nothing is refused for it - and by doctor.
+ *
+ * Measured from the directory's real path, since that is where the socket is bound.
+ */
+export async function configDirWarnings(
+  tool: ToolName,
+  configDir: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<string[]> {
+  const sockets = getAdapter(tool).unixSockets ?? [];
+  if (sockets.length === 0 || socketPathLimit(platform) === undefined) return [];
+  const resolved = await realpath(configDir).catch(() => path.resolve(configDir));
+  const warnings: string[] = [];
+  for (const socket of sockets) {
+    const overlong = overlongSocketPath(resolved, socket.path, platform);
+    if (!overlong) continue;
+    const system = PLATFORM_NAMES[platform] ?? platform;
+    warnings.push(
+      `${configDir} is too long a path for ${toolProduct(tool)}: ${socket.purpose} binds a socket at ${overlong.socketPath}, which is ${overlong.bytes} bytes where ${system} allows ${overlong.limit}, so it fails without saying so - keep the directory's real path to ${overlong.dirLimit} bytes or fewer`,
+    );
+  }
+  return warnings;
+}
+
 export async function validateConfigDir(
   inputPath: string,
   registeredDirs: string[],
@@ -1779,6 +1810,12 @@ export async function doctorProfiles(
             message: "plugins/ marketplaces and known_marketplaces.json are out of sync",
           });
         }
+      }
+    }
+
+    if (!configDirMissing) {
+      for (const message of await configDirWarnings(profile.tool, profile.configDir)) {
+        issues.push({ kind: "socket_path_too_long", severity: "warning", message });
       }
     }
 
@@ -2791,7 +2828,8 @@ async function addProfileHoldingLock(options: AddProfileOptions, id: string) {
     // on it is this profile's, so a later add must not treat it as a leftover to reuse.
     await rm(path.join(configDir, ADD_PENDING_MARKER), { force: true }).catch(() => {});
     if (options.tool === "claude") await seedSeenSessions(id, configDir);
-    return { name: options.name, email: accountInfo.email, configDir, backupDir };
+    const warnings = await configDirWarnings(options.tool, configDir);
+    return { name: options.name, email: accountInfo.email, configDir, backupDir, warnings };
   }
 
   // New profile with no --from: create a fresh config dir and run login
@@ -2914,7 +2952,8 @@ async function addProfileHoldingLock(options: AddProfileOptions, id: string) {
   // the profile drops it before the entry goes.
   await rm(path.join(configDir, ADD_PENDING_MARKER), { force: true }).catch(() => {});
   if (options.tool === "claude") await seedSeenSessions(id, configDir);
-  return { name: options.name, email: accountInfo.email, configDir, credentialUnconfirmed };
+  const warnings = await configDirWarnings(options.tool, configDir);
+  return { name: options.name, email: accountInfo.email, configDir, credentialUnconfirmed, warnings };
 }
 
 /**

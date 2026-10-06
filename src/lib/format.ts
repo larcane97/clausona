@@ -550,6 +550,8 @@ const SELF_DIRECTED_ISSUE_KINDS = new Set<DoctorIssue["kind"]>([
   "env_overrides_endpoint",
   "invalid_env_map",
   "invalid_profile_kind",
+  // Not an API profile's, but no more repair's to fix: a directory's length.
+  "socket_path_too_long",
 ]);
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
