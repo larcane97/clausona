@@ -32,6 +32,7 @@ import { isV1Registry, migrateRegistryV1toV2, setActiveProfile } from "../core/r
 import { createSharedLink, inspectSharedLink } from "../core/shared-links.js";
 import { isPosixEnvName, renderShellInit, type ShellInitPaths } from "../core/shell.js";
 import { overlongSocketPath, socketPathLimit } from "../core/socket-path.js";
+import { tomlRootValue } from "../core/toml.js";
 import { seedSeenSessions } from "../core/track-usage.js";
 import { summarizeUsage } from "../core/usage.js";
 import { validateEnvEntry } from "../tools/claude-env-catalog.js";
@@ -968,6 +969,48 @@ export async function configDirWarnings(
   return warnings;
 }
 
+/**
+ * Codex settings that put this profile's SQLite state - threads, memories, logs - somewhere
+ * other than its own CODEX_HOME, and with it every other profile's that has the same setting:
+ * `sqlite_home` in the config.toml the profile reads, normally the primary's through a shared
+ * link, or CODEX_SQLITE_HOME in the environment doctor runs in, which a profile started from
+ * the same shell inherits. The key wins over the variable, so only one is reported. A value
+ * the profile's own env map gives the variable is the profile's alone, and is left be.
+ */
+async function sqliteHomeIssues(
+  profile: Profile,
+  primarySource: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<DoctorIssue[]> {
+  const configPath = path.join(profile.configDir, "config.toml");
+  const config = await readFile(configPath, "utf8").catch(() => "");
+  if (tomlRootValue(config, "sqlite_home") !== undefined) {
+    const shared =
+      !profile.isPrimary &&
+      primarySource !== undefined &&
+      (await inspectSharedLink(configPath, path.join(primarySource, "config.toml"))).pointsToSource;
+    return [
+      {
+        kind: "shared_sqlite_home",
+        severity: "warning",
+        message: `sqlite_home is set in ${configPath}${shared ? " (shared with the primary)" : ""}, so Codex keeps this profile's SQLite state - threads, memories, logs - in the directory it names, along with every other profile that reads it - remove it to keep each account's state in its own CODEX_HOME`,
+      },
+    ];
+  }
+  const ownValue = envMapOf(profile.env)?.CODEX_SQLITE_HOME;
+  if (env.CODEX_SQLITE_HOME?.trim() && ownValue === undefined) {
+    return [
+      {
+        kind: "shared_sqlite_home",
+        severity: "warning",
+        message:
+          "CODEX_SQLITE_HOME is set in this environment, so every Codex profile started from it keeps its SQLite state - threads, memories, logs - in that one directory rather than in its own CODEX_HOME - unset it to keep each account's state apart",
+      },
+    ];
+  }
+  return [];
+}
+
 export async function validateConfigDir(
   inputPath: string,
   registeredDirs: string[],
@@ -1526,6 +1569,7 @@ export async function doctorProfiles(
 
   const results: DoctorProfileResult[] = [];
   const home = homedir();
+  const codexProfiles = Object.values(registry.profiles).filter((profile) => profile.tool === "codex").length;
 
   for (const [id, profile] of Object.entries(registry.profiles)) {
     const issues: DoctorIssue[] = [];
@@ -1817,6 +1861,10 @@ export async function doctorProfiles(
       for (const message of await configDirWarnings(profile.tool, profile.configDir)) {
         issues.push({ kind: "socket_path_too_long", severity: "warning", message });
       }
+    }
+    // One Codex profile has no other to share its SQLite state with.
+    if (profile.tool === "codex" && codexProfiles > 1) {
+      issues.push(...(await sqliteHomeIssues(profile, primarySource)));
     }
 
     results.push({
