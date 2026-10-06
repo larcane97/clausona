@@ -251,7 +251,9 @@ function shouldSkipShare(adapter: ToolAdapter, name: string, mergeSessions: bool
   // The marker describes the one directory it sits in, for either tool — never state to
   // share, back up, or hold against a profile in doctor.
   if (name === ADD_PENDING_MARKER) return true;
-  if (adapter.sharedSkipSet(mergeSessions).has(name)) return true;
+  // A tool that names the only entries it shares keeps every other one for the profile.
+  if (adapter.sharedAllow) return !adapter.sharedAllow(name, mergeSessions);
+  if (adapter.sharedSkipSet?.(mergeSessions).has(name)) return true;
   if (adapter.shouldSkipName?.(name, mergeSessions)) return true;
   return false;
 }
@@ -456,7 +458,8 @@ async function backupsByName(backupDir: string): Promise<Map<string, string[]>> 
  * Brings back each skip-set entry the profile no longer has from its newest backup: one the
  * profile kept for itself until it was shared (projects/ while sessions were merged) and now
  * keeps for itself again. A backup that is only a link to the primary's entry holds nothing
- * of the profile's own and is passed over. Copied, so the backup stays.
+ * of the profile's own and is passed over. Copied, so the backup stays. A tool that names the
+ * only entries it shares has restoreUnsharedFromBackup instead.
  */
 async function restoreSkippedFromBackup(
   adapter: ToolAdapter,
@@ -467,7 +470,11 @@ async function restoreSkippedFromBackup(
 ) {
   if (!(await exists(backupDir))) return;
   const backups = await backupsByName(backupDir);
-  for (const itemName of adapter.sharedSkipSet(mergeSessions)) {
+  if (adapter.sharedAllow) {
+    await restoreUnsharedFromBackup(adapter, configDir, primarySource, backups, mergeSessions);
+    return;
+  }
+  for (const itemName of adapter.sharedSkipSet?.(mergeSessions) ?? []) {
     const target = path.join(configDir, itemName);
     if (await exists(target)) continue;
     for (const backupItem of [...(backups.get(itemName) ?? [])].reverse()) {
@@ -476,6 +483,98 @@ async function restoreSkippedFromBackup(
       await cp(backupItem, target, { recursive: true, verbatimSymlinks: true });
       break;
     }
+  }
+}
+
+/**
+ * restoreSkippedFromBackup for a tool that names the only entries it shares. Each entry the
+ * profile keeps for itself and has none of comes back from its newest backup of the profile's
+ * own: a database an older clausona set aside to link the primary's in its place, say, which
+ * repair has just unlinked. Moved, not copied, as remove moves them: the profile holds it
+ * again, and a second copy would be one more to clear from the backups. A SQLite database
+ * brings the companion files set aside with it, and a companion never comes back on its own.
+ */
+async function restoreUnsharedFromBackup(
+  adapter: ToolAdapter,
+  configDir: string,
+  primarySource: string,
+  backups: Map<string, string[]>,
+  mergeSessions: boolean,
+) {
+  for (const [name, copies] of backups) {
+    if (name === ADD_PENDING_MARKER || SQLITE_COMPANION.test(name)) continue;
+    if (!shouldSkipShare(adapter, name, mergeSessions)) continue;
+    const target = path.join(configDir, name);
+    if (await exists(target)) continue;
+    const own = await ownBackups(copies, primarySource, name);
+    const newest = own.at(-1);
+    if (!newest) continue;
+    await moveTo(newest, target);
+    await moveBackCompanions(backups, name, own, configDir, primarySource);
+  }
+}
+
+/**
+ * The files SQLite keeps beside a database. Each belongs to the one copy of the database it
+ * was written beside: SQLite reads a write-ahead log or a hot journal into whatever database
+ * it finds next to it, and one written beside another copy corrupts it.
+ */
+const SQLITE_COMPANION_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
+const SQLITE_COMPANION = /\.sqlite-(?:wal|shm|journal)$/;
+
+/** When a backup was set aside, in ms; one from before backups were timestamped is older than any. */
+function backupTime(backup: string): number {
+  const stamp = STAMPED_BACKUP.exec(path.basename(backup))?.[2];
+  if (!stamp) return Number.NEGATIVE_INFINITY;
+  return Date.parse(stamp.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, "T$1:$2:$3.$4Z"));
+}
+
+/** The backups among `copies` that hold something of the profile's own, oldest first. */
+async function ownBackups(copies: string[], primarySource: string, name: string): Promise<string[]> {
+  const own: string[] = [];
+  for (const copy of copies) {
+    if (!(await isLinkToPrimaryEntry(copy, primarySource, name))) own.push(copy);
+  }
+  return own;
+}
+
+/**
+ * The newest of a companion's backups `companions`, when it was set aside with the newest of
+ * the database's own backups `own`: no older backup of the database is nearer to it in time.
+ * Set aside in the same pass, the two are milliseconds apart in either order; one left in place
+ * beside a link and set aside by a later pass is still the newest copy's.
+ */
+function companionSetAsideWith(own: string[], companions: string[]): string | undefined {
+  const companion = companions.at(-1);
+  const newest = own.at(-1);
+  if (!companion || !newest) return undefined;
+  const at = backupTime(companion);
+  const distance = (backup: string) => {
+    const time = backupTime(backup);
+    return time === at ? 0 : Math.abs(time - at);
+  };
+  return own.every((backup) => distance(backup) >= distance(newest)) ? companion : undefined;
+}
+
+/**
+ * Once `name`'s newest own backup, `own.at(-1)`, is back in `configDir`: moves back the
+ * companion files set aside with it, when `name` is a SQLite database, each onto an empty spot.
+ */
+async function moveBackCompanions(
+  backups: Map<string, string[]>,
+  name: string,
+  own: string[],
+  configDir: string,
+  primarySource: string,
+) {
+  if (!name.endsWith(".sqlite")) return;
+  for (const suffix of SQLITE_COMPANION_SUFFIXES) {
+    const companionName = `${name}${suffix}`;
+    const target = path.join(configDir, companionName);
+    if (await exists(target)) continue;
+    const companions = await ownBackups(backups.get(companionName) ?? [], primarySource, companionName);
+    const companion = companionSetAsideWith(own, companions);
+    if (companion) await moveTo(companion, target);
   }
 }
 
@@ -654,11 +753,11 @@ export async function setupSharedLinks(
   }
 
   // The walk above only sees what the primary still has. A link made before its entry
-  // joined the skip set, to a file the primary has since lost, would otherwise outlive
-  // every repair while doctor keeps reporting it as stale_symlink.
+  // stopped being shared, to a file the primary has since lost, would otherwise outlive
+  // every repair while doctor keeps reporting it.
   const primaryNames = new Set(items.map((item) => item.name));
-  for (const name of adapter.sharedSkipSet(mergeSessions)) {
-    if (primaryNames.has(name)) continue;
+  for (const { name } of await readdir(profileDir, { withFileTypes: true }).catch(() => [])) {
+    if (primaryNames.has(name) || !shouldSkipShare(adapter, name, mergeSessions)) continue;
     const target = path.join(profileDir, name);
     const source = path.join(primarySource, name);
     const linkInfo = await inspectSharedLink(target, source);
@@ -2043,9 +2142,10 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
     await setupPluginsDir(profile.configDir, primarySource, backupDir);
   }
 
-  // merged → separated: restore skip-set items from backup
-  if (!next) {
-    await restoreSkippedFromBackup(updateAdapter, profile.configDir, primarySource, backupDir, false);
+  // merged → separated: restore skip-set items from backup. A tool that names the only entries
+  // it shares has just had every other one unlinked whichever way it went, as repair does.
+  if (!next || updateAdapter.sharedAllow) {
+    await restoreSkippedFromBackup(updateAdapter, profile.configDir, primarySource, backupDir, next);
   }
 
   return { name: id, mergeSessions: next, changed: true };

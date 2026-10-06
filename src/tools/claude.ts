@@ -620,7 +620,8 @@ async function runLoginInteractive(configDir: string): Promise<boolean> {
   });
 }
 
-export const claudeAdapter: ToolAdapter = {
+// Claude names what it does not share, and keeps sharedSkipSet for every caller to read.
+export const claudeAdapter: ToolAdapter & Required<Pick<ToolAdapter, "sharedSkipSet">> = {
   name: "claude",
   binary: "claude",
   configEnvVar: "CLAUDE_CONFIG_DIR",

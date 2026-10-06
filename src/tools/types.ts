@@ -43,8 +43,17 @@ export type ToolAdapter = {
   // signed in, so a caller gating on the Keychain probe has to accept this too.
   hasFallbackCredential?(configDir: string): Promise<boolean>;
 
+  // A tool names either what a profile does not share (sharedSkipSet, with shouldSkipName) or
+  // the only entries it shares (sharedAllow), never both. The second is for a tool whose
+  // releases keep adding state of one account's to its config dir: a name no one has looked
+  // at yet stays the profile's own, rather than being linked into the primary's.
+  //
+  // Whether the primary's entry `name` is linked into a profile. Every other entry is the
+  // profile's own, and one linked by an earlier clausona is unlinked by repair.
+  sharedAllow?(name: string, mergeSessions: boolean): boolean;
+
   // Files/dirs under the profile's config dir that must NOT be symlinked to primary.
-  sharedSkipSet(mergeSessions: boolean): Set<string>;
+  sharedSkipSet?(mergeSessions: boolean): Set<string>;
 
   // Optional per-name predicate for skip patterns the Set can't express
   // (e.g. sqlite WAL/SHM siblings of state_*.sqlite).
