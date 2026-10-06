@@ -7,6 +7,7 @@ export function evaluateSymlinkHealth({
   isPrimary,
   items,
   missingSharedDirs = [],
+  symlinkNeeded = [],
 }: {
   isPrimary: boolean;
   items: Array<{
@@ -30,11 +31,19 @@ export function evaluateSymlinkHealth({
    * while a missing directory is always a real sharing gap.
    */
   missingSharedDirs?: string[];
+  /**
+   * Shared files the tool saves whole (see `rewritesWhole`) that a symbolic link does not
+   * hold: a hard link, which the next save splits, or - on Windows, where that is what a
+   * profile gets when no symbolic link can be made - the profile's own copy. Each is said
+   * in place of the generic local override, with what makes a symbolic link possible.
+   */
+  symlinkNeeded?: Array<{ name: string; held: "hard_link" | "copy" }>;
 }): DoctorIssue[] {
   if (isPrimary) {
     return [];
   }
 
+  const held = new Map(symlinkNeeded.map((file) => [file.name, file.held]));
   const issues: DoctorIssue[] = [];
   for (const item of items) {
     if (item.isSharedLink && !item.targetExists) {
@@ -45,12 +54,26 @@ export function evaluateSymlinkHealth({
     }
 
     // Should be a shared link to primary but isn't
-    if (!item.pointsToPrimary && item.existsInPrimary) {
+    if (!item.pointsToPrimary && item.existsInPrimary && held.get(item.name) !== "copy") {
       issues.push({
         kind: "local_override",
         message: `${item.name} replaced an expected shared link`,
       });
     }
+  }
+
+  // Warnings: the profile works, and on Windows turning on symbolic links is the user's call.
+  // repair is what makes the link once they can be made, so it stays on offer.
+  const privilege = `on Windows that needs Developer Mode turned on, or the "Create symbolic links" privilege`;
+  for (const { name, held: how } of symlinkNeeded) {
+    issues.push({
+      kind: "needs_symlink",
+      severity: "warning",
+      message:
+        how === "hard_link"
+          ? `${name} is shared by a hard link, which its next save will split, since the file is saved by renaming a new one over it - repair makes it a symbolic link, and ${privilege}`
+          : `${name} is this profile's own copy, not the primary's: the file is saved by renaming a new one over it, so only a symbolic link keeps it shared, and ${privilege} - then repair the profile`,
+    });
   }
 
   for (const name of missingSharedDirs) {

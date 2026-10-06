@@ -42,6 +42,12 @@ const BASE_SHARED_LINK_SKIP = new Set([
 // so they follow the session-separation choice rather than being shared unconditionally.
 const SESSION_SCOPED = ["projects", "jobs", "teams"] as const;
 
+// Shared files Claude Code saves whole: its writer puts a temp file beside the target and
+// renames it over it (2.1.291), whether the save is a settings change or an edit Claude makes
+// to the user's own CLAUDE.md or keybindings.json. Caches it saves the same way are left out:
+// a profile whose copy of a cache stops following the primary's loses nothing by it.
+const REWRITTEN_WHOLE = new Set(["settings.json", "CLAUDE.md", "keybindings.json"]);
+
 // Undocumented endpoint that backs Claude Code's own /usage view. Anonymous requests
 // are rejected with a flat one-hour Retry-After, so it is never called without a token.
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
@@ -627,6 +633,7 @@ export const claudeAdapter: ToolAdapter = {
   hasFallbackCredential,
   sharedSkipSet: (mergeSessions) =>
     mergeSessions ? new Set(BASE_SHARED_LINK_SKIP) : new Set([...BASE_SHARED_LINK_SKIP, ...SESSION_SCOPED]),
+  rewritesWhole: (name) => REWRITTEN_WHOLE.has(name),
   // postSetup is left undefined here — service.ts's syncPluginsJson is wired into the
   // Claude code path explicitly because it has cross-cutting plugin marketplace state.
   // We will keep that wiring during Task 11 refactor; the adapter is not the place for it.

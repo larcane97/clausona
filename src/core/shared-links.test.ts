@@ -1,4 +1,15 @@
-import { linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -46,6 +57,50 @@ describe("Windows shared links", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+// Runs everywhere: the symlink is refused the way Windows refuses it without Developer Mode.
+describe("createSharedLink where Windows refuses a file symlink", () => {
+  let root: string;
+  const notPermitted = (async () => {
+    throw Object.assign(new Error("EPERM: operation not permitted, symlink"), { code: "EPERM" });
+  }) as unknown as typeof import("node:fs/promises").symlink;
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), "clausona-no-symlink-"));
+    return () => rmSync(root, { recursive: true, force: true });
+  });
+
+  it("links nothing for a file that may not be hard-linked", async () => {
+    const source = path.join(root, "config.toml");
+    const target = path.join(root, "profile-config.toml");
+    writeFileSync(source, "model = 'x'\n");
+
+    const linked = await createSharedLink(source, target, {
+      platform: "win32",
+      isDirectory: false,
+      hardLink: false,
+      makeSymlink: notPermitted,
+    });
+
+    expect(linked).toBe(false);
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it("still falls back to a hard link for any other file", async () => {
+    const source = path.join(root, "AGENTS.md");
+    const target = path.join(root, "profile-AGENTS.md");
+    writeFileSync(source, "shared");
+
+    const linked = await createSharedLink(source, target, {
+      platform: "win32",
+      isDirectory: false,
+      makeSymlink: notPermitted,
+    });
+
+    expect(linked).toBe(true);
+    expect(statSync(target, { bigint: true }).ino).toBe(statSync(source, { bigint: true }).ino);
   });
 });
 

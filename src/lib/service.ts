@@ -1,6 +1,7 @@
 import { existsSync, rmSync } from "node:fs";
 import {
   chmod,
+  copyFile,
   cp,
   lstat,
   mkdir,
@@ -496,6 +497,19 @@ async function isLinkToPrimaryEntry(backupItem: string, primarySource: string, i
 }
 
 /**
+ * Said when a file the tool saves whole could not be shared: Windows would not make a
+ * symbolic link, and a hard link would split at the file's next save. doctor goes on saying it.
+ */
+function warnUnshared(name: string, profileDir: string, hardLinked: boolean): void {
+  const held = hardLinked
+    ? "is still shared by a hard link, which its next save will split"
+    : "is the profile's own copy, not shared with the primary's, since a hard link would split at its next save";
+  warn(
+    `${name} in ${profileDir} ${held}: Windows would not make a symbolic link. Turn on Developer Mode (or grant the "Create symbolic links" privilege), then run 'clausona repair' for this profile.`,
+  );
+}
+
+/**
  * Links each entry the primary shares into the profile. Whatever stands where a link goes -
  * the profile's own file or directory, or a link that leads elsewhere or nowhere - is moved
  * into a backup of its own first; nothing of the profile's is deleted. Refuses a profile
@@ -539,19 +553,53 @@ export async function setupSharedLinks(
       continue;
     }
     const target = path.join(profileDir, item.name);
+    // A file the tool saves whole is shared by a symbolic link or not at all: see rewritesWhole.
+    const symlinkOnly = !item.isDirectory() && adapter.rewritesWhole?.(item.name) === true;
     const targetExists = await exists(target);
     if (targetExists) {
       const linkInfo = await inspectSharedLink(target, source);
       // Linked, even where the primary's own entry is a broken link: that is the primary's to fix.
-      if (linkInfo.isSharedLink && linkInfo.pointsToSource) {
+      // Except a hard link to a file saved whole, which lasts only until its next save: that one
+      // is made a symbolic link whenever one can be made - after Developer Mode is turned on, say.
+      const hardLinked =
+        symlinkOnly &&
+        linkInfo.isSharedLink &&
+        !(await lstat(target)).isSymbolicLink() &&
+        (await holdsNothingOfItsOwn(target));
+      if (linkInfo.isSharedLink && linkInfo.pointsToSource && !hardLinked) {
+        linked += 1;
+        continue;
+      }
+      if (symlinkOnly) {
+        // The link is made beside what stands here, which moves into its backup only once the
+        // link exists - so where Windows refuses the link, the profile's file stays as it was.
+        const backup = backupFor(target);
+        const staged = `${target}.clausona-link-${process.pid}-${Date.now()}`;
+        if (!(await createSharedLink(source, staged, { isDirectory: false, hardLink: false }))) {
+          warnUnshared(item.name, profileDir, hardLinked);
+          continue;
+        }
+        try {
+          await setAside(target, backup, item.name);
+        } catch (error) {
+          await rm(staged, { force: true });
+          throw error;
+        }
+        await rename(staged, target);
         linked += 1;
         continue;
       }
       await setAside(target, backupFor(target), item.name);
     }
 
-    await createSharedLink(source, target, { isDirectory: item.isDirectory() });
-    linked += 1;
+    if (await createSharedLink(source, target, { isDirectory: item.isDirectory(), hardLink: !symlinkOnly })) {
+      linked += 1;
+      continue;
+    }
+    // Nothing stood here, and no symbolic link could be made: the profile starts from a copy of
+    // the primary's file, and doctor goes on saying how to share it.
+    await copyFile(source, target);
+    warnUnshared(item.name, profileDir, false);
   }
 
   // The walk above only sees what the primary still has. A link made before its entry
@@ -1659,11 +1707,32 @@ export async function doctorProfiles(
         }
       }
 
+      // Shared files the tool saves whole, held by something a save does not leave in place.
+      // A regular file with the primary's identity is a hard link. A regular file without it
+      // is the profile's own copy, which on Windows is what a profile gets where no symbolic
+      // link can be made - so there it is said with what would make one, not as an override.
+      const symlinkNeeded: Array<{ name: string; held: "hard_link" | "copy" }> = [];
+      if (!profile.isPrimary && adapter.rewritesWhole) {
+        for (const entry of dirEntries) {
+          if (!entry.isFile() || !adapter.rewritesWhole(entry.name) || isSkipped(entry.name)) continue;
+          if (!primaryEntries.has(entry.name)) continue;
+          const own = path.join(profile.configDir, entry.name);
+          const linkInfo = await inspectSharedLink(own, path.join(primarySource, entry.name));
+          if (linkInfo.pointsToSource) {
+            // Not the profile's only copy that a primary entry links to: that one is not a hard link.
+            if (await holdsNothingOfItsOwn(own)) symlinkNeeded.push({ name: entry.name, held: "hard_link" });
+          } else if (process.platform === "win32") {
+            symlinkNeeded.push({ name: entry.name, held: "copy" });
+          }
+        }
+      }
+
       issues.push(
         ...evaluateSymlinkHealth({
           isPrimary: Boolean(profile.isPrimary),
           items: sharedLinkItems,
           missingSharedDirs,
+          symlinkNeeded,
         }),
       );
     }
