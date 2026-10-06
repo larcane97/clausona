@@ -226,7 +226,9 @@ links back to your primary directory, so what you set up once is there for every
 └── ...
 ```
 
-Codex profiles work the same way, sharing `config.toml`, `skills/` and `plugins/cache/`.
+Codex profiles share only their configuration: `config.toml`, `hooks.json`, `AGENTS.md`, `rules/`,
+`skills/`, `plugins/`, `prompts/` and a few more. Everything else Codex keeps in its home, such as its
+app-server daemon and its memories, stays with each account ([the full list](docs/how-it-works.md#what-a-codex-profile-shares)).
 
 clausona has no telemetry and no server of its own. The only network calls it makes are each
 profile's plan-quota lookup — and a lapsed token's renewal — against that profile's own

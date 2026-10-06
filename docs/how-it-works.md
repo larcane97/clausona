@@ -109,16 +109,24 @@ When you register a new profile, clausona symlinks shared resources from your pr
 ```
 ~/.codex-work/             (new codex profile)
 ├── auth.json              ← own credentials (NOT shared)
-├── sessions/              ← own conversation history (NOT shared)
-├── history.jsonl          ← own input history (NOT shared)
-├── state_*.sqlite         ← own state DB (NOT shared)
+├── app-server-control/, app-server-daemon/
+│                          ← own app-server daemon (NOT shared)
+├── memories/, memories_1.sqlite
+│                          ← own memories (NOT shared)
+├── *.sqlite               ← own databases: state, threads, goals, queues, logs (NOT shared)
+├── sessions/, history.jsonl, ...
+│                          ← own conversation history (NOT shared by default)
+├── packages/              ← own app-server daemon install (NOT shared)
 ├── config.toml  →  ~/.codex/config.toml      (symlink to primary)
+├── hooks.json   →  ~/.codex/hooks.json       (symlink to primary)
 ├── skills/      →  ~/.codex/skills           (symlink to primary)
-├── plugins/cache/ → ~/.codex/plugins/cache   (symlink to primary)
-└── ...
+├── plugins/     →  ~/.codex/plugins          (symlink to primary)
+└── ...                    ← anything else Codex keeps here (NOT shared)
 ```
 
-The private set is larger for codex (state DB, input history, logs) but the principle is the same: credentials and session data stay profile-specific; everything else is shared.
+For claude the principle is that credentials and session data stay profile-specific and
+everything else is shared. Codex is the other way round, because each Codex release adds state
+that belongs to one account to its home. See [What a Codex profile shares](#what-a-codex-profile-shares) below.
 
 On Windows, shared directories use junctions. Shared files use symbolic links when Windows Developer Mode is enabled and
 otherwise fall back to same-volume hard links. If a profile is imported from another drive, enable Developer Mode so
@@ -168,7 +176,7 @@ Shared links are created from the primary's contents at the time a profile is se
 a directory the tool introduces in a later version does not reach profiles that already
 exist — the tool creates it locally instead, and the accounts silently stop sharing that
 state. `clausona doctor` reports these as `missing_shared_link`; `clausona repair
-<profile>` links them.
+<profile>` links them. For codex that is only ever a directory on the list below.
 
 `clausona doctor` only reads. A shared link whose target is gone is reported as
 `broken_symlink` and left where it is. `clausona repair` never deletes what it replaces: each
@@ -176,8 +184,9 @@ file, directory or stray link that stands where a shared link goes is moved into
 `~/.clausona/backups/<tool>/<profile>/<name>.<timestamp>`, a new backup every time, so a
 second repair keeps what the first one set aside. Removing the profile puts the newest backup
 of each entry back where the profile has none of that entry; an entry it has again is newer
-than any backup, so it stays as it is, and its backups stay too. `clausona uninstall` keeps
-`~/.clausona/backups` whenever something is left in it, and says so.
+than any backup, so it stays as it is, and its backups stay too. A SQLite database's `-wal`,
+`-shm` or `-journal` comes back only with the copy of the database it was set aside with.
+`clausona uninstall` keeps `~/.clausona/backups` whenever something is left in it, and says so.
 
 A shared link to a primary entry that is itself a broken link is reported as
 `primary_broken_link`, with the primary's path. That break is the primary's to fix:
@@ -197,6 +206,49 @@ to set clausona up again. `~/.clausona/backups` holds no copy of it to restore. 
 that would otherwise stop with "clausona is not initialized" prints the same line instead,
 `clausona init` refuses to replace the file while it is there, and the dashboard shows the
 line instead of opening init.
+
+### What a Codex profile shares
+
+A codex profile links only these entries of the primary's `~/.codex`:
+
+- `config.toml` and every `*.config.toml`, `hooks.json`, `AGENTS.md` and every `AGENTS*.md`,
+  `rules/`, `.sandbox_migration`, `skills/`, `plugins/`, `agents/`, `prompts/`,
+  `vendor_imports/`, `pets/` and `.personality_migration`.
+- With merged sessions, its conversation history as well: `sessions/`, `archived_sessions/`,
+  `session_index.jsonl`, `history.jsonl`, `attachments/`, `visualizations/` and
+  `thread-writer-locks/`.
+
+Everything else stays in the profile. That includes every SQLite database and its `-wal`, `-shm`
+and `-journal` files, whatever the database is called. Codex 0.148 to 0.159 added about ten new
+entries of one account's to its home, and with a list of what not to share, each of them was
+linked into every profile until someone noticed. With a list of what to share, a new Codex config
+file is not shared until clausona adds it, and nothing of one account's is shared by mistake. Two
+of those entries show what goes wrong:
+
+- **The app-server daemon.** Codex starts a background daemon by default (`daemon_auto_start`)
+  and finds its control socket through `$CODEX_HOME/app-server-control/`. The socket's path is a
+  hash of that directory's real path. So a profile that linked the primary's
+  `app-server-control/` talked to the primary's daemon, which serves the primary's `auth.json`
+  and quota, and its Codex ran on the wrong account. `app-server-daemon/` holds the daemon's pid
+  files and lock. While it was shared, `codex app-server daemon stop` in one profile stopped the
+  other's daemon.
+- **Memories.** `memories_1.sqlite` and the `memories` directories hold summaries of past
+  conversations that Codex adds to future prompts. While they were shared, one account's
+  conversations reached the other account's prompts.
+
+`packages/` is not shared either. It holds the app-server daemon's install, about 317 MB in each
+Codex home. Sharing it would save that space, but the profiles would then share one updater,
+which replaces the daemon every one of them runs.
+
+Profiles set up by clausona 0.5.0-beta or earlier link some entries that are not on the list to
+the primary's. `clausona doctor` reports each such link: `wrong_account_link` for the daemon's directories and
+the credential stores, `shared_account_state` for the rest. `clausona repair <profile>` and the
+session-mode toggle unlink it. If clausona set aside the profile's own copy when it made the
+link, repair moves the newest one back from `~/.clausona/backups/codex/<profile>/`. A database
+comes back with the `-wal`, `-shm` and `-journal` files set aside with it, never with ones written
+beside another copy of it. If there is no backup, the entry stays absent and Codex starts a fresh
+one. The primary is never changed. SQLite through a link was never a corruption risk, because the
+write-ahead log goes next to the file the link leads to. The problem was isolation only.
 
 ## Data Storage
 
