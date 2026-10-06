@@ -7,6 +7,7 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -185,5 +186,36 @@ describe("repair over the profile's own data", () => {
 
     expect(snapshot(path.join(h.dirs.codexWork, "sessions"))).toEqual({ "mine.jsonl": "file:mine" });
     expect(readFileSync(path.join(h.dirs.codex, "sessions", "primary.jsonl"), "utf8")).toBe("primary");
+  });
+});
+
+describe("doctor and a shared link whose target is gone", () => {
+  it("reports it and leaves it in place; repair moves it into a backup", async () => {
+    const h = await harness((dirs) => ({
+      "codex:default": { tool: "codex", configDir: dirs.codex, email: "primary@example.com", isPrimary: true },
+      "codex:work": { tool: "codex", configDir: dirs.codexWork, email: "work@example.com", mergeSessions: false },
+    }));
+    await h.service.repairProfile("codex:work");
+    // The primary loses a directory the profile links to.
+    mkdirSync(path.join(h.dirs.codex, "rules"));
+    symlinkSync(path.join(h.dirs.codex, "rules"), path.join(h.dirs.codexWork, "rules"), "junction");
+    rmSync(path.join(h.dirs.codex, "rules"), { recursive: true });
+    const dangling = path.join(h.dirs.codexWork, "rules");
+
+    const results = await h.service.doctorProfiles();
+
+    const work = results.find((result) => result.name === "codex:work");
+    expect(work?.issues).toContainEqual({
+      kind: "broken_symlink",
+      message: "rules shared link points to a missing target",
+    });
+    expect(lstatSync(dangling).isSymbolicLink(), "doctor deleted the dangling link").toBe(true);
+
+    await h.service.repairProfile("codex:work");
+
+    expect(lstatSync(dangling, { throwIfNoEntry: false })).toBeUndefined();
+    expect(backupsNamed(h.backups("work"), "rules")).toHaveLength(1);
+    const after = await h.service.doctorProfiles();
+    expect(after.find((result) => result.name === "codex:work")?.issues).toEqual([]);
   });
 });

@@ -510,6 +510,17 @@ export async function setupSharedLinks(
     }
   }
 
+  // A shared link whose target is gone, for an entry the primary no longer has. doctor
+  // reports these and leaves them; taking them out is repair's, into a backup like the rest.
+  for (const entry of await readdir(profileDir, { withFileTypes: true }).catch(() => [])) {
+    if (primaryNames.has(entry.name) || shouldSkipShare(adapter, entry.name, mergeSessions)) continue;
+    const target = path.join(profileDir, entry.name);
+    const linkInfo = await inspectSharedLink(target, path.join(primarySource, entry.name));
+    if (linkInfo.isSharedLink && !linkInfo.targetExists) {
+      await setAside(target, backupFor(target), entry.name);
+    }
+  }
+
   return linked;
 }
 
@@ -1513,17 +1524,14 @@ export async function doctorProfiles(
           continue;
         }
 
-        if (linkInfo.isSharedLink) {
-          if (!linkInfo.targetExists) {
-            await rm(targetPath, { force: true });
-            continue;
-          }
-        }
+        // A link whose target is gone is reported and left where it is: doctor only reads,
+        // and the link can be the one trace of what went missing. repair takes it out, into
+        // a backup (#73).
         sharedLinkItems.push({
           name: entry.name,
           isSharedLink: linkInfo.isSharedLink,
           pointsToPrimary,
-          targetExists: true,
+          targetExists: linkInfo.targetExists,
           existsInPrimary: primaryEntries.has(entry.name),
         });
       }
@@ -1972,9 +1980,17 @@ async function cleanupProfile(
   if (!options.keepBackup && (await exists(backupDir))) {
     if (await exists(profile.configDir)) {
       for (const [itemName, copies] of await backupsByName(backupDir)) {
-        const newest = copies[copies.length - 1];
-        await cp(newest, path.join(profile.configDir, itemName), { recursive: true });
-        await rm(newest, { force: true, recursive: true });
+        for (const copy of [...copies].reverse()) {
+          // A link into the primary, which repair set aside dangling, holds nothing of the
+          // profile's: brought back, it would be the very link removing the profile strips.
+          if (await isLinkToPrimaryEntry(copy, primarySource, itemName)) {
+            await rm(copy, { force: true });
+            continue;
+          }
+          await cp(copy, path.join(profile.configDir, itemName), { recursive: true });
+          await rm(copy, { force: true, recursive: true });
+          break;
+        }
       }
       if (await backupDirOccupied(backupDir)) {
         const home = homedir();
