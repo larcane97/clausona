@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Registry } from "../types.js";
+import type { DoctorIssue, DoctorProfileResult, Registry } from "../types.js";
 
 /**
  * #74: a Codex profile shares only the entries codex.ts allows, never the per-home state
@@ -104,6 +104,16 @@ async function harness(profiles: (dirs: { codex: string; work: string }) => Regi
     backups: (name: string) => path.join(clausona, "backups", "codex", name),
     primaryBefore: snapshot(dirs.codex),
   };
+}
+
+/**
+ * A profile's doctor findings, but for the warning that a temporary home's long path draws:
+ * the daemon's socket would not fit under it, which says nothing about links.
+ */
+function findings(results: DoctorProfileResult[], name = "codex:work"): DoctorIssue[] {
+  return (results.find((result) => result.name === name)?.issues ?? []).filter(
+    (issue) => issue.kind !== "socket_path_too_long",
+  );
 }
 
 /** A registered codex:work whose directory exists, with an account of its own. */
@@ -203,7 +213,7 @@ describe("adding a codex profile", () => {
 
     const results = await h.service.doctorProfiles();
 
-    expect(results.find((result) => result.name === "codex:work")?.issues).toEqual([]);
+    expect(findings(results)).toEqual([]);
   });
 });
 
@@ -336,7 +346,7 @@ describe("doctor on a profile an older clausona linked", () => {
       return profiles;
     });
 
-    const issues = (await h.service.doctorProfiles()).find((result) => result.name === "codex:work")?.issues ?? [];
+    const issues = findings(await h.service.doctorProfiles());
 
     expect(issues).toContainEqual({
       kind: "wrong_account_link",
@@ -352,6 +362,6 @@ describe("doctor on a profile an older clausona linked", () => {
 
     await h.service.repairProfile("codex:work");
 
-    expect((await h.service.doctorProfiles()).find((result) => result.name === "codex:work")?.issues).toEqual([]);
+    expect(findings(await h.service.doctorProfiles())).toEqual([]);
   });
 });
