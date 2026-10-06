@@ -202,6 +202,24 @@ describe("repair over the profile's own data", () => {
     expect(readFileSync(path.join(h.dirs.codex, "sessions", "primary.jsonl"), "utf8")).toBe("primary");
   });
 
+  it("keeps a claude profile's own marketplace, and its registration, through repair", async () => {
+    const h = await harness((dirs) => ({
+      "claude:default": { tool: "claude", configDir: dirs.claude, email: "primary@example.com", isPrimary: true },
+      "claude:work": { tool: "claude", configDir: dirs.claudeWork, email: "work@example.com" },
+    }));
+    mkdirSync(path.join(h.dirs.claude, "plugins", "marketplaces"), { recursive: true });
+    const own = path.join(h.dirs.claudeWork, "plugins", "marketplaces", "mine");
+    mkdirSync(own, { recursive: true });
+    writeFileSync(path.join(own, "marketplace.json"), "{}");
+    const known = path.join(h.dirs.claudeWork, "plugins", "known_marketplaces.json");
+    writeFileSync(known, JSON.stringify({ mine: { source: { source: "git", url: "x" }, installLocation: own } }));
+
+    await h.service.repairProfile("claude:work");
+
+    expect(JSON.parse(readFileSync(known, "utf8"))).toHaveProperty("mine");
+    expect(existsSync(path.join(own, "marketplace.json"))).toBe(true);
+  });
+
   it("keeps a private file the primary's entry is only a link to", async () => {
     const h = await workHarness();
     // The primary's auth.json leads into the profile, so the profile holds the only copy.
