@@ -671,6 +671,24 @@ async function unsharedLinks(
   return found;
 }
 
+/** Whether restoreUnsharedFromBackup has an entry of the profile's own to look at putting back. */
+async function hasUnsharedToRestore(
+  adapter: ToolAdapter,
+  configDir: string,
+  primarySource: string,
+  backupDir: string,
+  mergeSessions: boolean,
+): Promise<boolean> {
+  if (!adapter.sharedAllow || !(await exists(backupDir))) return false;
+  for (const [name, copies] of await backupsByName(backupDir)) {
+    if (name === ADD_PENDING_MARKER || SQLITE_COMPANION.test(name)) continue;
+    if (!shouldSkipShare(adapter, name, mergeSessions)) continue;
+    if (await exists(path.join(configDir, name))) continue;
+    if ((await ownBackups(copies, primarySource, name)).length > 0) return true;
+  }
+  return false;
+}
+
 /**
  * After setupSharedLinks, for a tool that names the only entries it shares: brings back from
  * the backups what the profile keeps for itself and has none of, gives the profile a copy of
@@ -2232,9 +2250,15 @@ export async function repairProfile(id: string) {
     await mergeSessionState(profile.configDir, primarySource);
   }
 
-  // Said, not refused: what repair moves is what a running Codex has open, and the user may
-  // know better - a process left behind, a daemon about to stop.
-  if (profile.tool === "codex") {
+  const unlinked = await unsharedLinks(profileAdapter, profile.configDir, primarySource, mergeSessions);
+  // Said, not refused: what repair takes out and puts back - databases, the daemon's
+  // directories - is what a running Codex has open, and the user may know better: a process
+  // left behind, a daemon about to stop. Looked for only when there is such a thing to move.
+  if (
+    profile.tool === "codex" &&
+    (unlinked.length > 0 ||
+      (await hasUnsharedToRestore(profileAdapter, profile.configDir, primarySource, backupDir, mergeSessions)))
+  ) {
     const running = await codexProcessesFor(profile.configDir);
     if (running.length > 0) {
       warn(
@@ -2243,7 +2267,6 @@ export async function repairProfile(id: string) {
     }
   }
 
-  const unlinked = await unsharedLinks(profileAdapter, profile.configDir, primarySource, mergeSessions);
   const repaired = await setupSharedLinks(profileAdapter, profile.configDir, primarySource, mergeSessions, backupDir);
   if (profile.tool === "claude") {
     // Never merged into the primary here, unlike add and init: repair runs again and again, and

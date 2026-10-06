@@ -277,8 +277,9 @@ write-ahead log goes next to the file the link leads to. The problem was isolati
 
 Quit Codex in a profile before you repair it, and stop its daemon with
 `CODEX_HOME=<profile dir> codex app-server daemon stop`, because repair moves files a running Codex
-holds open. On macOS and Linux, repair looks for a `codex` process running with the profile's
-`CODEX_HOME`, and warns before it goes on if it finds one.
+holds open. On macOS and Linux, when repair has a link to take out or a backup to put back,
+it looks for a `codex` process running with the profile's `CODEX_HOME`. If it finds one, it
+warns and then goes on.
 
 ## Data Storage
 

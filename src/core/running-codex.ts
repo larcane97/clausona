@@ -54,13 +54,10 @@ async function fromPs(homes: Set<string>): Promise<number[]> {
   const pids = (await run("pgrep", ["-x", "codex"])).split(/\s+/).filter((pid) => /^\d+$/.test(pid));
   if (pids.length === 0) return [];
   // `ps -E` appends the environment to the command, separated by spaces, so a value is told
-  // apart by what follows it. Each home is looked for as it would be written there.
-  const found: number[] = [];
-  for (const line of (await run("ps", ["-wwE", "-o", "pid=,command=", "-p", pids.join(",")])).split("\n")) {
-    const match = /^\s*(\d+)\s(.*)$/.exec(line);
-    if (!match) continue;
-    const command = `${match[2]} `;
-    if ([...homes].some((home) => command.includes(` CODEX_HOME=${home} `))) found.push(Number(match[1]));
-  }
-  return found;
+  // apart by what follows it. Each home is looked for as it would be written there. One pid
+  // at a time: ps reads that one process, where a list makes it read the whole process table.
+  const commands = await Promise.all(pids.map((pid) => run("ps", ["-wwE", "-o", "command=", "-p", pid])));
+  return pids
+    .filter((_pid, index) => [...homes].some((home) => ` ${commands[index].trim()} `.includes(` CODEX_HOME=${home} `)))
+    .map(Number);
 }
