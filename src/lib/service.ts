@@ -659,6 +659,26 @@ async function putBackNewest({ backups, name, own, configDir, primarySource, bac
 }
 
 /**
+ * Moves the profile's own -wal, -shm and -journal of `name` into backups, once `name` is a link
+ * to the primary's database. They belong to the copy the link replaced, and were set aside in
+ * the same pass so they come back with it. A link to the primary's companion holds nothing of
+ * its own, and goes.
+ */
+async function setAsideCompanions(profileDir: string, primarySource: string, name: string, backupDir: string) {
+  for (const suffix of SQLITE_COMPANION_SUFFIXES) {
+    const companionName = `${name}${suffix}`;
+    const companion = path.join(profileDir, companionName);
+    if (!(await exists(companion))) continue;
+    const linkInfo = await inspectSharedLink(companion, path.join(primarySource, companionName));
+    if (linkInfo.isSharedLink && linkInfo.pointsToSource && (await holdsNothingOfItsOwn(companion))) {
+      await rm(companion, { force: true });
+      continue;
+    }
+    await setAside(companion, backupDir, companionName);
+  }
+}
+
+/**
  * The entries of `profileDir` that are links to the primary's entry of their name, holding
  * nothing of their own, which the profile is not to share: what setupSharedLinks takes out.
  */
@@ -680,9 +700,10 @@ async function unsharedLinks(
 
 /**
  * What linking `configDir` and settling it will move that a running Codex has open: links to
- * the primary's entries the profile is to keep for itself, which go, and backups of its own
- * that come back - all of them for repair and the toggle, only those of what is unlinked for
- * init and add. Nothing for a tool that names what it does not share.
+ * the primary's entries the profile is to keep for itself, which go; the profile's own
+ * databases a link to the primary's is to replace; and backups of its own that come back - all
+ * of them for repair and the toggle, only those of what is unlinked for init and add. Nothing
+ * for a tool that names what it does not share.
  */
 async function codexStateToMove(
   adapter: ToolAdapter,
@@ -695,6 +716,12 @@ async function codexStateToMove(
   if (!adapter.sharedAllow) return { unlinked: [], moving: [] };
   const unlinked = await unsharedLinks(adapter, configDir, primarySource, mergeSessions);
   const moving = new Set(unlinked);
+  for (const { name } of await readdir(primarySource, { withFileTypes: true }).catch(() => [])) {
+    if (!name.endsWith(".sqlite") || shouldSkipShare(adapter, name, mergeSessions)) continue;
+    const target = path.join(configDir, name);
+    if (!(await exists(target))) continue;
+    if (!(await inspectSharedLink(target, path.join(primarySource, name))).pointsToSource) moving.add(name);
+  }
   if (await exists(backupDir)) {
     for (const [name, copies] of await backupsByName(backupDir)) {
       if (!restoreAll && !unlinked.includes(name)) continue;
@@ -931,6 +958,11 @@ export async function setupSharedLinks(
 
     if (await createSharedLink(source, target, { isDirectory: item.isDirectory(), hardLink: !symlinkOnly })) {
       linked += 1;
+      // A database's -wal, -shm and -journal are never linked: SQLite keeps its own beside the
+      // file a symbolic link leads to. The profile's go with the copy the link replaced.
+      if (item.name.endsWith(".sqlite")) {
+        await setAsideCompanions(profileDir, primarySource, item.name, backupFor(target));
+      }
       continue;
     }
     // Nothing stood here, and no symbolic link could be made: the profile starts from a copy of

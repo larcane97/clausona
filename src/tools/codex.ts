@@ -43,6 +43,7 @@ const SESSION_SET = new Set([
   "attachments",
   "visualizations",
   "thread-writer-locks",
+  "rollout-migrations",
 ]);
 
 /**
@@ -67,9 +68,20 @@ const CODEX_UNIX_SOCKETS = [
 // release brings databases under new names.
 const SQLITE_FILE = /\.sqlite(-wal|-shm|-journal)?$/;
 
-// Databases that belong with the conversation history, shared with it only with merged
-// sessions - the database alone, never its -wal, -shm or -journal. None yet.
-const SESSION_DATABASES: ReadonlySet<string> = new Set([]);
+// Codex's thread store, which goes with the conversation history it indexes and is shared
+// with it, as one unit: threads (state_5), the goal each thread carries (goals_1, keyed by
+// thread id), and the history index into the shared rollout files (thread_history_1). Shared
+// apart from them, `codex resume --last` and the picker miss the other account's threads, and
+// a resumed thread loses its goal (codex-rs, rust-v0.159.3). The queue (queue_1) stays per
+// profile: each Codex takes an item off it under a lock of its own process.
+//
+// Only the database is linked, never its -wal, -shm or -journal: through a symbolic link SQLite
+// keeps those beside the file the link leads to. That is Unix's SQLite; Windows' names them
+// after the path the database was opened by, so two profiles would write two logs for one
+// database - there, nothing of the store is shared.
+const SESSION_DATABASES: ReadonlySet<string> = new Set(
+  process.platform === "win32" ? [] : ["state_5.sqlite", "goals_1.sqlite", "thread_history_1.sqlite"],
+);
 
 function codexSharedAllow(name: string, mergeSessions: boolean): boolean {
   if (SQLITE_FILE.test(name)) return mergeSessions && SESSION_DATABASES.has(name);

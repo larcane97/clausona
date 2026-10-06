@@ -65,7 +65,13 @@ function seedPrimary(dir: string) {
   writeFileSync(path.join(dir, "memories_1.sqlite"), "the primary's memories");
   writeFileSync(path.join(dir, "memories_1.sqlite-wal"), "the primary's memories wal");
   writeFileSync(path.join(dir, "goals_1.sqlite"), "the primary's goals");
-  for (const name of ["archived_sessions", "attachments", "sessions"]) {
+  for (const db of ["state_5.sqlite", "thread_history_1.sqlite"]) {
+    writeFileSync(path.join(dir, db), `the primary's ${db}`);
+  }
+  for (const companion of ["state_5.sqlite-wal", "state_5.sqlite-shm", "goals_1.sqlite-wal"]) {
+    writeFileSync(path.join(dir, companion), `the primary's ${companion}`);
+  }
+  for (const name of ["archived_sessions", "attachments", "sessions", "rollout-migrations"]) {
     mkdirSync(path.join(dir, name));
     writeFileSync(path.join(dir, name, "primary.jsonl"), `the primary's ${name}`);
   }
@@ -662,4 +668,60 @@ describe.skipIf(process.platform === "win32")("repair while Codex runs in the pr
     expect(snapshot(h.dirs.work)).toEqual(before);
     expect(readFileSync(registryPath, "utf8")).toBe(registryBefore);
   });
+});
+
+describe("codex's thread store", () => {
+  const STORE = ["state_5.sqlite", "goals_1.sqlite", "thread_history_1.sqlite"];
+  // Windows' SQLite would keep a second -wal beside a link: there the store stays in each profile.
+  const shares = process.platform !== "win32";
+
+  it("is linked with merged sessions - the databases alone, never a -wal or -shm - and not without", async () => {
+    const h = await harness();
+
+    await h.service.addProfile({ tool: "codex", name: "work" });
+    await h.service.addProfile({ tool: "codex", name: "team", mergeSessions: true });
+
+    const team = path.join(path.dirname(h.dirs.work), ".codex-team");
+    for (const name of [...STORE, "rollout-migrations"]) {
+      expect(lstatOrNull(path.join(h.dirs.work, name)), `${name} was linked into separate sessions`).toBeNull();
+    }
+    for (const db of STORE) {
+      expect(linksTo(path.join(team, db), path.join(h.dirs.codex, db)), `${db} with merged sessions`).toBe(shares);
+    }
+    const migrations = path.join(team, "rollout-migrations");
+    expect(linksTo(migrations, path.join(h.dirs.codex, "rollout-migrations"))).toBe(true);
+    for (const companion of ["state_5.sqlite-wal", "state_5.sqlite-shm", "goals_1.sqlite-wal"]) {
+      expect(lstatOrNull(path.join(team, companion)), `${companion} was linked`).toBeNull();
+    }
+    expect(snapshot(h.dirs.codex)).toEqual(h.primaryBefore);
+  });
+
+  it.skipIf(!shares)(
+    "comes back as the profile's own, with its -wal and -shm, when sessions are separated again",
+    async () => {
+      const h = await harness((dirs) => {
+        const profiles = work(dirs);
+        for (const name of ["state_5.sqlite", "state_5.sqlite-wal", "state_5.sqlite-shm"]) {
+          writeFileSync(path.join(dirs.work, name), `work's own ${name}`);
+        }
+        return profiles;
+      });
+
+      await h.service.updateProfileConfig("codex:work", { mergeSessions: true });
+
+      const db = path.join(h.dirs.work, "state_5.sqlite");
+      expect(linksTo(db, path.join(h.dirs.codex, "state_5.sqlite"))).toBe(true);
+      expect(lstatOrNull(`${db}-wal`)).toBeNull();
+      expect(lstatOrNull(`${db}-shm`)).toBeNull();
+
+      await h.service.updateProfileConfig("codex:work", { mergeSessions: false });
+
+      for (const name of ["state_5.sqlite", "state_5.sqlite-wal", "state_5.sqlite-shm"]) {
+        const restored = path.join(h.dirs.work, name);
+        expect(lstatSync(restored).isSymbolicLink(), name).toBe(false);
+        expect(readFileSync(restored, "utf8")).toBe(`work's own ${name}`);
+      }
+      expect(snapshot(h.dirs.codex)).toEqual(h.primaryBefore);
+    },
+  );
 });

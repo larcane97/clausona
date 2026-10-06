@@ -121,18 +121,21 @@ describe("codexAdapter.sharedAllow", () => {
   });
 
   it("keeps every SQLite database and its companion files, by suffix rather than by name", () => {
-    for (const db of [
-      "memories_1",
-      "memories_v2_1",
-      "goals_1",
-      "queue_1",
-      "thread_history_1",
-      "state_5",
-      "logs_2",
-      "new_9",
-    ]) {
+    for (const db of ["memories_1", "memories_v2_1", "queue_1", "logs_2", "new_9"]) {
       for (const suffix of ["", "-wal", "-shm", "-journal"]) {
         expect(shared(`${db}.sqlite${suffix}`), `${db}.sqlite${suffix}`).toBe(false);
+        expect(shared(`${db}.sqlite${suffix}`, true), `${db}.sqlite${suffix}`).toBe(false);
+      }
+    }
+  });
+
+  it("shares the thread store with merged sessions, the databases alone and never their -wal or -shm", () => {
+    // Windows' SQLite would keep a second -wal beside a link, so there the store stays in each profile.
+    const merged = process.platform !== "win32";
+    for (const db of ["state_5", "goals_1", "thread_history_1"]) {
+      expect(shared(`${db}.sqlite`), db).toBe(false);
+      expect(shared(`${db}.sqlite`, true), db).toBe(merged);
+      for (const suffix of ["-wal", "-shm", "-journal"]) {
         expect(shared(`${db}.sqlite${suffix}`, true), `${db}.sqlite${suffix}`).toBe(false);
       }
     }
@@ -147,6 +150,7 @@ describe("codexAdapter.sharedAllow", () => {
       "attachments",
       "visualizations",
       "thread-writer-locks",
+      "rollout-migrations",
     ]) {
       expect(shared(name, false), name).toBe(false);
       expect(shared(name, true), name).toBe(true);
