@@ -163,6 +163,14 @@ async function waitForWorkers(host, workspaces, { timeout, quiet, interval }) {
   }
 }
 
+// An agent row names the account it signed in with. The skill needs only the config dir, and an
+// orchestrator prints what it reads, so the email is dropped.
+function withoutEmail({ account, ...rest }) {
+  if (!account) return rest;
+  const { email, ...kept } = account;
+  return { ...rest, account: kept };
+}
+
 // Config env can hold API keys, so only the keys are shown.
 function hideEnv({ env, ...rest }) {
   return { ...rest, envKeys: Object.keys(env ?? {}) };
@@ -308,7 +316,9 @@ const COMMANDS = {
     required: ["workspace"],
     run: async (host, { workspace }) => {
       const { sessions } = await call(host, "terminal.list", { workspaceId: workspace });
-      const agents = (await call(host, "terminalAgents.list")).filter((a) => a.workspaceId === workspace);
+      const agents = (await call(host, "terminalAgents.list"))
+        .filter((a) => a.workspaceId === workspace)
+        .map(withoutEmail);
       return { sessions, agents };
     },
   },

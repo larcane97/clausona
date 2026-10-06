@@ -253,6 +253,28 @@ describe("workspaces and terminals", () => {
     expect(seen[0]).toMatchObject({ method: "GET", procedure: "terminal.list", input: { workspaceId: "w1" } });
   });
 
+  it("lists agents without their account email", async () => {
+    const email = ["someone", "example.com"].join("@");
+    replies["terminal.list"] = { json: { sessions: [{ terminalId: "t1", workspaceId: "w1" }] } };
+    replies["terminalAgents.list"] = {
+      json: [
+        {
+          terminalId: "t1",
+          workspaceId: "w1",
+          agentId: "claude",
+          account: { agent: "claude", email, directory: "/home/u/.claude-work", credentialKind: "subscription" },
+        },
+      ],
+    };
+    const r = await run(["terminals", "list", "--workspace", "w1"]);
+    expect(r.stdout).not.toContain(email);
+    expect(JSON.parse(r.stdout).agents[0].account).toEqual({
+      agent: "claude",
+      directory: "/home/u/.claude-work",
+      credentialKind: "subscription",
+    });
+  });
+
   it("reads a terminal, 240 lines unless told otherwise", async () => {
     replies["terminal.snapshot"] = { json: { terminalId: "t1", text: "hello" } };
     await run(["terminals", "read", "--workspace", "w1", "--terminal", "t1"]);
