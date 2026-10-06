@@ -283,7 +283,7 @@ describe("repair over the profile's own data", () => {
     linkSync(shared, profileAuth);
 
     const work = (await h.service.doctorProfiles()).find((result) => result.name === "codex:work");
-    expect(work?.issues.map((issue) => issue.kind)).toContain("stale_symlink");
+    expect(work?.issues.map((issue) => issue.kind)).toContain("wrong_account_link");
 
     await h.service.repairProfile("codex:work");
 

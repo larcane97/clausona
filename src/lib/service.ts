@@ -1719,6 +1719,20 @@ export async function getUsageSummary(profileId_: string | null, period: UsagePe
   );
 }
 
+/**
+ * doctor's finding for a profile entry linked to the primary's that the profile is to keep for
+ * itself, which repair unlinks. A tool that names the only entries it shares says what the
+ * link does; for the other, it is a link made before the entry joined the skip set.
+ */
+function unsharedLinkIssue(adapter: ToolAdapter, name: string): DoctorIssue {
+  const risk = adapter.unsharedRisk?.(name);
+  if (!risk) return { kind: "stale_symlink", message: `${name} is symlinked to primary but should not be shared` };
+  return {
+    kind: risk.risk === "wrong_account" ? "wrong_account_link" : "shared_account_state",
+    message: `${name} links to the primary's, ${risk.why}`,
+  };
+}
+
 export async function doctorProfiles(
   options: {
     /**
@@ -1905,10 +1919,7 @@ export async function doctorProfiles(
           // Items in skip set should NOT be symlinked to primary. Only what repair takes out is
           // reported: not the profile's own file that a primary entry links to.
           if (!profile.isPrimary && pointsToPrimary && (await holdsNothingOfItsOwn(targetPath))) {
-            issues.push({
-              kind: "stale_symlink",
-              message: `${entry.name} is symlinked to primary but should not be shared`,
-            });
+            issues.push(unsharedLinkIssue(adapter, entry.name));
           }
           continue;
         }

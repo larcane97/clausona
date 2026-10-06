@@ -5,7 +5,7 @@ import { spawnCommand } from "../core/process.js";
 import { parseCodexQuota, QuotaHttpError } from "../core/quota.js";
 import type { QuotaWindows } from "../types.js";
 import { decodeJwtPayload } from "./codex-jwt.js";
-import type { AccountInfo, ToolAdapter, ToolCredential } from "./types.js";
+import type { AccountInfo, ToolAdapter, ToolCredential, UnsharedRisk } from "./types.js";
 
 // What a Codex profile shares with the primary's CODEX_HOME, and nothing else (#74). Codex
 // keeps adding state of one account's there - 0.148 to 0.159 added the app-server daemon's
@@ -71,6 +71,51 @@ function codexSharedAllow(name: string, mergeSessions: boolean): boolean {
   if (SQLITE_FILE.test(name)) return false;
   if (SHARED.has(name) || SHARED_PATTERNS.some((pattern) => pattern.test(name))) return true;
   return mergeSessions && SESSION_SET.has(name);
+}
+
+// Where Codex keeps credentials: its sign-in in auth.json, and other tokens and secrets in
+// the other two.
+const CREDENTIAL_STORES = new Set(["auth.json", ".credentials.json", "secrets"]);
+
+/** What a profile's link to the primary's `name` does, for an entry Codex keeps for each CODEX_HOME. */
+function codexUnsharedRisk(name: string): UnsharedRisk {
+  if (CREDENTIAL_STORES.has(name)) {
+    return { risk: "wrong_account", why: "so Codex in this profile uses the primary's credentials" };
+  }
+  // Codex finds the daemon's control socket through $CODEX_HOME/app-server-control/: its path
+  // is a hash of that directory's real path, so a link to the primary's leads to the daemon
+  // the primary started, which serves the primary's auth.json and quota (codex-cli 0.159.3).
+  if (name === "app-server-control") {
+    return {
+      risk: "wrong_account",
+      why: "so Codex in this profile talks to the primary's app-server daemon and runs on the primary's account and quota",
+    };
+  }
+  if (name === "app-server-daemon") {
+    return {
+      risk: "wrong_account",
+      why: "so this profile and the primary share one app-server daemon's pid files and lock, and stopping or starting the daemon in one does it to the other's",
+    };
+  }
+  if (name.startsWith("memories")) {
+    return {
+      risk: "isolation",
+      why: "so the conversation summaries Codex adds to future prompts are shared: one account's conversations reach the other account's prompts",
+    };
+  }
+  if (SQLITE_FILE.test(name)) {
+    return {
+      risk: "isolation",
+      why: "so this profile reads and writes the primary's Codex database (threads, goals, queues) instead of its own",
+    };
+  }
+  if (SESSION_SET.has(name)) {
+    return { risk: "isolation", why: "but this profile keeps its sessions separate from the primary's" };
+  }
+  return {
+    risk: "isolation",
+    why: "but Codex keeps it for each CODEX_HOME, so this profile shares it with the primary's account",
+  };
 }
 
 async function readCodexAccount(configDir: string): Promise<AccountInfo | null> {
@@ -249,6 +294,7 @@ export const codexAdapter: ToolAdapter = {
   configDirPattern: /^\.codex(-.+)?$/,
   readAccountInfo: readCodexAccount,
   sharedAllow: codexSharedAllow,
+  unsharedRisk: codexUnsharedRisk,
   rewritesWhole: codexRewritesWhole,
   unixSockets: CODEX_UNIX_SOCKETS,
   readCredential: readCodexCredential,

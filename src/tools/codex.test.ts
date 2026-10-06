@@ -158,6 +158,26 @@ describe("codexAdapter.sharedAllow", () => {
   });
 });
 
+describe("codexAdapter.unsharedRisk", () => {
+  const risk = (name: string) => codexAdapter.unsharedRisk?.(name);
+
+  it("calls the daemon's directories and the credential stores a wrong account", () => {
+    for (const name of ["app-server-control", "app-server-daemon", "auth.json", ".credentials.json", "secrets"]) {
+      expect(risk(name)?.risk, name).toBe("wrong_account");
+    }
+    expect(risk("app-server-control")?.why).toContain("the primary's app-server daemon");
+    expect(risk("app-server-control")?.why).toContain("account and quota");
+  });
+
+  it("calls memories and every other per-home entry an isolation risk", () => {
+    expect(risk("memories_1.sqlite")).toEqual({ risk: "isolation", why: expect.stringContaining("prompts") });
+    expect(risk("memories")?.why).toContain("conversation summaries");
+    for (const name of ["goals_1.sqlite", "browser", "sessions", "node_repl"]) {
+      expect(risk(name)?.risk, name).toBe("isolation");
+    }
+  });
+});
+
 describe("codexAdapter wiring", () => {
   it("uses CODEX_HOME env var", () => {
     expect(codexAdapter.configEnvVar).toBe("CODEX_HOME");

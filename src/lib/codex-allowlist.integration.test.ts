@@ -325,3 +325,33 @@ describe("repairing a profile an older clausona linked", () => {
     expect(snapshot(h.dirs.codex)).toEqual(h.primaryBefore);
   });
 });
+
+describe("doctor on a profile an older clausona linked", () => {
+  it("reports the linked app-server-control/ as a wrong account, and memories_1.sqlite as shared state", async () => {
+    const h = await harness((dirs) => {
+      const profiles = work(dirs);
+      for (const name of ["app-server-control", "memories_1.sqlite"]) {
+        linkAs(path.join(dirs.codex, name), path.join(dirs.work, name));
+      }
+      return profiles;
+    });
+
+    const issues = (await h.service.doctorProfiles()).find((result) => result.name === "codex:work")?.issues ?? [];
+
+    expect(issues).toContainEqual({
+      kind: "wrong_account_link",
+      message: expect.stringMatching(
+        /^app-server-control links to the primary's, .*app-server daemon.*account and quota/,
+      ),
+    });
+    expect(issues).toContainEqual({
+      kind: "shared_account_state",
+      message: expect.stringMatching(/^memories_1\.sqlite links to the primary's, .*conversation summaries/),
+    });
+    expect(h.offersRepair(issues)).toBe(true);
+
+    await h.service.repairProfile("codex:work");
+
+    expect((await h.service.doctorProfiles()).find((result) => result.name === "codex:work")?.issues).toEqual([]);
+  });
+});
