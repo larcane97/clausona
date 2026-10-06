@@ -10,6 +10,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -88,7 +89,11 @@ async function harness(profiles: (dirs: { codex: string; work: string }) => Regi
   writeFileSync(registryPath, JSON.stringify(registry));
 
   vi.resetModules();
-  vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  const stderr: string[] = [];
+  vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    stderr.push(String(chunk));
+    return true;
+  });
   const { getAdapter } = await import("../tools/registry.js");
   // The login is Codex's own browser sign-in; its stand-in leaves what it would.
   vi.spyOn(getAdapter("codex"), "runLogin").mockImplementation(async (configDir) => {
@@ -103,6 +108,7 @@ async function harness(profiles: (dirs: { codex: string; work: string }) => Regi
     offersRepair,
     backups: (name: string) => path.join(clausona, "backups", "codex", name),
     primaryBefore: snapshot(dirs.codex),
+    stderr: () => stderr.join(""),
   };
 }
 
@@ -251,16 +257,24 @@ describe("the session-mode toggle", () => {
   });
 });
 
-describe("repairing a profile an older clausona linked", () => {
-  /** codex:work as clausona 0.5.0 left it: the primary's memories and daemon control linked in. */
-  function linkedByOlderClausona(dirs: { codex: string; work: string }) {
-    const profiles = work(dirs);
-    for (const name of ["memories_1.sqlite", "memories_1.sqlite-wal", "goals_1.sqlite", "app-server-control"]) {
-      linkAs(path.join(dirs.codex, name), path.join(dirs.work, name));
-    }
-    return profiles;
+/** codex:work as clausona 0.5.0 left it: the primary's memories and daemon control linked in. */
+function linkedByOlderClausona(dirs: { codex: string; work: string }) {
+  const profiles = work(dirs);
+  for (const name of ["memories_1.sqlite", "memories_1.sqlite-wal", "goals_1.sqlite", "app-server-control"]) {
+    linkAs(path.join(dirs.codex, name), path.join(dirs.work, name));
   }
+  return profiles;
+}
 
+/** The backups of `name` in `backupDir` set aside since the layout was timestamped, oldest first. */
+function stampedBackups(backupDir: string, name: string): string[] {
+  const stamp = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z(-\d+)?$/;
+  return readdirSync(backupDir)
+    .filter((entry) => entry.startsWith(`${name}.`) && stamp.test(entry.slice(name.length + 1)))
+    .sort();
+}
+
+describe("repairing a profile an older clausona linked", () => {
   it.each([
     ["timestamped", (name: string) => stamped(name, "2026-09-01T10:00:00.000Z")],
     ["untimestamped", (name: string) => name],
@@ -363,5 +377,77 @@ describe("doctor on a profile an older clausona linked", () => {
     await h.service.repairProfile("codex:work");
 
     expect(findings(await h.service.doctorProfiles())).toEqual([]);
+  });
+});
+
+describe("putting a database back beside a -wal already there", () => {
+  const SET_ASIDE = "2026-09-01T10:00:00.000Z";
+  const at = (iso: string) => new Date(iso);
+
+  /** codex:work with memories_1.sqlite linked, a backup of its own copy, and a -wal of its own beside the link. */
+  async function walBeside(walTime: string, layout: "timestamped" | "untimestamped" = "timestamped") {
+    const h = await harness((dirs) => {
+      const profiles = work(dirs);
+      linkAs(path.join(dirs.codex, "memories_1.sqlite"), path.join(dirs.work, "memories_1.sqlite"));
+      const wal = path.join(dirs.work, "memories_1.sqlite-wal");
+      writeFileSync(wal, "a -wal beside the link");
+      utimesSync(wal, at(walTime), at(walTime));
+      return profiles;
+    });
+    mkdirSync(h.backups("work"), { recursive: true });
+    const backup = path.join(
+      h.backups("work"),
+      layout === "timestamped" ? stamped("memories_1.sqlite", SET_ASIDE) : "memories_1.sqlite",
+    );
+    writeFileSync(backup, "work's own memories");
+    // An untimestamped backup was copied when it was set aside, so its own time says when.
+    utimesSync(backup, at(SET_ASIDE), at(SET_ASIDE));
+    return h;
+  }
+
+  it.each([
+    "timestamped",
+    "untimestamped",
+  ] as const)("sets aside one written after the database was set aside (%s backup)", async (layout) => {
+    // As SQLite wrote the primary's frames there, through a hard link to the primary's database.
+    const h = await walBeside("2026-09-20T10:00:00.000Z", layout);
+
+    await h.service.repairProfile("codex:work");
+
+    expect(readFileSync(path.join(h.dirs.work, "memories_1.sqlite"), "utf8")).toBe("work's own memories");
+    expect(lstatOrNull(path.join(h.dirs.work, "memories_1.sqlite-wal"))).toBeNull();
+    const [setAside] = stampedBackups(h.backups("work"), "memories_1.sqlite-wal");
+    expect(readFileSync(path.join(h.backups("work"), setAside), "utf8")).toBe("a -wal beside the link");
+    expect(snapshot(h.dirs.codex)).toEqual(h.primaryBefore);
+  });
+
+  it("keeps one untouched since the database was set aside, and says so", async () => {
+    const h = await walBeside("2026-08-31T10:00:00.000Z");
+
+    await h.service.repairProfile("codex:work");
+
+    expect(readFileSync(path.join(h.dirs.work, "memories_1.sqlite"), "utf8")).toBe("work's own memories");
+    expect(readFileSync(path.join(h.dirs.work, "memories_1.sqlite-wal"), "utf8")).toBe("a -wal beside the link");
+    expect(h.stderr()).toContain("beside the memories_1.sqlite-wal already there");
+  });
+});
+
+describe("a database whose -wal cannot be told apart", () => {
+  it.each([
+    ["set aside before backups were timestamped", "memories_1.sqlite-wal"],
+    ["set aside in another pass", stamped("memories_1.sqlite-wal", "2026-10-01T10:05:00.000Z")],
+  ])("stays in the backups with a -wal %s, and is said", async (_how, walBackup) => {
+    const h = await harness(linkedByOlderClausona);
+    mkdirSync(h.backups("work"), { recursive: true });
+    const db = stamped("memories_1.sqlite", "2026-10-01T10:00:00.000Z");
+    writeFileSync(path.join(h.backups("work"), db), "work's own memories");
+    writeFileSync(path.join(h.backups("work"), walBackup), "a -wal of some copy");
+
+    await h.service.repairProfile("codex:work");
+
+    expect(lstatOrNull(path.join(h.dirs.work, "memories_1.sqlite"))).toBeNull();
+    expect(lstatOrNull(path.join(h.dirs.work, "memories_1.sqlite-wal"))).toBeNull();
+    expect(readdirSync(h.backups("work")).sort()).toEqual([db, walBackup].sort());
+    expect(h.stderr()).toContain("memories_1.sqlite was not put back");
   });
 });

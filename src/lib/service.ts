@@ -414,13 +414,26 @@ async function freshBackupPath(backupDir: string, name: string): Promise<string>
   }
 }
 
-/** Renames `source` to `dest`, or copies it there and removes it when the two are on different filesystems. */
+/**
+ * Renames `source` to `dest`, or copies it there and removes it when the two are on different
+ * filesystems. The copy is made under a name of its own beside `dest` and renamed into place
+ * once whole, so one cut short is never taken for the entry itself.
+ */
 async function moveTo(source: string, dest: string) {
   try {
     await rename(source, dest);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
-    await cp(source, dest, { recursive: true, verbatimSymlinks: true, errorOnExist: true, force: false });
+    const partial = `${dest}.clausona-move-${process.pid}`;
+    await rm(partial, { force: true, recursive: true });
+    try {
+      await cp(source, partial, { recursive: true, verbatimSymlinks: true, errorOnExist: true, force: false });
+      if (await exists(dest)) throw Object.assign(new Error(`${dest} already exists`), { code: "EEXIST" });
+      await rename(partial, dest);
+    } catch (copyError) {
+      await rm(partial, { force: true, recursive: true }).catch(() => {});
+      throw copyError;
+    }
     await rm(source, { force: true, recursive: true });
   }
 }
@@ -468,12 +481,12 @@ async function restoreSkippedFromBackup(
   backupDir: string,
   mergeSessions: boolean,
 ) {
-  if (!(await exists(backupDir))) return;
-  const backups = await backupsByName(backupDir);
   if (adapter.sharedAllow) {
-    await restoreUnsharedFromBackup(adapter, configDir, primarySource, backups, mergeSessions);
+    await restoreUnsharedFromBackup(adapter, configDir, primarySource, backupDir, mergeSessions);
     return;
   }
+  if (!(await exists(backupDir))) return;
+  const backups = await backupsByName(backupDir);
   for (const itemName of adapter.sharedSkipSet?.(mergeSessions) ?? []) {
     const target = path.join(configDir, itemName);
     if (await exists(target)) continue;
@@ -492,25 +505,24 @@ async function restoreSkippedFromBackup(
  * own: a database an older clausona set aside to link the primary's in its place, say, which
  * repair has just unlinked. Moved, not copied, as remove moves them: the profile holds it
  * again, and a second copy would be one more to clear from the backups. A SQLite database
- * brings the companion files set aside with it, and a companion never comes back on its own.
+ * comes back only with what putBackNewest finds of its companions.
  */
 async function restoreUnsharedFromBackup(
   adapter: ToolAdapter,
   configDir: string,
   primarySource: string,
-  backups: Map<string, string[]>,
+  backupDir: string,
   mergeSessions: boolean,
 ) {
+  if (!(await exists(backupDir))) return;
+  const backups = await backupsByName(backupDir);
   for (const [name, copies] of backups) {
     if (name === ADD_PENDING_MARKER || SQLITE_COMPANION.test(name)) continue;
     if (!shouldSkipShare(adapter, name, mergeSessions)) continue;
-    const target = path.join(configDir, name);
-    if (await exists(target)) continue;
+    if (await exists(path.join(configDir, name))) continue;
     const own = await ownBackups(copies, primarySource, name);
-    const newest = own.at(-1);
-    if (!newest) continue;
-    await moveTo(newest, target);
-    await moveBackCompanions(backups, name, own, configDir, primarySource);
+    if (own.length === 0) continue;
+    await putBackNewest({ backups, name, own, configDir, primarySource, backupDir });
   }
 }
 
@@ -522,11 +534,27 @@ async function restoreUnsharedFromBackup(
 const SQLITE_COMPANION_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
 const SQLITE_COMPANION = /\.sqlite-(?:wal|shm|journal)$/;
 
-/** When a backup was set aside, in ms; one from before backups were timestamped is older than any. */
-function backupTime(backup: string): number {
+/**
+ * How far apart two backups set aside in one pass of setupSharedLinks can be. A pass renames
+ * each entry in turn and takes milliseconds; this leaves room for a slow disk, and is far
+ * shorter than the time between two repairs.
+ */
+const SAME_PASS_MS = 10_000;
+
+/** When a backup was set aside, in ms; undefined for one from before backups were timestamped. */
+function backupTime(backup: string): number | undefined {
   const stamp = STAMPED_BACKUP.exec(path.basename(backup))?.[2];
-  if (!stamp) return Number.NEGATIVE_INFINITY;
-  return Date.parse(stamp.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, "T$1:$2:$3.$4Z"));
+  return stamp ? Date.parse(stamp.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, "T$1:$2:$3.$4Z")) : undefined;
+}
+
+/**
+ * Whether two backups were set aside in the same pass: both timestamped, and close enough in
+ * time, or both from before backups were timestamped - that layout says nothing finer.
+ */
+function setAsideTogether(a: string, b: string): boolean {
+  const [at, bt] = [backupTime(a), backupTime(b)];
+  if (at === undefined || bt === undefined) return at === bt;
+  return Math.abs(at - bt) <= SAME_PASS_MS;
 }
 
 /** The backups among `copies` that hold something of the profile's own, oldest first. */
@@ -538,44 +566,92 @@ async function ownBackups(copies: string[], primarySource: string, name: string)
   return own;
 }
 
-/**
- * The newest of a companion's backups `companions`, when it was set aside with the newest of
- * the database's own backups `own`: no older backup of the database is nearer to it in time.
- * Set aside in the same pass, the two are milliseconds apart in either order; one left in place
- * beside a link and set aside by a later pass is still the newest copy's.
- */
-function companionSetAsideWith(own: string[], companions: string[]): string | undefined {
-  const companion = companions.at(-1);
-  const newest = own.at(-1);
-  if (!companion || !newest) return undefined;
-  const at = backupTime(companion);
-  const distance = (backup: string) => {
-    const time = backupTime(backup);
-    return time === at ? 0 : Math.abs(time - at);
-  };
-  return own.every((backup) => distance(backup) >= distance(newest)) ? companion : undefined;
-}
+type PutBack = {
+  backups: Map<string, string[]>;
+  /** The entry, whose spot in `configDir` is empty. */
+  name: string;
+  /** Its backups of the profile's own, oldest first: the newest is the one put back. */
+  own: string[];
+  configDir: string;
+  primarySource: string;
+  /** Where anything in the way is set aside. */
+  backupDir: string;
+};
 
 /**
- * Once `name`'s newest own backup, `own.at(-1)`, is back in `configDir`: moves back the
- * companion files set aside with it, when `name` is a SQLite database, each onto an empty spot.
+ * Moves the newest of `own` back to `name`'s empty spot, and resolves to whether it did.
+ *
+ * A SQLite database is put back only with what can be told of its companions:
+ *
+ * - A companion's backup set aside in the same pass as the database comes back with it.
+ * - A companion's backup set aside with no copy of the database, which the newest one could
+ *   have been written with or not, makes it a guess: then nothing is put back, the database
+ *   and its companions stay in the backups together, and it is said.
+ * - A companion already beside the spot goes into a backup of its own when one set aside with
+ *   the database comes back in its place, or when it was written after the database was set
+ *   aside - for another copy, then, such as the primary's through a hard link. One untouched
+ *   since then was left with it, and is kept, and said.
+ *
+ * Should moving a companion fail, what was moved goes back into the backups, so a later repair
+ * finds the database and its companions together again.
  */
-async function moveBackCompanions(
-  backups: Map<string, string[]>,
-  name: string,
-  own: string[],
-  configDir: string,
-  primarySource: string,
-) {
-  if (!name.endsWith(".sqlite")) return;
+async function putBackNewest({ backups, name, own, configDir, primarySource, backupDir }: PutBack): Promise<boolean> {
+  const newest = own.at(-1);
+  if (!newest) return false;
+  const target = path.join(configDir, name);
+  if (!name.endsWith(".sqlite")) {
+    await moveTo(newest, target);
+    return true;
+  }
+
+  const shown = configDir.replace(homedir(), "~");
+  // An untimestamped backup was copied when it was set aside, so its own time says when.
+  const setAsideAt = backupTime(newest) ?? (await lstat(newest)).mtimeMs;
+  const bring: Array<{ from: string; to: string }> = [];
+  const inTheWay: Array<{ at: string; name: string }> = [];
+  const keptBeside: string[] = [];
   for (const suffix of SQLITE_COMPANION_SUFFIXES) {
     const companionName = `${name}${suffix}`;
-    const target = path.join(configDir, companionName);
-    if (await exists(target)) continue;
+    const companionTarget = path.join(configDir, companionName);
     const companions = await ownBackups(backups.get(companionName) ?? [], primarySource, companionName);
-    const companion = companionSetAsideWith(own, companions);
-    if (companion) await moveTo(companion, target);
+    const withIt = companions.filter((companion) => setAsideTogether(companion, newest)).at(-1);
+    if (!withIt && companions.some((companion) => !own.some((copy) => setAsideTogether(companion, copy)))) {
+      warn(
+        `${name} was not put back into ${shown}: a backup of its ${suffix} was set aside on its own, and could belong to it or not. The copies are still in ${backupDir.replace(homedir(), "~")}; Codex starts a new ${name} meanwhile.`,
+      );
+      return false;
+    }
+    const present = await lstat(companionTarget).catch(() => null);
+    if (present) {
+      if (withIt || present.isSymbolicLink() || present.mtimeMs > setAsideAt) {
+        inTheWay.push({ at: companionTarget, name: companionName });
+      } else {
+        keptBeside.push(companionName);
+        continue;
+      }
+    }
+    if (withIt) bring.push({ from: withIt, to: companionTarget });
   }
+
+  for (const { at, name: companionName } of inTheWay) await setAside(at, backupDir, companionName);
+  await moveTo(newest, target);
+  const moved: Array<{ from: string; to: string }> = [];
+  try {
+    for (const companion of bring) {
+      await moveTo(companion.from, companion.to);
+      moved.push(companion);
+    }
+  } catch (error) {
+    for (const companion of moved.reverse()) await moveTo(companion.to, companion.from).catch(() => {});
+    await moveTo(target, newest).catch(() => {});
+    throw error;
+  }
+  for (const companionName of keptBeside) {
+    warn(
+      `${name} was put back into ${shown} beside the ${companionName} already there, which has not changed since ${name} was set aside, so it is taken for that copy's. If Codex reports ${name} as damaged, move both aside.`,
+    );
+  }
+  return true;
 }
 
 /**
@@ -2461,11 +2537,10 @@ async function cleanupProfile(
         }
         const newest = own.at(-1);
         if (!newest) continue;
-        // Put back with its database, by moveBackCompanions, or not at all.
+        // Put back with its database, by putBackNewest, or not at all.
         if (SQLITE_COMPANION.test(itemName)) continue;
         if (!(await exists(target))) {
-          await moveTo(newest, target);
-          await moveBackCompanions(backups, itemName, own, profile.configDir, primarySource);
+          await putBackNewest({ backups, name: itemName, own, configDir: profile.configDir, primarySource, backupDir });
           continue;
         }
         // plugins/ is the profile's own directory, never a link, so it is always there by now.
