@@ -33,6 +33,7 @@ vi.mock("node:os", async (importOriginal) => {
 const temps: string[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.resetModules();
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -432,5 +433,30 @@ describe("a profile on its tool's primary directory", () => {
     expect(snapshot(h.backups("personal"))).toEqual(backupBefore);
     expect(h.registry().profiles["codex:personal"]).toBeUndefined();
     expect(h.stderr()).toContain("only its entry was removed");
+  });
+
+  it("uninstall keeps the backups it could not put back, and says where", async () => {
+    const h = await harness(selfLinked);
+    // The only copy of what an earlier, unguarded repair took from the primary.
+    mkdirSync(path.join(h.backups("personal"), "skills"), { recursive: true });
+    writeFileSync(path.join(h.backups("personal"), "skills", "lost.md"), "set aside");
+    const before = snapshot(h.dirs.codex);
+    const backupBefore = snapshot(h.backups("personal"));
+    // Nothing outside the temp home is in reach: no launcher on PATH, the app dir in the home.
+    const bin = path.join(h.home, "bin");
+    mkdirSync(bin);
+    vi.stubEnv("PATH", bin);
+    vi.stubEnv("XDG_DATA_HOME", path.join(h.home, ".local", "share"));
+    vi.stubEnv("LOCALAPPDATA", path.join(h.home, "AppData", "Local"));
+
+    const { removed } = await h.service.uninstallClausona();
+
+    expect(snapshot(h.dirs.codex)).toEqual(before);
+    expect(snapshot(h.backups("personal"))).toEqual(backupBefore);
+    expect(readdirSync(h.clausona)).toEqual(["backups"]);
+    expect(removed.some((line) => line.includes(path.join("~", ".clausona", "backups")))).toBe(true);
+    const personal = removed.find((line) => line.includes("codex:personal"));
+    expect(personal).toContain("primary config directory itself");
+    expect(personal).not.toContain("data preserved");
   });
 });

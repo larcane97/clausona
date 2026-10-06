@@ -2147,6 +2147,17 @@ async function clearBackupDir(backupDir: string, id: string) {
   });
 }
 
+/**
+ * Removes `dir` and every directory under it that holds nothing once its own empty
+ * directories are gone. rmdir alone, so nothing that holds a file or a link goes.
+ */
+async function removeEmptyDirs(dir: string): Promise<void> {
+  const stats = await lstat(dir).catch(() => null);
+  if (!stats?.isDirectory()) return;
+  for (const entry of await readdir(dir)) await removeEmptyDirs(path.join(dir, entry));
+  await rmdir(dir).catch(() => {});
+}
+
 /** Whether a backup directory holds anything - or is something other than a directory. */
 async function backupDirOccupied(backupDir: string): Promise<boolean> {
   const stats = await lstat(backupDir).catch(() => null);
@@ -3282,8 +3293,15 @@ export async function uninstallClausona() {
         const { name } = parseProfileRef(id, registry);
         const primarySource =
           registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
+        const shownDir = profile.configDir.replace(home, "~");
+        // cleanupProfile leaves a profile on the primary's own directory alone (#73).
+        const onPrimaryDir = await isPrimaryDir(profile.configDir, primarySource);
         await cleanupProfile(name, profile, primarySource);
-        removed.push(`profile: ${id} (symlinks stripped, data preserved at ${profile.configDir.replace(home, "~")})`);
+        removed.push(
+          onPrimaryDir
+            ? `profile: ${id} (${shownDir} is ${profile.tool}'s primary config directory itself, so it was left as it is)`
+            : `profile: ${id} (symlinks stripped, data preserved at ${shownDir})`,
+        );
       } catch (e) {
         warn(`uninstall: could not clean up profile ${id}: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -3313,10 +3331,24 @@ export async function uninstallClausona() {
     }
   }
 
-  // 3. Remove ~/.clausona/ directory (registry, usage, remaining backups)
+  // 3. Remove ~/.clausona/ (registry, usage, caches). Not the backups cleanup could not put
+  // back - older copies, entries the profile has again, a profile on the primary's own
+  // directory - which can be the only copy of a profile's data (#73). Those stay, and are said.
   if (await exists(CLAUSONA_DIR)) {
-    await rm(CLAUSONA_DIR, { force: true, recursive: true });
-    removed.push(`data: ${CLAUSONA_DIR}`);
+    const backupsDir = path.join(CLAUSONA_DIR, "backups");
+    await removeEmptyDirs(backupsDir);
+    if (await backupDirOccupied(backupsDir)) {
+      for (const entry of await readdir(CLAUSONA_DIR)) {
+        if (entry !== "backups") await rm(path.join(CLAUSONA_DIR, entry), { force: true, recursive: true });
+      }
+      removed.push(`data: ${CLAUSONA_DIR} (all but its backups)`);
+      removed.push(
+        `backups kept: ${backupsDir.replace(home, "~")} holds what clausona set aside and could not put back. Move it somewhere else, or delete it once nothing in it is needed.`,
+      );
+    } else {
+      await rm(CLAUSONA_DIR, { force: true, recursive: true });
+      removed.push(`data: ${CLAUSONA_DIR}`);
+    }
   }
 
   // 4. Remove app directory - the one the installer wrote to, which `clausona update` replaces in.

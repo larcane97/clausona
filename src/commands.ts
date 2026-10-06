@@ -1684,7 +1684,7 @@ export async function runCommand(command: string, args: string[]) {
           `    ${dim("• Strip symlinks and restore backups for all non-primary profiles")}`,
           `    ${dim("• Profile directories at ~/.claude-<name> are preserved (data intact)")}`,
           `    ${dim("• Remove shell integration from rc files")}`,
-          `    ${dim("• Delete ~/.clausona/ directory (registry, usage, backups)")}`,
+          `    ${dim("• Delete ~/.clausona/ (registry, usage), keeping any backup that could not be put back")}`,
           `    ${dim("• Delete app files and launcher binary")}`,
           "",
         ].join("\n")}\n`,
