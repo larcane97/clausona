@@ -465,7 +465,8 @@ async function restoreSkippedFromBackup(
     if (await exists(target)) continue;
     for (const backupItem of [...(backups.get(itemName) ?? [])].reverse()) {
       if (await isLinkToPrimaryEntry(backupItem, primarySource, itemName)) continue;
-      await cp(backupItem, target, { recursive: true });
+      // Links as written: resolved, a relative one would point into the backup directory.
+      await cp(backupItem, target, { recursive: true, verbatimSymlinks: true });
       break;
     }
   }
@@ -2050,26 +2051,34 @@ async function cleanupProfile(
   // config directory that is gone: that would bring back a directory the user deleted, with
   // only the backup in it, and keep the name taken - add refuses a name whose directory
   // exists. An empty backup goes with it; one that holds something is left, and said.
-  // Each entry gets its newest backup back, under its own name; an older one stays where it is.
+  // An entry the profile has none of gets its newest backup back, under its own name. One it
+  // has again is newer than any backup of it - put back over it, a backup would revert it -
+  // so its backups stay. Nothing leaves the backup except onto an empty spot.
   if (!options.keepBackup && (await exists(backupDir))) {
     if (await exists(profile.configDir)) {
+      const notPutBack: string[] = [];
       for (const [itemName, copies] of await backupsByName(backupDir)) {
+        const target = path.join(profile.configDir, itemName);
+        if (await exists(target)) {
+          notPutBack.push(itemName);
+          continue;
+        }
         for (const copy of [...copies].reverse()) {
           // A link into the primary, which repair set aside dangling, holds nothing of the
           // profile's: brought back, it would be the very link removing the profile strips.
-          if (await isLinkToPrimaryEntry(copy, primarySource, itemName)) {
-            await rm(copy, { force: true });
-            continue;
-          }
-          await cp(copy, path.join(profile.configDir, itemName), { recursive: true });
-          await rm(copy, { force: true, recursive: true });
+          if (await isLinkToPrimaryEntry(copy, primarySource, itemName)) continue;
+          await moveTo(copy, target);
           break;
         }
       }
       if (await backupDirOccupied(backupDir)) {
         const home = homedir();
+        const shownDir = profile.configDir.replace(home, "~");
+        const kept = notPutBack.length
+          ? ` ${shownDir} has its own ${notPutBack.sort().join(", ")} again, newer than any backup, so ${notPutBack.length === 1 ? "that was" : "those were"} not put back.`
+          : "";
         warn(
-          `${profile.configDir.replace(home, "~")} has the newest backup of each entry back. Older copies of what clausona set aside from it are still in ${backupDir.replace(home, "~")}: move them somewhere else, or delete them once nothing in them is needed.`,
+          `${shownDir} has the newest backup of each entry it was missing back.${kept} What clausona set aside and did not put back is still in ${backupDir.replace(home, "~")}: move it somewhere else, or delete it once nothing in it is needed.`,
         );
       } else {
         await rmdir(backupDir).catch(() => {});

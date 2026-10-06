@@ -85,19 +85,31 @@ function seedCodexPrimary(dir: string) {
   writeFileSync(path.join(dir, "history.jsonl"), '{"primary":true}\n');
 }
 
-async function harness(profiles: (dirs: { codex: string; codexWork: string }) => Registry["profiles"]) {
+type Dirs = { codex: string; codexWork: string; claude: string; claudeWork: string };
+
+async function harness(
+  profiles: (dirs: Dirs) => Registry["profiles"],
+  primarySources: (dirs: Dirs) => Registry["primarySources"] = (dirs) => ({ codex: dirs.codex, claude: dirs.claude }),
+) {
   currentHome = mkdtempSync(path.join(tmpdir(), "clausona-keep-"));
   temps.push(currentHome);
-  const dirs = { codex: path.join(currentHome, ".codex"), codexWork: path.join(currentHome, ".codex-work") };
+  const dirs: Dirs = {
+    codex: path.join(currentHome, ".codex"),
+    codexWork: path.join(currentHome, ".codex-work"),
+    claude: path.join(currentHome, ".claude"),
+    claudeWork: path.join(currentHome, ".claude-work"),
+  };
   seedCodexPrimary(dirs.codex);
   mkdirSync(dirs.codexWork, { recursive: true });
   writeFileSync(path.join(dirs.codexWork, "auth.json"), codexAuth("work@example.com"));
+  mkdirSync(dirs.claude, { recursive: true });
+  mkdirSync(dirs.claudeWork, { recursive: true });
 
   const clausona = path.join(currentHome, ".clausona");
   mkdirSync(clausona, { recursive: true });
   const registry: Registry = {
     version: 2,
-    primarySources: { codex: dirs.codex },
+    primarySources: primarySources(dirs),
     activeProfiles: { codex: Object.keys(profiles(dirs))[0] },
     profiles: profiles(dirs),
   };
@@ -117,7 +129,8 @@ async function harness(profiles: (dirs: { codex: string; codexWork: string }) =>
     dirs,
     service,
     commands,
-    backups: (name: string) => path.join(clausona, "backups", "codex", name),
+    clausona,
+    backups: (name: string, tool = "codex") => path.join(clausona, "backups", tool, name),
     registry: (): Registry => JSON.parse(readFileSync(registryPath, "utf8")),
     stderr: () => stderr.join(""),
   };
@@ -186,6 +199,54 @@ describe("repair over the profile's own data", () => {
 
     expect(snapshot(path.join(h.dirs.codexWork, "sessions"))).toEqual({ "mine.jsonl": "file:mine" });
     expect(readFileSync(path.join(h.dirs.codex, "sessions", "primary.jsonl"), "utf8")).toBe("primary");
+  });
+
+  it("remove puts no backup over what the profile has written since, and keeps that backup", async () => {
+    const h = await workHarness();
+    mkdirSync(path.join(h.dirs.codex, "sessions"));
+    mkdirSync(path.join(h.dirs.codexWork, "sessions"));
+    writeFileSync(path.join(h.dirs.codexWork, "sessions", "mine.jsonl"), "old");
+    writeFileSync(path.join(h.dirs.codexWork, "history.jsonl"), "old history");
+    // Merged sets both aside; separated copies them back from their backups.
+    await h.service.updateProfileConfig("codex:work", { mergeSessions: true });
+    await h.service.updateProfileConfig("codex:work", { mergeSessions: false });
+    // The profile goes on writing.
+    writeFileSync(path.join(h.dirs.codexWork, "sessions", "mine.jsonl"), "newer");
+    writeFileSync(path.join(h.dirs.codexWork, "history.jsonl"), "newer history");
+
+    await h.service.removeProfile("codex:work");
+
+    expect(readFileSync(path.join(h.dirs.codexWork, "sessions", "mine.jsonl"), "utf8")).toBe("newer");
+    expect(readFileSync(path.join(h.dirs.codexWork, "history.jsonl"), "utf8")).toBe("newer history");
+    const kept = [...backupsNamed(h.backups("work"), "sessions"), ...backupsNamed(h.backups("work"), "history.jsonl")];
+    expect(kept).toHaveLength(2);
+    expect(h.stderr()).toContain("history.jsonl, sessions");
+  });
+
+  it("puts a relative link back exactly as it was written", async () => {
+    const h = await workHarness();
+    mkdirSync(path.join(h.home, "dotfiles"));
+    writeFileSync(path.join(h.home, "dotfiles", "foo.md"), "from dotfiles");
+    mkdirSync(path.join(h.dirs.codex, "sessions"));
+    mkdirSync(path.join(h.dirs.codexWork, "sessions"));
+    const relative = path.join("..", "..", "dotfiles", "foo.md");
+    symlinkSync(relative, path.join(h.dirs.codexWork, "sessions", "foo.md"));
+
+    // Set aside by merging, then copied back by separating.
+    await h.service.updateProfileConfig("codex:work", { mergeSessions: true });
+    await h.service.updateProfileConfig("codex:work", { mergeSessions: false });
+
+    const restored = path.join(h.dirs.codexWork, "sessions", "foo.md");
+    expect(readlinkSync(restored)).toBe(relative);
+    expect(readFileSync(restored, "utf8")).toBe("from dotfiles");
+
+    // And when removing the profile puts a backup back.
+    replaceLinkWithOwnDir(h.dirs.codexWork, "own.md", "own");
+    symlinkSync(relative, path.join(h.dirs.codexWork, "skills", "foo.md"));
+    await h.service.repairProfile("codex:work");
+    await h.service.removeProfile("codex:work");
+
+    expect(readlinkSync(path.join(h.dirs.codexWork, "skills", "foo.md"))).toBe(relative);
   });
 });
 
