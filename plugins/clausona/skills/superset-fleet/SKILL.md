@@ -58,8 +58,8 @@ Below, `H` means `node <base>/scripts/superset-host.mjs`. `H trust`, `H terminal
 
 Write every brief and follow-up to a file and pass the file, as the table does. Never paste one
 inside quotes on a command line: the shell would run any `$( )` or backticks in it. Start each
-one with a word, not `-` or `---`: claude would read a brief that starts with `-` as an option,
-and the helper refuses one.
+one with a word, not `-` or `---`. Claude reads a brief that starts with `-` as an option, and
+the helper refuses one; the CLI may read a follow-up that way too.
 
 ## 2. Profiles as Superset agents
 
@@ -95,7 +95,8 @@ Add a `profile` column to orchestrate's coordinator table, and fill it in.
 task's profile, or a rule such as "keep GLM off src/". Then the settings file:
 
 - `workers`: the only profiles that may be workers, for example `["claude:work", "claude:glm"]`.
-  Without it, every Claude profile may be one.
+  This covers the checker in section 6 and a hand-over in section 5 too. Without it, every
+  Claude profile may be one.
 - `routing`: the user's own rules, in words, for example
   `"claude:glm never edits files under src/"`.
 - `maxUsage`: the usage threshold below, in percent. The default is 90.
@@ -194,7 +195,7 @@ rate-limit stop that will not clear soon:
 2. Trust the worktree for that profile.
 3. Hand the task over in the same workspace ("Hand a task over" in the table), using that
    profile's config and the stopped worker's terminal.
-4. Close the old terminal and update the table.
+4. Close the old terminal. Record the new terminal id in the table, and wait on it from now on.
 
 ## 6. Judging a worker done
 
@@ -206,9 +207,9 @@ A DONE envelope is a claim. Before marking a task completed, in its worktree:
   has no upstream, that is, when it was never pushed.
 - Read the diff against what the brief asked.
 - Run the brief's check commands yourself.
-- For risky changes, also run a blind checker on a third profile, from the worktree:
-  `clausona run <profile> -- -p "<checker prompt>" --model <model> --tools=Bash,Read,Grep,Glob --output-format json`.
-  Its prompt lists the brief's acceptance criteria and asks for a verdict on each.
+- For risky changes, also run a blind checker on a third profile, from the worktree. Write its
+  prompt to a file: the brief's acceptance criteria, and a request for a verdict on each. Then
+  run `clausona run <profile> -- -p "$(cat <checker prompt file>)" --model <model> --tools=Bash,Read,Grep,Glob --output-format json`.
 
 If something is missing, send the worker a follow-up that names each unmet criterion. In the
 report, keep what you checked apart from what the worker claimed.
