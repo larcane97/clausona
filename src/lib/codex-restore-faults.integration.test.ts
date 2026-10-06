@@ -6,6 +6,7 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,6 +28,9 @@ vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, default: { ...actual, homedir: () => currentHome }, homedir: () => currentHome };
 });
+
+// Nothing here is about a running Codex, and looking for one takes seconds on a loaded machine.
+vi.mock("../core/running-codex.js", () => ({ codexProcessesFor: async () => [] }));
 
 type Faults = {
   /** A rename from this path fails as a failing disk would. */
@@ -69,8 +73,11 @@ afterEach(async () => {
 const stamped = (name: string, iso: string) => `${name}.${iso.replace(/[:.]/g, "-")}`;
 const SET_ASIDE = "2026-09-01T10:00:00.000Z";
 
-/** codex:work with the primary's memories_1.sqlite linked in, and its own copy and -wal in its backups. */
-async function harness() {
+/**
+ * codex:work with the primary's memories_1.sqlite linked in, and its own copy and -wal in its
+ * backups - or, with `walBeside`, its copy alone there and a -wal beside the link written after.
+ */
+async function harness({ walBeside = false } = {}) {
   currentHome = mkdtempSync(path.join(tmpdir(), "clausona-faults-"));
   temps.push(currentHome);
   const codex = path.join(currentHome, ".codex");
@@ -86,7 +93,14 @@ async function harness() {
   const db = path.join(backups, stamped("memories_1.sqlite", SET_ASIDE));
   const wal = path.join(backups, stamped("memories_1.sqlite-wal", SET_ASIDE));
   writeFileSync(db, "work's own memories");
-  writeFileSync(wal, "work's own memories wal");
+  if (walBeside) {
+    const beside = path.join(work, "memories_1.sqlite-wal");
+    writeFileSync(beside, "a -wal beside the link");
+    const later = new Date("2026-09-20T10:00:00.000Z");
+    utimesSync(beside, later, later);
+  } else {
+    writeFileSync(wal, "work's own memories wal");
+  }
   const registry: Registry = {
     version: 2,
     primarySources: { codex },
@@ -139,5 +153,21 @@ describe("putting a database back", () => {
     expect(readFileSync(path.join(h.work, "memories_1.sqlite"), "utf8")).toBe("work's own memories");
     expect(readdirSync(h.work).filter((name) => name.includes("clausona-move"))).toEqual([]);
     expect(existsSync(h.db)).toBe(false);
+  });
+
+  it("puts back a -wal it set aside when the database cannot follow, so no backup of it is left on its own", async () => {
+    const h = await harness({ walBeside: true });
+    faults.renameFails = h.db;
+
+    await expect(h.service.repairProfile("codex:work")).rejects.toThrow("EIO");
+
+    expect(readFileSync(path.join(h.work, "memories_1.sqlite-wal"), "utf8")).toBe("a -wal beside the link");
+    expect(readdirSync(h.backups)).toEqual([path.basename(h.db)]);
+
+    delete faults.renameFails;
+    await h.service.repairProfile("codex:work");
+
+    expect(readFileSync(path.join(h.work, "memories_1.sqlite"), "utf8")).toBe("work's own memories");
+    expect(existsSync(path.join(h.work, "memories_1.sqlite-wal"))).toBe(false);
   });
 });

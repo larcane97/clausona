@@ -71,7 +71,15 @@ function seedPrimary(dir: string) {
   }
 }
 
-async function harness(profiles: (dirs: { codex: string; work: string }) => Registry["profiles"] = () => ({})) {
+/**
+ * `realProcessCheck` keeps the look for a running Codex, which the cases about it need. Every
+ * other case goes without it: on a loaded machine its pgrep and ps take seconds, and nothing
+ * else here is about them.
+ */
+async function harness(
+  profiles: (dirs: { codex: string; work: string }) => Registry["profiles"] = () => ({}),
+  { realProcessCheck = false } = {},
+) {
   currentHome = mkdtempSync(path.join(tmpdir(), "clausona-allow-"));
   temps.push(currentHome);
   const dirs = { codex: path.join(currentHome, ".codex"), work: path.join(currentHome, ".codex-work") };
@@ -91,6 +99,8 @@ async function harness(profiles: (dirs: { codex: string; work: string }) => Regi
   writeFileSync(registryPath, JSON.stringify(registry));
 
   vi.resetModules();
+  if (realProcessCheck) vi.doUnmock("../core/running-codex.js");
+  else vi.doMock("../core/running-codex.js", () => ({ codexProcessesFor: async () => [] }));
   const stderr: string[] = [];
   vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
     stderr.push(String(chunk));
@@ -460,23 +470,27 @@ describe("a database whose -wal cannot be told apart", () => {
   });
 });
 
+/** A codex account as discovery finds it. */
+function codexAccount(configDir: string, email: string, isPrimary: boolean) {
+  return {
+    tool: "codex" as const,
+    configDir,
+    jsonPath: path.join(configDir, "auth.json"),
+    email,
+    keychainService: "",
+    isPrimary,
+  };
+}
+
 describe("init on a codex profile it keeps", () => {
   it("unlinks a linked database and puts the profile's own copy back, as repair does", async () => {
     const h = await harness(linkedByOlderClausona);
     mkdirSync(h.backups("work"), { recursive: true });
     writeFileSync(path.join(h.backups("work"), "memories_1.sqlite"), "work's own memories");
     writeFileSync(path.join(h.backups("work"), "memories_1.sqlite-wal"), "work's own memories wal");
-    const account = (configDir: string, email: string, isPrimary: boolean) => ({
-      tool: "codex" as const,
-      configDir,
-      jsonPath: path.join(configDir, "auth.json"),
-      email,
-      keychainService: "",
-      isPrimary,
-    });
 
     await h.service.initializeRegistry({
-      accounts: [account(h.dirs.codex, "primary", true), account(h.dirs.work, "work", false)],
+      accounts: [codexAccount(h.dirs.codex, "primary", true), codexAccount(h.dirs.work, "work", false)],
       profileNames: { [h.dirs.codex]: "default", [h.dirs.work]: "work" },
     });
 
@@ -484,6 +498,23 @@ describe("init on a codex profile it keeps", () => {
     expect(readFileSync(path.join(h.dirs.work, "memories_1.sqlite-wal"), "utf8")).toBe("work's own memories wal");
     expect(lstatOrNull(path.join(h.dirs.work, "app-server-control"))).toBeNull();
     expect(snapshot(h.dirs.codex)).toEqual(h.primaryBefore);
+  });
+
+  it("puts back nothing it did not unlink: a cache or sessions/ the profile has since deleted stays gone", async () => {
+    const h = await harness((dirs) => work(dirs));
+    mkdirSync(path.join(h.backups("work"), stamped("sessions", "2026-09-01T10:00:00.000Z")), { recursive: true });
+    mkdirSync(path.join(h.backups("work"), "log"), { recursive: true });
+
+    await h.service.initializeRegistry({
+      accounts: [codexAccount(h.dirs.codex, "primary", true), codexAccount(h.dirs.work, "work", false)],
+      profileNames: { [h.dirs.codex]: "default", [h.dirs.work]: "work" },
+    });
+
+    expect(lstatOrNull(path.join(h.dirs.work, "sessions"))).toBeNull();
+    expect(lstatOrNull(path.join(h.dirs.work, "log"))).toBeNull();
+    expect(readdirSync(h.backups("work")).sort()).toEqual(
+      ["log", stamped("sessions", "2026-09-01T10:00:00.000Z")].sort(),
+    );
   });
 });
 
@@ -518,14 +549,32 @@ describe("a codex profile's .env", () => {
     expect(readFileSync(path.join(h.dirs.work, ".env"), "utf8")).toBe("SOME_MCP_TOKEN=work's\n");
   });
 
-  it("starts as a copy of the primary's in a new profile", async () => {
+  it.each([
+    "a new",
+    "an imported",
+  ] as const)("is not copied into %s profile, which is told the primary has one", async (how) => {
     const h = await harness();
+    if (how === "an imported") {
+      mkdirSync(h.dirs.work);
+      writeFileSync(path.join(h.dirs.work, "auth.json"), codexAuth("work"));
+    }
 
-    await h.service.addProfile({ tool: "codex", name: "work" });
+    await h.service.addProfile({
+      tool: "codex",
+      name: "work",
+      ...(how === "an imported" ? { fromPath: h.dirs.work } : {}),
+    });
 
-    const env = path.join(h.dirs.work, ".env");
-    expect(lstatSync(env).isSymbolicLink()).toBe(false);
-    expect(readFileSync(env, "utf8")).toBe("SOME_MCP_TOKEN=the primary's\n");
+    expect(lstatOrNull(path.join(h.dirs.work, ".env"))).toBeNull();
+    expect(h.stderr()).toContain("The primary's .env is not shared");
+  });
+
+  it("is not copied by repair into a profile that never linked it", async () => {
+    const h = await harness((dirs) => work(dirs));
+
+    await h.service.repairProfile("codex:work");
+
+    expect(lstatOrNull(path.join(h.dirs.work, ".env"))).toBeNull();
   });
 });
 
@@ -546,30 +595,71 @@ describe.skipIf(process.platform === "win32")("repair while Codex runs in the pr
     });
   }
 
-  it("is found by its CODEX_HOME, and repair says to quit it first, then repairs anyway", async () => {
-    const h = await harness(linkedByOlderClausona);
+  /** Starts one codex with the profile's CODEX_HOME, spelled with a trailing separator, and one with the primary's. */
+  async function codexRunning(h: Awaited<ReturnType<typeof harness>>) {
     const bin = path.join(path.dirname(h.dirs.work), "bin");
     mkdirSync(bin);
     const { codexProcessesFor } = await import("../core/running-codex.js");
     const other = startCodex(bin, h.dirs.codex);
-    child = startCodex(bin, h.dirs.work);
-    try {
-      const pid = child.pid ?? -1;
-      let found: number[] = [];
-      for (let tries = 0; tries < 50 && !found.includes(pid); tries++) {
-        found = await codexProcessesFor(h.dirs.work);
-        if (!found.includes(pid)) await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      expect(found).toContain(pid);
-      expect(found).not.toContain(other.pid);
-
-      await h.service.repairProfile("codex:work");
-
-      expect(h.stderr()).toContain(`Codex is running in`);
-      expect(h.stderr()).toContain(String(pid));
-      expect(lstatOrNull(path.join(h.dirs.work, "app-server-control"))).toBeNull();
-    } finally {
-      other.kill();
+    child = startCodex(bin, `${h.dirs.work}${path.sep}`);
+    const pid = child.pid ?? -1;
+    let found: number[] = [];
+    for (let tries = 0; tries < 50 && !found.includes(pid); tries++) {
+      found = await codexProcessesFor(h.dirs.work);
+      if (!found.includes(pid)) await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    other.kill();
+    return { pid, found, other: other.pid };
+  }
+
+  it("is found by its CODEX_HOME however it is spelled, and repair refuses until --force", async () => {
+    const h = await harness(linkedByOlderClausona, { realProcessCheck: true });
+    const { pid, found, other } = await codexRunning(h);
+    expect(found).toContain(pid);
+    expect(found).not.toContain(other);
+    const before = snapshot(h.dirs.work);
+
+    await expect(h.service.repairProfile("codex:work")).rejects.toThrow(
+      new RegExp(`Codex is running in .* \\(pid ${pid}\\).*clausona repair codex:work --force`),
+    );
+    expect(snapshot(h.dirs.work)).toEqual(before);
+
+    await h.service.repairProfile("codex:work", { force: true });
+
+    expect(lstatOrNull(path.join(h.dirs.work, "app-server-control"))).toBeNull();
+  });
+
+  it("refuses the session-mode toggle too, which leaves the mode as it was", async () => {
+    const h = await harness(linkedByOlderClausona, { realProcessCheck: true });
+    await codexRunning(h);
+    const before = snapshot(h.dirs.work);
+
+    await expect(h.service.updateProfileConfig("codex:work", { mergeSessions: true })).rejects.toThrow(
+      /--merge-sessions --force/,
+    );
+
+    expect(snapshot(h.dirs.work)).toEqual(before);
+    const registry = JSON.parse(
+      readFileSync(path.join(path.dirname(h.dirs.work), ".clausona", "profiles.json"), "utf8"),
+    );
+    expect(registry.profiles["codex:work"].mergeSessions).toBe(false);
+  });
+
+  it("refuses init on a profile it would unlink, before writing anything", async () => {
+    const h = await harness(linkedByOlderClausona, { realProcessCheck: true });
+    await codexRunning(h);
+    const registryPath = path.join(path.dirname(h.dirs.work), ".clausona", "profiles.json");
+    const registryBefore = readFileSync(registryPath, "utf8");
+    const before = snapshot(h.dirs.work);
+
+    await expect(
+      h.service.initializeRegistry({
+        accounts: [codexAccount(h.dirs.codex, "primary", true), codexAccount(h.dirs.work, "work", false)],
+        profileNames: { [h.dirs.codex]: "default", [h.dirs.work]: "work" },
+      }),
+    ).rejects.toThrow(/clausona init --auto --force/);
+
+    expect(snapshot(h.dirs.work)).toEqual(before);
+    expect(readFileSync(registryPath, "utf8")).toBe(registryBefore);
   });
 });

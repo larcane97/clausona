@@ -64,9 +64,10 @@ export type ToolAdapter = {
   // links it. `why` follows "<name> links to the primary's, ".
   unsharedRisk?(name: string): UnsharedRisk;
 
-  // With sharedAllow: entries the profile keeps for itself but starts from a copy of the
-  // primary's, when it has none - setup the tool reads that may hold an account's own keys.
-  seededFromPrimary?: readonly string[];
+  // With sharedAllow: entries the profile keeps for itself - setup the tool reads, which may
+  // hold an account's own keys - that a profile which linked the primary's keeps as a copy of
+  // it, in place of the link. No other profile gets one.
+  copiedWhenUnlinked?: readonly string[];
 
   // Files/dirs under the profile's config dir that must NOT be symlinked to primary.
   sharedSkipSet?(mergeSessions: boolean): Set<string>;

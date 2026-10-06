@@ -159,9 +159,9 @@ describe("codexAdapter.sharedAllow", () => {
   });
 });
 
-describe("codexAdapter.seededFromPrimary", () => {
-  it("starts a profile with no .env from a copy of the primary's, which Codex loads at start", () => {
-    expect(codexAdapter.seededFromPrimary).toEqual([".env"]);
+describe("codexAdapter.copiedWhenUnlinked", () => {
+  it("keeps a copy of the primary's .env, which Codex loads at start, in place of a link to it", () => {
+    expect(codexAdapter.copiedWhenUnlinked).toEqual([".env"]);
   });
 });
 

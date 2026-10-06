@@ -67,20 +67,20 @@ const CODEX_UNIX_SOCKETS = [
 // release brings databases under new names.
 const SQLITE_FILE = /\.sqlite(-wal|-shm|-journal)?$/;
 
-// Databases that belong with the conversation history, and are shared with it: only with
-// merged sessions, and with their -wal, -shm and -journal. Named one by one; none yet.
+// Databases that belong with the conversation history, shared with it only with merged
+// sessions - the database alone, never its -wal, -shm or -journal. None yet.
 const SESSION_DATABASES: ReadonlySet<string> = new Set([]);
 
 function codexSharedAllow(name: string, mergeSessions: boolean): boolean {
-  if (SQLITE_FILE.test(name)) return mergeSessions && SESSION_DATABASES.has(name.replace(/-(wal|shm|journal)$/, ""));
+  if (SQLITE_FILE.test(name)) return mergeSessions && SESSION_DATABASES.has(name);
   if (SHARED.has(name) || SHARED_PATTERNS.some((pattern) => pattern.test(name))) return true;
   return mergeSessions && SESSION_SET.has(name);
 }
 
 // Codex loads $CODEX_HOME/.env into its environment at start (codex-rs arg0, rust-v0.159.3),
-// so it can carry an account's own API keys and is never shared. A profile that has none
-// starts from a copy of the primary's, as it had the primary's through a link before.
-const SEEDED_FROM_PRIMARY = [".env"] as const;
+// so it can carry an account's own API keys and is never shared. A profile that linked the
+// primary's keeps a copy of it in place of the link; no other profile gets one.
+const COPIED_WHEN_UNLINKED = [".env"] as const;
 
 // Where Codex keeps credentials: its sign-in in auth.json, and other tokens and secrets in
 // the other two.
@@ -118,14 +118,14 @@ function codexUnsharedRisk(name: string): UnsharedRisk {
       why: "so the conversation summaries Codex adds to future prompts are shared: one account's conversations reach the other account's prompts",
     };
   }
+  if (SESSION_SET.has(name) || SESSION_DATABASES.has(name)) {
+    return { risk: "isolation", why: "but this profile keeps its sessions separate from the primary's" };
+  }
   if (SQLITE_FILE.test(name)) {
     return {
       risk: "isolation",
       why: "so this profile reads and writes the primary's Codex database (threads, goals, queues) instead of its own",
     };
-  }
-  if (SESSION_SET.has(name)) {
-    return { risk: "isolation", why: "but this profile keeps its sessions separate from the primary's" };
   }
   return {
     risk: "isolation",
@@ -310,7 +310,7 @@ export const codexAdapter: ToolAdapter = {
   readAccountInfo: readCodexAccount,
   sharedAllow: codexSharedAllow,
   unsharedRisk: codexUnsharedRisk,
-  seededFromPrimary: SEEDED_FROM_PRIMARY,
+  copiedWhenUnlinked: COPIED_WHEN_UNLINKED,
   rewritesWhole: codexRewritesWhole,
   unixSockets: CODEX_UNIX_SOCKETS,
   readCredential: readCodexCredential,

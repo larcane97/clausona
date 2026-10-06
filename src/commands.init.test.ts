@@ -195,9 +195,7 @@ describe("re-running init over a registry that holds a name from before the name
     writeFileSync(path.join(h.home, ".clausona", "profiles.json"), JSON.stringify(registry));
     const backups = path.join(h.home, ".clausona", "backups", "codex");
     renameSync(path.join(backups, "work"), path.join(backups, ".codex-work"));
-    // Under a name the profile shares: init puts a codex profile's own backups of what it keeps
-    // for itself back into it, as repair does, but leaves these where they are.
-    const sentinel = path.join(backups, ".codex-work", "config.toml");
+    const sentinel = path.join(backups, ".codex-work", "sentinel.json");
     writeFileSync(sentinel, '{"original":true}');
     return { h, sentinel, backups };
   }
