@@ -459,6 +459,16 @@ describe("a profile on its tool's primary directory", () => {
     expect(snapshot(h.dirs.codex)).toEqual(before);
   });
 
+  it("doctor finds it with no primary source recorded for the tool", async () => {
+    // repair, remove and the toggle fall back to the tool's default directory; doctor too.
+    const h = await harness(selfLinked, () => ({}));
+
+    const results = await h.service.doctorProfiles();
+
+    const personal = results.find((result) => result.name === "codex:personal");
+    expect(personal?.issues.map((issue) => issue.kind)).toEqual(["primary_config_dir"]);
+  });
+
   it("doctor points a duplicate of the primary profile at remove", async () => {
     const h = await harness((dirs) => ({
       "codex:default": { tool: "codex", configDir: dirs.codex, email: "primary@example.com", isPrimary: true },

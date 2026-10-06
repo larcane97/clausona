@@ -1570,11 +1570,12 @@ export async function doctorProfiles(
 
     // A profile registered on its tool's primary directory: every shared-link finding below
     // would compare the directory with itself, and what settles it is in the registry (#73).
+    // With no primary source recorded for the tool, its default directory, as repair, remove
+    // and the session-mode toggle take it.
     const onPrimaryDir =
       !profile.isPrimary &&
-      typeof primarySource === "string" &&
       typeof profile.configDir === "string" &&
-      (await isPrimaryDir(profile.configDir, primarySource));
+      (await isPrimaryDir(profile.configDir, primarySource ?? adapter.defaultConfigDir(home)));
     if (onPrimaryDir) {
       issues.push({ kind: "primary_config_dir", message: primaryDirProblem(registry, id, profile) });
     }
