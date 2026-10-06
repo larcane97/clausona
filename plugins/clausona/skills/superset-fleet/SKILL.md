@@ -62,9 +62,12 @@ profile.
   `settings.json`, so a worker without them runs the orchestrator's default model.
 - **Permission mode**: ask the user which one their workers should run with, if no config
   shows it already. With `acceptEdits`, the user approves commands in the worker's tab.
-- **API profiles** (`kind: "api"`) also get `--strict-mcp-config` and a short `--tools` list,
-  for example `--tools=Bash,Read,Edit,Write,Grep,Glob`. This keeps tool definitions out of a
-  small context window.
+- **MCP servers**: every worker config gets `--strict-mcp-config`, unless its task needs a
+  server. Without it, a worker whose worktree sits below a `.mcp.json` stops at Claude Code's
+  "new MCP servers found" question, and the servers' tool definitions take up context.
+- **API profiles** (`kind: "api"`) also get a short `--tools` list, for example
+  `--tools=Bash,Read,Edit,Write,Grep,Glob`. This keeps tool definitions out of a small context
+  window.
 - **Label**: `<Tool> · <profile> (<model>)`, for example `Claude · work (Sonnet 5.5)`.
 
 When a profile the plan needs has no config:

@@ -67,10 +67,11 @@ flowchart LR
 2. **Make each worker profile a Superset agent.** In Superset → Settings → Agents, add a
    custom agent per profile:
    - Command: the output of `command -v clausona`.
-   - Arguments: `run claude:work -- --model claude-sonnet-5-5 --effort high --permission-mode acceptEdits`.
+   - Arguments: `run claude:work -- --model claude-sonnet-5-5 --effort high --permission-mode acceptEdits --strict-mcp-config`.
 
    Put the model and the effort here, because Superset does not pass them to custom agents at
-   launch. For an API model, add `--strict-mcp-config --tools=Bash,Read,Edit,Write,Grep,Glob`.
+   launch. `--strict-mcp-config` keeps a worker from stopping at Claude Code's "new MCP servers
+   found" question. For an API model, also add `--tools=Bash,Read,Edit,Write,Grep,Glob`.
    Without the Superset CLI logged in, the skill can add these agents itself, after asking you.
 
    Start each new profile once by hand (`clausona run claude:work`). Its first session can ask
