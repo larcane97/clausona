@@ -202,22 +202,45 @@ describe("repair over the profile's own data", () => {
     expect(readFileSync(path.join(h.dirs.codex, "sessions", "primary.jsonl"), "utf8")).toBe("primary");
   });
 
-  it("keeps a claude profile's own marketplace, and its registration, through repair", async () => {
+  /** A primary and a claude:work profile, each with a marketplace and plugin registrations of its own. */
+  async function pluginsHarness() {
     const h = await harness((dirs) => ({
       "claude:default": { tool: "claude", configDir: dirs.claude, email: "primary@example.com", isPrimary: true },
       "claude:work": { tool: "claude", configDir: dirs.claudeWork, email: "work@example.com" },
     }));
-    mkdirSync(path.join(h.dirs.claude, "plugins", "marketplaces"), { recursive: true });
-    const own = path.join(h.dirs.claudeWork, "plugins", "marketplaces", "mine");
+    const primaryPlugins = path.join(h.dirs.claude, "plugins");
+    mkdirSync(path.join(primaryPlugins, "marketplaces", "theirs"), { recursive: true });
+    writeFileSync(
+      path.join(primaryPlugins, "known_marketplaces.json"),
+      JSON.stringify({ theirs: { installLocation: path.join(primaryPlugins, "marketplaces", "theirs") } }),
+    );
+    writeFileSync(path.join(primaryPlugins, "installed_plugins.json"), JSON.stringify({ version: 2, plugins: {} }));
+    const workPlugins = path.join(h.dirs.claudeWork, "plugins");
+    const own = path.join(workPlugins, "marketplaces", "mine");
     mkdirSync(own, { recursive: true });
     writeFileSync(path.join(own, "marketplace.json"), "{}");
-    const known = path.join(h.dirs.claudeWork, "plugins", "known_marketplaces.json");
-    writeFileSync(known, JSON.stringify({ mine: { source: { source: "git", url: "x" }, installLocation: own } }));
+    const ownKnown = JSON.stringify({ mine: { source: { source: "git", url: "x" }, installLocation: own } });
+    writeFileSync(path.join(workPlugins, "known_marketplaces.json"), ownKnown);
+    const ownInstalled = JSON.stringify({
+      version: 2,
+      plugins: { "b@mine": [{ installPath: path.join(workPlugins, "cache", "mine", "b") }] },
+    });
+    writeFileSync(path.join(workPlugins, "installed_plugins.json"), ownInstalled);
+    return { h, primaryPlugins, workPlugins, own, ownKnown, ownInstalled };
+  }
+
+  it("repair backs a claude profile's own plugins up, and leaves the primary's registrations alone", async () => {
+    const { h, primaryPlugins, ownKnown, ownInstalled } = await pluginsHarness();
+    const primaryBefore = snapshot(primaryPlugins);
 
     await h.service.repairProfile("claude:work");
 
-    expect(JSON.parse(readFileSync(known, "utf8"))).toHaveProperty("mine");
-    expect(existsSync(path.join(own, "marketplace.json"))).toBe(true);
+    expect(snapshot(primaryPlugins)).toEqual(primaryBefore);
+    const [setAside] = backupsNamed(h.backups("work", "claude"), "plugins");
+    const backup = path.join(h.backups("work", "claude"), setAside);
+    expect(readFileSync(path.join(backup, "known_marketplaces.json"), "utf8")).toBe(ownKnown);
+    expect(readFileSync(path.join(backup, "installed_plugins.json"), "utf8")).toBe(ownInstalled);
+    expect(existsSync(path.join(backup, "marketplaces", "mine", "marketplace.json"))).toBe(true);
   });
 
   it("keeps a private file the primary's entry is only a link to", async () => {

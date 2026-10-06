@@ -1757,9 +1757,9 @@ export async function repairProfile(id: string) {
 
   const repaired = await setupSharedLinks(profileAdapter, profile.configDir, primarySource, mergeSessions, backupDir);
   if (profile.tool === "claude") {
-    // As add and init do: the profile's own marketplaces and plugins go into the primary first,
-    // so the links setupPluginsDir makes still reach them and the sync keeps their entries.
-    await mergePluginFiles(path.join(profile.configDir, "plugins"), path.join(primarySource, "plugins"));
+    // Never merged into the primary here, unlike add and init: repair runs again and again, and
+    // would write the profile's registrations - stale ones too - into the primary each time.
+    // What setupPluginsDir replaces is backed up instead, the two JSON files with it.
     await setupPluginsDir(profile.configDir, primarySource, backupDir);
   }
 
@@ -1805,7 +1805,6 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
   const updateAdapter = getAdapter(profile.tool);
   await setupSharedLinks(updateAdapter, profile.configDir, primarySource, next, backupDir);
   if (profile.tool === "claude") {
-    await mergePluginFiles(path.join(profile.configDir, "plugins"), path.join(primarySource, "plugins"));
     await setupPluginsDir(profile.configDir, primarySource, backupDir);
   }
 
