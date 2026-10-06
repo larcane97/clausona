@@ -42,6 +42,7 @@ No re-login. No reinstalling plugins. Just switch and go.
 - **Shared environment** — plugins (and the MCP servers they bring), permissions, settings, and skills (Claude), and config.toml (MCP servers included), skills, and hooks (Codex) are symlinked across profiles within each tool. Set up once, use everywhere. MCP servers added with `claude mcp add` stay per account — [see the FAQ](#do-my-mcp-servers-plugins-and-settings-carry-over-when-i-switch).
 - **Plan quota at a glance** — session and weekly limit usage for every account, read live from each tool's own usage endpoint (Claude and Codex)
 - **Two accounts at once** — `clausona run claude:personal` starts one session under another profile without switching, so two terminals can run two accounts side by side
+- **Superset fleets** — a bundled Claude Code skill lets one session run parallel agents in [Superset](https://superset.sh), each on its own account or API model, then check and clean up after them ([use case](docs/usecases/superset-fleet.md))
 - **API profiles** — a profile can point at an API endpoint instead of a subscription login: the Anthropic API, a gateway, or a model you serve yourself
 - **Pure CLI passthrough** — no wrapping, no proxying, no background process. `claude` and `codex` run directly and unmodified. Compatible with oh-my-claudecode, Cline, codex plugins, and any other tool in your stack.
 - **Lightweight** — a single shell hook and a few symlinks. No daemon, no server, and no startup overhead: `claude` and `codex` start from a small cached script, and clausona itself runs only when something changed — a profile switch, a plugin install — or for a profile it can't cache, such as an API profile ([details](docs/how-it-works.md#the-launch-cache)).
@@ -290,6 +291,14 @@ access token when it needs to.
 Yes. `csn use` sets the account new `claude` and `codex` launches start with, and
 `clausona run claude:personal` starts one session under another profile without changing that.
 So one terminal can run your work account while another runs `clausona run claude:personal`.
+
+### Can each Superset agent run on a different account?
+
+Yes. In Superset → Settings → Agents, add a custom agent per profile whose command is
+`clausona run claude:work -- <claude args>`. Starting a workspace with that agent runs it on that
+account. To have one session split a job across several such agents, watch them and clean up
+after them, install this repo's plugin. See
+[Run a Superset fleet across your accounts](docs/usecases/superset-fleet.md).
 
 ### How is this different from setting `CLAUDE_CONFIG_DIR` myself?
 
