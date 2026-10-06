@@ -21,6 +21,7 @@ import {
   formatResetIn,
   formatResetShort,
   LIST_MIN_WIDTH,
+  offersRepair,
   pickLayout,
   quotaBar,
   quotaNotes,
@@ -764,6 +765,17 @@ describe("renderDoctor next-step hint", () => {
 
     expect(sharedLink.message).toContain("clausona repair");
     expect(out).not.toContain("Run clausona repair claude:work");
+  });
+
+  it("does not suggest repair for a profile on its tool's primary directory", () => {
+    // repair refuses one (#73), and the TUI's `r` asks the same offersRepair.
+    const issues = [
+      { kind: "primary_config_dir" as const, message: "x" },
+      { kind: "stale_symlink" as const, message: "y" },
+    ];
+
+    expect(offersRepair(issues)).toBe(false);
+    expect(stripAnsi(renderDoctor([result(issues)]))).not.toContain("Run clausona repair");
   });
 
   it("still suggests repair when an API profile's shared links are broken too", () => {

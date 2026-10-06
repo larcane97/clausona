@@ -165,6 +165,9 @@ export type DoctorIssue = {
     | "stale_symlink"
     | "missing_shared_link"
     | "plugins_out_of_sync"
+    // A non-primary profile registered on its tool's primary directory itself, which clausona
+    // never links or repairs. Settled in the registry, which the message says how to change.
+    | "primary_config_dir"
     // API profiles only. The first three are the profile's own configuration; the next
     // three are about a second key reaching the profile's endpoint by a route clausona
     // does not clear, or about not being able to tell; the last, about this profile's key

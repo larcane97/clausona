@@ -219,3 +219,157 @@ describe("doctor and a shared link whose target is gone", () => {
     expect(after.find((result) => result.name === "codex:work")?.issues).toEqual([]);
   });
 });
+
+/** A primary ~/.claude with a shared directory, a shared file and skip-set state. */
+function seedClaudePrimary(dir: string) {
+  mkdirSync(path.join(dir, "agents"), { recursive: true });
+  writeFileSync(path.join(dir, "agents", "helper.md"), "the primary's agent");
+  writeFileSync(path.join(dir, "settings.json"), '{"primary":true}');
+  writeFileSync(path.join(dir, ".credentials.json"), '{"primary":true}');
+  mkdirSync(path.join(dir, "projects", "-repo"), { recursive: true });
+  writeFileSync(path.join(dir, "projects", "-repo", "s.jsonl"), "{}\n");
+}
+
+/** The issue's registry: `codex:personal` is a non-primary profile on ~/.codex itself. */
+const selfLinked = (dirs: { codex: string; codexWork: string }): Registry["profiles"] => ({
+  "codex:personal": { tool: "codex", configDir: dirs.codex, email: "primary@example.com", mergeSessions: false },
+  "codex:work": { tool: "codex", configDir: dirs.codexWork, email: "work@example.com", mergeSessions: false },
+});
+
+describe("a profile on its tool's primary directory", () => {
+  it.each([
+    ["claude", seedClaudePrimary],
+    ["codex", seedCodexPrimary],
+  ] as const)("setupSharedLinks will not link %s's primary to itself, and deletes nothing", async (tool, seed) => {
+    currentHome = mkdtempSync(path.join(tmpdir(), "clausona-keep-"));
+    temps.push(currentHome);
+    const { getAdapter } = await import("../tools/registry.js");
+    const adapter = getAdapter(tool);
+    const primary = path.join(currentHome, "primary");
+    seed(primary);
+    // Another spelling of the same directory, which only resolving it tells apart.
+    const alias = path.join(currentHome, "alias");
+    symlinkSync(primary, alias, "junction");
+    const backup = path.join(currentHome, "backup");
+    const before = snapshot(primary);
+    const { setupSharedLinks } = await import("./service.js");
+
+    for (const profileDir of [primary, alias]) {
+      await expect(setupSharedLinks(adapter, profileDir, primary, false, backup)).rejects.toThrow(
+        /is the primary config directory itself/,
+      );
+      await expect(setupSharedLinks(adapter, profileDir, primary, true, backup)).rejects.toThrow(
+        /is the primary config directory itself/,
+      );
+    }
+
+    // Skip-set files (.credentials.json, auth.json, state_5.sqlite, ...) included.
+    expect(snapshot(primary)).toEqual(before);
+    expect(existsSync(backup)).toBe(false);
+  });
+
+  it("repair refuses it and leaves the directory as it is", async () => {
+    const h = await harness(selfLinked);
+    const before = snapshot(h.dirs.codex);
+
+    await expect(h.service.repairProfile("codex:personal")).rejects.toThrow(
+      /'codex:personal' is registered on .*\.codex, codex's primary config directory itself/,
+    );
+
+    expect(snapshot(h.dirs.codex)).toEqual(before);
+    expect(existsSync(h.backups("personal"))).toBe(false);
+  });
+
+  it("the session-mode toggle refuses it and changes nothing", async () => {
+    const h = await harness(selfLinked);
+    const before = snapshot(h.dirs.codex);
+
+    await expect(h.service.updateProfileConfig("codex:personal", { mergeSessions: true })).rejects.toThrow(
+      /codex's primary config directory itself/,
+    );
+
+    expect(snapshot(h.dirs.codex)).toEqual(before);
+    expect(h.registry().profiles["codex:personal"].mergeSessions).toBe(false);
+  });
+
+  it("add --from refuses the primary directory", async () => {
+    const h = await harness(selfLinked);
+    const before = snapshot(h.dirs.codex);
+
+    await expect(h.commands.runCommand("add", ["codex:again", "--from", "~/.codex"])).rejects.toThrow(
+      "it is codex's primary config directory",
+    );
+
+    expect(snapshot(h.dirs.codex)).toEqual(before);
+  });
+
+  it("init refuses to set the primary directory up as a profile of its own", async () => {
+    const h = await harness(selfLinked);
+    const before = snapshot(h.dirs.codex);
+
+    await expect(
+      h.service.initializeRegistry({
+        accounts: [
+          {
+            tool: "codex",
+            configDir: h.dirs.codex,
+            jsonPath: path.join(h.dirs.codex, "auth.json"),
+            email: "primary@example.com",
+            keychainService: "",
+            isPrimary: false,
+          },
+        ],
+        profileNames: { [h.dirs.codex]: "personal" },
+      }),
+    ).rejects.toThrow(/codex's primary config directory/);
+
+    expect(snapshot(h.dirs.codex)).toEqual(before);
+  });
+
+  it("doctor reports it as the primary directory, says how to fix the registry, and changes nothing", async () => {
+    const h = await harness(selfLinked);
+    const before = snapshot(h.dirs.codex);
+
+    const results = await h.service.doctorProfiles();
+
+    const personal = results.find((result) => result.name === "codex:personal");
+    expect(personal?.issues).toEqual([
+      {
+        kind: "primary_config_dir",
+        message: expect.stringContaining(`set "isPrimary": true on 'codex:personal'`),
+      },
+    ]);
+    expect(personal?.healthy).toBe(false);
+    expect(snapshot(h.dirs.codex)).toEqual(before);
+  });
+
+  it("doctor points a duplicate of the primary profile at remove", async () => {
+    const h = await harness((dirs) => ({
+      "codex:default": { tool: "codex", configDir: dirs.codex, email: "primary@example.com", isPrimary: true },
+      ...selfLinked(dirs),
+    }));
+
+    const results = await h.service.doctorProfiles();
+
+    const personal = results.find((result) => result.name === "codex:personal");
+    expect(personal?.issues.map((issue) => issue.kind)).toEqual(["primary_config_dir"]);
+    expect(personal?.issues[0].message).toContain("'codex:default' already registers it as the primary");
+    expect(personal?.issues[0].message).toContain("clausona remove codex:personal");
+  });
+
+  it("remove drops only the entry, and leaves the primary and its backup as they are", async () => {
+    const h = await harness(selfLinked);
+    // What an earlier, unguarded repair set aside from the primary.
+    mkdirSync(path.join(h.backups("personal"), "skills"), { recursive: true });
+    writeFileSync(path.join(h.backups("personal"), "skills", "lost.md"), "set aside");
+    const before = snapshot(h.dirs.codex);
+    const backupBefore = snapshot(h.backups("personal"));
+
+    await h.service.removeProfile("codex:personal");
+
+    expect(snapshot(h.dirs.codex)).toEqual(before);
+    expect(snapshot(h.backups("personal"))).toEqual(backupBefore);
+    expect(h.registry().profiles["codex:personal"]).toBeUndefined();
+    expect(h.stderr()).toContain("only its entry was removed");
+  });
+});

@@ -635,5 +635,8 @@ export function offersRepair(issues: DoctorIssue[]): boolean {
   // ENOENT instead of fixing anything - so the profile is left with the one instruction
   // that works, which its own message carries.
   if (issues.some((issue) => issue.kind === "missing_config_dir")) return false;
+  // A profile on its tool's primary directory is never linked, so there is nothing for repair
+  // to rebuild - it refuses one. The message names the registry change that settles it.
+  if (issues.some((issue) => issue.kind === "primary_config_dir")) return false;
   return issues.some((issue) => !CREDENTIAL_ISSUE_KINDS.has(issue.kind) && !SELF_DIRECTED_ISSUE_KINDS.has(issue.kind));
 }

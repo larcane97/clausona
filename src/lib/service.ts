@@ -357,6 +357,38 @@ export async function mergeSessionState(sourceDir: string, primarySource: string
   await mergeRecordDirs(sourceDir, primarySource, "teams");
 }
 
+/**
+ * Whether `configDir` is `primarySource` itself: the same directory by where each resolves,
+ * or by identity for another spelling of it. A profile there has nothing to share. Every
+ * entry setupSharedLinks would link in it is the primary's own, so linking replaces each one
+ * with a link to itself - and the skip-set pass, comparing each file with itself, takes it for
+ * a shared link and deletes it: auth.json, the state databases, everything (#73).
+ */
+async function isPrimaryDir(configDir: string, primarySource: string): Promise<boolean> {
+  const resolve = (dir: string) => realpath(dir).catch(() => path.resolve(dir));
+  if ((await resolve(configDir)) === (await resolve(primarySource))) return true;
+  return sameDirectory(configDir, primarySource);
+}
+
+/**
+ * Why a profile registered on its tool's primary directory is left alone, and the registry
+ * change that settles it. doctor reports it; repair and the session-mode toggle refuse with
+ * it. With the primary registered under another id, the entry is a duplicate to remove. With
+ * none, it is the primary profile missing only the mark that says so: removing it instead
+ * would hand the tool's launches to another of its profiles.
+ */
+function primaryDirProblem(registry: Registry, id: string, profile: Profile): string {
+  const home = homedir();
+  const shown = profile.configDir.replace(home, "~");
+  const registeredPrimary = Object.entries(registry.profiles).find(
+    ([other, entry]) => other !== id && entry?.tool === profile.tool && entry.isPrimary,
+  )?.[0];
+  const fix = registeredPrimary
+    ? `'${registeredPrimary}' already registers it as the primary, so remove this duplicate with 'clausona remove ${id}': that drops only the entry and leaves ${shown} as it is.`
+    : `To keep it as ${profile.tool}'s primary profile, set "isPrimary": true on '${id}' in ${REGISTRY_PATH.replace(home, "~")}.`;
+  return `'${id}' is registered on ${shown}, ${profile.tool}'s primary config directory itself, so clausona neither links nor repairs it. ${fix}`;
+}
+
 /** The timestamp in a backup's name: ISO 8601 with each `:` and `.` made `-`, which Windows refuses in a name. */
 function backupStamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
@@ -448,7 +480,8 @@ async function isLinkToPrimaryEntry(backupItem: string, primarySource: string, i
 /**
  * Links each entry the primary shares into the profile. Whatever stands where a link goes -
  * the profile's own file or directory, or a link that leads elsewhere or nowhere - is moved
- * into a backup of its own first; nothing of the profile's is deleted.
+ * into a backup of its own first; nothing of the profile's is deleted. Refuses a profile
+ * directory that is the primary's own, and changes nothing then.
  */
 export async function setupSharedLinks(
   adapter: ToolAdapter,
@@ -457,6 +490,11 @@ export async function setupSharedLinks(
   mergeSessions = false,
   backupDir?: string,
 ) {
+  if (await isPrimaryDir(profileDir, primarySource)) {
+    throw new Error(
+      `${profileDir.replace(homedir(), "~")} is the primary config directory itself, so it has nothing to share: linking it would replace each of its entries with a link to that same entry. Nothing was changed.`,
+    );
+  }
   const backupFor = (target: string) => {
     if (!backupDir) {
       throw new Error(
@@ -779,6 +817,12 @@ async function mergePluginFiles(profilePluginsDir: string, primaryPluginsDir: st
  * under its own name - so removing the profile puts it back where it was.
  */
 async function setupPluginsDir(profileDir: string, primarySource: string, backupDir: string): Promise<void> {
+  // setupSharedLinks refuses this first; checked again because what follows deletes the same way.
+  if (await isPrimaryDir(profileDir, primarySource)) {
+    throw new Error(
+      `${profileDir.replace(homedir(), "~")} is the primary config directory itself. Nothing was changed.`,
+    );
+  }
   const primaryPlugins = path.join(primarySource, "plugins");
   if (!(await exists(primaryPlugins))) return;
 
@@ -1115,6 +1159,14 @@ export async function initializeRegistry(options: {
       );
     }
     initIds.set(foldProfileName(id), { id, kept });
+    // An account on the tool's own directory is the primary, whatever the caller marked it:
+    // set up as a profile of its own, it would be linked to itself (#73).
+    const toolPrimary = getAdapter(account.tool).defaultConfigDir(homedir());
+    if (!account.isPrimary && (await isPrimaryDir(account.configDir, toolPrimary))) {
+      throw new Error(
+        `Cannot set up ${account.configDir.replace(homedir(), "~")} as '${id}': it is ${account.tool}'s primary config directory, which every profile shares. Register it as the primary profile instead.`,
+      );
+    }
     // Resolved now, so a kept name the containment guard refuses stops init before it writes.
     const backupDir = account.isPrimary ? null : backupDirFor(CLAUSONA_DIR, account.tool, name);
     // A re-registered profile goes on using its own backup. A new name gets the add paths'
@@ -1494,7 +1546,18 @@ export async function doctorProfiles(
       }
     }
 
-    if (primarySource && !configDirMissing) {
+    // A profile registered on its tool's primary directory: every shared-link finding below
+    // would compare the directory with itself, and what settles it is in the registry (#73).
+    const onPrimaryDir =
+      !profile.isPrimary &&
+      typeof primarySource === "string" &&
+      typeof profile.configDir === "string" &&
+      (await isPrimaryDir(profile.configDir, primarySource));
+    if (onPrimaryDir) {
+      issues.push({ kind: "primary_config_dir", message: primaryDirProblem(registry, id, profile) });
+    }
+
+    if (primarySource && !configDirMissing && !onPrimaryDir) {
       const primaryDirents = await readdir(primarySource, { withFileTypes: true }).catch(() => []);
       const primaryEntries = new Set(primaryDirents.map((entry) => entry.name));
 
@@ -1559,7 +1622,7 @@ export async function doctorProfiles(
     }
 
     // Check plugins/ consistency for non-primary claude profiles with a real plugins/ dir
-    if (!profile.isPrimary && profile.tool === "claude" && !configDirMissing) {
+    if (!profile.isPrimary && !onPrimaryDir && profile.tool === "claude" && !configDirMissing) {
       const profilePlugins = path.join(profile.configDir, "plugins");
       const pluginsStats = await lstat(profilePlugins).catch(() => null);
       if (pluginsStats && !pluginsStats.isSymbolicLink()) {
@@ -1634,10 +1697,13 @@ export async function repairProfile(id: string) {
     return { repaired: 0 };
   }
 
-  const { name } = parseProfileRef(id, registry);
-  const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
   const profileAdapter = getAdapter(profile.tool);
   const primarySource = registry.primarySources[profile.tool] ?? profileAdapter.defaultConfigDir(homedir());
+  if (await isPrimaryDir(profile.configDir, primarySource)) {
+    throw new Error(primaryDirProblem(registry, id, profile));
+  }
+  const { name } = parseProfileRef(id, registry);
+  const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
   const mergeSessions = profile.mergeSessions ?? false;
 
   // A profile that shares sessions may hold session state the primary has never seen —
@@ -1667,12 +1733,15 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
   if (profile.isPrimary) {
     throw new Error("Cannot change session mode for the primary profile.");
   }
+  const primarySource = registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
+  if (await isPrimaryDir(profile.configDir, primarySource)) {
+    throw new Error(primaryDirProblem(registry, id, profile));
+  }
 
   const prev = profile.mergeSessions ?? false;
   const next = options.mergeSessions;
   if (prev === next) return { name: id, mergeSessions: next, changed: false };
 
-  const primarySource = registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
   // Resolved before the registry changes, so a name backupDirFor refuses changes nothing.
   const { name } = parseProfileRef(id, registry);
   const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
@@ -1944,6 +2013,11 @@ async function cleanupProfile(
   if (profile.kind === "api" || profile.api?.secret?.source === "keychain") {
     await deleteSecret(profileId(profile.tool, name)).catch(() => {});
   }
+
+  // On the primary's own directory every file reads as a link to the primary - it is the
+  // primary's file - so the stripping below would delete them all, and the restore would
+  // then copy the backup over the primary and delete the backup (#73).
+  if (await isPrimaryDir(profile.configDir, primarySource)) return;
 
   // 1a. Strip inner symlinks from plugins/ dir (real dir with inner symlinks)
   const profilePlugins = path.join(profile.configDir, "plugins");
@@ -3074,12 +3148,18 @@ export async function removeProfile(id: string) {
   const { name } = parseProfileRef(id, registry);
   const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
   const sharer = backupDirSharer(registry, id, profile.tool, name);
-  const sharedWarning = sharer
-    ? `${id}: left ${backupDir.replace(home, "~")} in place because '${sharer}' keeps its backup there too. Nothing from it was restored into ${profile.configDir.replace(home, "~")}; copy back anything you need from it by hand.`
-    : undefined;
+  // A profile registered on the primary's own directory: cleanupProfile leaves that directory
+  // and the backup alone, so removing it drops the entry and nothing else (#73).
+  const onPrimaryDir = await isPrimaryDir(profile.configDir, primarySource);
+  const shownDir = profile.configDir.replace(home, "~");
+  const notice = onPrimaryDir
+    ? `${id}: ${shownDir} is ${profile.tool}'s primary config directory itself, so only its entry was removed. ${shownDir} was left as it is${(await backupDirOccupied(backupDir)) ? `, and so was ${backupDir.replace(home, "~")}, which holds what clausona set aside from it` : ""}.`
+    : sharer
+      ? `${id}: left ${backupDir.replace(home, "~")} in place because '${sharer}' keeps its backup there too. Nothing from it was restored into ${shownDir}; copy back anything you need from it by hand.`
+      : undefined;
 
-  await cleanupProfile(name, profile, primarySource, { keepBackup: sharer !== undefined });
-  if (sharedWarning) warn(sharedWarning);
+  await cleanupProfile(name, profile, primarySource, { keepBackup: sharer !== undefined || onPrimaryDir });
+  if (notice) warn(notice);
 
   await updateRegistry((current) => {
     // Already removed by another process - nothing left to write.
