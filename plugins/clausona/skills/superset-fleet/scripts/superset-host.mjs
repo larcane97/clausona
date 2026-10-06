@@ -104,6 +104,13 @@ async function call(host, procedure, input, { mutation = false } = {}) {
   return body?.result?.data?.json;
 }
 
+function positiveInt(text, flag) {
+  if (!/^\d+$/.test(text) || Number(text) === 0) throw new CliError(`${flag} must be a positive integer`);
+  return Number(text);
+}
+
+const str = { type: "string" };
+
 const COMMANDS = {
   status: {
     run: async (host) => {
@@ -113,6 +120,72 @@ const COMMANDS = {
   },
   projects: {
     run: async (host) => (await call(host, "project.list")).map(({ id, name, repoPath }) => ({ id, name, repoPath })),
+  },
+  "workspaces list": {
+    options: { project: str },
+    run: async (host, { project }) => {
+      const all = await call(host, "workspace.list");
+      return project ? all.filter((w) => w.projectId === project) : all;
+    },
+  },
+  "workspaces create": {
+    options: { project: str, name: str, branch: str, "base-branch": str, "skip-branch-prefix": { type: "boolean" } },
+    required: ["project", "name", "branch"],
+    run: (host, v) =>
+      call(
+        host,
+        "workspaces.create",
+        {
+          projectId: v.project,
+          name: v.name,
+          branch: v.branch,
+          ...(v["base-branch"] ? { baseBranch: v["base-branch"] } : {}),
+          ...(v["skip-branch-prefix"] ? { skipBranchPrefix: true } : {}),
+        },
+        { mutation: true },
+      ),
+  },
+  // The host stops the workspace's terminals and removes its worktree even when it has
+  // uncommitted changes (it runs with force), and keeps the branch. The skill checks first.
+  "workspaces delete": {
+    positionals: 1,
+    run: (host, _v, [id]) => call(host, "workspace.delete", { id }, { mutation: true }),
+  },
+  "terminals list": {
+    options: { workspace: str },
+    required: ["workspace"],
+    run: async (host, { workspace }) => {
+      const { sessions } = await call(host, "terminal.list", { workspaceId: workspace });
+      const agents = (await call(host, "terminalAgents.list")).filter((a) => a.workspaceId === workspace);
+      return { sessions, agents };
+    },
+  },
+  "terminals read": {
+    options: { workspace: str, terminal: str, "max-lines": str },
+    required: ["workspace", "terminal"],
+    run: (host, v) =>
+      call(host, "terminal.snapshot", {
+        terminalId: v.terminal,
+        workspaceId: v.workspace,
+        maxLines: positiveInt(v["max-lines"] ?? "240", "--max-lines"),
+      }),
+  },
+  "terminals send": {
+    options: { workspace: str, terminal: str, text: str },
+    required: ["workspace", "terminal", "text"],
+    run: (host, v) =>
+      call(
+        host,
+        "terminal.send",
+        { terminalId: v.terminal, workspaceId: v.workspace, text: v.text, submit: true },
+        { mutation: true },
+      ),
+  },
+  "terminals close": {
+    options: { workspace: str, terminal: str },
+    required: ["workspace", "terminal"],
+    run: (host, v) =>
+      call(host, "terminal.killSession", { terminalId: v.terminal, workspaceId: v.workspace }, { mutation: true }),
   },
 };
 

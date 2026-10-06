@@ -168,3 +168,116 @@ describe("host discovery and calls", () => {
     expect(seen).toEqual([]);
   });
 });
+
+describe("workspaces and terminals", () => {
+  it("lists workspaces, filtered to a project", async () => {
+    replies["workspace.list"] = {
+      json: [
+        { id: "w1", projectId: "p1" },
+        { id: "w2", projectId: "p2" },
+      ],
+    };
+    expect(JSON.parse((await run(["workspaces", "list"])).stdout)).toHaveLength(2);
+    expect(JSON.parse((await run(["workspaces", "list", "--project", "p2"])).stdout)).toEqual([
+      { id: "w2", projectId: "p2" },
+    ]);
+  });
+
+  it("creates a workspace with only the options given", async () => {
+    replies["workspaces.create"] = { json: { workspace: { id: "w1" } } };
+    await run(["workspaces", "create", "--project", "p1", "--name", "Task 1", "--branch", "fleet/t1"]);
+    await run([
+      "workspaces",
+      "create",
+      "--project",
+      "p1",
+      "--name",
+      "Task 2",
+      "--branch",
+      "fleet/t2",
+      "--base-branch",
+      "main",
+      "--skip-branch-prefix",
+    ]);
+    expect(seen.map((s) => [s.method, s.procedure, s.input])).toEqual([
+      ["POST", "workspaces.create", { projectId: "p1", name: "Task 1", branch: "fleet/t1" }],
+      [
+        "POST",
+        "workspaces.create",
+        { projectId: "p1", name: "Task 2", branch: "fleet/t2", baseBranch: "main", skipBranchPrefix: true },
+      ],
+    ]);
+  });
+
+  it("refuses to create a workspace without a branch, and calls nothing", async () => {
+    const r = await run(["workspaces", "create", "--project", "p1", "--name", "Task 1"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/--branch is required/);
+    expect(seen).toEqual([]);
+  });
+
+  it("deletes a workspace by id", async () => {
+    replies["workspace.delete"] = { json: { worktreeRemoved: true, warnings: [] } };
+    const r = await run(["workspaces", "delete", "w1"]);
+    expect(JSON.parse(r.stdout)).toEqual({ worktreeRemoved: true, warnings: [] });
+    expect(seen.map((s) => [s.method, s.procedure, s.input])).toEqual([["POST", "workspace.delete", { id: "w1" }]]);
+    expect((await run(["workspaces", "delete"])).code).toBe(1);
+  });
+
+  it("lists a workspace's terminals and only the agents running in it", async () => {
+    replies["terminal.list"] = { json: { sessions: [{ terminalId: "t1", workspaceId: "w1" }] } };
+    replies["terminalAgents.list"] = {
+      json: [
+        { terminalId: "t1", workspaceId: "w1", agentId: "claude" },
+        { terminalId: "t9", workspaceId: "w9", agentId: "claude" },
+      ],
+    };
+    const r = await run(["terminals", "list", "--workspace", "w1"]);
+    expect(JSON.parse(r.stdout)).toEqual({
+      sessions: [{ terminalId: "t1", workspaceId: "w1" }],
+      agents: [{ terminalId: "t1", workspaceId: "w1", agentId: "claude" }],
+    });
+    expect(seen[0]).toMatchObject({ method: "GET", procedure: "terminal.list", input: { workspaceId: "w1" } });
+  });
+
+  it("reads a terminal, 240 lines unless told otherwise", async () => {
+    replies["terminal.snapshot"] = { json: { terminalId: "t1", text: "hello" } };
+    await run(["terminals", "read", "--workspace", "w1", "--terminal", "t1"]);
+    await run(["terminals", "read", "--workspace", "w1", "--terminal", "t1", "--max-lines", "50"]);
+    expect(seen.map((s) => s.input)).toEqual([
+      { terminalId: "t1", workspaceId: "w1", maxLines: 240 },
+      { terminalId: "t1", workspaceId: "w1", maxLines: 50 },
+    ]);
+  });
+
+  it("rejects a max-lines that is not a positive integer", async () => {
+    for (const bad of ["0", "ten", "-3"]) {
+      const r = await run(["terminals", "read", "--workspace", "w1", "--terminal", "t1", `--max-lines=${bad}`]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/--max-lines must be a positive integer/);
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it("sends text verbatim and submits it", async () => {
+    replies["terminal.send"] = { json: { terminalId: "t1", submitted: true } };
+    const text = 'say "hi" && echo `date` $(whoami)\nsecond line';
+    await run(["terminals", "send", "--workspace", "w1", "--terminal", "t1", "--text", text]);
+    expect(seen).toEqual([
+      {
+        method: "POST",
+        procedure: "terminal.send",
+        input: { terminalId: "t1", workspaceId: "w1", text, submit: true },
+        auth: `Bearer ${TOKEN}`,
+      },
+    ]);
+  });
+
+  it("closes a terminal", async () => {
+    replies["terminal.killSession"] = { json: { success: true } };
+    await run(["terminals", "close", "--workspace", "w1", "--terminal", "t1"]);
+    expect(seen.map((s) => [s.method, s.procedure, s.input])).toEqual([
+      ["POST", "terminal.killSession", { terminalId: "t1", workspaceId: "w1" }],
+    ]);
+  });
+});
