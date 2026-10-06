@@ -175,7 +175,13 @@ state. `clausona doctor` reports these as `missing_shared_link`; `clausona repai
 file, directory or stray link that stands where a shared link goes is moved into
 `~/.clausona/backups/<tool>/<profile>/<name>.<timestamp>`, a new backup every time, so a
 second repair keeps what the first one set aside. Removing the profile puts the newest backup
-of each entry back.
+of each entry back where the profile has none of that entry; an entry it has again is newer
+than any backup, so it stays as it is, and its backups stay too. `clausona uninstall` keeps
+`~/.clausona/backups` whenever something is left in it, and says so.
+
+A shared link to a primary entry that is itself a broken link is reported as
+`primary_broken_link`, with the primary's path. That break is the primary's to fix:
+`clausona repair` changes nothing in the primary, and leaves the profile's link as it is.
 
 A profile registered on its tool's primary directory itself (a non-primary entry whose
 config directory is `~/.claude` or `~/.codex`) has nothing to share, so clausona never links
