@@ -10,7 +10,7 @@ export default defineConfig({
   define: { __CLAUSONA_VERSION__: JSON.stringify(version) },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "tests/**/*.test.ts"],
     // Keeps every test off the real `security` and `secret-tool` - see the file.
     globalSetup: ["./vitest.global-setup.ts"],
     // Windows runners stall now and then: a case that takes under a second there has run
