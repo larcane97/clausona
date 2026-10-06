@@ -171,6 +171,12 @@ export type DoctorIssue = {
     // A shared link to a primary entry that is itself a broken link: the primary's to fix,
     // and the message names its path. repair leaves both alone.
     | "primary_broken_link"
+    // A shared file the tool saves whole, held by a hard link or a copy rather than a symlink.
+    | "needs_symlink"
+    // A config dir too long for a Unix socket the tool binds inside it.
+    | "socket_path_too_long"
+    // Codex's sqlite_home or CODEX_SQLITE_HOME, which put every profile's SQLite state in one place.
+    | "shared_sqlite_home"
     // API profiles only. The first three are the profile's own configuration; the next
     // three are about a second key reaching the profile's endpoint by a route clausona
     // does not clear, or about not being able to tell; the last, about this profile's key

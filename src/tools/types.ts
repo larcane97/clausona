@@ -50,6 +50,16 @@ export type ToolAdapter = {
   // (e.g. sqlite WAL/SHM siblings of state_*.sqlite).
   shouldSkipName?(name: string, mergeSessions: boolean): boolean;
 
+  // Shared files the tool saves whole: it writes a new file and renames it over the old one.
+  // A hard link does not survive that - the profile keeps the old file and stops following
+  // the primary's at the first save - so these are shared by a symbolic link or not at all.
+  rewritesWhole?(name: string): boolean;
+
+  // Unix sockets the tool binds inside its config dir, relative to it, and what each is for.
+  // A socket's whole path has to fit in sun_path, so a config dir that is too long stops the
+  // tool binding it.
+  unixSockets?: ReadonlyArray<{ path: string; purpose: string }>;
+
   // Per-tool post-link setup (e.g. Claude's plugins JSON path-rewrite).
   postSetup?(profileDir: string, primaryDir: string): Promise<void>;
 

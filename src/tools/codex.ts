@@ -36,6 +36,23 @@ const SKIP_PREFIXES = ["state_", "logs_", "sessions_"];
 const SESSION_SKIP = new Set(["sessions", "session_index.jsonl", "history.jsonl"]);
 
 /**
+ * Codex writes its config files to a temp file and renames that over the original (checked
+ * against codex-cli 0.159.3): config.toml, the `<name>.config.toml` files beside it, and
+ * hooks.json.
+ */
+function codexRewritesWhole(name: string): boolean {
+  return name === "config.toml" || name.endsWith(".config.toml") || name === "hooks.json";
+}
+
+/**
+ * The app-server daemon's updater binds this socket under CODEX_HOME (codex-cli 0.159.3). The
+ * daemon's auto-update stops, with nothing said, when the path does not fit in sun_path.
+ */
+const CODEX_UNIX_SOCKETS = [
+  { path: "app-server-daemon/daemon-updater.sock", purpose: "the app-server daemon's auto-update" },
+] as const;
+
+/**
  * Returns the skip set for symlinking decisions.
  * Literal set members are exact filenames; prefix-based names (e.g. state_5.sqlite)
  * must be checked via shouldSkipForCodex().
@@ -225,6 +242,8 @@ export const codexAdapter: ToolAdapter = {
   readAccountInfo: readCodexAccount,
   sharedSkipSet: buildSkipSet,
   shouldSkipName: (name, _mergeSessions) => SKIP_PREFIXES.some((p) => name.startsWith(p)),
+  rewritesWhole: codexRewritesWhole,
+  unixSockets: CODEX_UNIX_SOCKETS,
   readCredential: readCodexCredential,
   fetchQuota: fetchCodexQuota,
   renewCredential: renewCodexCredential,

@@ -36,6 +36,7 @@ import {
 import {
   addApiProfile,
   addProfile,
+  configDirWarnings,
   discoverAccounts,
   doctorProfiles,
   fetchProfileQuotas,
@@ -112,6 +113,8 @@ type InitState = {
   mergeSessionsMap: Record<string, boolean>;
   nameField: 0 | 1;
   message?: string;
+  /** What init found to warn about in the directories it set up, shown with the done line. */
+  warning?: string;
 };
 
 // ── Add / Overlay types ──
@@ -1729,14 +1732,23 @@ export function App({ initialScreen = "dashboard", updater, onRestart }: AppProp
             setAddState((prev) => (prev ? { ...prev, profileNames: nextNames, step: "applying" } : null));
             void (async () => {
               try {
+                const warnings: string[] = [];
                 for (const [dir, name] of Object.entries(nextNames)) {
                   const merge = addState.mergeSessionsMap[dir] || undefined;
                   const account = addState.discoveredAccounts.find((a) => a.configDir === dir);
                   const tool = account?.tool ?? "claude";
-                  await addProfile({ tool, name, fromPath: dir, mergeSessions: merge });
+                  const added = await addProfile({ tool, name, fromPath: dir, mergeSessions: merge });
+                  warnings.push(...added.warnings);
                 }
                 setAddState((prev) =>
-                  prev ? { ...prev, step: "done", message: `Added ${Object.keys(nextNames).length} profile(s)` } : null,
+                  prev
+                    ? {
+                        ...prev,
+                        step: "done",
+                        message: `Added ${Object.keys(nextNames).length} profile(s)`,
+                        warning: warnings.length > 0 ? warnings.join("\n") : undefined,
+                      }
+                    : null,
                 );
                 await refreshDashboard();
               } catch (error) {
@@ -1797,14 +1809,19 @@ export function App({ initialScreen = "dashboard", updater, onRestart }: AppProp
               const result = await suspendTuiAndRun(() =>
                 addProfile({ tool: addState.selectedTool, name, mergeSessions: addState.mergeSessions || undefined }),
               );
-              const warning =
-                result.credentialUnconfirmed === undefined
-                  ? undefined
-                  : unconfirmedCredentialText(
-                      addState.selectedTool,
-                      profileId(addState.selectedTool, result.name),
-                      result.credentialUnconfirmed,
-                    );
+              const caveats = [
+                ...(result.credentialUnconfirmed === undefined
+                  ? []
+                  : [
+                      unconfirmedCredentialText(
+                        addState.selectedTool,
+                        profileId(addState.selectedTool, result.name),
+                        result.credentialUnconfirmed,
+                      ),
+                    ]),
+                ...result.warnings,
+              ];
+              const warning = caveats.length > 0 ? caveats.join("\n") : undefined;
               setAddState((prev) =>
                 prev ? { ...prev, step: "done", message: `Added ${result.name} (${result.email})`, warning } : null,
               );
@@ -1868,7 +1885,14 @@ export function App({ initialScreen = "dashboard", updater, onRestart }: AppProp
                 mergeSessions: addState.mergeSessions || undefined,
               });
               setAddState((prev) =>
-                prev ? { ...prev, step: "done", message: `Added ${result.name} (${result.email})` } : null,
+                prev
+                  ? {
+                      ...prev,
+                      step: "done",
+                      message: `Added ${result.name} (${result.email})`,
+                      warning: result.warnings.length > 0 ? result.warnings.join("\n") : undefined,
+                    }
+                  : null,
               );
               await refreshDashboard();
             } catch (error) {
@@ -2091,7 +2115,15 @@ export function App({ initialScreen = "dashboard", updater, onRestart }: AppProp
               defaultProfile: initState.defaultProfile,
               mergeSessionsMap: initState.mergeSessionsMap,
             });
-            setInitState((prev) => ({ ...prev, step: "done" }));
+            const warnings: string[] = [];
+            for (const account of selectedAccounts) {
+              warnings.push(...(await configDirWarnings(account.tool, account.configDir)));
+            }
+            setInitState((prev) => ({
+              ...prev,
+              step: "done",
+              warning: warnings.length > 0 ? warnings.join("\n") : undefined,
+            }));
             setMessage(`${symbol.check} Profiles initialized`);
             await refreshDashboard();
           } catch (error) {
@@ -3102,6 +3134,14 @@ export function App({ initialScreen = "dashboard", updater, onRestart }: AppProp
               <Text color={color.healthy} bold>
                 Profiles initialized successfully.
               </Text>
+            </Box>
+          )}
+          {initState.step === "done" && initState.warning && (
+            <Box gap={1} marginTop={1}>
+              <Box flexShrink={0}>
+                <Text color={color.warning}>{symbol.diamond}</Text>
+              </Box>
+              <Text color={color.warning}>{initState.warning}</Text>
             </Box>
           )}
         </Box>

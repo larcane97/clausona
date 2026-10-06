@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Registry } from "../types.js";
 
@@ -29,6 +29,18 @@ let currentHome = "";
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, default: { ...actual, homedir: () => currentHome }, homedir: () => currentHome };
+});
+
+// A temp HOME on macOS (/private/var/folders/...) is already too long a path for Codex's daemon
+// socket, so doctor would add that warning to every Codex profile here, on that platform only.
+// It has tests of its own (codex-profile-checks.integration.test.ts); these compare exact lists.
+vi.mock("../core/socket-path.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../core/socket-path.js")>();
+  return { ...actual, overlongSocketPath: () => undefined };
+});
+// The same for a CODEX_SQLITE_HOME the developer's own shell may export.
+beforeEach(() => {
+  vi.stubEnv("CODEX_SQLITE_HOME", "");
 });
 
 const temps: string[] = [];

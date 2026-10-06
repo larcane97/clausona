@@ -67,32 +67,56 @@ export async function inspectSharedLink(target: string, source: string): Promise
   return { isSharedLink: false, pointsToSource: false, targetExists: true };
 }
 
+/**
+ * Links `target` to `source`, which must not exist yet. True when it did.
+ *
+ * Windows makes a file symlink only with Developer Mode on or the "Create symbolic links"
+ * privilege, so there a file falls back to a hard link - unless `hardLink` is false: a file
+ * the tool saves by renaming a new one over it leaves a hard link behind at the first save,
+ * and the profile goes on reading a copy that no longer follows the primary's. For one of
+ * those, a symlink refused for want of the privilege links nothing and returns false, so the
+ * caller can keep a copy and say so.
+ */
 export async function createSharedLink(
   source: string,
   target: string,
   {
     platform = process.platform,
     isDirectory,
+    hardLink = true,
+    makeSymlink = symlink,
   }: {
     platform?: NodeJS.Platform;
     isDirectory: boolean;
+    /** Whether a hard link may stand in for a file symlink Windows refuses. */
+    hardLink?: boolean;
+    /** fs.symlink, replaceable so a test can refuse it the way Windows does. */
+    makeSymlink?: typeof symlink;
   },
-): Promise<void> {
+): Promise<boolean> {
   if (platform !== "win32") {
-    await symlink(source, target);
-    return;
+    await makeSymlink(source, target);
+    return true;
   }
 
   if (isDirectory) {
-    await symlink(source, target, "junction");
-    return;
+    await makeSymlink(source, target, "junction");
+    return true;
   }
 
   try {
-    await symlink(source, target, "file");
+    await makeSymlink(source, target, "file");
+    return true;
   } catch (symlinkError) {
+    if (!hardLink) {
+      if ((symlinkError as NodeJS.ErrnoException).code === "EPERM") return false;
+      throw new Error(
+        `Could not share '${source}' on Windows by a symbolic link, and a hard link would not outlast the next save of it: ${symlinkError instanceof Error ? symlinkError.message : String(symlinkError)}`,
+      );
+    }
     try {
       await link(source, target);
+      return true;
     } catch (hardLinkError) {
       throw new Error(
         `Could not share '${source}' on Windows. Enable Developer Mode for symbolic links, or keep the profile on the same drive as its primary config. ` +

@@ -1,9 +1,12 @@
 import { existsSync, rmSync } from "node:fs";
 import {
   chmod,
+  copyFile,
   cp,
+  link,
   lstat,
   mkdir,
+  mkdtemp,
   readdir,
   readFile,
   readlink,
@@ -14,7 +17,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { constants, homedir } from "node:os";
+import { constants, homedir, tmpdir } from "node:os";
 import path from "node:path";
 
 import { checkBaseUrl, hasBareUserinfo, isAnthropicHost, sendsKeyInClear } from "../core/api-url.js";
@@ -30,6 +33,8 @@ import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
 import { isV1Registry, migrateRegistryV1toV2, setActiveProfile } from "../core/registry.js";
 import { createSharedLink, inspectSharedLink } from "../core/shared-links.js";
 import { isPosixEnvName, renderShellInit, type ShellInitPaths } from "../core/shell.js";
+import { overlongSocketPath, socketPathLimit } from "../core/socket-path.js";
+import { tomlRootValue } from "../core/toml.js";
 import { seedSeenSessions } from "../core/track-usage.js";
 import { summarizeUsage } from "../core/usage.js";
 import { validateEnvEntry } from "../tools/claude-env-catalog.js";
@@ -421,10 +426,12 @@ async function moveTo(source: string, dest: string) {
 /**
  * Moves `target` into a backup of its own, `<backupDir>/<name>.<timestamp>`. Every
  * replacement gets one: repair used to keep only the first backup of a name and then delete,
- * so a second repair lost what the profile had made since (#73).
+ * so a second repair lost what the profile had made since (#73). Resolves to the backup's path.
  */
-async function setAside(target: string, backupDir: string, name: string) {
-  await moveTo(target, await freshBackupPath(backupDir, name));
+async function setAside(target: string, backupDir: string, name: string): Promise<string> {
+  const backup = await freshBackupPath(backupDir, name);
+  await moveTo(target, backup);
+  return backup;
 }
 
 /**
@@ -495,6 +502,58 @@ async function isLinkToPrimaryEntry(backupItem: string, primarySource: string, i
   return Boolean(stats?.isSymbolicLink()) && (await readlink(backupItem)) === path.join(primarySource, itemName);
 }
 
+/** Marks the name a symbolic link is tried under before a file saved whole is replaced by one. */
+const PROBE_LINK = ".clausona-link-";
+
+/**
+ * Replaces what stands at `target`, a file the tool saves whole, with a symbolic link to
+ * `source`, once a probe has shown that one can be made. False when it still could not, with
+ * `target` as it was.
+ *
+ * A hard link to the primary's file holds nothing of the profile's own, so it is removed, not
+ * backed up: as the newest backup of the name it is what removing the profile would put back -
+ * the primary's file, over the profile's own older backup. Anything else goes into a backup
+ * first. The link is then made where the target was, and symlink never replaces anything, so a
+ * save that lands in between is not overwritten. If the link is not made, what was there goes
+ * back - while the spot is still empty.
+ */
+async function replaceWithSymlink(
+  source: string,
+  target: string,
+  { name, backupDir, hardLinked }: { name: string; backupDir: string; hardLinked: boolean },
+): Promise<boolean> {
+  const sameFileAsSource =
+    hardLinked && (await holdsNothingOfItsOwn(target)) && (await inspectSharedLink(target, source)).pointsToSource;
+  const backup = sameFileAsSource ? undefined : await setAside(target, backupDir, name);
+  if (sameFileAsSource) await rm(target, { force: true });
+  const putBack = async () => {
+    if (await exists(target)) return;
+    if (backup) await moveTo(backup, target);
+    else await link(source, target);
+  };
+  try {
+    if (await createSharedLink(source, target, { isDirectory: false, hardLink: false })) return true;
+  } catch (error) {
+    await putBack().catch(() => {});
+    throw error;
+  }
+  await putBack();
+  return false;
+}
+
+/**
+ * Said when a file the tool saves whole could not be shared: Windows would not make a
+ * symbolic link, and a hard link would split at the file's next save. doctor goes on saying it.
+ */
+function warnUnshared(name: string, profileDir: string, hardLinked: boolean): void {
+  const held = hardLinked
+    ? "is still shared by a hard link, which its next save will split"
+    : "is the profile's own copy, not shared with the primary's, since a hard link would split at its next save";
+  warn(
+    `${name} in ${profileDir} ${held}: Windows would not make a symbolic link. Turn on Developer Mode (or grant the "Create symbolic links" privilege), then run 'clausona repair' for this profile.`,
+  );
+}
+
 /**
  * Links each entry the primary shares into the profile. Whatever stands where a link goes -
  * the profile's own file or directory, or a link that leads elsewhere or nowhere - is moved
@@ -522,6 +581,14 @@ export async function setupSharedLinks(
     return backupDir;
   };
 
+  // A probe link left by a run that stopped before taking it out: a symbolic link under
+  // clausona's own marker, which holds nothing. Nothing else with the marker is touched.
+  for (const entry of await readdir(profileDir, { withFileTypes: true }).catch(() => [])) {
+    if (entry.name.includes(PROBE_LINK) && entry.isSymbolicLink()) {
+      await rm(path.join(profileDir, entry.name), { force: true });
+    }
+  }
+
   const items = await readdir(primarySource, { withFileTypes: true });
   let linked = 0;
 
@@ -539,19 +606,51 @@ export async function setupSharedLinks(
       continue;
     }
     const target = path.join(profileDir, item.name);
+    // A file the tool saves whole is shared by a symbolic link or not at all: see rewritesWhole.
+    const symlinkOnly = !item.isDirectory() && adapter.rewritesWhole?.(item.name) === true;
     const targetExists = await exists(target);
     if (targetExists) {
       const linkInfo = await inspectSharedLink(target, source);
       // Linked, even where the primary's own entry is a broken link: that is the primary's to fix.
-      if (linkInfo.isSharedLink && linkInfo.pointsToSource) {
+      // Except a hard link to a file saved whole, which lasts only until its next save: that one
+      // is made a symbolic link whenever one can be made - after Developer Mode is turned on, say.
+      const hardLinked =
+        symlinkOnly &&
+        linkInfo.isSharedLink &&
+        !(await lstat(target)).isSymbolicLink() &&
+        (await holdsNothingOfItsOwn(target));
+      if (linkInfo.isSharedLink && linkInfo.pointsToSource && !hardLinked) {
         linked += 1;
+        continue;
+      }
+      if (symlinkOnly) {
+        // Whether Windows makes a symbolic link here at all is tried first, under a name of its
+        // own, so that where it refuses, what stands here is left exactly as it was.
+        const backup = backupFor(target);
+        const probe = `${target}${PROBE_LINK}${process.pid}-${Date.now()}`;
+        if (!(await createSharedLink(source, probe, { isDirectory: false, hardLink: false }))) {
+          warnUnshared(item.name, profileDir, hardLinked);
+          continue;
+        }
+        await rm(probe, { force: true });
+        if (await replaceWithSymlink(source, target, { name: item.name, backupDir: backup, hardLinked })) {
+          linked += 1;
+        } else {
+          warnUnshared(item.name, profileDir, hardLinked);
+        }
         continue;
       }
       await setAside(target, backupFor(target), item.name);
     }
 
-    await createSharedLink(source, target, { isDirectory: item.isDirectory() });
-    linked += 1;
+    if (await createSharedLink(source, target, { isDirectory: item.isDirectory(), hardLink: !symlinkOnly })) {
+      linked += 1;
+      continue;
+    }
+    // Nothing stood here, and no symbolic link could be made: the profile starts from a copy of
+    // the primary's file, and doctor goes on saying how to share it.
+    await copyFile(source, target);
+    warnUnshared(item.name, profileDir, false);
   }
 
   // The walk above only sees what the primary still has. A link made before its entry
@@ -887,6 +986,98 @@ async function setupPluginsDir(profileDir: string, primarySource: string, backup
   }
 
   await syncPluginsJson(profileDir, primarySource);
+}
+
+/**
+ * Whether Windows refuses this user a file symlink - no Developer Mode, no "Create symbolic
+ * links" privilege - tried once on a file of its own in a temp directory. False off Windows,
+ * and when the try fails for any other reason: then nothing says the privilege is what is missing.
+ */
+async function fileSymlinksRefused(): Promise<boolean> {
+  if (process.platform !== "win32") return false;
+  let dir: string | undefined;
+  try {
+    dir = await mkdtemp(path.join(tmpdir(), "clausona-symlink-probe-"));
+    const source = path.join(dir, "source");
+    await writeFile(source, "");
+    return !(await createSharedLink(source, path.join(dir, "link"), { isDirectory: false, hardLink: false }));
+  } catch {
+    return false;
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+const PLATFORM_NAMES: Partial<Record<NodeJS.Platform, string>> = { darwin: "macOS", linux: "Linux" };
+
+/**
+ * What to know about a profile's config directory that does not stop it working: that it is
+ * too long a path for a Unix socket the tool binds inside it. A socket path has to fit in
+ * sun_path, and the tool does not say when it does not. Said by add, add --from and init as
+ * a warning - nothing is refused for it - and by doctor.
+ *
+ * Measured from the directory's real path, since that is where the socket is bound.
+ */
+export async function configDirWarnings(
+  tool: ToolName,
+  configDir: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<string[]> {
+  const sockets = getAdapter(tool).unixSockets ?? [];
+  if (sockets.length === 0 || socketPathLimit(platform) === undefined) return [];
+  const resolved = await realpath(configDir).catch(() => path.resolve(configDir));
+  const warnings: string[] = [];
+  for (const socket of sockets) {
+    const overlong = overlongSocketPath(resolved, socket.path, platform);
+    if (!overlong) continue;
+    const system = PLATFORM_NAMES[platform] ?? platform;
+    warnings.push(
+      `${configDir} is too long a path for ${toolProduct(tool)}: ${socket.purpose} binds a socket at ${overlong.socketPath}, which is ${overlong.bytes} bytes where ${system} allows ${overlong.limit}, so it fails without saying so - keep the directory's real path to ${overlong.dirLimit} bytes or fewer`,
+    );
+  }
+  return warnings;
+}
+
+/**
+ * Codex settings that put this profile's SQLite state - threads, memories, logs - somewhere
+ * other than its own CODEX_HOME, and with it every other profile's that has the same setting:
+ * `sqlite_home` in the config.toml the profile reads, normally the primary's through a shared
+ * link, or CODEX_SQLITE_HOME in the environment doctor runs in, which a profile started from
+ * the same shell inherits. The key wins over the variable, so only one is reported. A value
+ * the profile's own env map gives the variable is the profile's alone, and is left be.
+ */
+async function sqliteHomeIssues(
+  profile: Profile,
+  primarySource: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<DoctorIssue[]> {
+  const configPath = path.join(profile.configDir, "config.toml");
+  const config = await readFile(configPath, "utf8").catch(() => "");
+  if (tomlRootValue(config, "sqlite_home") !== undefined) {
+    const shared =
+      !profile.isPrimary &&
+      primarySource !== undefined &&
+      (await inspectSharedLink(configPath, path.join(primarySource, "config.toml"))).pointsToSource;
+    return [
+      {
+        kind: "shared_sqlite_home",
+        severity: "warning",
+        message: `sqlite_home is set in ${configPath}${shared ? " (shared with the primary)" : ""}, so Codex keeps this profile's SQLite state - threads, memories, logs - in the directory it names, along with every other profile that reads it - remove it to keep each account's state in its own CODEX_HOME`,
+      },
+    ];
+  }
+  const ownValue = envMapOf(profile.env)?.CODEX_SQLITE_HOME;
+  if (env.CODEX_SQLITE_HOME?.trim() && ownValue === undefined) {
+    return [
+      {
+        kind: "shared_sqlite_home",
+        severity: "warning",
+        message:
+          "CODEX_SQLITE_HOME is set in this environment, so every Codex profile started from it keeps its SQLite state - threads, memories, logs - in that one directory rather than in its own CODEX_HOME - unset it to keep each account's state apart",
+      },
+    ];
+  }
+  return [];
 }
 
 export async function validateConfigDir(
@@ -1447,6 +1638,13 @@ export async function doctorProfiles(
 
   const results: DoctorProfileResult[] = [];
   const home = homedir();
+  const codexProfiles = Object.values(registry.profiles).filter((profile) => profile.tool === "codex").length;
+  // Tried at most once a run, and only when a profile holds a copy it would explain.
+  let refused: Promise<boolean> | undefined;
+  const symlinksRefused = () => {
+    refused ??= fileSymlinksRefused();
+    return refused;
+  };
 
   for (const [id, profile] of Object.entries(registry.profiles)) {
     const issues: DoctorIssue[] = [];
@@ -1659,11 +1857,33 @@ export async function doctorProfiles(
         }
       }
 
+      // Shared files the tool saves whole, held by something a save does not leave in place.
+      // A regular file with the primary's identity is a hard link. A regular file without it
+      // is the profile's own copy, which is what a profile gets where Windows refuses a
+      // symbolic link - so there, and only there, it is said with what would make one. Where
+      // a symbolic link can be made, the copy is an override like any other.
+      const symlinkNeeded: Array<{ name: string; held: "hard_link" | "copy" }> = [];
+      if (!profile.isPrimary && adapter.rewritesWhole) {
+        for (const entry of dirEntries) {
+          if (!entry.isFile() || !adapter.rewritesWhole(entry.name) || isSkipped(entry.name)) continue;
+          if (!primaryEntries.has(entry.name)) continue;
+          const own = path.join(profile.configDir, entry.name);
+          const linkInfo = await inspectSharedLink(own, path.join(primarySource, entry.name));
+          if (linkInfo.pointsToSource) {
+            // Not the profile's only copy that a primary entry links to: that one is not a hard link.
+            if (await holdsNothingOfItsOwn(own)) symlinkNeeded.push({ name: entry.name, held: "hard_link" });
+          } else if (await symlinksRefused()) {
+            symlinkNeeded.push({ name: entry.name, held: "copy" });
+          }
+        }
+      }
+
       issues.push(
         ...evaluateSymlinkHealth({
           isPrimary: Boolean(profile.isPrimary),
           items: sharedLinkItems,
           missingSharedDirs,
+          symlinkNeeded,
         }),
       );
     }
@@ -1711,6 +1931,16 @@ export async function doctorProfiles(
           });
         }
       }
+    }
+
+    if (!configDirMissing) {
+      for (const message of await configDirWarnings(profile.tool, profile.configDir)) {
+        issues.push({ kind: "socket_path_too_long", severity: "warning", message });
+      }
+    }
+    // One Codex profile has no other to share its SQLite state with.
+    if (profile.tool === "codex" && codexProfiles > 1) {
+      issues.push(...(await sqliteHomeIssues(profile, primarySource)));
     }
 
     results.push({
@@ -2722,7 +2952,8 @@ async function addProfileHoldingLock(options: AddProfileOptions, id: string) {
     // on it is this profile's, so a later add must not treat it as a leftover to reuse.
     await rm(path.join(configDir, ADD_PENDING_MARKER), { force: true }).catch(() => {});
     if (options.tool === "claude") await seedSeenSessions(id, configDir);
-    return { name: options.name, email: accountInfo.email, configDir, backupDir };
+    const warnings = await configDirWarnings(options.tool, configDir);
+    return { name: options.name, email: accountInfo.email, configDir, backupDir, warnings };
   }
 
   // New profile with no --from: create a fresh config dir and run login
@@ -2845,7 +3076,8 @@ async function addProfileHoldingLock(options: AddProfileOptions, id: string) {
   // the profile drops it before the entry goes.
   await rm(path.join(configDir, ADD_PENDING_MARKER), { force: true }).catch(() => {});
   if (options.tool === "claude") await seedSeenSessions(id, configDir);
-  return { name: options.name, email: accountInfo.email, configDir, credentialUnconfirmed };
+  const warnings = await configDirWarnings(options.tool, configDir);
+  return { name: options.name, email: accountInfo.email, configDir, credentialUnconfirmed, warnings };
 }
 
 /**
