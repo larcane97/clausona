@@ -92,6 +92,7 @@ describe("codexAdapter.sharedAllow", () => {
   it("keeps every other entry for the profile, including names it has never seen", () => {
     for (const name of [
       "auth.json",
+      ".env",
       ".credentials.json",
       "secrets",
       "app-server-control",
@@ -158,11 +159,24 @@ describe("codexAdapter.sharedAllow", () => {
   });
 });
 
+describe("codexAdapter.seededFromPrimary", () => {
+  it("starts a profile with no .env from a copy of the primary's, which Codex loads at start", () => {
+    expect(codexAdapter.seededFromPrimary).toEqual([".env"]);
+  });
+});
+
 describe("codexAdapter.unsharedRisk", () => {
   const risk = (name: string) => codexAdapter.unsharedRisk?.(name);
 
   it("calls the daemon's directories and the credential stores a wrong account", () => {
-    for (const name of ["app-server-control", "app-server-daemon", "auth.json", ".credentials.json", "secrets"]) {
+    for (const name of [
+      "app-server-control",
+      "app-server-daemon",
+      "auth.json",
+      ".env",
+      ".credentials.json",
+      "secrets",
+    ]) {
       expect(risk(name)?.risk, name).toBe("wrong_account");
     }
     expect(risk("app-server-control")?.why).toContain("the primary's app-server daemon");

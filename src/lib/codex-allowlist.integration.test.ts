@@ -1,3 +1,4 @@
+import { type ChildProcess, spawn } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -54,6 +55,7 @@ function seedPrimary(dir: string) {
   writeFileSync(path.join(dir, "config.toml"), 'model = "primary"\n');
   writeFileSync(path.join(dir, "hooks.json"), "{}");
   writeFileSync(path.join(dir, "auth.json"), codexAuth("primary"));
+  writeFileSync(path.join(dir, ".env"), "SOME_MCP_TOKEN=the primary's\n");
   mkdirSync(path.join(dir, "app-server-control"));
   writeFileSync(path.join(dir, "app-server-control", "control.json"), "the primary's daemon");
   mkdirSync(path.join(dir, "app-server-daemon"));
@@ -291,8 +293,14 @@ describe("repairing a profile an older clausona linked", () => {
     }
     expect(readFileSync(path.join(h.dirs.work, "memories_1.sqlite"), "utf8")).toBe("work's own memories");
     expect(readFileSync(path.join(h.dirs.work, "memories_1.sqlite-wal"), "utf8")).toBe("work's own memories wal");
-    // No backup of goals_1.sqlite: the spot stays empty, and Codex starts a new one.
+    // No backup of goals_1.sqlite: the spot stays empty, Codex starts a new one, and repair says so.
     expect(lstatOrNull(path.join(h.dirs.work, "goals_1.sqlite"))).toBeNull();
+    for (const name of ["goals_1.sqlite", "app-server-control"]) {
+      expect(h.stderr()).toMatch(
+        new RegExp(`${name.replace(".", "\\.")} in .* was a link to the primary's and is gone`),
+      );
+    }
+    expect(h.stderr()).not.toMatch(/memories_1\.sqlite in .* is gone/);
     // Moved back, so the profile's copy is the only one.
     expect(existsSync(h.backups("work")) ? readdirSync(h.backups("work")) : []).toEqual([]);
     expect(snapshot(h.dirs.codex)).toEqual(h.primaryBefore);
@@ -449,5 +457,119 @@ describe("a database whose -wal cannot be told apart", () => {
     expect(lstatOrNull(path.join(h.dirs.work, "memories_1.sqlite-wal"))).toBeNull();
     expect(readdirSync(h.backups("work")).sort()).toEqual([db, walBackup].sort());
     expect(h.stderr()).toContain("memories_1.sqlite was not put back");
+  });
+});
+
+describe("init on a codex profile it keeps", () => {
+  it("unlinks a linked database and puts the profile's own copy back, as repair does", async () => {
+    const h = await harness(linkedByOlderClausona);
+    mkdirSync(h.backups("work"), { recursive: true });
+    writeFileSync(path.join(h.backups("work"), "memories_1.sqlite"), "work's own memories");
+    writeFileSync(path.join(h.backups("work"), "memories_1.sqlite-wal"), "work's own memories wal");
+    const account = (configDir: string, email: string, isPrimary: boolean) => ({
+      tool: "codex" as const,
+      configDir,
+      jsonPath: path.join(configDir, "auth.json"),
+      email,
+      keychainService: "",
+      isPrimary,
+    });
+
+    await h.service.initializeRegistry({
+      accounts: [account(h.dirs.codex, "primary", true), account(h.dirs.work, "work", false)],
+      profileNames: { [h.dirs.codex]: "default", [h.dirs.work]: "work" },
+    });
+
+    expect(readFileSync(path.join(h.dirs.work, "memories_1.sqlite"), "utf8")).toBe("work's own memories");
+    expect(readFileSync(path.join(h.dirs.work, "memories_1.sqlite-wal"), "utf8")).toBe("work's own memories wal");
+    expect(lstatOrNull(path.join(h.dirs.work, "app-server-control"))).toBeNull();
+    expect(snapshot(h.dirs.codex)).toEqual(h.primaryBefore);
+  });
+});
+
+describe("a codex profile's .env", () => {
+  it("is a copy of the primary's once repair takes out the link to it", async () => {
+    const h = await harness((dirs) => {
+      const profiles = work(dirs);
+      linkAs(path.join(dirs.codex, ".env"), path.join(dirs.work, ".env"));
+      return profiles;
+    });
+
+    await h.service.repairProfile("codex:work");
+
+    const env = path.join(h.dirs.work, ".env");
+    expect(lstatSync(env).isFile()).toBe(true);
+    expect(readFileSync(env, "utf8")).toBe("SOME_MCP_TOKEN=the primary's\n");
+    expect(h.stderr()).toContain("is now a copy of it");
+    expect(snapshot(h.dirs.codex)).toEqual(h.primaryBefore);
+  });
+
+  it("is the profile's own again where repair finds a backup of it", async () => {
+    const h = await harness((dirs) => {
+      const profiles = work(dirs);
+      linkAs(path.join(dirs.codex, ".env"), path.join(dirs.work, ".env"));
+      return profiles;
+    });
+    mkdirSync(h.backups("work"), { recursive: true });
+    writeFileSync(path.join(h.backups("work"), stamped(".env", "2026-09-01T10:00:00.000Z")), "SOME_MCP_TOKEN=work's\n");
+
+    await h.service.repairProfile("codex:work");
+
+    expect(readFileSync(path.join(h.dirs.work, ".env"), "utf8")).toBe("SOME_MCP_TOKEN=work's\n");
+  });
+
+  it("starts as a copy of the primary's in a new profile", async () => {
+    const h = await harness();
+
+    await h.service.addProfile({ tool: "codex", name: "work" });
+
+    const env = path.join(h.dirs.work, ".env");
+    expect(lstatSync(env).isSymbolicLink()).toBe(false);
+    expect(readFileSync(env, "utf8")).toBe("SOME_MCP_TOKEN=the primary's\n");
+  });
+});
+
+describe.skipIf(process.platform === "win32")("repair while Codex runs in the profile", () => {
+  let child: ChildProcess | undefined;
+  afterEach(() => {
+    child?.kill();
+    child = undefined;
+  });
+
+  /** Starts a process named codex - node under that name - with `codexHome` as its CODEX_HOME. */
+  function startCodex(binDir: string, codexHome: string): ChildProcess {
+    const codex = path.join(binDir, "codex");
+    if (!existsSync(codex)) symlinkSync(process.execPath, codex);
+    return spawn(codex, ["-e", "setTimeout(() => {}, 60000)"], {
+      env: { PATH: process.env.PATH ?? "", CODEX_HOME: codexHome },
+      stdio: "ignore",
+    });
+  }
+
+  it("is found by its CODEX_HOME, and repair says to quit it first, then repairs anyway", async () => {
+    const h = await harness(linkedByOlderClausona);
+    const bin = path.join(path.dirname(h.dirs.work), "bin");
+    mkdirSync(bin);
+    const { codexProcessesFor } = await import("../core/running-codex.js");
+    const other = startCodex(bin, h.dirs.codex);
+    child = startCodex(bin, h.dirs.work);
+    try {
+      const pid = child.pid ?? -1;
+      let found: number[] = [];
+      for (let tries = 0; tries < 50 && !found.includes(pid); tries++) {
+        found = await codexProcessesFor(h.dirs.work);
+        if (!found.includes(pid)) await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(found).toContain(pid);
+      expect(found).not.toContain(other.pid);
+
+      await h.service.repairProfile("codex:work");
+
+      expect(h.stderr()).toContain(`Codex is running in`);
+      expect(h.stderr()).toContain(String(pid));
+      expect(lstatOrNull(path.join(h.dirs.work, "app-server-control"))).toBeNull();
+    } finally {
+      other.kill();
+    }
   });
 });

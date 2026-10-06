@@ -1,4 +1,4 @@
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, constants as fsConstants, rmSync } from "node:fs";
 import {
   chmod,
   copyFile,
@@ -31,6 +31,7 @@ import { appDir, backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.
 import { spawnCommand } from "../core/process.js";
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
 import { isV1Registry, migrateRegistryV1toV2, setActiveProfile } from "../core/registry.js";
+import { codexProcessesFor } from "../core/running-codex.js";
 import { createSharedLink, inspectSharedLink } from "../core/shared-links.js";
 import { isPosixEnvName, renderShellInit, type ShellInitPaths } from "../core/shell.js";
 import { overlongSocketPath, socketPathLimit } from "../core/socket-path.js";
@@ -472,7 +473,7 @@ async function backupsByName(backupDir: string): Promise<Map<string, string[]>> 
  * profile kept for itself until it was shared (projects/ while sessions were merged) and now
  * keeps for itself again. A backup that is only a link to the primary's entry holds nothing
  * of the profile's own and is passed over. Copied, so the backup stays. A tool that names the
- * only entries it shares has restoreUnsharedFromBackup instead.
+ * only entries it shares has settleUnshared instead.
  */
 async function restoreSkippedFromBackup(
   adapter: ToolAdapter,
@@ -481,10 +482,6 @@ async function restoreSkippedFromBackup(
   backupDir: string,
   mergeSessions: boolean,
 ) {
-  if (adapter.sharedAllow) {
-    await restoreUnsharedFromBackup(adapter, configDir, primarySource, backupDir, mergeSessions);
-    return;
-  }
   if (!(await exists(backupDir))) return;
   const backups = await backupsByName(backupDir);
   for (const itemName of adapter.sharedSkipSet?.(mergeSessions) ?? []) {
@@ -652,6 +649,61 @@ async function putBackNewest({ backups, name, own, configDir, primarySource, bac
     );
   }
   return true;
+}
+
+/**
+ * The entries of `profileDir` that are links to the primary's entry of their name, holding
+ * nothing of their own, which the profile is not to share: what setupSharedLinks takes out.
+ */
+async function unsharedLinks(
+  adapter: ToolAdapter,
+  profileDir: string,
+  primarySource: string,
+  mergeSessions: boolean,
+): Promise<string[]> {
+  const found: string[] = [];
+  for (const { name } of await readdir(profileDir, { withFileTypes: true }).catch(() => [])) {
+    if (!shouldSkipShare(adapter, name, mergeSessions)) continue;
+    const target = path.join(profileDir, name);
+    const linkInfo = await inspectSharedLink(target, path.join(primarySource, name));
+    if (linkInfo.isSharedLink && linkInfo.pointsToSource && (await holdsNothingOfItsOwn(target))) found.push(name);
+  }
+  return found;
+}
+
+/**
+ * After setupSharedLinks, for a tool that names the only entries it shares: brings back from
+ * the backups what the profile keeps for itself and has none of, gives the profile a copy of
+ * each primary entry it starts from, and says which of `unlinked` - the links setupSharedLinks
+ * took out - came back as nothing, so none of them goes without a word.
+ */
+async function settleUnshared(
+  adapter: ToolAdapter,
+  configDir: string,
+  primarySource: string,
+  backupDir: string,
+  mergeSessions: boolean,
+  unlinked: string[] = [],
+) {
+  if (!adapter.sharedAllow) return;
+  await restoreUnsharedFromBackup(adapter, configDir, primarySource, backupDir, mergeSessions);
+  const shown = configDir.replace(homedir(), "~");
+  for (const name of adapter.seededFromPrimary ?? []) {
+    const target = path.join(configDir, name);
+    if (await exists(target)) continue;
+    const source = path.join(primarySource, name);
+    if (!(await stat(source).catch(() => null))?.isFile()) continue;
+    await copyFile(source, target, fsConstants.COPYFILE_EXCL);
+    if (unlinked.includes(name)) {
+      warn(`${name} in ${shown} was a link to the primary's, and is now a copy of it, which this profile can change.`);
+    }
+  }
+  for (const name of unlinked) {
+    if (await exists(path.join(configDir, name))) continue;
+    warn(
+      `${name} in ${shown} was a link to the primary's and is gone, with no backup of this profile's own to put back: Codex starts a new one. The primary's is unchanged.`,
+    );
+  }
 }
 
 /**
@@ -1616,7 +1668,11 @@ export async function initializeRegistry(options: {
       if (merge && account.tool === "claude") {
         await mergeSessionState(account.configDir, primary);
       }
+      const unlinked = await unsharedLinks(adapter, account.configDir, primary, merge);
       await setupSharedLinks(adapter, account.configDir, primary, merge, backupDir);
+      // A profile init keeps is a profile repair would settle: what it unlinked comes back
+      // from the backups now, before Codex starts a fresh one in its place.
+      await settleUnshared(adapter, account.configDir, primary, backupDir, merge, unlinked);
       if (account.tool === "claude") {
         await mergePluginFiles(path.join(account.configDir, "plugins"), path.join(primary, "plugins"));
         await setupPluginsDir(account.configDir, primary, backupDir);
@@ -2176,6 +2232,18 @@ export async function repairProfile(id: string) {
     await mergeSessionState(profile.configDir, primarySource);
   }
 
+  // Said, not refused: what repair moves is what a running Codex has open, and the user may
+  // know better - a process left behind, a daemon about to stop.
+  if (profile.tool === "codex") {
+    const running = await codexProcessesFor(profile.configDir);
+    if (running.length > 0) {
+      warn(
+        `Codex is running in ${profile.configDir.replace(homedir(), "~")} (pid ${running.join(", ")}). Repair moves files it has open, its databases among them: quit Codex in this profile, and 'codex app-server daemon stop' with its CODEX_HOME, then run the repair again.`,
+      );
+    }
+  }
+
+  const unlinked = await unsharedLinks(profileAdapter, profile.configDir, primarySource, mergeSessions);
   const repaired = await setupSharedLinks(profileAdapter, profile.configDir, primarySource, mergeSessions, backupDir);
   if (profile.tool === "claude") {
     // Never merged into the primary here, unlike add and init: repair runs again and again, and
@@ -2185,7 +2253,11 @@ export async function repairProfile(id: string) {
   }
 
   // Restore skip-set items from backup if they were stale symlinks that got removed
-  await restoreSkippedFromBackup(profileAdapter, profile.configDir, primarySource, backupDir, mergeSessions);
+  if (profileAdapter.sharedAllow) {
+    await settleUnshared(profileAdapter, profile.configDir, primarySource, backupDir, mergeSessions, unlinked);
+  } else {
+    await restoreSkippedFromBackup(profileAdapter, profile.configDir, primarySource, backupDir, mergeSessions);
+  }
 
   return { repaired };
 }
@@ -2224,6 +2296,7 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
   });
 
   const updateAdapter = getAdapter(profile.tool);
+  const unlinked = await unsharedLinks(updateAdapter, profile.configDir, primarySource, next);
   await setupSharedLinks(updateAdapter, profile.configDir, primarySource, next, backupDir);
   if (profile.tool === "claude") {
     await setupPluginsDir(profile.configDir, primarySource, backupDir);
@@ -2231,8 +2304,10 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
 
   // merged → separated: restore skip-set items from backup. A tool that names the only entries
   // it shares has just had every other one unlinked whichever way it went, as repair does.
-  if (!next || updateAdapter.sharedAllow) {
-    await restoreSkippedFromBackup(updateAdapter, profile.configDir, primarySource, backupDir, next);
+  if (updateAdapter.sharedAllow) {
+    await settleUnshared(updateAdapter, profile.configDir, primarySource, backupDir, next, unlinked);
+  } else if (!next) {
+    await restoreSkippedFromBackup(updateAdapter, profile.configDir, primarySource, backupDir, false);
   }
 
   return { name: id, mergeSessions: next, changed: true };
@@ -3102,7 +3177,9 @@ async function addProfileHoldingLock(options: AddProfileOptions, id: string) {
       if (mergeSessions && options.tool === "claude") {
         await mergeSessionState(configDir, primarySource);
       }
+      const unlinked = await unsharedLinks(adapter, configDir, primarySource, mergeSessions);
       await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
+      await settleUnshared(adapter, configDir, primarySource, backupDir, mergeSessions, unlinked);
       if (options.tool === "claude") {
         await mergePluginFiles(path.join(configDir, "plugins"), path.join(primarySource, "plugins"));
         await setupPluginsDir(configDir, primarySource, backupDir);
@@ -3229,6 +3306,7 @@ async function addProfileHoldingLock(options: AddProfileOptions, id: string) {
   const mergeSessions = options.mergeSessions ?? false;
   try {
     await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
+    await settleUnshared(adapter, configDir, primarySource, backupDir, mergeSessions);
     if (options.tool === "claude") {
       await setupPluginsDir(configDir, primarySource, backupDir);
     }

@@ -67,11 +67,20 @@ const CODEX_UNIX_SOCKETS = [
 // release brings databases under new names.
 const SQLITE_FILE = /\.sqlite(-wal|-shm|-journal)?$/;
 
+// Databases that belong with the conversation history, and are shared with it: only with
+// merged sessions, and with their -wal, -shm and -journal. Named one by one; none yet.
+const SESSION_DATABASES: ReadonlySet<string> = new Set([]);
+
 function codexSharedAllow(name: string, mergeSessions: boolean): boolean {
-  if (SQLITE_FILE.test(name)) return false;
+  if (SQLITE_FILE.test(name)) return mergeSessions && SESSION_DATABASES.has(name.replace(/-(wal|shm|journal)$/, ""));
   if (SHARED.has(name) || SHARED_PATTERNS.some((pattern) => pattern.test(name))) return true;
   return mergeSessions && SESSION_SET.has(name);
 }
+
+// Codex loads $CODEX_HOME/.env into its environment at start (codex-rs arg0, rust-v0.159.3),
+// so it can carry an account's own API keys and is never shared. A profile that has none
+// starts from a copy of the primary's, as it had the primary's through a link before.
+const SEEDED_FROM_PRIMARY = [".env"] as const;
 
 // Where Codex keeps credentials: its sign-in in auth.json, and other tokens and secrets in
 // the other two.
@@ -81,6 +90,12 @@ const CREDENTIAL_STORES = new Set(["auth.json", ".credentials.json", "secrets"])
 function codexUnsharedRisk(name: string): UnsharedRisk {
   if (CREDENTIAL_STORES.has(name)) {
     return { risk: "wrong_account", why: "so Codex in this profile uses the primary's credentials" };
+  }
+  if (name === ".env") {
+    return {
+      risk: "wrong_account",
+      why: "so Codex in this profile loads the primary's .env, and any API keys in it, at start",
+    };
   }
   // Codex finds the daemon's control socket through $CODEX_HOME/app-server-control/: its path
   // is a hash of that directory's real path, so a link to the primary's leads to the daemon
@@ -295,6 +310,7 @@ export const codexAdapter: ToolAdapter = {
   readAccountInfo: readCodexAccount,
   sharedAllow: codexSharedAllow,
   unsharedRisk: codexUnsharedRisk,
+  seededFromPrimary: SEEDED_FROM_PRIMARY,
   rewritesWhole: codexRewritesWhole,
   unixSockets: CODEX_UNIX_SOCKETS,
   readCredential: readCodexCredential,
