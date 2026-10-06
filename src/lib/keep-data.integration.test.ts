@@ -353,6 +353,24 @@ describe("doctor and a shared link whose target is gone", () => {
     expect(after.find((result) => result.name === "codex:work")?.issues).toEqual([]);
   });
 
+  it("set aside by repair, does not outlive remove or block adding the name again", async () => {
+    const h = await harness((dirs) => ({
+      "codex:default": { tool: "codex", configDir: dirs.codex, email: "primary@example.com", isPrimary: true },
+      "codex:work": { tool: "codex", configDir: dirs.codexWork, email: "work@example.com", mergeSessions: false },
+    }));
+    mkdirSync(path.join(h.dirs.codex, "rules"));
+    symlinkSync(path.join(h.dirs.codex, "rules"), path.join(h.dirs.codexWork, "rules"), "junction");
+    rmSync(path.join(h.dirs.codex, "rules"), { recursive: true });
+    await h.service.repairProfile("codex:work");
+    expect(backupsNamed(h.backups("work"), "rules")).toHaveLength(1);
+
+    await h.service.removeProfile("codex:work");
+
+    expect(existsSync(h.backups("work"))).toBe(false);
+    await h.commands.runCommand("add", ["codex:work", "--from", "~/.codex-work"]);
+    expect(h.registry().profiles["codex:work"]?.configDir).toBe(h.dirs.codexWork);
+  });
+
   it("whose break is the primary's own: repair leaves the link, and doctor points at the primary", async () => {
     const h = await harness((dirs) => ({
       "codex:default": { tool: "codex", configDir: dirs.codex, email: "primary@example.com", isPrimary: true },

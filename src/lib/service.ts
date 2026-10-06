@@ -2111,10 +2111,13 @@ async function cleanupProfile(
       for (const [itemName, copies] of await backupsByName(backupDir)) {
         const target = path.join(profile.configDir, itemName);
         // A link into the primary, which repair set aside dangling, holds nothing of the
-        // profile's: brought back, it would be the very link removing the profile strips.
+        // profile's: brought back, it would be the very link removing the profile strips. Kept,
+        // it would hold the backup directory, and the name, for nothing. It is deleted - the
+        // one kind of backup that is: a link, with no content of its own.
         const own: string[] = [];
         for (const copy of copies) {
-          if (!(await isLinkToPrimaryEntry(copy, primarySource, itemName))) own.push(copy);
+          if (await isLinkToPrimaryEntry(copy, primarySource, itemName)) await rm(copy, { force: true });
+          else own.push(copy);
         }
         const newest = own.at(-1);
         if (!newest) continue;
