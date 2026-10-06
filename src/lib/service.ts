@@ -3,6 +3,7 @@ import {
   chmod,
   copyFile,
   cp,
+  link,
   lstat,
   mkdir,
   readdir,
@@ -424,10 +425,12 @@ async function moveTo(source: string, dest: string) {
 /**
  * Moves `target` into a backup of its own, `<backupDir>/<name>.<timestamp>`. Every
  * replacement gets one: repair used to keep only the first backup of a name and then delete,
- * so a second repair lost what the profile had made since (#73).
+ * so a second repair lost what the profile had made since (#73). Resolves to the backup's path.
  */
-async function setAside(target: string, backupDir: string, name: string) {
-  await moveTo(target, await freshBackupPath(backupDir, name));
+async function setAside(target: string, backupDir: string, name: string): Promise<string> {
+  const backup = await freshBackupPath(backupDir, name);
+  await moveTo(target, backup);
+  return backup;
 }
 
 /**
@@ -498,6 +501,45 @@ async function isLinkToPrimaryEntry(backupItem: string, primarySource: string, i
   return Boolean(stats?.isSymbolicLink()) && (await readlink(backupItem)) === path.join(primarySource, itemName);
 }
 
+/** Marks the name a symbolic link is tried under before a file saved whole is replaced by one. */
+const PROBE_LINK = ".clausona-link-";
+
+/**
+ * Replaces what stands at `target`, a file the tool saves whole, with a symbolic link to
+ * `source`, once a probe has shown that one can be made. False when it still could not, with
+ * `target` as it was.
+ *
+ * A hard link to the primary's file holds nothing of the profile's own, so it is removed, not
+ * backed up: as the newest backup of the name it is what removing the profile would put back -
+ * the primary's file, over the profile's own older backup. Anything else goes into a backup
+ * first. The link is then made where the target was, and symlink never replaces anything, so a
+ * save that lands in between is not overwritten. If the link is not made, what was there goes
+ * back - while the spot is still empty.
+ */
+async function replaceWithSymlink(
+  source: string,
+  target: string,
+  { name, backupDir, hardLinked }: { name: string; backupDir: string; hardLinked: boolean },
+): Promise<boolean> {
+  const sameFileAsSource =
+    hardLinked && (await holdsNothingOfItsOwn(target)) && (await inspectSharedLink(target, source)).pointsToSource;
+  const backup = sameFileAsSource ? undefined : await setAside(target, backupDir, name);
+  if (sameFileAsSource) await rm(target, { force: true });
+  const putBack = async () => {
+    if (await exists(target)) return;
+    if (backup) await moveTo(backup, target);
+    else await link(source, target);
+  };
+  try {
+    if (await createSharedLink(source, target, { isDirectory: false, hardLink: false })) return true;
+  } catch (error) {
+    await putBack().catch(() => {});
+    throw error;
+  }
+  await putBack();
+  return false;
+}
+
 /**
  * Said when a file the tool saves whole could not be shared: Windows would not make a
  * symbolic link, and a hard link would split at the file's next save. doctor goes on saying it.
@@ -538,6 +580,14 @@ export async function setupSharedLinks(
     return backupDir;
   };
 
+  // A probe link left by a run that stopped before taking it out: a symbolic link under
+  // clausona's own marker, which holds nothing. Nothing else with the marker is touched.
+  for (const entry of await readdir(profileDir, { withFileTypes: true }).catch(() => [])) {
+    if (entry.name.includes(PROBE_LINK) && entry.isSymbolicLink()) {
+      await rm(path.join(profileDir, entry.name), { force: true });
+    }
+  }
+
   const items = await readdir(primarySource, { withFileTypes: true });
   let linked = 0;
 
@@ -573,22 +623,20 @@ export async function setupSharedLinks(
         continue;
       }
       if (symlinkOnly) {
-        // The link is made beside what stands here, which moves into its backup only once the
-        // link exists - so where Windows refuses the link, the profile's file stays as it was.
+        // Whether Windows makes a symbolic link here at all is tried first, under a name of its
+        // own, so that where it refuses, what stands here is left exactly as it was.
         const backup = backupFor(target);
-        const staged = `${target}.clausona-link-${process.pid}-${Date.now()}`;
-        if (!(await createSharedLink(source, staged, { isDirectory: false, hardLink: false }))) {
+        const probe = `${target}${PROBE_LINK}${process.pid}-${Date.now()}`;
+        if (!(await createSharedLink(source, probe, { isDirectory: false, hardLink: false }))) {
           warnUnshared(item.name, profileDir, hardLinked);
           continue;
         }
-        try {
-          await setAside(target, backup, item.name);
-        } catch (error) {
-          await rm(staged, { force: true });
-          throw error;
+        await rm(probe, { force: true });
+        if (await replaceWithSymlink(source, target, { name: item.name, backupDir: backup, hardLinked })) {
+          linked += 1;
+        } else {
+          warnUnshared(item.name, profileDir, hardLinked);
         }
-        await rename(staged, target);
-        linked += 1;
         continue;
       }
       await setAside(target, backupFor(target), item.name);

@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -147,18 +148,49 @@ describe("sharing a file the tool saves whole, where Windows refuses a symlink",
       const h = await harness();
       linkSync(path.join(h.primary, "config.toml"), path.join(h.work, "config.toml"));
       writeFileSync(path.join(h.work, "hooks.json"), '{"mine": true}\n');
+      // A probe link a crashed run left, and a file of the user's that only shares the marker.
+      symlinkSync(path.join(h.primary, "config.toml"), path.join(h.work, "config.toml.clausona-link-1-2"));
+      writeFileSync(path.join(h.work, "notes.clausona-link-mine"), "kept");
 
       await asWindows(h.link, { symlinks: true });
 
       // A hard link made before this fix, and the profile's own file, both become symlinks;
-      // the profile's file goes into a timestamped backup like anything else replaced.
+      // the profile's file goes into a timestamped backup like anything else replaced, and the
+      // hard link - the primary's file under another name - into none.
       expect(lstatSync(path.join(h.work, "config.toml")).isSymbolicLink()).toBe(true);
       expect(lstatSync(path.join(h.work, "hooks.json")).isSymbolicLink()).toBe(true);
       const [hooksBackup, ...more] = backups(h.home).filter((name) => name.startsWith("hooks.json."));
       expect(more).toEqual([]);
       expect(readFileSync(path.join(h.home, "backup", hooksBackup ?? "missing"), "utf8")).toBe('{"mine": true}\n');
-      // Nothing of the staged link is left beside it.
-      expect(readdirSync(h.work).filter((name) => name.includes("clausona-link"))).toEqual([]);
+      expect(backups(h.home).filter((name) => name.startsWith("config.toml"))).toEqual([]);
+      // No probe link is left, the crashed run's included, and nothing else is touched.
+      expect(readdirSync(h.work).filter((name) => name.includes("clausona-link"))).toEqual([
+        "notes.clausona-link-mine",
+      ]);
+    },
+  );
+
+  // T9 of the review: the profile's own config.toml was backed up and hard-linked by a build
+  // without this fix, on Windows without symlink rights. Developer Mode goes on, repair makes
+  // the symlink, and removing the profile puts back the newest backup of each name - which
+  // must still be the profile's own file, not the hard link, the primary's file by another name.
+  it.skipIf(realPlatform === "win32")(
+    "gives the profile its own config.toml back on remove after a hard link was upgraded",
+    async () => {
+      const h = await harness();
+      const backupDir = path.join(h.home, ".clausona", "backups", "codex", "work");
+      mkdirSync(backupDir, { recursive: true });
+      writeFileSync(path.join(backupDir, "config.toml.2026-01-01T00-00-00-000Z"), 'model = "mine"\n');
+      linkSync(path.join(h.primary, "config.toml"), path.join(h.work, "config.toml"));
+
+      await asWindows(() => h.service.repairProfile("codex:work"), { symlinks: true });
+      expect(lstatSync(path.join(h.work, "config.toml")).isSymbolicLink()).toBe(true);
+      await h.service.removeProfile("codex:work");
+
+      const config = path.join(h.work, "config.toml");
+      expect(readFileSync(config, "utf8")).toBe('model = "mine"\n');
+      expect(lstatSync(config).isFile()).toBe(true);
+      expect(inode(config)).not.toBe(inode(path.join(h.primary, "config.toml")));
     },
   );
 
