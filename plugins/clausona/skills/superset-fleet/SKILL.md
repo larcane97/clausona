@@ -104,6 +104,9 @@ the worker.
    - A Claude Code that is starting rewrites that file and can drop an entry written just
      before. So start workers on the same profile one at a time, each after the previous one
      shows its first output.
+   - A profile's first Claude Code session can stop at one-time questions, such as an API-key
+     profile's "Detected a custom API key" (the answer must be Yes). Before a profile's first
+     worker, ask the user to start it once by hand (`clausona run <profile>`) and answer them.
 2. **The brief.** Write it to a file and start the worker with it. Besides the task, every
    brief says:
    - Work only in this worktree and branch. When done, commit and push the branch
