@@ -28,7 +28,8 @@ let server: Server;
 let endpoint: string;
 let home: string;
 let seen: Seen[];
-let replies: Record<string, Reply>;
+// A list answers successive calls in turn and then keeps giving its last entry.
+let replies: Record<string, Reply | Reply[]>;
 
 function startServer(): Promise<string> {
   return new Promise((resolve) => {
@@ -45,7 +46,8 @@ function startServer(): Promise<string> {
         auth: req.headers.authorization,
       });
       res.setHeader("content-type", "application/json");
-      const reply = replies[procedure];
+      const entry = replies[procedure];
+      const reply = Array.isArray(entry) ? (entry.length > 1 ? entry.shift() : entry[0]) : entry;
       if (!reply) {
         // What the real host answers for a procedure it does not have.
         res.statusCode = 404;
@@ -532,5 +534,66 @@ describe("trust", () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/is not valid JSON/);
     expect(readFileSync(file, "utf8")).toBe("{oops");
+  });
+});
+
+describe("waiting for workers", () => {
+  const busy = (workspaceId: string, terminalId: string) => ({
+    workspaceId,
+    terminalId,
+    agentId: "claude",
+    lastEventType: "Start",
+    lastEventAt: Date.now(),
+  });
+
+  it("returns as soon as one worker's agent ends its turn", async () => {
+    replies["terminalAgents.list"] = [
+      { json: [busy("w1", "t1"), busy("w2", "t2")] },
+      { json: [busy("w1", "t1"), busy("w2", "t2")] },
+      { json: [busy("w1", "t1"), { ...busy("w2", "t2"), lastEventType: "Stop" }] },
+    ];
+    const r = await run(["terminals", "wait", "--workspace", "w1", "--workspace", "w2", "--interval", "0.05"]);
+    expect(r.stderr).toBe("");
+    expect(JSON.parse(r.stdout)).toMatchObject({
+      event: "stopped",
+      workspaceId: "w2",
+      terminalId: "t2",
+      lastEventType: "Stop",
+    });
+    expect(seen.filter((s) => s.procedure === "terminalAgents.list").length).toBe(3);
+  });
+
+  it("reports a worker that has been quiet too long, as at a permission prompt", async () => {
+    replies["terminalAgents.list"] = {
+      json: [{ ...busy("w1", "t1"), lastEventType: "PermissionRequest", lastEventAt: Date.now() - 10 * 60_000 }],
+    };
+    const r = await run(["terminals", "wait", "--workspace", "w1", "--quiet", "60", "--interval", "0.05"]);
+    expect(JSON.parse(r.stdout)).toMatchObject({
+      event: "quiet",
+      workspaceId: "w1",
+      lastEventType: "PermissionRequest",
+    });
+  });
+
+  it("reports a worker whose terminal is gone", async () => {
+    replies["terminalAgents.list"] = { json: [] };
+    replies["terminal.list"] = { json: { sessions: [{ terminalId: "t1", workspaceId: "w1", exited: true }] } };
+    const r = await run(["terminals", "wait", "--workspace", "w1", "--interval", "0.05"]);
+    expect(JSON.parse(r.stdout)).toMatchObject({ event: "gone", workspaceId: "w1" });
+  });
+
+  it("treats a worker that is still starting as busy, and times out", async () => {
+    replies["terminalAgents.list"] = { json: [] };
+    replies["terminal.list"] = { json: { sessions: [{ terminalId: "t1", workspaceId: "w1", exited: false }] } };
+    const r = await run(["terminals", "wait", "--workspace", "w1", "--timeout", "0.3", "--interval", "0.05"]);
+    expect(JSON.parse(r.stdout)).toMatchObject({ event: "timeout", workspaces: ["w1"] });
+  });
+
+  it("needs a workspace and positive numbers", async () => {
+    const none = await run(["terminals", "wait"]);
+    const zero = await run(["terminals", "wait", "--workspace", "w1", "--interval", "0"]);
+    expect(none.stderr).toMatch(/--workspace is required/);
+    expect(zero.stderr).toMatch(/--interval must be a positive number/);
+    expect(seen).toEqual([]);
   });
 });

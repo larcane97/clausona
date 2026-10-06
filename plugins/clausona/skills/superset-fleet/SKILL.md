@@ -33,7 +33,8 @@ Stop and tell the user what is missing if any of these fails.
      - Every helper command prints JSON.
      - If it says the host API has changed, stop and pass that message on.
 
-Below, `H` means `node <base>/scripts/superset-host.mjs`. `H trust` is used on both paths.
+Below, `H` means `node <base>/scripts/superset-host.mjs`. `H trust` and `H terminals wait` are
+used on both paths.
 
 | Step | CLI path | Helper path |
 |---|---|---|
@@ -47,6 +48,7 @@ Below, `H` means `node <base>/scripts/superset-host.mjs`. `H trust` is used on b
 | Read | `superset terminals read --local --workspace <id> --terminal <terminal> --max-lines 240 --json` | `H terminals read --workspace <id> --terminal <terminal>` |
 | Send | `superset terminals send --local --workspace <id> --terminal <terminal> --text "<text>" --json` | `H terminals send --workspace <id> --terminal <terminal> --text "<text>"` |
 | Close | `superset terminals close --local --workspace <id> --terminal <terminal> --json` | `H terminals close --workspace <id> --terminal <terminal>` |
+| Wait for workers | `H terminals wait --workspace <id> --workspace <id> …` | `H terminals wait --workspace <id> --workspace <id> …` |
 | Delete workspace | `superset ws delete --local <id> --json` | `H workspaces delete <id>` |
 
 ## 2. Profiles as Superset agents
@@ -124,6 +126,21 @@ under 26 characters: the sidebar cuts longer names.
    really runs on; check that it is the profile you chose.
 
 The user can open any worker's tab in Superset, read along and type into it at any time.
+
+**Waiting.** Never end your turn while a worker runs with nothing waiting on it: no one would
+wake you, and the user would have to. After starting the workers, and after handling each
+event, run `H terminals wait` with every worker that is still running, as a background task.
+It returns as soon as one of them needs you. It judges this from Superset's record of each
+agent's last hook event, not from the screen:
+
+- `stopped`: its turn ended. Read its screen for a DONE or BLOCKED envelope, a question, or a
+  limit or API error.
+- `quiet`: no event for 5 minutes, often a permission prompt. Read its screen.
+- `gone`: its terminal exited.
+- `timeout`: nothing for 30 minutes. Read the screens, then wait again.
+
+Do not write your own loop that searches the screens for a phrase. The phrase may be in the
+brief too, in another language, or missing.
 
 ## 5. When an account runs out
 

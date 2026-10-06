@@ -34,6 +34,7 @@ const USAGE = `usage: superset-host.mjs <command>
   terminals read --workspace <id> --terminal <id> [--max-lines <n>]
   terminals send --workspace <id> --terminal <id> --text <text>
   terminals close --workspace <id> --terminal <id>
+  terminals wait --workspace <id> [--workspace <id>...] [--timeout <s>] [--quiet <s>] [--interval <s>]
   trust --config-dir <profile config dir> --path <folder> [--check]`;
 
 class CliError extends Error {}
@@ -118,6 +119,48 @@ async function call(host, procedure, input, { mutation = false } = {}) {
 function positiveInt(text, flag) {
   if (!/^\d+$/.test(text) || Number(text) === 0) throw new CliError(`${flag} must be a positive integer`);
   return Number(text);
+}
+
+function positiveNumber(text, flag) {
+  if (!/^\d+(\.\d+)?$/.test(text) || !(Number(text) > 0)) throw new CliError(`${flag} must be a positive number`);
+  return Number(text);
+}
+
+// The host files each agent's hook events under these; only Start and PermissionRequest mean
+// the agent is working.
+const ENDED_EVENTS = new Set(["Stop", "Failed", "Detached"]);
+
+// Waits until one of the given workers needs the orchestrator. The host keeps each agent's last
+// hook event, so this does not depend on what a worker prints or in which language. A worker
+// counts as needing attention when its turn ended (done, blocked or asking), it failed or its
+// terminal is gone, or it has had no event for `quiet` seconds, which is how a permission prompt
+// looks from outside.
+async function waitForWorkers(host, workspaces, { timeout, quiet, interval }) {
+  const started = Date.now();
+  for (;;) {
+    const agents = await call(host, "terminalAgents.list");
+    const waited = Math.round((Date.now() - started) / 1000);
+    for (const workspaceId of workspaces) {
+      const agent = agents.find((a) => a.workspaceId === workspaceId);
+      if (!agent) {
+        // A worker that was just started has no agent row for a few seconds.
+        let sessions = [];
+        try {
+          ({ sessions } = await call(host, "terminal.list", { workspaceId }));
+        } catch (err) {
+          // A deleted workspace has no terminals to list; a changed host API is still an error.
+          if (/host API has changed/.test(err.message)) throw err;
+        }
+        if (!sessions.some((s) => !s.exited)) return { event: "gone", workspaceId, waited };
+        continue;
+      }
+      const found = { workspaceId, terminalId: agent.terminalId, lastEventType: agent.lastEventType, waited };
+      if (ENDED_EVENTS.has(agent.lastEventType)) return { event: "stopped", ...found };
+      if (Date.now() - agent.lastEventAt > quiet * 1000) return { event: "quiet", ...found };
+    }
+    if (Date.now() - started >= timeout * 1000) return { event: "timeout", workspaces, waited };
+    await new Promise((resolve) => setTimeout(resolve, interval * 1000));
+  }
 }
 
 // Config env can hold API keys, so only the keys are shown.
@@ -295,6 +338,16 @@ const COMMANDS = {
     required: ["workspace", "terminal"],
     run: (host, v) =>
       call(host, "terminal.killSession", { terminalId: v.terminal, workspaceId: v.workspace }, { mutation: true }),
+  },
+  "terminals wait": {
+    options: { workspace: { type: "string", multiple: true }, timeout: str, quiet: str, interval: str },
+    required: ["workspace"],
+    run: (host, v) =>
+      waitForWorkers(host, v.workspace, {
+        timeout: positiveNumber(v.timeout ?? "1800", "--timeout"),
+        quiet: positiveNumber(v.quiet ?? "300", "--quiet"),
+        interval: positiveNumber(v.interval ?? "5", "--interval"),
+      }),
   },
   "agents configs": {
     run: async (host) => (await call(host, "settings.agentConfigs.list")).map(hideEnv),
