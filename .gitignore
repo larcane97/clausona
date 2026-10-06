@@ -8,3 +8,5 @@ docs/superpowers/
 *.local
 *.local.*
 .DS_Store
+
+plugins/clausona/evals/results/

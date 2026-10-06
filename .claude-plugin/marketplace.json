@@ -1,0 +1,12 @@
+{
+  "name": "clausona",
+  "owner": { "name": "larcane97", "url": "https://github.com/larcane97" },
+  "description": "Claude Code plugins from clausona, the profile manager for Claude Code and Codex accounts.",
+  "plugins": [
+    {
+      "name": "clausona",
+      "source": "./plugins/clausona",
+      "description": "Run parallel agents in Superset, each on its own clausona account or API model."
+    }
+  ]
+}
