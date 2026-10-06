@@ -525,7 +525,8 @@ export async function setupSharedLinks(
     const targetExists = await exists(target);
     if (targetExists) {
       const linkInfo = await inspectSharedLink(target, source);
-      if (linkInfo.isSharedLink && linkInfo.pointsToSource && linkInfo.targetExists) {
+      // Linked, even where the primary's own entry is a broken link: that is the primary's to fix.
+      if (linkInfo.isSharedLink && linkInfo.pointsToSource) {
         linked += 1;
         continue;
       }
@@ -850,7 +851,7 @@ async function setupPluginsDir(profileDir: string, primarySource: string, backup
     const targetExists = await exists(target);
     if (targetExists) {
       const linkInfo = await inspectSharedLink(target, source);
-      if (linkInfo.isSharedLink && linkInfo.pointsToSource && linkInfo.targetExists) continue;
+      if (linkInfo.isSharedLink && linkInfo.pointsToSource) continue;
       if (!setAsideDir) {
         setAsideDir = await freshBackupPath(backupDir, "plugins");
         await mkdir(setAsideDir);
@@ -1585,6 +1586,24 @@ export async function doctorProfiles(
               message: `${entry.name} is symlinked to primary but should not be shared`,
             });
           }
+          continue;
+        }
+
+        // A link to the primary's entry that is broken because that entry is itself a broken
+        // link: the break is the primary's, which repair does not touch, so it is reported
+        // with the path to fix rather than as this profile's broken_symlink.
+        if (
+          !profile.isPrimary &&
+          linkInfo.isSharedLink &&
+          pointsToPrimary &&
+          !linkInfo.targetExists &&
+          (await lstat(sourcePath).catch(() => null))?.isSymbolicLink()
+        ) {
+          const shownSource = sourcePath.replace(home, "~");
+          issues.push({
+            kind: "primary_broken_link",
+            message: `${entry.name} links to the primary's ${shownSource}, which is itself a broken link. clausona does not change the primary: fix ${shownSource} there, or remove it.`,
+          });
           continue;
         }
 

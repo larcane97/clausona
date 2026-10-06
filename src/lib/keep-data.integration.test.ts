@@ -280,6 +280,27 @@ describe("doctor and a shared link whose target is gone", () => {
     const after = await h.service.doctorProfiles();
     expect(after.find((result) => result.name === "codex:work")?.issues).toEqual([]);
   });
+
+  it("whose break is the primary's own: repair leaves the link, and doctor points at the primary", async () => {
+    const h = await harness((dirs) => ({
+      "codex:default": { tool: "codex", configDir: dirs.codex, email: "primary@example.com", isPrimary: true },
+      "codex:work": { tool: "codex", configDir: dirs.codexWork, email: "work@example.com", mergeSessions: false },
+    }));
+    // The primary's own rules is a link whose target is gone, as #73 left ~/.codex.
+    mkdirSync(path.join(h.dirs.codex, "gone"));
+    symlinkSync(path.join(h.dirs.codex, "gone"), path.join(h.dirs.codex, "rules"), "junction");
+    rmSync(path.join(h.dirs.codex, "gone"), { recursive: true });
+
+    for (let run = 0; run < 3; run++) await h.service.repairProfile("codex:work");
+
+    expect(backupsNamed(h.backups("work"), "rules")).toEqual([]);
+    expect(lstatSync(path.join(h.dirs.codexWork, "rules")).isSymbolicLink()).toBe(true);
+    const work = (await h.service.doctorProfiles()).find((result) => result.name === "codex:work");
+    expect(work?.issues.map((issue) => issue.kind)).toEqual(["primary_broken_link"]);
+    expect(work?.issues[0].message).toContain(path.join("~", ".codex", "rules"));
+    const { offersRepair } = await import("./format.js");
+    expect(offersRepair(work?.issues ?? [])).toBe(false);
+  });
 });
 
 /** A primary ~/.claude with a shared directory, a shared file and skip-set state. */

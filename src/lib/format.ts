@@ -531,12 +531,14 @@ export function unconfirmedCredentialHint(tool: ToolName, command: string): stri
 const CREDENTIAL_ISSUE_KINDS = new Set<DoctorIssue["kind"]>(["missing_json", "missing_keychain", "missing_oauth"]);
 
 /**
- * Issues whose message already names what to do. Every one of them belongs to an API
- * profile, which has neither a login to renew nor shared links that could be at fault —
- * so offering `repair` or `login` here would point at a command that reports success and
+ * Issues whose message already names what to do. All but one belong to an API profile,
+ * which has neither a login to renew nor shared links that could be at fault; the one,
+ * `primary_broken_link`, is a break in the primary, which repair never changes. Offering
+ * `repair` or `login` for any of them would point at a command that reports success and
  * changes nothing.
  */
 const SELF_DIRECTED_ISSUE_KINDS = new Set<DoctorIssue["kind"]>([
+  "primary_broken_link",
   "missing_config_dir",
   "missing_api_secret",
   "invalid_api_config",
