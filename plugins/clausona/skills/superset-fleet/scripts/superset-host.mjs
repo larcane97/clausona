@@ -4,7 +4,18 @@
 // The host's auth token is read from the host's manifest inside this process and sent only in
 // the Authorization header: it is never printed, passed on a command line or written to a file.
 // Every command prints JSON on stdout. Errors go to stderr, with exit status 1.
-import { readdirSync, readFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -143,6 +154,70 @@ async function handoffPrompt(host, workspaceId, terminalId, extra) {
   return lines.join("\n");
 }
 
+// Claude Code keeps the default account's state in ~/.claude.json, outside ~/.claude, and any
+// other config dir's inside it (the same rule as clausona's claudeJsonPathForConfigDir).
+function claudeJsonFor(configDir) {
+  const dir = path.resolve(configDir);
+  const home = homedir();
+  return dir === path.join(home, ".claude") ? path.join(home, ".claude.json") : path.join(dir, ".claude.json");
+}
+
+// Replaces the file in one rename so a Claude Code reading it never sees half of it. A symlinked
+// file (a dotfiles checkout) is written at its target, so the link survives.
+function atomicWrite(file, content) {
+  let target = file;
+  try {
+    target = realpathSync(file);
+  } catch {
+    target = file;
+  }
+  let mode = 0o600;
+  try {
+    mode = statSync(target).mode & 0o777;
+  } catch {
+    mode = 0o600;
+  }
+  const dir = mkdtempSync(path.join(path.dirname(target), ".superset-fleet-"));
+  const tmp = path.join(dir, "next");
+  try {
+    writeFileSync(tmp, content, { mode });
+    chmodSync(tmp, mode);
+    renameSync(tmp, target);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Superset pre-trusts a worktree only for its own claude and codex presets, so a worker started
+// through `clausona run` would stop at Claude Code's folder-trust prompt. This records the same
+// answer Superset's seedClaudeFolderTrust records, keyed by the folder's real path.
+function trust(configDir, folder, checkOnly) {
+  const file = claudeJsonFor(configDir);
+  let key;
+  try {
+    key = realpathSync(folder);
+  } catch {
+    throw new CliError(`${folder} does not exist`);
+  }
+  let state = {};
+  if (existsSync(file)) {
+    try {
+      state = JSON.parse(readFileSync(file, "utf8"));
+    } catch {
+      throw new CliError(`${file} is not valid JSON; leaving it as it is`);
+    }
+  } else if (!existsSync(path.dirname(file))) {
+    throw new CliError(
+      `${path.dirname(file)} does not exist: pass a profile's configDir from \`clausona list --json\``,
+    );
+  }
+  const trusted = state.projects?.[key]?.hasTrustDialogAccepted === true;
+  if (checkOnly || trusted) return { file, path: key, trusted };
+  state.projects = { ...state.projects, [key]: { ...state.projects?.[key], hasTrustDialogAccepted: true } };
+  atomicWrite(file, JSON.stringify(state, null, 2));
+  return { file, path: key, trusted: true };
+}
+
 const str = { type: "string" };
 
 const COMMANDS = {
@@ -262,6 +337,12 @@ const COMMANDS = {
       if (!prompt?.trim()) throw new CliError("pass --prompt, --prompt-file or --from-terminal");
       return call(host, "agents.run", { workspaceId: v.workspace, agent: v.agent, prompt }, { mutation: true });
     },
+  },
+  trust: {
+    options: { "config-dir": str, path: str, check: { type: "boolean" } },
+    required: ["config-dir", "path"],
+    local: true,
+    run: (_host, v) => trust(v["config-dir"], v.path, v.check === true),
   },
 };
 

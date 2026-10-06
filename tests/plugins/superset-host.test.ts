@@ -1,5 +1,16 @@
 import { type ExecFileException, execFile, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -422,5 +433,104 @@ describe("agents", () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/terminal t1 has no output to hand off yet/);
     expect(seen.map((s) => s.procedure)).toEqual(["terminal.transcript"]);
+  });
+});
+
+describe("trust", () => {
+  // Windows gives no file modes, and symlinks there need a privilege runners lack.
+  const onWindows = process.platform === "win32";
+
+  function setup(configName: string) {
+    const configDir = path.join(home, configName);
+    const worktree = path.join(home, "worktrees", "acme", "task-1");
+    mkdirSync(configDir, { recursive: true });
+    mkdirSync(worktree, { recursive: true });
+    // No host is needed for a file edit.
+    rmSync(path.join(home, ".superset", "host"), { recursive: true, force: true });
+    return { configDir, worktree, key: realpathSync(worktree) };
+  }
+
+  it("marks the real path trusted in the profile's .claude.json and keeps the rest", async () => {
+    const { configDir, worktree, key } = setup(".claude-work");
+    const file = path.join(configDir, ".claude.json");
+    writeFileSync(file, JSON.stringify({ userID: "u1", projects: { "/other": { allowedTools: ["Bash"] } } }));
+    const r = await run(["trust", "--config-dir", configDir, "--path", worktree]);
+    expect(r.stderr).toBe("");
+    expect(JSON.parse(r.stdout)).toEqual({ file, path: key, trusted: true });
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({
+      userID: "u1",
+      projects: { "/other": { allowedTools: ["Bash"] }, [key]: { hasTrustDialogAccepted: true } },
+    });
+    expect(seen).toEqual([]);
+  });
+
+  it("uses ~/.claude.json for the ~/.claude config dir", async () => {
+    const { configDir, worktree, key } = setup(".claude");
+    await run(["trust", "--config-dir", configDir, "--path", worktree]);
+    expect(JSON.parse(readFileSync(path.join(home, ".claude.json"), "utf8"))).toEqual({
+      projects: { [key]: { hasTrustDialogAccepted: true } },
+    });
+    expect(existsSync(path.join(configDir, ".claude.json"))).toBe(false);
+  });
+
+  it("only reports with --check", async () => {
+    const { configDir, worktree, key } = setup(".claude-work");
+    const file = path.join(configDir, ".claude.json");
+    writeFileSync(file, '{"projects":{}}');
+    const r = await run(["trust", "--config-dir", configDir, "--path", worktree, "--check"]);
+    expect(JSON.parse(r.stdout)).toEqual({ file, path: key, trusted: false });
+    expect(readFileSync(file, "utf8")).toBe('{"projects":{}}');
+  });
+
+  it("leaves the file alone when the folder is already trusted", async () => {
+    const { configDir, worktree, key } = setup(".claude-work");
+    const file = path.join(configDir, ".claude.json");
+    // Compact on purpose: a rewrite would come out indented.
+    const before = JSON.stringify({ projects: { [key]: { hasTrustDialogAccepted: true } } });
+    writeFileSync(file, before);
+    const r = await run(["trust", "--config-dir", configDir, "--path", worktree]);
+    expect(JSON.parse(r.stdout)).toEqual({ file, path: key, trusted: true });
+    expect(readFileSync(file, "utf8")).toBe(before);
+  });
+
+  it.skipIf(onWindows)("keeps the file's mode", async () => {
+    const { configDir, worktree, key } = setup(".claude-work");
+    const file = path.join(configDir, ".claude.json");
+    writeFileSync(file, "{}");
+    chmodSync(file, 0o640);
+    await run(["trust", "--config-dir", configDir, "--path", worktree]);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ projects: { [key]: { hasTrustDialogAccepted: true } } });
+    expect(statSync(file).mode & 0o777).toBe(0o640);
+  });
+
+  it.skipIf(onWindows)("writes through a symlinked .claude.json and keeps the link", async () => {
+    const { configDir, worktree, key } = setup(".claude-work");
+    const real = path.join(home, "dotfiles", "claude.json");
+    mkdirSync(path.dirname(real), { recursive: true });
+    writeFileSync(real, "{}");
+    symlinkSync(real, path.join(configDir, ".claude.json"));
+    await run(["trust", "--config-dir", configDir, "--path", worktree]);
+    expect(realpathSync(path.join(configDir, ".claude.json"))).toBe(realpathSync(real));
+    expect(JSON.parse(readFileSync(real, "utf8"))).toEqual({ projects: { [key]: { hasTrustDialogAccepted: true } } });
+  });
+
+  it("refuses a config dir or a folder that does not exist", async () => {
+    const { configDir, worktree } = setup(".claude-work");
+    const noDir = await run(["trust", "--config-dir", path.join(home, ".claude-nope"), "--path", worktree]);
+    const noFolder = await run(["trust", "--config-dir", configDir, "--path", path.join(home, "nope")]);
+    expect(noDir.code).toBe(1);
+    expect(noDir.stderr).toMatch(/does not exist/);
+    expect(noFolder.code).toBe(1);
+    expect(noFolder.stderr).toMatch(/does not exist/);
+  });
+
+  it("refuses a .claude.json that is not JSON, and leaves it as it was", async () => {
+    const { configDir, worktree } = setup(".claude-work");
+    const file = path.join(configDir, ".claude.json");
+    writeFileSync(file, "{oops");
+    const r = await run(["trust", "--config-dir", configDir, "--path", worktree]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/is not valid JSON/);
+    expect(readFileSync(file, "utf8")).toBe("{oops");
   });
 });
