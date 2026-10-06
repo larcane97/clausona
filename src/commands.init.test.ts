@@ -1,6 +1,15 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -338,9 +347,9 @@ describe("re-running init with an API profile registered", () => {
 });
 
 describe("init and a backup directory left over from an earlier profile", () => {
-  // Init used to take such a directory as the new profile's backup. setupSharedLinks backs an
-  // item up only if the backup does not have one yet, so an item the leftover already had
-  // was deleted from the account without being saved.
+  // Init used to take such a directory as the new profile's backup. setupSharedLinks then
+  // backed an item up only if the backup did not have one yet, so an item the leftover
+  // already had was deleted from the account without being saved.
   function seedLeftover(home: string) {
     writeFileSync(path.join(home, ".claude", "settings.json"), '{"from":"primary"}');
     writeFileSync(path.join(home, ".claude-work", "settings.json"), '{"from":"work account"}');
@@ -356,10 +365,11 @@ describe("init and a backup directory left over from an earlier profile", () => 
 
     await h.commands.runCommand("init", ["--auto"]);
 
-    const saved = path.join(h.home, ".clausona", "backups", "claude", "work-2", "settings.json");
-    expect(existsSync(saved) && readFileSync(saved, "utf8"), "the account's own settings.json was lost").toBe(
-      '{"from":"work account"}',
-    );
+    // Set aside under a timestamped name: settings.json.<ISO timestamp>.
+    const backups = path.join(h.home, ".clausona", "backups", "claude", "work-2");
+    const saved = readdirSync(backups).filter((entry) => entry.startsWith("settings.json."));
+    expect(saved, "the account's own settings.json was lost").toHaveLength(1);
+    expect(readFileSync(path.join(backups, saved[0]), "utf8")).toBe('{"from":"work account"}');
     expect(readFileSync(leftover, "utf8"), "the leftover was changed").toBe('{"from":"an earlier profile"}');
     expect(h.ids()).toEqual(["claude:default", "claude:work-2", "codex:default", "codex:work"]);
   });

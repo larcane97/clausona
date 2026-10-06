@@ -1,4 +1,13 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -74,9 +83,10 @@ describe("setupSharedLinks (real fs integration)", () => {
 
     await setupSharedLinks(claudeAdapter, profile, primary, false, backup);
 
-    // Original local file backed up
-    const backupContent = readFileSync(path.join(backup, "settings.json"), "utf8");
-    expect(backupContent).toContain("localData");
+    // Original local file moved into a backup of its own: settings.json.<ISO timestamp>
+    const saved = readdirSync(backup).filter((entry) => entry.startsWith("settings.json."));
+    expect(saved).toHaveLength(1);
+    expect(readFileSync(path.join(backup, saved[0]), "utf8")).toContain("localData");
     // Now a shared link to primary
     expect(
       await inspectSharedLink(path.join(profile, "settings.json"), path.join(primary, "settings.json")),

@@ -347,9 +347,9 @@ async function rebaseJobTranscriptPath(jobDir: string, sourceDir: string, primar
 
 /**
  * Fold a profile's own session state into the primary ahead of replacing it with shared
- * links. `setupSharedLinks` backs a local directory up and then deletes it, and a
- * backup under ~/.clausona is invisible to the tool — so anything not merged here is
- * gone from the user's session and background lists.
+ * links. `setupSharedLinks` moves a local directory into a backup, and a backup under
+ * ~/.clausona is invisible to the tool — so anything not merged here is gone from the
+ * user's session and background lists.
  */
 export async function mergeSessionState(sourceDir: string, primarySource: string) {
   await mergeSessionFiles(sourceDir, primarySource);
@@ -357,6 +357,99 @@ export async function mergeSessionState(sourceDir: string, primarySource: string
   await mergeRecordDirs(sourceDir, primarySource, "teams");
 }
 
+/** The timestamp in a backup's name: ISO 8601 with each `:` and `.` made `-`, which Windows refuses in a name. */
+function backupStamp(): string {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+/** `<name>.<backupStamp()>`, with `-<n>` for a second backup of the name made in the same millisecond. */
+const STAMPED_BACKUP = /^(.+)\.(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)(?:-(\d+))?$/;
+
+/** A path in `backupDir` for a new backup of `name`, which nothing is at yet. */
+async function freshBackupPath(backupDir: string, name: string): Promise<string> {
+  await mkdir(backupDir, { recursive: true });
+  const stamp = backupStamp();
+  for (let n = 0; ; n++) {
+    const candidate = path.join(backupDir, `${name}.${stamp}${n === 0 ? "" : `-${n}`}`);
+    if (!(await exists(candidate))) return candidate;
+  }
+}
+
+/** Renames `source` to `dest`, or copies it there and removes it when the two are on different filesystems. */
+async function moveTo(source: string, dest: string) {
+  try {
+    await rename(source, dest);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+    await cp(source, dest, { recursive: true, verbatimSymlinks: true, errorOnExist: true, force: false });
+    await rm(source, { force: true, recursive: true });
+  }
+}
+
+/**
+ * Moves `target` into a backup of its own, `<backupDir>/<name>.<timestamp>`. Every
+ * replacement gets one: repair used to keep only the first backup of a name and then delete,
+ * so a second repair lost what the profile had made since (#73).
+ */
+async function setAside(target: string, backupDir: string, name: string) {
+  await moveTo(target, await freshBackupPath(backupDir, name));
+}
+
+/**
+ * The backups in `backupDir` by the name of the entry each was set aside from, oldest first:
+ * one from before backups were timestamped carries the entry's own name and counts as the
+ * oldest, then each `<name>.<timestamp>` in the order they were made.
+ */
+async function backupsByName(backupDir: string): Promise<Map<string, string[]>> {
+  const entries = (await readdir(backupDir).catch((): string[] => [])).map((entry) => {
+    const match = STAMPED_BACKUP.exec(entry);
+    return match
+      ? { entry, name: match[1], stamp: match[2], count: Number(match[3] ?? 0) }
+      : { entry, name: entry, stamp: "", count: 0 };
+  });
+  entries.sort((a, b) => (a.stamp === b.stamp ? a.count - b.count : a.stamp < b.stamp ? -1 : 1));
+  const byName = new Map<string, string[]>();
+  for (const { entry, name } of entries) byName.set(name, [...(byName.get(name) ?? []), path.join(backupDir, entry)]);
+  return byName;
+}
+
+/**
+ * Brings back each skip-set entry the profile no longer has from its newest backup: one the
+ * profile kept for itself until it was shared (projects/ while sessions were merged) and now
+ * keeps for itself again. A backup that is only a link to the primary's entry holds nothing
+ * of the profile's own and is passed over. Copied, so the backup stays.
+ */
+async function restoreSkippedFromBackup(
+  adapter: ToolAdapter,
+  configDir: string,
+  primarySource: string,
+  backupDir: string,
+  mergeSessions: boolean,
+) {
+  if (!(await exists(backupDir))) return;
+  const backups = await backupsByName(backupDir);
+  for (const itemName of adapter.sharedSkipSet(mergeSessions)) {
+    const target = path.join(configDir, itemName);
+    if (await exists(target)) continue;
+    for (const backupItem of [...(backups.get(itemName) ?? [])].reverse()) {
+      if (await isLinkToPrimaryEntry(backupItem, primarySource, itemName)) continue;
+      await cp(backupItem, target, { recursive: true });
+      break;
+    }
+  }
+}
+
+/** Whether a backup is only a link to the primary's entry of that name - nothing of the profile's own. */
+async function isLinkToPrimaryEntry(backupItem: string, primarySource: string, itemName: string): Promise<boolean> {
+  const stats = await lstat(backupItem).catch(() => null);
+  return Boolean(stats?.isSymbolicLink()) && (await readlink(backupItem)) === path.join(primarySource, itemName);
+}
+
+/**
+ * Links each entry the primary shares into the profile. Whatever stands where a link goes -
+ * the profile's own file or directory, or a link that leads elsewhere or nowhere - is moved
+ * into a backup of its own first; nothing of the profile's is deleted.
+ */
 export async function setupSharedLinks(
   adapter: ToolAdapter,
   profileDir: string,
@@ -364,6 +457,15 @@ export async function setupSharedLinks(
   mergeSessions = false,
   backupDir?: string,
 ) {
+  const backupFor = (target: string) => {
+    if (!backupDir) {
+      throw new Error(
+        `${target} would be replaced by a shared link, and there is no backup directory to move it into.`,
+      );
+    }
+    return backupDir;
+  };
+
   const items = await readdir(primarySource, { withFileTypes: true });
   let linked = 0;
 
@@ -371,7 +473,8 @@ export async function setupSharedLinks(
     const source = path.join(primarySource, item.name);
 
     if (shouldSkipShare(adapter, item.name, mergeSessions)) {
-      // Remove symlinks to primary for skipped items (e.g. projects/ when separated)
+      // Remove links to the primary for skipped items (e.g. projects/ when separated). A link
+      // holds nothing of its own: the entry stays in the primary.
       const target = path.join(profileDir, item.name);
       const linkInfo = await inspectSharedLink(target, source);
       if (linkInfo.isSharedLink && linkInfo.pointsToSource) {
@@ -387,14 +490,7 @@ export async function setupSharedLinks(
         linked += 1;
         continue;
       }
-      if (!linkInfo.isSharedLink && backupDir) {
-        // Real data — save to backup before removing
-        const backupTarget = path.join(backupDir, item.name);
-        if (!(await exists(backupTarget))) {
-          await cp(target, backupTarget, { recursive: true });
-        }
-      }
-      await rm(target, { force: true, recursive: true });
+      await setAside(target, backupFor(target), item.name);
     }
 
     await createSharedLink(source, target, { isDirectory: item.isDirectory() });
@@ -666,7 +762,12 @@ async function mergePluginFiles(profilePluginsDir: string, primaryPluginsDir: st
   }
 }
 
-async function setupPluginsDir(profileDir: string, primarySource: string): Promise<void> {
+/**
+ * Links each entry of the primary's plugins/ into the profile's own plugins/. What stands
+ * where a link goes is moved into one backup for the run, `<backupDir>/plugins.<timestamp>/`,
+ * under its own name - so removing the profile puts it back where it was.
+ */
+async function setupPluginsDir(profileDir: string, primarySource: string, backupDir: string): Promise<void> {
   const primaryPlugins = path.join(primarySource, "plugins");
   if (!(await exists(primaryPlugins))) return;
 
@@ -681,6 +782,7 @@ async function setupPluginsDir(profileDir: string, primarySource: string): Promi
   await mkdir(profilePlugins, { recursive: true });
 
   const items = await readdir(primaryPlugins, { withFileTypes: true });
+  let setAsideDir: string | undefined;
   for (const item of items) {
     if (PLUGINS_PATH_FILES.has(item.name)) continue; // syncPluginsJson handles these
     // The primary's own plugin sync stamp, or one being written. Linked, every profile's stamp
@@ -693,7 +795,11 @@ async function setupPluginsDir(profileDir: string, primarySource: string): Promi
     if (targetExists) {
       const linkInfo = await inspectSharedLink(target, source);
       if (linkInfo.isSharedLink && linkInfo.pointsToSource && linkInfo.targetExists) continue;
-      await rm(target, { force: true, recursive: true });
+      if (!setAsideDir) {
+        setAsideDir = await freshBackupPath(backupDir, "plugins");
+        await mkdir(setAsideDir);
+      }
+      await moveTo(target, path.join(setAsideDir, item.name));
     }
     await createSharedLink(source, target, { isDirectory: item.isDirectory() });
   }
@@ -1057,7 +1163,7 @@ export async function initializeRegistry(options: {
       await setupSharedLinks(adapter, account.configDir, primary, merge, backupDir);
       if (account.tool === "claude") {
         await mergePluginFiles(path.join(account.configDir, "plugins"), path.join(primary, "plugins"));
-        await setupPluginsDir(account.configDir, primary);
+        await setupPluginsDir(account.configDir, primary, backupDir);
       }
     }
   }
@@ -1528,33 +1634,18 @@ export async function repairProfile(id: string) {
 
   // A profile that shares sessions may hold session state the primary has never seen —
   // that is the whole point of repairing a profile whose links predate a directory the
-  // tool added later. Fold it in before setupSharedLinks deletes it.
+  // tool added later. Fold it in before setupSharedLinks moves it into a backup.
   if (mergeSessions && profile.tool === "claude") {
     await mergeSessionState(profile.configDir, primarySource);
   }
 
   const repaired = await setupSharedLinks(profileAdapter, profile.configDir, primarySource, mergeSessions, backupDir);
   if (profile.tool === "claude") {
-    await setupPluginsDir(profile.configDir, primarySource);
+    await setupPluginsDir(profile.configDir, primarySource, backupDir);
   }
 
   // Restore skip-set items from backup if they were stale symlinks that got removed
-  // Skip if the backup item is a symlink pointing to primary (stale)
-  if (await exists(backupDir)) {
-    const skipSet = profileAdapter.sharedSkipSet(mergeSessions);
-    for (const itemName of skipSet) {
-      const target = path.join(profile.configDir, itemName);
-      const backupItem = path.join(backupDir, itemName);
-      if (!(await exists(target)) && (await exists(backupItem))) {
-        const backupStats = await lstat(backupItem).catch(() => null);
-        if (backupStats?.isSymbolicLink()) {
-          const linkTarget = await readlink(backupItem);
-          if (linkTarget === path.join(primarySource, itemName)) continue;
-        }
-        await cp(backupItem, target, { recursive: true });
-      }
-    }
-  }
+  await restoreSkippedFromBackup(profileAdapter, profile.configDir, primarySource, backupDir, mergeSessions);
 
   return { repaired };
 }
@@ -1592,27 +1683,12 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
   const updateAdapter = getAdapter(profile.tool);
   await setupSharedLinks(updateAdapter, profile.configDir, primarySource, next, backupDir);
   if (profile.tool === "claude") {
-    await setupPluginsDir(profile.configDir, primarySource);
+    await setupPluginsDir(profile.configDir, primarySource, backupDir);
   }
 
   // merged → separated: restore skip-set items from backup
-  // Skip if the backup item is a symlink pointing to primary (stale)
   if (!next) {
-    if (await exists(backupDir)) {
-      const skipSet = updateAdapter.sharedSkipSet(false);
-      for (const itemName of skipSet) {
-        const target = path.join(profile.configDir, itemName);
-        const backupItem = path.join(backupDir, itemName);
-        if (!(await exists(target)) && (await exists(backupItem))) {
-          const backupStats = await lstat(backupItem).catch(() => null);
-          if (backupStats?.isSymbolicLink()) {
-            const linkTarget = await readlink(backupItem);
-            if (linkTarget === path.join(primarySource, itemName)) continue;
-          }
-          await cp(backupItem, target, { recursive: true });
-        }
-      }
-    }
+    await restoreSkippedFromBackup(updateAdapter, profile.configDir, primarySource, backupDir, false);
   }
 
   return { name: id, mergeSessions: next, changed: true };
@@ -1892,10 +1968,22 @@ async function cleanupProfile(
   // config directory that is gone: that would bring back a directory the user deleted, with
   // only the backup in it, and keep the name taken - add refuses a name whose directory
   // exists. An empty backup goes with it; one that holds something is left, and said.
+  // Each entry gets its newest backup back, under its own name; an older one stays where it is.
   if (!options.keepBackup && (await exists(backupDir))) {
     if (await exists(profile.configDir)) {
-      await cp(backupDir, profile.configDir, { recursive: true });
-      await rm(backupDir, { force: true, recursive: true });
+      for (const [itemName, copies] of await backupsByName(backupDir)) {
+        const newest = copies[copies.length - 1];
+        await cp(newest, path.join(profile.configDir, itemName), { recursive: true });
+        await rm(newest, { force: true, recursive: true });
+      }
+      if (await backupDirOccupied(backupDir)) {
+        const home = homedir();
+        warn(
+          `${profile.configDir.replace(home, "~")} has the newest backup of each entry back. Older copies of what clausona set aside from it are still in ${backupDir.replace(home, "~")}: move them somewhere else, or delete them once nothing in them is needed.`,
+        );
+      } else {
+        await rmdir(backupDir).catch(() => {});
+      }
     } else if (await backupDirOccupied(backupDir)) {
       const home = homedir();
       warn(
@@ -2419,7 +2507,7 @@ async function addProfileHoldingLock(options: AddProfileOptions, id: string) {
       await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
       if (options.tool === "claude") {
         await mergePluginFiles(path.join(configDir, "plugins"), path.join(primarySource, "plugins"));
-        await setupPluginsDir(configDir, primarySource);
+        await setupPluginsDir(configDir, primarySource, backupDir);
       }
     } catch (error) {
       await cleanupProfile(
@@ -2543,7 +2631,7 @@ async function addProfileHoldingLock(options: AddProfileOptions, id: string) {
   try {
     await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
     if (options.tool === "claude") {
-      await setupPluginsDir(configDir, primarySource);
+      await setupPluginsDir(configDir, primarySource, backupDir);
     }
   } catch (error) {
     await cleanupProfile(
@@ -2803,7 +2891,7 @@ export async function addApiProfile(options: {
       await writeJson(jsonPath, profileJson);
 
       await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
-      await setupPluginsDir(configDir, primarySource);
+      await setupPluginsDir(configDir, primarySource, backupDir);
       if (toStore !== null) await storeSecret(id, toStore);
 
       // Inside the try: neither a registry write that fails nor an id another add took meanwhile
