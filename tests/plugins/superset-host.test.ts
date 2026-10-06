@@ -2,6 +2,7 @@ import { type ExecFileException, execFile, spawnSync } from "node:child_process"
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -516,6 +517,15 @@ describe("agents", () => {
     ]);
   });
 
+  it("refuses a brief that starts with a dash, which claude would read as an option", async () => {
+    const file = path.join(home, "brief.md");
+    writeFileSync(file, "---\ntask: fix parse()\n---\nFix it.\n");
+    const r = await run(["agents", "run", "--workspace", "w1", "--agent", "c1", "--prompt-file", file]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/starts with "-", so claude would read it as an option/);
+    expect(seen).toEqual([]);
+  });
+
   it("refuses both --prompt and --prompt-file, and no prompt at all", async () => {
     const file = path.join(home, "brief.md");
     writeFileSync(file, "x");
@@ -641,6 +651,18 @@ describe("trust", () => {
     expect(statSync(file).mode & 0o777).toBe(0o640);
   });
 
+  it.skipIf(onWindows)("writes a dangling symlink's target and keeps the link", async () => {
+    const { configDir, worktree, key } = setup(".claude-work");
+    const real = path.join(home, "dotfiles", "claude.json");
+    mkdirSync(path.dirname(real), { recursive: true });
+    const link = path.join(configDir, ".claude.json");
+    symlinkSync(real, link);
+    const r = await run(["trust", "--config-dir", configDir, "--path", worktree]);
+    expect(r.stderr).toBe("");
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(real, "utf8"))).toEqual({ projects: { [key]: { hasTrustDialogAccepted: true } } });
+  });
+
   it.skipIf(onWindows)("writes through a symlinked .claude.json and keeps the link", async () => {
     const { configDir, worktree, key } = setup(".claude-work");
     const real = path.join(home, "dotfiles", "claude.json");
@@ -716,6 +738,55 @@ describe("waiting for workers", () => {
     replies["terminal.list"] = { json: { sessions: [{ terminalId: "t1", workspaceId: "w1", exited: true }] } };
     const r = await run(["terminals", "wait", "--workspace", "w1", "--interval", "0.05"]);
     expect(JSON.parse(r.stdout)).toMatchObject({ event: "gone", workspaceId: "w1" });
+  });
+
+  it("calls a worker gone when the host no longer finds its workspace", async () => {
+    replies["terminalAgents.list"] = { json: [] };
+    replies["terminal.list"] = { status: 404, error: "Workspace not found" };
+    const r = await run(["terminals", "wait", "--workspace", "w1", "--interval", "0.05"]);
+    expect(JSON.parse(r.stdout)).toMatchObject({ event: "gone", workspaceId: "w1" });
+  });
+
+  it("stops with the host's error instead of calling a worker gone", async () => {
+    replies["terminalAgents.list"] = { json: [] };
+    replies["terminal.list"] = { status: 500, error: "database is locked" };
+    const r = await run(["terminals", "wait", "--workspace", "w1", "--interval", "0.05"]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toMatch(/terminal\.list failed: database is locked/);
+  });
+
+  it("with --terminal, a shell tab in the workspace does not keep an exited worker alive", async () => {
+    replies["terminalAgents.list"] = { json: [] };
+    replies["terminal.list"] = {
+      json: {
+        sessions: [
+          { terminalId: "t1", workspaceId: "w1", exited: true },
+          { terminalId: "t-shell", workspaceId: "w1", exited: false },
+        ],
+      },
+    };
+    const r = await run(["terminals", "wait", "--workspace", "w1", "--terminal", "t1", "--interval", "0.05"]);
+    expect(JSON.parse(r.stdout)).toMatchObject({ event: "gone", workspaceId: "w1" });
+  });
+
+  it("with --terminal, ignores an agent the user started in the same workspace", async () => {
+    replies["terminalAgents.list"] = {
+      json: [{ ...busy("w1", "t-user"), lastEventType: "Stop" }, busy("w1", "t1")],
+    };
+    const r = await run([
+      "terminals",
+      "wait",
+      "--workspace",
+      "w1",
+      "--terminal",
+      "t1",
+      "--timeout",
+      "0.3",
+      "--interval",
+      "0.05",
+    ]);
+    expect(JSON.parse(r.stdout)).toMatchObject({ event: "timeout", workspaces: ["w1"] });
   });
 
   it("treats a worker that is still starting as busy, and times out", async () => {

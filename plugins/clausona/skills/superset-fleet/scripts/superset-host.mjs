@@ -8,9 +8,11 @@ import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -35,10 +37,16 @@ const USAGE = `usage: superset-host.mjs <command>
   terminals read --workspace <id> --terminal <id> [--max-lines <n>]
   terminals send --workspace <id> --terminal <id> (--text <text> | --text-file <path>)
   terminals close --workspace <id> --terminal <id>
-  terminals wait --workspace <id> [--workspace <id>...] [--seen <terminal>@<time>...] [--timeout <s>] [--quiet <s>] [--interval <s>]
+  terminals wait --workspace <id> [--workspace <id>...] [--terminal <id>...] [--seen <terminal>@<time>...] [--timeout <s>] [--quiet <s>] [--interval <s>]
   trust --config-dir <profile config dir> --path <folder> [--check]`;
 
-class CliError extends Error {}
+class CliError extends Error {
+  // The HTTP status, when the host answered with an error.
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+  }
+}
 
 // Set once the token is read, so that nothing printed afterwards can carry it.
 let secret = "";
@@ -113,7 +121,7 @@ async function call(host, procedure, input, { mutation = false } = {}) {
         "`claude plugin update clausona@clausona`, or log the Superset CLI in with `superset auth login` and use it instead.",
     );
   }
-  if (!response.ok) throw new CliError(`${procedure} failed: ${message ?? `HTTP ${response.status}`}`);
+  if (!response.ok) throw new CliError(`${procedure} failed: ${message ?? `HTTP ${response.status}`}`, response.status);
   return body?.result?.data?.json;
 }
 
@@ -136,24 +144,28 @@ const ENDED_EVENTS = new Set(["Stop", "Failed", "Detached"]);
 // counts as needing attention when its turn ended (done, blocked or asking), it failed or its
 // terminal is gone, or it has had no event for `quiet` seconds, which is how a permission prompt
 // looks from outside. A state stays the same until the agent's next event, so each result carries
-// a `seen` mark; given back with --seen, that state is skipped and the wait goes on.
-async function waitForWorkers(host, workspaces, { timeout, quiet, interval, seen }) {
+// a `seen` mark; given back with --seen, that state is skipped and the wait goes on. Given
+// `terminals`, only those count as workers: a shell tab or an agent the user opened in the same
+// workspace is left out.
+async function waitForWorkers(host, workspaces, { timeout, quiet, interval, seen, terminals }) {
+  const isWorker = (terminalId) => terminals.size === 0 || terminals.has(terminalId);
   const started = Date.now();
   for (;;) {
     const agents = await call(host, "terminalAgents.list");
     const waited = Math.round((Date.now() - started) / 1000);
     for (const workspaceId of workspaces) {
-      const mine = agents.filter((a) => a.workspaceId === workspaceId);
+      const mine = agents.filter((a) => a.workspaceId === workspaceId && isWorker(a.terminalId));
       if (mine.length === 0) {
         // A worker that was just started has no agent row for a few seconds.
         let sessions = [];
         try {
           ({ sessions } = await call(host, "terminal.list", { workspaceId }));
         } catch (err) {
-          // A deleted workspace has no terminals to list; a changed host API is still an error.
-          if (/host API has changed/.test(err.message)) throw err;
+          // A workspace the host no longer finds has no terminals. Any other error, a changed
+          // host API among them, is the host's problem, not a sign the worker is gone.
+          if (err.status !== 404) throw err;
         }
-        if (!sessions.some((s) => !s.exited)) return { event: "gone", workspaceId, waited };
+        if (!sessions.some((s) => !s.exited && isWorker(s.terminalId))) return { event: "gone", workspaceId, waited };
         continue;
       }
       for (const agent of mine) {
@@ -257,15 +269,26 @@ function claudeJsonFor(configDir) {
   return dir === path.join(home, ".claude") ? path.join(home, ".claude.json") : path.join(dir, ".claude.json");
 }
 
-// Replaces the file in one rename so a Claude Code reading it never sees half of it. A symlinked
-// file (a dotfiles checkout) is written at its target, so the link survives.
-function atomicWrite(file, content) {
-  let target = file;
+// A symlinked file (a dotfiles checkout) is written at its target, so the link survives, even when
+// the target does not exist yet.
+function writeTarget(file) {
   try {
-    target = realpathSync(file);
+    return realpathSync(file);
   } catch {
-    target = file;
+    // A dangling link, or no file yet.
   }
+  try {
+    if (lstatSync(file).isSymbolicLink()) return path.resolve(path.dirname(file), readlinkSync(file));
+  } catch {
+    // No file yet.
+  }
+  return file;
+}
+
+// Replaces the file in one rename so a Claude Code reading it never sees half of it.
+function atomicWrite(file, content) {
+  const target = writeTarget(file);
+  if (!existsSync(path.dirname(target))) throw new CliError(`${path.dirname(target)} does not exist`);
   let mode = 0o600;
   try {
     mode = statSync(target).mode & 0o777;
@@ -402,6 +425,7 @@ const COMMANDS = {
   "terminals wait": {
     options: {
       workspace: { type: "string", multiple: true },
+      terminal: { type: "string", multiple: true },
       seen: { type: "string", multiple: true },
       timeout: str,
       quiet: str,
@@ -414,6 +438,7 @@ const COMMANDS = {
         quiet: positiveNumber(v.quiet ?? "300", "--quiet"),
         interval: positiveNumber(v.interval ?? "5", "--interval"),
         seen: new Set(v.seen ?? []),
+        terminals: new Set(v.terminal ?? []),
       }),
   },
   "agents configs": {
@@ -455,6 +480,10 @@ const COMMANDS = {
       let prompt = v["prompt-file"] !== undefined ? readTextFile(v["prompt-file"]) : v.prompt;
       if (v["from-terminal"] !== undefined) prompt = await handoffPrompt(host, v.workspace, v["from-terminal"], prompt);
       if (!prompt?.trim()) throw new CliError("pass --prompt, --prompt-file or --from-terminal");
+      // The prompt is the last argument of the worker's command line.
+      if (prompt.startsWith("-")) {
+        throw new CliError('the prompt starts with "-", so claude would read it as an option. Start it with a word.');
+      }
       return call(host, "agents.run", { workspaceId: v.workspace, agent: v.agent, prompt }, { mutation: true });
     },
   },

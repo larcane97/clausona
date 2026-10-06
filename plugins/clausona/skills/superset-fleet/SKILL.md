@@ -53,12 +53,13 @@ Below, `H` means `node <base>/scripts/superset-host.mjs`. `H trust`, `H terminal
 | Read | `superset terminals read --local --workspace <id> --terminal <terminal> --max-lines 240 --json` | `H terminals read --workspace <id> --terminal <terminal>` |
 | Send | `superset terminals send --local --workspace <id> --terminal <terminal> --text "$(cat <text file>)" --json` | `H terminals send --workspace <id> --terminal <terminal> --text-file <text file>` |
 | Close | `superset terminals close --local --workspace <id> --terminal <terminal> --json` | `H terminals close --workspace <id> --terminal <terminal>` |
-| Wait for workers | `H terminals wait --workspace <id> … --seen <mark> …` | `H terminals wait --workspace <id> … --seen <mark> …` |
+| Wait for workers | `H terminals wait --workspace <id> --terminal <terminal> … --seen <mark> …` | `H terminals wait --workspace <id> --terminal <terminal> … --seen <mark> …` |
 | Delete workspace | `H workspaces delete <id>` | `H workspaces delete <id>` |
 
 Write every brief and follow-up to a file and pass the file, as the table does. Never paste one
-inside quotes on a command line: the shell would run any `$( )` or backticks in it. On the CLI
-path, do not start a follow-up with `-`.
+inside quotes on a command line: the shell would run any `$( )` or backticks in it. Start each
+one with a word, not `-` or `---`: claude would read a brief that starts with `-` as an option,
+and the helper refuses one.
 
 ## 2. Profiles as Superset agents
 
@@ -163,9 +164,11 @@ The user can open any worker's tab in Superset, read along and type into it at a
 
 **Waiting.** Never end your turn while a worker runs with nothing waiting on it: no one would
 wake you, and the user would have to. After starting the workers, and after handling each
-event, run `H terminals wait` as a background task, with a `--workspace` for every worker whose
-task is not finished. It returns as soon as one of them needs you. It judges this from
-Superset's record of each agent's last hook event, not from the screen:
+event, run `H terminals wait` as a background task. Give it a `--workspace` and a `--terminal`
+(the worker's terminal id) for every worker whose task is not finished; after a hand-over, the
+new terminal's id. A shell tab or an agent the user opened in the same workspace then does not
+count. It returns as soon as one of them needs you. It judges this from Superset's record of
+each agent's last hook event, not from the screen:
 
 - `stopped`: its turn ended. Read its screen for a DONE or BLOCKED envelope, a question, or a
   limit or API error.
