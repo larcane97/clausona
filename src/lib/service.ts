@@ -6,6 +6,7 @@ import {
   link,
   lstat,
   mkdir,
+  mkdtemp,
   readdir,
   readFile,
   readlink,
@@ -16,7 +17,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { constants, homedir } from "node:os";
+import { constants, homedir, tmpdir } from "node:os";
 import path from "node:path";
 
 import { checkBaseUrl, hasBareUserinfo, isAnthropicHost, sendsKeyInClear } from "../core/api-url.js";
@@ -987,6 +988,26 @@ async function setupPluginsDir(profileDir: string, primarySource: string, backup
   await syncPluginsJson(profileDir, primarySource);
 }
 
+/**
+ * Whether Windows refuses this user a file symlink - no Developer Mode, no "Create symbolic
+ * links" privilege - tried once on a file of its own in a temp directory. False off Windows,
+ * and when the try fails for any other reason: then nothing says the privilege is what is missing.
+ */
+async function fileSymlinksRefused(): Promise<boolean> {
+  if (process.platform !== "win32") return false;
+  let dir: string | undefined;
+  try {
+    dir = await mkdtemp(path.join(tmpdir(), "clausona-symlink-probe-"));
+    const source = path.join(dir, "source");
+    await writeFile(source, "");
+    return !(await createSharedLink(source, path.join(dir, "link"), { isDirectory: false, hardLink: false }));
+  } catch {
+    return false;
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 const PLATFORM_NAMES: Partial<Record<NodeJS.Platform, string>> = { darwin: "macOS", linux: "Linux" };
 
 /**
@@ -1618,6 +1639,12 @@ export async function doctorProfiles(
   const results: DoctorProfileResult[] = [];
   const home = homedir();
   const codexProfiles = Object.values(registry.profiles).filter((profile) => profile.tool === "codex").length;
+  // Tried at most once a run, and only when a profile holds a copy it would explain.
+  let refused: Promise<boolean> | undefined;
+  const symlinksRefused = () => {
+    refused ??= fileSymlinksRefused();
+    return refused;
+  };
 
   for (const [id, profile] of Object.entries(registry.profiles)) {
     const issues: DoctorIssue[] = [];
@@ -1832,8 +1859,9 @@ export async function doctorProfiles(
 
       // Shared files the tool saves whole, held by something a save does not leave in place.
       // A regular file with the primary's identity is a hard link. A regular file without it
-      // is the profile's own copy, which on Windows is what a profile gets where no symbolic
-      // link can be made - so there it is said with what would make one, not as an override.
+      // is the profile's own copy, which is what a profile gets where Windows refuses a
+      // symbolic link - so there, and only there, it is said with what would make one. Where
+      // a symbolic link can be made, the copy is an override like any other.
       const symlinkNeeded: Array<{ name: string; held: "hard_link" | "copy" }> = [];
       if (!profile.isPrimary && adapter.rewritesWhole) {
         for (const entry of dirEntries) {
@@ -1844,7 +1872,7 @@ export async function doctorProfiles(
           if (linkInfo.pointsToSource) {
             // Not the profile's only copy that a primary entry links to: that one is not a hard link.
             if (await holdsNothingOfItsOwn(own)) symlinkNeeded.push({ name: entry.name, held: "hard_link" });
-          } else if (process.platform === "win32") {
+          } else if (await symlinksRefused()) {
             symlinkNeeded.push({ name: entry.name, held: "copy" });
           }
         }

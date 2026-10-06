@@ -214,4 +214,17 @@ describe("sharing a file the tool saves whole, where Windows refuses a symlink",
       false,
     );
   });
+
+  // Where a symlink can be made, a copy is not for want of one: it stays a plain override.
+  it.skipIf(realPlatform === "win32")("reports a copy as an override where symlinks can be made", async () => {
+    const h = await harness();
+    writeFileSync(path.join(h.work, "hooks.json"), "{}\n");
+
+    const results = await asWindows(() => h.service.doctorProfiles(), { symlinks: true });
+
+    const kinds = (results.find((result) => result.name === "codex:work")?.issues ?? [])
+      .filter((issue) => issue.message.startsWith("hooks.json "))
+      .map((issue) => issue.kind);
+    expect(kinds).toEqual(["local_override"]);
+  });
 });
