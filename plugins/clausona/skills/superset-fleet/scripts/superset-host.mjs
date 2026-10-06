@@ -4,6 +4,7 @@
 // The host's auth token is read from the host's manifest inside this process and sent only in
 // the Authorization header: it is never printed, passed on a command line or written to a file.
 // Every command prints JSON on stdout. Errors go to stderr, with exit status 1.
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -32,9 +33,9 @@ const USAGE = `usage: superset-host.mjs <command>
   agents run --workspace <id> --agent <config id> [--prompt <text> | --prompt-file <path>] [--from-terminal <id>]
   terminals list --workspace <id>
   terminals read --workspace <id> --terminal <id> [--max-lines <n>]
-  terminals send --workspace <id> --terminal <id> --text <text>
+  terminals send --workspace <id> --terminal <id> (--text <text> | --text-file <path>)
   terminals close --workspace <id> --terminal <id>
-  terminals wait --workspace <id> [--workspace <id>...] [--timeout <s>] [--quiet <s>] [--interval <s>]
+  terminals wait --workspace <id> [--workspace <id>...] [--seen <terminal>@<time>...] [--timeout <s>] [--quiet <s>] [--interval <s>]
   trust --config-dir <profile config dir> --path <folder> [--check]`;
 
 class CliError extends Error {}
@@ -134,15 +135,16 @@ const ENDED_EVENTS = new Set(["Stop", "Failed", "Detached"]);
 // hook event, so this does not depend on what a worker prints or in which language. A worker
 // counts as needing attention when its turn ended (done, blocked or asking), it failed or its
 // terminal is gone, or it has had no event for `quiet` seconds, which is how a permission prompt
-// looks from outside.
-async function waitForWorkers(host, workspaces, { timeout, quiet, interval }) {
+// looks from outside. A state stays the same until the agent's next event, so each result carries
+// a `seen` mark; given back with --seen, that state is skipped and the wait goes on.
+async function waitForWorkers(host, workspaces, { timeout, quiet, interval, seen }) {
   const started = Date.now();
   for (;;) {
     const agents = await call(host, "terminalAgents.list");
     const waited = Math.round((Date.now() - started) / 1000);
     for (const workspaceId of workspaces) {
-      const agent = agents.find((a) => a.workspaceId === workspaceId);
-      if (!agent) {
+      const mine = agents.filter((a) => a.workspaceId === workspaceId);
+      if (mine.length === 0) {
         // A worker that was just started has no agent row for a few seconds.
         let sessions = [];
         try {
@@ -154,9 +156,14 @@ async function waitForWorkers(host, workspaces, { timeout, quiet, interval }) {
         if (!sessions.some((s) => !s.exited)) return { event: "gone", workspaceId, waited };
         continue;
       }
-      const found = { workspaceId, terminalId: agent.terminalId, lastEventType: agent.lastEventType, waited };
-      if (ENDED_EVENTS.has(agent.lastEventType)) return { event: "stopped", ...found };
-      if (Date.now() - agent.lastEventAt > quiet * 1000) return { event: "quiet", ...found };
+      for (const agent of mine) {
+        const mark = `${agent.terminalId}@${agent.lastEventAt}`;
+        if (seen.has(mark)) continue;
+        const { terminalId, lastEventType, lastEventAt } = agent;
+        const found = { workspaceId, terminalId, lastEventType, lastEventAt, seen: mark, waited };
+        if (ENDED_EVENTS.has(lastEventType)) return { event: "stopped", ...found };
+        if (Date.now() - lastEventAt > quiet * 1000) return { event: "quiet", ...found };
+      }
     }
     if (Date.now() - started >= timeout * 1000) return { event: "timeout", workspaces, waited };
     await new Promise((resolve) => setTimeout(resolve, interval * 1000));
@@ -179,7 +186,7 @@ function hideEnv({ env, ...rest }) {
 // The CLI's own cap on the context it hands from one terminal to a new agent.
 const HANDOFF_MAX_CHARS = 36_000;
 
-function readPromptFile(file) {
+function readTextFile(file) {
   try {
     return readFileSync(file, "utf8");
   } catch (err) {
@@ -203,6 +210,43 @@ async function handoffPrompt(host, workspaceId, terminalId, extra) {
   ];
   if (extra?.trim()) lines.push("", extra);
   return lines.join("\n");
+}
+
+// The host deletes a workspace with force: it removes the worktree even with uncommitted work in
+// it. It keeps the branch. So a workspace is deleted only when its worktree is clean and its
+// branch has an upstream with nothing left to push.
+function git(worktree, args) {
+  return execFileSync("git", ["-C", worktree, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
+function whyNotRetirable(worktree) {
+  if (typeof worktree !== "string" || !existsSync(worktree)) {
+    return `its worktree ${worktree} is missing, so it cannot be checked`;
+  }
+  let status;
+  try {
+    status = git(worktree, ["status", "--porcelain"]);
+  } catch (err) {
+    return `git status failed in ${worktree}: ${String(err.stderr ?? err.message).trim()}`;
+  }
+  const changes = status.split("\n").filter(Boolean).length;
+  if (changes > 0) return `${worktree} has ${changes} uncommitted change(s)`;
+  let ahead;
+  try {
+    ahead = Number(git(worktree, ["rev-list", "--count", "@{u}..HEAD"]).trim());
+  } catch {
+    return "its branch has no upstream; push it with `git push -u origin HEAD` first";
+  }
+  if (ahead > 0) return `${ahead} commit(s) on its branch are not pushed`;
+  return null;
+}
+
+async function deleteWorkspace(host, id) {
+  const workspace = (await call(host, "workspace.list")).find((w) => w.id === id);
+  if (!workspace) throw new CliError(`no workspace ${id}`);
+  const reason = whyNotRetirable(workspace.worktreePath);
+  if (reason) throw new CliError(`not deleting workspace ${id}: ${reason}`);
+  return call(host, "workspace.delete", { id }, { mutation: true });
 }
 
 // Claude Code keeps the default account's state in ~/.claude.json, outside ~/.claude, and any
@@ -305,11 +349,10 @@ const COMMANDS = {
         { mutation: true },
       ),
   },
-  // The host stops the workspace's terminals and removes its worktree even when it has
-  // uncommitted changes (it runs with force), and keeps the branch. The skill checks first.
+  // Stops the workspace's terminals and removes its worktree, after deleteWorkspace's checks.
   "workspaces delete": {
     positionals: 1,
-    run: (host, _v, [id]) => call(host, "workspace.delete", { id }, { mutation: true }),
+    run: (host, _v, [id]) => deleteWorkspace(host, id),
   },
   "terminals list": {
     options: { workspace: str },
@@ -333,15 +376,22 @@ const COMMANDS = {
       }),
   },
   "terminals send": {
-    options: { workspace: str, terminal: str, text: str },
-    required: ["workspace", "terminal", "text"],
-    run: (host, v) =>
-      call(
+    options: { workspace: str, terminal: str, text: str, "text-file": str },
+    required: ["workspace", "terminal"],
+    run: (host, v) => {
+      if (v.text !== undefined && v["text-file"] !== undefined) {
+        throw new CliError("pass --text or --text-file, not both");
+      }
+      // A file's final newline goes, as it would from `$(cat file)`: the send presses Enter itself.
+      const text = v["text-file"] !== undefined ? readTextFile(v["text-file"]).replace(/\n+$/, "") : v.text;
+      if (text === undefined) throw new CliError("pass --text or --text-file");
+      return call(
         host,
         "terminal.send",
-        { terminalId: v.terminal, workspaceId: v.workspace, text: v.text, submit: true },
+        { terminalId: v.terminal, workspaceId: v.workspace, text, submit: true },
         { mutation: true },
-      ),
+      );
+    },
   },
   "terminals close": {
     options: { workspace: str, terminal: str },
@@ -350,13 +400,20 @@ const COMMANDS = {
       call(host, "terminal.killSession", { terminalId: v.terminal, workspaceId: v.workspace }, { mutation: true }),
   },
   "terminals wait": {
-    options: { workspace: { type: "string", multiple: true }, timeout: str, quiet: str, interval: str },
+    options: {
+      workspace: { type: "string", multiple: true },
+      seen: { type: "string", multiple: true },
+      timeout: str,
+      quiet: str,
+      interval: str,
+    },
     required: ["workspace"],
     run: (host, v) =>
       waitForWorkers(host, v.workspace, {
         timeout: positiveNumber(v.timeout ?? "1800", "--timeout"),
         quiet: positiveNumber(v.quiet ?? "300", "--quiet"),
         interval: positiveNumber(v.interval ?? "5", "--interval"),
+        seen: new Set(v.seen ?? []),
       }),
   },
   "agents configs": {
@@ -395,7 +452,7 @@ const COMMANDS = {
       if (v.prompt !== undefined && v["prompt-file"] !== undefined) {
         throw new CliError("pass --prompt or --prompt-file, not both");
       }
-      let prompt = v["prompt-file"] !== undefined ? readPromptFile(v["prompt-file"]) : v.prompt;
+      let prompt = v["prompt-file"] !== undefined ? readTextFile(v["prompt-file"]) : v.prompt;
       if (v["from-terminal"] !== undefined) prompt = await handoffPrompt(host, v.workspace, v["from-terminal"], prompt);
       if (!prompt?.trim()) throw new CliError("pass --prompt, --prompt-file or --from-terminal");
       return call(host, "agents.run", { workspaceId: v.workspace, agent: v.agent, prompt }, { mutation: true });

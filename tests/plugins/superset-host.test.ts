@@ -229,12 +229,95 @@ describe("workspaces and terminals", () => {
     expect(seen).toEqual([]);
   });
 
-  it("deletes a workspace by id", async () => {
-    replies["workspace.delete"] = { json: { worktreeRemoved: true, warnings: [] } };
-    const r = await run(["workspaces", "delete", "w1"]);
-    expect(JSON.parse(r.stdout)).toEqual({ worktreeRemoved: true, warnings: [] });
-    expect(seen.map((s) => [s.method, s.procedure, s.input])).toEqual([["POST", "workspace.delete", { id: "w1" }]]);
-    expect((await run(["workspaces", "delete"])).code).toBe(1);
+  // Each case runs a dozen git processes, which can take several seconds together.
+  describe("deleting a workspace", { timeout: 30_000 }, () => {
+    // The host deletes with force, so the helper is the only thing between a delete and a worker's
+    // unsaved work. These run real git in a temporary repo with a temporary remote.
+    function git(cwd: string, ...args: string[]) {
+      const r = spawnSync(
+        "git",
+        [
+          "-c",
+          "init.defaultBranch=main",
+          "-c",
+          "commit.gpgsign=false",
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.com",
+          ...args,
+        ],
+        { cwd, encoding: "utf8", env: { ...process.env, HOME: home, GIT_CONFIG_NOSYSTEM: "1" } },
+      );
+      if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+      return r.stdout;
+    }
+
+    // A worker's worktree on branch fleet/t1, committed and pushed with an upstream.
+    function pushedWorktree() {
+      const remote = path.join(home, "remote.git");
+      const worktree = path.join(home, "wt");
+      git(home, "init", "-q", "--bare", remote);
+      git(home, "init", "-q", worktree);
+      git(worktree, "checkout", "-q", "-b", "fleet/t1");
+      writeFileSync(path.join(worktree, "a.txt"), "a\n");
+      git(worktree, "add", "a.txt");
+      git(worktree, "commit", "-q", "-m", "a");
+      git(worktree, "remote", "add", "origin", remote);
+      git(worktree, "push", "-q", "-u", "origin", "HEAD");
+      replies["workspace.list"] = { json: [{ id: "w1", projectId: "p1", worktreePath: worktree }] };
+      replies["workspace.delete"] = { json: { worktreeRemoved: true, warnings: [] } };
+      return worktree;
+    }
+
+    it("deletes a workspace whose worktree is clean and pushed", async () => {
+      pushedWorktree();
+      const r = await run(["workspaces", "delete", "w1"]);
+      expect(r.stderr).toBe("");
+      expect(JSON.parse(r.stdout)).toEqual({ worktreeRemoved: true, warnings: [] });
+      expect(seen.map((s) => [s.method, s.procedure, s.input])).toEqual([
+        ["GET", "workspace.list", undefined],
+        ["POST", "workspace.delete", { id: "w1" }],
+      ]);
+      expect((await run(["workspaces", "delete"])).code).toBe(1);
+    });
+
+    it("refuses a worktree with uncommitted changes", async () => {
+      const worktree = pushedWorktree();
+      writeFileSync(path.join(worktree, "new.txt"), "unsaved\n");
+      const r = await run(["workspaces", "delete", "w1"]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/not deleting workspace w1: .*1 uncommitted change/);
+      expect(seen.map((s) => s.procedure)).not.toContain("workspace.delete");
+    });
+
+    it("refuses a branch with commits that are not pushed", async () => {
+      const worktree = pushedWorktree();
+      writeFileSync(path.join(worktree, "b.txt"), "b\n");
+      git(worktree, "add", "b.txt");
+      git(worktree, "commit", "-q", "-m", "b");
+      const r = await run(["workspaces", "delete", "w1"]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/not deleting workspace w1: 1 commit\(s\) on its branch are not pushed/);
+      expect(seen.map((s) => s.procedure)).not.toContain("workspace.delete");
+    });
+
+    it("refuses a branch that has no upstream", async () => {
+      const worktree = pushedWorktree();
+      git(worktree, "checkout", "-q", "-b", "fleet/t1-local");
+      const r = await run(["workspaces", "delete", "w1"]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/not deleting workspace w1: its branch has no upstream/);
+      expect(seen.map((s) => s.procedure)).not.toContain("workspace.delete");
+    });
+
+    it("refuses a workspace it cannot find", async () => {
+      pushedWorktree();
+      const r = await run(["workspaces", "delete", "w9"]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/no workspace w9/);
+      expect(seen.map((s) => s.procedure)).toEqual(["workspace.list"]);
+    });
   });
 
   it("lists a workspace's terminals and only the agents running in it", async () => {
@@ -306,6 +389,37 @@ describe("workspaces and terminals", () => {
         auth: `Bearer ${TOKEN}`,
       },
     ]);
+  });
+
+  it("sends a text file, even one that starts with a dash, without its final newline", async () => {
+    replies["terminal.send"] = { json: { terminalId: "t1", submitted: true } };
+    const text = "- fix `parse()` first\n- then run $(npm test)";
+    const file = path.join(home, "follow-up.md");
+    writeFileSync(file, `${text}\n`);
+    const r = await run(["terminals", "send", "--workspace", "w1", "--terminal", "t1", "--text-file", file]);
+    expect(r.stderr).toBe("");
+    expect(seen.map((s) => s.input)).toEqual([{ terminalId: "t1", workspaceId: "w1", text, submit: true }]);
+  });
+
+  it("refuses both --text and --text-file, and neither", async () => {
+    const file = path.join(home, "follow-up.md");
+    writeFileSync(file, "x");
+    const both = await run([
+      "terminals",
+      "send",
+      "--workspace",
+      "w1",
+      "--terminal",
+      "t1",
+      "--text",
+      "x",
+      "--text-file",
+      file,
+    ]);
+    const none = await run(["terminals", "send", "--workspace", "w1", "--terminal", "t1"]);
+    expect(both.stderr).toMatch(/pass --text or --text-file, not both/);
+    expect(none.stderr).toMatch(/pass --text or --text-file/);
+    expect(seen).toEqual([]);
   });
 
   it("closes a terminal", async () => {
@@ -609,6 +723,55 @@ describe("waiting for workers", () => {
     replies["terminal.list"] = { json: { sessions: [{ terminalId: "t1", workspaceId: "w1", exited: false }] } };
     const r = await run(["terminals", "wait", "--workspace", "w1", "--timeout", "0.3", "--interval", "0.05"]);
     expect(JSON.parse(r.stdout)).toMatchObject({ event: "timeout", workspaces: ["w1"] });
+  });
+
+  it("skips a state given back with --seen and waits for the next event", async () => {
+    const at = Date.now() - 10 * 60_000;
+    const stopped = (lastEventAt: number) => ({ ...busy("w1", "t1"), lastEventType: "Stop", lastEventAt });
+    replies["terminalAgents.list"] = [{ json: [stopped(at)] }, { json: [stopped(at)] }, { json: [stopped(at + 5000)] }];
+    const r = await run(["terminals", "wait", "--workspace", "w1", "--seen", `t1@${at}`, "--interval", "0.05"]);
+    expect(r.stderr).toBe("");
+    expect(JSON.parse(r.stdout)).toMatchObject({
+      event: "stopped",
+      terminalId: "t1",
+      lastEventAt: at + 5000,
+      seen: `t1@${at + 5000}`,
+    });
+    expect(seen.filter((s) => s.procedure === "terminalAgents.list").length).toBe(3);
+  });
+
+  it("does not report a quiet worker again once it was seen", async () => {
+    const at = Date.now() - 10 * 60_000;
+    replies["terminalAgents.list"] = {
+      json: [{ ...busy("w1", "t1"), lastEventType: "PermissionRequest", lastEventAt: at }],
+    };
+    const r = await run([
+      "terminals",
+      "wait",
+      "--workspace",
+      "w1",
+      "--seen",
+      `t1@${at}`,
+      "--quiet",
+      "60",
+      "--timeout",
+      "0.3",
+      "--interval",
+      "0.05",
+    ]);
+    expect(JSON.parse(r.stdout)).toMatchObject({ event: "timeout", workspaces: ["w1"] });
+  });
+
+  it("looks past a seen agent to another agent in the same workspace", async () => {
+    const at = Date.now() - 60_000;
+    replies["terminalAgents.list"] = {
+      json: [
+        { ...busy("w1", "t-old"), lastEventType: "Stop", lastEventAt: at },
+        { ...busy("w1", "t-new"), lastEventType: "Stop", lastEventAt: at + 1000 },
+      ],
+    };
+    const r = await run(["terminals", "wait", "--workspace", "w1", "--seen", `t-old@${at}`, "--interval", "0.05"]);
+    expect(JSON.parse(r.stdout)).toMatchObject({ event: "stopped", terminalId: "t-new" });
   });
 
   it("needs a workspace and positive numbers", async () => {
