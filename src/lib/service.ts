@@ -347,9 +347,9 @@ async function rebaseJobTranscriptPath(jobDir: string, sourceDir: string, primar
 
 /**
  * Fold a profile's own session state into the primary ahead of replacing it with shared
- * links. `setupSharedLinks` backs a local directory up and then deletes it, and a
- * backup under ~/.clausona is invisible to the tool — so anything not merged here is
- * gone from the user's session and background lists.
+ * links. `setupSharedLinks` moves a local directory into a backup, and a backup under
+ * ~/.clausona is invisible to the tool — so anything not merged here is gone from the
+ * user's session and background lists.
  */
 export async function mergeSessionState(sourceDir: string, primarySource: string) {
   await mergeSessionFiles(sourceDir, primarySource);
@@ -357,6 +357,150 @@ export async function mergeSessionState(sourceDir: string, primarySource: string
   await mergeRecordDirs(sourceDir, primarySource, "teams");
 }
 
+/**
+ * Whether `configDir` is `primarySource` itself: the same directory by where each resolves,
+ * or by identity for another spelling of it. A profile there has nothing to share. Every
+ * entry setupSharedLinks would link in it is the primary's own, so linking replaces each one
+ * with a link to itself - and the skip-set pass, comparing each file with itself, takes it for
+ * a shared link and deletes it: auth.json, the state databases, everything (#73).
+ */
+async function isPrimaryDir(configDir: string, primarySource: string): Promise<boolean> {
+  const resolve = (dir: string) => realpath(dir).catch(() => path.resolve(dir));
+  if ((await resolve(configDir)) === (await resolve(primarySource))) return true;
+  return sameDirectory(configDir, primarySource);
+}
+
+/**
+ * Why a profile registered on its tool's primary directory is left alone, and the registry
+ * change that settles it. doctor reports it; repair and the session-mode toggle refuse with
+ * it. With the primary registered under another id, the entry is a duplicate to remove. With
+ * none, it is the primary profile missing only the mark that says so: removing it instead
+ * would hand the tool's launches to another of its profiles.
+ */
+function primaryDirProblem(registry: Registry, id: string, profile: Profile): string {
+  const home = homedir();
+  const shown = profile.configDir.replace(home, "~");
+  const registeredPrimary = Object.entries(registry.profiles).find(
+    ([other, entry]) => other !== id && entry?.tool === profile.tool && entry.isPrimary,
+  )?.[0];
+  const fix = registeredPrimary
+    ? `'${registeredPrimary}' already registers it as the primary, so remove this duplicate with 'clausona remove ${id}': that drops only the entry and leaves ${shown} as it is.`
+    : `To keep it as ${profile.tool}'s primary profile, set "isPrimary": true on '${id}' in ${REGISTRY_PATH.replace(home, "~")}.`;
+  return `'${id}' is registered on ${shown}, ${profile.tool}'s primary config directory itself, so clausona neither links nor repairs it. ${fix}`;
+}
+
+/** The timestamp in a backup's name: ISO 8601 with each `:` and `.` made `-`, which Windows refuses in a name. */
+function backupStamp(): string {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+/** `<name>.<backupStamp()>`, with `-<n>` for a second backup of the name made in the same millisecond. */
+const STAMPED_BACKUP = /^(.+)\.(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)(?:-(\d+))?$/;
+
+/** A path in `backupDir` for a new backup of `name`, which nothing is at yet. */
+async function freshBackupPath(backupDir: string, name: string): Promise<string> {
+  await mkdir(backupDir, { recursive: true });
+  const stamp = backupStamp();
+  for (let n = 0; ; n++) {
+    const candidate = path.join(backupDir, `${name}.${stamp}${n === 0 ? "" : `-${n}`}`);
+    if (!(await exists(candidate))) return candidate;
+  }
+}
+
+/** Renames `source` to `dest`, or copies it there and removes it when the two are on different filesystems. */
+async function moveTo(source: string, dest: string) {
+  try {
+    await rename(source, dest);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+    await cp(source, dest, { recursive: true, verbatimSymlinks: true, errorOnExist: true, force: false });
+    await rm(source, { force: true, recursive: true });
+  }
+}
+
+/**
+ * Moves `target` into a backup of its own, `<backupDir>/<name>.<timestamp>`. Every
+ * replacement gets one: repair used to keep only the first backup of a name and then delete,
+ * so a second repair lost what the profile had made since (#73).
+ */
+async function setAside(target: string, backupDir: string, name: string) {
+  await moveTo(target, await freshBackupPath(backupDir, name));
+}
+
+/**
+ * The backups in `backupDir` by the name of the entry each was set aside from, oldest first:
+ * one from before backups were timestamped carries the entry's own name and counts as the
+ * oldest, then each `<name>.<timestamp>` in the order they were made.
+ */
+async function backupsByName(backupDir: string): Promise<Map<string, string[]>> {
+  const entries = (await readdir(backupDir).catch((): string[] => [])).map((entry) => {
+    const match = STAMPED_BACKUP.exec(entry);
+    return match
+      ? { entry, name: match[1], stamp: match[2], count: Number(match[3] ?? 0) }
+      : { entry, name: entry, stamp: "", count: 0 };
+  });
+  entries.sort((a, b) => (a.stamp === b.stamp ? a.count - b.count : a.stamp < b.stamp ? -1 : 1));
+  const byName = new Map<string, string[]>();
+  for (const { entry, name } of entries) byName.set(name, [...(byName.get(name) ?? []), path.join(backupDir, entry)]);
+  return byName;
+}
+
+/**
+ * Brings back each skip-set entry the profile no longer has from its newest backup: one the
+ * profile kept for itself until it was shared (projects/ while sessions were merged) and now
+ * keeps for itself again. A backup that is only a link to the primary's entry holds nothing
+ * of the profile's own and is passed over. Copied, so the backup stays.
+ */
+async function restoreSkippedFromBackup(
+  adapter: ToolAdapter,
+  configDir: string,
+  primarySource: string,
+  backupDir: string,
+  mergeSessions: boolean,
+) {
+  if (!(await exists(backupDir))) return;
+  const backups = await backupsByName(backupDir);
+  for (const itemName of adapter.sharedSkipSet(mergeSessions)) {
+    const target = path.join(configDir, itemName);
+    if (await exists(target)) continue;
+    for (const backupItem of [...(backups.get(itemName) ?? [])].reverse()) {
+      if (await isLinkToPrimaryEntry(backupItem, primarySource, itemName)) continue;
+      // Links as written: resolved, a relative one would point into the backup directory.
+      await cp(backupItem, target, { recursive: true, verbatimSymlinks: true });
+      break;
+    }
+  }
+}
+
+/**
+ * Whether deleting `target`, which inspectSharedLink called a link to the primary's entry,
+ * loses nothing: it is a symbolic link, or one of several names of a file, whose content the
+ * other names keep. inspectSharedLink follows the primary's entry, so when that entry is itself
+ * a link into the profile, the profile's own file - one name, the only copy - reads as shared.
+ */
+async function holdsNothingOfItsOwn(target: string): Promise<boolean> {
+  const targetStats = await lstat(target).catch(() => null);
+  if (targetStats?.isSymbolicLink()) return true;
+  return Boolean(targetStats?.isFile() && targetStats.nlink >= 2);
+}
+
+/** Whether `target` is a directory itself, not a link to one. */
+async function isRealDirectory(target: string): Promise<boolean> {
+  return Boolean((await lstat(target).catch(() => null))?.isDirectory());
+}
+
+/** Whether a backup is only a link to the primary's entry of that name - nothing of the profile's own. */
+async function isLinkToPrimaryEntry(backupItem: string, primarySource: string, itemName: string): Promise<boolean> {
+  const stats = await lstat(backupItem).catch(() => null);
+  return Boolean(stats?.isSymbolicLink()) && (await readlink(backupItem)) === path.join(primarySource, itemName);
+}
+
+/**
+ * Links each entry the primary shares into the profile. Whatever stands where a link goes -
+ * the profile's own file or directory, or a link that leads elsewhere or nowhere - is moved
+ * into a backup of its own first; nothing of the profile's is deleted. Refuses a profile
+ * directory that is the primary's own, and changes nothing then.
+ */
 export async function setupSharedLinks(
   adapter: ToolAdapter,
   profileDir: string,
@@ -364,6 +508,20 @@ export async function setupSharedLinks(
   mergeSessions = false,
   backupDir?: string,
 ) {
+  if (await isPrimaryDir(profileDir, primarySource)) {
+    throw new Error(
+      `${profileDir.replace(homedir(), "~")} is the primary config directory itself, so it has nothing to share: linking it would replace each of its entries with a link to that same entry. Nothing was changed.`,
+    );
+  }
+  const backupFor = (target: string) => {
+    if (!backupDir) {
+      throw new Error(
+        `${target} would be replaced by a shared link, and there is no backup directory to move it into.`,
+      );
+    }
+    return backupDir;
+  };
+
   const items = await readdir(primarySource, { withFileTypes: true });
   let linked = 0;
 
@@ -371,10 +529,11 @@ export async function setupSharedLinks(
     const source = path.join(primarySource, item.name);
 
     if (shouldSkipShare(adapter, item.name, mergeSessions)) {
-      // Remove symlinks to primary for skipped items (e.g. projects/ when separated)
+      // Remove links to the primary for skipped items (e.g. projects/ when separated). A link
+      // holds nothing of its own: the entry stays in the primary.
       const target = path.join(profileDir, item.name);
       const linkInfo = await inspectSharedLink(target, source);
-      if (linkInfo.isSharedLink && linkInfo.pointsToSource) {
+      if (linkInfo.isSharedLink && linkInfo.pointsToSource && (await holdsNothingOfItsOwn(target))) {
         await rm(target, { force: true, recursive: true });
       }
       continue;
@@ -383,18 +542,12 @@ export async function setupSharedLinks(
     const targetExists = await exists(target);
     if (targetExists) {
       const linkInfo = await inspectSharedLink(target, source);
-      if (linkInfo.isSharedLink && linkInfo.pointsToSource && linkInfo.targetExists) {
+      // Linked, even where the primary's own entry is a broken link: that is the primary's to fix.
+      if (linkInfo.isSharedLink && linkInfo.pointsToSource) {
         linked += 1;
         continue;
       }
-      if (!linkInfo.isSharedLink && backupDir) {
-        // Real data — save to backup before removing
-        const backupTarget = path.join(backupDir, item.name);
-        if (!(await exists(backupTarget))) {
-          await cp(target, backupTarget, { recursive: true });
-        }
-      }
-      await rm(target, { force: true, recursive: true });
+      await setAside(target, backupFor(target), item.name);
     }
 
     await createSharedLink(source, target, { isDirectory: item.isDirectory() });
@@ -408,9 +561,21 @@ export async function setupSharedLinks(
   for (const name of adapter.sharedSkipSet(mergeSessions)) {
     if (primaryNames.has(name)) continue;
     const target = path.join(profileDir, name);
-    const linkInfo = await inspectSharedLink(target, path.join(primarySource, name));
-    if (linkInfo.isSharedLink && linkInfo.pointsToSource) {
+    const source = path.join(primarySource, name);
+    const linkInfo = await inspectSharedLink(target, source);
+    if (linkInfo.isSharedLink && linkInfo.pointsToSource && (await holdsNothingOfItsOwn(target))) {
       await rm(target, { force: true, recursive: true });
+    }
+  }
+
+  // A shared link whose target is gone, for an entry the primary no longer has. doctor
+  // reports these and leaves them; taking them out is repair's, into a backup like the rest.
+  for (const entry of await readdir(profileDir, { withFileTypes: true }).catch(() => [])) {
+    if (primaryNames.has(entry.name) || shouldSkipShare(adapter, entry.name, mergeSessions)) continue;
+    const target = path.join(profileDir, entry.name);
+    const linkInfo = await inspectSharedLink(target, path.join(primarySource, entry.name));
+    if (linkInfo.isSharedLink && !linkInfo.targetExists) {
+      await setAside(target, backupFor(target), entry.name);
     }
   }
 
@@ -666,7 +831,20 @@ async function mergePluginFiles(profilePluginsDir: string, primaryPluginsDir: st
   }
 }
 
-async function setupPluginsDir(profileDir: string, primarySource: string): Promise<void> {
+/**
+ * Links each entry of the primary's plugins/ into the profile's own plugins/. What stands
+ * where a link goes is moved into one backup for the run, `<backupDir>/plugins.<timestamp>/`,
+ * under its own name, with a copy of the two JSON files the sync is about to rewrite.
+ * Removing the profile moves each item back into its plugins/ wherever the profile has none
+ * of it by then; the rest stays in the backup, and is named.
+ */
+async function setupPluginsDir(profileDir: string, primarySource: string, backupDir: string): Promise<void> {
+  // setupSharedLinks refuses this first; checked again because what follows deletes the same way.
+  if (await isPrimaryDir(profileDir, primarySource)) {
+    throw new Error(
+      `${profileDir.replace(homedir(), "~")} is the primary config directory itself. Nothing was changed.`,
+    );
+  }
   const primaryPlugins = path.join(primarySource, "plugins");
   if (!(await exists(primaryPlugins))) return;
 
@@ -681,6 +859,7 @@ async function setupPluginsDir(profileDir: string, primarySource: string): Promi
   await mkdir(profilePlugins, { recursive: true });
 
   const items = await readdir(primaryPlugins, { withFileTypes: true });
+  let setAsideDir: string | undefined;
   for (const item of items) {
     if (PLUGINS_PATH_FILES.has(item.name)) continue; // syncPluginsJson handles these
     // The primary's own plugin sync stamp, or one being written. Linked, every profile's stamp
@@ -692,8 +871,17 @@ async function setupPluginsDir(profileDir: string, primarySource: string): Promi
     const targetExists = await exists(target);
     if (targetExists) {
       const linkInfo = await inspectSharedLink(target, source);
-      if (linkInfo.isSharedLink && linkInfo.pointsToSource && linkInfo.targetExists) continue;
-      await rm(target, { force: true, recursive: true });
+      if (linkInfo.isSharedLink && linkInfo.pointsToSource) continue;
+      if (!setAsideDir) {
+        setAsideDir = await freshBackupPath(backupDir, "plugins");
+        await mkdir(setAsideDir);
+        // The sync below drops each entry whose directory is no longer on disk, so the two
+        // files go into the backup as they are now, beside what is set aside.
+        for (const name of PLUGINS_PATH_FILES) {
+          await cp(path.join(profilePlugins, name), path.join(setAsideDir, name)).catch(() => {});
+        }
+      }
+      await moveTo(target, path.join(setAsideDir, item.name));
     }
     await createSharedLink(source, target, { isDirectory: item.isDirectory() });
   }
@@ -998,6 +1186,14 @@ export async function initializeRegistry(options: {
       );
     }
     initIds.set(foldProfileName(id), { id, kept });
+    // An account on the tool's own directory is the primary, whatever the caller marked it:
+    // set up as a profile of its own, it would be linked to itself (#73).
+    const toolPrimary = getAdapter(account.tool).defaultConfigDir(homedir());
+    if (!account.isPrimary && (await isPrimaryDir(account.configDir, toolPrimary))) {
+      throw new Error(
+        `Cannot set up ${account.configDir.replace(homedir(), "~")} as '${id}': it is ${account.tool}'s primary config directory, which every profile shares. Register it as the primary profile instead.`,
+      );
+    }
     // Resolved now, so a kept name the containment guard refuses stops init before it writes.
     const backupDir = account.isPrimary ? null : backupDirFor(CLAUSONA_DIR, account.tool, name);
     // A re-registered profile goes on using its own backup. A new name gets the add paths'
@@ -1057,7 +1253,7 @@ export async function initializeRegistry(options: {
       await setupSharedLinks(adapter, account.configDir, primary, merge, backupDir);
       if (account.tool === "claude") {
         await mergePluginFiles(path.join(account.configDir, "plugins"), path.join(primary, "plugins"));
-        await setupPluginsDir(account.configDir, primary);
+        await setupPluginsDir(account.configDir, primary, backupDir);
       }
     }
   }
@@ -1377,7 +1573,19 @@ export async function doctorProfiles(
       }
     }
 
-    if (primarySource && !configDirMissing) {
+    // A profile registered on its tool's primary directory: every shared-link finding below
+    // would compare the directory with itself, and what settles it is in the registry (#73).
+    // With no primary source recorded for the tool, its default directory, as repair, remove
+    // and the session-mode toggle take it.
+    const onPrimaryDir =
+      !profile.isPrimary &&
+      typeof profile.configDir === "string" &&
+      (await isPrimaryDir(profile.configDir, primarySource ?? adapter.defaultConfigDir(home)));
+    if (onPrimaryDir) {
+      issues.push({ kind: "primary_config_dir", message: primaryDirProblem(registry, id, profile) });
+    }
+
+    if (primarySource && !configDirMissing && !onPrimaryDir) {
       const primaryDirents = await readdir(primarySource, { withFileTypes: true }).catch(() => []);
       const primaryEntries = new Set(primaryDirents.map((entry) => entry.name));
 
@@ -1397,8 +1605,9 @@ export async function doctorProfiles(
         const pointsToPrimary = linkInfo.pointsToSource;
 
         if (isSkipped(entry.name)) {
-          // Items in skip set should NOT be symlinked to primary
-          if (!profile.isPrimary && pointsToPrimary) {
+          // Items in skip set should NOT be symlinked to primary. Only what repair takes out is
+          // reported: not the profile's own file that a primary entry links to.
+          if (!profile.isPrimary && pointsToPrimary && (await holdsNothingOfItsOwn(targetPath))) {
             issues.push({
               kind: "stale_symlink",
               message: `${entry.name} is symlinked to primary but should not be shared`,
@@ -1407,17 +1616,32 @@ export async function doctorProfiles(
           continue;
         }
 
-        if (linkInfo.isSharedLink) {
-          if (!linkInfo.targetExists) {
-            await rm(targetPath, { force: true });
-            continue;
-          }
+        // A link to the primary's entry that is broken because that entry is itself a broken
+        // link: the break is the primary's, which repair does not touch, so it is reported
+        // with the path to fix rather than as this profile's broken_symlink.
+        if (
+          !profile.isPrimary &&
+          linkInfo.isSharedLink &&
+          pointsToPrimary &&
+          !linkInfo.targetExists &&
+          (await lstat(sourcePath).catch(() => null))?.isSymbolicLink()
+        ) {
+          const shownSource = sourcePath.replace(home, "~");
+          issues.push({
+            kind: "primary_broken_link",
+            message: `${entry.name} links to the primary's ${shownSource}, which is itself a broken link. clausona does not change the primary: fix ${shownSource} there, or remove it.`,
+          });
+          continue;
         }
+
+        // A link whose target is gone is reported and left where it is: doctor only reads,
+        // and the link can be the one trace of what went missing. repair takes it out, into
+        // a backup (#73).
         sharedLinkItems.push({
           name: entry.name,
           isSharedLink: linkInfo.isSharedLink,
           pointsToPrimary,
-          targetExists: true,
+          targetExists: linkInfo.targetExists,
           existsInPrimary: primaryEntries.has(entry.name),
         });
       }
@@ -1445,7 +1669,7 @@ export async function doctorProfiles(
     }
 
     // Check plugins/ consistency for non-primary claude profiles with a real plugins/ dir
-    if (!profile.isPrimary && profile.tool === "claude" && !configDirMissing) {
+    if (!profile.isPrimary && !onPrimaryDir && profile.tool === "claude" && !configDirMissing) {
       const profilePlugins = path.join(profile.configDir, "plugins");
       const pluginsStats = await lstat(profilePlugins).catch(() => null);
       if (pluginsStats && !pluginsStats.isSymbolicLink()) {
@@ -1520,41 +1744,32 @@ export async function repairProfile(id: string) {
     return { repaired: 0 };
   }
 
-  const { name } = parseProfileRef(id, registry);
-  const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
   const profileAdapter = getAdapter(profile.tool);
   const primarySource = registry.primarySources[profile.tool] ?? profileAdapter.defaultConfigDir(homedir());
+  if (await isPrimaryDir(profile.configDir, primarySource)) {
+    throw new Error(primaryDirProblem(registry, id, profile));
+  }
+  const { name } = parseProfileRef(id, registry);
+  const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
   const mergeSessions = profile.mergeSessions ?? false;
 
   // A profile that shares sessions may hold session state the primary has never seen —
   // that is the whole point of repairing a profile whose links predate a directory the
-  // tool added later. Fold it in before setupSharedLinks deletes it.
+  // tool added later. Fold it in before setupSharedLinks moves it into a backup.
   if (mergeSessions && profile.tool === "claude") {
     await mergeSessionState(profile.configDir, primarySource);
   }
 
   const repaired = await setupSharedLinks(profileAdapter, profile.configDir, primarySource, mergeSessions, backupDir);
   if (profile.tool === "claude") {
-    await setupPluginsDir(profile.configDir, primarySource);
+    // Never merged into the primary here, unlike add and init: repair runs again and again, and
+    // would write the profile's registrations - stale ones too - into the primary each time.
+    // What setupPluginsDir replaces is backed up instead, the two JSON files with it.
+    await setupPluginsDir(profile.configDir, primarySource, backupDir);
   }
 
   // Restore skip-set items from backup if they were stale symlinks that got removed
-  // Skip if the backup item is a symlink pointing to primary (stale)
-  if (await exists(backupDir)) {
-    const skipSet = profileAdapter.sharedSkipSet(mergeSessions);
-    for (const itemName of skipSet) {
-      const target = path.join(profile.configDir, itemName);
-      const backupItem = path.join(backupDir, itemName);
-      if (!(await exists(target)) && (await exists(backupItem))) {
-        const backupStats = await lstat(backupItem).catch(() => null);
-        if (backupStats?.isSymbolicLink()) {
-          const linkTarget = await readlink(backupItem);
-          if (linkTarget === path.join(primarySource, itemName)) continue;
-        }
-        await cp(backupItem, target, { recursive: true });
-      }
-    }
-  }
+  await restoreSkippedFromBackup(profileAdapter, profile.configDir, primarySource, backupDir, mergeSessions);
 
   return { repaired };
 }
@@ -1568,12 +1783,15 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
   if (profile.isPrimary) {
     throw new Error("Cannot change session mode for the primary profile.");
   }
+  const primarySource = registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
+  if (await isPrimaryDir(profile.configDir, primarySource)) {
+    throw new Error(primaryDirProblem(registry, id, profile));
+  }
 
   const prev = profile.mergeSessions ?? false;
   const next = options.mergeSessions;
   if (prev === next) return { name: id, mergeSessions: next, changed: false };
 
-  const primarySource = registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
   // Resolved before the registry changes, so a name backupDirFor refuses changes nothing.
   const { name } = parseProfileRef(id, registry);
   const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
@@ -1592,27 +1810,12 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
   const updateAdapter = getAdapter(profile.tool);
   await setupSharedLinks(updateAdapter, profile.configDir, primarySource, next, backupDir);
   if (profile.tool === "claude") {
-    await setupPluginsDir(profile.configDir, primarySource);
+    await setupPluginsDir(profile.configDir, primarySource, backupDir);
   }
 
   // merged → separated: restore skip-set items from backup
-  // Skip if the backup item is a symlink pointing to primary (stale)
   if (!next) {
-    if (await exists(backupDir)) {
-      const skipSet = updateAdapter.sharedSkipSet(false);
-      for (const itemName of skipSet) {
-        const target = path.join(profile.configDir, itemName);
-        const backupItem = path.join(backupDir, itemName);
-        if (!(await exists(target)) && (await exists(backupItem))) {
-          const backupStats = await lstat(backupItem).catch(() => null);
-          if (backupStats?.isSymbolicLink()) {
-            const linkTarget = await readlink(backupItem);
-            if (linkTarget === path.join(primarySource, itemName)) continue;
-          }
-          await cp(backupItem, target, { recursive: true });
-        }
-      }
-    }
+    await restoreSkippedFromBackup(updateAdapter, profile.configDir, primarySource, backupDir, false);
   }
 
   return { name: id, mergeSessions: next, changed: true };
@@ -1861,6 +2064,11 @@ async function cleanupProfile(
     await deleteSecret(profileId(profile.tool, name)).catch(() => {});
   }
 
+  // On the primary's own directory every file reads as a link to the primary - it is the
+  // primary's file - so the stripping below would delete them all, and the restore would
+  // then copy the backup over the primary and delete the backup (#73).
+  if (await isPrimaryDir(profile.configDir, primarySource)) return;
+
   // 1a. Strip inner symlinks from plugins/ dir (real dir with inner symlinks)
   const profilePlugins = path.join(profile.configDir, "plugins");
   const pluginsStats = await lstat(profilePlugins).catch(() => null);
@@ -1870,7 +2078,7 @@ async function cleanupProfile(
       const p = path.join(profilePlugins, entry.name);
       const source = path.join(primarySource, "plugins", entry.name);
       const linkInfo = await inspectSharedLink(p, source);
-      if (linkInfo.isSharedLink) {
+      if (linkInfo.isSharedLink && (await holdsNothingOfItsOwn(p))) {
         await rm(p, { force: true, recursive: true });
       }
     }
@@ -1882,7 +2090,7 @@ async function cleanupProfile(
     const p = path.join(profile.configDir, entry.name);
     const source = path.join(primarySource, entry.name);
     const linkInfo = await inspectSharedLink(p, source);
-    if (linkInfo.isSharedLink) {
+    if (linkInfo.isSharedLink && (await holdsNothingOfItsOwn(p))) {
       await rm(p, { force: true, recursive: true });
     }
   }
@@ -1892,10 +2100,57 @@ async function cleanupProfile(
   // config directory that is gone: that would bring back a directory the user deleted, with
   // only the backup in it, and keep the name taken - add refuses a name whose directory
   // exists. An empty backup goes with it; one that holds something is left, and said.
+  // An entry the profile has none of gets its newest backup back, under its own name. One it
+  // has again is newer than any backup of it - put back over it, a backup would revert it -
+  // so its backups stay. Nothing leaves the backup except onto an empty spot.
   if (!options.keepBackup && (await exists(backupDir))) {
     if (await exists(profile.configDir)) {
-      await cp(backupDir, profile.configDir, { recursive: true });
-      await rm(backupDir, { force: true, recursive: true });
+      const notPutBack: string[] = [];
+      for (const [itemName, copies] of await backupsByName(backupDir)) {
+        const target = path.join(profile.configDir, itemName);
+        // A link into the primary, which repair set aside dangling, holds nothing of the
+        // profile's: brought back, it would be the very link removing the profile strips. Kept,
+        // it would hold the backup directory, and the name, for nothing. It is deleted - the
+        // one kind of backup that is: a link, with no content of its own.
+        const own: string[] = [];
+        for (const copy of copies) {
+          if (await isLinkToPrimaryEntry(copy, primarySource, itemName)) await rm(copy, { force: true });
+          else own.push(copy);
+        }
+        const newest = own.at(-1);
+        if (!newest) continue;
+        if (!(await exists(target))) {
+          await moveTo(newest, target);
+          continue;
+        }
+        // plugins/ is the profile's own directory, never a link, so it is always there by now.
+        // setupPluginsDir set its items aside one by one, and they go back the same way.
+        if (itemName === "plugins" && (await isRealDirectory(target)) && (await isRealDirectory(newest))) {
+          for (const inner of await readdir(newest)) {
+            const innerTarget = path.join(target, inner);
+            if (await exists(innerTarget)) {
+              notPutBack.push(path.join(itemName, inner));
+              continue;
+            }
+            await moveTo(path.join(newest, inner), innerTarget);
+          }
+          await rmdir(newest).catch(() => {});
+          continue;
+        }
+        notPutBack.push(itemName);
+      }
+      if (await backupDirOccupied(backupDir)) {
+        const home = homedir();
+        const shownDir = profile.configDir.replace(home, "~");
+        const kept = notPutBack.length
+          ? ` ${shownDir} has its own ${notPutBack.sort().join(", ")} again, newer than any backup, so ${notPutBack.length === 1 ? "that was" : "those were"} not put back.`
+          : "";
+        warn(
+          `${shownDir} has the newest backup of each entry it was missing back.${kept} What clausona set aside and did not put back is still in ${backupDir.replace(home, "~")}: move it somewhere else, or delete it once nothing in it is needed.`,
+        );
+      } else {
+        await rmdir(backupDir).catch(() => {});
+      }
     } else if (await backupDirOccupied(backupDir)) {
       const home = homedir();
       warn(
@@ -1958,6 +2213,17 @@ async function clearBackupDir(backupDir: string, id: string) {
     }
     throw error;
   });
+}
+
+/**
+ * Removes `dir` and every directory under it that holds nothing once its own empty
+ * directories are gone. rmdir alone, so nothing that holds a file or a link goes.
+ */
+async function removeEmptyDirs(dir: string): Promise<void> {
+  const stats = await lstat(dir).catch(() => null);
+  if (!stats?.isDirectory()) return;
+  for (const entry of await readdir(dir)) await removeEmptyDirs(path.join(dir, entry));
+  await rmdir(dir).catch(() => {});
 }
 
 /** Whether a backup directory holds anything - or is something other than a directory. */
@@ -2419,7 +2685,7 @@ async function addProfileHoldingLock(options: AddProfileOptions, id: string) {
       await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
       if (options.tool === "claude") {
         await mergePluginFiles(path.join(configDir, "plugins"), path.join(primarySource, "plugins"));
-        await setupPluginsDir(configDir, primarySource);
+        await setupPluginsDir(configDir, primarySource, backupDir);
       }
     } catch (error) {
       await cleanupProfile(
@@ -2543,7 +2809,7 @@ async function addProfileHoldingLock(options: AddProfileOptions, id: string) {
   try {
     await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
     if (options.tool === "claude") {
-      await setupPluginsDir(configDir, primarySource);
+      await setupPluginsDir(configDir, primarySource, backupDir);
     }
   } catch (error) {
     await cleanupProfile(
@@ -2803,7 +3069,7 @@ export async function addApiProfile(options: {
       await writeJson(jsonPath, profileJson);
 
       await setupSharedLinks(adapter, configDir, primarySource, mergeSessions, backupDir);
-      await setupPluginsDir(configDir, primarySource);
+      await setupPluginsDir(configDir, primarySource, backupDir);
       if (toStore !== null) await storeSecret(id, toStore);
 
       // Inside the try: neither a registry write that fails nor an id another add took meanwhile
@@ -2970,12 +3236,18 @@ export async function removeProfile(id: string) {
   const { name } = parseProfileRef(id, registry);
   const backupDir = backupDirFor(CLAUSONA_DIR, profile.tool, name);
   const sharer = backupDirSharer(registry, id, profile.tool, name);
-  const sharedWarning = sharer
-    ? `${id}: left ${backupDir.replace(home, "~")} in place because '${sharer}' keeps its backup there too. Nothing from it was restored into ${profile.configDir.replace(home, "~")}; copy back anything you need from it by hand.`
-    : undefined;
+  // A profile registered on the primary's own directory: cleanupProfile leaves that directory
+  // and the backup alone, so removing it drops the entry and nothing else (#73).
+  const onPrimaryDir = await isPrimaryDir(profile.configDir, primarySource);
+  const shownDir = profile.configDir.replace(home, "~");
+  const notice = onPrimaryDir
+    ? `${id}: ${shownDir} is ${profile.tool}'s primary config directory itself, so only its entry was removed. ${shownDir} was left as it is${(await backupDirOccupied(backupDir)) ? `, and so was ${backupDir.replace(home, "~")}, which holds what clausona set aside from it` : ""}.`
+    : sharer
+      ? `${id}: left ${backupDir.replace(home, "~")} in place because '${sharer}' keeps its backup there too. Nothing from it was restored into ${shownDir}; copy back anything you need from it by hand.`
+      : undefined;
 
-  await cleanupProfile(name, profile, primarySource, { keepBackup: sharer !== undefined });
-  if (sharedWarning) warn(sharedWarning);
+  await cleanupProfile(name, profile, primarySource, { keepBackup: sharer !== undefined || onPrimaryDir });
+  if (notice) warn(notice);
 
   await updateRegistry((current) => {
     // Already removed by another process - nothing left to write.
@@ -3089,8 +3361,15 @@ export async function uninstallClausona() {
         const { name } = parseProfileRef(id, registry);
         const primarySource =
           registry.primarySources[profile.tool] ?? getAdapter(profile.tool).defaultConfigDir(homedir());
+        const shownDir = profile.configDir.replace(home, "~");
+        // cleanupProfile leaves a profile on the primary's own directory alone (#73).
+        const onPrimaryDir = await isPrimaryDir(profile.configDir, primarySource);
         await cleanupProfile(name, profile, primarySource);
-        removed.push(`profile: ${id} (symlinks stripped, data preserved at ${profile.configDir.replace(home, "~")})`);
+        removed.push(
+          onPrimaryDir
+            ? `profile: ${id} (${shownDir} is ${profile.tool}'s primary config directory itself, so it was left as it is)`
+            : `profile: ${id} (symlinks stripped, data preserved at ${shownDir})`,
+        );
       } catch (e) {
         warn(`uninstall: could not clean up profile ${id}: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -3120,10 +3399,24 @@ export async function uninstallClausona() {
     }
   }
 
-  // 3. Remove ~/.clausona/ directory (registry, usage, remaining backups)
+  // 3. Remove ~/.clausona/ (registry, usage, caches). Not the backups cleanup could not put
+  // back - older copies, entries the profile has again, a profile on the primary's own
+  // directory - which can be the only copy of a profile's data (#73). Those stay, and are said.
   if (await exists(CLAUSONA_DIR)) {
-    await rm(CLAUSONA_DIR, { force: true, recursive: true });
-    removed.push(`data: ${CLAUSONA_DIR}`);
+    const backupsDir = path.join(CLAUSONA_DIR, "backups");
+    await removeEmptyDirs(backupsDir);
+    if (await backupDirOccupied(backupsDir)) {
+      for (const entry of await readdir(CLAUSONA_DIR)) {
+        if (entry !== "backups") await rm(path.join(CLAUSONA_DIR, entry), { force: true, recursive: true });
+      }
+      removed.push(`data: ${CLAUSONA_DIR} (all but its backups)`);
+      removed.push(
+        `backups kept: ${backupsDir.replace(home, "~")} holds what clausona set aside and could not put back. Move it somewhere else, or delete it once nothing in it is needed.`,
+      );
+    } else {
+      await rm(CLAUSONA_DIR, { force: true, recursive: true });
+      removed.push(`data: ${CLAUSONA_DIR}`);
+    }
   }
 
   // 4. Remove app directory - the one the installer wrote to, which `clausona update` replaces in.

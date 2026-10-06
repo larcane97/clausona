@@ -170,6 +170,25 @@ exist — the tool creates it locally instead, and the accounts silently stop sh
 state. `clausona doctor` reports these as `missing_shared_link`; `clausona repair
 <profile>` links them.
 
+`clausona doctor` only reads. A shared link whose target is gone is reported as
+`broken_symlink` and left where it is. `clausona repair` never deletes what it replaces: each
+file, directory or stray link that stands where a shared link goes is moved into
+`~/.clausona/backups/<tool>/<profile>/<name>.<timestamp>`, a new backup every time, so a
+second repair keeps what the first one set aside. Removing the profile puts the newest backup
+of each entry back where the profile has none of that entry; an entry it has again is newer
+than any backup, so it stays as it is, and its backups stay too. `clausona uninstall` keeps
+`~/.clausona/backups` whenever something is left in it, and says so.
+
+A shared link to a primary entry that is itself a broken link is reported as
+`primary_broken_link`, with the primary's path. That break is the primary's to fix:
+`clausona repair` changes nothing in the primary, and leaves the profile's link as it is.
+
+A profile registered on its tool's primary directory itself (a non-primary entry whose
+config directory is `~/.claude` or `~/.codex`) has nothing to share, so clausona never links
+or repairs it. `clausona doctor` reports it as `primary_config_dir`, with the registry change
+that settles it: mark the entry `"isPrimary": true`, or remove it when another entry is
+already the primary. `clausona remove` of such an entry drops only the entry.
+
 A `~/.clausona/profiles.json` that is there but is not valid JSON, or not a JSON object, is
 the first thing `clausona doctor` checks. It says so in one line on stderr, in either output
 form, and exits 1 without checking anything else. The line names the file and what is wrong
@@ -204,8 +223,9 @@ that profile's key to Claude Code, which then talks to the endpoint you configur
 ├── locks/           # short-lived locks: registry and usage.json writes, per-profile
 │                    #   credential renewal
 └── backups/
-    ├── claude/      # backups of imported claude profile directories
-    └── codex/       # backups of imported codex profile directories
+    ├── claude/      # what clausona set aside from claude profile directories,
+    │                #   <profile>/<name>.<timestamp>
+    └── codex/       # the same for codex profile directories
 
 ~/.claude-<name>/        # claude profile config directories (created by `clausona add`)
 ~/.codex-<name>/         # codex profile config directories (created by `clausona add codex:<name>`)

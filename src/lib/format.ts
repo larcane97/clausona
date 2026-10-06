@@ -531,12 +531,14 @@ export function unconfirmedCredentialHint(tool: ToolName, command: string): stri
 const CREDENTIAL_ISSUE_KINDS = new Set<DoctorIssue["kind"]>(["missing_json", "missing_keychain", "missing_oauth"]);
 
 /**
- * Issues whose message already names what to do. Every one of them belongs to an API
- * profile, which has neither a login to renew nor shared links that could be at fault —
- * so offering `repair` or `login` here would point at a command that reports success and
+ * Issues whose message already names what to do. All but one belong to an API profile,
+ * which has neither a login to renew nor shared links that could be at fault; the one,
+ * `primary_broken_link`, is a break in the primary, which repair never changes. Offering
+ * `repair` or `login` for any of them would point at a command that reports success and
  * changes nothing.
  */
 const SELF_DIRECTED_ISSUE_KINDS = new Set<DoctorIssue["kind"]>([
+  "primary_broken_link",
   "missing_config_dir",
   "missing_api_secret",
   "invalid_api_config",
@@ -635,5 +637,8 @@ export function offersRepair(issues: DoctorIssue[]): boolean {
   // ENOENT instead of fixing anything - so the profile is left with the one instruction
   // that works, which its own message carries.
   if (issues.some((issue) => issue.kind === "missing_config_dir")) return false;
+  // A profile on its tool's primary directory is never linked, so there is nothing for repair
+  // to rebuild - it refuses one. The message names the registry change that settles it.
+  if (issues.some((issue) => issue.kind === "primary_config_dir")) return false;
   return issues.some((issue) => !CREDENTIAL_ISSUE_KINDS.has(issue.kind) && !SELF_DIRECTED_ISSUE_KINDS.has(issue.kind));
 }
