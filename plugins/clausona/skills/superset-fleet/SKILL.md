@@ -94,7 +94,9 @@ Show the user the table, with each task's profile, before starting the workers.
 ## 4. Starting a worker
 
 For each task: create the workspace, trust its worktree for the worker's profile, then start
-the worker.
+the worker. Name the workspace `<short task> · <profile label>`, for example
+`Paths · work (Opus 5.5)`, so the Superset sidebar shows which account runs where. Keep it
+under 26 characters: the sidebar cuts longer names.
 
 1. **Trust.** Superset does not pre-trust folders for custom configs, so a fresh worktree stops
    at Claude Code's folder-trust prompt.
@@ -105,8 +107,10 @@ the worker.
      before. So start workers on the same profile one at a time, each after the previous one
      shows its first output.
    - A profile's first Claude Code session can stop at one-time questions, such as an API-key
-     profile's "Detected a custom API key" (the answer must be Yes). Before a profile's first
-     worker, ask the user to start it once by hand (`clausona run <profile>`) and answer them.
+     profile's "Detected a custom API key" (the answer must be Yes) or a Claude in Chrome
+     notice. Before a profile's first worker, ask the user to start it once by hand
+     (`clausona run <profile>`) and answer them. If a worker's screen shows such a question,
+     tell the user, or answer it yourself when the highlighted default is the safe choice.
 2. **The brief.** Write it to a file and start the worker with it. Besides the task, every
    brief says:
    - Work only in this worktree and branch. When done, commit and push the branch
