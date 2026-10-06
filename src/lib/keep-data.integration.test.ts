@@ -1,5 +1,6 @@
 import {
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -257,6 +258,25 @@ describe("repair over the profile's own data", () => {
       ownKnown,
     );
     expect(h.stderr()).toContain(path.join("plugins", "known_marketplaces.json"));
+  });
+
+  it("takes out a second name of the primary's credential even when the primary reaches it by a link", async () => {
+    const h = await workHarness();
+    const shared = path.join(h.home, "shared-auth.json");
+    writeFileSync(shared, codexAuth("primary@example.com"));
+    rmSync(path.join(h.dirs.codex, "auth.json"));
+    symlinkSync(shared, path.join(h.dirs.codex, "auth.json"));
+    const profileAuth = path.join(h.dirs.codexWork, "auth.json");
+    rmSync(profileAuth);
+    linkSync(shared, profileAuth);
+
+    const work = (await h.service.doctorProfiles()).find((result) => result.name === "codex:work");
+    expect(work?.issues.map((issue) => issue.kind)).toContain("stale_symlink");
+
+    await h.service.repairProfile("codex:work");
+
+    expect(lstatSync(profileAuth, { throwIfNoEntry: false })).toBeUndefined();
+    expect(readFileSync(shared, "utf8")).toBe(codexAuth("primary@example.com"));
   });
 
   it("keeps a private file the primary's entry is only a link to", async () => {
