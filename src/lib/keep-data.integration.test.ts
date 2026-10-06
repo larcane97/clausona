@@ -243,6 +243,22 @@ describe("repair over the profile's own data", () => {
     expect(existsSync(path.join(backup, "marketplaces", "mine", "marketplace.json"))).toBe(true);
   });
 
+  it("remove puts a claude profile's own plugins back into its plugins/, item by item", async () => {
+    const { h, workPlugins, own, ownKnown } = await pluginsHarness();
+    await h.service.repairProfile("claude:work");
+
+    await h.service.removeProfile("claude:work");
+
+    expect(lstatSync(path.join(workPlugins, "marketplaces")).isSymbolicLink()).toBe(false);
+    expect(readFileSync(path.join(own, "marketplace.json"), "utf8")).toBe("{}");
+    // The profile has a known_marketplaces.json again, so the one set aside stays, and is named.
+    const [kept] = backupsNamed(h.backups("work", "claude"), "plugins");
+    expect(readFileSync(path.join(h.backups("work", "claude"), kept, "known_marketplaces.json"), "utf8")).toBe(
+      ownKnown,
+    );
+    expect(h.stderr()).toContain(path.join("plugins", "known_marketplaces.json"));
+  });
+
   it("keeps a private file the primary's entry is only a link to", async () => {
     const h = await workHarness();
     // The primary's auth.json leads into the profile, so the profile holds the only copy.

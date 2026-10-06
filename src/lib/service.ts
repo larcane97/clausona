@@ -486,6 +486,11 @@ async function holdsNothingOfItsOwn(target: string, source: string): Promise<boo
   return Boolean(sourceStats?.isFile());
 }
 
+/** Whether `target` is a directory itself, not a link to one. */
+async function isRealDirectory(target: string): Promise<boolean> {
+  return Boolean((await lstat(target).catch(() => null))?.isDirectory());
+}
+
 /** Whether a backup is only a link to the primary's entry of that name - nothing of the profile's own. */
 async function isLinkToPrimaryEntry(backupItem: string, primarySource: string, itemName: string): Promise<boolean> {
   const stats = await lstat(backupItem).catch(() => null);
@@ -831,7 +836,9 @@ async function mergePluginFiles(profilePluginsDir: string, primaryPluginsDir: st
 /**
  * Links each entry of the primary's plugins/ into the profile's own plugins/. What stands
  * where a link goes is moved into one backup for the run, `<backupDir>/plugins.<timestamp>/`,
- * under its own name - so removing the profile puts it back where it was.
+ * under its own name, with a copy of the two JSON files the sync is about to rewrite.
+ * Removing the profile moves each item back into its plugins/ wherever the profile has none
+ * of it by then; the rest stays in the backup, and is named.
  */
 async function setupPluginsDir(profileDir: string, primarySource: string, backupDir: string): Promise<void> {
   // setupSharedLinks refuses this first; checked again because what follows deletes the same way.
@@ -2103,17 +2110,33 @@ async function cleanupProfile(
       const notPutBack: string[] = [];
       for (const [itemName, copies] of await backupsByName(backupDir)) {
         const target = path.join(profile.configDir, itemName);
-        if (await exists(target)) {
-          notPutBack.push(itemName);
+        // A link into the primary, which repair set aside dangling, holds nothing of the
+        // profile's: brought back, it would be the very link removing the profile strips.
+        const own: string[] = [];
+        for (const copy of copies) {
+          if (!(await isLinkToPrimaryEntry(copy, primarySource, itemName))) own.push(copy);
+        }
+        const newest = own.at(-1);
+        if (!newest) continue;
+        if (!(await exists(target))) {
+          await moveTo(newest, target);
           continue;
         }
-        for (const copy of [...copies].reverse()) {
-          // A link into the primary, which repair set aside dangling, holds nothing of the
-          // profile's: brought back, it would be the very link removing the profile strips.
-          if (await isLinkToPrimaryEntry(copy, primarySource, itemName)) continue;
-          await moveTo(copy, target);
-          break;
+        // plugins/ is the profile's own directory, never a link, so it is always there by now.
+        // setupPluginsDir set its items aside one by one, and they go back the same way.
+        if (itemName === "plugins" && (await isRealDirectory(target)) && (await isRealDirectory(newest))) {
+          for (const inner of await readdir(newest)) {
+            const innerTarget = path.join(target, inner);
+            if (await exists(innerTarget)) {
+              notPutBack.push(path.join(itemName, inner));
+              continue;
+            }
+            await moveTo(path.join(newest, inner), innerTarget);
+          }
+          await rmdir(newest).catch(() => {});
+          continue;
         }
+        notPutBack.push(itemName);
       }
       if (await backupDirOccupied(backupDir)) {
         const home = homedir();
