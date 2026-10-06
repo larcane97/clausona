@@ -39,8 +39,9 @@ flowchart LR
   C -- "retire: ask or auto" --> R["Workspace and worktree removed,<br/>branch kept"]
 ```
 
-1. **It picks the profiles.** The orchestrator reads every profile's limits with
-   `clausona list` and gives each task a profile with headroom, never its own.
+1. **It picks the profiles.** It uses the profiles and rules you give it, in the request or in
+   a settings file. For the rest it reads every profile's limits with `clausona list` and gives
+   each task a profile with headroom, never its own.
 2. **It starts the workers.** It creates a Superset workspace per task and starts the worker
    with that profile's Superset agent.
 3. **It watches them.** It reads the workers' terminals and answers what they ask. If an
@@ -95,7 +96,8 @@ In a Claude Code session in a Superset project, ask for the work:
 
 The orchestrator then:
 
-1. Shows a table of the tasks and the profile each will run on, chosen by headroom.
+1. Shows a table of the tasks and the profile each will run on, chosen by headroom. When
+   neither your request nor your settings named a profile, it waits for your OK.
 2. Creates a workspace per task, named after the task and the profile, so the sidebar shows
    which account runs where. It starts each worker with its brief. The brief tells the worker
    to push its branch, to start no agents of its own, and to report done or blocked.
@@ -107,17 +109,40 @@ The orchestrator then:
 
 ## Settings
 
+Settings live in `~/.clausona/superset-fleet.json`. What you say in the conversation wins over
+the file, and the file wins over the defaults.
+
+**Choosing the workers.**
+- By default any Claude profile with headroom can be a worker, except the orchestrator's own.
+  A profile at 90% or more of its 5-hour or weekly limit is skipped.
+- To choose them yourself, name them in the request, or set them in the file:
+
+  ```json
+  {
+    "workers": ["claude:work", "claude:side", "claude:glm"],
+    "routing": ["claude:glm never edits files under src/"],
+    "maxUsage": 80
+  }
+  ```
+
+  - `workers`: the only profiles that can be workers.
+  - `routing`: your own rules for which task goes where, in plain words.
+  - `maxUsage`: the usage, in percent, at which a profile is skipped. The default is 90.
+- Or tell the orchestrator, for example "never use claude:personal for workers", and it updates
+  the file.
+
 **Retiring finished workers.**
 - By default the orchestrator asks before retiring anything.
-- To retire automatically, tell it "always retire finished workers", or create
-  `~/.clausona/superset-fleet.json`:
+- To retire automatically, tell it "always retire finished workers", or set `retire` in the
+  file:
 
   ```json
   { "retire": "auto" }
   ```
 
 - A worker is retired only when its work was checked, its branch is pushed and its worktree
-  is clean. Superset removes a worktree with whatever is in it.
+  is clean. Superset removes a worktree with whatever is in it, so the skill's helper checks
+  the worktree and the branch right before the delete, and refuses when either is not clean.
 
 **With or without the Superset CLI.**
 - With the CLI logged in (`superset auth login`), the skill uses it.

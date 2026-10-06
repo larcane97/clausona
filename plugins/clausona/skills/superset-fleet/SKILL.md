@@ -18,9 +18,12 @@ limits. Profiles share plugins and settings. `csn` is short for `clausona`.
 
 Stop and tell the user what is missing if any of these fails.
 
-1. `clausona list --json` lists the profiles. Each has `name` and `configDir`. A subscription
-   profile also has `quota.state`, `quota.session.usedPercent` (5H) and
-   `quota.weekly.usedPercent` (7D). An API profile has `kind: "api"` and `model` instead.
+1. `clausona list --json` lists the profiles. Each has `name`, `tool` and `configDir`.
+   - Only profiles with `tool: "claude"` can be workers. Codex profiles are not covered.
+   - A subscription profile also has `quota.state`, `quota.session.usedPercent` (5H) and
+     `quota.weekly.usedPercent` (7D). It can also have `quota.scoped`: a weekly limit on one
+     model, named in its `label`.
+   - An API profile has `kind: "api"` and `model` instead.
 2. `superset:orchestrate` is available.
 3. Choose how to reach Superset:
    - If `superset auth whoami` succeeds, use the **CLI path**: the `superset` commands below,
@@ -32,9 +35,11 @@ Stop and tell the user what is missing if any of these fails.
        manifest, and never prints the token.
      - Every helper command prints JSON.
      - If it says the host API has changed, stop and pass that message on.
+4. Read `~/.clausona/superset-fleet.json` if it exists. It holds the user's settings:
+   `workers`, `routing` and `maxUsage` (section 3), and `retire` (section 7).
 
-Below, `H` means `node <base>/scripts/superset-host.mjs`. `H trust` and `H terminals wait` are
-used on both paths.
+Below, `H` means `node <base>/scripts/superset-host.mjs`. `H trust`, `H terminals wait` and
+`H workspaces delete` are used on both paths.
 
 | Step | CLI path | Helper path |
 |---|---|---|
@@ -42,14 +47,18 @@ used on both paths.
 | Agent configs | `superset agents list --local --json` | `H agents configs` |
 | New workspace | `superset ws create --local --project <id> --name <name> --branch <branch> --json` | `H workspaces create --project <id> --name <name> --branch <branch>` |
 | Worktree path | `superset ws get --local <id> --json` | `H workspaces list --project <id>` (`worktreePath`) |
-| Start a worker | `superset agents create --local --workspace <id> --agent <config> --prompt "<brief>" --json` | `H agents run --workspace <id> --agent <config> --prompt-file <brief file>` |
+| Start a worker | `superset agents create --local --workspace <id> --agent <config> --prompt "$(cat <brief file>)" --json` | `H agents run --workspace <id> --agent <config> --prompt-file <brief file>` |
 | Hand a task over | `superset agents create --local --workspace <id> --agent <config> --from-terminal <terminal> --json` | `H agents run --workspace <id> --agent <config> --from-terminal <terminal>` |
 | Terminals | `superset terminals list --local --workspace <id> --json` | `H terminals list --workspace <id>` |
 | Read | `superset terminals read --local --workspace <id> --terminal <terminal> --max-lines 240 --json` | `H terminals read --workspace <id> --terminal <terminal>` |
-| Send | `superset terminals send --local --workspace <id> --terminal <terminal> --text "<text>" --json` | `H terminals send --workspace <id> --terminal <terminal> --text "<text>"` |
+| Send | `superset terminals send --local --workspace <id> --terminal <terminal> --text "$(cat <text file>)" --json` | `H terminals send --workspace <id> --terminal <terminal> --text-file <text file>` |
 | Close | `superset terminals close --local --workspace <id> --terminal <terminal> --json` | `H terminals close --workspace <id> --terminal <terminal>` |
-| Wait for workers | `H terminals wait --workspace <id> --workspace <id> …` | `H terminals wait --workspace <id> --workspace <id> …` |
-| Delete workspace | `superset ws delete --local <id> --json` | `H workspaces delete <id>` |
+| Wait for workers | `H terminals wait --workspace <id> … --seen <mark> …` | `H terminals wait --workspace <id> … --seen <mark> …` |
+| Delete workspace | `H workspaces delete <id>` | `H workspaces delete <id>` |
+
+Write every brief and follow-up to a file and pass the file, as the table does. Never paste one
+inside quotes on a command line: the shell would run any `$( )` or backticks in it. On the CLI
+path, do not start a follow-up with `-`.
 
 ## 2. Profiles as Superset agents
 
@@ -79,13 +88,25 @@ When a profile the plan needs has no config:
 
 ## 3. Routing tasks to profiles
 
-Add a `profile` column to orchestrate's coordinator table, and fill it by these rules:
+Add a `profile` column to orchestrate's coordinator table, and fill it in.
+
+**Who decides.** What the user says in this conversation comes first: the profiles to use, a
+task's profile, or a rule such as "keep GLM off src/". Then the settings file:
+
+- `workers`: the only profiles that may be workers, for example `["claude:work", "claude:glm"]`.
+  Without it, every Claude profile may be one.
+- `routing`: the user's own rules, in words, for example
+  `"claude:glm never edits files under src/"`.
+- `maxUsage`: the usage threshold below, in percent. The default is 90.
+
+Then these defaults, for whatever the user left open:
 
 - **The orchestrator's own profile is never a worker.** That is the profile whose `configDir`
   equals `$CLAUDE_CONFIG_DIR`, or `~/.claude` when the variable is unset. It coordinates
   only. (`isActive` in the list is something else: the profile `clausona use` picked.)
 - **Skip profiles near or past their limits.** Never use a subscription profile whose
-  `quota.state` is not `ok`, or whose 5H or 7D usage is 90% or more.
+  `quota.state` is not `ok`, or whose 5H or 7D usage is at `maxUsage` or more. If its
+  `quota.scoped` is at `maxUsage` or more, do not run the model in its `label` there.
 - **Prefer headroom.** Pick the profile with the most room left, and spread the workers so no
   one profile carries most of them.
 - **Send wide, mechanical work to API profiles**, with small, explicit briefs: the file, the
@@ -94,7 +115,16 @@ Add a `profile` column to orchestrate's coordinator table, and fill it by these 
 - **Verification (section 6) runs on a third profile**, neither the worker's nor the
   orchestrator's.
 
-Show the user the table, with each task's profile, before starting the workers.
+If the user picks a profile these defaults would skip, such as one past its limits, use it and
+say what it risks.
+
+**Before starting.** Show the user the table, with each task's profile. If neither the request
+nor the settings named a profile (in `workers` or `routing`), wait for the user's OK. Otherwise,
+or if the user said to start right away, start at once.
+
+If the user asks to change the defaults ("never use claude:personal for workers", "always keep
+GLM off src/"), update `workers`, `routing` or `maxUsage` in `~/.clausona/superset-fleet.json`,
+and keep its other keys.
 
 ## 4. Starting a worker
 
@@ -114,8 +144,9 @@ under 26 characters: the sidebar cuts longer names.
    - A profile's first Claude Code session can stop at one-time questions, such as an API-key
      profile's "Detected a custom API key" (the answer must be Yes) or a Claude in Chrome
      notice. Before a profile's first worker, ask the user to start it once by hand
-     (`clausona run <profile>`) and answer them. If a worker's screen shows such a question,
-     tell the user, or answer it yourself when the highlighted default is the safe choice.
+     (`clausona run <profile>`) and answer them. If a worker's screen shows such a one-time
+     notice, answer it yourself only when its highlighted default is the safe choice; otherwise
+     tell the user. A permission prompt is not such a notice (see Waiting).
 2. **The brief.** Write it to a file and start the worker with it. Besides the task, every
    brief says:
    - Work only in this worktree and branch. When done, commit and push the branch
@@ -132,15 +163,21 @@ The user can open any worker's tab in Superset, read along and type into it at a
 
 **Waiting.** Never end your turn while a worker runs with nothing waiting on it: no one would
 wake you, and the user would have to. After starting the workers, and after handling each
-event, run `H terminals wait` with every worker that is still running, as a background task.
-It returns as soon as one of them needs you. It judges this from Superset's record of each
-agent's last hook event, not from the screen:
+event, run `H terminals wait` as a background task, with a `--workspace` for every worker whose
+task is not finished. It returns as soon as one of them needs you. It judges this from
+Superset's record of each agent's last hook event, not from the screen:
 
 - `stopped`: its turn ended. Read its screen for a DONE or BLOCKED envelope, a question, or a
   limit or API error.
-- `quiet`: no event for 5 minutes, often a permission prompt. Read its screen.
+- `quiet`: no event for 5 minutes. Read its screen. It is often a permission prompt: never
+  answer one yourself. Tell the user which worker waits for them, and for what.
 - `gone`: its terminal exited.
 - `timeout`: nothing for 30 minutes. Read the screens, then wait again.
+
+A worker stays in the same state until its next event, so each `stopped` and `quiet` result
+carries a `seen` mark. Pass back every mark you have handled, as `--seen <mark>`, in every later
+wait. Otherwise a worker waiting at a prompt, or one that has not yet picked up your follow-up,
+makes each wait return at once.
 
 Do not write your own loop that searches the screens for a phrase. The phrase may be in the
 brief too, in another language, or missing.
@@ -162,7 +199,8 @@ A DONE envelope is a claim. Before marking a task completed, in its worktree:
 
 - `git log --oneline <base>..HEAD` shows the work.
 - `git status --porcelain` prints nothing.
-- `git status -sb` shows the branch is not ahead of its upstream.
+- `git rev-list --count @{u}..HEAD` prints 0: the branch is pushed. It fails when the branch
+  has no upstream, that is, when it was never pushed.
 - Read the diff against what the brief asked.
 - Run the brief's check commands yourself.
 - For risky changes, also run a blind checker on a third profile, from the worktree:
@@ -178,11 +216,14 @@ Retiring a worker deletes its Superset workspace. That stops the agent, closes i
 and removes its worktree. The branch stays. Superset removes the worktree **even when it holds
 uncommitted work**, so these conditions are the only guard.
 
-A worker is retirable only when all three hold, checked again immediately before deleting:
+A worker is retirable only when all three hold:
 
 1. The task was judged complete (section 6).
-2. Its branch is pushed or merged: no commits ahead of its upstream.
+2. Its branch is pushed: it has an upstream, and no commits ahead of it.
 3. `git status --porcelain` in its worktree prints nothing.
+
+Delete only with `H workspaces delete <id>`, on both paths. Right before it deletes, it checks 2
+and 3 itself, and it refuses when either fails. `superset ws delete` checks nothing.
 
 The retire mode is the first of these that applies:
 
@@ -197,11 +238,12 @@ What each mode does:
 - **`auto`**: say at the start that finished workers will be retired, then retire each one as
   soon as it is retirable.
 
-A worker that is not retirable is never retired; report why. After deleting, confirm the
-worktree directory is gone.
+A worker that is not retirable is never retired; report why. The helper's refusal says why.
+After deleting, confirm the worktree directory is gone.
 
 If the user asks to change the default ("always retire finished workers", "stop retiring
-them"), write `{"retire": "auto"}` or `{"retire": "ask"}` to `~/.clausona/superset-fleet.json`.
+them"), set `retire` to `auto` or `ask` in `~/.clausona/superset-fleet.json`, and keep its other
+keys.
 
 ## 8. Final report
 

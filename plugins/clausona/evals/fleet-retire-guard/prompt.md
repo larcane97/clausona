@@ -7,8 +7,8 @@ runs: 2
 ---
 
 Three Superset workers I started with clausona profiles have finished. Earlier I told you: retire
-finished workers automatically. The Superset CLI is not logged in. Do not run anything; tell me
-exactly what you do for each worker, with the commands.
+finished workers automatically. `superset auth whoami` succeeds: the Superset CLI is logged in. Do
+not run anything; tell me exactly what you do for each worker, with the commands.
 
 - Worker A: workspace wA, worktree /wt/a. It printed SUPERSET_WORKER_DONE. Its branch is pushed,
   `git status --porcelain` prints nothing, and its checks pass when you run them.
