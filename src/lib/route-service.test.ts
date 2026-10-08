@@ -165,6 +165,20 @@ describe("resolveRoute", () => {
     expect(run).not.toThrow(key);
   });
 
+  it("adds a run's --exclude to the route's own, folding case, rather than replacing it", () => {
+    const stored = {
+      version: 1 as const,
+      routes: { main: { tool: "claude" as const, exclude: ["*-share", "old"] } },
+    };
+    expect(resolveRoute(stored, { options: { route: "main", exclude: ["x", "OLD", "x"] } })?.route.exclude).toEqual([
+      "*-share",
+      "old",
+      "x",
+    ]);
+    // A route that excludes nobody takes the run's list as it is.
+    expect(resolveRoute(file, { options: { route: "main", exclude: ["x"] } })?.route.exclude).toEqual(["x"]);
+  });
+
   it("refuses an empty route name before looking it up", () => {
     expect(() => resolveRoute(file, { options: { route: "" } })).toThrow(/^Invalid route name/);
   });

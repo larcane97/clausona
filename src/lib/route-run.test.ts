@@ -84,6 +84,30 @@ describe("runRouted", () => {
     expect(s.launches).toEqual([["claude:b", ["--resume", "abc"]]]);
   });
 
+  it("keeps the route's own excludes when a run excludes one more", async () => {
+    const registry: Registry = {
+      ...REGISTRY,
+      profiles: {
+        ...REGISTRY.profiles,
+        "claude:team-share": { tool: "claude", configDir: "/home/u/.claude-team-share", email: "t@example.com" },
+      },
+    };
+    const s = setup({
+      registry,
+      routes: { version: 1, routes: { main: { tool: "claude", exclude: ["*-share"], strategy: "headroom" } } },
+      quotas: { "claude:a": snap(30), "claude:b": snap(10), "claude:solo": snap(5), "claude:team-share": snap(1) },
+    });
+    const asked: string[][] = [];
+    const collect = s.deps.collectQuotas;
+    s.deps.collectQuotas = async (targets) => {
+      asked.push(targets.map((target) => target.id));
+      return collect(targets);
+    };
+    await runRouted(["--route", "main", "--exclude", "solo", "-p", "hi"], s.launch, s.io, s.deps);
+    expect(asked).toEqual([["claude:a", "claude:b"]]);
+    expect(s.launches).toEqual([["claude:b", ["-p", "hi"]]]);
+  });
+
   it("exits 75 when nobody can be picked", async () => {
     const s = setup({ routes: MAIN, quotas: { "claude:a": snap(99), "claude:b": snap(99), "claude:solo": snap(99) } });
     const error = (await runRouted(["--route", "main"], s.launch, s.io, s.deps).catch(

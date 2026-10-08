@@ -933,7 +933,7 @@ function subcommandHelpText(command: string): string | undefined {
         helpSection("ROUTING OPTIONS", [
           ["--route <name>", "Pick through a saved route (clausona route --help)"],
           ["--from <patterns>", "Pick through an unsaved route of these members"],
-          ["--exclude <patterns>", "Leave these out for this run"],
+          ["--exclude <patterns>", "Also leave these out for this run"],
           ["--strategy <s>", "round-robin, headroom or expiring, for this run"],
           ["--max-usage <n>", "Cut at n% for this run"],
           ["--reserve-usage <n>", "Reserve up to n% for this run"],

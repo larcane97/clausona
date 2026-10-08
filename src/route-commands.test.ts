@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-
+import { runCommand } from "./commands.js";
 import { routesPaths } from "./core/routes-store.js";
 import { stripAnsi } from "./lib/cli-style.js";
 import type { RouteIo } from "./lib/route-create.js";
@@ -81,6 +81,14 @@ describe("route help", () => {
     const { run } = setup();
     expect(await run("add", "--help")).toContain("clausona route add <name>");
     expect(await run("pick", "-h")).toContain("--json");
+  });
+
+  it("says a run's --exclude adds to the route's list, and route set's replaces it", async () => {
+    const { run } = setup();
+    expect(await run("set", "--help")).toMatch(/--exclude <patterns>\s+Replace the route's exclude list/);
+    expect(stripAnsi(await runCommand("run", ["--help"]))).toMatch(
+      /--exclude <patterns>\s+Also leave these out for this run/,
+    );
   });
 });
 
@@ -292,6 +300,17 @@ describe("route explain and pick", () => {
     expect(() => readFileSync(deps.paths.picksPath)).toThrow();
     const json = JSON.parse(await run("explain", "main", "--json"));
     expect(json).toMatchObject({ route: "main", resolvedBy: "flag", outcome: { kind: "picked", id: "claude:a" } });
+  });
+
+  it("adds a run-time --exclude to the route's own, while route set --exclude replaces it", async () => {
+    const { run, file } = setup();
+    await run("add", "main", "--exclude", "c");
+    const json = JSON.parse(await run("explain", "main", "--exclude", "a", "--json"));
+    expect(json.settings.exclude).toEqual(["c", "a"]);
+    expect(json.members.map((member: { profile: string }) => member.profile)).toEqual(["claude:b"]);
+    expect(await run("pick", "main", "--exclude", "b")).toBe("claude:a");
+    await run("set", "main", "--exclude", "b");
+    expect(file().routes.main.exclude).toEqual(["b"]);
   });
 
   it("explains an unsaved route", async () => {

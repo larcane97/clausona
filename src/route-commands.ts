@@ -85,7 +85,10 @@ const SUB_HELP: Record<string, string[]> = {
     helpUsage("clausona route set <name> [options] [--add <patterns>] [--drop <patterns>] [--no-fallback]"),
     "",
     helpSection("OPTIONS", [
-      ...FIELD_HELP,
+      // An edit: unlike a run's --exclude, which adds to the route's list for that run.
+      ...FIELD_HELP.map(([flag, text]): [string, string] =>
+        flag.startsWith("--exclude") ? [flag, "Replace the route's exclude list"] : [flag, text],
+      ),
       ["--add <patterns>", "Add entries to from"],
       ["--drop <patterns>", "Remove entries from from (to leave one account out of *, use --exclude)"],
       ["--no-fallback", "Remove the fallback list"],

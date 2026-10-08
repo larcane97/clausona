@@ -14,6 +14,7 @@ import { pickWithRecord, type RoutesPaths, readPicks, routesPaths } from "../cor
 import { type Ranking, rankRoute } from "../core/routing.js";
 import type { QuotaSnapshot, Registry, ToolName } from "../types.js";
 import { editInEditor } from "./editor.js";
+import { foldProfileName } from "./profile-ref.js";
 import type { ResolvedBy } from "./route-render.js";
 import type { RoutingOptions } from "./run-args.js";
 import { loadRegistry, noRegistryError } from "./service.js";
@@ -102,6 +103,17 @@ function listFlags(flags: string[]): string {
   return flags.length < 2 ? flags.join("") : `${flags.slice(0, -1).join(", ")} and ${flags[flags.length - 1]}`;
 }
 
+/** Every pattern of the lists, in order, once: two that differ only in case are one. */
+function unionPatterns(...lists: string[][]): string[] {
+  const seen = new Set<string>();
+  return lists.flat().filter((pattern) => {
+    const folded = foldProfileName(pattern);
+    if (seen.has(folded)) return false;
+    seen.add(folded);
+    return true;
+  });
+}
+
 function inferTool(patterns: string[]): ToolName | undefined {
   const tools = new Set(patterns.map((pattern) => /^(claude|codex):/.exec(pattern)?.[1] as ToolName | undefined));
   if (tools.size !== 1) return undefined;
@@ -110,7 +122,8 @@ function inferTool(patterns: string[]): ToolName | undefined {
 
 /**
  * The route a run names: a stored one (`--route`), or an unsaved one (`--from`), with the run's
- * field options applied over it. Null when the run names neither and gives no field options.
+ * field options applied over it. Each replaces its field for the run, except `--exclude`, which
+ * adds to the route's own exclude list. Null when the run names neither and gives no field options.
  */
 export function resolveRoute(
   file: RoutesFile,
@@ -145,7 +158,13 @@ export function resolveRoute(
     }
     return null;
   }
-  const merged = applyOverrides(spec, overrides);
+  // Leaving one more account out for a run must not bring back the ones the route leaves out.
+  // (`route set --exclude` replaces the list: that is an edit, and goes through applyOverrides.)
+  const runOverrides =
+    overrides.exclude !== undefined && spec.exclude?.length
+      ? { ...overrides, exclude: unionPatterns(spec.exclude, overrides.exclude) }
+      : overrides;
+  const merged = applyOverrides(spec, runOverrides);
   const problems = checkRoute(name ?? "inline", merged, name ? `routes.${name}` : "--from route");
   if (problems.length) throw new Error(problems.join("\n"));
   return { ...(name ? { name } : {}), route: withDefaults(merged), resolvedBy: name ? "flag" : "inline" };
