@@ -3,8 +3,8 @@ import path from "node:path";
 import { truncate } from "../lib/cli-style.js";
 import type { Registry, ToolName } from "../types.js";
 import { duplicateGroups, loadInventory, marksOf, usageOf } from "./inventory.js";
-import type { Extension, Inventory, Kind } from "./model.js";
-import { samePath } from "./read.js";
+import type { EffectiveState, Extension, Inventory, Kind } from "./model.js";
+import { entryInfo, samePath } from "./read.js";
 import { relevantIn, stateOf } from "./state.js";
 
 export type ExtensionsCommand = "skills" | "mcp" | "hooks";
@@ -83,26 +83,54 @@ export function whereLabel(item: Extension): string {
   return parts.join(" ");
 }
 
+/** The project an item is read in: its own when it has one, else the one the list is seen from. */
+function viewFrom(item: Extension, project: string | undefined): string | undefined {
+  return item.location.project ?? project;
+}
+
+/** What `item` is with no account named: every account's approvals merged. */
+function stateHere(inv: Inventory, item: Extension, project: string | undefined): EffectiveState {
+  return stateOf(inv, item, viewFrom(item, project));
+}
+
+type AccountState = { profile: string; state: EffectiveState };
+
 /**
- * A Claude MCP server that every account opening the project sees (.mcp.json, plugin) is read
- * per account. Only the accounts that can load it count: Claude accounts, and for a plugin's
- * server the ones with the plugin installed. Codex records projects too, but never loads a
- * Claude server.
+ * A Claude MCP server that every account opening the project sees (.mcp.json, plugin) is
+ * switched per account, so it is read per account. Only the accounts that can load it count:
+ * Claude accounts, and for a plugin's server the ones with the plugin installed. Codex records
+ * projects too, but never loads a Claude server. Undefined for any other item, and when no such
+ * account has recorded the project.
  */
-function stateWord(inv: Inventory, item: Extension, project: string | undefined): string {
-  if (item.kind === "mcp" && item.location.tool === "claude" && item.location.profile === undefined && project) {
-    const accounts =
-      item.location.scope === "plugin" && item.location.accounts ? item.location.accounts : inv.claudeProfiles;
-    const profiles = (inv.projects.find((p) => samePath(p.path, project))?.profiles ?? []).filter((profile) =>
-      accounts.includes(profile),
-    );
-    const values = profiles.map((profile) => stateOf(inv, item, project, profile).value);
-    const unique = [...new Set(values)];
-    if (unique.length > 1) return `${values.filter((v) => v === "on").length}/${values.length} on`;
-    if (unique[0]) return unique[0];
+function accountStates(inv: Inventory, item: Extension, project: string | undefined): AccountState[] | undefined {
+  const here = viewFrom(item, project);
+  if (item.kind !== "mcp" || item.location.tool !== "claude" || item.location.profile !== undefined || !here) {
+    return undefined;
   }
-  const state = stateOf(inv, item, project);
+  const accounts =
+    item.location.scope === "plugin" && item.location.accounts ? item.location.accounts : inv.claudeProfiles;
+  const profiles = (inv.projects.find((p) => samePath(p.path, here))?.profiles ?? []).filter((profile) =>
+    accounts.includes(profile),
+  );
+  if (profiles.length === 0) return undefined;
+  return profiles.map((profile) => ({ profile, state: stateOf(inv, item, here, profile) }));
+}
+
+function stateWord(inv: Inventory, item: Extension, project: string | undefined): string {
+  const byAccount = accountStates(inv, item, project);
+  if (byAccount) {
+    const first = byAccount[0]?.state.value;
+    if (first !== undefined && byAccount.every((a) => a.state.value === first)) return first;
+    return `${byAccount.filter((a) => a.state.value === "on").length}/${byAccount.length} on`;
+  }
+  const state = stateHere(inv, item, project);
   return state.shadowedBy ? "shadowed" : state.value;
+}
+
+/** Off in at least one account, for a server read per account - as the dashboard's Off filter has it. */
+function isOff(inv: Inventory, item: Extension, project: string | undefined): boolean {
+  const byAccount = accountStates(inv, item, project);
+  return byAccount ? byAccount.some((a) => a.state.value === "off") : stateHere(inv, item, project).value === "off";
 }
 
 function select(
@@ -124,9 +152,26 @@ function select(
     if (!options.allProjects && !relevantIn(item, project)) return false;
     if (options.filter === "cleanup") return marksOf(inv, item, now).includes("cleanup");
     if (options.filter === "duplicates") return duplicates.has(item.id);
-    if (options.filter === "off") return stateOf(inv, item, project).value === "off";
+    if (options.filter === "off") return isOff(inv, item, project);
     return true;
   });
+}
+
+const NOUN: Record<ExtensionsCommand, { one: string; many: string }> = {
+  skills: { one: "skill", many: "skills" },
+  mcp: { one: "MCP server", many: "MCP servers" },
+  hooks: { one: "hook", many: "hooks" },
+};
+
+function seenFrom(options: ListOptions, project: string | undefined, homeDir: string): string {
+  if (options.allProjects) return "all projects";
+  return project ? `project ${tilde(project, homeDir)}` : "no project";
+}
+
+function nothingToList(options: ListOptions): string {
+  if (options.filter) return `Nothing matches --filter ${options.filter} here.`;
+  if (options.allProjects) return "Nothing found in any project.";
+  return "Nothing loads here. Add --all-projects to include every project's own.";
 }
 
 /** `clausona skills|mcp|hooks ls`: the inventory, filtered, as a table or JSON. */
@@ -138,6 +183,11 @@ export async function runExtensionsCommand(
   const [sub, ...rest] = args[0] !== undefined && !args[0].startsWith("-") ? args : ["ls", ...args];
   if (sub !== "ls") throw new Error(`Unknown subcommand '${sub}'. Usage: ${usageLine(command)}`);
   const options = parseListArgs(rest, deps.cwd);
+  // Without the check, a mistyped path would quietly become the project the list is seen from.
+  // The path is not echoed back, as no option's value is.
+  if (options.project !== undefined && (await entryInfo(options.project)).kind !== "dir") {
+    throw new Error("--project: no such directory.");
+  }
   const inv = await loadInventory({ homeDir: deps.homeDir, registry: deps.registry, cwd: options.project ?? deps.cwd });
   const project = inv.currentProject;
   const now = deps.now ?? Date.now();
@@ -149,24 +199,36 @@ export async function runExtensionsCommand(
         kind: KIND[command],
         currentProject: project ?? null,
         projects: inv.projects,
-        items: items.map((item) => ({
-          id: item.id,
-          kind: item.kind,
-          tool: item.location.tool,
-          name: item.name,
-          scope: item.location.scope,
-          file: item.location.file,
-          ...(item.location.profile ? { profile: item.location.profile } : {}),
-          ...(item.location.project ? { project: item.location.project } : {}),
-          ...(item.location.plugin ? { plugin: item.location.plugin } : {}),
-          ...(item.location.accounts ? { accounts: item.location.accounts } : {}),
-          ...(item.description ? { description: item.description } : {}),
-          ...(item.link ? { link: item.link } : {}),
-          ...(item.summary ? { summary: item.summary } : {}),
-          state: stateOf(inv, item, project),
-          usage: usageOf(inv, [item]) ?? null,
-          marks: marksOf(inv, item, now),
-        })),
+        items: items.map((item) => {
+          const byAccount = accountStates(inv, item, project);
+          return {
+            id: item.id,
+            kind: item.kind,
+            tool: item.location.tool,
+            name: item.name,
+            scope: item.location.scope,
+            file: item.location.file,
+            ...(item.location.profile ? { profile: item.location.profile } : {}),
+            ...(item.location.project ? { project: item.location.project } : {}),
+            ...(item.location.plugin ? { plugin: item.location.plugin } : {}),
+            ...(item.location.accounts ? { accounts: item.location.accounts } : {}),
+            ...(item.description ? { description: item.description } : {}),
+            ...(item.link ? { link: item.link } : {}),
+            ...(item.summary ? { summary: item.summary } : {}),
+            state: stateHere(inv, item, project),
+            ...(byAccount
+              ? {
+                  stateByAccount: byAccount.map(({ profile, state }) => ({
+                    profile,
+                    value: state.value,
+                    ...(state.setBy ? { setBy: state.setBy } : {}),
+                  })),
+                }
+              : {}),
+            usage: usageOf(inv, [item]) ?? null,
+            marks: marksOf(inv, item, now),
+          };
+        }),
         warnings: inv.warnings,
       },
       null,
@@ -174,34 +236,60 @@ export async function runExtensionsCommand(
     );
   }
 
-  const header = ["NAME", "TOOL", "WHERE", "STATE", ...(command === "skills" ? ["USED"] : []), "NOTES"];
-  const rows = items.map((item) => {
-    const usage = usageOf(inv, [item]);
-    return [
-      item.name,
-      item.location.tool,
-      whereLabel(item),
-      stateWord(inv, item, project),
-      ...(command === "skills" ? [item.location.tool === "claude" ? String(usage?.total ?? 0) : "—"] : []),
-      marksOf(inv, item, now).join(", "),
+  const noun = items.length === 1 ? NOUN[command].one : NOUN[command].many;
+  const lines = [`${items.length} ${noun} · ${seenFrom(options, project, deps.homeDir)}`, ""];
+  if (items.length === 0) {
+    lines.push(nothingToList(options));
+  } else {
+    const hooks = command === "hooks";
+    const skills = command === "skills";
+    const header = [
+      "NAME",
+      "TOOL",
+      "WHERE",
+      ...(hooks ? ["COMMAND"] : []),
+      "STATE",
+      ...(skills ? ["USED"] : []),
+      "NOTES",
     ];
-  });
-  const width = deps.columns ?? process.stdout.columns ?? 120;
-  const title = `${items.length} ${command === "skills" ? "skills" : command === "mcp" ? "MCP servers" : "hooks"} · ${
-    options.allProjects ? "all projects" : project ? `project ${tilde(project, deps.homeDir)}` : "no project"
-  }`;
-  const lines = [title, "", ...table([header, ...rows], width)];
-  if (inv.warnings.length > 0)
-    lines.push("", `${inv.warnings.length} file(s) could not be read — see --json for which.`);
+    const rows = items.map((item) => {
+      const usage = usageOf(inv, [item]);
+      return [
+        item.name,
+        item.location.tool,
+        whereLabel(item),
+        // Already redacted when read: a hook's summary passes its command line through redactCommand.
+        ...(hooks ? [item.summary?.command ?? item.summary?.prompt ?? ""] : []),
+        stateWord(inv, item, project),
+        ...(skills ? [item.location.tool === "claude" ? String(usage?.total ?? 0) : "—"] : []),
+        marksOf(inv, item, now).join(", "),
+      ];
+    });
+    // A hook's name is short and its matcher is what tells it apart; its command line is the
+    // long cell, so it gives way first.
+    const giveWay = hooks ? [3, 0, 2] : [0, 2];
+    lines.push(...table([header, ...rows], deps.columns ?? process.stdout.columns ?? 120, giveWay));
+  }
+  if (inv.warnings.length > 0) {
+    // A warning's message is a fixed phrase plus a position, never the file's contents.
+    lines.push(
+      "",
+      "Could not read every file:",
+      ...inv.warnings.map((w) => `  ${tilde(w.file, deps.homeDir)}: ${w.message}`),
+    );
+  }
   return lines.join("\n");
 }
 
-/** Columns padded to their widest cell; NAME and WHERE give way first when the terminal is narrow. */
-function table(rows: string[][], width: number): string[] {
+/**
+ * Columns padded to their widest cell. When the terminal is narrow, the `giveWay` columns are
+ * cut in turn, each to no less than 12 characters, until the row fits.
+ */
+function table(rows: string[][], width: number, giveWay: number[]): string[] {
   const widths = (rows[0] ?? []).map((_, c) => Math.max(...rows.map((r) => (r[c] ?? "").length)));
   const gap = 2;
   let total = widths.reduce((a, b) => a + b, 0) + gap * (widths.length - 1);
-  for (const column of [0, 2]) {
+  for (const column of giveWay) {
     if (total <= width) break;
     const cut = Math.min(total - width, Math.max(0, (widths[column] ?? 0) - 12));
     widths[column] = (widths[column] ?? 0) - cut;

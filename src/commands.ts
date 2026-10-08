@@ -1056,7 +1056,7 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${accent("--project <path>".padEnd(20))}${dim("Show it as seen from that project (default: the one you are in)")}`,
         `    ${accent("--all-projects".padEnd(20))}${dim("Include every project's own items")}`,
         `    ${accent("--tool <tool>".padEnd(20))}${dim("claude or codex")}`,
-        `    ${accent("--filter <name>".padEnd(20))}${dim("cleanup, duplicates or off")}`,
+        `    ${accent("--filter <name>".padEnd(20))}${dim("cleanup, duplicates or off (off in any one account counts)")}`,
         `    ${accent("--json".padEnd(20))}${dim("Machine-readable, with state, usage and where each one is defined")}`,
         "",
       ].join("\n");

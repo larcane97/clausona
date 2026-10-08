@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { leakedWindows } from "../test-leaks.js";
@@ -87,11 +89,20 @@ describe("mcp ls, a server more than one account sees", () => {
     homes.push(h);
     const app = h.project("repos/app");
     h.write("repos/app/.mcp.json", { mcpServers: { docs: { command: "docs-mcp" } } });
-    h.claude("default", ".claude", { projects: { [app]: { enabledMcpjsonServers: ["docs"] } } });
-    h.claude("work", ".claude-work", { projects: { [app]: { disabledMcpjsonServers: ["docs"] } } });
+    const main = h.claude("default", ".claude", { projects: { [app]: { enabledMcpjsonServers: ["docs"] } } });
+    const work = h.claude("work", ".claude-work", { projects: { [app]: { disabledMcpjsonServers: ["docs"] } } });
     // Codex records the project too, but never loads a .mcp.json, so it is not one of the two.
     h.codex("personal", ".codex", `[projects."${app.replaceAll("\\", "\\\\")}"]\ntrust_level = "trusted"\n`);
-    expect(await run(h, app, "mcp", ["ls"])).toMatch(/^docs\s+claude\s+project app\s+1\/2 on$/m);
+    const text = await run(h, app, "mcp", ["ls"]);
+    expect(text).toMatch(/^1 MCP server · /);
+    expect(text).toMatch(/^docs\s+claude\s+project app\s+1\/2 on$/m);
+    const docs = JSON.parse(await run(h, app, "mcp", ["ls", "--json"])).items[0];
+    expect(docs.stateByAccount).toEqual([
+      { profile: "claude:default", value: "on", setBy: { file: main.jsonPath, key: "enabledMcpjsonServers" } },
+      { profile: "claude:work", value: "off", setBy: { file: work.jsonPath, key: "disabledMcpjsonServers" } },
+    ]);
+    // Off in one account is off enough to list, as the dashboard's Off filter does.
+    expect(await run(h, app, "mcp", ["ls", "--filter", "off"])).toMatch(/^docs\s/m);
   });
 
   it("counts only the accounts that have the plugin, for a plugin's server", async () => {
@@ -99,7 +110,9 @@ describe("mcp ls, a server more than one account sees", () => {
     homes.push(h);
     const app = h.project("repos/app");
     h.claude("default", ".claude", { projects: { [app]: {} } });
-    h.claude("work", ".claude-work", { projects: { [app]: { disabledMcpServers: ["plugin:sp:search"] } } });
+    const work = h.claude("work", ".claude-work", {
+      projects: { [app]: { disabledMcpServers: ["plugin:sp:search"] } },
+    });
     h.claude("solo", ".claude-solo", { projects: { [app]: {} } });
     const sp = h.path(".claude/plugins/cache/m/sp/1.0.0");
     h.write(".claude/plugins/installed_plugins.json", { plugins: { "sp@m": [{ installPath: sp }] } });
@@ -108,9 +121,91 @@ describe("mcp ls, a server more than one account sees", () => {
     h.write(".claude/settings.json", { enabledPlugins: { "sp@m": true } });
     expect(await run(h, app, "mcp", ["ls"])).toMatch(/^plugin:sp:search\s+claude\s+plugin sp\s+1\/2 on$/m);
     const parsed = JSON.parse(await run(h, app, "mcp", ["ls", "--json"]));
-    expect(parsed.items.find((i: { name: string }) => i.name === "plugin:sp:search").accounts).toEqual([
-      "claude:default",
-      "claude:work",
+    const search = parsed.items.find((i: { name: string }) => i.name === "plugin:sp:search");
+    expect(search.accounts).toEqual(["claude:default", "claude:work"]);
+    expect(search.state).toEqual({ value: "on" });
+    expect(search.stateByAccount).toEqual([
+      { profile: "claude:default", value: "on" },
+      { profile: "claude:work", value: "off", setBy: { file: work.jsonPath, key: "disabledMcpServers" } },
     ]);
+    expect(await run(h, app, "mcp", ["ls", "--filter", "off"])).toMatch(/^plugin:sp:search\s/m);
+  });
+});
+
+describe("ls --all-projects", () => {
+  it("reads another project's item in that project's own settings", async () => {
+    const { h, app } = seed();
+    h.write("repos/web/.claude/settings.local.json", { skillOverrides: { "web-only": "off" } });
+    expect(await run(h, app, "skills", ["ls", "--all-projects"])).toMatch(/^web-only\s+claude\s+project web\s+off\s/m);
+    expect(await run(h, app, "skills", ["ls", "--all-projects", "--filter", "off"])).toMatch(/^web-only\s/m);
+  });
+});
+
+describe("ls with nothing to list", () => {
+  it("says so instead of printing a bare header", async () => {
+    const { h, app } = seed();
+    expect(await run(h, app, "hooks", ["ls"])).toMatch(
+      /^0 hooks · .+\n\nNothing loads here\. Add --all-projects to include every project's own\.$/,
+    );
+    expect(await run(h, app, "hooks", ["ls", "--all-projects"])).toMatch(
+      /^0 hooks · all projects\n\nNothing found in any project\.$/,
+    );
+    expect(await run(h, app, "skills", ["ls", "--filter", "cleanup"])).toMatch(
+      /^0 skills · .+\n\nNothing matches --filter cleanup here\.$/,
+    );
+  });
+});
+
+describe("hooks ls", () => {
+  it("shows each hook's command, cut to fit and never a secret", async () => {
+    const { h, app } = seed();
+    const long = `${"/opt/hooks/".repeat(6)}guard.sh`;
+    h.write(".claude/settings.json", {
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [
+              { type: "command", command: "audit-bash" },
+              { type: "command", command: `${long} --api-key ${KEY}` },
+            ],
+          },
+        ],
+      },
+    });
+    const wide = await run(h, app, "hooks", ["ls"]);
+    expect(wide).toMatch(/^2 hooks · /);
+    expect(wide).toMatch(/^NAME\s+TOOL\s+WHERE\s+COMMAND\s+STATE\s+NOTES$/m);
+    expect(wide).toMatch(/^PreToolUse Bash\s+claude\s+global\s+audit-bash\s+on$/m);
+    const narrow = await runExtensionsCommand("hooks", ["ls"], {
+      homeDir: h.home,
+      cwd: app,
+      registry: h.registry,
+      columns: 60,
+    });
+    const rows = narrow.split("\n").filter((line) => line.startsWith("PreToolUse"));
+    expect(rows).toHaveLength(2);
+    // The command gives way first: a hook's name is short, and its matcher is what tells it apart.
+    expect(rows[1]).toMatch(/^PreToolUse Bash\s+claude\s+global\s+\/opt\/hooks\/\S*…\s+on$/);
+    for (const line of narrow.split("\n")) expect(line.length).toBeLessThanOrEqual(60);
+    expect(leakedWindows([wide, narrow], KEY)).toEqual([]);
+  });
+});
+
+describe("ls options and warnings", () => {
+  it("refuses a --project that is no directory, without echoing it", async () => {
+    const { h, app } = seed();
+    const error = await run(h, app, "skills", ["ls", "--project", h.path("no-such-dir")]).catch((e: Error) => e);
+    expect(String(error)).toMatch(/--project: no such directory\./);
+    expect(String(error)).not.toContain("no-such-dir");
+  });
+
+  it("names each file it could not read, by its message and never its contents", async () => {
+    const { h, app } = seed();
+    h.write("repos/app/.claude/settings.local.json", `{ "token": "${KEY}", nope`);
+    const text = await run(h, app, "skills", ["ls"]);
+    const bad = path.join("~", "repos", "app", ".claude", "settings.local.json");
+    expect(text).toContain(`\n\nCould not read every file:\n  ${bad}: `);
+    expect(leakedWindows([text], KEY)).toEqual([]);
   });
 });
