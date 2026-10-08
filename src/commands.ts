@@ -95,6 +95,7 @@ import {
   updateProfileEnv,
   updateProfileSecret,
 } from "./lib/service.js";
+import { runRouteCommand } from "./route-commands.js";
 import { CLAUDE_ENV_CATALOG, validateEnvEntry } from "./tools/claude-env-catalog.js";
 import { ALL_TOOLS, getAdapter } from "./tools/registry.js";
 import type { Profile, Registry, SecretSource, ToolName } from "./types.js";
@@ -1055,6 +1056,7 @@ function usageText() {
     "",
     helpSection("COMMANDS", [
       ["run <profile>", "Run the CLI with a specific profile"],
+      ["route <command>", "Pick an account by plan quota (clausona run --route <name>)"],
       ["init", "Discover accounts interactively"],
       ["add <profile>", "Add a new profile (--api for an endpoint instead of a login)"],
       ["use [profile]", "Switch active profile"],
@@ -1080,6 +1082,10 @@ function usageText() {
 // ─── Command Runner ─────────────────────────────────────────────────
 
 export async function runCommand(command: string, args: string[]) {
+  // `route` reads its own subcommands, options and --help (route-commands.ts), so that
+  // `route add --help` shows add's page rather than the top-level one.
+  if (command === "route") return runRouteCommand(args);
+
   if (command !== "help" && command !== "-h" && command !== "--help" && helpFlag(args)) {
     const helpText = subcommandHelpText(command);
     if (helpText) return helpText;
