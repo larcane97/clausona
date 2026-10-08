@@ -7,8 +7,7 @@ import { trackUsage } from "./core/track-usage.js";
 import { createUpdater, type UpdateOffer } from "./core/update.js";
 import { dropLauncherCompileCache } from "./installer.js";
 import { accent, ok, fail as xMark } from "./lib/cli-style.js";
-import { parseProfileRef } from "./lib/profile-ref.js";
-import { runRouted } from "./lib/route-run.js";
+import { runRouted, runTarget } from "./lib/route-run.js";
 import { loadRegistry, noRegistryError, resolveProfileEnv } from "./lib/service.js";
 import type { ParsedCommand } from "./types.js";
 
@@ -170,7 +169,7 @@ export async function runProfile(
 ): Promise<number> {
   const registry = await loadRegistry();
   if (!registry) throw await noRegistryError();
-  const ref = parseProfileRef(profileArg, registry);
+  const ref = runTarget(profileArg, registry);
   const { binary, env } = await resolveProfileEnv(ref.id, platform);
   const result = spawnCommandSync(binary, args, { stdio: "inherit", env }, platform);
   if (ref.tool === "claude") {

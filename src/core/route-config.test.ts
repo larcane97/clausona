@@ -187,6 +187,14 @@ describe("checkRoute", () => {
     expect(problems).toEqual(["routes.main: an unknown key looks like an API key"]);
   });
 
+  it("never quotes a vendor token as an unknown key", () => {
+    // Short, and not starting with sk-: only a check for a token anywhere in it catches it.
+    const token = ["ghp", "Ab".repeat(18)].join("_");
+    const problems = checkRoute("main", { tool: "claude", [token]: true });
+    expect(problems).toEqual(["routes.main: an unknown key looks like an API key"]);
+    expect(problems.join("\n")).not.toContain(token);
+  });
+
   it("needs a tool", () => {
     expect(checkRoute("main", { from: ["*"] })).toEqual(['routes.main.tool: must be "claude" or "codex"']);
   });

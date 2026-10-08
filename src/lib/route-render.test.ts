@@ -153,11 +153,12 @@ describe("renderNoAccount", () => {
 
 describe("renderCreateScreen", () => {
   it("shows the pool before anything is written", () => {
-    const r = ranking({ "claude:team": snap(1, 1), "claude:work": snap(1, 1), "claude:old": snap(1, 1, "missing") });
+    const r = ranking({ "claude:team": snap(1, 1), "claude:work": snap(90, 1), "claude:old": snap(1, 1, "missing") });
     const { body, question } = renderCreateScreen("work", { tool: "claude", from: ["*"] }, r, true);
     const text = plain(body);
     expect(text).toContain("Create 'work' now?");
-    expect(text).toContain("pool      * · 2 account(s) can be used now");
+    // Only claude:team is under the cut: claude:work is over it, and claude:old is signed out.
+    expect(text).toContain("pool      * · 1 of 3 account(s) under 80% now");
     expect(text).toContain("claude:team, claude:work");
     expect(text).toContain("claude:old (signed out (clausona login claude:old))");
     expect(text).toContain("strategy  round-robin · max 80% · reserve 95%");
@@ -222,6 +223,88 @@ describe("JSON", () => {
       reason: "no account is available",
       soonest: null,
     });
+  });
+
+  // The documented contract (docs/routing.md). Internal fields added to a ranking never leak into it.
+  const withInternals = (r: ReturnType<typeof ranking>): ReturnType<typeof ranking> =>
+    ({
+      ...r,
+      route: { ...r.route, internal: 1 },
+      outcome: {
+        ...r.outcome,
+        internal: 1,
+        ...(r.outcome.kind === "none" && r.outcome.soonest ? { soonest: { ...r.outcome.soonest, internal: 1 } } : {}),
+      },
+      rows: r.rows.map((row) => ({
+        ...row,
+        internal: 1,
+        ...(row.usage ? { usage: { ...row.usage, internal: 1 } } : {}),
+        ...(row.fiveHour ? { fiveHour: { ...row.fiveHour, label: "x" } } : {}),
+        ...(row.sevenDay ? { sevenDay: { ...row.sevenDay, label: "x" } } : {}),
+      })),
+      excluded: r.excluded.map((entry) => ({ ...entry, internal: 1 })),
+    }) as unknown as ReturnType<typeof ranking>;
+  const keys = (value: unknown) => Object.keys(value as object).sort();
+
+  it("explain has exactly the documented fields", () => {
+    const r = rankRoute({
+      route: withDefaults({ tool: "claude", from: ["*"], exclude: ["old"] }),
+      members,
+      quotas: { "claude:team": snap(40, 30), "claude:work": snap(20, 70) },
+      lastPicked: {},
+      now: NOW,
+      resume: false,
+    });
+    const json = explainJson("main", "flag", withInternals(r)) as Record<string, unknown> & {
+      members: Array<Record<string, unknown>>;
+      excluded: object[];
+    };
+    expect(keys(json)).toEqual(["emptyPatterns", "excluded", "members", "outcome", "resolvedBy", "route", "settings"]);
+    expect(keys(json.settings)).toEqual([
+      "exclude",
+      "fallback",
+      "from",
+      "maxUsage",
+      "reserveUsage",
+      "strategy",
+      "tool",
+    ]);
+    expect(keys(json.outcome)).toEqual(["id", "kind", "reason", "stage"]);
+    for (const entry of json.members) {
+      expect(keys(entry)).toEqual([
+        "fiveHour",
+        "lastPickedAt",
+        "matchedBy",
+        "profile",
+        "role",
+        "sevenDay",
+        "skipReason",
+        "status",
+        "usage",
+      ]);
+      expect(keys(entry.usage)).toEqual(["percent", "stale", "window"]);
+      expect(keys(entry.fiveHour)).toEqual(["resetsAt", "usedPercent"]);
+      expect(keys(entry.sevenDay)).toEqual(["resetsAt", "usedPercent"]);
+    }
+    expect(json.excluded.map(keys)).toEqual([["matchedBy", "profile"]]);
+
+    const none = explainJson("main", "flag", withInternals(ranking({}))) as { outcome: object };
+    expect(keys(none.outcome)).toEqual(["kind"]);
+    const busy = ranking({ "claude:team": snap(99, 1), "claude:work": snap(99, 1), "claude:old": snap(99, 1) });
+    const soon = explainJson("main", "flag", withInternals(busy)) as { outcome: { soonest: object } };
+    expect(keys(soon.outcome)).toEqual(["kind", "soonest"]);
+    expect(keys(soon.outcome.soonest)).toEqual(["at", "id"]);
+  });
+
+  it("pick has exactly the documented fields", () => {
+    const r = ranking({ "claude:team": snap(40, 30), "claude:work": snap(20, 70), "claude:old": snap(0, 99) });
+    const picked = pickJson("main", withInternals(r)) as { usage: object };
+    expect(keys(picked)).toEqual(["profile", "reason", "route", "stage", "usage"]);
+    expect(keys(picked.usage)).toEqual(["percent", "stale", "window"]);
+    const busy = ranking({ "claude:team": snap(99, 1), "claude:work": snap(99, 1), "claude:old": snap(99, 1) });
+    const none = pickJson("main", withInternals(busy)) as { soonest: object };
+    expect(keys(none)).toEqual(["profile", "reason", "route", "soonest", "stage", "usage"]);
+    expect(keys(none.soonest)).toEqual(["at", "id"]);
   });
 
   it("explain lists every member with its status", () => {

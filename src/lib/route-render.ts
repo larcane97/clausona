@@ -117,7 +117,7 @@ export function renderExplain(name: string | undefined, ranking: Ranking, now: n
   return lines.join("\n");
 }
 
-/** Skips decided before any quota is read. */
+/** Skips decided without a quota reading: quotaTargets leaves these members out (route-service.ts). */
 const NOT_LOOKED_UP: ReadonlySet<SkipReason> = new Set(["not-registered", "api-not-supported", "keeps-own-sessions"]);
 
 export function renderNoAccount(name: string | undefined, ranking: Ranking, now: number): string {
@@ -201,10 +201,12 @@ export function renderCreateScreen(
   const route = withDefaults(spec);
   const pool = ranking.rows.filter((row) => row.role === "pool");
   const usable = pool.filter((row) => !row.skip);
+  // What a run could take at the pool stage now: not skipped, and under the cut.
+  const underCut = usable.filter((row) => row.usage !== undefined && row.usage.percent < route.maxUsage);
   const indent = " ".repeat(12);
   const lines = [
     `Create '${name}' now?`,
-    `  pool      ${route.from.join(", ")} · ${usable.length} account(s) can be used now`,
+    `  pool      ${route.from.join(", ")} · ${underCut.length} of ${pool.length} account(s) under ${route.maxUsage}% now`,
     ...wrapIds(
       usable.map((row) => row.id),
       indent,
@@ -217,6 +219,21 @@ export function renderCreateScreen(
   return { body: lines.join("\n"), question: andRun ? "[Y]es and run · [e]dit · [n]o " : "[Y]es · [e]dit · [n]o " };
 }
 
+/*
+ * The JSON shapes are documented in docs/routing.md, and fields are only ever added. Each object
+ * is built field by field, never passed through, so renaming or adding an internal field cannot
+ * change what a script reads.
+ */
+
+const usageJson = (usage: Usage | undefined) =>
+  usage ? { percent: usage.percent, window: usage.window, stale: usage.stale } : null;
+
+const windowJson = (window: QuotaWindow | undefined) =>
+  window ? { usedPercent: window.usedPercent, resetsAt: window.resetsAt ?? null } : null;
+
+const soonestJson = (soonest: { id: string; at: string } | undefined) =>
+  soonest ? { id: soonest.id, at: soonest.at } : null;
+
 export function pickJson(name: string | undefined, ranking: Ranking): object {
   const { outcome } = ranking;
   if (outcome.kind === "none") {
@@ -226,32 +243,43 @@ export function pickJson(name: string | undefined, ranking: Ranking): object {
       stage: null,
       usage: null,
       reason: "no account is available",
-      soonest: outcome.soonest ?? null,
+      soonest: soonestJson(outcome.soonest),
     };
   }
-  const usage = ranking.rows.find((row) => row.id === outcome.id)?.usage ?? null;
+  const usage = usageJson(ranking.rows.find((row) => row.id === outcome.id)?.usage);
   return { profile: outcome.id, route: name ?? null, stage: outcome.stage, usage, reason: outcome.reason };
 }
 
-/** The shape is documented in docs/routing.md; fields are only ever added. */
 export function explainJson(name: string | undefined, resolvedBy: ResolvedBy, ranking: Ranking): object {
+  const { route, outcome } = ranking;
   return {
     route: name ?? null,
     resolvedBy,
-    settings: ranking.route,
-    outcome: ranking.outcome,
+    settings: {
+      tool: route.tool,
+      from: [...route.from],
+      exclude: [...route.exclude],
+      strategy: route.strategy,
+      maxUsage: route.maxUsage,
+      reserveUsage: route.reserveUsage,
+      fallback: [...route.fallback],
+    },
+    outcome:
+      outcome.kind === "picked"
+        ? { kind: outcome.kind, id: outcome.id, stage: outcome.stage, reason: outcome.reason }
+        : { kind: outcome.kind, ...(outcome.soonest ? { soonest: soonestJson(outcome.soonest) } : {}) },
     members: ranking.rows.map((row) => ({
       profile: row.id,
       role: row.role,
       matchedBy: row.pattern,
       status: row.status,
       skipReason: row.skip ?? null,
-      usage: row.usage ?? null,
-      fiveHour: row.fiveHour ?? null,
-      sevenDay: row.sevenDay ?? null,
+      usage: usageJson(row.usage),
+      fiveHour: windowJson(row.fiveHour),
+      sevenDay: windowJson(row.sevenDay),
       lastPickedAt: row.lastPickedAt ?? null,
     })),
     excluded: ranking.excluded.map((entry) => ({ profile: entry.id, matchedBy: entry.pattern })),
-    emptyPatterns: ranking.emptyPatterns,
+    emptyPatterns: [...ranking.emptyPatterns],
   };
 }

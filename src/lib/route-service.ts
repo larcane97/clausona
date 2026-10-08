@@ -170,8 +170,11 @@ export function resolveRoute(
   return { ...(name ? { name } : {}), route: withDefaults(merged), resolvedBy: name ? "flag" : "inline" };
 }
 
-/** The members whose quota a route needs: listed, not excluded, and subscription profiles. */
-export function quotaTargets(route: Route, members: Member[]): QuotaTarget[] {
+/**
+ * The members whose quota a route needs: listed, not excluded, and subscription profiles; on a
+ * resumed run, only those that share sessions, since ranking skips the others whatever they read.
+ */
+export function quotaTargets(route: Route, members: Member[], resume: boolean): QuotaTarget[] {
   const excluded = new Set(expandPatterns(route.exclude, members).members.map((entry) => entry.member.id));
   const seen = new Set<string>();
   const targets: QuotaTarget[] = [];
@@ -179,8 +182,9 @@ export function quotaTargets(route: Route, members: Member[]): QuotaTarget[] {
     ...expandPatterns(route.from, members).members,
     ...expandPatterns(route.fallback, members).members,
   ]) {
-    // An excluded account is not touched at all: no quota read, so no token renewal either.
+    // An excluded or skipped account is not touched at all: no quota read, so no token renewal either.
     if (member.kind !== "subscription" || excluded.has(member.id) || seen.has(member.id)) continue;
+    if (resume && !member.sharesSessions) continue;
     seen.add(member.id);
     targets.push({ id: member.id, tool: member.tool, configDir: member.configDir });
   }
@@ -196,7 +200,7 @@ export async function rankRouteNow(
   if (!registry) throw await noRegistryError();
   const members = membersOf(registry, resolved.route.tool);
   // Read first: it can take seconds, and the pick-record lock is held only for the pick itself.
-  const quotas = await deps.collectQuotas(quotaTargets(resolved.route, members));
+  const quotas = await deps.collectQuotas(quotaTargets(resolved.route, members, options.resume));
   const rank = (lastPicked: Record<string, string>) =>
     rankRoute({ route: resolved.route, members, quotas, lastPicked, now: deps.clock(), resume: options.resume });
   if (!options.record) return rank(await readPicks(deps.paths));

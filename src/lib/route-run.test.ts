@@ -7,7 +7,7 @@ import { routesPaths } from "../core/routes-store.js";
 import type { QuotaSnapshot, Registry } from "../types.js";
 import { stripAnsi } from "./cli-style.js";
 import type { RouteIo } from "./route-create.js";
-import { runRouted } from "./route-run.js";
+import { runRouted, runTarget } from "./route-run.js";
 import { NoAccountError, type RouteDeps, UnknownRouteError } from "./route-service.js";
 
 const NOW = Date.parse("2026-10-09T00:00:00.000Z");
@@ -69,6 +69,43 @@ function setup(
 }
 
 const MAIN = { version: 1, routes: { main: { tool: "claude", from: ["*"], strategy: "headroom" } } };
+
+describe("runTarget", () => {
+  it("resolves a profile as parseProfileRef does", () => {
+    expect(runTarget("solo", REGISTRY)).toEqual({ tool: "claude", name: "solo", id: "claude:solo" });
+  });
+
+  it("says a prompt is not a profile or a tool, and how to pass it", () => {
+    expect(() => runTarget("fix the bug", REGISTRY)).toThrow(
+      "'fix the bug' is not a profile or a tool. To pass a prompt, name the tool: clausona run claude 'fix the bug'",
+    );
+    expect(() => runTarget("don't stop", REGISTRY)).toThrow(/clausona run claude 'don'\\''t stop'$/);
+  });
+
+  it("keeps saying a well-formed name is not found", () => {
+    expect(() => runTarget("nobody", REGISTRY)).toThrow("Profile 'nobody' not found.");
+    expect(() => runTarget("claude:nobody", REGISTRY)).toThrow("Profile 'claude:nobody' not found.");
+    expect(() => runTarget("gemini:x", REGISTRY)).toThrow("Unknown tool 'gemini'. Use one of: claude, codex.");
+  });
+
+  it("never quotes a key, or a sentence with a token in it", () => {
+    for (const input of [
+      ["sk", "ant", "y".repeat(24)].join("-"),
+      `use ${["ghp", "Ab".repeat(18)].join("_")} now`,
+      `run ${["sk", "ant", "y".repeat(8)].join("-")}`,
+    ]) {
+      const error = (() => {
+        try {
+          runTarget(input, REGISTRY);
+        } catch (e) {
+          return e as Error;
+        }
+      })();
+      expect(error?.message).toMatch(/^That looks like an API key, not a profile name/);
+      expect(error?.message).not.toContain(input);
+    }
+  });
+});
 
 describe("runRouted", () => {
   it("launches the picked profile with the tool's arguments, after a note", async () => {

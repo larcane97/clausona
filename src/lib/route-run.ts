@@ -1,7 +1,14 @@
+import { carriesCredentialToken, looksLikeCredential } from "../core/credential-token.js";
 import { applyOverrides, DEFAULT_RESERVE_USAGE, newRouteSpec, withDefaults } from "../core/route-config.js";
 import { readRoutes } from "../core/routes-store.js";
 import { createRoute } from "../route-commands.js";
 import type { Registry, ToolName } from "../types.js";
+import {
+  CREDENTIAL_AS_NAME_ERROR,
+  type ParsedProfileRef,
+  parseProfileRef,
+  validateProfileName,
+} from "./profile-ref.js";
 import { askTool, confirmNewRoute, type RouteIo, terminalIo } from "./route-create.js";
 import { renderNoAccount, renderNote } from "./route-render.js";
 import {
@@ -17,6 +24,40 @@ import {
 } from "./route-service.js";
 import { isResumeRun, type RunArgs, readRunArgs } from "./run-args.js";
 import { noRegistryError } from "./service.js";
+
+/** A string quoted for a POSIX shell, so the command in a message can be pasted as it is. */
+const shellQuote = (text: string) => `'${text.replace(/'/g, "'\\''")}'`;
+
+/**
+ * The profile `clausona run <target>` names. A target that cannot be a profile name - a prompt,
+ * typed where the profile goes - is told how to pass it, rather than that no such profile
+ * exists; a key-shaped one, or a sentence with a token in it, is refused without being quoted.
+ * Other commands keep parseProfileRef's messages.
+ */
+export function runTarget(input: string, registry: Registry): ParsedProfileRef {
+  try {
+    return parseProfileRef(input, registry);
+  } catch (error) {
+    if (
+      [input, ...input.split(/[\s,:]+/)].some((piece) => looksLikeCredential(piece) || carriesCredentialToken(piece))
+    ) {
+      throw new Error(CREDENTIAL_AS_NAME_ERROR);
+    }
+    // Shaped like a reference (`work`, `claude:work`, `gemini:work`): parseProfileRef's message
+    // says what is wrong with it. Anything else is not a name at all.
+    const colon = input.indexOf(":");
+    const refShaped =
+      colon === -1
+        ? validateProfileName(input).ok
+        : /^[A-Za-z][A-Za-z0-9-]*$/.test(input.slice(0, colon)) && validateProfileName(input.slice(colon + 1)).ok;
+    if (!refShaped) {
+      throw new Error(
+        `'${input}' is not a profile or a tool. To pass a prompt, name the tool: clausona run ${onlyTool(registry) ?? "claude"} ${shellQuote(input)}`,
+      );
+    }
+    throw error;
+  }
+}
 
 /** A registered profile literally named `claude` or `codex` keeps meaning that profile. */
 function isProfileName(name: string, registry: Registry): boolean {

@@ -155,8 +155,12 @@ export function checkRoute(name: string, raw: unknown, at = `routes.${name}`): s
   const problems: string[] = [];
   for (const key of Object.keys(raw)) {
     if (ROUTE_KEYS.has(key)) continue;
+    // A vendor token (`ghp_…`, `hf_…`) is short and does not start with 'sk-': only
+    // carriesCredentialToken sees it, and the key is quoted below.
     problems.push(
-      looksLikeCredential(key) ? `${at}: an unknown key looks like an API key` : `${at}: unknown key '${key}'`,
+      looksLikeCredential(key) || carriesCredentialToken(key)
+        ? `${at}: an unknown key looks like an API key`
+        : `${at}: unknown key '${key}'`,
     );
   }
   const tool = raw.tool;

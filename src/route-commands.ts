@@ -123,7 +123,8 @@ const SUB_HELP: Record<string, string[]> = {
 };
 
 export function routeHelp(sub?: string): string {
-  if (sub && SUB_HELP[sub]) {
+  // Own keys only: `toString` and `constructor` are on every object, and are not subcommands.
+  if (sub && Object.hasOwn(SUB_HELP, sub)) {
     return ["", `  ${accent(`clausona route ${sub}`)}`, "", `  ${bold("USAGE")}`, ...SUB_HELP[sub], ""].join("\n");
   }
   return [
@@ -176,7 +177,8 @@ export function routeHelp(sub?: string): string {
     `    ${dim("1                usage error, or routes.json cannot be used")}`,
     `    ${dim("75               no account is available now: retry later, or name a profile")}`,
     "",
-    `  ${dim("Run clausona route <command> --help for each command. Docs: docs/routing.md")}`,
+    `  ${dim("Run clausona route <command> --help for each command.")}`,
+    `  ${dim("Docs: https://github.com/larcane97/clausona/blob/main/docs/routing.md")}`,
     "",
   ].join("\n");
 }
@@ -303,6 +305,11 @@ async function setRoute(args: string[], deps: RouteDeps): Promise<string> {
       }
       const kept = from.filter((pattern) => !drop.some((entry) => fold(entry) === fold(pattern)));
       next.from = [...kept, ...add.filter((entry) => !kept.some((pattern) => fold(pattern) === fold(entry)))];
+      // Said here, in the words of the options given: the file's own check would point at
+      // leaving `from` out of routes.json, which `route set` cannot do.
+      if (next.from.length === 0) {
+        throw new Error("A route needs at least one entry in from; add one with --add, or remove the route.");
+      }
     }
     if (noFallback) delete next.fallback;
     checkRouteMembers(name, next, registry);

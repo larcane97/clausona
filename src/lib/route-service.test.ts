@@ -213,7 +213,13 @@ describe("quotaTargets", () => {
   it("asks only for listed subscription members that are not excluded", () => {
     const members = membersOf(REGISTRY, "claude");
     const route = withDefaults({ tool: "claude", from: ["*", "glm"], exclude: ["c"] });
-    expect(quotaTargets(route, members).map((target) => target.id)).toEqual(["claude:a", "claude:b"]);
+    expect(quotaTargets(route, members, false).map((target) => target.id)).toEqual(["claude:a", "claude:b"]);
+  });
+
+  it("leaves out, on a resumed run, the members that keep their own sessions", () => {
+    const members = membersOf(REGISTRY, "claude");
+    const route = withDefaults({ tool: "claude" });
+    expect(quotaTargets(route, members, true).map((target) => target.id)).toEqual(["claude:a", "claude:b"]);
   });
 });
 
@@ -227,6 +233,16 @@ describe("rankRouteNow", () => {
     expect(ranking.outcome).toMatchObject({ kind: "picked", id: "claude:a" });
     expect(d.asked).toEqual([["claude:a", "claude:b", "claude:c"]]);
     expect(() => readFileSync(d.paths.picksPath)).toThrow();
+  });
+
+  it("never reads the quota of a member a resumed run skips", async () => {
+    const d = deps({ "claude:a": snap(10, 10), "claude:b": snap(20, 20), "claude:c": snap(1, 1) });
+    const ranking = await rankRouteNow({ route: withDefaults({ tool: "claude" }) }, d, {
+      resume: true,
+      record: false,
+    });
+    expect(d.asked).toEqual([["claude:a", "claude:b"]]);
+    expect(ranking.rows.find((row) => row.id === "claude:c")?.skip).toBe("keeps-own-sessions");
   });
 
   it("records the pick, so the next run takes the next member", async () => {

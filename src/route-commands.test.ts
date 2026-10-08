@@ -75,6 +75,15 @@ describe("route help", () => {
     ]) {
       expect(help).toContain(text);
     }
+    // The docs as an installed clausona can reach them: there is no docs/ folder on that machine.
+    expect(help).toContain("Docs: https://github.com/larcane97/clausona/blob/main/docs/routing.md");
+  });
+
+  it("shows the overview for a word that is not a subcommand, even one every object has", async () => {
+    const { run } = setup();
+    for (const sub of ["toString", "constructor", "hasOwnProperty"]) {
+      expect(await run(sub, "--help")).toContain("COMMANDS");
+    }
   });
 
   it("has a page per subcommand", async () => {
@@ -218,6 +227,17 @@ describe("route set, rename, remove", () => {
     await run("add", "two", "--from", "a,b");
     await run("set", "two", "--add", "c", "--drop", "a");
     expect(file().routes.two.from).toEqual(["b", "c"]);
+  });
+
+  it("says how to go on when --drop would leave from empty, and changes nothing", async () => {
+    const { run, file } = setup();
+    await run("add", "main");
+    await expect(run("set", "main", "--drop", "*")).rejects.toThrow(
+      /^A route needs at least one entry in from; add one with --add, or remove the route\.$/,
+    );
+    expect(file().routes.main.from).toEqual(["*"]);
+    await run("set", "main", "--drop", "*", "--add", "a");
+    expect(file().routes.main.from).toEqual(["a"]);
   });
 
   it("points at --exclude when a dropped name is not in from", async () => {
