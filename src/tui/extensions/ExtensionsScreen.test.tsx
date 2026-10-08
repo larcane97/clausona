@@ -272,14 +272,18 @@ describe("ExtensionsScreen", () => {
     expect(stripAnsi(short.lastFrame() ?? "")).not.toContain("Where");
   });
 
-  it("hints the keys nothing else points to: enter at 60 columns, the unreadable files at 80", async () => {
+  it("hints the keys nothing else points to: enter and search at 60 columns, the unreadable files and search at 80", async () => {
     const inv = await seed();
     const hintLine = (frame: string) => frame.split("\n").find((line) => line.includes("↑↓ move")) ?? "";
     const narrow = screen(inv, 60, 20).instance;
-    expect(hintLine(await seen(narrow, (f) => f.includes("eli5")))).toContain("enter open");
+    const narrowHints = hintLine(await seen(narrow, (f) => f.includes("eli5")));
+    expect(narrowHints).toContain("enter open");
+    expect(narrowHints).toContain("/ search");
     expect(inv.warnings).toHaveLength(1);
     const mid = screen(inv, 80, 24).instance;
-    expect(hintLine(await seen(mid, (f) => f.includes("eli5")))).toContain("w 1 unreadable");
+    const midHints = hintLine(await seen(mid, (f) => f.includes("eli5")));
+    expect(midHints).toContain("w 1 unreadable");
+    expect(midHints).toContain("/ search");
   });
 
   it.each([
