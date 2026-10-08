@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
-import { lstat, readdir, readFile, readlink, stat } from "node:fs/promises";
+import { lstat, readdir, readFile, readlink, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { Warning } from "./model.js";
@@ -18,10 +18,45 @@ function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * How many file-system calls the whole process keeps in flight. `mapLimit` bounds one call site
+ * only, and many folders listed and hashed side by side would still open thousands of files at
+ * once - past the open-file limit, where a read fails with EMFILE and a skill drops out of the
+ * list with a warning. Node's thread pool runs four calls at a time either way; this many queued
+ * keep it busy while each waits on the disk.
+ */
+export const FS_SLOTS = 64;
+let slotsTaken = 0;
+const waiting: (() => void)[] = [];
+
+/**
+ * `call` once one of the FS_SLOTS is free, holding it until `call` settles. Every file-system
+ * call the inventory makes goes through here - the sources reach it through these helpers - and
+ * each holds its slot for that one call alone: one that waited on more limited work while it held
+ * a slot could wait forever, once every slot was held that way.
+ */
+async function limited<T>(call: () => Promise<T>): Promise<T> {
+  if (slotsTaken < FS_SLOTS) slotsTaken++;
+  else await new Promise<void>((resolve) => waiting.push(resolve));
+  try {
+    return await call();
+  } finally {
+    // The slot passes straight to the first in line, so a newcomer cannot take it ahead of it.
+    const next = waiting.shift();
+    if (next) next();
+    else slotsTaken--;
+  }
+}
+
+/** `realpath`, within the process's file-system limit. */
+export function realPath(p: string): Promise<string> {
+  return limited(() => realpath(p));
+}
+
 /** A file's text, or undefined when it is not there. Any other failure is a warning. */
 export async function readText(file: string, warnings: Warning[]): Promise<string | undefined> {
   try {
-    return await readFile(file, "utf8");
+    return await limited(() => readFile(file, "utf8"));
   } catch (error) {
     if (!isMissing(error)) warnings.push({ file, message: `could not be read: ${reason(error)}` });
     return undefined;
@@ -58,7 +93,7 @@ export async function readJsonObject(file: string, warnings: Warning[]): Promise
 /** A directory's entries without dot-entries, sorted; none when it is not there. */
 export async function listNames(dir: string, warnings: Warning[]): Promise<string[]> {
   try {
-    return (await readdir(dir)).filter((name) => !name.startsWith(".")).sort();
+    return (await limited(() => readdir(dir))).filter((name) => !name.startsWith(".")).sort();
   } catch (error) {
     if (!isMissing(error)) warnings.push({ file: dir, message: `could not be listed: ${reason(error)}` });
     return [];
@@ -83,12 +118,12 @@ function kindOf(stats: { isDirectory(): boolean; isFile(): boolean }): EntryInfo
 
 /** What is at `p`: its kind as followed through a link, and the link itself if it is one. */
 export async function entryInfo(p: string): Promise<EntryInfo> {
-  const own = await lstat(p).catch(() => null);
+  const own = await limited(() => lstat(p)).catch(() => null);
   if (!own) return { kind: "missing" };
   if (!own.isSymbolicLink()) return { kind: kindOf(own), createdAt: createdAt(own) };
-  const raw = await readlink(p).catch(() => "");
+  const raw = await limited(() => readlink(p)).catch(() => "");
   const target = path.resolve(path.dirname(p), raw);
-  const followed = await stat(p).catch(() => null);
+  const followed = await limited(() => stat(p)).catch(() => null);
   if (!followed) return { kind: "missing", link: { target, broken: true } };
   return { kind: kindOf(followed), link: { target, broken: false }, createdAt: createdAt(followed) };
 }
@@ -124,9 +159,10 @@ export function parseFrontmatter(text: string): { name?: string; description?: s
 }
 
 /**
- * How many file-system calls one listing or walk keeps in flight. Node's thread pool runs four
- * at a time either way; more in the queue keeps it busy while each call waits on the disk,
- * without holding open a file for every entry of a large home.
+ * How many items one `mapLimit` call - one listing, or one step of a walk - works on at once. It
+ * bounds that call alone: many listings side by side each keep this many going, and FS_SLOTS is
+ * what bounds the file-system calls of them all together. A walk keeps enough queued to use its
+ * share of the slots, without a promise and a result held for every entry of a large home.
  */
 export const IO_LIMIT = 32;
 
@@ -172,7 +208,7 @@ export async function hashTree(dir: string): Promise<string> {
   let level = [""];
   while (level.length > 0) {
     const listed = await mapLimit(level, IO_LIMIT, async (rel) =>
-      (await readdir(path.join(dir, rel), { withFileTypes: true }).catch(() => []))
+      (await limited(() => readdir(path.join(dir, rel), { withFileTypes: true })).catch(() => []))
         .filter((entry) => entry.name !== ".DS_Store")
         .sort((a, b) => a.name.localeCompare(b.name)),
     );
@@ -193,7 +229,7 @@ export async function hashTree(dir: string): Promise<string> {
   };
   inOrder("");
   const sizes = await mapLimit(files, IO_LIMIT, async (relPath) => {
-    const stats = await stat(path.join(dir, relPath)).catch(() => null);
+    const stats = await limited(() => stat(path.join(dir, relPath))).catch(() => null);
     return stats?.isFile() ? stats.size : undefined;
   });
   // The files that fit the budget if every read succeeds, read ahead; together they are within
@@ -206,7 +242,7 @@ export async function hashTree(dir: string): Promise<string> {
     planned -= size;
     ahead.push(i);
   });
-  const read = (relPath: string) => readFile(path.join(dir, relPath)).catch(() => null);
+  const read = (relPath: string) => limited(() => readFile(path.join(dir, relPath))).catch(() => null);
   const readAhead = await mapLimit(ahead, IO_LIMIT, (i) => read(files[i] ?? ""));
   const contents = new Map(ahead.map((fileIndex, k) => [fileIndex, readAhead[k] ?? null]));
   const hash = createHash("sha256");
@@ -235,7 +271,7 @@ export async function gitRoot(dir: string): Promise<string | undefined> {
   let current = path.resolve(dir);
   for (;;) {
     if (
-      await lstat(path.join(current, ".git")).then(
+      await limited(() => lstat(path.join(current, ".git"))).then(
         () => true,
         () => false,
       )

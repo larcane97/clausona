@@ -196,6 +196,26 @@ describe("hashTree", () => {
       expect(await hashTree(path.join(dir, "a"))).not.toBe(await hashTree(path.join(dir, "b")));
     },
   );
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "skips a file it read ahead once the reads before it have used the budget",
+    async () => {
+      const MB = 1024 * 1024;
+      const dir = tempDir();
+      for (const copy of ["a", "b"]) {
+        mkdirSync(path.join(dir, copy));
+        writeFileSync(path.join(dir, copy, "a-locked.bin"), "x".repeat(2 * MB));
+        chmodSync(path.join(dir, copy, "a-locked.bin"), 0o000);
+        writeFileSync(path.join(dir, copy, "b.bin"), "y".repeat(3 * MB));
+        writeFileSync(path.join(dir, copy, "c.bin"), `${"z".repeat(2 * MB - 1)}${copy}`);
+      }
+      // Planned as if the locked 2 MB file were read, the 3 MB file does not fit the 4 MB budget
+      // and the last 2 MB does, so that one is read ahead. The locked read fails, the 3 MB file is
+      // read in its place, and 1 MB is left: the file read ahead then counts by path and size
+      // only, as in a walk one file at a time, so the byte that differs is not hashed.
+      expect(await hashTree(path.join(dir, "a"))).toBe(await hashTree(path.join(dir, "b")));
+    },
+  );
 });
 
 describe("mapLimit", () => {
@@ -222,6 +242,16 @@ describe("mapLimit", () => {
       },
     );
     expect(most).toBe(3);
+  });
+
+  it("rejects with the error a call throws", async () => {
+    await expect(
+      mapLimit([1, 2, 3, 4], 2, async (n) => {
+        await new Promise((resolve) => setTimeout(resolve, n));
+        if (n === 2) throw new Error("call 2 failed");
+        return n;
+      }),
+    ).rejects.toThrow("call 2 failed");
   });
 
   it("is empty for no items and runs one at a time below a limit of 1", async () => {

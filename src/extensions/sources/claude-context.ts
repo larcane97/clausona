@@ -1,10 +1,9 @@
-import { realpath } from "node:fs/promises";
 import path from "node:path";
 
 import { claudeJsonPathForConfigDir } from "../../core/paths.js";
 import type { Registry } from "../../types.js";
 import type { Collector, Project, SettingsLayer, Warning } from "../model.js";
-import { IO_LIMIT, isRecord, listNames, mapLimit, pathKey, readJsonObject, samePath } from "../read.js";
+import { IO_LIMIT, isRecord, listNames, mapLimit, pathKey, readJsonObject, realPath, samePath } from "../read.js";
 
 export type ClaudeAccount = {
   id: string;
@@ -175,7 +174,7 @@ async function readPluginInstalls(
   }
   // Every account lists most installs, so there are hundreds of paths to resolve: in parallel,
   // then merged in the accounts' order as before.
-  const resolved = await mapLimit(records, IO_LIMIT, ({ recorded }) => realpath(recorded).catch(() => recorded));
+  const resolved = await mapLimit(records, IO_LIMIT, ({ recorded }) => realPath(recorded).catch(() => recorded));
   const byKey = new Map<string, PluginInstall>();
   for (const [index, { account, id, entry, recorded }] of records.entries()) {
     const installPath = resolved[index] ?? recorded;
@@ -215,8 +214,8 @@ export function collectClaudeSettingsFacts(ctx: ClaudeContext, out: Collector): 
 export async function sharesPrimaryEntry(account: ClaudeAccount, primaryDir: string, name: string): Promise<boolean> {
   if (samePath(account.configDir, primaryDir)) return true;
   const [mine, primary] = await Promise.all([
-    realpath(path.join(account.configDir, name)).catch(() => undefined),
-    realpath(path.join(primaryDir, name)).catch(() => undefined),
+    realPath(path.join(account.configDir, name)).catch(() => undefined),
+    realPath(path.join(primaryDir, name)).catch(() => undefined),
   ]);
   return mine !== undefined && samePath(mine, primary);
 }
