@@ -3,11 +3,14 @@
 **Switch between multiple Claude Code and OpenAI Codex CLI accounts on one machine — plugins, settings, and skills stay shared.**
 
 <p align="center">
+  <a href="https://github.com/hesreallyhim/awesome-claude-code"><img src="https://img.shields.io/badge/Mentioned%20in-Awesome%20Claude%20Code-fc60a8?style=for-the-badge&logo=awesomelists&logoColor=white" alt="Mentioned in Awesome Claude Code" /></a>
+</p>
+
+<p align="center">
   <a href="https://github.com/larcane97/clausona/releases/latest"><img src="https://img.shields.io/github/v/release/larcane97/clausona?include_prereleases&label=release" alt="Latest release" /></a>
   <a href="https://github.com/larcane97/clausona/actions/workflows/ci.yml"><img src="https://github.com/larcane97/clausona/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue" alt="Platforms: macOS, Linux, Windows" />
   <a href="LICENSE"><img src="https://img.shields.io/github/license/larcane97/clausona" alt="MIT license" /></a>
-  <a href="https://github.com/hesreallyhim/awesome-claude-code"><img src="https://awesome.re/mentioned-badge-flat.svg" alt="Mentioned in Awesome Claude Code" /></a>
 </p>
 
 <p align="center">
