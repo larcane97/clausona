@@ -16,6 +16,37 @@ describe("redactCommand", () => {
   });
 });
 
+describe("redactCommand on a token that is not key-shaped", () => {
+  // Lowercase hex, which the key-shape check misses: what a self-hosted gateway often issues.
+  const HEX = "0123456789abcdef".repeat(2);
+  const command = (line: string) => hookSummary("Stop", undefined, { type: "command", command: line }).command ?? "";
+
+  it("hides the value of a NAME=value whose name says it is a secret", () => {
+    const docker = redactCommand(["docker", "run", "-e", `GITHUB_TOKEN=${HEX}`, "img"]);
+    expect(docker).toBe("docker run -e GITHUB_TOKEN=<hidden> img");
+    const prefixed = command(`TOKEN=${HEX} notify`);
+    expect(prefixed).toBe("TOKEN=<hidden> notify");
+    expect(`${docker} ${prefixed}`).not.toContain(HEX);
+  });
+
+  it("hides a secret header's value in one argument and across a quoted hook command", () => {
+    const remote = redactCommand(["mcp-remote", "https://x.example/mcp", "--header", `Authorization: Bearer ${HEX}`]);
+    expect(remote).toBe("mcp-remote https://x.example/mcp --header Authorization: <hidden>");
+    // hookSummary splits at whitespace, so the quoted header arrives as three words.
+    const curl = command(`curl -H "Authorization: Bearer ${HEX}" https://h.example`);
+    expect(curl).toBe('curl -H "Authorization: <hidden>" https://h.example');
+    expect(`${remote} ${curl}`).not.toContain(HEX);
+  });
+
+  it("hides the word after Bearer or Basic under any header name", () => {
+    const arg = redactCommand(["server", "--header", `X-Upstream: Bearer ${HEX}`]);
+    expect(arg).toBe("server --header X-Upstream: Bearer <hidden>");
+    const hook = command(`notify --header "X-Upstream: Basic ${HEX}" done`);
+    expect(hook).toBe('notify --header "X-Upstream: Basic <hidden>" done');
+    expect(`${arg} ${hook}`).not.toContain(HEX);
+  });
+});
+
 describe("mcpSummary", () => {
   it("shows transport, command and the names - never the values - of env and headers", () => {
     const summary = mcpSummary({
