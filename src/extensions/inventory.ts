@@ -10,7 +10,7 @@ import {
   type Warning,
 } from "./model.js";
 import { collectProjects, type ProjectRecord, recordedPaths, resolveCurrentProject } from "./projects.js";
-import { hashTree, isRecord } from "./read.js";
+import { hashTree, isRecord, pathKey } from "./read.js";
 import {
   type ClaudeAccount,
   collectClaudeSettingsFacts,
@@ -148,29 +148,38 @@ export function usageOf(inv: Inventory, items: Extension[]): Usage | undefined {
   return merged;
 }
 
-/** Skills sharing a name across folders of the user's own - not plugin, synced or built-in ones. */
+/** The folder a skill's files are in: a working link's target, else the skill's own folder. */
+function realFolder(item: Extension): string {
+  return item.link && !item.link.broken ? item.link.target : item.location.file;
+}
+
+/**
+ * Skills sharing a name across folders of the user's own - not plugin, synced or built-in ones -
+ * where at least two of those folders are distinct. A link to another listed folder is that
+ * folder, not a second copy: counting it would keep it among the duplicates for good, even
+ * after the copies were merged into one folder and a link.
+ */
 export function duplicateGroups(items: Extension[]): Extension[][] {
   const byName = new Map<string, Extension[]>();
   for (const item of items) {
+    // A legacy command is one .md file, not a folder, so there is no folder copy to compare.
     if (item.kind !== "skill" || !OWN_SCOPES.has(item.location.scope) || item.summary?.type === "command") continue;
     const group = byName.get(item.name) ?? [];
     group.push(item);
     byName.set(item.name, group);
   }
-  return [...byName.values()].filter((group) => group.length > 1);
+  // pathKey is what samePath compares, so a set of keys counts the folders samePath tells apart.
+  return [...byName.values()].filter((group) => new Set(group.map((item) => pathKey(realFolder(item)))).size > 1);
 }
 
+/** Hashes in item order, so the keys' order does not depend on which hash finishes first. */
 async function hashDuplicates(items: Extension[]): Promise<Record<string, string>> {
-  const hashes: Record<string, string> = {};
-  await Promise.all(
-    duplicateGroups(items)
-      .flat()
-      .filter((item) => !item.link?.broken)
-      .map(async (item) => {
-        hashes[item.id] = await hashTree(item.location.file);
-      }),
+  const members = duplicateGroups(items)
+    .flat()
+    .filter((item) => !item.link?.broken);
+  return Object.fromEntries(
+    await Promise.all(members.map(async (item) => [item.id, await hashTree(item.location.file)] as const)),
   );
-  return hashes;
 }
 
 /** Duplicate groups by item id, worked out once per inventory. */
@@ -197,24 +206,28 @@ export function marksOf(inv: Inventory, item: Extension, now: number): Mark[] {
     marks.push("shadowed");
   }
   const mine = inv.hashes[item.id];
+  // A copy that differs is marked "differs" and listed by the Duplicates filter, but not called
+  // cleanup: the copy in daily use is often one of them.
   if (
     mine !== undefined &&
     groupFor(inv, item)?.some((o) => inv.hashes[o.id] !== undefined && inv.hashes[o.id] !== mine)
   ) {
     marks.push("differs");
   }
-  if (isCleanup(inv, item, now, marks)) marks.push("cleanup");
+  if (isCleanup(inv, item, now)) marks.push("cleanup");
   return marks;
 }
 
-function isCleanup(inv: Inventory, item: Extension, now: number, marks: Mark[]): boolean {
+/** Cleanup is the mark a delete follows, so anything not known counts against it. */
+function isCleanup(inv: Inventory, item: Extension, now: number): boolean {
   if (item.kind !== "skill" || !OWN_SCOPES.has(item.location.scope)) return false;
-  // A copy that differs is marked "differs" and listed by the Duplicates filter, but not called
-  // cleanup: the copy in daily use is often one of them.
-  if (marks.includes("broken-link")) return true;
+  if (item.link?.broken) return true;
   if (item.location.tool !== "claude") return false;
   const usage = usageOf(inv, [item]);
   if (usage?.lastUsedAt !== undefined) return now - usage.lastUsedAt > CLEANUP_UNUSED_DAYS * DAY;
-  // Never used: only once the folder is past the grace period, so a skill installed today is not flagged.
-  return item.createdAt === undefined || now - item.createdAt > CLEANUP_GRACE_DAYS * DAY;
+  // Used, with no time recorded: there is no telling how long ago, so it is not called unused.
+  if (usage !== undefined && usage.total > 0) return false;
+  // Never used: only once the folder is known to be past the grace period, so a skill installed
+  // today, or one whose age could not be read, is not flagged.
+  return item.createdAt !== undefined && now - item.createdAt > CLEANUP_GRACE_DAYS * DAY;
 }
