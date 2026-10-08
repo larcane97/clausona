@@ -21,18 +21,28 @@ const SIZES = (entries.length ? entries : ["140", "100", "72", "60", "80x24"]).m
 const CHAR_PX = 10;
 const LINE_PX = 19;
 const PAD = 20;
-const EDGE_X = 25 + CHAR_PX / 2;
-const EDGE_Y = 10 + LINE_PX / 2;
+const FRAME_X = 25;
+const FRAME_Y = 10;
+const EDGE_X = FRAME_X + CHAR_PX / 2;
+const EDGE_Y = FRAME_Y + LINE_PX / 2;
+const DEFAULT_HEIGHT = 900;
 const build = path.join("scripts", "demo", ".build");
 mkdirSync(build, { recursive: true });
 
-const steps = [
+/**
+ * The keys to each shot. `listMode` is a size where the detail has no pane of its own - under 64
+ * columns or 28 rows, as the screen's pickLayout has it: there enter opens a row's detail and esc
+ * closes it, while anywhere else esc on the list would leave the screen.
+ */
+const steps = (listMode) => [
   ["01-skills", []],
   ["02-detail-duplicate", ["Type /", "Type eli5", "Enter", "Down"]],
   ["03-filter-cleanup", ["Escape", "Type f", "Type f"]],
   ["04-filter-duplicates", ["Type f"]],
   ["05-mcp", ["Type f", "Type f", "Tab"]],
-  ["06-mcp-matrix", ["Type m"]],
+  // github, under the User group's header and docs: its env holds a token, shown by name only.
+  ["05b-mcp-detail", ["Down", "Down", ...(listMode ? ["Enter"] : [])]],
+  ["06-mcp-matrix", [...(listMode ? ["Escape"] : []), "Type m"]],
   ["07-hooks", ["Escape", "Tab"]],
   ["08-project-picker", ["Type p"]],
   ["09-plugin-search", ["Escape", "Tab", "Type /", "Type superpowers", "Enter"]],
@@ -43,7 +53,9 @@ const steps = [
 for (const { columns, rows } of SIZES) {
   const size = rows ? `${columns}x${rows}` : `${columns}`;
   const width = Math.round(columns * CHAR_PX + 2 * PAD + EDGE_X);
-  const height = rows ? Math.round(rows * LINE_PX + 2 * PAD + EDGE_Y) : 900;
+  const height = rows ? Math.round(rows * LINE_PX + 2 * PAD + EDGE_Y) : DEFAULT_HEIGHT;
+  const lineCount = rows ?? Math.floor((DEFAULT_HEIGHT - 2 * PAD - FRAME_Y) / LINE_PX);
+  const listMode = columns < 64 || lineCount < 28;
   const lines = [
     `Output ${build}/ext-${size}.gif`,
     "Require docker",
@@ -70,6 +82,8 @@ for (const { columns, rows } of SIZES) {
     'Type "clear; csn"',
     "Enter",
     "Wait+Screen@60s /Extensions/",
+    // The dashboard draws its rows a moment before it takes keys: sent at once, they can be lost.
+    "Sleep 1s",
     "Down",
     "Down",
     "Enter",
@@ -77,7 +91,7 @@ for (const { columns, rows } of SIZES) {
     "Sleep 500ms",
     "Show",
   ];
-  for (const [name, keys] of steps) {
+  for (const [name, keys] of steps(listMode)) {
     for (const key of keys) lines.push(key.startsWith("Type ") ? `Type "${key.slice(5)}"` : key, "Sleep 300ms");
     // The sleep after the screenshot lets that next frame come before the next step's first key.
     lines.push("Sleep 400ms", `Screenshot ${build}/ext-${size}-${name}.png`, "Sleep 200ms");
