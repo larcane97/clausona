@@ -17,7 +17,8 @@ workers, read them and remove them. This skill says everything else.
 **Shells.** Commands here are written for a POSIX shell. Claude Code runs them in Bash, on Windows
 too (Git Bash). Codex on Windows runs PowerShell: there, read `"$(cat <file>)"` as
 `(Get-Content -Raw <file>)`, and `<cmd> </dev/null` as `$null | <cmd>`. `~` is your home
-directory: `%USERPROFILE%` on Windows.
+directory: `%USERPROFILE%` on Windows. The shell can be zsh, which does not split an unquoted
+variable into words: loop over paths written out one by one, not over a variable holding several.
 
 ## 1. Profiles and the main session
 
@@ -48,8 +49,9 @@ older name. The keys:
   `claude` is a Claude Code permission mode. `codex` is a Codex approval policy: `untrusted`,
   `on-failure`, `on-request` or `never`.
 
-When you need a `permissions` value that is missing, and no worker config already shows one, ask
-the user once, and save it when they agree.
+When a `permissions` value you need is missing, use what a worker config or the profile's own
+settings already set (Claude Code's `permissions.defaultMode`), and say which mode the workers get.
+If nothing sets one, ask the user once, and save the answer to `fleet.json` when they agree.
 
 When the user asks to change a default ("never use claude:personal for workers", "always retire
 finished workers"), update that key in `~/.clausona/fleet.json` and keep its other keys. If only
