@@ -45,6 +45,13 @@ describe("redactCommand on a token that is not key-shaped", () => {
     expect(hook).toBe('notify --header "X-Upstream: Basic <hidden>" done');
     expect(`${arg} ${hook}`).not.toContain(HEX);
   });
+
+  it("hides the password of the user:password after -u or --user, and leaves a bare user", () => {
+    const curl = redactCommand(["curl", "-u", `alice:${HEX}`, `--user=bob:${HEX}`, "https://h.example"]);
+    expect(curl).toBe("curl -u alice:<hidden> --user=bob:<hidden> https://h.example");
+    expect(curl).not.toContain(HEX);
+    expect(redactCommand(["curl", "-u", "alice", "https://h.example"])).toBe("curl -u alice https://h.example");
+  });
 });
 
 describe("mcpSummary", () => {
