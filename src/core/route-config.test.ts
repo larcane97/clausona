@@ -85,6 +85,7 @@ describe("checkPattern", () => {
     "w?rk",
     "*@example.com",
     "me@example.com",
+    "claude:*@example.com",
   ])("accepts %s on a claude route", (pattern) => {
     expect(checkPattern(pattern, "claude")).toBeNull();
   });
@@ -98,6 +99,22 @@ describe("checkPattern", () => {
   it("refuses an unknown prefix", () => {
     expect(checkPattern("gpt:work", "claude")).toBe(
       "'gpt:work' names unknown tool 'gpt', but this route is for claude",
+    );
+  });
+
+  it("reads a prefix on an email pattern the same way", () => {
+    expect(checkPattern("codex:*@example.com", "claude")).toBe(
+      "'codex:*@example.com' names a codex profile, but this route is for claude",
+    );
+    expect(checkPattern("gpt:*@example.com", "claude")).toBe(
+      "'gpt:*@example.com' names unknown tool 'gpt', but this route is for claude",
+    );
+  });
+
+  it("refuses a colon anywhere else in an email pattern", () => {
+    expect(checkPattern("*@example.com:x", "claude")).toBe("'*@example.com:x' is not an email pattern");
+    expect(checkPattern("claude:codex:*@example.com", "claude")).toBe(
+      "'claude:codex:*@example.com' is not an email pattern",
     );
   });
 

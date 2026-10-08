@@ -32,16 +32,22 @@ export function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${source}$`, "u");
 }
 
-/** What a pattern is compared with: an email pattern whole, a name pattern without its `tool:`. */
-function patternBody(pattern: string): string {
-  const trimmed = pattern.trim();
-  if (trimmed.includes("@")) return trimmed;
-  const colon = trimmed.indexOf(":");
-  return colon === -1 ? trimmed : trimmed.slice(colon + 1);
+/**
+ * A pattern's `tool:` prefix (null when it has none) and the rest, which is what is compared. A name
+ * or an email pattern may carry the prefix; a colon after the `@` is not one. checkPattern
+ * (route-config.ts) splits a pattern with this too, so a saved pattern is read as it was checked.
+ */
+export function splitToolPrefix(pattern: string): { prefix: string | null; body: string } {
+  const colon = pattern.indexOf(":");
+  const at = pattern.indexOf("@");
+  if (colon === -1 || (at !== -1 && at < colon)) return { prefix: null, body: pattern };
+  return { prefix: pattern.slice(0, colon), body: pattern.slice(colon + 1) };
 }
 
 export function matchesMember(pattern: string, member: Member): boolean {
-  const body = patternBody(pattern);
+  const { prefix, body } = splitToolPrefix(pattern.trim());
+  // A prefix names one tool, so a pattern for another tool never matches.
+  if (prefix !== null && prefix !== member.tool) return false;
   const isEmail = body.includes("@");
   // An API profile is billed per use, so it joins a route only by its exact name.
   if (member.kind === "api" && (isEmail || hasGlob(body))) return false;
@@ -67,7 +73,7 @@ export function expandPatterns(patterns: string[], members: Member[]): Expansion
   for (const pattern of patterns) {
     const matched = sorted.filter((member) => matchesMember(pattern, member));
     if (matched.length === 0) {
-      const body = patternBody(pattern);
+      const { body } = splitToolPrefix(pattern.trim());
       if (hasGlob(body) || body.includes("@")) out.emptyPatterns.push(pattern);
       else out.unknownNames.push(pattern);
     }

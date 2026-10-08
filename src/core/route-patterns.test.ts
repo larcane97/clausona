@@ -61,6 +61,19 @@ describe("matchesMember", () => {
     expect(ids(all.filter((m) => matchesMember("*@corp.example.com", m)))).toEqual(["claude:work", "claude:team-a"]);
   });
 
+  it("reads a tool prefix on an email pattern", () => {
+    expect(ids(all.filter((m) => matchesMember("claude:*@corp.example.com", m)))).toEqual([
+      "claude:work",
+      "claude:team-a",
+    ]);
+  });
+
+  it("matches only profiles of the tool a prefix names", () => {
+    expect(matchesMember("codex:work", work)).toBe(false);
+    expect(matchesMember("codex:*@corp.example.com", work)).toBe(false);
+    expect(matchesMember("gpt:work", work)).toBe(false);
+  });
+
   it("matches an API profile only by its exact name", () => {
     expect(matchesMember("glm", glm)).toBe(true);
     expect(matchesMember("claude:glm", glm)).toBe(true);

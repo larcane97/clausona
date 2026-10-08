@@ -1,5 +1,6 @@
 import type { ToolName } from "../types.js";
 import { looksLikeCredential } from "./credential-token.js";
+import { splitToolPrefix } from "./route-patterns.js";
 
 /**
  * A route: a pool of profiles and a rule for picking one of them by plan quota, stored in
@@ -127,17 +128,15 @@ export function checkPattern(pattern: unknown, tool: ToolName): string | null {
   if ([pattern, ...pattern.split(/[\s,:]+/)].some(looksLikeCredential)) {
     return "looks like an API key, not a profile name or email pattern";
   }
-  if (pattern.includes("@")) return /[\s,]/.test(pattern) ? `'${pattern}' is not an email pattern` : null;
-  const colon = pattern.indexOf(":");
-  if (colon !== -1) {
-    const prefix = pattern.slice(0, colon);
-    if (prefix !== tool) {
-      const what = TOOLS.includes(prefix) ? `a ${prefix} profile` : `unknown tool '${prefix}'`;
-      return `'${pattern}' names ${what}, but this route is for ${tool}`;
-    }
+  // Split as the matcher splits it, so a name and an email pattern read a prefix the same way.
+  const { prefix, body } = splitToolPrefix(pattern);
+  if (prefix !== null && prefix !== tool) {
+    const what = TOOLS.includes(prefix) ? `a ${prefix} profile` : `unknown tool '${prefix}'`;
+    return `'${pattern}' names ${what}, but this route is for ${tool}`;
   }
-  const name = colon === -1 ? pattern : pattern.slice(colon + 1);
-  if (!NAME_PATTERN.test(name)) {
+  // A colon left in an email pattern would sit inside the address, which no account has.
+  if (body.includes("@")) return /[\s,:]/.test(body) ? `'${pattern}' is not an email pattern` : null;
+  if (!NAME_PATTERN.test(body)) {
     return `'${pattern}' is not a profile name pattern (letters, digits, '.', '_', '-', '*' and '?')`;
   }
   return null;
