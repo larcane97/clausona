@@ -3,7 +3,7 @@ import path from "node:path";
 import { accountStates, shortProfile, stateHere, tilde, viewFrom, whereLabel } from "../../extensions/cli.js";
 import { duplicateGroups, marksOf, usageOf } from "../../extensions/inventory.js";
 import type { EffectiveState, Extension, Inventory, Mark } from "../../extensions/model.js";
-import { samePath } from "../../extensions/read.js";
+import { pathKey, samePath } from "../../extensions/read.js";
 import { pluginState, relevantIn, stateOf } from "../../extensions/state.js";
 import type { ToolName } from "../../types.js";
 
@@ -151,9 +151,18 @@ function rowState(inv: Inventory, items: Extension[], project: string | undefine
   return unique.join(" / ");
 }
 
+/**
+ * Whether every Claude copy in a row is shadowed. Claude Code records a skill's use under its
+ * name, and a shadowed copy never loads, so the count under that name is the winning copy's.
+ */
+function shadowedEverywhere(inv: Inventory, items: Extension[], now: number): boolean {
+  const claude = items.filter((i) => i.location.tool === "claude");
+  return claude.length > 0 && claude.every((i) => marksOf(inv, i, now).includes("shadowed"));
+}
+
 function rowUsed(inv: Inventory, items: Extension[], now: number): string {
   if (items[0]?.kind !== "skill") return "";
-  if (!items.some((i) => i.location.tool === "claude")) return "—";
+  if (!items.some((i) => i.location.tool === "claude") || shadowedEverywhere(inv, items, now)) return "—";
   const usage = usageOf(inv, items);
   if (!usage) return "0";
   return usage.lastUsedAt === undefined ? String(usage.total) : `${usage.total} · ${ago(usage.lastUsedAt, now)}`;
@@ -302,12 +311,19 @@ export function detailOf(inv: Inventory, row: ItemRow, project: string | undefin
     }
   }
   if (first.kind === "skill") {
+    // Across the whole duplicate group, which can hold copies this row does not list - a
+    // project's copy of a global skill is a row of its own.
     const group = duplicateGroups(inv.items).find((g) => g.some((i) => i.id === first.id));
     const hashes = new Set((group ?? []).map((i) => inv.hashes[i.id]).filter((h): h is string => h !== undefined));
     if (group && hashes.size > 0) {
+      // A folder counts once, however many links lead to it; a broken link holds no copy.
+      const folders = new Set(
+        group.filter((i) => !i.link?.broken).map((i) => pathKey(i.link ? i.link.target : i.location.file)),
+      );
+      const copies = `${folders.size} ${folders.size === 1 ? "copy" : "copies"}`;
       lines.push({
         label: "Copies",
-        text: hashes.size === 1 ? "same content" : "differ",
+        text: hashes.size === 1 ? `${copies} · same content` : `${copies} · ${hashes.size} versions`,
         tone: hashes.size === 1 ? "muted" : "warning",
       });
     }
@@ -343,7 +359,9 @@ export function detailOf(inv: Inventory, row: ItemRow, project: string | undefin
       : [];
     if (offIn.length > 0) lines.push({ label: "Off in", text: [...new Set(offIn)].join(", ") });
     const usage = usageOf(inv, row.items);
-    if (usage) {
+    if (shadowedEverywhere(inv, row.items, now)) {
+      lines.push({ label: "Used", text: "counted under the copy that wins", tone: "muted" });
+    } else if (usage) {
       const top = Object.entries(usage.byProfile)
         .filter(([, count]) => count > 0)
         .sort(([, a], [, b]) => b - a)
@@ -441,8 +459,12 @@ const STACKED_MIN = 7;
  * has room for both at STACKED_MIN lines or more; else on its own screen, opened with enter.
  * Heights leave room for Chrome's header and footer, the tab bar and the key hints. A size that
  * is not a number, as from a stream that is no terminal, is read as 80 by 24.
+ *
+ * `listLines` is how many lines the list takes to show every row, its header included. Stacked,
+ * the list gets those lines, within STACKED_MIN and body - STACKED_MIN, and the detail every
+ * line left, so the body is filled and a long detail is not cut while the terminal has room.
  */
-export function pickLayout(columns: number, rows: number): Layout {
+export function pickLayout(columns: number, rows: number, listLines = Number.POSITIVE_INFINITY): Layout {
   const across = Number.isFinite(columns) ? columns : 80;
   const down = Number.isFinite(rows) ? rows : 24;
   const width = Math.max(20, across - 4);
@@ -452,33 +474,75 @@ export function pickLayout(columns: number, rows: number): Layout {
     return { mode: "side", listWidth, listHeight: body, detailWidth: width - 2 - listWidth, detailHeight: body };
   }
   if (across >= 64 && body >= 2 * STACKED_MIN) {
-    // The two share the body: the detail takes 40% of it, within 7 to 9 lines, and the list the
-    // rest - 7 lines or more, since the detail stays at 7 until the body reaches 20.
-    const detailHeight = Math.min(9, Math.max(STACKED_MIN, Math.floor(body * 0.4)));
-    return { mode: "stacked", listWidth: width, listHeight: body - detailHeight, detailWidth: width, detailHeight };
+    const listHeight = Math.min(Math.max(listLines, STACKED_MIN), body - STACKED_MIN);
+    return { mode: "stacked", listWidth: width, listHeight, detailWidth: width, detailHeight: body - listHeight };
   }
   return { mode: "list", listWidth: width, listHeight: body, detailWidth: width, detailHeight: body };
 }
 
+/**
+ * The rows a list `height` lines tall shows of `total`: all of them under the header when they
+ * fit, else one line fewer, kept for the line that says how many more are below.
+ */
+export function listRoom(height: number, total: number): number {
+  return total <= height - 1 ? Math.max(1, height - 1) : Math.max(1, height - 2);
+}
+
+/** The spaces before each column after the name, in the header and in every row. */
+export const COLUMN_GAP = 2;
+
 export type Columns = { name: number; tool: number; extra: number; used: number; state: number };
 
-/** Column widths for a list `width` wide: optional columns go before the name drops under 8. */
-export function listColumns(tab: Tab, width: number): Columns {
+/** The width a row's name, its marks and its indent take, as ItemList draws them. */
+function nameAndMarks(row: ItemRow): number {
+  const tags = row.marks.map((m) => MARK_LABEL[m]).join(" ");
+  return 2 + row.name.length + (tags ? 1 + tags.length : 0);
+}
+
+/**
+ * The name column a tab needs: the widest name with its marks over every row of the tab, every
+ * group open and no filter or search, so the columns stay put while the list scrolls, a group
+ * opens or a search narrows it.
+ */
+export function nameWidth(inv: Inventory, tab: Tab, project: string | undefined, now: number): number {
+  const open = new Proxy({}, { get: () => true }) as Record<string, boolean>;
+  const rows = buildRows(inv, { tab, filter: "all", query: "", open, now, ...(project ? { project } : {}) });
+  return Math.max(0, ...rows.map((r) => (r.type === "item" ? nameAndMarks(r) : 0)));
+}
+
+/** What the columns after the name take, each with its gap. */
+function after(...widths: number[]): number {
+  return widths.reduce((sum, w) => sum + (w > 0 ? w + COLUMN_GAP : 0), 0);
+}
+
+/**
+ * Column widths for a list `width` wide whose names need `need` columns: optional columns go
+ * before the name drops under 8, and the name takes what it needs of what they leave. What it
+ * does not need is left after the last column, so the columns sit beside the names.
+ */
+export function listColumns(tab: Tab, width: number, need = Number.POSITIVE_INFINITY): Columns {
   const inner = width - 2;
+  const wanted = Math.max(8, need);
   if (tab === "hooks") {
-    const name = Math.min(28, Math.floor(inner * 0.4));
+    // The command is the last column and takes the rest: the name keeps to 40% and 28 at most.
+    const name = Math.min(wanted, 28, Math.floor(inner * 0.4));
     const tool = inner >= 40 ? 4 : 0;
-    return { name, tool, extra: Math.max(0, inner - name - tool - 2), used: 0, state: 0 };
+    return { name, tool, extra: Math.max(0, inner - name - after(tool) - COLUMN_GAP), used: 0, state: 0 };
   }
   if (tab === "mcp") {
     // Wide enough for the longest state word, pending-approval.
     const state = 16;
     const extra = inner >= 60 ? 8 : 0;
     const tool = inner >= 40 ? 4 : 0;
-    return { name: Math.max(8, inner - state - extra - tool - 3), tool, extra, used: 0, state };
+    return { name: Math.min(wanted, Math.max(8, inner - after(tool, extra, state))), tool, extra, used: 0, state };
   }
   const state = inner >= 50 ? 20 : 12;
   const used = inner >= 70 ? 13 : 0;
   const tool = inner >= 40 ? 4 : 0;
-  return { name: Math.max(8, inner - state - used - tool - 3), tool, extra: 0, used, state };
+  return { name: Math.min(wanted, Math.max(8, inner - after(tool, used, state))), tool, extra: 0, used, state };
+}
+
+/** How long a read took: milliseconds under a second, else seconds to one decimal place. */
+export function took(ms: number): string {
+  return Math.round(ms) < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)}s`;
 }

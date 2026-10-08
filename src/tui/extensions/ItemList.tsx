@@ -1,7 +1,19 @@
 import { Box, Text } from "ink";
 
 import { color, symbol } from "../theme.js";
-import { type Columns, cell, type GroupRow, type ItemRow, MARK_LABEL, type Row, type Tab } from "./view-model.js";
+import {
+  COLUMN_GAP,
+  type Columns,
+  cell,
+  type GroupRow,
+  type ItemRow,
+  listRoom,
+  MARK_LABEL,
+  type Row,
+  type Tab,
+} from "./view-model.js";
+
+const GAP = " ".repeat(COLUMN_GAP);
 
 const STATE_COLOR: Record<string, string> = {
   on: color.healthy,
@@ -22,7 +34,7 @@ function header(tab: Tab, columns: Columns): string {
   if (columns.extra) parts.push(cell(tab === "hooks" ? "COMMAND" : "ACCOUNTS", columns.extra));
   if (columns.used) parts.push(cell("USED", columns.used));
   if (columns.state) parts.push(cell("THIS PROJECT", columns.state));
-  return parts.join(" ");
+  return parts.join(GAP);
 }
 
 function GroupLine({ row, active }: { row: GroupRow; active: boolean }) {
@@ -40,12 +52,14 @@ function GroupLine({ row, active }: { row: GroupRow; active: boolean }) {
 
 function ItemLine({ row, active, columns }: { row: ItemRow; active: boolean; columns: Columns }) {
   const tags = row.marks.map((m) => MARK_LABEL[m]).join(" ");
-  // The name's part of its column, after the indent. The name gives way to its marks - "cleanup"
-  // says more than the last letters of a long name - down to 4 letters; past that the marks are
-  // cut instead, so however many there are, the columns after them stay where the header has them.
+  // The name's part of its column, after the indent. The marks give way first: they are cut, or
+  // left out when not even ` …` fits after the name, and the name is cut only when it does not
+  // fit on its own. However many marks there are, the columns after them stay where the header
+  // has them.
   const room = columns.name - 2;
-  const tagText = tags ? cell(` ${tags}`, Math.max(0, room - 4)).trimEnd() : "";
-  const name = cell(row.name, Math.max(0, room - tagText.length)).trimEnd();
+  const name = cell(row.name, room).trimEnd();
+  const left = room - name.length;
+  const tagText = tags && name === row.name && left >= 2 ? cell(` ${tags}`, left).trimEnd() : "";
   const pad = Math.max(0, room - name.length - tagText.length);
   const tools = row.tools.map((t) => (t === "claude" ? "C" : "X")).join(" ");
   return (
@@ -57,12 +71,32 @@ function ItemLine({ row, active, columns }: { row: ItemRow; active: boolean; col
       </Text>
       {tagText ? <Text color={row.marks.includes("broken-link") ? color.error : color.warning}>{tagText}</Text> : null}
       <Text>{" ".repeat(pad)}</Text>
-      {/* Each column brings the space before it, as the header joins them: a space after the
-          last one is a column past the list's width, which ink cuts to an ellipsis. */}
-      {columns.tool ? <Text color={color.muted}> {cell(tools, columns.tool)}</Text> : null}
-      {columns.extra ? <Text color={color.muted}> {cell(row.extra, columns.extra)}</Text> : null}
-      {columns.used ? <Text color={color.muted}> {cell(row.used, columns.used)}</Text> : null}
-      {columns.state ? <Text color={stateColor(row.state)}> {cell(row.state, columns.state)}</Text> : null}
+      {/* Each column brings the gap before it, as the header joins them: a gap after the last
+          one is a column past the list's width, which ink cuts to an ellipsis. */}
+      {columns.tool ? (
+        <Text color={color.muted}>
+          {GAP}
+          {cell(tools, columns.tool)}
+        </Text>
+      ) : null}
+      {columns.extra ? (
+        <Text color={color.muted}>
+          {GAP}
+          {cell(row.extra, columns.extra)}
+        </Text>
+      ) : null}
+      {columns.used ? (
+        <Text color={color.muted}>
+          {GAP}
+          {cell(row.used, columns.used)}
+        </Text>
+      ) : null}
+      {columns.state ? (
+        <Text color={stateColor(row.state)}>
+          {GAP}
+          {cell(row.state, columns.state)}
+        </Text>
+      ) : null}
     </Text>
   );
 }
@@ -77,15 +111,17 @@ type Props = {
   tab: Tab;
   /** What an empty list says: that the tab has nothing, or that nothing matches. */
   empty: string;
+  /** Take all `height` lines, however few rows there are: stacked, the detail starts below them. */
+  fill?: boolean;
 };
 
 /** The list: a column header, the rows that fit from `top`, and how many more are below. */
-export function ItemList({ rows, cursor, top, height, width, columns, tab, empty }: Props) {
-  const room = Math.max(1, height - 2);
+export function ItemList({ rows, cursor, top, height, width, columns, tab, empty, fill = false }: Props) {
+  const room = listRoom(height, rows.length);
   const visible = rows.slice(top, top + room);
   const below = rows.length - top - visible.length;
   return (
-    <Box flexDirection="column" width={width} flexShrink={0}>
+    <Box flexDirection="column" width={width} flexShrink={0} {...(fill ? { height } : {})}>
       <Text color={color.muted} wrap="truncate-end">
         {header(tab, columns)}
       </Text>

@@ -20,8 +20,10 @@ import {
   waitForFrame,
 } from "../test-drive.js";
 import { windowsOnScreen } from "../test-frames.js";
+import { color } from "../theme.js";
 import { ExtensionsScreen } from "./ExtensionsScreen.js";
 import { ItemList } from "./ItemList.js";
+import { MARK_COLOR } from "./McpMatrix.js";
 import { type ItemRow, listColumns } from "./view-model.js";
 
 vi.setConfig({ testTimeout: 15_000 });
@@ -42,7 +44,8 @@ async function seen(instance: Instance, check: (text: string) => boolean): Promi
   return stripAnsi(await waitForFrame(instance.lastFrame, (frame) => check(stripAnsi(frame))));
 }
 
-async function seed(): Promise<Inventory> {
+/** `more` adds to the home before the inventory is read, for a case that needs one more file. */
+async function seed(more?: (h: TestHome) => void): Promise<Inventory> {
   const h = new TestHome();
   homes.push(h);
   const app = h.project("repos/app");
@@ -59,7 +62,25 @@ async function seed(): Promise<Inventory> {
   h.skill("repos/app/.claude/skills", "deploy-check");
   h.write(".claude/settings.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-me" }] }] } });
   h.write("repos/app/.claude/settings.local.json", "{ broken");
+  more?.(h);
   return loadInventory({ homeDir: h.home, registry: h.registry, cwd: app, managedSettings: h.path("none.json") });
+}
+
+/** An item row as ItemList draws it, for the cases that draw the list alone. */
+function itemRow(name: string, marks: ItemRow["marks"] = [], more: Partial<ItemRow> = {}): ItemRow {
+  return {
+    type: "item",
+    key: `global|${name}`,
+    group: "global",
+    name,
+    items: [],
+    tools: ["claude"],
+    state: "on",
+    used: "0",
+    extra: "",
+    marks,
+    ...more,
+  };
 }
 
 function mount(tree: ReactElement, columns: number, rows?: number): WatchedInstance {
@@ -366,10 +387,11 @@ describe("ExtensionsScreen", () => {
   });
 
   it("moves the list's window up when a group closes, so no blank line is left below it", async () => {
-    const { instance } = screen(await seed(), 60, 20);
+    const { instance } = screen(await seed((h) => h.skill(".claude/skills", "zz-last")), 60, 20);
     await seen(instance, (f) => f.includes("Global"));
     await moveTo(instance, "deploy-check");
-    // Four rows fit at this height, so the last of five has scrolled the first away.
+    // Six rows do not fit under the header, so four do with the line that says how many more:
+    // the last has scrolled the first away.
     expect(stripAnsi(instance.lastFrame() ?? "")).not.toContain("▾ Global");
     await press(instance, UP);
     await press(instance, ENTER);
@@ -412,6 +434,91 @@ describe("ExtensionsScreen", () => {
     expect(height(instance.lastFrame())).toBeLessThan(20);
   });
 
+  it("fills the stacked body, so a long detail is not cut while the terminal has room", async () => {
+    const inv = await seed();
+    const githubAt = async (columns: number) => {
+      const { instance } = screen(inv, columns, 40);
+      await seen(instance, (f) => f.includes("eli5"));
+      await press(instance, TAB);
+      await moveTo(instance, "github");
+      return seen(instance, (f) => f.includes("Accounts"));
+    };
+    const stacked = await githubAt(100);
+    expect(stacked).not.toMatch(/│ … +│/);
+    // As tall as the side-by-side frame, whose detail always takes the whole body.
+    expect(height(stacked)).toBe(height(await githubAt(140)));
+  });
+
+  it("puts two spaces between columns, in the header and the rows alike", async () => {
+    const row = itemRow("eli5", [], { tools: ["claude", "codex"], used: "207 · 3h" });
+    const list = mount(
+      <ItemList
+        rows={[row]}
+        cursor={0}
+        top={0}
+        height={6}
+        width={96}
+        columns={listColumns("skills", 96, 12)}
+        tab="skills"
+        empty=""
+      />,
+      100,
+    );
+    const lines = (await seen(list, (f) => f.includes("THIS PROJECT"))).split("\n");
+    const header = lines.find((line) => line.includes("THIS PROJECT")) ?? "";
+    const line = lines.find((l) => l.includes("eli5")) ?? "";
+    expect(header).toMatch(/NAME {10}TOOL {2}USED {11}THIS PROJECT/);
+    expect(line.indexOf("C X")).toBe(header.indexOf("TOOL"));
+    expect(line.indexOf("207")).toBe(header.indexOf("USED"));
+    expect(line.indexOf(" on") + 1).toBe(header.indexOf("THIS PROJECT"));
+  });
+
+  it("cuts a row's marks before its name, and the name only when no marks fit", async () => {
+    // Twenty columns for the name and its marks, after the indent.
+    const columns = listColumns("skills", 60, 22);
+    const rows = [itemRow("gone-helper", ["broken-link", "cleanup"]), itemRow("a-name-that-has-22-chr", ["cleanup"])];
+    const list = mount(
+      <ItemList rows={rows} cursor={0} top={0} height={6} width={60} columns={columns} tab="skills" empty="" />,
+      60,
+    );
+    const frame = await seen(list, (f) => f.includes("gone-helper"));
+    expect(frame).toContain("gone-helper broken …");
+    expect(frame).toContain("a-name-that-has-22-…  C");
+    expect(frame).not.toMatch(/a-name.*cleanup/);
+  });
+
+  it("hints the matrix on the MCP tab right after search, at 80 by 24", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", { projects: { [app]: {} }, mcpServers: { github: { command: "gh-mcp" } } });
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: app,
+      managedSettings: h.path("none.json"),
+    });
+    expect(inv.warnings).toEqual([]);
+    const { instance } = screen(inv, 80, 24);
+    await seen(instance, (f) => f.includes("Skills"));
+    await press(instance, TAB);
+    const hints = (await seen(instance, (f) => f.includes("[MCP 1]"))).split("\n").find((l) => l.includes("↑↓ move"));
+    expect(hints).toContain("/ search │ m matrix");
+  });
+
+  it("draws a server that is not in an account in the legend's muted colour, not the border's", () => {
+    expect(MARK_COLOR.absent).toBe(color.muted);
+  });
+
+  it("says how long the read took in milliseconds under a second", async () => {
+    const inv = await seed();
+    // The screen reads the clock when the read starts, when it ends, and for the status line.
+    let calls = 0;
+    const now = () => 1_000_000 + 6 * calls++;
+    const instance = mount(<ExtensionsScreen load={async () => inv} onExit={vi.fn()} now={now} />, 100);
+    expect(await seen(instance, (f) => f.includes("Read "))).toContain(`Read ${inv.items.length} items in 12 ms`);
+  });
+
   it("cuts a row's marks, not its columns, however many it has", async () => {
     const columns = listColumns("skills", 56);
     const row: ItemRow = {
@@ -432,7 +539,7 @@ describe("ExtensionsScreen", () => {
     );
     const lines = (await seen(list, (f) => f.includes("THIS PROJECT"))).split("\n");
     const header = lines.find((line) => line.includes("THIS PROJECT")) ?? "";
-    const line = lines.find((l) => l.includes("cleanup")) ?? "";
+    const line = lines.find((l) => l.includes("a-long-skill-name")) ?? "";
     expect(line.slice(header.indexOf("THIS PROJECT")).trimEnd()).toBe("on");
     expect(line.length).toBeLessThanOrEqual(56);
   });
