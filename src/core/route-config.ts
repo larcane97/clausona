@@ -1,5 +1,5 @@
 import type { ToolName } from "../types.js";
-import { looksLikeCredential } from "./credential-token.js";
+import { carriesCredentialToken, looksLikeCredential } from "./credential-token.js";
 import { splitToolPrefix } from "./route-patterns.js";
 
 /**
@@ -124,8 +124,11 @@ export function checkPattern(pattern: unknown, tool: ToolName): string | null {
   if (typeof pattern !== "string" || pattern.trim() === "") return "must be a non-empty string";
   // Each piece as well as the whole: `claude:<key>` does not start with 'sk-', and a shorter key
   // behind a prefix or a space stays under the length ceiling, so the checks below would store
-  // it in routes.json or quote it back.
-  if ([pattern, ...pattern.split(/[\s,:]+/)].some(looksLikeCredential)) {
+  // it in routes.json or quote it back. And a key anywhere in it: a vendor token (`hf_…`, `AIza…`,
+  // `ghp_…`) is short and does not start with 'sk-', so only carriesCredentialToken sees it.
+  if (
+    [pattern, ...pattern.split(/[\s,:]+/)].some((piece) => looksLikeCredential(piece) || carriesCredentialToken(piece))
+  ) {
     return "looks like an API key, not a profile name or email pattern";
   }
   // Split as the matcher splits it, so a name and an email pattern read a prefix the same way.

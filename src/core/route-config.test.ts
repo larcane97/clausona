@@ -86,6 +86,8 @@ describe("checkPattern", () => {
     "*@example.com",
     "me@example.com",
     "claude:*@example.com",
+    "jiyoung_lee",
+    "*@corp.example.com",
   ])("accepts %s on a claude route", (pattern) => {
     expect(checkPattern(pattern, "claude")).toBeNull();
   });
@@ -142,6 +144,17 @@ describe("checkPattern", () => {
     const problem = checkPattern(pattern(), "claude") ?? "";
     expect(problem).toMatch(/API key/);
     expect(problem).not.toContain(keyShaped());
+  });
+
+  // Short, and not starting with sk-: a vendor token only a check for a key anywhere in it catches.
+  it.each([
+    ["on its own", (token: string) => token],
+    ["behind this tool's prefix", (token: string) => `claude:${token}`],
+    ["inside a glob", (token: string) => `*${token}*`],
+  ])("refuses a vendor token %s, and never quotes it", (_, wrap) => {
+    const token = ["hf", "Ab".repeat(17)].join("_");
+    const problem = checkPattern(wrap(token), "claude") ?? "";
+    expect(problem).toBe("looks like an API key, not a profile name or email pattern");
   });
 });
 

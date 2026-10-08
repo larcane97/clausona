@@ -193,19 +193,25 @@ describe("route set, rename, remove", () => {
     );
   });
 
-  it("never quotes a key given to --drop, --from or --add", async () => {
-    const { run, file } = setup();
+  it("never quotes or stores a key given to --drop, --from or --add", async () => {
+    const { run, file, deps } = setup();
     await run("add", "main");
-    const key = ["sk", "ant", "y".repeat(24)].join("-");
-    for (const args of [
-      ["--drop", key],
-      ["--from", key, "--drop", "b"],
-      ["--add", key],
-    ]) {
-      const error = (await run("set", "main", ...args).catch((e: unknown) => e)) as Error;
-      expect(error).toBeInstanceOf(Error);
-      expect(error.message).not.toContain(key);
+    // The second is short and does not start with sk-: only a check for a key anywhere in it catches it.
+    for (const key of [["sk", "ant", "y".repeat(24)].join("-"), ["hf", "Ab".repeat(17)].join("_")]) {
+      for (const args of [
+        ["set", "main", "--drop", key],
+        ["set", "main", "--from", key, "--drop", "b"],
+        ["set", "main", "--add", key],
+        ["add", "other", "--from", key],
+        ["explain", "--tool", "claude", "--from", key],
+      ]) {
+        const error = (await run(...args).catch((e: unknown) => e)) as Error;
+        expect(error).toBeInstanceOf(Error);
+        expect(error.message).not.toContain(key);
+      }
+      expect(readFileSync(deps.paths.routesPath, "utf8")).not.toContain(key);
     }
+    expect(Object.keys(file().routes)).toEqual(["main"]);
     expect(file().routes.main.from).toEqual(["*"]);
   });
 
