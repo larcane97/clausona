@@ -1,0 +1,24 @@
+# clausona
+
+> clausona is a free, open-source CLI and terminal dashboard for running multiple Claude Code and OpenAI Codex CLI accounts on one machine. Each account keeps its own sign-in in its own config directory (CLAUDE_CONFIG_DIR or CODEX_HOME). Skills, hooks, plugins, settings and global instructions are shared between the accounts of each tool, and conversation history can be shared too, so a conversation started under one account can be resumed under another. It also shows every account's 5-hour and weekly plan usage side by side. It runs on macOS, Linux and Windows, has no proxy or daemon, and is not affiliated with Anthropic or OpenAI.
+
+Key facts:
+
+- Install: `curl -fsSL https://github.com/larcane97/clausona/releases/latest/download/install.sh | bash` (macOS, Linux) or `irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex` (Windows PowerShell). Needs Node.js 20 or later.
+- Set up: `clausona init` registers the accounts already signed in; `clausona add claude:work` or `clausona add codex:work` adds one; `csn use work` switches; `clausona run claude:personal` runs one session under another account.
+- Shared history: `clausona config <profile> --merge-sessions`; then `claude --resume` and `claude --continue`, and on macOS and Linux `codex resume`, see conversations from every account that shares history.
+- Never shared: sign-ins, Claude Code's `.claude.json` (including `claude mcp add` servers), and Codex's auth.json, app-server daemon, memories and its databases other than the thread store (which merged sessions share on macOS and Linux).
+- clausona does not switch accounts automatically when a limit is reached; the user picks the account.
+
+## Guides
+
+- [How to use multiple Claude Code accounts on one machine](https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/): CLAUDE_CONFIG_DIR by hand, what must not be shared, and the clausona way, including shared conversation history.
+- [How to use multiple Codex CLI accounts on one machine](https://larcane97.github.io/clausona/guides/multiple-codex-cli-accounts/): one CODEX_HOME per account, which files to share, and which must stay with each account.
+- [클로드 코드·Codex 여러 계정 동시에 쓰는 법](https://larcane97.github.io/clausona/ko/): the same guide in Korean.
+
+## Project
+
+- [GitHub repository and README](https://github.com/larcane97/clausona)
+- [How it works](https://github.com/larcane97/clausona/blob/main/docs/how-it-works.md)
+- [Plan quota](https://github.com/larcane97/clausona/blob/main/docs/plan-quota.md)
+- [API profiles](https://github.com/larcane97/clausona/blob/main/docs/api-profiles.md)

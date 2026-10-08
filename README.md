@@ -1,6 +1,6 @@
 # clausona
 
-**Switch between multiple Claude Code and OpenAI Codex CLI accounts on one machine — plugins, settings, and skills stay shared.**
+**Switch between multiple Claude Code and OpenAI Codex CLI accounts on one machine — skills, hooks, plugins and settings stay shared, and conversation history can be too.**
 
 <p align="center">
   <a href="https://github.com/hesreallyhim/awesome-claude-code"><img src="https://img.shields.io/badge/Mentioned%20in-Awesome%20Claude%20Code-fc60a8?style=for-the-badge&logo=awesomelists&logoColor=white" alt="Mentioned in Awesome Claude Code" /></a>
@@ -18,9 +18,16 @@
 </p>
 
 clausona is a profile manager for the Claude Code and OpenAI Codex CLIs. Each account gets its
-own config directory — its own sign-in and session history — while plugins and settings are
-shared across them, so `csn use work` is all it takes to move to another account. It also
-shows how much of every account's 5-hour and weekly plan limits is left, side by side.
+own config directory for its sign-in, while skills, hooks, plugins and settings are shared across
+them, so `csn use work` is all it takes to move to another account. Conversation history stays with
+each account, or is shared too if you choose, so a conversation started under one account can be
+resumed under another. It also shows how much of every account's 5-hour and weekly plan limits is
+left, side by side.
+
+Step-by-step guides, including how to do it by hand:
+[multiple Claude Code accounts](https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/),
+[multiple Codex CLI accounts](https://larcane97.github.io/clausona/guides/multiple-codex-cli-accounts/),
+and [the same in Korean](https://larcane97.github.io/clausona/ko/).
 
 ## Why
 
@@ -43,7 +50,8 @@ No re-login. No reinstalling plugins. Just switch and go.
 ## Features
 
 - **One-command switching** — `clausona use <name>` and you're on a different account
-- **Shared environment** — plugins (and the MCP servers they bring), permissions, settings, and skills (Claude), and config.toml (MCP servers included), skills, and hooks (Codex) are symlinked across profiles within each tool. Set up once, use everywhere. MCP servers added with `claude mcp add` stay per account — [see the FAQ](#do-my-mcp-servers-plugins-and-settings-carry-over-when-i-switch).
+- **Shared environment** — plugins (and the MCP servers they bring), skills, and settings.json with its hooks and permissions (Claude), and config.toml (MCP servers included), skills, and hooks (Codex) are symlinked across profiles within each tool. Set up once, use everywhere. MCP servers added with `claude mcp add` stay per account — [see the FAQ](#do-my-mcp-servers-plugins-and-settings-carry-over-when-i-switch).
+- **Shared history, if you want** — `clausona config <profile> --merge-sessions` shares conversation history with your primary directory, so `claude --resume` and `claude --continue` (and `codex resume` on macOS and Linux) find conversations from every account that shares it
 - **Plan quota at a glance** — session and weekly limit usage for every account, read live from each tool's own usage endpoint (Claude and Codex)
 - **Two accounts at once** — `clausona run claude:personal` starts one session under another profile without switching, so two terminals can run two accounts side by side
 - **Superset fleets** — a Claude Code plugin from this repo lets one session run parallel agents in [Superset](https://superset.sh), each on its own account or API model, then check and clean up after them ([use case](docs/usecases/superset-fleet.md))
@@ -226,7 +234,8 @@ links back to your primary directory, so what you set up once is there for every
 ├── .credentials.json      ← own OAuth tokens outside macOS, and on macOS when the
 │                            Keychain refuses them (NOT shared)
 ├── projects/              ← own session history (NOT shared by default)
-├── plugins/      →  ~/.claude/plugins        (symlink to primary)
+├── plugins/               ← own directory: each entry links to ~/.claude/plugins/, except
+│                            the two JSON files that hold paths, kept as per-profile copies
 ├── settings.json →  ~/.claude/settings.json  (symlink to primary)
 └── ...
 ```
@@ -235,9 +244,9 @@ Codex profiles share only their configuration: `config.toml`, `hooks.json`, `AGE
 `skills/`, `plugins/`, `prompts/` and a few more. Everything else Codex keeps in its home, such as its
 app-server daemon and its memories, stays with each account ([the full list](docs/how-it-works.md#what-a-codex-profile-shares)).
 
-clausona has no telemetry and no server of its own. The only network calls it makes are each
-profile's plan-quota lookup — and a lapsed token's renewal — against that profile's own
-provider, which `clausona list --no-quota` skips.
+clausona has no telemetry and no server of its own. Its network calls are each profile's
+plan-quota lookup — and a lapsed token's renewal — against that profile's own provider, which
+`clausona list --no-quota` skips, and the dashboard's check of GitHub for a newer clausona release.
 
 Session separation, Windows links, how credentials are kept apart, what `doctor` and `repair`
 look at, and where clausona stores its data: **[docs/how-it-works.md](docs/how-it-works.md)**.
@@ -281,7 +290,20 @@ they are linked to your primary config directory, so what you install under one 
 there under every account of that tool. MCP servers added with `claude mcp add` are the
 exception: Claude Code keeps those in each config directory's `.claude.json`, next to that
 account's sign-in, and clausona does not share that file. Add them to each profile, or put
-them in a project's `.mcp.json`. Sign-ins and session history are never shared.
+them in a project's `.mcp.json`. Sign-ins are never shared, and session history stays with each
+account unless you merge sessions (below).
+
+### Can I continue a conversation under another account?
+
+Yes, once the accounts share history: `clausona config claude:work --merge-sessions` (or
+`--merge-sessions` on `clausona add` and `clausona init`). For Claude Code that copies the account's
+existing conversations into the primary's history first, so none are lost. Then `claude --resume`
+lists conversations from every account that shares history, and `claude --continue` picks up the
+latest one in the current folder, whichever account started it. For Codex on macOS and Linux,
+`codex resume` and `codex resume --last` find threads from every such account, goals included; the
+account's earlier Codex conversations are set aside in a backup rather than copied, and come back
+with `--separate-sessions`. On Windows Codex's thread store stays with each account, so a thread
+from another account is resumed by its id. `--separate-sessions` turns sharing off.
 
 ### Can I see Claude and Codex plan limits for all my accounts at once?
 
@@ -326,8 +348,10 @@ See [API profiles](#api-profiles). Codex API profiles are not supported yet.
 
 ### Does it work on Windows?
 
-Yes, with PowerShell 5.1 or later. Shared directories use junctions. Shared files use symbolic
-links when Developer Mode is on and fall back to hard links otherwise.
+Yes, with PowerShell 5.1 or later. Shared directories use junctions. Turn on Developer Mode so
+shared files can be symbolic links: without it, files the tools save whole (`settings.json`,
+`CLAUDE.md`, `keybindings.json`, and Codex's `config.toml` and `hooks.json`) stay a copy per
+account, and `clausona doctor` says so. Other files fall back to hard links.
 
 ## Contributing
 

@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How to use multiple Codex CLI accounts on one machine (CODEX_HOME, shared config and sessions)</title>
+  <meta name="description" content="Switch Codex CLI accounts without logging out. Give each its own CODEX_HOME, share config.toml, hooks, skills and plugins, and keep auth, the daemon and memories per account.">
+  <link rel="canonical" href="https://larcane97.github.io/clausona/guides/multiple-codex-cli-accounts/">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="clausona">
+  <meta property="og:title" content="How to use multiple Codex CLI accounts on one machine">
+  <meta property="og:description" content="One CODEX_HOME per account, shared configuration, and the files that must stay with each account.">
+  <meta property="og:url" content="https://larcane97.github.io/clausona/guides/multiple-codex-cli-accounts/">
+  <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
+  <meta property="article:published_time" content="2026-10-08">
+  <meta property="article:modified_time" content="2026-10-08">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Recursive:wght,CASL,MONO@300..900,0..1,0..1&display=swap">
+  <link rel="stylesheet" href="../../style.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "How to use multiple Codex CLI accounts on one machine",
+    "description": "Give each Codex CLI account its own CODEX_HOME, share the configuration, and keep the sign-in, the app-server daemon, memories and databases with each account.",
+    "datePublished": "2026-10-08",
+    "dateModified": "2026-10-08",
+    "inLanguage": "en",
+    "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
+    "mainEntityOfPage": "https://larcane97.github.io/clausona/guides/multiple-codex-cli-accounts/",
+    "about": [
+      { "@type": "SoftwareApplication", "name": "Codex CLI" },
+      { "@type": "SoftwareApplication", "name": "clausona", "url": "https://github.com/larcane97/clausona" }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      { "@type": "ListItem", "position": 1, "name": "clausona", "item": "https://larcane97.github.io/clausona/" },
+      { "@type": "ListItem", "position": 2, "name": "Multiple Codex CLI accounts", "item": "https://larcane97.github.io/clausona/guides/multiple-codex-cli-accounts/" }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "How do I switch Codex CLI accounts without logging out?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Give each account its own CODEX_HOME and sign in to each once with CODEX_HOME=<dir> codex login. Codex starts as whichever account's home it is pointed at. With clausona: clausona add codex:work, then csn use codex:work."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Which files in ~/.codex can be shared between accounts?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "The configuration: config.toml and any *.config.toml, hooks.json, AGENTS.md, rules/, skills/, plugins/, agents/ and prompts/. Keep auth.json, the app-server daemon's directories, memories, the databases, .env and packages/ with each account."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Why not share the whole ~/.codex directory?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Codex keeps account state in its home. A shared app-server-control/ makes Codex talk to another account's daemon and run on that account, and shared memories put one account's past conversations into another account's prompts."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Are Codex and Claude Code setups shared with each other?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. Codex accounts share ~/.codex's configuration, and Claude Code accounts share ~/.claude's. The two tools stay separate."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does clausona switch accounts when one reaches its limit?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. You choose the account for each terminal; clausona shows how much of each account's limits is left."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What if I already set CODEX_HOME myself?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "clausona steps aside in that shell, and Codex uses the home you set."
+        }
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="wordmark" href="../../">clausona</a>
+      <nav class="site-nav" aria-label="Site">
+        <a href="../multiple-claude-code-accounts/">Claude Code guide</a>
+        <a href="./" aria-current="page">Codex guide</a>
+        <a href="../../ko/" hreflang="ko" lang="ko">한국어</a>
+        <a href="https://github.com/larcane97/clausona">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <article class="article">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../../">clausona</a> / Guides</nav>
+      <h1>How to use multiple Codex CLI accounts on one machine</h1>
+      <p class="lead">Codex CLI keeps its sign-in and everything else in one home directory, <code>~/.codex</code>. Give each account its own home and you can switch without logging out. Share the right files and every account has the same config, hooks and skills; share the wrong ones and one account's daemon or memories end up serving another.</p>
+      <p class="updated">Updated <time datetime="2026-10-08">October 8, 2026</time></p>
+
+      <div class="answer">
+        <p><strong>Short answer.</strong> Run each account with its own <code>CODEX_HOME</code>, and link only the configuration back to <code>~/.codex</code>: <code>config.toml</code>, <code>hooks.json</code>, <code>AGENTS.md</code>, <code>rules/</code>, <code>skills/</code>, <code>plugins/</code>, <code>agents/</code> and <code>prompts/</code>. <a href="https://github.com/larcane97/clausona">clausona</a> does that in three commands:</p>
+<pre data-copy><code>clausona init              <span class="c"># register the homes already signed in</span>
+clausona add codex:work    <span class="c"># a second account, with Codex's own login</span>
+csn use codex:work         <span class="c"># plain `codex` now starts as that account</span></code></pre>
+      </div>
+
+      <ul class="toc" aria-label="On this page">
+        <li><a href="#by-hand">Option 1: CODEX_HOME by hand</a></li>
+        <li><a href="#not-shared">What must stay with each account</a></li>
+        <li><a href="#clausona">Option 2: clausona</a></li>
+        <li><a href="#history">Resume conversations across accounts</a></li>
+        <li><a href="#two-at-once">Two accounts at once, and usage for each</a></li>
+        <li><a href="#questions">Questions</a></li>
+      </ul>
+
+      <h2 id="by-hand">Option 1: CODEX_HOME by hand</h2>
+      <p>Logging out and in replaces the one <code>auth.json</code> each time, and two accounts can't run at once. <code>CODEX_HOME</code> tells Codex which home to use, so each account can have its own. Keep <code>~/.codex</code> as the main one and link the configuration into the second:</p>
+<pre data-copy><code><span class="c"># a home for the second account</span>
+mkdir -p ~/.codex-work
+
+<span class="c"># link the configuration both accounts should share</span>
+for item in config.toml hooks.json AGENTS.md rules skills plugins agents prompts; do
+  [ -e ~/.codex/$item ] &amp;&amp; ln -sn ~/.codex/$item ~/.codex-work/$item
+done
+
+<span class="c"># sign in to the second account in its own home</span>
+CODEX_HOME=~/.codex-work codex login</code></pre>
+      <p><code>config.toml</code> holds your MCP servers and Codex profiles, so they're shared too. Then add an alias:</p>
+<pre data-copy><code>alias codex-work='CODEX_HOME=~/.codex-work codex'</code></pre>
+      <div class="warn">
+        <p><strong>Keep the home's path short.</strong> Codex's app-server daemon puts a Unix socket inside <code>CODEX_HOME</code>, and a socket path can be only about 100 bytes long on macOS and Linux. Under a deep path, the daemon's auto-update stops without saying so. <code>~/.codex-work</code> is fine.</p>
+      </div>
+
+      <h2 id="not-shared">What must stay with each account</h2>
+      <p>Codex keeps more than configuration in its home, and each release adds a little more. These belong to one account (checked with Codex CLI 0.159):</p>
+      <ul>
+        <li><strong><code>auth.json</code></strong> is the sign-in. <code>.credentials.json</code> and <code>secrets/</code> hold other tokens.</li>
+        <li><strong><code>app-server-control/</code> and <code>app-server-daemon/</code>.</strong> Codex starts a background app-server daemon and finds it through <code>app-server-control/</code>. A home that links the main one's talks to the main account's daemon, so Codex runs on the wrong account, and stopping the daemon in one home stops the other's.</li>
+        <li><strong><code>memories/</code> and <code>memories_1.sqlite</code></strong> hold summaries of past conversations that Codex adds to future prompts. Shared, one account's conversations reach the other account's prompts.</li>
+        <li><strong>The other SQLite databases</strong>, with their <code>-wal</code> and <code>-shm</code> files: queues, logs and state for one account.</li>
+        <li><strong><code>.env</code>.</strong> Codex loads it into its environment at start, so it may hold one account's API keys.</li>
+        <li><strong><code>packages/</code></strong> is the daemon's own install, about 300 MB. Shared, one updater would replace the daemon every home runs.</li>
+      </ul>
+      <p>That is why it pays to share by a list of what to share, as above, rather than linking the whole home and leaving a few files out. A file a new Codex version adds then stays with its account until you decide otherwise.</p>
+
+      <h2 id="clausona">Option 2: clausona</h2>
+      <p><a href="https://github.com/larcane97/clausona">clausona</a> is a free, open-source CLI that sets up each account's home this way, for Codex CLI and Claude Code. Install it:</p>
+      <div class="install">
+        <div class="cmd" data-copy>
+          <span class="cmd-label">macOS and Linux</span>
+          <code>curl -fsSL https://github.com/larcane97/clausona/releases/latest/download/install.sh | bash</code>
+        </div>
+        <div class="cmd" data-copy>
+          <span class="cmd-label">Windows PowerShell</span>
+          <code>irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex</code>
+        </div>
+      </div>
+      <p>Sign in to Codex once as usual, then:</p>
+<pre data-copy><code>clausona init              <span class="c"># registers ~/.codex and other homes already signed in</span>
+clausona add codex:work    <span class="c"># makes ~/.codex-work and runs Codex's own login</span>
+csn use codex:work         <span class="c"># plain `codex` now starts as the work account</span></code></pre>
+      <p>clausona links only the entries on its list into each home, and keeps the rest with the account. <code>clausona doctor</code> reports a home set up by an older version that still links account state, such as the daemon's directories or memories, and <code>clausona repair &lt;profile&gt;</code> unlinks it and puts the account's own copy back from a backup. Nothing is deleted along the way. <code>csn</code> is the short name for <code>clausona</code>.</p>
+      <p>There is no wrapper around Codex: a shell hook sets <code>CODEX_HOME</code> for each run and starts the real <code>codex</code>.</p>
+
+      <h2 id="history">Resume conversations across accounts</h2>
+      <p>Codex keeps conversations in <code>sessions/</code>, with <code>history.jsonl</code> and <code>session_index.jsonl</code> beside them. It finds threads through <code>state_5.sqlite</code>, keeps each thread's <code>/goal</code> in <code>goals_1.sqlite</code>, and indexes the conversation files in <code>thread_history_1.sqlite</code>. Resuming under another account needs all of these shared together. The databases need care: link only the database file, never its <code>-wal</code> or <code>-shm</code>, because SQLite keeps those beside the file the link leads to.</p>
+      <p>With clausona it is one switch per account. Quit Codex in that account first and stop its daemon (<code>CODEX_HOME=~/.codex-work codex app-server daemon stop</code>); on macOS and Linux clausona refuses to move files while either is running.</p>
+<pre data-copy><code>clausona config codex:work --merge-sessions</code></pre>
+      <p>From then on, on macOS and Linux, <code>codex resume</code> and <code>codex resume --last</code> find threads from every account that shares history, and a resumed thread's goal comes back with it. Unlike Claude Code, the account's earlier Codex conversations aren't copied into the shared history: they're set aside in <code>~/.clausona/backups/codex/&lt;profile&gt;/</code> and come back with <code>--separate-sessions</code>. Memories still stay with each account. On Windows the thread store stays per account, because SQLite there names its log after the path it was opened by, so a thread from another account is resumed by its id.</p>
+
+      <h2 id="two-at-once">Two accounts at once, and usage for each</h2>
+      <p><code>csn use codex:work</code> sets which account new <code>codex</code> launches use. To run one session under another account without changing that:</p>
+<pre data-copy><code>clausona run codex:default</code></pre>
+      <p><code>clausona list</code> shows each account's 5-hour and weekly limits, read from Codex's own usage endpoint with that account's stored login, next to your Claude Code accounts.</p>
+
+      <h2 id="questions">Questions</h2>
+      <h3>How do I switch Codex CLI accounts without logging out?</h3>
+      <p>Give each account its own <code>CODEX_HOME</code> and sign in to each once with <code>CODEX_HOME=&lt;dir&gt; codex login</code>. Codex starts as whichever account's home it is pointed at. With clausona: <code>clausona add codex:work</code>, then <code>csn use codex:work</code>.</p>
+      <h3>Which files in ~/.codex can be shared between accounts?</h3>
+      <p>The configuration: <code>config.toml</code> and any <code>*.config.toml</code>, <code>hooks.json</code>, <code>AGENTS.md</code>, <code>rules/</code>, <code>skills/</code>, <code>plugins/</code>, <code>agents/</code> and <code>prompts/</code>. Keep <code>auth.json</code>, the app-server daemon's directories, memories, the databases, <code>.env</code> and <code>packages/</code> with each account.</p>
+      <h3>Why not share the whole ~/.codex directory?</h3>
+      <p>Codex keeps account state in its home. A shared <code>app-server-control/</code> makes Codex talk to another account's daemon and run on that account, and shared memories put one account's past conversations into another account's prompts.</p>
+      <h3>Are Codex and Claude Code setups shared with each other?</h3>
+      <p>No. Codex accounts share <code>~/.codex</code>'s configuration, and Claude Code accounts share <code>~/.claude</code>'s. The two tools stay separate.</p>
+      <h3>Does clausona switch accounts when one reaches its limit?</h3>
+      <p>No. You choose the account for each terminal; clausona shows how much of each account's limits is left.</p>
+      <h3>What if I already set CODEX_HOME myself?</h3>
+      <p>clausona steps aside in that shell, and Codex uses the home you set.</p>
+      <section class="cta" aria-labelledby="try">
+        <h2 id="try">Try clausona</h2>
+        <p>It's free and open source. If it saves you a few logins a day, a star on <a href="https://github.com/larcane97/clausona">GitHub</a> helps other people find it. Using Claude Code too? See <a href="../multiple-claude-code-accounts/">how to use multiple Claude Code accounts</a>.</p>
+      </section>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>clausona is open source under the MIT license, on <a href="https://github.com/larcane97/clausona">GitHub</a>, and listed in <a href="https://github.com/hesreallyhim/awesome-claude-code">Awesome Claude Code</a>.</p>
+      <p>It is an independent project, not affiliated with Anthropic or OpenAI. Claude Code is a product of Anthropic; Codex CLI is a product of OpenAI.</p>
+    </div>
+  </footer>
+  <script src="../../copy.js"></script>
+</body>
+</html>

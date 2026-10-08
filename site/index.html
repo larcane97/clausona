@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>clausona: multiple Claude Code and Codex accounts with shared skills, hooks and history</title>
+  <meta name="description" content="Run several Claude Code and Codex CLI accounts on one machine. Each keeps its own sign-in, while skills, hooks, plugins, settings and even conversation history stay shared.">
+  <link rel="canonical" href="https://larcane97.github.io/clausona/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="clausona">
+  <meta property="og:title" content="clausona: multiple Claude Code and Codex accounts, one shared setup">
+  <meta property="og:description" content="Each account keeps its own sign-in. Skills, hooks, plugins, settings and even conversation history stay shared.">
+  <meta property="og:url" content="https://larcane97.github.io/clausona/">
+  <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Recursive:wght,CASL,MONO@300..900,0..1,0..1&display=swap">
+  <link rel="stylesheet" href="style.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "clausona",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "macOS, Linux, Windows",
+    "description": "A CLI and terminal dashboard for running multiple Claude Code and OpenAI Codex CLI accounts on one machine. Each account keeps its own sign-in; skills, hooks, plugins and settings are shared between accounts, and conversation history can be shared too.",
+    "url": "https://larcane97.github.io/clausona/",
+    "downloadUrl": "https://github.com/larcane97/clausona/releases/latest",
+    "codeRepository": "https://github.com/larcane97/clausona",
+    "license": "https://opensource.org/licenses/MIT",
+    "isAccessibleForFree": true,
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" }
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "Can I use two Claude Code accounts on one machine?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. Claude Code keeps one sign-in per config directory. clausona gives each account its own directory and links skills, hooks, plugins and settings back to your main ~/.claude, so every account has the same setup. clausona add claude:work adds an account and csn use work switches to it."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can I continue a conversation under another account?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes, once the accounts share history: clausona config <profile> --merge-sessions. Then claude --resume and claude --continue see conversations from every account that shares it, and so does codex resume on macOS and Linux."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Is my sign-in shared between accounts?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. Each account keeps its own credentials. MCP servers added with claude mcp add live next to the sign-in, so they stay with the account too."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does clausona switch accounts when one reaches its limit?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. You choose which account each terminal uses. clausona shows how much of every account's limits is left."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does it proxy or modify claude and codex?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. The real binaries run unmodified, with the account's config directory set for that one run. If you set CLAUDE_CONFIG_DIR or CODEX_HOME yourself, clausona steps aside in that shell."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What does clausona send over the network?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "clausona has no server and no telemetry. It reads each account's plan usage from that account's own provider, renewing a lapsed sign-in token when it has to, and the dashboard asks GitHub whether a newer clausona release is out."
+        }
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="wordmark" href="./">clausona</a>
+      <nav class="site-nav" aria-label="Site">
+        <a href="guides/multiple-claude-code-accounts/">Claude Code guide</a>
+        <a href="guides/multiple-codex-cli-accounts/">Codex guide</a>
+        <a href="ko/" hreflang="ko" lang="ko">한국어</a>
+        <a href="https://github.com/larcane97/clausona">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="wrap">
+      <section class="hero" aria-labelledby="title">
+        <div>
+          <h1 id="title">Multiple Claude Code and Codex accounts, one shared setup</h1>
+          <p class="lead">clausona gives each account its own sign-in and keeps the rest in one place. Skills, hooks, plugins and settings are shared by every account, and conversation history can be shared too.</p>
+
+          <div class="install">
+            <div class="cmd" data-copy>
+              <span class="cmd-label">macOS and Linux</span>
+              <code>curl -fsSL https://github.com/larcane97/clausona/releases/latest/download/install.sh | bash</code>
+            </div>
+            <div class="cmd" data-copy>
+              <span class="cmd-label">Windows PowerShell</span>
+              <code>irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex</code>
+            </div>
+          </div>
+          <p class="needs">Needs Node.js 20 or later, and Claude Code or Codex CLI. Free and open source (MIT).</p>
+
+          <div class="actions">
+            <a class="btn btn-primary" href="https://github.com/larcane97/clausona">View on GitHub</a>
+            <a class="btn" href="guides/multiple-claude-code-accounts/">Read the setup guide</a>
+          </div>
+        </div>
+
+        <figure class="links">
+          <div class="links-grid">
+            <ul class="accounts" aria-label="Three Claude Code accounts">
+              <li style="--c: var(--a1)">
+                <div class="acct">
+                  <div class="acct-name">claude:work</div>
+                  <div class="acct-mail">dev@example.com</div>
+                  <div class="acct-own">Own sign-in</div>
+                  <div class="quota" aria-label="62% of the 5-hour limit and 41% of the weekly limit used">
+                    <span>5h</span><span class="bar"><i style="--w: 62%"></i></span>
+                    <span>7d</span><span class="bar"><i style="--w: 41%"></i></span>
+                  </div>
+                </div>
+              </li>
+              <li style="--c: var(--a2)">
+                <div class="acct">
+                  <div class="acct-name">claude:personal</div>
+                  <div class="acct-mail">me@example.org</div>
+                  <div class="acct-own">Own sign-in</div>
+                  <div class="quota" aria-label="8% of the 5-hour limit and 77% of the weekly limit used">
+                    <span>5h</span><span class="bar"><i style="--w: 8%"></i></span>
+                    <span>7d</span><span class="bar"><i style="--w: 77%"></i></span>
+                  </div>
+                </div>
+              </li>
+              <li style="--c: var(--a3)">
+                <div class="acct">
+                  <div class="acct-name">claude:client</div>
+                  <div class="acct-mail">dev@client.example</div>
+                  <div class="acct-own">Own sign-in</div>
+                  <div class="quota" aria-label="25% of the 5-hour limit and 12% of the weekly limit used">
+                    <span>5h</span><span class="bar"><i style="--w: 25%"></i></span>
+                    <span>7d</span><span class="bar"><i style="--w: 12%"></i></span>
+                  </div>
+                </div>
+              </li>
+            </ul>
+
+            <svg class="wires" viewBox="0 0 100 600" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+              <path class="w1" d="M0 100 C 58 100, 42 262, 100 262" />
+              <path class="w2" d="M0 300 C 50 300, 50 300, 100 300" />
+              <path class="w3" d="M0 500 C 58 500, 42 338, 100 338" />
+            </svg>
+            <span class="join" aria-hidden="true"></span>
+
+            <div class="shared">
+              <div class="shared-head">
+                <span class="shared-dir">~/.claude</span>
+                <span class="shared-note">shared by every account</span>
+              </div>
+              <ul>
+                <li><b>settings.json</b><span>permissions, hooks, status line, model</span></li>
+                <li><b>skills/</b><span>every skill you install</span></li>
+                <li><b>commands/, agents/</b><span>slash commands and subagents</span></li>
+                <li><b>plugins/</b><span>with the MCP servers they bring</span></li>
+                <li><b>CLAUDE.md</b><span>your global instructions</span></li>
+                <li class="optional"><b>projects/</b><span>conversation history, when you merge sessions</span></li>
+              </ul>
+            </div>
+          </div>
+          <figcaption>Three Claude Code accounts on one machine. Each keeps its own sign-in; all three read the same skills, hooks, plugins and settings. The dashed entry is shared only for accounts that merge sessions. Codex CLI works the same way, with <code>~/.codex</code>.</figcaption>
+        </figure>
+      </section>
+    </div>
+
+    <section class="section" aria-labelledby="what">
+      <div class="wrap">
+        <h2 id="what">What each account keeps, and what they share</h2>
+        <div class="prose">
+          <p>Claude Code and Codex CLI both keep everything in one directory: <code>~/.claude</code> and <code>~/.codex</code>. A second account normally means a second directory that starts empty. clausona gives every account its own directory for the sign-in and links the rest back to your main one, so you set things up once.</p>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr><th scope="col"></th><th scope="col">Claude Code</th><th scope="col">Codex CLI</th></tr>
+            </thead>
+            <tbody>
+              <tr><th scope="row">Sign-in</th><td class="is-own">Own</td><td class="is-own">Own</td></tr>
+              <tr><th scope="row">Skills</th><td class="is-shared">Shared</td><td class="is-shared">Shared</td></tr>
+              <tr><th scope="row">Hooks</th><td class="is-shared">Shared<small>in settings.json</small></td><td class="is-shared">Shared<small>hooks.json</small></td></tr>
+              <tr><th scope="row">Plugins</th><td class="is-shared">Shared</td><td class="is-shared">Shared</td></tr>
+              <tr><th scope="row">Settings</th><td class="is-shared">Shared<small>settings.json</small></td><td class="is-shared">Shared<small>config.toml</small></td></tr>
+              <tr><th scope="row">Global instructions</th><td class="is-shared">Shared<small>CLAUDE.md</small></td><td class="is-shared">Shared<small>AGENTS.md</small></td></tr>
+              <tr><th scope="row">MCP servers</th><td>Shared when a plugin brings them<small>ones added with <code>claude mcp add</code> stay with the account</small></td><td class="is-shared">Shared<small>config.toml</small></td></tr>
+              <tr><th scope="row">Conversation history</th><td>Own, or shared<small>when you merge sessions</small></td><td>Own, or shared<small>when you merge sessions</small></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="prose">
+          <p>Codex keeps its memories, its app-server daemon and its databases with each account. Merging sessions shares only the conversation history and, on macOS and Linux, the thread store that indexes it, so one account's memories never reach another account's prompts.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="demo">
+      <div class="wrap">
+        <h2 id="demo">What it looks like</h2>
+        <div class="prose">
+          <p>Listing the accounts with their plan usage, switching to the work account so that plain <code>claude</code> starts signed in as it, switching back, and opening the dashboard.</p>
+        </div>
+        <img class="demo" src="assets/demo.gif" width="1200" height="1000" loading="lazy" alt="A terminal running clausona list, which shows Claude Code and Codex accounts with their 5-hour and weekly usage; then csn use work, after which claude's status shows the work account; then switching back and opening the clausona dashboard.">
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="history">
+      <div class="wrap">
+        <div class="prose">
+        <h2 id="history">Pick up a conversation under another account</h2>
+        <p>History is kept per account unless you ask for it to be shared. Merge sessions for an account and it shares conversation history with your main directory: <code>claude --resume</code> lists the conversations from every account that shares it, and <code>claude --continue</code> carries on the latest one in this folder, whichever account started it.</p>
+<pre><code>clausona config claude:personal --merge-sessions
+csn use claude:personal
+claude --continue    <span class="c"># the latest conversation in this folder</span></code></pre>
+        <p>Codex works the same way on macOS and Linux: <code>codex resume</code> and <code>codex resume --last</code> find threads from every account that shares history, goals included. On Windows Codex's thread store stays with each account, so a thread from another account is resumed by its id.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="setup">
+      <div class="wrap">
+        <h2 id="setup">Set up in three commands</h2>
+        <ol class="steps">
+          <li>
+            <div>
+              <p>Register the accounts already signed in on this machine.</p>
+<pre data-copy><code>clausona init</code></pre>
+            </div>
+          </li>
+          <li>
+            <div>
+              <p>Add another account. Claude Code's own sign-in opens for it.</p>
+<pre data-copy><code>clausona add claude:work</code></pre>
+            </div>
+          </li>
+          <li>
+            <div>
+              <p>Choose the account. Plain <code>claude</code> now starts signed in as it, with the same skills, hooks and plugins.</p>
+<pre data-copy><code>csn use work</code></pre>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="more">
+      <div class="wrap">
+        <h2 id="more">Also in clausona</h2>
+        <dl class="features">
+          <div>
+            <dt>Two accounts at once</dt>
+            <dd><code>clausona run claude:personal</code> starts one session under another account without switching, so two terminals can run two accounts side by side.</dd>
+          </div>
+          <div>
+            <dt>Usage for every account</dt>
+            <dd><code>clausona list</code> and the dashboard show each account's 5-hour and weekly limits side by side, with the time until each resets.</dd>
+          </div>
+          <div>
+            <dt>Nothing in the way</dt>
+            <dd>A shell hook points the tool at the account's directory and starts the real <code>claude</code> or <code>codex</code>. No proxy and no daemon, and most launches start nothing before the tool.</dd>
+          </div>
+          <div>
+            <dt>API profiles</dt>
+            <dd>A Claude Code profile can use the Anthropic API, a gateway such as OpenRouter, or a model you serve yourself, and switches like any account.</dd>
+          </div>
+          <div>
+            <dt>Agents on different accounts</dt>
+            <dd>A Claude Code plugin from the repository runs parallel <a href="https://superset.sh">Superset</a> agents, each on its own account.</dd>
+          </div>
+          <div>
+            <dt>macOS, Linux and Windows</dt>
+            <dd>zsh and bash on macOS and Linux, PowerShell 5.1 or later on Windows.</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="guides">
+      <div class="wrap">
+        <h2 id="guides">Guides</h2>
+        <ul class="guide-list">
+          <li><a href="guides/multiple-claude-code-accounts/">How to use multiple Claude Code accounts on one machine<span>By hand with CLAUDE_CONFIG_DIR, what not to share, and the clausona way.</span></a></li>
+          <li><a href="guides/multiple-codex-cli-accounts/">How to use multiple Codex CLI accounts<span>One CODEX_HOME per account, and which files must stay with each one.</span></a></li>
+          <li><a href="ko/" hreflang="ko" lang="ko">클로드 코드·Codex 여러 계정 쓰는 법<span>스킬, 훅, 대화 기록까지 공유하면서 계정을 나누는 방법.</span></a></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section faq" aria-labelledby="faq">
+      <div class="wrap">
+        <h2 id="faq">Questions</h2>
+        <h3>Can I use two Claude Code accounts on one machine?</h3>
+        <p>Yes. Claude Code keeps one sign-in per config directory. clausona gives each account its own directory and links skills, hooks, plugins and settings back to your main <code>~/.claude</code>, so every account has the same setup. <code>clausona add claude:work</code> adds an account and <code>csn use work</code> switches to it.</p>
+        <h3>Can I continue a conversation under another account?</h3>
+        <p>Yes, once the accounts share history: <code>clausona config &lt;profile&gt; --merge-sessions</code>. Then <code>claude --resume</code> and <code>claude --continue</code> see conversations from every account that shares it, and so does <code>codex resume</code> on macOS and Linux.</p>
+        <h3>Is my sign-in shared between accounts?</h3>
+        <p>No. Each account keeps its own credentials. MCP servers added with <code>claude mcp add</code> live next to the sign-in, so they stay with the account too.</p>
+        <h3>Does clausona switch accounts when one reaches its limit?</h3>
+        <p>No. You choose which account each terminal uses. clausona shows how much of every account's limits is left.</p>
+        <h3>Does it proxy or modify claude and codex?</h3>
+        <p>No. The real binaries run unmodified, with the account's config directory set for that one run. If you set <code>CLAUDE_CONFIG_DIR</code> or <code>CODEX_HOME</code> yourself, clausona steps aside in that shell.</p>
+        <h3>What does clausona send over the network?</h3>
+        <p>clausona has no server and no telemetry. It reads each account's plan usage from that account's own provider, renewing a lapsed sign-in token when it has to, and the dashboard asks GitHub whether a newer clausona release is out.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>clausona is open source under the MIT license, on <a href="https://github.com/larcane97/clausona">GitHub</a>, and listed in <a href="https://github.com/hesreallyhim/awesome-claude-code">Awesome Claude Code</a>.</p>
+      <p>It is an independent project, not affiliated with Anthropic or OpenAI. Claude Code is a product of Anthropic; Codex CLI is a product of OpenAI.</p>
+    </div>
+  </footer>
+  <script src="copy.js"></script>
+</body>
+</html>

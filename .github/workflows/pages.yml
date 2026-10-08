@@ -1,0 +1,47 @@
+name: Pages
+
+# Publishes site/ to https://larcane97.github.io/clausona/. The demo GIF and the social preview
+# are copied in from assets/ so the site and the README show the same files.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "assets/demo.gif"
+      - "assets/social-preview.png"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble the site
+        run: |
+          mkdir -p _site/assets
+          cp -R site/. _site/
+          cp assets/demo.gif assets/social-preview.png _site/assets/
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v5
