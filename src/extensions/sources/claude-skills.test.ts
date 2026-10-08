@@ -83,4 +83,35 @@ describe("readClaudeSkills", () => {
     expect(byName["plugin:superpowers:brainstorming"]?.location.accounts).toEqual(["claude:default"]);
     expect(new Set(out.items.map((i) => i.id)).size).toBe(out.items.length);
   });
+
+  it("lists a plugin's skills once per install, each with its own id", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    h.claude("work", ".claude-work");
+    const app = h.project("repos/app");
+    const v1 = h.path(".claude/plugins/cache/m/superpowers/1.0.0");
+    const v2 = h.path(".claude/plugins/cache/m/superpowers/2.0.0");
+    h.skill(".claude/plugins/cache/m/superpowers/1.0.0/skills", "brainstorming");
+    h.write(".claude/plugins/cache/m/superpowers/1.0.0/commands/plan.md", "Plan.");
+    h.skill(".claude/plugins/cache/m/superpowers/2.0.0/skills", "brainstorming");
+    h.write(".claude/plugins/installed_plugins.json", {
+      plugins: { "superpowers@m": [{ installPath: v1 }, { installPath: v1, scope: "local", projectPath: app }] },
+    });
+    h.write(".claude-work/plugins/installed_plugins.json", { plugins: { "superpowers@m": [{ installPath: v2 }] } });
+
+    const out = await inventoryOf(h, [app]);
+    const installs = (name: string) =>
+      out.items
+        .filter((i) => i.name === name)
+        .map((i) => `${i.location.plugin}|${i.location.project ?? "-"}|${i.location.accounts?.join(",")}`)
+        .sort();
+    expect(installs("superpowers:brainstorming")).toEqual(
+      ["superpowers@m|-|claude:default", `superpowers@m|${app}|claude:default`, "superpowers@m|-|claude:work"].sort(),
+    );
+    expect(installs("superpowers:plan")).toEqual(
+      ["superpowers@m|-|claude:default", `superpowers@m|${app}|claude:default`].sort(),
+    );
+    expect(new Set(out.items.map((i) => i.id)).size).toBe(out.items.length);
+  });
 });

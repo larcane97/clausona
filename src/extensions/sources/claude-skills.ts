@@ -2,7 +2,7 @@ import path from "node:path";
 
 import type { Collector, Project } from "../model.js";
 import { entryInfo, isRecord, listNames, parseFrontmatter, readText } from "../read.js";
-import { type ClaudeContext, sharesPrimaryEntry } from "./claude-context.js";
+import { type ClaudeContext, pluginOwner, sharesPrimaryEntry } from "./claude-context.js";
 import { readSkillFolders, type SkillLocation } from "./skill-dirs.js";
 
 /**
@@ -46,8 +46,9 @@ export async function readClaudeSkills(ctx: ClaudeContext, projects: Project[], 
       accounts: plugin.profiles,
     };
     const prefix = `${plugin.name}:`;
-    jobs.push(readSkillFolders(path.join(plugin.installPath, "skills"), from, plugin.id, out, { prefix }));
-    jobs.push(readCommandFiles(path.join(plugin.installPath, "commands"), from, plugin.id, out, prefix));
+    const owner = pluginOwner(plugin);
+    jobs.push(readSkillFolders(path.join(plugin.installPath, "skills"), from, owner, out, { prefix }));
+    jobs.push(readCommandFiles(path.join(plugin.installPath, "commands"), from, owner, out, prefix));
   }
   await Promise.all(jobs);
   addOverrideOnlySkills(out);
