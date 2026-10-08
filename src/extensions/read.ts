@@ -27,6 +27,19 @@ export async function readText(file: string, warnings: Warning[]): Promise<strin
   }
 }
 
+/**
+ * Why a file is not valid JSON, keeping only where. V8's own message quotes the text around
+ * the bad token, and in a settings file that text can be an API key or a token, while a
+ * warning reaches the TUI and `--json`.
+ */
+function invalidJson(error: unknown): string {
+  const at = /at position (\d+)(?: \(line (\d+) column (\d+)\))?/.exec(reason(error));
+  if (!at) return "is not valid JSON";
+  return at[2] && at[3]
+    ? `is not valid JSON at line ${at[2]}, column ${at[3]}`
+    : `is not valid JSON at position ${at[1]}`;
+}
+
 /** A JSON file holding an object, or undefined when it is missing; malformed or not an object is a warning. */
 export async function readJsonObject(file: string, warnings: Warning[]): Promise<Record<string, unknown> | undefined> {
   const text = await readText(file, warnings);
@@ -36,7 +49,7 @@ export async function readJsonObject(file: string, warnings: Warning[]): Promise
     if (isRecord(value)) return value;
     warnings.push({ file, message: "is not a JSON object" });
   } catch (error) {
-    warnings.push({ file, message: `is not valid JSON: ${reason(error)}` });
+    warnings.push({ file, message: invalidJson(error) });
   }
   return undefined;
 }
@@ -115,7 +128,10 @@ const HASH_BYTE_BUDGET = 4 * 1024 * 1024;
 /**
  * A digest of a folder's files - relative paths, sizes and contents - to tell two copies of
  * a skill apart. A skill can carry large assets, so past the budget a file counts by its path
- * and size only: enough to see a copy that changed, without reading a 50 MB model file.
+ * and size only: enough to see a copy that changed, without reading a 50 MB model file. A file
+ * it cannot read, gone since it was listed or not readable, counts the same way. A symlinked
+ * subfolder is not followed, so a link loop cannot hang the walk, and two copies that differ
+ * only inside one hash alike.
  */
 export async function hashTree(dir: string): Promise<string> {
   const hash = createHash("sha256");
@@ -133,12 +149,12 @@ export async function hashTree(dir: string): Promise<string> {
       const stats = await stat(full).catch(() => null);
       if (!stats?.isFile()) continue;
       hash.update(`${relPath}\0${stats.size}\0`);
-      if (stats.size <= budget) {
-        budget -= stats.size;
-        const bytes = await readFile(full);
-        // A plain view of the same bytes: this repo's @types/node Buffer is not a BinaryLike under TypeScript 5.9.
-        hash.update(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
-      }
+      if (stats.size > budget) continue;
+      const bytes = await readFile(full).catch(() => null);
+      if (!bytes) continue;
+      budget -= stats.size;
+      // A plain view of the same bytes: this repo's @types/node Buffer is not a BinaryLike under TypeScript 5.9.
+      hash.update(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
     }
   };
   await walk("");
