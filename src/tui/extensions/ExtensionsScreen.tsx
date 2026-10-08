@@ -19,11 +19,14 @@ import {
   FILTERS,
   type Filter,
   listColumns,
+  listRoom,
+  nameWidth,
   pickLayout,
   TAB_LABEL,
   TABS,
   type Tab,
   tilde,
+  took,
 } from "./view-model.js";
 
 type View = "list" | "detail" | "matrix" | "picker" | "warnings";
@@ -106,7 +109,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
         if (id !== request.current) return;
         setInventory(inv);
         setLoadedAt(clock());
-        setStatus(`Read ${inv.items.length} items in ${((clock() - started) / 1000).toFixed(1)}s`);
+        setStatus(`Read ${inv.items.length} items in ${took(clock() - started)}`);
       },
       (e: unknown) => {
         if (id === request.current) setError(e instanceof Error ? e.message : String(e));
@@ -118,12 +121,6 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   }, [reload]);
 
   const project = picked === null ? inventory?.currentProject : picked.project;
-  // One row is kept for the status line, which is there only while it has something to say. One
-  // more is kept because ink 6 draws a frame as tall as the terminal by clearing the whole screen,
-  // and its scrollback, on every redraw (ink.js, the isFullscreen branch of onRender).
-  const layout = pickLayout(columns, terminalRows - 2);
-  // The matrix, the picker and the warnings take the list's place and the stacked detail's too.
-  const fullHeight = layout.mode === "stacked" ? layout.listHeight + layout.detailHeight : layout.listHeight;
   // A filter or search opens every group and keeps it open: enter on a group does nothing then.
   const held = query.trim() !== "" || filter !== "all";
   const rows = useMemo(
@@ -132,6 +129,18 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
         ? buildRows(inventory, { tab, filter, query, open, now: loadedAt, ...(project ? { project } : {}) })
         : [],
     [inventory, tab, filter, query, open, loadedAt, project],
+  );
+  // The header, and every row or the line that says there are none.
+  const listLines = 1 + Math.max(1, rows.length);
+  // One row is kept for the status line, which is there only while it has something to say. One
+  // more is kept because ink 6 draws a frame as tall as the terminal by clearing the whole screen,
+  // and its scrollback, on every redraw (ink.js, the isFullscreen branch of onRender).
+  const layout = pickLayout(columns, terminalRows - 2, listLines);
+  // The matrix, the picker and the warnings take the list's place and the stacked detail's too.
+  const fullHeight = layout.mode === "stacked" ? layout.listHeight + layout.detailHeight : layout.listHeight;
+  const need = useMemo(
+    () => (inventory ? nameWidth(inventory, tab, project, loadedAt) : 0),
+    [inventory, tab, project, loadedAt],
   );
   const counts = useMemo(() => {
     const count: Record<Tab, number> = { skills: 0, mcp: 0, hooks: 0 };
@@ -270,8 +279,8 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   }
 
   const subtitle = project ? tilde(project, inventory.homeDir) : "No project";
-  const columnsFor = listColumns(tab, layout.listWidth);
-  const room = Math.max(1, layout.listHeight - 2);
+  const columnsFor = listColumns(tab, layout.listWidth, need);
+  const room = listRoom(layout.listHeight, rows.length);
   listTop.current = scrolled(listTop.current, at, room, rows.length);
   const matrixRoom = Math.max(1, fullHeight - 3);
   matrixTop.current = scrolled(matrixTop.current, matrixCursor, matrixRoom, matrix?.rows.length ?? 0);
@@ -305,17 +314,18 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
           : // The keys nothing else on screen points to come first: enter, when the detail has no
             // pane of its own, and w, the one sign that some files could not be read once the status
             // line has gone. Search comes before the filter: the tab bar shows the filter's label at
-            // all times, but nothing there points to search until one is typed.
+            // all times, but nothing there points to search until one is typed. On the MCP tab the
+            // matrix, that tab's main view, comes right after search.
             [
               { keys: "↑↓", action: "move", rank: 0 },
               { keys: "tab", action: "section", rank: 2 },
               layout.mode === "list"
                 ? { keys: "enter", action: "open", rank: 1 }
                 : { keys: "enter", action: "group", rank: 9 },
-              { keys: "f", action: "filter", rank: 6 },
+              { keys: "f", action: "filter", rank: 7 },
               { keys: "/", action: "search", rank: 5 },
+              ...(tab === "mcp" ? [{ keys: "m", action: "matrix", rank: 6 }] : []),
               { keys: "p", action: "project", rank: 8 },
-              ...(tab === "mcp" ? [{ keys: "m", action: "matrix", rank: 7 }] : []),
               { keys: "r", action: "reload", rank: 10 },
               ...(inventory.warnings.length > 0
                 ? [{ keys: "w", action: `${inventory.warnings.length} unreadable`, rank: 4 }]
@@ -405,6 +415,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
             columns={columnsFor}
             tab={tab}
             empty={held ? "Nothing matches." : "Nothing here."}
+            fill={layout.mode === "stacked"}
           />
           {layout.mode !== "list" ? (
             <DetailPane

@@ -12,6 +12,7 @@ import {
   countItems,
   detailOf,
   listColumns,
+  nameWidth,
   pickLayout,
   type Row,
 } from "./view-model.js";
@@ -214,8 +215,45 @@ describe("detailOf", () => {
     expect(text[0]).toBe("|Explain things simply");
     expect(text.filter((t) => t.startsWith("Where|"))).toHaveLength(2);
     expect(text.some((t) => t.startsWith("Here|C name-only"))).toBe(true);
-    expect(text.some((t) => t === "Copies|same content")).toBe(true);
+    expect(text.some((t) => t === "Copies|2 copies · same content")).toBe(true);
     expect(text.some((t) => t.startsWith("Used|7 · 2d ago · default 7"))).toBe(true);
+  });
+
+  it("says how many copies and versions a name has, counting the project's copy the Where lines leave out", async () => {
+    const { app, inv } = await seed((h) => {
+      h.skill("repos/app/.claude/skills", "eli5", "The project's own take");
+    });
+    const global = items(buildRows(inv, { ...base, tab: "skills", project: app })).find(
+      (r) => r.type === "item" && r.name === "eli5" && r.group === "global",
+    );
+    if (global?.type !== "item") throw new Error("no global eli5 row");
+    // The Claude and Codex copies are alike; the project's is the one that differs.
+    expect(detailOf(inv, global, app, Date.now()).find((l) => l.label === "Copies")).toEqual({
+      label: "Copies",
+      text: "3 copies · 2 versions",
+      tone: "warning",
+    });
+  });
+
+  it("gives a shadowed copy no usage of its own: Claude counts it under the copy that wins", async () => {
+    const { app, inv } = await seed((h) => {
+      h.skill("repos/app/.claude/skills", "eli5", "The project's own take");
+    });
+    const rows = items(buildRows(inv, { ...base, tab: "skills", project: app }));
+    const row = (group: string) => {
+      const found = rows.find((r) => r.type === "item" && r.name === "eli5" && r.group === group);
+      if (found?.type !== "item") throw new Error(`no eli5 row in ${group}`);
+      return found;
+    };
+    const shadowed = row(`project:${app}`);
+    expect(shadowed.marks).toContain("shadowed");
+    expect(shadowed.used).toBe("—");
+    expect(detailOf(inv, shadowed, app, Date.now()).find((l) => l.label === "Used")).toEqual({
+      label: "Used",
+      text: "counted under the copy that wins",
+      tone: "muted",
+    });
+    expect(row("global").used).toMatch(/^7 · \d+d$/);
   });
 
   it("gives a plugin's server one Here line per account that has the plugin, and lists those accounts", async () => {
@@ -328,6 +366,19 @@ describe("layout helpers", () => {
     expect(pickLayout(100, 26)).toMatchObject({ mode: "stacked", listHeight: 7, detailHeight: 7 });
   });
 
+  it("fills a stacked body: the list takes the lines it needs, from 7 to body - 7, and the detail the rest", () => {
+    for (let rows = 26; rows <= 60; rows++) {
+      const body = rows - 12;
+      for (const lines of [1, 5, 7, 12, 30, 100]) {
+        const layout = pickLayout(100, rows, lines);
+        expect(layout.mode).toBe("stacked");
+        expect(layout.listHeight).toBe(Math.min(Math.max(lines, 7), body - 7));
+        expect(layout.detailHeight).toBeGreaterThanOrEqual(7);
+        expect(layout.listHeight + layout.detailHeight).toBe(body);
+      }
+    }
+  });
+
   it("reads a size it cannot know as 80 by 24", () => {
     expect(pickLayout(Number.NaN, Number.POSITIVE_INFINITY)).toEqual(pickLayout(80, 24));
     expect(pickLayout(Number.NaN, 24).mode).toBe("list");
@@ -340,6 +391,18 @@ describe("layout helpers", () => {
     // pending-approval is the longest state word, and the MCP state column fits it whole.
     expect(listColumns("mcp", 120).state).toBe("pending-approval".length);
     expect(listColumns("mcp", 40).state).toBe(16);
+  });
+
+  it("sizes the name column to the widest name and marks in the whole tab, two spaces before each column", async () => {
+    const { app, inv } = await seed();
+    // sp:brainstorming is in the plugin's group, which starts closed: the column does not move when it opens.
+    expect(nameWidth(inv, "skills", app, Date.now())).toBe(2 + "sp:brainstorming".length);
+    // What the name does not need goes after the last column.
+    expect(listColumns("skills", 96, 18)).toMatchObject({ name: 18, tool: 4, used: 13, state: 20 });
+    expect(listColumns("mcp", 96, 10)).toMatchObject({ name: 10, tool: 4, extra: 8, state: 16 });
+    expect(listColumns("hooks", 96, 17)).toMatchObject({ name: 17, tool: 4, extra: 94 - 17 - 2 - (4 + 2) });
+    // Capped by what the other columns leave, each with its two spaces.
+    expect(listColumns("skills", 60, 80).name).toBe(58 - (4 + 2) - (20 + 2));
   });
 
   it("cuts long text with an ellipsis on one line, and pads short text", () => {

@@ -4,11 +4,12 @@ import { color, symbol } from "../theme.js";
 import { cell, type Matrix, type MatrixCell } from "./view-model.js";
 
 const MARK: Record<MatrixCell, string> = { on: symbol.dot, off: symbol.circle, pending: "?", absent: "·" };
-const MARK_COLOR: Record<MatrixCell, string> = {
+/** Not here is muted, as the legend says it: the border's dim grey all but vanishes on the ground. */
+export const MARK_COLOR: Record<MatrixCell, string> = {
   on: color.healthy,
   off: color.muted,
   pending: color.warning,
-  absent: color.dim,
+  absent: color.muted,
 };
 /** Room kept at the header's end for ` ← → 99 more`, so a scrolled matrix says so in full. */
 const SCROLL_NOTE = 12;
