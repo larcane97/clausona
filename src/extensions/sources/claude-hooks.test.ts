@@ -13,7 +13,7 @@ afterEach(() => {
   for (const home of homes.splice(0)) home.dispose();
 });
 
-async function inventoryOf(h: TestHome, projects: Project[]) {
+async function inventoryOf(h: TestHome, projects: Project[], managedSettings = h.path("none.json")) {
   const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
   const accounts = await loadClaudeAccounts(h.registry, h.home, out.warnings);
   const ctx = await loadClaudeContext({
@@ -21,7 +21,7 @@ async function inventoryOf(h: TestHome, projects: Project[]) {
     registry: h.registry,
     homeDir: h.home,
     projects,
-    managedSettings: h.path("none.json"),
+    managedSettings,
     warnings: out.warnings,
   });
   await Promise.all([readClaudeHooks(ctx, out), readClaudePlugins(ctx, out)]);
@@ -48,8 +48,9 @@ describe("readClaudeHooks and readClaudePlugins", () => {
         Stop: [{ hooks: [{ type: "command", command: "notify" }] }],
       },
     });
+    // An entry that is not an object is no hook command, so only "setup" is one.
     h.write("repos/app/.claude/settings.json", {
-      hooks: { SessionStart: [{ hooks: [{ type: "command", command: "setup" }] }] },
+      hooks: { SessionStart: [{ hooks: [null, "setup", { type: "command", command: "setup" }] }] },
     });
     const sp = h.path(".claude/plugins/cache/m/sp/1.0.0");
     h.write(".claude/plugins/installed_plugins.json", { plugins: { "sp@m": [{ installPath: sp }] } });
@@ -113,5 +114,33 @@ describe("readClaudeHooks and readClaudePlugins", () => {
     expect(hooks.map((i) => i.location.project ?? "-").sort()).toEqual(["-", app].sort());
     expect(new Set(plugins.map((i) => i.id)).size).toBe(2);
     expect(new Set(hooks.map((i) => i.id)).size).toBe(2);
+  });
+
+  it("gives each settings file its own hook ids, and redacts their commands", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    // Built from pieces, so no key-shaped string sits in the source.
+    const secretCommand = ["API_KEY=", "abc", "123", " run --token ", "xyz", "789"].join("");
+    const managed = h.write("managed-settings.json", {
+      hooks: { PreToolUse: [{ hooks: [{ type: "command", command: "policy" }] }] },
+    });
+    h.write("managed-settings.d/10-a.json", {
+      hooks: { PreToolUse: [{ hooks: [{ type: "command", command: secretCommand }] }] },
+    });
+
+    const out = await inventoryOf(h, [], managed);
+
+    const hooks = out.items.filter((i) => i.kind === "hook");
+    expect(hooks.map((i) => `${i.location.scope}|${path.basename(i.location.file)}`).sort()).toEqual([
+      "managed|10-a.json",
+      "managed|managed-settings.json",
+    ]);
+    expect(new Set(hooks.map((i) => i.id)).size).toBe(2);
+    const command = hooks.find((i) => i.location.file.endsWith("10-a.json"))?.summary?.command;
+    expect(command).toContain("run");
+    expect(command).not.toContain("abc123");
+    expect(command).not.toContain("xyz789");
+    expect(out.warnings).toEqual([]);
   });
 });
