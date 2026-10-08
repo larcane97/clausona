@@ -28,6 +28,14 @@ export type PluginInstall = {
   profiles: string[];
 };
 
+/**
+ * A plugin install record as an id owner: unique per record, so items from two installs of one
+ * plugin never share an id.
+ */
+export function pluginOwner(plugin: PluginInstall): string {
+  return `${plugin.id}|${plugin.scope}|${plugin.project ?? "-"}|${pathKey(plugin.installPath)}`;
+}
+
 export type ClaudeContext = {
   homeDir: string;
   primaryDir: string;
