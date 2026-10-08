@@ -83,18 +83,21 @@ const MODE_SWITCHES = new Set([BRACKETED_PASTE_ON, BRACKETED_PASTE_OFF]);
  * columns, and what a one-line message loses at the panel's edge depends on exactly that.
  *
  * `tty` makes stdout say it is a terminal, which is what the App writes a mode switch to; such a
- * write goes to `modes`, not `frames`. `exitOnCtrlC` is ink's, off unless asked for.
+ * write goes to `modes`, not `frames`. `exitOnCtrlC` is ink's, off unless asked for. `rows` gives
+ * the terminal a height, for a screen that fits itself to one; without it stdout has none, as
+ * ink-testing-library's has none.
  */
 export function renderAt(
   tree: ReactElement,
   columns: number,
-  options: { tty?: boolean; exitOnCtrlC?: boolean } = {},
+  options: { tty?: boolean; exitOnCtrlC?: boolean; rows?: number } = {},
 ): WatchedInstance {
   const frames: string[] = [];
   const modes: string[] = [];
   const watchers = new Set<(frame: string) => void>();
   const stdout = Object.assign(new EventEmitter(), {
     columns,
+    ...(options.rows === undefined ? {} : { rows: options.rows }),
     isTTY: options.tty === true,
     write: (frame: string) => {
       if (MODE_SWITCHES.has(frame)) {

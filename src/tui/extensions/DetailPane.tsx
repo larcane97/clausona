@@ -11,7 +11,26 @@ const TONE: Record<NonNullable<DetailLine["tone"]>, string> = {
   healthy: color.healthy,
 };
 
-type Props = { inv: Inventory; row: Row | undefined; project?: string; width: number; height: number; now: number };
+type Props = {
+  inv: Inventory;
+  row: Row | undefined;
+  project?: string;
+  width: number;
+  height: number;
+  now: number;
+  /** A filter or search holds every group open, so enter does nothing to one. */
+  held?: boolean;
+};
+
+function itemCount(count: number): string {
+  return `${count} ${count === 1 ? "item" : "items"}`;
+}
+
+/** What a group's pane says: how many it holds, and what enter does to it, if anything. */
+function groupLine(count: number, open: boolean, held: boolean): string {
+  if (held) return `${itemCount(count)} · open while a filter or search is on`;
+  return `${itemCount(count)} · enter to ${open ? "close" : "open"}`;
+}
 
 /**
  * Each line keyed by what it says. Two copies of a server can both read `C on`, so a line that
@@ -28,17 +47,21 @@ function withIds(lines: DetailLine[]): (DetailLine & { id: string })[] {
 }
 
 /** What the selected row is, where it lives and what it is here, cut to the pane's height. */
-export function DetailPane({ inv, row, project, width, height, now }: Props) {
+export function DetailPane({ inv, row, project, width, height, now, held = false }: Props) {
   const lines: DetailLine[] =
     row === undefined
       ? []
       : row.type === "group"
-        ? [{ text: `${row.count} item(s) · enter to ${row.open ? "close" : "open"}`, tone: "muted" }]
+        ? [{ text: groupLine(row.count, row.open, held), tone: "muted" }]
         : detailOf(inv, row, project, now);
   // The border takes two lines and the title one, and every line is one row: this is what fits,
   // which at the 3-line floor is the title alone. Rows keep their height (a Text shrinks by
   // default), so anything that still overflows is cut at the bottom, not squeezed into the title.
-  const keyed = withIds(lines.slice(0, Math.max(0, height - 3)));
+  const room = Math.max(0, height - 3);
+  // A cut list ends in a line that says so. With room for one line only, that line is the first
+  // one: an ellipsis alone would say nothing.
+  const cut = lines.length > room && room >= 2;
+  const keyed = withIds(lines.slice(0, cut ? room - 1 : room));
   return (
     <Box
       flexDirection="column"
@@ -77,6 +100,11 @@ export function DetailPane({ inv, row, project, width, height, now }: Props) {
           </Box>
         </Box>
       ))}
+      {cut ? (
+        <Box flexShrink={0}>
+          <Text color={color.muted}>…</Text>
+        </Box>
+      ) : null}
     </Box>
   );
 }

@@ -10,19 +10,20 @@ type Props = { projects: Project[]; current?: string; here?: string; cursor: num
 /** Row 0 is "No project"; then every known project, the one csn was started in marked. */
 export function ProjectPicker({ projects, current, here, cursor, height, homeDir }: Props) {
   const entries = [{ key: "none", label: "No project — user settings only", note: "" }].concat(
-    projects.map((p) => ({
-      key: p.path,
-      label: tilde(p.path, homeDir),
-      note: [
-        samePath(p.path, here) ? "here" : "",
-        p.profiles.filter((id) => id.startsWith("claude:")).length > 0
-          ? `${p.profiles.filter((id) => id.startsWith("claude:")).length} Claude acct`
-          : "",
-        p.tools.includes("codex") ? "Codex" : "",
-      ]
-        .filter(Boolean)
-        .join(" · "),
-    })),
+    projects.map((p) => {
+      const claude = p.profiles.filter((id) => id.startsWith("claude:")).length;
+      return {
+        key: p.path,
+        label: tilde(p.path, homeDir),
+        note: [
+          samePath(p.path, here) ? "here" : "",
+          claude > 0 ? `${claude} Claude acct` : "",
+          p.tools.includes("codex") ? "Codex" : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      };
+    }),
   );
   const room = Math.max(1, height - 1);
   const top = Math.max(0, Math.min(cursor - Math.floor(room / 2), entries.length - room));
