@@ -4,6 +4,7 @@ import {
   checkRoute,
   checkRouteName,
   type Route,
+  type RouteOverrides,
   type RouteSpec,
   type RoutesFile,
   withDefaults,
@@ -88,6 +89,20 @@ export function onlyTool(registry: Registry): ToolName | undefined {
 
 export type ResolvedRoute = { name?: string; route: Route; resolvedBy: ResolvedBy };
 
+/** The field options a run may give, as their flags, in the order an error lists them. */
+const FIELD_FLAGS: ReadonlyArray<[keyof RouteOverrides, string]> = [
+  ["exclude", "--exclude"],
+  ["strategy", "--strategy"],
+  ["maxUsage", "--max-usage"],
+  ["reserveUsage", "--reserve-usage"],
+  ["fallback", "--fallback"],
+];
+
+/** `--a`, `--a and --b`, `--a, --b and --c`. */
+function listFlags(flags: string[]): string {
+  return flags.length < 2 ? flags.join("") : `${flags.slice(0, -1).join(", ")} and ${flags[flags.length - 1]}`;
+}
+
 function inferTool(patterns: string[]): ToolName | undefined {
   const tools = new Set(patterns.map((pattern) => /^(claude|codex):/.exec(pattern)?.[1] as ToolName | undefined));
   if (tools.size !== 1) return undefined;
@@ -96,7 +111,7 @@ function inferTool(patterns: string[]): ToolName | undefined {
 
 /**
  * The route a run names: a stored one (`--route`), or an unsaved one (`--from`), with the run's
- * field options applied over it. Null when the run names neither.
+ * field options applied over it. Null when the run names neither and gives no field options.
  */
 export function resolveRoute(
   file: RoutesFile,
@@ -121,6 +136,14 @@ export function resolveRoute(
     }
     spec = { tool: inferred };
   } else {
+    // Without a route these would be dropped, and the tool run on its active profile as if they
+    // were never given. Only the flags are named: an option's value is never echoed.
+    const given = FIELD_FLAGS.filter(([key]) => overrides[key] !== undefined).map(([, flag]) => flag);
+    if (given.length) {
+      throw new Error(
+        `${listFlags(given)} ${given.length === 1 ? "needs" : "need"} --route <name> or --from <patterns>.`,
+      );
+    }
     return null;
   }
   const merged = applyOverrides(spec, overrides);

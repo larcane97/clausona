@@ -141,6 +141,22 @@ describe("resolveRoute", () => {
     expect(resolveRoute(file, { tool: "claude", options: {} })).toBeNull();
   });
 
+  it("refuses field options that name no route, naming the flags only", () => {
+    expect(() => resolveRoute(file, { tool: "claude", options: { exclude: ["work"], maxUsage: 70 } })).toThrow(
+      /^--exclude and --max-usage need --route <name> or --from <patterns>\.$/,
+    );
+    expect(() => resolveRoute(file, { tool: "claude", options: { strategy: "headroom" } })).toThrow(
+      /^--strategy needs --route <name> or --from <patterns>\.$/,
+    );
+    expect(() =>
+      resolveRoute(file, {
+        options: { fallback: ["b"], reserveUsage: 90, maxUsage: 70, strategy: "expiring", exclude: ["work"] },
+      }),
+    ).toThrow(
+      /^--exclude, --strategy, --max-usage, --reserve-usage and --fallback need --route <name> or --from <patterns>\.$/,
+    );
+  });
+
   it("checks the run's overrides, without quoting a key-shaped one", () => {
     const key = ["sk", "ant", "x".repeat(24)].join("-");
     const run = () => resolveRoute(file, { options: { route: "main", exclude: [key] } });
