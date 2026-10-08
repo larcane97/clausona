@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -308,5 +308,70 @@ describe("unknown subcommands", () => {
     const token = ["hf", "Ab".repeat(17)].join("_");
     const tokenError = (await run(token).catch((e: unknown) => e)) as Error;
     expect(tokenError.message).toBe("That is not a route command. Run `clausona route --help` for the list.");
+  });
+});
+
+describe("route edit", () => {
+  it("saves what the editor saved, once it checks out", async () => {
+    const { deps, io, file } = setup();
+    deps.editText = async () => JSON.stringify({ version: 1, routes: { main: { tool: "claude" } } });
+    expect(stripAnsi(await runRouteCommand(["edit"], io, deps))).toContain("Saved");
+    expect(file().routes.main).toEqual({ tool: "claude" });
+  });
+
+  it("writes nothing when the edit has a problem, and says where", async () => {
+    const { deps, io } = setup();
+    writeFileSync(deps.paths.routesPath, '{ "version": 1, "routes": {} }\n');
+    deps.editText = async () => JSON.stringify({ version: 1, routes: { main: { tool: "claude", maxUsage: 0 } } });
+    await expect(runRouteCommand(["edit"], io, deps)).rejects.toThrow(
+      "routes.main.maxUsage: must be a number from 1 to 100",
+    );
+    expect(readFileSync(deps.paths.routesPath, "utf8")).toBe('{ "version": 1, "routes": {} }\n');
+  });
+
+  it("offers to edit again in a terminal", async () => {
+    const { deps } = setup();
+    const edits = [
+      JSON.stringify({ version: 1, routes: { main: { tool: "x" } } }),
+      JSON.stringify({ version: 1, routes: { main: { tool: "claude" } } }),
+    ];
+    deps.editText = async () => edits.shift() as string;
+    const said: string[] = [];
+    const io: RouteIo = { interactive: true, ask: async () => "", say: (text) => said.push(stripAnsi(text)) };
+    await runRouteCommand(["edit"], io, deps);
+    expect(said.join("\n")).toContain('routes.main.tool: must be "claude" or "codex"');
+    expect(JSON.parse(readFileSync(deps.paths.routesPath, "utf8")).routes.main).toEqual({ tool: "claude" });
+  });
+
+  it("opens an invalid file as it is, so it can be fixed", async () => {
+    const { deps, io } = setup();
+    writeFileSync(deps.paths.routesPath, "{ broken");
+    let opened = "";
+    deps.editText = async (initial) => {
+      opened = initial;
+      return '{ "version": 1, "routes": {} }';
+    };
+    await runRouteCommand(["edit"], io, deps);
+    expect(opened).toBe("{ broken");
+  });
+
+  it("changes nothing when the editor saves what it opened", async () => {
+    const { deps, io } = setup();
+    deps.editText = async (initial) => initial;
+    expect(stripAnsi(await runRouteCommand(["edit"], io, deps))).toBe("Nothing was changed.");
+    expect(existsSync(deps.paths.routesPath)).toBe(false);
+    writeFileSync(deps.paths.routesPath, '{ "version": 1, "routes": {} }\n');
+    expect(stripAnsi(await runRouteCommand(["edit"], io, deps))).toBe("Nothing was changed.");
+  });
+
+  it("takes no route name, and opens nothing when given one", async () => {
+    const { deps, io } = setup();
+    let opened = false;
+    deps.editText = async (initial) => {
+      opened = true;
+      return initial;
+    };
+    await expect(runRouteCommand(["edit", "main"], io, deps)).rejects.toThrow("Usage: clausona route edit");
+    expect(opened).toBe(false);
   });
 });

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withDefaults } from "../core/route-config.js";
 import { routesPaths } from "../core/routes-store.js";
 import type { QuotaSnapshot, Registry } from "../types.js";
+import { editInEditor } from "./editor.js";
 import {
   checkRouteMembers,
   defaultRouteDeps,
@@ -181,8 +182,16 @@ describe("errors", () => {
     expect([error.exitCode, error.stdout, error.name]).toEqual([75, "{}", "NoAccountError"]);
   });
 
-  it("route edit rejects until the editor is wired", async () => {
-    await expect(defaultRouteDeps().editText("", "routes.json")).rejects.toThrow("route edit is not available yet");
+  // Both variables are blanked first, so a real editor in the developer's environment never opens.
+  it("route edit uses the editor config --edit uses, which says what to set when there is none", async () => {
+    expect(defaultRouteDeps().editText).toBe(editInEditor);
+    vi.stubEnv("VISUAL", "");
+    vi.stubEnv("EDITOR", "");
+    try {
+      await expect(defaultRouteDeps().editText("", "routes.json")).rejects.toThrow("Set $EDITOR (or $VISUAL) to edit.");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

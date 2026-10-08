@@ -1,6 +1,4 @@
-import { rmSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { sendsKeyInClear } from "./core/api-url.js";
@@ -19,7 +17,6 @@ import {
   syncWithStamp,
   writeLaunchCache,
 } from "./core/launch-cache.js";
-import { spawnCommandSync } from "./core/process.js";
 import { isPosixEnvName, LAUNCH_MARKER, renderJsonEnv, renderLaunchJson, renderPosixExports } from "./core/shell.js";
 import { trackUsage } from "./core/track-usage.js";
 import {
@@ -31,6 +28,7 @@ import {
   versionOfTag,
 } from "./core/update.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
+import { editInEditor, splitCommandLine } from "./lib/editor.js";
 import {
   describeOtherAccount,
   describeUnconfirmedCredential,
@@ -475,20 +473,6 @@ function showProfile(id: string, profile: Profile, asJson: boolean): string {
   return box(id, lines);
 }
 
-/**
- * Splits $VISUAL or $EDITOR into a command and its arguments. `code -w` and `emacsclient -nw` are
- * ordinary values for it, and the whole string as one command name would look for a
- * program called "code -w". Quotes group a path with spaces in it; nothing else is
- * interpreted, because this is not a shell and the value is never handed to one.
- */
-function splitCommandLine(input: string): string[] {
-  const parts: string[] = [];
-  for (const match of input.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)) {
-    parts.push(match[1] ?? match[2] ?? match[3]);
-  }
-  return parts;
-}
-
 /** The edited file, checked to be what the env map is: a flat object of strings. */
 function parseEditedEnv(raw: string): Record<string, string> {
   let parsed: unknown;
@@ -511,62 +495,21 @@ function parseEditedEnv(raw: string): Record<string, string> {
 
 /**
  * `config --edit`: the env map in $VISUAL, or $EDITOR when that is unset, applied on a
- * clean exit.
- *
- * The scratch file lives in a directory of its own made by mkdtemp (0700) and is written
- * 0600. A fixed name in the shared temp directory would be world-readable and something
- * anyone on the machine could point at another file with a symlink first - and this file
- * can hold an ANTHROPIC_CUSTOM_HEADERS value. The directory goes on every way out: a
- * failed editor, an unparseable edit, a successful save, and a Ctrl-C while the editor is
- * open, which reaches clausona too (the editor shares its process group) and would
- * otherwise kill it before any `finally` ran.
+ * clean exit. The editor runs through `editInEditor`, which keeps the scratch file private
+ * and takes it away on every way out.
  */
 async function editProfileEnv(id: string, profile: Profile): Promise<string> {
   // `null` and `[]` open as the `{}` they apply as. One that is not a map opens as it is, so
   // what the user meant to set is there to save as one.
   const current = envMapOf(profile.env) ?? profile.env;
-  // A blank $VISUAL is as good as an unset one; `??` would take "" and stop there.
+  // Checked here too, so the message names --edit. A blank $VISUAL is as good as an unset one.
   const editor = [process.env.VISUAL, process.env.EDITOR].find((value) => (value ?? "").trim() !== "");
-  const [command, ...editorArgs] = splitCommandLine(editor ?? "");
-  if (!command) throw new Error("Set $EDITOR (or $VISUAL) to use --edit.");
-
-  const dir = await mkdtemp(path.join(tmpdir(), "clausona-env-"));
-  const scratchPath = path.join(dir, "env.json");
-
-  const onSignal = (signal: NodeJS.Signals) => {
-    // Synchronous: the process is on its way out and an awaited rm would not finish.
-    rmSync(dir, { force: true, recursive: true });
-    detachSignals();
-    // Re-raised with our listener gone, so the signal decides the exit status as it would
-    // have. A handler that just returned would swallow the Ctrl-C instead.
-    process.kill(process.pid, signal);
-  };
-  const detachSignals = () => {
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-  };
-  process.once("SIGINT", onSignal);
-  process.once("SIGTERM", onSignal);
-
-  try {
-    await writeFile(scratchPath, `${JSON.stringify(current, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    // No env is passed, so the editor inherits this process's own - the spawn helpers
-    // treat a given env as a replacement, and a partial one would start the editor
-    // without a PATH, a HOME or a TERM.
-    const result = spawnCommandSync(command, [...editorArgs, scratchPath], { stdio: "inherit" });
-    if (result.error) throw new Error(`Could not run ${command}: ${result.error.message}`);
-    if (result.status !== 0) {
-      throw new Error(`${command} exited with ${result.status ?? "a signal"}, so nothing was changed.`);
-    }
-
-    const edited = parseEditedEnv(await readFile(scratchPath, "utf8"));
-    await updateProfileEnv(id, { set: edited, replace: true });
-    warnPlaintextEnv(id, profile, Object.keys(edited));
-    return success(`Updated ${bold(id)} ${dim(`(${Object.keys(edited).length} setting(s))`)}`);
-  } finally {
-    detachSignals();
-    await rm(dir, { force: true, recursive: true }).catch(() => {});
-  }
+  if (!splitCommandLine(editor ?? "")[0]) throw new Error("Set $EDITOR (or $VISUAL) to use --edit.");
+  const saved = await editInEditor(`${JSON.stringify(current, null, 2)}\n`, "env.json");
+  const edited = parseEditedEnv(saved);
+  await updateProfileEnv(id, { set: edited, replace: true });
+  warnPlaintextEnv(id, profile, Object.keys(edited));
+  return success(`Updated ${bold(id)} ${dim(`(${Object.keys(edited).length} setting(s))`)}`);
 }
 
 // ─── Subcommand Help ────────────────────────────────────────────────

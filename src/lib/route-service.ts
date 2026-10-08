@@ -13,6 +13,7 @@ import { expandPatterns, type Member } from "../core/route-patterns.js";
 import { pickWithRecord, type RoutesPaths, readPicks, routesPaths } from "../core/routes-store.js";
 import { type Ranking, rankRoute } from "../core/routing.js";
 import type { QuotaSnapshot, Registry, ToolName } from "../types.js";
+import { editInEditor } from "./editor.js";
 import type { ResolvedBy } from "./route-render.js";
 import type { RoutingOptions } from "./run-args.js";
 import { loadRegistry, noRegistryError } from "./service.js";
@@ -33,9 +34,7 @@ export function defaultRouteDeps(): RouteDeps {
     collectQuotas: (targets) => collectQuotas(targets),
     paths: routesPaths(),
     clock: () => Date.now(),
-    editText: async () => {
-      throw new Error("route edit is not available yet.");
-    },
+    editText: editInEditor,
   };
 }
 

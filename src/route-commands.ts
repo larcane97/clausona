@@ -5,12 +5,20 @@ import {
   checkRoute,
   checkRouteName,
   DEFAULT_RESERVE_USAGE,
+  emptyRoutesFile,
   newRouteSpec,
   type RouteSpec,
   withDefaults,
 } from "./core/route-config.js";
 import { expandPatterns } from "./core/route-patterns.js";
-import { readRoutes, updateRoutes } from "./core/routes-store.js";
+import {
+  parseRoutesText,
+  RoutesFileError,
+  readRoutes,
+  readRoutesText,
+  replaceRoutesText,
+  updateRoutes,
+} from "./core/routes-store.js";
 import { accent, bold, dim, helpSection, helpUsage, stripAnsi, success } from "./lib/cli-style.js";
 import { askTool, confirmNewRoute, type RouteIo, terminalIo } from "./lib/route-create.js";
 import {
@@ -333,6 +341,35 @@ async function removeRoute(args: string[], deps: RouteDeps): Promise<string> {
   return success(`Removed route ${bold(name)}`);
 }
 
+/**
+ * `route edit`: routes.json as it is on disk (an invalid one too, so it can be fixed), or an
+ * empty file when there is none. Saved only once it checks out, and only if routes.json is still
+ * what the edit started from.
+ */
+async function editRoutes(args: string[], io: RouteIo, deps: RouteDeps): Promise<string> {
+  const read = readOptions(args, { values: [], flags: [] }, "route edit");
+  if (read.positionals.length) throw new Error(`${usage("edit")}\nRun \`clausona route edit --help\` for usage.`);
+  const original = await readRoutesText(deps.paths);
+  const opened = original ?? `${JSON.stringify(emptyRoutesFile(), null, 2)}\n`;
+  let text = opened;
+  for (;;) {
+    text = await deps.editText(text, "routes.json");
+    try {
+      parseRoutesText(text, deps.paths.routesPath);
+      break;
+    } catch (error) {
+      if (!(error instanceof RoutesFileError) || !io.interactive) throw error;
+      io.say(error.message);
+      const again = await io.ask("Edit again? (Y/n) ");
+      if (again === null || !["", "y", "yes"].includes(again.toLowerCase())) return "Nothing was changed.";
+    }
+  }
+  // Saving the empty file unchanged, with no routes.json yet, creates nothing.
+  if (text === opened) return "Nothing was changed.";
+  await replaceRoutesText(original, text, deps.paths);
+  return success(`Saved ${deps.paths.routesPath}`);
+}
+
 async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
   const read = readOptions(args, { values: [], flags: ["--json"] }, "route list");
   if (read.positionals.length) throw new Error(`${usage("list")}\nRun \`clausona route list --help\` for usage.`);
@@ -422,6 +459,8 @@ export async function runRouteCommand(
       return renameRoute(rest, deps);
     case "remove":
       return removeRoute(rest, deps);
+    case "edit":
+      return editRoutes(rest, io, deps);
     case "explain":
       return explainRoute(rest, deps);
     case "pick":
