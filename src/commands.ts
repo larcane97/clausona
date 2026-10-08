@@ -946,6 +946,7 @@ function subcommandHelpText(command: string): string | undefined {
         `    ${dim("3. --from: an unsaved route")}`,
         `    ${dim("4. claude / codex alone: that tool's active profile")}`,
         `    ${dim("Routing options go before the tool's own arguments; a -- ends them.")}`,
+        `    ${dim("A profile after routing options is an error; after a -- it goes to the tool.")}`,
         `    ${dim("A routed run says on stderr which profile it picked, and why.")}`,
         `    ${dim("An unknown --route in a terminal offers to create it (every account, round-robin).")}`,
         `    ${dim("Resumed runs (-c, --resume, --from-pr, codex resume) use only accounts that share sessions.")}`,

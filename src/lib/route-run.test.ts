@@ -108,6 +108,38 @@ describe("runRouted", () => {
     expect(s.launches).toEqual([["claude:b", ["-p", "hi"]]]);
   });
 
+  it("refuses a profile after routing options, launching and recording nothing", async () => {
+    for (const args of [
+      ["--route", "main", "claude:b"],
+      ["--route", "main", "solo", "-p", "hi"],
+      ["claude", "--from", "a,b", "solo"],
+    ]) {
+      const s = setup({ routes: MAIN });
+      await expect(runRouted(args, s.launch, s.io, s.deps)).rejects.toThrow(
+        "Routing options cannot be combined with a profile. Run it by name: clausona run <profile> …, or put it after -- to pass it to the tool.",
+      );
+      expect(s.launches).toEqual([]);
+      expect(() => readFileSync(s.paths.picksPath)).toThrow();
+    }
+    // Before an unknown route is offered, so nothing is created either.
+    const s = setup({ interactive: true, answers: ["y"] });
+    await expect(runRouted(["--route", "work", "claude:b"], s.launch, s.io, s.deps)).rejects.toThrow(
+      /^Routing options cannot be combined with a profile\./,
+    );
+    expect(() => readFileSync(s.paths.routesPath)).toThrow();
+    expect(s.notes).toEqual([]);
+  });
+
+  it("passes a profile's name to the tool after --, and a word that names no profile as it is", async () => {
+    const s = setup({ routes: MAIN });
+    await runRouted(["--route", "main", "--", "claude:b"], s.launch, s.io, s.deps);
+    await runRouted(["--route", "main", "hello"], s.launch, s.io, s.deps);
+    expect(s.launches).toEqual([
+      ["claude:solo", ["claude:b"]],
+      ["claude:solo", ["hello"]],
+    ]);
+  });
+
   it("exits 75 when nobody can be picked", async () => {
     const s = setup({ routes: MAIN, quotas: { "claude:a": snap(99), "claude:b": snap(99), "claude:solo": snap(99) } });
     const error = (await runRouted(["--route", "main"], s.launch, s.io, s.deps).catch(

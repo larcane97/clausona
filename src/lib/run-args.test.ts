@@ -7,6 +7,7 @@ describe("readRunArgs", () => {
     expect(readRunArgs(["--route", "main", "-p", "summarize"])).toEqual({
       options: { route: "main" },
       toolArgs: ["-p", "summarize"],
+      sawSeparator: false,
     });
   });
 
@@ -15,11 +16,13 @@ describe("readRunArgs", () => {
       tool: "claude",
       options: { from: ["team-*", "work"], strategy: "headroom" },
       toolArgs: ["fix it"],
+      sawSeparator: false,
     });
     expect(readRunArgs(["--route", "cx", "codex", "exec", "codex"])).toEqual({
       tool: "codex",
       options: { route: "cx" },
       toolArgs: ["exec", "codex"],
+      sawSeparator: false,
     });
   });
 
@@ -49,6 +52,7 @@ describe("readRunArgs", () => {
     expect(readRunArgs(["--route", "main", "--", "--route", "x"])).toEqual({
       options: { route: "main" },
       toolArgs: ["--route", "x"],
+      sawSeparator: true,
     });
   });
 

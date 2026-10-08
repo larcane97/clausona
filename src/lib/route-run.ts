@@ -1,7 +1,7 @@
 import { applyOverrides, DEFAULT_RESERVE_USAGE, newRouteSpec, withDefaults } from "../core/route-config.js";
 import { readRoutes } from "../core/routes-store.js";
 import { createRoute } from "../route-commands.js";
-import type { Registry } from "../types.js";
+import type { Registry, ToolName } from "../types.js";
 import { askTool, confirmNewRoute, type RouteIo, terminalIo } from "./route-create.js";
 import { renderNoAccount, renderNote } from "./route-render.js";
 import {
@@ -21,6 +21,18 @@ import { noRegistryError } from "./service.js";
 /** A registered profile literally named `claude` or `codex` keeps meaning that profile. */
 function isProfileName(name: string, registry: Registry): boolean {
   return Object.keys(registry.profiles).some((id) => id.slice(id.indexOf(":") + 1) === name);
+}
+
+/**
+ * Whether the tool's first argument names a registered profile: an exact id, or a bare name of
+ * the tool in play (any tool's while it is not known yet).
+ */
+function namesProfile(arg: string | undefined, registry: Registry, tool: ToolName | undefined): boolean {
+  if (arg === undefined) return false;
+  if (Object.hasOwn(registry.profiles, arg)) return true;
+  if (arg.includes(":")) return false;
+  const tools: ToolName[] = tool ? [tool] : ["claude", "codex"];
+  return tools.some((candidate) => Object.hasOwn(registry.profiles, `${candidate}:${arg}`));
 }
 
 async function offerToCreate(
@@ -81,13 +93,26 @@ export async function runRouted(
   }
 
   const run = readRunArgs(args);
-  let resolved: ResolvedRoute | null;
+  let resolved: ResolvedRoute | null = null;
+  let unknown: UnknownRouteError | undefined;
   try {
     resolved = resolveRoute(await readRoutes(deps.paths), run);
   } catch (error) {
     if (!(error instanceof UnknownRouteError)) throw error;
-    resolved = await offerToCreate(error, run, registry, io, deps);
+    unknown = error;
   }
+  // `run --route main claude:b` would otherwise launch another account with `claude:b` as its
+  // prompt. Checked before anything is created, ranked or recorded; the name is not echoed.
+  if (
+    (resolved || unknown) &&
+    !run.sawSeparator &&
+    namesProfile(run.toolArgs[0], registry, resolved?.route.tool ?? run.tool)
+  ) {
+    throw new Error(
+      "Routing options cannot be combined with a profile. Run it by name: clausona run <profile> …, or put it after -- to pass it to the tool.",
+    );
+  }
+  if (unknown) resolved = await offerToCreate(unknown, run, registry, io, deps);
 
   if (!resolved) {
     if (!run.tool) {

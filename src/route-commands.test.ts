@@ -90,6 +90,12 @@ describe("route help", () => {
       /--exclude <patterns>\s+Also leave these out for this run/,
     );
   });
+
+  it("says in run's help that a profile does not go with routing options", async () => {
+    expect(stripAnsi(await runCommand("run", ["--help"]))).toContain(
+      "A profile after routing options is an error; after a -- it goes to the tool.",
+    );
+  });
 });
 
 describe("route add", () => {

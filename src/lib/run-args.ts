@@ -20,7 +20,13 @@ export const ROUTE_FIELD_OPTIONS: readonly string[] = [
 
 export const ROUTING_VALUE_OPTIONS: readonly string[] = ["--route", ...ROUTE_FIELD_OPTIONS];
 
-export type RunArgs = { tool?: ToolName; options: RoutingOptions; toolArgs: string[] };
+export type RunArgs = {
+  tool?: ToolName;
+  options: RoutingOptions;
+  toolArgs: string[];
+  /** Whether a `--` ended clausona's part, so that what follows is the tool's whatever it looks like. */
+  sawSeparator: boolean;
+};
 
 export function parsePatterns(flag: string, value: string): string[] {
   const patterns = value
@@ -93,10 +99,12 @@ function splitOption(arg: string): [string, string | undefined] {
 export function readRunArgs(args: string[]): RunArgs {
   const values = new Map<string, string>();
   let tool: ToolName | undefined;
+  let sawSeparator = false;
   let i = 0;
   for (; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--") {
+      sawSeparator = true;
       i++;
       break;
     }
@@ -115,7 +123,7 @@ export function readRunArgs(args: string[]): RunArgs {
     }
     values.set(flag, value);
   }
-  return { ...(tool ? { tool } : {}), options: toRoutingOptions(values), toolArgs: args.slice(i) };
+  return { ...(tool ? { tool } : {}), options: toRoutingOptions(values), toolArgs: args.slice(i), sawSeparator };
 }
 
 export type OptionSpec = { values: readonly string[]; flags: readonly string[] };
