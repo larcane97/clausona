@@ -33,4 +33,4 @@ Superset agent configs: "Claude · work (Sonnet 5.5)" (id cfg-work, runs clauson
 "Claude · team (Opus 5.5)" (id cfg-team, runs clausona run claude:team -- --model claude-opus-5-5),
 "GLM · api" (id cfg-glm, runs clausona run claude:glm) and "Codex · work" (id cfg-codex, runs
 clausona run codex:work). There are none for claude:main or claude:side.
-No ~/.clausona/superset-fleet.json exists.
+Neither ~/.clausona/fleet.json nor ~/.clausona/superset-fleet.json exists.

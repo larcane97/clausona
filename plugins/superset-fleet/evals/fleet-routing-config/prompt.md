@@ -25,6 +25,9 @@ $ clausona list --json   (abridged)
  {"name":"claude:side","tool":"claude","configDir":"/home/u/.claude-side","quota":{"state":"ok","session":{"usedPercent":30},"weekly":{"usedPercent":40}}},
  {"name":"claude:glm","tool":"claude","configDir":"/home/u/.claude-glm","kind":"api","model":"z-ai/glm-5.3"}]
 
+$ cat ~/.clausona/fleet.json
+cat: /home/u/.clausona/fleet.json: No such file or directory
+
 $ cat ~/.clausona/superset-fleet.json
 {"retire": "ask", "workers": ["claude:side", "claude:glm"], "routing": ["claude:glm never edits files under src/"]}
 
