@@ -68,7 +68,7 @@ export function shortProfile(id: string): string {
 }
 
 /** `~` for the home dir, only where a path starts with it. */
-function tilde(p: string, homeDir: string): string {
+export function tilde(p: string, homeDir: string): string {
   if (p === homeDir) return "~";
   return p.startsWith(homeDir + path.sep) ? `~${p.slice(homeDir.length)}` : p;
 }
@@ -84,16 +84,16 @@ export function whereLabel(item: Extension): string {
 }
 
 /** The project an item is read in: its own when it has one, else the one the list is seen from. */
-function viewFrom(item: Extension, project: string | undefined): string | undefined {
+export function viewFrom(item: Extension, project: string | undefined): string | undefined {
   return item.location.project ?? project;
 }
 
 /** What `item` is with no account named: every account's approvals merged. */
-function stateHere(inv: Inventory, item: Extension, project: string | undefined): EffectiveState {
+export function stateHere(inv: Inventory, item: Extension, project: string | undefined): EffectiveState {
   return stateOf(inv, item, viewFrom(item, project));
 }
 
-type AccountState = { profile: string; state: EffectiveState };
+export type AccountState = { profile: string; state: EffectiveState };
 
 /**
  * A Claude MCP server that every account opening the project sees (.mcp.json, plugin) is
@@ -102,7 +102,11 @@ type AccountState = { profile: string; state: EffectiveState };
  * projects too, but never loads a Claude server. Undefined for any other item, and when no such
  * account has recorded the project.
  */
-function accountStates(inv: Inventory, item: Extension, project: string | undefined): AccountState[] | undefined {
+export function accountStates(
+  inv: Inventory,
+  item: Extension,
+  project: string | undefined,
+): AccountState[] | undefined {
   const here = viewFrom(item, project);
   if (item.kind !== "mcp" || item.location.tool !== "claude" || item.location.profile !== undefined || !here) {
     return undefined;
