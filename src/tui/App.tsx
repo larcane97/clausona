@@ -7,6 +7,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 
 import { bootstrapInitFromCurrentState } from "../commands.js";
 import { reinstallCommand, type UpdateOffer, type Updater } from "../core/update.js";
+import { loadInventoryHere } from "../extensions/load.js";
+import type { Inventory } from "../extensions/model.js";
 import {
   describeOtherAccount,
   describeUnconfirmedCredential,
@@ -85,10 +87,11 @@ import { SelectList, type SelectListItem } from "./components/SelectList.js";
 import { StepIndicator } from "./components/StepIndicator.js";
 import { UpdatePanel, type UpdatePhase } from "./components/UpdatePanel.js";
 import { UsageTable } from "./components/UsageTable.js";
+import { ExtensionsScreen } from "./extensions/ExtensionsScreen.js";
 import { RoutesScreen } from "./routes/RoutesScreen.js";
 import { color, symbol } from "./theme.js";
 
-type Screen = "dashboard" | "use" | "routes" | "doctor" | "init" | "usage";
+type Screen = "dashboard" | "use" | "routes" | "doctor" | "init" | "usage" | "extensions";
 type InitStep = "loading" | "select" | "name" | "default" | "review" | "applying" | "done" | "error";
 
 type AppProps = {
@@ -98,6 +101,11 @@ type AppProps = {
    * checked, which keeps every test that is not about updating off the network.
    */
   updater?: Updater;
+  /**
+   * Reads the extensions inventory for the Extensions screen. Left out, it reads this user's
+   * real one; tests pass their own so the App never reads a home directory.
+   */
+  loadExtensions?: () => Promise<Inventory>;
   /** Called once an update is installed, just before the App exits: index.tsx then starts the new version. */
   onRestart?: (offer: UpdateOffer) => void;
 };
@@ -341,7 +349,7 @@ function useCommittedHandler<Args extends unknown[]>(handler: (...args: Args) =>
 
 // ── App ──
 
-export function App({ initialScreen = "dashboard", updater, onRestart }: AppProps) {
+export function App({ initialScreen = "dashboard", updater, onRestart, loadExtensions = loadInventoryHere }: AppProps) {
   const { exit } = useApp();
   const { stdout, write } = useStdout();
   const { internal_eventEmitter: inputEvents } = useStdin();
@@ -1250,6 +1258,7 @@ export function App({ initialScreen = "dashboard", updater, onRestart }: AppProp
     { id: "use", label: "Profiles", detail: "Switch, add, or remove accounts" },
     { id: "routes", label: "Routes", detail: "Pick accounts by plan quota" },
     { id: "usage", label: "Usage", detail: "View cost and token usage" },
+    { id: "extensions", label: "Extensions", detail: "Skills, MCP servers and hooks across accounts" },
     { id: "init", label: "Initialize", detail: "Register discovered Claude accounts" },
     { id: "doctor", label: "Health check", detail: "Inspect profile integrity" },
     { id: "quit", label: "Quit", detail: "Exit clausona" },
@@ -1272,6 +1281,9 @@ export function App({ initialScreen = "dashboard", updater, onRestart }: AppProp
       if (key.escape) exit();
       return;
     }
+
+    // The Extensions screen answers its own keys, esc included.
+    if (screen === "extensions") return;
 
     if (screen === "dashboard") {
       // An install in flight takes every key, from the Enter that started it. A key in the same
@@ -1319,7 +1331,8 @@ export function App({ initialScreen = "dashboard", updater, onRestart }: AppProp
           selectedAction === "routes" ||
           selectedAction === "doctor" ||
           selectedAction === "init" ||
-          selectedAction === "usage"
+          selectedAction === "usage" ||
+          selectedAction === "extensions"
         ) {
           setCursor(0);
           setScreen(selectedAction);
@@ -2187,6 +2200,18 @@ export function App({ initialScreen = "dashboard", updater, onRestart }: AppProp
           <Text color={color.text}>{unreadableRegistry}</Text>
         </Box>
       </Chrome>
+    );
+  }
+
+  if (screen === "extensions") {
+    return (
+      <ExtensionsScreen
+        load={loadExtensions}
+        onExit={() => {
+          setCursor(0);
+          setScreen("dashboard");
+        }}
+      />
     );
   }
 
