@@ -88,6 +88,9 @@ const URL_RUN = /[a-z][a-z0-9+.-]*:\/\/[^\s"'`]+/gi;
 /** A command line's words, and whether each ends an argument: an MCP server's can hold several. */
 type Line = { words: string[]; ends: boolean[]; shown: string[] };
 
+/** A shell's option for a command line, `bash -c`, `sh -lc`, `cmd /c`: the next argument's words are separate. */
+const SHELL_COMMAND = /^(-[a-z]?c|\/c)$/i;
+
 /**
  * A command line as the inventory shows it, for reading, not running. Every argument is read
  * word by word, and hidden are:
@@ -109,11 +112,12 @@ type Line = { words: string[]; ends: boolean[]; shown: string[] };
  */
 export function redactCommand(args: string[]): string {
   const line: Line = { words: [], ends: [], shown: [] };
-  for (const arg of args) {
+  for (const [n, arg] of args.entries()) {
     const words = arg.split(/\s+/).filter(Boolean);
+    const commandLine = SHELL_COMMAND.test(args[n - 1] ?? "");
     for (const [k, word] of words.entries()) {
       line.words.push(word);
-      line.ends.push(k === words.length - 1);
+      line.ends.push(commandLine || k === words.length - 1);
     }
   }
   for (let i = 0; i < line.words.length; i++) i = redactAt(line, i);
@@ -199,10 +203,16 @@ function argEnd(line: Line, i: number): number {
  * index of the value's last word. `rest` is the value's text in that word after `quote`, the
  * quote it is in, if any: the value runs to the quote's closing - in this word or a later one,
  * or the end - and what follows that is shown, redacted. An unquoted value is the rest of the
- * word, with any closing quotes or brackets after it shown.
+ * word, with any closing quotes or brackets after it shown - or, when the word starts an
+ * argument of several words, the rest of that argument.
  */
 function hideValue(line: Line, at: number, prefix: string, quote: string, rest: string): number {
   if (quote === "") {
+    // An argument that starts with the value and goes on is all value: `API_KEY=a b`, `alice:a b`.
+    if (line.ends[at - 1] !== false && !line.ends[at]) {
+      line.shown.push(`${prefix}${HIDDEN}`);
+      return argEnd(line, at);
+    }
     line.shown.push(`${prefix}${HIDDEN}${closingTail(rest)}`);
     return at;
   }
@@ -408,7 +418,8 @@ export function mcpSummary(config: unknown): Record<string, string> {
   if (url) out.url = showUrl(url);
   if (typeof config.command === "string") {
     const args = Array.isArray(config.args) ? config.args.filter((a): a is string => typeof a === "string") : [];
-    out.command = redactCommand([config.command, ...args]);
+    // The command is a command line when it holds spaces, so its words are its own arguments.
+    out.command = redactCommand([...config.command.split(/\s+/), ...args]);
   }
   const env = names(config.env);
   if (env.length > 0) out.env = env.join(", ");
