@@ -132,7 +132,10 @@ function codexMcpState(inv: Inventory, item: Extension, project: string | undefi
 
 /**
  * What `item` is in `project` (undefined: with no project, where only user and managed
- * settings apply), for `profile` when the switch is an account's (Claude MCP).
+ * settings apply), for `profile` when the switch is an account's (Claude MCP). For a Claude MCP
+ * server that any account can see (a `.mcp.json` or plugin server), callers pass `profile`:
+ * without one, every account's approvals are merged and no account's `disabledMcpServers` entry
+ * applies.
  */
 export function stateOf(inv: Inventory, item: Extension, project?: string, profile?: string): EffectiveState {
   switch (item.kind) {
