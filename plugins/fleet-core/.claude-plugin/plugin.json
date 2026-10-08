@@ -1,0 +1,10 @@
+{
+  "name": "fleet-core",
+  "version": "0.1.0",
+  "description": "Shared rules for the clausona fleet skills (superset-fleet, herdr-fleet, orca-fleet). Installed with them; not used on its own.",
+  "author": { "name": "larcane97", "url": "https://github.com/larcane97" },
+  "homepage": "https://larcane97.github.io/clausona/guides/parallel-claude-code-agents/",
+  "repository": "https://github.com/larcane97/clausona",
+  "license": "MIT",
+  "keywords": ["clausona", "multi-account", "parallel-agents", "orchestration", "claude-code", "codex"]
+}
