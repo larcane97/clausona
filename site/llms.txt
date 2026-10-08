@@ -15,7 +15,7 @@ Facts:
 
 - [How to use multiple Claude Code accounts on one machine](https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/): CLAUDE_CONFIG_DIR by hand, what must not be shared, and the clausona way, including shared conversation history.
 - [How to use multiple Codex CLI accounts on one machine](https://larcane97.github.io/clausona/guides/multiple-codex-cli-accounts/): one CODEX_HOME per account, which files to share, and which must stay with each account.
-- [Run parallel Claude Code agents on different accounts and models](https://larcane97.github.io/clausona/guides/parallel-claude-code-agents/): instead of subagents, which run out of sight and all spend one account, run each agent as its own Claude Code session in Superset, routed by your rules to an account or an API model such as DeepSeek, with the superset-fleet skill.
+- [Run parallel Claude Code agents on different accounts and models](https://larcane97.github.io/clausona/guides/parallel-claude-code-agents/): subagents run out of sight and all spend one account. Instead, run each agent as a separate Claude Code session with `clausona run <profile>` in any runner (a terminal, tmux, herdr, Orca or Superset), on an account or an API model such as DeepSeek. Today the superset-fleet skill adds a coordinator in Superset that plans, routes by rules and usage, checks and retires workers.
 - [Claude Code와 Codex 계정 여러 개를 동시에 쓰는 법](https://larcane97.github.io/clausona/ko/): the same guide in Korean.
 - [Claude Code 에이전트를 여러 계정과 모델로 병렬 실행하기](https://larcane97.github.io/clausona/ko/parallel-agents/): the parallel agents guide in Korean.
 
