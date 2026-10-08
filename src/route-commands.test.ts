@@ -139,6 +139,27 @@ describe("route add", () => {
     await expect(run("add", "a b")).rejects.toThrow(/Invalid route name/);
   });
 
+  it("stores and prints nothing of a vendor token given as a route name", async () => {
+    const { run, file } = setup();
+    await run("add", "main");
+    // Short, and not starting with sk-: only a check for a key anywhere in it catches it.
+    const token = ["hf", "Ab".repeat(17)].join("_");
+    for (const args of [
+      ["add", token],
+      ["set", token, "--strategy", "headroom"],
+      ["rename", "main", token],
+      ["rename", token, "other"],
+      ["remove", token],
+      ["explain", token],
+      ["pick", token],
+    ]) {
+      const error = (await run(...args).catch((e: unknown) => e)) as Error;
+      expect(error).toBeInstanceOf(Error);
+      expect(error.message).toBe("That looks like an API key, not a route name.");
+    }
+    expect(Object.keys(file().routes)).toEqual(["main"]);
+  });
+
   it("asks for --tool, and says why, when it cannot tell the tool", async () => {
     const { deps, io } = setup();
     const withRegistry = (profiles: Registry["profiles"]): RouteDeps => ({

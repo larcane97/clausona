@@ -75,6 +75,12 @@ describe("checkRouteName", () => {
     expect(problem).toMatch(/API key/);
     expect(problem).not.toContain(keyShaped());
   });
+
+  it("never quotes a vendor token as a name", () => {
+    // Short, and not starting with sk-: only a check for a key anywhere in it catches it.
+    const token = ["hf", "Ab".repeat(17)].join("_");
+    expect(checkRouteName(token)).toBe("That looks like an API key, not a route name.");
+  });
 });
 
 describe("checkPattern", () => {

@@ -113,8 +113,9 @@ function isPercent(value: unknown, min: number): boolean {
 }
 
 export function checkRouteName(name: string): string | null {
-  // Checked first, so the message below never echoes something key-shaped.
-  if (looksLikeCredential(name)) return "That looks like an API key, not a route name.";
+  // Checked first, so the message below never echoes something key-shaped. A vendor token
+  // (`hf_…`, `ghp_…`) fits the name rule and the length ceiling, so it is looked for anywhere too.
+  if (looksLikeCredential(name) || carriesCredentialToken(name)) return "That looks like an API key, not a route name.";
   if (ROUTE_NAME.test(name)) return null;
   return `Invalid route name '${name}': start with a letter or digit, and use only letters, digits, '.', '_' and '-'.`;
 }
