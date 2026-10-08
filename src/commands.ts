@@ -30,6 +30,7 @@ import {
   reinstallCommand,
   versionOfTag,
 } from "./core/update.js";
+import { EXTENSIONS_FLAGS, EXTENSIONS_VALUE_FLAGS, runExtensionsCommand, usageLine } from "./extensions/cli.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import {
   describeOtherAccount,
@@ -158,6 +159,9 @@ const commandFlags: Record<string, { flags: string[]; prefixes?: string[] }> = {
   usage: { flags: ["--json"], prefixes: ["--period="] },
   current: { flags: ["--json"] },
   doctor: { flags: ["--json"] },
+  skills: { flags: EXTENSIONS_FLAGS, prefixes: valuePrefixes(EXTENSIONS_VALUE_FLAGS) },
+  mcp: { flags: EXTENSIONS_FLAGS, prefixes: valuePrefixes(EXTENSIONS_VALUE_FLAGS) },
+  hooks: { flags: EXTENSIONS_FLAGS, prefixes: valuePrefixes(EXTENSIONS_VALUE_FLAGS) },
   config: {
     flags: [
       "--merge-sessions",
@@ -1038,6 +1042,25 @@ function subcommandHelpText(command: string): string | undefined {
         "",
       ].join("\n");
 
+    case "skills":
+    case "mcp":
+    case "hooks":
+      return [
+        "",
+        `  ${accent(`clausona ${command}`)} ${dim("— What every account and project can load")}`,
+        "",
+        `  ${bold("USAGE")}`,
+        helpUsage(usageLine(command)),
+        "",
+        `  ${bold("OPTIONS")}`,
+        `    ${accent("--project <path>".padEnd(20))}${dim("Show it as seen from that project (default: the one you are in)")}`,
+        `    ${accent("--all-projects".padEnd(20))}${dim("Include every project's own items")}`,
+        `    ${accent("--tool <tool>".padEnd(20))}${dim("claude or codex")}`,
+        `    ${accent("--filter <name>".padEnd(20))}${dim("cleanup, duplicates or off")}`,
+        `    ${accent("--json".padEnd(20))}${dim("Machine-readable, with state, usage and where each one is defined")}`,
+        "",
+      ].join("\n");
+
     default:
       return undefined;
   }
@@ -1063,6 +1086,9 @@ function usageText() {
       ["current", "Show active profile details"],
       ["config <profile>", "Configure profile settings"],
       ["doctor", "Check profile health"],
+      ["skills ls", "List skills across accounts and projects"],
+      ["mcp ls", "List MCP servers across accounts and projects"],
+      ["hooks ls", "List hooks across accounts and projects"],
       ["repair <profile>", "Repair shared links"],
       ["login <profile>", "Re-authenticate a profile"],
       ["remove <profile>", "Remove a profile"],
@@ -1227,6 +1253,14 @@ export async function runCommand(command: string, args: string[]) {
       );
       const rendered = renderDoctor(results);
       return keysStored ? `${rendered}  ${dim(`Stored API keys are kept in ${secretStoreName()}.`)}\n` : rendered;
+    }
+
+    case "skills":
+    case "mcp":
+    case "hooks": {
+      const registry = await loadRegistry();
+      if (!registry) throw await noRegistryError();
+      return runExtensionsCommand(command, args, { homeDir: homedir(), cwd: process.cwd(), registry });
     }
 
     case "repair": {
