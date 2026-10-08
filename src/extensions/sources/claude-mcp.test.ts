@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { type Collector, emptyFacts } from "../model.js";
+import { type Collector, emptyFacts, type Project } from "../model.js";
 import { TestHome } from "../test-home.js";
 import { loadClaudeAccounts, loadClaudeContext } from "./claude-context.js";
 import { readClaudeMcp } from "./claude-mcp.js";
@@ -65,4 +65,59 @@ describe("readClaudeMcp", () => {
       ["-", [], ["extra"]],
     ]);
   });
+
+  it("keeps the first of a plugin server defined in both its .mcp.json and its manifest", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    const ctx7 = h.path(".claude/plugins/cache/m/context7/1.0.0");
+    h.write(".claude/plugins/installed_plugins.json", { plugins: { "context7@m": [{ installPath: ctx7 }] } });
+    h.write(".claude/plugins/cache/m/context7/1.0.0/.mcp.json", { context7: { command: "from-mcp-json" } });
+    h.write(".claude/plugins/cache/m/context7/1.0.0/.claude-plugin/plugin.json", {
+      mcpServers: { context7: { command: "from-manifest" } },
+    });
+
+    const out = await read(h, []);
+
+    expect(out.items.map((i) => [i.name, i.summary?.command])).toEqual([["plugin:context7:context7", "from-mcp-json"]]);
+  });
+
+  it("reads a project once when two of an account's keys resolve to it", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    const entry = { mcpServers: { "pg-dev": { command: "pg" } }, disabledMcpServers: ["stitch"] };
+    h.claude("default", ".claude", { projects: { [app]: entry, [`${app}/`]: entry } });
+
+    const out = await read(h, [{ path: app, tools: ["claude"], profiles: ["claude:default"] }]);
+
+    expect(out.items.map((i) => `${i.location.scope}|${i.name}`)).toEqual(["local|pg-dev"]);
+    expect(out.facts.claudeMcpDisabled).toHaveLength(1);
+  });
+
+  it("keeps .mcp.json approvals from the user settings, for every project", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    const settings = h.write(".claude/settings.json", { enableAllProjectMcpServers: true });
+
+    const out = await read(h, []);
+
+    expect(out.facts.claudeMcpjson).toEqual([{ file: settings, enabled: [], disabled: [], enableAll: true }]);
+  });
 });
+
+async function read(h: TestHome, projects: Project[]): Promise<Collector> {
+  const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+  const accounts = await loadClaudeAccounts(h.registry, h.home, out.warnings);
+  const ctx = await loadClaudeContext({
+    accounts,
+    registry: h.registry,
+    homeDir: h.home,
+    projects,
+    managedSettings: h.path("none.json"),
+    warnings: out.warnings,
+  });
+  await readClaudeMcp(ctx, projects, out);
+  return out;
+}

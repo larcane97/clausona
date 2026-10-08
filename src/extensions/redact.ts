@@ -2,153 +2,319 @@ import { HIDDEN, redactBaseUrl, redactUrlsIn } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { isRecord } from "./read.js";
 
-/** An option whose name says its value is a secret: `--api-key`, `--token`, `-p`assword... */
-const SECRET_FLAG = /^--?[\w-]*(key|token|secret|password|passwd|auth|credential)[\w-]*$/i;
+/**
+ * The words that mark a name as holding a secret: `GITHUB_TOKEN`, `--api-key`, `X-Auth-Token`,
+ * `apiKey`, `client_secret`, `SESSION_ID`, `GITHUB_PAT`. Matched anywhere in the name, so some
+ * harmless names match too - `--path`, `author`, `monkey` - and their values are hidden: the
+ * safe side, for a list that only shows what a server is.
+ */
+const SECRET_WORDS = "key|token|secret|password|passwd|pwd|auth|credential|bearer|pat|jwt|session";
+
+/** A name of identifier characters with a secret word in it. */
+const NAME = `[\\w.-]*(?:${SECRET_WORDS})[\\w.-]*`;
+
+/** An option whose name says its value is a secret: `--api-key VALUE`, `--token VALUE`. */
+const SECRET_FLAG = new RegExp(`^--?${NAME}$`, "i");
 
 /**
- * The name of an assignment whose value is a secret, dash or not: `--token=`, and the
+ * An assignment's name that says its value is a secret, dash or not: `--token=`, and the
  * environment forms `GITHUB_TOKEN=` (docker `-e`, `env`) and `API_KEY=x cmd` (a hook's prefix).
  * No `/` or `:` in it, so a URL's query is left to the URL rule.
  */
-const SECRET_NAME = /^[\w.-]*(key|token|secret|password|passwd|auth|credential)[\w.-]*$/i;
+const SECRET_NAME = new RegExp(`^${NAME}$`, "i");
 
-/** A header whose value is a credential: the name, then what follows its colon, if one does. */
-const SECRET_HEADER = /^(authorization|proxy-authorization|x-api-key|api-key|cookie)\s*(?::([\s\S]*))?$/i;
+/** A word that starts with a header named for a secret, or `Cookie`: the name, its colon, and the rest. */
+const SECRET_HEADER = new RegExp(`^(${NAME}|cookie)(\\s*:)([\\s\\S]*)$`, "i");
+
+/** A secret header's name with no colon: its value is in the words after it. */
+const BARE_HEADER = /^(authorization|proxy-authorization|x-api-key|api-key|cookie)$/i;
+
+/** A word that ends with a secret-named key and its colon, as JSON split at a space does: `{"token":`. */
+const ENDS_WITH_KEY = new RegExp(`(?<![\\w.-])(["']?)${NAME}\\1\\s*:$`, "i");
+
+/**
+ * A secret-named key and its value inside a word: `PRIVATE-TOKEN:x`, `{"apiKey":"x"}`,
+ * `user=bob&password=x`. The separator is required, which leaves prose that names a secret as
+ * written; the value runs to a quote, a space or the next field.
+ */
+const KEY_VALUE = new RegExp(`(?<![\\w.-])(["']?)(${NAME})\\1(\\s*[:=]\\s*)(["']?)[^\\s"'&,;}]+`, "gi");
 
 /** An auth scheme: the word after it is the credential, whatever its shape. */
 const AUTH_SCHEME = /^(bearer|basic)$/i;
 
-/** The same scheme inside one argument that holds spaces, as an args entry can. */
-const INLINE_SCHEME = /\b(bearer|basic)(\s+)[^\s"']+/gi;
+/** GitHub's `token X` scheme: only after a header's colon, since `token` alone is an ordinary word. */
+const TOKEN_SCHEME = /^token$/i;
 
-/** curl's option for `user:password`. Only these: `-k` takes no value, and the next word is the URL. */
-const USER_FLAG = /^(-u|--user)$/;
+/** curl's options for `user:password`, its own and the proxy's. Only these: `-k` takes no value. */
+const USER_FLAG = /^(-u|--user|-U|--proxy-user)$/;
+
+/** `-ualice:pw`: the short option with the user attached, which no `=` or URL looks like. */
+const ATTACHED_USER = /^-[uU][^\s:=/-][^\s:=/]*:/;
+
+/** A URL inside a word: a scheme, `//`, then up to a space, a quote or a backtick. */
+const URL_RUN = /[a-z][a-z0-9+.-]*:\/\/[^\s"'`]+/gi;
+
+/** A command line's words, and whether each ends an argument: an MCP server's can hold several. */
+type Line = { words: string[]; ends: boolean[]; shown: string[] };
 
 /**
- * A command line as the inventory shows it: a key-shaped word hidden, the value of an option or
- * an assignment named for a secret hidden (`--api-key VALUE`, `--token=VALUE`, `API_KEY=VALUE`),
- * a secret header's value hidden (`Authorization: ...`, `Cookie: ...`), the word after `Bearer`
- * or `Basic` hidden, the password of a `-u user:password` hidden, and a URL's userinfo and
- * query hidden. The name rules are what catch a token that is not key-shaped - a gateway's hex
- * token, say - which the shape check misses. The words are rejoined with single spaces - this
- * is for reading, not running.
+ * A command line as the inventory shows it, for reading, not running. Every argument is read
+ * word by word, and hidden are:
+ * - a key-shaped word, and the value of an option or assignment named for a secret
+ *   (`--api-key VALUE`, `--token=VALUE`, `API_KEY=VALUE`);
+ * - a value after any secret-named key inside a word, a header's or JSON's or a form body's
+ *   (`X-Auth-Token: ...`, `{"apiKey":"..."}`, `user=bob&password=...`), and `Cookie`'s;
+ * - the word after `Bearer` or `Basic`, and after `token` behind a header's colon;
+ * - the password of `-u`/`--user`/`-U`/`--proxy-user` `user:password`;
+ * - in every URL, its userinfo, query and fragment, and a path segment that is a secret.
+ * The name rules are what catch a token that is not key-shaped - a gateway's hex token, say -
+ * which the shape check misses.
  *
- * The words come either from an MCP server's args, one argument each, or from a hook command
- * split at whitespace, where a quoted argument arrives as several words with the quotes still
- * on its first and last. So a value that opens a quote runs on through the word that closes it,
- * the way the shell would read it, and the quotes are kept around what stands in for it.
+ * The words come from an MCP server's command and args, one argument each, or from a hook
+ * command split at whitespace, where a quoted argument arrives as several words with the quotes
+ * still on its first and last. So a value that opens a quote runs on through the word that
+ * closes it, the way the shell would read it, and one in an argument of several words runs to
+ * that argument's end. The quotes are kept around what stands in for a value.
  */
-export function redactCommand(words: string[]): string {
-  const shown: string[] = [];
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i] ?? "";
-    const quote = leadingQuote(word);
-    const body = word.slice(quote.length);
-    const equals = body.indexOf("=");
-    const name = equals > 0 ? body.slice(0, equals) : "";
-    if (SECRET_NAME.test(name)) {
-      const value = body.slice(equals + 1);
-      const valueQuote = quote === "" ? leadingQuote(value) : "";
-      const rest = quote === "" ? value.slice(valueQuote.length) : value;
-      i = hideValue(words, i, `${quote}${name}=${valueQuote}`, quote || valueQuote, rest, shown);
-      continue;
-    }
-    const after = equals > 0 && quote === "" ? body.slice(equals + 1) : undefined;
-    const end =
-      hideHeader(words, i, "", word, shown) ??
-      (after === undefined ? undefined : hideHeader(words, i, `${name}=`, after, shown)) ??
-      (after !== undefined && USER_FLAG.test(name) ? hideUserinfo(words, i, `${name}=`, after, shown) : undefined);
-    if (end !== undefined) {
-      i = end;
-      continue;
-    }
-    if (carriesCredentialToken(word)) {
-      shown.push(HIDDEN);
-      continue;
-    }
-    shown.push(redactUrlsIn(word).replace(INLINE_SCHEME, `$1$2${HIDDEN}`));
-    if (i + 1 >= words.length) continue;
-    if (SECRET_FLAG.test(body) || AUTH_SCHEME.test(body)) {
-      i = hideWord(words, i + 1, shown);
-    } else if (USER_FLAG.test(body)) {
-      i = hideUserinfo(words, i + 1, "", words[i + 1] ?? "", shown) ?? i;
+export function redactCommand(args: string[]): string {
+  const line: Line = { words: [], ends: [], shown: [] };
+  for (const arg of args) {
+    const words = arg.split(/\s+/).filter(Boolean);
+    for (const [k, word] of words.entries()) {
+      line.words.push(word);
+      line.ends.push(k === words.length - 1);
     }
   }
-  return shown.join(" ");
+  for (let i = 0; i < line.words.length; i++) i = redactAt(line, i);
+  return line.shown.join(" ");
+}
+
+/** Shows `words[i]`, and the words its value takes, redacted; returns the index of the last one. */
+function redactAt(line: Line, i: number): number {
+  const word = line.words[i] ?? "";
+  const quote = leadingQuote(word);
+  const body = word.slice(quote.length);
+  const equals = body.indexOf("=");
+  const name = equals > 0 ? body.slice(0, equals) : "";
+  const value = equals > 0 ? body.slice(equals + 1) : undefined;
+  if (value !== undefined && SECRET_NAME.test(name)) {
+    const valueQuote = quote === "" ? leadingQuote(value) : "";
+    const rest = quote === "" ? value.slice(valueQuote.length) : value;
+    return hideValue(line, i, `${quote}${name}=${valueQuote}`, quote || valueQuote, rest);
+  }
+  const assigned = value !== undefined && quote === "" ? value : undefined;
+  const special =
+    hideHeader(line, i, "", word) ??
+    (word.startsWith("-H") ? hideHeader(line, i, "-H", word.slice(2)) : undefined) ??
+    (assigned === undefined ? undefined : hideHeader(line, i, `${name}=`, assigned)) ??
+    (assigned !== undefined && USER_FLAG.test(name) ? hideUserinfo(line, i, `${name}=`, assigned) : undefined) ??
+    (ATTACHED_USER.test(word) ? hideUserinfo(line, i, word.slice(0, 2), word.slice(2)) : undefined);
+  if (special !== undefined) return special;
+  if (carriesCredentialToken(word)) {
+    line.shown.push(HIDDEN);
+    return i;
+  }
+  line.shown.push(redactWord(word));
+  if (i + 1 >= line.words.length) return i;
+  if (ENDS_WITH_KEY.test(word)) return hideFollowing(line, i, quote !== "" && !body.includes(quote) ? quote : "");
+  const afterColon = (line.words[i - 1] ?? "").endsWith(":");
+  if (SECRET_FLAG.test(body) || AUTH_SCHEME.test(body) || (afterColon && TOKEN_SCHEME.test(body))) {
+    return hideWord(line, i + 1);
+  }
+  if (USER_FLAG.test(body)) return hideUserinfo(line, i + 1, "", line.words[i + 1] ?? "") ?? i;
+  return i;
 }
 
 function leadingQuote(text: string): string {
   return text.startsWith('"') || text.startsWith("'") ? (text[0] ?? "") : "";
 }
 
-function trailingQuote(text: string): string {
-  return text.endsWith('"') || text.endsWith("'") ? (text[text.length - 1] ?? "") : "";
+const OPENER: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+
+/**
+ * What closes around a value at the end of a word - quotes and brackets that something before
+ * the value opened - to show after it. One the value opened itself is the value's: the `}` of
+ * `${API_KEY}`.
+ */
+function closingTail(text: string): string {
+  let tail = /["'`)\]}]*$/.exec(text)?.[0] ?? "";
+  let value = text.slice(0, text.length - tail.length);
+  const count = (c: string) => value.split(c).length - 1;
+  for (;;) {
+    const c = tail[0];
+    if (c === undefined) break;
+    const opener = OPENER[c];
+    const ownsIt = opener ? count(opener) > count(c) : count(c) % 2 === 1;
+    if (!ownsIt) break;
+    value += c;
+    tail = tail.slice(1);
+  }
+  return tail;
+}
+
+/** The index of the last word of the argument `words[i]` is in. */
+function argEnd(line: Line, i: number): number {
+  let last = i;
+  while (last + 1 < line.words.length && !line.ends[last]) last++;
+  return last;
 }
 
 /**
  * Shows `prefix` and HIDDEN in place of a value that starts in `words[at]`, and returns the
  * index of the value's last word. `rest` is the value's text in that word after `quote`, the
- * quote it is in, if any: one it does not close there runs on through the word that closes it,
- * or to the end. A closing quote is shown, so the line still reads as typed.
+ * quote it is in, if any: the value runs to the quote's closing - in this word or a later one,
+ * or the end - and what follows that is shown, redacted. An unquoted value is the rest of the
+ * word, with any closing quotes or brackets after it shown.
  */
-function hideValue(words: string[], at: number, prefix: string, quote: string, rest: string, shown: string[]): number {
-  let last = at;
-  if (quote !== "" && !rest.endsWith(quote)) {
-    while (last + 1 < words.length) {
-      last++;
-      if ((words[last] ?? "").endsWith(quote)) break;
-    }
+function hideValue(line: Line, at: number, prefix: string, quote: string, rest: string): number {
+  if (quote === "") {
+    line.shown.push(`${prefix}${HIDDEN}${closingTail(rest)}`);
+    return at;
   }
-  shown.push(`${prefix}${HIDDEN}${quote || trailingQuote(words[last] ?? "")}`);
+  let last = at;
+  let text = rest;
+  let close = text.indexOf(quote);
+  while (close < 0 && last + 1 < line.words.length) {
+    last++;
+    text = line.words[last] ?? "";
+    close = text.indexOf(quote);
+  }
+  line.shown.push(`${prefix}${HIDDEN}${quote}${close < 0 ? "" : redactWord(text.slice(close + 1))}`);
   return last;
+}
+
+/** Hides `words[at]`, a secret on its own: what follows `--api-key` or `Bearer`. All of an argument that it starts. */
+function hideWord(line: Line, at: number): number {
+  const word = line.words[at] ?? "";
+  const quote = leadingQuote(word);
+  if (quote !== "") return hideValue(line, at, quote, quote, word.slice(1));
+  if (line.ends[at - 1] !== false && !line.ends[at]) {
+    line.shown.push(HIDDEN);
+    return argEnd(line, at);
+  }
+  return hideValue(line, at, "", "", word);
+}
+
+/**
+ * Hides the value after `words[i]`, a key or header name whose value is not in the word: the
+ * quoted string the next word opens; else the rest of `openQuote`, a quote `words[i]` left open;
+ * else the rest of `words[i]`'s argument; else the words up to the next option or the end.
+ */
+function hideFollowing(line: Line, i: number, openQuote: string): number {
+  const next = line.words[i + 1];
+  if (next === undefined) return i;
+  const quote = leadingQuote(next);
+  if (quote !== "") return hideValue(line, i + 1, quote, quote, next.slice(1));
+  if (openQuote !== "") return hideValue(line, i + 1, "", openQuote, next);
+  let last = i + 1;
+  if (!line.ends[i]) {
+    last = argEnd(line, i);
+  } else {
+    if (next.startsWith("-")) return i;
+    while (last + 1 < line.words.length && !(line.words[last + 1] ?? "").startsWith("-")) last++;
+  }
+  line.shown.push(`${HIDDEN}${closingTail(line.words[last] ?? "")}`);
+  return last;
+}
+
+/**
+ * When `text` - all of `words[i]`, or what follows `prefix` in it - starts with a secret header,
+ * shows it with its value hidden and returns the index of the value's last word. The value is
+ * what follows the colon in the word (`PRIVATE-TOKEN:x`), with a quote it opens there
+ * (`Authorization:"Bearer x"`) or the word opened before the name (`"Authorization:` `Bearer`
+ * `x"`) running on to its closing. A name with nothing after it but a scheme takes its value
+ * from the words after it (`hideFollowing`), as a bare `Authorization` or `Cookie` does.
+ */
+function hideHeader(line: Line, i: number, prefix: string, text: string): number | undefined {
+  const quote = leadingQuote(text);
+  const body = text.slice(quote.length);
+  const header = SECRET_HEADER.exec(body);
+  if (!header) {
+    const closed = quote !== "" && body.endsWith(quote);
+    if (!BARE_HEADER.test(closed ? body.slice(0, -1) : body)) return undefined;
+    line.shown.push(line.words[i] ?? "");
+    return hideFollowing(line, i, closed ? "" : quote);
+  }
+  const [, headerName = "", colon = "", after = ""] = header;
+  const space = /^\s*/.exec(after)?.[0] ?? "";
+  const value = after.slice(space.length);
+  const head = `${prefix}${quote}${headerName}${colon}${space}`;
+  const valueQuote = leadingQuote(value);
+  if (valueQuote !== "") return hideValue(line, i, `${head}${valueQuote}`, valueQuote, value.slice(1));
+  const open = quote !== "" && !after.includes(quote);
+  const inWord = (quote !== "" && !open ? after.slice(0, after.indexOf(quote)) : after).trim();
+  if (inWord !== "" && !AUTH_SCHEME.test(inWord) && !TOKEN_SCHEME.test(inWord)) {
+    if (quote === "" && !line.ends[i]) {
+      line.shown.push(`${head}${HIDDEN}`);
+      return argEnd(line, i);
+    }
+    return hideValue(line, i, head, quote, value);
+  }
+  line.shown.push(line.words[i] ?? "");
+  return hideFollowing(line, i, open ? quote : "");
 }
 
 /**
  * When `text` - all of `words[at]`, or what follows `prefix` in it - is `user:password`, shows
  * the user and hides the rest, and returns the index of its last word. A bare user is left to
- * the other rules: curl asks for the password then.
+ * the other rules, curl asking for the password then, and so is a URL, whose rules hide its
+ * userinfo.
  */
-function hideUserinfo(words: string[], at: number, prefix: string, text: string, shown: string[]): number | undefined {
+function hideUserinfo(line: Line, at: number, prefix: string, text: string): number | undefined {
   const quote = leadingQuote(text);
   const body = text.slice(quote.length);
   const colon = body.indexOf(":");
-  if (colon < 0) return undefined;
-  return hideValue(words, at, `${prefix}${quote}${body.slice(0, colon + 1)}`, quote, body.slice(colon + 1), shown);
+  if (colon < 0 || body.includes("://")) return undefined;
+  return hideValue(line, at, `${prefix}${quote}${body.slice(0, colon + 1)}`, quote, body.slice(colon + 1));
 }
 
-/** The secret in `words[at]`: what follows `--api-key` or `Bearer`. */
-function hideWord(words: string[], at: number, shown: string[]): number {
-  const word = words[at] ?? "";
-  const quote = leadingQuote(word);
-  return hideValue(words, at, quote, quote, word.slice(quote.length), shown);
+/** A word with every URL in it shown as `showUrl` does, and the text around them by `redactText`. */
+function redactWord(word: string): string {
+  let shown = "";
+  let from = 0;
+  for (const match of word.matchAll(URL_RUN)) {
+    const start = match.index ?? 0;
+    shown += redactText(word.slice(from, start)) + showUrl(match[0]);
+    from = start + match[0].length;
+  }
+  return shown + redactText(word.slice(from));
+}
+
+/** Text that is not a URL: a secret-named key's value hidden, and `user:password@host` userinfo. */
+function redactText(text: string): string {
+  return text === "" ? "" : redactUrlsIn(text.replace(KEY_VALUE, `$1$2$1$3$4${HIDDEN}`));
 }
 
 /**
- * When `text` - all of `words[i]`, or what follows `prefix` in it - is a secret header, shows it
- * with its value hidden and returns the index of the value's last word. The value is what
- * follows the colon in the same word (`Authorization: Bearer X` as one argument), or the quote
- * the word opens (`"Authorization:` `Bearer` `X"`). A bare name, or one followed only by its
- * scheme, takes its value from the words after it: through a quote they open, else up to the
- * next option or the end.
+ * A path segment that is a secret rather than a name: a run of 20 or more letters, digits, `_`
+ * and `-` with both letters and digits in it (a Slack or Discord webhook's secret, an API key in
+ * a path), or a UUID (a capability URL's, as Pipedream's MCP URLs are). A commit hash or a long
+ * versioned name goes too.
  */
-function hideHeader(words: string[], i: number, prefix: string, text: string, shown: string[]): number | undefined {
-  const quote = leadingQuote(text);
-  const body = text.slice(quote.length);
-  const closed = quote !== "" && body.endsWith(quote);
-  const header = SECRET_HEADER.exec(closed ? body.slice(0, -1) : body);
-  if (!header) return undefined;
-  const value = (header[2] ?? "").trim();
-  if ((quote !== "" && !closed) || (value !== "" && !AUTH_SCHEME.test(value))) {
-    return hideValue(words, i, `${prefix}${quote}${header[1]}: `, quote, body, shown);
-  }
-  shown.push(words[i] ?? "");
-  const next = words[i + 1];
-  if (next === undefined || next.startsWith("-")) return i;
-  if (leadingQuote(next) !== "") return hideWord(words, i + 1, shown);
-  let last = i + 1;
-  while (last + 1 < words.length && !(words[last + 1] ?? "").startsWith("-")) last++;
-  shown.push(`${HIDDEN}${trailingQuote(words[last] ?? "")}`);
-  return last;
+function opaqueSegment(segment: string): boolean {
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment)) return true;
+  return /^[\w-]{20,}$/.test(segment) && /[A-Za-z]/.test(segment) && /\d/.test(segment);
+}
+
+/**
+ * A URL as the inventory shows it: userinfo, query and fragment hidden by `redactBaseUrl`'s
+ * rules, then each path segment that is a secret, and the token of a Telegram `bot<id>:` one.
+ * The path is cut from the string `redactBaseUrl` returns, after the authority, so what it hid
+ * stays hidden and the rest reads as typed.
+ */
+function showUrl(url: string): string {
+  const shown = redactBaseUrl(url);
+  const parts = /^([a-z][a-z0-9+.-]*:\/\/[^/?#]*)([^?#]*)([\s\S]*)$/i.exec(shown);
+  if (!parts) return shown;
+  const path = (parts[2] ?? "")
+    .split("/")
+    .map((segment) => {
+      const bot = /^(bot\d+:)./.exec(segment);
+      if (bot) return `${bot[1]}${HIDDEN}`;
+      return opaqueSegment(segment) ? HIDDEN : segment;
+    })
+    .join("/");
+  return `${parts[1]}${path}${parts[3]}`;
 }
 
 /** The keys of an object as shown: a key-shaped one hidden too. */
@@ -167,7 +333,7 @@ export function mcpSummary(config: unknown): Record<string, string> {
   const out: Record<string, string> = {
     transport: typeof config.type === "string" ? config.type : url ? "http" : "stdio",
   };
-  if (url) out.url = redactBaseUrl(url);
+  if (url) out.url = showUrl(url);
   if (typeof config.command === "string") {
     const args = Array.isArray(config.args) ? config.args.filter((a): a is string => typeof a === "string") : [];
     out.command = redactCommand([config.command, ...args]);
@@ -179,7 +345,10 @@ export function mcpSummary(config: unknown): Record<string, string> {
   return out;
 }
 
-/** What the inventory says about one hook command. */
+/**
+ * What the inventory says about one hook command. The command is split at whitespace, each
+ * word its own argument, so a quoted one is read across its words (see `redactCommand`).
+ */
 export function hookSummary(event: string, matcher: string | undefined, hook: unknown): Record<string, string> {
   const out: Record<string, string> = { event };
   if (matcher) out.matcher = matcher;
