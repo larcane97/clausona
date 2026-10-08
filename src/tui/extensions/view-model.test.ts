@@ -306,18 +306,31 @@ describe("layout helpers", () => {
     expect(pickLayout(110, 40).mode).toBe("side");
   });
 
-  it("never stacks the list and detail taller than the body, and keeps 3 lines for the list", () => {
-    expect(pickLayout(80, 18)).toMatchObject({ listHeight: 3, detailHeight: 3 });
+  it("stacks only when the list and the detail both get 7 lines, inside the body", () => {
+    expect(pickLayout(80, 18)).toMatchObject({ mode: "list", listHeight: 6 });
     for (let rows = 0; rows <= 60; rows++) {
-      const { listHeight, detailHeight } = pickLayout(80, rows);
-      expect(listHeight + detailHeight).toBeLessThanOrEqual(Math.max(6, rows - 12));
-      expect(listHeight).toBeGreaterThanOrEqual(3);
+      const layout = pickLayout(80, rows);
+      const body = Math.max(6, rows - 12);
+      if (layout.mode === "stacked") {
+        expect(layout.listHeight + layout.detailHeight).toBeLessThanOrEqual(body);
+        expect(layout.listHeight).toBeGreaterThanOrEqual(7);
+        expect(layout.detailHeight).toBeGreaterThanOrEqual(7);
+      } else {
+        expect(layout).toMatchObject({ mode: "list", listHeight: body, detailHeight: body });
+      }
     }
+  });
+
+  it("stacks from a body of 14 lines: 26 rows here, 28 in the terminal the screen is in", () => {
+    // The screen keeps two of the terminal's rows back (ExtensionsScreen), so it asks for rows - 2.
+    expect(pickLayout(100, 24).mode).toBe("list");
+    expect(pickLayout(100, 25).mode).toBe("list");
+    expect(pickLayout(100, 26)).toMatchObject({ mode: "stacked", listHeight: 7, detailHeight: 7 });
   });
 
   it("reads a size it cannot know as 80 by 24", () => {
     expect(pickLayout(Number.NaN, Number.POSITIVE_INFINITY)).toEqual(pickLayout(80, 24));
-    expect(pickLayout(Number.NaN, 24).mode).toBe("stacked");
+    expect(pickLayout(Number.NaN, 24).mode).toBe("list");
   });
 
   it("drops columns before the name gets too short", () => {
