@@ -1,7 +1,7 @@
 name: Pages
 
-# Publishes site/ to https://larcane97.github.io/clausona/. The demo GIF and the social preview
-# are copied in from assets/ so the site and the README show the same files.
+# Publishes site/ to https://larcane97.github.io/clausona/. The GIFs and the social preview are
+# copied in from assets/ so the site and the README show the same files.
 
 on:
   push:
@@ -10,6 +10,7 @@ on:
       - "site/**"
       - "assets/demo.gif"
       - "assets/social-preview.png"
+      - "assets/superset-fleet.gif"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -35,7 +36,7 @@ jobs:
         run: |
           mkdir -p _site/assets
           cp -R site/. _site/
-          cp assets/demo.gif assets/social-preview.png _site/assets/
+          cp assets/demo.gif assets/social-preview.png assets/superset-fleet.gif _site/assets/
 
       - uses: actions/configure-pages@v6
 

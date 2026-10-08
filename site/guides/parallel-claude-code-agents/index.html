@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Run parallel Claude Code agents on different accounts and models (Superset + clausona)</title>
+  <meta name="description" content="Subagents run out of sight, can't be steered one by one, and all spend one account. Run each agent as its own Claude Code session in Superset instead, routed to the account or API model (such as DeepSeek) you choose.">
+  <link rel="canonical" href="https://larcane97.github.io/clausona/guides/parallel-claude-code-agents/">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="clausona">
+  <meta property="og:title" content="Run parallel Claude Code agents on different accounts and models">
+  <meta property="og:description" content="Every agent its own visible Claude Code session in Superset, each routed by your rules to an account or an API model such as DeepSeek.">
+  <meta property="og:url" content="https://larcane97.github.io/clausona/guides/parallel-claude-code-agents/">
+  <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
+  <meta property="article:published_time" content="2026-10-08">
+  <meta property="article:modified_time" content="2026-10-08">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Recursive:wght,CASL,MONO@300..900,0..1,0..1&display=swap">
+  <link rel="stylesheet" href="../../style.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Run parallel Claude Code agents on different accounts and models",
+    "description": "Run each agent as its own Claude Code session in Superset, routed by your rules to an account or an API model such as DeepSeek, instead of subagents that share one account.",
+    "datePublished": "2026-10-08",
+    "dateModified": "2026-10-08",
+    "inLanguage": "en",
+    "image": "https://larcane97.github.io/clausona/assets/superset-fleet.gif",
+    "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
+    "mainEntityOfPage": "https://larcane97.github.io/clausona/guides/parallel-claude-code-agents/",
+    "about": [
+      { "@type": "SoftwareApplication", "name": "Claude Code" },
+      { "@type": "SoftwareApplication", "name": "Superset", "url": "https://superset.sh" },
+      { "@type": "SoftwareApplication", "name": "clausona", "url": "https://github.com/larcane97/clausona" }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      { "@type": "ListItem", "position": 1, "name": "clausona", "item": "https://larcane97.github.io/clausona/" },
+      { "@type": "ListItem", "position": 2, "name": "Parallel Claude Code agents", "item": "https://larcane97.github.io/clausona/guides/parallel-claude-code-agents/" }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "Does the orchestrator run workers on its own account?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. The profile the orchestrator runs on only coordinates; workers go to other profiles."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can retiring a worker lose work?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "A worker is retired only when its work was checked, its branch is pushed and its worktree is clean. The skill's helper checks the branch and the worktree again right before it deletes the workspace, and refuses when either isn't clean."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Do I need Superset to give agents different accounts?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. clausona run claude:work starts a Claude Code session on that account in any terminal, tmux or herdr pane. Superset and the skill add the coordinator: the plan, the routing, the watching and the checks."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What happens when an account reaches its limit mid-task?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "The orchestrator hands the task to another profile your rules allow, in the same workspace, and closes the stopped worker's terminal."
+        }
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="wordmark" href="../../">clausona</a>
+      <nav class="site-nav" aria-label="Site">
+        <a href="../multiple-claude-code-accounts/">Claude Code</a>
+        <a href="../multiple-codex-cli-accounts/">Codex</a>
+        <a href="./" aria-current="page">Agent fleets</a>
+        <a href="../../ko/" hreflang="ko" lang="ko">한국어</a>
+        <a href="https://github.com/larcane97/clausona">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <article class="article">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../../">clausona</a> / Guides</nav>
+      <h1>Run parallel Claude Code agents on different accounts and models</h1>
+      <p class="lead">When one job splits into five, subagents are the usual answer. They run out of sight, you can't step into one of them, and all five spend the same account. This setup runs every agent as its own Claude Code session that you can watch and interrupt, and sends each one to the account or model you choose: your work account, a second subscription, or an API model such as DeepSeek.</p>
+      <p class="updated">Updated <time datetime="2026-10-08">October 8, 2026</time></p>
+
+      <div class="answer">
+        <p><strong>Short answer.</strong> <a href="https://superset.sh">Superset</a> runs each agent in its own git worktree and tab. <a href="https://github.com/larcane97/clausona">clausona</a> gives each of those agents its own profile: an account or an API endpoint. The <code>superset-fleet</code> skill lets one Claude Code session plan the work, start a worker per task on the profile your rules pick, answer and watch them, check each result and clean up. Install the skill once and ask:</p>
+<pre data-copy><code>claude plugin marketplace add larcane97/clausona
+claude plugin install clausona@clausona</code></pre>
+        <p>"Split these across my accounts in Superset: add a <code>--json</code> flag to <code>notes list</code>, write tests for <code>src/parse.ts</code>, and fix the broken links in <code>docs/</code>."</p>
+      </div>
+
+      <figure class="figure">
+        <img class="demo" src="../../assets/superset-fleet.gif" width="1200" height="799" loading="lazy" alt="Superset with a main Claude Code session that starts three workers, each in its own workspace on a different clausona profile, reads their progress, checks each finished branch and retires the workers.">
+        <figcaption>One coordinating session starts three workers in Superset, each on its own profile, then checks their branches and retires them.</figcaption>
+      </figure>
+
+      <ul class="toc" aria-label="On this page">
+        <li><a href="#subagents">Where subagents fall short</a></li>
+        <li><a href="#how">How the fleet works</a></li>
+        <li><a href="#routing">Route each agent to an account or a model</a></li>
+        <li><a href="#deepseek">Add an API model such as DeepSeek</a></li>
+        <li><a href="#compare">Compared with subagents and herdr</a></li>
+        <li><a href="#setup">Set it up</a></li>
+        <li><a href="#limits">Limits</a></li>
+        <li><a href="#questions">Questions</a></li>
+      </ul>
+
+      <h2 id="subagents">Where subagents fall short</h2>
+      <p>Subagents are built for quick side errands inside one session. For several real tasks at once, three things get in the way:</p>
+      <ul>
+        <li><strong>You can't see them work.</strong> A subagent runs inside its parent session. You see what it returns, not what it is doing, so a wrong turn shows up only at the end.</li>
+        <li><strong>You can't steer one.</strong> You can't type into a single subagent to correct it or answer it. Stopping one usually means interrupting the session that runs all of them.</li>
+        <li><strong>They all spend one account.</strong> Every subagent runs on the account of the session that started it. Five at once use up that account's 5-hour window five times as fast, and none of them can run on another account or on a model from another provider.</li>
+      </ul>
+      <p>In Superset, each worker is an ordinary Claude Code session in its own tab and worktree. You can read along, answer its questions, or stop it, without touching the others.</p>
+
+      <h2 id="how">How the fleet works</h2>
+      <p>You talk to one Claude Code session in Superset, the orchestrator. With the <code>superset-fleet</code> skill it:</p>
+      <ol>
+        <li><strong>Picks a profile for each task</strong> from your request, your rules and every profile's current usage, and shows you the plan.</li>
+        <li><strong>Starts the workers</strong>, one Superset workspace per task, named after the task and the profile so the sidebar shows which account runs where.</li>
+        <li><strong>Watches them</strong>: it answers their questions, tells you when one waits at a permission prompt, and hands a task to another allowed profile if an account reaches its limit.</li>
+        <li><strong>Checks each result itself</strong>: the commits, the diff and the checks the brief named. It reports what it verified apart from what the worker only claimed.</li>
+        <li><strong>Retires finished workers</strong>, after asking you by default. A worker is retired only when its branch is pushed and its worktree is clean; the branch stays.</li>
+      </ol>
+      <p>An example plan it might show before starting:</p>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th scope="col">Task</th><th scope="col">Profile</th><th scope="col">Why there</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row"><code>--json</code> flag for <code>notes list</code></th><td><code>claude:work</code><small>Opus 5.5</small></td><td>touches the CLI's core; your rule sends it here</td></tr>
+            <tr><th scope="row">Tests for <code>src/parse.ts</code></th><td><code>claude:deepseek</code><small>deepseek-v4-pro</small></td><td>small, explicit brief with a check command</td></tr>
+            <tr><th scope="row">Broken links in <code>docs/</code></th><td><code>claude:side</code><small>Sonnet 5.5</small></td><td>most headroom of the subscription profiles</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="routing">Route each agent to an account or a model</h2>
+      <p>This is the part a terminal full of agents doesn't do for you: deciding which account or model each one runs on. The orchestrator follows, in this order, what you say in the conversation, then <code>~/.clausona/superset-fleet.json</code>, then its defaults.</p>
+<pre data-copy><code>{
+  "workers": ["claude:work", "claude:side", "claude:deepseek"],
+  "routing": [
+    "claude:deepseek takes tests and doc fixes, never changes under src/",
+    "anything touching the release process goes to claude:work"
+  ],
+  "maxUsage": 80,
+  "retire": "ask"
+}</code></pre>
+      <ul>
+        <li><strong><code>workers</code></strong> lists the only profiles that may be workers.</li>
+        <li><strong><code>routing</code></strong> holds your own rules, in plain words. The orchestrator applies them when it fills in the plan.</li>
+        <li><strong><code>maxUsage</code></strong> skips a subscription profile once its 5-hour or weekly usage reaches that percentage. The default is 90.</li>
+        <li><strong><code>retire</code></strong> is <code>ask</code> (the default) or <code>auto</code>.</li>
+      </ul>
+      <p>Whatever your rules leave open, the defaults decide: the orchestrator's own profile never takes a worker, profiles with more headroom are preferred and workers are spread across them, wide mechanical work goes to API profiles, and an independent check of risky work runs on a third profile. You can also change the file by asking, for example "never use claude:personal for workers".</p>
+
+      <h2 id="deepseek">Add an API model such as DeepSeek</h2>
+      <p>Any endpoint that speaks the Anthropic Messages format can be a profile. DeepSeek serves one at <code>https://api.deepseek.com/anthropic</code>:</p>
+<pre data-copy><code>clausona add claude:deepseek --api \
+  --base-url https://api.deepseek.com/anthropic \
+  --model deepseek-v4-pro</code></pre>
+      <p>clausona asks for the key without echoing it and keeps it in the macOS Keychain or <code>~/.clausona/secrets.json</code>. The profile shares your skills, hooks and plugins like any account. OpenRouter, a gateway, or a model you serve yourself work the same way.</p>
+      <ul>
+        <li>Give API workers small, explicit briefs: the file, the function, the change and the command that checks it. Long exploratory briefs overflow smaller context windows.</li>
+        <li>Give their Superset agent a short tool list, such as <code>--tools=Bash,Read,Edit,Write,Grep,Glob</code>, to keep tool definitions out of the context.</li>
+        <li>Check whether the endpoint honours prompt caching. Without it, every turn re-reads the whole conversation and long sessions slow down.</li>
+      </ul>
+
+      <h2 id="compare">Compared with subagents and herdr</h2>
+      <p><a href="https://github.com/ogulcancelik/herdr">herdr</a> is a terminal runtime for coding agents: it keeps agent panes running in the background, marks each one working, blocked or idle, and lets agents open panes and prompt each other. It doesn't decide which account or model an agent uses; a pane runs whatever you start in it. That is the gap clausona fills, and the two work together: start a herdr pane with <code>clausona run claude:work</code> and it runs on that account.</p>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th scope="col"></th><th scope="col">Claude Code subagents</th><th scope="col">herdr</th><th scope="col">Superset + clausona fleet</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Each agent visible as its own session</th><td>No, inside the parent</td><td class="is-shared">Yes, a pane each</td><td class="is-shared">Yes, a tab and worktree each</td></tr>
+            <tr><th scope="row">Type into one agent</th><td>No</td><td class="is-shared">Yes</td><td class="is-shared">Yes</td></tr>
+            <tr><th scope="row">A different account per agent</th><td>No, all on the parent's account</td><td>Not managed<small>a pane runs what you start</small></td><td class="is-shared">Yes, a clausona profile each</td></tr>
+            <tr><th scope="row">An API model such as DeepSeek per agent</th><td>No, Claude models on the same account</td><td>Not managed</td><td class="is-shared">Yes, an API profile</td></tr>
+            <tr><th scope="row">Routing by your rules and each account's usage</th><td>No</td><td>Not part of herdr</td><td class="is-shared">Yes</td></tr>
+            <tr><th scope="row">Result checked before cleanup</th><td>No</td><td>Not part of herdr</td><td class="is-shared">Yes, branch, diff and checks</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="updated">Compared from each project's documentation in October 2026. Corrections are welcome on <a href="https://github.com/larcane97/clausona/issues">GitHub</a>.</p>
+
+      <h2 id="setup">Set it up</h2>
+      <ol class="steps">
+        <li>
+          <div>
+            <p>Install clausona and add a profile per account or API endpoint.</p>
+<pre data-copy><code>clausona add claude:work
+clausona add claude:side</code></pre>
+          </div>
+        </li>
+        <li>
+          <div>
+            <p>In Superset → Settings → Agents, add a custom agent per profile. Command: the output of <code>command -v clausona</code>. Arguments, for example:</p>
+<pre data-copy><code>run claude:work -- --model claude-sonnet-5-5 --effort high --permission-mode acceptEdits --strict-mcp-config</code></pre>
+            <p>Put the model and effort here, because Superset doesn't pass them to custom agents. <code>--strict-mcp-config</code> keeps a worker from stopping at Claude Code's "new MCP servers found" question. Without the Superset CLI logged in, the skill can add these agents for you, after asking.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <p>Start each new profile once by hand, so its one-time questions are answered before a worker meets them.</p>
+<pre data-copy><code>clausona run claude:deepseek</code></pre>
+          </div>
+        </li>
+        <li>
+          <div>
+            <p>Install the plugin. Plugins are shared across profiles, so one install reaches all of them.</p>
+<pre data-copy><code>claude plugin marketplace add larcane97/clausona
+claude plugin install clausona@clausona</code></pre>
+          </div>
+        </li>
+      </ol>
+
+      <h2 id="limits">Limits</h2>
+      <ul>
+        <li>Workers are Claude Code sessions. Codex workers aren't covered yet.</li>
+        <li>Superset has to run on the same machine, as the desktop app or <code>superset start</code>.</li>
+        <li>Without the Superset CLI logged in, the skill talks to the Superset app's local host service through a bundled helper. That service isn't a documented API; if an update changes it, the helper says so and stops.</li>
+      </ul>
+
+      <h2 id="questions">Questions</h2>
+      <h3>Does the orchestrator run workers on its own account?</h3>
+      <p>No. The profile the orchestrator runs on only coordinates; workers go to other profiles.</p>
+      <h3>Can retiring a worker lose work?</h3>
+      <p>A worker is retired only when its work was checked, its branch is pushed and its worktree is clean. The skill's helper checks the branch and the worktree again right before it deletes the workspace, and refuses when either isn't clean.</p>
+      <h3>Do I need Superset to give agents different accounts?</h3>
+      <p>No. <code>clausona run claude:work</code> starts a Claude Code session on that account in any terminal, tmux or herdr pane. Superset and the skill add the coordinator: the plan, the routing, the watching and the checks.</p>
+      <h3>What happens when an account reaches its limit mid-task?</h3>
+      <p>The orchestrator hands the task to another profile your rules allow, in the same workspace, and closes the stopped worker's terminal.</p>
+
+      <section class="cta" aria-labelledby="try">
+        <h2 id="try">Try it</h2>
+        <p>clausona and the skill are free and open source. Start with <a href="../multiple-claude-code-accounts/">setting up your accounts</a>, then add the plugin. The full reference is in the <a href="https://github.com/larcane97/clausona/blob/main/docs/usecases/superset-fleet.md">use case</a> on GitHub, where a star helps other people find it.</p>
+      </section>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>clausona is open source under the MIT license, on <a href="https://github.com/larcane97/clausona">GitHub</a>, and listed in <a href="https://github.com/hesreallyhim/awesome-claude-code">Awesome Claude Code</a>.</p>
+      <p>It is an independent project, not affiliated with Anthropic, OpenAI, Superset or DeepSeek. Claude Code is a product of Anthropic; Codex CLI is a product of OpenAI.</p>
+    </div>
+  </footer>
+  <script src="../../copy.js"></script>
+</body>
+</html>
