@@ -185,6 +185,27 @@ describe("redactCommand on a token that is not key-shaped", () => {
     expect(numbered).not.toContain(HEX);
   });
 
+  it("hides all of an argument's value that starts with a secret assignment or a user:password", () => {
+    const shown = [
+      [
+        redactCommand(["docker", "run", "-e", `AUTHORIZATION=Bearer ${HEX}`, "img"]),
+        "docker run -e AUTHORIZATION=<hidden> img",
+      ],
+      [redactCommand(["srv", `--token=Bearer ${HEX}`]), "srv --token=<hidden>"],
+      [redactCommand(["srv", `--api-key=two ${HEX}`]), "srv --api-key=<hidden>"],
+      [redactCommand(["env", `API_KEY=a ${HEX}`, "srv"]), "env API_KEY=<hidden> srv"],
+      [redactCommand(["curl", "-u", `alice:a ${HEX}`]), "curl -u alice:<hidden>"],
+      [redactCommand(["curl", `--user=alice:a ${HEX}`]), "curl --user=alice:<hidden>"],
+    ];
+    for (const [actual, expected] of shown) {
+      expect(actual).toBe(expected);
+      expect(actual).not.toContain(HEX);
+    }
+    // A shell's command line is words, not one value: the command after the assignment is shown.
+    expect(redactCommand(["bash", "-c", `API_KEY=${HEX} run`])).toBe("bash -c API_KEY=<hidden> run");
+    expect(mcpSummary({ command: `API_KEY=${HEX} node srv` }).command).toBe("API_KEY=<hidden> node srv");
+  });
+
   it("matches secret words against whole name parts, so a name that only contains one is shown", () => {
     const plain = [
       redactCommand(["srv", "--path", "/x"]),
