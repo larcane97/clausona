@@ -302,23 +302,24 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
           ])
         : view !== "list"
           ? inOrder([{ keys: "esc", action: "back" }])
-          : // Moving, tabs, filter, search and leaving first; then what only a key reaches - the detail
-            // when it has no pane of its own, and the matrix - and the rest as room allows.
+          : // The keys nothing else on screen points to come first: enter, when the detail has no
+            // pane of its own, and w, the one sign that some files could not be read once the status
+            // line has gone. The filter and the search have their place in the tab bar.
             [
               { keys: "↑↓", action: "move", rank: 0 },
-              { keys: "tab", action: "section", rank: 1 },
+              { keys: "tab", action: "section", rank: 2 },
               layout.mode === "list"
-                ? { keys: "enter", action: "open", rank: 5 }
+                ? { keys: "enter", action: "open", rank: 1 }
                 : { keys: "enter", action: "group", rank: 9 },
-              { keys: "f", action: "filter", rank: 2 },
-              { keys: "/", action: "search", rank: 3 },
-              { keys: "p", action: "project", rank: 7 },
-              ...(tab === "mcp" ? [{ keys: "m", action: "matrix", rank: 6 }] : []),
+              { keys: "f", action: "filter", rank: 5 },
+              { keys: "/", action: "search", rank: 6 },
+              { keys: "p", action: "project", rank: 8 },
+              ...(tab === "mcp" ? [{ keys: "m", action: "matrix", rank: 7 }] : []),
               { keys: "r", action: "reload", rank: 10 },
               ...(inventory.warnings.length > 0
-                ? [{ keys: "w", action: `${inventory.warnings.length} unreadable`, rank: 8 }]
+                ? [{ keys: "w", action: `${inventory.warnings.length} unreadable`, rank: 4 }]
                 : []),
-              { keys: "esc", action: "back", rank: 4 },
+              { keys: "esc", action: "back", rank: 3 },
             ];
 
   return (

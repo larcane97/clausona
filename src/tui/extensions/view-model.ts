@@ -433,11 +433,14 @@ export type Layout = {
   detailHeight: number;
 };
 
+/** The fewest lines the stacked list and detail each get: a shorter detail is a title and one line. */
+const STACKED_MIN = 7;
+
 /**
- * Where the detail pane goes: beside the list from 110 columns, under it from 64, and on its
- * own screen (enter) below that. Heights leave room for Chrome's header and footer, the tab
- * bar and the key hints. A size that is not a number, as from a stream that is no terminal,
- * is read as 80 by 24.
+ * Where the detail pane goes: beside the list from 110 columns; under it from 64 when the body
+ * has room for both at STACKED_MIN lines or more; else on its own screen, opened with enter.
+ * Heights leave room for Chrome's header and footer, the tab bar and the key hints. A size that
+ * is not a number, as from a stream that is no terminal, is read as 80 by 24.
  */
 export function pickLayout(columns: number, rows: number): Layout {
   const across = Number.isFinite(columns) ? columns : 80;
@@ -448,9 +451,10 @@ export function pickLayout(columns: number, rows: number): Layout {
     const listWidth = Math.floor((width - 2) * 0.58);
     return { mode: "side", listWidth, listHeight: body, detailWidth: width - 2 - listWidth, detailHeight: body };
   }
-  if (across >= 64) {
-    // The two share the body: the detail gives way first, so the list keeps at least 3 lines.
-    const detailHeight = Math.min(9, Math.max(5, Math.floor(body * 0.4)), body - 3);
+  if (across >= 64 && body >= 2 * STACKED_MIN) {
+    // The two share the body: the detail takes 40% of it, within 7 to 9 lines, and the list the
+    // rest - 7 lines or more, since the detail stays at 7 until the body reaches 20.
+    const detailHeight = Math.min(9, Math.max(STACKED_MIN, Math.floor(body * 0.4)));
     return { mode: "stacked", listWidth: width, listHeight: body - detailHeight, detailWidth: width, detailHeight };
   }
   return { mode: "list", listWidth: width, listHeight: body, detailWidth: width, detailHeight: body };

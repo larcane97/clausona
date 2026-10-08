@@ -186,7 +186,7 @@ describe("ExtensionsScreen", () => {
 
   it("stacks the detail under the list at 90 columns and opens it on enter at 60", async () => {
     const inv = await seed();
-    const mid = screen(inv, 90, 32).instance;
+    const mid = screen(inv, 90, 40).instance;
     await seen(mid, (f) => f.includes("eli5"));
     await press(mid, DOWN);
     const stacked = (await seen(mid, (f) => f.includes("Where"))).split("\n");
@@ -245,20 +245,48 @@ describe("ExtensionsScreen", () => {
     for (const line of narrow.split("\n")) expect(line.length).toBeLessThanOrEqual(60);
   });
 
-  it("keeps the title inside the stacked detail's border at its 3-line floor, 80 by 18", async () => {
+  it("shows the list alone at 80 by 18, and on enter a detail that ends in … where it is cut", async () => {
     const { instance } = screen(await seed(), 80, 18);
     await seen(instance, (f) => f.includes("Global"));
     await moveTo(instance, "eli5");
+    expect(stripAnsi(instance.lastFrame() ?? "")).not.toMatch(/Where|╭/);
+    await press(instance, ENTER);
     const lines = (await seen(instance, (f) => /│ eli5 +│/.test(f))).split("\n");
     const title = lines.findIndex((line) => /│ eli5 +│/.test(line));
     expect(lines[title - 1]).toMatch(/╭─+╮/);
-    expect(lines[title + 1]).toMatch(/╰─+╯/);
+    // Four lines of detail, room for three: two of them and a line that says there is more.
+    expect(lines[title + 2]).toMatch(/│ Where /);
+    expect(lines[title + 3]).toMatch(/│ … +│/);
+    expect(lines[title + 4]).toMatch(/╰─+╯/);
+  });
+
+  it("stacks the detail under the list at 100 columns from 28 rows, not 27", async () => {
+    const inv = await seed();
+    const tall = screen(inv, 100, 28).instance;
+    await seen(tall, (f) => f.includes("Global"));
+    await moveTo(tall, "eli5");
+    await seen(tall, (f) => f.includes("Where"));
+    const short = screen(inv, 100, 27).instance;
+    await seen(short, (f) => f.includes("Global"));
+    await moveTo(short, "eli5");
+    expect(stripAnsi(short.lastFrame() ?? "")).not.toContain("Where");
+  });
+
+  it("hints the keys nothing else points to: enter at 60 columns, the unreadable files at 80", async () => {
+    const inv = await seed();
+    const hintLine = (frame: string) => frame.split("\n").find((line) => line.includes("↑↓ move")) ?? "";
+    const narrow = screen(inv, 60, 20).instance;
+    expect(hintLine(await seen(narrow, (f) => f.includes("eli5")))).toContain("enter open");
+    expect(inv.warnings).toHaveLength(1);
+    const mid = screen(inv, 80, 24).instance;
+    expect(hintLine(await seen(mid, (f) => f.includes("eli5")))).toContain("w 1 unreadable");
   });
 
   it.each([
     [60, 20],
     [80, 24],
     [100, 24],
+    [100, 28],
     [140, 32],
   ])("keeps every frame inside a %i by %i terminal, its hints on one line", async (columns, rows) => {
     const { instance } = screen(await seed(), columns, rows);
@@ -272,14 +300,6 @@ describe("ExtensionsScreen", () => {
     for (const frame of instance.frames) expect(height(frame)).toBeLessThan(rows);
     expect(last.split("\n").some((line) => line.includes("↑↓ move") && line.includes("esc back"))).toBe(true);
     for (const line of last.split("\n")) expect(line.length).toBeLessThanOrEqual(columns);
-  });
-
-  it("ends a detail that does not fit with a line that says so", async () => {
-    const { instance } = screen(await seed(), 80, 24);
-    await seen(instance, (f) => f.includes("Global"));
-    await moveTo(instance, "a-very-long");
-    const lines = (await seen(instance, (f) => f.includes("Where") || /│ … +│/.test(f))).split("\n");
-    expect(lines.some((line) => /│ … +│/.test(line))).toBe(true);
   });
 
   it("takes every key as search text while typing", async () => {
