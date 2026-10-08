@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How to use multiple Claude Code accounts on one machine (shared skills, hooks and history)</title>
+  <meta name="description" content="Run a work and a personal Claude Code account side by side. Give each its own CLAUDE_CONFIG_DIR, share skills, hooks, plugins and settings, and optionally conversation history.">
+  <link rel="canonical" href="https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="clausona">
+  <meta property="og:title" content="How to use multiple Claude Code accounts on one machine">
+  <meta property="og:description" content="One config directory per account, with skills, hooks, plugins, settings and even conversation history shared between them.">
+  <meta property="og:url" content="https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/">
+  <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
+  <meta property="article:published_time" content="2026-10-08">
+  <meta property="article:modified_time" content="2026-10-08">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Recursive:wght,CASL,MONO@300..900,0..1,0..1&display=swap">
+  <link rel="stylesheet" href="../../style.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "How to use multiple Claude Code accounts on one machine",
+    "description": "Run a work and a personal Claude Code account side by side, with skills, hooks, plugins, settings and optionally conversation history shared between them.",
+    "datePublished": "2026-10-08",
+    "dateModified": "2026-10-08",
+    "inLanguage": "en",
+    "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
+    "mainEntityOfPage": "https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/",
+    "about": [
+      { "@type": "SoftwareApplication", "name": "Claude Code" },
+      { "@type": "SoftwareApplication", "name": "clausona", "url": "https://github.com/larcane97/clausona" }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      { "@type": "ListItem", "position": 1, "name": "clausona", "item": "https://larcane97.github.io/clausona/" },
+      { "@type": "ListItem", "position": 2, "name": "Multiple Claude Code accounts", "item": "https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/" }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "Can I be signed in to two Claude Code accounts at once?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes, with one config directory per account. Two terminals with different CLAUDE_CONFIG_DIR values run two accounts side by side. clausona run claude:work starts one session under another account without changing the default."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Do MCP servers carry over to the other account?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Servers that come with a plugin do, because plugins are shared. Servers added with claude mcp add are stored in .claude.json next to the account's sign-in, which must not be shared, so add them to each account or put them in a project's .mcp.json."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does clausona switch accounts automatically when I hit a limit?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. You choose the account for each terminal; clausona shows how much of each account's limits is left. Keep each account to what it's for, such as work and personal use, and within Anthropic's terms."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Is my sign-in ever shared?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. Each account keeps its own credentials and its own .claude.json."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does it work with tools that start Claude Code themselves?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "The shell hook covers claude started from your shell. A tool that starts Claude Code on its own, such as Superset, can use clausona run claude:work -- <args> as its command to run on that account."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can a profile use an API key or another model?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. clausona add claude:gw --api --base-url <url> adds a profile for the Anthropic API, a gateway such as OpenRouter, or a model you serve yourself. It shares the same setup and switches like any account."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does it work on Windows?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes, in PowerShell 5.1 or later. Shared directories are junctions. Turn on Developer Mode: without it, settings.json, CLAUDE.md and keybindings.json stay a per-account copy, because Claude Code replaces them on every save, and clausona doctor says so."
+        }
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="wordmark" href="../../">clausona</a>
+      <nav class="site-nav" aria-label="Site">
+        <a href="./" aria-current="page">Claude Code guide</a>
+        <a href="../multiple-codex-cli-accounts/">Codex guide</a>
+        <a href="../../ko/" hreflang="ko" lang="ko">한국어</a>
+        <a href="https://github.com/larcane97/clausona">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <article class="article">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../../">clausona</a> / Guides</nav>
+      <h1>How to use multiple Claude Code accounts on one machine</h1>
+      <p class="lead">Claude Code signs in one account per config directory. Here is how to keep a work and a personal account side by side without setting up your skills, hooks and plugins twice, and how to share conversation history between them too.</p>
+      <p class="updated">Updated <time datetime="2026-10-08">October 8, 2026</time></p>
+
+      <div class="answer">
+        <p><strong>Short answer.</strong> Give each account its own config directory with <code>CLAUDE_CONFIG_DIR</code>, and link everything except the sign-in back to your main <code>~/.claude</code>. <a href="https://github.com/larcane97/clausona">clausona</a> does that in three commands:</p>
+<pre data-copy><code>clausona init              <span class="c"># register the account already signed in</span>
+clausona add claude:work   <span class="c"># a second account, with Claude Code's own sign-in</span>
+csn use work               <span class="c"># plain `claude` now starts as that account</span></code></pre>
+      </div>
+
+      <ul class="toc" aria-label="On this page">
+        <li><a href="#why">Why a second account is awkward</a></li>
+        <li><a href="#by-hand">Option 1: CLAUDE_CONFIG_DIR by hand</a></li>
+        <li><a href="#not-shared">What must not be shared</a></li>
+        <li><a href="#clausona">Option 2: clausona</a></li>
+        <li><a href="#history">Share conversation history between accounts</a></li>
+        <li><a href="#two-at-once">Use two accounts at the same time</a></li>
+        <li><a href="#usage">See how much each account has left</a></li>
+        <li><a href="#questions">Questions</a></li>
+      </ul>
+
+      <h2 id="why">Why a second account is awkward</h2>
+      <p>Claude Code keeps one signed-in account at a time. Switching with <code>/logout</code> and <code>/login</code> works, but every switch means signing in again, and one terminal can't stay on your work account while another uses your personal one.</p>
+      <p>The <code>CLAUDE_CONFIG_DIR</code> environment variable moves Claude Code's whole config directory, so a second directory can hold a second sign-in. The catch is that the new directory starts empty: no settings, no hooks, no skills, no plugins, no <code>CLAUDE.md</code> and no history. Install a plugin under one account and the other doesn't have it, and the two setups drift apart from there.</p>
+
+      <h2 id="by-hand">Option 1: CLAUDE_CONFIG_DIR by hand</h2>
+      <p>Keep <code>~/.claude</code> as your main directory, give the second account a directory of its own, and link into it whatever both accounts should share:</p>
+<pre data-copy><code><span class="c"># a directory for the second account</span>
+mkdir -p ~/.claude-work
+
+<span class="c"># link what both accounts should share</span>
+for item in settings.json CLAUDE.md skills commands agents hooks; do
+  [ -e ~/.claude/$item ] &amp;&amp; ln -sn ~/.claude/$item ~/.claude-work/$item
+done
+
+<span class="c"># start Claude Code there and sign in with the second account</span>
+CLAUDE_CONFIG_DIR=~/.claude-work claude</code></pre>
+      <p>Hooks are configured in <code>settings.json</code>, so linking it shares them, along with your permissions, status line and model choice. The <code>hooks</code> link covers scripts you keep in <code>~/.claude/hooks</code>. Then add an alias for the second account:</p>
+<pre data-copy><code>alias claude-work='CLAUDE_CONFIG_DIR=~/.claude-work claude'</code></pre>
+
+      <div class="warn">
+        <p><strong>Leave <code>CLAUDE_CONFIG_DIR</code> unset for your main account.</strong> Claude Code treats any value as a separate directory, even <code>~/.claude</code>: with the variable set it reads <code>~/.claude/.claude.json</code> instead of <code>~/.claude.json</code>, and on macOS it looks for a different Keychain item, so you land in a second, signed-out identity. (Checked with Claude Code 2.1.278 on macOS.)</p>
+      </div>
+
+      <h2 id="not-shared">What must not be shared</h2>
+      <ul>
+        <li><strong><code>.claude.json</code></strong> records which account is signed in, along with the MCP servers added with <code>claude mcp add</code>. Linking it mixes up which account each directory belongs to. To have an MCP server under both accounts, add it to each, or put it in a project's <code>.mcp.json</code>.</li>
+        <li><strong><code>.credentials.json</code></strong> holds the sign-in tokens on Linux and Windows, and on macOS when the Keychain refuses them. On macOS the tokens normally sit in the Keychain under a name derived from the config directory, so each directory gets its own.</li>
+        <li><strong><code>plugins/</code> as a whole.</strong> Two files in it, <code>known_marketplaces.json</code> and <code>installed_plugins.json</code>, store absolute paths into the config directory. Link the rest of <code>plugins/</code>, keep a copy of those two in each directory with the paths pointing at that directory, and update the copies whenever you add or remove a plugin.</li>
+        <li><strong>Small per-directory state</strong>, such as <code>.last-update-result.json</code>, which Claude Code rewrites as a new file and which describes one directory only.</li>
+      </ul>
+      <p>Newer Claude Code versions also add directories. A link you made today doesn't cover a directory that appears next month, so the second account quietly gets its own copy. Check your links after updating Claude Code.</p>
+
+      <h2 id="clausona">Option 2: clausona</h2>
+      <p><a href="https://github.com/larcane97/clausona">clausona</a> is a free, open-source CLI that does the steps above and keeps them correct. Install it:</p>
+      <div class="install">
+        <div class="cmd" data-copy>
+          <span class="cmd-label">macOS and Linux</span>
+          <code>curl -fsSL https://github.com/larcane97/clausona/releases/latest/download/install.sh | bash</code>
+        </div>
+        <div class="cmd" data-copy>
+          <span class="cmd-label">Windows PowerShell</span>
+          <code>irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex</code>
+        </div>
+      </div>
+      <p>Then register the account you're signed in to, and add the others:</p>
+<pre data-copy><code>clausona init              <span class="c"># registers the accounts already signed in</span>
+clausona add claude:work   <span class="c"># makes ~/.claude-work and opens Claude Code's sign-in</span>
+csn use work               <span class="c"># plain `claude` now starts as the work account</span>
+csn use claude:default     <span class="c"># back to the first account; init names it default</span></code></pre>
+      <p>Each account gets its own directory. Everything in <code>~/.claude</code> except the sign-in, the account file, per-directory state and, unless you merge sessions, conversation history is linked into it, so settings, hooks, skills, commands, agents, plugins and <code>CLAUDE.md</code> are the same under every account. clausona keeps the two plugin files in step for each account, and <code>clausona doctor</code> reports a directory a newer Claude Code added that isn't linked yet; <code>clausona repair &lt;profile&gt;</code> links it. <code>csn</code> is the short name for <code>clausona</code>.</p>
+      <p>There is no wrapper around Claude Code: a shell hook sets <code>CLAUDE_CONFIG_DIR</code> for each run and starts the real <code>claude</code>, and nothing stays running in the background.</p>
+
+      <h2 id="history">Share conversation history between accounts</h2>
+      <p>Conversation history lives in <code>projects/</code>, next to two directories that refer to it by session id: <code>jobs/</code> for background sessions and <code>teams/</code>. Share all three or none of them. A background session whose record and transcript sit in different directories can't be resumed.</p>
+      <p>With clausona it is one switch per account:</p>
+<pre data-copy><code>clausona config claude:work --merge-sessions</code></pre>
+      <p>Turning it on copies the account's existing conversations into the shared history first, so none are lost. From then on, <code>claude --resume</code> lists conversations from every account that shares history, <code>claude --continue</code> picks up the latest one in the current folder whichever account started it, and a <code>/goal</code> set in that conversation comes back with it. <code>--separate-sessions</code> turns it off. You can also pass <code>--merge-sessions</code> to <code>clausona add</code> or <code>clausona init</code>.</p>
+
+      <h2 id="two-at-once">Use two accounts at the same time</h2>
+      <p><code>csn use</code> sets which account new <code>claude</code> launches use. To run one session under another account without changing that, start it with <code>clausona run</code>:</p>
+<pre data-copy><code>clausona run claude:work</code></pre>
+      <p>One terminal can stay on your main account while another runs the work one, both with the same skills and hooks. Arguments after <code>--</code> go to Claude Code.</p>
+
+      <h2 id="usage">See how much each account has left</h2>
+      <p><code>clausona list</code> shows every account's 5-hour and weekly limits, read from Claude Code's own usage endpoint with the credential Claude Code stored for that account:</p>
+<pre><code>PROFILE             ACCOUNT              5H         7D
+claude:work         dev@example.com      62% 1h     41% 3d
+claude:personal     me@example.org       8%         77% 5d</code></pre>
+      <p>Running <code>csn</code> with no arguments opens a dashboard with the same readings and the exact reset times.</p>
+
+      <h2 id="questions">Questions</h2>
+      <h3>Can I be signed in to two Claude Code accounts at once?</h3>
+      <p>Yes, with one config directory per account. Two terminals with different <code>CLAUDE_CONFIG_DIR</code> values run two accounts side by side. <code>clausona run claude:work</code> starts one session under another account without changing the default.</p>
+      <h3>Do MCP servers carry over to the other account?</h3>
+      <p>Servers that come with a plugin do, because plugins are shared. Servers added with <code>claude mcp add</code> are stored in <code>.claude.json</code> next to the account's sign-in, which must not be shared, so add them to each account or put them in a project's <code>.mcp.json</code>.</p>
+      <h3>Does clausona switch accounts automatically when I hit a limit?</h3>
+      <p>No. You choose the account for each terminal; clausona shows how much of each account's limits is left. Keep each account to what it's for, such as work and personal use, and within Anthropic's terms.</p>
+      <h3>Is my sign-in ever shared?</h3>
+      <p>No. Each account keeps its own credentials and its own <code>.claude.json</code>.</p>
+      <h3>Does it work with tools that start Claude Code themselves?</h3>
+      <p>The shell hook covers <code>claude</code> started from your shell. A tool that starts Claude Code on its own, such as <a href="https://superset.sh">Superset</a>, can use <code>clausona run claude:work -- &lt;args&gt;</code> as its command to run on that account.</p>
+      <h3>Can a profile use an API key or another model?</h3>
+      <p>Yes. <code>clausona add claude:gw --api --base-url &lt;url&gt;</code> adds a profile for the Anthropic API, a gateway such as OpenRouter, or a model you serve yourself. It shares the same setup and switches like any account.</p>
+      <h3>Does it work on Windows?</h3>
+      <p>Yes, in PowerShell 5.1 or later. Shared directories are junctions. Turn on Developer Mode: without it, <code>settings.json</code>, <code>CLAUDE.md</code> and <code>keybindings.json</code> stay a per-account copy, because Claude Code replaces them on every save, and <code>clausona doctor</code> says so.</p>
+      <section class="cta" aria-labelledby="try">
+        <h2 id="try">Try clausona</h2>
+        <p>It's free and open source. If it saves you a few sign-ins a day, a star on <a href="https://github.com/larcane97/clausona">GitHub</a> helps other people find it. Using Codex CLI as well? See <a href="../multiple-codex-cli-accounts/">how to use multiple Codex CLI accounts</a>.</p>
+      </section>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>clausona is open source under the MIT license, on <a href="https://github.com/larcane97/clausona">GitHub</a>, and listed in <a href="https://github.com/hesreallyhim/awesome-claude-code">Awesome Claude Code</a>.</p>
+      <p>It is an independent project, not affiliated with Anthropic or OpenAI. Claude Code is a product of Anthropic; Codex CLI is a product of OpenAI.</p>
+    </div>
+  </footer>
+  <script src="../../copy.js"></script>
+</body>
+</html>

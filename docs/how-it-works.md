@@ -99,7 +99,9 @@ When you register a new profile, clausona symlinks shared resources from your pr
 ├── jobs/                  ← own background sessions (follows projects/)
 ├── teams/                 ← own team records (follows projects/)
 ├── mcp-servers/  →  ~/.claude/mcp-servers    (symlink to primary)
-├── plugins/      →  ~/.claude/plugins        (symlink to primary)
+├── plugins/               ← own directory: each entry links to ~/.claude/plugins/, except
+│                            known_marketplaces.json and installed_plugins.json, kept as
+│                            per-profile copies with their paths rewritten
 ├── settings.json →  ~/.claude/settings.json  (symlink to primary)
 └── ...
 ```
@@ -130,11 +132,13 @@ For claude the principle is that credentials and session data stay profile-speci
 everything else is shared. Codex is the other way round, because each Codex release adds state
 that belongs to one account to its home. See [What a Codex profile shares](#what-a-codex-profile-shares) below.
 
-On Windows, shared directories use junctions. Shared files use symbolic links when Windows Developer Mode is enabled and
-otherwise fall back to same-volume hard links. If a profile is imported from another drive, enable Developer Mode so
-clausona can create file symbolic links across volumes.
+On Windows, shared directories use junctions. Shared files use symbolic links when Windows Developer Mode is enabled.
+Without it, a file the tool saves whole - Claude Code's `settings.json`, `CLAUDE.md` and `keybindings.json`, Codex's
+`config.toml`, `*.config.toml` and `hooks.json` - stays a copy in each profile, because a save would break a hard link,
+and `clausona doctor` reports it. Other files fall back to same-volume hard links. If a profile is imported from another
+drive, enable Developer Mode so clausona can create file symbolic links across volumes.
 
-**Session separation** is the default: each profile keeps its own session directory, so `/resume` (Claude) and `codex resume` (Codex) only show that profile's conversations. To share session history across claude profiles, pass `--merge-sessions` when adding or initializing.
+**Session separation** is the default: each profile keeps its own session directory, so `/resume` (Claude) and `codex resume` (Codex) only show that profile's conversations. To share session history, pass `--merge-sessions` when adding or initializing, or turn it on later with `clausona config <profile> --merge-sessions`.
 
 For claude profiles this covers background sessions and team records too. A background
 session is stored as a record in `jobs/` keyed by the same session id as its transcript
