@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -74,10 +75,30 @@ describe("loadClaudeContext", () => {
       ["user", "settings.json"],
       ["local", "settings.local.json"],
     ]);
+    const primaryOnly = ["claude:default"];
     expect(ctx.plugins).toEqual([
-      { id: "home@m", name: "home", installPath: h.path(".claude/plugins/cache/m/home/1.0.0") },
-      { id: "proj@m", name: "proj", installPath: h.path(".claude/plugins/cache/m/proj/1.0.0"), project: app },
-      { id: "sp@m", name: "sp", installPath: h.path(".claude/plugins/cache/m/sp/1.0.0") },
+      {
+        id: "home@m",
+        name: "home",
+        installPath: h.path(".claude/plugins/cache/m/home/1.0.0"),
+        scope: "user",
+        profiles: primaryOnly,
+      },
+      {
+        id: "proj@m",
+        name: "proj",
+        installPath: h.path(".claude/plugins/cache/m/proj/1.0.0"),
+        scope: "project",
+        project: app,
+        profiles: primaryOnly,
+      },
+      {
+        id: "sp@m",
+        name: "sp",
+        installPath: h.path(".claude/plugins/cache/m/sp/1.0.0"),
+        scope: "user",
+        profiles: primaryOnly,
+      },
     ]);
 
     const out: Collector = { items: [], facts: emptyFacts(), warnings };
@@ -90,10 +111,72 @@ describe("loadClaudeContext", () => {
     expect(out.facts.claudeEnabledPlugins.map((o) => o.map)).toEqual([{ "sp@m": true }]);
   });
 
+  it("merges each account's plugin installs by the folder they resolve to", async () => {
+    const { h, app } = seed();
+    // The work profile records paths under its own dir, whose plugins/cache links to the primary's.
+    h.write(".claude/plugins/cache/m/sp/1.0.0/README.md", "sp");
+    h.write(".claude/plugins/cache/m/only/1.0.0/README.md", "only");
+    h.link(".claude/plugins/cache", ".claude-work/plugins/cache");
+    h.write(".claude-work/plugins/installed_plugins.json", {
+      version: 2,
+      plugins: {
+        "sp@m": [{ scope: "user", installPath: h.path(".claude-work/plugins/cache/m/sp/1.0.0") }],
+        "only@m": [{ installPath: h.path(".claude-work/plugins/cache/m/only/1.0.0") }],
+        "tg@m": [{ scope: "local", projectPath: app, installPath: h.path(".claude-work/plugins/cache/m/tg/1.0.0") }],
+      },
+    });
+    const warnings: Warning[] = [];
+    const accounts = await loadClaudeAccounts(h.registry, h.home, warnings);
+    const ctx = await loadClaudeContext({
+      accounts,
+      registry: h.registry,
+      homeDir: h.home,
+      projects: [],
+      managedSettings: h.path("managed-settings.json"),
+      warnings,
+    });
+    expect(ctx.plugins.map((p) => [p.id, p.scope, p.project, p.profiles])).toEqual([
+      ["home@m", "user", undefined, ["claude:default"]],
+      ["only@m", "user", undefined, ["claude:work"]],
+      ["proj@m", "project", app, ["claude:default"]],
+      ["sp@m", "user", undefined, ["claude:default", "claude:work"]],
+      ["tg@m", "local", app, ["claude:work"]],
+    ]);
+    const byId = new Map(ctx.plugins.map((p) => [p.id, p.installPath]));
+    expect(byId.get("sp@m")).toBe(realpathSync(h.path(".claude/plugins/cache/m/sp/1.0.0")));
+    expect(byId.get("only@m")).toBe(realpathSync(h.path(".claude/plugins/cache/m/only/1.0.0")));
+    // A path that does not resolve stays as recorded.
+    expect(byId.get("tg@m")).toBe(h.path(".claude-work/plugins/cache/m/tg/1.0.0"));
+    expect(warnings.map((w) => path.basename(path.dirname(w.file)))).toEqual([".claude-broken"]);
+  });
+
+  it("reads managed-settings.d drop-ins ahead of the managed file, the last name first", async () => {
+    const { h } = seed();
+    const managed = h.write("managed-settings.json", { skillOverrides: { base: "off" } });
+    h.write("managed-settings.d/10-a.json", { skillOverrides: { a: "off" } });
+    h.write("managed-settings.d/20-b.json", { skillOverrides: { b: "off" } });
+    h.write("managed-settings.d/notes.txt", "not settings");
+    const warnings: Warning[] = [];
+    const ctx = await loadClaudeContext({
+      accounts: await loadClaudeAccounts(h.registry, h.home, warnings),
+      registry: h.registry,
+      homeDir: h.home,
+      projects: [],
+      managedSettings: managed,
+      warnings,
+    });
+    expect(ctx.settings.map((s) => [s.layer, path.basename(s.file)])).toEqual([
+      ["managed", "20-b.json"],
+      ["managed", "10-a.json"],
+      ["managed", "managed-settings.json"],
+      ["user", "settings.json"],
+    ]);
+  });
+
   it("names a managed settings path for each platform", () => {
     expect(managedSettingsPath("darwin")).toBe("/Library/Application Support/ClaudeCode/managed-settings.json");
     expect(managedSettingsPath("linux")).toBe("/etc/claude-code/managed-settings.json");
-    expect(managedSettingsPath("win32")).toBe("C:\\ProgramData\\ClaudeCode\\managed-settings.json");
+    expect(managedSettingsPath("win32")).toBe("C:\\Program Files\\ClaudeCode\\managed-settings.json");
   });
 });
 

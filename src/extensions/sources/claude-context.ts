@@ -4,7 +4,7 @@ import path from "node:path";
 import { claudeJsonPathForConfigDir } from "../../core/paths.js";
 import type { Registry } from "../../types.js";
 import type { Collector, Project, SettingsLayer, Warning } from "../model.js";
-import { isRecord, readJsonObject, samePath } from "../read.js";
+import { isRecord, listNames, pathKey, readJsonObject, samePath } from "../read.js";
 
 export type ClaudeAccount = {
   id: string;
@@ -16,7 +16,17 @@ export type ClaudeAccount = {
 
 export type SettingsFile = { file: string; layer: SettingsLayer; project?: string; data: Record<string, unknown> };
 
-export type PluginInstall = { id: string; name: string; installPath: string; project?: string };
+export type PluginInstall = {
+  id: string;
+  name: string;
+  /** The recorded install path resolved through links, or as recorded when it does not resolve. */
+  installPath: string;
+  scope: "user" | "project" | "local";
+  /** Set exactly when the scope is project or local. */
+  project?: string;
+  /** The Claude accounts that list this install, primary first. */
+  profiles: string[];
+};
 
 export type ClaudeContext = {
   homeDir: string;
@@ -29,7 +39,7 @@ export type ClaudeContext = {
 /** Where Claude Code reads organisation policy on each platform. */
 export function managedSettingsPath(platform: NodeJS.Platform): string {
   if (platform === "darwin") return "/Library/Application Support/ClaudeCode/managed-settings.json";
-  if (platform === "win32") return "C:\\ProgramData\\ClaudeCode\\managed-settings.json";
+  if (platform === "win32") return "C:\\Program Files\\ClaudeCode\\managed-settings.json";
   return "/etc/claude-code/managed-settings.json";
 }
 
@@ -60,7 +70,7 @@ export async function loadClaudeAccounts(
 }
 
 /**
- * The settings files Claude Code reads and the plugins installed into the primary. One user
+ * The settings files Claude Code reads and every account's plugin installs. One user
  * `settings.json` stands for every account: clausona links each profile's to the primary's.
  */
 export async function loadClaudeContext(options: {
@@ -75,6 +85,7 @@ export async function loadClaudeContext(options: {
   const primaryDir =
     registry.primarySources.claude ?? accounts.find((a) => a.isPrimary)?.configDir ?? path.join(homeDir, ".claude");
   const wanted: Omit<SettingsFile, "data">[] = [
+    ...(await managedDropIns(options.managedSettings, warnings)).map((file) => ({ file, layer: "managed" as const })),
     { file: options.managedSettings, layer: "managed" },
     { file: path.join(primaryDir, "settings.json"), layer: "user" },
     ...projects.flatMap((project) => [
@@ -97,30 +108,73 @@ export async function loadClaudeContext(options: {
     primaryDir,
     accounts,
     settings: read.filter((s): s is SettingsFile => s !== undefined),
-    plugins: await readPluginInstalls(primaryDir, homeDir, warnings),
+    plugins: await readPluginInstalls(accounts, homeDir, warnings),
   };
 }
 
 /**
- * The primary's `plugins/installed_plugins.json`. clausona keeps every profile's copy in step
- * with it, so the primary's list is every account's. A plugin installed for the home dir as a
- * "project" is the user's own: the home dir is not a project here.
+ * The `*.json` files in `managed-settings.d/` beside the managed file, highest precedence
+ * first. The order is systemd-style - files merge in name order, so a later name overrides
+ * an earlier one and the base file - and is not verified against Claude Code.
  */
-async function readPluginInstalls(primaryDir: string, homeDir: string, warnings: Warning[]): Promise<PluginInstall[]> {
-  const json = await readJsonObject(path.join(primaryDir, "plugins", "installed_plugins.json"), warnings);
-  const plugins = isRecord(json?.plugins) ? json.plugins : {};
-  const out: PluginInstall[] = [];
-  for (const [id, entries] of Object.entries(plugins)) {
-    for (const entry of Array.isArray(entries) ? entries : [entries]) {
-      if (!isRecord(entry) || typeof entry.installPath !== "string") continue;
-      const project =
-        entry.scope === "project" && typeof entry.projectPath === "string" && !samePath(entry.projectPath, homeDir)
-          ? entry.projectPath
-          : undefined;
-      out.push({ id, name: id.split("@")[0] ?? id, installPath: entry.installPath, ...(project ? { project } : {}) });
+async function managedDropIns(managedSettings: string, warnings: Warning[]): Promise<string[]> {
+  const dir = path.join(path.dirname(managedSettings), "managed-settings.d");
+  return (await listNames(dir, warnings))
+    .filter((name) => name.endsWith(".json"))
+    .reverse()
+    .map((name) => path.join(dir, name));
+}
+
+function pluginScope(entry: Record<string, unknown>, homeDir: string): Pick<PluginInstall, "scope" | "project"> {
+  const scope = entry.scope === "project" || entry.scope === "local" ? entry.scope : "user";
+  // A plugin installed for the home dir is the user's own: the home dir is not a project
+  // here, and in it Claude Code's project settings are the user settings.
+  if (scope === "user" || typeof entry.projectPath !== "string" || samePath(entry.projectPath, homeDir)) {
+    return { scope: "user" };
+  }
+  return { scope, project: entry.projectPath };
+}
+
+/**
+ * Every account's `plugins/installed_plugins.json`. These differ by account: clausona seeds a
+ * profile's copy from the primary's once, and installs after that land in one account only.
+ * A profile records install paths under its own dir, which link into the primary's cache, so
+ * an install is the same in two accounts when its path resolves to the same folder.
+ */
+async function readPluginInstalls(
+  accounts: ClaudeAccount[],
+  homeDir: string,
+  warnings: Warning[],
+): Promise<PluginInstall[]> {
+  const files = await Promise.all(
+    accounts.map((account) =>
+      readJsonObject(path.join(account.configDir, "plugins", "installed_plugins.json"), warnings),
+    ),
+  );
+  const byKey = new Map<string, PluginInstall>();
+  for (const [index, account] of accounts.entries()) {
+    const json = files[index];
+    const plugins = isRecord(json?.plugins) ? json.plugins : {};
+    for (const [id, entries] of Object.entries(plugins)) {
+      for (const entry of Array.isArray(entries) ? entries : [entries]) {
+        if (!isRecord(entry) || typeof entry.installPath !== "string") continue;
+        const recorded = entry.installPath;
+        const installPath = await realpath(recorded).catch(() => recorded);
+        const where = pluginScope(entry, homeDir);
+        const key = [id, pathKey(installPath), where.scope, where.project ? pathKey(where.project) : ""].join("\0");
+        const known = byKey.get(key);
+        if (known) {
+          if (!known.profiles.includes(account.id)) known.profiles.push(account.id);
+          continue;
+        }
+        byKey.set(key, { id, name: id.split("@")[0] ?? id, installPath, ...where, profiles: [account.id] });
+      }
     }
   }
-  return out.sort((a, b) => a.id.localeCompare(b.id));
+  return [...byKey.values()].sort(
+    (a, b) =>
+      a.id.localeCompare(b.id) || a.scope.localeCompare(b.scope) || (a.project ?? "").localeCompare(b.project ?? ""),
+  );
 }
 
 /** Each settings file's `skillOverrides` and `enabledPlugins`, for `state.ts`. */
