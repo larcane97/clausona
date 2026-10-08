@@ -4,40 +4,67 @@ import { isRecord } from "./read.js";
 
 /**
  * The words that mark a name as holding a secret: `GITHUB_TOKEN`, `--api-key`, `X-Auth-Token`,
- * `apiKey`, `client_secret`, `SESSION_ID`, `GITHUB_PAT`. Matched anywhere in the name, so some
- * harmless names match too - `--path`, `author`, `monkey` - and their values are hidden: the
- * safe side, for a list that only shows what a server is.
+ * `apiKey`, `client_secret`, `Authorization`, `GITHUB_PAT`.
  */
-const SECRET_WORDS = "key|token|secret|password|passwd|pwd|auth|credential|bearer|pat|jwt|session";
+const SECRET_WORDS = [
+  "key",
+  "token",
+  "secret",
+  "password",
+  "passwd",
+  "pwd",
+  "auth",
+  "authorization",
+  "credential",
+  "bearer",
+  "pat",
+  "jwt",
+];
 
-/** A name of identifier characters with a secret word in it. */
-const NAME = `[\\w.-]*(?:${SECRET_WORDS})[\\w.-]*`;
+/**
+ * Whether a name says it holds a secret: one of its parts (split at `-`, `_`, `.` and camelCase)
+ * is a secret word or its plural, or words run together that end in one (`apikey`, `authtoken`,
+ * as ngrok and many CLIs write them). Whole parts, so a name that only contains a secret word -
+ * `--path`, `PATH`, `--pattern`, `keycloak` - is a name like any other. What a part ending in one
+ * also catches, `--hotkey` or `--compat`, has its value hidden: the safe side.
+ */
+function isSecretName(name: string): boolean {
+  return name
+    .replace(/([a-z\d])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .split(/[\s_.-]+/)
+    .some((part) => {
+      const word = part.toLowerCase().replace(/s$/, "");
+      return SECRET_WORDS.some((secret) => word.endsWith(secret));
+    });
+}
 
 /** An option whose name says its value is a secret: `--api-key VALUE`, `--token VALUE`. */
-const SECRET_FLAG = new RegExp(`^--?${NAME}$`, "i");
+function isSecretFlag(word: string): boolean {
+  const flag = /^--?([\w.-]+)$/.exec(word);
+  return flag !== null && isSecretName(flag[1] ?? "");
+}
 
 /**
  * An assignment's name that says its value is a secret, dash or not: `--token=`, and the
  * environment forms `GITHUB_TOKEN=` (docker `-e`, `env`) and `API_KEY=x cmd` (a hook's prefix).
  * No `/` or `:` in it, so a URL's query is left to the URL rule.
  */
-const SECRET_NAME = new RegExp(`^${NAME}$`, "i");
+function isSecretAssignment(name: string): boolean {
+  return /^[\w.-]+$/.test(name) && isSecretName(name);
+}
 
-/** A word that starts with a header named for a secret, or `Cookie`: the name, its colon, and the rest. */
-const SECRET_HEADER = new RegExp(`^(${NAME}|cookie)(\\s*:)([\\s\\S]*)$`, "i");
+/** A word that starts with a header name, its colon and the rest; a secret one, or `Cookie`, is hidden. */
+const HEADER = /^([\w.-]+)(\s*:)([\s\S]*)$/;
 
 /** A secret header's name with no colon: its value is in the words after it. */
 const BARE_HEADER = /^(authorization|proxy-authorization|x-api-key|api-key|cookie)$/i;
 
-/** A word that ends with a secret-named key and its colon, as JSON split at a space does: `{"token":`. */
-const ENDS_WITH_KEY = new RegExp(`(?<![\\w.-])(["']?)${NAME}\\1\\s*:$`, "i");
+/** A word that ends with a key and its colon, as JSON split at a space does: `{"token":`. */
+const ENDS_WITH_KEY = /(?<![\w.-])(["']?)([\w.-]+)\1\s*:$/;
 
-/**
- * A secret-named key and its value inside a word: `PRIVATE-TOKEN:x`, `{"apiKey":"x"}`,
- * `user=bob&password=x`. The separator is required, which leaves prose that names a secret as
- * written; the value runs to a quote, a space or the next field.
- */
-const KEY_VALUE = new RegExp(`(?<![\\w.-])(["']?)(${NAME})\\1(\\s*[:=]\\s*)(["']?)[^\\s"'&,;}]+`, "gi");
+/** A key and its separator inside a word: `PRIVATE-TOKEN:`, `"apiKey":"`, `&password=`. */
+const KEY_AT = /(?<![\w.-])(["']?)([\w.-]+)\1\s*[:=]\s*["']?/g;
 
 /** An auth scheme: the word after it is the credential, whatever its shape. */
 const AUTH_SCHEME = /^(bearer|basic)$/i;
@@ -97,7 +124,7 @@ function redactAt(line: Line, i: number): number {
   const equals = body.indexOf("=");
   const name = equals > 0 ? body.slice(0, equals) : "";
   const value = equals > 0 ? body.slice(equals + 1) : undefined;
-  if (value !== undefined && SECRET_NAME.test(name)) {
+  if (value !== undefined && isSecretAssignment(name)) {
     const valueQuote = quote === "" ? leadingQuote(value) : "";
     const rest = quote === "" ? value.slice(valueQuote.length) : value;
     return hideValue(line, i, `${quote}${name}=${valueQuote}`, quote || valueQuote, rest);
@@ -116,9 +143,10 @@ function redactAt(line: Line, i: number): number {
   }
   line.shown.push(redactWord(word));
   if (i + 1 >= line.words.length) return i;
-  if (ENDS_WITH_KEY.test(word)) return hideFollowing(line, i, quote !== "" && !body.includes(quote) ? quote : "");
+  if (isSecretName(ENDS_WITH_KEY.exec(word)?.[2] ?? ""))
+    return hideFollowing(line, i, quote !== "" && !body.includes(quote) ? quote : "");
   const afterColon = (line.words[i - 1] ?? "").endsWith(":");
-  if (SECRET_FLAG.test(body) || AUTH_SCHEME.test(body) || (afterColon && TOKEN_SCHEME.test(body))) {
+  if (isSecretFlag(body) || AUTH_SCHEME.test(body) || (afterColon && TOKEN_SCHEME.test(body))) {
     return hideWord(line, i + 1);
   }
   if (USER_FLAG.test(body)) return hideUserinfo(line, i + 1, "", line.words[i + 1] ?? "") ?? i;
@@ -228,8 +256,8 @@ function hideFollowing(line: Line, i: number, openQuote: string): number {
 function hideHeader(line: Line, i: number, prefix: string, text: string): number | undefined {
   const quote = leadingQuote(text);
   const body = text.slice(quote.length);
-  const header = SECRET_HEADER.exec(body);
-  if (!header) {
+  const header = HEADER.exec(body);
+  if (!header || !(isSecretName(header[1] ?? "") || /^cookie$/i.test(header[1] ?? ""))) {
     const closed = quote !== "" && body.endsWith(quote);
     if (!BARE_HEADER.test(closed ? body.slice(0, -1) : body)) return undefined;
     line.shown.push(line.words[i] ?? "");
@@ -282,7 +310,29 @@ function redactWord(word: string): string {
 
 /** Text that is not a URL: a secret-named key's value hidden, and `user:password@host` userinfo. */
 function redactText(text: string): string {
-  return text === "" ? "" : redactUrlsIn(text.replace(KEY_VALUE, `$1$2$1$3$4${HIDDEN}`));
+  return text === "" ? "" : redactUrlsIn(hideKeyValues(text));
+}
+
+/**
+ * A secret-named key's value inside a word: `PRIVATE-TOKEN:x`, `{"apiKey":"x"}`,
+ * `user=bob&password=x`. The separator is required, which leaves prose that names a secret as
+ * written; the value runs to a quote, a space or the next field. A key that is not secret-named
+ * is stepped over at its separator, so one in its value - `opt=token=x` - is still found.
+ */
+function hideKeyValues(text: string): string {
+  const keys = new RegExp(KEY_AT.source, "g");
+  let shown = "";
+  let from = 0;
+  for (let key = keys.exec(text); key !== null; key = keys.exec(text)) {
+    if (!isSecretName(key[2] ?? "")) continue;
+    const start = key.index + key[0].length;
+    const value = /^[^\s"'&,;}]+/.exec(text.slice(start))?.[0];
+    if (value === undefined) continue;
+    shown += `${text.slice(from, start)}${HIDDEN}`;
+    from = start + value.length;
+    keys.lastIndex = from;
+  }
+  return shown + text.slice(from);
 }
 
 /**
