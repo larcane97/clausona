@@ -21,13 +21,17 @@ const AUTH_SCHEME = /^(bearer|basic)$/i;
 /** The same scheme inside one argument that holds spaces, as an args entry can. */
 const INLINE_SCHEME = /\b(bearer|basic)(\s+)[^\s"']+/gi;
 
+/** curl's option for `user:password`. Only these: `-k` takes no value, and the next word is the URL. */
+const USER_FLAG = /^(-u|--user)$/;
+
 /**
  * A command line as the inventory shows it: a key-shaped word hidden, the value of an option or
  * an assignment named for a secret hidden (`--api-key VALUE`, `--token=VALUE`, `API_KEY=VALUE`),
  * a secret header's value hidden (`Authorization: ...`, `Cookie: ...`), the word after `Bearer`
- * or `Basic` hidden, and a URL's userinfo and query hidden. The name rules are what catch a
- * token that is not key-shaped - a gateway's hex token, say - which the shape check misses. The
- * words are rejoined with single spaces - this is for reading, not running.
+ * or `Basic` hidden, the password of a `-u user:password` hidden, and a URL's userinfo and
+ * query hidden. The name rules are what catch a token that is not key-shaped - a gateway's hex
+ * token, say - which the shape check misses. The words are rejoined with single spaces - this
+ * is for reading, not running.
  *
  * The words come either from an MCP server's args, one argument each, or from a hook command
  * split at whitespace, where a quoted argument arrives as several words with the quotes still
@@ -49,11 +53,13 @@ export function redactCommand(words: string[]): string {
       i = hideValue(words, i, `${quote}${name}=${valueQuote}`, quote || valueQuote, rest, shown);
       continue;
     }
-    const headerEnd =
+    const after = equals > 0 && quote === "" ? body.slice(equals + 1) : undefined;
+    const end =
       hideHeader(words, i, "", word, shown) ??
-      (equals > 0 && quote === "" ? hideHeader(words, i, `${name}=`, body.slice(equals + 1), shown) : undefined);
-    if (headerEnd !== undefined) {
-      i = headerEnd;
+      (after === undefined ? undefined : hideHeader(words, i, `${name}=`, after, shown)) ??
+      (after !== undefined && USER_FLAG.test(name) ? hideUserinfo(words, i, `${name}=`, after, shown) : undefined);
+    if (end !== undefined) {
+      i = end;
       continue;
     }
     if (carriesCredentialToken(word)) {
@@ -61,8 +67,11 @@ export function redactCommand(words: string[]): string {
       continue;
     }
     shown.push(redactUrlsIn(word).replace(INLINE_SCHEME, `$1$2${HIDDEN}`));
-    if ((SECRET_FLAG.test(body) || AUTH_SCHEME.test(body)) && i + 1 < words.length) {
+    if (i + 1 >= words.length) continue;
+    if (SECRET_FLAG.test(body) || AUTH_SCHEME.test(body)) {
       i = hideWord(words, i + 1, shown);
+    } else if (USER_FLAG.test(body)) {
+      i = hideUserinfo(words, i + 1, "", words[i + 1] ?? "", shown) ?? i;
     }
   }
   return shown.join(" ");
@@ -92,6 +101,19 @@ function hideValue(words: string[], at: number, prefix: string, quote: string, r
   }
   shown.push(`${prefix}${HIDDEN}${quote || trailingQuote(words[last] ?? "")}`);
   return last;
+}
+
+/**
+ * When `text` - all of `words[at]`, or what follows `prefix` in it - is `user:password`, shows
+ * the user and hides the rest, and returns the index of its last word. A bare user is left to
+ * the other rules: curl asks for the password then.
+ */
+function hideUserinfo(words: string[], at: number, prefix: string, text: string, shown: string[]): number | undefined {
+  const quote = leadingQuote(text);
+  const body = text.slice(quote.length);
+  const colon = body.indexOf(":");
+  if (colon < 0) return undefined;
+  return hideValue(words, at, `${prefix}${quote}${body.slice(0, colon + 1)}`, quote, body.slice(colon + 1), shown);
 }
 
 /** The secret in `words[at]`: what follows `--api-key` or `Bearer`. */
