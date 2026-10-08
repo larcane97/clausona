@@ -127,13 +127,13 @@ describe("redactCommand on a token that is not key-shaped", () => {
           HEX,
           `GITHUB_PAT=${HEX}`,
           `--jwt=${HEX}`,
-          `SESSION_ID=${HEX}`,
+          `SESSION_TOKEN=${HEX}`,
           "--pwd",
           HEX,
           "--bearer",
           HEX,
         ]),
-        "srv --pat <hidden> GITHUB_PAT=<hidden> --jwt=<hidden> SESSION_ID=<hidden> --pwd <hidden> --bearer <hidden>",
+        "srv --pat <hidden> GITHUB_PAT=<hidden> --jwt=<hidden> SESSION_TOKEN=<hidden> --pwd <hidden> --bearer <hidden>",
       ],
       [
         redactCommand(["curl", `-ualice:${HEX}`, "-U", `proxy:${HEX}`, `--proxy-user=p:${HEX}`]),
@@ -146,6 +146,35 @@ describe("redactCommand on a token that is not key-shaped", () => {
       expect(actual).toBe(expected);
       expect(actual).not.toContain(HEX);
     }
+  });
+
+  it("matches secret words against whole name parts, so a name that only contains one is shown", () => {
+    const plain = [
+      redactCommand(["srv", "--path", "/x"]),
+      command("PATH=/usr/bin:/bin cmd"),
+      redactCommand(["rg", "--pattern", "foo"]),
+      redactCommand(["srv", "--session-name", "work", "--dispatch-mode=fast"]),
+      redactCommand(["docker", "run", "keycloak:24.0"]),
+    ];
+    expect(plain).toEqual([
+      "srv --path /x",
+      "PATH=/usr/bin:/bin cmd",
+      "rg --pattern foo",
+      "srv --session-name work --dispatch-mode=fast",
+      "docker run keycloak:24.0",
+    ]);
+    // A part that ends in a secret word is one: `apikey`, `authtoken` written as one word.
+    const compound = redactCommand([
+      "srv",
+      "--apikey",
+      HEX,
+      `NGROK_AUTHTOKEN=${HEX}`,
+      `APIKey=${HEX}`,
+      "--secrets",
+      HEX,
+    ]);
+    expect(compound).toBe("srv --apikey <hidden> NGROK_AUTHTOKEN=<hidden> APIKey=<hidden> --secrets <hidden>");
+    expect(compound).not.toContain(HEX);
   });
 });
 
