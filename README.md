@@ -1,6 +1,6 @@
 # clausona
 
-**Switch between multiple Claude Code and OpenAI Codex CLI accounts on one machine — skills, hooks, plugins and settings stay shared, and conversation history can be too.**
+**Switch between multiple Claude Code and OpenAI Codex CLI accounts on one machine. They sign in separately and share one setup.**
 
 <p align="center">
   <a href="https://github.com/hesreallyhim/awesome-claude-code"><img src="https://img.shields.io/badge/Mentioned%20in-Awesome%20Claude%20Code-fc60a8?style=for-the-badge&logo=awesomelists&logoColor=white" alt="Mentioned in Awesome Claude Code" /></a>
@@ -17,12 +17,14 @@
   <img src="assets/demo.gif" alt="clausona listing Claude Code and Codex accounts with their plan quota, switching to the work account so that plain claude starts signed in as it, switching back, and opening the dashboard" width="800" />
 </p>
 
-clausona is a profile manager for the Claude Code and OpenAI Codex CLIs. Each account gets its
-own config directory for its sign-in, while skills, hooks, plugins and settings are shared across
-them, so `csn use work` is all it takes to move to another account. Conversation history stays with
-each account, or is shared too if you choose, so a conversation started under one account can be
-resumed under another. It also shows how much of every account's 5-hour and weekly plan limits is
-left, side by side.
+clausona is a profile manager for the Claude Code and OpenAI Codex CLIs. Every account gets a
+config directory for its sign-in. Skills, hooks, plugins and settings are shared across them, so
+`csn use work` is all it takes to move to another account.
+
+Conversation history stays with the account unless you choose to share it. Once it's shared, a
+conversation started under one account can be resumed under another.
+
+clausona also shows how much of your accounts' 5-hour and weekly plan limits is left, side by side.
 
 Step-by-step guides, including how to do it by hand:
 [multiple Claude Code accounts](https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/),
@@ -31,19 +33,23 @@ and [the same in Korean](https://larcane97.github.io/clausona/ko/).
 
 ## Why
 
-You have multiple Claude Code or OpenAI Codex CLI accounts (personal, work, different orgs), but switching between them on a single machine is tedious:
+I've been using Claude Code with a personal and a work account, and I got tired of setting up
+plugins and permissions for both. So I made a simple tool for it.
 
-- **Switching is manual.** You need to log out, log back in, or juggle `CLAUDE_CONFIG_DIR` (Claude) or `CODEX_HOME` (Codex) yourself.
-- **Settings don't carry over.** Each account gets its own config directory, so your plugins, permissions, settings, and skills have to be set up from scratch — every time.
+If you have Claude Code or OpenAI Codex CLI accounts for personal use, work or different orgs,
+switching between them on one machine is tedious:
 
-clausona fixes both. Switch profiles with one command — your plugins, settings, and skills carry over.
+- **Switching is manual.** You log out and back in, or juggle `CLAUDE_CONFIG_DIR` (Claude) or `CODEX_HOME` (Codex) yourself.
+- **Settings don't carry over.** A second account gets a separate config directory. Your plugins, permissions, settings and skills have to be set up from scratch, every time.
+
+clausona fixes both. One command switches profiles, and your setup comes along.
 
 ```bash
-csn use work             # switch to work account — done
-csn use codex:personal   # switch to your personal codex account too
+csn use work             # switch to the work account
+csn use codex:personal   # switch to your personal Codex account too
 ```
 
-No re-login. No reinstalling plugins. Just switch and go.
+You don't sign in again, and you don't reinstall plugins.
 
 > `csn` is a shorthand alias for `clausona`, registered automatically on install.
 
