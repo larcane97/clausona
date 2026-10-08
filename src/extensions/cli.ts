@@ -73,6 +73,24 @@ export function tilde(p: string, homeDir: string): string {
   return p.startsWith(homeDir + path.sep) ? `~${p.slice(homeDir.length)}` : p;
 }
 
+/** What may stand before and after a path in a command line: its start or end, a space, a quote, a list separator. */
+const PATH_START = String.raw`(?<=^|[\s"'=:;,(])`;
+const PATH_END = String.raw`(?=$|[\s"':;,)]|${path.sep.replace(/\\/g, "\\\\")})`;
+
+/**
+ * `tilde` for every path in `text` that starts with the home dir, as in a command line or a URL,
+ * so a long home prefix does not crowd out what the command runs. For display only: --json
+ * keeps the text as read. Text that runs on from the home dir's name (`~-old`), or holds it
+ * further into another path, names another folder and is left as it is.
+ */
+export function tildeIn(text: string, homeDir: string): string {
+  // An empty pattern would match between every two characters.
+  if (homeDir === "") return text;
+  const home = homeDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Windows compares paths case-folded, so a home dir typed in another case is the same folder.
+  return text.replace(new RegExp(`${PATH_START}${home}${PATH_END}`, process.platform === "win32" ? "gi" : "g"), "~");
+}
+
 /** Where an item is defined, in a few words: `project app`, `local work · app`, `plugin superpowers`. */
 export function whereLabel(item: Extension): string {
   const loc = item.location;
@@ -265,7 +283,7 @@ export async function runExtensionsCommand(
         item.location.tool,
         whereLabel(item),
         // Already redacted when read: a hook's summary passes its command line through redactCommand.
-        ...(hooks ? [item.summary?.command ?? item.summary?.prompt ?? ""] : []),
+        ...(hooks ? [tildeIn(item.summary?.command ?? item.summary?.prompt ?? "", inv.homeDir)] : []),
         stateWord(inv, item, project),
         ...(skills ? [item.location.tool === "claude" ? String(usage?.total ?? 0) : "—"] : []),
         marksOf(inv, item, now).join(", "),

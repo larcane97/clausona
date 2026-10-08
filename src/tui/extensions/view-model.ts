@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { accountStates, shortProfile, stateHere, tilde, viewFrom, whereLabel } from "../../extensions/cli.js";
+import { accountStates, shortProfile, stateHere, tilde, tildeIn, viewFrom, whereLabel } from "../../extensions/cli.js";
 import { duplicateGroups, marksOf, usageOf } from "../../extensions/inventory.js";
 import type { EffectiveState, Extension, Inventory, Mark } from "../../extensions/model.js";
 import { pathKey, samePath } from "../../extensions/read.js";
@@ -73,6 +73,15 @@ export function cell(text: string, width: number): string {
   if (width <= 0) return "";
   const cut = text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text;
   return cut.padEnd(width);
+}
+
+/**
+ * One column of a table drawn without separators: `text` cut to `width` less COLUMN_GAP, then
+ * padded to `width`. A cut text then still has the gap before the next column, where `cell`
+ * would run its ellipsis into it.
+ */
+export function column(text: string, width: number): string {
+  return cell(text, width - COLUMN_GAP).padEnd(Math.max(0, width));
 }
 
 type GroupInfo = { key: string; label: string; order: number; open: boolean; plugin?: string; project?: string };
@@ -177,9 +186,9 @@ function accountsOf(items: Extension[]): string[] {
   return [...new Set(accounts.filter((p): p is string => p !== undefined))];
 }
 
-function rowExtra(items: Extension[]): string {
+function rowExtra(items: Extension[], homeDir: string): string {
   const first = items[0];
-  if (first?.kind === "hook") return first.summary?.command ?? first.summary?.prompt ?? "";
+  if (first?.kind === "hook") return tildeIn(first.summary?.command ?? first.summary?.prompt ?? "", homeDir);
   if (first?.kind !== "mcp") return "";
   const accounts = accountsOf(items);
   return accounts.length > 0 ? `${accounts.length} acct` : "shared";
@@ -274,7 +283,7 @@ export function buildRows(inv: Inventory, o: ViewOptions): Row[] {
         tools: [...new Set(items.map((i) => i.location.tool))],
         state: rowState(inv, items, o.project),
         used: rowUsed(inv, items, o.now),
-        extra: rowExtra(items),
+        extra: rowExtra(items, inv.homeDir),
         marks: [...new Set(items.flatMap((i) => marksOf(inv, i, o.now)))],
       });
     }
@@ -376,7 +385,8 @@ export function detailOf(inv: Inventory, row: ItemRow, project: string | undefin
     }
   }
   if (first.kind === "mcp" || first.kind === "hook") {
-    // Every copy's own: a server of one name can run another command in another account.
+    // Every copy's own: a server of one name can run another command in another account. A
+    // command under the home dir reads as ~/…, as every path on screen does.
     const seen = new Set<string>();
     for (const item of row.items) {
       for (const [key, value] of Object.entries(item.summary ?? {})) {
@@ -384,7 +394,7 @@ export function detailOf(inv: Inventory, row: ItemRow, project: string | undefin
         const label = `${key.charAt(0).toUpperCase()}${key.slice(1)}`;
         if (seen.has(`${label}\0${value}`)) continue;
         seen.add(`${label}\0${value}`);
-        lines.push({ label, text: value });
+        lines.push({ label, text: tildeIn(value, inv.homeDir) });
       }
     }
   }

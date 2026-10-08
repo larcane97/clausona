@@ -20,11 +20,11 @@ import {
   waitForFrame,
 } from "../test-drive.js";
 import { windowsOnScreen } from "../test-frames.js";
-import { color } from "../theme.js";
+import { color, symbol } from "../theme.js";
 import { ExtensionsScreen } from "./ExtensionsScreen.js";
 import { ItemList } from "./ItemList.js";
-import { MARK_COLOR } from "./McpMatrix.js";
-import { type ItemRow, listColumns } from "./view-model.js";
+import { MARK_COLOR, McpMatrix } from "./McpMatrix.js";
+import { type ItemRow, listColumns, type Matrix } from "./view-model.js";
 
 vi.setConfig({ testTimeout: 15_000 });
 
@@ -533,6 +533,25 @@ describe("ExtensionsScreen", () => {
 
   it("draws a server that is not in an account in the legend's muted colour, not the border's", () => {
     expect(MARK_COLOR.absent).toBe(color.muted);
+  });
+
+  it("keeps two spaces after every matrix cell it cuts, so long account names never run together", async () => {
+    const matrix: Matrix = {
+      columns: [
+        { key: "claude:alexandra-personal", label: "alexandra-personal" },
+        { key: "claude:benjamin-workplace", label: "benjamin-workplace" },
+      ],
+      rows: [{ name: `a-server-with-a-long-name-${"x".repeat(12)}`, cells: ["on", "off"] }],
+    };
+    const instance = mount(<McpMatrix matrix={matrix} cursor={0} top={0} height={8} width={100} offset={0} />, 104);
+    const lines = (await seen(instance, (f) => f.includes("SERVER"))).split("\n");
+    const header = lines.find((line) => line.includes("SERVER")) ?? "";
+    const row = lines.find((line) => line.includes("a-server")) ?? "";
+    expect(header).toContain("alexandra…  benjamin-…");
+    expect(row).toMatch(/… {2}●/);
+    // Each mark still sits under its account's label.
+    expect(row.indexOf(symbol.dot)).toBe(header.indexOf("alexandra"));
+    expect(row.indexOf(symbol.circle)).toBe(header.indexOf("benjamin"));
   });
 
   it("says how long the read took in milliseconds under a second", async () => {
