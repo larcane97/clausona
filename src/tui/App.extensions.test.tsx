@@ -50,7 +50,7 @@ vi.mock("../lib/service", async (importOriginal) => ({
 }));
 
 import { App } from "./App.js";
-import { ENTER, ESC, moveTo, press, waitForFrame } from "./test-drive.js";
+import { ENTER, ESC, focusedOn, moveTo, press, waitForFrame } from "./test-drive.js";
 
 vi.setConfig({ testTimeout: 15_000 });
 
@@ -90,6 +90,31 @@ describe("Extensions from the dashboard", () => {
     expect(load).toHaveBeenCalledTimes(1);
     await press(instance, ESC);
     await waitForFrame(instance.lastFrame, (f) => f.includes("Dashboard"));
+    instance.unmount();
+  });
+
+  it("leaves esc inside a view to the Extensions screen, and comes back clean", async () => {
+    const instance = render(<App loadExtensions={async () => inventory} />);
+    await waitForFrame(instance.lastFrame, (f) => f.includes("Extensions"));
+    // A dashboard message from before, which the way back must not bring back with it.
+    await press(instance, ESC);
+    await waitForFrame(instance.lastFrame, (f) => f.includes("Press ESC again to quit"));
+    await moveTo(instance, "Extensions");
+    await press(instance, ENTER);
+    await waitForFrame(instance.lastFrame, (f) => f.includes("eli5"));
+
+    // Esc while typing a search only ends the search: the App must not take it as a way back.
+    await press(instance, "/");
+    await waitForFrame(instance.lastFrame, (f) => f.includes("▏"));
+    await press(instance, ESC);
+    const after = await waitForFrame(instance.lastFrame, (f) => !f.includes("▏"));
+    expect(after).toContain("eli5");
+    expect(after).not.toContain("Dashboard");
+
+    await press(instance, ESC);
+    const back = await waitForFrame(instance.lastFrame, (f) => f.includes("Dashboard"));
+    expect(focusedOn(back, "Profiles")).toBe(true);
+    expect(back).not.toContain("Press ESC again to quit");
     instance.unmount();
   });
 });
