@@ -2199,6 +2199,7 @@ export function App({ initialScreen = "dashboard", updater, onRestart, loadExten
       <ExtensionsScreen
         load={loadExtensions}
         onExit={() => {
+          setMessage("");
           setCursor(0);
           setScreen("dashboard");
         }}
