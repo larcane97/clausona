@@ -1,7 +1,7 @@
 import path from "node:path";
 
-import type { Collector, Location } from "../model.js";
-import { entryInfo, listNames, parseFrontmatter, readText } from "../read.js";
+import type { Collector, Extension, Location } from "../model.js";
+import { entryInfo, IO_LIMIT, listNames, mapLimit, parseFrontmatter, readText } from "../read.js";
 
 export type SkillLocation = Omit<Location, "file">;
 
@@ -18,17 +18,18 @@ export async function readSkillFolders(
   out: Collector,
   options: { skip?: readonly string[]; prefix?: string; usageKeys?: (name: string) => string[] } = {},
 ): Promise<void> {
-  for (const entry of await listNames(dir, out.warnings)) {
-    if (options.skip?.includes(entry)) continue;
+  // The entries are read in parallel and listed in their own order, as one at a time would.
+  const found = await mapLimit(await listNames(dir, out.warnings), IO_LIMIT, async (entry) => {
+    if (options.skip?.includes(entry)) return undefined;
     const folder = path.join(dir, entry);
     const info = await entryInfo(folder);
     const broken = info.link?.broken === true;
-    if (info.kind !== "dir" && !broken) continue;
+    if (info.kind !== "dir" && !broken) return undefined;
     const text = broken ? undefined : await readText(path.join(folder, "SKILL.md"), out.warnings);
-    if (!broken && text === undefined) continue;
+    if (!broken && text === undefined) return undefined;
     const front = text === undefined ? {} : parseFrontmatter(text);
     const name = `${options.prefix ?? ""}${entry}`;
-    out.items.push({
+    const item: Extension = {
       id: `skill:${location.tool}:${location.scope}:${owner}:${name}`,
       kind: "skill",
       name,
@@ -37,6 +38,8 @@ export async function readSkillFolders(
       ...(info.link ? { link: info.link } : {}),
       ...(info.createdAt !== undefined ? { createdAt: info.createdAt } : {}),
       usageKeys: options.usageKeys ? options.usageKeys(name) : [name],
-    });
-  }
+    };
+    return item;
+  });
+  for (const item of found) if (item) out.items.push(item);
 }

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { Dirent } from "node:fs";
 import { lstat, readdir, readFile, readlink, stat } from "node:fs/promises";
 import path from "node:path";
 
@@ -122,6 +123,34 @@ export function parseFrontmatter(text: string): { name?: string; description?: s
   return out;
 }
 
+/**
+ * How many file-system calls one listing or walk keeps in flight. Node's thread pool runs four
+ * at a time either way; more in the queue keeps it busy while each call waits on the disk,
+ * without holding open a file for every entry of a large home.
+ */
+export const IO_LIMIT = 32;
+
+/**
+ * `fn` over `items`, at most `limit` calls at a time, with the results in the items' order -
+ * so reading folders in parallel keeps what is listed, and in which order, the same.
+ */
+export async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index] as T, index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, limit), items.length) }, worker));
+  return results;
+}
+
 /** How much file content `hashTree` reads before it hashes the rest by path and size. */
 const HASH_BYTE_BUDGET = 4 * 1024 * 1024;
 
@@ -132,33 +161,73 @@ const HASH_BYTE_BUDGET = 4 * 1024 * 1024;
  * it cannot read, gone since it was listed or not readable, counts the same way. A symlinked
  * subfolder is not followed, so a link loop cannot hang the walk, and two copies that differ
  * only inside one hash alike.
+ *
+ * A skill can hold a whole node_modules, tens of thousands of files, so the folders are listed
+ * and the files stat'ed and read in parallel; the digest then takes them in the order of a walk
+ * one entry at a time - each folder's entries by name, a subfolder's files in its place - and
+ * comes out the same as that walk's.
  */
 export async function hashTree(dir: string): Promise<string> {
-  const hash = createHash("sha256");
-  let budget = HASH_BYTE_BUDGET;
-  const walk = async (rel: string): Promise<void> => {
-    const entries = await readdir(path.join(dir, rel), { withFileTypes: true }).catch(() => []);
-    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      if (entry.name === ".DS_Store") continue;
-      const relPath = rel === "" ? entry.name : `${rel}/${entry.name}`;
-      if (entry.isDirectory()) {
-        await walk(relPath);
-        continue;
-      }
-      const full = path.join(dir, relPath);
-      const stats = await stat(full).catch(() => null);
-      if (!stats?.isFile()) continue;
-      hash.update(`${relPath}\0${stats.size}\0`);
-      if (stats.size > budget) continue;
-      const bytes = await readFile(full).catch(() => null);
-      if (!bytes) continue;
-      budget -= stats.size;
-      // A plain view of the same bytes: this repo's @types/node Buffer is not a BinaryLike under TypeScript 5.9.
-      hash.update(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+  const listings = new Map<string, Dirent[]>();
+  let level = [""];
+  while (level.length > 0) {
+    const listed = await mapLimit(level, IO_LIMIT, async (rel) =>
+      (await readdir(path.join(dir, rel), { withFileTypes: true }).catch(() => []))
+        .filter((entry) => entry.name !== ".DS_Store")
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    );
+    const next: string[] = [];
+    level.forEach((rel, i) => {
+      const entries = listed[i] ?? [];
+      listings.set(rel, entries);
+      for (const entry of entries) if (entry.isDirectory()) next.push(relativeTo(rel, entry.name));
+    });
+    level = next;
+  }
+  const files: string[] = [];
+  const inOrder = (rel: string): void => {
+    for (const entry of listings.get(rel) ?? []) {
+      if (entry.isDirectory()) inOrder(relativeTo(rel, entry.name));
+      else files.push(relativeTo(rel, entry.name));
     }
   };
-  await walk("");
+  inOrder("");
+  const sizes = await mapLimit(files, IO_LIMIT, async (relPath) => {
+    const stats = await stat(path.join(dir, relPath)).catch(() => null);
+    return stats?.isFile() ? stats.size : undefined;
+  });
+  // The files that fit the budget if every read succeeds, read ahead; together they are within
+  // the budget. A read that fails leaves its share of the budget to later files, which are then
+  // read in turn below, as the one-at-a-time walk would.
+  let planned = HASH_BYTE_BUDGET;
+  const ahead: number[] = [];
+  sizes.forEach((size, i) => {
+    if (size === undefined || size > planned) return;
+    planned -= size;
+    ahead.push(i);
+  });
+  const read = (relPath: string) => readFile(path.join(dir, relPath)).catch(() => null);
+  const readAhead = await mapLimit(ahead, IO_LIMIT, (i) => read(files[i] ?? ""));
+  const contents = new Map(ahead.map((fileIndex, k) => [fileIndex, readAhead[k] ?? null]));
+  const hash = createHash("sha256");
+  let budget = HASH_BYTE_BUDGET;
+  for (const [i, relPath] of files.entries()) {
+    const size = sizes[i];
+    if (size === undefined) continue;
+    hash.update(`${relPath}\0${size}\0`);
+    if (size > budget) continue;
+    const bytes = contents.has(i) ? contents.get(i) : await read(relPath);
+    if (!bytes) continue;
+    budget -= size;
+    // A plain view of the same bytes: this repo's @types/node Buffer is not a BinaryLike under TypeScript 5.9.
+    hash.update(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+  }
   return hash.digest("hex");
+}
+
+/** A path under a walk's root, with `/` as the digest has always had it. */
+function relativeTo(rel: string, name: string): string {
+  return rel === "" ? name : `${rel}/${name}`;
 }
 
 /** The directory holding the `.git` entry (a repo's folder or a worktree's file) at or above `dir`. */

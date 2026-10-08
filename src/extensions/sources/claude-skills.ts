@@ -1,7 +1,7 @@
 import path from "node:path";
 
-import type { Collector, Project } from "../model.js";
-import { entryInfo, isRecord, listNames, parseFrontmatter, readText } from "../read.js";
+import type { Collector, Extension, Project } from "../model.js";
+import { entryInfo, IO_LIMIT, isRecord, listNames, mapLimit, parseFrontmatter, readText } from "../read.js";
 import { type ClaudeContext, pluginOwner, sharesPrimaryEntry } from "./claude-context.js";
 import { readSkillFolders, type SkillLocation } from "./skill-dirs.js";
 
@@ -25,6 +25,8 @@ export async function readClaudeSkills(ctx: ClaudeContext, projects: Project[], 
         if (!(await sharesPrimaryEntry(account, ctx.primaryDir, "skills"))) {
           await readSkillFolders(path.join(account.configDir, "skills"), own, account.id, out, { skip: ["synced"] });
         }
+      })(),
+      (async () => {
         if (!(await sharesPrimaryEntry(account, ctx.primaryDir, "commands"))) {
           await readCommandFiles(path.join(account.configDir, "commands"), own, account.id, out);
         }
@@ -65,19 +67,17 @@ async function readCommandFiles(
   out: Collector,
   prefix = "",
 ): Promise<void> {
-  const visit = async (sub: string): Promise<void> => {
-    for (const entry of await listNames(path.join(dir, sub), out.warnings)) {
+  // The entries are read in parallel and listed in their own order, as one at a time would.
+  const visit = async (sub: string): Promise<Extension[]> => {
+    const found = await mapLimit(await listNames(path.join(dir, sub), out.warnings), IO_LIMIT, async (entry) => {
       const file = path.join(dir, sub, entry);
       const info = await entryInfo(file);
-      if (info.kind === "dir" && sub === "") {
-        await visit(entry);
-        continue;
-      }
-      if (info.kind !== "file" || !entry.endsWith(".md")) continue;
+      if (info.kind === "dir" && sub === "") return visit(entry);
+      if (info.kind !== "file" || !entry.endsWith(".md")) return [];
       const text = await readText(file, out.warnings);
       const front = text === undefined ? {} : parseFrontmatter(text);
       const name = `${prefix}${entry.slice(0, -3)}`;
-      out.items.push({
+      const item: Extension = {
         id: `skill:claude:${location.scope}:${owner}:command:${sub ? `${sub}/` : ""}${name}`,
         kind: "skill",
         name,
@@ -86,10 +86,12 @@ async function readCommandFiles(
         ...(info.createdAt !== undefined ? { createdAt: info.createdAt } : {}),
         usageKeys: [name],
         summary: sub ? { type: "command", namespace: sub } : { type: "command" },
-      });
-    }
+      };
+      return [item];
+    });
+    return found.flat();
   };
-  await visit("");
+  out.items.push(...(await visit("")));
 }
 
 /**
@@ -107,16 +109,18 @@ async function readSynced(ctx: ClaudeContext, out: Collector): Promise<void> {
     }
   }
   const root = path.join(ctx.primaryDir, "skills", "synced");
-  for (const bucket of await listNames(root, out.warnings)) {
-    const profile = owners.get(bucket);
-    await readSkillFolders(
-      path.join(root, bucket),
-      { tool: "claude", scope: "synced", ...(profile ? { profile } : {}) },
-      bucket,
-      out,
-      { usageKeys: (name) => [name, `anthropic-skills:${name}`] },
-    );
-  }
+  await Promise.all(
+    (await listNames(root, out.warnings)).map((bucket) => {
+      const profile = owners.get(bucket);
+      return readSkillFolders(
+        path.join(root, bucket),
+        { tool: "claude", scope: "synced", ...(profile ? { profile } : {}) },
+        bucket,
+        out,
+        { usageKeys: (name) => [name, `anthropic-skills:${name}`] },
+      );
+    }),
+  );
 }
 
 /**
