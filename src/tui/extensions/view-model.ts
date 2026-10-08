@@ -81,15 +81,20 @@ type GroupInfo = { key: string; label: string; order: number; open: boolean; plu
 function groupOf(item: Extension, tab: Tab, project: string | undefined): GroupInfo {
   const loc = item.location;
   if (loc.scope === "plugin") {
-    return {
-      key: `plugin:${loc.plugin}`,
-      label: `Plugin · ${(loc.plugin ?? "").split("@")[0]}`,
-      order: 3,
-      open: false,
-      ...(loc.plugin ? { plugin: loc.plugin } : {}),
-      // A plugin installed for one project is switched in that project's settings.
-      ...(loc.project ? { project: loc.project } : {}),
-    };
+    const name = (loc.plugin ?? "").split("@")[0];
+    const plugin = loc.plugin ? { plugin: loc.plugin } : {};
+    // A plugin installed for one project is its own group, switched in that project's settings.
+    if (loc.project !== undefined) {
+      return {
+        key: `plugin:${loc.plugin}|${loc.project}`,
+        label: `Plugin · ${name} · ${path.basename(loc.project)}`,
+        order: 3,
+        open: false,
+        ...plugin,
+        project: loc.project,
+      };
+    }
+    return { key: `plugin:${loc.plugin}`, label: `Plugin · ${name}`, order: 3, open: false, ...plugin };
   }
   if (loc.project !== undefined) {
     const here = project !== undefined && samePath(loc.project, project);
@@ -154,12 +159,21 @@ function rowUsed(inv: Inventory, items: Extension[], now: number): string {
   return usage.lastUsedAt === undefined ? String(usage.total) : `${usage.total} · ${ago(usage.lastUsedAt, now)}`;
 }
 
+/**
+ * The accounts that hold any of `items`: an account's own server, or a plugin's server in each
+ * account that has the plugin. None for a `.mcp.json` server, which every account sees.
+ */
+function accountsOf(items: Extension[]): string[] {
+  const accounts = items.flatMap((i) => [i.location.profile, ...(i.location.accounts ?? [])]);
+  return [...new Set(accounts.filter((p): p is string => p !== undefined))];
+}
+
 function rowExtra(items: Extension[]): string {
   const first = items[0];
   if (first?.kind === "hook") return first.summary?.command ?? first.summary?.prompt ?? "";
   if (first?.kind !== "mcp") return "";
-  const accounts = new Set(items.map((i) => i.location.profile).filter((p): p is string => p !== undefined));
-  return accounts.size > 0 ? `${accounts.size} acct` : "shared";
+  const accounts = accountsOf(items);
+  return accounts.length > 0 ? `${accounts.length} acct` : "shared";
 }
 
 function duplicateIds(inv: Inventory, tab: Tab): Set<string> {
@@ -203,43 +217,48 @@ function matches(item: Extension, query: string): boolean {
 
 /**
  * The rows of one tab: a header per group, then one row per name in it - so the Claude and
- * Codex copies of `eli5` share a row - unless the group is closed. Searching or filtering
- * opens every group, so a match is never hidden behind one.
+ * Codex copies of `eli5` share a row - unless the group is closed. A hook is a row of its own:
+ * two commands on one event are two hooks, not two copies of one. Searching or filtering opens
+ * every group, so a match is never hidden behind one.
  */
 export function buildRows(inv: Inventory, o: ViewOptions): Row[] {
   const kind = KIND[o.tab];
   const query = o.query.trim().toLowerCase();
   const forced = query !== "" || o.filter !== "all";
   const duplicates = duplicateIds(inv, o.tab);
-  const groups = new Map<string, { info: GroupInfo; byName: Map<string, Extension[]> }>();
+  const groups = new Map<string, { info: GroupInfo; byKey: Map<string, { name: string; items: Extension[] }> }>();
   for (const item of inv.items) {
     if (item.kind !== kind || !passes(inv, item, o, duplicates)) continue;
     if (query && !matches(item, query)) continue;
     const info = groupOf(item, o.tab, o.project);
-    const group = groups.get(info.key) ?? { info, byName: new Map<string, Extension[]>() };
+    const group = groups.get(info.key) ?? { info, byKey: new Map() };
     groups.set(info.key, group);
-    group.byName.set(item.name, [...(group.byName.get(item.name) ?? []), item]);
+    const rowKey = o.tab === "hooks" ? item.id : item.name;
+    const row = group.byKey.get(rowKey) ?? { name: item.name, items: [] };
+    row.items.push(item);
+    group.byKey.set(rowKey, row);
   }
   const rows: Row[] = [];
   const ordered = [...groups.values()].sort(
     (a, b) => a.info.order - b.info.order || a.info.label.localeCompare(b.info.label),
   );
-  for (const { info, byName } of ordered) {
+  for (const { info, byKey } of ordered) {
     const open = forced || (o.open[info.key] ?? info.open);
     const state = info.plugin ? pluginState(inv, info.plugin, info.project ?? o.project).value : undefined;
     rows.push({
       type: "group",
       key: info.key,
       label: info.label,
-      count: byName.size,
+      count: byKey.size,
       open,
       ...(state ? { state } : {}),
     });
     if (!open) continue;
-    for (const [name, items] of [...byName.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    // A stable sort: hooks of one event stay in the inventory's order, which is by id.
+    for (const [rowKey, { name, items }] of [...byKey.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name))) {
       rows.push({
         type: "item",
-        key: `${info.key}|${name}`,
+        key: `${info.key}|${rowKey}`,
         group: info.key,
         name,
         items,
@@ -312,9 +331,16 @@ export function detailOf(inv: Inventory, row: ItemRow, project: string | undefin
     }
   }
   if (first.kind === "skill") {
-    const offIn = inv.facts.claudeSkillOverrides
-      .filter((o) => o.project && o.map[first.name] === "off" && !samePath(o.project, project))
-      .map((o) => path.basename(o.project ?? ""));
+    // skillOverrides in other projects matter only to a Claude skill no project owns: a plugin's
+    // skill ignores them, and a project's own is read in its project on the Here line.
+    const overridable = row.items.some(
+      (i) => i.location.tool === "claude" && i.location.project === undefined && i.location.scope !== "plugin",
+    );
+    const offIn = overridable
+      ? inv.facts.claudeSkillOverrides
+          .filter((o) => o.project && o.map[first.name] === "off" && !samePath(o.project, project))
+          .map((o) => path.basename(o.project ?? ""))
+      : [];
     if (offIn.length > 0) lines.push({ label: "Off in", text: [...new Set(offIn)].join(", ") });
     const usage = usageOf(inv, row.items);
     if (usage) {
@@ -330,18 +356,21 @@ export function detailOf(inv: Inventory, row: ItemRow, project: string | undefin
     }
   }
   if (first.kind === "mcp" || first.kind === "hook") {
-    for (const [key, value] of Object.entries(first.summary ?? {})) {
-      if (key === "event" && first.kind === "hook") continue;
-      lines.push({ label: key[0]?.toUpperCase() + key.slice(1), text: value });
+    // Every copy's own: a server of one name can run another command in another account.
+    const seen = new Set<string>();
+    for (const item of row.items) {
+      for (const [key, value] of Object.entries(item.summary ?? {})) {
+        if (key === "event" && item.kind === "hook") continue;
+        const label = `${key.charAt(0).toUpperCase()}${key.slice(1)}`;
+        if (seen.has(`${label}\0${value}`)) continue;
+        seen.add(`${label}\0${value}`);
+        lines.push({ label, text: value });
+      }
     }
   }
   if (first.kind === "mcp") {
-    // A plugin's server is in the accounts that have the plugin; any other in its owner's.
-    const accounts = row.items
-      .flatMap((i) => [i.location.profile, ...(i.location.accounts ?? [])])
-      .filter((p): p is string => p !== undefined);
-    if (accounts.length > 0)
-      lines.push({ label: "Accounts", text: [...new Set(accounts)].map(shortProfile).join(", ") });
+    const accounts = accountsOf(row.items);
+    if (accounts.length > 0) lines.push({ label: "Accounts", text: accounts.map(shortProfile).join(", ") });
   }
   return lines;
 }
@@ -407,24 +436,22 @@ export type Layout = {
 /**
  * Where the detail pane goes: beside the list from 110 columns, under it from 64, and on its
  * own screen (enter) below that. Heights leave room for Chrome's header and footer, the tab
- * bar and the key hints.
+ * bar and the key hints. A size that is not a number, as from a stream that is no terminal,
+ * is read as 80 by 24.
  */
 export function pickLayout(columns: number, rows: number): Layout {
-  const width = Math.max(20, columns - 4);
-  const body = Math.max(6, rows - 12);
-  if (columns >= 110) {
+  const across = Number.isFinite(columns) ? columns : 80;
+  const down = Number.isFinite(rows) ? rows : 24;
+  const width = Math.max(20, across - 4);
+  const body = Math.max(6, down - 12);
+  if (across >= 110) {
     const listWidth = Math.floor((width - 2) * 0.58);
     return { mode: "side", listWidth, listHeight: body, detailWidth: width - 2 - listWidth, detailHeight: body };
   }
-  if (columns >= 64) {
-    const detailHeight = Math.min(9, Math.max(5, Math.floor(body * 0.4)));
-    return {
-      mode: "stacked",
-      listWidth: width,
-      listHeight: Math.max(3, body - detailHeight),
-      detailWidth: width,
-      detailHeight,
-    };
+  if (across >= 64) {
+    // The two share the body: the detail gives way first, so the list keeps at least 3 lines.
+    const detailHeight = Math.min(9, Math.max(5, Math.floor(body * 0.4)), body - 3);
+    return { mode: "stacked", listWidth: width, listHeight: body - detailHeight, detailWidth: width, detailHeight };
   }
   return { mode: "list", listWidth: width, listHeight: body, detailWidth: width, detailHeight: body };
 }
@@ -440,7 +467,8 @@ export function listColumns(tab: Tab, width: number): Columns {
     return { name, tool, extra: Math.max(0, inner - name - tool - 2), used: 0, state: 0 };
   }
   if (tab === "mcp") {
-    const state = 12;
+    // Wide enough for the longest state word, pending-approval.
+    const state = 16;
     const extra = inner >= 60 ? 8 : 0;
     const tool = inner >= 40 ? 4 : 0;
     return { name: Math.max(8, inner - state - extra - tool - 3), tool, extra, used: 0, state };
