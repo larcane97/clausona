@@ -30,7 +30,7 @@ const USAGE = `usage: superset-host.mjs <command>
   workspaces create --project <id> --name <name> --branch <branch> [--base-branch <branch>] [--skip-branch-prefix]
   workspaces delete <id>
   agents configs
-  agents add-config --label <label> --profile <profile> [--command <path>] [-- <claude args>...]
+  agents add-config --label <label> --profile <profile> [--command <path>] [-- <tool args>...]
   agents remove-config <id>
   agents run --workspace <id> --agent <config id> [--prompt <text> | --prompt-file <path>] [--from-terminal <id>]
   terminals list --workspace <id>

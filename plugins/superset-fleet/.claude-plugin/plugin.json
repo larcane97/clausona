@@ -1,0 +1,11 @@
+{
+  "name": "superset-fleet",
+  "version": "0.2.0",
+  "description": "Run parallel agents in Superset, each on its own clausona account or API model (Claude Code or Codex), then check and retire them.",
+  "author": { "name": "larcane97", "url": "https://github.com/larcane97" },
+  "homepage": "https://github.com/larcane97/clausona/blob/main/docs/usecases/superset-fleet.md",
+  "repository": "https://github.com/larcane97/clausona",
+  "license": "MIT",
+  "keywords": ["superset", "clausona", "multi-account", "parallel-agents", "orchestration", "codex"],
+  "dependencies": ["fleet-core"]
+}
