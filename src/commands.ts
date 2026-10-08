@@ -1557,7 +1557,9 @@ export async function runCommand(command: string, args: string[]) {
     }
 
     case "run": {
-      throw new Error("Usage: clausona run <profile> [claude-args...]");
+      throw new Error(
+        "Usage: clausona run <profile> [-- args...] | clausona run [claude|codex] --route <name> [-- args...]\nRun `clausona run --help` for every form.",
+      );
     }
 
     case "_shell-env": {

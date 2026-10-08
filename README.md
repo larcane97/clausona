@@ -59,6 +59,7 @@ You don't sign in again, and you don't reinstall plugins.
 - **Shared environment** — plugins (and the MCP servers they bring), skills, and settings.json with its hooks and permissions (Claude), and config.toml (MCP servers included), skills, and hooks (Codex) are symlinked across profiles within each tool. Set up once, use everywhere. MCP servers added with `claude mcp add` stay per account — [see the FAQ](#do-my-mcp-servers-plugins-and-settings-carry-over-when-i-switch).
 - **Shared history, if you want** — `clausona config <profile> --merge-sessions` shares conversation history with your primary directory, so `claude --resume` and `claude --continue` (and `codex resume` on macOS and Linux) find conversations from every account that shares it
 - **Plan quota at a glance** — session and weekly limit usage for every account, read live from each tool's own usage endpoint (Claude and Codex)
+- **Routing** — `clausona run --route main` starts on whichever account still has room, going by the same plan-quota readings ([docs](docs/routing.md))
 - **Two accounts at once** — `clausona run claude:personal` starts one session under another profile without switching, so two terminals can run two accounts side by side
 - **Parallel agent fleets** — plugins from this repo let one Claude Code or Codex session run parallel agents in [Superset](docs/usecases/superset-fleet.md), [herdr](docs/usecases/herdr-fleet.md) or [Orca](docs/usecases/orca-fleet.md), each on its own account or API model, then check and clean up after them. Install only the one for the tool you use
 - **API profiles** — a profile can point at an API endpoint instead of a subscription login: the Anthropic API, a gateway, or a model you serve yourself
@@ -148,6 +149,31 @@ skips the network entirely.
 How lapsed tokens are renewed, and what a dash in the table means:
 **[docs/plan-quota.md](docs/plan-quota.md)**.
 
+## Routing
+
+You can let clausona choose the account. A route is a named group of accounts and a rule for
+picking one of them by plan quota:
+
+```bash
+clausona route add main                          # every account, taking turns
+clausona route explain main                      # who would be picked now, and why
+clausona run --route main -- -p "run the tests"
+```
+
+The run says on stderr which account it got:
+
+```
+→ claude:team · route main · usage 40% (5H) · round-robin
+```
+
+By default an account at 80% or more of its 5-hour or weekly limit is used only when no other
+account in the route is under 80%, and one at 95% or more is never picked. When every account is
+that full, clausona says when each one resets and exits with code 75 instead of starting a
+session.
+
+Patterns like `*@example.com`, fallbacks, the strategies, and the JSON that scripts and agents
+read: **[docs/routing.md](docs/routing.md)**.
+
 ## API profiles
 
 A profile can be backed by an API endpoint instead of a subscription login — the Anthropic
@@ -197,6 +223,8 @@ clausona hides or clears from the environment: **[docs/api-profiles.md](docs/api
 | `clausona remove <profile>`                                         | Remove a profile. Its config directory and history stay, so delete that directory before adding the name again |
 | `clausona use [profile]`                                            | Switch active profile                                |
 | `clausona run <profile> [-- args...]`                               | Run the tool's CLI with a specific profile (a leading `--` is dropped) |
+| `clausona run --route <name> [-- args...]`                          | Run on the account a [route](docs/routing.md) picks |
+| `clausona route add\|set\|rename\|remove\|edit\|list\|explain\|pick …` | Manage [routes](docs/routing.md) |
 | `clausona list [--json] [--refresh] [--no-quota] [--no-renew]`      | List all profiles with plan quota and usage          |
 | `clausona usage [profile] [--period=today\|week\|month\|all]`       | View cost and token usage                            |
 | `clausona current [--json]`                                         | Show active profile                                  |
@@ -317,6 +345,13 @@ Yes. `clausona list` and the dashboard show every account's 5-hour and 7-day usa
 time until each resets, read from each tool's own usage endpoint with the credential that tool
 already stored. Accounts you have not used today still report, because clausona renews a lapsed
 access token when it needs to.
+
+### Can clausona pick the account with quota left?
+
+Yes. `clausona route add main` makes a route of every account of one tool, and
+`clausona run --route main` starts on the next one in turn that is under 80% of its limits.
+With `--strategy headroom` it takes the account with the most room instead. See
+[Routing](docs/routing.md).
 
 ### Can I run two accounts at the same time?
 
