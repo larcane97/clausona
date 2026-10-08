@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import type { Collector, Location, Scope, SettingsLayer } from "../model.js";
-import { isRecord, readJsonObject } from "../read.js";
+import { isRecord, pathKey, readJsonObject } from "../read.js";
 import { hookSummary } from "../redact.js";
 import { type ClaudeContext, type PluginInstall, pluginOwner } from "./claude-context.js";
 
@@ -11,7 +11,8 @@ function layerScope(layer: SettingsLayer): Scope {
 
 /**
  * One item per hook command, `hooks[event][group].hooks[index]` - the shape of Claude Code's
- * settings, of a plugin's hooks.json, and of Codex's hooks.json alike.
+ * settings, of a plugin's hooks.json, and of Codex's hooks.json alike. An entry that is not an
+ * object is no command Claude Code could run, so it is not listed.
  */
 export function addHooks(hooks: unknown, location: Location, owner: string, out: Collector): void {
   if (!isRecord(hooks)) return;
@@ -21,6 +22,7 @@ export function addHooks(hooks: unknown, location: Location, owner: string, out:
       if (!isRecord(group) || !Array.isArray(group.hooks)) return;
       const matcher = typeof group.matcher === "string" && group.matcher !== "" ? group.matcher : undefined;
       group.hooks.forEach((hook, h) => {
+        if (!isRecord(hook)) return;
         out.items.push({
           id: `hook:${location.tool}:${location.scope}:${owner}:${event}#${g}.${h}`,
           kind: "hook",
@@ -45,7 +47,12 @@ function pluginLocation(plugin: PluginInstall, file: string): Location {
   };
 }
 
-/** The hooks in every settings file Claude Code reads, and in each plugin's hooks/hooks.json. */
+/**
+ * The hooks in every settings file Claude Code reads, and in each plugin's hooks/hooks.json. A
+ * settings hook's id owner is its file, which fixes the layer and the project too: the managed
+ * file and each managed-settings.d drop-in share a layer, as a project's settings.json and
+ * settings.local.json share a project.
+ */
 export async function readClaudeHooks(ctx: ClaudeContext, out: Collector): Promise<void> {
   for (const settings of ctx.settings) {
     addHooks(
@@ -56,7 +63,7 @@ export async function readClaudeHooks(ctx: ClaudeContext, out: Collector): Promi
         file: settings.file,
         ...(settings.project ? { project: settings.project } : {}),
       },
-      `${settings.layer}:${settings.project ?? "-"}`,
+      `${settings.layer}:${pathKey(settings.file)}`,
       out,
     );
   }
