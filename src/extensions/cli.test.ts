@@ -192,6 +192,17 @@ describe("hooks ls", () => {
     for (const line of narrow.split("\n")) expect(line.length).toBeLessThanOrEqual(60);
     expect(leakedWindows([wide, narrow], KEY)).toEqual([]);
   });
+
+  it("shows the home dir as ~ in the table's command, and in full in --json", async () => {
+    const { h, app } = seed();
+    const command = `${path.join(h.home, "bin", "guard.sh")} --log ${h.home}`;
+    h.write(".claude/settings.json", { hooks: { Stop: [{ hooks: [{ type: "command", command }] }] } });
+    const row = (await run(h, app, "hooks", ["ls"])).split("\n").find((line) => line.startsWith("Stop")) ?? "";
+    expect(row).toContain(`${path.join("~", "bin", "guard.sh")} --log ~`);
+    expect(row).not.toContain(h.home);
+    const json = JSON.parse(await run(h, app, "hooks", ["ls", "--json"]));
+    expect(json.items[0].summary.command).toBe(command);
+  });
 });
 
 describe("ls options and warnings", () => {

@@ -299,6 +299,43 @@ describe("detailOf", () => {
     expect(here.map((l) => l.text)).toEqual(["C a on", `C b off (${path.join("~", ".claude-b", ".claude.json")})`]);
   });
 
+  it("shows the home dir as ~ in a hook's and a server's command, and leaves the items as read", async () => {
+    let home = "";
+    const { app, inv } = await seed((h) => {
+      home = h.home;
+      h.write(".claude/settings.json", {
+        enabledPlugins: { "sp@m": true },
+        hooks: {
+          Stop: [
+            {
+              hooks: [
+                { type: "command", command: `${path.join(h.home, "bin", "notify")} --log ${h.home} ${h.home}-old` },
+              ],
+            },
+          ],
+        },
+      });
+      h.write("repos/app/.mcp.json", {
+        mcpServers: { docs: { command: "node", args: [path.join(h.home, "mcp", "docs.js")] } },
+      });
+    });
+    // Only where a path starts with the home dir: a sibling named like it is another folder.
+    const hookCommand = `${path.join("~", "bin", "notify")} --log ~ ${home}-old`;
+    const hook = items(buildRows(inv, { ...base, tab: "hooks", project: app }))[0];
+    if (hook?.type !== "item") throw new Error("no hook row");
+    expect(hook.extra).toBe(hookCommand);
+    expect(detailOf(inv, hook, app, Date.now())).toContainEqual({ label: "Command", text: hookCommand });
+    const docs = items(buildRows(inv, { ...base, tab: "mcp", project: app })).find((r) => r.name === "docs");
+    if (docs?.type !== "item") throw new Error("no docs row");
+    expect(detailOf(inv, docs, app, Date.now())).toContainEqual({
+      label: "Command",
+      text: `node ${path.join("~", "mcp", "docs.js")}`,
+    });
+    // Display only: what --json carries is the item's own summary, as it was read.
+    expect(hook.items[0]?.summary?.command).toBe(`${path.join(home, "bin", "notify")} --log ${home} ${home}-old`);
+    expect(docs.items[0]?.summary?.command).toBe(`node ${path.join(home, "mcp", "docs.js")}`);
+  });
+
   it("says where else a skill is off only for one no project owns", async () => {
     const { web, app, inv } = await seed((h) => {
       h.write("repos/web/.claude/settings.local.json", {

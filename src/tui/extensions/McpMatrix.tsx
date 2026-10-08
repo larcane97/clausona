@@ -1,7 +1,7 @@
 import { Box, Text } from "ink";
 
 import { color, symbol } from "../theme.js";
-import { cell, type Matrix, type MatrixCell } from "./view-model.js";
+import { COLUMN_GAP, column, type Matrix, type MatrixCell } from "./view-model.js";
 
 const MARK: Record<MatrixCell, string> = { on: symbol.dot, off: symbol.circle, pending: "?", absent: "·" };
 /** Not here is muted, as the legend says it: the border's dim grey all but vanishes on the ground. */
@@ -32,9 +32,10 @@ export function McpMatrix({ matrix, cursor, top, height, width, offset }: Props)
       </Text>
     );
   }
-  const nameWidth = Math.min(24, Math.max(8, ...matrix.rows.map((r) => r.name.length), 6));
-  const colWidth = Math.max(6, Math.min(12, Math.max(0, ...matrix.columns.map((c) => c.label.length)) + 2));
-  const across = width - 3 - nameWidth;
+  // Each column's width counts the gap after it, so a name or label that is cut keeps it.
+  const nameWidth = Math.min(24, Math.max(8, ...matrix.rows.map((r) => r.name.length), 6)) + COLUMN_GAP;
+  const colWidth = Math.max(6, Math.min(12, Math.max(0, ...matrix.columns.map((c) => c.label.length)) + COLUMN_GAP));
+  const across = width - 2 - nameWidth;
   const all = Math.floor(across / colWidth);
   const fit =
     offset === 0 && all >= matrix.columns.length ? all : Math.max(1, Math.floor((across - SCROLL_NOTE) / colWidth));
@@ -46,7 +47,8 @@ export function McpMatrix({ matrix, cursor, top, height, width, offset }: Props)
     <Box flexDirection="column">
       <Text color={color.muted} wrap="truncate-end">
         {"  "}
-        {cell("SERVER", nameWidth)} {columns.map((c) => cell(c.label, colWidth)).join("")}
+        {column("SERVER", nameWidth)}
+        {columns.map((c) => column(c.label, colWidth)).join("")}
         {offset > 0 ? " ←" : ""}
         {hidden > 0 ? ` → ${hidden} more` : ""}
       </Text>
@@ -56,13 +58,13 @@ export function McpMatrix({ matrix, cursor, top, height, width, offset }: Props)
           <Text key={row.name} wrap="truncate-end">
             <Text color={active ? color.cursor : color.dim}>{active ? symbol.cursor : " "} </Text>
             <Text color={active ? color.text : color.secondary} bold={active}>
-              {cell(row.name, nameWidth)}{" "}
+              {column(row.name, nameWidth)}
             </Text>
-            {columns.map((column, c) => {
+            {columns.map((account, c) => {
               const value = row.cells[offset + c] ?? "absent";
               return (
-                <Text key={`${row.name}|${column.key}`} color={MARK_COLOR[value]}>
-                  {cell(MARK[value], colWidth)}
+                <Text key={`${row.name}|${account.key}`} color={MARK_COLOR[value]}>
+                  {column(MARK[value], colWidth)}
                 </Text>
               );
             })}
