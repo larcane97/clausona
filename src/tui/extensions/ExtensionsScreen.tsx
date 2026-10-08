@@ -6,7 +6,7 @@ import type { Inventory } from "../../extensions/model.js";
 import { samePath } from "../../extensions/read.js";
 import { Chrome } from "../components/Chrome.js";
 import { color } from "../theme.js";
-import { DetailPane } from "./DetailPane.js";
+import { DetailPane, paneLines } from "./DetailPane.js";
 import { ItemList } from "./ItemList.js";
 import { McpMatrix } from "./McpMatrix.js";
 import { ProjectPicker } from "./ProjectPicker.js";
@@ -20,6 +20,7 @@ import {
   type Filter,
   listColumns,
   listRoom,
+  maxDetailTop,
   nameWidth,
   pickLayout,
   TAB_LABEL,
@@ -86,6 +87,8 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   const [pickerCursor, setPickerCursor] = useState(0);
   const [matrixCursor, setMatrixCursor] = useState(0);
   const [matrixOffset, setMatrixOffset] = useState(0);
+  /** The full-screen detail's first line. */
+  const [detailTop, setDetailTop] = useState(0);
   /** One line about the last thing done, shown until the next key. */
   const [status, setStatus] = useState("");
   const listTop = useRef(0);
@@ -160,6 +163,13 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   const matrix = useMemo(() => (inventory && project ? buildMatrix(inventory, project) : null), [inventory, project]);
   const at = Math.min(cursor, Math.max(0, rows.length - 1));
   const selected = rows[at];
+  // The full-screen detail's rows inside its border and under its title, and how far it scrolls.
+  const detailRoom = Math.max(0, layout.detailHeight - 3);
+  const detailMax =
+    inventory && view === "detail"
+      ? maxDetailTop(paneLines(inventory, selected, project, loadedAt, held).length, detailRoom)
+      : 0;
+  const detailPage = Math.max(1, detailRoom - 2);
 
   const move = (delta: number) =>
     setCursor((c) => Math.max(0, Math.min(rows.length - 1, Math.min(c, rows.length - 1) + delta)));
@@ -210,7 +220,15 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       else if (key.rightArrow) setMatrixOffset((o) => Math.min(Math.max(0, (matrix?.columns.length ?? 1) - 1), o + 1));
       return;
     }
-    if (view === "warnings" || view === "detail") {
+    if (view === "detail") {
+      if (key.escape || key.return) setView("list");
+      else if (key.upArrow) setDetailTop((t) => Math.max(0, Math.min(t, detailMax) - 1));
+      else if (key.downArrow) setDetailTop((t) => Math.min(detailMax, t + 1));
+      else if (key.pageUp) setDetailTop((t) => Math.max(0, Math.min(t, detailMax) - detailPage));
+      else if (key.pageDown) setDetailTop((t) => Math.min(detailMax, t + detailPage));
+      return;
+    }
+    if (view === "warnings") {
       if (key.escape || key.return) setView("list");
       return;
     }
@@ -229,7 +247,10 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     else if (key.return || input === " ") {
       if (selected?.type === "group") {
         if (!held) setOpen((o) => ({ ...o, [selected.key]: !selected.open }));
-      } else if (selected && key.return && layout.mode === "list") setView("detail");
+      } else if (selected && key.return && layout.mode === "list") {
+        setDetailTop(0);
+        setView("detail");
+      }
     } else if (input === "f") {
       setFilter((f) => FILTERS[(FILTERS.indexOf(f) + 1) % FILTERS.length] ?? "all");
       setCursor(0);
@@ -309,29 +330,35 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
             { keys: "m", action: "list" },
             { keys: "esc", action: "back" },
           ])
-        : view !== "list"
-          ? inOrder([{ keys: "esc", action: "back" }])
-          : // The keys nothing else on screen points to come first: enter, when the detail has no
-            // pane of its own, and w, the one sign that some files could not be read once the status
-            // line has gone. Search comes before the filter: the tab bar shows the filter's label at
-            // all times, but nothing there points to search until one is typed. On the MCP tab the
-            // matrix, that tab's main view, comes right after search.
-            [
-              { keys: "↑↓", action: "move", rank: 0 },
-              { keys: "tab", action: "section", rank: 2 },
-              layout.mode === "list"
-                ? { keys: "enter", action: "open", rank: 1 }
-                : { keys: "enter", action: "group", rank: 9 },
-              { keys: "f", action: "filter", rank: 7 },
-              { keys: "/", action: "search", rank: 5 },
-              ...(tab === "mcp" ? [{ keys: "m", action: "matrix", rank: 6 }] : []),
-              { keys: "p", action: "project", rank: 8 },
-              { keys: "r", action: "reload", rank: 10 },
-              ...(inventory.warnings.length > 0
-                ? [{ keys: "w", action: `${inventory.warnings.length} unreadable`, rank: 4 }]
-                : []),
-              { keys: "esc", action: "back", rank: 3 },
-            ];
+        : view === "detail" && detailMax > 0
+          ? inOrder([
+              { keys: "↑↓", action: "scroll" },
+              { keys: "esc", action: "back" },
+            ])
+          : view !== "list"
+            ? inOrder([{ keys: "esc", action: "back" }])
+            : // The keys nothing else on screen points to come first: enter, when the detail has no
+              // pane of its own, and w, the one sign that some files could not be read once the status
+              // line has gone. Search comes before the filter: the tab bar shows the filter's label at
+              // all times, but nothing there points to search until one is typed. On the MCP tab the
+              // matrix, that tab's main view, comes before search: it is the one key there that
+              // shows what the list cannot, account by account.
+              [
+                { keys: "↑↓", action: "move", rank: 0 },
+                { keys: "tab", action: "section", rank: 2 },
+                layout.mode === "list"
+                  ? { keys: "enter", action: "open", rank: 1 }
+                  : { keys: "enter", action: "group", rank: 9 },
+                { keys: "f", action: "filter", rank: 7 },
+                ...(tab === "mcp" ? [{ keys: "m", action: "matrix", rank: 5 }] : []),
+                { keys: "/", action: "search", rank: tab === "mcp" ? 6 : 5 },
+                { keys: "p", action: "project", rank: 8 },
+                { keys: "r", action: "reload", rank: 10 },
+                ...(inventory.warnings.length > 0
+                  ? [{ keys: "w", action: `${inventory.warnings.length} unreadable`, rank: 4 }]
+                  : []),
+                { keys: "esc", action: "back", rank: 3 },
+              ];
 
   return (
     <Chrome title="Extensions" subtitle={subtitle} footer={status || undefined} hints={fitHints(hints, hintWidth)}>
@@ -403,6 +430,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
           height={layout.detailHeight}
           now={loadedAt}
           held={held}
+          top={Math.min(detailTop, detailMax)}
         />
       ) : (
         <Box flexDirection={layout.mode === "side" ? "row" : "column"} gap={layout.mode === "side" ? 2 : 0}>

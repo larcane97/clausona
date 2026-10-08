@@ -11,7 +11,9 @@ import {
   cell,
   countItems,
   detailOf,
+  detailWindow,
   listColumns,
+  maxDetailTop,
   nameWidth,
   pickLayout,
   type Row,
@@ -283,6 +285,20 @@ describe("detailOf", () => {
     expect(text).toContain("Accounts|a, b");
   });
 
+  it("names the account on the Here line of a server that one account holds", async () => {
+    const { app, inv } = await seed((h, project) => {
+      h.claude("a", ".claude-a", { mcpServers: { github: { command: "gh-mcp" } }, projects: {} });
+      h.claude("b", ".claude-b", {
+        mcpServers: { github: { command: "gh-mcp" } },
+        projects: { [project]: { disabledMcpServers: ["github"] } },
+      });
+    });
+    const row = items(buildRows(inv, { ...base, tab: "mcp", project: app })).find((r) => r.name === "github");
+    if (row?.type !== "item") throw new Error("no github row");
+    const here = detailOf(inv, row, app, Date.now()).filter((l) => l.label === "Here");
+    expect(here.map((l) => l.text)).toEqual(["C a on", `C b off (${path.join("~", ".claude-b", ".claude.json")})`]);
+  });
+
   it("says where else a skill is off only for one no project owns", async () => {
     const { web, app, inv } = await seed((h) => {
       h.write("repos/web/.claude/settings.local.json", {
@@ -403,6 +419,20 @@ describe("layout helpers", () => {
     expect(listColumns("hooks", 96, 17)).toMatchObject({ name: 17, tool: 4, extra: 94 - 17 - 2 - (4 + 2) });
     // Capped by what the other columns leave, each with its two spaces.
     expect(listColumns("skills", 60, 80).name).toBe(58 - (4 + 2) - (20 + 2));
+  });
+
+  it("scrolls a long detail a line at a time, with a line for what is hidden above and below", () => {
+    // Nine lines in seven rows: six and the line below, then the line above, five and the line below.
+    expect(detailWindow(9, 7, 0)).toEqual({ start: 0, end: 6, above: 0, below: 3 });
+    expect(detailWindow(9, 7, 1)).toEqual({ start: 1, end: 6, above: 1, below: 3 });
+    expect(detailWindow(9, 7, 2)).toEqual({ start: 2, end: 7, above: 2, below: 2 });
+    // The last top shows the last line, after the line above; a later one is read as it.
+    expect(maxDetailTop(9, 7)).toBe(3);
+    expect(detailWindow(9, 7, 3)).toEqual({ start: 3, end: 9, above: 3, below: 0 });
+    expect(detailWindow(9, 7, 50)).toEqual(detailWindow(9, 7, 3));
+    // What fits does not scroll.
+    expect(maxDetailTop(7, 7)).toBe(0);
+    expect(detailWindow(7, 7, 2)).toEqual({ start: 0, end: 7, above: 0, below: 0 });
   });
 
   it("cuts long text with an ellipsis on one line, and pads short text", () => {

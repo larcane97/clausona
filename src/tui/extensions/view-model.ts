@@ -333,9 +333,11 @@ export function detailOf(inv: Inventory, row: ItemRow, project: string | undefin
     // An item with a project of its own is read there, so only one with none anywhere is global.
     const label = viewFrom(item, project) ? "Here" : "Globally";
     // A server every account sees is switched per account: one line each, as ls --json has it.
+    // What one account holds is read in that account, so its line names it too.
     const byAccount = accountStates(inv, item, project);
+    const owner = item.location.profile ? `${shortProfile(item.location.profile)} ` : "";
     const states = byAccount?.map(({ profile, state }) => ({ who: `${shortProfile(profile)} `, state })) ?? [
-      { who: "", state: stateHere(inv, item, project) },
+      { who: owner, state: stateHere(inv, item, project) },
     ];
     for (const { who, state } of states) {
       const from = state.setBy ? ` (${tilde(state.setBy.file, inv.homeDir)})` : "";
@@ -391,6 +393,31 @@ export function detailOf(inv: Inventory, row: ItemRow, project: string | undefin
     if (accounts.length > 0) lines.push({ label: "Accounts", text: accounts.map(shortProfile).join(", ") });
   }
   return lines;
+}
+
+/**
+ * The furthest a full-screen detail of `total` lines scrolls in `room` rows: to where the last
+ * line shows under the line that says how many are above. Nothing scrolls when all fit, or when
+ * the room cannot hold a line between the two markers.
+ */
+export function maxDetailTop(total: number, room: number): number {
+  return total <= room || room < 3 ? 0 : total - (room - 1);
+}
+
+/**
+ * The lines a full-screen detail shows from `top`: `start` to `end`, after a line that says how
+ * many are above when any are, and before one that says how many are below when any are.
+ */
+export function detailWindow(
+  total: number,
+  room: number,
+  top: number,
+): { start: number; end: number; above: number; below: number } {
+  const start = Math.max(0, Math.min(top, maxDetailTop(total, room)));
+  if (total <= room || room < 3) return { start: 0, end: Math.min(total, room), above: 0, below: 0 };
+  const shown = room - (start > 0 ? 1 : 0);
+  const end = total - start <= shown ? total : start + shown - 1;
+  return { start, end, above: start, below: total - end };
 }
 
 export type MatrixCell = "on" | "off" | "pending" | "absent";

@@ -51,7 +51,7 @@ async function seed(more?: (h: TestHome) => void): Promise<Inventory> {
   const app = h.project("repos/app");
   h.claude("default", ".claude", {
     projects: { [app]: { mcpServers: { "pg-dev": { command: "pg", env: { PGPASSWORD: KEY } } } } },
-    mcpServers: { github: { command: "gh-mcp", args: ["--api-key", KEY] } },
+    mcpServers: { github: { command: "gh-mcp", args: ["--api-key", KEY], env: { GITHUB_TOKEN: KEY } } },
   });
   h.claude("work", ".claude-work", {
     projects: { [app]: { disabledMcpServers: ["github"] } },
@@ -266,7 +266,7 @@ describe("ExtensionsScreen", () => {
     for (const line of narrow.split("\n")) expect(line.length).toBeLessThanOrEqual(60);
   });
 
-  it("shows the list alone at 80 by 18, and on enter a detail that ends in … where it is cut", async () => {
+  it("shows the list alone at 80 by 18, and on enter a detail that says how many lines are below", async () => {
     const { instance } = screen(await seed(), 80, 18);
     await seen(instance, (f) => f.includes("Global"));
     await moveTo(instance, "eli5");
@@ -275,9 +275,9 @@ describe("ExtensionsScreen", () => {
     const lines = (await seen(instance, (f) => /│ eli5 +│/.test(f))).split("\n");
     const title = lines.findIndex((line) => /│ eli5 +│/.test(line));
     expect(lines[title - 1]).toMatch(/╭─+╮/);
-    // Four lines of detail, room for three: two of them and a line that says there is more.
+    // Four lines of detail, room for three: two of them and a line that says how many more.
     expect(lines[title + 2]).toMatch(/│ Where /);
-    expect(lines[title + 3]).toMatch(/│ … +│/);
+    expect(lines[title + 3]).toMatch(/│ ↓ 2 more +│/);
     expect(lines[title + 4]).toMatch(/╰─+╯/);
   });
 
@@ -487,23 +487,48 @@ describe("ExtensionsScreen", () => {
     expect(frame).not.toMatch(/a-name.*cleanup/);
   });
 
-  it("hints the matrix on the MCP tab right after search, at 80 by 24", async () => {
-    const h = new TestHome();
-    homes.push(h);
-    const app = h.project("repos/app");
-    h.claude("default", ".claude", { projects: { [app]: {} }, mcpServers: { github: { command: "gh-mcp" } } });
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
-    expect(inv.warnings).toEqual([]);
+  it("hints the matrix on the MCP tab before search, so it fits at 80 by 24 beside an unreadable file", async () => {
+    const inv = await seed();
+    expect(inv.warnings).toHaveLength(1);
     const { instance } = screen(inv, 80, 24);
     await seen(instance, (f) => f.includes("Skills"));
     await press(instance, TAB);
-    const hints = (await seen(instance, (f) => f.includes("[MCP 1]"))).split("\n").find((l) => l.includes("↑↓ move"));
-    expect(hints).toContain("/ search │ m matrix");
+    const hints = (await seen(instance, (f) => f.includes("[MCP 2]"))).split("\n").find((l) => l.includes("↑↓ move"));
+    expect(hints).toContain("w 1 unreadable");
+    expect(hints).toContain("m matrix");
+  });
+
+  it("scrolls the full-screen detail with ↑↓ and says how many lines are hidden either way", async () => {
+    const { instance } = screen(await seed(), 80, 24);
+    await seen(instance, (f) => f.includes("eli5"));
+    await press(instance, TAB);
+    await moveTo(instance, "github");
+    await press(instance, ENTER);
+    const first = await seen(instance, (f) => f.includes("Where"));
+    expect(first).not.toContain("Env");
+    expect(first).toMatch(/↓ \d+ more/);
+    expect(first).toContain("↑↓ scroll │ esc back");
+    let frame = first;
+    for (let i = 0; i < 10 && !frame.includes("Env"); i++) {
+      await press(instance, DOWN);
+      frame = stripAnsi(instance.lastFrame() ?? "");
+    }
+    expect(frame).toContain("Env");
+    expect(frame).toMatch(/↑ \d+ more/);
+    await press(instance, ESC);
+    expect(await seen(instance, (f) => f.includes("ACCOUNTS"))).toContain("github");
+    expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+  });
+
+  it("hints no scrolling for a full-screen detail that fits", async () => {
+    const { instance } = screen(await seed(), 60, 30);
+    await seen(instance, (f) => f.includes("Global"));
+    await moveTo(instance, "deploy-check");
+    await press(instance, ENTER);
+    const frame = await seen(instance, (f) => f.includes("Where"));
+    expect(frame).not.toMatch(/more/);
+    expect(frame).not.toContain("scroll");
+    expect(frame).toContain("esc back");
   });
 
   it("draws a server that is not in an account in the legend's muted colour, not the border's", () => {
