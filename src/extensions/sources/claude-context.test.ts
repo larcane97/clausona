@@ -143,8 +143,8 @@ describe("loadClaudeContext", () => {
       ["tg@m", "local", app, ["claude:work"]],
     ]);
     const byId = new Map(ctx.plugins.map((p) => [p.id, p.installPath]));
-    expect(byId.get("sp@m")).toBe(realpathSync(h.path(".claude/plugins/cache/m/sp/1.0.0")));
-    expect(byId.get("only@m")).toBe(realpathSync(h.path(".claude/plugins/cache/m/only/1.0.0")));
+    expect(byId.get("sp@m")).toBe(realpathSync.native(h.path(".claude/plugins/cache/m/sp/1.0.0")));
+    expect(byId.get("only@m")).toBe(realpathSync.native(h.path(".claude/plugins/cache/m/only/1.0.0")));
     // A path that does not resolve stays as recorded.
     expect(byId.get("tg@m")).toBe(h.path(".claude-work/plugins/cache/m/tg/1.0.0"));
     expect(warnings.map((w) => path.basename(path.dirname(w.file)))).toEqual([".claude-broken"]);

@@ -73,7 +73,7 @@ describe("readClaudeHooks and readClaudePlugins", () => {
     );
     expect(new Set(hooks.map((i) => i.id)).size).toBe(hooks.length);
     // Install paths are realpaths: on macOS the temp dir sits behind the /var link.
-    const realSp = realpathSync(sp);
+    const realSp = realpathSync.native(sp);
     expect(hooks.find((i) => i.location.scope === "plugin")?.location).toEqual({
       tool: "claude",
       scope: "plugin",
