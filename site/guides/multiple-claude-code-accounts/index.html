@@ -9,7 +9,7 @@
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="clausona">
   <meta property="og:title" content="How to use multiple Claude Code accounts on one machine">
-  <meta property="og:description" content="One config directory per account, with skills, hooks, plugins, settings and even conversation history shared between them.">
+  <meta property="og:description" content="One config directory per account, with skills, hooks, plugins, settings and, optionally, conversation history shared between them.">
   <meta property="og:url" content="https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/">
   <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
   <meta property="article:published_time" content="2026-10-08">
@@ -78,6 +78,14 @@
       },
       {
         "@type": "Question",
+        "name": "Does clausona slow down Claude Code's start?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. A normal launch reads a cached script in the shell. On an M4 Pro Mac, claude --version took a median 25 ms with the hook and 25 ms without it. clausona's own process runs only after you change something, such as csn use."
+        }
+      },
+      {
+        "@type": "Question",
         "name": "Is my sign-in ever shared?",
         "acceptedAnswer": {
           "@type": "Answer",
@@ -130,7 +138,7 @@
     <article class="article">
       <nav class="crumbs" aria-label="Breadcrumb"><a href="../../">clausona</a> / Guides</nav>
       <h1>How to use multiple Claude Code accounts on one machine</h1>
-      <p class="lead">Claude Code signs in one account per config directory. Here is how to keep a work and a personal account side by side without setting up your skills, hooks and plugins twice, and how to share conversation history between them too.</p>
+      <p class="lead">Claude Code signs in one account per config directory. You can keep a work and a personal account side by side without setting up your skills, hooks and plugins twice, and share conversation history between them too.</p>
       <p class="updated">Updated <time datetime="2026-10-08">October 8, 2026</time></p>
 
       <div class="answer">
@@ -153,7 +161,7 @@ csn use work               <span class="c"># plain `claude` now starts as that a
 
       <h2 id="why">Why a second account is awkward</h2>
       <p>Claude Code keeps one signed-in account at a time. Switching with <code>/logout</code> and <code>/login</code> works, but every switch means signing in again, and one terminal can't stay on your work account while another uses your personal one.</p>
-      <p>The <code>CLAUDE_CONFIG_DIR</code> environment variable moves Claude Code's whole config directory, so a second directory can hold a second sign-in. The catch is that the new directory starts empty: no settings, no hooks, no skills, no plugins, no <code>CLAUDE.md</code> and no history. Install a plugin under one account and the other doesn't have it, and the two setups drift apart from there.</p>
+      <p>The <code>CLAUDE_CONFIG_DIR</code> environment variable moves Claude Code's whole config directory, so a second directory can hold a second sign-in. The new directory starts empty, without settings, hooks, skills, plugins, <code>CLAUDE.md</code> or history. Install a plugin under one account and the other doesn't have it, and the two setups drift apart from there.</p>
 
       <h2 id="by-hand">Option 1: CLAUDE_CONFIG_DIR by hand</h2>
       <p>Keep <code>~/.claude</code> as your main directory, give the second account a directory of its own, and link into it whatever both accounts should share:</p>
@@ -181,7 +189,7 @@ CLAUDE_CONFIG_DIR=~/.claude-work claude</code></pre>
         <li><strong><code>plugins/</code> as a whole.</strong> Two files in it, <code>known_marketplaces.json</code> and <code>installed_plugins.json</code>, store absolute paths into the config directory. Link the rest of <code>plugins/</code>, keep a copy of those two in each directory with the paths pointing at that directory, and update the copies whenever you add or remove a plugin.</li>
         <li><strong>Small per-directory state</strong>, such as <code>.last-update-result.json</code>, which Claude Code rewrites as a new file and which describes one directory only.</li>
       </ul>
-      <p>Newer Claude Code versions also add directories. A link you made today doesn't cover a directory that appears next month, so the second account quietly gets its own copy. Check your links after updating Claude Code.</p>
+      <p>Newer Claude Code versions also add directories. A link you made today doesn't cover a directory that appears next month, so the second account silently gets its own copy. Check your links after updating Claude Code.</p>
 
       <h2 id="clausona">Option 2: clausona</h2>
       <p><a href="https://github.com/larcane97/clausona">clausona</a> is a free, open-source CLI that does the steps above and keeps them correct. Install it:</p>
@@ -201,7 +209,7 @@ clausona add claude:work   <span class="c"># makes ~/.claude-work and opens Clau
 csn use work               <span class="c"># plain `claude` now starts as the work account</span>
 csn use claude:default     <span class="c"># back to the first account; init names it default</span></code></pre>
       <p>Each account gets its own directory. Everything in <code>~/.claude</code> except the sign-in, the account file, per-directory state and, unless you merge sessions, conversation history is linked into it, so settings, hooks, skills, commands, agents, plugins and <code>CLAUDE.md</code> are the same under every account. clausona keeps the two plugin files in step for each account, and <code>clausona doctor</code> reports a directory a newer Claude Code added that isn't linked yet; <code>clausona repair &lt;profile&gt;</code> links it. <code>csn</code> is the short name for <code>clausona</code>.</p>
-      <p>There is no wrapper around Claude Code: a shell hook sets <code>CLAUDE_CONFIG_DIR</code> for each run and starts the real <code>claude</code>, and nothing stays running in the background.</p>
+      <p>There is no wrapper around Claude Code: a shell hook sets <code>CLAUDE_CONFIG_DIR</code> for each run and starts the real <code>claude</code>, and nothing stays running in the background. A normal launch reads a cached script in the shell, so Claude Code starts as fast as it does without clausona. clausona's own process runs only after you change something, such as <code>csn use</code>.</p>
 
       <h2 id="history">Share conversation history between accounts</h2>
       <p>Conversation history lives in <code>projects/</code>, next to two directories that refer to it by session id: <code>jobs/</code> for background sessions and <code>teams/</code>. Share all three or none of them. A background session whose record and transcript sit in different directories can't be resumed.</p>
@@ -228,6 +236,8 @@ claude:personal     me@example.org       8%         77% 5d</code></pre>
       <p>Servers that come with a plugin do, because plugins are shared. Servers added with <code>claude mcp add</code> are stored in <code>.claude.json</code> next to the account's sign-in, which must not be shared, so add them to each account or put them in a project's <code>.mcp.json</code>.</p>
       <h3>Does clausona switch accounts automatically when I hit a limit?</h3>
       <p>No. You choose the account for each terminal; clausona shows how much of each account's limits is left. Keep each account to what it's for, such as work and personal use, and within Anthropic's terms.</p>
+      <h3>Does clausona slow down Claude Code's start?</h3>
+      <p>No. A normal launch reads a cached script in the shell. On an M4 Pro Mac, <code>claude --version</code> took a median 25 ms with the hook and 25 ms without it. clausona's own process runs only after you change something, such as <code>csn use</code>.</p>
       <h3>Is my sign-in ever shared?</h3>
       <p>No. Each account keeps its own credentials and its own <code>.claude.json</code>.</p>
       <h3>Does it work with tools that start Claude Code themselves?</h3>
