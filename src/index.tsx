@@ -8,6 +8,7 @@ import { createUpdater, type UpdateOffer } from "./core/update.js";
 import { dropLauncherCompileCache } from "./installer.js";
 import { accent, ok, fail as xMark } from "./lib/cli-style.js";
 import { parseProfileRef } from "./lib/profile-ref.js";
+import { runRouted } from "./lib/route-run.js";
 import { loadRegistry, noRegistryError, resolveProfileEnv } from "./lib/service.js";
 import type { ParsedCommand } from "./types.js";
 
@@ -19,14 +20,20 @@ export function parseCommand(argv: string[]): ParsedCommand {
   const [command, ...args] = argv;
 
   if (command === "run") {
-    const [profile, ...rest] = args;
-    if (!profile || profile.startsWith("-")) {
+    const [first, ...rest] = args;
+    if (!first || first === "--help" || first === "-h") {
       return { kind: "command", command: "run", args };
+    }
+    // No profile named: a route, an unsaved route, or a tool's active profile (route-run.ts).
+    // The arguments go on untouched, `--` included, because only the routing reader knows
+    // where clausona's part ends.
+    if (first.startsWith("-") || first === "claude" || first === "codex") {
+      return { kind: "route", args };
     }
     // `run <profile> -- -p "q"` separates clausona's arguments from the tool's; the `--` is
     // clausona's, and handed on it would make the tool read `-p` as its prompt. Only the
     // first goes, so `-- --` still passes one through.
-    return { kind: "exec", profile, args: rest[0] === "--" ? rest.slice(1) : rest };
+    return { kind: "exec", profile: first, args: rest[0] === "--" ? rest.slice(1) : rest };
   }
 
   return { kind: "command", command, args };
@@ -92,9 +99,16 @@ async function main() {
     try {
       process.exitCode = await runProfile(parsed.profile, parsed.args);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`  ${xMark} ${message}\n`);
-      process.exitCode = 1;
+      process.exitCode = reportError(error);
+    }
+    return;
+  }
+
+  if (parsed.kind === "route") {
+    try {
+      process.exitCode = await runRouted(parsed.args, (profile, toolArgs) => runProfile(profile, toolArgs));
+    } catch (error) {
+      process.exitCode = reportError(error);
     }
     return;
   }
@@ -120,10 +134,28 @@ async function main() {
     }
     writeCommandResult(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`  ${xMark} ${message}\n`);
-    process.exitCode = 1;
+    process.exitCode = reportError(error);
   }
+}
+
+/**
+ * Prints a failed command's error and returns the exit code to leave with: the error's own
+ * `exitCode` when it has one (75 for "no account available"), else 1. An error carrying
+ * `stdout` - `route pick --json` - prints that instead, so a script still gets its JSON.
+ */
+export function reportError(
+  error: unknown,
+  err: { write(chunk: string): unknown } = process.stderr,
+  out: { write(chunk: string): unknown } = process.stdout,
+): number {
+  const extra = (typeof error === "object" && error !== null ? error : {}) as { exitCode?: unknown; stdout?: unknown };
+  if (typeof extra.stdout === "string") {
+    writeCommandResult(extra.stdout, out);
+  } else {
+    const message = error instanceof Error ? error.message : String(error);
+    err.write(`  ${xMark} ${message}\n`);
+  }
+  return typeof extra.exitCode === "number" ? extra.exitCode : 1;
 }
 
 /**

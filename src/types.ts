@@ -240,4 +240,5 @@ export type UsageStore = Record<
 export type ParsedCommand =
   | { kind: "tui"; command: "dashboard" }
   | { kind: "command"; command: string; args: string[] }
-  | { kind: "exec"; profile: string; args: string[] };
+  | { kind: "exec"; profile: string; args: string[] }
+  | { kind: "route"; args: string[] };
