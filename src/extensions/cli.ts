@@ -168,9 +168,11 @@ function seenFrom(options: ListOptions, project: string | undefined, homeDir: st
   return project ? `project ${tilde(project, homeDir)}` : "no project";
 }
 
-function nothingToList(options: ListOptions): string {
+function nothingToList(command: ExtensionsCommand, options: ListOptions): string {
   if (options.filter) return `Nothing matches --filter ${options.filter} here.`;
   if (options.allProjects) return "Nothing found in any project.";
+  // Pointing at --all-projects would mislead when it is the tool that left nothing.
+  if (options.tool) return `No ${options.tool} ${NOUN[command].many} here.`;
   return "Nothing loads here. Add --all-projects to include every project's own.";
 }
 
@@ -239,7 +241,7 @@ export async function runExtensionsCommand(
   const noun = items.length === 1 ? NOUN[command].one : NOUN[command].many;
   const lines = [`${items.length} ${noun} · ${seenFrom(options, project, deps.homeDir)}`, ""];
   if (items.length === 0) {
-    lines.push(nothingToList(options));
+    lines.push(nothingToList(command, options));
   } else {
     const hooks = command === "hooks";
     const skills = command === "skills";

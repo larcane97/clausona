@@ -147,6 +147,7 @@ describe("ls with nothing to list", () => {
     expect(await run(h, app, "hooks", ["ls"])).toMatch(
       /^0 hooks · .+\n\nNothing loads here\. Add --all-projects to include every project's own\.$/,
     );
+    expect(await run(h, app, "hooks", ["ls", "--tool", "codex"])).toMatch(/^0 hooks · .+\n\nNo codex hooks here\.$/);
     expect(await run(h, app, "hooks", ["ls", "--all-projects"])).toMatch(
       /^0 hooks · all projects\n\nNothing found in any project\.$/,
     );
@@ -166,8 +167,9 @@ describe("hooks ls", () => {
           {
             matcher: "Bash",
             hooks: [
-              { type: "command", command: "audit-bash" },
-              { type: "command", command: `${long} --api-key ${KEY}` },
+              // Short enough to show whole at 120 columns, so a redaction that failed would show.
+              { type: "command", command: `audit-bash --api-key ${KEY}` },
+              { type: "command", command: long },
             ],
           },
         ],
@@ -176,7 +178,7 @@ describe("hooks ls", () => {
     const wide = await run(h, app, "hooks", ["ls"]);
     expect(wide).toMatch(/^2 hooks · /);
     expect(wide).toMatch(/^NAME\s+TOOL\s+WHERE\s+COMMAND\s+STATE\s+NOTES$/m);
-    expect(wide).toMatch(/^PreToolUse Bash\s+claude\s+global\s+audit-bash\s+on$/m);
+    expect(wide).toMatch(/^PreToolUse Bash\s+claude\s+global\s+audit-bash --api-key <hidden>\s+on$/m);
     const narrow = await runExtensionsCommand("hooks", ["ls"], {
       homeDir: h.home,
       cwd: app,
