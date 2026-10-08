@@ -58,7 +58,7 @@ In an agent's shell there is no terminal, so `route add` and `route set` write s
 ask nothing. Before writing:
 
 1. Show the user which accounts the route would hold. Rank it unsaved and list its members with
-   their usage: `clausona route explain --tool claude --from '<patterns>' [--exclude '<patterns>']`.
+   their usage: `clausona route explain --tool <claude|codex> --from '<patterns>' [--exclude '<patterns>']`.
    For a change, show the route as it is (`route list --json`) and as it would be.
 2. Ask before including accounts that look like someone else's or shared: another person's name
    or email, `*-share`. Leave them out until the user says yes.
@@ -72,7 +72,7 @@ ask nothing. Before writing:
    yourself, and do not use `route edit`: it opens an editor for a person.
 
 ```bash
-clausona route add <name> --tool claude --from '<patterns>' [--exclude '<patterns>'] [--fallback '<patterns>'] [--strategy <s>] [--max-usage <n>] [--reserve-usage <n>]
+clausona route add <name> [--tool <claude|codex>] --from '<patterns>' [--exclude '<patterns>'] [--fallback '<patterns>'] [--strategy <s>] [--max-usage <n>] [--reserve-usage <n>]
 clausona route set <name> [--from …] [--exclude …] [--fallback …] [--strategy …] [--max-usage …] [--reserve-usage …] [--add …] [--drop …] [--no-fallback]
 clausona route rename <old> <new>
 clausona route remove <name>
@@ -80,8 +80,9 @@ clausona route remove <name>
 
 - Patterns are comma-separated profile names or globs (`team-*`, `claude:team-*`). A pattern
   with an `@` matches account emails. Matching ignores case. Quote the list.
-- `--tool` is needed when both Claude Code and Codex have accounts, unless every `--from` entry
-  has a `claude:` or `codex:` prefix.
+- `--tool` is needed only when both Claude Code and Codex have accounts, and not even then when
+  every `--from` entry has a `claude:` or `codex:` prefix. Check `clausona list --json` for which
+  tools have accounts.
 - In `route set`, each field option replaces its whole field: `--exclude old` makes the exclude
   list just `old`. To add to a list, pass its current entries too (from `route list --json`).
 - `--add` and `--drop` change `from` one entry at a time. `--drop` removes only an entry written
@@ -106,10 +107,11 @@ clausona run --route <name> --strategy headroom -- -p "…"   # change a field f
   everything after it goes to the tool untouched (`--model`, `--permission-mode`,
   `--output-format json`, …).
 - The field options need `--route` or `--from`. On their own they are refused with exit 1.
-- Next to `--route`, a field option replaces that whole field for this run, as `route set` would,
-  and saves nothing. `--exclude x` drops the route's own exclude list for the run, which can let
-  an account the user left out back in. Pass the route's excludes too: on a route that excludes
-  `personal`, write `--exclude 'personal,x'`.
+- Next to `--route`, `--exclude x` leaves `x` out for this run on top of the route's own
+  excludes. The other field options replace their field for this run. Nothing is saved.
+- Never put a profile right after routing options: `clausona run --route main claude:work` is
+  refused, because the tool would get the name as its prompt. To run one account, name it alone
+  (`clausona run claude:work`).
 - `clausona run claude` with no routing options is not routed: it runs the active profile.
 - Naming a profile (`clausona run claude:work`) always runs it, whatever its quota.
 - A routed run names the account it picked, and why, on stderr. stdout is the tool's own.
@@ -159,6 +161,6 @@ account hits its limit.
 
 Start it again on the route. The spent account is now at or above the cut, so another one is
 picked. Readings are cached for up to 5 minutes: if `explain` still shows the spent account as
-eligible, add `--exclude` with it and the route's own excludes for this run. To carry on the
-same session, pass `-c` or `--resume` after `--`; that run only goes to accounts that share
+eligible, add `--exclude` with it for this run. The route's own excludes still apply. To carry on
+the same session, pass `-c` or `--resume` after `--`; that run only goes to accounts that share
 sessions.

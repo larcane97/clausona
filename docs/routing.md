@@ -73,7 +73,7 @@ Some runs carry on a session that lives in one account's history: `claude -c` or
 
 A routed run like that uses only the accounts that see shared history. Those are the primary
 account and the profiles with merged sessions (`clausona config <profile> --merge-sessions`).
-The rest are skipped as "keeps its own sessions".
+The rest are skipped as "keeps its own sessions", and their quota is not read.
 
 If none of them can take it, run the account that holds the session by name.
 
@@ -131,12 +131,15 @@ In a terminal, `route add` shows the accounts the route would use before it writ
 
 ```
 Create 'main' now?
-  pool      * · 3 account(s) can be used now
+  pool      * · 2 of 4 account(s) under 80% now
             claude:old, claude:team, claude:work
             claude:personal (signed out (clausona login claude:personal))
   strategy  round-robin · max 80% · reserve 95%
 [Y]es · [e]dit · [n]o
 ```
+
+The first line counts the accounts a run could take right now, the ones under the cut. Every
+account in the pool is listed under it.
 
 Enter or `y` creates it, and `n` leaves everything as it was.
 
@@ -155,11 +158,13 @@ nothing is asked and the route is created as given.
 
 `route set` changes only the fields you pass, and each field option replaces its field.
 `--exclude old` makes the exclude list just `old`, whatever it held before. `--from` replaces
-the whole pool list.
+the whole pool list. This is an edit of the saved route. A run's `--exclude` works differently
+and adds to the list (see [Running on a route](#running-on-a-route)).
 
 `--add` and `--drop` change `from` one entry at a time instead. `--drop` removes an entry that is
 in `from` itself, so it cannot take one account out of `*` or `*@example.com`. Use `--exclude`
-for that. `--no-fallback` removes the fallback list.
+for that. A route needs at least one entry in `from`, so dropping the last one is refused unless
+`--add` puts another in. `--no-fallback` removes the fallback list.
 
 `route rename` and `route remove` act straight away. Neither one asks first.
 
@@ -226,9 +231,13 @@ ends them, and so does a `--`, which is dropped. Everything after goes to the to
 You can name the tool too, as in `clausona run claude --route main`. A route saved for the other
 tool is then refused.
 
-`--exclude`, `--strategy`, `--max-usage`, `--reserve-usage` and `--fallback` change the route for
-one run and are not saved. So does `--from` next to `--route`. If `--max-usage` goes above the
-route's reserve, the reserve moves up with it for that run.
+`--strategy`, `--max-usage`, `--reserve-usage` and `--fallback` replace their field for one run.
+So does `--from` next to `--route`. If `--max-usage` goes above the route's reserve, the reserve
+moves up with it for that run.
+
+`--exclude` adds to the route's own exclude list instead of replacing it. On a route that
+excludes `*-share`, `--exclude old` leaves out `old` and the share accounts both. None of these
+options is saved.
 
 `--from` without `--route` makes an unsaved route, which the note calls an "inline route". It
 needs to know its tool, so write `clausona run claude --from …` or put a `claude:` or `codex:`
@@ -249,6 +258,24 @@ active profile, and say so on stderr:
 ```
 
 If you have a profile named `claude` or `codex`, `clausona run claude` runs that profile.
+
+A profile and routing options do not go together. In `clausona run --route main claude:work` the
+tool would get `claude:work` as its prompt and start on some other account, so clausona stops
+instead:
+
+```
+  ✘ Routing options cannot be combined with a profile. Run it by name: clausona run <profile> …, or put it after -- to pass it to the tool.
+```
+
+To run that account, name it alone: `clausona run claude:work`. After a `--` the name is the
+tool's, like any other argument.
+
+A first argument that is neither a profile nor a tool, such as a prompt typed without the tool,
+is refused with the fix:
+
+```
+  ✘ 'fix the bug' is not a profile or a tool. To pass a prompt, name the tool: clausona run claude 'fix the bug'
+```
 
 ### A route that does not exist
 
