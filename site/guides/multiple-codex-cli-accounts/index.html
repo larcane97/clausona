@@ -122,7 +122,7 @@
     <article class="article">
       <nav class="crumbs" aria-label="Breadcrumb"><a href="../../">clausona</a> / Guides</nav>
       <h1>How to use multiple Codex CLI accounts on one machine</h1>
-      <p class="lead">Codex CLI keeps its sign-in and everything else in one home directory, <code>~/.codex</code>. Give each account its own home and you can switch without logging out. Share the right files and every account has the same config, hooks and skills; share the wrong ones and one account's daemon or memories end up serving another.</p>
+      <p class="lead">Codex CLI keeps its sign-in and everything else in one home directory, <code>~/.codex</code>. Give each account its own home and you can switch without logging out. If you share only the configuration, every account gets the same config, hooks and skills. Sharing the whole home lets one account's daemon or memories serve another.</p>
       <p class="updated">Updated <time datetime="2026-10-08">October 8, 2026</time></p>
 
       <div class="answer">
@@ -169,7 +169,7 @@ CODEX_HOME=~/.codex-work codex login</code></pre>
         <li><strong><code>.env</code>.</strong> Codex loads it into its environment at start, so it may hold one account's API keys.</li>
         <li><strong><code>packages/</code></strong> is the daemon's own install, about 300 MB. Shared, one updater would replace the daemon every home runs.</li>
       </ul>
-      <p>That is why it pays to share by a list of what to share, as above, rather than linking the whole home and leaving a few files out. A file a new Codex version adds then stays with its account until you decide otherwise.</p>
+      <p>So link an explicit list of entries, as above, instead of linking the whole home and leaving a few files out. A file a new Codex version adds then stays with its account until you decide otherwise.</p>
 
       <h2 id="clausona">Option 2: clausona</h2>
       <p><a href="https://github.com/larcane97/clausona">clausona</a> is a free, open-source CLI that sets up each account's home this way, for Codex CLI and Claude Code. Install it:</p>
@@ -188,7 +188,7 @@ CODEX_HOME=~/.codex-work codex login</code></pre>
 clausona add codex:work    <span class="c"># makes ~/.codex-work and runs Codex's own login</span>
 csn use codex:work         <span class="c"># plain `codex` now starts as the work account</span></code></pre>
       <p>clausona links only the entries on its list into each home, and keeps the rest with the account. <code>clausona doctor</code> reports a home set up by an older version that still links account state, such as the daemon's directories or memories, and <code>clausona repair &lt;profile&gt;</code> unlinks it and puts the account's own copy back from a backup. Nothing is deleted along the way. <code>csn</code> is the short name for <code>clausona</code>.</p>
-      <p>There is no wrapper around Codex: a shell hook sets <code>CODEX_HOME</code> for each run and starts the real <code>codex</code>.</p>
+      <p>There is no wrapper around Codex: a shell hook sets <code>CODEX_HOME</code> for each run and starts the real <code>codex</code>, and nothing stays running in the background. clausona's own process runs only after you change something, such as <code>csn use codex:work</code>.</p>
 
       <h2 id="history">Resume conversations across accounts</h2>
       <p>Codex keeps conversations in <code>sessions/</code>, with <code>history.jsonl</code> and <code>session_index.jsonl</code> beside them. It finds threads through <code>state_5.sqlite</code>, keeps each thread's <code>/goal</code> in <code>goals_1.sqlite</code>, and indexes the conversation files in <code>thread_history_1.sqlite</code>. Resuming under another account needs all of these shared together. The databases need care: link only the database file, never its <code>-wal</code> or <code>-shm</code>, because SQLite keeps those beside the file the link leads to.</p>

@@ -6,6 +6,8 @@
   <title>Run parallel Claude Code agents on different accounts and models (Superset + clausona)</title>
   <meta name="description" content="Subagents run out of sight, can't be steered one by one, and all spend one account. Run each agent as its own Claude Code session in Superset instead, routed to the account or API model (such as DeepSeek) you choose.">
   <link rel="canonical" href="https://larcane97.github.io/clausona/guides/parallel-claude-code-agents/">
+  <link rel="alternate" hreflang="en" href="https://larcane97.github.io/clausona/guides/parallel-claude-code-agents/">
+  <link rel="alternate" hreflang="ko" href="https://larcane97.github.io/clausona/ko/parallel-agents/">
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="clausona">
   <meta property="og:title" content="Run parallel Claude Code agents on different accounts and models">
@@ -75,7 +77,7 @@
         "name": "Do I need Superset to give agents different accounts?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "No. clausona run claude:work starts a Claude Code session on that account in any terminal, tmux or herdr pane. Superset and the skill add the coordinator: the plan, the routing, the watching and the checks."
+          "text": "No. clausona run claude:work starts a Claude Code session on that account in any terminal, tmux or herdr pane. Superset and the skill add a coordinator that plans the work, routes it, watches the workers and checks their results."
         }
       },
       {
@@ -137,20 +139,20 @@ claude plugin install clausona@clausona</code></pre>
       <h2 id="subagents">Where subagents fall short</h2>
       <p>Subagents are built for quick side errands inside one session. For several real tasks at once, three things get in the way:</p>
       <ul>
-        <li><strong>You can't see them work.</strong> A subagent runs inside its parent session. You see what it returns, not what it is doing, so a wrong turn shows up only at the end.</li>
-        <li><strong>You can't steer one.</strong> You can't type into a single subagent to correct it or answer it. Stopping one usually means interrupting the session that runs all of them.</li>
-        <li><strong>They all spend one account.</strong> Every subagent runs on the account of the session that started it. Five at once use up that account's 5-hour window five times as fast, and none of them can run on another account or on a model from another provider.</li>
+        <li>A subagent runs inside its parent session. You see what it returns, not what it is doing, so a wrong turn shows up only at the end.</li>
+        <li>You can't type into a single subagent to correct it or answer it. Stopping one usually means interrupting the session that runs all of them.</li>
+        <li>Every subagent runs on the account of the session that started it. Five at once use up that account's 5-hour window five times as fast, and none of them can run on another account or on a model from another provider.</li>
       </ul>
       <p>In Superset, each worker is an ordinary Claude Code session in its own tab and worktree. You can read along, answer its questions, or stop it, without touching the others.</p>
 
       <h2 id="how">How the fleet works</h2>
       <p>You talk to one Claude Code session in Superset, the orchestrator. With the <code>superset-fleet</code> skill it:</p>
       <ol>
-        <li><strong>Picks a profile for each task</strong> from your request, your rules and every profile's current usage, and shows you the plan.</li>
-        <li><strong>Starts the workers</strong>, one Superset workspace per task, named after the task and the profile so the sidebar shows which account runs where.</li>
-        <li><strong>Watches them</strong>: it answers their questions, tells you when one waits at a permission prompt, and hands a task to another allowed profile if an account reaches its limit.</li>
-        <li><strong>Checks each result itself</strong>: the commits, the diff and the checks the brief named. It reports what it verified apart from what the worker only claimed.</li>
-        <li><strong>Retires finished workers</strong>, after asking you by default. A worker is retired only when its branch is pushed and its worktree is clean; the branch stays.</li>
+        <li>Picks a profile for each task from your request, your rules and every profile's current usage, and shows you the plan.</li>
+        <li>Starts the workers, one Superset workspace per task, named after the task and the profile so the sidebar shows which account runs where.</li>
+        <li>Watches them: it answers their questions, tells you when one waits at a permission prompt, and hands a task to another allowed profile if an account reaches its limit.</li>
+        <li>Checks each result itself: the commits, the diff and the checks the brief named. It reports what it verified separately from what the worker only claimed.</li>
+        <li>Retires finished workers, after asking you by default. A worker is retired only when its branch is pushed and its worktree is clean; the branch stays.</li>
       </ol>
       <p>An example plan it might show before starting:</p>
       <div class="table-scroll">
@@ -167,7 +169,7 @@ claude plugin install clausona@clausona</code></pre>
       </div>
 
       <h2 id="routing">Route each agent to an account or a model</h2>
-      <p>This is the part a terminal full of agents doesn't do for you: deciding which account or model each one runs on. The orchestrator follows, in this order, what you say in the conversation, then <code>~/.clausona/superset-fleet.json</code>, then its defaults.</p>
+      <p>A terminal full of agents doesn't decide which account or model each one runs on. The orchestrator follows, in this order, what you say in the conversation, then <code>~/.clausona/superset-fleet.json</code>, then its defaults.</p>
 <pre data-copy><code>{
   "workers": ["claude:work", "claude:side", "claude:deepseek"],
   "routing": [
@@ -194,11 +196,11 @@ claude plugin install clausona@clausona</code></pre>
       <ul>
         <li>Give API workers small, explicit briefs: the file, the function, the change and the command that checks it. Long exploratory briefs overflow smaller context windows.</li>
         <li>Give their Superset agent a short tool list, such as <code>--tools=Bash,Read,Edit,Write,Grep,Glob</code>, to keep tool definitions out of the context.</li>
-        <li>Check whether the endpoint honours prompt caching. Without it, every turn re-reads the whole conversation and long sessions slow down.</li>
+        <li>Check whether the endpoint honors prompt caching. Without it, every turn re-reads the whole conversation and long sessions slow down.</li>
       </ul>
 
       <h2 id="compare">Compared with subagents and herdr</h2>
-      <p><a href="https://github.com/ogulcancelik/herdr">herdr</a> is a terminal runtime for coding agents: it keeps agent panes running in the background, marks each one working, blocked or idle, and lets agents open panes and prompt each other. It doesn't decide which account or model an agent uses; a pane runs whatever you start in it. That is the gap clausona fills, and the two work together: start a herdr pane with <code>clausona run claude:work</code> and it runs on that account.</p>
+      <p><a href="https://github.com/ogulcancelik/herdr">herdr</a> is a terminal runtime for coding agents: it keeps agent panes running in the background, marks each one working, blocked or idle, and lets agents open panes and prompt each other. It doesn't decide which account or model an agent uses; a pane runs whatever you start in it. clausona adds that, and the two work together: start a herdr pane with <code>clausona run claude:work</code> and it runs on that account.</p>
       <div class="table-scroll">
         <table>
           <thead>
@@ -227,7 +229,7 @@ clausona add claude:side</code></pre>
         </li>
         <li>
           <div>
-            <p>In Superset → Settings → Agents, add a custom agent per profile. Command: the output of <code>command -v clausona</code>. Arguments, for example:</p>
+            <p>In Superset, open Settings, then Agents, and add a custom agent per profile. Command: the output of <code>command -v clausona</code>. Arguments, for example:</p>
 <pre data-copy><code>run claude:work -- --model claude-sonnet-5-5 --effort high --permission-mode acceptEdits --strict-mcp-config</code></pre>
             <p>Put the model and effort here, because Superset doesn't pass them to custom agents. <code>--strict-mcp-config</code> keeps a worker from stopping at Claude Code's "new MCP servers found" question. Without the Superset CLI logged in, the skill can add these agents for you, after asking.</p>
           </div>
@@ -260,7 +262,7 @@ claude plugin install clausona@clausona</code></pre>
       <h3>Can retiring a worker lose work?</h3>
       <p>A worker is retired only when its work was checked, its branch is pushed and its worktree is clean. The skill's helper checks the branch and the worktree again right before it deletes the workspace, and refuses when either isn't clean.</p>
       <h3>Do I need Superset to give agents different accounts?</h3>
-      <p>No. <code>clausona run claude:work</code> starts a Claude Code session on that account in any terminal, tmux or herdr pane. Superset and the skill add the coordinator: the plan, the routing, the watching and the checks.</p>
+      <p>No. <code>clausona run claude:work</code> starts a Claude Code session on that account in any terminal, tmux or herdr pane. Superset and the skill add a coordinator that plans the work, routes it, watches the workers and checks their results.</p>
       <h3>What happens when an account reaches its limit mid-task?</h3>
       <p>The orchestrator hands the task to another profile your rules allow, in the same workspace, and closes the stopped worker's terminal.</p>
 

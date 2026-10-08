@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>clausona: multiple Claude Code and Codex accounts with shared skills, hooks and history</title>
-  <meta name="description" content="Run several Claude Code and Codex CLI accounts on one machine. Each keeps its own sign-in, while skills, hooks, plugins, settings and even conversation history stay shared.">
+  <meta name="description" content="Run several Claude Code and Codex CLI accounts on one machine. Each keeps its own sign-in, while skills, hooks, plugins and settings stay shared, and conversation history can be shared too.">
   <link rel="canonical" href="https://larcane97.github.io/clausona/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="clausona">
   <meta property="og:title" content="clausona: multiple Claude Code and Codex accounts, one shared setup">
-  <meta property="og:description" content="Each account keeps its own sign-in. Skills, hooks, plugins, settings and even conversation history stay shared.">
+  <meta property="og:description" content="Each account keeps its own sign-in. Skills, hooks, plugins and settings stay shared, and conversation history can be too.">
   <meta property="og:url" content="https://larcane97.github.io/clausona/">
   <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
   <meta name="twitter:card" content="summary_large_image">
@@ -25,7 +25,7 @@
     "name": "clausona",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "macOS, Linux, Windows",
-    "description": "A CLI and terminal dashboard for running multiple Claude Code and OpenAI Codex CLI accounts on one machine. Each account keeps its own sign-in; skills, hooks, plugins and settings are shared between accounts, and conversation history can be shared too.",
+    "description": "A CLI and terminal dashboard for running multiple Claude Code and OpenAI Codex CLI accounts on one machine. Each account keeps its own sign-in; skills, hooks, plugins and settings are shared between accounts, and conversation history can be shared too. It works through a shell hook and symbolic links, with no daemon or proxy.",
     "url": "https://larcane97.github.io/clausona/",
     "downloadUrl": "https://github.com/larcane97/clausona/releases/latest",
     "codeRepository": "https://github.com/larcane97/clausona",
@@ -112,6 +112,8 @@
         <div>
           <h1 id="title">Multiple Claude Code and Codex accounts, one shared setup</h1>
           <p class="lead">clausona gives each account its own sign-in and keeps the rest in one place. Skills, hooks, plugins and settings are shared by every account, and conversation history can be shared too.</p>
+
+          <p class="light-line">clausona is a shell hook and a few symbolic links, and <code>claude</code> starts as fast as it does without it.</p>
 
           <div class="install">
             <div class="cmd" data-copy>
@@ -225,11 +227,38 @@
       </div>
     </section>
 
+    <section class="section" aria-labelledby="light">
+      <div class="wrap">
+        <h2 id="light">A shell hook and a few symbolic links</h2>
+        <div class="prose">
+          <p>clausona sets up the account before the tool starts and has no part in the session after that. There is no app to keep open and no service left running.</p>
+        </div>
+        <dl class="features">
+          <div>
+            <dt>What starts with <code>claude</code></dt>
+            <dd>The shell reads a cached launch script and runs the real binary. On an M4 Pro Mac, <code>claude --version</code> took a median 25 ms with the hook and 25 ms without it (Claude Code 2.1.294, 15 runs each).</dd>
+          </div>
+          <div>
+            <dt>When clausona itself runs</dt>
+            <dd>Only after you change something, such as <code>csn use</code> or a plugin install. Starting clausona takes about a third of a second, which is why ordinary launches skip it.</dd>
+          </div>
+          <div>
+            <dt>What it installs</dt>
+            <dd>One JavaScript file of about 1 MB, a hook in your shell's rc file, and a symbolic link for each shared file or folder. Updates are checked against the release's SHA-256 before they replace anything.</dd>
+          </div>
+          <div>
+            <dt>How to remove it</dt>
+            <dd><code>clausona uninstall</code> takes out the hook, the links and <code>~/.clausona</code>, keeping any backups that still hold data. Each account's directory and history stay where they are.</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
     <section class="section" aria-labelledby="demo">
       <div class="wrap">
         <h2 id="demo">What it looks like</h2>
         <div class="prose">
-          <p>Listing the accounts with their plan usage, switching to the work account so that plain <code>claude</code> starts signed in as it, switching back, and opening the dashboard.</p>
+          <p>The recording lists the accounts with their plan usage, switches to the work account so that plain <code>claude</code> starts signed in as it, switches back, and opens the dashboard.</p>
         </div>
         <img class="demo" src="assets/demo.gif" width="1200" height="1000" loading="lazy" alt="A terminal running clausona list, which shows Claude Code and Codex accounts with their 5-hour and weekly usage; then csn use work, after which claude's status shows the work account; then switching back and opening the clausona dashboard.">
       </div>
@@ -287,10 +316,6 @@ claude --continue    <span class="c"># the latest conversation in this folder</s
             <dd><code>clausona list</code> and the dashboard show each account's 5-hour and weekly limits side by side, with the time until each resets.</dd>
           </div>
           <div>
-            <dt>Nothing in the way</dt>
-            <dd>A shell hook points the tool at the account's directory and starts the real <code>claude</code> or <code>codex</code>. No proxy and no daemon, and most launches start nothing before the tool.</dd>
-          </div>
-          <div>
             <dt>API profiles</dt>
             <dd>A Claude Code profile can use the Anthropic API, a gateway such as OpenRouter, or a model you serve yourself, and switches like any account.</dd>
           </div>
@@ -313,8 +338,8 @@ claude --continue    <span class="c"># the latest conversation in this folder</s
           <li><a href="guides/multiple-claude-code-accounts/">How to use multiple Claude Code accounts on one machine<span>By hand with CLAUDE_CONFIG_DIR, what not to share, and the clausona way.</span></a></li>
           <li><a href="guides/multiple-codex-cli-accounts/">How to use multiple Codex CLI accounts<span>One CODEX_HOME per account, and which files must stay with each one.</span></a></li>
           <li><a href="guides/parallel-claude-code-agents/">Run parallel Claude Code agents on different accounts and models<span>Visible, interruptible agents in Superset, each routed to an account or an API model such as DeepSeek.</span></a></li>
-          <li><a href="ko/" hreflang="ko" lang="ko">클로드 코드·Codex 여러 계정 쓰는 법<span>스킬, 훅, 대화 기록까지 공유하면서 계정을 나누는 방법.</span></a></li>
-          <li><a href="ko/parallel-agents/" hreflang="ko" lang="ko">Claude Code 에이전트 여러 개를 계정·모델별로 병렬 실행하기<span>Superset에서 에이전트마다 다른 계정이나 DeepSeek 같은 API 모델로.</span></a></li>
+          <li><a href="ko/" hreflang="ko" lang="ko">Claude Code와 Codex 계정 여러 개를 동시에 쓰는 법<span>스킬, 훅, 대화 기록까지 공유하면서 계정을 나누는 방법.</span></a></li>
+          <li><a href="ko/parallel-agents/" hreflang="ko" lang="ko">Claude Code 에이전트를 여러 계정과 모델로 병렬 실행하기<span>Superset에서 에이전트마다 다른 계정이나 DeepSeek 같은 API 모델을 쓰는 방법.</span></a></li>
         </ul>
       </div>
     </section>

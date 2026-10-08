@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>클로드 코드·Codex 여러 계정 동시에 쓰는 법: 스킬, 훅, 대화 기록까지 공유하기 | clausona</title>
-  <meta name="description" content="회사 계정과 개인 계정을 한 컴퓨터에서 같이 쓰는 법. 계정마다 로그인은 따로 두고, 스킬·훅·플러그인·설정과 대화 기록까지 공유합니다. 직접 설정하는 법과 clausona로 하는 법.">
+  <title>Claude Code(클로드 코드)와 Codex 계정 여러 개를 동시에 쓰는 법: 스킬, 훅, 대화 기록까지 공유 | clausona</title>
+  <meta name="description" content="회사 계정과 개인 계정을 한 컴퓨터에서 함께 쓰는 법. 로그인은 계정마다 따로 두고 스킬, 훅, 플러그인, 설정은 공유하며, 원하면 대화 기록도 공유합니다. 직접 설정하는 법과 clausona로 하는 법을 함께 다룹니다.">
   <link rel="canonical" href="https://larcane97.github.io/clausona/ko/">
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="clausona">
   <meta property="og:locale" content="ko_KR">
-  <meta property="og:title" content="클로드 코드·Codex 여러 계정 동시에 쓰는 법">
-  <meta property="og:description" content="계정마다 로그인은 따로, 스킬·훅·플러그인·설정과 대화 기록은 하나로.">
+  <meta property="og:title" content="Claude Code와 Codex 계정 여러 개를 동시에 쓰는 법">
+  <meta property="og:description" content="로그인은 계정마다 따로 두고 스킬, 훅, 플러그인, 설정은 공유합니다. 대화 기록도 원하면 공유할 수 있습니다.">
   <meta property="og:url" content="https://larcane97.github.io/clausona/ko/">
   <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
   <meta property="article:published_time" content="2026-10-08">
@@ -25,15 +25,15 @@
   {
     "@context": "https://schema.org",
     "@type": "TechArticle",
-    "headline": "클로드 코드·Codex 여러 계정 동시에 쓰는 법",
-    "description": "계정마다 로그인은 따로 두고, 스킬·훅·플러그인·설정과 대화 기록까지 공유하는 방법.",
+    "headline": "Claude Code와 Codex 계정 여러 개를 동시에 쓰는 법",
+    "description": "로그인은 계정마다 따로 두고 스킬, 훅, 플러그인, 설정은 공유하며, 원하면 대화 기록도 공유하는 방법.",
     "datePublished": "2026-10-08",
     "dateModified": "2026-10-08",
     "inLanguage": "ko",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
     "mainEntityOfPage": "https://larcane97.github.io/clausona/ko/",
     "about": [
-      { "@type": "SoftwareApplication", "name": "Claude Code" },
+      { "@type": "SoftwareApplication", "name": "Claude Code", "alternateName": "클로드 코드" },
       { "@type": "SoftwareApplication", "name": "Codex CLI" },
       { "@type": "SoftwareApplication", "name": "clausona", "url": "https://github.com/larcane97/clausona" }
     ]
@@ -46,10 +46,10 @@
     "mainEntity": [
       {
         "@type": "Question",
-        "name": "클로드 코드 계정 두 개를 한 컴퓨터에서 같이 쓸 수 있나요?",
+        "name": "Claude Code 계정 두 개를 한 컴퓨터에서 같이 쓸 수 있나요?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "네. 클로드 코드는 설정 폴더 하나에 계정 하나가 로그인됩니다. 계정마다 설정 폴더를 따로 두면 여러 계정을 로그인해 둔 채 쓸 수 있고, clausona는 스킬·훅·플러그인·설정을 기본 폴더 ~/.claude와 공유하도록 연결해 줍니다."
+          "text": "네. Claude Code는 설정 폴더 하나에 계정 하나가 로그인됩니다. 계정마다 설정 폴더를 따로 두면 여러 계정을 로그인해 둔 채 쓸 수 있습니다. clausona는 스킬, 훅, 플러그인, 설정을 기본 폴더 ~/.claude와 공유하도록 연결해 줍니다."
         }
       },
       {
@@ -62,6 +62,14 @@
       },
       {
         "@type": "Question",
+        "name": "clausona를 쓰면 Claude Code 실행이 느려지나요?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "아니요. 평소에는 셸이 캐시해 둔 실행 스크립트만 읽습니다. M4 Pro Mac에서 claude --version의 실행 시간 중앙값은 훅이 있을 때와 없을 때 모두 25ms였습니다. clausona 자체는 csn use처럼 설정을 바꾼 뒤에만 실행됩니다."
+        }
+      },
+      {
+        "@type": "Question",
         "name": "로그인 정보도 공유되나요?",
         "acceptedAnswer": {
           "@type": "Answer",
@@ -70,18 +78,18 @@
       },
       {
         "@type": "Question",
-        "name": "한도에 닿으면 자동으로 다른 계정으로 바꿔 주나요?",
+        "name": "한도에 걸리면 자동으로 다른 계정으로 바꿔 주나요?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "아니요. 터미널마다 어느 계정을 쓸지는 직접 고르고, clausona는 계정마다 한도가 얼마나 남았는지 보여 줍니다. 계정은 회사용, 개인용처럼 각자의 용도로, Anthropic과 OpenAI의 약관 안에서 쓰세요."
+          "text": "아니요. 터미널마다 어느 계정을 쓸지는 직접 고르고, clausona는 계정마다 한도가 얼마나 남았는지 보여 줍니다. 계정은 회사용, 개인용처럼 용도에 맞게 쓰고 Anthropic과 OpenAI 약관을 지켜 주세요."
         }
       },
       {
         "@type": "Question",
-        "name": "클로드 코드와 Codex의 설정도 서로 공유되나요?",
+        "name": "Claude Code와 Codex의 설정도 서로 공유되나요?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "아니요. 클로드 코드 계정끼리 ~/.claude를, Codex 계정끼리 ~/.codex를 공유합니다."
+          "text": "아니요. Claude Code 계정끼리 ~/.claude를, Codex 계정끼리 ~/.codex를 공유합니다."
         }
       },
       {
@@ -89,7 +97,7 @@
         "name": "API 키나 다른 모델도 프로필로 쓸 수 있나요?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "네, 클로드 코드는 됩니다. clausona add claude:gw --api --base-url <url>로 Anthropic API, OpenRouter 같은 게이트웨이, 직접 띄운 모델을 프로필로 추가할 수 있고 다른 계정처럼 전환됩니다."
+          "text": "네, Claude Code는 됩니다. clausona add claude:gw --api --base-url <url>로 Anthropic API, OpenRouter 같은 게이트웨이, 직접 띄운 모델을 프로필로 추가할 수 있고 다른 계정처럼 전환됩니다."
         }
       },
       {
@@ -97,7 +105,7 @@
         "name": "Windows에서도 되나요?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "네, PowerShell 5.1 이상에서 됩니다. 공유 폴더는 정션으로 연결됩니다. 개발자 모드를 켜 두세요. 꺼져 있으면 settings.json, CLAUDE.md처럼 저장할 때마다 통째로 바뀌는 파일은 계정마다 사본으로 남고, clausona doctor가 이를 알려 줍니다."
+          "text": "네, PowerShell 5.1 이상에서 됩니다. 공유 폴더는 정션으로 연결됩니다. 개발자 모드를 켜 두세요. 꺼져 있으면 settings.json, CLAUDE.md처럼 저장할 때마다 통째로 바뀌는 파일이 계정마다 사본으로 남고, clausona doctor가 이를 알려 줍니다."
         }
       }
     ]
@@ -120,32 +128,33 @@
   <main class="wrap">
     <article class="article">
       <nav class="crumbs" aria-label="현재 위치"><a href="../">clausona</a> / 가이드</nav>
-      <h1>클로드 코드·Codex 여러 계정 동시에 쓰는 법</h1>
-      <p class="lead">회사 계정과 개인 계정을 오가며 쓰는데, 계정을 바꿀 때마다 다시 로그인하고, 계정마다 스킬과 플러그인을 따로 설치하고, 대화 기록도 계정별로 흩어져 있다면 이 글이 해결책입니다. 로그인은 계정마다 따로 두고, 스킬·훅·플러그인·설정, 원하면 대화 기록까지 하나로 공유하는 방법을 정리했습니다.</p>
+      <h1>Claude Code와 Codex 계정 여러 개를 동시에 쓰는 법</h1>
+      <p class="lead">회사 계정과 개인 계정을 오가며 Claude Code(클로드 코드)나 Codex를 쓰면 바꿀 때마다 다시 로그인해야 합니다. 스킬과 플러그인은 계정마다 따로 설치해야 하고 대화 기록도 계정별로 흩어집니다. 이 글은 로그인만 계정마다 따로 두고 스킬, 훅, 플러그인, 설정은 하나로 공유하는 방법을 정리합니다. 원하면 대화 기록도 공유할 수 있습니다.</p>
       <p class="updated"><time datetime="2026-10-08">2026년 10월 8일</time> 업데이트</p>
 
       <div class="answer">
-        <p><strong>짧은 답.</strong> 계정마다 설정 폴더를 따로 두고(클로드 코드는 <code>CLAUDE_CONFIG_DIR</code>, Codex는 <code>CODEX_HOME</code>), 로그인 정보를 뺀 나머지를 기본 폴더로 연결합니다. <a href="https://github.com/larcane97/clausona">clausona</a>를 쓰면 명령 세 개로 끝납니다.</p>
+        <p><strong>요약</strong> 계정마다 설정 폴더를 따로 두고(Claude Code는 <code>CLAUDE_CONFIG_DIR</code>, Codex는 <code>CODEX_HOME</code>), 로그인 정보를 뺀 나머지를 기본 폴더에 연결합니다. <a href="https://github.com/larcane97/clausona">clausona</a>를 쓰면 명령 세 개로 끝납니다.</p>
 <pre data-copy><code>clausona init              <span class="c"># 이미 로그인된 계정 등록</span>
-clausona add claude:work   <span class="c"># 계정 추가, 클로드 코드 자체 로그인 화면이 열림</span>
+clausona add claude:work   <span class="c"># 계정 추가, Claude Code 로그인 화면이 열림</span>
 csn use work               <span class="c"># 이제 그냥 `claude`가 이 계정으로 시작</span></code></pre>
       </div>
 
       <ul class="toc" aria-label="목차">
-        <li><a href="#why">계정 하나 더 쓰기가 번거로운 이유</a></li>
-        <li><a href="#claude">직접 설정하기: 클로드 코드</a></li>
-        <li><a href="#codex">직접 설정하기: Codex</a></li>
+        <li><a href="#why">계정을 하나 더 쓰기 번거로운 이유</a></li>
+        <li><a href="#claude">Claude Code 직접 설정하기</a></li>
+        <li><a href="#codex">Codex 직접 설정하기</a></li>
         <li><a href="#clausona">clausona로 하기</a></li>
+        <li><a href="#light">설치되는 것과 실행 부담</a></li>
         <li><a href="#history">대화 기록까지 공유하기</a></li>
-        <li><a href="#more">두 계정 동시에, 사용량은 한눈에</a></li>
+        <li><a href="#more">두 계정 동시에 쓰고 사용량 한눈에 보기</a></li>
         <li><a href="#faq">자주 묻는 질문</a></li>
       </ul>
 
-      <h2 id="why">계정 하나 더 쓰기가 번거로운 이유</h2>
-      <p>클로드 코드는 한 번에 계정 하나만 로그인됩니다. <code>/logout</code>과 <code>/login</code>으로 바꿀 수는 있지만 바꿀 때마다 다시 로그인해야 하고, 한 터미널은 회사 계정, 다른 터미널은 개인 계정으로 동시에 쓸 수도 없습니다. Codex도 <code>~/.codex</code>의 <code>auth.json</code> 하나로 로그인하니 사정이 같습니다.</p>
-      <p>환경 변수 <code>CLAUDE_CONFIG_DIR</code>와 <code>CODEX_HOME</code>로 설정 폴더를 하나 더 만들면 로그인을 따로 둘 수 있습니다. 문제는 새 폴더가 빈 상태로 시작한다는 점입니다. 설정, 훅, 스킬, 플러그인, 전역 지침(<code>CLAUDE.md</code>, <code>AGENTS.md</code>), 대화 기록이 하나도 없습니다. 한쪽 계정에 플러그인을 깔면 다른 쪽에는 없고, 두 환경은 점점 달라집니다.</p>
+      <h2 id="why">계정을 하나 더 쓰기 번거로운 이유</h2>
+      <p>Claude Code는 한 번에 계정 하나만 로그인됩니다. <code>/logout</code>과 <code>/login</code>으로 바꿀 수는 있지만 바꿀 때마다 다시 로그인해야 합니다. 한 터미널은 회사 계정으로, 다른 터미널은 개인 계정으로 동시에 쓸 수도 없습니다. Codex도 <code>~/.codex</code>의 <code>auth.json</code> 하나로 로그인하니 사정이 같습니다.</p>
+      <p>환경 변수 <code>CLAUDE_CONFIG_DIR</code>와 <code>CODEX_HOME</code>으로 설정 폴더를 하나 더 만들면 로그인을 따로 둘 수 있습니다. 문제는 새 폴더가 빈 상태로 시작한다는 점입니다. 설정, 훅, 스킬, 플러그인, 전역 지침(<code>CLAUDE.md</code>, <code>AGENTS.md</code>), 대화 기록이 하나도 없습니다. 한쪽 계정에 플러그인을 설치해도 다른 쪽에는 없어서 두 환경은 점점 달라집니다.</p>
 
-      <h2 id="claude">직접 설정하기: 클로드 코드</h2>
+      <h2 id="claude">Claude Code 직접 설정하기</h2>
       <p><code>~/.claude</code>를 기본 폴더로 두고, 두 번째 계정용 폴더를 만들어 공유할 것만 연결합니다.</p>
 <pre data-copy><code><span class="c"># 두 번째 계정용 폴더</span>
 mkdir -p ~/.claude-work
@@ -155,24 +164,24 @@ for item in settings.json CLAUDE.md skills commands agents hooks; do
   [ -e ~/.claude/$item ] &amp;&amp; ln -sn ~/.claude/$item ~/.claude-work/$item
 done
 
-<span class="c"># 그 폴더로 클로드 코드를 열고 두 번째 계정으로 로그인</span>
+<span class="c"># 그 폴더로 Claude Code를 열고 두 번째 계정으로 로그인</span>
 CLAUDE_CONFIG_DIR=~/.claude-work claude
 
 <span class="c"># 계정별 별칭</span>
 alias claude-work='CLAUDE_CONFIG_DIR=~/.claude-work claude'</code></pre>
-      <p>훅은 <code>settings.json</code>에 설정되므로 이 파일을 연결하면 훅, 권한, 상태 표시줄, 모델 설정이 함께 공유됩니다.</p>
+      <p>훅은 <code>settings.json</code>에 설정되므로 이 파일을 연결하면 훅과 권한, 상태 표시줄, 모델 설정이 함께 공유됩니다.</p>
       <p>공유하면 안 되는 것도 있습니다.</p>
       <ul>
         <li><strong><code>.claude.json</code></strong>: 어느 계정이 로그인됐는지와 <code>claude mcp add</code>로 추가한 MCP 서버가 들어 있습니다. 연결하면 폴더마다 어느 계정인지가 뒤섞입니다. MCP 서버는 계정마다 추가하거나 프로젝트의 <code>.mcp.json</code>에 두세요.</li>
         <li><strong><code>.credentials.json</code></strong>: Linux와 Windows의 로그인 토큰입니다. macOS는 설정 폴더 경로에서 이름을 만든 키체인 항목에 토큰을 따로 둡니다.</li>
-        <li><strong><code>plugins/</code> 통째로</strong>: 안의 <code>known_marketplaces.json</code>과 <code>installed_plugins.json</code>에 설정 폴더의 절대경로가 들어 있습니다. 나머지는 연결하되 이 두 파일은 폴더마다 경로를 고친 사본을 두고, 플러그인을 바꿀 때마다 맞춰야 합니다.</li>
+        <li><strong><code>plugins/</code> 통째로</strong>: 안의 <code>known_marketplaces.json</code>과 <code>installed_plugins.json</code>에 설정 폴더의 절대경로가 들어 있습니다. 나머지는 연결하고, 이 두 파일은 폴더마다 경로를 고친 사본을 둔 뒤 플러그인을 바꿀 때마다 맞춰야 합니다.</li>
       </ul>
       <div class="warn">
-        <p><strong>기본 계정에는 <code>CLAUDE_CONFIG_DIR</code>를 설정하지 마세요.</strong> 값을 <code>~/.claude</code>로 줘도 클로드 코드는 별도 폴더로 취급해서 <code>~/.claude.json</code> 대신 <code>~/.claude/.claude.json</code>을 읽고, macOS에서는 다른 키체인 항목을 찾습니다. 로그인 안 된 다른 사용자가 되는 셈입니다(클로드 코드 2.1.278, macOS에서 확인).</p>
+        <p><strong>기본 계정에는 <code>CLAUDE_CONFIG_DIR</code>를 설정하지 마세요.</strong> 값을 <code>~/.claude</code>로 줘도 Claude Code는 별도 폴더로 취급해서 <code>~/.claude.json</code> 대신 <code>~/.claude/.claude.json</code>을 읽고, macOS에서는 다른 키체인 항목을 찾습니다. 로그인되지 않은 다른 사용자가 되는 셈입니다(Claude Code 2.1.278, macOS에서 확인).</p>
       </div>
 
-      <h2 id="codex">직접 설정하기: Codex</h2>
-      <p>Codex는 홈 폴더에 설정 말고도 계정 상태를 많이 두기 때문에, 통째로 연결하지 말고 공유할 목록만 연결해야 합니다.</p>
+      <h2 id="codex">Codex 직접 설정하기</h2>
+      <p>Codex는 홈 폴더에 설정 말고도 계정 상태를 많이 둡니다. 그래서 홈을 통째로 연결하지 말고 공유할 항목만 골라 연결해야 합니다.</p>
 <pre data-copy><code>mkdir -p ~/.codex-work
 for item in config.toml hooks.json AGENTS.md rules skills plugins agents prompts; do
   [ -e ~/.codex/$item ] &amp;&amp; ln -sn ~/.codex/$item ~/.codex-work/$item
@@ -186,10 +195,10 @@ alias codex-work='CODEX_HOME=~/.codex-work codex'</code></pre>
         <li><strong><code>memories/</code>, <code>memories_1.sqlite</code></strong>: 지난 대화 요약을 이후 프롬프트에 넣는 기억입니다. 공유하면 한 계정의 대화가 다른 계정 프롬프트에 섞입니다.</li>
         <li><strong>그 밖의 SQLite DB</strong>와 <code>-wal</code>, <code>-shm</code> 파일, <strong><code>.env</code></strong>(계정별 API 키가 있을 수 있음), <strong><code>packages/</code></strong>(데몬 설치본).</li>
       </ul>
-      <p>그리고 홈 경로는 짧게 두세요. 데몬이 홈 안에 유닉스 소켓을 만드는데, 경로가 100바이트 안팎을 넘으면 데몬 자동 업데이트가 아무 말 없이 멈춥니다.</p>
+      <p>홈 경로는 짧게 두세요. 데몬이 홈 안에 유닉스 소켓을 만드는데, 경로가 100바이트 안팎을 넘으면 데몬 자동 업데이트가 아무 말 없이 멈춥니다.</p>
 
       <h2 id="clausona">clausona로 하기</h2>
-      <p><a href="https://github.com/larcane97/clausona">clausona</a>는 위 과정을 대신하고 계속 맞게 유지해 주는 무료 오픈소스 CLI입니다. 클로드 코드와 Codex를 모두 지원합니다.</p>
+      <p><a href="https://github.com/larcane97/clausona">clausona</a>는 위 과정을 대신하고 이후에도 연결이 어긋나지 않게 관리하는 무료 오픈소스 CLI입니다. Claude Code와 Codex를 모두 지원합니다.</p>
       <div class="install">
         <div class="cmd" data-copy>
           <span class="cmd-label">macOS, Linux</span>
@@ -200,49 +209,73 @@ alias codex-work='CODEX_HOME=~/.codex-work codex'</code></pre>
           <code>irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex</code>
         </div>
       </div>
-      <p class="needs">Node.js 20 이상과 클로드 코드 또는 Codex CLI가 필요합니다.</p>
-<pre data-copy><code>clausona init              <span class="c"># 이미 로그인된 클로드 코드·Codex 계정 등록</span>
-clausona add claude:work   <span class="c"># ~/.claude-work를 만들고 클로드 코드 로그인을 엶</span>
+      <p class="needs">Node.js 20 이상과 Claude Code 또는 Codex CLI가 필요합니다.</p>
+<pre data-copy><code>clausona init              <span class="c"># 이미 로그인된 Claude Code와 Codex 계정 등록</span>
+clausona add claude:work   <span class="c"># ~/.claude-work를 만들고 Claude Code 로그인을 엶</span>
 clausona add codex:work    <span class="c"># ~/.codex-work를 만들고 Codex 로그인을 실행</span>
 csn use claude:work        <span class="c"># 이제 그냥 `claude`가 회사 계정으로 시작</span>
 csn use codex:work         <span class="c"># Codex도 같은 방식</span></code></pre>
-      <p>계정마다 폴더가 따로 생깁니다. 클로드 코드는 로그인 정보와 계정 상태를 뺀 나머지를, Codex는 정해 둔 설정 목록만 기본 폴더로 연결합니다. 그래서 설정, 훅, 스킬, 플러그인, 전역 지침이 모든 계정에서 같습니다. 플러그인 파일 두 개도 계정마다 자동으로 맞춰 줍니다. 클로드 코드가 업데이트되면서 생긴 새 폴더처럼 연결이 빠진 곳은 <code>clausona doctor</code>가 알려 주고 <code>clausona repair &lt;프로필&gt;</code>이 고칩니다. <code>csn</code>은 <code>clausona</code>의 짧은 이름입니다.</p>
-      <p>클로드 코드나 Codex를 감싸거나 프록시하지 않습니다. 셸 hook이 실행할 때마다 계정의 폴더를 지정하고 원래 <code>claude</code>, <code>codex</code>를 그대로 실행하며, 백그라운드에 상주하는 프로세스도 없습니다.</p>
+      <p>계정마다 폴더가 따로 생깁니다. Claude Code는 로그인 정보와 계정 상태를 뺀 나머지를, Codex는 정해 둔 설정 목록만 기본 폴더에 연결합니다. 그래서 설정, 훅, 스킬, 플러그인, 전역 지침이 모든 계정에서 같습니다. 플러그인 파일 두 개도 계정마다 자동으로 맞춰 줍니다. Claude Code가 업데이트되면서 생긴 새 폴더처럼 연결이 빠진 곳은 <code>clausona doctor</code>가 알려 주고 <code>clausona repair &lt;프로필&gt;</code>이 고칩니다. <code>csn</code>은 <code>clausona</code>의 짧은 이름입니다.</p>
+      <p>clausona는 Claude Code나 Codex를 감싸거나 프록시하지 않습니다. <code>claude</code>나 <code>codex</code>를 실행할 때마다 셸 훅이 계정 폴더를 지정하고 원래 명령을 그대로 실행합니다.</p>
+
+      <h2 id="light">설치되는 것과 실행 부담</h2>
+      <p>clausona는 도구가 시작되기 전에 계정을 맞춰 놓을 뿐, 세션이 시작된 뒤에는 관여하지 않습니다. 띄워 둘 앱도, 계속 떠 있는 서비스도 없습니다.</p>
+      <dl class="features">
+        <div>
+          <dt><code>claude</code>를 실행할 때</dt>
+          <dd>셸이 캐시해 둔 실행 스크립트를 읽고 원래 실행 파일을 그대로 실행합니다. M4 Pro Mac에서 <code>claude --version</code>의 실행 시간 중앙값은 훅이 있을 때와 없을 때 모두 25ms였습니다(Claude Code 2.1.294, 각 15회).</dd>
+        </div>
+        <div>
+          <dt>clausona가 직접 실행될 때</dt>
+          <dd><code>csn use</code>나 플러그인 설치처럼 무언가를 바꾼 뒤에만 실행됩니다. clausona를 한 번 띄우는 데 0.3초쯤 걸려서 평소 실행에서는 건너뜁니다.</dd>
+        </div>
+        <div>
+          <dt>설치되는 것</dt>
+          <dd>1MB 남짓한 JavaScript 파일 하나, 셸 설정 파일에 들어가는 훅, 공유할 파일과 폴더마다 만드는 심볼릭 링크가 전부입니다. 업데이트는 릴리스의 SHA-256과 대조한 뒤에 적용합니다.</dd>
+        </div>
+        <div>
+          <dt>지울 때</dt>
+          <dd><code>clausona uninstall</code>이 훅과 링크, <code>~/.clausona</code>를 지웁니다. 아직 데이터가 남은 백업은 남겨 두고, 계정 폴더와 대화 기록도 그대로 둡니다.</dd>
+        </div>
+      </dl>
 
       <h2 id="history">대화 기록까지 공유하기</h2>
       <p>대화 기록은 기본적으로 계정마다 따로 둡니다. 계정별로 기록 공유를 켜면 그 계정이 기본 폴더와 대화 기록을 함께 씁니다.</p>
 <pre data-copy><code>clausona config claude:work --merge-sessions
 clausona config codex:work --merge-sessions</code></pre>
       <ul>
-        <li><strong>클로드 코드</strong>: 켜는 순간 그 계정의 기존 대화를 공유 기록으로 복사하므로 사라지는 대화는 없습니다. 이후 <code>claude --resume</code>은 기록을 공유하는 모든 계정의 대화를 보여 주고, <code>claude --continue</code>는 어느 계정에서 시작했든 현재 폴더의 마지막 대화를 이어 갑니다. 대화에 걸어 둔 <code>/goal</code>도 함께 돌아옵니다.</li>
-        <li><strong>Codex</strong>: macOS와 Linux에서는 <code>codex resume</code>과 <code>codex resume --last</code>가 모든 계정의 스레드를 찾고, 스레드의 goal도 함께 돌아옵니다. 클로드 코드와 달리 그 계정의 기존 Codex 대화는 공유 기록으로 복사되지 않고 <code>~/.clausona/backups/codex/&lt;프로필&gt;/</code>에 보관되며, <code>--separate-sessions</code>로 끄면 돌아옵니다. 기억(memories)은 이때도 계정마다 따로 남습니다. 켜기 전에 그 계정의 Codex를 종료하고 데몬도 멈추세요(<code>CODEX_HOME=~/.codex-work codex app-server daemon stop</code>). Windows에서는 스레드 저장소가 계정마다 따로 남아서, 다른 계정의 스레드는 ID로 이어야 합니다.</li>
+        <li><strong>Claude Code</strong>: 켜는 순간 그 계정의 기존 대화를 공유 기록으로 복사하므로 사라지는 대화는 없습니다. 이후 <code>claude --resume</code>은 기록을 공유하는 모든 계정의 대화를 보여 줍니다. <code>claude --continue</code>는 어느 계정에서 시작했든 현재 폴더의 마지막 대화를 이어 가고, 대화에 걸어 둔 <code>/goal</code>도 함께 돌아옵니다.</li>
+        <li><strong>Codex</strong>: macOS와 Linux에서는 <code>codex resume</code>과 <code>codex resume --last</code>가 모든 계정의 스레드를 찾고 스레드의 goal도 함께 돌아옵니다. Claude Code와 달리 그 계정의 기존 Codex 대화는 공유 기록으로 복사되지 않습니다. <code>~/.clausona/backups/codex/&lt;프로필&gt;/</code>에 보관했다가 <code>--separate-sessions</code>로 끄면 되돌립니다. 기억(memories)은 이때도 계정마다 따로 남습니다. 켜기 전에 그 계정의 Codex를 종료하고 데몬도 멈추세요(<code>CODEX_HOME=~/.codex-work codex app-server daemon stop</code>). Windows에서는 스레드 저장소가 계정마다 따로 남아서 다른 계정의 스레드는 ID로 이어야 합니다.</li>
       </ul>
-      <p>직접 하려면 클로드 코드는 <code>projects/</code>와 <code>jobs/</code>, <code>teams/</code>를 함께 공유해야 합니다. 셋이 세션 ID로 서로를 가리키기 때문에 하나만 공유하면 백그라운드 세션을 이어갈 수 없습니다. 끄려면 <code>--separate-sessions</code>를 씁니다.</p>
+      <p>직접 하려면 Claude Code는 <code>projects/</code>, <code>jobs/</code>, <code>teams/</code>를 함께 공유해야 합니다. 셋이 세션 ID로 서로를 가리켜서 하나만 공유하면 백그라운드 세션을 이어갈 수 없습니다. 끄려면 <code>--separate-sessions</code>를 씁니다.</p>
 
-      <h2 id="more">두 계정 동시에, 사용량은 한눈에</h2>
-      <p><code>csn use</code>는 새로 여는 <code>claude</code>, <code>codex</code>가 쓸 계정을 정합니다. 기본 계정은 그대로 두고 한 세션만 다른 계정으로 띄우려면 <code>clausona run</code>을 씁니다. 한 터미널은 회사 계정, 다른 터미널은 개인 계정으로, 둘 다 같은 스킬과 훅으로 쓸 수 있습니다.</p>
+      <h2 id="more">두 계정 동시에 쓰고 사용량 한눈에 보기</h2>
+      <p><code>csn use</code>는 새로 여는 <code>claude</code>와 <code>codex</code>가 쓸 계정을 정합니다. 기본 계정은 그대로 두고 세션 하나만 다른 계정으로 띄우려면 <code>clausona run</code>을 씁니다. 한 터미널은 회사 계정으로 열고 다른 터미널을 개인 계정으로 열어도 스킬과 훅은 같습니다.</p>
 <pre data-copy><code>clausona run claude:default</code></pre>
-      <p><code>clausona list</code>는 모든 계정의 5시간·주간 한도 사용량과 초기화까지 남은 시간을 나란히 보여 줍니다. 각 도구가 계정마다 저장해 둔 로그인으로 그 도구의 사용량 정보를 읽습니다.</p>
+      <p><code>clausona list</code>는 모든 계정의 5시간 한도와 주간 한도 사용량, 초기화까지 남은 시간을 나란히 보여 줍니다. 각 도구가 계정마다 저장해 둔 로그인으로 그 도구의 사용량 정보를 읽습니다.</p>
 <pre><code>PROFILE             ACCOUNT              5H         7D
 claude:work         dev@example.com      62% 1h     41% 3d
 claude:personal     me@example.org       8%         77% 5d
 codex:work          dev@example.com      —          12% 5d</code></pre>
 
       <h2 id="faq">자주 묻는 질문</h2>
-      <h3>클로드 코드 계정 두 개를 한 컴퓨터에서 같이 쓸 수 있나요?</h3>
-      <p>네. 클로드 코드는 설정 폴더 하나에 계정 하나가 로그인됩니다. 계정마다 설정 폴더를 따로 두면 여러 계정을 로그인해 둔 채 쓸 수 있고, clausona는 스킬·훅·플러그인·설정을 기본 폴더 <code>~/.claude</code>와 공유하도록 연결해 줍니다.</p>
+      <h3>Claude Code 계정 두 개를 한 컴퓨터에서 같이 쓸 수 있나요?</h3>
+      <p>네. Claude Code는 설정 폴더 하나에 계정 하나가 로그인됩니다. 계정마다 설정 폴더를 따로 두면 여러 계정을 로그인해 둔 채 쓸 수 있습니다. clausona는 스킬, 훅, 플러그인, 설정을 기본 폴더 <code>~/.claude</code>와 공유하도록 연결해 줍니다.</p>
       <h3>다른 계정에서 대화를 이어갈 수 있나요?</h3>
       <p>네. <code>clausona config &lt;프로필&gt; --merge-sessions</code>로 기록 공유를 켜면 <code>claude --resume</code>과 <code>claude --continue</code>가 기록을 공유하는 모든 계정의 대화를 찾습니다. macOS와 Linux에서는 <code>codex resume</code>도 마찬가지입니다.</p>
+      <h3>clausona를 쓰면 Claude Code 실행이 느려지나요?</h3>
+      <p>아니요. 평소에는 셸이 캐시해 둔 실행 스크립트만 읽습니다. M4 Pro Mac에서 <code>claude --version</code>의 실행 시간 중앙값은 훅이 있을 때와 없을 때 모두 25ms였습니다. clausona 자체는 <code>csn use</code>처럼 설정을 바꾼 뒤에만 실행됩니다.</p>
       <h3>로그인 정보도 공유되나요?</h3>
       <p>아니요. 로그인 정보는 계정마다 따로 있고 공유되지 않습니다.</p>
-      <h3>한도에 닿으면 자동으로 다른 계정으로 바꿔 주나요?</h3>
-      <p>아니요. 터미널마다 어느 계정을 쓸지는 직접 고르고, clausona는 계정마다 한도가 얼마나 남았는지 보여 줍니다. 계정은 회사용, 개인용처럼 각자의 용도로, Anthropic과 OpenAI의 약관 안에서 쓰세요.</p>
-      <h3>클로드 코드와 Codex의 설정도 서로 공유되나요?</h3>
-      <p>아니요. 클로드 코드 계정끼리 <code>~/.claude</code>를, Codex 계정끼리 <code>~/.codex</code>를 공유합니다.</p>
+      <h3>한도에 걸리면 자동으로 다른 계정으로 바꿔 주나요?</h3>
+      <p>아니요. 터미널마다 어느 계정을 쓸지는 직접 고르고, clausona는 계정마다 한도가 얼마나 남았는지 보여 줍니다. 계정은 회사용, 개인용처럼 용도에 맞게 쓰고 Anthropic과 OpenAI 약관을 지켜 주세요.</p>
+      <h3>Claude Code와 Codex의 설정도 서로 공유되나요?</h3>
+      <p>아니요. Claude Code 계정끼리 <code>~/.claude</code>를, Codex 계정끼리 <code>~/.codex</code>를 공유합니다.</p>
       <h3>API 키나 다른 모델도 프로필로 쓸 수 있나요?</h3>
-      <p>네, 클로드 코드는 됩니다. <code>clausona add claude:gw --api --base-url &lt;url&gt;</code>로 Anthropic API, OpenRouter 같은 게이트웨이, 직접 띄운 모델을 프로필로 추가할 수 있고 다른 계정처럼 전환됩니다.</p>
+      <p>네, Claude Code는 됩니다. <code>clausona add claude:gw --api --base-url &lt;url&gt;</code>로 Anthropic API, OpenRouter 같은 게이트웨이, 직접 띄운 모델을 프로필로 추가할 수 있고 다른 계정처럼 전환됩니다.</p>
       <h3>Windows에서도 되나요?</h3>
-      <p>네, PowerShell 5.1 이상에서 됩니다. 공유 폴더는 정션으로 연결됩니다. 개발자 모드를 켜 두세요. 꺼져 있으면 <code>settings.json</code>, <code>CLAUDE.md</code>처럼 저장할 때마다 통째로 바뀌는 파일은 계정마다 사본으로 남고, <code>clausona doctor</code>가 이를 알려 줍니다.</p>
+      <p>네, PowerShell 5.1 이상에서 됩니다. 공유 폴더는 정션으로 연결됩니다. 개발자 모드를 켜 두세요. 꺼져 있으면 <code>settings.json</code>, <code>CLAUDE.md</code>처럼 저장할 때마다 통째로 바뀌는 파일이 계정마다 사본으로 남고, <code>clausona doctor</code>가 이를 알려 줍니다.</p>
+
       <section class="cta" aria-labelledby="try">
         <h2 id="try">clausona 써 보기</h2>
         <p>무료 오픈소스입니다. 하루에 로그인 몇 번이라도 줄여 줬다면 <a href="https://github.com/larcane97/clausona">GitHub</a>에 별을 눌러 주세요. 다른 사람이 찾는 데 도움이 됩니다. 에이전트 여러 개를 계정마다 나눠 돌리려면 <a href="parallel-agents/">에이전트 병렬 실행 가이드</a>를 보세요.</p>
@@ -253,7 +286,7 @@ codex:work          dev@example.com      —          12% 5d</code></pre>
   <footer class="site-footer">
     <div class="wrap">
       <p>clausona는 MIT 라이선스 오픈소스로 <a href="https://github.com/larcane97/clausona">GitHub</a>에 있으며, <a href="https://github.com/hesreallyhim/awesome-claude-code">Awesome Claude Code</a>에 소개되었습니다.</p>
-      <p>Anthropic, OpenAI와 관계없는 개인 프로젝트입니다. Claude Code는 Anthropic의, Codex CLI는 OpenAI의 제품입니다.</p>
+      <p>Anthropic, OpenAI와 관계없는 개인 프로젝트입니다. Claude Code는 Anthropic 제품이고 Codex CLI는 OpenAI 제품입니다.</p>
     </div>
   </footer>
   <script src="../copy.js"></script>

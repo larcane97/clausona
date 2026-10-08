@@ -2,12 +2,13 @@
 
 > clausona is a free, open-source CLI and terminal dashboard for running multiple Claude Code and OpenAI Codex CLI accounts on one machine. Each account keeps its own sign-in in its own config directory (CLAUDE_CONFIG_DIR or CODEX_HOME). Skills, hooks, plugins, settings and global instructions are shared between the accounts of each tool, and conversation history can be shared too, so a conversation started under one account can be resumed under another. It also shows every account's 5-hour and weekly plan usage side by side. It runs on macOS, Linux and Windows, has no proxy or daemon, and is not affiliated with Anthropic or OpenAI.
 
-Key facts:
+Facts:
 
 - Install: `curl -fsSL https://github.com/larcane97/clausona/releases/latest/download/install.sh | bash` (macOS, Linux) or `irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex` (Windows PowerShell). Needs Node.js 20 or later.
 - Set up: `clausona init` registers the accounts already signed in; `clausona add claude:work` or `clausona add codex:work` adds one; `csn use work` switches; `clausona run claude:personal` runs one session under another account.
 - Shared history: `clausona config <profile> --merge-sessions`; then `claude --resume` and `claude --continue`, and on macOS and Linux `codex resume`, see conversations from every account that shares history.
 - Never shared: sign-ins, Claude Code's `.claude.json` (including `claude mcp add` servers), and Codex's auth.json, app-server daemon, memories and its databases other than the thread store (which merged sessions share on macOS and Linux).
+- Lightweight: a shell hook and symbolic links, with no app, daemon or proxy. A normal launch reads a cached script in the shell; on an M4 Pro Mac, `claude --version` took a median 25 ms with the hook and 25 ms without it. clausona's own process (about 0.3 s) runs only after a change such as `csn use`.
 - clausona does not switch accounts automatically when a limit is reached; the user picks the account.
 
 ## Guides
@@ -15,9 +16,8 @@ Key facts:
 - [How to use multiple Claude Code accounts on one machine](https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/): CLAUDE_CONFIG_DIR by hand, what must not be shared, and the clausona way, including shared conversation history.
 - [How to use multiple Codex CLI accounts on one machine](https://larcane97.github.io/clausona/guides/multiple-codex-cli-accounts/): one CODEX_HOME per account, which files to share, and which must stay with each account.
 - [Run parallel Claude Code agents on different accounts and models](https://larcane97.github.io/clausona/guides/parallel-claude-code-agents/): instead of subagents, which run out of sight and all spend one account, run each agent as its own Claude Code session in Superset, routed by your rules to an account or an API model such as DeepSeek, with the superset-fleet skill.
-- [클로드 코드·Codex 여러 계정 동시에 쓰는 법](https://larcane97.github.io/clausona/ko/): the same guide in Korean.
-
-- [Claude Code 에이전트 여러 개를 계정·모델별로 병렬 실행하기](https://larcane97.github.io/clausona/ko/parallel-agents/): the parallel agents guide in Korean.
+- [Claude Code와 Codex 계정 여러 개를 동시에 쓰는 법](https://larcane97.github.io/clausona/ko/): the same guide in Korean.
+- [Claude Code 에이전트를 여러 계정과 모델로 병렬 실행하기](https://larcane97.github.io/clausona/ko/parallel-agents/): the parallel agents guide in Korean.
 
 ## Project
 
