@@ -148,6 +148,43 @@ describe("redactCommand on a token that is not key-shaped", () => {
     }
   });
 
+  it("hides the token after a scheme that is not a word of its own, or inside a quoted value", () => {
+    const shown = [
+      [
+        redactCommand(["srv", `{"headers":{"Authorization":"Bearer ${HEX}"}}`]),
+        'srv {"headers":{"Authorization":"<hidden>"}}',
+      ],
+      [redactCommand(["srv", `{"token":"Bearer ${HEX}"}`]), 'srv {"token":"<hidden>"}'],
+      [redactCommand(["srv", `X-Upstream:Bearer ${HEX}`]), "srv X-Upstream:Bearer <hidden>"],
+      [redactCommand(["srv", `X-Upstream:"Bearer ${HEX}"`]), 'srv X-Upstream:"Bearer <hidden>"'],
+      [redactCommand(["srv", `use=Bearer ${HEX}`]), "srv use=Bearer <hidden>"],
+      [
+        command(`curl -d '{"Authorization":"Bearer ${HEX}"}' https://h.example`),
+        `curl -d '{"Authorization":"<hidden>"}' https://h.example`,
+      ],
+    ];
+    for (const [actual, expected] of shown) {
+      expect(actual).toBe(expected);
+      expect(actual).not.toContain(HEX);
+    }
+  });
+
+  it("reads a secret word with a number after it as the word", () => {
+    const numbered = redactCommand([
+      "srv",
+      `TOKEN1=${HEX}`,
+      `API_KEY2=${HEX}`,
+      `apiKey2=${HEX}`,
+      "--apikey2",
+      HEX,
+      `--oauth2=${HEX}`,
+    ]);
+    expect(numbered).toBe(
+      "srv TOKEN1=<hidden> API_KEY2=<hidden> apiKey2=<hidden> --apikey2 <hidden> --oauth2=<hidden>",
+    );
+    expect(numbered).not.toContain(HEX);
+  });
+
   it("matches secret words against whole name parts, so a name that only contains one is shown", () => {
     const plain = [
       redactCommand(["srv", "--path", "/x"]),

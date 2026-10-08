@@ -23,10 +23,11 @@ const SECRET_WORDS = [
 
 /**
  * Whether a name says it holds a secret: one of its parts (split at `-`, `_`, `.` and camelCase)
- * is a secret word or its plural, or words run together that end in one (`apikey`, `authtoken`,
- * as ngrok and many CLIs write them). Whole parts, so a name that only contains a secret word -
- * `--path`, `PATH`, `--pattern`, `keycloak` - is a name like any other. What a part ending in one
- * also catches, `--hotkey` or `--compat`, has its value hidden: the safe side.
+ * is a secret word, its plural or numbered form (`TOKEN1`, `oauth2`), or words run together that
+ * end in one (`apikey`, `authtoken`, as ngrok and many CLIs write them). Whole parts, so a name
+ * that only contains a secret word - `--path`, `PATH`, `--pattern`, `keycloak` - is a name like
+ * any other. What a part ending in one also catches, `--hotkey`, `--compat`, `AUTH0_DOMAIN`, has
+ * its value hidden: the safe side.
  */
 function isSecretName(name: string): boolean {
   return name
@@ -34,7 +35,7 @@ function isSecretName(name: string): boolean {
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
     .split(/[\s_.-]+/)
     .some((part) => {
-      const word = part.toLowerCase().replace(/s$/, "");
+      const word = part.toLowerCase().replace(/\d+$/, "").replace(/s$/, "");
       return SECRET_WORDS.some((secret) => word.endsWith(secret));
     });
 }
@@ -63,11 +64,14 @@ const BARE_HEADER = /^(authorization|proxy-authorization|x-api-key|api-key|cooki
 /** A word that ends with a key and its colon, as JSON split at a space does: `{"token":`. */
 const ENDS_WITH_KEY = /(?<![\w.-])(["']?)([\w.-]+)\1\s*:$/;
 
-/** A key and its separator inside a word: `PRIVATE-TOKEN:`, `"apiKey":"`, `&password=`. */
-const KEY_AT = /(?<![\w.-])(["']?)([\w.-]+)\1\s*[:=]\s*["']?/g;
+/** A key and its separator inside a word, with the value's opening quote: `PRIVATE-TOKEN:`, `"apiKey":"`, `&password=`. */
+const KEY_AT = /(?<![\w.-])(["']?)([\w.-]+)\1\s*[:=]\s*(["']?)/g;
 
 /** An auth scheme: the word after it is the credential, whatever its shape. */
 const AUTH_SCHEME = /^(bearer|basic)$/i;
+
+/** The same scheme ending a word after a separator or a quote: `X-Upstream:Bearer`, `use=Bearer`, `:"Bearer`. */
+const ENDING_SCHEME = /[:="'](bearer|basic)$/i;
 
 /** GitHub's `token X` scheme: only after a header's colon, since `token` alone is an ordinary word. */
 const TOKEN_SCHEME = /^token$/i;
@@ -141,12 +145,15 @@ function redactAt(line: Line, i: number): number {
     line.shown.push(HIDDEN);
     return i;
   }
+  const open = openKeyValue(word);
+  if (open) return hideValue(line, i, redactWord(word.slice(0, open.at)), open.quote, word.slice(open.at));
   line.shown.push(redactWord(word));
   if (i + 1 >= line.words.length) return i;
   if (isSecretName(ENDS_WITH_KEY.exec(word)?.[2] ?? ""))
     return hideFollowing(line, i, quote !== "" && !body.includes(quote) ? quote : "");
   const afterColon = (line.words[i - 1] ?? "").endsWith(":");
-  if (isSecretFlag(body) || AUTH_SCHEME.test(body) || (afterColon && TOKEN_SCHEME.test(body))) {
+  const scheme = AUTH_SCHEME.test(body) || ENDING_SCHEME.test(word) || (afterColon && TOKEN_SCHEME.test(body));
+  if (isSecretFlag(body) || scheme) {
     return hideWord(line, i + 1);
   }
   if (USER_FLAG.test(body)) return hideUserinfo(line, i + 1, "", line.words[i + 1] ?? "") ?? i;
@@ -311,6 +318,21 @@ function redactWord(word: string): string {
 /** Text that is not a URL: a secret-named key's value hidden, and `user:password@host` userinfo. */
 function redactText(text: string): string {
   return text === "" ? "" : redactUrlsIn(hideKeyValues(text));
+}
+
+/**
+ * Where a secret-named key's quoted value starts in `word` when the word does not close its
+ * quote: the value is then the shell's or JSON's one string across words, as in
+ * `{"Authorization":"Bearer x"}` read word by word, and runs on to the closing quote.
+ */
+function openKeyValue(word: string): { at: number; quote: string } | undefined {
+  const keys = new RegExp(KEY_AT.source, "g");
+  for (let key = keys.exec(word); key !== null; key = keys.exec(word)) {
+    const quote = key[3] ?? "";
+    const at = key.index + key[0].length;
+    if (quote !== "" && isSecretName(key[2] ?? "") && !word.slice(at).includes(quote)) return { at, quote };
+  }
+  return undefined;
 }
 
 /**
