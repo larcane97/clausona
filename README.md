@@ -7,6 +7,7 @@
   <a href="https://github.com/larcane97/clausona/actions/workflows/ci.yml"><img src="https://github.com/larcane97/clausona/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue" alt="Platforms: macOS, Linux, Windows" />
   <a href="LICENSE"><img src="https://img.shields.io/github/license/larcane97/clausona" alt="MIT license" /></a>
+  <a href="https://github.com/hesreallyhim/awesome-claude-code"><img src="https://awesome.re/mentioned-badge-flat.svg" alt="Mentioned in Awesome Claude Code" /></a>
 </p>
 
 <p align="center">
