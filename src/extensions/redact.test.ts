@@ -52,6 +52,101 @@ describe("redactCommand on a token that is not key-shaped", () => {
     expect(curl).not.toContain(HEX);
     expect(redactCommand(["curl", "-u", "alice", "https://h.example"])).toBe("curl -u alice https://h.example");
   });
+
+  it("hides the query of a URL anywhere in a word", () => {
+    const shown = [
+      [
+        command(`curl -s "https://h.example/notify?token=${HEX}&m=done"`),
+        'curl -s "https://h.example/notify?<hidden>"',
+      ],
+      [command(`curl 'https://h.example/n?apikey=${HEX}'`), "curl 'https://h.example/n?<hidden>'"],
+      [redactCommand(["srv", `--url=https://h.example/mcp?token=${HEX}`]), "srv --url=https://h.example/mcp?<hidden>"],
+      [command(`ENDPOINT=https://h.example/n?key=${HEX} run`), "ENDPOINT=https://h.example/n?<hidden> run"],
+    ];
+    for (const [actual, expected] of shown) {
+      expect(actual).toBe(expected);
+      expect(actual).not.toContain(HEX);
+    }
+  });
+
+  it("hides a value after any secret-named key: in a header, in JSON, in a form body", () => {
+    const shown = [
+      [
+        command(`curl --header "X-Auth-Token: ${HEX}" https://h.example`),
+        'curl --header "X-Auth-Token: <hidden>" https://h.example',
+      ],
+      [redactCommand(["curl", "-H", `PRIVATE-TOKEN:${HEX}`]), "curl -H PRIVATE-TOKEN:<hidden>"],
+      [command(`curl -H "X-Api-Token: ${HEX}"`), 'curl -H "X-Api-Token: <hidden>"'],
+      [redactCommand(["srv", "--config", `{"apiKey":"${HEX}"}`]), 'srv --config {"apiKey":"<hidden>"}'],
+      [command(`curl -d '{"token":"${HEX}"}' https://h.example`), `curl -d '{"token":"<hidden>"}' https://h.example`],
+      [
+        command(`curl -d "user=bob&password=${HEX}" https://h.example`),
+        'curl -d "user=bob&password=<hidden>" https://h.example',
+      ],
+      [command(`http POST h.example Authorization:"Bearer ${HEX}"`), 'http POST h.example Authorization:"<hidden>"'],
+    ];
+    for (const [actual, expected] of shown) {
+      expect(actual).toBe(expected);
+      expect(actual).not.toContain(HEX);
+    }
+    // No separator, no value: prose that names a secret is left as written.
+    const prose = "Rotate the token when the key expires";
+    expect(hookSummary("Stop", undefined, { type: "prompt", prompt: prose }).prompt).toBe(prose);
+  });
+
+  it("hides opaque path segments: webhook secrets, UUIDs, a bot token", () => {
+    // Built from pieces so push protection does not take them for real webhooks.
+    const slack = ["https://hooks.slack.com", "services", "T0ABCDEFG", "B0ABCDEFG"].join("/");
+    const discord = ["https://discord.com", "api", "webhooks", "123456789012345678"].join("/");
+    const uuid = "123e4567-e89b-42d3-a456-426614174000";
+    const shown = [
+      [command(`curl -X POST ${slack}/${HEX}`), `curl -X POST ${slack}/<hidden>`],
+      [redactCommand(["notify", `${discord}/${HEX}`]), `notify ${discord}/<hidden>`],
+      [
+        redactCommand(["curl", `https://api.telegram.org/bot123456789:${HEX}/sendMessage`]),
+        "curl https://api.telegram.org/bot123456789:<hidden>/sendMessage",
+      ],
+      [
+        mcpSummary({ type: "http", url: `https://mcp.pipedream.net/${uuid}/gmail` }).url ?? "",
+        "https://mcp.pipedream.net/<hidden>/gmail",
+      ],
+    ];
+    for (const [actual, expected] of shown) {
+      expect(actual).toBe(expected);
+      expect(actual).not.toContain(HEX);
+      expect(actual).not.toContain(uuid);
+    }
+  });
+
+  it("covers the other secret words, attached -u and -H, the proxy user and the token scheme", () => {
+    const shown = [
+      [
+        redactCommand([
+          "srv",
+          "--pat",
+          HEX,
+          `GITHUB_PAT=${HEX}`,
+          `--jwt=${HEX}`,
+          `SESSION_ID=${HEX}`,
+          "--pwd",
+          HEX,
+          "--bearer",
+          HEX,
+        ]),
+        "srv --pat <hidden> GITHUB_PAT=<hidden> --jwt=<hidden> SESSION_ID=<hidden> --pwd <hidden> --bearer <hidden>",
+      ],
+      [
+        redactCommand(["curl", `-ualice:${HEX}`, "-U", `proxy:${HEX}`, `--proxy-user=p:${HEX}`]),
+        "curl -ualice:<hidden> -U proxy:<hidden> --proxy-user=p:<hidden>",
+      ],
+      [redactCommand(["srv", "--header", `X-Upstream: token ${HEX}`]), "srv --header X-Upstream: token <hidden>"],
+      [command(`curl -H"X-Api-Key: ${HEX}" https://h.example`), 'curl -H"X-Api-Key: <hidden>" https://h.example'],
+    ];
+    for (const [actual, expected] of shown) {
+      expect(actual).toBe(expected);
+      expect(actual).not.toContain(HEX);
+    }
+  });
 });
 
 describe("mcpSummary", () => {
@@ -76,6 +171,15 @@ describe("mcpSummary", () => {
       transport: "http",
       url: "https://mcp.example/mcp?<hidden>",
     });
+  });
+
+  it("reads every word of an argument and of the command", () => {
+    const HEX = "0123456789abcdef".repeat(2);
+    const nested = mcpSummary({ command: "bash", args: ["-c", `npx -y srv --api-key ${HEX}`] }).command;
+    expect(nested).toBe("bash -c npx -y srv --api-key <hidden>");
+    const whole = mcpSummary({ command: `npx srv --token ${HEX}` }).command;
+    expect(whole).toBe("npx srv --token <hidden>");
+    expect(`${nested} ${whole}`).not.toContain(HEX);
   });
 });
 

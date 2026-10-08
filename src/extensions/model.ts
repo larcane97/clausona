@@ -76,7 +76,8 @@ export type StateFacts = {
   /** `.mcp.json` approvals, from settings and from an account's project entry. */
   claudeMcpjson: {
     file: string;
-    project: string;
+    /** Absent for user and managed settings, whose approvals apply to every project. */
+    project?: string;
     profile?: string;
     enabled: string[];
     disabled: string[];
