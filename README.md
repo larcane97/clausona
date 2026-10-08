@@ -112,11 +112,11 @@ clausona                  # open the interactive dashboard
 clausona add claude:gw --api --base-url https://openrouter.ai/api   # a profile backed by an API endpoint
 ```
 
-clausona starts from a Claude Code account that is already signed in: `clausona init` registers
-the accounts it finds and refuses when there are none, and until it has run the other commands say
-"clausona is not initialized". On a machine where Claude Code has never been signed in, run
-`claude login` once first — also when you mean to use only [API profiles](#api-profiles), which
-are added next to that account.
+clausona starts from an account that is already signed in, Claude Code or Codex: `clausona init`
+registers the accounts it finds and refuses when there are none, and until it has run the other
+commands say "clausona is not initialized". On a machine where neither has been signed in, run
+`claude login` or `codex login` once first. [API profiles](#api-profiles) are added next to a Claude
+Code account, so they need `claude login` once even if you will use only API profiles.
 
 ## Plan quota
 

@@ -587,7 +587,8 @@ function subcommandHelpText(command: string): string | undefined {
         "",
         `  ${bold("NOTES")}`,
         `    ${dim("Registers the Claude Code and Codex accounts already signed in; with none,")}`,
-        `    ${dim("run `claude login` first. API profiles already registered are kept.")}`,
+        `    ${dim("sign in with `claude login` or `codex login` first. API profiles already")}`,
+        `    ${dim("registered are kept.")}`,
         `    ${dim("A ~/.clausona/profiles.json that cannot be read is refused, not replaced:")}`,
         `    ${dim("fix it by hand, or move it aside and run init again.")}`,
         "",
@@ -1745,7 +1746,7 @@ export async function runCommand(command: string, args: string[]) {
 
       const accounts = await discoverAccounts();
       if (accounts.length === 0) {
-        throw new Error("No Claude Code accounts found. Run `claude login` first.");
+        throw new Error("No Claude Code or Codex accounts found. Sign in with `claude login` or `codex login` first.");
       }
       const mergeSessions = args.includes("--merge-sessions") || undefined;
       const profileNames = await proposeInitProfileNames(accounts, await loadRegistry());

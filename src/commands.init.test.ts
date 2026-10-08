@@ -479,6 +479,34 @@ describe("re-running init --auto leaves the active profiles alone", () => {
   });
 });
 
+describe("init --auto without a Claude Code account", () => {
+  function removeClaude(home: string) {
+    for (const name of [".claude", ".claude-work", ".claude.json"]) {
+      rmSync(path.join(home, name), { recursive: true, force: true });
+    }
+  }
+
+  it("registers the Codex accounts on their own", async () => {
+    const h = await harness();
+    removeClaude(h.home);
+
+    await h.commands.runCommand("init", ["--auto"]);
+
+    expect(h.ids()).toEqual(["codex:default", "codex:work"]);
+    expect(h.registry().activeProfiles.codex).toBe("codex:default");
+  });
+
+  it("names both tools' logins when no account of either is signed in", async () => {
+    const h = await harness();
+    removeClaude(h.home);
+    for (const name of [".codex", ".codex-work"]) rmSync(path.join(h.home, name), { recursive: true, force: true });
+
+    await expect(h.commands.runCommand("init", ["--auto"])).rejects.toThrow(
+      "No Claude Code or Codex accounts found. Sign in with `claude login` or `codex login` first.",
+    );
+  });
+});
+
 describe("TUI init", () => {
   it("keeps the active codex profile, since its default step picks the claude one", async () => {
     const h = await harness();
