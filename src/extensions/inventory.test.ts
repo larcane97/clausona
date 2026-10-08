@@ -77,6 +77,51 @@ describe("loadInventory", () => {
     expect(marksOf(inv, eli5, Date.now())).not.toContain("differs");
   });
 
+  it("does not call two projects' copies differs: they never load together", async () => {
+    const { h, app } = seed();
+    const web = h.project("repos/web");
+    h.claude("default", ".claude", { projects: { [app]: {}, [web]: {} } });
+    h.skill("repos/app/.claude/skills", "deploy", "Deploy", "the app's way");
+    h.skill("repos/web/.claude/skills", "deploy", "Deploy", "the web's way");
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: app,
+      managedSettings: h.path("none.json"),
+    });
+    const copies = inv.items.filter((i) => i.name === "deploy");
+    expect(copies.map((i) => i.location.project).sort()).toEqual([app, web].sort());
+    // Still one duplicate group, hashed apart, for the Duplicates filter and the Copies line.
+    expect(duplicateGroups(inv.items).find((g) => g[0]?.name === "deploy")).toHaveLength(2);
+    expect(new Set(copies.map((i) => inv.hashes[i.id])).size).toBe(2);
+    for (const copy of copies) expect(marksOf(inv, copy, Date.now())).not.toContain("differs");
+  });
+
+  it("calls a project's copy and the global one differs when they differ, as they load together", async () => {
+    const { h, app } = seed();
+    const web = h.project("repos/web");
+    h.claude("default", ".claude", { projects: { [app]: {}, [web]: {} } });
+    h.skill(".claude/skills", "deploy", "Deploy", "the usual way");
+    h.skill("repos/app/.claude/skills", "deploy", "Deploy", "the app's way");
+    h.skill("repos/web/.claude/skills", "deploy", "Deploy", "the usual way");
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: app,
+      managedSettings: h.path("none.json"),
+    });
+    const copy = (project: string | undefined) => {
+      const found = inv.items.find((i) => i.name === "deploy" && i.location.project === project);
+      if (!found) throw new Error(`no deploy in ${project ?? "global"}`);
+      return marksOf(inv, found, Date.now());
+    };
+    expect(copy(app)).toContain("differs");
+    // The global copy loads in app too, beside the copy that differs.
+    expect(copy(undefined)).toContain("differs");
+    // web's copy matches the global one, and app's copy never loads in web.
+    expect(copy(web)).not.toContain("differs");
+  });
+
   it("calls a skill cleanup when no account used it for 90 days, after a 14-day grace for new folders", async () => {
     const { h, app } = seed();
     const inv = await loadInventory({

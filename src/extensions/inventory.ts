@@ -10,7 +10,7 @@ import {
   type Warning,
 } from "./model.js";
 import { collectProjects, type ProjectRecord, recordedPaths, resolveCurrentProject } from "./projects.js";
-import { hashTree, isRecord, mapLimit, pathKey } from "./read.js";
+import { hashTree, isRecord, mapLimit, pathKey, samePath } from "./read.js";
 import {
   type ClaudeAccount,
   collectClaudeSettingsFacts,
@@ -209,6 +209,16 @@ function groupFor(inv: Inventory, item: Extension): Extension[] | undefined {
   return byId.get(item.id);
 }
 
+/**
+ * Whether two copies of a skill can load in one place: one that no project owns loads in every
+ * project, while a project's own loads in that project only. Two projects' copies never meet,
+ * so they can differ without either being called out for it.
+ */
+function loadTogether(a: Extension, b: Extension): boolean {
+  const [one, other] = [a.location.project, b.location.project];
+  return one === undefined || other === undefined || samePath(one, other);
+}
+
 /** Why a row deserves a second look. */
 export function marksOf(inv: Inventory, item: Extension, now: number): Mark[] {
   const marks: Mark[] = [];
@@ -221,11 +231,14 @@ export function marksOf(inv: Inventory, item: Extension, now: number): Mark[] {
     marks.push("shadowed");
   }
   const mine = inv.hashes[item.id];
-  // A copy that differs is marked "differs" and listed by the Duplicates filter, but not called
-  // cleanup: the copy in daily use is often one of them.
+  // A copy that differs from one it loads beside is marked "differs", but not called cleanup:
+  // the copy in daily use is often one of them. The Duplicates filter and the Copies line still
+  // take the whole group, copies in other projects too.
   if (
     mine !== undefined &&
-    groupFor(inv, item)?.some((o) => inv.hashes[o.id] !== undefined && inv.hashes[o.id] !== mine)
+    groupFor(inv, item)?.some(
+      (o) => loadTogether(item, o) && inv.hashes[o.id] !== undefined && inv.hashes[o.id] !== mine,
+    )
   ) {
     marks.push("differs");
   }

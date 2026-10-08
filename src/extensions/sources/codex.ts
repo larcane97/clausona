@@ -1,4 +1,3 @@
-import { realpath } from "node:fs/promises";
 import path from "node:path";
 
 import { parse } from "smol-toml";
@@ -6,7 +5,7 @@ import { parse } from "smol-toml";
 import type { Registry } from "../../types.js";
 import type { Collector, Location, Project, Warning } from "../model.js";
 import { type ProjectRecord, recordedPaths } from "../projects.js";
-import { isRecord, readJsonObject, readText, samePath } from "../read.js";
+import { isRecord, readJsonObject, readText, realPath, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
 import { addHooks } from "./claude-hooks.js";
 import { readSkillFolders, type SkillLocation } from "./skill-dirs.js";
@@ -101,8 +100,8 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
     jobs.push(
       (async () => {
         const [mine, primary] = await Promise.all([
-          realpath(path.join(home.dir, "skills")).catch(() => undefined),
-          realpath(path.join(ctx.primary.dir, "skills")).catch(() => undefined),
+          realPath(path.join(home.dir, "skills")).catch(() => undefined),
+          realPath(path.join(ctx.primary.dir, "skills")).catch(() => undefined),
         ]);
         if (mine === undefined || samePath(mine, primary)) return;
         await readSkillFolders(
