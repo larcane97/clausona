@@ -4,7 +4,7 @@ import path from "node:path";
 import { claudeJsonPathForConfigDir } from "../../core/paths.js";
 import type { Registry } from "../../types.js";
 import type { Collector, Project, SettingsLayer, Warning } from "../model.js";
-import { isRecord, listNames, pathKey, readJsonObject, samePath } from "../read.js";
+import { IO_LIMIT, isRecord, listNames, mapLimit, pathKey, readJsonObject, samePath } from "../read.js";
 
 export type ClaudeAccount = {
   id: string;
@@ -105,18 +105,21 @@ export async function loadClaudeContext(options: {
       },
     ]),
   ];
-  const read = await Promise.all(
-    wanted.map(async (entry) => {
-      const data = await readJsonObject(entry.file, warnings);
-      return data ? { ...entry, data } : undefined;
-    }),
-  );
+  const [read, plugins] = await Promise.all([
+    Promise.all(
+      wanted.map(async (entry) => {
+        const data = await readJsonObject(entry.file, warnings);
+        return data ? { ...entry, data } : undefined;
+      }),
+    ),
+    readPluginInstalls(accounts, homeDir, warnings),
+  ]);
   return {
     homeDir,
     primaryDir,
     accounts,
     settings: read.filter((s): s is SettingsFile => s !== undefined),
-    plugins: await readPluginInstalls(accounts, homeDir, warnings),
+    plugins,
   };
 }
 
@@ -159,25 +162,31 @@ async function readPluginInstalls(
       readJsonObject(path.join(account.configDir, "plugins", "installed_plugins.json"), warnings),
     ),
   );
-  const byKey = new Map<string, PluginInstall>();
+  const records: { account: ClaudeAccount; id: string; entry: Record<string, unknown>; recorded: string }[] = [];
   for (const [index, account] of accounts.entries()) {
     const json = files[index];
     const plugins = isRecord(json?.plugins) ? json.plugins : {};
     for (const [id, entries] of Object.entries(plugins)) {
       for (const entry of Array.isArray(entries) ? entries : [entries]) {
         if (!isRecord(entry) || typeof entry.installPath !== "string") continue;
-        const recorded = entry.installPath;
-        const installPath = await realpath(recorded).catch(() => recorded);
-        const where = pluginScope(entry, homeDir);
-        const key = [id, pathKey(installPath), where.scope, where.project ? pathKey(where.project) : ""].join("\0");
-        const known = byKey.get(key);
-        if (known) {
-          if (!known.profiles.includes(account.id)) known.profiles.push(account.id);
-          continue;
-        }
-        byKey.set(key, { id, name: id.split("@")[0] ?? id, installPath, ...where, profiles: [account.id] });
+        records.push({ account, id, entry, recorded: entry.installPath });
       }
     }
+  }
+  // Every account lists most installs, so there are hundreds of paths to resolve: in parallel,
+  // then merged in the accounts' order as before.
+  const resolved = await mapLimit(records, IO_LIMIT, ({ recorded }) => realpath(recorded).catch(() => recorded));
+  const byKey = new Map<string, PluginInstall>();
+  for (const [index, { account, id, entry, recorded }] of records.entries()) {
+    const installPath = resolved[index] ?? recorded;
+    const where = pluginScope(entry, homeDir);
+    const key = [id, pathKey(installPath), where.scope, where.project ? pathKey(where.project) : ""].join("\0");
+    const known = byKey.get(key);
+    if (known) {
+      if (!known.profiles.includes(account.id)) known.profiles.push(account.id);
+      continue;
+    }
+    byKey.set(key, { id, name: id.split("@")[0] ?? id, installPath, ...where, profiles: [account.id] });
   }
   return [...byKey.values()].sort(
     (a, b) =>

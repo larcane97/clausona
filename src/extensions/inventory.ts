@@ -10,7 +10,7 @@ import {
   type Warning,
 } from "./model.js";
 import { collectProjects, type ProjectRecord, recordedPaths, resolveCurrentProject } from "./projects.js";
-import { hashTree, isRecord, pathKey } from "./read.js";
+import { hashTree, isRecord, mapLimit, pathKey } from "./read.js";
 import {
   type ClaudeAccount,
   collectClaudeSettingsFacts,
@@ -47,15 +47,20 @@ export async function loadInventory(options: LoadOptions): Promise<Inventory> {
   const { homeDir, registry } = options;
   const warnings: Warning[] = [];
   const out: Collector = { items: [], facts: emptyFacts(), warnings };
-  const currentProject = await resolveCurrentProject(options.cwd, homeDir);
-  const accounts = await loadClaudeAccounts(registry, homeDir, warnings);
-  const codex = await loadCodexContext(registry, homeDir, warnings);
+  const [currentProject, accounts, codex] = await Promise.all([
+    resolveCurrentProject(options.cwd, homeDir),
+    loadClaudeAccounts(registry, homeDir, warnings),
+    loadCodexContext(registry, homeDir, warnings),
+  ]);
   const records: ProjectRecord[] = [
     ...accounts.map((a) => ({ tool: "claude" as const, profile: a.id, paths: recordedPaths(a.json?.projects) })),
     ...(codex ? codexProjectRecords(codex) : []),
   ];
   const projects = await collectProjects(records, homeDir, currentProject);
-  if (accounts.length > 0) {
+  // The Claude and Codex sources write apart - each its own items and facts, and warnings are
+  // sorted below - so they read side by side.
+  const readClaude = async (): Promise<void> => {
+    if (accounts.length === 0) return;
     const ctx = await loadClaudeContext({
       accounts,
       registry,
@@ -71,8 +76,8 @@ export async function loadInventory(options: LoadOptions): Promise<Inventory> {
       readClaudeHooks(ctx, out),
       readClaudePlugins(ctx, out),
     ]);
-  }
-  if (codex) await readCodex(codex, projects, out);
+  };
+  await Promise.all([readClaude(), codex ? readCodex(codex, projects, out) : undefined]);
   const items = out.items.sort(
     (a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
   );
@@ -172,13 +177,23 @@ export function duplicateGroups(items: Extension[]): Extension[][] {
   return [...byName.values()].filter((group) => new Set(group.map((item) => pathKey(realFolder(item)))).size > 1);
 }
 
+/**
+ * Folders hashed at once. Each walk keeps its own calls in flight and reads ahead up to the
+ * hash's byte budget, so a few at a time keep the disk busy and bound the bytes held.
+ */
+const HASH_FOLDERS_AT_ONCE = 8;
+
 /** Hashes in item order, so the keys' order does not depend on which hash finishes first. */
 async function hashDuplicates(items: Extension[]): Promise<Record<string, string>> {
   const members = duplicateGroups(items)
     .flat()
     .filter((item) => !item.link?.broken);
   return Object.fromEntries(
-    await Promise.all(members.map(async (item) => [item.id, await hashTree(item.location.file)] as const)),
+    await mapLimit(
+      members,
+      HASH_FOLDERS_AT_ONCE,
+      async (item) => [item.id, await hashTree(item.location.file)] as const,
+    ),
   );
 }
 

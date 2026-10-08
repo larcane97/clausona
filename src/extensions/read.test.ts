@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -5,7 +6,16 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { leakedWindows } from "../test-leaks.js";
 import type { Warning } from "./model.js";
-import { entryInfo, gitRoot, hashTree, listNames, parseFrontmatter, readJsonObject, samePath } from "./read.js";
+import {
+  entryInfo,
+  gitRoot,
+  hashTree,
+  listNames,
+  mapLimit,
+  parseFrontmatter,
+  readJsonObject,
+  samePath,
+} from "./read.js";
 
 const temps: string[] = [];
 afterEach(() => {
@@ -106,6 +116,29 @@ describe("listNames and entryInfo", () => {
 });
 
 describe("hashTree", () => {
+  it("hashes files in the walk's order: by name, a subfolder's files in its place", async () => {
+    const dir = tempDir();
+    mkdirSync(path.join(dir, "b", "d"), { recursive: true });
+    writeFileSync(path.join(dir, "a.md"), "1");
+    writeFileSync(path.join(dir, "b", "c.md"), "22");
+    writeFileSync(path.join(dir, "b", "d", "e.md"), "333");
+    writeFileSync(path.join(dir, "f.md"), "4444");
+    writeFileSync(path.join(dir, ".DS_Store"), "skipped");
+    // The digest a walk one entry at a time makes; reading in parallel must not change it, or
+    // copies hashed before and after would stop matching.
+    const expected = createHash("sha256");
+    for (const [rel, text] of [
+      ["a.md", "1"],
+      ["b/c.md", "22"],
+      ["b/d/e.md", "333"],
+      ["f.md", "4444"],
+    ]) {
+      expected.update(`${rel}\0${text.length}\0`);
+      expected.update(text);
+    }
+    expect(await hashTree(dir)).toBe(expected.digest("hex"));
+  });
+
   it("is equal for equal folders and differs when a file differs", async () => {
     const dir = tempDir();
     for (const copy of ["one", "two", "three"]) {
@@ -147,6 +180,64 @@ describe("hashTree", () => {
       expect(a).not.toBe(c);
     },
   );
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "leaves the budget a failed read did not use to the files after it",
+    async () => {
+      const dir = tempDir();
+      for (const copy of ["a", "b"]) {
+        mkdirSync(path.join(dir, copy));
+        writeFileSync(path.join(dir, copy, "a-locked.bin"), "x".repeat(3 * 1024 * 1024));
+        chmodSync(path.join(dir, copy, "a-locked.bin"), 0o000);
+        writeFileSync(path.join(dir, copy, "b.bin"), `${"y".repeat(2 * 1024 * 1024 - 1)}${copy}`);
+      }
+      // The locked 3 MB file is not read, so the 2 MB after it still fits the 4 MB budget and
+      // its contents - which differ - are hashed.
+      expect(await hashTree(path.join(dir, "a"))).not.toBe(await hashTree(path.join(dir, "b")));
+    },
+  );
+});
+
+describe("mapLimit", () => {
+  it("keeps the items' order whichever call finishes first", async () => {
+    const delays = [30, 5, 20, 0, 10];
+    const out = await mapLimit(delays, 2, async (ms, i) => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      return `${i}:${ms}`;
+    });
+    expect(out).toEqual(["0:30", "1:5", "2:20", "3:0", "4:10"]);
+  });
+
+  it("never has more than the limit in flight, and uses all of it", async () => {
+    let inFlight = 0;
+    let most = 0;
+    await mapLimit(
+      Array.from({ length: 20 }, (_, i) => i),
+      3,
+      async (i) => {
+        inFlight++;
+        most = Math.max(most, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, i % 4));
+        inFlight--;
+      },
+    );
+    expect(most).toBe(3);
+  });
+
+  it("is empty for no items and runs one at a time below a limit of 1", async () => {
+    expect(await mapLimit([], 4, async () => 1)).toEqual([]);
+    let inFlight = 0;
+    let most = 0;
+    const out = await mapLimit([1, 2, 3], 0, async (n) => {
+      inFlight++;
+      most = Math.max(most, inFlight);
+      await Promise.resolve();
+      inFlight--;
+      return n * 2;
+    });
+    expect(out).toEqual([2, 4, 6]);
+    expect(most).toBe(1);
+  });
 });
 
 describe("gitRoot", () => {
