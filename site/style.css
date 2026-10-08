@@ -880,8 +880,8 @@ td code {
   }
 
   .site-nav {
-    gap: 14px;
-    font-size: 0.88rem;
+    gap: 12px;
+    font-size: 0.84rem;
   }
 }
 
@@ -902,4 +902,14 @@ td code {
     white-space: normal;
     overflow-wrap: anywhere;
   }
+}
+
+.figure {
+  margin: 32px 0;
+}
+
+.figure figcaption {
+  margin-top: 10px;
+  font-size: 0.9rem;
+  color: var(--ink-2);
 }

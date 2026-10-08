@@ -97,8 +97,9 @@
     <div class="wrap">
       <a class="wordmark" href="./">clausona</a>
       <nav class="site-nav" aria-label="Site">
-        <a href="guides/multiple-claude-code-accounts/">Claude Code guide</a>
-        <a href="guides/multiple-codex-cli-accounts/">Codex guide</a>
+        <a href="guides/multiple-claude-code-accounts/">Claude Code</a>
+        <a href="guides/multiple-codex-cli-accounts/">Codex</a>
+        <a href="guides/parallel-claude-code-agents/">Agent fleets</a>
         <a href="ko/" hreflang="ko" lang="ko">한국어</a>
         <a href="https://github.com/larcane97/clausona">GitHub</a>
       </nav>
@@ -295,7 +296,7 @@ claude --continue    <span class="c"># the latest conversation in this folder</s
           </div>
           <div>
             <dt>Agents on different accounts</dt>
-            <dd>A Claude Code plugin from the repository runs parallel <a href="https://superset.sh">Superset</a> agents, each on its own account.</dd>
+            <dd>One Claude Code session runs parallel <a href="https://superset.sh">Superset</a> agents, each routed by your rules to its own account or to an API model such as DeepSeek. <a href="guides/parallel-claude-code-agents/">How it works</a>.</dd>
           </div>
           <div>
             <dt>macOS, Linux and Windows</dt>
@@ -311,7 +312,9 @@ claude --continue    <span class="c"># the latest conversation in this folder</s
         <ul class="guide-list">
           <li><a href="guides/multiple-claude-code-accounts/">How to use multiple Claude Code accounts on one machine<span>By hand with CLAUDE_CONFIG_DIR, what not to share, and the clausona way.</span></a></li>
           <li><a href="guides/multiple-codex-cli-accounts/">How to use multiple Codex CLI accounts<span>One CODEX_HOME per account, and which files must stay with each one.</span></a></li>
+          <li><a href="guides/parallel-claude-code-agents/">Run parallel Claude Code agents on different accounts and models<span>Visible, interruptible agents in Superset, each routed to an account or an API model such as DeepSeek.</span></a></li>
           <li><a href="ko/" hreflang="ko" lang="ko">클로드 코드·Codex 여러 계정 쓰는 법<span>스킬, 훅, 대화 기록까지 공유하면서 계정을 나누는 방법.</span></a></li>
+          <li><a href="ko/parallel-agents/" hreflang="ko" lang="ko">Claude Code 에이전트 여러 개를 계정·모델별로 병렬 실행하기<span>Superset에서 에이전트마다 다른 계정이나 DeepSeek 같은 API 모델로.</span></a></li>
         </ul>
       </div>
     </section>
