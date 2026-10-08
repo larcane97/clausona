@@ -304,15 +304,16 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
           ? inOrder([{ keys: "esc", action: "back" }])
           : // The keys nothing else on screen points to come first: enter, when the detail has no
             // pane of its own, and w, the one sign that some files could not be read once the status
-            // line has gone. The filter and the search have their place in the tab bar.
+            // line has gone. Search comes before the filter: the tab bar shows the filter's label at
+            // all times, but nothing there points to search until one is typed.
             [
               { keys: "↑↓", action: "move", rank: 0 },
               { keys: "tab", action: "section", rank: 2 },
               layout.mode === "list"
                 ? { keys: "enter", action: "open", rank: 1 }
                 : { keys: "enter", action: "group", rank: 9 },
-              { keys: "f", action: "filter", rank: 5 },
-              { keys: "/", action: "search", rank: 6 },
+              { keys: "f", action: "filter", rank: 6 },
+              { keys: "/", action: "search", rank: 5 },
               { keys: "p", action: "project", rank: 8 },
               ...(tab === "mcp" ? [{ keys: "m", action: "matrix", rank: 7 }] : []),
               { keys: "r", action: "reload", rank: 10 },
