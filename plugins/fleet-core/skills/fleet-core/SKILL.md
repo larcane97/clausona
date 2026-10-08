@@ -79,7 +79,9 @@ profile itself, use it and say what it risks.
 
 **Before starting**, show the coordinator table (section 6) with each task's profile. If neither the
 request nor the settings named a profile (in `workers` or `routing`), wait for the user's OK.
-Otherwise, or if the user said to start right away, start at once.
+Otherwise, or if the user said to start right away, start at once. A request names profiles when it
+gives a profile for any task, or says which accounts to use ("use my Claude accounts for the
+rest"); the tasks it leaves open take the defaults above, and you still start at once.
 
 ## 4. Launch arguments
 
