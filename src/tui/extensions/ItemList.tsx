@@ -40,11 +40,13 @@ function GroupLine({ row, active }: { row: GroupRow; active: boolean }) {
 
 function ItemLine({ row, active, columns }: { row: ItemRow; active: boolean; columns: Columns }) {
   const tags = row.marks.map((m) => MARK_LABEL[m]).join(" ");
-  const tagText = tags ? ` ${tags}` : "";
-  // The name gives way to its marks: "cleanup" says more than the last letters of a long name.
-  const nameRoom = Math.max(4, columns.name - 2 - tagText.length);
-  const name = cell(row.name, nameRoom).trimEnd();
-  const pad = Math.max(0, columns.name - 2 - name.length - tagText.length);
+  // The name's part of its column, after the indent. The name gives way to its marks - "cleanup"
+  // says more than the last letters of a long name - down to 4 letters; past that the marks are
+  // cut instead, so however many there are, the columns after them stay where the header has them.
+  const room = columns.name - 2;
+  const tagText = tags ? cell(` ${tags}`, Math.max(0, room - 4)).trimEnd() : "";
+  const name = cell(row.name, Math.max(0, room - tagText.length)).trimEnd();
+  const pad = Math.max(0, room - name.length - tagText.length);
   const tools = row.tools.map((t) => (t === "claude" ? "C" : "X")).join(" ");
   return (
     <Text wrap="truncate-end">
@@ -65,10 +67,20 @@ function ItemLine({ row, active, columns }: { row: ItemRow; active: boolean; col
   );
 }
 
-type Props = { rows: Row[]; cursor: number; top: number; height: number; width: number; columns: Columns; tab: Tab };
+type Props = {
+  rows: Row[];
+  cursor: number;
+  top: number;
+  height: number;
+  width: number;
+  columns: Columns;
+  tab: Tab;
+  /** What an empty list says: that the tab has nothing, or that nothing matches. */
+  empty: string;
+};
 
 /** The list: a column header, the rows that fit from `top`, and how many more are below. */
-export function ItemList({ rows, cursor, top, height, width, columns, tab }: Props) {
+export function ItemList({ rows, cursor, top, height, width, columns, tab, empty }: Props) {
   const room = Math.max(1, height - 2);
   const visible = rows.slice(top, top + room);
   const below = rows.length - top - visible.length;
@@ -79,7 +91,8 @@ export function ItemList({ rows, cursor, top, height, width, columns, tab }: Pro
       </Text>
       {rows.length === 0 ? (
         <Text color={color.muted} wrap="truncate-end">
-          {"  "}Nothing here.
+          {"  "}
+          {empty}
         </Text>
       ) : null}
       {visible.map((row, i) =>
