@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { type Extension, emptyFacts, type Inventory, type StateFacts } from "./model.js";
-import { pluginState, relevantIn, stateOf } from "./state.js";
+import { claudeMcpTaken, pluginState, relevantIn, stateOf } from "./state.js";
 
 const P = "/repos/app";
 const Q = "/repos/web";
@@ -178,6 +178,116 @@ describe("Claude MCP", () => {
     expect(stateOf(disabledForA, fromPlugin, P, "claude:b").value).toBe("on");
     // With no account named, no account's disabledMcpServers entry applies.
     expect(stateOf(disabledForA, fromPlugin, P).value).toBe("on");
+  });
+});
+
+describe("Claude MCP, one server per name", () => {
+  // Claude Code: "local-scoped servers first, followed by project-scoped servers, and finally user-scoped servers".
+  const user = (profile: string) =>
+    ({
+      ...ext("mcp", "github", { tool: "claude", scope: "account", profile, file: `/${profile}.json` }),
+      id: `mcp:claude:account:${profile}:github`,
+    }) satisfies Extension;
+  const [userA, userB] = [user("claude:a"), user("claude:b")];
+  const localA: Extension = {
+    ...ext("mcp", "github", {
+      tool: "claude",
+      scope: "local",
+      profile: "claude:a",
+      project: P,
+      file: "/claude:a.json",
+    }),
+    id: "mcp:claude:local:claude:a@app:github",
+  };
+  const shared = ext("mcp", "github", { tool: "claude", scope: "project", project: P, file: `${P}/.mcp.json` });
+  const parent: Extension = {
+    ...ext("mcp", "github", { tool: "claude", scope: "project", project: "/repos", file: "/repos/.mcp.json" }),
+    id: "mcp:claude:project:/repos:github",
+  };
+  const approvedFor = (profile: string): Partial<StateFacts> => ({
+    claudeMcpjson: [
+      { file: `/${profile}.json`, project: P, profile, enabled: ["github"], disabled: [], enableAll: false },
+    ],
+  });
+
+  it("hides a user server behind the same account's local one, in that account only", () => {
+    const i = inv([userA, userB, localA]);
+    expect(stateOf(i, userA, P)).toEqual({ value: "on", shadowedBy: localA.id });
+    expect(stateOf(i, userB, P)).toEqual({ value: "on" });
+    expect(stateOf(i, localA, P)).toEqual({ value: "on" });
+    // The local server is the project's: elsewhere, and with no project, the user one loads.
+    expect(stateOf(i, userA, Q).shadowedBy).toBeUndefined();
+    expect(stateOf(i, userA).shadowedBy).toBeUndefined();
+  });
+
+  it("hides a user server behind a .mcp.json one approved for its account, here or in a parent dir", () => {
+    const i = inv([userA, userB, shared], approvedFor("claude:a"));
+    expect(stateOf(i, userA, P)).toEqual({ value: "on", shadowedBy: shared.id });
+    // Not approved for b: Claude Code leaves the .mcp.json copy out, and b's user server loads.
+    expect(stateOf(i, userB, P)).toEqual({ value: "on" });
+    const fromParent = inv([userA, parent], approvedFor("claude:a"));
+    expect(stateOf(fromParent, userA, P).shadowedBy).toBe(parent.id);
+  });
+
+  it("keeps a user server loading beside a pending or denied .mcp.json one, which waits or is off", () => {
+    const pending = inv([userA, shared]);
+    expect(stateOf(pending, userA, P)).toEqual({ value: "on" });
+    expect(stateOf(pending, shared, P, "claude:a")).toEqual({ value: "pending-approval" });
+    const denied = inv([userA, shared], {
+      claudeMcpjson: [
+        {
+          file: "/claude:a.json",
+          project: P,
+          profile: "claude:a",
+          enabled: [],
+          disabled: ["github"],
+          enableAll: false,
+        },
+      ],
+    });
+    expect(stateOf(denied, userA, P)).toEqual({ value: "on" });
+    expect(stateOf(denied, shared, P, "claude:a").value).toBe("off");
+  });
+
+  it("hides a .mcp.json server behind an account's local one, in that account only", () => {
+    const i = inv([localA, shared, parent], approvedFor("claude:a"));
+    expect(stateOf(i, shared, P, "claude:a")).toMatchObject({ value: "on", shadowedBy: localA.id });
+    expect(stateOf(i, shared, P, "claude:b")).toEqual({ value: "pending-approval" });
+    // The local copy outranks every .mcp.json copy; without it, the nearer file still wins.
+    expect(stateOf(i, parent, P, "claude:a").shadowedBy).toBe(localA.id);
+    expect(stateOf(i, parent, P, "claude:b").shadowedBy).toBe(shared.id);
+    // With no account named, no account's own server applies.
+    expect(stateOf(i, shared, P).shadowedBy).toBeUndefined();
+  });
+
+  it("takes, per account, the copy Claude Code starts", () => {
+    const i = inv([userA, userB, localA, shared], approvedFor("claude:b"));
+    expect(claudeMcpTaken(i, "github", P, "claude:a")).toBe(localA);
+    expect(claudeMcpTaken(i, "github", P, "claude:b")).toBe(shared);
+    const pending = inv([userA, shared]);
+    expect(claudeMcpTaken(pending, "github", P, "claude:a")).toBe(userA);
+    // Nothing but a pending .mcp.json copy: it is the one, waiting for approval.
+    expect(claudeMcpTaken(pending, "github", P, "claude:b")).toBe(shared);
+  });
+});
+
+describe("Claude skills, one per name", () => {
+  const deploy = skill("deploy", "project", { project: P });
+  const workOwn: Extension = {
+    ...skill("deploy", "account", { profile: "claude:b" }),
+    id: "skill:claude:account:b:deploy",
+  };
+
+  it("hides a project skill behind an account's own copy in that account only, and a Global one in every account", () => {
+    const i = inv([deploy, workOwn]);
+    expect(stateOf(i, deploy, P, "claude:a")).toEqual({ value: "on" });
+    expect(stateOf(i, deploy, P, "claude:b")).toEqual({ value: "on", shadowedBy: workOwn.id });
+    // With no account named, no account's own copy applies.
+    expect(stateOf(i, deploy, P).shadowedBy).toBeUndefined();
+    const global = skill("deploy", "global");
+    const both = inv([deploy, workOwn, global]);
+    expect(stateOf(both, deploy, P, "claude:a").shadowedBy).toBe(global.id);
+    expect(stateOf(both, deploy, P).shadowedBy).toBe(global.id);
   });
 });
 

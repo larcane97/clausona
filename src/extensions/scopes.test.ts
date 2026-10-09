@@ -1,11 +1,20 @@
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
-
+import { statesByAccount, tagsOf } from "./describe.js";
 import { loadInventory } from "./inventory.js";
 import type { Inventory } from "./model.js";
 import { pathKey } from "./read.js";
-import { homeScope, itemsIn, otherProjects, pluginContents, rowsIn, SCOPE_LABEL, scopesFor } from "./scopes.js";
+import {
+  homeScope,
+  itemsIn,
+  otherProjects,
+  pluginContents,
+  rowsIn,
+  SCOPE_LABEL,
+  type ScopeRow,
+  scopesFor,
+} from "./scopes.js";
 import { TestHome } from "./test-home.js";
 
 const DAY = 86_400_000;
@@ -461,5 +470,129 @@ describe("rows across accounts", () => {
       ["claude:solo", true],
       ["claude:work", true],
     ]);
+  });
+});
+
+describe("one copy per name, account by account", () => {
+  type Entry = Record<string, unknown>;
+  /**
+   * personal (the primary) and work, both with a user github and app recorded. `entries` gives
+   * each account's entry for app in its `.claude.json`; `more` adds to the home. Read from app.
+   */
+  async function accounts(
+    entries: { personal?: Entry; work?: Entry } = {},
+    more?: (h: TestHome) => void,
+  ): Promise<Seeded> {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    const web = h.project("repos/web");
+    const user = { github: { command: "gh-user" } };
+    h.claude("personal", ".claude", { projects: { [app]: entries.personal ?? {}, [web]: {} }, mcpServers: user });
+    h.claude("work", ".claude-work", { projects: { [app]: entries.work ?? {} }, mcpServers: user });
+    more?.(h);
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: app,
+      managedSettings: h.path("none.json"),
+    });
+    return { h, inv, app, web };
+  }
+
+  /** The one row of `name` in a scope. */
+  function rowOf(seeded: Seeded, kind: "skill" | "mcp", scope: "loaded" | "global" | "project", name: string) {
+    const rows = rowsIn(seeded.inv, "claude", kind, scope, seeded.app, NOW).filter((r) => r.name === name);
+    if (rows.length !== 1) throw new Error(`${rows.length} rows of ${name} in ${scope}`);
+    return rows[0] as ScopeRow;
+  }
+
+  /** Each account's state, by short name: the scope of the copy that wins over the row there, or its value. */
+  function perAccount({ inv, app }: Seeded, row: ScopeRow): Record<string, string> {
+    return Object.fromEntries(
+      (statesByAccount(inv, row, app) ?? []).map(({ profile, state }) => {
+        const winner = inv.items.find((i) => i.id === state.shadowedBy);
+        return [profile.replace("claude:", ""), winner ? `hidden by ${homeScope(winner, app)}` : state.value];
+      }),
+    );
+  }
+
+  /** Loaded here's row keys, sorted. */
+  const loadedKeys = ({ inv, app }: Seeded, kind: "skill" | "mcp") =>
+    rowsIn(inv, "claude", kind, "loaded", app, NOW)
+      .map((r) => r.key)
+      .sort();
+
+  it("loads a project skill in every account but the one whose own skills folder has the name", async () => {
+    const seeded = await accounts({}, (h) => {
+      h.skill("repos/app/.claude/skills", "deploy");
+      h.skill(".claude-work/skills", "deploy");
+    });
+    const project = rowOf(seeded, "skill", "project", "deploy");
+    expect(perAccount(seeded, project)).toEqual({ personal: "on", work: "hidden by global" });
+    // Hidden in work alone: no tag says it is hidden, and it loads here, beside work's own copy.
+    expect(tagsOf(seeded.inv, project, seeded.app, NOW).filter((tag) => tag.startsWith("hidden"))).toEqual([]);
+    expect(loadedKeys(seeded, "skill")).toEqual(["skill:claude:account:claude:work:deploy", project.key].sort());
+  });
+
+  it("hides a user server behind an account's local one, in that account only", async () => {
+    const local = { mcpServers: { github: { command: "gh-local" } } };
+    const one = await accounts({ personal: local });
+    const user = rowOf(one, "mcp", "global", "github");
+    expect(perAccount(one, user)).toEqual({ personal: "hidden by project", work: "on" });
+    expect(tagsOf(one.inv, user, one.app, NOW)).toEqual([]);
+    // Both load here: the local one in personal, the user one in work.
+    const localKey = `mcp:claude:local:${pathKey(one.app)}:github`;
+    expect(loadedKeys(one, "mcp")).toEqual([localKey, user.key].sort());
+    // With a local github in both, the user one loads in neither.
+    const both = await accounts({ personal: local, work: local });
+    expect(tagsOf(both.inv, rowOf(both, "mcp", "global", "github"), both.app, NOW)).toEqual(["hidden by Project copy"]);
+    expect(loadedKeys(both, "mcp")).toEqual([`mcp:claude:local:${pathKey(both.app)}:github`]);
+  });
+
+  it("hides a user server behind a .mcp.json one approved for its account, and not behind a pending one", async () => {
+    const approved = { enabledMcpjsonServers: ["github"] };
+    const mcpjson = (h: TestHome) => h.write("repos/app/.mcp.json", { mcpServers: { github: { command: "gh-team" } } });
+    const one = await accounts({ personal: approved }, mcpjson);
+    expect(perAccount(one, rowOf(one, "mcp", "global", "github"))).toEqual({
+      personal: "hidden by project",
+      work: "on",
+    });
+    // work has not approved it: the .mcp.json copy waits there, and work's user one loads.
+    const team = rowOf(one, "mcp", "project", "github");
+    expect(perAccount(one, team)).toEqual({ personal: "on", work: "pending-approval" });
+    expect(loadedKeys(one, "mcp")).toEqual(["mcp:claude:account:-:github", team.key].sort());
+
+    const pending = await accounts({}, mcpjson);
+    expect(perAccount(pending, rowOf(pending, "mcp", "global", "github"))).toEqual({ personal: "on", work: "on" });
+    expect(tagsOf(pending.inv, rowOf(pending, "mcp", "project", "github"), pending.app, NOW)).toEqual([
+      "pending approval",
+    ]);
+    expect(loadedKeys(pending, "mcp")).toEqual(["mcp:claude:account:-:github"]);
+
+    // Approved in both, in a parent folder: the tag says where the copy that wins lives.
+    const parent = await accounts({ personal: approved, work: approved }, (h) =>
+      h.write(".mcp.json", { mcpServers: { github: { command: "gh-home" } } }),
+    );
+    expect(tagsOf(parent.inv, rowOf(parent, "mcp", "global", "github"), parent.app, NOW)).toEqual([
+      "hidden by Parent folders copy",
+    ]);
+  });
+
+  it("hides a .mcp.json server behind an account's local one, in that account only", async () => {
+    const approved = { enabledMcpjsonServers: ["github"] };
+    const seeded = await accounts(
+      { personal: { ...approved, mcpServers: { github: { command: "gh-local" } } }, work: approved },
+      (h) => h.write("repos/app/.mcp.json", { mcpServers: { github: { command: "gh-team" } } }),
+    );
+    const rows = rowsIn(seeded.inv, "claude", "mcp", "project", seeded.app, NOW);
+    const localKey = `mcp:claude:local:${pathKey(seeded.app)}:github`;
+    const team = rows.find((r) => r.key !== localKey);
+    if (!team) throw new Error("no .mcp.json row");
+    expect(perAccount(seeded, team)).toEqual({ personal: "hidden by project", work: "on" });
+    // The user ones lose in both: to the local one in personal, to the approved .mcp.json one in work.
+    const user = rowOf(seeded, "mcp", "global", "github");
+    expect(tagsOf(seeded.inv, user, seeded.app, NOW)).toEqual(["hidden by Project copy"]);
+    expect(loadedKeys(seeded, "mcp")).toEqual([localKey, team.key].sort());
   });
 });

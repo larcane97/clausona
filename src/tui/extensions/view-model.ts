@@ -1,7 +1,7 @@
 import type { Extension, Inventory } from "../../extensions/model.js";
 import { shortProfile } from "../../extensions/present.js";
 import { samePath } from "../../extensions/read.js";
-import { relevantIn, stateOf } from "../../extensions/state.js";
+import { claudeMcpTaken, relevantIn, stateOf } from "../../extensions/state.js";
 
 export { shortProfile, tilde } from "../../extensions/present.js";
 
@@ -68,8 +68,12 @@ function profilesOf(inv: Inventory, project: string): string[] {
 export type MatrixCell = "on" | "off" | "pending" | "absent";
 export type Matrix = { columns: { key: string; label: string }[]; rows: { name: string; cells: MatrixCell[] }[] };
 
-/** Most specific first, as Claude Code resolves a name defined in more than one scope. */
-const SCOPE_RANK = ["local", "project", "account", "plugin", "global"];
+/**
+ * Codex's servers, most specific first: a project's config.toml before Codex's own. A Claude
+ * account's column takes the copy Claude Code takes, local > project > user (`claudeMcpTaken`,
+ * the rule the states use); a plugin's servers go by names of their own, so none outranks them.
+ */
+const SCOPE_RANK = ["project", "global"];
 
 /**
  * Whether a Claude server is in one account: its own, or one every account sees - which, for a
@@ -100,19 +104,11 @@ export function buildMatrix(inv: Inventory, project: string): Matrix {
     rows: names.map((name) => ({
       name,
       cells: columns.map((column) => {
+        const codex = column.key === "codex";
         const candidates = servers
-          .filter(
-            (i) =>
-              i.name === name && (column.key === "codex" ? i.location.tool === "codex" : inClaudeColumn(i, column.key)),
-          )
-          .sort(
-            (a, b) =>
-              SCOPE_RANK.indexOf(a.location.scope) - SCOPE_RANK.indexOf(b.location.scope) ||
-              // Of two .mcp.json copies, the nearer one: Claude Code starts that one.
-              Number(Boolean(stateOf(inv, a, project).shadowedBy)) -
-                Number(Boolean(stateOf(inv, b, project).shadowedBy)),
-          );
-        const item = candidates[0];
+          .filter((i) => i.name === name && (codex ? i.location.tool === "codex" : inClaudeColumn(i, column.key)))
+          .sort((a, b) => SCOPE_RANK.indexOf(a.location.scope) - SCOPE_RANK.indexOf(b.location.scope));
+        const item = (codex ? undefined : claudeMcpTaken(inv, name, project, column.key)) ?? candidates[0];
         if (!item) return "absent";
         const value = stateOf(inv, item, project, column.key === "codex" ? undefined : column.key).value;
         return value === "off" ? "off" : value === "pending-approval" ? "pending" : "on";
