@@ -33,7 +33,7 @@ export function usageText(usage?: Usage): string {
   return `${Math.round(usage.percent)}% ${usage.window}${usage.stale ? " (stale)" : ""}`;
 }
 
-export function skipText(row: Row): string {
+export function skipText(row: Pick<Row, "id" | "skip">): string {
   switch (row.skip) {
     case "signed-out":
       return `signed out (csn login ${row.id})`;
@@ -53,7 +53,7 @@ export function skipText(row: Row): string {
 }
 
 /** skipText without the command that fixes it, for a line that lists accounts side by side. */
-export const skipReason = (row: Row) => skipText(row).replace(/ \(.*\)$/, "");
+export const skipReason = (row: Pick<Row, "id" | "skip">) => skipText(row).replace(/ \(.*\)$/, "");
 
 export function toolLabel(tool: RouteTool): string {
   return tool === "all" ? "claude + codex" : tool;

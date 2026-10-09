@@ -1,8 +1,8 @@
 import { Box, Text } from "ink";
 import type { PropsWithChildren } from "react";
 
-import type { Ranking } from "../../core/routing.js";
-import { freeNow } from "../../lib/route-render.js";
+import { type Ranking, usageOf } from "../../core/routing.js";
+import { freeNow, skipReason } from "../../lib/route-render.js";
 import type { QuotaSnapshot } from "../../types.js";
 import { QuotaCell } from "../components/QuotaCell.js";
 import { color, symbol } from "../theme.js";
@@ -104,19 +104,33 @@ export function Radio<T extends string>({
   );
 }
 
-/** Row 0, every account, then one row per account with its quota; out of the route reads `excluded`. */
+/**
+ * Why an account has no quota to show, in the Routes screen's words: signed out or its sign-in
+ * expired. Not a missing reading, which an account read as the form opens has for a moment.
+ */
+function noQuotaReason(id: string, snapshot: QuotaSnapshot | undefined, now: number): string {
+  const { skip } = usageOf(snapshot, now);
+  return skip === "signed-out" || skip === "expired" ? skipReason({ id, skip }) : "";
+}
+
+/**
+ * Row 0, every account, then one row per account with its quota; out of the route reads
+ * `excluded`, and an account with no quota says why.
+ */
 export function AccountRows({
   state,
   listed,
   quotas,
   excluded,
   focused,
+  now,
 }: {
   state: RouteFormState;
   listed: FormAccount[];
   quotas: Record<string, QuotaSnapshot>;
   excluded: ReadonlySet<string>;
   focused: boolean;
+  now: number;
 }) {
   const idWidth = Math.max(0, ...listed.map((account) => account.id.length));
   const mark = (row: number) => (
@@ -137,6 +151,7 @@ export function AccountRows({
         const ticked = state.ticked.includes(account.id) && !out;
         const snapshot = quotas[account.id];
         const live = snapshot?.state === "ok";
+        const note = out ? "excluded" : noQuotaReason(account.id, snapshot, now);
         return (
           <Box key={account.id} flexDirection="row" paddingLeft={2}>
             {mark(index + 1)}
@@ -152,9 +167,9 @@ export function AccountRows({
             <Box marginLeft={GAP} width={QUOTA} flexShrink={0} justifyContent="flex-end">
               <QuotaCell window={snapshot?.weekly} live={live} width={QUOTA} />
             </Box>
-            {out ? (
+            {note ? (
               <Box marginLeft={GAP} flexShrink={0}>
-                <Text color={color.muted}>excluded</Text>
+                <Text color={color.muted}>{note}</Text>
               </Box>
             ) : null}
           </Box>

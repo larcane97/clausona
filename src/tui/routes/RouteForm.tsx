@@ -431,6 +431,7 @@ export function RouteForm(props: RouteFormProps) {
             quotas={quotas}
             excluded={excluded}
             focused={focusOn("accounts")}
+            now={now}
           />
         </Line>
         <Line {...line("from", "Patterns")}>

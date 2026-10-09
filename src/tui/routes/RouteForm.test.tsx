@@ -99,6 +99,7 @@ function setup(
     spec?: RouteSpec;
     file?: RoutesFile | null;
     columns?: number;
+    quotas?: Record<string, QuotaSnapshot>;
     /** Runs before the form is drawn, which is when it reads routes.json. */
     prepare?: (deps: Deps) => void;
   } = {},
@@ -131,7 +132,7 @@ function setup(
       name={name}
       spec={name === undefined ? undefined : (options.spec ?? disk.file().routes[name])}
       accounts={formAccounts(REGISTRY)}
-      quotas={QUOTAS}
+      quotas={options.quotas ?? QUOTAS}
       lastPicked={{}}
       registry={REGISTRY}
       deps={deps}
@@ -270,6 +271,23 @@ describe("RouteForm", () => {
     await press(instance, "x");
     await press(instance, ESC);
     expect(hintLines(text(instance))).toEqual(["Discard changes? (y/N)", "y discard │ n/esc keep editing"]);
+  });
+
+  it("says why an account has no quota, as the Routes screen does, and excluded before that", async () => {
+    const quotas: Record<string, QuotaSnapshot> = {
+      ...QUOTAS,
+      "claude:side": { state: "missing", fetchedAt: NOW },
+      "claude:work": { state: "expired", fetchedAt: NOW },
+      "claude:ops-share": { state: "missing", fetchedAt: NOW },
+    };
+    const { instance, deps } = setup({ edit: "main", quotas, columns: 80 });
+    await opened(instance, deps);
+    const frame = text(instance);
+
+    expect(row(frame, "claude:side")).toMatch(/\[x\] claude:side\s+—\s+—\s+signed out$/);
+    expect(row(frame, "claude:work")).toMatch(/\[x\] claude:work\s+—\s+—\s+sign-in expired$/);
+    expect(row(frame, "claude:ops-share")).toMatch(/\[ \] claude:ops-share\s+—\s+—\s+excluded$/);
+    expect(row(frame, "claude:team")).toMatch(/\[x\] claude:team\s+5%\s+22%$/);
   });
 
   it("moves the focus with tab and back with shift+tab", async () => {
