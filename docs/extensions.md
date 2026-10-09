@@ -6,8 +6,9 @@
 that Claude Code and Codex load, for every account clausona manages, seen from one project.
 The dashboard's Extensions screen shows the same rows.
 
-Both only read files: in this version nothing here changes one. A later version adds ways to
-turn things off and to delete them, each with a confirm step and an undo.
+The commands and the screen only read files. In this version nothing here changes a file. A
+later version adds ways to turn things off and to delete them, each with a confirm step and an
+undo.
 
 `csn` is the same command as `clausona`. The examples use the fictional accounts `personal`
 and `work`, the projects `~/app` and `~/site`, and a plugin `kit@demo`.
@@ -193,10 +194,12 @@ A row can carry several tags. They are listed most important first: `broken link
 | `pending approval` | A `.mcp.json` server that no account has approved in this project. |
 | `hidden by Project copy` | A same-name copy in Project wins in every account. |
 | `hidden by Global copy` | A same-name copy in Global wins in every account. |
+| `hidden by Parent folders copy` | A `.mcp.json` copy in a nearer parent folder wins in every account. |
 | `unused` | A Claude skill the rule below calls unused. |
 
-`hidden by Project copy` and `hidden by Global copy` are the common cases of
-`hidden by <scope> copy`, which names the winning copy's scope.
+The three `hidden by` tags are the forms of `hidden by <scope> copy`, which names the winning
+copy's scope. A Global copy can win over a Project skill, and a nearer `.mcp.json` over a
+farther one.
 
 ### Not used in 90 days
 
@@ -331,7 +334,9 @@ outside `mcp` and `--id` with `ls` are all bad usage, exit code 2.
 `all` is the places together, each row once: Project, Parent folders, Global, Cloud, Plugins,
 the built-in scope, Managed and Other projects. In place of each plugin it lists what the plugin
 brings of the kind, on or off, with the same row ids as in Loaded here. So `hooks ls --scope all`
-lists hooks only, and its title counts hooks. The plugins themselves are in `plugins`.
+lists hooks only, and its title counts hooks. The title reads `All scopes` where a scope's
+name would be, as in `4 hooks · All scopes · project ~/app`. The plugins themselves are in
+`plugins`.
 
 A scope that does not apply to a tool is empty for it: `csn skills ls --scope cloud --tool codex`
 lists nothing.
@@ -637,15 +642,23 @@ nothing. Cloud and plugin skills are never in this list.
 ### Which accounts have MCP server X, and is it on here?
 
 ```bash
-csn mcp show github --json
-csn mcp show github --json | jq '{accounts, state, stateByAccount}'
+csn mcp show github --tool claude --json
+csn mcp show github --tool claude --json | jq '{accounts, state, stateByAccount}'
 ```
+
+`--tool claude` is there because accounts are Claude's. Without it, a Codex server with the
+same name makes `show` find two servers, exit 2 and ask which one.
 
 `accounts` lists the profile ids that have the server; an account not in it does not have it.
 `stateByAccount` gives each one's state in this project: `on`, `off` or `pending-approval`.
-With no `accounts`, every account sees the server alike and `state` says it. If the name is in several places, the command exits 2 and
-prints `candidates`; run it again with one `--id`. To list what one account has, run
-`csn mcp ls --scope all --account work --json`.
+
+A Codex server has no `accounts`, because Codex has no accounts here; its `state` is the one
+state. A `.mcp.json` server in a project no account has opened has none either, and its `state`
+merges every account's approvals.
+
+If the name is still in several places, such as Global and this project's `.mcp.json`, the
+command exits 2 and prints `candidates`; run it again with one `--id`. To list what one account
+has, run `csn mcp ls --scope all --account work --json`.
 
 ### Which hooks run when Claude finishes replying?
 
