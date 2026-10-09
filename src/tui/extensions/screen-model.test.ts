@@ -12,10 +12,17 @@ import {
   CHROME_COLUMNS,
   CHROME_ROWS,
   columnText,
+  DETAIL_LABEL_WIDTH,
   DIVIDER_COLUMNS,
+  detailRows,
+  detailWindow,
   KIND_LABEL,
   KINDS,
+  listRoom,
+  maxDetailTop,
   paneLayout,
+  scopeLines,
+  scrolled,
   type Table,
   type TableRow,
 } from "./screen-model.js";
@@ -535,5 +542,103 @@ describe("paneLayout", () => {
     expect(paneLayout(80, 24, []).height).toBe(24 - 2 - CHROME_ROWS);
     // A size that is not a number, as from a stream that is no terminal, reads as 80 by 24.
     expect(paneLayout(Number.NaN, Number.NaN, [])).toEqual(paneLayout(80, 24, []));
+  });
+});
+
+describe("scopeLines", () => {
+  const entry = (id: ScopeEntry["id"], count = 1): ScopeEntry => ({ id, label: id, count });
+
+  it("puts a rule after Loaded here and another before Not used in 90 days", () => {
+    const lines = scopeLines([entry("loaded"), entry("project"), entry("global"), entry("unused")]);
+    expect(lines.map((l) => (l.type === "rule" ? "─" : l.entry.id))).toEqual([
+      "loaded",
+      "─",
+      "project",
+      "global",
+      "─",
+      "unused",
+    ]);
+    // Each rule has a key of its own.
+    expect(new Set(lines.map((l) => l.key)).size).toBe(lines.length);
+  });
+
+  it("draws no rule before an unused scope that is not there", () => {
+    expect(scopeLines([entry("loaded"), entry("project")]).map((l) => l.type)).toEqual(["scope", "rule", "scope"]);
+  });
+});
+
+describe("windows", () => {
+  it("shows every line that fits, else one fewer for the line that says how many more", () => {
+    expect(listRoom(5, 5)).toBe(5);
+    expect(listRoom(5, 6)).toBe(4);
+    expect(listRoom(1, 6)).toBe(1);
+    expect(listRoom(0, 6)).toBe(0);
+  });
+
+  it("keeps the cursor in view, and the window inside the lines there are", () => {
+    expect(scrolled(0, 2, 4, 10)).toBe(0);
+    expect(scrolled(0, 6, 4, 10)).toBe(3);
+    expect(scrolled(5, 2, 4, 10)).toBe(2);
+    // A search narrowed the list: the window moves up rather than show blank lines.
+    expect(scrolled(6, 2, 4, 3)).toBe(0);
+  });
+
+  it("scrolls a detail to where its last line shows under the line that says how many are above", () => {
+    expect(detailWindow(9, 7, 0)).toEqual({ start: 0, end: 6, above: 0, below: 3 });
+    expect(detailWindow(9, 7, 1)).toEqual({ start: 1, end: 6, above: 1, below: 3 });
+    expect(detailWindow(9, 7, 2)).toEqual({ start: 2, end: 7, above: 2, below: 2 });
+    expect(maxDetailTop(9, 7)).toBe(3);
+    expect(detailWindow(9, 7, 3)).toEqual({ start: 3, end: 9, above: 3, below: 0 });
+    expect(detailWindow(9, 7, 50)).toEqual(detailWindow(9, 7, 3));
+    // All of it fits, or there is no room for a line between the two markers: nothing scrolls.
+    expect(maxDetailTop(7, 7)).toBe(0);
+    expect(detailWindow(7, 7, 2)).toEqual({ start: 0, end: 7, above: 0, below: 0 });
+    expect(maxDetailTop(9, 2)).toBe(0);
+  });
+});
+
+describe("detailRows", () => {
+  it("wraps a long value under its label's column, and a line with no label at the full width", () => {
+    const rows = detailRows(
+      [
+        { text: "a description that runs on past the width" },
+        { label: "Runs", text: "node /opt/long/index.js --flag", tone: "muted" },
+        { label: "File", text: "short" },
+      ],
+      30,
+    );
+    expect(DETAIL_LABEL_WIDTH).toBe(10);
+    expect(rows.map(({ label, text }) => [label, text])).toEqual([
+      [undefined, "a description that runs on"],
+      [undefined, "past the width"],
+      ["Runs", "node"],
+      ["", "/opt/long/index.js"],
+      ["", "--flag"],
+      ["File", "short"],
+    ]);
+    // Every row fits: its label's column and its text.
+    for (const row of rows) {
+      expect((row.label === undefined ? 0 : DETAIL_LABEL_WIDTH) + row.text.length).toBeLessThanOrEqual(30);
+    }
+    // A wrapped line keeps its tone.
+    expect(rows[3]?.tone).toBe("muted");
+  });
+
+  it("gives two lines that read the same each an id of its own", () => {
+    const rows = detailRows(
+      [
+        { label: "", text: "on" },
+        { label: "", text: "on" },
+      ],
+      40,
+    );
+    expect(rows[0]?.id).not.toBe(rows[1]?.id);
+  });
+
+  it("breaks a word longer than the room inside it, so a command is read in full", () => {
+    const word = "x".repeat(45);
+    const rows = detailRows([{ label: "Runs", text: word }], 30);
+    expect(rows.map((r) => r.text).join("")).toBe(word);
+    expect(rows.every((r) => r.text.length <= 20)).toBe(true);
   });
 });

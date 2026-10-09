@@ -2,47 +2,44 @@ import { Spinner } from "@inkjs/ui";
 import { Box, Text, useInput } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { detailsOf } from "../../extensions/describe.js";
 import type { Inventory } from "../../extensions/model.js";
 import { samePath } from "../../extensions/read.js";
+import { type ScopeId, scopesFor } from "../../extensions/scopes.js";
 import { Chrome } from "../components/Chrome.js";
 import { color } from "../theme.js";
-import { DetailPane, paneLines } from "./DetailPane.js";
-import { ItemList } from "./ItemList.js";
+import { DetailsView } from "./DetailsView.js";
+import { ItemTable } from "./ItemTable.js";
 import { McpMatrix } from "./McpMatrix.js";
 import { ProjectPicker } from "./ProjectPicker.js";
-import { useTerminalSize } from "./use-terminal-size.js";
+import { ScopeList } from "./ScopeList.js";
 import {
-  buildMatrix,
-  buildRows,
-  countItems,
-  FILTER_LABEL,
-  FILTERS,
-  type Filter,
-  listColumns,
+  buildTable,
+  CHROME_COLUMNS,
+  CURSOR_COLUMNS,
+  DIVIDER_COLUMNS,
+  detailRows,
+  KINDS,
+  type Kind,
   listRoom,
   maxDetailTop,
-  nameWidth,
-  pickLayout,
-  TAB_LABEL,
-  TABS,
-  type Tab,
-  tilde,
-  took,
-} from "./view-model.js";
+  paneLayout,
+  scopeLines,
+  scrolled,
+  type Tool,
+} from "./screen-model.js";
+import { ToolKindBar } from "./ToolKindBar.js";
+import { useTerminalSize } from "./use-terminal-size.js";
+import { buildMatrix, tilde, took } from "./view-model.js";
 
-type View = "list" | "detail" | "matrix" | "picker" | "warnings";
+type View = "main" | "picker" | "matrix" | "warnings";
+/** Which pane the keys move: the scope list, the table, or a row's details in its place. */
+type Focus = "scopes" | "table" | "details";
 type Props = { load: () => Promise<Inventory>; onExit: () => void; now?: () => number };
 type Hint = { keys: string; action: string };
 
-/**
- * Keeps `cursor` inside a window `room` rows tall that starts at `top`, and the window inside the
- * `total` rows there are: when a group closes or a search narrows the list, the window moves up
- * rather than show blank lines below the last row.
- */
-function scrolled(top: number, cursor: number, room: number, total: number): number {
-  const kept = cursor < top ? cursor : cursor >= top + room ? cursor - room + 1 : top;
-  return Math.max(0, Math.min(kept, total - room));
-}
+const OTHER_TOOL: Record<Tool, Tool> = { claude: "codex", codex: "claude" };
+const TOOL_LABEL: Record<Tool, string> = { claude: "Claude", codex: "Codex" };
 
 /** Hints in the order given, the first the most needed. */
 function inOrder(hints: Hint[]): (Hint & { rank: number })[] {
@@ -68,31 +65,42 @@ function fitHints(hints: (Hint & { rank: number })[], width: number): Hint[] {
 }
 
 /**
- * Every skill, MCP server and hook across the user's accounts and projects, read-only. The
- * App hands every key to this screen while it is open; esc leaves it.
+ * Every skill, MCP server and hook across the user's accounts and projects, read-only: Claude
+ * and Codex on tab, Skills, MCP and Hooks on 1 2 3, the scopes on the left and the chosen one's
+ * table on the right, a row's details on enter. The App hands every key to this screen while it
+ * is open; esc leaves it.
  */
 export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   const [inventory, setInventory] = useState<Inventory | null>(null);
   const [loadedAt, setLoadedAt] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("skills");
-  const [filter, setFilter] = useState<Filter>("all");
+  const [tool, setTool] = useState<Tool>("claude");
+  const [kind, setKind] = useState<Kind>("skill");
+  /** The chosen scope. The list's cursor is where it is in the list: one that has gone reads as Loaded here. */
+  const [scope, setScope] = useState<ScopeId>("loaded");
+  /** The project opened from the Other projects list. */
+  const [otherProject, setOtherProject] = useState<string | undefined>(undefined);
+  const [focus, setFocus] = useState<Focus>("scopes");
+  const [rowCursor, setRowCursor] = useState(0);
   const [query, setQuery] = useState("");
   const [typing, setTyping] = useState(false);
+  /** Where `/` was pressed: esc while typing goes back there. */
+  const [searchFrom, setSearchFrom] = useState<Focus>("scopes");
   /** null until the user picks: until then the project csn was started in. */
   const [picked, setPicked] = useState<{ project?: string } | null>(null);
-  const [open, setOpen] = useState<Record<string, boolean>>({});
-  const [cursor, setCursor] = useState(0);
-  const [view, setView] = useState<View>("list");
+  const [view, setView] = useState<View>("main");
   const [pickerCursor, setPickerCursor] = useState(0);
   const [matrixCursor, setMatrixCursor] = useState(0);
   const [matrixOffset, setMatrixOffset] = useState(0);
-  /** The full-screen detail's first line. */
+  /** The details' first row. */
   const [detailTop, setDetailTop] = useState(0);
   /** One line about the last thing done, shown until the next key. */
   const [status, setStatus] = useState("");
-  const listTop = useRef(0);
+  const scopeTop = useRef(0);
+  const rowTop = useRef(0);
   const matrixTop = useRef(0);
+  /** The Other projects list's cursor when a project was opened from it, to come back to. */
+  const listCursor = useRef(0);
   const { columns, rows: terminalRows } = useTerminalSize();
 
   // The latest props, read when a load starts. A caller that passes a new `load` on every render
@@ -124,60 +132,70 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   }, [reload]);
 
   const project = picked === null ? inventory?.currentProject : picked.project;
-  // A filter or search opens every group and keeps it open: enter on a group does nothing then.
-  const held = query.trim() !== "" || filter !== "all";
-  const rows = useMemo(
+  const scopes = useMemo(
+    () => (inventory ? scopesFor(inventory, tool, kind, project, loadedAt) : []),
+    [inventory, tool, kind, project, loadedAt],
+  );
+  const scopeAt = Math.max(
+    0,
+    scopes.findIndex((s) => s.id === scope),
+  );
+  const current = scopes[scopeAt]?.id ?? "loaded";
+  const opened = current === "other" ? otherProject : undefined;
+  const layout = paneLayout(columns, terminalRows, scopes);
+  const table = useMemo(
     () =>
       inventory
-        ? buildRows(inventory, { tab, filter, query, open, now: loadedAt, ...(project ? { project } : {}) })
-        : [],
-    [inventory, tab, filter, query, open, loadedAt, project],
+        ? buildTable(
+            inventory,
+            tool,
+            kind,
+            current,
+            project,
+            loadedAt,
+            layout.tableWidth - CURSOR_COLUMNS,
+            query,
+            opened,
+          )
+        : null,
+    [inventory, tool, kind, current, project, loadedAt, layout.tableWidth, query, opened],
   );
-  // The header, and every row or the line that says there are none.
-  const listLines = 1 + Math.max(1, rows.length);
-  // One row is kept for the status line, which is there only while it has something to say. One
-  // more is kept because ink 6 draws a frame as tall as the terminal by clearing the whole screen,
-  // and its scrollback, on every redraw (ink.js, the isFullscreen branch of onRender).
-  const layout = pickLayout(columns, terminalRows - 2, listLines);
-  // The matrix, the picker and the warnings take the list's place and the stacked detail's too.
-  const fullHeight = layout.mode === "stacked" ? layout.listHeight + layout.detailHeight : layout.listHeight;
-  const need = useMemo(
-    () => (inventory ? nameWidth(inventory, tab, project, loadedAt) : 0),
-    [inventory, tab, project, loadedAt],
-  );
-  const counts = useMemo(() => {
-    const count: Record<Tab, number> = { skills: 0, mcp: 0, hooks: 0 };
-    if (!inventory) return count;
-    for (const t of TABS) {
-      count[t] = countItems(inventory, {
-        tab: t,
-        filter,
-        query,
-        open: {},
-        now: loadedAt,
-        ...(project ? { project } : {}),
-      });
-    }
-    return count;
-  }, [inventory, filter, query, loadedAt, project]);
-  const matrix = useMemo(() => (inventory && project ? buildMatrix(inventory, project) : null), [inventory, project]);
-  const at = Math.min(cursor, Math.max(0, rows.length - 1));
+  const rows = table?.rows ?? [];
+  const at = Math.min(rowCursor, Math.max(0, rows.length - 1));
   const selected = rows[at];
-  // The full-screen detail's rows inside its border and under its title, and how far it scrolls.
-  const detailRoom = Math.max(0, layout.detailHeight - 3);
-  const detailMax =
-    inventory && view === "detail"
-      ? maxDetailTop(paneLines(inventory, selected, project, loadedAt, held, layout.detailWidth).length, detailRoom)
-      : 0;
+  // Details only for a row of the inventory: a line of the Other projects list opens that project.
+  const shown = focus === "details" && selected?.row ? "details" : focus === "details" ? "table" : focus;
+  const details = useMemo(() => {
+    if (!inventory || shown !== "details" || !selected?.row) return null;
+    const [title, ...lines] = detailsOf(inventory, selected.row, project, loadedAt);
+    return { title: title?.text ?? "", rows: detailRows(lines, layout.tableWidth) };
+  }, [inventory, shown, selected, project, loadedAt, layout.tableWidth]);
+  // The details' rows under their title and the blank line after it, and how far they scroll.
+  const detailRoom = Math.max(0, layout.height - 2);
+  const detailMax = details ? maxDetailTop(details.rows.length, detailRoom) : 0;
   const detailPage = Math.max(1, detailRoom - 2);
+  const rowRoom = listRoom(Math.max(0, layout.height - 2), rows.length);
+  const matrix = useMemo(() => (inventory && project ? buildMatrix(inventory, project) : null), [inventory, project]);
 
-  const move = (delta: number) =>
-    setCursor((c) => Math.max(0, Math.min(rows.length - 1, Math.min(c, rows.length - 1) + delta)));
-  const switchTab = (delta: number) => {
-    setTab((t) => TABS[(TABS.indexOf(t) + delta + TABS.length) % TABS.length] ?? t);
-    setCursor(0);
-    setView("list");
+  /** Another table: the row cursor goes back to the top and a search, which was for the last one, ends. */
+  const freshTable = () => {
+    setRowCursor(0);
+    setQuery("");
+    setTyping(false);
+    setDetailTop(0);
   };
+  const toScope = (id: ScopeId) => {
+    setScope(id);
+    setOtherProject(undefined);
+    freshTable();
+  };
+  const moveScope = (delta: number) => {
+    const next = scopes[Math.max(0, Math.min(scopes.length - 1, scopeAt + delta))];
+    if (next && next.id !== current) toScope(next.id);
+  };
+  const moveRow = (delta: number) => setRowCursor(Math.max(0, Math.min(rows.length - 1, at + delta)));
+  const scrollDetail = (delta: number) =>
+    setDetailTop((t) => Math.max(0, Math.min(detailMax, Math.min(t, detailMax) + delta)));
 
   useInput((input, key) => {
     // A status line answers the key before this one; any key moves on from it.
@@ -189,90 +207,136 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     }
     if (typing) {
       if (key.escape) {
+        // A search given up: nothing of it stays, and the keys go back to where it began.
         setTyping(false);
         setQuery("");
+        setFocus(searchFrom);
       } else if (key.return) setTyping(false);
       else if (key.backspace || key.delete) setQuery((q) => q.slice(0, -1));
       else if (input && !key.ctrl && !key.meta && !key.tab && !key.upArrow && !key.downArrow)
         setQuery((q) => q + input);
-      setCursor(0);
+      setRowCursor(0);
       return;
     }
     if (view === "picker") {
       const count = inventory.projects.length + 1;
-      if (key.escape) setView("list");
+      if (key.escape) setView("main");
       else if (key.upArrow) setPickerCursor((c) => (c - 1 + count) % count);
       else if (key.downArrow) setPickerCursor((c) => (c + 1) % count);
       else if (key.return) {
         const chosen = pickerCursor === 0 ? undefined : inventory.projects[pickerCursor - 1]?.path;
         setPicked(chosen === undefined ? {} : { project: chosen });
-        setCursor(0);
-        setView("list");
+        toScope("loaded");
+        setFocus("scopes");
+        setView("main");
       }
       return;
     }
     if (view === "matrix") {
       const count = matrix?.rows.length ?? 0;
-      if (key.escape || input === "m") setView("list");
+      if (key.escape || input === "m") setView("main");
       else if (key.upArrow) setMatrixCursor((c) => Math.max(0, c - 1));
       else if (key.downArrow) setMatrixCursor((c) => Math.min(Math.max(0, count - 1), c + 1));
       else if (key.leftArrow) setMatrixOffset((o) => Math.max(0, o - 1));
       else if (key.rightArrow) setMatrixOffset((o) => Math.min(Math.max(0, (matrix?.columns.length ?? 1) - 1), o + 1));
       return;
     }
-    if (view === "detail") {
-      if (key.escape || key.return) setView("list");
-      else if (key.upArrow) setDetailTop((t) => Math.max(0, Math.min(t, detailMax) - 1));
-      else if (key.downArrow) setDetailTop((t) => Math.min(detailMax, t + 1));
-      else if (key.pageUp) setDetailTop((t) => Math.max(0, Math.min(t, detailMax) - detailPage));
-      else if (key.pageDown) setDetailTop((t) => Math.min(detailMax, t + detailPage));
-      return;
-    }
     if (view === "warnings") {
-      if (key.escape || key.return) setView("list");
+      if (key.escape || key.return) setView("main");
       return;
     }
-    if (key.escape) {
-      if (query) setQuery("");
-      else onExit();
+
+    // Keys that work wherever the focus is.
+    const kindKey = KINDS[Number(input) - 1];
+    if (key.tab) {
+      setTool(OTHER_TOOL[tool]);
+      toScope("loaded");
+      setFocus("scopes");
       return;
     }
-    if (key.upArrow) move(-1);
-    else if (key.downArrow) move(1);
-    else if (key.pageUp) move(-Math.max(1, layout.listHeight - 2));
-    else if (key.pageDown) move(Math.max(1, layout.listHeight - 2));
-    else if (key.tab && key.shift) switchTab(-1);
-    else if (key.tab || key.rightArrow) switchTab(1);
-    else if (key.leftArrow) switchTab(-1);
-    else if (key.return || input === " ") {
-      if (selected?.type === "group") {
-        if (!held) setOpen((o) => ({ ...o, [selected.key]: !selected.open }));
-      } else if (selected && key.return && layout.mode === "list") {
-        setDetailTop(0);
-        setView("detail");
-      }
-    } else if (input === "f") {
-      setFilter((f) => FILTERS[(FILTERS.indexOf(f) + 1) % FILTERS.length] ?? "all");
-      setCursor(0);
-    } else if (input === "/") setTyping(true);
-    else if (input === "p") {
+    if (kindKey !== undefined && /^[123]$/.test(input)) {
+      setKind(kindKey);
+      toScope("loaded");
+      if (focus === "details") setFocus("table");
+      return;
+    }
+    if (input === "r") {
+      reload();
+      return;
+    }
+    if (input === "w") {
+      if (inventory.warnings.length > 0) setView("warnings");
+      return;
+    }
+    if (input === "p") {
       const index = inventory.projects.findIndex((p) => samePath(p.path, project));
       setPickerCursor(index + 1);
       setView("picker");
-    } else if (input === "m") {
-      if (tab !== "mcp") setStatus("The matrix is on the MCP tab.");
+      return;
+    }
+    if (input === "m") {
+      if (tool !== "claude" || kind !== "mcp") setStatus("The matrix is on Claude's MCP tab.");
       else if (!project) setStatus("Pick a project first: p");
       else {
         setMatrixCursor(0);
         setMatrixOffset(0);
         setView("matrix");
       }
-    } else if (input === "r") reload();
-    else if (input === "w" && inventory.warnings.length > 0) setView("warnings");
+      return;
+    }
+
+    if (shown === "details") {
+      if (key.escape || key.leftArrow) setFocus("table");
+      else if (key.upArrow) scrollDetail(-1);
+      else if (key.downArrow) scrollDetail(1);
+      else if (key.pageUp) scrollDetail(-detailPage);
+      else if (key.pageDown) scrollDetail(detailPage);
+      return;
+    }
+    if (input === "/") {
+      setSearchFrom(shown);
+      setFocus("table");
+      setTyping(true);
+      return;
+    }
+    if (shown === "table") {
+      if (key.escape && query !== "") {
+        setQuery("");
+        setRowCursor(0);
+      } else if (key.escape || key.leftArrow) {
+        if (opened !== undefined) {
+          setOtherProject(undefined);
+          freshTable();
+          setRowCursor(listCursor.current);
+        } else setFocus("scopes");
+      } else if (key.upArrow) moveRow(-1);
+      else if (key.downArrow) moveRow(1);
+      else if (key.pageUp) moveRow(-Math.max(1, rowRoom - 1));
+      else if (key.pageDown) moveRow(Math.max(1, rowRoom - 1));
+      else if (key.return) {
+        if (selected?.project) {
+          listCursor.current = at;
+          setOtherProject(selected.project.path);
+          freshTable();
+        } else if (selected?.row) {
+          setDetailTop(0);
+          setFocus("details");
+        }
+      }
+      return;
+    }
+    // The scope list.
+    if (key.escape) {
+      if (query !== "") setQuery("");
+      else onExit();
+    } else if (key.upArrow) moveScope(-1);
+    else if (key.downArrow) moveScope(1);
+    else if (key.pageUp) moveScope(-Math.max(1, layout.height - 1));
+    else if (key.pageDown) moveScope(Math.max(1, layout.height - 1));
+    else if (key.rightArrow || key.return) setFocus("table");
   });
 
-  // Chrome's padding takes two columns a side.
-  const hintWidth = columns - 4;
+  const innerWidth = Math.max(1, columns - CHROME_COLUMNS);
   if (error) {
     return (
       <Chrome
@@ -282,7 +346,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
             { keys: "r", action: "retry" },
             { keys: "esc", action: "back" },
           ]),
-          hintWidth,
+          innerWidth,
         )}
       >
         <Text color={color.error} wrap="truncate-end">
@@ -291,7 +355,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       </Chrome>
     );
   }
-  if (!inventory) {
+  if (!inventory || !table) {
     return (
       <Chrome title="Extensions">
         <Spinner label="Reading skills, MCP servers and hooks..." />
@@ -300,17 +364,26 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   }
 
   const subtitle = project ? tilde(project, inventory.homeDir) : "No project — pick one with p";
-  const columnsFor = listColumns(tab, layout.listWidth, need, project !== undefined);
-  const room = listRoom(layout.listHeight, rows.length);
-  listTop.current = scrolled(listTop.current, at, room, rows.length);
-  const matrixRoom = Math.max(1, fullHeight - 3);
+  const lines = scopeLines(scopes);
+  const scopeLine = Math.max(
+    0,
+    lines.findIndex((line) => line.type === "scope" && line.entry.id === current),
+  );
+  scopeTop.current = scrolled(scopeTop.current, scopeLine, listRoom(layout.height, lines.length), lines.length);
+  rowTop.current = scrolled(rowTop.current, at, rowRoom, rows.length);
+  const matrixRoom = Math.max(1, layout.height - 3);
   matrixTop.current = scrolled(matrixTop.current, matrixCursor, matrixRoom, matrix?.rows.length ?? 0);
   // The warnings below their heading; when they do not all fit, the last line says how many more.
-  const warningRoom = Math.max(1, fullHeight - 1);
+  const warningRoom = Math.max(1, layout.height - 1);
   const warnings =
     inventory.warnings.length > warningRoom
       ? inventory.warnings.slice(0, Math.max(0, warningRoom - 1))
       : inventory.warnings;
+
+  // w, the one sign that some files could not be read once the status line has gone, comes
+  // right after esc in every focus.
+  const unreadable =
+    inventory.warnings.length > 0 ? [{ keys: "w", action: `${inventory.warnings.length} unreadable` }] : [];
   const hints = typing
     ? inOrder([
         { keys: "type", action: "search" },
@@ -330,61 +403,96 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
             { keys: "m", action: "list" },
             { keys: "esc", action: "back" },
           ])
-        : view === "detail" && detailMax > 0
-          ? inOrder([
-              { keys: "↑↓", action: "scroll" },
-              { keys: "esc", action: "back" },
-            ])
-          : view !== "list"
-            ? inOrder([{ keys: "esc", action: "back" }])
-            : // The keys nothing else on screen points to come first: enter, when the detail has no
-              // pane of its own, and w, the one sign that some files could not be read once the status
-              // line has gone. Search comes before the filter: the tab bar shows the filter's label at
-              // all times, but nothing there points to search until one is typed. On the MCP tab the
-              // matrix, that tab's main view, comes before search: it is the one key there that
-              // shows what the list cannot, account by account.
-              [
-                { keys: "↑↓", action: "move", rank: 0 },
-                { keys: "tab", action: "section", rank: 2 },
-                layout.mode === "list"
-                  ? { keys: "enter", action: "open", rank: 1 }
-                  : { keys: "enter", action: "group", rank: 9 },
-                { keys: "f", action: "filter", rank: 7 },
-                ...(tab === "mcp" ? [{ keys: "m", action: "matrix", rank: 5 }] : []),
-                { keys: "/", action: "search", rank: tab === "mcp" ? 6 : 5 },
-                { keys: "p", action: "project", rank: 8 },
-                { keys: "r", action: "reload", rank: 10 },
-                ...(inventory.warnings.length > 0
-                  ? [{ keys: "w", action: `${inventory.warnings.length} unreadable`, rank: 4 }]
-                  : []),
-                { keys: "esc", action: "back", rank: 3 },
-              ];
+        : view === "warnings"
+          ? inOrder([{ keys: "esc", action: "back" }])
+          : shown === "details"
+            ? [
+                ...(detailMax > 0 ? [{ keys: "↑↓", action: "scroll", rank: 0 }] : []),
+                ...unreadable.map((hint) => ({ ...hint, rank: 2 })),
+                { keys: "esc", action: "back", rank: 1 },
+              ]
+            : shown === "table"
+              ? // The matrix, the one key on Claude's MCP tab that shows what the table cannot,
+                // account by account, comes before search.
+                [
+                  { keys: "↑↓", action: "move", rank: 0 },
+                  { keys: "enter", action: selected?.project ? "open" : "details", rank: 1 },
+                  { keys: "←", action: opened !== undefined ? "projects" : "scopes", rank: 6 },
+                  { keys: "/", action: "search", rank: 5 },
+                  ...(tool === "claude" && kind === "mcp" ? [{ keys: "m", action: "matrix", rank: 4 }] : []),
+                  ...unreadable.map((hint) => ({ ...hint, rank: 3 })),
+                  { keys: "esc", action: "back", rank: 2 },
+                ]
+              : // The kinds come before search and the tools: the bar names them, but no key.
+                [
+                  { keys: "↑↓", action: "move", rank: 0 },
+                  { keys: "→", action: "open", rank: 1 },
+                  { keys: "tab", action: TOOL_LABEL[OTHER_TOOL[tool]], rank: 6 },
+                  { keys: "1 2 3", action: "kind", rank: 4 },
+                  { keys: "/", action: "search", rank: 5 },
+                  { keys: "p", action: "project", rank: 7 },
+                  ...unreadable.map((hint) => ({ ...hint, rank: 3 })),
+                  { keys: "esc", action: "back", rank: 2 },
+                ];
+
+  const scopeList = (
+    <ScopeList
+      scopes={scopes}
+      selected={current}
+      focused={shown === "scopes"}
+      width={layout.scopeWidth}
+      height={layout.height}
+      top={scopeTop.current}
+    />
+  );
+  const right = details ? (
+    <DetailsView
+      title={details.title}
+      rows={details.rows}
+      width={layout.tableWidth}
+      height={layout.height}
+      top={Math.min(detailTop, detailMax)}
+    />
+  ) : (
+    <ItemTable
+      table={table}
+      width={layout.tableWidth}
+      height={layout.height}
+      cursor={at}
+      top={rowTop.current}
+      focused={shown === "table"}
+    />
+  );
+  // One pane: the one the focus is on, at the full width. Two: the scope list, the divider and
+  // the table or the details. The panes keep their height, so the footer stays put.
+  const panes =
+    layout.mode === "one" ? (
+      shown === "scopes" ? (
+        scopeList
+      ) : (
+        right
+      )
+    ) : (
+      <>
+        {scopeList}
+        <Box
+          borderStyle="single"
+          borderColor={color.dim}
+          borderTop={false}
+          borderRight={false}
+          borderBottom={false}
+          paddingLeft={DIVIDER_COLUMNS - 1}
+          flexShrink={0}
+        >
+          {right}
+        </Box>
+      </>
+    );
 
   return (
-    <Chrome title="Extensions" subtitle={subtitle} footer={status || undefined} hints={fitHints(hints, hintWidth)}>
-      <Box marginBottom={1} gap={2} width="100%">
-        {TABS.map((t) => (
-          <Box key={t} flexShrink={0}>
-            <Text color={t === tab ? color.text : color.muted} bold={t === tab}>
-              {t === tab ? `[${TAB_LABEL[t]} ${counts[t]}]` : `${TAB_LABEL[t]} ${counts[t]}`}
-            </Text>
-          </Box>
-        ))}
-        <Box flexGrow={1} />
-        <Box flexShrink={0}>
-          <Text color={color.muted}>
-            Filter: <Text color={filter === "all" ? color.muted : color.accent}>{FILTER_LABEL[filter]}</Text>
-          </Text>
-        </Box>
-        {typing || query ? (
-          // The one part of the bar that gives way: a long search is cut, the tabs never are.
-          <Box flexShrink={1} minWidth={1}>
-            <Text color={color.accent} wrap="truncate-end">
-              /{query}
-              {typing ? "▏" : ""}
-            </Text>
-          </Box>
-        ) : null}
+    <Chrome title="Extensions" subtitle={subtitle} footer={status || undefined} hints={fitHints(hints, innerWidth)}>
+      <Box marginBottom={1}>
+        <ToolKindBar tool={tool} kind={kind} query={query} typing={typing} width={innerWidth} />
       </Box>
       {view === "picker" ? (
         <ProjectPicker
@@ -392,7 +500,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
           {...(project ? { current: project } : {})}
           {...(inventory.currentProject ? { here: inventory.currentProject } : {})}
           cursor={pickerCursor}
-          height={fullHeight}
+          height={layout.height}
           homeDir={inventory.homeDir}
         />
       ) : view === "matrix" && matrix ? (
@@ -400,8 +508,8 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
           matrix={matrix}
           cursor={matrixCursor}
           top={matrixTop.current}
-          height={fullHeight}
-          width={layout.listWidth + (layout.mode === "side" ? layout.detailWidth + 2 : 0)}
+          height={layout.height}
+          width={innerWidth}
           offset={matrixOffset}
         />
       ) : view === "warnings" ? (
@@ -421,41 +529,9 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
             </Text>
           ) : null}
         </Box>
-      ) : view === "detail" ? (
-        <DetailPane
-          inv={inventory}
-          row={selected}
-          {...(project ? { project } : {})}
-          width={layout.detailWidth}
-          height={layout.detailHeight}
-          now={loadedAt}
-          held={held}
-          top={Math.min(detailTop, detailMax)}
-        />
       ) : (
-        <Box flexDirection={layout.mode === "side" ? "row" : "column"} gap={layout.mode === "side" ? 2 : 0}>
-          <ItemList
-            rows={rows}
-            cursor={at}
-            top={listTop.current}
-            height={layout.listHeight}
-            width={layout.listWidth}
-            columns={columnsFor}
-            tab={tab}
-            empty={held ? "Nothing matches." : "Nothing here."}
-            fill={layout.mode === "stacked"}
-          />
-          {layout.mode !== "list" ? (
-            <DetailPane
-              inv={inventory}
-              row={selected}
-              {...(project ? { project } : {})}
-              width={layout.detailWidth}
-              height={layout.detailHeight}
-              now={loadedAt}
-              held={held}
-            />
-          ) : null}
+        <Box flexDirection="row" height={layout.height} overflow="hidden">
+          {panes}
         </Box>
       )}
     </Chrome>
