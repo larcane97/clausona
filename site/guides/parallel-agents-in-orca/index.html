@@ -116,13 +116,13 @@
         <p>Install the <code>orca-fleet</code> plugin. It brings <code>fleet-core</code>, the rules all the fleet plugins share, with it:</p>
 <pre data-copy><code>claude plugin marketplace add larcane97/clausona
 claude plugin install orca-fleet@clausona</code></pre>
-        <p>Then, in an Orca terminal, ask Claude Code something like "Split these across my accounts in Orca: add a CODE_OF_CONDUCT.md, and add a .prettierrc. Use DeepSeek for both, and keep the workers."</p>
+        <p>Then, in an Orca terminal, ask Claude Code something like "Split these across my accounts in Orca: add a CODE_OF_CONDUCT.md, and add a .prettierrc. Use DeepSeek for both."</p>
         <p>It plans the work and starts a worker per task in its own Orca worktree, on the account each one should use. It checks what comes back before it cleans up.</p>
       </div>
 
       <figure class="figure">
-        <img class="demo" src="../../assets/orca-fleet.png" width="1571" height="918" loading="lazy" alt="Orca with the main Claude Code session in front. Its sidebar lists two worker worktrees, prettierrc · ds-flash and coc · ds-flash, and the main session's report says it checked both branches itself: one commit each, a clean worktree, and pushed.">
-        <figcaption>A real run. The main session started two workers on a DeepSeek profile, checked each branch itself, and kept the workers as it was asked to.</figcaption>
+        <img class="demo" src="../../assets/orca-fleet.gif" width="1200" height="699" loading="lazy" alt="A main Claude Code session in Orca opens a worktree per task, named for the task and its clausona profile, runs both workers on DeepSeek, then checks each branch and removes the worktrees.">
+        <figcaption>A real run, sped up. Each worker is an Orca worktree named after its task and profile, and the main session checks each branch before it removes the worktree.</figcaption>
       </figure>
 
       <h2 id="see">What you see in Orca</h2>
