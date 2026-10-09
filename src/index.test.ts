@@ -92,7 +92,7 @@ describe("writeCommandError", () => {
 
   it("writes an ExitError's stdout alone, so stdout is the JSON and stderr stays empty", () => {
     const s = streams();
-    const json = JSON.stringify({ error: "ambiguous", candidates: [] });
+    const json = JSON.stringify({ version: 1, error: "ambiguous", candidates: [] });
     expect(writeCommandError(new ExitError("2 skills are named 'eli5':", 2, json), s.streams)).toBe(2);
     expect(s.out).toEqual([`${json}\n`]);
     expect(s.err).toEqual([]);

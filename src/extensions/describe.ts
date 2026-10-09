@@ -688,10 +688,17 @@ export function detailsOf(inv: Inventory, row: ScopeRow, project: string | undef
   }
 }
 
+/** What a plugin row brings, by kind: each thing's row name, sorted - a name twice for two hooks on one event. */
+function containsOf(inv: Inventory, row: ScopeRow): Record<ItemKind, string[]> {
+  const contents = pluginContents(inv, row);
+  const names = (rows: ScopeRow[]) => rows.map((r) => r.name).sort((a, b) => a.localeCompare(b));
+  return { skill: names(contents.skill), mcp: names(contents.mcp), hook: names(contents.hook) };
+}
+
 /**
  * The JSON v1 item. A row of copies is one item: its id is the row key, `copies` lists each copy
  * - with its account, or a plugin install's accounts - and `file`, `project` and `summary` are
- * the first copy's.
+ * the first copy's. A plugin row says what it brings in `contains`.
  */
 export function jsonItem(
   inv: Inventory,
@@ -751,5 +758,6 @@ export function jsonItem(
     ...(item.link ? { link: { target: item.link.target, broken: item.link.broken } } : {}),
     // Already redacted: commands and URLs with secrets hidden, env and header names only.
     ...(item.kind === "mcp" || item.kind === "hook" ? { summary: { ...item.summary } } : {}),
+    ...(item.kind === "plugin" ? { contains: containsOf(inv, row) } : {}),
   };
 }

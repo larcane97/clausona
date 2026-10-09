@@ -23,6 +23,7 @@ import {
   type ItemKind,
   isAccountServer,
   otherProjects,
+  pluginContents,
   rowKey,
   rowsIn,
   SCOPE_LABEL,
@@ -199,7 +200,11 @@ function unique(rows: ScopeRow[]): ScopeRow[] {
   return [...byKey.values()];
 }
 
-/** What `--scope` lists for one tool: `other` and `all` flatten every other project's rows in. */
+/**
+ * What `--scope` lists for one tool: `other` and `all` flatten every other project's rows in.
+ * `all` lists things of the kind alone: in place of each plugin, what it brings, as rows of their
+ * own keys - the plugins themselves are `--scope plugins`.
+ */
 function rowsFor(
   inv: Inventory,
   command: ExtensionsCommand,
@@ -209,7 +214,15 @@ function rowsFor(
   now: number,
 ): ScopeRow[] {
   const kind = KIND[command];
-  if (scope === "all") return unique(placesOf(command).flatMap((s) => rowsFor(inv, command, tool, s, project, now)));
+  if (scope === "all") {
+    return unique(
+      placesOf(command).flatMap((place) =>
+        place === "plugins"
+          ? rowsFor(inv, command, tool, place, project, now).flatMap((plugin) => pluginContents(inv, plugin)[kind])
+          : rowsFor(inv, command, tool, place, project, now),
+      ),
+    );
+  }
   if (scope === "other") {
     return unique(
       otherProjects(inv, tool, kind, project).flatMap((other) =>
@@ -232,7 +245,11 @@ function everyRow(
   now: number,
 ): ScopeRow[] {
   const kind = KIND[command];
-  const rows = rowsFor(inv, command, tool, "all", project, now);
+  // `all` lists what plugins bring; the plugins, which show takes too, are Plugins' rows.
+  const rows = unique([
+    ...rowsFor(inv, command, tool, "all", project, now),
+    ...rowsFor(inv, command, tool, "plugins", project, now),
+  ]);
   const listed = new Set(rows.flatMap((row) => row.items.map((item) => item.id)));
   const rest = new Map<string, ScopeRow>();
   for (const item of inv.items) {
@@ -448,7 +465,7 @@ function ambiguous(
     ...table(cells, Number.POSITIVE_INFINITY, []).map((line) => `    ${line}`),
     "    Pick one with --tool, --scope or --id <id>.",
   ].join("\n");
-  const stdout = options.json ? JSON.stringify({ error: "ambiguous", candidates }, null, 2) : undefined;
+  const stdout = options.json ? JSON.stringify({ version: 1, error: "ambiguous", candidates }, null, 2) : undefined;
   return new ExitError(message, 2, stdout);
 }
 
@@ -516,7 +533,7 @@ function show(
   const [row, ...more] = found;
   if (row === undefined || more.length > 0) throw ambiguous(command, options, found, project, inv.homeDir);
   const details = detailsOf(inv, row, project, now);
-  if (options.json) return JSON.stringify({ ...jsonItem(inv, row, project, now), details }, null, 2);
+  if (options.json) return JSON.stringify({ version: 1, ...jsonItem(inv, row, project, now), details }, null, 2);
   return [...detailText(details), ...warningLines(inv)].join("\n");
 }
 
@@ -526,7 +543,15 @@ function show(
 export async function runExtensionsCommand(
   command: ExtensionsCommand,
   args: string[],
-  deps: { homeDir: string; cwd: string; registry: Registry; now?: number; columns?: number },
+  deps: {
+    homeDir: string;
+    cwd: string;
+    registry: Registry;
+    now?: number;
+    columns?: number;
+    /** Where to look for Claude Code's managed settings; tests point it at a file of their own. */
+    managedSettings?: string;
+  },
 ): Promise<string> {
   const given = args[0] !== undefined && !args[0].startsWith("-") ? args[0] : undefined;
   if (args.includes("--help") || args.includes("-h")) {
@@ -535,7 +560,12 @@ export async function runExtensionsCommand(
   const sub = given ?? "ls";
   if (sub !== "ls" && sub !== "show") throw badUsage(`Unknown subcommand '${sub}'. Run clausona ${command} --help.`);
   const options = await parseOptions(command, sub, given === undefined ? args : args.slice(1), deps.cwd);
-  const inv = await loadInventory({ homeDir: deps.homeDir, registry: deps.registry, cwd: options.project ?? deps.cwd });
+  const inv = await loadInventory({
+    homeDir: deps.homeDir,
+    registry: deps.registry,
+    cwd: options.project ?? deps.cwd,
+    ...(deps.managedSettings !== undefined ? { managedSettings: deps.managedSettings } : {}),
+  });
   const project = inv.currentProject;
   const now = deps.now ?? Date.now();
   if (options.sub === "show") return show(inv, command, options, project, now);
@@ -746,6 +776,8 @@ export function extensionsHelp(command: ExtensionsCommand, sub?: "ls" | "show"):
   }
   if (sub === "show") {
     const kind = command === "mcp" ? "server" : one;
+    // Every value ls takes: one scope's rows, in place of the tiers below.
+    const scopes = scopeList([...SCOPES[command]]).map(optionMore);
     return [
       "",
       `  ${accent(`clausona ${command} show`)} ${dim(`— Everything about one ${one}`)}`,
@@ -754,7 +786,8 @@ export function extensionsHelp(command: ExtensionsCommand, sub?: "ls" | "show"):
       "",
       ...section("OPTIONS", [
         option("--tool <tool>", `claude | codex, when both have a ${kind} by this name`),
-        option("--scope <scope>", `${placesOf(command).join(" | ")}, to pick one copy`),
+        option("--scope <scope>", "Look in this scope only, to pick one copy:"),
+        ...scopes,
         option("--id <id>", "An exact id from ls --json, instead of a name"),
         ...account,
         project,

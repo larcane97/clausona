@@ -45,8 +45,16 @@ function seed() {
   return { h, app, web };
 }
 
+// The managed settings are the home's own, so no test reads this machine's.
 const run = (h: TestHome, cwd: string, command: ExtensionsCommand, args: string[], columns = 120) =>
-  runExtensionsCommand(command, args, { homeDir: h.home, cwd, registry: h.registry, now: NOW, columns });
+  runExtensionsCommand(command, args, {
+    homeDir: h.home,
+    cwd,
+    registry: h.registry,
+    now: NOW,
+    columns,
+    managedSettings: h.path("managed-settings.json"),
+  });
 
 /** What a rejected run threw, for a look at its code, message and stdout. */
 async function failure(promise: Promise<string>): Promise<ExitError> {
@@ -165,6 +173,51 @@ describe("skills ls", () => {
     expect(await run(h, app, "mcp", ["ls", "--scope", "plugins"])).toMatch(
       /^0 plugins · Plugins · .+\n\nNo plugin brings MCP servers\.$/,
     );
+    // Each plugin row says what it brings, by row name, sorted; no other row has `contains`.
+    const json = JSON.parse(await run(h, app, "skills", ["ls", "--scope", "plugins", "--json"]));
+    expect(json.items.map((i: { name: string; contains: unknown }) => [i.name, i.contains])).toEqual([
+      ["kit@m", { skill: ["kit:kit-a", "kit:kit-b"], mcp: [], hook: [] }],
+      ["sp@m", { skill: ["sp:sp-skill"], mcp: [], hook: ["SessionStart"] }],
+    ]);
+    const loaded = JSON.parse(await run(h, app, "skills", ["ls", "--json"]));
+    expect(loaded.items.filter((i: object) => "contains" in i)).toEqual([]);
+  });
+
+  it("lists what plugins bring with --scope all, in place of the plugins", async () => {
+    const { h, app } = seed();
+    const sp = h.path(".claude/plugins/cache/m/sp/1.0.0");
+    h.write(".claude/plugins/installed_plugins.json", { plugins: { "sp@m": [{ installPath: sp }] } });
+    h.write(".claude/settings.json", {
+      enabledPlugins: { "sp@m": true },
+      hooks: { Stop: [{ hooks: [{ type: "command", command: "notify" }] }] },
+    });
+    h.skill(".claude/plugins/cache/m/sp/1.0.0/skills", "sp-skill");
+    h.write(".claude/plugins/cache/m/sp/1.0.0/hooks/hooks.json", {
+      hooks: { SessionStart: [{ hooks: [{ type: "command", command: "sp-start" }] }] },
+    });
+    const json = JSON.parse(await run(h, app, "hooks", ["ls", "--scope", "all", "--json"]));
+    expect(json.items.map((i: { kind: string; name: string; scope: string }) => [i.kind, i.name, i.scope])).toEqual([
+      ["hook", "SessionStart", "plugins"],
+      ["hook", "Stop", "global"],
+    ]);
+    // The key is the row's, as in Loaded here, so the hook is one row there and here.
+    const loaded = JSON.parse(await run(h, app, "hooks", ["ls", "--json"]));
+    expect(json.items[0].id).toBe(loaded.items.find((i: { name: string }) => i.name === "SessionStart").id);
+    expect(firstLine(await run(h, app, "hooks", ["ls", "--scope", "all"]))).toMatch(/^2 hooks · All scopes · /);
+    const skills = JSON.parse(await run(h, app, "skills", ["ls", "--scope", "all", "--tool", "claude", "--json"]));
+    expect(skills.items.map((i: { name: string }) => i.name)).toContain("sp:sp-skill");
+    expect(skills.items.filter((i: { kind: string }) => i.kind === "plugin")).toEqual([]);
+    // The plugins stay in --scope plugins, and show still finds one by name.
+    expect(firstLine(await run(h, app, "hooks", ["ls", "--scope", "plugins"]))).toMatch(/^1 plugin · Plugins · /);
+    expect(firstLine(await run(h, app, "hooks", ["show", "sp@m"]))).toBe("PLUGINS › sp");
+  });
+
+  it("reads the managed settings it is pointed at", async () => {
+    const { h, app } = seed();
+    h.write("managed-settings.json", { hooks: { SessionEnd: [{ hooks: [{ type: "command", command: "audit" }] }] } });
+    const text = await run(h, app, "hooks", ["ls", "--scope", "managed"]);
+    expect(firstLine(text)).toMatch(/^1 hook · Managed · /);
+    expect(text).toMatch(/^SessionEnd\s+claude\s+Managed\s+When a session ends\s+audit$/m);
   });
 
   it("lists Built into Claude Code: a skill your settings name that is on no disk", async () => {
@@ -368,6 +421,8 @@ describe("show", () => {
     const json = await failure(run(h, app, "skills", ["show", "eli5", "--json"]));
     expect(json.code).toBe(2);
     const parsed = JSON.parse(json.stdout ?? "");
+    expect(Object.keys(parsed)).toEqual(["version", "error", "candidates"]);
+    expect(parsed.version).toBe(1);
     expect(parsed.error).toBe("ambiguous");
     expect(parsed.candidates).toEqual([
       { id: "skill:claude:global:-:eli5", tool: "claude", scope: "global", project: null, account: null },
@@ -402,7 +457,8 @@ describe("show", () => {
     const json = JSON.parse(
       await run(h, app, "skills", ["show", "eli5", "--tool", "claude", "--scope", "project", "--json"]),
     );
-    expect(json).toMatchObject({ kind: "skill", tool: "claude", name: "eli5", scope: "project" });
+    expect(json).toMatchObject({ version: 1, kind: "skill", tool: "claude", name: "eli5", scope: "project" });
+    expect(Object.keys(json)[0]).toBe("version");
     expect(json.details[0]).toEqual({ text: "PROJECT › eli5" });
     expect(await run(h, app, "skills", ["show", "--id", json.id])).toBe(text);
     // An id is a name too, so one listed by ls --json can be given as it is.

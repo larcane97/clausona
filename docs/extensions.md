@@ -108,8 +108,9 @@ Some scopes need a word more:
   `~/.claude/skills/synced`.
 - Plugins lists the plugins themselves (rows of kind `plugin`) that bring at least one
   thing of the kind, installed for everyone or for this project. A plugin installed only for
-  another project is under Other projects. What a plugin brings is in Loaded here while the
-  plugin is on, with the plugin's name as WHERE.
+  another project is under Other projects. In JSON a plugin row has `contains`, the names of
+  what it brings. What a plugin brings is in Loaded here while the plugin is on, and in `all`,
+  with the plugin's name as WHERE.
 - Built into Claude Code: names in `skillOverrides` that match no skill on disk. clausona
   cannot tell a built-in skill from one removed since, so it lists both here. Shown only when
   there is one.
@@ -328,9 +329,9 @@ outside `mcp` and `--id` with `ls` are all bad usage, exit code 2.
 | `all` | every place at once | ✓ | ✓ | ✓ |
 
 `all` is the places together, each row once: Project, Parent folders, Global, Cloud, Plugins,
-the built-in scope, Managed and Other projects. Under Plugins that is the plugin's own row, so
-what a plugin brings is not in `all`. It is in `loaded` while the plugin is on, and `show`
-finds it by name either way.
+the built-in scope, Managed and Other projects. In place of each plugin it lists what the plugin
+brings of the kind, on or off, with the same row ids as in Loaded here. So `hooks ls --scope all`
+lists hooks only, and its title counts hooks. The plugins themselves are in `plugins`.
 
 A scope that does not apply to a tool is empty for it: `csn skills ls --scope cloud --tool codex`
 lists nothing.
@@ -353,10 +354,11 @@ Exactly one match in that tier is shown. Several are ambiguous: `show` exits wit
 lists the candidates of that tier only. So `csn skills show deploy-check` means the one that
 loads here, even when another project has its own.
 
-`--scope` replaces the tiers with that one scope: its rows, and the rows that live there, such
-as what plugins bring under `plugins`. The help lists the places; `loaded`, `unused` and `all`
-are taken too. `--tool` and `--account` narrow every tier. `--account` picks which rows match;
-the details still list every account.
+`--scope` replaces the tiers with that one scope. It takes every value `ls --scope` takes, and
+looks in that scope's rows and in the rows that live there, such as what plugins bring under
+`plugins`. With `--scope all` a plugin itself is not among them; it is under `plugins`.
+`--tool` and `--account` narrow every tier. `--account` picks which rows match; the details
+still list every account.
 
 ```
 $ csn skills show eli5
@@ -445,9 +447,9 @@ files, and JSON lists them in `warnings`. The exit code stays 0.
 
 ## JSON
 
-`ls --json` prints one object, the envelope. `show --json` prints one item with `details`
-added. Both are indented with two spaces. Paths are absolute; the text output writes `~` for
-the home folder, JSON does not.
+`ls --json` prints one object, the envelope. `show --json` prints one item, with `version`
+first and `details` last. Both are indented with two spaces. Paths are absolute; the text
+output writes `~` for the home folder, JSON does not.
 
 ### The envelope
 
@@ -487,6 +489,7 @@ apply; the others are always there, `null` when empty.
 | `alsoIn` | object[] | Skills: same-name skills elsewhere, in either tool. Empty for the other kinds. |
 | `link` | object | When set: a skill whose folder is a link, `{ target, broken }`. |
 | `summary` | object | MCP servers and hooks only: what it runs, with secrets hidden. |
+| `contains` | object | When set: a plugin row's contents, `{ skill, mcp, hook }`. |
 
 The parts of the larger fields:
 
@@ -503,6 +506,10 @@ The parts of the larger fields:
 - An MCP `summary` has `transport`, `command` or `url`, and `env` and `headers` with the names
   only, comma-separated. A hook `summary` has `event`, `matcher`, `type`, and `command` or
   `prompt`.
+- `contains` is set on `kind: "plugin"` rows only. Each of `skill`, `mcp` and `hook` is a sorted
+  list of the row names of what the plugin brings, the names `show` takes, such as
+  `{ "skill": ["kit:plan"], "mcp": [], "hook": ["SessionStart"] }`. There is one name per row,
+  so two hooks on one event are listed twice.
 
 A row of copies, as `csn mcp ls --json` prints it:
 
@@ -533,8 +540,9 @@ A row of copies, as `csn mcp ls --json` prints it:
 
 ### show --json
 
-`show --json` prints the item, then `details`: the lines of the text view, in order. Each line
-is an object with `text`, and with `label` and `tone` when they apply.
+`show --json` prints `"version": 1`, the item's fields, then `details`: the lines of the text
+view, in order. Each line is an object with `text`, and with `label` and `tone` when they
+apply.
 
 - The first line is the title, such as `GLOBAL › eli5`, with no `label`.
 - A line with no `label` stands alone, such as a description.
@@ -550,6 +558,7 @@ With `--json`, a name that matches several rows prints this on stdout and exits 
 
 ```json
 {
+  "version": 1,
   "error": "ambiguous",
   "candidates": [
     { "id": "skill:claude:global:-:eli5", "tool": "claude", "scope": "global", "project": null, "account": null },
@@ -564,12 +573,12 @@ They are the candidates of one tier (see [show](#show)).
 
 ### Versioning
 
-The envelope's `version` is `1`. Within version 1, keys can be added, and new values can
-appear in `scope`, `state`, `tags` and `summary`. A key keeps its name, type and meaning. A
-change that breaks this comes with `version: 2`.
+Every JSON output starts with `"version": 1`: the `ls` envelope, the `show` item and the
+ambiguous error. Within version 1, keys can be added, and new values can appear in `scope`,
+`state`, `tags`, `summary` and `contains`. A key keeps its name, type and meaning. A change
+that breaks this comes with `version: 2`.
 
-So read keys by name and skip the ones you do not know. `show --json` and the error object
-carry no `version` of their own; they follow the version `ls --json` reports.
+So check `version`, read keys by name, and skip the ones you do not know.
 
 ## Safety
 
