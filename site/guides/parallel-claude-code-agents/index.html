@@ -15,7 +15,7 @@
   <meta property="og:url" content="https://larcane97.github.io/clausona/guides/parallel-claude-code-agents/">
   <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
   <meta property="article:published_time" content="2026-10-08">
-  <meta property="article:modified_time" content="2026-10-08">
+  <meta property="article:modified_time" content="2026-10-09">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="../../favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -29,7 +29,7 @@
     "headline": "Run parallel Claude Code agents on different accounts and models",
     "description": "Subagents run out of sight, can't be steered one by one, and all spend one account. Run each agent as its own Claude Code session instead, on the account or API model (such as DeepSeek) you choose, in tmux, herdr, Orca or Superset.",
     "datePublished": "2026-10-08",
-    "dateModified": "2026-10-08",
+    "dateModified": "2026-10-09",
     "inLanguage": "en",
     "image": "https://larcane97.github.io/clausona/assets/superset-fleet.gif",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
@@ -71,7 +71,7 @@
         "name": "Can retiring a worker lose work?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "A worker is retired only when its work was checked, its branch is pushed and its worktree is clean. Right before it deletes the workspace, the skill's helper checks the branch and the worktree again. It refuses if either isn't clean."
+          "text": "A worker is retired only when its work was checked, its branch is pushed and its worktree is clean. In Superset, right before it deletes the workspace, the plugin's helper checks the branch and the worktree again, and refuses if either isn't clean. herdr and Orca refuse to remove a worktree with uncommitted changes themselves."
         }
       },
       {
@@ -79,7 +79,7 @@
         "name": "Do I need Superset to give agents different accounts?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "No. clausona run claude:work starts a Claude Code session on that account in any runner: a plain terminal, tmux, herdr, Orca or Superset. The Superset skill adds a coordinator on top. It plans and routes the work. Then it watches the workers and checks their results."
+          "text": "No. clausona run claude:work starts a Claude Code session on that account in any runner: a plain terminal, tmux, herdr, Orca or Superset. The fleet plugins for Superset, herdr and Orca add a coordinator on top. It plans and routes the work. Then it watches the workers and checks their results."
         }
       },
       {
@@ -113,14 +113,15 @@
       <nav class="crumbs" aria-label="Breadcrumb"><a href="../../">clausona</a> / Guides</nav>
       <h1>Run parallel Claude Code agents on different accounts and models</h1>
       <p class="lead">Your job just split into five tasks. Subagents would run all five out of sight, on one account.</p>
-      <p class="updated">Updated <time datetime="2026-10-08">October 8, 2026</time></p>
+      <p class="updated">Updated <time datetime="2026-10-09">October 9, 2026</time></p>
 
       <div class="answer">
         <p>Run them as separate Claude Code sessions instead, and start them with <code>clausona run</code>. That puts a session on the profile you name: your work account, a second subscription, or an API model such as DeepSeek.</p>
         <p>Any terminal works, and so does a runner that gives you a terminal or lets you set the command.</p>
-        <p>Today the coordinating skill, <code>superset-fleet</code>, drives Superset. One Claude Code session plans the work and starts a worker per task on the profile your rules pick. It watches and answers the workers, then checks their results before it cleans up. Install it once:</p>
+        <p>To have one session coordinate them, add the fleet plugin for your runner: <code>superset-fleet</code>, <code>herdr-fleet</code> or <code>orca-fleet</code>. One Claude Code or Codex session plans the work and starts a worker per task on the profile your rules pick. It watches and answers the workers, then checks their results before it cleans up. Install the one you need:</p>
 <pre data-copy><code>claude plugin marketplace add larcane97/clausona
-claude plugin install clausona@clausona</code></pre>
+claude plugin install superset-fleet@clausona   # or herdr-fleet, orca-fleet</code></pre>
+        <p>In Codex, use <code>codex plugin marketplace add</code> and <code>codex plugin add</code> the same way, and add <code>fleet-core@clausona</code> too.</p>
         <p>Then ask: "Split these across my accounts in Superset: add a <code>--json</code> flag to <code>notes list</code>, write tests for <code>src/parse.ts</code>, and fix the broken links in <code>docs/</code>."</p>
       </div>
 
@@ -161,8 +162,8 @@ claude plugin install clausona@clausona</code></pre>
             <tr><th scope="row">Type into one agent</th><td>No</td><td class="is-shared">Yes</td></tr>
             <tr><th scope="row">A different account per agent</th><td>No, all on the parent's account</td><td class="is-shared">Yes, a clausona profile each</td></tr>
             <tr><th scope="row">An API model such as DeepSeek per agent</th><td>No, Claude models on the same account</td><td class="is-shared">Yes, an API profile</td></tr>
-            <tr><th scope="row">Routing by your rules and each account's usage</th><td>No</td><td class="is-shared">Yes<small>with the Superset skill</small></td></tr>
-            <tr><th scope="row">Result checked before cleanup</th><td>No</td><td class="is-shared">Yes, branch, diff and checks<small>with the Superset skill</small></td></tr>
+            <tr><th scope="row">Routing by your rules and each account's usage</th><td>No</td><td class="is-shared">Yes<small>with a fleet plugin</small></td></tr>
+            <tr><th scope="row">Result checked before cleanup</th><td>No</td><td class="is-shared">Yes, branch, diff and checks<small>with a fleet plugin</small></td></tr>
           </tbody>
         </table>
       </div>
@@ -173,15 +174,15 @@ claude plugin install clausona@clausona</code></pre>
       <p>They work together.</p>
       <p>In any terminal, <code>clausona run claude:work</code> starts a Claude Code session on that account. In tmux, open it in a new window:</p>
 <pre data-copy><code>tmux new-window 'clausona run claude:work'</code></pre>
-      <p><a href="https://github.com/ogulcancelik/herdr">herdr</a> is a terminal runtime that keeps agent panes running and shows their state. Open a pane and run <code>clausona run claude:work</code> in it.</p>
+      <p><a href="https://github.com/ogulcancelik/herdr">herdr</a> is a terminal runtime that keeps agent panes running and shows their state. Open a pane and run <code>clausona run claude:work</code> in it. The <code>herdr-fleet</code> plugin adds a coordinator there: see <a href="../parallel-agents-in-herdr/">parallel agents in herdr</a>.</p>
       <p><a href="https://github.com/stablyai/orca">Orca</a> is an open-source desktop app that runs coding agents side by side in separate git worktrees. It works with any CLI agent. In an Orca terminal, <code>clausona run claude:work</code> starts Claude Code on that account.</p>
-      <p>Orca also has its own Claude and Codex account switcher.</p>
+      <p>Orca also has its own Claude and Codex account switcher. The <code>orca-fleet</code> plugin adds a coordinator there: see <a href="../parallel-agents-in-orca/">parallel agents in Orca</a>.</p>
       <p>In <a href="https://superset.sh">Superset</a>, add a custom agent whose command is the full path that <code>command -v clausona</code> prints. Its arguments start with <code>run claude:work --</code>, and <a href="#setup">the setup steps</a> have the full line.</p>
-      <p>In Superset you can also add a coordinator. With the <code>superset-fleet</code> skill, one session plans the work and routes it by your rules and usage, as the next section shows.</p>
+      <p>In Superset, the <code>superset-fleet</code> plugin adds the coordinator. The next section shows how it works there.</p>
 
       <h2 id="how">How the Superset fleet works</h2>
-      <p>In Superset, a worker is an ordinary Claude Code session with its own tab and git worktree.</p>
-      <p>You talk to one Claude Code session in Superset, the orchestrator. With the <code>superset-fleet</code> skill, it:</p>
+      <p>In Superset, a worker is an ordinary Claude Code or Codex session with its own tab and git worktree.</p>
+      <p>You talk to one Claude Code or Codex session in Superset, the orchestrator. With the <code>superset-fleet</code> skill, it:</p>
       <ol>
         <li>Picks a profile per task from your request, your rules and the profiles' current usage. Then it shows you the plan.</li>
         <li>Starts the workers, one Superset workspace per task. A workspace is named after its task and profile, so the sidebar shows which account runs where.</li>
@@ -204,7 +205,7 @@ claude plugin install clausona@clausona</code></pre>
       </div>
 
       <h2 id="routing">Route agents to accounts and models</h2>
-      <p>The orchestrator decides which account or model a worker runs on. It follows what you say in the conversation first, then <code>~/.clausona/superset-fleet.json</code>, then its defaults.</p>
+      <p>The orchestrator decides which account or model a worker runs on. It follows what you say in the conversation first, then <code>~/.clausona/fleet.json</code>, then its defaults. The Superset, herdr and Orca plugins share that file.</p>
 <pre data-copy><code>{
   "workers": ["claude:work", "claude:side", "claude:deepseek"],
   "routing": [
@@ -219,10 +220,12 @@ claude plugin install clausona@clausona</code></pre>
         <li><strong><code>routing</code></strong> holds your own rules, in plain words. The orchestrator applies them when it fills in the plan.</li>
         <li><strong><code>maxUsage</code></strong> skips a subscription profile once its 5-hour or weekly usage reaches that percentage. The default is 90.</li>
         <li><strong><code>retire</code></strong> is <code>ask</code> (the default) or <code>auto</code>.</li>
+        <li><strong><code>permissions</code></strong> sets how workers run, per tool, such as <code>{"claude": "acceptEdits", "codex": "on-request"}</code>. In Codex's default sandbox a Codex worker asks before each commit and push. Add <code>"codexSandbox": "danger-full-access"</code> to it if you want Codex workers to do that on their own. That turns Codex's sandbox off for workers.</li>
       </ul>
       <p>Whatever your rules leave open, the defaults decide:</p>
       <ul>
         <li>The orchestrator's profile never takes a worker.</li>
+        <li>Workers use the orchestrator's tool. Codex profiles join a Claude Code fleet, or the other way round, only when you name them or list them in <code>workers</code>.</li>
         <li>Profiles with more headroom are preferred, and workers are spread across them.</li>
         <li>Wide mechanical work goes to API profiles.</li>
         <li>An independent check of risky work runs on a third profile.</li>
@@ -239,7 +242,7 @@ claude plugin install clausona@clausona</code></pre>
       <p>API workers need a little more care:</p>
       <ul>
         <li>Give them small, explicit briefs that name the file, the function, the change and the command that checks it. Long exploratory briefs overflow smaller context windows.</li>
-        <li>Give their Superset agent a short tool list, such as <code>--tools=Bash,Read,Edit,Write,Grep,Glob</code>. That keeps tool definitions out of the context.</li>
+        <li>Give them a short tool list, such as <code>--tools=Bash,Read,Edit,Write,Grep,Glob</code>. That keeps tool definitions out of the context.</li>
         <li>Check whether the endpoint honors prompt caching. Without it, every turn re-reads the whole conversation, and long sessions slow down.</li>
       </ul>
 
@@ -271,14 +274,13 @@ clausona add claude:side</code></pre>
           <div>
             <p>Install the plugin. Plugins are shared across profiles, so one install reaches all of them.</p>
 <pre data-copy><code>claude plugin marketplace add larcane97/clausona
-claude plugin install clausona@clausona</code></pre>
+claude plugin install superset-fleet@clausona</code></pre>
           </div>
         </li>
       </ol>
 
       <h2 id="limits">Limits of the fleet</h2>
       <ul>
-        <li>Workers are Claude Code sessions. Codex workers aren't covered yet.</li>
         <li>Superset has to run on the same machine. The desktop app and <code>superset start</code> both work.</li>
         <li>If the Superset CLI isn't logged in, the skill talks to the Superset app's local host service through a bundled helper. That service isn't a documented API. The helper says so and stops if an update changes it.</li>
       </ul>
@@ -287,15 +289,15 @@ claude plugin install clausona@clausona</code></pre>
       <h3>Does the orchestrator run workers on its own account?</h3>
       <p>No. The orchestrator's profile only coordinates, and workers go to other profiles.</p>
       <h3>Can retiring a worker lose work?</h3>
-      <p>A worker is retired only when its work was checked, its branch is pushed and its worktree is clean. Right before it deletes the workspace, the skill's helper checks the branch and the worktree again. It refuses if either isn't clean.</p>
+      <p>A worker is retired only when its work was checked, its branch is pushed and its worktree is clean. In Superset, right before it deletes the workspace, the plugin's helper checks the branch and the worktree again, and refuses if either isn't clean. herdr and Orca refuse to remove a worktree with uncommitted changes themselves.</p>
       <h3>Do I need Superset to give agents different accounts?</h3>
-      <p>No. <code>clausona run claude:work</code> starts a Claude Code session on that account in any runner: a plain terminal, tmux, herdr, Orca or Superset. The Superset skill adds a coordinator on top. It plans and routes the work. Then it watches the workers and checks their results.</p>
+      <p>No. <code>clausona run claude:work</code> starts a Claude Code session on that account in any runner: a plain terminal, tmux, herdr, Orca or Superset. The fleet plugins for Superset, herdr and Orca add a coordinator on top. It plans and routes the work. Then it watches the workers and checks their results.</p>
       <h3>What happens when an account reaches its limit mid-task?</h3>
       <p>The orchestrator hands the task to another profile your rules allow, in the same workspace. It also closes the stopped worker's terminal.</p>
 
       <section class="cta" aria-labelledby="try">
         <h2 id="try">Start with your accounts</h2>
-        <p>clausona and the skill are free and open source. Set up <a href="../multiple-claude-code-accounts/">your accounts</a> first, then add the plugin.</p>
+        <p>clausona and the plugins are free and open source. Set up <a href="../multiple-claude-code-accounts/">your accounts</a> first, then add the plugin.</p>
         <p>The full reference is in the <a href="https://github.com/larcane97/clausona/blob/main/docs/usecases/superset-fleet.md">use case</a> on GitHub, where a star helps other people find it.</p>
       </section>
     </article>
