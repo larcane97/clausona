@@ -20,6 +20,8 @@ Facts:
 - [Run parallel Claude Code and Codex agents in herdr](https://larcane97.github.io/clausona/guides/parallel-agents-in-herdr/): the herdr-fleet plugin. One session in a herdr pane creates a worktree per task with `herdr worktree create`, starts `clausona run <profile>` in each pane, waits with `herdr agent prompt --wait`, checks the pushed branch and, once you approve, removes the worktree without force.
 - [Run parallel Claude Code and Codex agents in Orca](https://larcane97.github.io/clausona/guides/parallel-agents-in-orca/): the orca-fleet plugin. One session creates an Orca worktree per task, starts `clausona run <profile>` in its terminal (overriding the CODEX_HOME Orca sets), waits with `orca terminal wait --for tui-idle`, checks the pushed branch and, once you approve, removes the worktree, which also deletes its local branch.
 - [Claude Code 에이전트를 여러 계정과 모델로 병렬 실행하기](https://larcane97.github.io/clausona/ko/parallel-agents/): the parallel agents guide in Korean.
+- [herdr에서 Claude Code와 Codex 에이전트를 계정별로 병렬 실행하기](https://larcane97.github.io/clausona/ko/parallel-agents-in-herdr/): the herdr guide in Korean.
+- [Orca에서 Claude Code와 Codex 에이전트를 계정별로 병렬 실행하기](https://larcane97.github.io/clausona/ko/parallel-agents-in-orca/): the Orca guide in Korean.
 
 ## Project
 

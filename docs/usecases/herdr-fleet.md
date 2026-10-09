@@ -2,7 +2,7 @@
 
 ![A main Claude Code session in herdr, on Opus, starts one worker on Sonnet with a second Claude account and one on DeepSeek through an API, then checks each branch and removes the worktrees](../../assets/herdr-fleet.gif)
 
-[herdr](https://github.com/ogulcancelik/herdr) keeps coding agents running in terminal panes and
+[herdr](https://github.com/herdrdev/herdr) keeps coding agents running in terminal panes and
 shows each one's state in its sidebar. clausona gives each of those agents its own account. With
 both, one Claude Code or Codex session in a herdr pane can split a job across several workers,
 each on a different account or an API model, and you can switch to any worker's pane and type
@@ -38,7 +38,7 @@ has the longer version.
 1. **Add your profiles to clausona.** [Install clausona](../../README.md#install), then
    `clausona add claude:work` per account, or an API model such as
    `clausona add claude:glm --api --base-url https://openrouter.ai/api --model z-ai/glm-5.3`.
-2. **Install herdr** ([releases](https://github.com/ogulcancelik/herdr/releases): macOS, Linux and
+2. **Install herdr** ([releases](https://github.com/herdrdev/herdr/releases): macOS, Linux and
    Windows builds).
 3. **Install the plugin.** clausona shares plugins across profiles, so one install reaches every
    profile:
