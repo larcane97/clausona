@@ -153,7 +153,7 @@ export function checkPattern(pattern: unknown, tool: RouteTool): string | null {
   const { prefix, body } = splitToolPrefix(pattern);
   if (prefix !== null && !toolsOf(tool).includes(prefix as ToolName)) {
     const what = TOOLS.includes(prefix) ? `a ${prefix} profile` : `unknown tool '${prefix}'`;
-    return `'${pattern}' names ${what}, but this route is for ${tool}`;
+    return `'${pattern}' names ${what}, but this route is for ${tool === "all" ? "claude + codex" : tool}`;
   }
   // A colon left in an email pattern would sit inside the address, which no account has.
   if (body.includes("@")) return /[\s,:]/.test(body) ? `'${pattern}' is not an email pattern` : null;

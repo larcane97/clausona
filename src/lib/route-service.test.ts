@@ -272,6 +272,20 @@ describe("all routes in the service", () => {
     expect(resolveRoute(file, { options: { route: "any" } })).not.toHaveProperty("onlyTool");
   });
 
+  it("takes all as --tool: an unsaved route over both, or a stored all route as it is", () => {
+    const file = {
+      version: 1 as const,
+      routes: { any: { tool: "all" as const }, main: { tool: "claude" as const } },
+    };
+    expect(resolveRoute(file, { tool: "all", options: { from: ["a"] } })?.route.tool).toBe("all");
+    const stored = resolveRoute(file, { tool: "all", options: { route: "any" } });
+    expect(stored?.route.tool).toBe("all");
+    expect(stored).not.toHaveProperty("onlyTool");
+    expect(() => resolveRoute(file, { tool: "all", options: { route: "main" } })).toThrow(
+      "Route 'main' is for claude, not all.",
+    );
+  });
+
   it("infers the tool of an unsaved route, defaulting to claude", () => {
     const file = { version: 1 as const, routes: {} };
     expect(resolveRoute(file, { options: { from: ["a"] } })?.route.tool).toBe("claude");

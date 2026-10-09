@@ -1,4 +1,5 @@
 import { carriesCredentialToken, looksLikeCredential } from "./core/credential-token.js";
+import type { QuotaTarget } from "./core/quota-store.js";
 import {
   applyOverrides,
   checkPattern,
@@ -7,7 +8,10 @@ import {
   DEFAULT_RESERVE_USAGE,
   emptyRoutesFile,
   newRouteSpec,
+  type Route,
+  type RouteOverrides,
   type RouteSpec,
+  type RouteTool,
   withDefaults,
 } from "./core/route-config.js";
 import { expandPatterns } from "./core/route-patterns.js";
@@ -19,8 +23,9 @@ import {
   replaceRoutesText,
   updateRoutes,
 } from "./core/routes-store.js";
+import type { Ranking } from "./core/routing.js";
 import { accent, bold, dim, helpSection, helpUsage, stripAnsi, success } from "./lib/cli-style.js";
-import { confirmNewRoute, type RouteIo, terminalIo } from "./lib/route-create.js";
+import { type RouteIo, terminalIo } from "./lib/route-io.js";
 import {
   explainJson,
   pickJson,
@@ -32,14 +37,16 @@ import {
 import {
   checkRouteMembers,
   defaultRouteDeps,
+  inferRouteTool,
   membersOf,
   NoAccountError,
+  quotaTargets,
   type RouteDeps,
   rankRouteNow,
   resolveRoute,
   UnknownRouteError,
 } from "./lib/route-service.js";
-import { parsePatterns, parseTool, ROUTE_FIELD_OPTIONS, readOptions, toRoutingOptions } from "./lib/run-args.js";
+import { parsePatterns, parseRouteTool, ROUTE_FIELD_OPTIONS, readOptions, toRoutingOptions } from "./lib/run-args.js";
 import { noRegistryError } from "./lib/service.js";
 import type { Registry } from "./types.js";
 
@@ -60,22 +67,23 @@ const FIELD_HELP: [string, string][] = [
 
 const SUB_HELP: Record<string, string[]> = {
   list: [
-    helpUsage("clausona route list [--json]"),
+    helpUsage("clausona route list [--json] [--no-quota]"),
     "",
-    `    ${dim("Every route with its settings and members. Warns about names that are not")}`,
-    `    ${dim("registered (removed profiles) and patterns that match nobody.")}`,
+    `    ${dim("Every route with its settings, how many of its accounts are free now, and the one it")}`,
+    `    ${dim("would pick next (nothing is recorded). --no-quota reads no quota and shows a dash.")}`,
+    `    ${dim("Warns about names that are not registered (removed profiles) and patterns that match nobody.")}`,
   ],
   add: [
-    helpUsage("clausona route add <name> [--tool claude|codex] [options] [--yes]"),
+    helpUsage("clausona route add <name> [--tool claude|codex|all] [options]"),
     "",
-    helpSection("OPTIONS", [
-      ["--tool <tool>", "claude or codex; needed only when both have accounts"],
-      ...FIELD_HELP,
-      ["--yes, -y", "Do not ask in a terminal (never asks without one)"],
-    ]),
+    helpSection("OPTIONS", [["--tool <tool>", "claude (default), codex or all"], ...FIELD_HELP]),
+    "",
+    `    ${dim("Asks nothing, and shows the new route with its members. Without --tool, --from entries")}`,
+    `    ${dim("that all start with codex: make a codex route; entries of both tools make an all route.")}`,
     "",
     `  ${bold("EXAMPLES")}`,
-    `    ${dim("clausona route add main                                   # every account, round-robin")}`,
+    `    ${dim("clausona route add main                                   # every claude account, round-robin")}`,
+    `    ${dim("clausona route add any --tool all                         # claude and codex accounts")}`,
     `    ${dim("clausona route add work --from '*@example.com' --exclude '*-share'")}`,
     `    ${dim("clausona route add solo --from work --fallback personal --strategy headroom")}`,
   ],
@@ -101,15 +109,16 @@ const SUB_HELP: Record<string, string[]> = {
     `    ${dim("has a problem, nothing is written and you can edit again.")}`,
   ],
   explain: [
-    helpUsage("clausona route explain <name> [options] [--resume] [--json]"),
-    helpUsage("clausona route explain --tool claude --from <patterns> [--json]"),
+    helpUsage("clausona route explain <name> [--tool claude|codex] [options] [--resume] [--json]"),
+    helpUsage("clausona route explain --tool claude|codex|all --from <patterns> [--json]"),
     "",
     `    ${dim("Every member with its 5H and 7D use, its usage (the higher of the two), when it was")}`,
     `    ${dim("last picked, and why it would or would not be picked now. Launches nothing and")}`,
     `    ${dim("records nothing. --resume ranks as a resumed run would (shared sessions only).")}`,
+    `    ${dim("On an all route, --tool ranks only that tool's accounts, as a run naming it would.")}`,
   ],
   pick: [
-    helpUsage("clausona route pick <name> [options] [--resume] [--json]"),
+    helpUsage("clausona route pick <name> [--tool claude|codex] [options] [--resume] [--json]"),
     "",
     `    ${dim("Takes a turn: prints the picked profile id (or JSON) and records the pick, so the")}`,
     `    ${dim("next pick on a round-robin route takes the next account. Exits 75 when nobody can")}`,
@@ -133,8 +142,9 @@ export function routeHelp(sub?: string): string {
     helpUsage("clausona route <command> [options]"),
     "",
     helpSection("COMMANDS", [
-      ["list", "Show routes, their members, and names that match nobody"],
-      ["add <name>", "Create a route (every subscription, round-robin, max 80%, reserve 95%)"],
+      ["(no arguments)", "In a terminal, open the Routes screen of the dashboard"],
+      ["list", "Show routes, how many accounts are free now, and who is next"],
+      ["add <name>", "Create a route (every claude subscription, round-robin, 80% / 95%)"],
       ["set <name>", "Change some of a route's fields"],
       ["rename <old> <new>", "Rename a route"],
       ["remove <name>", "Remove a route"],
@@ -146,6 +156,8 @@ export function routeHelp(sub?: string): string {
     `  ${bold("RUN ON A ROUTE")}`,
     helpUsage("clausona run --route <name> [--] [tool args...]"),
     helpUsage("clausona run claude --from 'team-*' [--] [tool args...]     # an unsaved route"),
+    `    ${dim("On a route over both tools (--tool all), name the tool before its arguments:")}`,
+    `    ${dim("clausona run codex --route any -- exec 'review this'")}`,
     "",
     `  ${bold("HOW A PROFILE IS PICKED")}`,
     `    ${dim("usage = the higher of the account's 5H and 7D windows")}`,
@@ -158,15 +170,17 @@ export function routeHelp(sub?: string): string {
     `    ${dim("Resumed runs (-c, --resume, codex resume) use only accounts that share sessions.")}`,
     "",
     `  ${bold("PATTERNS")} ${dim("(--from, --exclude, --fallback; comma-separated, quoted in the shell)")}`,
-    `    ${dim("*               every subscription profile of the route's tool")}`,
+    `    ${dim("*               every subscription profile of the route's tool (of both, on an all route)")}`,
     `    ${dim("team-*          profile names; a tool prefix works too: claude:team-*")}`,
     `    ${dim("*@example.com   account emails: any pattern with an @")}`,
     `    ${dim("API profiles never match a pattern; routes take subscription profiles only for now.")}`,
     "",
     `  ${bold("FOR AGENTS")}`,
-    `    ${dim("clausona route explain <name> --json   every member, its usage, and why it is or is not picked")}`,
-    `    ${dim("clausona route pick <name> --json      take a turn; call it once per worker you start")}`,
-    `    ${dim("clausona run <profile> [--] ...        launch on the picked profile")}`,
+    `    ${dim("clausona route add <name> --tool <tool>  create a route: claude (default), codex or all")}`,
+    `    ${dim("clausona route explain <name> --json     every member, its usage, and why it is or is not picked")}`,
+    `    ${dim("clausona route pick <name> --json        take a turn; call it once per worker you start")}`,
+    `    ${dim("clausona run <profile> [--] ...          launch on the picked profile")}`,
+    `    ${dim("add and set never ask; run asks one Y/n only for an unknown route in a terminal.")}`,
     `    ${dim("Create and change routes with add / set / remove, not by editing routes.json.")}`,
     `    ${dim("Before creating or changing a route for the user, show them its members (explain).")}`,
     "",
@@ -198,6 +212,16 @@ function routeNameArg(name: string | undefined, sub: string): string {
   return name;
 }
 
+/**
+ * A new route as `route add` writes it, and as `run --route <unknown>` proposes it: the defaults
+ * for the tool with the options given, and the reserve spelled out even when a cut above 95% moved it.
+ */
+export function newRouteFrom(tool: RouteTool, overrides: RouteOverrides): RouteSpec {
+  const spec = applyOverrides(newRouteSpec(tool), overrides);
+  if (spec.reserveUsage === undefined) spec.reserveUsage = Math.max(DEFAULT_RESERVE_USAGE, spec.maxUsage ?? 0);
+  return spec;
+}
+
 /** Writes a new route, refusing a name someone created meanwhile. */
 export async function createRoute(name: string, spec: RouteSpec, deps: RouteDeps): Promise<void> {
   await updateRoutes((file) => {
@@ -208,41 +232,33 @@ export async function createRoute(name: string, spec: RouteSpec, deps: RouteDeps
   }, deps.paths);
 }
 
-async function addRoute(args: string[], io: RouteIo, deps: RouteDeps): Promise<string> {
+/** The route's settings box and members, as `route explain` shows them; nothing is recorded. */
+async function routeDetail(name: string, spec: RouteSpec, deps: RouteDeps): Promise<string> {
+  const ranking = await rankRouteNow({ route: withDefaults(spec) }, deps, { resume: false, record: false });
+  return renderRouteDetail(name, ranking, { now: deps.clock() });
+}
+
+/** Asks nothing: the flags say everything, and what was created is shown. */
+async function addRoute(args: string[], deps: RouteDeps): Promise<string> {
+  // --yes is read and changes nothing: add asked before creating once, and scripts still pass it.
   const read = readOptions(args, { values: ["--tool", ...ROUTE_FIELD_OPTIONS], flags: ["--yes", "-y"] }, "route add");
   const [nameArg, ...extra] = read.positionals;
   if (extra.length) throw new Error(`${usage("add")}\nRun \`clausona route add --help\` for usage.`);
   const name = routeNameArg(nameArg, "add");
   const options = toRoutingOptions(read.values);
+  const tool = parseRouteTool(read.values.get("--tool")) ?? inferRouteTool(options.from ?? []) ?? "claude";
   const registry = await registryOrThrow(deps);
   if ((await readRoutes(deps.paths)).routes[name]) {
     throw new Error(`Route '${name}' already exists. Change it with clausona route set ${name} …`);
   }
-  const prefixed = (options.from ?? []).map((pattern) => /^(claude|codex):/.exec(pattern)?.[1]);
-  const fromPrefix =
-    prefixed.length > 0 && prefixed.every((tool) => tool && tool === prefixed[0]) ? prefixed[0] : undefined;
-  const tool = parseTool(read.values.get("--tool")) ?? (fromPrefix as "claude" | "codex" | undefined) ?? "claude";
-
-  let spec = applyOverrides(newRouteSpec(tool), options);
-  if (spec.reserveUsage === undefined) spec.reserveUsage = Math.max(DEFAULT_RESERVE_USAGE, spec.maxUsage ?? 0);
+  const spec = newRouteFrom(tool, options);
   checkRouteMembers(name, spec, registry);
-
-  if (io.interactive && !read.flags.has("--yes") && !read.flags.has("-y")) {
-    const confirmed = await confirmNewRoute(
-      name,
-      spec,
-      io,
-      (candidate) => rankRouteNow({ route: withDefaults(candidate) }, deps, { resume: false, record: false }),
-      false,
-    );
-    if (!confirmed) return "Nothing was created.";
-    checkRouteMembers(name, confirmed, registry);
-    spec = confirmed;
-  }
   await createRoute(name, spec, deps);
   return [
     success(`Created route ${bold(name)}`),
-    dim(`    Run on it: clausona run --route ${name}    See the ranking: clausona route explain ${name}`),
+    await routeDetail(name, spec, deps),
+    dim(`    Run on it: csn run --route ${name}`),
+    "",
   ].join("\n");
 }
 
@@ -266,7 +282,7 @@ async function setRoute(args: string[], deps: RouteDeps): Promise<string> {
     );
   }
   const registry = await registryOrThrow(deps);
-  await updateRoutes((file) => {
+  const written = await updateRoutes((file) => {
     const current = file.routes[name];
     if (!current) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
     const next = applyOverrides(current, options);
@@ -303,7 +319,7 @@ async function setRoute(args: string[], deps: RouteDeps): Promise<string> {
     file.routes[name] = next;
     return file;
   }, deps.paths);
-  return success(`Updated route ${bold(name)}`);
+  return [success(`Updated route ${bold(name)}`), await routeDetail(name, written.routes[name], deps)].join("\n");
 }
 
 async function renameRoute(args: string[], deps: RouteDeps): Promise<string> {
@@ -366,8 +382,22 @@ async function editRoutes(args: string[], io: RouteIo, deps: RouteDeps): Promise
   return success(`Saved ${deps.paths.routesPath}`);
 }
 
+/**
+ * Every route ranked as `route explain` ranks it, recording nothing, from one quota read for the
+ * members of all of them: a route that shares accounts with another does not read them twice.
+ */
+async function rankEvery(routes: Route[], registry: Registry, deps: RouteDeps): Promise<Ranking[]> {
+  const targets = new Map<string, QuotaTarget>();
+  for (const route of routes) {
+    for (const target of quotaTargets(route, membersOf(registry, route.tool), false)) targets.set(target.id, target);
+  }
+  const quotas = await deps.collectQuotas([...targets.values()]);
+  const read: RouteDeps = { ...deps, loadRegistry: async () => registry, collectQuotas: async () => quotas };
+  return Promise.all(routes.map((route) => rankRouteNow({ route }, read, { resume: false, record: false })));
+}
+
 async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
-  const read = readOptions(args, { values: [], flags: ["--json"] }, "route list");
+  const read = readOptions(args, { values: [], flags: ["--json", "--no-quota"] }, "route list");
   if (read.positionals.length) throw new Error(`${usage("list")}\nRun \`clausona route list --help\` for usage.`);
   const file = await readRoutes(deps.paths);
   const registry = await deps.loadRegistry();
@@ -396,9 +426,13 @@ async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
     ...entry.unknownNames.map((name) => `${entry.name} names '${name}', which is not a registered profile.`),
     ...entry.emptyPatterns.map((pattern) => `${entry.name}: '${pattern}' matches nobody.`),
   ]);
+  // Without a registry there is nobody to rank; with --no-quota nothing is read, and the table says so.
+  const routes = entries.map((entry) => entry.route);
+  const rankings = registry && !read.flags.has("--no-quota") ? await rankEvery(routes, registry, deps) : undefined;
   return renderRouteTable(
-    entries.map(({ name, route }) => ({ name, route })),
+    entries.map(({ name, route }, i) => ({ name, route, ...(rankings ? { ranking: rankings[i] } : {}) })),
     warnings,
+    { now: deps.clock() },
   );
 }
 
@@ -411,7 +445,10 @@ async function resolveForRanking(sub: "explain" | "pick", args: string[], deps: 
   const [name, ...extra] = read.positionals;
   if (extra.length) throw new Error(`${usage(sub)}\nRun \`clausona route ${sub} --help\` for usage.`);
   const options = { ...toRoutingOptions(read.values), ...(name ? { route: name } : {}) };
-  const resolved = resolveRoute(await readRoutes(deps.paths), { tool: parseTool(read.values.get("--tool")), options });
+  const resolved = resolveRoute(await readRoutes(deps.paths), {
+    tool: parseRouteTool(read.values.get("--tool")),
+    options,
+  });
   if (!resolved) {
     throw new Error(
       `Name a route: clausona route ${sub} <name>, or an unsaved one: clausona route ${sub} --tool claude --from '<patterns>'.`,
@@ -453,7 +490,7 @@ export async function runRouteCommand(
     case "list":
       return listRoutes(rest, deps);
     case "add":
-      return addRoute(rest, io, deps);
+      return addRoute(rest, deps);
     case "set":
       return setRoute(rest, deps);
     case "rename":

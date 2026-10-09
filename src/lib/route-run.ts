@@ -1,26 +1,21 @@
 import { carriesCredentialToken, looksLikeCredential } from "../core/credential-token.js";
-import {
-  applyOverrides,
-  DEFAULT_RESERVE_USAGE,
-  newRouteSpec,
-  type RouteTool,
-  toolsOf,
-  withDefaults,
-} from "../core/route-config.js";
+import { type RouteTool, toolsOf, withDefaults } from "../core/route-config.js";
 import { readRoutes } from "../core/routes-store.js";
-import { createRoute } from "../route-commands.js";
+import { createRoute, newRouteFrom } from "../route-commands.js";
 import type { Registry } from "../types.js";
+import { accent, bold, dim } from "./cli-style.js";
 import {
   CREDENTIAL_AS_NAME_ERROR,
   type ParsedProfileRef,
   parseProfileRef,
   validateProfileName,
 } from "./profile-ref.js";
-import { confirmNewRoute, type RouteIo, terminalIo } from "./route-create.js";
-import { renderNoAccount, renderNote } from "./route-render.js";
+import { type RouteIo, terminalIo } from "./route-io.js";
+import { renderNewRoutePreview, renderNoAccount, renderNote } from "./route-render.js";
 import {
   checkRouteMembers,
   defaultRouteDeps,
+  inferRouteTool,
   NoAccountError,
   type ResolvedRoute,
   type RouteDeps,
@@ -81,6 +76,25 @@ function namesProfile(arg: string | undefined, registry: Registry, tool: RouteTo
   return toolsOf(tool ?? "all").some((candidate) => Object.hasOwn(registry.profiles, `${candidate}:${arg}`));
 }
 
+/**
+ * An `all` route ranks both tools' accounts, so arguments given without a tool word could be
+ * either tool's: a claude flag handed to codex, or the other way round. Refused before anything
+ * is ranked, recorded or created.
+ */
+function checkArgsHaveTool(name: string | undefined, tool: RouteTool, run: RunArgs): void {
+  if (tool !== "all" || run.tool || run.toolArgs.length === 0) return;
+  throw new Error(
+    name
+      ? `Route ${name} has claude and codex accounts. Say which tool these arguments are for: csn run claude --route ${name} … (or codex).`
+      : "The inline route has claude and codex accounts. Say which tool these arguments are for: csn run claude --from … (or codex).",
+  );
+}
+
+/**
+ * `run --route <unknown>` in a terminal: shows the route it would create, with each account's
+ * usage now, and asks one Y/n. Without a terminal nothing is written: a typo in a script must not
+ * create a route.
+ */
 async function offerToCreate(
   error: UnknownRouteError,
   run: RunArgs,
@@ -88,29 +102,19 @@ async function offerToCreate(
   io: RouteIo,
   deps: RouteDeps,
 ): Promise<ResolvedRoute> {
-  // Without a terminal nothing is written: a typo in a script must not create a route.
   if (!io.interactive) throw error;
-  io.say(
-    `Route '${error.routeName}' does not exist.${error.existing.length ? ` Existing routes: ${error.existing.join(", ")}.` : ""}`,
-  );
   const { route: _name, ...overrides } = run.options;
-  const proposed = applyOverrides(newRouteSpec(run.tool ?? "claude"), overrides);
-  // As `route add` writes it: the reserve spelled out, even when a cut above 95% moved it.
-  if (proposed.reserveUsage === undefined) {
-    proposed.reserveUsage = Math.max(DEFAULT_RESERVE_USAGE, proposed.maxUsage ?? 0);
-  }
-  // Checked before the screen, as `route add` does: the screen quotes the patterns, and a key
+  const tool = run.tool ?? inferRouteTool(overrides.from ?? []) ?? "claude";
+  checkArgsHaveTool(error.routeName, tool, run);
+  const spec = newRouteFrom(tool, overrides);
+  // Checked before the preview, as `route add` does: the preview quotes the patterns, and a key
   // given to --from must be refused without being shown or written to routes.json.
-  checkRouteMembers(error.routeName, proposed, registry);
-  const spec = await confirmNewRoute(
-    error.routeName,
-    proposed,
-    io,
-    (candidate) => rankRouteNow({ route: withDefaults(candidate) }, deps, { resume: false, record: false }),
-    true,
-  );
-  if (!spec) throw new Error("Nothing was created, and nothing was run.");
   checkRouteMembers(error.routeName, spec, registry);
+  const ranking = await rankRouteNow({ route: withDefaults(spec) }, deps, { resume: false, record: false });
+  io.say(renderNewRoutePreview(error.routeName, spec, ranking));
+  if (!(await io.confirm(`  Create it and run? ${accent("(Y/n)")} `))) {
+    throw new Error("Nothing was created, and nothing was run.");
+  }
   await createRoute(error.routeName, spec, deps);
   const resolved = resolveRoute(await readRoutes(deps.paths), run);
   if (!resolved) throw error;
@@ -168,15 +172,16 @@ export async function runRouted(
     if (!active || !registry.profiles[active]) {
       throw new Error(`No active ${run.tool} profile. Run \`clausona use\`, or name one: clausona run <profile>.`);
     }
-    io.say(`→ ${active} · active profile (no route)`);
+    io.say(`  ${accent("▸")} ${bold(active)}  ${dim("active profile (no route)")}`);
     return launch(active, run.toolArgs);
   }
 
-  // An `all` route run without a tool word reads the arguments as either tool's: a resume that
-  // either tool would see is not missed.
-  const runTools = toolsOf(resolved.onlyTool ?? resolved.route.tool);
+  checkArgsHaveTool(resolved.name, resolved.onlyTool ?? resolved.route.tool, run);
+  // The tool whose flags say whether this is a resume. On an `all` route without a tool word
+  // there are no arguments (checked above), so there is nothing to resume.
+  const runTool = resolved.onlyTool ?? (resolved.route.tool === "all" ? undefined : resolved.route.tool);
   const ranking = await rankRouteNow(resolved, deps, {
-    resume: runTools.some((tool) => isResumeRun(tool, run.toolArgs)),
+    resume: runTool ? isResumeRun(runTool, run.toolArgs) : false,
     record: true,
   });
   if (ranking.outcome.kind === "none") {

@@ -50,12 +50,6 @@ function parseStrategy(value: string): Strategy {
   return value as Strategy;
 }
 
-export function parseTool(value: string | undefined): ToolName | undefined {
-  if (value === undefined) return undefined;
-  if (value !== "claude" && value !== "codex") throw new Error("--tool must be claude or codex.");
-  return value;
-}
-
 /** `--tool` of the `route` subcommands: claude, codex, or all for a route over both. */
 export function parseRouteTool(value: string | undefined): RouteTool | undefined {
   if (value === undefined) return undefined;

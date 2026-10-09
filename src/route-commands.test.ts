@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runCommand } from "./commands.js";
 import { routesPaths } from "./core/routes-store.js";
 import { stripAnsi } from "./lib/cli-style.js";
-import type { RouteIo } from "./lib/route-create.js";
+import type { RouteIo } from "./lib/route-io.js";
 import { renderRoutesEmpty } from "./lib/route-render.js";
 import { NoAccountError, type RouteDeps } from "./lib/route-service.js";
 import { runRouteCommand } from "./route-commands.js";
@@ -26,6 +26,7 @@ const REGISTRY: Registry = {
     "claude:b": { tool: "claude", configDir: "/home/u/.claude-b", email: "b@corp.example.com", mergeSessions: true },
     "claude:c": { tool: "claude", configDir: "/home/u/.claude-c", email: "c@corp.example.com" },
     "claude:glm": { tool: "claude", kind: "api", configDir: "/home/u/.claude-glm", email: "" },
+    "codex:x": { tool: "codex", configDir: "/home/u/.codex", email: "x@example.com" },
   },
 };
 
@@ -41,6 +42,7 @@ function setup(
     "claude:a": snap(10, 10),
     "claude:b": snap(20, 20),
     "claude:c": snap(30, 30),
+    "codex:x": snap(5, 5),
   },
 ) {
   const dir = mkdtempSync(path.join(tmpdir(), "clausona-route-cmd-"));
@@ -54,11 +56,23 @@ function setup(
       throw new Error("no editor");
     },
   };
-  const io: RouteIo = { interactive: false, ask: async () => null, say: () => {} };
+  const io: RouteIo = { interactive: false, ask: async () => null, say: () => {}, confirm: async () => false };
   const run = async (...args: string[]) => stripAnsi(await runRouteCommand(args, io, deps));
   const file = () => JSON.parse(readFileSync(deps.paths.routesPath, "utf8"));
   return { deps, io, run, file };
 }
+
+/** A terminal that fails the test if anything asks it a question. */
+const NEVER_ASKS: RouteIo = {
+  interactive: true,
+  ask: async () => {
+    throw new Error("asked a question");
+  },
+  confirm: async () => {
+    throw new Error("asked to confirm");
+  },
+  say: () => {},
+};
 
 describe("route help", () => {
   it("is enough for an agent on its own", async () => {
@@ -93,6 +107,21 @@ describe("route help", () => {
     expect(await run("pick", "-h")).toContain("--json");
   });
 
+  it("is what route prints with no arguments outside a terminal", async () => {
+    const { run } = setup();
+    expect(await run()).toBe(await run("--help"));
+  });
+
+  it("says add takes --tool, defaults to claude, and asks nothing", async () => {
+    const { run } = setup();
+    const add = await run("add", "--help");
+    expect(add).toMatch(/--tool <tool>\s+claude \(default\), codex or all/);
+    expect(add).not.toContain("--yes");
+    const overview = await run("--help");
+    expect(overview).toContain("add and set never ask; run asks one Y/n only for an unknown route in a terminal");
+    expect(overview).toMatch(/\(no arguments\)\s+In a terminal, open the Routes screen of the dashboard/);
+  });
+
   it("says a run's --exclude adds to the route's list, and route set's replaces it", async () => {
     const { run } = setup();
     expect(await run("set", "--help")).toMatch(/--exclude <patterns>\s+Replace the route's exclude list/);
@@ -113,7 +142,7 @@ describe("route add", () => {
     const { run, file } = setup();
     const out = await run("add", "main", "--tool", "claude");
     expect(out).toContain("Created route main");
-    expect(out).toContain("clausona run --route main");
+    expect(out).toContain("csn run --route main");
     expect(file().routes.main).toEqual({
       tool: "claude",
       from: ["*"],
@@ -123,10 +152,35 @@ describe("route add", () => {
     });
   });
 
-  it("takes the tool from the registry when only one tool has accounts", async () => {
-    const { run, file } = setup();
-    await run("add", "main");
+  it("makes a claude route when both tools have accounts, and asks nothing even in a terminal", async () => {
+    const { deps, file } = setup();
+    const out = stripAnsi(await runRouteCommand(["add", "main"], NEVER_ASKS, deps));
     expect(file().routes.main.tool).toBe("claude");
+    const lines = out.split("\n");
+    expect(lines[0]).toBe("  ✔ Created route main");
+    expect(out).toContain("╭─ main ─");
+    expect(out).toMatch(/^ {2}▸ claude:a\s.*picked next$/m);
+    expect(out).not.toContain("codex:x");
+    expect(lines.slice(-2)).toEqual(["    Run on it: csn run --route main", ""]);
+    expect(out).not.toContain("See the ranking");
+  });
+
+  it("takes --tool all, and the tool the --from prefixes say", async () => {
+    const { run, file } = setup();
+    await run("add", "any", "--tool", "all");
+    await run("add", "cx", "--from", "codex:*");
+    await run("add", "both", "--from", "claude:a,codex:x");
+    expect(file().routes.any.tool).toBe("all");
+    expect(file().routes.cx.tool).toBe("codex");
+    expect(file().routes.both.tool).toBe("all");
+    await expect(run("add", "bad", "--tool", "gpt")).rejects.toThrow(/^--tool must be claude, codex or all\.$/);
+  });
+
+  it("still accepts --yes and -y, which scripts pass, and asks nothing either way", async () => {
+    const { deps, file } = setup();
+    await runRouteCommand(["add", "main", "--yes"], NEVER_ASKS, deps);
+    await runRouteCommand(["add", "other", "-y"], NEVER_ASKS, deps);
+    expect(Object.keys(file().routes).sort()).toEqual(["main", "other"]);
   });
 
   it("stores the fields given", async () => {
@@ -201,18 +255,19 @@ describe("route add", () => {
     expect(file().routes.main.tool).toBe("claude");
     expect(file().routes.cx.tool).toBe("codex");
   });
-
-  it("asks before creating in a terminal, and creates nothing on no", async () => {
-    const { deps } = setup();
-    const said: string[] = [];
-    const io: RouteIo = { interactive: true, ask: async () => "n", say: (text) => said.push(stripAnsi(text)) };
-    expect(stripAnsi(await runRouteCommand(["add", "main"], io, deps))).toBe("Nothing was created.");
-    expect(said.join("\n")).toContain("Create 'main' now?");
-    expect(() => readFileSync(deps.paths.routesPath)).toThrow();
-  });
 });
 
 describe("route set, rename, remove", () => {
+  it("shows the route as it is after the change", async () => {
+    const { deps, file } = setup();
+    await runRouteCommand(["add", "main"], NEVER_ASKS, deps);
+    const out = stripAnsi(await runRouteCommand(["set", "main", "--strategy", "headroom"], NEVER_ASKS, deps));
+    expect(out.split("\n")[0]).toBe("  ✔ Updated route main");
+    expect(out).toContain("╭─ main ─");
+    expect(out).toMatch(/Strategy {3}headroom \(most room first\)/);
+    expect(file().routes.main.strategy).toBe("headroom");
+  });
+
   it("changes only the fields given", async () => {
     const { run, file } = setup();
     await run("add", "main");
@@ -295,7 +350,38 @@ describe("route list", () => {
 
   it("takes no route name", async () => {
     const { run } = setup();
-    await expect(run("list", "main")).rejects.toThrow("Usage: clausona route list [--json]");
+    await expect(run("list", "main")).rejects.toThrow("Usage: clausona route list [--json] [--no-quota]");
+  });
+
+  it("ranks every route, so who is free now and who is next show", async () => {
+    const { run, deps } = setup({
+      "claude:a": snap(10, 10),
+      "claude:b": snap(85, 20),
+      "claude:c": snap(30, 30),
+      "codex:x": snap(5, 5),
+    });
+    await run("add", "main");
+    await run("add", "any", "--tool", "all", "--strategy", "headroom");
+    const out = await run("list");
+    expect(out).toMatch(/^ {4}any\s+claude \+ codex\s+headroom\s+80% \/ 95%\s+3 of 4\s+codex:x$/m);
+    expect(out).toMatch(/^ {4}main\s+claude\s+round-robin\s+80% \/ 95%\s+2 of 3\s+claude:a$/m);
+    // Ranked as explain ranks, so nothing is recorded.
+    expect(() => readFileSync(deps.paths.picksPath)).toThrow();
+  });
+
+  it("reads no quota with --no-quota, and says so with a dash", async () => {
+    const { run, deps } = setup();
+    await run("add", "main");
+    let reads = 0;
+    deps.collectQuotas = async () => {
+      reads++;
+      return {};
+    };
+    const out = await run("list", "--no-quota");
+    expect(out).toMatch(/^ {4}main\s+claude\s+round-robin\s+80% \/ 95%\s+—\s+—$/m);
+    expect(reads).toBe(0);
+    await run("list", "--json");
+    expect(reads).toBe(0);
   });
 
   // Review Focus 5 (list side): a removed profile named in a route is pointed out.
@@ -344,6 +430,22 @@ describe("route explain and pick", () => {
   it("explains an unsaved route", async () => {
     const { run } = setup();
     expect(await run("explain", "--tool", "claude", "--from", "b,c")).toContain("inline route");
+    const both = await run("explain", "--tool", "all", "--from", "a,x");
+    expect(both).toMatch(/^ {4}claude:a\s/m);
+    expect(both).toMatch(/^ {2}▸ codex:x\s/m);
+  });
+
+  it("narrows an all route to the tool --tool names", async () => {
+    const { run } = setup();
+    await run("add", "any", "--tool", "all");
+    const codex = await run("explain", "any", "--tool", "codex");
+    expect(codex).toMatch(/^ {2}▸ codex:x\s/m);
+    expect(codex).not.toMatch(/claude:/);
+    expect(await run("explain", "any")).toMatch(/^ {4}claude:a\s/m);
+    expect(await run("pick", "any", "--tool", "claude")).toBe("claude:a");
+    await run("add", "main");
+    await expect(run("explain", "main", "--tool", "codex")).rejects.toThrow("Route 'main' is for claude, not codex.");
+    await expect(run("explain", "main", "--tool", "all")).rejects.toThrow("Route 'main' is for claude, not all.");
   });
 
   it("picks in turn and records each pick", async () => {
@@ -411,7 +513,12 @@ describe("route edit", () => {
     ];
     deps.editText = async () => edits.shift() as string;
     const said: string[] = [];
-    const io: RouteIo = { interactive: true, ask: async () => "", say: (text) => said.push(stripAnsi(text)) };
+    const io: RouteIo = {
+      interactive: true,
+      ask: async () => "",
+      say: (text) => said.push(stripAnsi(text)),
+      confirm: async () => true,
+    };
     await runRouteCommand(["edit"], io, deps);
     expect(said.join("\n")).toContain('routes.main.tool: must be "claude", "codex" or "all"');
     expect(JSON.parse(readFileSync(deps.paths.routesPath, "utf8")).routes.main).toEqual({ tool: "claude" });

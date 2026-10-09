@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { routesPaths } from "../core/routes-store.js";
 import type { QuotaSnapshot, Registry } from "../types.js";
 import { stripAnsi } from "./cli-style.js";
-import type { RouteIo } from "./route-create.js";
+import type { RouteIo } from "./route-io.js";
 import { runRouted, runTarget } from "./route-run.js";
 import { NoAccountError, type RouteDeps, UnknownRouteError } from "./route-service.js";
 
@@ -55,9 +55,17 @@ function setup(
   };
   const answers = [...(options.answers ?? [])];
   const notes: string[] = [];
+  const confirmed: string[] = [];
+  const next = () => (answers.length ? (answers.shift() as string | null) : null);
   const io: RouteIo = {
     interactive: options.interactive ?? false,
-    ask: async () => (answers.length ? (answers.shift() as string | null) : null),
+    ask: async () => next(),
+    // As terminalIo reads a Y/n: Enter, y or yes; anything else, or a closed input, is no.
+    confirm: async (question) => {
+      confirmed.push(stripAnsi(question));
+      const answer = next();
+      return answer !== null && ["", "y", "yes"].includes(answer.toLowerCase());
+    },
     say: (text) => notes.push(stripAnsi(text)),
   };
   const launches: Array<[string, string[]]> = [];
@@ -65,10 +73,28 @@ function setup(
     launches.push([profile, toolArgs]);
     return 0;
   };
-  return { deps, io, notes, launches, launch, paths };
+  return { deps, io, notes, confirmed, launches, launch, paths };
 }
 
 const MAIN = { version: 1, routes: { main: { tool: "claude", from: ["*"], strategy: "headroom" } } };
+
+/** Both tools registered, with an `all` route over them. */
+const BOTH: Registry = {
+  ...REGISTRY,
+  profiles: {
+    ...REGISTRY.profiles,
+    "codex:x": { tool: "codex", configDir: "/home/u/.codex", email: "x@example.com", isPrimary: true },
+    "codex:y": { tool: "codex", configDir: "/home/u/.codex-y", email: "y@example.com" },
+  },
+};
+const ANY = { version: 1, routes: { any: { tool: "all", strategy: "headroom" } } };
+const BOTH_QUOTAS = {
+  "claude:a": snap(30),
+  "claude:b": snap(10),
+  "claude:solo": snap(5),
+  "codex:x": snap(1),
+  "codex:y": snap(2),
+};
 
 describe("runTarget", () => {
   it("resolves a profile as parseProfileRef does", () => {
@@ -203,8 +229,41 @@ describe("runRouted", () => {
       maxUsage: 80,
       reserveUsage: 95,
     });
-    expect(s.notes[0]).toBe("Route 'work' does not exist.");
-    expect(s.launches).toHaveLength(1);
+    expect(s.notes[0]).toContain("Route work does not exist yet. It would take every claude account,");
+    expect(s.notes[0]).toContain("claude:solo 5%");
+    expect(s.confirmed).toEqual(["  Create it and run? (Y/n) "]);
+    expect(s.launches).toEqual([["claude:solo", ["-p", "hi"]]]);
+  });
+
+  it("proposes the run's options over the defaults, and asks once", async () => {
+    const s = setup({ interactive: true, answers: ["", "y"] });
+    await runRouted(["--route", "work", "--strategy", "headroom", "--exclude", "solo"], s.launch, s.io, s.deps);
+    expect(JSON.parse(readFileSync(s.paths.routesPath, "utf8")).routes.work).toEqual({
+      tool: "claude",
+      from: ["*"],
+      exclude: ["solo"],
+      strategy: "headroom",
+      maxUsage: 80,
+      reserveUsage: 95,
+    });
+    expect(s.notes[0]).toContain("taking the one with the most room");
+    expect(s.confirmed).toHaveLength(1);
+    expect(s.launches).toEqual([["claude:b", []]]);
+  });
+
+  it("creates an unknown route for the tool the run names, or its --from prefixes say", async () => {
+    const named = setup({ registry: BOTH, quotas: BOTH_QUOTAS, interactive: true, answers: ["y"] });
+    await runRouted(["codex", "--route", "work"], named.launch, named.io, named.deps);
+    expect(JSON.parse(readFileSync(named.paths.routesPath, "utf8")).routes.work.tool).toBe("codex");
+    expect(named.notes[0]).toContain("It would take every codex account,");
+    expect(named.launches).toEqual([["codex:x", []]]);
+
+    const prefixed = setup({ registry: BOTH, quotas: BOTH_QUOTAS, interactive: true, answers: ["y"] });
+    await runRouted(["--route", "work", "--from", "codex:*"], prefixed.launch, prefixed.io, prefixed.deps);
+    expect(JSON.parse(readFileSync(prefixed.paths.routesPath, "utf8")).routes.work).toMatchObject({
+      tool: "codex",
+      from: ["codex:*"],
+    });
   });
 
   it("never shows or stores a key given to --from while offering to create a route", async () => {
@@ -243,25 +302,28 @@ describe("runRouted", () => {
     });
   });
 
-  it("names the existing routes when offering to create one", async () => {
-    const s = setup({ routes: MAIN, interactive: true, answers: ["n"] });
-    await expect(runRouted(["--route", "work"], s.launch, s.io, s.deps)).rejects.toThrow("Nothing was created");
-    expect(s.notes[0]).toBe("Route 'work' does not exist. Existing routes: main.");
-  });
-
-  it("creates and runs nothing when the answer is no", async () => {
-    const s = setup({ interactive: true, answers: ["n"] });
-    await expect(runRouted(["--route", "work"], s.launch, s.io, s.deps)).rejects.toThrow(
+  it("creates and runs nothing when the answer is no, or the input closes", async () => {
+    for (const answer of ["n", null]) {
+      const s = setup({ routes: MAIN, interactive: true, answers: [answer] });
+      await expect(runRouted(["--route", "work"], s.launch, s.io, s.deps)).rejects.toThrow(
+        /^Nothing was created, and nothing was run\.$/,
+      );
+      expect(JSON.parse(readFileSync(s.paths.routesPath, "utf8")).routes).toEqual(MAIN.routes);
+      expect(() => readFileSync(s.paths.picksPath)).toThrow();
+      expect(s.launches).toEqual([]);
+    }
+    const fresh = setup({ interactive: true, answers: ["n"] });
+    await expect(runRouted(["--route", "work"], fresh.launch, fresh.io, fresh.deps)).rejects.toThrow(
       "Nothing was created, and nothing was run.",
     );
-    expect(s.launches).toEqual([]);
+    expect(() => readFileSync(fresh.paths.routesPath)).toThrow();
   });
 
   it("runs the active profile for a tool with no route", async () => {
     const s = setup();
     await runRouted(["claude", "-p", "hi"], s.launch, s.io, s.deps);
     expect(s.launches).toEqual([["claude:a", ["-p", "hi"]]]);
-    expect(s.notes).toEqual(["→ claude:a · active profile (no route)"]);
+    expect(s.notes).toEqual(["  ▸ claude:a  active profile (no route)"]);
   });
 
   it("refuses routing options that name no route, rather than running the active profile", async () => {
@@ -285,6 +347,61 @@ describe("runRouted", () => {
   it("asks for a route, a tool or a profile when given none", async () => {
     const s = setup();
     await expect(runRouted(["-p", "hi"], s.launch, s.io, s.deps)).rejects.toThrow(/^Name a route, a tool or a profile/);
+  });
+
+  describe("on an all route", () => {
+    it("refuses the tool's arguments without a tool word, launching and recording nothing", async () => {
+      const s = setup({ registry: BOTH, quotas: BOTH_QUOTAS, routes: ANY });
+      await expect(runRouted(["--route", "any", "-p", "hi"], s.launch, s.io, s.deps)).rejects.toThrow(
+        /^Route any has claude and codex accounts\. Say which tool these arguments are for: csn run claude --route any … \(or codex\)\.$/,
+      );
+      await expect(runRouted(["--route", "any", "--", "exec", "hi"], s.launch, s.io, s.deps)).rejects.toThrow(
+        /^Route any has claude and codex accounts\./,
+      );
+      expect(s.launches).toEqual([]);
+      expect(() => readFileSync(s.paths.picksPath)).toThrow();
+    });
+
+    it("launches whichever tool's account is picked when there are no arguments", async () => {
+      const s = setup({ registry: BOTH, quotas: BOTH_QUOTAS, routes: ANY });
+      await runRouted(["--route", "any"], s.launch, s.io, s.deps);
+      expect(s.launches).toEqual([["codex:x", []]]);
+      expect(s.notes).toEqual(["  ▸ codex:x  route any, most room, 1% of 5H used"]);
+    });
+
+    it("ranks only the named tool's members, and resumes within that tool", async () => {
+      const s = setup({ registry: BOTH, quotas: BOTH_QUOTAS, routes: ANY });
+      const asked: string[][] = [];
+      const collect = s.deps.collectQuotas;
+      s.deps.collectQuotas = async (targets) => {
+        asked.push(targets.map((target) => target.id));
+        return collect(targets);
+      };
+      await runRouted(["claude", "--route", "any", "--resume", "x"], s.launch, s.io, s.deps);
+      // codex:x shares sessions and has the most room, but the run is claude's.
+      expect(asked).toEqual([["claude:a", "claude:b"]]);
+      expect(s.launches).toEqual([["claude:b", ["--resume", "x"]]]);
+      await runRouted(["codex", "--route", "any", "resume"], s.launch, s.io, s.deps);
+      expect(asked[1]).toEqual(["codex:x"]);
+      expect(s.launches[1]).toEqual(["codex:x", ["resume"]]);
+    });
+
+    it("refuses a profile of either tool after the routing options, unless a tool word narrows it", async () => {
+      for (const args of [
+        ["--route", "any", "claude:b"],
+        ["--route", "any", "y"],
+      ]) {
+        const s = setup({ registry: BOTH, quotas: BOTH_QUOTAS, routes: ANY });
+        await expect(runRouted(args, s.launch, s.io, s.deps)).rejects.toThrow(
+          /^Routing options cannot be combined with a profile\./,
+        );
+        expect(s.launches).toEqual([]);
+      }
+      // `y` is only a codex profile, so to a claude run it is the tool's argument.
+      const s = setup({ registry: BOTH, quotas: BOTH_QUOTAS, routes: ANY });
+      await runRouted(["claude", "--route", "any", "y"], s.launch, s.io, s.deps);
+      expect(s.launches).toEqual([["claude:solo", ["y"]]]);
+    });
   });
 
   it("spreads concurrent runs on a round-robin route", async () => {

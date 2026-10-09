@@ -702,52 +702,6 @@ export function renderNewRoutePreview(
   ].join("\n");
 }
 
-// ─── The creation screen (route-create.ts; removed with it) ─────────
-
-/** Wraps ids into lines of at most `width` characters, comma-separated. */
-function wrapIds(ids: string[], indent: string, width = 76): string[] {
-  const lines: string[] = [];
-  let line = "";
-  for (const id of ids) {
-    const next = line ? `${line}, ${id}` : id;
-    if (indent.length + next.length > width && line) {
-      lines.push(`${indent}${line},`);
-      line = id;
-    } else {
-      line = next;
-    }
-  }
-  if (line) lines.push(`${indent}${line}`);
-  return lines;
-}
-
-export function renderCreateScreen(
-  name: string,
-  spec: RouteSpec,
-  ranking: Ranking,
-  andRun: boolean,
-): { body: string; question: string } {
-  const route = withDefaults(spec);
-  const pool = ranking.rows.filter((row) => row.role === "pool");
-  const usable = pool.filter((row) => !row.skip);
-  // What a run could take at the pool stage now: not skipped, and under the cut.
-  const underCut = usable.filter((row) => row.usage !== undefined && row.usage.percent < route.maxUsage);
-  const indent = " ".repeat(12);
-  const lines = [
-    `Create '${name}' now?`,
-    `  pool      ${route.from.join(", ")} · ${underCut.length} of ${pool.length} account(s) under ${route.maxUsage}% now`,
-    ...wrapIds(
-      usable.map((row) => row.id),
-      indent,
-    ),
-    ...pool.filter((row) => row.skip).map((row) => `${indent}${row.id} (${skipText(row)})`),
-    ...(route.exclude.length ? [`  exclude   ${route.exclude.join(", ")}`] : []),
-    ...(route.fallback.length ? [`  fallback  ${route.fallback.join(", ")}`] : []),
-    `  strategy  ${route.strategy} · max ${route.maxUsage}% · reserve ${route.reserveUsage}%`,
-  ];
-  return { body: lines.join("\n"), question: andRun ? "[Y]es and run · [e]dit · [n]o " : "[Y]es · [e]dit · [n]o " };
-}
-
 /*
  * The JSON shapes are documented in docs/routing.md, and fields are only ever added. Each object
  * is built field by field, never passed through, so renaming or adding an internal field cannot

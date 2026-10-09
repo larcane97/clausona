@@ -9,7 +9,6 @@ import {
   explainJson,
   pickJson,
   type RouteListRow,
-  renderCreateScreen,
   renderNewRoutePreview,
   renderNoAccount,
   renderNote,
@@ -510,21 +509,6 @@ describe("renderNewRoutePreview", () => {
     expect(text).toContain(
       "\n    claude:team 5%   claude:work 12%\n    claude:side 88% (over)   claude:personal 96% (over)\n",
     );
-  });
-});
-
-describe("renderCreateScreen", () => {
-  it("shows the pool before anything is written", () => {
-    const r = ranking({ "claude:team": snap(1, 1), "claude:work": snap(90, 1), "claude:old": snap(1, 1, "missing") });
-    const { body, question } = renderCreateScreen("work", { tool: "claude", from: ["*"] }, r, true);
-    const text = plain(body);
-    expect(text).toContain("Create 'work' now?");
-    // Only claude:team is under the cut: claude:work is over it, and claude:old is signed out.
-    expect(text).toContain("pool      * · 1 of 3 account(s) under 80% now");
-    expect(text).toContain("claude:team, claude:work");
-    expect(text).toContain("claude:old (signed out (csn login claude:old))");
-    expect(text).toContain("strategy  round-robin · max 80% · reserve 95%");
-    expect(plain(question)).toBe("[Y]es and run · [e]dit · [n]o ");
   });
 });
 

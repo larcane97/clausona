@@ -136,11 +136,12 @@ export function inferRouteTool(patterns: string[]): RouteTool | undefined {
  * adds to the route's own exclude list. Null when the run names neither and gives no field options.
  *
  * A tool word must be a one-tool route's own tool; on an `all` route it narrows the run to that
- * tool. An unsaved route takes the tool word, else the tool its prefixes say, else claude.
+ * tool. An unsaved route takes the tool word, else the tool its prefixes say, else claude. `all`
+ * (`route explain --tool all`) narrows nothing: it asks for an `all` route.
  */
 export function resolveRoute(
   file: RoutesFile,
-  run: { tool?: ToolName; options: RoutingOptions },
+  run: { tool?: RouteTool; options: RoutingOptions },
 ): ResolvedRoute | null {
   const { tool, options } = run;
   const { route: name, ...overrides } = options;
@@ -151,13 +152,16 @@ export function resolveRoute(
     if (nameProblem) throw new Error(nameProblem);
     const stored = file.routes[name];
     if (!stored) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
-    if (tool && stored.tool === "all") onlyTool = tool;
-    else if (tool && stored.tool !== tool) throw new Error(`Route '${name}' is for ${stored.tool}, not ${tool}.`);
+    if (tool && stored.tool === "all") {
+      if (tool !== "all") onlyTool = tool;
+    } else if (tool && stored.tool !== tool) {
+      throw new Error(`Route '${name}' is for ${stored.tool}, not ${tool}.`);
+    }
     spec = stored;
   } else if (options.from !== undefined) {
     const inferred = inferRouteTool(options.from);
     // `run claude --from claude:a,codex:x`: a route over both, narrowed to the tool the run names.
-    if (tool && inferred === "all") onlyTool = tool;
+    if (tool && tool !== "all" && inferred === "all") onlyTool = tool;
     spec = { tool: onlyTool ? "all" : (tool ?? inferred ?? "claude") };
   } else {
     // Without a route these would be dropped, and the tool run on its active profile as if they

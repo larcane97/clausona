@@ -226,5 +226,9 @@ export function rankRoute(input: RankInput): Ranking {
     if (outcome.kind === "picked" && row.id === outcome.id) row.status = "picked";
     else if (row.usage && row.usage.percent >= route.maxUsage) row.status = "over-limit";
   }
-  return { route, rows, excluded, emptyPatterns: [...pool.emptyPatterns, ...fallback.emptyPatterns], outcome };
+  // As with unknown names: a pattern of the other tool that matches nobody is not this run's.
+  const emptyPatterns = [...pool.emptyPatterns, ...fallback.emptyPatterns].filter((pattern) =>
+    inRun(splitToolPrefix(pattern.trim()).prefix),
+  );
+  return { route, rows, excluded, emptyPatterns, outcome };
 }

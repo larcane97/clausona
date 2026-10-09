@@ -249,7 +249,7 @@ describe("all routes", () => {
   it("accepts either tool's prefix on an all route", () => {
     expect(checkPattern("claude:work", "all")).toBeNull();
     expect(checkPattern("codex:*", "all")).toBeNull();
-    expect(checkPattern("gpt:x", "all")).toBe("'gpt:x' names unknown tool 'gpt', but this route is for all");
+    expect(checkPattern("gpt:x", "all")).toBe("'gpt:x' names unknown tool 'gpt', but this route is for claude + codex");
   });
 
   it("still refuses a key behind a prefix on an all route, without quoting it", () => {

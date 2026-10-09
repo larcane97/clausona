@@ -314,6 +314,19 @@ describe("all routes", () => {
     expect(ranking.excluded).toEqual([]);
   });
 
+  it("leaves the other tool's patterns that match nobody out of a narrowed run", () => {
+    const ranking = rankRoute({
+      route: withDefaults({ tool: "all", from: ["*", "codex:ops-*", "claude:ops-*", "ops-*"] }),
+      members: [W, CT],
+      quotas,
+      lastPicked: {},
+      now: NOW,
+      resume: false,
+      onlyTool: "claude",
+    });
+    expect(ranking.emptyPatterns).toEqual(["claude:ops-*", "ops-*"]);
+  });
+
   it("still names an unknown name by its tool on a one-tool route", () => {
     const ranking = rankRoute({
       route: withDefaults({ tool: "codex", from: ["gone", "team"] }),
