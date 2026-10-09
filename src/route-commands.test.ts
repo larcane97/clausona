@@ -456,6 +456,22 @@ describe("route explain and pick", () => {
   it("explains an unsaved route", async () => {
     const { run } = setup();
     expect(await run("explain", "--tool", "claude", "--from", "b,c")).toContain("inline route");
+    const none = await run(
+      "explain",
+      "--tool",
+      "claude",
+      "--from",
+      "b,c",
+      "--exclude",
+      "c",
+      "--max-usage",
+      "1",
+      "--reserve-usage",
+      "1",
+    );
+    expect(none.replace(/\s+/g, " ")).toContain(
+      "Nobody can be picked now; clausona run claude --from 'b,c' --exclude 'c' --max-usage 1 --reserve-usage 1 would exit 75.",
+    );
     const both = await run("explain", "--tool", "all", "--from", "a,x");
     expect(both).toMatch(/^ {4}claude:a\s/m);
     expect(both).toMatch(/^ {2}▸ codex:x\s/m);
@@ -477,7 +493,10 @@ describe("route explain and pick", () => {
     expect(stripAnsi(none.message).split("\n")[0]).toBe("No claude account in route any is free right now.");
     expect(stripAnsi(none.message)).toContain("clausona route explain any --tool claude");
     const narrowed = await run("explain", "any", "--tool", "claude", "--max-usage", "1", "--reserve-usage", "1");
-    expect(narrowed).toContain("Nobody can be picked now; clausona run claude --route any would exit 75.");
+    // With the options the explain was given: without them the run would rank another route.
+    expect(narrowed).toContain(
+      "Nobody can be picked now; clausona run claude --route any --max-usage 1 --reserve-usage 1 would exit 75.",
+    );
     await run("add", "main");
     await expect(run("explain", "main", "--tool", "codex")).rejects.toThrow("Route 'main' is for claude, not codex.");
     await expect(run("explain", "main", "--tool", "all")).rejects.toThrow("Route 'main' is for claude, not all.");

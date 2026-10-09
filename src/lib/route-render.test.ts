@@ -318,6 +318,47 @@ describe("renderRouteDetail", () => {
     );
   });
 
+  // `clausona run would exit 75` named no route: a bare run ranks none, and runs the active profile.
+  it("names the run of an unsaved route, with its options, as the one that would exit 75", () => {
+    const busy = { "claude:team": quota(99, 1), "claude:work": quota(1, 99), "claude:old": quota(99, 99) };
+    const inline = rank({ tool: "claude", from: ["team", "work", "old"], exclude: ["old"] }, busy);
+    expect(plain(renderRouteDetail(undefined, inline, at(120)))).toMatch(
+      /\n\n {2}Nobody can be picked now; clausona run claude --from 'team,work,old' --exclude 'old' would exit 75\.\n$/,
+    );
+
+    // The options it was given, quoted for the shell: the run ranks what the explain ranked.
+    const given = { from: ["team", "work"], maxUsage: 50, strategy: "headroom" as const, fallback: ["o'neil"] };
+    const options = rank({ tool: "claude", ...given }, busy);
+    expect(plain(renderRouteDetail(undefined, options, { ...at(120), overrides: given }))).toContain(
+      "clausona run claude --from 'team,work' --strategy headroom --max-usage 50 --fallback 'o'\\''neil' would exit 75.",
+    );
+    const named = rank({ tool: "claude", from: ["team", "work"], maxUsage: 50 }, busy);
+    expect(plain(renderRouteDetail("main", named, { ...at(120), overrides: { maxUsage: 50 } }))).toContain(
+      "Nobody can be picked now; clausona run --route main --max-usage 50 would exit 75.",
+    );
+
+    const both = rankRoute({
+      route: withDefaults({ tool: "all", from: ["claude:*", "codex:*"] }),
+      members: [member("claude:team"), member("codex:x")],
+      quotas: { "claude:team": quota(99, 10), "codex:x": quota(5, 5) },
+      lastPicked: {},
+      now: NOW,
+      resume: false,
+      onlyTool: "claude",
+    });
+    expect(plain(renderRouteDetail(undefined, both, { ...at(120), onlyTool: "claude" }))).toContain(
+      "Nobody can be picked now; clausona run claude --from 'claude:*,codex:*' would exit 75.",
+    );
+    // A long one is broken between its options, never between an option and its value.
+    const narrow = plain(renderRouteDetail(undefined, options, { ...at(60), overrides: given }));
+    expect(narrow.split("\n").slice(-4)).toEqual([
+      "  Nobody can be picked now; clausona run claude",
+      "  --from 'team,work' --strategy headroom --max-usage 50",
+      "  --fallback 'o'\\''neil' would exit 75.",
+      "",
+    ]);
+  });
+
   it("names both tools for an all route, and titles an unsaved one", () => {
     const text = plain(renderRouteDetail(undefined, rank({ tool: "all" }, quotas), at(120)));
     expect(text.startsWith("\n  ╭─ inline route ─")).toBe(true);

@@ -445,25 +445,25 @@ async function resolveForRanking(sub: "explain" | "pick", args: string[], deps: 
   );
   const [name, ...extra] = read.positionals;
   if (extra.length) throw new Error(`${usage(sub)}\nRun \`clausona route ${sub} --help\` for usage.`);
-  const options = { ...toRoutingOptions(read.values), ...(name ? { route: name } : {}) };
+  const overrides = toRoutingOptions(read.values);
   const resolved = resolveRoute(await readRoutes(deps.paths), {
     tool: parseRouteTool(read.values.get("--tool")),
-    options,
+    options: { ...overrides, ...(name ? { route: name } : {}) },
   });
   if (!resolved) {
     throw new Error(
       `Name a route: clausona route ${sub} <name>, or an unsaved one: clausona route ${sub} --tool claude --from '<patterns>'.`,
     );
   }
-  return { resolved, json: read.flags.has("--json"), resume: read.flags.has("--resume") };
+  return { resolved, overrides, json: read.flags.has("--json"), resume: read.flags.has("--resume") };
 }
 
 async function explainRoute(args: string[], deps: RouteDeps): Promise<string> {
-  const { resolved, json, resume } = await resolveForRanking("explain", args, deps);
+  const { resolved, overrides, json, resume } = await resolveForRanking("explain", args, deps);
   const ranking = await rankRouteNow(resolved, deps, { resume, record: false });
   return json
     ? JSON.stringify(explainJson(resolved.name, resolved.resolvedBy, ranking), null, 2)
-    : renderRouteDetail(resolved.name, ranking, { now: deps.clock(), onlyTool: resolved.onlyTool });
+    : renderRouteDetail(resolved.name, ranking, { now: deps.clock(), onlyTool: resolved.onlyTool, overrides });
 }
 
 async function pickRoute(args: string[], deps: RouteDeps): Promise<string> {

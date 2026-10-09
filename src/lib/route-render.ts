@@ -1,6 +1,7 @@
 import {
   DEFAULT_MAX_USAGE,
   type Route,
+  type RouteOverrides,
   type RouteSpec,
   type RouteTool,
   type Strategy,
@@ -90,16 +91,53 @@ function resetsIn(at: string, now: number): string {
 /** A string quoted for a POSIX shell, so a command in a message can be pasted as it is. */
 const shellQuote = (text: string) => `'${text.replace(/'/g, "'\\''")}'`;
 
+/**
+ * The field options a run or an explain was given, as the flags that give them again, in the
+ * order the help lists them. A suggested command carries them, so that it ranks what was ranked.
+ */
+function fieldFlags(overrides: RouteOverrides): string[] {
+  const flags: string[] = [];
+  const patterns = (flag: string, list: string[] | undefined) => {
+    if (list?.length) flags.push(`${flag} ${shellQuote(list.join(","))}`);
+  };
+  patterns("--from", overrides.from);
+  patterns("--exclude", overrides.exclude);
+  if (overrides.strategy !== undefined) flags.push(`--strategy ${overrides.strategy}`);
+  if (overrides.maxUsage !== undefined) flags.push(`--max-usage ${overrides.maxUsage}`);
+  if (overrides.reserveUsage !== undefined) flags.push(`--reserve-usage ${overrides.reserveUsage}`);
+  patterns("--fallback", overrides.fallback);
+  return flags;
+}
+
+/**
+ * The options that make up a route as a command gives it: a saved route's are the ones given
+ * over it; an unsaved route is nothing but its options, and without them its own from and
+ * exclude say it.
+ */
+function routeFlags(name: string | undefined, route: Route, overrides: RouteOverrides | undefined): string[] {
+  if (name) return fieldFlags(overrides ?? {});
+  return fieldFlags({ from: route.from, ...(route.exclude.length ? { exclude: route.exclude } : {}), ...overrides });
+}
+
 // ─── Wrapping ───────────────────────────────────────────────────────
 
 const NBSP = "\u00a0";
+/** Holds an option and its value together even where an unbroken command is split. */
+const GLUE = "\u202f";
 
 /** A command, kept on one line by wrap() while it fits on one. */
 const unbroken = (text: string) => text.replaceAll(" ", NBSP);
 
 /**
+ * A command of several parts - `clausona run`, then an option with its value, and so on - kept
+ * on one line while it fits on one, and split only between its parts when it does not.
+ */
+const command = (parts: string[]) => parts.map((part) => part.replaceAll(" ", GLUE)).join(NBSP);
+
+/**
  * Prose wrapped at `width`, each line starting with `indent`. A word longer than a line gets a
- * line to itself; an unbroken command longer than a line is split at its own spaces.
+ * line to itself; an unbroken command longer than a line is split at its own spaces (a
+ * command() only between its parts).
  */
 function wrap(text: string, width: number, indent: string): string[] {
   const room = width - indent.length;
@@ -117,7 +155,7 @@ function wrap(text: string, width: number, indent: string): string[] {
     }
   }
   if (line) lines.push(line);
-  return lines.map((each) => `${indent}${each.replaceAll(NBSP, " ")}`);
+  return lines.map((each) => `${indent}${each.replaceAll(NBSP, " ").replaceAll(GLUE, " ")}`);
 }
 
 // ─── Tables ─────────────────────────────────────────────────────────
@@ -537,21 +575,29 @@ function memberLines(ranking: Ranking, width: number, now: number): string[] {
 
 /**
  * `route explain`, and what `route add` and `route set` show: the settings, then every member.
- * `onlyTool` is the tool an explain narrowed an `all` route to, as a run naming it would.
+ * `onlyTool` is the tool an explain narrowed an `all` route to, as a run naming it would;
+ * `overrides` are the field options the explain was given, which the run it names carries too.
  */
 export function renderRouteDetail(
   name: string | undefined,
   ranking: Ranking,
-  options: { width?: number; now?: number; onlyTool?: ToolName } = {},
+  options: { width?: number; now?: number; onlyTool?: ToolName; overrides?: RouteOverrides } = {},
 ): string {
   const width = options.width ?? terminalWidth();
   const now = options.now ?? Date.now();
+  const { route } = ranking;
   const title = truncate(name ?? "inline route", Math.max(8, width - 12));
-  const lines = ["", box(title, settingsLines(ranking.route, width)), "", ...memberLines(ranking, width, now)];
+  const lines = ["", box(title, settingsLines(route, width)), "", ...memberLines(ranking, width, now)];
   if (ranking.outcome.kind === "none") {
-    const narrowed = ranking.route.tool === "all" ? options.onlyTool : undefined;
-    const run = name ? `clausona run ${narrowed ? `${narrowed} ` : ""}--route ${name}` : "clausona run";
-    lines.push("", ...wrap(`Nobody can be picked now; ${unbroken(run)} would exit 75.`, width, "  "));
+    const narrowed = route.tool === "all" ? options.onlyTool : undefined;
+    // An unsaved route's tool is the run's tool word; on an `all` route the --from prefixes say it.
+    const tool = narrowed ?? (name || route.tool === "all" ? undefined : route.tool);
+    const run = command([
+      tool ? `clausona run ${tool}` : "clausona run",
+      ...(name ? [`--route ${name}`] : []),
+      ...routeFlags(name, route, options.overrides),
+    ]);
+    lines.push("", ...wrap(`Nobody can be picked now; ${run} would exit 75.`, width, "  "));
   }
   lines.push("");
   return lines.join("\n");
