@@ -43,9 +43,10 @@ and Windows, and the commands below are the same on each.
 For each task, after `fleet-core` picked its profile:
 
 1. **Worktree.** `herdr worktree create --cwd <repo> --branch fleet/<task> --label "<task> · <profile>" --no-focus`.
-   Keep the label under 26 characters, so the sidebar shows which account runs where. Record
-   `.result.workspace.workspace_id`, `.result.root_pane.pane_id` and `.result.worktree.path`. The
-   worktree lands under `~/.herdr/worktrees/`.
+   Keep the label to 20 characters or fewer, with a short task word such as `docs · ds-flash`:
+   herdr's agents list cuts longer labels, and the profile at the end is what shows which account
+   runs where. Record `.result.workspace.workspace_id`, `.result.root_pane.pane_id` and
+   `.result.worktree.path`. The worktree lands under `~/.herdr/worktrees/`.
 2. **Start.** `herdr pane run <pane> "clausona run <profile> -- <args>"`, with the arguments from
    `fleet-core` section 4. Codex workers keep `--disable hooks`.
 3. **Check it started.** Within 20 seconds, `herdr agent list` shows the pane with agent `claude` or
