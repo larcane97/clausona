@@ -459,6 +459,37 @@ describe("RouteForm", () => {
     expect(routes(disk).roomy.strategy).toBe("headroom");
   });
 
+  // Asked what `skip at` and `reserve up to` mean: the line under them says it, in their numbers.
+  it("says under the limits in what order they pick, in the numbers typed or the defaults", async () => {
+    const { instance } = setup({ columns: 80 });
+    await opened(instance);
+    const below = () => {
+      const all = lines(text(instance));
+      return inside(all[all.findIndex((line) => line.includes("reserve up to")) + 1] ?? "");
+    };
+    expect(below()).toMatch(/^\s+under 80% first; if none, the most room under 95%$/);
+    expect(columnOf(text(instance), "under 80%", "under")).toBe(columnOf(text(instance), "Limits", "skip at"));
+
+    await tabTo(instance, "skip at");
+    await retype(instance, 2, "70");
+    expect(below()).toMatch(/^\s+under 70% first; if none, the most room under 95%$/);
+    await tabTo(instance, "reserve up to");
+    await retype(instance, 2, "100");
+    expect(below()).toMatch(/^\s+under 70% first; if none, the most room under 100%$/);
+    for (const line of lines(text(instance))) expect(line.length).toBeLessThanOrEqual(80);
+
+    // Blank, the reserve is its default, which rises with the cut, as the field shows.
+    for (let i = 0; i < 3; i++) await press(instance, ERASE);
+    await tabTo(instance, "skip at");
+    await retype(instance, 2, "98");
+    expect(below()).toMatch(/^\s+under 98% first; if none, the most room under 98%$/);
+    expect(row(text(instance), "reserve up to")).toMatch(/\[98\]%$/);
+    // As typed still while another field holds a problem, and no preview is made.
+    await untickEvery(instance, ["claude:ops-share", "claude:side", "claude:team", "claude:work"]);
+    expect(text(instance)).toContain("Now: —");
+    expect(below()).toMatch(/^\s+under 98% first; if none, the most room under 98%$/);
+  });
+
   it("shows the reserve's problem when the limit is raised above it, and writes nothing", async () => {
     const { instance, deps, onDone, disk } = setup();
     await opened(instance);

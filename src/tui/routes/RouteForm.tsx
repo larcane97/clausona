@@ -79,11 +79,12 @@ export function formAccounts(registry: Registry): FormAccount[] {
 
 /**
  * The form's lines besides its accounts, when nothing wraps: the chrome's header (5 with its
- * padding) and footer (5), the frame's borders and its other fields (11), the every-account row,
- * the Now line, and one more, since ink redraws the whole screen once its output is as tall as the
- * terminal. A question, the saving note, the picker and each error take one or more besides.
+ * padding) and footer (5), the frame's borders and its other fields' lines (12, the strategy's
+ * and the limits' descriptions among them), the every-account row, the Now line, and one more,
+ * since ink redraws the whole screen once its output is as tall as the terminal. A question, the
+ * saving note, the picker and each error take one or more besides.
  */
-const FORM_LINES = 24;
+const FORM_LINES = 25;
 
 /** The fewest account lines the form shows, however short the terminal. */
 const MIN_ACCOUNT_LINES = 3;
@@ -112,6 +113,19 @@ const STRATEGY_TEXT: Record<Strategy, string> = {
   headroom: "picks the account with the most room",
   expiring: "uses weekly limits that reset within 24h first",
 };
+
+/**
+ * What the limits do, in their numbers, as routing's decide() takes them: an account under the
+ * cut (by the strategy, then the fallback), and when there is none, the one with the most room
+ * under the reserve.
+ */
+const limitsText = (max: number, reserve: number) => `under ${max}% first; if none, the most room under ${reserve}%`;
+
+/** A limit as typed, when it is a number; a blank one is left to its default. */
+function typedLimit(text: string): number | undefined {
+  const trimmed = text.trim();
+  return trimmed === "" || !Number.isFinite(Number(trimmed)) ? undefined : Number(trimmed);
+}
 
 type Hint = { keys: string; action: string };
 
@@ -452,8 +466,13 @@ export function RouteForm(props: RouteFormProps) {
   const subLabel = (field: FormField, text: string, width: number) => (
     <SubLabel text={text} width={width} focused={focusOn(field)} error={state.errors[field] !== undefined} />
   );
-  // A blank limit is the route's default, shown in its place.
-  const limits = preview?.route ?? withDefaults({ tool: state.tool });
+  // The limits as typed, a blank one the route's default, shown in its place: what the save takes,
+  // and not the preview's, which a problem in another field leaves out.
+  const limits = withDefaults({
+    tool: state.tool,
+    maxUsage: typedLimit(state.maxText),
+    reserveUsage: typedLimit(state.reserveText),
+  });
 
   return (
     <Chrome
@@ -520,6 +539,9 @@ export function RouteForm(props: RouteFormProps) {
           <Text color={color.muted}>[</Text>
           {textField("reserve", String(limits.reserveUsage))}
           <Text color={color.muted}>]%</Text>
+        </Line>
+        <Line label="">
+          <Text color={color.muted}>{limitsText(limits.maxUsage, limits.reserveUsage)}</Text>
         </Line>
         <Line {...line("fallback", "Fallback")}>
           <FallbackEntries entries={state.fallback} cursor={focusOn("fallback") ? state.cursor : null} pool={pool} />
