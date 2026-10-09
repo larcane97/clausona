@@ -167,6 +167,16 @@ describe("an edit form", () => {
     expect(editForm({ tool: "claude", fallback: ["side", "personal"] }).fallback).toEqual(["claude:side", "personal"]);
   });
 
+  // Opened as two claude:side entries, which the form drew under one React key.
+  it("holds an account the fallback names twice, by name and by id, once", () => {
+    const state = editForm({
+      tool: "claude",
+      fallback: ["side", "claude:side", "claude:team", "personal", "personal"],
+    });
+    expect(state.fallback).toEqual(["claude:side", "claude:team", "personal"]);
+    expect(editForm({ tool: "all", fallback: ["codex:x", "codex:x"] }).fallback).toEqual(["codex:x"]);
+  });
+
   it("leaves limits the spec does not set blank, and saves them unset", () => {
     const state = editForm({ tool: "codex", from: ["x"], strategy: "expiring" });
     expect([state.maxText, state.reserveText]).toEqual(["", ""]);

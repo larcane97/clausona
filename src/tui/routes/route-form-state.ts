@@ -157,7 +157,8 @@ export function initialFormState(
     strategy: spec.strategy ?? DEFAULT_STRATEGY,
     maxText: spec.maxUsage === undefined ? "" : String(spec.maxUsage),
     reserveText: spec.reserveUsage === undefined ? "" : String(spec.reserveUsage),
-    fallback: (spec.fallback ?? []).map((entry) => byName.get(entry) ?? entry),
+    // `side` and `claude:side` are one account, held once as it is saved once.
+    fallback: unique((spec.fallback ?? []).map((entry) => fromAccount.get(entry) ?? entry)),
     focus: "name",
     cursor: 0,
     errors: {},
