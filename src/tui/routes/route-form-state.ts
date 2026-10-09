@@ -8,7 +8,7 @@ import {
   type Strategy,
   toolsOf,
 } from "../../core/route-config.js";
-import { splitToolPrefix } from "../../core/route-patterns.js";
+import { compareIds, splitToolPrefix } from "../../core/route-patterns.js";
 import type { ToolName } from "../../types.js";
 
 /**
@@ -91,7 +91,7 @@ const TEXT_KEYS = {
 /** The subscription accounts a route of `tool` takes, by id. The caller leaves API profiles out. */
 export function accountsFor(tool: RouteTool, all: FormAccount[]): FormAccount[] {
   const tools = toolsOf(tool);
-  return all.filter((account) => tools.includes(account.tool)).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return all.filter((account) => tools.includes(account.tool)).sort(compareIds);
 }
 
 /** How a route of `tool` writes one of its accounts. */
@@ -118,6 +118,9 @@ export function initialFormState(
   const spec = input.mode === "edit" ? input.spec : newRouteSpec();
   const listed = accountsFor(spec.tool, accounts);
   const byName = new Map(listed.map((account) => [nameIn(spec.tool, account), account.id]));
+  // A from list may also name an account by id: `claude:work` on a claude route is that
+  // account, and is saved back as `work`. The other tool's prefix stays a pattern.
+  const fromAccount = new Map([...listed.map((account) => [account.id, account.id] as const), ...byName]);
   const from = spec.from ?? ["*"];
   const exclude = spec.exclude ?? [];
   const every = from.includes("*");
@@ -133,8 +136,8 @@ export function initialFormState(
     fromText = from.filter((entry) => entry !== "*");
     excludeText = exclude.filter((entry) => !excluded.has(entry));
   } else {
-    ticked = unique(from.flatMap((entry) => byName.get(entry) ?? []));
-    fromText = from.filter((entry) => !byName.has(entry));
+    ticked = unique(from.flatMap((entry) => fromAccount.get(entry) ?? []));
+    fromText = from.filter((entry) => !fromAccount.has(entry));
     excludeText = exclude;
   }
 
@@ -245,7 +248,8 @@ export function reduceForm(state: RouteFormState, action: FormAction, accounts: 
     case "text": {
       const key = TEXT_KEYS[action.field];
       if (state[key] === action.value) return state;
-      return changed(state, { [key]: action.value }, [action.field]);
+      // A from pattern is what an empty accounts list was missing, so its error goes too.
+      return changed(state, { [key]: action.value }, action.field === "from" ? ["from", "accounts"] : [action.field]);
     }
     case "tool":
       return changeTool(state, action.tool, accounts);
@@ -312,10 +316,12 @@ export function formToSpec(
 
   const from = unique(state.every ? ["*", ...fromExtra] : [...tickedNames, ...fromExtra]);
   const exclude = unique([...splitList(state.excludeText), ...(state.every ? untickedNames : [])]);
-  const fallback = state.fallback.map((entry) => {
-    const account = byId.get(entry);
-    return account ? nameIn(state.tool, account) : entry;
-  });
+  const fallback = unique(
+    state.fallback.map((entry) => {
+      const account = byId.get(entry);
+      return account ? nameIn(state.tool, account) : entry;
+    }),
+  );
   // In the order route add writes the keys, which is the order routes.json shows them in.
   const spec: RouteSpec = { tool: state.tool };
   if (from.length > 0) spec.from = from;

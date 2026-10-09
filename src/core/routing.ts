@@ -1,6 +1,6 @@
 import type { QuotaSnapshot, QuotaWindow, ToolName } from "../types.js";
 import { type Route, type RouteTool, toolsOf } from "./route-config.js";
-import { type Expansion, expandPatterns, type Member, splitToolPrefix } from "./route-patterns.js";
+import { compareIds, type Expansion, expandPatterns, type Member, splitToolPrefix } from "./route-patterns.js";
 
 /**
  * Picks a profile for a route. Pure: the caller brings the members, their quota and the pick
@@ -82,7 +82,6 @@ export function usageOf(snapshot: QuotaSnapshot | undefined, now: number): { usa
   return { usage: { percent: top.usedPercent, window, stale } };
 }
 
-const compareIds = (a: Row, b: Row) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const percentOf = (row: Row) => row.usage?.percent ?? Number.POSITIVE_INFINITY;
 const byUsage = (a: Row, b: Row) => percentOf(a) - percentOf(b) || compareIds(a, b);
 

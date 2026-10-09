@@ -19,7 +19,8 @@ const fold = (value: string) => value.normalize("NFKC").toLowerCase();
 
 const hasGlob = (pattern: string) => /[*?]/.test(pattern);
 
-const compareIds = (a: Member, b: Member) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+/** Orders anything with an id - a member, a ranked row, a form's account - by that id. */
+export const compareIds = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 /** A glob as an anchored, case-folded RegExp: `*` any run, `?` one character, the rest literal. */
 export function globToRegExp(glob: string): RegExp {

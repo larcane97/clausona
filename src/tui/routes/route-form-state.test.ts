@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { newRouteSpec, type RouteSpec, type Strategy } from "../../core/route-config.js";
+import { newRouteSpec, type RouteSpec, type Strategy, withDefaults } from "../../core/route-config.js";
+import { expandPatterns } from "../../core/route-patterns.js";
+import type { ToolName } from "../../types.js";
 import {
   accountsFor,
   FORM_FIELDS,
@@ -46,6 +48,17 @@ function rowOf(state: RouteFormState, id: string): number {
 
 function toggleAccount(state: RouteFormState, id: string): RouteFormState {
   return run(onAccountsRow(state, rowOf(state, id)), { type: "toggle" });
+}
+
+/** The accounts a from list takes, as routing expands it: what makes two lists the same route. */
+function picks(patterns: string[] | undefined, tool: ToolName): string[] {
+  const members = ACCOUNTS.filter((account) => account.tool === tool).map((account) => ({
+    ...account,
+    kind: "subscription" as const,
+    sharesSessions: true,
+    configDir: `/h/.${account.tool}-${account.name}`,
+  }));
+  return expandPatterns(patterns ?? [], members).members.map(({ member }) => member.id);
 }
 
 const named = (state: RouteFormState, name = "main") => run(state, { type: "text", field: "name", value: name });
@@ -113,6 +126,33 @@ describe("an edit form", () => {
     expect(state.every).toBe(false);
     expect(state.ticked).toEqual(["claude:team", "claude:side"]);
     expect(state.fromText).toBe("*@work.example.com, gone");
+  });
+
+  it("ticks the accounts from names with the route's own tool prefix, and saves the same accounts", () => {
+    const spec: RouteSpec = { tool: "claude", from: ["claude:work", "claude:side"] };
+    const state = editForm(spec);
+    expect(state.ticked).toEqual(["claude:work", "claude:side"]);
+    expect(state.fromText).toBe("");
+    const saved = formToSpec(state, ACCOUNTS).spec;
+    expect(saved).toEqual({ tool: "claude", from: ["work", "side"], strategy: "round-robin" });
+    expect(picks(saved?.from, "claude")).toEqual(picks(spec.from, "claude"));
+  });
+
+  it("ticks a codex: name on a codex route the same way", () => {
+    const spec: RouteSpec = { tool: "codex", from: ["codex:x"] };
+    const state = editForm(spec);
+    expect(state.ticked).toEqual(["codex:x"]);
+    expect(state.fromText).toBe("");
+    const saved = formToSpec(state, ACCOUNTS).spec;
+    expect(saved).toEqual({ tool: "codex", from: ["x"], strategy: "round-robin" });
+    expect(picks(saved?.from, "codex")).toEqual(picks(spec.from, "codex"));
+  });
+
+  it("keeps a name with the other tool's prefix as a pattern, which saving refuses", () => {
+    const state = editForm({ tool: "claude", from: ["team", "codex:x"] });
+    expect(state.ticked).toEqual(["claude:team"]);
+    expect(state.fromText).toBe("codex:x");
+    expect(formToSpec(state, ACCOUNTS).errors).toEqual({ from: expect.stringMatching(/names a codex profile/) });
   });
 
   it("keeps an exclude naming an account as text when from is a list, so saving does not drop it", () => {
@@ -281,6 +321,11 @@ describe("fallback", () => {
     const all = run(named(newForm()), { type: "tool", tool: "all" }, { type: "fallback-add", id: "codex:x" });
     expect(formToSpec(all, ACCOUNTS).spec?.fallback).toEqual(["codex:x"]);
   });
+
+  it("saves an entry once when the fallback names it twice", () => {
+    const state = editForm({ tool: "claude", fallback: ["side", "claude:side", "personal", "personal"] });
+    expect(formToSpec(state, ACCOUNTS).spec?.fallback).toEqual(["side", "personal"]);
+  });
 });
 
 describe("dirty", () => {
@@ -425,6 +470,45 @@ describe("errors", () => {
     };
     expect(run(state, { type: "text", field: "max", value: "70" }).errors).toEqual({ name: "Invalid route name" });
   });
+
+  const failed: RouteFormState["errors"] = {
+    name: "n",
+    accounts: "Pick at least one account.",
+    from: "f",
+    exclude: "e",
+    max: "m",
+    reserve: "r",
+    fallback: "b",
+    form: "x",
+  };
+  const without = (...keys: (keyof RouteFormState["errors"])[]) =>
+    Object.fromEntries(Object.entries(failed).filter(([key]) => !keys.includes(key as keyof typeof failed)));
+
+  it.each<[string, (state: RouteFormState) => RouteFormState, RouteFormState["errors"]]>([
+    [
+      "typing a from pattern clears the from and accounts errors",
+      (state) => run(state, { type: "text", field: "from", value: "*@work.example.com" }),
+      without("from", "accounts", "form"),
+    ],
+    [
+      "ticking an account clears the accounts error",
+      (state) => toggleAccount(state, "claude:side"),
+      without("accounts", "form"),
+    ],
+    [
+      "turning every account off clears the accounts error",
+      (state) => run(onAccountsRow(state, 0), { type: "toggle" }),
+      without("accounts", "form"),
+    ],
+    [
+      "turning every account on clears the accounts and exclude errors",
+      (state) => run(onAccountsRow({ ...state, every: false }, 0), { type: "toggle" }),
+      without("accounts", "exclude", "form"),
+    ],
+    ["changing the tool clears every error", (state) => run(state, { type: "tool", tool: "all" }), {}],
+  ])("%s", (_label, act, left) => {
+    expect(act({ ...newForm(), errors: failed }).errors).toEqual(left);
+  });
 });
 
 describe("a round trip through the form", () => {
@@ -450,5 +534,13 @@ describe("a round trip through the form", () => {
     { tool: "codex", from: ["x"], strategy: "headroom", maxUsage: 60, reserveUsage: 100 },
   ])("saves the spec it was opened with: %j", (spec) => {
     expect(formToSpec(editForm(spec), ACCOUNTS)).toEqual({ name: "main", spec, errors: {} });
+  });
+
+  it("writes out the * a spec with no from means", () => {
+    const spec: RouteSpec = { tool: "claude", exclude: ["side"], strategy: "headroom" };
+    const { spec: saved, errors } = formToSpec(editForm(spec), ACCOUNTS);
+    expect(errors).toEqual({});
+    expect(saved).toEqual({ ...spec, from: ["*"] });
+    expect(withDefaults(saved ?? spec)).toEqual(withDefaults(spec));
   });
 });
