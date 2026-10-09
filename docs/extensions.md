@@ -1,0 +1,678 @@
+# Extensions
+
+[← Back to the README](../README.md)
+
+`clausona skills`, `clausona mcp` and `clausona hooks` list the skills, MCP servers and hooks
+that Claude Code and Codex load, for every account clausona manages, seen from one project.
+The dashboard's Extensions screen shows the same rows.
+
+Both only read files: in this version nothing here changes one. A later version adds ways to
+turn things off and to delete them, each with a confirm step and an undo.
+
+`csn` is the same command as `clausona`. The examples use the fictional accounts `personal`
+and `work`, the projects `~/app` and `~/site`, and a plugin `kit@demo`.
+
+- [Projects, rows and accounts](#projects-rows-and-accounts)
+- [Scopes](#scopes)
+- [States and tags](#states-and-tags)
+- [Reading the tables](#reading-the-tables)
+- [CLI reference](#cli-reference)
+- [JSON](#json)
+- [Safety](#safety)
+- [Recipes for agents](#recipes-for-agents)
+- [On the screen](#on-the-screen)
+
+## Projects, rows and accounts
+
+Everything is seen from one project. It is the git root that holds the current directory, or
+the directory itself outside a repository. The home folder can be the project too.
+`--project <path>` looks from another one, and `p` picks one on the screen. At the filesystem
+root there is no project.
+
+The other projects are the folders that Claude Code or Codex recorded in any account and that
+still exist.
+
+The lists are made of rows. A row is one thing, even when several accounts hold their own copy
+of it:
+
+- a Claude MCP server that several accounts' `.claude.json` define, as a user server or as a
+  local server of the same project;
+- a Cloud skill that several accounts have;
+- a plugin installed in several accounts, and each skill, server and hook it brings.
+
+Such a row lists all its copies. Every other item is a row of its own. An account's own skills
+folder, one that is not linked to the primary's, is a folder of its own, so its skills are one
+row per account.
+
+The text output names an account by its short name (`work`), JSON by its profile id
+(`claude:work`). `--account` takes either.
+
+## Scopes
+
+A scope is a place things come from. Two of them, Loaded here and Not used in 90 days, are
+worked out from the others.
+
+| Scope | `--scope` | Applies to | Its header on the screen |
+|---|---|---|---|
+| Loaded here | `loaded` | every tool and kind | `what Claude Code loads in ~/app, in at least one account` |
+| Project | `project` | every tool and kind | the project's own files, listed below |
+| Parent folders | `parents` | Claude MCP | `.mcp.json in ~/repos · loads here too` |
+| Global | `global` | every tool and kind | the user's own files, listed below, then `· loads in every project` |
+| Cloud | `cloud` | Claude skills | `skills on your claude.ai accounts, different per account` |
+| Plugins | `plugins` | Claude skills, MCP and hooks | `plugins that bring skills, installed for you or for this project` |
+| Built into Claude Code | `builtin` | Claude skills | `skills that come with Claude Code, named in your settings` |
+| Built into Codex | `builtin` | Codex skills | `skills that come with Codex` |
+| Managed | `managed` | Claude MCP and hooks | `your organization's managed settings · apply in every project` |
+| Other projects | `other` | every tool and kind | `projects with skills of their own · they load there, not here` |
+| Not used in 90 days | `unused` | Claude skills | `not used in 90 days in any account, or never used and older than 14 days` |
+
+The header says "runs" for hooks and names MCP servers or hooks where the table above says
+skills. Codex's Loaded here reads `what Codex loads in ~/app`, with no accounts: Codex
+profiles share one configuration.
+
+Project and Global are these files. The header names the folders it found.
+
+| Tool, kind | Project (in `~/app`) | Global |
+|---|---|---|
+| Claude skills | `.claude/skills` and `.claude/commands` | `~/.claude/skills` and `~/.claude/commands`, and an account's own `skills` and `commands` folders |
+| Claude MCP | `.mcp.json`, and each account's entry for the project in `.claude.json` | user servers in each account's `.claude.json` |
+| Claude hooks | `.claude/settings.json` and `.claude/settings.local.json` | `~/.claude/settings.json` |
+| Codex skills | `.agents/skills` | `~/.agents/skills` and the `skills` folder of Codex's home |
+| Codex MCP | `.codex/config.toml` | `config.toml` in Codex's home |
+| Codex hooks | `.codex/hooks.json` | `hooks.json` in Codex's home |
+
+`~/.claude` stands for the primary Claude Code folder, which every account's `settings.json`
+and `skills` link to. Codex's home is the primary Codex folder, `~/.codex` by default.
+
+Each tool and kind lists its scopes in this order:
+
+| Tool, kind | Scopes |
+|---|---|
+| Claude skills | Loaded here, Project, Global, Cloud, Plugins, Built into Claude Code, Other projects, Not used in 90 days |
+| Claude MCP | Loaded here, Project, Parent folders, Global, Plugins, Managed, Other projects |
+| Claude hooks | Loaded here, Project, Global, Plugins, Managed, Other projects |
+| Codex skills | Loaded here, Project, Global, Built into Codex, Other projects |
+| Codex MCP | Loaded here, Project, Global, Other projects |
+| Codex hooks | Loaded here, Project, Global, Other projects |
+
+The screen always shows Loaded here and Project, and the others only when they hold something.
+The CLI takes every scope its command has, for either tool, and says so when one is empty.
+
+Some scopes need a word more:
+
+- Project for Claude MCP includes local servers: the ones an account added for this
+  project with `claude mcp add`, kept in that account's `.claude.json`.
+- Parent folders: Claude Code reads `.mcp.json` in the project and in every folder above
+  it. The header names each folder, nearest first.
+- Cloud: the skills Claude Code downloaded from each account's claude.ai skills, under
+  `~/.claude/skills/synced`.
+- Plugins lists the plugins themselves (rows of kind `plugin`) that bring at least one
+  thing of the kind, installed for everyone or for this project. A plugin installed only for
+  another project is under Other projects. What a plugin brings is in Loaded here while the
+  plugin is on, with the plugin's name as WHERE.
+- Built into Claude Code: names in `skillOverrides` that match no skill on disk. clausona
+  cannot tell a built-in skill from one removed since, so it lists both here. Shown only when
+  there is one.
+- Built into Codex: the skills in the `skills/.system` folder of Codex's home.
+- Managed: the administrator's managed settings, `managed-settings.json` and the files in
+  `managed-settings.d/`. In this version that means hooks: clausona reads no managed MCP file,
+  so `mcp ls --scope managed` is always empty.
+- Other projects: on the screen, a list of projects with a count each; `enter` opens one.
+  `ls --scope other` lists the rows of every other project at once, each with its `project`.
+
+### Loaded here
+
+Loaded here is the union of what loads in this project:
+
+- what no project owns: Global, Cloud, built-in and managed items;
+- what an enabled plugin brings, installed for everyone or for this project;
+- this project's own items;
+- the `.mcp.json` servers of this folder and the folders above it.
+
+Then it takes out what is off, a `.mcp.json` server still pending approval, and a copy that a
+same-name copy wins over. For Claude, a row is in Loaded here when it loads in at least one
+account.
+
+### Which copy wins
+
+Claude Code ranks skills managed first, then personal (Global), then project. clausona reads no
+managed skills, so in practice a Global skill wins over a Project skill of the same name. The
+Project row is then tagged `hidden by Global copy` and is not in Loaded here.
+
+For `.mcp.json` servers, the nearest file wins a name. A copy farther up reads
+`hidden by Project copy`, or `hidden by Parent folders copy` when the winner is in a nearer
+parent folder.
+
+`skillOverrides` and `enabledPlugins` are read the way Claude Code reads them: managed
+settings first, then the project's `.claude/settings.local.json`, then its
+`.claude/settings.json`, then the user settings. The first that sets a name wins.
+
+## States and tags
+
+The `state` of an item in JSON is one of these:
+
+| State | Meaning |
+|---|---|
+| `on` | It loads, unless a tag says it is hidden. |
+| `off` | It is turned off. |
+| `name-only` | A Claude skill set to `name-only` in `skillOverrides`. The details say "Shows as name only". |
+| `user-invocable-only` | A Claude skill set to `user-invocable-only` in `skillOverrides`. The details say "Shows as only when you call it". |
+| `pending-approval` | A `.mcp.json` server not approved yet. Claude Code does not start it. |
+| `mixed` | The accounts differ: `stateByAccount` has each one's. |
+
+A hidden copy keeps its own `state`; only its tags say it is hidden.
+
+The switches are read from these places:
+
+- Claude skills: `skillOverrides` in the settings files.
+- Claude plugins and what they bring: `enabledPlugins` in the settings files. A plugin no
+  settings file turns on is off.
+- Claude user and local MCP servers: `disabledMcpServers` in the account's `.claude.json`
+  entry for the project, which is what `/mcp disable` writes. With no project they are on. A
+  plugin's server is off while its plugin is off, and each account can turn it off the same
+  way.
+- `.mcp.json` servers: `enabledMcpjsonServers`, `disabledMcpjsonServers` and
+  `enableAllProjectMcpServers`, in the settings files or the account's project entry.
+- Codex skills: `[[skills.config]]` in Codex's `config.toml`, by name or by path.
+- Codex MCP servers: `mcp_servers.<name>.enabled` in Codex's or the project's `config.toml`.
+- Hooks are on, except a plugin's hooks while the plugin is off.
+
+### Tags
+
+A row can carry several tags. They are listed most important first: `broken link`, then
+`off`, `off here` or `off in N of M accounts`, then `pending approval`, then
+`hidden by … copy`, then `unused`. The NOTE column shows the first; JSON `tags` has them all.
+
+| Tag | When |
+|---|---|
+| `broken link` | The skill's folder is a link whose target is missing. |
+| `off` | Off in every account that has it, by a user or managed setting, or because nothing turns it on (a plugin no settings file enables). |
+| `off here` | Off in every account by this project's own settings: its `.claude/settings*.json`, an account's entry for it in `.claude.json`, or its `.codex/config.toml`. |
+| `off in N of M accounts` | Off in N accounts and on in the others. M counts the accounts that have the row; for a server every account sees, the accounts that have opened this project. |
+| `pending approval` | A `.mcp.json` server that no account has approved in this project. |
+| `hidden by Project copy` | A same-name copy in Project wins in every account. |
+| `hidden by Global copy` | A same-name copy in Global wins in every account. |
+| `unused` | A Claude skill the rule below calls unused. |
+
+`hidden by Project copy` and `hidden by Global copy` are the common cases of
+`hidden by <scope> copy`, which names the winning copy's scope.
+
+### Not used in 90 days
+
+The rule uses two constants, `CLEANUP_UNUSED_DAYS = 90` and `CLEANUP_GRACE_DAYS = 14`.
+
+- It covers Claude skills only. Codex keeps no record of use.
+- It covers the skills you can delete one at a time: those in Global (an account's own folder
+  too), Project and Other projects. Cloud, plugin and built-in skills are left out.
+- A skill is unused when its last use, in any account, was more than 90 days ago.
+- A skill that was never used is unused when its folder is more than 14 days old.
+- A broken link is listed too. Its tag is `broken link`.
+- A skill used with no time recorded is not called unused. Neither is a never-used skill
+  whose age could not be read.
+
+Use comes from Claude Code's `skillUsage` in each account's `.claude.json`, summed over the
+accounts and counted by skill name. A Cloud skill is also counted under
+`anthropic-skills:<name>`. Because the count is by name, a hidden copy and the copy that wins
+over it share one count.
+
+## Reading the tables
+
+`ls` prints a title line, a blank line and a table.
+
+```
+$ csn skills ls
+8 skills · Loaded here · project ~/app
+
+NAME           TOOL    WHERE               USES  LAST USED  NOTE
+deploy-check   claude  Project             9     5d ago
+eli5           claude  Global              613   38m ago
+eli5           codex   Global              —     —
+kit:plan       claude  kit                 0     never
+old-notes      claude  Global              0     never      unused
+pdf            claude  Cloud · 2 accounts  0     never
+pr-summary     claude  Global              3     4mo ago    unused
+skill-creator  codex   Built in            —     —
+```
+
+The columns:
+
+- NAME is what `show` takes. A plugin's skill is `<plugin>:<name>`, a plugin's server
+  `plugin:<plugin>:<name>`, a plugin `<plugin>@<marketplace>`, and a hook `<Event>` or
+  `<Event> <matcher>`.
+- TOOL appears only when both tools are listed.
+- WHERE is where the row comes from: `Project`, `Global`, `Cloud`, the plugin's name, a
+  parent folder such as `~/repos`, `Built in`, `Managed`, or another project's name. It adds
+  ` · work` for one account's own skill, ` · 2 accounts` for Cloud copies, and ` · command`
+  for a legacy command file.
+- USES and LAST USED (skills): the uses summed over accounts, and how long ago the
+  last one was (`38m ago`, `5d ago`, `4mo ago`). A skill never used reads `0` and `never`. A
+  hidden copy, a Codex skill and a plugin row read `—` in both.
+- ACCOUNTS (MCP): `all` when every Claude account has it; `N of M` when N of the M Claude
+  accounts do; the one account's short name; `—` for Codex.
+- WHEN and RUNS (hooks): the event in plain words, and the command or prompt it runs
+  with `~` for the home folder.
+- NOTE: the first tag.
+
+The title says how many rows, the scope, and the project. A scope with no rows prints one
+sentence instead of the table, such as "Nothing in this project's own files." When the
+terminal is narrow, long cells are cut with `…`; JSON is never cut.
+
+### Hook events
+
+| Hook name | WHEN |
+|---|---|
+| `PreToolUse Bash` | Before Bash runs |
+| `PreToolUse` | Before any tool runs |
+| `PostToolUse Edit` | After Edit runs |
+| `PostToolUseFailure Bash` | After Bash fails |
+| `UserPromptSubmit` | When you send a message |
+| `Notification` | When Claude sends a notification |
+| `Stop` | When Claude finishes replying |
+| `SubagentStop` | When a subagent finishes |
+| `SessionStart` | When a session starts |
+| `SessionStart startup` | When a session starts (startup) |
+| `SessionEnd` | When a session ends |
+| `PreCompact` | Before the conversation is compacted |
+| `PermissionRequest` | When Claude asks for permission |
+| `Interrupt` | When you interrupt |
+| `StopFailure` | When replying fails |
+
+A matcher of `*` on a tool event reads "any tool". An event clausona does not know is shown by
+its name.
+
+## CLI reference
+
+```
+clausona skills ls   [--scope <scope>] [--tool claude|codex] [--project <path>] [--json]
+clausona skills show <name> [--tool claude|codex] [--scope <scope>] [--id <id>]
+                     [--project <path>] [--json]
+clausona mcp    ls   [--scope <scope>] [--tool claude|codex] [--account <name>]...
+                     [--project <path>] [--json]
+clausona mcp    show <name> [--tool claude|codex] [--scope <scope>] [--id <id>]
+                     [--account <name>]... [--project <path>] [--json]
+clausona hooks  ls   [--scope <scope>] [--tool claude|codex] [--project <path>] [--json]
+clausona hooks  show <id|name> [--tool claude|codex] [--scope <scope>] [--id <id>]
+                     [--project <path>] [--json]
+```
+
+With no subcommand, `ls` runs: `csn skills --scope project` is `csn skills ls --scope project`.
+`--help` or `-h` prints the command's help; `ls --help` and `show --help` print their own pages.
+
+| Option | Meaning |
+|---|---|
+| `--scope <scope>` | For `ls`, the scope to list, `loaded` by default. For `show`, the one scope to look in. |
+| `--tool <tool>` | `claude` or `codex`. Both by default. |
+| `--project <path>` | Look from another project. A relative path is read from the current directory. It must be a directory, and its git root is used, as for the current directory. |
+| `--account <name>` | MCP only. Keep the rows this Claude account has. Give it more than once for several accounts. It takes `work` or `claude:work`, lists Claude rows only, and cannot be used with `--tool codex`. |
+| `--id <id>` | `show` only. A row key or a copy's id, from `ls --json`. |
+| `--json` | Print JSON version 1, described under [JSON](#json). |
+
+A value can follow its option as `--scope project` or `--scope=project`. A value cannot start
+with `-`. An unknown option, a value that is not in the list, a name after `ls`, `--account`
+outside `mcp` and `--id` with `ls` are all bad usage, exit code 2.
+
+### Scope values
+
+| Value | Scope | skills | mcp | hooks |
+|---|---|---|---|---|
+| `loaded` | Loaded here, the default | ✓ | ✓ | ✓ |
+| `project` | Project | ✓ | ✓ | ✓ |
+| `parents` | Parent folders | | ✓ | |
+| `global` | Global | ✓ | ✓ | ✓ |
+| `cloud` | Cloud | ✓ | | |
+| `plugins` | Plugins | ✓ | ✓ | ✓ |
+| `builtin` | Built into Claude Code, Built into Codex | ✓ | | |
+| `managed` | Managed | | ✓ | ✓ |
+| `other` | Other projects | ✓ | ✓ | ✓ |
+| `unused` | Not used in 90 days | ✓ | | |
+| `all` | every place at once | ✓ | ✓ | ✓ |
+
+`all` is the places together, each row once: Project, Parent folders, Global, Cloud, Plugins,
+the built-in scope, Managed and Other projects. Under Plugins that is the plugin's own row, so
+what a plugin brings is not in `all`. It is in `loaded` while the plugin is on, and `show`
+finds it by name either way.
+
+A scope that does not apply to a tool is empty for it: `csn skills ls --scope cloud --tool codex`
+lists nothing.
+
+### show
+
+`show` takes one name, or an id in its place, or `--id <id>`. A name is matched exactly, case
+included. It is the NAME column: `eli5`, `kit:plan`, `kit@demo`, `Stop`,
+`"PreToolUse Bash"`.
+
+Without `--scope`, `show` looks in tiers. The first tier that has a match decides:
+
+1. Rows in Loaded here.
+2. If none match: rows in Project, Parent folders, Global, Cloud, Plugins, Built into Claude
+   Code or Built into Codex, and Managed, whether they load here or not. This tier also holds
+   what no scope lists, such as a skill of a plugin that is off.
+3. If none match: rows in Other projects.
+
+Exactly one match in that tier is shown. Several are ambiguous: `show` exits with code 2 and
+lists the candidates of that tier only. So `csn skills show deploy-check` means the one that
+loads here, even when another project has its own.
+
+`--scope` replaces the tiers with that one scope: its rows, and the rows that live there, such
+as what plugins bring under `plugins`. The help lists the places; `loaded`, `unused` and `all`
+are taken too. `--tool` and `--account` narrow every tier. `--account` picks which rows match;
+the details still list every account.
+
+```
+$ csn skills show eli5
+  ✘ 2 skills are named 'eli5':
+    claude  global  —  —  --id 'skill:claude:global:-:eli5'
+    codex   global  —  —  --id 'skill:codex:global:agents:eli5'
+    Pick one with --tool, --scope or --id <id>.
+```
+
+The candidate lines give the tool, the scope, the project, the account and the id to pass.
+
+```
+$ csn skills show eli5 --tool claude
+GLOBAL › eli5
+
+Explain any topic at the reader's level
+
+File      ~/.claude/skills/eli5/SKILL.md
+Loaded    on in every account, every project
+Used      613 times · last 38m ago
+          personal 412 · work 201
+Also in   Claude › Project (different content)
+          Codex › Global (same content)
+```
+
+```
+$ csn mcp show github
+GLOBAL › github
+
+Runs      npx -y @modelcontextprotocol/server-github
+Secrets   GITHUB_TOKEN (value hidden)
+Accounts  personal  on
+          work      off (this project's entry in ~/.claude-work/.claude.json)
+File      ~/.claude.json
+          ~/.claude-work/.claude.json
+```
+
+### Ids and row keys
+
+Every item has an id, `<kind>:<tool>:<scope>:<owner>:<name>`, built from where it is stored.
+The owner part can hold a profile id or an absolute path, so treat an id as an opaque string:
+copy it from `--json` and pass it back as it is.
+
+A row of copies has a row key. It is the same with one copy as with many:
+
+| Row | Key |
+|---|---|
+| A Claude MCP server in accounts' `.claude.json` | `mcp:claude:<account or local>:<project or ->:<name>` |
+| A Cloud skill | `skill:claude:synced:-:<name>` |
+| A plugin install | `plugin:claude:<install scope>:<project or ->:<plugin id>` |
+| What a plugin install brings | `<kind>:claude:plugin:<install scope>:<project or ->:<plugin id>:<name>` |
+
+The first part after `mcp:claude:` is `account` for a user server and `local` for a local one.
+`<project>` is the project's absolute path, lower-cased on Windows, and `-` when there is none.
+The install scope is `user`, `project` or `local`. A plugin's hook adds its place in its file,
+as in `hook:claude:plugin:user:-:kit@demo:SessionStart#0.0`, so two hooks on one event are two
+rows.
+
+Ids and keys name where a thing is stored, not where it is seen from. They are the same from
+every project, so an agent can store one and pass it to `show --id` later. A row key stays the
+same when a plugin updates; a copy's id holds the plugin's install folder, which changes. A
+hook's id holds its place in its file (`#<group>.<index>`), which moves when hooks above it are
+added or removed.
+
+`--id`, and a name given as an id, take a row key or the id of any copy. A copy's id picks its
+whole row.
+
+### Output, errors and exit codes
+
+Text and JSON go to stdout. An error goes to stderr as one plain-text line or block, with
+`--json` too. The one exception is an ambiguous name with `--json`: its object goes to stdout
+and stderr stays empty. A JSON body for the other errors is a planned follow-up.
+
+| Code | When |
+|---|---|
+| 0 | OK |
+| 1 | Not found, or another failure, such as clausona not set up yet |
+| 2 | Bad usage, an unknown option, or an ambiguous name |
+
+A name nothing has prints `No skill named 'nope'.` and exits 1. When `--tool`, `--scope` or
+`--account` narrowed the search, it adds "Leave out --tool, --scope or --account to look
+further."
+
+When a file cannot be read, the text output ends with "Could not read every file:" and the
+files, and JSON lists them in `warnings`. The exit code stays 0.
+
+## JSON
+
+`ls --json` prints one object, the envelope. `show --json` prints one item with `details`
+added. Both are indented with two spaces. Paths are absolute; the text output writes `~` for
+the home folder, JSON does not.
+
+### The envelope
+
+| Field | Type | Meaning |
+|---|---|---|
+| `version` | number | `1`. |
+| `command` | string | `skills`, `mcp` or `hooks`. |
+| `project` | string or null | The project the list is seen from. |
+| `scope` | string | The `--scope` value, `loaded` by default. |
+| `tools` | string[] | `["claude", "codex"]`, or the one `--tool` named. `["claude"]` with `--account`. |
+| `items` | object[] | One item per row, by name, Claude's before Codex's. |
+| `warnings` | object[] | `{ file, message }` for each file that could not be read. |
+
+### Item fields
+
+Each item has these keys, in this order. A key marked "when set" is left out when it does not
+apply; the others are always there, `null` when empty.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | The row key for a row of copies, else the item's id. Pass it to `show --id`. |
+| `kind` | string | `skill`, `mcp`, `hook`, or `plugin` for a plugin's own row. |
+| `tool` | string | `claude` or `codex`. |
+| `name` | string | The name `show` takes. |
+| `scope` | string | Where the row lives, seen from the project: `project`, `parents`, `global`, `cloud`, `plugins`, `builtin`, `managed` or `other`. Never `loaded` or `unused`, which are worked out. |
+| `from` | string | The WHERE label: `Project`, `Global`, `Cloud`, a plugin's name, a parent folder, another project's name, `Built in`, `Managed`. |
+| `project` | string or null | The project the row belongs to, or the folder of a parent `.mcp.json`. `null` for what no project owns. |
+| `plugin` | string | When set: the plugin, `<plugin>@<marketplace>`, for a plugin row and what a plugin brings. |
+| `accounts` | string[] | When set: the profile ids of the accounts that have the row, primary first. Set when the row is held or switched per account. |
+| `state` | string | One of the states above, or `mixed` when the accounts differ. |
+| `stateByAccount` | object | When set: profile id to state, for a row switched per account. |
+| `usage` | object or null | Claude skills only: `{ total, lastUsedAt, byAccount }`. `null` otherwise. |
+| `tags` | string[] | Every tag that applies, most important first. |
+| `file` | string | The file or folder that defines the row. For a row of copies, the first copy's. |
+| `copies` | object[] | When set: for a row of copies, each copy, primary first. |
+| `description` | string or null | The skill's or plugin's description. |
+| `alsoIn` | object[] | Skills: same-name skills elsewhere, in either tool. Empty for the other kinds. |
+| `link` | object | When set: a skill whose folder is a link, `{ target, broken }`. |
+| `summary` | object | MCP servers and hooks only: what it runs, with secrets hidden. |
+
+The parts of the larger fields:
+
+- `usage.total` is the uses summed over accounts; `usage.lastUsedAt` an ISO 8601 time, or
+  `null` when never used; `usage.byAccount` the count per profile id. A hidden copy reports
+  the count of the copy that wins over it, since Claude Code counts by name.
+- `file` is a skill's folder (a legacy command's `.md` file), a server's or hook's settings or
+  config file, a plugin's install folder, or for a Claude built-in skill the settings file
+  that names it.
+- Each of `copies` is `{ id, account, file }`, or `{ id, accounts, file }` for a plugin
+  install, which every account that has it shares.
+- Each of `alsoIn` is `{ tool, scope, project, sameContent }`. `sameContent` is `true`,
+  `false`, or `null` when the folders were not compared.
+- An MCP `summary` has `transport`, `command` or `url`, and `env` and `headers` with the names
+  only, comma-separated. A hook `summary` has `event`, `matcher`, `type`, and `command` or
+  `prompt`.
+
+A row of copies, as `csn mcp ls --json` prints it:
+
+```json
+{
+  "id": "mcp:claude:account:-:github",
+  "kind": "mcp",
+  "tool": "claude",
+  "name": "github",
+  "scope": "global",
+  "from": "Global",
+  "project": null,
+  "accounts": ["claude:personal", "claude:work"],
+  "state": "mixed",
+  "stateByAccount": { "claude:personal": "on", "claude:work": "off" },
+  "usage": null,
+  "tags": ["off in 1 of 2 accounts"],
+  "file": "/home/you/.claude.json",
+  "copies": [
+    { "id": "mcp:claude:account:claude:personal:github", "account": "claude:personal", "file": "/home/you/.claude.json" },
+    { "id": "mcp:claude:account:claude:work:github", "account": "claude:work", "file": "/home/you/.claude-work/.claude.json" }
+  ],
+  "description": null,
+  "alsoIn": [],
+  "summary": { "transport": "stdio", "command": "npx -y @modelcontextprotocol/server-github", "env": "GITHUB_TOKEN" }
+}
+```
+
+### show --json
+
+`show --json` prints the item, then `details`: the lines of the text view, in order. Each line
+is an object with `text`, and with `label` and `tone` when they apply.
+
+- The first line is the title, such as `GLOBAL › eli5`, with no `label`.
+- A line with no `label` stands alone, such as a description.
+- A `label` of `""` continues the line above.
+- `tone`, when set, is `muted`, `warning` or `error`.
+
+`details` is written for people to read. Its wording can change within version 1, so read the
+item's own fields where they have what you need.
+
+### The ambiguous error
+
+With `--json`, a name that matches several rows prints this on stdout and exits 2:
+
+```json
+{
+  "error": "ambiguous",
+  "candidates": [
+    { "id": "skill:claude:global:-:eli5", "tool": "claude", "scope": "global", "project": null, "account": null },
+    { "id": "skill:codex:global:agents:eli5", "tool": "codex", "scope": "global", "project": null, "account": null }
+  ]
+}
+```
+
+Each of `candidates` has `id`, the row's id to pass to `--id`; `tool`; `scope`; `project`, or
+`null`; and `account`, the profile id when the row is one account's single copy, else `null`.
+They are the candidates of one tier (see [show](#show)).
+
+### Versioning
+
+The envelope's `version` is `1`. Within version 1, keys can be added, and new values can
+appear in `scope`, `state`, `tags` and `summary`. A key keeps its name, type and meaning. A
+change that breaks this comes with `version: 2`.
+
+So read keys by name and skip the ones you do not know. `show --json` and the error object
+carry no `version` of their own; they follow the version `ls --json` reports.
+
+## Safety
+
+These commands and the screen only read. They never write, lock or move a file of Claude Code
+or Codex, and they keep no cache: each run reads the files as they are.
+
+Secret values stay out of every output, the screen, the text and `--json`:
+
+- An MCP server's env and header values are never copied out of its config. Only their names
+  are shown, such as `GITHUB_TOKEN (value hidden)`.
+- In a command line, a URL or a hook's command, a value that looks like a secret reads
+  `<hidden>`, such as the word after `--api-key` or a token in a URL.
+- A warning about a file names the file and a position in it, never what the file holds.
+
+Nothing leaves the machine. Listing makes no network call.
+
+## Recipes for agents
+
+Each recipe is a question, the command, and what to read in the JSON. The `jq` lines are one
+way to read it.
+
+### What loads in this project?
+
+```bash
+csn skills ls --json
+csn mcp ls --json
+csn hooks ls --json
+```
+
+Each item loads here in at least one account. `tool` says which tool, `from` where it comes
+from. For a Claude MCP server, `stateByAccount` says which accounts load it, and the tag
+`off in N of M accounts` marks a split. Add `--project <path>` to ask about another project.
+
+### Which skills does this project define?
+
+```bash
+csn skills ls --scope project --json
+```
+
+Read `name` and `file`, the skill's folder. Claude's come from `.claude/skills` and
+`.claude/commands`, Codex's from `.agents/skills`. A Claude skill tagged
+`hidden by Global copy` is defined here, but a Global skill of the same name loads instead.
+
+### Which Claude skills haven't been used in 90 days?
+
+```bash
+csn skills ls --scope unused --tool claude --json
+csn skills ls --scope unused --tool claude --json \
+  | jq -r '.items[] | [.name, .scope, (.usage.lastUsedAt // "never"), .file] | @tsv'
+```
+
+Read `usage.lastUsedAt` (`null` means never used), `usage.total`, `scope` and `project` for
+where it lives, and `file` for its folder. A `broken link` tag means the folder is a link to
+nothing. Cloud and plugin skills are never in this list.
+
+### Which accounts have MCP server X, and is it on here?
+
+```bash
+csn mcp show github --json
+csn mcp show github --json | jq '{accounts, state, stateByAccount}'
+```
+
+`accounts` lists the profile ids that have the server; an account not in it does not have it.
+`stateByAccount` gives each one's state in this project: `on`, `off` or `pending-approval`.
+With no `accounts`, every account sees the server alike and `state` says it. If the name is in several places, the command exits 2 and
+prints `candidates`; run it again with one `--id`. To list what one account has, run
+`csn mcp ls --scope all --account work --json`.
+
+### Which hooks run when Claude finishes replying?
+
+```bash
+csn hooks ls --tool claude --json \
+  | jq '.items[] | select(.summary.event == "Stop") | {command: .summary.command, file, from}'
+```
+
+Loaded here lists the hooks that run in this project, plugins' included. The event is in
+`summary.event`; `Stop` is "When Claude finishes replying". `summary.command`, or
+`summary.prompt`, is what runs, and `file` is where it is set. `csn hooks show Stop` shows
+one; when several hooks are on Stop, it exits 2 and lists their ids.
+
+## On the screen
+
+Run `csn` and choose Extensions. Claude and Codex are tabs, and Skills, MCP and Hooks are the
+second level. The scope list is on the left and the chosen scope's table on the right. At 100
+columns or more both show; below that, one at a time: scopes, then the table, then the
+details.
+
+The screen's tables differ a little from the CLI's. They have no TOOL column, Loaded here adds
+FROM, Plugins shows CONTAINS, and Codex skills show their description.
+
+| Key | What it does |
+|---|---|
+| `tab` | Switch between Claude and Codex, back to Loaded here. |
+| `1` `2` `3` | Skills, MCP, Hooks, back to Loaded here. |
+| `↑` `↓` `pgup` `pgdn` | Move. |
+| `→` or `enter` | From the scope list into the table. |
+| `enter` | On a row, its details. On another project, its table. |
+| `←` or `esc` | Back one step. `esc` on the scope list leaves the screen. |
+| `/` | Search the table. `enter` keeps the search, `esc` drops it. |
+| `p` | Pick the project. |
+| `m` | A matrix of servers by account: which account starts which server in this project. On Claude's MCP tab, with a project picked. |
+| `r` | Read the files again. |
+| `w` | The files that could not be read, when there are any. |
+
+Search matches a row's name, description, file, summary values, and the text cells the table
+shows. It does not match the numbers in USES and LAST USED.
