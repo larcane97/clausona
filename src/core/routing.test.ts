@@ -155,7 +155,7 @@ describe("stages", () => {
     expect(ranking.outcome).toEqual({
       kind: "picked",
       id: "claude:a",
-      stage: "reserve",
+      stage: "overflow",
       reason: "most room left (all over 80%)",
     });
   });
@@ -166,7 +166,7 @@ describe("stages", () => {
     expect(rank({ from: ["a", "b"], fallback: ["c"] }, quotas).outcome).toEqual({
       kind: "picked",
       id: "claude:c",
-      stage: "reserve",
+      stage: "overflow",
       reason: "most room left (all over 80%)",
     });
     expect(rank({ from: ["*"], maxUsage: 50 }, quotas).outcome).toMatchObject({
@@ -242,7 +242,7 @@ describe("skips", () => {
     );
     expect(ranking.excluded).toEqual([{ id: "claude:b", pattern: "b" }]);
     expect(ranking.rows.map((row) => row.id)).toEqual(["claude:a", "claude:c"]);
-    expect(ranking.outcome).toMatchObject({ stage: "reserve" });
+    expect(ranking.outcome).toMatchObject({ stage: "overflow" });
   });
 
   it("keeps a resumed run to profiles that share sessions", () => {

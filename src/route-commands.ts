@@ -165,7 +165,7 @@ export function routeHelp(sub?: string): string {
     `    ${dim("usage = the higher of the account's 5H and 7D windows")}`,
     `    ${dim("1. pool      from-members under max-usage, by strategy")}`,
     `    ${dim("2. fallback  fallback-members under max-usage, first in listed order")}`,
-    `    ${dim("3. reserve   any member under 100%, lowest usage first")}`,
+    `    ${dim("3. overflow  any member under 100%, lowest usage first")}`,
     `    ${dim("4. nobody    exit 75")}`,
     `    ${dim("round-robin: picked longest ago · headroom: lowest usage ·")}`,
     `    ${dim("expiring: weekly limit resetting within 24h first")}`,

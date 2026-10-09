@@ -662,7 +662,7 @@ function pickedWhy(ranking: Ranking): string {
   const { outcome, route } = ranking;
   if (outcome.kind !== "picked") return "";
   if (outcome.stage === "fallback") return "fallback";
-  if (outcome.stage === "reserve") return mostLeftReason(route);
+  if (outcome.stage === "overflow") return mostLeftReason(route);
   if (route.strategy === "round-robin") return "next in turn";
   // routing.ts says which of the two `expiring` took.
   if (route.strategy === "expiring" && outcome.reason.startsWith("weekly limit resets")) {

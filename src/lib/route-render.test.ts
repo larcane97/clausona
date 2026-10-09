@@ -739,7 +739,7 @@ describe("JSON", () => {
     const most = ranking({ "claude:team": snap(85, 30), "claude:work": snap(20, 99), "claude:old": snap(100, 0) });
     expect(pickJson("main", most)).toMatchObject({
       profile: "claude:team",
-      stage: "reserve",
+      stage: "overflow",
       reason: "most room left (all over 80%)",
     });
   });

@@ -557,7 +557,7 @@ describe("the reserve limit, which routes no longer have", () => {
       expect(page).not.toMatch(/reserve-usage|95%/);
     }
     expect(stripAnsi(await runCommand("run", ["--help"]))).not.toContain("--reserve-usage");
-    expect(await run("--help")).toContain("3. reserve   any member under 100%, lowest usage first");
+    expect(await run("--help")).toContain("3. overflow  any member under 100%, lowest usage first");
   });
 });
 

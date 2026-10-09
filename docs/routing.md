@@ -612,7 +612,7 @@ Without a terminal an unknown `--route` creates nothing.
 }
 ```
 
-`stage` is `pool`, `fallback` or `reserve`. `reserve` is the third stage: every account was at the
+`stage` is `pool`, `fallback` or `overflow`. `overflow` is the third stage: every account was at the
 cut or over it, and the one with the most left was picked. `route` is null for an unsaved route.
 
 When nobody can be picked, the JSON is still printed on stdout, and the exit code is 75:
@@ -655,7 +655,7 @@ Each entry in `members`:
 | `fiveHour`, `sevenDay` | `{ "usedPercent", "resetsAt" }` with `resetsAt` an ISO time or null, or null |
 | `lastPickedAt` | The ISO time of the last pick, or null |
 
-An account picked at the `reserve` stage has the status `picked`, even though its usage is at or
+An account picked at the `overflow` stage has the status `picked`, even though its usage is at or
 over `maxUsage`. Percentages are not rounded in JSON. Fields are only ever added.
 
 `route list --json` gives `{ "routes": [...] }`. Each entry has `name`, `route` (the settings

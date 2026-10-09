@@ -61,7 +61,7 @@ type Line = { key: string; id: string; picked: boolean; fallback: boolean; row?:
 function statusOf(row: Row, ranking: Ranking): string {
   const { outcome, route } = ranking;
   if (row.status === "picked")
-    return outcome.kind === "picked" && outcome.stage === "reserve" ? "next (most room left)" : "next";
+    return outcome.kind === "picked" && outcome.stage === "overflow" ? "next (most room left)" : "next";
   if (row.status === "over-limit") return `over ${route.maxUsage}%`;
   return "";
 }

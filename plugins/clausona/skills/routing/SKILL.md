@@ -24,7 +24,7 @@ the help.) A user who would rather look through routes on that screen can run it
 - clausona stops at the first stage that finds someone:
   1. **pool**: `from` members under `maxUsage` (default 80), chosen by the strategy.
   2. **fallback**: the first `fallback` member, in listed order, under `maxUsage`.
-  3. **reserve**: every member is at `maxUsage` or over it, so the one with the most left
+  3. **overflow**: every member is at `maxUsage` or over it, so the one with the most left
      (lowest usage) is taken, pool or fallback, at 90% or 99% alike.
   4. **nobody**: every member is at 100% or skipped. Nothing is launched, exit code **75**.
 - Strategies: `round-robin` (default; the account picked longest ago, a never-picked one
@@ -152,7 +152,7 @@ the user.
 - Each pick records the turn, so the next pick takes the next account under the cut. Never start
   every worker on one `pick` result, and never on ids copied from `explain`, which records nothing.
 - With fewer accounts under the cut than workers, later picks come back to an account already in
-  use. Once every account is over the cut, a pick (stage `reserve`) takes the one with the most
+  use. Once every account is over the cut, a pick (stage `overflow`) takes the one with the most
   left, not the next turn. Tell the user which workers share an account.
 - One `clausona run --route main -- -p …` per worker also takes its own turn. Use `pick` when you
   want the id before you start.

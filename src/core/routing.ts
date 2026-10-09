@@ -44,10 +44,10 @@ export type Row = {
 };
 
 /**
- * `reserve`: everyone was at the cut or over it, and the one with the most left was taken. The
+ * `overflow`: everyone was at the cut or over it, and the one with the most left was taken. The
  * name is what `--json` says, kept from when a route had a limit for that stage.
  */
-export type Stage = "pool" | "fallback" | "reserve";
+export type Stage = "pool" | "fallback" | "overflow";
 
 export type Outcome =
   | { kind: "picked"; id: string; stage: Stage; reason: string }
@@ -143,7 +143,7 @@ function soonestReset(rows: Row[], limit: number): { id: string; at: string } | 
   return best;
 }
 
-/** Why the reserve stage took its account; route-render.ts shows the same words. */
+/** Why the overflow stage took its account; route-render.ts shows the same words. */
 export const mostLeftReason = (route: Route) => `most room left (all over ${route.maxUsage}%)`;
 
 function decide(route: Route, rows: Row[], now: number): Outcome {
@@ -162,9 +162,9 @@ function decide(route: Route, rows: Row[], now: number): Outcome {
   if (fallback.length > 0) {
     return { kind: "picked", id: fallback[0].id, stage: "fallback", reason: `first fallback under ${route.maxUsage}%` };
   }
-  const reserve = under(rows, FULL).sort(byUsage);
-  if (reserve.length > 0) {
-    return { kind: "picked", id: reserve[0].id, stage: "reserve", reason: mostLeftReason(route) };
+  const overflow = under(rows, FULL).sort(byUsage);
+  if (overflow.length > 0) {
+    return { kind: "picked", id: overflow[0].id, stage: "overflow", reason: mostLeftReason(route) };
   }
   return { kind: "none", soonest: soonestReset(rows, FULL) };
 }
