@@ -37,7 +37,7 @@
     "about": [
       { "@type": "SoftwareApplication", "name": "Claude Code" },
       { "@type": "SoftwareApplication", "name": "Superset", "url": "https://superset.sh" },
-      { "@type": "SoftwareApplication", "name": "herdr", "url": "https://github.com/ogulcancelik/herdr" },
+      { "@type": "SoftwareApplication", "name": "herdr", "url": "https://github.com/herdrdev/herdr" },
       { "@type": "SoftwareApplication", "name": "Orca", "url": "https://github.com/stablyai/orca" },
       { "@type": "SoftwareApplication", "name": "clausona", "url": "https://github.com/larcane97/clausona" }
     ]
@@ -174,7 +174,7 @@ claude plugin install superset-fleet@clausona   # or herdr-fleet, orca-fleet</co
       <p>They work together.</p>
       <p>In any terminal, <code>clausona run claude:work</code> starts a Claude Code session on that account. In tmux, open it in a new window:</p>
 <pre data-copy><code>tmux new-window 'clausona run claude:work'</code></pre>
-      <p><a href="https://github.com/ogulcancelik/herdr">herdr</a> is a terminal runtime that keeps agent panes running and shows their state. Open a pane and run <code>clausona run claude:work</code> in it. The <code>herdr-fleet</code> plugin adds a coordinator there: see <a href="../parallel-agents-in-herdr/">parallel agents in herdr</a>.</p>
+      <p><a href="https://github.com/herdrdev/herdr">herdr</a> is a terminal runtime that keeps agent panes running and shows their state. Open a pane and run <code>clausona run claude:work</code> in it. The <code>herdr-fleet</code> plugin adds a coordinator there: see <a href="../parallel-agents-in-herdr/">parallel agents in herdr</a>.</p>
       <p><a href="https://github.com/stablyai/orca">Orca</a> is an open-source desktop app that runs coding agents side by side in separate git worktrees. It works with any CLI agent. In an Orca terminal, <code>clausona run claude:work</code> starts Claude Code on that account.</p>
       <p>Orca also has its own Claude and Codex account switcher. The <code>orca-fleet</code> plugin adds a coordinator there: see <a href="../parallel-agents-in-orca/">parallel agents in Orca</a>.</p>
       <p>In <a href="https://superset.sh">Superset</a>, add a custom agent whose command is the full path that <code>command -v clausona</code> prints. Its arguments start with <code>run claude:work --</code>, and <a href="#setup">the setup steps</a> have the full line.</p>

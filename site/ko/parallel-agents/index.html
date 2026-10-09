@@ -148,7 +148,7 @@ claude plugin install superset-fleet@clausona   # herdr-fleet, orca-fleet도 같
       <p>어느 터미널이든 <code>clausona run claude:work</code>로 그 계정의 Claude Code 세션을 띄웁니다. 도구마다 다른 건 이 명령을 넣는 자리뿐이에요.</p>
       <p><strong>tmux</strong>에서는 새 창으로 띄우면 됩니다.</p>
 <pre data-copy><code>tmux new-window 'clausona run claude:work'</code></pre>
-      <p><a href="https://github.com/ogulcancelik/herdr">herdr</a>는 에이전트 창을 유지하고 창마다 상태를 보여 주는 터미널 런타임입니다. 창을 하나 열고 그 안에서 <code>clausona run claude:work</code>를 실행하면 됩니다. herdr에서는 <code>herdr-fleet</code> 플러그인이 조율을 맡아요. 자세한 내용은 <a href="../parallel-agents-in-herdr/">herdr 가이드</a>에 있습니다.</p>
+      <p><a href="https://github.com/herdrdev/herdr">herdr</a>는 에이전트 창을 유지하고 창마다 상태를 보여 주는 터미널 런타임입니다. 창을 하나 열고 그 안에서 <code>clausona run claude:work</code>를 실행하면 됩니다. herdr에서는 <code>herdr-fleet</code> 플러그인이 조율을 맡아요. 자세한 내용은 <a href="../parallel-agents-in-herdr/">herdr 가이드</a>에 있습니다.</p>
       <p><a href="https://github.com/stablyai/orca">Orca</a>는 코딩 에이전트를 각자의 git worktree에서 나란히 돌리는 오픈소스 데스크톱 앱입니다. 어떤 CLI 에이전트든 실행할 수 있습니다. Orca 터미널에서 <code>clausona run claude:work</code>를 실행하면 그 계정으로 Claude Code가 뜹니다.</p>
       <p>참고로 Orca에는 Claude와 Codex 계정을 바꾸는 자체 기능이 있습니다. Orca에서는 <code>orca-fleet</code> 플러그인이 조율을 맡고, 자세한 내용은 <a href="../parallel-agents-in-orca/">Orca 가이드</a>에 있습니다.</p>
       <p><a href="https://superset.sh">Superset</a>에서는 커스텀 에이전트로 등록합니다. command에는 <code>command -v clausona</code>가 출력하는 전체 경로를 넣고, arguments는 <code>run claude:work -- --model claude-sonnet-5-5 --effort high --permission-mode acceptEdits --strict-mcp-config</code>처럼 둡니다. 자세한 순서는 <a href="#setup">조율 스킬 설정하기</a>에 있습니다.</p>
