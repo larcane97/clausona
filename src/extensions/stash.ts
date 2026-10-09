@@ -3,6 +3,7 @@ import { bytesHash } from "./hash.js";
 import type { Extension, HookPlace, Location, Scope } from "./model.js";
 import { isRecord } from "./read.js";
 import { hookSummary, mcpSummary } from "./redact.js";
+import type { JsonPath } from "./writers/json.js";
 
 /**
  * What clausona keeps of an MCP server or a hook it turned off everywhere: the tool has no
@@ -10,10 +11,6 @@ import { hookSummary, mcpSummary } from "./redact.js";
  * per entry, and goes back from there. Pure: the format, its parsing, and the item a file lists
  * as. Reading the folder is `sources/stash.ts`'s.
  */
-
-/** One segment of a path into a JSON file: a key, an index, or a project's key in `projects` as written there. */
-export type PathSeg = string | number | { projectKey: string };
-export type JsonPath = readonly PathSeg[];
 
 export const STASH_VERSION = 1;
 
