@@ -30,7 +30,8 @@ import {
   reinstallCommand,
   versionOfTag,
 } from "./core/update.js";
-import { EXTENSIONS_FLAGS, EXTENSIONS_VALUE_FLAGS, runExtensionsCommand, usageParts } from "./extensions/cli.js";
+import { EXTENSIONS_FLAGS, EXTENSIONS_VALUE_FLAGS, extensionsHelp, runExtensionsCommand } from "./extensions/cli.js";
+import { ExitError } from "./extensions/exit-error.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import {
   describeOtherAccount,
@@ -151,7 +152,7 @@ function valuePrefixes(flags: string[]): string[] {
   return flags.map((flag) => `${flag}=`);
 }
 
-const commandFlags: Record<string, { flags: string[]; prefixes?: string[] }> = {
+const commandFlags: Record<string, { flags: string[]; prefixes?: string[]; badUsageCode?: number }> = {
   init: { flags: ["--auto", "--merge-sessions", "--force"] },
   add: { flags: ["--merge-sessions", "--api", ...ADD_VALUE_FLAGS], prefixes: valuePrefixes(ADD_VALUE_FLAGS) },
   use: { flags: [] },
@@ -159,9 +160,10 @@ const commandFlags: Record<string, { flags: string[]; prefixes?: string[] }> = {
   usage: { flags: ["--json"], prefixes: ["--period="] },
   current: { flags: ["--json"] },
   doctor: { flags: ["--json"] },
-  skills: { flags: EXTENSIONS_FLAGS, prefixes: valuePrefixes(EXTENSIONS_VALUE_FLAGS) },
-  mcp: { flags: EXTENSIONS_FLAGS, prefixes: valuePrefixes(EXTENSIONS_VALUE_FLAGS) },
-  hooks: { flags: EXTENSIONS_FLAGS, prefixes: valuePrefixes(EXTENSIONS_VALUE_FLAGS) },
+  // An unknown option is bad usage, exit code 2, as everything else these commands refuse.
+  skills: { flags: EXTENSIONS_FLAGS, prefixes: valuePrefixes(EXTENSIONS_VALUE_FLAGS), badUsageCode: 2 },
+  mcp: { flags: EXTENSIONS_FLAGS, prefixes: valuePrefixes(EXTENSIONS_VALUE_FLAGS), badUsageCode: 2 },
+  hooks: { flags: EXTENSIONS_FLAGS, prefixes: valuePrefixes(EXTENSIONS_VALUE_FLAGS), badUsageCode: 2 },
   config: {
     flags: [
       "--merge-sessions",
@@ -200,7 +202,8 @@ function validateFlags(command: string, args: string[]) {
     // lands here, and quoting the whole token would print the key into the window and the
     // scrollback. Cutting at the `=` covers every option that will ever be misspelled
     // this way, rather than special-casing the ones next to a credential today.
-    throw new Error(`Unknown option: ${arg.split("=")[0]}\nRun \`clausona ${command} --help\` for usage.`);
+    const message = `Unknown option: ${arg.split("=")[0]}\nRun \`clausona ${command} --help\` for usage.`;
+    throw spec.badUsageCode === undefined ? new Error(message) : new ExitError(message, spec.badUsageCode);
   }
 }
 
@@ -574,7 +577,7 @@ async function editProfileEnv(id: string, profile: Profile): Promise<string> {
 
 // ─── Subcommand Help ────────────────────────────────────────────────
 
-function subcommandHelpText(command: string): string | undefined {
+function subcommandHelpText(command: string, args: string[] = []): string | undefined {
   switch (command) {
     case "init":
       return [
@@ -1045,24 +1048,9 @@ function subcommandHelpText(command: string): string | undefined {
     case "skills":
     case "mcp":
     case "hooks": {
-      const [usage, more] = usageParts(command);
-      return [
-        "",
-        `  ${accent(`clausona ${command}`)} ${dim("— What every account and project can load")}`,
-        "",
-        `  ${bold("USAGE")}`,
-        helpUsage(usage),
-        // The rest of the options under the first, past `clausona <command> ls `.
-        helpUsage(`${" ".repeat(`clausona ${command} ls `.length)}${more}`),
-        "",
-        `  ${bold("OPTIONS")}`,
-        `    ${accent("--project <path>".padEnd(20))}${dim("Show it as seen from that project (default: the one you are in)")}`,
-        `    ${accent("--all-projects".padEnd(20))}${dim("Include every project's own items")}`,
-        `    ${accent("--tool <tool>".padEnd(20))}${dim("claude or codex")}`,
-        `    ${accent("--filter <name>".padEnd(20))}${dim("cleanup, duplicates or off (off in any one account counts)")}`,
-        `    ${accent("--json".padEnd(20))}${dim("JSON: state (stateByAccount for servers all accounts see), usage, location")}`,
-        "",
-      ].join("\n");
+      // `clausona skills ls --help` is the ls page; the subcommand comes first, as it is typed.
+      const sub = args[0] === "ls" || args[0] === "show" ? args[0] : undefined;
+      return extensionsHelp(command, sub);
     }
 
     default:
@@ -1090,9 +1078,9 @@ function usageText() {
       ["current", "Show active profile details"],
       ["config <profile>", "Configure profile settings"],
       ["doctor", "Check profile health"],
-      ["skills ls", "List skills across accounts and projects"],
-      ["mcp ls", "List MCP servers across accounts and projects"],
-      ["hooks ls", "List hooks across accounts and projects"],
+      ["skills ls|show", "Skills each project loads, by scope"],
+      ["mcp ls|show", "MCP servers each project loads, by scope"],
+      ["hooks ls|show", "Hooks each project runs, by scope"],
       ["repair <profile>", "Repair shared links"],
       ["login <profile>", "Re-authenticate a profile"],
       ["remove <profile>", "Remove a profile"],
@@ -1111,7 +1099,7 @@ function usageText() {
 
 export async function runCommand(command: string, args: string[]) {
   if (command !== "help" && command !== "-h" && command !== "--help" && helpFlag(args)) {
-    const helpText = subcommandHelpText(command);
+    const helpText = subcommandHelpText(command, args);
     if (helpText) return helpText;
   }
 

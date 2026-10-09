@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands.js";
-import { isMainModule, parseCommand, writeCommandResult } from "./index.js";
+import { ExitError } from "./extensions/exit-error.js";
+import { isMainModule, parseCommand, writeCommandError, writeCommandResult } from "./index.js";
 
 describe("parseCommand", () => {
   it("defaults to interactive mode with no args", () => {
@@ -68,6 +69,39 @@ describe("writeCommandResult", () => {
       writeCommandResult(result, out);
       expect(chunks, JSON.stringify(result)).toEqual([`${result}\n`]);
     }
+  });
+});
+
+describe("writeCommandError", () => {
+  function streams() {
+    const out: string[] = [];
+    const err: string[] = [];
+    return {
+      out,
+      err,
+      streams: { out: { write: (c: string) => out.push(c) > 0 }, err: { write: (c: string) => err.push(c) > 0 } },
+    };
+  }
+
+  it("exits with an ExitError's code, its message on stderr", () => {
+    const s = streams();
+    expect(writeCommandError(new ExitError("--scope parents does not apply to skills.", 2), s.streams)).toBe(2);
+    expect(s.out).toEqual([]);
+    expect(s.err.join("")).toContain("--scope parents does not apply to skills.");
+  });
+
+  it("writes an ExitError's stdout alone, so stdout is the JSON and stderr stays empty", () => {
+    const s = streams();
+    const json = JSON.stringify({ error: "ambiguous", candidates: [] });
+    expect(writeCommandError(new ExitError("2 skills are named 'eli5':", 2, json), s.streams)).toBe(2);
+    expect(s.out).toEqual([`${json}\n`]);
+    expect(s.err).toEqual([]);
+  });
+
+  it("exits 1 with the message for any other error", () => {
+    const s = streams();
+    expect(writeCommandError(new Error("boom"), s.streams)).toBe(1);
+    expect(s.err.join("")).toContain("boom");
   });
 });
 
