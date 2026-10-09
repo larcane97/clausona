@@ -237,6 +237,26 @@ describe("detailOf", () => {
     });
   });
 
+  it("lists no duplicates and no Copies line for skills read through a skills dir that is a link", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    h.codex("personal", ".codex", "");
+    h.skill(".agents/skills", "eli5", "Explain things simply");
+    h.link(".agents/skills", ".claude/skills");
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: h.home,
+      managedSettings: h.path("none.json"),
+    });
+    expect(items(buildRows(inv, { ...base, tab: "skills", filter: "duplicates" }))).toEqual([]);
+    const row = items(buildRows(inv, { ...base, tab: "skills" })).find((r) => r.name === "eli5");
+    if (row?.type !== "item") throw new Error("no eli5 row");
+    expect(row.tools).toEqual(["claude", "codex"]);
+    expect(detailOf(inv, row, undefined, Date.now()).find((l) => l.label === "Copies")).toBeUndefined();
+  });
+
   it("gives a shadowed copy no usage of its own: Claude counts it under the copy that wins", async () => {
     const { app, inv } = await seed((h) => {
       h.skill("repos/app/.claude/skills", "eli5", "The project's own take");

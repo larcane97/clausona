@@ -34,6 +34,11 @@ export type Extension = {
   location: Location;
   /** Set when the folder is a symlink or junction. */
   link?: { target: string; broken: boolean };
+  /**
+   * Skills: the folder's real path, through every link on the way - its own, or a whole skills
+   * dir's - so two entries that lead to one folder are one copy. Absent for a broken link.
+   */
+  realFolder?: string;
   /** Skills: when the folder appeared (birthtime, else mtime), for the cleanup grace period. */
   createdAt?: number;
   /** Skills: the keys Claude Code may record its use under in `skillUsage`. */
