@@ -2,13 +2,14 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 
 import type { Action, ExtensionsCommand } from "./actions.js";
-import { type Plan, type PlanContext, plan, trackCandidates } from "./plan.js";
-import { gitRoot, pathKey } from "./read.js";
+import { type Plan, type PlanContext, type PlanLine, plan, trackCandidates } from "./plan.js";
+import { entryInfo, gitRoot, pathKey } from "./read.js";
 
 /**
- * Which of the paths a plan touches git tracks, so a change to the repo asks first (rule A).
- * The one module that starts a process: `git ls-files`, which only reads. No git, a dir that is
- * no repo, git failing or running out of time: nothing there is tracked, and the change is still
+ * The plan as the confirm dialog and `--dry-run` show it: which of the paths it touches git
+ * tracks, so a change to the repo asks first (rule A), and which of its files are there yet. The
+ * one module that starts a process: `git ls-files`, which only reads. No git, a dir that is no
+ * repo, git failing or running out of time: nothing there is tracked, and the change is still
  * backed up.
  */
 
@@ -74,7 +75,24 @@ export async function trackedPaths(
   return tracked;
 }
 
-/** plan with an empty tracked set, trackedPaths of its trackCandidates, then plan again with them. */
+/**
+ * Each edited file's line said as what it is on disk: "create" where the file is not there yet
+ * and the change may make it, else "edit". plan() is pure and can only tell from what the
+ * inventory read.
+ */
+async function filesLookedAt(plan: Plan): Promise<Plan> {
+  const changes = await Promise.all(
+    plan.changes.map(async (change) => {
+      if (change.kind === "remove") return change;
+      const there = (await entryInfo(change.file)).kind !== "missing";
+      const made: PlanLine["change"] = there || !change.create ? "edit" : "create";
+      return { ...change, lines: change.lines.map((line) => ({ ...line, change: made })) };
+    }),
+  );
+  return { ...plan, changes };
+}
+
+/** plan with an empty tracked set, trackedPaths of its trackCandidates, then plan again with them; each file looked at. */
 export async function planChecked(
   ctx: Omit<PlanContext, "tracked">,
   command: ExtensionsCommand,
@@ -87,5 +105,6 @@ export async function planChecked(
     candidates.length === 0
       ? new Set<string>()
       : await trackedPaths(candidates, options.git !== undefined ? { git: options.git } : {});
-  return { plan: tracked.size === 0 ? first : plan({ ...ctx, tracked }, command, action), tracked };
+  const checked = tracked.size === 0 ? first : plan({ ...ctx, tracked }, command, action);
+  return { plan: await filesLookedAt(checked), tracked };
 }

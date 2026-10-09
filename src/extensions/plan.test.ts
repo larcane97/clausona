@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { mkdirSync, realpathSync, symlinkSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -17,10 +17,10 @@ import {
 import { valueHash } from "./hash.js";
 import { loadInventory } from "./inventory.js";
 import type { Inventory } from "./model.js";
-import { actionsLine, keysFor, type Plan, type PlanContext, plan, trackCandidates } from "./plan.js";
+import { actionsLine, keysFor, type Plan, type PlanContext, plan, rowForId, trackCandidates } from "./plan.js";
 import { tilde } from "./present.js";
 import { pathKey, samePath } from "./read.js";
-import { type ItemKind, rowsIn, type ScopeId, type ScopeRow, type ToolName } from "./scopes.js";
+import { type ItemKind, pluginContents, rowsIn, type ScopeId, type ScopeRow, type ToolName } from "./scopes.js";
 import { stashFileName, stashIdFor, stashText } from "./stash.js";
 import { TestHome } from "./test-home.js";
 
@@ -309,6 +309,40 @@ describe("plan: Claude skills", () => {
     expect(p.changes.some((c) => samePath(c.file, shared) || samePath(c.file, h.path("shared/notes")))).toBe(false);
   });
 
+  // A file symlink needs privileges on Windows.
+  it.skipIf(process.platform === "win32")(
+    "removes a command file that is a link, and keeps what it leads to",
+    async () => {
+      let target = "";
+      const { h, app, inv, ctx } = await seed((h) => {
+        target = h.write("dotfiles/commands/ship.md", "Ship.");
+        mkdirSync(h.path(".claude", "commands"), { recursive: true });
+        symlinkSync(target, h.path(".claude", "commands", "ship.md"), "file");
+      });
+      const ship = rowIn(inv, app, "global", "ship");
+      const link = h.path(".claude", "commands", "ship.md");
+      expect(plan(ctx, "skills", act("rm", "here", [ship])).changes).toEqual([
+        {
+          kind: "remove",
+          file: link,
+          what: "link",
+          expect: [{ type: "entry", kind: "link", target: ship.items[0]?.link?.target }],
+          lines: [
+            {
+              file: link,
+              change: "unlink",
+              what: "",
+              note: "link only, target kept",
+              tracked: false,
+              rows: [ship.key],
+            },
+          ],
+        },
+      ]);
+      expect(samePath(ship.items[0]?.link?.target, target)).toBe(true);
+    },
+  );
+
   it("removes a broken link, and refuses to turn it off", async () => {
     const { h, app, inv, ctx } = await seed();
     const lost = rowIn(inv, app, "global", "lost");
@@ -414,6 +448,13 @@ describe("plan: Claude skills", () => {
     expect(refusalText(p.refused[0] as Plan["refused"][number], "flags")).toBe(
       `${file} could not be read. Fix it, then try again.`,
     );
+    // Before anything is called already so: eli5 is on, but what the file says is not known.
+    const on = plan(ctx, "skills", act("on", "here", [rowIn(inv, app, "global", "eli5")]));
+    expect(on.unchanged).toEqual([]);
+    expect(codes(on)).toEqual(["unreadable"]);
+    expect(
+      codes(plan(ctx, "mcp", act("on", "here", [rowIn(inv, app, "project", "docs-search", "claude", "mcp")]))),
+    ).toEqual(["unreadable"]);
   });
 
   it("refuses to turn a skill off here with no project", async () => {
@@ -450,6 +491,7 @@ describe("plan: Claude skills", () => {
     const policy = rowIn(inv, app, "managed", "Stop", "claude", "hook");
     expect(codes(plan(ctx, "hooks", act("off", "everywhere", [policy])))).toEqual(["managed"]);
     expect(codes(plan(ctx, "hooks", act("rm", "here", [policy])))).toEqual(["managed"]);
+    expect(codes(plan(ctx, "hooks", act("visibility", "here", [policy], { level: "name-only" })))).toEqual(["managed"]);
     // Deleting the folder is no setting: managed settings do not stop it.
     expect(plan(ctx, "skills", act("rm", "here", [rowIn(inv, app, "global", "old-one")])).refused).toEqual([]);
   });
@@ -841,26 +883,106 @@ describe("plan: Claude MCP servers", () => {
     const gone = figma.items.find((item) => item.stashed?.gone);
     const on = plan(ctx, "mcp", act("on", "everywhere", [figma]));
     expect(on.changes).toEqual([]);
-    expect(on.refused.map((r) => [r.code, r.reason, r.flags])).toEqual([
+    expect(on.refused.map((r) => [r.code, r.reason, r.keys, r.flags])).toEqual([
       [
         "stash-gone",
         `${tilde(h.path("gone", ".claude.json"), inv.homeDir)}, where it came from, is gone.`,
+        // d on the row would take default's live figma too.
+        "Press d and choose only work in the dialog.",
         `Delete the copy clausona kept: clausona mcp rm --id ${gone?.id}.`,
       ],
     ]);
+    const stashRemoved = {
+      kind: "remove",
+      file: stashFile,
+      what: "file",
+      expect: [{ type: "entry", kind: "file" }],
+      lines: [
+        { file: stashFile, change: "delete", what: "", account: "claude:work", tracked: false, rows: [figma.key] },
+      ],
+    };
     const rm = plan(ctx, "mcp", act("rm", "here", [figma], { accounts: ["claude:work"] }));
     expect(rm.refused).toEqual([]);
-    expect(rm.changes).toEqual([
+    expect(rm.changes).toEqual([stashRemoved]);
+
+    // Following the flags' hint: --id <that copy> is the row narrowed to it, and default's live figma stays.
+    const byId = rowForId(figma, gone?.id ?? "");
+    expect(byId?.items).toEqual([gone]);
+    const hinted = plan(ctx, "mcp", act("rm", "here", [byId as ScopeRow]));
+    expect(hinted.changes).toEqual([stashRemoved]);
+    expect(hinted.changes.some((c) => samePath(c.file, h.path(".claude.json")))).toBe(false);
+    // The whole row, by its key, is every copy.
+    expect(rowForId(figma, figma.key)).toBe(figma);
+    expect(plan(ctx, "mcp", act("rm", "here", [figma])).changes.map((c) => c.file)).toEqual([
+      h.path(".claude.json"),
+      stashFile,
+    ]);
+    expect(rowForId(figma, "mcp:claude:account:nobody:figma")).toBeUndefined();
+    // Two copies named by their ids, or a row named twice, plan as one row.
+    const live = figma.items.find((item) => !item.stashed);
+    const both = plan(ctx, "mcp", act("rm", "here", [byId as ScopeRow, rowForId(figma, live?.id ?? "") as ScopeRow]));
+    expect(both.changes.map((c) => c.lines.map((l) => l.rows))).toEqual([[[figma.key]], [[figma.key]]]);
+    expect(both.question).toBe("Delete figma?");
+  });
+
+  it("refuses to turn a .mcp.json server on over a managed denial", async () => {
+    const { app, inv, ctx } = await seed((h) =>
+      h.write("managed-settings.json", { disabledMcpjsonServers: ["docs-search"] }),
+    );
+    const docs = rowIn(inv, app, "project", "docs-search", "claude", "mcp");
+    expect(codes(plan(ctx, "mcp", act("on", "here", [docs])))).toEqual(["managed"]);
+  });
+
+  it("switches a plugin's server here in each account that has the plugin and has opened the project", async () => {
+    const seeded = await seed((h) => {
+      const kit = h.path(".claude/plugins/cache/m/kit/1.0.0");
+      h.write(".claude/plugins/cache/m/kit/1.0.0/.mcp.json", { mcpServers: { kitdb: { command: "kd" } } });
+      h.write(".claude-work/plugins/installed_plugins.json", { plugins: { "kit@m": [{ installPath: kit }] } });
+    });
+    const { h, inv, web } = seeded;
+    const ctx = contextFor(h, inv, web);
+    const kitdb = rowIn(inv, web, "loaded", "plugin:kit:kitdb", "claude", "mcp");
+    const off = plan(ctx, "mcp", act("off", "here", [kitdb]));
+    expect(off.changes).toEqual([
       {
-        kind: "remove",
-        file: stashFile,
-        what: "file",
-        expect: [{ type: "entry", kind: "file" }],
+        kind: "json",
+        file: h.path(".claude.json"),
+        edits: [
+          { op: "list-add", path: ["projects", { projectKey: web }, "disabledMcpServers"], value: "plugin:kit:kitdb" },
+        ],
+        expect: [],
+        create: false,
+        lock: true,
         lines: [
-          { file: stashFile, change: "delete", what: "", account: "claude:work", tracked: false, rows: [figma.key] },
+          {
+            file: h.path(".claude.json"),
+            change: "edit",
+            what: "disabledMcpServers + plugin:kit:kitdb",
+            account: "claude:default",
+            tracked: false,
+            rows: [kitdb.key],
+          },
         ],
       },
     ]);
+    expect(off.notes).toEqual(["work has not opened this project"]);
+    expect(codes(plan(ctx, "mcp", act("off", "everywhere", [kitdb])))).toEqual(["plugin-item"]);
+    expect(codes(plan(ctx, "mcp", act("rm", "here", [kitdb])))).toEqual(["plugin-item"]);
+
+    const pluginOff = await seed((h) => {
+      h.write(".claude/plugins/cache/m/kit/1.0.0/.mcp.json", { mcpServers: { kitdb: { command: "kd" } } });
+      h.write(".claude/settings.json", { ...SETTINGS, enabledPlugins: { "kit@m": false } });
+    });
+    // A server of a plugin that is off is in no table but its plugin's: the row its details list.
+    const kitRow = rowIn(pluginOff.inv, pluginOff.app, "plugins", "kit@m", "claude", "mcp");
+    const [serverRow] = pluginContents(pluginOff.inv, kitRow).mcp;
+    expect(serverRow?.name).toBe("plugin:kit:kitdb");
+    expect(
+      plan(pluginOff.ctx, "mcp", act("on", "here", [serverRow as ScopeRow])).refused.map((r) => [
+        r.code,
+        refusalText(r, "keys"),
+      ]),
+    ).toEqual([["plugin-item", "It comes with the plugin kit@m. Turn the plugin on or off in Plugins."]]);
   });
 });
 
@@ -924,6 +1046,53 @@ describe("plan: Codex MCP servers", () => {
         expect: [{ type: "toml", path: ["mcp_servers", "docs", "enabled"], hash: valueHash(false) }],
       },
     ]);
+  });
+});
+
+describe("plan: Codex project servers and hooks", () => {
+  const projectFiles: More = (h) => {
+    h.write("repos/app/.codex/config.toml", '[mcp_servers.local-db]\ncommand = "db"\n');
+    h.write("repos/web/.codex/config.toml", '[mcp_servers.web-db]\ncommand = "wdb"\n');
+    h.write("repos/web/.codex/hooks.json", {
+      hooks: { Stop: [{ hooks: [{ type: "command", command: "web-stop" }] }] },
+    });
+  };
+
+  it("switches a trusted project's own server in its own config, here only", async () => {
+    const { app, inv, ctx } = await seed(projectFiles);
+    const localDb = rowIn(inv, app, "project", "local-db", "codex", "mcp");
+    const file = path.join(app, ".codex", "config.toml");
+    expect(plan(ctx, "mcp", act("off", "here", [localDb])).changes).toEqual([
+      {
+        kind: "toml",
+        file,
+        edits: [{ op: "mcp-enabled", server: "local-db", enabled: false }],
+        expect: [{ type: "toml", path: ["mcp_servers", "local-db", "enabled"], hash: null }],
+        create: false,
+        lines: [
+          { file, change: "edit", what: "mcp_servers.local-db.enabled → false", tracked: false, rows: [localDb.key] },
+        ],
+      },
+    ]);
+    expect(codes(plan(ctx, "mcp", act("off", "everywhere", [localDb])))).toEqual(["codex-project-everywhere"]);
+    expect(
+      refusalText(plan(ctx, "mcp", act("off", "everywhere", [localDb])).refused[0] as Plan["refused"][number], "flags"),
+    ).toBe("It is defined in this project only. Leave out --everywhere.");
+  });
+
+  it("writes nothing under the .codex folder of a project Codex does not trust", async () => {
+    const { app, web, inv, ctx } = await seed(projectFiles);
+    const webDb = rowsIn(inv, "codex", "mcp", "other", app, NOW, web).find((r) => r.name === "web-db") as ScopeRow;
+    for (const verb of ["off", "on", "rm"] as const) {
+      expect(codes(plan(ctx, "mcp", act(verb, "here", [webDb])))).toEqual(["codex-untrusted"]);
+    }
+    const webStop = rowsIn(inv, "codex", "hook", "other", app, NOW, web).find((r) => r.name === "Stop") as ScopeRow;
+    expect(webStop.items[0]?.location.file).toBe(path.join(web, ".codex", "hooks.json"));
+    expect(codes(plan(ctx, "hooks", act("off", "everywhere", [webStop])))).toEqual(["codex-untrusted"]);
+    expect(codes(plan(ctx, "hooks", act("rm", "here", [webStop])))).toEqual(["codex-untrusted"]);
+    expect(
+      refusalText(plan(ctx, "hooks", act("rm", "here", [webStop])).refused[0] as Plan["refused"][number], "keys"),
+    ).toBe("Codex does not trust this project, so it ignores its .codex folder. Trust the project in Codex first.");
   });
 });
 
@@ -999,6 +1168,78 @@ describe("plan: hooks and plugins", () => {
       ],
       lines: [{ what: "Stop hook deleted" }, { what: "Stop hook deleted" }],
     });
+  });
+
+  it("puts hooks clausona kept back first place first, and refuses one whose file is gone", async () => {
+    const files: Record<string, string> = {};
+    const { h, app, inv, ctx } = await seed((h) => {
+      h.write(".claude/settings.json", { enabledPlugins: { "kit@m": true } });
+      const kept = (command: string, index: number, file: string) => {
+        const id = stashIdFor(`hook:claude:global:-:Stop#0.${index}:${command}`, NOW - DAY);
+        files[command] = h.write(
+          path.join(STASH, stashFileName(id)),
+          stashText({
+            version: 1,
+            id,
+            kind: "hook",
+            tool: "claude",
+            name: "Stop",
+            file,
+            path: ["hooks", "Stop"],
+            scope: "global",
+            hook: { base: "hooks", event: "Stop", group: 0, index },
+            entry: { type: "command", command },
+            stashedAt: new Date(NOW - DAY).toISOString(),
+          }),
+        );
+      };
+      kept("notify-a", 0, h.path(".claude", "settings.json"));
+      kept("notify-b", 1, h.path(".claude", "settings.json"));
+      kept("notify-gone", 0, h.path("gone", "settings.json"));
+    });
+    const [a, b, gone] = ["notify-a", "notify-b", "notify-gone"].map((command) => hookRow(inv, app, command));
+    // A kept hook's row is that one copy: d on it deletes only what clausona kept.
+    for (const row of [a, b, gone]) {
+      expect(row?.items).toHaveLength(1);
+      expect(row?.key).toBe(row?.items[0]?.id);
+    }
+    const settings = h.path(".claude", "settings.json");
+    const on = plan(ctx, "hooks", act("on", "everywhere", [b as ScopeRow, a as ScopeRow]));
+    expect(on.changes).toEqual(
+      [
+        [a, "notify-a", 0],
+        [b, "notify-b", 1],
+      ].map(([row, command, index]) => ({
+        kind: "json",
+        file: settings,
+        edits: [{ op: "hook-restore", place: { base: "hooks", event: "Stop", group: 0, index } }],
+        expect: [],
+        create: false,
+        lock: false,
+        fromStash: files[command as string],
+        lines: [
+          {
+            file: settings,
+            change: "edit",
+            what: "Stop hook put back",
+            tracked: false,
+            rows: [(row as ScopeRow).key],
+          },
+        ],
+      })),
+    );
+    expect(on.question).toBe("Turn on 2 hooks in every project?");
+    const refused = plan(ctx, "hooks", act("on", "everywhere", [gone as ScopeRow])).refused;
+    expect(refused.map((r) => [r.code, refusalText(r, "keys"), refusalText(r, "flags")])).toEqual([
+      [
+        "stash-gone",
+        `${tilde(h.path("gone", "settings.json"), inv.homeDir)}, where it came from, is gone. Press d to delete the copy clausona kept.`,
+        `${tilde(h.path("gone", "settings.json"), inv.homeDir)}, where it came from, is gone. Delete the copy clausona kept: clausona hooks rm --id ${gone?.key}.`,
+      ],
+    ]);
+    expect(plan(ctx, "hooks", act("rm", "here", [gone as ScopeRow])).changes).toMatchObject([
+      { kind: "remove", what: "file", file: files["notify-gone"] },
+    ]);
   });
 
   it("switches a plugin in this project's local settings or in user settings", async () => {
@@ -1091,12 +1332,18 @@ describe("keys and toggles", () => {
     expect(stopText({ file, reason: "locked" }, "flags", home, "mcp")).toBe(
       `Claude Code is saving ${shown}. Try again in a moment.`,
     );
-    const conflict = { file, reason: "conflict" as const, name: "figma", rowKey: "mcp:claude:account:-:figma" };
-    expect(stopText(conflict, "keys", home, "mcp")).toBe(
-      `figma is back in ${shown} already. Press d to delete the copy clausona kept.`,
+    const id = "mcp:claude:account:stash-x-1:figma";
+    const conflict = { file, reason: "conflict" as const, name: "figma", rowKey: id };
+    const byId = `figma is back in ${shown} already. Delete the copy clausona kept: clausona mcp rm --id ${id}.`;
+    expect(stopText(conflict, "flags", home, "mcp")).toBe(byId);
+    // The server back in the account's file shares the row with the kept copy: d would take both.
+    expect(stopText(conflict, "keys", home, "mcp")).toBe(byId);
+    expect(stopText({ file, reason: "conflict", name: "figma" }, "flags", home, "mcp")).toBe(
+      `figma is back in ${shown} already. Delete the copy clausona kept: clausona mcp rm --id '<id>'.`,
     );
-    expect(stopText(conflict, "flags", home, "mcp")).toBe(
-      `figma is back in ${shown} already. Delete the copy clausona kept: clausona mcp rm --id mcp:claude:account:-:figma.`,
+    const hooksFile = path.join(home, ".claude", "settings.json");
+    expect(stopText({ file: hooksFile, reason: "conflict", name: "Stop" }, "keys", home, "hooks")).toBe(
+      `Stop is back in ~${path.sep}${path.join(".claude", "settings.json")} already. Press d to delete the copy clausona kept.`,
     );
     expect(stopText({ file, reason: "failed", detail: "EACCES" }, "keys", home, "mcp")).toBe(
       `Could not change ${shown}: EACCES.`,

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { planChecked, trackedPaths } from "./git-tracked.js";
 import { loadInventory } from "./inventory.js";
+import { plan } from "./plan.js";
 import { pathKey } from "./read.js";
 import { rowsIn } from "./scopes.js";
 import { TestHome } from "./test-home.js";
@@ -68,6 +69,31 @@ describe("trackedPaths", () => {
 });
 
 describe("planChecked", () => {
+  it("says a file is edited where it is there, though the inventory read nothing from it", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", { projects: { [app]: {} } });
+    h.skill(".claude/skills", "eli5");
+    const load = () =>
+      loadInventory({ homeDir: h.home, registry: h.registry, cwd: app, managedSettings: h.path("managed.json") });
+    const checkedChange = async () => {
+      const inv = await load();
+      const row = rowsIn(inv, "claude", "skill", "global", app, NOW).find((r) => r.name === "eli5");
+      if (!row) throw new Error("no eli5 row");
+      const ctx = { inv, project: app, now: NOW, stashDir: h.path(".clausona", "extensions", "stash") };
+      const action = { verb: "off" as const, reach: "here" as const, rows: [row] };
+      return {
+        planned: plan({ ...ctx, tracked: new Set() }, "skills", action).changes[0]?.lines[0]?.change,
+        checked: (await planChecked(ctx, "skills", action)).plan.changes[0]?.lines[0]?.change,
+      };
+    };
+    expect(await checkedChange()).toEqual({ planned: "create", checked: "create" });
+    // Permissions only: nothing the inventory lists, so the pure plan cannot tell it is there.
+    h.write("repos/app/.claude/settings.local.json", { permissions: { allow: [] } });
+    expect(await checkedChange()).toEqual({ planned: "create", checked: "edit" });
+  });
+
   it.skipIf(!hasGit)("plans again with what git tracks, so a tracked folder is refused", async () => {
     const { h, app, tracked } = repo();
     h.claude("default", ".claude", { projects: { [app]: {} } });

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ToolName } from "../types.js";
 import {
   type Action,
+  chosenAccount,
   codexMcpEntry,
   codexSkillEntry,
   type ExtensionsCommand,
@@ -10,6 +11,7 @@ import {
   layerMap,
   mcpDisabled,
   NEXT_VISIBILITY,
+  ONE_ACCOUNT_KEYS,
   ownValue,
   type Reach,
   type Refusal,
@@ -192,7 +194,14 @@ function adding(out: Outcome, change: FileChange): Outcome {
 }
 
 function chosenIn(run: Run, profile: string | undefined): boolean {
-  return run.action.accounts === undefined || profile === undefined || run.action.accounts.includes(profile);
+  return chosenAccount(run.action.accounts, profile);
+}
+
+/** The refusal `unreadable` when the inventory could not read `file`, the one this row changes. */
+function unreadableAt(run: Run, row: ScopeRow, file: string): Outcome | undefined {
+  return run.inv.warnings.some((warning) => samePath(warning.file, file))
+    ? refused(run, row, "unreadable", { "~file": tilde(file, run.inv.homeDir) })
+    : undefined;
 }
 
 const knownFiles = new WeakMap<Inventory, Set<string>>();
@@ -200,7 +209,7 @@ const knownFiles = new WeakMap<Inventory, Set<string>>();
 /**
  * Whether the inventory read something from `file`, so it is there. plan() cannot look: a file
  * that exists but holds nothing the inventory lists - a settings.local.json with permissions
- * only - reads as new here. Apply finds out, and edits it.
+ * only - reads as new here, and planChecked (git-tracked.ts) looks before it is shown.
  */
 function known(inv: Inventory, file: string): boolean {
   let keys = knownFiles.get(inv);
@@ -218,6 +227,8 @@ function known(inv: Inventory, file: string): boolean {
         ...inv.warnings,
       ].map((entry) => entry.file),
       ...(facts.codexTrust.length > 0 && inv.places.codexConfig ? [inv.places.codexConfig] : []),
+      // An account's file is there once the account is: Claude Code writes it at its first start.
+      ...Object.values(inv.places.claudeJson),
     ];
     keys = new Set(files.map(pathKey));
     knownFiles.set(inv, keys);
@@ -230,11 +241,17 @@ function lineFor(
   row: ScopeRow,
   file: string,
   what: string,
-  more: { change?: PlanLine["change"]; account?: string | undefined; note?: string | undefined } = {},
+  more: {
+    change?: PlanLine["change"];
+    /** The change may make the file: only then is a file the inventory never read new. */
+    create?: boolean;
+    account?: string | undefined;
+    note?: string | undefined;
+  } = {},
 ): PlanLine {
   return {
     file,
-    change: more.change ?? (known(run.inv, file) ? "edit" : "create"),
+    change: more.change ?? (more.create === true && !known(run.inv, file) ? "create" : "edit"),
     what,
     ...(more.account !== undefined ? { account: more.account } : {}),
     ...(more.note !== undefined ? { note: more.note } : {}),
@@ -268,7 +285,7 @@ function jsonChange(
     lock: isClaudeJson(file),
     ...(more.stash ? { stash: more.stash } : {}),
     ...(more.fromStash !== undefined ? { fromStash: more.fromStash } : {}),
-    lines: [lineFor(run, row, file, what, { account: more.account })],
+    lines: [lineFor(run, row, file, what, { account: more.account, create: more.create === true })],
   };
 }
 
@@ -281,7 +298,7 @@ function tomlChange(
   what: string,
   create: boolean,
 ): FileChange {
-  return { kind: "toml", file, edits, expect, create, lines: [lineFor(run, row, file, what)] };
+  return { kind: "toml", file, edits, expect, create, lines: [lineFor(run, row, file, what, { create })] };
 }
 
 function removal(file: string, what: "folder" | "file" | "link", expect: Expect[], line: PlanLine): FileChange {
@@ -338,13 +355,14 @@ function planRow(run: Run, row: ScopeRow): Outcome {
   const loc = item.location;
   const { verb, reach } = run.action;
   const claudeSkill = item.kind === "skill" && loc.tool === "claude";
+  if (loc.scope === "managed") return refused(run, row, "managed");
   if (verb === "visibility" && !claudeSkill) return refused(run, row, "no-visibility");
   // A plugin's server has a switch of its own in each account's project entry: space only.
   const serverHere = item.kind === "mcp" && loc.tool === "claude" && reach === "here" && verb !== "rm";
   if (loc.scope === "plugin" && item.kind !== "plugin" && !serverHere) {
     return refused(run, row, "plugin-item", { plugin: loc.plugin ?? "" });
   }
-  if (loc.scope === "managed" || (verb !== "rm" && setByPolicy(run, item))) return refused(run, row, "managed");
+  if (verb !== "rm" && setByPolicy(run, item)) return refused(run, row, "managed");
   switch (item.kind) {
     case "skill":
       return claudeSkill ? planClaudeSkill(run, row) : planCodexSkill(run, row);
@@ -371,6 +389,8 @@ function planClaudeSkill(run: Run, row: ScopeRow): Outcome {
   if (here && seen === undefined) return refused(run, row, "no-project");
   const file = here && seen !== undefined ? localSettingsFile(seen) : inv.places.claudeUserSettings;
   if (file === undefined) return refused(run, row, "no-account");
+  const unreadable = unreadableAt(run, row, file);
+  if (unreadable) return unreadable;
   const name = item.name;
   const at: JsonPath = ["skillOverrides", name];
   // What the layer this changes holds, and here what applies once every layer is read.
@@ -431,6 +451,8 @@ function planCodexSkill(run: Run, row: ScopeRow): Outcome {
   if (here && item.location.scope !== "project") return refused(run, row, "codex-user-here");
   const file = inv.places.codexConfig;
   if (file === undefined) return refused(run, row, "no-account");
+  const unreadable = unreadableAt(run, row, file);
+  if (unreadable) return unreadable;
   const seen = here ? item.location.project : undefined;
   const selector: SkillSelector = here ? { path: path.join(item.location.file, "SKILL.md") } : { name: item.name };
   const entry = codexSkillEntry(inv, selector);
@@ -628,12 +650,16 @@ function planAccountServer(run: Run, row: ScopeRow): Outcome {
       } else if (!copy.stashed) {
         unchanged(out, row, `not off everywhere in ${short(copy)}`);
       } else if (copy.stashed.gone) {
+        // d on a row that holds other accounts' copies too would delete theirs: pick this one's account.
+        const others = row.items.some((other) => other.location.profile !== copy.location.profile);
         out.refused.push(
-          refusal("stash-gone", row, "claude", {
-            command: run.command,
-            "~file": tilde(file, inv.homeDir),
-            id: copy.id,
-          }),
+          refusal(
+            "stash-gone",
+            row,
+            "claude",
+            { command: run.command, "~file": tilde(file, inv.homeDir), id: copy.id, short: short(copy) },
+            others ? ONE_ACCOUNT_KEYS : undefined,
+          ),
         );
       } else {
         out.changes.push(
@@ -690,10 +716,7 @@ function planPluginServer(run: Run, row: ScopeRow): Outcome {
     return refused(run, row, "plugin-item", { plugin });
   }
   const out = outcome(seen);
-  const rank = (profile: string) => {
-    const at = inv.claudeProfiles.indexOf(profile);
-    return at < 0 ? inv.claudeProfiles.length : at;
-  };
+  const rank = rankOf(inv);
   const accounts = [...new Set(row.items.flatMap((copy) => copy.location.accounts ?? []))]
     .filter((account) => chosenIn(run, account))
     .sort((a, b) => rank(a) - rank(b));
@@ -738,8 +761,10 @@ function planMcpjson(run: Run, row: ScopeRow): Outcome {
     );
   }
   if (reach === "everywhere") return refused(run, row, "mcpjson-everywhere");
-  const seen = viewFrom(item, run.ctx.project) ?? item.location.project ?? inv.homeDir;
+  const seen = viewFrom(item, run.ctx.project) ?? inv.homeDir;
   const local = localSettingsFile(seen);
+  const unreadable = unreadableAt(run, row, local);
+  if (unreadable) return unreadable;
   const out = outcome(seen);
   const where = whereFor(run.ctx, reach, seen);
   const states = accountStates(inv, item, run.ctx.project)
@@ -865,6 +890,8 @@ function planCodexMcp(run: Run, row: ScopeRow): Outcome {
   };
   /** In a project's config.toml. On: true over the user config's off, else this file's off removed. */
   const inProject = (file: string, project: string, create: boolean): Outcome => {
+    const unreadable = unreadableAt(run, row, file);
+    if (unreadable) return unreadable;
     const out = outcome(project);
     const where = whereFor(run.ctx, "here", project);
     const off = stateOf(inv, item, project).value === "off";
@@ -882,6 +909,8 @@ function planCodexMcp(run: Run, row: ScopeRow): Outcome {
   }
   if (verb === "rm") return deleteServer();
   if (reach === "everywhere") {
+    const unreadable = unreadableAt(run, row, own);
+    if (unreadable) return unreadable;
     const out = outcome();
     const off = codexMcpEntry(inv, own, name)?.enabled === false;
     if (verb === "off") return off ? unchanged(out, row, "already off in every project") : write(out, own, false, true);
@@ -913,6 +942,8 @@ function planHook(run: Run, row: ScopeRow): Outcome {
   if (untrusted && !(verb === "rm" && item.stashed)) return refused(run, row, "codex-untrusted");
   const place = item.hook;
   if (!place) return refused(run, row, "unreadable", { "~file": tilde(loc.file, inv.homeDir) });
+  const unreadable = verb === "rm" && item.stashed ? undefined : unreadableAt(run, row, loc.file);
+  if (unreadable) return unreadable;
   const at: JsonPath = [...eventPath(place), place.group, "hooks", place.index];
   const event = place.event;
   const out = outcome();
@@ -970,6 +1001,8 @@ function planPlugin(run: Run, row: ScopeRow): Outcome {
   if (!here && item.location.project !== undefined) return refused(run, row, "plugin-project-everywhere");
   const file = here && seen !== undefined ? localSettingsFile(seen) : inv.places.claudeUserSettings;
   if (file === undefined) return refused(run, row, "no-account");
+  const unreadable = unreadableAt(run, row, file);
+  if (unreadable) return unreadable;
   const value = verb === "on";
   const out = outcome(seen);
   if (pluginState(inv, id, here ? seen : undefined).value === verb) {
@@ -1001,11 +1034,11 @@ function planPlugin(run: Run, row: ScopeRow): Outcome {
 
 // ─── After every row: what can't be read, what git tracks ───────────
 
+/** Every file a change goes to, once more: the account files a server's switch is in among them. */
 function unreadableIn(run: Run, row: ScopeRow, out: Outcome): Outcome {
   for (const change of out.changes) {
-    if (run.inv.warnings.some((warning) => samePath(warning.file, change.file))) {
-      return refused(run, row, "unreadable", { "~file": tilde(change.file, run.inv.homeDir) });
-    }
+    const unreadable = unreadableAt(run, row, change.file);
+    if (unreadable) return unreadable;
   }
   return out;
 }
@@ -1137,6 +1170,32 @@ function ordered(changes: FileChange[]): FileChange[] {
   return out;
 }
 
+/** Rows named twice, or two copies of one row named by their ids, as one row each, in the order first met. */
+function foldRows(rows: readonly ScopeRow[]): ScopeRow[] {
+  const byKey = new Map<string, ScopeRow>();
+  for (const row of rows) {
+    const known = byKey.get(row.key);
+    if (!known) byKey.set(row.key, row);
+    else {
+      const ids = new Set(known.items.map((item) => item.id));
+      byKey.set(row.key, { ...known, items: [...known.items, ...row.items.filter((item) => !ids.has(item.id))] });
+    }
+  }
+  return [...byKey.values()];
+}
+
+/**
+ * The row an `--id` names: the whole row for its key, or for one copy's item id the row
+ * narrowed to that copy, so `rm --id <a kept copy>` deletes it and no other account's. Undefined
+ * when the id is neither.
+ */
+export function rowForId(row: ScopeRow, id: string): ScopeRow | undefined {
+  if (row.key === id) return row;
+  const item = row.items.find((copy) => copy.id === id);
+  if (!item) return undefined;
+  return row.items.length === 1 ? row : { ...row, items: [item] };
+}
+
 type Planned = {
   changes: FileChange[];
   unchanged: Unchanged[];
@@ -1148,7 +1207,7 @@ type Planned = {
 };
 
 function planned(ctx: PlanContext, command: ExtensionsCommand, action: Action): Planned {
-  const rows = [...new Map(action.rows.map((row) => [row.key, row])).values()];
+  const rows = foldRows(action.rows);
   const run: Run = {
     ctx,
     inv: ctx.inv,

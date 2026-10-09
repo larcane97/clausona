@@ -62,7 +62,8 @@ export async function readClaudeSkills(ctx: ClaudeContext, projects: Project[], 
 /**
  * Legacy commands: `<dir>/<name>.md`, and one level of subfolders, which Claude Code lists by
  * file name with the folder as a namespace in the description - so the name is the file's. A
- * `.md` link whose target is gone is listed too, as a skill folder's is, so it can be cleaned up.
+ * `.md` that is a link carries it, as a skill folder does, so a delete removes the link and
+ * keeps what it leads to; one whose target is gone is listed too, so it can be cleaned up.
  *
  * Claude Code records a command's use under its name. For one in a subfolder `<sub>:<name>` is
  * looked up as well: a guess, not verified, which can only keep a command off the not-used list,
@@ -92,7 +93,7 @@ async function readCommandFiles(
         name,
         ...(front.description ? { description: front.description } : {}),
         location: { ...location, file },
-        ...(broken ? { link: broken } : {}),
+        ...(info.link ? { link: info.link } : {}),
         ...(info.createdAt !== undefined ? { createdAt: info.createdAt } : {}),
         usageKeys: sub ? [name, `${sub}:${name}`] : [name],
         summary: sub ? { type: "command", namespace: sub } : { type: "command" },
