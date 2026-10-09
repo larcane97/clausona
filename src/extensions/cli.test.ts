@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { leakedWindows } from "../test-leaks.js";
-import { type ExtensionsCommand, runExtensionsCommand } from "./cli.js";
+import { type ExtensionsCommand, runExtensionsCommand, withJsonErrors } from "./cli.js";
 import { scopeSentence } from "./describe.js";
 import { ExitError } from "./exit-error.js";
 import { loadInventory } from "./inventory.js";
@@ -45,16 +45,19 @@ function seed() {
   return { h, app, web };
 }
 
-// The managed settings are the home's own, so no test reads this machine's.
+// The managed settings are the home's own, so no test reads this machine's. With --json an error
+// is JSON, as commands.ts runs it.
 const run = (h: TestHome, cwd: string, command: ExtensionsCommand, args: string[], columns = 120) =>
-  runExtensionsCommand(command, args, {
-    homeDir: h.home,
-    cwd,
-    registry: h.registry,
-    now: NOW,
-    columns,
-    managedSettings: h.path("managed-settings.json"),
-  });
+  withJsonErrors(args, () =>
+    runExtensionsCommand(command, args, {
+      homeDir: h.home,
+      cwd,
+      registry: h.registry,
+      now: NOW,
+      columns,
+      managedSettings: h.path("managed-settings.json"),
+    }),
+  );
 
 /** What a rejected run threw, for a look at its code, message and stdout. */
 async function failure(promise: Promise<string>): Promise<ExitError> {
@@ -341,10 +344,47 @@ describe("ls options", () => {
 
   it("refuses an unknown subcommand as bad usage", async () => {
     const { h, app } = seed();
-    expect(await failure(run(h, app, "skills", ["off", "eli5"]))).toMatchObject({
+    expect(await failure(run(h, app, "skills", ["of", "eli5"]))).toMatchObject({
       code: 2,
-      message: "Unknown subcommand 'off'. Run clausona skills --help.",
+      kind: "usage",
+      message:
+        "Unknown subcommand 'of'. clausona skills takes ls, show, off, on, visibility, rm or undo. Run clausona skills --help.",
     });
+    expect(await failure(run(h, app, "hooks", ["visibility"]))).toMatchObject({
+      code: 2,
+      message:
+        "Unknown subcommand 'visibility'. clausona hooks takes ls, show, off, on, rm or undo. Run clausona hooks --help.",
+    });
+  });
+
+  it("says bad usage and not found as one JSON object on stdout with --json (#103)", async () => {
+    const { h, app } = seed();
+    const scope = await failure(run(h, app, "skills", ["ls", "--scope", "nope", "--json"]));
+    expect(scope.code).toBe(2);
+    expect(JSON.parse(scope.stdout ?? "")).toEqual({
+      version: 1,
+      error: "usage",
+      message: "--scope takes loaded, project, global, cloud, plugins, builtin, other, unused or all.",
+    });
+    const missing = await failure(run(h, app, "skills", ["show", "nope", "--json"]));
+    expect(missing.code).toBe(1);
+    expect(JSON.parse(missing.stdout ?? "")).toEqual({
+      version: 1,
+      error: "not-found",
+      message: "No skill named 'nope'.",
+    });
+    const project = await failure(run(h, app, "skills", ["ls", "--project", h.path("no-such-dir"), "--json"]));
+    expect(JSON.parse(project.stdout ?? "")).toEqual({
+      version: 1,
+      error: "usage",
+      message: "--project: no such directory.",
+    });
+    // An option's value is never quoted back, a key given by mistake included.
+    const secret = await failure(run(h, app, "skills", ["ls", "--scope", KEY, "--json"]));
+    expect(secret.message).not.toContain(KEY);
+    expect(leakedWindows([secret.message, secret.stdout ?? ""], KEY)).toEqual([]);
+    // Without --json, an error is the message alone, for stderr.
+    expect((await failure(run(h, app, "skills", ["show", "nope"]))).stdout).toBeUndefined();
   });
 
   it("takes every scope each command has", async () => {
@@ -516,9 +556,12 @@ describe("show", () => {
     const json = await failure(run(h, app, "skills", ["show", "eli5", "--json"]));
     expect(json.code).toBe(2);
     const parsed = JSON.parse(json.stdout ?? "");
-    expect(Object.keys(parsed)).toEqual(["version", "error", "candidates"]);
+    // Every error object has a message; this one adds the name it was given, and the candidates.
+    expect(Object.keys(parsed)).toEqual(["version", "error", "message", "name", "candidates"]);
     expect(parsed.version).toBe(1);
     expect(parsed.error).toBe("ambiguous");
+    expect(parsed.message).toBe(error.message);
+    expect(parsed.name).toBe("eli5");
     expect(parsed.candidates).toEqual([
       { id: "skill:claude:global:-:eli5", tool: "claude", scope: "global", project: null, account: null },
       { id: "skill:codex:global:agents:eli5", tool: "codex", scope: "global", project: null, account: null },

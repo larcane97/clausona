@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands.js";
 import { ExitError } from "./extensions/exit-error.js";
 import { isMainModule, parseCommand, reportError, TUI_SCREENS, writeCommandResult } from "./index.js";
+import { stripAnsi } from "./lib/cli-style.js";
 
 describe("parseCommand", () => {
   it("defaults to interactive mode with no args", () => {
@@ -106,6 +107,16 @@ describe("reportError", () => {
     expect(reportError(new ExitError("2 skills are named 'eli5':", 2, json), err.stream, out.stream)).toBe(2);
     expect(out.chunks).toEqual([`${json}\n`]);
     expect(err.chunks).toEqual([]);
+  });
+
+  it("says an unknown command in one line, with exit code 2 (#104)", () => {
+    const err = sink();
+    const out = sink();
+    expect(
+      reportError(new ExitError("Unknown command 'plugins'. Run clausona --help.", 2), err.stream, out.stream),
+    ).toBe(2);
+    expect(out.chunks).toEqual([]);
+    expect(err.chunks.map(stripAnsi)).toEqual(["  ✘ Unknown command 'plugins'. Run clausona --help.\n"]);
   });
 });
 

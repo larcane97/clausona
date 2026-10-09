@@ -429,8 +429,11 @@ describe("an unknown internal command", () => {
   it("fails instead of printing usage on stdout", async () => {
     const h = await harness((home) => subscription(home));
     await expect(h.runCommand("_no-such-command", [])).rejects.toThrow(/Unknown command: _no-such-command/);
-    // A mistyped public command still just gets the usage, as before.
-    expect(await h.runCommand("no-such-command", [])).toContain("USAGE");
+    // A mistyped public command is one line and exit code 2, not the usage (#104).
+    await expect(h.runCommand("no-such-command", [])).rejects.toMatchObject({
+      code: 2,
+      message: "Unknown command 'no-such-command'. Run clausona --help.",
+    });
   });
 });
 

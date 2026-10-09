@@ -166,4 +166,17 @@ describe("the update question", () => {
     input.write("\x03");
     expect(await answer).toBe(false);
   });
+
+  // An extensions change asks `(y/N)`: Enter alone changes nothing.
+  it.each([
+    ["", false],
+    ["y", true],
+    ["yes", true],
+    ["n", false],
+  ])("reads %j as %s when the default is no", async (reply, expected) => {
+    const input = new PassThrough();
+    const answer = askYesNo("  Apply? (y/N) ", input, new PassThrough(), false);
+    input.write(`${reply}\n`);
+    expect(await answer).toBe(expected);
+  });
 });
