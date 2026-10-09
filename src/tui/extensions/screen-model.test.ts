@@ -528,11 +528,22 @@ describe("paneLayout", () => {
     expect(paneLayout(140, 40, wide).scopeWidth).toBe(32);
   });
 
-  it("shows one pane at a time under 100 columns, at the full width", () => {
-    const one = paneLayout(99, 40, []);
+  it("shows one pane at a time under 100 columns: the table at the full width, the scope list as narrow as beside it", () => {
+    const scopes: ScopeEntry[] = [
+      { id: "loaded", label: "Loaded here", count: 162 },
+      { id: "project", label: "Project", count: 35 },
+    ];
+    const one = paneLayout(99, 40, scopes);
     expect(one.mode).toBe("one");
     expect(one.tableWidth).toBe(99 - CHROME_COLUMNS);
-    expect(one.scopeWidth).toBe(99 - CHROME_COLUMNS);
+    // Each count stays next to its label: "Loaded here  162" and 4 for the marker and the edge.
+    expect(one.scopeWidth).toBe("Loaded here  162".length + 4);
+    expect(one.scopeWidth).toBe(paneLayout(140, 40, scopes).scopeWidth);
+    expect(paneLayout(80, 24, [{ id: "loaded", label: "x".repeat(40), count: 1 }]).scopeWidth).toBe(32);
+    // Never wider than the terminal leaves.
+    expect(paneLayout(20, 24, [{ id: "loaded", label: "x".repeat(40), count: 1 }]).scopeWidth).toBe(
+      20 - CHROME_COLUMNS,
+    );
   });
 
   it("leaves the chrome its rows and the frame two rows short of the terminal", () => {

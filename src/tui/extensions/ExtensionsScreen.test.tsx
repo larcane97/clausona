@@ -361,6 +361,16 @@ describe("ExtensionsScreen", () => {
     expect(back).not.toContain("LOADED HERE");
   });
 
+  it("keeps the scope list narrow on a narrow terminal, each count next to its label", async () => {
+    const { instance } = screen(await seed(), 80, 24);
+    const frame = await seen(instance, (f) => f.includes("Loaded here"));
+    const line = frame.split("\n").find((l) => l.includes("Loaded here")) ?? "";
+    const start = line.indexOf("▸");
+    const count = line.search(/\d+ *$/);
+    expect(count).toBeGreaterThan(start);
+    expect(count - start).toBeLessThan(32);
+  });
+
   it("picks no project: the subtitle and the Project table say to pick one (Review Focus 3)", async () => {
     const { instance } = screen(await seed(), 140, 40);
     await seen(instance, (f) => f.includes("deploy-check"));
