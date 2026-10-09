@@ -11,6 +11,7 @@ import { entryInfo } from "./read.js";
 import {
   homeScope,
   type ItemKind,
+  isAccountCopy,
   isAccountServer,
   otherProjects,
   rowsIn,
@@ -234,7 +235,16 @@ function holders(row: ScopeRow): string[] | undefined {
   const first = firstOf(row);
   const loc = first.location;
   if (loc.tool !== "claude") return [];
-  if (isAccountServer(first)) return row.items.map((copy) => copy.location.profile ?? "");
+  // A row of copies is every account's that has one: its own copy, or an install's accounts.
+  if (isAccountCopy(first)) {
+    return [
+      ...new Set(
+        row.items.flatMap((copy) =>
+          copy.location.profile !== undefined ? [copy.location.profile] : (copy.location.accounts ?? []),
+        ),
+      ),
+    ];
+  }
   return loc.profile !== undefined ? [loc.profile] : loc.accounts;
 }
 
@@ -298,9 +308,17 @@ function whereCell(inv: Inventory, row: ScopeRow, project: string | undefined): 
   const loc = item.location;
   const place =
     homeScope(item, project) === "other" ? projectName(loc.project ?? "", inv) : fromLabel(item, inv, project);
-  // Two rows can differ only in whose they are - each account's Cloud copy - or in one being a
-  // legacy command: say so, or they read as one row twice. An account server's row has ACCOUNTS.
-  const whose = loc.profile !== undefined && !isAccountServer(item) ? ` · ${shortProfile(loc.profile)}` : "";
+  // Whose a skill is - an account's own folder, or Cloud's copies, one row for every account -
+  // and whether it is a legacy command, or two rows read as one twice. A server's row has ACCOUNTS.
+  const owners = row.items.flatMap((copy) =>
+    copy.location.profile !== undefined && !isAccountServer(copy) ? [copy.location.profile] : [],
+  );
+  const whose =
+    owners.length === 1
+      ? ` · ${shortProfile(owners[0] ?? "")}`
+      : owners.length > 1
+        ? ` · ${owners.length} accounts`
+        : "";
   const command = item.kind === "skill" && item.summary?.type === "command" ? " · command" : "";
   return `${place}${whose}${command}`;
 }
@@ -326,7 +344,7 @@ function kindCells(command: ExtensionsCommand, inv: Inventory, row: ScopeRow, no
     case "skills": {
       // Codex keeps no usage record, and a plugin's use is its skills'.
       if (item.kind !== "skill" || item.location.tool !== "claude") return ["—", "—"];
-      const usage = usageOf(inv, [item]);
+      const usage = usageOf(inv, row.items);
       return [String(usage?.total ?? 0), agoWords(usage?.lastUsedAt, now)];
     }
     case "mcp":

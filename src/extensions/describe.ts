@@ -16,8 +16,10 @@ import { isWithin, pathKey, samePath } from "./read.js";
 import {
   homeScope,
   type ItemKind,
+  isAccountCopy,
   isAccountServer,
   pluginContents,
+  rowKey,
   SCOPE_LABEL,
   type ScopeId,
   type ScopeRow,
@@ -105,9 +107,10 @@ export function fromLabel(item: Extension, inv: Inventory, project: string | und
 }
 
 /**
- * The state of each account, for a Claude MCP row that is switched per account: a row of account
- * servers - each account's own copy, read in that account - or a `.mcp.json` or plugin server
- * every account sees (`accountStates`). Undefined for every other row, which has one state.
+ * The state of each account that has a row of copies - a Claude MCP server several accounts'
+ * .claude.json define, a Cloud skill, a plugin's installs and what they bring - each read in its
+ * own copy, primary first; or of a `.mcp.json` or plugin server every account sees
+ * (`accountStates`). Undefined for every other row, which has one state.
  */
 export function statesByAccount(
   inv: Inventory,
@@ -115,8 +118,25 @@ export function statesByAccount(
   project: string | undefined,
 ): AccountState[] | undefined {
   const first = firstOf(row);
-  if (!isAccountServer(first)) return accountStates(inv, first, project);
-  return row.items.map((copy) => ({ profile: copy.location.profile as string, state: stateHere(inv, copy, project) }));
+  if (!isAccountCopy(first)) return accountStates(inv, first, project);
+  const states = new Map<string, EffectiveState>();
+  for (const copy of row.items) {
+    const loc = copy.location;
+    // One account's own copy, or an install every account that has it reads alike - a plugin's
+    // server per account, as its switch is.
+    const own =
+      loc.profile !== undefined
+        ? [{ profile: loc.profile, state: stateHere(inv, copy, project) }]
+        : (accountStates(inv, copy, project) ??
+          (loc.accounts ?? []).map((profile) => ({ profile, state: stateHere(inv, copy, project) })));
+    for (const { profile, state } of own) if (!states.has(profile)) states.set(profile, state);
+  }
+  if (states.size === 0) return undefined;
+  const rank = (profile: string) => {
+    const at = inv.claudeProfiles.indexOf(profile);
+    return at < 0 ? inv.claudeProfiles.length : at;
+  };
+  return [...states].map(([profile, state]) => ({ profile, state })).sort((a, b) => rank(a.profile) - rank(b.profile));
 }
 
 /** A row's first item: its only one, or the primary-most account's copy. Rows are never empty. */
@@ -298,15 +318,26 @@ function settingPlace(inv: Inventory, item: Extension, project: string | undefin
   return `${whose} ${inside ? path.relative(here, file) : `entry in ${tilde(file, inv.homeDir)}`}`;
 }
 
-/** A state as one account line says it: "on", "off (this project's …)", "pending approval". */
-function stateWords(inv: Inventory, item: Extension, project: string | undefined, state: EffectiveState): string {
+/** A state in words, and where it is set when that matters: off, and where it is turned off. */
+function stateParts(
+  inv: Inventory,
+  item: Extension,
+  project: string | undefined,
+  state: EffectiveState,
+): { word: string; because?: string } {
   if (state.shadowedBy) {
     const winner = inv.items.find((i) => i.id === state.shadowedBy);
-    return winner ? `hidden by the ${scopeLabel(winner, project)} copy` : "hidden by another copy";
+    return { word: winner ? `hidden by the ${scopeLabel(winner, project)} copy` : "hidden by another copy" };
   }
-  if (state.value === "pending-approval") return "pending approval";
-  if (state.value !== "off") return "on";
-  return state.setBy ? `off (${settingPlace(inv, item, project, state.setBy.file)})` : "off";
+  if (state.value === "pending-approval") return { word: "pending approval" };
+  if (state.value !== "off") return { word: "on" };
+  return state.setBy ? { word: "off", because: settingPlace(inv, item, project, state.setBy.file) } : { word: "off" };
+}
+
+/** A state as one account line says it: "on", "off (this project's …)", "pending approval". */
+function stateWords(inv: Inventory, item: Extension, project: string | undefined, state: EffectiveState): string {
+  const { word, because } = stateParts(inv, item, project, state);
+  return because === undefined ? word : `${word} (${because})`;
 }
 
 /** The accounts an item is in when not every one: an account's own, or a plugin's installs. */
@@ -318,27 +349,54 @@ function holders(inv: Inventory, item: Extension): string[] | undefined {
   return undefined;
 }
 
-/** Where an item loads, in words, for one that has a single state: a skill, a hook, a plugin. */
-function loadedLine(inv: Inventory, item: Extension, project: string | undefined): DetailLine {
-  const state = stateHere(inv, item, project);
+/**
+ * Where a row loads, in words: a skill, a hook, a plugin. Accounts in different states say each
+ * ("on in share, dalsoo · off in work (…)"); else the one state, and which accounts have it when
+ * not every Claude account does.
+ */
+function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined): DetailLine[] {
+  const item = firstOf(row);
+  const perAccount = statesByAccount(inv, row, project);
+  const parts = perAccount?.map((a) => ({ name: shortProfile(a.profile), ...stateParts(inv, item, project, a.state) }));
+  const groups = new Map<string, { word: string; because?: string; names: string[] }>();
+  for (const part of parts ?? []) {
+    const key = `${part.word}\0${part.because ?? ""}`;
+    const group = groups.get(key) ?? { word: part.word, ...(part.because ? { because: part.because } : {}), names: [] };
+    group.names.push(part.name);
+    groups.set(key, group);
+  }
+  if (groups.size > 1) {
+    const text = [...groups.values()]
+      .map((g) => `${g.word} in ${g.names.join(", ")}${g.because === undefined ? "" : ` (${g.because})`}`)
+      .join(" · ");
+    return [{ label: "Loaded", text }];
+  }
+  const state = perAccount?.[0]?.state ?? stateHere(inv, item, project);
   if (state.shadowedBy) {
     const winner = inv.items.find((i) => i.id === state.shadowedBy);
     const text = winner
       ? `no, the ${scopeLabel(winner, project)} copy wins (${tilde(winner.location.file, inv.homeDir)})`
       : "no, another copy wins";
-    return { label: "Loaded", text, tone: "muted" };
+    return [{ label: "Loaded", text, tone: "muted" }];
   }
   if (state.value === "off") {
-    if (!state.setBy) return { label: "Loaded", text: "off: no settings file turns it on", tone: "warning" };
+    if (!state.setBy) return [{ label: "Loaded", text: "off: no settings file turns it on", tone: "warning" }];
     const place = settingPlace(inv, item, project, state.setBy.file);
     const here = isProjectSetting(inv, state.setBy.file);
-    return { label: "Loaded", text: `${here ? "off here" : "off everywhere"} (${place})`, tone: "warning" };
+    return [{ label: "Loaded", text: `${here ? "off here" : "off everywhere"} (${place})`, tone: "warning" }];
   }
-  if (state.value === "pending-approval") return { label: "Loaded", text: "pending approval here", tone: "warning" };
-  const who = holders(inv, item)?.map(shortProfile).join(", ") ?? "every account";
+  if (state.value === "pending-approval") return [{ label: "Loaded", text: "pending approval here", tone: "warning" }];
   const own = item.location.project;
   const where = own === undefined ? "every project" : samePath(own, project) ? "this project" : projectName(own, inv);
-  return { label: "Loaded", text: `on in ${who}, ${where}` };
+  const who = perAccount?.map((a) => a.profile) ?? holders(inv, item);
+  if (who === undefined || inv.claudeProfiles.every((p) => who.includes(p))) {
+    return [{ label: "Loaded", text: `on in every account, ${where}` }];
+  }
+  if (who.length === 1) return [{ label: "Loaded", text: `on in ${shortProfile(who[0] ?? "")}, ${where}` }];
+  return [
+    { label: "Loaded", text: `on in ${who.length} accounts, ${where}` },
+    { label: "", text: who.map(shortProfile).join(", ") },
+  ];
 }
 
 /** Each account's state of an MCP server, one line each, and "on in every account" when that says it all. */
@@ -364,19 +422,39 @@ function accountLines(inv: Inventory, row: ScopeRow, project: string | undefined
   return rows.map((r, i) => ({ label: i === 0 ? "Accounts" : "", text: `${r.name.padEnd(width)}  ${r.words}` }));
 }
 
-type Copy = { item: Extension; sameFolder: boolean; sameContent: boolean | undefined };
+/** Same-name skills elsewhere, a row's worth at a time: every account's Cloud copy is one. */
+type Copy = { item: Extension; items: Extension[]; sameFolder: boolean; sameContent: boolean | undefined };
 
-/** The same-name skills elsewhere: either tool, any scope, Claude's first. */
-function copiesOf(inv: Inventory, item: Extension, project: string | undefined): Copy[] {
+/** The same-name skills outside the row: either tool, any scope, Claude's first. */
+function copiesOf(inv: Inventory, row: ScopeRow, project: string | undefined): Copy[] {
+  const item = firstOf(row);
   if (item.kind !== "skill") return [];
+  const members = new Set(row.items.map((i) => i.id));
+  const groups = new Map<string, Extension[]>();
+  for (const other of inv.items) {
+    if (other.kind !== "skill" || members.has(other.id) || other.name !== item.name) continue;
+    const key = rowKey(other);
+    groups.set(key, [...(groups.get(key) ?? []), other]);
+  }
   const order: string[] = ["project", "parents", "global", "cloud", "plugins", "builtin", "managed", "other"];
-  return inv.items
-    .filter((other) => other.kind === "skill" && other.id !== item.id && other.name === item.name)
-    .map((other) => {
-      const sameFolder = !item.link?.broken && !other.link?.broken && folderKey(item) === folderKey(other);
-      const [mine, theirs] = [inv.hashes[item.id], inv.hashes[other.id]];
-      const hashed = mine !== undefined && theirs !== undefined ? mine === theirs : undefined;
-      return { item: other, sameFolder, sameContent: sameFolder ? true : hashed };
+  return [...groups.values()]
+    .map((items) => {
+      const verdicts = items.map((other) => {
+        const sameFolder = !item.link?.broken && !other.link?.broken && folderKey(item) === folderKey(other);
+        const [mine, theirs] = [inv.hashes[item.id], inv.hashes[other.id]];
+        return {
+          sameFolder,
+          sameContent: sameFolder || (mine !== undefined && theirs !== undefined ? mine === theirs : undefined),
+        };
+      });
+      const contents = new Set(verdicts.map((v) => v.sameContent));
+      return {
+        item: items[0] as Extension,
+        items,
+        sameFolder: verdicts.every((v) => v.sameFolder),
+        // Said only when every copy in the group agrees.
+        sameContent: contents.size === 1 ? verdicts[0]?.sameContent : undefined,
+      };
     })
     .sort(
       (a, b) =>
@@ -386,12 +464,13 @@ function copiesOf(inv: Inventory, item: Extension, project: string | undefined):
     );
 }
 
-function alsoInLines(inv: Inventory, item: Extension, project: string | undefined): DetailLine[] {
-  return copiesOf(inv, item, project).map((copy, i) => {
+function alsoInLines(inv: Inventory, row: ScopeRow, project: string | undefined): DetailLine[] {
+  return copiesOf(inv, row, project).map((copy, i) => {
     const loc = copy.item.location;
     const scope = homeScope(copy.item, project);
     const place = scope === "other" ? projectName(loc.project ?? "", inv) : scopeLabel(copy.item, project);
-    const account = loc.profile ? ` · ${shortProfile(loc.profile)}` : "";
+    const owners = copy.items.flatMap((c) => (c.location.profile ? [shortProfile(c.location.profile)] : []));
+    const account = owners.length === 1 ? ` · ${owners[0]}` : owners.length > 1 ? ` · ${owners.length} accounts` : "";
     const note = copy.sameFolder
       ? " (same folder)"
       : copy.sameContent === undefined
@@ -409,7 +488,8 @@ const SHOWS_AS: Partial<Record<StateValue, string>> = {
   "user-invocable-only": "only when you call it",
 };
 
-function skillLines(inv: Inventory, item: Extension, project: string | undefined, now: number): DetailLine[] {
+function skillLines(inv: Inventory, row: ScopeRow, project: string | undefined, now: number): DetailLine[] {
+  const item = firstOf(row);
   const loc = item.location;
   const lines: DetailLine[] = [];
   if (item.description) lines.push({ text: item.description });
@@ -417,6 +497,9 @@ function skillLines(inv: Inventory, item: Extension, project: string | undefined
   if (!(loc.tool === "claude" && loc.scope === "builtin")) {
     const folder = item.summary?.type === "command" || item.link?.broken;
     lines.push({ label: "File", text: tilde(folder ? loc.file : path.join(loc.file, "SKILL.md"), inv.homeDir) });
+    // Each account's copy is a folder of its own; the first stands for them.
+    const more = row.items.length - 1;
+    if (more > 0) lines.push({ label: "", text: `and ${more} more ${more === 1 ? "copy" : "copies"}`, tone: "muted" });
   }
   if (item.link) {
     const broken = item.link.broken;
@@ -426,10 +509,10 @@ function skillLines(inv: Inventory, item: Extension, project: string | undefined
       tone: broken ? "error" : "muted",
     });
   }
-  lines.push(loadedLine(inv, item, project));
+  lines.push(...loadedLines(inv, row, project));
   const state = stateHere(inv, item, project);
-  if (loc.tool === "claude") lines.push(...usedLines(inv, item, state, now));
-  lines.push(...alsoInLines(inv, item, project));
+  if (loc.tool === "claude") lines.push(...usedLines(inv, row.items, state, now));
+  lines.push(...alsoInLines(inv, row, project));
   const shows = SHOWS_AS[state.value];
   if (shows !== undefined) {
     const from = state.setBy ? ` (${settingPlace(inv, item, project, state.setBy.file)})` : "";
@@ -438,10 +521,10 @@ function skillLines(inv: Inventory, item: Extension, project: string | undefined
   return lines;
 }
 
-function usedLines(inv: Inventory, item: Extension, state: EffectiveState, now: number): DetailLine[] {
+function usedLines(inv: Inventory, items: Extension[], state: EffectiveState, now: number): DetailLine[] {
   // Claude Code records a skill's use by name, and a hidden copy never loads.
   if (state.shadowedBy) return [{ label: "Used", text: "counted under the copy that wins", tone: "muted" }];
-  const usage = usageOf(inv, [item]);
+  const usage = usageOf(inv, items);
   if (!usage || (usage.total === 0 && usage.lastUsedAt === undefined)) {
     return [{ label: "Used", text: "never, in any account", tone: "muted" }];
   }
@@ -493,13 +576,14 @@ function mcpLines(inv: Inventory, row: ScopeRow, project: string | undefined): D
   return lines;
 }
 
-function hookLines(inv: Inventory, item: Extension, project: string | undefined): DetailLine[] {
+function hookLines(inv: Inventory, row: ScopeRow, project: string | undefined): DetailLine[] {
+  const item = firstOf(row);
   const lines: DetailLine[] = [{ label: "When", text: hookWhen(item).replace(/^When /, "") }];
   const runs = item.summary?.command ?? item.summary?.prompt;
   if (runs) lines.push({ label: "Runs", text: tildeIn(runs, inv.homeDir) });
   lines.push({ label: "File", text: tilde(item.location.file, inv.homeDir) });
   // A plugin's hook is off with its plugin: say where, as for any item that is off.
-  if (stateHere(inv, item, project).value !== "on") lines.push(loadedLine(inv, item, project));
+  if (stateHere(inv, item, project).value !== "on") lines.push(...loadedLines(inv, row, project));
   return lines;
 }
 
@@ -507,7 +591,8 @@ function count(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
-function pluginLines(inv: Inventory, item: Extension, project: string | undefined): DetailLine[] {
+function pluginLines(inv: Inventory, row: ScopeRow, project: string | undefined): DetailLine[] {
+  const item = firstOf(row);
   const loc = item.location;
   const lines: DetailLine[] = [];
   if (item.description) lines.push({ text: item.description });
@@ -518,8 +603,9 @@ function pluginLines(inv: Inventory, item: Extension, project: string | undefine
         ? "for this project"
         : `for ${projectName(loc.project, inv)}`;
   lines.push({ label: "Installed", text: installed });
-  lines.push(loadedLine(inv, item, project));
-  const contents = pluginContents(inv, item);
+  lines.push(...loadedLines(inv, row, project));
+  // Every install's, one row per thing across them.
+  const contents = pluginContents(inv, row);
   lines.push({
     label: "Contains",
     text: [
@@ -531,9 +617,9 @@ function pluginLines(inv: Inventory, item: Extension, project: string | undefine
   // What a plugin brings is named `<plugin>:<name>`, its servers `plugin:<plugin>:<name>`.
   const name = pluginName(item);
   const names = [
-    ...contents.skill.map((i) => i.name.replace(`${name}:`, "")),
-    ...contents.mcp.map((i) => i.name.replace(`plugin:${name}:`, "")),
-    ...contents.hook.map((i) => i.name),
+    ...contents.skill.map((r) => r.name.replace(`${name}:`, "")),
+    ...contents.mcp.map((r) => r.name.replace(`plugin:${name}:`, "")),
+    ...contents.hook.map((r) => r.name),
   ];
   if (names.length > 0) lines.push({ label: "", text: names.join(", ") });
   return lines;
@@ -546,19 +632,20 @@ export function detailsOf(inv: Inventory, row: ScopeRow, project: string | undef
   const lines: DetailLine[] = [{ text: title }];
   switch (item.kind) {
     case "skill":
-      return [...lines, ...skillLines(inv, item, project, now)];
+      return [...lines, ...skillLines(inv, row, project, now)];
     case "mcp":
       return [...lines, ...mcpLines(inv, row, project)];
     case "hook":
-      return [...lines, ...hookLines(inv, item, project)];
+      return [...lines, ...hookLines(inv, row, project)];
     case "plugin":
-      return [...lines, ...pluginLines(inv, item, project)];
+      return [...lines, ...pluginLines(inv, row, project)];
   }
 }
 
 /**
- * The JSON v1 item. A row of account servers is one item: its id is the row key, `copies` lists
- * each account's copy, and `file`, `project` and `summary` are the first copy's.
+ * The JSON v1 item. A row of copies is one item: its id is the row key, `copies` lists each copy
+ * - with its account, or a plugin install's accounts - and `file`, `project` and `summary` are
+ * the first copy's.
  */
 export function jsonItem(
   inv: Inventory,
@@ -568,14 +655,14 @@ export function jsonItem(
 ): Record<string, unknown> {
   const item = firstOf(row);
   const loc = item.location;
-  const merged = isAccountServer(item);
+  const merged = isAccountCopy(item);
   const perAccount = statesByAccount(inv, row, project);
   const accounts =
     perAccount?.map((a) => a.profile) ?? (loc.profile ? [loc.profile] : loc.accounts && [...loc.accounts]);
   const values = [...new Set((perAccount?.map((a) => a.state) ?? [stateHere(inv, item, project)]).map((s) => s.value))];
   // Only Claude records how often a skill is used.
   const counted = item.kind === "skill" && loc.tool === "claude";
-  const usage = counted ? usageOf(inv, [item]) : undefined;
+  const usage = counted ? usageOf(inv, row.items) : undefined;
   return {
     id: merged ? row.key : item.id,
     kind: item.kind,
@@ -598,10 +685,18 @@ export function jsonItem(
     tags: tagsOf(inv, row, project, now),
     file: loc.file,
     ...(merged
-      ? { copies: row.items.map((copy) => ({ id: copy.id, account: copy.location.profile, file: copy.location.file })) }
+      ? {
+          copies: row.items.map((copy) => ({
+            id: copy.id,
+            ...(copy.location.profile !== undefined
+              ? { account: copy.location.profile }
+              : { accounts: [...(copy.location.accounts ?? [])] }),
+            file: copy.location.file,
+          })),
+        }
       : {}),
     description: item.description ?? null,
-    alsoIn: copiesOf(inv, item, project).map((copy) => ({
+    alsoIn: copiesOf(inv, row, project).map((copy) => ({
       tool: copy.item.location.tool,
       scope: homeScope(copy.item, project),
       project: copy.item.location.project ?? null,

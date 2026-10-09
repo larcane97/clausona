@@ -143,8 +143,9 @@ export function itemsIn(
 }
 
 /**
- * A table row: one item, or - for a Claude MCP server defined in several accounts' .claude.json
- * (scope account, or local for one project) - every account's copy under one name.
+ * A table row: one item, or every account's copy of one thing - a Claude MCP server several
+ * accounts' .claude.json define, a Cloud skill several accounts have, a plugin installed in
+ * several accounts and what it brings - under one name.
  */
 export type ScopeRow = { key: string; name: string; items: Extension[] };
 
@@ -163,21 +164,68 @@ export function isAccountServer(item: Extension): boolean {
 }
 
 /**
- * A row's key: an account server's is `mcp:claude:<account|local>:<project or ->:<name>`, from
- * where it is stored alone - the same from every project, and the same with one account's copy
- * as with many, so it does not change as accounts add the server.
+ * The install scope - user, project or local - a plugin's item came from. The sources keep it in
+ * the item's id alone, as the second part of its owner (`pluginOwner` in claude-context.ts:
+ * `<plugin>|<scope>|<project>|<install path>`). Undefined when the id does not read so.
  */
-function rowKey(item: Extension): string {
-  if (!isAccountServer(item)) return item.id;
-  const loc = item.location;
-  const own = loc.scope === "local" ? loc.project : undefined;
-  return `mcp:claude:${loc.scope}:${own === undefined ? "-" : pathKey(own)}:${item.name}`;
+function installScope(item: Extension): string | undefined {
+  const plugin = item.location.plugin;
+  const prefix = `${item.kind}:claude:plugin:${plugin}|`;
+  if (plugin === undefined || !item.id.startsWith(prefix)) return undefined;
+  const scope = item.id.slice(prefix.length).split("|", 1)[0];
+  return scope === "user" || scope === "project" || scope === "local" ? scope : undefined;
+}
+
+function dirKey(dir: string | undefined): string {
+  return dir === undefined ? "-" : pathKey(dir);
 }
 
 /**
- * itemsIn as rows. A row of account servers holds every account's copy, primary first, and is
- * listed when any copy is: in Loaded here, one account loading it is enough. Every other row is
- * one item, keyed by its id.
+ * A row's key. Every account's copy of one thing shares one, built from where the thing is
+ * stored, not where it is seen from, and the same with one copy as with many:
+ * - a Claude MCP server in accounts' `.claude.json`: `mcp:claude:<account|local>:<project or ->:<name>`;
+ * - a Cloud skill: `skill:claude:synced:-:<name>`;
+ * - a plugin install: `plugin:claude:<install scope>:<project or ->:<plugin id>`, and what it
+ *   brings `<kind>:claude:plugin:<install scope>:<project or ->:<plugin id>:<name>`, a hook's
+ *   name with its place in its file (`#<group>.<index>`), so two hooks on one event are two rows.
+ *
+ * Every other item - an account's own skills folder too, which is a folder of its own - is a row
+ * of its own, keyed by its id.
+ */
+export function rowKey(item: Extension): string {
+  const loc = item.location;
+  if (isAccountServer(item)) {
+    return `mcp:claude:${loc.scope}:${dirKey(loc.scope === "local" ? loc.project : undefined)}:${item.name}`;
+  }
+  if (loc.tool !== "claude") return item.id;
+  if (item.kind === "skill" && loc.scope === "synced") return `skill:claude:synced:-:${item.name}`;
+  const install = loc.scope === "plugin" ? installScope(item) : undefined;
+  if (install === undefined) return item.id;
+  const where = `${install}:${dirKey(loc.project)}:${loc.plugin}`;
+  if (item.kind === "plugin") return `plugin:claude:${where}`;
+  const at = item.id.lastIndexOf("#");
+  const name = item.kind === "hook" && at >= 0 ? `${item.name}${item.id.slice(at)}` : item.name;
+  return `${item.kind}:claude:plugin:${where}:${name}`;
+}
+
+/** Whether the item is one account's or one install's copy of a thing whose copies make one row. */
+export function isAccountCopy(item: Extension): boolean {
+  return rowKey(item) !== item.id;
+}
+
+/** Primary first: by the first account that holds the item, as the inventory orders accounts. */
+function byAccount(inv: Inventory): (a: Extension, b: Extension) => number {
+  const rank = (item: Extension) => {
+    const at = inv.claudeProfiles.indexOf(item.location.profile ?? item.location.accounts?.[0] ?? "");
+    return at < 0 ? inv.claudeProfiles.length : at;
+  };
+  return (a, b) => rank(a) - rank(b);
+}
+
+/**
+ * itemsIn as rows. A row of copies holds every account's (or install's) copy, primary first, and
+ * is listed when any copy is: in Loaded here, one account loading it is enough. Every other row
+ * is one item, keyed by its id.
  */
 export function rowsIn(
   inv: Inventory,
@@ -191,12 +239,8 @@ export function rowsIn(
   const listed = itemsIn(inv, tool, kind, scope, project, now, otherProject);
   // Every account's copies by row key, read once: a row holds them all, listed here or not.
   const copies = new Map<string, Extension[]>();
-  if (listed.some(isAccountServer)) {
-    const rank = (item: Extension) => {
-      const at = inv.claudeProfiles.indexOf(item.location.profile ?? "");
-      return at < 0 ? inv.claudeProfiles.length : at;
-    };
-    for (const item of inv.items.filter(isAccountServer).sort((a, b) => rank(a) - rank(b))) {
+  if (listed.some(isAccountCopy)) {
+    for (const item of inv.items.filter(isAccountCopy).sort(byAccount(inv))) {
       const key = rowKey(item);
       copies.set(key, [...(copies.get(key) ?? []), item]);
     }
@@ -244,20 +288,38 @@ export function loadsHere(inv: Inventory, item: Extension, project: string | und
   return states.some((s) => s.value !== "off" && s.value !== "pending-approval" && !s.shadowedBy);
 }
 
-/** The plugin items of `kind`'s tool that a plugin item brings, for its CONTAINS cell and details. */
-export function pluginContents(
-  inv: Inventory,
-  plugin: Extension,
-): { skill: Extension[]; mcp: Extension[]; hook: Extension[] } {
-  const contents: { skill: Extension[]; mcp: Extension[]; hook: Extension[] } = { skill: [], mcp: [], hook: [] };
-  const own = plugin.location;
+/** Whether `item` is something the plugin install `install` brings. */
+function brings(install: Extension, item: Extension): boolean {
+  const own = install.location;
+  const loc = item.location;
+  if (loc.tool !== own.tool || loc.plugin !== own.plugin || installScope(item) !== installScope(install)) return false;
+  // One install of the plugin: the same project (or none), files inside its install path.
+  const sameProject = own.project === undefined ? loc.project === undefined : samePath(loc.project, own.project);
+  return sameProject && isWithin(loc.file, own.file);
+}
+
+export type PluginContents = { skill: ScopeRow[]; mcp: ScopeRow[]; hook: ScopeRow[] };
+
+/**
+ * What a plugin brings, for its CONTAINS cell and details, in rows: for a row of a plugin's
+ * installs, what each install brings, one row per thing across them, as rowsIn makes them.
+ */
+export function pluginContents(inv: Inventory, plugin: Extension | ScopeRow): PluginContents {
+  const installs = "items" in plugin ? plugin.items : [plugin];
+  const rows = {
+    skill: new Map<string, ScopeRow>(),
+    mcp: new Map<string, ScopeRow>(),
+    hook: new Map<string, ScopeRow>(),
+  };
   for (const item of inv.items) {
-    const loc = item.location;
-    if (item.kind === "plugin" || loc.scope !== "plugin" || loc.tool !== own.tool || loc.plugin !== own.plugin)
-      continue;
-    // One install of the plugin: the same project (or none), files inside its install path.
-    const sameProject = own.project === undefined ? loc.project === undefined : samePath(loc.project, own.project);
-    if (sameProject && isWithin(loc.file, own.file)) contents[item.kind].push(item);
+    if (item.kind === "plugin" || item.location.scope !== "plugin") continue;
+    if (!installs.some((install) => brings(install, item))) continue;
+    const key = rowKey(item);
+    const row = rows[item.kind].get(key) ?? { key, name: item.name, items: [] };
+    row.items.push(item);
+    rows[item.kind].set(key, row);
   }
-  return contents;
+  const sorted = (map: Map<string, ScopeRow>) =>
+    [...map.values()].map((row) => ({ ...row, items: [...row.items].sort(byAccount(inv)) }));
+  return { skill: sorted(rows.skill), mcp: sorted(rows.mcp), hook: sorted(rows.hook) };
 }

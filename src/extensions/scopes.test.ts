@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadInventory } from "./inventory.js";
 import type { Inventory } from "./model.js";
 import { pathKey } from "./read.js";
-import { homeScope, itemsIn, otherProjects, rowsIn, SCOPE_LABEL, scopesFor } from "./scopes.js";
+import { homeScope, itemsIn, otherProjects, pluginContents, rowsIn, SCOPE_LABEL, scopesFor } from "./scopes.js";
 import { TestHome } from "./test-home.js";
 
 const DAY = 86_400_000;
@@ -315,6 +315,142 @@ describe("rows", () => {
     expect(otherProjects(inv, "claude", "mcp", web)).toEqual([{ path: app, name: "app", count: 1 }]);
     expect(shape(rowsIn(inv, "claude", "mcp", "other", web, NOW, app))).toEqual([
       { key: `mcp:claude:local:${pathKey(app)}:pg-dev`, name: "pg-dev", accounts: ["claude:default", "claude:work"] },
+    ]);
+  });
+});
+
+describe("rows across accounts", () => {
+  /**
+   * Three accounts. default and work each have Cloud's pdf. kit is installed for everyone in
+   * default and in work, each from its own folder; sp for everyone in both from one folder; lp
+   * for app and, separately, for web. solo and work each have a skills folder of their own.
+   */
+  async function shared(): Promise<Seeded> {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    const web = h.project("repos/web");
+    h.claude("default", ".claude", {
+      projects: { [app]: {}, [web]: {} },
+      oauthAccount: { organizationUuid: "org1", accountUuid: "acc1" },
+    });
+    h.claude("work", ".claude-work", {
+      projects: { [app]: {} },
+      oauthAccount: { organizationUuid: "org1", accountUuid: "acc2" },
+    });
+    h.claude("solo", ".claude-solo");
+    h.skill(".claude/skills/synced/org1_acc1", "pdf");
+    h.skill(".claude/skills/synced/org1_acc2", "pdf");
+    h.skill(".claude-work/skills", "mine");
+    h.skill(".claude-solo/skills", "mine");
+    const kitA = h.path(".claude/plugins/cache/m/kit/1.0.0");
+    const kitB = h.path(".claude-work/plugins/cache/m/kit/1.0.0");
+    const sp = h.path(".claude/plugins/cache/m/sp/1.0.0");
+    const lp = h.path(".claude/plugins/cache/m/lp/1.0.0");
+    h.write(".claude/plugins/installed_plugins.json", {
+      plugins: {
+        "kit@m": [{ installPath: kitA }],
+        "sp@m": [{ installPath: sp }],
+        "lp@m": [
+          { scope: "project", projectPath: app, installPath: lp },
+          { scope: "project", projectPath: web, installPath: lp },
+        ],
+      },
+    });
+    h.write(".claude-work/plugins/installed_plugins.json", {
+      plugins: { "kit@m": [{ installPath: kitB }], "sp@m": [{ installPath: sp }] },
+    });
+    h.write(".claude/settings.json", { enabledPlugins: { "kit@m": true, "sp@m": true, "lp@m": true } });
+    for (const dir of [".claude/plugins/cache/m/kit/1.0.0", ".claude-work/plugins/cache/m/kit/1.0.0"]) {
+      h.skill(`${dir}/skills`, "plan");
+      // Two hooks on one event: two rows, each holding both installs' copy.
+      h.write(`${dir}/hooks/hooks.json`, {
+        hooks: {
+          SessionStart: [
+            {
+              hooks: [
+                { type: "command", command: "one" },
+                { type: "command", command: "two" },
+              ],
+            },
+          ],
+        },
+      });
+    }
+    h.skill(".claude/plugins/cache/m/sp/1.0.0/skills", "search");
+    h.skill(".claude/plugins/cache/m/lp/1.0.0/skills", "lint");
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: app,
+      managedSettings: h.path("none.json"),
+    });
+    return { h, inv, app, web };
+  }
+
+  const shape = (rows: ReturnType<typeof rowsIn>) => rows.map((r) => [r.key, r.items.length]);
+
+  it("makes one row of a Cloud skill that several accounts have", async () => {
+    const { inv, app } = await shared();
+    const rows = rowsIn(inv, "claude", "skill", "cloud", app, NOW);
+    expect(shape(rows)).toEqual([["skill:claude:synced:-:pdf", 2]]);
+    expect(rows[0]?.items.map((i) => i.location.profile)).toEqual(["claude:default", "claude:work"]);
+    expect(itemsIn(inv, "claude", "skill", "cloud", app, NOW)).toHaveLength(2);
+    expect(scopesFor(inv, "claude", "skill", app, NOW).find((s) => s.id === "cloud")?.count).toBe(1);
+  });
+
+  it("makes one row of a plugin installed for everyone in several accounts, from one folder or two", async () => {
+    const { inv, app, web } = await shared();
+    expect(shape(rowsIn(inv, "claude", "skill", "plugins", app, NOW))).toEqual([
+      ["plugin:claude:user:-:kit@m", 2],
+      [`plugin:claude:project:${pathKey(app)}:lp@m`, 1],
+      ["plugin:claude:user:-:sp@m", 1],
+    ]);
+    // One folder in two accounts is one install already, which both accounts have.
+    const sp = rowsIn(inv, "claude", "skill", "plugins", app, NOW)[2];
+    expect(sp?.items[0]?.location.accounts).toEqual(["claude:default", "claude:work"]);
+    expect(itemsIn(inv, "claude", "skill", "plugins", app, NOW)).toHaveLength(4);
+    expect(scopesFor(inv, "claude", "skill", app, NOW).find((s) => s.id === "plugins")?.count).toBe(3);
+    // The install for web is web's own row.
+    expect(rowsIn(inv, "claude", "skill", "plugins", web, NOW).map((r) => r.key)).toContain(
+      `plugin:claude:project:${pathKey(web)}:lp@m`,
+    );
+  });
+
+  it("makes one row of what a plugin brings, across its installs, and keeps two hooks on one event apart", async () => {
+    const { inv, app, web } = await shared();
+    const loaded = rowsIn(inv, "claude", "skill", "loaded", app, NOW);
+    // By name, as the inventory sorts; each account's own "mine" stays a row of its own.
+    expect(shape(loaded)).toEqual([
+      ["skill:claude:plugin:user:-:kit@m:kit:plan", 2],
+      [`skill:claude:plugin:project:${pathKey(app)}:lp@m:lp:lint`, 1],
+      ["skill:claude:account:claude:solo:mine", 1],
+      ["skill:claude:account:claude:work:mine", 1],
+      ["skill:claude:synced:-:pdf", 2],
+      ["skill:claude:plugin:user:-:sp@m:sp:search", 1],
+    ]);
+    expect(shape(rowsIn(inv, "claude", "hook", "loaded", app, NOW))).toEqual([
+      ["hook:claude:plugin:user:-:kit@m:SessionStart#0.0", 2],
+      ["hook:claude:plugin:user:-:kit@m:SessionStart#0.1", 2],
+    ]);
+    // web's lp skill is web's, in a row apart from app's.
+    expect(shape(rowsIn(inv, "claude", "skill", "other", app, NOW, web))).toEqual([
+      [`skill:claude:plugin:project:${pathKey(web)}:lp@m:lp:lint`, 1],
+    ]);
+    const kit = rowsIn(inv, "claude", "skill", "plugins", app, NOW)[0];
+    if (!kit) throw new Error("no kit row");
+    const contents = pluginContents(inv, kit);
+    expect(shape(contents.skill)).toEqual([["skill:claude:plugin:user:-:kit@m:kit:plan", 2]]);
+    expect(contents.hook).toHaveLength(2);
+    expect(contents.mcp).toEqual([]);
+  });
+
+  it("keeps an account's own skills folder per account", async () => {
+    const { inv, app } = await shared();
+    const mine = rowsIn(inv, "claude", "skill", "global", app, NOW).filter((r) => r.name === "mine");
+    expect(mine.map((r) => [r.items[0]?.location.profile, r.key === r.items[0]?.id])).toEqual([
+      ["claude:solo", true],
+      ["claude:work", true],
     ]);
   });
 });
