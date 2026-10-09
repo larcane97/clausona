@@ -491,7 +491,9 @@ describe("route explain and pick", () => {
     )) as NoAccountError;
     expect(none).toBeInstanceOf(NoAccountError);
     expect(stripAnsi(none.message).split("\n")[0]).toBe("No claude account in route any is free right now.");
-    expect(stripAnsi(none.message)).toContain("clausona route explain any --tool claude");
+    expect(stripAnsi(none.message).replace(/\s+/g, " ")).toContain(
+      "clausona route explain any --tool claude --max-usage 1 --reserve-usage 1",
+    );
     const narrowed = await run("explain", "any", "--tool", "claude", "--max-usage", "1", "--reserve-usage", "1");
     // With the options the explain was given: without them the run would rank another route.
     expect(narrowed).toContain(

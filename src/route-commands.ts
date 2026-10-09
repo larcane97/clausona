@@ -467,11 +467,11 @@ async function explainRoute(args: string[], deps: RouteDeps): Promise<string> {
 }
 
 async function pickRoute(args: string[], deps: RouteDeps): Promise<string> {
-  const { resolved, json, resume } = await resolveForRanking("pick", args, deps);
+  const { resolved, overrides, json, resume } = await resolveForRanking("pick", args, deps);
   const ranking = await rankRouteNow(resolved, deps, { resume, record: true });
   if (ranking.outcome.kind === "none") {
     throw new NoAccountError(
-      renderNoAccount(resolved.name, ranking, { now: deps.clock(), onlyTool: resolved.onlyTool }),
+      renderNoAccount(resolved.name, ranking, { now: deps.clock(), onlyTool: resolved.onlyTool, overrides, resume }),
       json ? JSON.stringify(pickJson(resolved.name, ranking), null, 2) : undefined,
     );
   }

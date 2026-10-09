@@ -175,13 +175,13 @@ export async function runRouted(
   // The tool whose flags say whether this is a resume. On an `all` route without a tool word
   // there are no arguments (checked above), so there is nothing to resume.
   const runTool = resolved.onlyTool ?? (resolved.route.tool === "all" ? undefined : resolved.route.tool);
-  const ranking = await rankRouteNow(resolved, deps, {
-    resume: runTool ? isResumeRun(runTool, run.toolArgs) : false,
-    record: true,
-  });
+  const resume = runTool ? isResumeRun(runTool, run.toolArgs) : false;
+  const ranking = await rankRouteNow(resolved, deps, { resume, record: true });
   if (ranking.outcome.kind === "none") {
+    // The explain it points to ranks with the run's own options, as the run did.
+    const { route: _name, ...overrides } = run.options;
     throw new NoAccountError(
-      renderNoAccount(resolved.name, ranking, { now: deps.clock(), onlyTool: resolved.onlyTool }),
+      renderNoAccount(resolved.name, ranking, { now: deps.clock(), onlyTool: resolved.onlyTool, overrides, resume }),
     );
   }
   io.say(renderNote(resolved.name, ranking));

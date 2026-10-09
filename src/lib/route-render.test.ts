@@ -562,6 +562,33 @@ describe("renderNoAccount", () => {
     expect(text).toContain("clausona route explain --tool claude --from 'team,work'");
   });
 
+  // `route explain main` alone ranks the route as stored: not the cut, the excludes or the
+  // resume the run ranked with, so it could show someone free the run did not have.
+  it("gives the explain the run's own options, so it ranks what the run ranked", () => {
+    const overrides = { exclude: ["o'neil"], maxUsage: 50, reserveUsage: 60, strategy: "headroom" as const };
+    const r = rank({ tool: "claude", from: ["personal", "side", "old"], ...overrides }, quotas);
+    const text = plain(renderNoAccount("main", r, { ...at(200), overrides, resume: true }));
+    expect(text).toContain(
+      "or see everything with: clausona route explain main --exclude 'o'\\''neil' --strategy headroom --max-usage 50 --reserve-usage 60 --resume\n",
+    );
+
+    const fallback = { from: ["personal"], fallback: ["side", "old"] };
+    const inline = rank({ tool: "claude", ...fallback }, quotas);
+    expect(plain(renderNoAccount(undefined, inline, { ...at(200), overrides: fallback }))).toContain(
+      "or see everything with: clausona route explain --tool claude --from 'personal' --fallback 'side,old'\n",
+    );
+
+    // Broken between its options at 80 columns, never inside one.
+    const narrow = plain(renderNoAccount("main", r, { ...at(80), overrides, resume: true }));
+    expect(widest(narrow)).toBeLessThanOrEqual(80);
+    expect(narrow.split("\n").slice(-4)).toEqual([
+      "    Run again after 1h, or see everything with: clausona route explain main",
+      "    --exclude 'o'\\''neil' --strategy headroom --max-usage 50 --reserve-usage 60",
+      "    --resume",
+      "",
+    ]);
+  });
+
   it("says when the patterns match nobody, or the exclude took everyone", () => {
     expect(plain(renderNoAccount("main", rank({ tool: "claude", from: ["team-x-*"] }, {}), at(120)))).toContain(
       "No profile matches team-x-*.",

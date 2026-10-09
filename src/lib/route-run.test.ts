@@ -213,6 +213,17 @@ describe("runRouted", () => {
     expect(s.launches).toEqual([]);
   });
 
+  it("points exit 75 at an explain that ranks with the run's options and its resume", async () => {
+    const s = setup({ routes: MAIN });
+    const args = ["--route", "main", "--exclude", "b", "--max-usage", "1", "--reserve-usage", "1", "--", "-c"];
+    const error = (await runRouted(args, s.launch, s.io, s.deps).catch((e: unknown) => e)) as NoAccountError;
+    expect(error).toBeInstanceOf(NoAccountError);
+    expect(stripAnsi(error.message).replace(/\s+/g, " ")).toContain(
+      "see everything with: clausona route explain main --exclude 'b' --max-usage 1 --reserve-usage 1 --resume",
+    );
+    expect(s.launches).toEqual([]);
+  });
+
   it("refuses an unknown route without a terminal, and writes nothing", async () => {
     const s = setup();
     await expect(runRouted(["--route", "work"], s.launch, s.io, s.deps)).rejects.toBeInstanceOf(UnknownRouteError);

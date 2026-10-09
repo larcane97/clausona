@@ -651,12 +651,13 @@ function freeAgainCell(row: Row, limit: number, at: string | null, now: number):
  * Exit 75's message: who is held back and until when, and what to do. NoAccountError prints it
  * after a `✘`, on stderr, so its first line is the headline and the rest is indented under it.
  * `onlyTool` is the tool a run narrowed an `all` route to: the message is about that tool's
- * accounts only, and so is the explain it points to.
+ * accounts only, and so is the explain it points to. `overrides` are the field options the run
+ * was given, and `resume` whether it resumed: the explain it points to ranks with them too.
  */
 export function renderNoAccount(
   name: string | undefined,
   ranking: Ranking,
-  options: { width?: number; now?: number; onlyTool?: ToolName } = {},
+  options: { width?: number; now?: number; onlyTool?: ToolName; overrides?: RouteOverrides; resume?: boolean } = {},
 ): string {
   const width = options.width ?? terminalWidth("stderr");
   const now = options.now ?? Date.now();
@@ -709,14 +710,18 @@ export function renderNoAccount(
     }),
   );
 
-  const explain = name
-    ? `clausona route explain ${name}${narrowed ? ` --tool ${narrowed}` : ""}`
-    : `clausona route explain --tool ${narrowed ?? route.tool} --from ${shellQuote(route.from.join(","))}`;
+  const explain = command([
+    name ? `clausona route explain ${name}` : "clausona route explain",
+    // An unsaved route's tool is not stored anywhere, so it is always given.
+    ...(name ? (narrowed ? [`--tool ${narrowed}`] : []) : [`--tool ${narrowed ?? route.tool}`]),
+    ...routeFlags(name, route, options.overrides),
+    ...(options.resume ? ["--resume"] : []),
+  ]);
   const when = soonest ? formatResetIn(soonest.at, new Date(now)) : undefined;
   const again = when === "now" ? "now" : when ? `after ${unbroken(when)}` : "later";
   const advice = nothingRead(rows)
     ? `No quota could be read for any member: check the network, or run ${unbroken("clausona list --refresh")}.`
-    : `Run again ${again}, or see everything with: ${unbroken(explain)}`;
+    : `Run again ${again}, or see everything with: ${explain}`;
   return [headline, "", ...fitTable(tables, width), "", ...wrap(advice, width, indent), ""].join("\n");
 }
 
