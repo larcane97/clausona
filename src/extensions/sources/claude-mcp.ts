@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import type { Collector, Location, Project } from "../model.js";
-import { isRecord, pathKey, readJsonObject, samePath } from "../read.js";
+import { isRecord, isWithin, pathKey, readJsonObject, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
 import { type ClaudeContext, pluginOwner } from "./claude-context.js";
 
@@ -11,8 +11,8 @@ export function stringList(value: unknown): string[] {
 
 /**
  * Every MCP server Claude Code can start: each account's user-scope servers and its local ones
- * for each project that still exists (both in that account's `.claude.json`), each project's
- * `.mcp.json`, and each plugin's. Alongside, the switches: `disabledMcpServers` per account and
+ * for each project that still exists (both in that account's `.claude.json`), the `.mcp.json`
+ * of each project and of each dir above it (see `mcpjsonDirs`), and each plugin's. Alongside, the switches: `disabledMcpServers` per account and
  * project (what `/mcp disable` writes), and the `.mcp.json` approvals from settings - a
  * project's, or the user's and managed ones for every project - and from the account's project
  * entry. A server id is kept once, the first definition winning.
@@ -46,17 +46,10 @@ export async function readClaudeMcp(ctx: ClaudeContext, projects: Project[], out
     }
   }
   await Promise.all(
-    projects.map(async (project) => {
-      const file = path.join(project.path, ".mcp.json");
+    mcpjsonDirs(projects, ctx.homeDir).map(async (dir) => {
+      const file = path.join(dir, ".mcp.json");
       const json = await readJsonObject(file, out.warnings);
-      if (json)
-        addServers(
-          json.mcpServers,
-          { tool: "claude", scope: "project", project: project.path, file },
-          project.path,
-          out,
-          ids,
-        );
+      if (json) addServers(json.mcpServers, { tool: "claude", scope: "project", project: dir, file }, dir, out, ids);
     }),
   );
   for (const settings of ctx.settings) {
@@ -95,6 +88,25 @@ export async function readClaudeMcp(ctx: ClaudeContext, projects: Project[], out
       if (manifest) addServers(manifest.mcpServers, { ...from, file: manifestFile }, owner, out, ids, prefix);
     }),
   );
+}
+
+/**
+ * The dirs whose `.mcp.json` a project's sessions read, each once: Claude Code 2.1.294 reads the
+ * file in the dir it starts in and in each parent dir up to the filesystem root, the nearest
+ * winning a name. For a project inside the home dir the walk here stops at the home dir: a
+ * .mcp.json above it - in /Users or C:\Users, shared by every user - is not read, which also
+ * keeps a test home in the temp dir, under the real home on Windows, from reading the real one.
+ */
+function mcpjsonDirs(projects: Project[], homeDir: string): string[] {
+  const dirs = new Map<string, string>();
+  for (const project of projects) {
+    const inHome = isWithin(project.path, homeDir);
+    for (let dir = path.resolve(project.path); path.dirname(dir) !== dir; dir = path.dirname(dir)) {
+      if (!dirs.has(pathKey(dir))) dirs.set(pathKey(dir), dir === path.resolve(project.path) ? project.path : dir);
+      if (inHome && samePath(dir, homeDir)) break;
+    }
+  }
+  return [...dirs.values()];
 }
 
 /**

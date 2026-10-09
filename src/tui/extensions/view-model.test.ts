@@ -448,6 +448,56 @@ describe("the home dir as the project", () => {
   });
 });
 
+describe("a .mcp.json in a parent dir", () => {
+  async function ancestorSeed() {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", { projects: { [app]: { enabledMcpjsonServers: ["tools"] } } });
+    h.claude("work", ".claude-work", { projects: { [app]: {} } });
+    h.write(".mcp.json", { mcpServers: { tools: { command: "tools-mcp" }, notes: { command: "home-notes" } } });
+    h.write("repos/app/.mcp.json", { mcpServers: { notes: { command: "app-notes" } } });
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: app,
+      managedSettings: h.path("none.json"),
+    });
+    return { h, app, inv };
+  }
+
+  it("groups its servers as loading here, read in this project, the one a nearer file wins marked", async () => {
+    const { app, inv } = await ancestorSeed();
+    const rows = buildRows(inv, { ...base, tab: "mcp", project: app });
+    expect(labels(rows)).toEqual([
+      "# Project · app (1)",
+      "  notes claude pending-approval",
+      `# From ${path.join("~", ".mcp.json")} (2)`,
+      "  notes claude shadowed",
+      "  tools claude 1/2 on",
+    ]);
+    const homeNotes = items(rows).find((r) => r.type === "item" && r.name === "notes" && r.group !== `project:${app}`);
+    expect(homeNotes?.type === "item" && homeNotes.marks).toEqual(["shadowed"]);
+    if (homeNotes?.type !== "item") throw new Error("no home notes row");
+    expect(detailOf(inv, homeNotes, app, Date.now()).filter((l) => l.label === "Here")).toEqual([
+      { label: "Here", text: `C default pending-approval · ${path.join("~", "repos", "app", ".mcp.json")} wins` },
+      { label: "Here", text: `C work pending-approval · ${path.join("~", "repos", "app", ".mcp.json")} wins` },
+    ]);
+    const loaded = items(buildRows(inv, { ...base, tab: "mcp", project: app, filter: "loaded" })).map((r) => r.name);
+    expect(loaded).toEqual(["tools"]);
+  });
+
+  it("puts in the matrix the copy that wins, each account's approval in this project", async () => {
+    const { app, inv } = await ancestorSeed();
+    const matrix = buildMatrix(inv, app);
+    expect(matrix.columns.map((c) => c.label)).toEqual(["default", "work"]);
+    expect(Object.fromEntries(matrix.rows.map((r) => [r.name, r.cells]))).toEqual({
+      notes: ["pending", "pending"],
+      tools: ["on", "pending"],
+    });
+  });
+});
+
 describe("layout helpers", () => {
   it("picks side, stacked and list layouts by width", () => {
     expect(pickLayout(140, 40).mode).toBe("side");

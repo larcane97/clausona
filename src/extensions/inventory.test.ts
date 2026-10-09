@@ -4,7 +4,7 @@ import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { duplicateGroups, loadInventory, marksOf, usageOf } from "./inventory.js";
-import { stateOf } from "./state.js";
+import { relevantIn, stateOf } from "./state.js";
 import { TestHome } from "./test-home.js";
 
 const homes: TestHome[] = [];
@@ -462,5 +462,90 @@ describe("loadInventory, the home dir as a project", () => {
     // ~/.codex/config.toml once, as the user's.
     expect(inv.items.filter((i) => i.name === "exa").map((i) => i.location.scope)).toEqual(["global"]);
     expect(inv.warnings).toEqual([]);
+  });
+});
+
+describe("loadInventory, a .mcp.json in a parent dir", () => {
+  /**
+   * Claude Code 2.1.294 reads .mcp.json from the dir it starts in and from each parent dir, the
+   * nearest file winning a name. ~/.mcp.json is the common case: its servers load in every
+   * project under the home dir, each project approving them on its own.
+   */
+  function ancestorSeed() {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    const web = h.project("repos/web");
+    const main = h.claude("default", ".claude", {
+      projects: { [app]: { enabledMcpjsonServers: ["tools"] }, [web]: {} },
+    });
+    h.claude("work", ".claude-work", { projects: { [app]: {} } });
+    h.write(".mcp.json", {
+      mcpServers: {
+        tools: { command: "tools-mcp" },
+        notes: { command: "home-notes" },
+        shared: { command: "home-shared" },
+      },
+    });
+    h.write("repos/.mcp.json", { mcpServers: { shared: { command: "repos-shared" } } });
+    h.write("repos/app/.mcp.json", { mcpServers: { notes: { command: "app-notes" } } });
+    return { h, app, web, main };
+  }
+  const load = (h: TestHome, cwd: string) =>
+    loadInventory({ homeDir: h.home, registry: h.registry, cwd, managedSettings: h.path("none.json") });
+  const server = (inv: Awaited<ReturnType<typeof load>>, name: string, file: string) => {
+    const found = inv.items.find((i) => i.kind === "mcp" && i.name === name && i.location.file === file);
+    if (!found) throw new Error(`no ${name} in ${file}`);
+    return found;
+  };
+
+  it("reads each .mcp.json once: the project's and each parent dir's up to the home dir", async () => {
+    const { h, app } = ancestorSeed();
+    const inv = await load(h, app);
+    const files = inv.items
+      .filter((i) => i.kind === "mcp")
+      .map((i) => `${i.name}|${i.location.scope}|${i.location.project}|${i.location.file}`)
+      .sort();
+    expect(files).toEqual(
+      [
+        `notes|project|${app}|${h.path("repos/app/.mcp.json")}`,
+        `notes|project|${h.home}|${h.path(".mcp.json")}`,
+        `shared|project|${h.home}|${h.path(".mcp.json")}`,
+        `shared|project|${h.path("repos")}|${h.path("repos/.mcp.json")}`,
+        `tools|project|${h.home}|${h.path(".mcp.json")}`,
+      ].sort(),
+    );
+    // A parent dir is read for its .mcp.json only: it is no project of its own.
+    expect(inv.projects.map((p) => p.path)).toEqual([app, h.path("repos/web")]);
+  });
+
+  it("loads a parent dir's server in the project, approved or not by the project's own switches", async () => {
+    const { h, app, web, main } = ancestorSeed();
+    const inv = await load(h, app);
+    const tools = server(inv, "tools", h.path(".mcp.json"));
+    expect(relevantIn(tools, app)).toBe(true);
+    expect(relevantIn(tools, web)).toBe(true);
+    expect(stateOf(inv, tools, app, "claude:default")).toEqual({
+      value: "on",
+      setBy: { file: main.jsonPath, key: "enabledMcpjsonServers" },
+    });
+    expect(stateOf(inv, tools, app, "claude:work").value).toBe("pending-approval");
+    expect(stateOf(inv, tools, web, "claude:default").value).toBe("pending-approval");
+    // The project's own .mcp.json loads in that project alone.
+    expect(relevantIn(server(inv, "notes", h.path("repos/app/.mcp.json")), web)).toBe(false);
+  });
+
+  it("lets the nearest .mcp.json win a name, as Claude Code merges them", async () => {
+    const { h, app, web } = ancestorSeed();
+    const inv = await load(h, app);
+    const appNotes = server(inv, "notes", h.path("repos/app/.mcp.json"));
+    const homeNotes = server(inv, "notes", h.path(".mcp.json"));
+    expect(stateOf(inv, homeNotes, app).shadowedBy).toBe(appNotes.id);
+    expect(stateOf(inv, appNotes, app).shadowedBy).toBeUndefined();
+    expect(marksOf(inv, homeNotes, Date.now(), app)).toContain("shadowed");
+    // In web, app's file is not read, so the home dir's notes is the one.
+    expect(stateOf(inv, homeNotes, web).shadowedBy).toBeUndefined();
+    const reposShared = server(inv, "shared", h.path("repos/.mcp.json"));
+    expect(stateOf(inv, server(inv, "shared", h.path(".mcp.json")), app).shadowedBy).toBe(reposShared.id);
   });
 });
