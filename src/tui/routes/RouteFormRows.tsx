@@ -1,0 +1,241 @@
+import { Box, Text } from "ink";
+import type { PropsWithChildren } from "react";
+
+import type { Ranking } from "../../core/routing.js";
+import { freeNow } from "../../lib/route-render.js";
+import type { QuotaSnapshot } from "../../types.js";
+import { QuotaCell } from "../components/QuotaCell.js";
+import { color, symbol } from "../theme.js";
+import { FORM_FIELDS, type FormAccount, type FormField, type RouteFormState } from "./route-form-state.js";
+
+/**
+ * The route form's lines (RouteForm.tsx), drawn from what they are given: no state, no keys.
+ *
+ * Every field has a line of its own with the focus mark (`✦`) at its start, so where the focus
+ * is reads in the text itself, not only in its colour; a list marks its row with `▸`.
+ */
+
+const CURSOR = 2;
+const LABEL = 11;
+/** A row's mark (`▸`) and the space after it. */
+const MARK = 2;
+const GAP = 2;
+/** A quota cell's percentage, as the spec's form shows it: no gauge, no reset. */
+const QUOTA = 4;
+
+/** How an error names its field below the box. */
+const FIELD_LABEL: Record<FormField, string> = {
+  name: "Name",
+  tool: "Tool",
+  accounts: "Accounts",
+  from: "From",
+  exclude: "Exclude",
+  strategy: "Strategy",
+  max: "Skip at",
+  reserve: "Reserve up to",
+  fallback: "Fallback",
+};
+
+const labelColor = (focused: boolean, error: boolean) => (error ? color.error : focused ? color.text : color.secondary);
+
+/** One line of the form: the focus mark, the field's label, and what it holds. */
+export function Line({
+  focused = false,
+  label,
+  error = false,
+  children,
+}: PropsWithChildren<{ focused?: boolean; label: string; error?: boolean }>) {
+  return (
+    <Box flexDirection="row">
+      <Box width={CURSOR} flexShrink={0}>
+        <Text color={color.cursor}>{focused ? symbol.cursor : " "}</Text>
+      </Box>
+      <Box width={LABEL} flexShrink={0}>
+        <Text color={labelColor(focused, error)} bold={focused}>
+          {label}
+        </Text>
+      </Box>
+      <Box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0}>
+        {children}
+      </Box>
+    </Box>
+  );
+}
+
+/** The name of one of the two fields under a label: `from` and `exclude`, `skip at` and `reserve up to`. */
+export function SubLabel({
+  text,
+  width,
+  focused,
+  error,
+}: {
+  text: string;
+  width: number;
+  focused: boolean;
+  error: boolean;
+}) {
+  return (
+    <Box width={width} flexShrink={0}>
+      <Text color={error ? color.error : focused ? color.text : color.muted}>{text}</Text>
+    </Box>
+  );
+}
+
+export function Radio<T extends string>({
+  options,
+  selected,
+  focused,
+}: {
+  options: Array<[T, string]>;
+  selected: T;
+  focused: boolean;
+}) {
+  return (
+    <Box columnGap={3} flexWrap="wrap">
+      {options.map(([value, label]) => {
+        const on = value === selected;
+        return (
+          <Box key={value} flexShrink={0}>
+            <Text color={on ? (focused ? color.cursor : color.text) : color.muted} bold={on && focused}>
+              {`${on ? symbol.dot : symbol.circle} ${label}`}
+            </Text>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
+/** Row 0, every account, then one row per account with its quota; out of the route reads `excluded`. */
+export function AccountRows({
+  state,
+  listed,
+  quotas,
+  excluded,
+  focused,
+}: {
+  state: RouteFormState;
+  listed: FormAccount[];
+  quotas: Record<string, QuotaSnapshot>;
+  excluded: ReadonlySet<string>;
+  focused: boolean;
+}) {
+  const idWidth = Math.max(0, ...listed.map((account) => account.id.length));
+  const mark = (row: number) => (
+    <Box width={MARK} flexShrink={0}>
+      <Text color={color.cursor}>{focused && state.cursor === row ? "▸" : " "}</Text>
+    </Box>
+  );
+  return (
+    <Box flexDirection="column" flexGrow={1} minWidth={0}>
+      <Box flexDirection="row">
+        {mark(0)}
+        <Text color={color.text} wrap="truncate-end">
+          {`[${state.every ? "x" : " "}] every account (*), new ones join`}
+        </Text>
+      </Box>
+      {listed.map((account, index) => {
+        const out = excluded.has(account.id);
+        const ticked = state.ticked.includes(account.id) && !out;
+        const snapshot = quotas[account.id];
+        const live = snapshot?.state === "ok";
+        return (
+          <Box key={account.id} flexDirection="row" paddingLeft={2}>
+            {mark(index + 1)}
+            <Box width={4 + idWidth} flexShrink={1} minWidth={0}>
+              <Text color={out ? color.muted : color.text} wrap="truncate-end">
+                {`[${ticked ? "x" : " "}] ${account.id}`}
+              </Text>
+            </Box>
+            {/* Right-aligned: a percentage comes padded to the width, a dash does not. */}
+            <Box marginLeft={GAP} width={QUOTA} flexShrink={0} justifyContent="flex-end">
+              <QuotaCell window={snapshot?.session} live={live} width={QUOTA} />
+            </Box>
+            <Box marginLeft={GAP} width={QUOTA} flexShrink={0} justifyContent="flex-end">
+              <QuotaCell window={snapshot?.weekly} live={live} width={QUOTA} />
+            </Box>
+            {out ? (
+              <Box marginLeft={GAP} flexShrink={0}>
+                <Text color={color.muted}>excluded</Text>
+              </Box>
+            ) : null}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
+/** `1. <id>  2. <id>  (+ add)`, the entry at `cursor` marked while the field has the focus. */
+export function FallbackEntries({ entries, cursor }: { entries: string[]; cursor: number | null }) {
+  return (
+    <Box columnGap={2} flexWrap="wrap">
+      {entries.map((entry, index) => (
+        <Box key={entry} flexShrink={0}>
+          <Text color={index === cursor ? color.cursor : color.text}>
+            {`${index === cursor ? "▸" : " "}${index + 1}. ${entry}`}
+          </Text>
+        </Box>
+      ))}
+      <Box flexShrink={0}>
+        {/* After the slot an entry's mark sits in, so the gaps match. */}
+        <Text color={color.muted}> (+ add)</Text>
+      </Box>
+    </Box>
+  );
+}
+
+/** The accounts that can still join the fallback, under its line, to pick one from. */
+export function FallbackPicker({ ids, cursor }: { ids: string[]; cursor: number }) {
+  return (
+    <Box flexDirection="column" paddingLeft={CURSOR + LABEL}>
+      <Text color={color.secondary}>Add to fallback</Text>
+      {ids.length === 0 ? (
+        <Text color={color.muted}>Every account is in the fallback already.</Text>
+      ) : (
+        ids.map((id, index) => (
+          <Text key={id} color={index === cursor ? color.cursor : color.text} wrap="truncate-end">
+            {`${index === cursor ? "▸" : " "} ${id}`}
+          </Text>
+        ))
+      )}
+    </Box>
+  );
+}
+
+/** Who the route would pick now, from the quota already read: what `csn route explain` would say. */
+export function NowLine({ ranking }: { ranking: Ranking | null }) {
+  if (!ranking) return <Text color={color.muted}>Now: —</Text>;
+  const { outcome } = ranking;
+  if (outcome.kind !== "picked") return <Text color={color.warning}>Now: nobody can be picked</Text>;
+  const { free, members } = freeNow(ranking);
+  return (
+    <Text color={color.text}>
+      {`Now: ${free} of ${members} accounts under ${ranking.route.maxUsage}% · next `}
+      <Text color={color.accent}>{outcome.id}</Text>
+    </Text>
+  );
+}
+
+/** The form's own problem, then each field's, named by its field. */
+export function ErrorLines({ errors }: { errors: RouteFormState["errors"] }) {
+  const messages = [
+    ...(errors.form ? [errors.form] : []),
+    ...FORM_FIELDS.flatMap((field) => {
+      const message = errors[field];
+      return message ? [`${FIELD_LABEL[field]}: ${message}`] : [];
+    }),
+  ];
+  return (
+    <>
+      {messages.map((message) => (
+        <Box key={message} gap={1}>
+          <Box flexShrink={0}>
+            <Text color={color.error}>{symbol.cross}</Text>
+          </Box>
+          <Text color={color.error}>{message}</Text>
+        </Box>
+      ))}
+    </>
+  );
+}

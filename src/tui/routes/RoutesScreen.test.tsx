@@ -6,7 +6,7 @@ import type { RoutesFile } from "../../core/route-config.js";
 import { RoutesFileError } from "../../core/routes-store.js";
 import { stripAnsi } from "../../lib/cli-style.js";
 import type { QuotaSnapshot, Registry } from "../../types.js";
-import { DOWN, ESC, type Instance, press, renderAt, type, waitForFrame } from "../test-drive.js";
+import { DOWN, ENTER, ESC, type Instance, press, renderAt, type, waitForFrame } from "../test-drive.js";
 import { RoutesScreen, type RoutesScreenDeps } from "./RoutesScreen.js";
 
 vi.setConfig({ testTimeout: 15_000 });
@@ -86,6 +86,7 @@ function setup(options: { file?: RoutesFile; collect?: Collect; readError?: Erro
     collectQuotas: vi.fn<Collect>(options.collect ?? (async () => QUOTAS)),
     readPicks: vi.fn(async () => ({})),
     clock: () => NOW,
+    readRoutesText: vi.fn(async () => `${JSON.stringify(current, null, 2)}\n`),
   } satisfies RoutesScreenDeps;
   const onExit = vi.fn();
   const tree = <RoutesScreen deps={deps} onExit={onExit} />;
@@ -366,5 +367,63 @@ describe("RoutesScreen", () => {
     expect(all[accounts]).not.toContain("│");
     expect(all.find((line) => line.includes("claude:side"))).toMatch(/claude:side\s.*88%.*40%\s+over 80%/);
     for (const line of all) expect(line.length).toBeLessThanOrEqual(80);
+  });
+
+  it("opens a new route form on n, and lists and selects the route it saves", async () => {
+    const { instance, file } = setup();
+    await ranked(instance);
+
+    await press(instance, "n");
+    await until(instance, (f) => f.includes("New route"));
+    await press(instance, "daily");
+    await type(instance, ENTER);
+
+    const frame = await until(instance, (f) => /▸ daily/.test(f) && !f.includes("New route"));
+    expect(file().routes.daily).toEqual({
+      tool: "claude",
+      from: ["*"],
+      strategy: "round-robin",
+      maxUsage: 80,
+      reserveUsage: 95,
+    });
+    const { list, detail } = panes(frame);
+    expect(list.map((line) => line.split(/\s+/).filter((word) => word !== "▸")[0])).toEqual([
+      "daily",
+      "main",
+      "solo",
+      "wide",
+    ]);
+    expect(detail.find(Boolean)).toBe("daily");
+  });
+
+  it("opens the selected route on e, and goes back to the list on esc", async () => {
+    const { instance, deps, onExit } = setup();
+    await ranked(instance);
+    await press(instance, DOWN);
+
+    await press(instance, "e");
+    const form = await until(instance, (f) => f.includes("Edit solo"));
+    expect(form).toMatch(/Name\s+solo/);
+    expect(form).toMatch(/\[x\] claude:work/);
+
+    await type(instance, ESC);
+    const frame = await until(instance, (f) => !f.includes("Edit solo"));
+    expect(panes(frame).list[1]).toMatch(/^▸ solo/);
+    expect(deps.updateRoutes).not.toHaveBeenCalled();
+    expect(onExit).not.toHaveBeenCalled();
+  });
+
+  it("reads the quota of the accounts no route takes yet when the form opens", async () => {
+    const { instance, deps } = setup({ file: { version: 1, routes: { solo: FILE.routes.solo } } });
+    await ranked(instance);
+    expect(ids(deps.collectQuotas.mock.calls[0][0])).toEqual(["claude:team", "claude:work"]);
+
+    await press(instance, "n");
+    await vi.waitFor(() => expect(deps.collectQuotas).toHaveBeenCalledTimes(2));
+    const [targets, options] = deps.collectQuotas.mock.calls[1];
+    expect(ids(targets)).toEqual(["claude:old", "claude:ops-share", "claude:side", "codex:x"]);
+    expect(options?.refresh).not.toBe(true);
+    const frame = await until(instance, (f) => /claude:side\s+88%\s+40%/.test(f));
+    expect(frame).toContain("Now: 3 of 5 accounts under 80% · next claude:team");
   });
 });

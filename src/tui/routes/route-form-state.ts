@@ -80,7 +80,8 @@ type ErrorKey = keyof RouteFormState["errors"];
 
 const PICK_ONE = "Pick at least one account.";
 
-const TEXT_KEYS = {
+/** The text fields, and the state key each one edits. */
+export const TEXT_KEYS = {
   name: "name",
   from: "fromText",
   exclude: "excludeText",
@@ -99,7 +100,8 @@ function nameIn(tool: RouteTool, account: FormAccount): string {
   return tool === "all" ? account.id : account.name;
 }
 
-function splitList(text: string): string[] {
+/** A comma-separated field's entries, trimmed, the empty ones dropped. */
+export function splitList(text: string): string[] {
   return text
     .split(",")
     .map((entry) => entry.trim())

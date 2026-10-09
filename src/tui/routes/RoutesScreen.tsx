@@ -2,8 +2,15 @@ import { Box, type Key, Text, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { collectQuotas, type QuotaTarget } from "../../core/quota-store.js";
-import { DEFAULT_MAX_USAGE, type RoutesFile, withDefaults } from "../../core/route-config.js";
-import { RoutesFileError, readPicks, readRoutes, routesPaths, updateRoutes } from "../../core/routes-store.js";
+import { DEFAULT_MAX_USAGE, type RouteSpec, type RoutesFile, withDefaults } from "../../core/route-config.js";
+import {
+  RoutesFileError,
+  readPicks,
+  readRoutes,
+  readRoutesText,
+  routesPaths,
+  updateRoutes,
+} from "../../core/routes-store.js";
 import { type Ranking, rankRoute } from "../../core/routing.js";
 import { freeNow } from "../../lib/route-render.js";
 import { membersOf, quotaTargets } from "../../lib/route-service.js";
@@ -13,11 +20,13 @@ import { Chrome } from "../components/Chrome.js";
 import { color, symbol } from "../theme.js";
 import { useWidth } from "../use-width.js";
 import { type Entry, GAP, MARK, RouteDetail } from "./RouteDetail.js";
+import { formAccounts, RouteForm } from "./RouteForm.js";
 
 /**
  * The dashboard's Routes screen: every route, and the one selected with its members ranked as
  * `csn route explain` ranks them. It reads routes.json, the registry, quota and the pick record,
- * and writes only when a route is removed; a pick is never recorded here.
+ * and writes only when a route is removed, or saved from its form (RouteForm.tsx); a pick is
+ * never recorded here.
  */
 
 /** What the screen reaches outside itself, injectable for tests. */
@@ -28,6 +37,8 @@ export type RoutesScreenDeps = {
   collectQuotas: (targets: QuotaTarget[], options?: { refresh?: boolean }) => Promise<Record<string, QuotaSnapshot>>;
   readPicks: () => Promise<Record<string, string>>;
   clock: () => number;
+  /** routes.json as it is on disk, or null for none: the form saves only over the text it opened on. */
+  readRoutesText: () => Promise<string | null>;
 };
 
 export function defaultRoutesScreenDeps(): RoutesScreenDeps {
@@ -39,6 +50,7 @@ export function defaultRoutesScreenDeps(): RoutesScreenDeps {
     collectQuotas: (targets, options) => collectQuotas(targets, { refresh: options?.refresh }),
     readPicks: () => readPicks(paths),
     clock: () => Date.now(),
+    readRoutesText: () => readRoutesText(paths),
   };
 }
 
@@ -68,6 +80,12 @@ type Loaded =
 /** One quota read, and the pick record as it was then. */
 type Reading = { quotas: Record<string, QuotaSnapshot>; lastPicked: Record<string, string>; now: number };
 
+/** The form on screen: a new route, or the selected one as stored. */
+type FormOpen = { mode: "new" } | { mode: "edit"; name: string; spec: RouteSpec };
+
+/** Without profiles.json the form has no accounts to offer, and every pattern names nobody. */
+const NO_PROFILES: Registry = { version: 2, primarySources: {}, activeProfiles: {}, profiles: {} };
+
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** Every route, by name, ranked on `reading`; with none yet, on nothing, which lists the members only. */
@@ -87,6 +105,10 @@ function rankAll(file: RoutesFile, registry: Registry | null, reading: Reading |
       return { name, route, ranking };
     });
 }
+
+/** Every subscription account: what the form offers, whether or not a route takes it yet. */
+const everyTarget = (registry: Registry) =>
+  quotaTargets(withDefaults({ tool: "all" }), membersOf(registry, "all"), false);
 
 /** The members of every route, once each: one quota read serves them all, as in `csn route list`. */
 function targetsOf(file: RoutesFile, registry: Registry | null): QuotaTarget[] {
@@ -127,6 +149,9 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
   const [cursor, setCursor] = useState(0);
   const [removing, setRemoving] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [form, setForm] = useState<FormOpen | null>(null);
+  /** Quota of the accounts no route took, read for the form: they are on its rows. */
+  const [extra, setExtra] = useState<Record<string, QuotaSnapshot>>({});
   const columns = useColumns();
   const alive = useRef(true);
   /** Only the latest read is shown: an `r` pressed twice must not end on the older answer. */
@@ -164,9 +189,11 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
     };
   }, [io, rank]);
 
+  /** Everything read so far: a saved route whose accounts were read for the form shows them at once. */
+  const shown = useMemo(() => reading && { ...reading, quotas: { ...extra, ...reading.quotas } }, [reading, extra]);
   const entries = useMemo(
-    () => (loaded.kind === "ready" ? rankAll(loaded.file, loaded.registry, reading, io.clock()) : []),
-    [loaded, reading, io],
+    () => (loaded.kind === "ready" ? rankAll(loaded.file, loaded.registry, shown, io.clock()) : []),
+    [loaded, shown, io],
   );
   const index = Math.min(cursor, Math.max(0, entries.length - 1));
   const selected = entries[index];
@@ -185,6 +212,38 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
       if (!alive.current) return;
       if (error instanceof RoutesFileError) setLoaded({ kind: "broken", error });
       else setMessage(`${symbol.cross} ${errorText(error)}`);
+    }
+  }
+
+  function openForm(open: FormOpen) {
+    if (loaded.kind !== "ready") return;
+    setForm(open);
+    if (!loaded.registry) return;
+    // One cached read for the accounts the screen has not read: no route takes them yet.
+    const read = new Set([
+      ...targetsOf(loaded.file, loaded.registry).map((target) => target.id),
+      ...Object.keys(extra),
+    ]);
+    const missing = everyTarget(loaded.registry).filter((target) => !read.has(target.id));
+    if (missing.length === 0) return;
+    void settle(() => io.collectQuotas(missing), {}).then((quotas) => {
+      if (alive.current) setExtra((prev) => ({ ...prev, ...quotas }));
+    });
+  }
+
+  /** Back to the list; after a save, routes.json read again and the saved route selected. */
+  async function closeForm(saved: string | null) {
+    setForm(null);
+    if (saved === null || loaded.kind !== "ready") return;
+    const { registry } = loaded;
+    try {
+      const file = await io.readRoutes();
+      if (!alive.current) return;
+      setLoaded({ kind: "ready", file, registry });
+      setCursor(Math.max(0, Object.keys(file.routes).sort().indexOf(saved)));
+      await rank(file, registry, false);
+    } catch (error) {
+      if (alive.current) setLoaded({ kind: "broken", error });
     }
   }
 
@@ -209,6 +268,10 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
       setRefreshing(true);
       void rank(loaded.file, loaded.registry, true);
     } else if (input === "d" && selected) setRemoving(selected.name);
+    else if (input === "n") openForm({ mode: "new" });
+    else if (input === "e" && selected) {
+      openForm({ mode: "edit", name: selected.name, spec: loaded.file.routes[selected.name] });
+    }
   };
   // Answered with the state on screen, as the App's keys are (`useCommittedHandler` in App.tsx).
   const handler = useRef(handle);
@@ -216,7 +279,8 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
     handler.current = handle;
   });
   const onInput = useCallback((input: string, key: Key) => handler.current(input, key), []);
-  useInput(onInput);
+  // The form answers its own keys.
+  useInput(onInput, { isActive: form === null });
 
   const footer = removing
     ? `Remove route ${removing}? (y/N)`
@@ -234,6 +298,21 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
           <FileProblem error={loaded.error} />
         )}
       </Chrome>
+    );
+  }
+
+  if (form) {
+    return (
+      <RouteForm
+        {...form}
+        accounts={formAccounts(loaded.registry ?? NO_PROFILES)}
+        quotas={shown?.quotas ?? extra}
+        lastPicked={reading?.lastPicked ?? {}}
+        registry={loaded.registry ?? NO_PROFILES}
+        deps={io}
+        now={reading?.now ?? io.clock()}
+        onDone={(saved) => void closeForm(saved)}
+      />
     );
   }
 
