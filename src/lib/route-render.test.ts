@@ -1,19 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import { withDefaults } from "../core/route-config.js";
+import { type RouteSpec, withDefaults } from "../core/route-config.js";
 import type { Member } from "../core/route-patterns.js";
-import { rankRoute } from "../core/routing.js";
+import { type Row, rankRoute, type SkipReason } from "../core/routing.js";
 import type { QuotaSnapshot, ToolName } from "../types.js";
 import { stripAnsi } from "./cli-style.js";
 import {
-  describeSpec,
   explainJson,
   pickJson,
+  type RouteListRow,
   renderCreateScreen,
-  renderExplain,
+  renderNewRoutePreview,
   renderNoAccount,
   renderNote,
-  renderRouteList,
+  renderRouteDetail,
+  renderRoutesEmpty,
+  renderRouteTable,
+  skipText,
+  toolLabel,
   usageText,
 } from "./route-render.js";
 
@@ -51,6 +55,42 @@ function ranking(quotas: Record<string, QuotaSnapshot>, from = ["*"], lastPicked
   });
 }
 
+/** A reading whose windows reset in the given hours; null is a reset the API did not give. */
+const quota = (five: number, seven: number, fiveIn: number | null = 1, sevenIn: number | null = 50): QuotaSnapshot => ({
+  state: "ok",
+  fetchedAt: NOW,
+  session: { usedPercent: five, resetsAt: fiveIn === null ? null : inHours(fiveIn) },
+  weekly: { usedPercent: seven, resetsAt: sevenIn === null ? null : inHours(sevenIn) },
+});
+const signedOut: QuotaSnapshot = { state: "missing", fetchedAt: NOW };
+
+const EVERYONE = ["claude:team", "claude:work", "claude:side", "claude:personal", "claude:old", "claude:ops-share"].map(
+  member,
+);
+
+function rank(
+  spec: RouteSpec,
+  quotas: Record<string, QuotaSnapshot>,
+  options: { members?: Member[]; lastPicked?: Record<string, string>; resume?: boolean } = {},
+) {
+  return rankRoute({
+    route: withDefaults(spec),
+    members: options.members ?? EVERYONE,
+    quotas,
+    lastPicked: options.lastPicked ?? {},
+    now: NOW,
+    resume: options.resume ?? false,
+  });
+}
+
+const widest = (text: string) =>
+  Math.max(
+    ...plain(text)
+      .split("\n")
+      .map((line) => line.length),
+  );
+const at = (width: number) => ({ width, now: NOW });
+
 describe("usageText", () => {
   it("says the percent and the window", () => {
     expect(usageText({ percent: 40, window: "5H", stale: false })).toBe("40% 5H");
@@ -59,95 +99,417 @@ describe("usageText", () => {
   });
 });
 
-describe("renderNote", () => {
-  it("names the profile, the route, the usage and the strategy", () => {
-    const r = ranking({ "claude:team": snap(40, 30), "claude:work": snap(20, 70), "claude:old": snap(0, 99) });
-    expect(plain(renderNote("main", r))).toBe("→ claude:team · route main · usage 40% (5H) · round-robin");
+describe("skipText", () => {
+  it("says why a member is skipped, and the command that fixes it", () => {
+    const row = (skip: SkipReason): Row => ({ id: "claude:old", role: "pool", pattern: "*", skip, status: "skipped" });
+    expect(skipText(row("signed-out"))).toBe("signed out (csn login claude:old)");
+    expect(skipText(row("expired"))).toBe("sign-in expired (csn login claude:old)");
+    expect(skipText(row("no-reading"))).toBe("no quota reading (csn list --refresh)");
+    expect(skipText(row("not-registered"))).toBe("not registered");
+    expect(skipText(row("keeps-own-sessions"))).toBe("keeps its own sessions, so it cannot resume a shared one");
+    expect(skipText(row("api-not-supported"))).toBe("API profile: routes take subscription profiles only for now");
   });
+});
 
-  it("says which stage it came from", () => {
-    const r = ranking({ "claude:team": snap(85, 0), "claude:work": snap(90, 0), "claude:old": snap(0, 99) });
-    expect(plain(renderNote(undefined, r))).toBe(
-      "→ claude:team · inline route (reserve) · usage 85% (5H) · every member at or above 80%",
+describe("toolLabel", () => {
+  it("names one tool, or both", () => {
+    expect(toolLabel("claude")).toBe("claude");
+    expect(toolLabel("codex")).toBe("codex");
+    expect(toolLabel("all")).toBe("claude + codex");
+  });
+});
+
+describe("renderRoutesEmpty", () => {
+  it("says what a route is and how to make one", () => {
+    expect(plain(renderRoutesEmpty())).toBe(
+      [
+        "",
+        "  No routes yet.",
+        "",
+        "  A route picks the account for you: the next one in turn that is",
+        "  under 80% of its 5-hour and weekly limits.",
+        "",
+        "    csn route add main               every Claude account, taking turns",
+        "    csn run --route main             run on the account it picks",
+        "    csn route                        create and edit routes in the dashboard",
+        "",
+      ].join("\n"),
     );
   });
 });
 
-describe("renderExplain", () => {
-  it("shows every member, the pick and why the others were not", () => {
-    const r = ranking(
-      { "claude:team": snap(40, 30), "claude:work": snap(20, 70), "claude:old": snap(0, 99) },
-      ["*", "gone"],
-      { "claude:work": new Date(NOW - 3 * 60_000).toISOString() },
+describe("renderRouteTable", () => {
+  const main = rank(
+    { tool: "claude", exclude: ["*-share"] },
+    {
+      "claude:team": quota(5, 22),
+      "claude:work": quota(12, 34),
+      "claude:side": quota(88, 40),
+      "claude:personal": quota(30, 40),
+    },
+  );
+  const busyQuotas = {
+    "claude:team": quota(99, 10, 2),
+    "claude:work": quota(99, 10, 3),
+    "claude:side": quota(99, 10, 4),
+    "claude:personal": quota(99, 10, 5),
+  };
+  const busy = rank({ tool: "all", exclude: ["*-share"] }, busyQuotas);
+  const rows: RouteListRow[] = [
+    { name: "main", route: main.route, ranking: main },
+    { name: "solo", route: withDefaults({ tool: "claude", from: ["work"], strategy: "headroom" }) },
+    { name: "everything", route: busy.route, ranking: busy },
+  ];
+  const warnings = ["solo names 'gone', which is not a registered profile."];
+
+  it("shows each route's settings, who is free now and who is next", () => {
+    const text = plain(renderRouteTable(rows, warnings, at(120)));
+    const lines = text.split("\n");
+    expect(lines[0]).toBe("");
+    expect(lines.at(-1)).toBe("");
+    expect(lines[1]).toMatch(/^ {4}ROUTE\s+TOOL\s+STRATEGY\s+LIMITS\s+FREE NOW\s+NEXT$/);
+    expect(lines[2]).toMatch(/^ {4}─+$/);
+    // Free: team, work and personal; side is over the cut, old has no reading, ops-share is excluded.
+    expect(text).toMatch(/^ {4}main\s+claude\s+round-robin\s+80% \/ 95%\s+3 of 5\s+claude:team$/m);
+    expect(text).toMatch(
+      /^ {4}everything\s+claude \+ codex\s+round-robin\s+80% \/ 95%\s+0 of 5\s+none, soonest in 2h$/m,
     );
-    const text = plain(renderExplain("main", r, NOW));
-    expect(text).toContain("route main (claude · round-robin · max 80% · reserve 95%)");
-    expect(text).toMatch(/→ claude:team\s+40%\s+30%\s+40% 5H\s+never\s+picked: next in turn/);
-    expect(text).toMatch(/ {2}claude:work\s+20%\s+70%\s+70% 7D\s+3m ago/);
-    expect(text).toMatch(/claude:old\s+0%\s+99%\s+99% 7D\s+never\s+at or above 80%/);
-    expect(text).toMatch(/claude:gone\s+—\s+—\s+—\s+—\s+skipped: not registered/);
   });
 
-  it("keeps the columns aligned for the widest usage, 100% and stale", () => {
-    const stale: QuotaSnapshot = { ...snap(100, 0, "error"), fetchedAt: NOW - 10 * 60_000 };
-    const r = ranking({ "claude:team": stale, "claude:work": snap(20, 70), "claude:old": snap(0, 99) });
-    const lines = plain(renderExplain("main", r, NOW)).split("\n");
-    const header = lines[1];
-    const row = lines.find((line) => line.includes("claude:team")) ?? "";
-    expect(row).toContain("100% 5H (stale)");
-    expect(row.indexOf("never")).toBe(header.indexOf("LAST PICKED"));
+  it("shows dashes for a route that was not ranked (--no-quota)", () => {
+    expect(plain(renderRouteTable(rows, [], at(120)))).toMatch(/^ {4}solo\s+claude\s+headroom\s+80% \/ 95%\s+—\s+—$/m);
   });
 
-  it("says never for a pick time it cannot read, as ranking treats it", () => {
-    const r = ranking({ "claude:team": snap(40, 30), "claude:work": snap(20, 70), "claude:old": snap(0, 99) }, ["*"], {
-      "claude:work": "not-a-date",
+  it("says none when nobody is free and no reset is known", () => {
+    const stuck = rank({ tool: "claude", from: ["team"] }, { "claude:team": quota(99, 99, null, null) });
+    expect(plain(renderRouteTable([{ name: "stuck", route: stuck.route, ranking: stuck }], [], at(120)))).toMatch(
+      /^ {4}stuck\s+claude\s+round-robin\s+80% \/ 95%\s+0 of 1\s+none$/m,
+    );
+  });
+
+  it("prints the warnings below the table", () => {
+    const lines = plain(renderRouteTable(rows, warnings, at(120))).split("\n");
+    const index = lines.indexOf("  ⚠ solo names 'gone', which is not a registered profile.");
+    expect(index).toBeGreaterThan(0);
+    expect(lines[index - 1]).toBe("");
+  });
+
+  // Review Focus 1: an 80-column terminal never wraps a row; TOOL goes first, then LIMITS.
+  it("drops TOOL, then LIMITS, rather than wrap a row", () => {
+    const wide = plain(renderRouteTable(rows, warnings, at(120)));
+    expect(wide.split("\n")[1]).toContain("TOOL");
+
+    const at80 = renderRouteTable(rows, warnings, at(80));
+    expect(widest(at80)).toBeLessThanOrEqual(80);
+    const header80 = plain(at80).split("\n")[1];
+    expect(header80).not.toContain("TOOL");
+    expect(header80).toMatch(/ROUTE\s+STRATEGY\s+LIMITS\s+FREE NOW\s+NEXT/);
+    expect(plain(at80)).toMatch(/everything\s+round-robin\s+80% \/ 95%\s+0 of 5\s+none, soonest in 2h/);
+
+    const at60 = renderRouteTable(rows, warnings, at(60));
+    expect(widest(at60)).toBeLessThanOrEqual(60);
+    expect(plain(at60).split("\n")[1]).toMatch(/ROUTE\s+STRATEGY\s+FREE NOW\s+NEXT$/);
+  });
+});
+
+describe("renderRouteDetail", () => {
+  const quotas = {
+    "claude:team": quota(5, 22),
+    "claude:work": quota(12, 34),
+    "claude:side": quota(88, 40),
+    "claude:personal": quota(96, 81),
+    "claude:old": signedOut,
+  };
+  const main = rank({ tool: "claude", exclude: ["*-share"] }, quotas, {
+    lastPicked: { "claude:work": new Date(NOW - 3 * 60_000).toISOString() },
+  });
+
+  it("shows the settings in a box, then every member", () => {
+    const text = plain(renderRouteDetail("main", main, at(120)));
+    expect(text.startsWith("\n  ╭─ main ─")).toBe(true);
+    for (const line of [
+      "  │  Tool       claude",
+      "  │  Strategy   round-robin (next in turn)",
+      "  │  Limits     skip at 80%, reserve up to 95%",
+      "  │  Accounts   * except *-share",
+      "  │  Fallback   none",
+    ]) {
+      expect(text).toContain(line);
+    }
+    expect(text).toMatch(/^ {4}ACCOUNT\s+5H\s+7D\s+LAST PICKED$/m);
+    expect(text).toMatch(/^ {2}▸ claude:team\s+5% 1h\s+22% 2d\s+never\s+picked next$/m);
+    expect(text).toMatch(/^ {4}claude:work\s+12% 1h\s+34% 2d\s+3m ago$/m);
+    expect(text).toMatch(/^ {4}claude:side\s+88% 1h\s+40% 2d\s+over 80%$/m);
+    expect(text).toMatch(/^ {4}claude:personal\s+96% 1h\s+81% 2d\s+over 80%$/m);
+    expect(text).toMatch(/^ {4}claude:old\s+—\s+—\s+signed out \(csn login claude:old\)$/m);
+    expect(text).toContain("\n    claude:ops-share  excluded by *-share\n");
+    expect(text).not.toContain("Nobody can be picked");
+    expect(text.endsWith("\n")).toBe(true);
+  });
+
+  it("puts the pick first, then the others by usage, then the skipped and the excluded", () => {
+    const text = plain(renderRouteDetail("main", main, at(120)));
+    const order = ["▸ claude:team", "claude:work", "claude:side", "claude:personal", "claude:old", "claude:ops-share"];
+    const positions = order.map((id) => text.indexOf(id));
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  });
+
+  it("shows LAST PICKED only for round-robin, and marks fallback members", () => {
+    const r = rank(
+      { tool: "claude", from: ["team", "work"], strategy: "headroom", fallback: ["side"] },
+      { "claude:team": quota(85, 10), "claude:work": quota(90, 10), "claude:side": quota(10, 10) },
+    );
+    const text = plain(renderRouteDetail("solo", r, at(120)));
+    expect(text).toContain("  │  Strategy   headroom (most room first)");
+    expect(text).toContain("  │  Accounts   team, work");
+    expect(text).toContain("  │  Fallback   side");
+    expect(text).toMatch(/^ {4}ACCOUNT\s+5H\s+7D$/m);
+    expect(text).not.toContain("LAST PICKED");
+    expect(text).toMatch(/^ {2}▸ claude:side \(fallback\)\s+10% 1h\s+10% 2d\s+picked: fallback$/m);
+    expect(text).toMatch(/^ {4}claude:team\s+85% 1h\s+10% 2d\s+over 80%$/m);
+  });
+
+  it("says when the pick comes from the reserve", () => {
+    const r = rank(
+      { tool: "claude", from: ["team", "work"], strategy: "expiring" },
+      { "claude:team": quota(85, 10), "claude:work": quota(90, 10) },
+    );
+    const text = plain(renderRouteDetail("main", r, at(120)));
+    expect(text).toContain("  │  Strategy   expiring (weekly limit resetting within 24h first)");
+    expect(text).toMatch(/▸ claude:team\s+85% 1h\s+10% 2d\s+picked: reserve, most room up to 95%$/m);
+  });
+
+  it("says when nobody can be picked, and that a run would exit 75", () => {
+    const r = rank(
+      { tool: "claude", from: ["team", "work"] },
+      { "claude:team": quota(99, 1), "claude:work": quota(1, 99) },
+    );
+    const text = plain(renderRouteDetail("main", r, at(120)));
+    expect(text.endsWith("\n\n  Nobody can be picked now; csn run --route main would exit 75.\n")).toBe(true);
+  });
+
+  it("names both tools for an all route, and titles an unsaved one", () => {
+    const text = plain(renderRouteDetail(undefined, rank({ tool: "all" }, quotas), at(120)));
+    expect(text.startsWith("\n  ╭─ inline route ─")).toBe(true);
+    expect(text).toContain("  │  Tool       claude + codex");
+  });
+
+  it("lists names that are not registered and patterns that match nobody", () => {
+    const text = plain(
+      renderRouteDetail("main", rank({ tool: "claude", from: ["*", "gone", "x-*"] }, quotas), at(120)),
+    );
+    expect(text).toMatch(/^ {4}claude:gone\s+not registered$/m);
+    expect(text).toMatch(/^ {4}x-\*\s+matches nobody$/m);
+  });
+
+  it("says the exclude took everyone, rather than that nothing matched", () => {
+    const text = plain(renderRouteDetail("main", rank({ tool: "claude", exclude: ["*"] }, quotas), at(120)));
+    expect(text).toContain("No profile matches * after excluding *.");
+    expect(text).not.toContain("No profile matches *.");
+    expect(text).not.toContain("ACCOUNT");
+  });
+
+  // Review Focus 1.
+  it("never wraps a row at 80 columns", () => {
+    const text = renderRouteDetail("main", main, at(80));
+    expect(widest(text)).toBeLessThanOrEqual(80);
+    // The signed-out row gives up its dashes before the table gives up a column.
+    expect(plain(text)).toMatch(/^ {4}ACCOUNT\s+5H\s+7D\s+LAST PICKED$/m);
+    expect(plain(text)).toMatch(/^ {4}claude:old\s+signed out \(csn login claude:old\)$/m);
+
+    // The longest words a row can carry: a resumed run's skip, and a reserve pick.
+    const loners = ["claude:team", "claude:work", "claude:personal"].map((id) => ({
+      ...member(id),
+      sharesSessions: id === "claude:team",
+    }));
+    const resumedQuotas = {
+      "claude:team": quota(85, 10),
+      "claude:work": quota(10, 10),
+      "claude:personal": quota(10, 10),
+    };
+    const resumed = rank({ tool: "claude" }, resumedQuotas, { members: loners, resume: true });
+    const long = renderRouteDetail("main", resumed, at(80));
+    expect(plain(long)).toContain("keeps its own sessions, so it cannot resume a shared one");
+    expect(plain(long)).toContain("picked: reserve, most room up to 95%");
+    expect(widest(long)).toBeLessThanOrEqual(80);
+
+    // Wider still with a fallback mark: the words are cut, the row still does not wrap.
+    const marked = rank({ tool: "claude", from: ["team", "work"], fallback: ["personal"] }, resumedQuotas, {
+      members: loners,
+      resume: true,
     });
-    expect(plain(renderExplain("main", r, NOW))).toMatch(/claude:work\s+20%\s+70%\s+70% 7D\s+never/);
+    expect(widest(renderRouteDetail("main", marked, at(80)))).toBeLessThanOrEqual(80);
+  });
+
+  it("keeps a long pattern list inside the box at 80 columns", () => {
+    const from = ["team", "work", "side", "personal", "old", "*@work.example.com", "*@home.example.com"];
+    const text = renderRouteDetail("main", rank({ tool: "claude", from }, quotas), at(80));
+    expect(widest(text)).toBeLessThanOrEqual(80);
+    expect(plain(text)).toContain("│  Accounts   team, work, side, personal, old, *@work.example.com,");
+  });
+});
+
+describe("renderNote", () => {
+  it("names the profile, the route, why, and the usage", () => {
+    const r = ranking({ "claude:team": snap(5, 22), "claude:work": snap(12, 34), "claude:old": snap(0, 99) });
+    expect(plain(renderNote("main", r))).toBe("  ▸ claude:team  route main, next in turn, 22% of 7D used");
+  });
+
+  it("says the stage when the pool had nobody, and an unsaved route", () => {
+    const r = ranking({ "claude:team": snap(85, 0), "claude:work": snap(90, 0), "claude:old": snap(0, 99) });
+    expect(plain(renderNote(undefined, r))).toBe("  ▸ claude:team  inline route, reserve, 85% of 5H used");
+    const fallback = rank(
+      { tool: "claude", from: ["team"], fallback: ["work"] },
+      { "claude:team": quota(90, 0), "claude:work": quota(10, 20) },
+    );
+    expect(plain(renderNote("main", fallback))).toBe("  ▸ claude:work  route main, fallback, 20% of 7D used");
+  });
+
+  it("says why for each strategy", () => {
+    const quotas = { "claude:team": quota(10, 30, 1, 20), "claude:work": quota(5, 5) };
+    const headroom = rank({ tool: "claude", from: ["team", "work"], strategy: "headroom" }, quotas);
+    expect(plain(renderNote("main", headroom))).toBe("  ▸ claude:work  route main, most room, 5% of 5H used");
+    const expiring = rank({ tool: "claude", from: ["team", "work"], strategy: "expiring" }, quotas);
+    expect(plain(renderNote("main", expiring))).toBe(
+      "  ▸ claude:team  route main, weekly limit resets within 24h, 30% of 7D used",
+    );
+    const later = rank({ tool: "claude", from: ["work"], strategy: "expiring" }, quotas);
+    expect(plain(renderNote("main", later))).toBe("  ▸ claude:work  route main, most room, 5% of 5H used");
+  });
+
+  it("says when the usage is the last reading", () => {
+    const stale: QuotaSnapshot = { ...quota(40, 10), state: "error", fetchedAt: NOW - 10 * 60_000 };
+    const r = rank({ tool: "claude", from: ["team"] }, { "claude:team": stale });
+    expect(plain(renderNote("main", r))).toBe(
+      "  ▸ claude:team  route main, next in turn, 40% of 5H used, last reading",
+    );
+  });
+
+  it("is empty when nobody was picked", () => {
+    expect(renderNote("main", ranking({}))).toBe("");
   });
 });
 
 describe("renderNoAccount", () => {
-  it("lists every member with its reset, marks the soonest and names a way out", () => {
-    const r = ranking({ "claude:team": snap(99, 0), "claude:work": snap(97, 98), "claude:old": snap(0, 96) });
-    const text = plain(renderNoAccount("main", r, NOW));
-    expect(text.split("\n")[0]).toBe("No account is available for route main.");
-    expect(text).toMatch(/claude:team\s+99% 5H, resets in 1h\s+← soonest/);
-    expect(text).toContain("Retry later, or name a profile: clausona run claude:team");
+  const quotas = {
+    "claude:side": quota(96, 40, 1, 72),
+    // With the reserve at 95, only the weekly window holds this one back.
+    "claude:personal": quota(88, 97, 2, 48),
+    "claude:old": signedOut,
+  };
+  const busy = rank({ tool: "claude", from: ["personal", "side", "old"] }, quotas);
+
+  it("says nobody is free, when each will be, and what to do", () => {
+    const text = plain(renderNoAccount("main", busy, at(120)));
+    const lines = text.split("\n");
+    expect(lines[0]).toBe("No account in route main is free right now.");
+    expect(lines[1]).toBe("");
+    expect(text).toMatch(/^ {4}ACCOUNT\s+5H\s+7D\s+FREE AGAIN$/m);
+    expect(text).toContain("in 1h (5H resets)   soonest");
+    expect(text).toMatch(/^ {4}claude:side\s+96% 1h\s+40% 3d\s+in 1h \(5H resets\) {3}soonest$/m);
+    expect(text).toMatch(/^ {4}claude:personal\s+88% 2h\s+97% 2d\s+in 2d \(7D resets\)$/m);
+    expect(text).toMatch(/^ {4}claude:old\s+signed out \(csn login claude:old\)$/m);
+    expect(text).toContain("\n\n    Run again after 1h, or see everything with: csn route explain main\n");
+    // Soonest first; the skipped last.
+    expect(text.indexOf("claude:side")).toBeLessThan(text.indexOf("claude:personal"));
+    expect(text.indexOf("claude:personal")).toBeLessThan(text.indexOf("claude:old"));
   });
 
-  // Offline, nothing was read; "at or above" would be wrong.
-  it("says no quota could be read when none was", () => {
-    const r = ranking({});
-    const text = plain(renderNoAccount("main", r, NOW));
-    expect(text).toContain("No quota could be read for any member");
-    expect(text).not.toMatch(/at or above/);
+  // Review Focus 2: offline, nothing was read, so nobody is "over" anything.
+  it("says no quota could be read when none was, even with an unregistered name", () => {
+    const offline = rank({ tool: "claude", from: ["*", "gone"] }, {});
+    const text = plain(renderNoAccount("main", offline, at(120)));
+    expect(text).toContain(
+      "\n    No quota could be read for any member: check the network, or run csn list --refresh.\n",
+    );
+    expect(text).toMatch(/^ {4}claude:gone\s+not registered$/m);
+    expect(text).not.toMatch(/over|at or above|Run again/);
+
+    const narrow = renderNoAccount("main", offline, at(80));
+    expect(widest(narrow)).toBeLessThanOrEqual(80);
+    expect(plain(narrow)).toContain(
+      "    No quota could be read for any member: check the network, or run\n    csn list --refresh.",
+    );
   });
 
-  it("still says no quota could be read when the route also names someone unregistered", () => {
-    const r = ranking({}, ["*", "gone"]);
-    const text = plain(renderNoAccount("main", r, NOW));
-    expect(text).toMatch(/claude:gone\s+not registered/);
-    expect(text).toContain("No quota could be read for any member");
+  it("says later when no reset is known", () => {
+    const r = rank({ tool: "claude", from: ["team"] }, { "claude:team": quota(99, 99, null, null) });
+    const text = plain(renderNoAccount("main", r, at(120)));
+    expect(text).toMatch(/^ {4}claude:team\s+99%\s+99%\s+—$/m);
+    expect(text).toContain("    Run again later, or see everything with: csn route explain main\n");
   });
 
-  it("says when the patterns match nobody", () => {
-    const r = ranking({}, ["team-x-*"]);
-    expect(plain(renderNoAccount("main", r, NOW))).toContain("No profile matches team-x-*.");
+  it("gives an unsaved route's explain command", () => {
+    const r = rank(
+      { tool: "claude", from: ["team", "work"] },
+      { "claude:team": quota(99, 1), "claude:work": quota(99, 1) },
+    );
+    const text = plain(renderNoAccount(undefined, r, at(120)));
+    expect(text.split("\n")[0]).toBe("No account in the inline route is free right now.");
+    expect(text).toContain("csn route explain --tool claude --from 'team,work'");
   });
 
-  it("says the exclude took everyone, rather than that nothing matched", () => {
-    const r = rankRoute({
-      route: withDefaults({ tool: "claude", exclude: ["*"] }),
-      members,
-      quotas: {},
-      lastPicked: {},
-      now: NOW,
-      resume: false,
-    });
-    const text = plain(renderNoAccount("main", r, NOW));
+  it("says when the patterns match nobody, or the exclude took everyone", () => {
+    expect(plain(renderNoAccount("main", rank({ tool: "claude", from: ["team-x-*"] }, {}), at(120)))).toContain(
+      "No profile matches team-x-*.",
+    );
+    const text = plain(renderNoAccount("main", rank({ tool: "claude", exclude: ["*"] }, {}), at(120)));
     expect(text).toContain("No profile matches * after excluding *.");
     expect(text).not.toContain("No profile matches *.");
-    expect(plain(renderExplain("main", r, NOW))).toContain("No profile matches * after excluding *.");
+  });
+
+  // Review Focus 1.
+  it("never wraps a row at 80 columns", () => {
+    expect(widest(renderNoAccount("main", busy, at(80)))).toBeLessThanOrEqual(80);
+  });
+});
+
+describe("renderNewRoutePreview", () => {
+  const four = ["claude:team", "claude:work", "claude:side", "claude:personal", "claude:old"].map(member);
+  const quotas = {
+    "claude:team": quota(5, 1),
+    "claude:work": quota(12, 1),
+    "claude:side": quota(88, 1),
+    "claude:personal": quota(96, 1),
+  };
+
+  it("says what the new route would take, and who is in it now", () => {
+    const spec: RouteSpec = { tool: "claude", from: ["*"] };
+    const r = rank(spec, quotas, { members: four.slice(0, 4) });
+    expect(plain(renderNewRoutePreview("work", spec, r, { width: 120 }))).toBe(
+      [
+        "",
+        "  Route work does not exist yet. It would take every claude account,",
+        "  taking turns and skipping any at 80% or more:",
+        "",
+        "    claude:team 5%   claude:work 12%   claude:side 88% (over)   claude:personal 96% (over)",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("names the accounts when the route names them, and says why one is skipped", () => {
+    const spec: RouteSpec = { tool: "claude", from: ["team", "work"] };
+    const text = plain(renderNewRoutePreview("work", spec, rank(spec, quotas, { members: four }), { width: 120 }));
+    expect(text).toContain("  Route work does not exist yet. It would take claude:team, claude:work,\n  taking turns");
+    const withOld = { ...quotas, "claude:old": signedOut };
+    const all = plain(
+      renderNewRoutePreview("work", { tool: "claude" }, rank({ tool: "claude" }, withOld, { members: four }), {
+        width: 120,
+      }),
+    );
+    expect(all).toContain("claude:old (signed out)");
+  });
+
+  it("wraps the accounts at the width, never inside one", () => {
+    const spec: RouteSpec = { tool: "claude", from: ["*"] };
+    const text = plain(
+      renderNewRoutePreview("work", spec, rank(spec, quotas, { members: four.slice(0, 4) }), { width: 60 }),
+    );
+    expect(widest(text)).toBeLessThanOrEqual(60);
+    expect(text).toContain(
+      "\n    claude:team 5%   claude:work 12%\n    claude:side 88% (over)   claude:personal 96% (over)\n",
+    );
   });
 });
 
@@ -160,44 +522,9 @@ describe("renderCreateScreen", () => {
     // Only claude:team is under the cut: claude:work is over it, and claude:old is signed out.
     expect(text).toContain("pool      * · 1 of 3 account(s) under 80% now");
     expect(text).toContain("claude:team, claude:work");
-    expect(text).toContain("claude:old (signed out (clausona login claude:old))");
+    expect(text).toContain("claude:old (signed out (csn login claude:old))");
     expect(text).toContain("strategy  round-robin · max 80% · reserve 95%");
     expect(plain(question)).toBe("[Y]es and run · [e]dit · [n]o ");
-  });
-});
-
-describe("renderRouteList", () => {
-  it("shows each route's settings, member count and warnings", () => {
-    const text = renderRouteList([
-      {
-        name: "main",
-        route: withDefaults({ tool: "claude", exclude: ["*-share"], fallback: ["personal"] }),
-        members: ["claude:team", "claude:work"],
-        fallbackMembers: ["claude:personal"],
-        excluded: ["claude:share"],
-        unknownNames: ["gone"],
-        emptyPatterns: ["team-x-*"],
-      },
-      {
-        name: "cx",
-        route: withDefaults({ tool: "codex" }),
-        members: ["codex:main"],
-        fallbackMembers: [],
-        excluded: [],
-        unknownNames: [],
-        emptyPatterns: [],
-      },
-    ]);
-    expect(plain(text)).toBe(
-      [
-        "  main  claude · round-robin · max 80% · reserve 95%",
-        "        from * · exclude *-share · fallback personal · 2 member(s)",
-        "        ⚠ 'gone' is not registered",
-        "        ⚠ 'team-x-*' matches nobody",
-        "  cx    codex · round-robin · max 80% · reserve 95%",
-        "        from * · 1 member(s)",
-      ].join("\n"),
-    );
   });
 });
 
@@ -319,13 +646,5 @@ describe("JSON", () => {
       ["claude:team", "picked"],
       ["claude:work", "eligible"],
     ]);
-  });
-});
-
-describe("describeSpec", () => {
-  it("is one line", () => {
-    expect(describeSpec({ tool: "claude", exclude: ["*-share"] })).toBe(
-      "claude · round-robin · max 80% · reserve 95% · from * · exclude *-share",
-    );
   });
 });

@@ -6,6 +6,7 @@ import { runCommand } from "./commands.js";
 import { routesPaths } from "./core/routes-store.js";
 import { stripAnsi } from "./lib/cli-style.js";
 import type { RouteIo } from "./lib/route-create.js";
+import { renderRoutesEmpty } from "./lib/route-render.js";
 import { NoAccountError, type RouteDeps } from "./lib/route-service.js";
 import { runRouteCommand } from "./route-commands.js";
 import type { QuotaSnapshot, Registry } from "./types.js";
@@ -289,7 +290,7 @@ describe("route set, rename, remove", () => {
 describe("route list", () => {
   it("says how to start when there are no routes", async () => {
     const { run } = setup();
-    expect(await run("list")).toMatch(/^No routes yet\. Create one: clausona route add <name>/);
+    expect(await run("list")).toBe(stripAnsi(renderRoutesEmpty()));
   });
 
   it("takes no route name", async () => {
@@ -305,8 +306,9 @@ describe("route list", () => {
       JSON.stringify({ version: 1, routes: { main: { tool: "claude", from: ["gone", "*"] } } }),
     );
     const out = await run("list");
-    expect(out).toContain("main");
-    expect(out).toContain("⚠ 'gone' is not registered");
+    expect(out).toMatch(/^ {4}ROUTE\s+TOOL\s+STRATEGY\s+LIMITS\s+FREE NOW\s+NEXT$/m);
+    expect(out).toMatch(/^ {4}main\s+claude\s+round-robin\s+80% \/ 95%/m);
+    expect(out).toContain("  ⚠ main names 'gone', which is not a registered profile.");
     const json = JSON.parse(await run("list", "--json"));
     expect(json.routes[0]).toMatchObject({
       name: "main",
@@ -321,7 +323,8 @@ describe("route explain and pick", () => {
     const { run, deps } = setup();
     await run("add", "main");
     const out = await run("explain", "main");
-    expect(out).toMatch(/→ claude:a/);
+    expect(out).toContain("╭─ main ─");
+    expect(out).toMatch(/^ {2}▸ claude:a\s.*picked next$/m);
     expect(() => readFileSync(deps.paths.picksPath)).toThrow();
     const json = JSON.parse(await run("explain", "main", "--json"));
     expect(json).toMatchObject({ route: "main", resolvedBy: "flag", outcome: { kind: "picked", id: "claude:a" } });
@@ -360,7 +363,7 @@ describe("route explain and pick", () => {
     const error = (await run("pick", "main").catch((e: unknown) => e)) as NoAccountError;
     expect(error).toBeInstanceOf(NoAccountError);
     expect(error.exitCode).toBe(75);
-    expect(stripAnsi(error.message)).toContain("No account is available for route main.");
+    expect(stripAnsi(error.message).split("\n")[0]).toBe("No account in route main is free right now.");
     const jsonError = (await run("pick", "main", "--json").catch((e: unknown) => e)) as NoAccountError;
     expect(JSON.parse(jsonError.stdout ?? "")).toMatchObject({ profile: null });
   });

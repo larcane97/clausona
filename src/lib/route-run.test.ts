@@ -112,7 +112,7 @@ describe("runRouted", () => {
     const s = setup({ routes: MAIN });
     expect(await runRouted(["--route", "main", "-p", "hi"], s.launch, s.io, s.deps)).toBe(0);
     expect(s.launches).toEqual([["claude:solo", ["-p", "hi"]]]);
-    expect(s.notes).toEqual(["→ claude:solo · route main · usage 5% (5H) · headroom"]);
+    expect(s.notes).toEqual(["  ▸ claude:solo  route main, most room, 5% of 5H used"]);
   });
 
   it("keeps a resumed run to profiles that share sessions", async () => {

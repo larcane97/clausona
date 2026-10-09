@@ -22,13 +22,12 @@ import {
 import { accent, bold, dim, helpSection, helpUsage, stripAnsi, success } from "./lib/cli-style.js";
 import { confirmNewRoute, type RouteIo, terminalIo } from "./lib/route-create.js";
 import {
-  describeSpec,
   explainJson,
   pickJson,
-  type RouteListEntry,
-  renderExplain,
   renderNoAccount,
-  renderRouteList,
+  renderRouteDetail,
+  renderRoutesEmpty,
+  renderRouteTable,
 } from "./lib/route-render.js";
 import {
   checkRouteMembers,
@@ -242,7 +241,7 @@ async function addRoute(args: string[], io: RouteIo, deps: RouteDeps): Promise<s
   }
   await createRoute(name, spec, deps);
   return [
-    success(`Created route ${bold(name)} ${dim(`(${describeSpec(spec)})`)}`),
+    success(`Created route ${bold(name)}`),
     dim(`    Run on it: clausona run --route ${name}    See the ranking: clausona route explain ${name}`),
   ].join("\n");
 }
@@ -267,7 +266,6 @@ async function setRoute(args: string[], deps: RouteDeps): Promise<string> {
     );
   }
   const registry = await registryOrThrow(deps);
-  let changed: RouteSpec | undefined;
   await updateRoutes((file) => {
     const current = file.routes[name];
     if (!current) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
@@ -303,10 +301,9 @@ async function setRoute(args: string[], deps: RouteDeps): Promise<string> {
     if (noFallback) delete next.fallback;
     checkRouteMembers(name, next, registry);
     file.routes[name] = next;
-    changed = next;
     return file;
   }, deps.paths);
-  return success(`Updated route ${bold(name)} ${dim(`(${describeSpec(changed as RouteSpec)})`)}`);
+  return success(`Updated route ${bold(name)}`);
 }
 
 async function renameRoute(args: string[], deps: RouteDeps): Promise<string> {
@@ -374,7 +371,7 @@ async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
   if (read.positionals.length) throw new Error(`${usage("list")}\nRun \`clausona route list --help\` for usage.`);
   const file = await readRoutes(deps.paths);
   const registry = await deps.loadRegistry();
-  const entries: RouteListEntry[] = Object.keys(file.routes)
+  const entries = Object.keys(file.routes)
     .sort()
     .map((name) => {
       const route = withDefaults(file.routes[name]);
@@ -394,10 +391,15 @@ async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
       };
     });
   if (read.flags.has("--json")) return JSON.stringify({ routes: entries }, null, 2);
-  if (entries.length === 0) {
-    return "No routes yet. Create one: clausona route add <name>   (every subscription account, round-robin, max 80%, reserve 95%)";
-  }
-  return renderRouteList(entries);
+  if (entries.length === 0) return renderRoutesEmpty();
+  const warnings = entries.flatMap((entry) => [
+    ...entry.unknownNames.map((name) => `${entry.name} names '${name}', which is not a registered profile.`),
+    ...entry.emptyPatterns.map((pattern) => `${entry.name}: '${pattern}' matches nobody.`),
+  ]);
+  return renderRouteTable(
+    entries.map(({ name, route }) => ({ name, route })),
+    warnings,
+  );
 }
 
 async function resolveForRanking(sub: "explain" | "pick", args: string[], deps: RouteDeps) {
@@ -423,7 +425,7 @@ async function explainRoute(args: string[], deps: RouteDeps): Promise<string> {
   const ranking = await rankRouteNow(resolved, deps, { resume, record: false });
   return json
     ? JSON.stringify(explainJson(resolved.name, resolved.resolvedBy, ranking), null, 2)
-    : renderExplain(resolved.name, ranking, deps.clock());
+    : renderRouteDetail(resolved.name, ranking, { now: deps.clock() });
 }
 
 async function pickRoute(args: string[], deps: RouteDeps): Promise<string> {
@@ -431,7 +433,7 @@ async function pickRoute(args: string[], deps: RouteDeps): Promise<string> {
   const ranking = await rankRouteNow(resolved, deps, { resume, record: true });
   if (ranking.outcome.kind === "none") {
     throw new NoAccountError(
-      renderNoAccount(resolved.name, ranking, deps.clock()),
+      renderNoAccount(resolved.name, ranking, { now: deps.clock() }),
       json ? JSON.stringify(pickJson(resolved.name, ranking), null, 2) : undefined,
     );
   }

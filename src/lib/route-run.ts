@@ -179,7 +179,9 @@ export async function runRouted(
     resume: runTools.some((tool) => isResumeRun(tool, run.toolArgs)),
     record: true,
   });
-  if (ranking.outcome.kind === "none") throw new NoAccountError(renderNoAccount(resolved.name, ranking, deps.clock()));
+  if (ranking.outcome.kind === "none") {
+    throw new NoAccountError(renderNoAccount(resolved.name, ranking, { now: deps.clock() }));
+  }
   io.say(renderNote(resolved.name, ranking));
   return launch(ranking.outcome.id, run.toolArgs);
 }
