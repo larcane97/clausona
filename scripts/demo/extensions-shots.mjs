@@ -64,8 +64,9 @@ const steps = (onePane) => {
     ["09-hooks", ["Escape", "Type 3", ...open], "LOADED — what Claude Code runs"],
     // The project list, in the scope list's place: app first, then web, then No project.
     ["10-projects", [...back, "Type p"], "PROJECT\\s+hooks"],
-    // web picked: every scope is seen from it, back on Loaded with the scope list focused.
-    ["10b-web", ["Down", "Enter"], "▾ web"],
+    // web picked: every scope is seen from it - the subtitle and the row say so - back on Loaded.
+    // \x2F for the slash, which would end the tape's /regexp/.
+    ["10b-web", ["Down", "Enter"], "~\\x2Fweb[\\s\\S]*▾ web[\\s\\S]*▸ Loaded"],
     // 1 for Skills: the search is in the table on screen, and Hooks has no eli.
     ["11-search", ["Type 1", "Type /", "Type eli", "Enter"], "(?m)\\Weli *$"],
     // The list again, seen from web: web first, and app still (here).
