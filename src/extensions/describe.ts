@@ -1,0 +1,598 @@
+import path from "node:path";
+
+import { CLEANUP_GRACE_DAYS, CLEANUP_UNUSED_DAYS, folderKey, marksOf, usageOf } from "./inventory.js";
+import type { EffectiveState, Extension, Inventory, StateValue } from "./model.js";
+import {
+  type AccountState,
+  accountStates,
+  projectName,
+  shortProfile,
+  stateHere,
+  tilde,
+  tildeIn,
+  viewFrom,
+} from "./present.js";
+import { isWithin, pathKey, samePath } from "./read.js";
+import { homeScope, type ItemKind, pluginContents, SCOPE_LABEL, type ScopeId, type ToolName } from "./scopes.js";
+
+/**
+ * The words the Extensions screen and the CLI say about an item: its tags, a hook's event in
+ * plain words, how long ago, the details view's lines and the JSON v1 item. Pure, like scopes.ts:
+ * it reads the inventory, and what it shows of an MCP server or a hook is the redacted summary.
+ */
+
+/** One of the verbatim tags: off, off here, off in N of M accounts, unused, broken link, pending approval, hidden by … copy. */
+export type Tag = string;
+
+export type DetailLine = { label?: string; text: string; tone?: "muted" | "warning" | "error" | "healthy" };
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+const TOOL_WORD: Record<ToolName, string> = { claude: "Claude", codex: "Codex" };
+const TOOL_NAME: Record<ToolName, string> = { claude: "Claude Code", codex: "Codex" };
+const NOUN: Record<ItemKind, string> = { skill: "skills", mcp: "MCP servers", hook: "hooks" };
+
+/** "38m ago", "5h ago", "13d ago", "3mo ago", "2y ago"; "never" for undefined. */
+export function agoWords(then: number | undefined, now: number): string {
+  if (then === undefined) return "never";
+  const ms = Math.max(0, now - then);
+  if (ms < HOUR) return `${Math.max(1, Math.floor(ms / MINUTE))}m ago`;
+  if (ms < DAY) return `${Math.floor(ms / HOUR)}h ago`;
+  if (ms < 60 * DAY) return `${Math.floor(ms / DAY)}d ago`;
+  if (ms < 365 * DAY) return `${Math.floor(ms / (30 * DAY))}mo ago`;
+  return `${Math.floor(ms / (365 * DAY))}y ago`;
+}
+
+/** The events whose matcher names a tool. Maps, so an event named like an object's own key is unknown. */
+const TOOL_EVENTS = new Map<string, (tool: string) => string>([
+  ["PreToolUse", (tool) => `Before ${tool} runs`],
+  ["PostToolUse", (tool) => `After ${tool} runs`],
+  ["PostToolUseFailure", (tool) => `After ${tool} fails`],
+]);
+
+const EVENTS = new Map<string, string>([
+  ["UserPromptSubmit", "When you send a message"],
+  ["Notification", "When Claude sends a notification"],
+  ["Stop", "When Claude finishes replying"],
+  ["SubagentStop", "When a subagent finishes"],
+  ["SessionStart", "When a session starts"],
+  ["SessionEnd", "When a session ends"],
+  ["PreCompact", "Before the conversation is compacted"],
+  ["PermissionRequest", "When Claude asks for permission"],
+  ["Interrupt", "When you interrupt"],
+  ["StopFailure", "When replying fails"],
+]);
+
+/** A hook in plain words: "Before Bash runs", "When Claude finishes replying". */
+export function hookWhen(item: Extension): string {
+  // The sources name a hook "<Event> <matcher>", or "<Event>" when it has no matcher.
+  const space = item.name.indexOf(" ");
+  const event = space < 0 ? item.name : item.name.slice(0, space);
+  const matcher = space < 0 ? undefined : item.name.slice(space + 1);
+  const tool = TOOL_EVENTS.get(event);
+  if (tool) return tool(matcher === undefined || matcher === "*" ? "any tool" : matcher);
+  const words = EVENTS.get(event) ?? event;
+  return matcher === undefined ? words : `${words} (${matcher})`;
+}
+
+/** A plugin's name without its marketplace: `superpowers@official` is `superpowers`. */
+function pluginName(item: Extension): string {
+  const id = item.location.plugin ?? item.name;
+  return id.split("@")[0] ?? id;
+}
+
+/**
+ * Where a row in Loaded here comes from: "Project", "Global", "Cloud", "~/repos" (parent
+ * folder), the plugin's name, "Built in", "Managed".
+ */
+export function fromLabel(item: Extension, inv: Inventory, project: string | undefined): string {
+  const scope = homeScope(item, project);
+  if (scope === "plugins" || (scope === "other" && item.location.scope === "plugin")) return pluginName(item);
+  if (scope === "parents" || scope === "other") return projectName(item.location.project ?? "", inv);
+  if (scope === "builtin") return "Built in";
+  return SCOPE_LABEL[scope](item.location.tool);
+}
+
+/**
+ * The state of each account that has the item, for a Claude MCP server that is switched per
+ * account: a `.mcp.json` or plugin server every account sees (`accountStates`), or a server
+ * defined in accounts' own `.claude.json` - one copy per account, the copies of one name, scope
+ * and project read together as one server. Accounts in the inventory's order, primary first.
+ * Undefined for every other item, which has one state.
+ */
+export function statesByAccount(
+  inv: Inventory,
+  item: Extension,
+  project: string | undefined,
+): AccountState[] | undefined {
+  const shared = accountStates(inv, item, project);
+  if (shared) return shared;
+  const loc = item.location;
+  if (item.kind !== "mcp" || loc.tool !== "claude" || loc.profile === undefined) return undefined;
+  const rank = (profile: string) => {
+    const at = inv.claudeProfiles.indexOf(profile);
+    return at < 0 ? inv.claudeProfiles.length : at;
+  };
+  return inv.items
+    .filter(
+      (other) =>
+        other.kind === "mcp" &&
+        other.location.tool === "claude" &&
+        other.name === item.name &&
+        other.location.scope === loc.scope &&
+        other.location.profile !== undefined &&
+        (loc.project === undefined
+          ? other.location.project === undefined
+          : samePath(other.location.project, loc.project)),
+    )
+    .map((copy) => ({ profile: copy.location.profile as string, state: stateHere(inv, copy, project) }))
+    .sort((a, b) => rank(a.profile) - rank(b.profile));
+}
+
+/**
+ * Whether a setting was read from a project's own place: its `.claude/settings*.json`, an
+ * account's `.claude.json` entry for it, or its `.codex/config.toml`. Told from the facts the
+ * sources recorded with a project, not from where the file is: in the home dir every file is
+ * under the project, `~/.claude/settings.json` too, and that one is the user's.
+ */
+function isProjectSetting(inv: Inventory, file: string): boolean {
+  const facts = inv.facts;
+  const key = pathKey(file);
+  const at = (entry: { file: string; project?: string }) => entry.project !== undefined && pathKey(entry.file) === key;
+  return (
+    facts.claudeSkillOverrides.some(at) ||
+    facts.claudeEnabledPlugins.some(at) ||
+    facts.claudeMcpDisabled.some(at) ||
+    facts.claudeMcpjson.some(at) ||
+    facts.codexMcpEnabled.some(at)
+  );
+}
+
+function scopeLabel(item: Extension, project: string | undefined): string {
+  return SCOPE_LABEL[homeScope(item, project)](item.location.tool);
+}
+
+/** Every tag that applies, most important first: broken link > off > off here > off in N of M accounts > pending approval > hidden by … > unused. */
+export function tagsOf(inv: Inventory, item: Extension, project: string | undefined, now: number): Tag[] {
+  const tags: Tag[] = [];
+  const broken = item.link?.broken === true;
+  if (broken) tags.push("broken link");
+  const perAccount = statesByAccount(inv, item, project);
+  const states = perAccount?.map((a) => a.state) ?? [stateHere(inv, item, project)];
+  const off = states.filter((s) => s.value === "off");
+  if (states.length > 0 && off.length === states.length) {
+    const here = off.every((s) => s.setBy !== undefined && isProjectSetting(inv, s.setBy.file));
+    tags.push(here ? "off here" : "off");
+  } else if (perAccount && off.length > 0) {
+    tags.push(`off in ${off.length} of ${states.length} accounts`);
+  }
+  if (states.length > 0 && states.every((s) => s.value === "pending-approval")) tags.push("pending approval");
+  const winnerId = states.length > 0 && states.every((s) => s.shadowedBy) ? states[0]?.shadowedBy : undefined;
+  const winner = winnerId === undefined ? undefined : inv.items.find((i) => i.id === winnerId);
+  if (winner) tags.push(`hidden by ${scopeLabel(winner, project)} copy`);
+  if (!broken && marksOf(inv, item, now).includes("cleanup")) tags.push("unused");
+  return tags;
+}
+
+/** What a skill's, a server's or a hook's global row is in, as the header names it. */
+function globalPlace(item: Extension): string {
+  if (item.kind !== "skill") return item.location.file;
+  const file = item.location.file;
+  // A legacy command is a file in commands/, or in one folder below it.
+  if (item.summary?.type === "command")
+    return item.summary.namespace ? path.dirname(path.dirname(file)) : path.dirname(file);
+  return path.dirname(file);
+}
+
+/** What a project's own files are, per tool and kind, for the project at `here`. */
+const PROJECT_FILES: Record<ToolName, Record<ItemKind, (here: string) => string>> = {
+  claude: {
+    skill: (here) => `.claude/skills and .claude/commands in ${here}`,
+    mcp: (here) => `.mcp.json in ${here}, and each account's entry for it in .claude.json`,
+    hook: (here) => `.claude/settings.json and .claude/settings.local.json in ${here}`,
+  },
+  codex: {
+    skill: (here) => `.agents/skills in ${here}`,
+    mcp: (here) => `.codex/config.toml in ${here}`,
+    hook: (here) => `.codex/hooks.json in ${here}`,
+  },
+};
+
+const GLOBAL_FALLBACK: Record<ToolName, Record<ItemKind, string>> = {
+  claude: { skill: "your skills folder", mcp: "each account's .claude.json", hook: "your user settings" },
+  codex: {
+    skill: "~/.agents/skills and Codex's skills folder",
+    mcp: "Codex's config.toml",
+    hook: "Codex's hooks.json",
+  },
+};
+
+/** The items of a tool and kind whose home is `scope`, seen from `project`. */
+function inScope(
+  inv: Inventory,
+  tool: ToolName,
+  kind: ItemKind,
+  scope: ScopeId,
+  project: string | undefined,
+): Extension[] {
+  return inv.items.filter((i) => i.kind === kind && i.location.tool === tool && homeScope(i, project) === scope);
+}
+
+/** A list of places that stays one line: two, then how many more. */
+function fewPlaces(places: string[]): string {
+  return places.length <= 2 ? places.join(", ") : `${places.slice(0, 2).join(", ")} and ${places.length - 2} more`;
+}
+
+function sentence(scope: ScopeId, tool: ToolName, kind: ItemKind, inv: Inventory, project: string | undefined): string {
+  const here = project === undefined ? undefined : tilde(project, inv.homeDir);
+  const loads = kind === "hook" ? "runs" : "loads";
+  switch (scope) {
+    case "loaded":
+      if (here === undefined) return `what ${TOOL_NAME[tool]} ${loads} with no project`;
+      return `what ${TOOL_NAME[tool]} ${loads} in ${here}${tool === "claude" ? ", in at least one account" : ""}`;
+    case "project":
+      return here === undefined ? "no project · pick one with p" : PROJECT_FILES[tool][kind](here);
+    case "parents": {
+      // Nearest first, as Claude Code lets the nearest file win a name.
+      const dirs = [...new Set(inScope(inv, tool, kind, "parents", project).map((i) => i.location.project ?? ""))]
+        .sort((a, b) => b.length - a.length)
+        .map((dir) => tilde(dir, inv.homeDir));
+      return dirs.length === 0
+        ? ".mcp.json files in folders above this project · load here too"
+        : `.mcp.json in ${fewPlaces(dirs)} · loads here too`;
+    }
+    case "global": {
+      if (tool === "claude" && kind === "mcp")
+        return `user servers in each account's .claude.json · ${loads} in every project`;
+      const places = [
+        ...new Set(inScope(inv, tool, kind, "global", project).map((item) => tilde(globalPlace(item), inv.homeDir))),
+      ];
+      return `${places.length === 0 ? GLOBAL_FALLBACK[tool][kind] : fewPlaces(places)} · ${loads} in every project`;
+    }
+    case "cloud":
+      return "skills on your claude.ai accounts, different per account";
+    case "plugins":
+      return `plugins that bring ${NOUN[kind]}, installed for you or for this project`;
+    case "builtin":
+      return tool === "claude"
+        ? "skills that come with Claude Code, named in your settings"
+        : "skills that come with Codex";
+    case "managed":
+      return "your organization's managed settings · apply in every project";
+    case "other":
+      return `projects with ${NOUN[kind]} of their own · they load there, not here`;
+    case "unused":
+      return `not used in ${CLEANUP_UNUSED_DAYS} days in any account, or never used and older than ${CLEANUP_GRACE_DAYS} days`;
+  }
+}
+
+/**
+ * The table's header line: the scope's name in caps, a dash, and one plain sentence saying what
+ * the scope is - "GLOBAL — ~/.claude/skills · loads in every project". An other project's table
+ * is headed with its name.
+ */
+export function scopeSentence(
+  scope: ScopeId,
+  tool: ToolName,
+  kind: ItemKind,
+  inv: Inventory,
+  project: string | undefined,
+  otherProject?: string,
+): string {
+  const name = SCOPE_LABEL[scope](tool).toUpperCase();
+  if (scope === "other" && otherProject !== undefined) {
+    const loads = kind === "hook" ? "run" : "load";
+    return `${name} › ${projectName(otherProject, inv)} — ${tilde(otherProject, inv.homeDir)} · its ${NOUN[kind]} ${loads} there, not here`;
+  }
+  return `${name} — ${sentence(scope, tool, kind, inv, project)}`;
+}
+
+/**
+ * Where a setting is, in words: "this project's .claude/settings.local.json", "this project's
+ * entry in ~/.claude-work/.claude.json", or the file's path for one of the user's.
+ */
+function settingPlace(inv: Inventory, item: Extension, project: string | undefined, file: string): string {
+  if (!isProjectSetting(inv, file)) return tilde(file, inv.homeDir);
+  const here = viewFrom(item, project);
+  const whose = here === undefined || samePath(here, project) ? "this project's" : `${projectName(here, inv)}'s`;
+  // An account's .claude.json holds an entry per project, wherever the file is.
+  const inside = here !== undefined && path.basename(file) !== ".claude.json" && isWithin(file, here);
+  return `${whose} ${inside ? path.relative(here, file) : `entry in ${tilde(file, inv.homeDir)}`}`;
+}
+
+/** A state as one account line says it: "on", "off (this project's …)", "pending approval". */
+function stateWords(inv: Inventory, item: Extension, project: string | undefined, state: EffectiveState): string {
+  if (state.shadowedBy) {
+    const winner = inv.items.find((i) => i.id === state.shadowedBy);
+    return winner ? `hidden by the ${scopeLabel(winner, project)} copy` : "hidden by another copy";
+  }
+  if (state.value === "pending-approval") return "pending approval";
+  if (state.value !== "off") return "on";
+  return state.setBy ? `off (${settingPlace(inv, item, project, state.setBy.file)})` : "off";
+}
+
+/** The accounts an item is in when not every one: an account's own, or a plugin's installs. */
+function holders(inv: Inventory, item: Extension): string[] | undefined {
+  const loc = item.location;
+  if (loc.profile !== undefined) return [loc.profile];
+  const accounts = loc.accounts;
+  if (accounts && !inv.claudeProfiles.every((p) => accounts.includes(p))) return accounts;
+  return undefined;
+}
+
+/** Where an item loads, in words, for one that has a single state: a skill, a hook, a plugin. */
+function loadedLine(inv: Inventory, item: Extension, project: string | undefined): DetailLine {
+  const state = stateHere(inv, item, project);
+  if (state.shadowedBy) {
+    const winner = inv.items.find((i) => i.id === state.shadowedBy);
+    const text = winner
+      ? `no, the ${scopeLabel(winner, project)} copy wins (${tilde(winner.location.file, inv.homeDir)})`
+      : "no, another copy wins";
+    return { label: "Loaded", text, tone: "muted" };
+  }
+  if (state.value === "off") {
+    if (!state.setBy) return { label: "Loaded", text: "off: no settings file turns it on", tone: "warning" };
+    const place = settingPlace(inv, item, project, state.setBy.file);
+    const here = isProjectSetting(inv, state.setBy.file);
+    return { label: "Loaded", text: `${here ? "off here" : "off everywhere"} (${place})`, tone: "warning" };
+  }
+  if (state.value === "pending-approval") return { label: "Loaded", text: "pending approval here", tone: "warning" };
+  const who = holders(inv, item)?.map(shortProfile).join(", ") ?? "every account";
+  const own = item.location.project;
+  const where = own === undefined ? "every project" : samePath(own, project) ? "this project" : projectName(own, inv);
+  return { label: "Loaded", text: `on in ${who}, ${where}` };
+}
+
+/** Each account's state of an MCP server, one line each, and "on in every account" when that says it all. */
+function accountLines(inv: Inventory, item: Extension, project: string | undefined): DetailLine[] {
+  const perAccount = statesByAccount(inv, item, project);
+  if (!perAccount) {
+    const words = stateWords(inv, item, project, stateHere(inv, item, project));
+    return [{ label: "Accounts", text: `${words} in every account` }];
+  }
+  const words = perAccount.map((a) => ({
+    name: shortProfile(a.profile),
+    words: stateWords(inv, item, project, a.state),
+  }));
+  const every = inv.claudeProfiles.every((p) => perAccount.some((a) => a.profile === p));
+  if (every && new Set(words.map((w) => w.words)).size === 1) {
+    return [{ label: "Accounts", text: `${words[0]?.words} in every account` }];
+  }
+  // A server in accounts' own .claude.json is not in the others; a shared one is in each that opened the project.
+  const others = item.location.profile !== undefined && !every;
+  const rows = [...words, ...(others ? [{ name: "others", words: "not added" }] : [])];
+  const width = Math.max(...rows.map((r) => r.name.length));
+  return rows.map((r, i) => ({ label: i === 0 ? "Accounts" : "", text: `${r.name.padEnd(width)}  ${r.words}` }));
+}
+
+type Copy = { item: Extension; sameFolder: boolean; sameContent: boolean | undefined };
+
+/** The same-name skills elsewhere: either tool, any scope, Claude's first. */
+function copiesOf(inv: Inventory, item: Extension, project: string | undefined): Copy[] {
+  if (item.kind !== "skill") return [];
+  const order: string[] = ["project", "parents", "global", "cloud", "plugins", "builtin", "managed", "other"];
+  return inv.items
+    .filter((other) => other.kind === "skill" && other.id !== item.id && other.name === item.name)
+    .map((other) => {
+      const sameFolder = !item.link?.broken && !other.link?.broken && folderKey(item) === folderKey(other);
+      const [mine, theirs] = [inv.hashes[item.id], inv.hashes[other.id]];
+      const hashed = mine !== undefined && theirs !== undefined ? mine === theirs : undefined;
+      return { item: other, sameFolder, sameContent: sameFolder ? true : hashed };
+    })
+    .sort(
+      (a, b) =>
+        Number(a.item.location.tool !== "claude") - Number(b.item.location.tool !== "claude") ||
+        order.indexOf(homeScope(a.item, project)) - order.indexOf(homeScope(b.item, project)) ||
+        (a.item.location.project ?? "").localeCompare(b.item.location.project ?? ""),
+    );
+}
+
+function alsoInLines(inv: Inventory, item: Extension, project: string | undefined): DetailLine[] {
+  return copiesOf(inv, item, project).map((copy, i) => {
+    const loc = copy.item.location;
+    const scope = homeScope(copy.item, project);
+    const place = scope === "other" ? projectName(loc.project ?? "", inv) : scopeLabel(copy.item, project);
+    const account = loc.profile ? ` · ${shortProfile(loc.profile)}` : "";
+    const note = copy.sameFolder
+      ? " (same folder)"
+      : copy.sameContent === undefined
+        ? ""
+        : copy.sameContent
+          ? " (same content)"
+          : " (different content)";
+    return { label: i === 0 ? "Also in" : "", text: `${TOOL_WORD[loc.tool]} › ${place}${account}${note}` };
+  });
+}
+
+/** How Claude Code shows a skill at a visibility short of the full skill. */
+const SHOWS_AS: Partial<Record<StateValue, string>> = {
+  "name-only": "name only",
+  "user-invocable-only": "only when you call it",
+};
+
+function skillLines(inv: Inventory, item: Extension, project: string | undefined, now: number): DetailLine[] {
+  const loc = item.location;
+  const lines: DetailLine[] = [];
+  if (item.description) lines.push({ text: item.description });
+  // A Claude built-in skill has no folder: its file is the settings file that names it.
+  if (!(loc.tool === "claude" && loc.scope === "builtin")) {
+    const folder = item.summary?.type === "command" || item.link?.broken;
+    lines.push({ label: "File", text: tilde(folder ? loc.file : path.join(loc.file, "SKILL.md"), inv.homeDir) });
+  }
+  if (item.link) {
+    const broken = item.link.broken;
+    lines.push({
+      label: "Link to",
+      text: `${tilde(item.link.target, inv.homeDir)}${broken ? " (missing)" : ""}`,
+      tone: broken ? "error" : "muted",
+    });
+  }
+  lines.push(loadedLine(inv, item, project));
+  const state = stateHere(inv, item, project);
+  if (loc.tool === "claude") lines.push(...usedLines(inv, item, state, now));
+  lines.push(...alsoInLines(inv, item, project));
+  const shows = SHOWS_AS[state.value];
+  if (shows !== undefined) {
+    const from = state.setBy ? ` (${settingPlace(inv, item, project, state.setBy.file)})` : "";
+    lines.push({ label: "Shows as", text: `${shows}${from}` });
+  }
+  return lines;
+}
+
+function usedLines(inv: Inventory, item: Extension, state: EffectiveState, now: number): DetailLine[] {
+  // Claude Code records a skill's use by name, and a hidden copy never loads.
+  if (state.shadowedBy) return [{ label: "Used", text: "counted under the copy that wins", tone: "muted" }];
+  const usage = usageOf(inv, [item]);
+  if (!usage || (usage.total === 0 && usage.lastUsedAt === undefined)) {
+    return [{ label: "Used", text: "never, in any account", tone: "muted" }];
+  }
+  const last = usage.lastUsedAt === undefined ? "" : ` · last ${agoWords(usage.lastUsedAt, now)}`;
+  const lines: DetailLine[] = [
+    { label: "Used", text: `${usage.total} ${usage.total === 1 ? "time" : "times"}${last}` },
+  ];
+  const byAccount = Object.entries(usage.byProfile)
+    .filter(([, count]) => count > 0)
+    .sort(([a, x], [b, y]) => y - x || a.localeCompare(b))
+    .map(([profile, count]) => `${shortProfile(profile)} ${count}`);
+  if (byAccount.length > 0) lines.push({ label: "", text: byAccount.join(" · ") });
+  return lines;
+}
+
+/** Names of a server's env vars and headers: the summary holds no values. */
+function secretNames(summary: Record<string, string> | undefined): string[] {
+  return [summary?.env, summary?.headers].flatMap((list) => (list ? list.split(", ").filter(Boolean) : []));
+}
+
+function mcpLines(inv: Inventory, item: Extension, project: string | undefined): DetailLine[] {
+  const loc = item.location;
+  const lines: DetailLine[] = [];
+  const runs = item.summary?.command ?? item.summary?.url;
+  if (runs) lines.push({ label: "Runs", text: tildeIn(runs, inv.homeDir) });
+  const secrets = secretNames(item.summary);
+  if (secrets.length > 0) {
+    lines.push({
+      label: "Secrets",
+      text: `${secrets.join(", ")} (${secrets.length === 1 ? "value" : "values"} hidden)`,
+    });
+  }
+  lines.push(...accountLines(inv, item, project));
+  const entry =
+    loc.scope === "local" && loc.project !== undefined
+      ? ` (${samePath(loc.project, project) ? "this project's" : `${projectName(loc.project, inv)}'s`} entry)`
+      : "";
+  lines.push({ label: "File", text: `${tilde(loc.file, inv.homeDir)}${entry}` });
+  return lines;
+}
+
+function hookLines(inv: Inventory, item: Extension, project: string | undefined): DetailLine[] {
+  const lines: DetailLine[] = [{ label: "When", text: hookWhen(item).replace(/^When /, "") }];
+  const runs = item.summary?.command ?? item.summary?.prompt;
+  if (runs) lines.push({ label: "Runs", text: tildeIn(runs, inv.homeDir) });
+  lines.push({ label: "File", text: tilde(item.location.file, inv.homeDir) });
+  // A plugin's hook is off with its plugin: say where, as for any item that is off.
+  if (stateHere(inv, item, project).value !== "on") lines.push(loadedLine(inv, item, project));
+  return lines;
+}
+
+function count(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
+function pluginLines(inv: Inventory, item: Extension, project: string | undefined): DetailLine[] {
+  const loc = item.location;
+  const lines: DetailLine[] = [];
+  if (item.description) lines.push({ text: item.description });
+  const installed =
+    loc.project === undefined
+      ? "for you (every project)"
+      : samePath(loc.project, project)
+        ? "for this project"
+        : `for ${projectName(loc.project, inv)}`;
+  lines.push({ label: "Installed", text: installed });
+  lines.push(loadedLine(inv, item, project));
+  const contents = pluginContents(inv, item);
+  lines.push({
+    label: "Contains",
+    text: [
+      count(contents.skill.length, "skill"),
+      count(contents.mcp.length, "MCP server"),
+      count(contents.hook.length, "hook"),
+    ].join(" · "),
+  });
+  // What a plugin brings is named `<plugin>:<name>`, its servers `plugin:<plugin>:<name>`.
+  const name = pluginName(item);
+  const names = [
+    ...contents.skill.map((i) => i.name.replace(`${name}:`, "")),
+    ...contents.mcp.map((i) => i.name.replace(`plugin:${name}:`, "")),
+    ...contents.hook.map((i) => i.name),
+  ];
+  if (names.length > 0) lines.push({ label: "", text: names.join(", ") });
+  return lines;
+}
+
+/** The details view: title line first ("GLOBAL › eli5"), then the lines of the spec's Details section that apply. */
+export function detailsOf(inv: Inventory, item: Extension, project: string | undefined, now: number): DetailLine[] {
+  const title = `${scopeLabel(item, project).toUpperCase()} › ${item.kind === "plugin" ? pluginName(item) : item.name}`;
+  const lines: DetailLine[] = [{ text: title }];
+  switch (item.kind) {
+    case "skill":
+      return [...lines, ...skillLines(inv, item, project, now)];
+    case "mcp":
+      return [...lines, ...mcpLines(inv, item, project)];
+    case "hook":
+      return [...lines, ...hookLines(inv, item, project)];
+    case "plugin":
+      return [...lines, ...pluginLines(inv, item, project)];
+  }
+}
+
+/** The JSON v1 item. */
+export function jsonItem(
+  inv: Inventory,
+  item: Extension,
+  project: string | undefined,
+  now: number,
+): Record<string, unknown> {
+  const loc = item.location;
+  const perAccount = statesByAccount(inv, item, project);
+  const accounts =
+    perAccount?.map((a) => a.profile) ?? (loc.profile ? [loc.profile] : loc.accounts && [...loc.accounts]);
+  const values = [...new Set((perAccount?.map((a) => a.state) ?? [stateHere(inv, item, project)]).map((s) => s.value))];
+  // Only Claude records how often a skill is used.
+  const counted = item.kind === "skill" && loc.tool === "claude";
+  const usage = counted ? usageOf(inv, [item]) : undefined;
+  return {
+    id: item.id,
+    kind: item.kind,
+    tool: loc.tool,
+    name: item.name,
+    scope: homeScope(item, project),
+    from: fromLabel(item, inv, project),
+    project: loc.project ?? null,
+    ...(loc.plugin ? { plugin: loc.plugin } : {}),
+    ...(accounts ? { accounts } : {}),
+    state: values.length === 1 ? values[0] : "mixed",
+    ...(perAccount ? { stateByAccount: Object.fromEntries(perAccount.map((a) => [a.profile, a.state.value])) } : {}),
+    usage: counted
+      ? {
+          total: usage?.total ?? 0,
+          lastUsedAt: usage?.lastUsedAt === undefined ? null : new Date(usage.lastUsedAt).toISOString(),
+          byAccount: { ...usage?.byProfile },
+        }
+      : null,
+    tags: tagsOf(inv, item, project, now),
+    file: loc.file,
+    description: item.description ?? null,
+    alsoIn: copiesOf(inv, item, project).map((copy) => ({
+      tool: copy.item.location.tool,
+      scope: homeScope(copy.item, project),
+      project: copy.item.location.project ?? null,
+      sameContent: copy.sameContent ?? null,
+    })),
+    ...(item.link ? { link: { target: item.link.target, broken: item.link.broken } } : {}),
+    // Already redacted: commands and URLs with secrets hidden, env and header names only.
+    ...(item.kind === "mcp" || item.kind === "hook" ? { summary: { ...item.summary } } : {}),
+  };
+}
