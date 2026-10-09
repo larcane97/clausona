@@ -59,8 +59,8 @@ function stateWord(inv: Inventory, item: Extension, project: string | undefined)
     if (first !== undefined && byAccount.every((a) => a.state.value === first)) return first;
     return `${byAccount.filter((a) => a.state.value === "on").length}/${byAccount.length} on`;
   }
-  const state = stateHere(inv, item, project);
-  return state.shadowedBy ? "shadowed" : state.value;
+  // The value as the settings have it, even for a shadowed copy: NOTES says it is shadowed.
+  return stateHere(inv, item, project).value;
 }
 
 /** Off in at least one account, for a server read per account - as the dashboard's Off filter has it. */
