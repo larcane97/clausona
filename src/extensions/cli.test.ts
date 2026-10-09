@@ -334,7 +334,7 @@ describe("ls, a .mcp.json in a parent dir", () => {
     const text = await run(h, app, "mcp", ["ls"]);
     expect(text).toMatch(/^4 MCP servers · /);
     expect(text).toMatch(/^tools\s+claude\s+project ~\s+1\/2 on$/m);
-    expect(text).toMatch(/^shared\s+claude\s+project ~\/repos\s+pending-approval$/m);
+    expect(text).toMatch(/^shared\s+claude\s+project ~[\\/]repos\s+pending-approval$/m);
     expect(text).toMatch(/^notes\s+claude\s+project app\s+pending-approval$/m);
     expect(text).toMatch(/^notes\s+claude\s+project ~\s+pending-approval\s+shadowed$/m);
     const json = JSON.parse(await run(h, app, "mcp", ["ls", "--json"]));

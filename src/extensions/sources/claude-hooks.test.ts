@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { type Collector, emptyFacts, type Project } from "../model.js";
+import { pathKey } from "../read.js";
 import { TestHome } from "../test-home.js";
 import { loadClaudeAccounts, loadClaudeContext } from "./claude-context.js";
 import { readClaudeHooks, readClaudePlugins } from "./claude-hooks.js";
@@ -83,7 +84,7 @@ describe("readClaudeHooks and readClaudePlugins", () => {
     });
     expect(out.items.filter((i) => i.kind === "plugin")).toEqual([
       {
-        id: `plugin:claude:plugin:sp@m|user|-|${realSp}:sp@m`,
+        id: `plugin:claude:plugin:sp@m|user|-|${pathKey(realSp)}:sp@m`,
         kind: "plugin",
         name: "sp@m",
         description: "Skills pack",
