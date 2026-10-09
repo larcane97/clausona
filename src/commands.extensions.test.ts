@@ -1,14 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import { runCommand } from "./commands.js";
+import { SUBS } from "./extensions/cli.js";
+import { ExitError } from "./extensions/exit-error.js";
 import { stripAnsi } from "./lib/cli-style.js";
 
 const COMMANDS = ["skills", "mcp", "hooks"] as const;
-const PAGES = [
-  { page: "the overview", sub: "" },
-  { page: "the ls page", sub: "ls" },
-  { page: "the show page", sub: "show" },
-] as const;
+/** Each command's pages: the overview, then one per subcommand it takes. */
+const PAGES = COMMANDS.flatMap((command) => ["", ...SUBS[command]].map((sub) => ({ command, sub })));
+
+/** The lines of a page's section, from its heading to the blank line after it. */
+function sectionLines(help: string, title: string): string[] {
+  const lines = help.split("\n");
+  const at = lines.findIndex((line) => line.trim() === title || line.trim().startsWith(`${title} `));
+  if (at < 0) return [];
+  const end = lines.findIndex((line, i) => i > at && line.trim() === "");
+  return lines.slice(at + 1, end < 0 ? undefined : end);
+}
 
 describe("skills, mcp and hooks commands", () => {
   it("refuse an unknown option before reading anything, as bad usage", async () => {
@@ -18,20 +26,75 @@ describe("skills, mcp and hooks commands", () => {
     await expect(runCommand("skills", ["ls", "--all-projects"])).rejects.toMatchObject({ code: 2 });
   });
 
-  describe.each(COMMANDS)("%s --help", (command) => {
-    it.each(PAGES)("is $page, in 100 columns, pointing to the docs", async ({ sub }) => {
-      const help = stripAnsi(await runCommand(command, [...(sub ? [sub] : []), "--help"]));
-      for (const line of help.split("\n")) expect(line.length).toBeLessThanOrEqual(100);
-      expect(help).toContain("docs/extensions.md");
-      if (sub) {
-        expect(help).toContain(`clausona ${command} ${sub} — `);
-        expect(help).toContain("EXAMPLES");
-        expect(help).toContain("EXIT CODES");
-      } else {
-        expect(help).toContain(`clausona ${command} — `);
-        expect(help).toContain("SUBCOMMANDS");
-      }
+  it("say an unknown option as one JSON object on stdout with --json (#103)", async () => {
+    const error = await runCommand("skills", ["ls", "--bogus", "--json"]).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(ExitError);
+    expect((error as ExitError).code).toBe(2);
+    expect(JSON.parse((error as ExitError).stdout ?? "")).toEqual({
+      version: 1,
+      error: "usage",
+      message: "Unknown option: --bogus\nRun `clausona skills --help` for usage.",
     });
+  });
+
+  it("take the flags of a change", async () => {
+    // Known to the command, so refused - if at all - by the subcommand, not as an unknown option.
+    for (const flag of ["--everywhere", "--dry-run", "--yes", "-y", "--tracked"]) {
+      await expect(runCommand("skills", ["show", "--help", flag])).resolves.toContain("clausona skills show");
+    }
+  });
+
+  it.each(PAGES)("$command $sub --help is in 100 columns, pointing to the docs", async ({ command, sub }) => {
+    const help = stripAnsi(await runCommand(command, [...(sub ? [sub] : []), "--help"]));
+    for (const line of help.split("\n")) expect(line.length).toBeLessThanOrEqual(100);
+    expect(help).toContain("docs/extensions.md");
+    if (sub) {
+      const title = sub === "off" || sub === "on" ? "off | on" : sub;
+      expect(help.split("\n")[1]).toContain(`clausona ${command} ${title} — `);
+      expect(sectionLines(help, "EXAMPLES").filter((line) => line.startsWith("    clausona "))).toHaveLength(3);
+      expect(help).toContain("EXIT CODES");
+    } else {
+      expect(help).toContain(`clausona ${command} — `);
+      // The overview lists every subcommand the command takes.
+      const listed = sectionLines(help, "SUBCOMMANDS").flatMap(
+        (line) => line.trim().split(/ {2,}/)[0]?.split(", ") ?? [],
+      );
+      expect(listed).toEqual([...SUBS[command]]);
+    }
+  });
+
+  it("give off and on one page", async () => {
+    for (const command of COMMANDS) {
+      expect(await runCommand(command, ["off", "--help"])).toBe(await runCommand(command, ["on", "--help"]));
+    }
+  });
+
+  it("spell out a change's options on its page", async () => {
+    const page = async (command: string, sub: string) => stripAnsi(await runCommand(command, [sub, "--help"]));
+    const off = await page("skills", "off");
+    expect(off).toContain("--everywhere      In every project: your user settings (Codex: its config.toml)\n");
+    expect(off).toContain(
+      '--id <id>         An exact id, the "id" field of ls --json, instead of a name (repeatable)\n',
+    );
+    expect(off).toContain("--yes, -y         Do not ask first. Needed when there is no terminal\n");
+    expect(off).toContain(
+      "  EXIT CODES   0 done, or nothing to do · 1 refused, changed meanwhile or failed · 2 bad usage,\n" +
+        "               several matches, or no terminal without --yes\n",
+    );
+    expect(off).toContain("docs/extensions.md#changing-things");
+    expect(await page("skills", "rm")).toContain(
+      "--tracked         Delete it even if git tracks it, which changes the repo\n",
+    );
+    expect(await page("skills", "visibility")).not.toContain("--tool <tool>");
+    expect(await page("mcp", "off")).toContain("--account <name>  Only this Claude account (repeatable)\n");
+    expect(await page("hooks", "undo")).toContain("clausona hooks undo — Put back what the last hooks change changed");
+    expect(await page("mcp", "undo")).toContain(
+      "  EXIT CODES   0 put back · 1 nothing to undo, or a file changed since · 2 bad usage or no terminal\n" +
+        "               without --yes\n",
+    );
   });
 
   it("spell out every scope a command takes, on its ls page", async () => {
@@ -69,8 +132,8 @@ describe("skills, mcp and hooks commands", () => {
 
   it("are in the main help", async () => {
     const help = stripAnsi(await runCommand("help", []));
-    expect(help).toMatch(/skills ls\|show\s+Skills each project loads, by scope/);
-    expect(help).toMatch(/mcp ls\|show\s+MCP servers each project loads, by scope/);
-    expect(help).toMatch(/hooks ls\|show\s+Hooks each project runs, by scope/);
+    expect(help).toMatch(/skills ls\|show\|off\|on\|rm\s+Skills each project loads; turn them off or delete them/);
+    expect(help).toMatch(/mcp ls\|show\|off\|on\|rm\s+MCP servers each project loads; turn them off or delete them/);
+    expect(help).toMatch(/hooks ls\|show\|off\|on\|rm\s+Hooks each project runs; turn them off or delete them/);
   });
 });
