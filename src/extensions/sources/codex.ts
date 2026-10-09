@@ -156,16 +156,23 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
   await Promise.all(jobs);
 }
 
+/**
+ * Each `[mcp_servers.<name>]` table: a server when it says how to start one, by `command` or
+ * `url`. A table that only sets `enabled` - as a project's config.toml switches a user server
+ * off - is that switch alone, for the server of that name, and not a second server.
+ */
 function addServers(config: Record<string, unknown>, location: Location, owner: string, out: Collector): void {
   for (const [name, server] of Object.entries(isRecord(config.mcp_servers) ? config.mcp_servers : {})) {
     if (!isRecord(server)) continue;
-    out.items.push({
-      id: `mcp:codex:${location.scope}:${owner}:${name}`,
-      kind: "mcp",
-      name,
-      location,
-      summary: mcpSummary(server),
-    });
+    if (server.command !== undefined || server.url !== undefined) {
+      out.items.push({
+        id: `mcp:codex:${location.scope}:${owner}:${name}`,
+        kind: "mcp",
+        name,
+        location,
+        summary: mcpSummary(server),
+      });
+    }
     if (typeof server.enabled === "boolean") {
       out.facts.codexMcpEnabled.push({
         file: location.file,

@@ -67,7 +67,6 @@ describe("readCodex", () => {
         "skill|project|-|lint",
         "mcp|global|-|exa",
         "mcp|global|-|old",
-        "mcp|project|-|exa",
         "hook|global|-|Stop",
       ].sort(),
     );
@@ -82,6 +81,25 @@ describe("readCodex", () => {
         ["exa", "project", false],
       ]),
     );
+  });
+
+  it("reads a project table that only switches a server as that switch, not as a second server", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.codex("personal", ".codex", '[mcp_servers.github]\ncommand = "gh-mcp"\n');
+    h.write(
+      "repos/app/.codex/config.toml",
+      '[mcp_servers.github]\nenabled = false\n\n[mcp_servers.own]\nurl = "https://own.example/mcp"\n',
+    );
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(ctx, [{ path: app, tools: ["codex"], profiles: [] }], out);
+    expect(out.items.map((i) => `${i.location.scope}|${i.name}`).sort()).toEqual(["global|github", "project|own"]);
+    expect(out.facts.codexMcpEnabled).toEqual([
+      { file: path.join(app, ".codex", "config.toml"), project: app, name: "github", enabled: false },
+    ]);
   });
 
   it("warns for a config.toml that does not parse and reads the rest", async () => {
