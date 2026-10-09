@@ -63,7 +63,9 @@ describe("who may touch the file system", () => {
     ]);
   });
 
-  it("has no file start a process or take a lock", () => {
-    expect(FILES.filter((file) => PROCESS.test(text(file)) || LOCK.test(text(file)))).toEqual([]);
+  it("has git-tracked.ts alone start a process (git ls-files, which only reads), and no file take a lock", () => {
+    expect(FILES).toContain("extensions/git-tracked.ts");
+    expect(FILES.filter((file) => PROCESS.test(text(file)))).toEqual(["extensions/git-tracked.ts"]);
+    expect(FILES.filter((file) => LOCK.test(text(file)))).toEqual([]);
   });
 });

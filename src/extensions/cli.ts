@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { accent, bold, dim, helpUsage, truncate } from "../lib/cli-style.js";
 import type { Registry, ToolName } from "../types.js";
+import type { ExtensionsCommand } from "./actions.js";
 import {
   accountsWord,
   containsWords,
@@ -38,7 +39,7 @@ import {
  * details. Read-only, like the screen: it reads the inventory and prints what describe.ts says.
  */
 
-export type ExtensionsCommand = "skills" | "mcp" | "hooks";
+export type { ExtensionsCommand } from "./actions.js";
 
 const KIND: Record<ExtensionsCommand, ItemKind> = { skills: "skill", mcp: "mcp", hooks: "hook" };
 const TOOLS: readonly ToolName[] = ["claude", "codex"];
