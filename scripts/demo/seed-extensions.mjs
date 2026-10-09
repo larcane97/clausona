@@ -1,4 +1,4 @@
-// Adds fictional skills, MCP servers, hooks and a plugin to the demo home that seed.mjs built,
+// Adds fictional skills, MCP servers, hooks and plugins to the demo home that seed.mjs built,
 // for the Extensions screenshots (scripts/demo/extensions-shots.mjs). Container only, like seed.mjs.
 import { mkdirSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -51,20 +51,36 @@ skill(
 skill("app/.claude/skills", "deploy-check", "Check a deploy before it ships");
 skill("app/.claude/skills", "eli5", "Project copy of eli5");
 skill("app/.agents/skills", "app-lint", "Lint the app the team's way");
+// A project skill nobody has used, made 30 days ago. The cleanup rule reads a folder's birth
+// time, which no call can set back, and the container's file system keeps one. So
+// extensions-shots.mjs mounts this one folder from the host: through that mount the container
+// sees no birth time, and the rule reads the modification time set here instead.
+const unusedSkill = path.dirname(skill("app/.claude/skills", "db-migrate", "Run the app's database migrations"));
+const monthAgo = (now - 30 * DAY) / 1000;
+utimesSync(unusedSkill, monthAgo, monthAgo);
 write("app/.mcp.json", { mcpServers: { "docs-search": { command: "npx", args: ["-y", "docs-search-mcp"] } } });
+// A parent folder's .mcp.json: Claude Code reads it in every project below, here ~/app.
+write(".mcp.json", { mcpServers: { notes: { command: "notes-mcp", args: ["--dir", "~/notes"] } } });
 write("app/.claude/settings.local.json", {
   skillOverrides: { changelog: "user-invocable-only" },
-  enabledMcpjsonServers: ["docs-search"],
+  enabledMcpjsonServers: ["docs-search", "notes"],
 });
 skill("web/.claude/skills", "storybook", "Write a Storybook story");
 skill("web/.claude/skills", "a11y-audit", "Audit a page for accessibility");
+write("web/.claude/settings.json", {
+  hooks: { PostToolUse: [{ matcher: "Edit", hooks: [{ type: "command", command: "format-changed" }] }] },
+});
 write("web/.claude/settings.local.json", '{ "skillOverrides": ');
 
-// A plugin with skills and a hook.
+// Two plugins: one with skills and a hook, on, and one with skills, off.
 const sp = path.join(home, ".claude/plugins/cache/claude-plugins-official/superpowers/5.0.0");
+const pr = path.join(home, ".claude/plugins/cache/acme-plugins/pr-tools/1.2.0");
 write(".claude/plugins/installed_plugins.json", {
   version: 2,
-  plugins: { "superpowers@claude-plugins-official": [{ scope: "user", installPath: sp, version: "5.0.0" }] },
+  plugins: {
+    "superpowers@claude-plugins-official": [{ scope: "user", installPath: sp, version: "5.0.0" }],
+    "pr-tools@acme-plugins": [{ scope: "user", installPath: pr, version: "1.2.0" }],
+  },
 });
 for (const name of ["brainstorming", "writing-plans", "systematic-debugging", "test-driven-development"]) {
   skill(path.relative(home, path.join(sp, "skills")), name, `superpowers ${name.replaceAll("-", " ")}`);
@@ -76,10 +92,16 @@ write(path.relative(home, path.join(sp, ".claude-plugin/plugin.json")), {
 write(path.relative(home, path.join(sp, "hooks/hooks.json")), {
   hooks: { SessionStart: [{ hooks: [{ type: "command", command: "superpowers session-start" }] }] },
 });
+skill(path.relative(home, path.join(pr, "skills")), "pr-summary", "Summarize a pull request");
+skill(path.relative(home, path.join(pr, "skills")), "pr-checklist", "Check a pull request before review");
+write(path.relative(home, path.join(pr, ".claude-plugin/plugin.json")), {
+  name: "pr-tools",
+  description: "Pull request helpers",
+});
 
-// Shared settings: the plugin on, two hooks.
+// Shared settings: one plugin on and one off, two hooks.
 mergeJson(".claude/settings.json", {
-  enabledPlugins: { "superpowers@claude-plugins-official": true },
+  enabledPlugins: { "superpowers@claude-plugins-official": true, "pr-tools@acme-plugins": false },
   hooks: {
     PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "guard-shell --strict" }] }],
     Stop: [{ hooks: [{ type: "command", command: "notify-done" }] }],
@@ -123,9 +145,4 @@ writeFileSync(
 );
 write(".codex/hooks.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-done --codex" }] }] } });
 
-// Old folders, so the cleanup rule's grace period has passed for them.
-const old = (now - 200 * DAY) / 1000;
-for (const rel of [".claude/skills/sentry-cli", ".claude/skills/changelog", ".claude/skills/plan-review"]) {
-  utimesSync(path.join(home, rel), old, old);
-}
 console.log("seeded extensions");
