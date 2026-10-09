@@ -27,9 +27,10 @@ type Props = {
 
 /**
  * The left pane: the project row - the project everything is seen from, "(here)" for the
- * folder's own - and a rule, then one line per scope, its label on the left and its count on the
- * right, the selected one marked. A rule sets Loaded apart from the places, and the places from
- * Not used in 90 days. Scopes that do not fit end in a line that says how many more are below.
+ * folder's own - then one line per scope, its label on the left and its count on the right, the
+ * selected one marked. The row's ▾ and bold name set it apart, with no rule under it. A rule sets
+ * Loaded apart from the places, and the places from Not used in 90 days. Scopes that do not fit
+ * end in a line that says how many more are below.
  */
 export function ScopeList({ project, projectFocused, scopes, selected, focused, width, height, top }: Props) {
   const lines = scopeLines(scopes);
@@ -37,12 +38,6 @@ export function ScopeList({ project, projectFocused, scopes, selected, focused, 
   const visible = lines.slice(top, top + room);
   const below = lines.slice(top + room).filter((line) => line.type === "scope").length;
   const inner = Math.max(0, width - EDGES);
-  const rule = (key: string) => (
-    <Text key={key} color={color.dim} wrap="truncate-end">
-      {"  "}
-      {"─".repeat(inner)}
-    </Text>
-  );
   const row = projectLabel(project.name, project.here, inner);
   return (
     <Box flexDirection="column" width={width} flexShrink={0}>
@@ -53,9 +48,15 @@ export function ScopeList({ project, projectFocused, scopes, selected, focused, 
         </Text>
         <Text color={color.muted}>{row.here}</Text>
       </Text>
-      {rule("rule-project")}
       {visible.map((line) => {
-        if (line.type === "rule") return rule(line.key);
+        if (line.type === "rule") {
+          return (
+            <Text key={line.key} color={color.dim} wrap="truncate-end">
+              {"  "}
+              {"─".repeat(inner)}
+            </Text>
+          );
+        }
         const { entry } = line;
         const active = entry.id === selected;
         const count = String(entry.count);

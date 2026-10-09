@@ -727,9 +727,9 @@ second level. The scope list is on the left and the chosen scope's table on the 
 columns or more both show; below that, one at a time: scopes, then the table, then the
 details.
 
-The project row sits above the scopes, with a rule under it. It names the project everything
-is seen from, such as `▾ app (here)`. `(here)` marks the project of the folder you started
-`csn` in, and with no project the row reads `▾ No project`.
+The project row sits right above the scopes. It names the project everything is seen from,
+such as `▾ app (here)`. `(here)` marks the project of the folder you started `csn` in, and
+with no project the row reads `▾ No project`.
 
 `p`, or `↑` from Loaded to the row and then `enter`, opens the project list in the scope
 list's place. The heading reads `PROJECT` with the kind on the right: `skills`, `MCP servers`

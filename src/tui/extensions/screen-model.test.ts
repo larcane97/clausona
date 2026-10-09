@@ -612,12 +612,12 @@ describe("project list widths", () => {
     expect(noun).toBe("skills");
     // After the marker's two columns, every line runs to the same column: 26 less 4.
     expect(lines.map(text)).toEqual([
-      "agency-plat… (here) 35",
-      "a-project-with-a-v…  7",
+      "agency-pla… (here)  35",
+      "a-project-with-a-…   7",
       `web${" ".repeat(18)}—`,
       `${NO_PROJECT}${" ".repeat(11)}—`,
     ]);
-    expect(lines.map((l) => l.here.trimEnd())).toEqual([" (here)", "", "", ""]);
+    expect(lines.map((l) => l.here)).toEqual([" (here)", "", "", ""]);
     expect(lines.map((l) => l.entry)).toEqual(entries);
     // Wide enough, nothing is cut.
     expect(projectListLines(entries, "skills", 40).lines[0]).toMatchObject({
@@ -626,11 +626,30 @@ describe("project list widths", () => {
     });
   });
 
+  it("keeps two spaces before the count at every width, cutting the name and never the gap or (here)", () => {
+    const short = [entry("app", 4, true), entry("web", 12), none];
+    for (const list of [entries, short]) {
+      for (let width = 0; width <= 44; width++) {
+        for (const line of projectListLines(list, "skills", width).lines) {
+          const what = `${line.entry.name} at ${width}`;
+          // A count shown has two spaces before it at least: it never reads as part of the name.
+          if (line.count.trim() !== "") expect(line.count.startsWith("  "), what).toBe(true);
+          // (here) stays whenever "…" and it fit beside the count and the gap.
+          if (line.entry.here && width - 4 - 2 - 2 >= " (here)".length + 1) expect(line.here, what).toBe(" (here)");
+          if (line.name !== line.entry.name && line.name !== "") expect(line.name.endsWith("…"), what).toBe(true);
+        }
+      }
+    }
+    // At 140 the list is as wide as it needs: "app (here)", then the gap and the count.
+    const wide = projectListLines(short, "skills", projectPaneWidth(short, "skills"));
+    expect(wide.lines.map(text)).toEqual(["app (here)   4", `web${" ".repeat(9)}12`, `${NO_PROJECT}${" ".repeat(3)}—`]);
+  });
+
   it("takes the widest line whole, or the heading, the same whichever project is picked", () => {
-    // "▸ " + "a-project-with-a-very-long-name" + " " + "35" + 2 before the divider.
-    expect(projectPaneWidth(entries, "skills")).toBe(2 + 31 + 1 + 2 + 2);
+    // "▸ " + "a-project-with-a-very-long-name" + two spaces + "35" + 2 before the divider.
+    expect(projectPaneWidth(entries, "skills")).toBe(2 + 31 + 2 + 2 + 2);
     expect(projectPaneWidth([entry("agency-platform", 4, true), none], "skills")).toBe(
-      2 + "agency-platform (here)".length + 1 + 1 + 2,
+      2 + "agency-platform (here)".length + 2 + 1 + 2,
     );
     // From where the marker is to two columns before the divider.
     expect(projectPaneWidth([entry("app", 4), none], "MCP servers")).toBe("PROJECT  MCP servers".length + 2);
@@ -652,10 +671,11 @@ describe("project list widths", () => {
     }
   });
 
-  it("cuts the name before (here), and drops (here) only when no letter of the name would be left", () => {
+  it("cuts the name before (here), and drops (here) only when not even … fits beside it", () => {
     expect(projectLabel("agency-platform", true, 30)).toEqual({ name: "agency-platform", here: " (here)" });
     expect(projectLabel("agency-platform", true, 14)).toEqual({ name: "agency…", here: " (here)" });
-    expect(projectLabel("agency-platform", true, 8)).toEqual({ name: "agency-…", here: "" });
+    expect(projectLabel("agency-platform", true, 8)).toEqual({ name: "…", here: " (here)" });
+    expect(projectLabel("agency-platform", true, 7)).toEqual({ name: "agency…", here: "" });
     expect(projectLabel("agency-platform", false, 8)).toEqual({ name: "agency-…", here: "" });
     expect(projectLabel(NO_PROJECT, false, 30)).toEqual({ name: NO_PROJECT, here: "" });
   });
