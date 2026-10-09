@@ -2,6 +2,15 @@ import chalk from "chalk";
 import { Text, useInput } from "ink";
 
 /**
+ * Input without its control characters, C0 (U+0000-U+001F) and DEL. Fast typing or a paste
+ * reaches ink as one read, which it hands over as one input: a tab or a line break inside it
+ * is no key, and put into a one-line field it was drawn as text and broke the form's border.
+ */
+function printable(input: string): string {
+  return [...input].filter((char) => (char.codePointAt(0) ?? 0) > 0x1f && char !== "\u007f").join("");
+}
+
+/**
  * One line of text input for the API form, whose cursor belongs to the form.
  *
  * ink-text-input keeps its cursor offset in state of its own, where nothing else can see it. A
@@ -12,8 +21,9 @@ import { Text, useInput } from "ink";
  *
  * Otherwise it is ink-text-input's behaviour and drawing, key for key: the same keys it ignores
  * (up, down, Tab, Enter, ctrl-c), the arrows that move the cursor only while it is shown, an
- * erase before the cursor, anything else inserted at it - and the offset kept inside the value,
- * where ink-text-input let a left arrow at the start take it below zero for a keystroke.
+ * erase before the cursor, anything else inserted at it (without its control characters) - and
+ * the offset kept inside the value, where ink-text-input let a left arrow at the start take it
+ * below zero for a keystroke.
  *
  * `conceal` keeps the editing and draws nothing at all: the caller draws a mask instead. The
  * value was hidden by drawing it in a box of no width, and ink's screen-reader output, which
@@ -56,8 +66,9 @@ export function FieldInput({
           nextAt--;
         }
       } else {
-        next = value.slice(0, at) + input + value.slice(at);
-        nextAt += input.length;
+        const text = printable(input);
+        next = value.slice(0, at) + text + value.slice(at);
+        nextAt += text.length;
       }
       nextAt = Math.max(0, Math.min(nextAt, next.length));
       if (next !== value || nextAt !== at) onChange(next, nextAt);
