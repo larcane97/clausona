@@ -512,7 +512,10 @@ describe("RouteForm", () => {
     // Blank, the limit is its default, as the field shows.
     for (let i = 0; i < 2; i++) await press(instance, ERASE);
     expect(below()).toMatch(/^\s+under 80% in turn; if none, the one with the most left$/);
-    await press(instance, "98");
+    // At 100% nobody past the cut can still run: there is no "if none" to say.
+    await press(instance, "100");
+    expect(below()).toMatch(/^\s+under 100% in turn$/);
+    await retype(instance, 3, "98");
 
     // Only round-robin takes them in turn.
     await tabTo(instance, "Strategy");

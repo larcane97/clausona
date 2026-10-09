@@ -259,6 +259,14 @@ describe("renderRouteDetail", () => {
     expect(text.endsWith("\n")).toBe(true);
   });
 
+  // At 100% nobody past the cut can still run, so there is no "if all are" to say.
+  it("says only where the limit is when it is 100%", () => {
+    const full = rank({ tool: "claude", maxUsage: 100 }, quotas);
+    const text = plain(renderRouteDetail("full", full, at(120)));
+    expect(text).toMatch(/^ {2}│ {2}Limits {5}skip at 100% +│$/m);
+    expect(text).not.toContain("most left");
+  });
+
   it("puts the pick first, then the others by usage, then the skipped and the excluded", () => {
     const text = plain(renderRouteDetail("main", main, at(120)));
     const order = ["▸ claude:team", "claude:work", "claude:side", "claude:personal", "claude:old", "claude:ops-share"];

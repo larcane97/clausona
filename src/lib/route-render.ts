@@ -516,6 +516,15 @@ const LABEL_WIDTH = 11;
 /** A box line is its content plus eight columns: the indent, the borders and their padding. */
 const BOX_CHROME = 8;
 
+/**
+ * What the limit does: past the cut, the one with the most left runs. At 100% no account is past
+ * the cut and can still run, so that is left unsaid.
+ */
+function limitsWords(max: number): string {
+  const skip = `skip at ${max}%`;
+  return max >= 100 ? skip : `${skip}; if all are, the one with the most left`;
+}
+
 function settingsLines(route: Route, width: number): string[] {
   const room = Math.max(20, width - BOX_CHROME - LABEL_WIDTH);
   const entry = (label: string, value: string) =>
@@ -525,7 +534,7 @@ function settingsLines(route: Route, width: number): string[] {
   return [
     ...entry("Tool", toolLabel(route.tool)),
     ...entry("Strategy", STRATEGY_WORDS[route.strategy]),
-    ...entry("Limits", `skip at ${route.maxUsage}%; if all are, the one with the most left`),
+    ...entry("Limits", limitsWords(route.maxUsage)),
     ...entry(
       "Accounts",
       `${route.from.join(", ")}${route.exclude.length ? ` except ${route.exclude.join(", ")}` : ""}`,

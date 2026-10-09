@@ -117,10 +117,13 @@ const STRATEGY_TEXT: Record<Strategy, string> = {
 
 /**
  * What the limit does, in its number, as routing's decide() takes it: an account under the cut
- * (by the strategy, then the fallback), and when there is none, the one with the most left.
+ * (by the strategy, then the fallback), and when there is none, the one with the most left. At
+ * 100% none is past the cut and can still run, so that is left unsaid.
  */
-const limitsText = (max: number, strategy: Strategy) =>
-  `under ${max}% ${strategy === "round-robin" ? "in turn" : "first"}; if none, the one with the most left`;
+function limitsText(max: number, strategy: Strategy): string {
+  const under = `under ${max}% ${strategy === "round-robin" ? "in turn" : "first"}`;
+  return max >= 100 ? under : `${under}; if none, the one with the most left`;
+}
 
 /** A limit as typed, when it is a number; a blank one is left to its default. */
 function typedLimit(text: string): number | undefined {
