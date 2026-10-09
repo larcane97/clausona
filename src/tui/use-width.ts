@@ -32,3 +32,23 @@ export function useWidth(): [RefObject<DOMElement | null>, number] {
   });
   return [element, width ?? Number.POSITIVE_INFINITY];
 }
+
+/**
+ * The terminal's size, read again when it is resized; either is undefined when stdout does not
+ * say (a test's, or a pipe). A screen that can outgrow the height fits its lists to it: once ink's
+ * output reaches the terminal's height, ink 6 clears the terminal and writes the whole frame again
+ * on every render, which flickers, wipes the scrollback and pushes the top off.
+ */
+export function useTerminalSize(): { columns?: number; rows?: number } {
+  const { stdout } = useStdout();
+  const read = () => ({ columns: stdout.columns, rows: stdout.rows });
+  const [size, setSize] = useState(read);
+  useEffect(() => {
+    const onResize = () => setSize({ columns: stdout.columns, rows: stdout.rows });
+    stdout.on("resize", onResize);
+    return () => {
+      stdout.off("resize", onResize);
+    };
+  }, [stdout]);
+  return size;
+}

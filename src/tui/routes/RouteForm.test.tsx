@@ -99,14 +99,18 @@ function setup(
     spec?: RouteSpec;
     file?: RoutesFile | null;
     columns?: number;
+    /** The terminal's height; without it stdout does not say, and the form lists every account. */
+    rows?: number;
+    registry?: Registry;
     quotas?: Record<string, QuotaSnapshot>;
     /** Runs before the form is drawn, which is when it reads routes.json. */
     prepare?: (deps: Deps) => void;
   } = {},
 ) {
   const disk = memoryDisk(options.file === undefined ? FILE : options.file);
+  const registry = options.registry ?? REGISTRY;
   const deps = {
-    loadRegistry: vi.fn(async () => REGISTRY),
+    loadRegistry: vi.fn(async () => registry),
     registryProblem: vi.fn(async () => null),
     readRoutes: vi.fn(async () => disk.file()),
     updateRoutes: vi.fn<RoutesScreenDeps["updateRoutes"]>(async (update) => {
@@ -131,17 +135,19 @@ function setup(
       mode={name === undefined ? "new" : "edit"}
       name={name}
       spec={name === undefined ? undefined : (options.spec ?? disk.file().routes[name])}
-      accounts={formAccounts(REGISTRY)}
+      accounts={formAccounts(registry)}
       quotas={options.quotas ?? QUOTAS}
       lastPicked={{}}
-      registry={REGISTRY}
+      registry={registry}
       deps={deps}
       now={NOW}
       onDone={onDone}
     />
   );
-  const instance: Instance = options.columns ? renderAt(tree, options.columns) : render(tree);
-  return { instance, deps, onDone, disk };
+  const sized = options.columns !== undefined || options.rows !== undefined;
+  const watched = sized ? renderAt(tree, options.columns ?? 80, { rows: options.rows }) : undefined;
+  const instance: Instance = watched ?? render(tree);
+  return { instance, watched, deps, onDone, disk };
 }
 
 const text = (instance: Instance) => stripAnsi(instance.lastFrame() ?? "");
@@ -799,6 +805,100 @@ describe("RouteForm", () => {
     const emails = "alice@work.example.com, bob@work.example.com, carol@work.example.com";
     await press(instance, emails);
     expect(row(text(instance), "from")).toContain(emails);
+  });
+
+  describe("in a terminal shorter than the account list", () => {
+    /** Twenty claude accounts and twenty codex ones: an `all` route lists forty. */
+    const MANY: Registry = {
+      ...REGISTRY,
+      profiles: Object.fromEntries(
+        (["claude", "codex"] as const).flatMap((tool) =>
+          Array.from({ length: 20 }, (_, i) => {
+            const name = `acct-${String(i + 1).padStart(2, "0")}`;
+            return [`${tool}:${name}`, profile(tool, name)];
+          }),
+        ),
+      ),
+    };
+    const ids = (tool: "claude" | "codex") => Object.keys(MANY.profiles).filter((id) => id.startsWith(`${tool}:`));
+    /** The account rows on screen: a `[ ]` or `[x]` and an id. */
+    const shownIds = (frame: string) =>
+      lines(frame).flatMap((line) => /\[[ x]\] ((?:claude|codex):\S+)/.exec(line)?.[1] ?? []);
+    const more = (frame: string, arrow: "↑" | "↓") => Number(new RegExp(`${arrow} (\\d+) more`).exec(frame)?.[1] ?? 0);
+
+    // Once ink's output reached the terminal's height it cleared the screen and rewrote the
+    // frame on every render: the form flickered, the scrollback went, Name and Tool off the top.
+    it("lists only the accounts that fit, the cursor's always among them, and scrolls with it", async () => {
+      const ROWS = 34;
+      const { instance, deps } = setup({ registry: MANY, rows: ROWS, columns: 80 });
+      await opened(instance, deps);
+      const first = text(instance);
+      expect(lines(first).length).toBeLessThan(ROWS);
+      expect(first).toContain("Name");
+      expect(first).toContain("every account (*)");
+      const shown = shownIds(first);
+      expect(shown.length).toBeGreaterThanOrEqual(3);
+      expect(shown).toEqual(ids("claude").slice(0, shown.length));
+      expect(more(first, "↓")).toBe(20 - shown.length);
+      expect(first).not.toMatch(/↑ \d+ more/);
+
+      await tabTo(instance, "Accounts");
+      for (const [index, id] of ids("claude").entries()) {
+        await press(instance, DOWN);
+        const frame = text(instance);
+        expect(lines(frame).length, id).toBeLessThan(ROWS);
+        expect(frame, id).toMatch(accountRow(id));
+        expect(frame).toContain("every account (*)");
+        const now = shownIds(frame);
+        // What is above and below the window is counted, and the window is a run of the list.
+        expect(more(frame, "↑") + now.length + more(frame, "↓"), id).toBe(20);
+        expect(now).toEqual(ids("claude").slice(more(frame, "↑"), more(frame, "↑") + now.length));
+        if (index === 19) expect(more(frame, "↓")).toBe(0);
+      }
+      expect(more(text(instance), "↑")).toBeGreaterThan(0);
+      // Back up to the top: the first account comes back into the window.
+      for (let i = 0; i < 20; i++) await press(instance, UP);
+      expect(text(instance)).toMatch(/▸ \[x\] every account/);
+      await press(instance, DOWN);
+      expect(shownIds(text(instance))[0]).toBe("claude:acct-01");
+      expect(text(instance)).not.toMatch(/↑ \d+ more/);
+
+      // The picker's line and an error's take room from the accounts, not past the terminal.
+      await tabTo(instance, "Fallback");
+      await press(instance, "a");
+      expect(text(instance)).toContain("The pool takes every account");
+      expect(lines(text(instance)).length).toBeLessThan(ROWS);
+      await press(instance, ESC);
+      await save(instance);
+      const refused = await until(instance, (f) => f.includes("Give the route a name."));
+      expect(lines(refused).length).toBeLessThan(ROWS);
+      expect(shownIds(refused).length).toBe(shown.length - 1);
+    });
+
+    it("lists fewer when the terminal is resized smaller, and both tools' accounts in the same room", async () => {
+      const { instance, watched, deps } = setup({ registry: MANY, rows: 40, columns: 80 });
+      await opened(instance, deps);
+      const tall = shownIds(text(instance)).length;
+
+      watched?.resize(80, 30);
+      const frame = await until(instance, (f) => shownIds(f).length < tall);
+      expect(lines(frame).length).toBeLessThan(30);
+      expect(shownIds(frame).length).toBe(tall - 10);
+
+      await tabTo(instance, "Tool");
+      await press(instance, RIGHT);
+      await press(instance, RIGHT);
+      expect(lines(text(instance)).length).toBeLessThan(30);
+      expect(more(text(instance), "↓")).toBe(40 - shownIds(text(instance)).length);
+    });
+
+    it("keeps three accounts on screen however short the terminal", async () => {
+      const { instance, deps } = setup({ registry: MANY, rows: 12, columns: 80 });
+      await opened(instance, deps);
+      // Two accounts and the count below them: three lines.
+      expect(shownIds(text(instance))).toHaveLength(2);
+      expect(more(text(instance), "↓")).toBe(18);
+    });
   });
 
   it("fits 80 columns without wrapping a line", async () => {

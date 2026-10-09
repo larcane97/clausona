@@ -18,9 +18,11 @@ import type { QuotaSnapshot, Registry } from "../../types.js";
 import { Chrome } from "../components/Chrome.js";
 import { FieldInput } from "../components/FieldInput.js";
 import { color } from "../theme.js";
+import { useTerminalSize } from "../use-width.js";
 import {
   AccountRows,
   ErrorLines,
+  errorLineCount,
   FallbackEntries,
   FallbackPicker,
   Line,
@@ -74,6 +76,17 @@ export function formAccounts(registry: Registry): FormAccount[] {
     .filter((member) => member.kind === "subscription")
     .map(({ id, tool, name, email }) => ({ id, tool, name, email }));
 }
+
+/**
+ * The form's lines besides its accounts, when nothing wraps: the chrome's header (5 with its
+ * padding) and footer (5), the frame's borders and its other fields (11), the every-account row,
+ * the Now line, and one more, since ink redraws the whole screen once its output is as tall as the
+ * terminal. A question, the saving note, the picker and each error take one or more besides.
+ */
+const FORM_LINES = 24;
+
+/** The fewest account lines the form shows, however short the terminal. */
+const MIN_ACCOUNT_LINES = 3;
 
 /** What a field holding something key-shaped shows instead: a constant, as the API form's key field. */
 const MASK = "•".repeat(8);
@@ -385,6 +398,11 @@ export function RouteForm(props: RouteFormProps) {
 
   /** Keys go to the form's question or picker, or nowhere while it saves, rather than to a field. */
   const typing = !asking && picking === null && !saving;
+
+  const { columns = 80, rows } = useTerminalSize();
+  /** Lines in the frame and under it that come and go; the errors as they wrap inside the chrome. */
+  const extra = (asking || saving ? 1 : 0) + (picking !== null ? 1 : 0) + errorLineCount(state.errors, columns - 4);
+  const accountLines = rows === undefined ? undefined : Math.max(MIN_ACCOUNT_LINES, rows - FORM_LINES - extra);
   const focusOn = (field: FormField) => state.focus === field;
 
   function textField(field: TextField, placeholder?: string) {
@@ -466,6 +484,7 @@ export function RouteForm(props: RouteFormProps) {
             excluded={excluded}
             focused={focusOn("accounts")}
             now={now}
+            lines={accountLines}
           />
         </Line>
         <Line {...line("from", "Patterns")}>

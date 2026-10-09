@@ -1,5 +1,5 @@
 import { Box, Text } from "ink";
-import type { PropsWithChildren } from "react";
+import { type PropsWithChildren, useRef } from "react";
 
 import { type Ranking, usageOf } from "../../core/routing.js";
 import { freeNow, nothingRead, skipReason } from "../../lib/route-render.js";
@@ -114,8 +114,41 @@ function noQuotaReason(id: string, snapshot: QuotaSnapshot | undefined, now: num
 }
 
 /**
+ * The accounts `lines` lines show of `total`, the cursor's among them: from `start` (where the
+ * last window began, so that it moves only when the cursor leaves it), less a line for the count
+ * above when there are accounts above, and one for the count below when there are some below.
+ */
+export function accountWindow(
+  total: number,
+  lines: number,
+  cursor: number | null,
+  start: number,
+): { start: number; end: number } {
+  if (total <= lines) return { start: 0, end: total };
+  const room = (from: number) => lines - (from > 0 ? 1 : 0) - (from + lines - (from > 0 ? 1 : 0) < total ? 1 : 0);
+  let from = Math.max(0, Math.min(start, total - 1));
+  if (cursor !== null) {
+    if (cursor < from) from = cursor;
+    while (cursor >= from + room(from)) from += 1;
+  }
+  // No room left empty at the end while there are accounts above it.
+  while (from > 0 && from - 1 + room(from - 1) >= total) from -= 1;
+  return { start: from, end: Math.min(total, from + room(from)) };
+}
+
+/** `↑ 3 more` or `↓ 12 more`, where the window leaves accounts out. */
+function MoreLine({ arrow, count }: { arrow: "↑" | "↓"; count: number }) {
+  return (
+    <Box paddingLeft={2 + MARK}>
+      <Text color={color.muted}>{`${arrow} ${count} more`}</Text>
+    </Box>
+  );
+}
+
+/**
  * Row 0, every account, then one row per account with its quota; out of the route reads
- * `excluded`, and an account with no quota says why.
+ * `excluded`, and an account with no quota says why. `lines` is the most lines the accounts may
+ * take, their counts above and below included: the rest scroll with the cursor, and row 0 stays.
  */
 export function AccountRows({
   state,
@@ -124,6 +157,7 @@ export function AccountRows({
   excluded,
   focused,
   now,
+  lines = Number.POSITIVE_INFINITY,
 }: {
   state: RouteFormState;
   listed: FormAccount[];
@@ -131,6 +165,7 @@ export function AccountRows({
   excluded: ReadonlySet<string>;
   focused: boolean;
   now: number;
+  lines?: number;
 }) {
   const idWidth = Math.max(0, ...listed.map((account) => account.id.length));
   const mark = (row: number) => (
@@ -138,6 +173,11 @@ export function AccountRows({
       <Text color={color.cursor}>{focused && state.cursor === row ? "▸" : " "}</Text>
     </Box>
   );
+  // Where the window began last time: it moves only as far as the cursor takes it.
+  const began = useRef(0);
+  const cursor = focused && state.cursor > 0 ? state.cursor - 1 : null;
+  const view = accountWindow(listed.length, lines, cursor, began.current);
+  began.current = view.start;
   return (
     <Box flexDirection="column" flexGrow={1} minWidth={0}>
       <Box flexDirection="row">
@@ -146,7 +186,9 @@ export function AccountRows({
           {`[${state.every ? "x" : " "}] every account (*), new ones join`}
         </Text>
       </Box>
-      {listed.map((account, index) => {
+      {view.start > 0 ? <MoreLine arrow="↑" count={view.start} /> : null}
+      {listed.slice(view.start, view.end).map((account, at) => {
+        const index = view.start + at;
         const out = excluded.has(account.id);
         const ticked = state.ticked.includes(account.id) && !out;
         const snapshot = quotas[account.id];
@@ -175,6 +217,7 @@ export function AccountRows({
           </Box>
         );
       })}
+      {view.end < listed.length ? <MoreLine arrow="↓" count={listed.length - view.end} /> : null}
     </Box>
   );
 }
@@ -286,14 +329,24 @@ export function NowLine({ ranking }: { ranking: Ranking | null }) {
 }
 
 /** The form's own problem, then each field's, named by its field. */
-export function ErrorLines({ errors }: { errors: RouteFormState["errors"] }) {
-  const messages = [
+export function errorMessages(errors: RouteFormState["errors"]): string[] {
+  return [
     ...(errors.form ? [errors.form] : []),
     ...FORM_FIELDS.flatMap((field) => {
       const message = errors[field];
       return message ? [`${FIELD_LABEL[field]}: ${message}`] : [];
     }),
   ];
+}
+
+/** The lines errorMessages take at `width`, the `✘ ` before each included: each wraps on its own. */
+export function errorLineCount(errors: RouteFormState["errors"], width: number): number {
+  const room = Math.max(1, width - 2);
+  return errorMessages(errors).reduce((sum, message) => sum + Math.max(1, Math.ceil(message.length / room)), 0);
+}
+
+export function ErrorLines({ errors }: { errors: RouteFormState["errors"] }) {
+  const messages = errorMessages(errors);
   return (
     <>
       {messages.map((message) => (
