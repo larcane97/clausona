@@ -1,0 +1,456 @@
+import path from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import { loadInventory } from "../../extensions/inventory.js";
+import type { Inventory } from "../../extensions/model.js";
+import { pathKey } from "../../extensions/read.js";
+import { type ScopeEntry, scopesFor } from "../../extensions/scopes.js";
+import { TestHome } from "../../extensions/test-home.js";
+import {
+  buildTable,
+  CHROME_COLUMNS,
+  CHROME_ROWS,
+  columnText,
+  DIVIDER_COLUMNS,
+  KIND_LABEL,
+  KINDS,
+  paneLayout,
+  type Table,
+  type TableRow,
+} from "./screen-model.js";
+
+const DAY = 86_400_000;
+/**
+ * 200 days after the fixture's files were made. Moving `now` on rather than the files' times
+ * back keeps "unused" the same on every OS: a skill's age is its folder's birth time, which
+ * utimes moves on macOS only.
+ */
+const NOW = Date.now() + 200 * DAY;
+
+const homes: TestHome[] = [];
+afterEach(() => {
+  for (const home of homes.splice(0)) home.dispose();
+});
+
+type Seeded = { h: TestHome; inv: Inventory; app: string; web: string };
+
+/**
+ * Task 1's fixture. Two Claude accounts and a Codex one; projects app and web; a global and a
+ * project eli5, and one skill only web has; a Codex eli5; `~/.mcp.json` with `tools`; a hook in
+ * user settings. eli5 was used yesterday; every other skill was never used and is 200 days old.
+ * `more` adds to the home before the inventory is read.
+ */
+async function seed(more?: (h: TestHome, app: string, web: string) => void): Promise<Seeded> {
+  const h = new TestHome();
+  homes.push(h);
+  const app = h.project("repos/app");
+  const web = h.project("repos/web");
+  h.claude("default", ".claude", {
+    projects: { [app]: {}, [web]: {} },
+    skillUsage: { eli5: { usageCount: 4, lastUsedAt: NOW - DAY } },
+  });
+  h.claude("work", ".claude-work", { projects: { [app]: {} } });
+  h.codex("personal", ".codex");
+  h.skill(".claude/skills", "eli5", "Explain things simply");
+  h.skill(".claude/skills", "old-one");
+  h.skill("repos/app/.claude/skills", "eli5");
+  h.skill("repos/app/.claude/skills", "deploy-check");
+  h.skill("repos/web/.claude/skills", "web-only");
+  h.skill(".agents/skills", "eli5");
+  h.write(".mcp.json", { mcpServers: { tools: { command: "tools-mcp" } } });
+  h.write(".claude/settings.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-me" }] }] } });
+  more?.(h, app, web);
+  const inv = await loadInventory({
+    homeDir: h.home,
+    registry: h.registry,
+    cwd: app,
+    managedSettings: h.path("none.json"),
+  });
+  return { h, inv, app, web };
+}
+
+/** A home whose project app has nothing of its own, for the empty tables. */
+async function bare(): Promise<Seeded> {
+  const h = new TestHome();
+  homes.push(h);
+  const app = h.project("repos/app");
+  h.claude("default", ".claude", { projects: { [app]: {} } });
+  const inv = await loadInventory({
+    homeDir: h.home,
+    registry: h.registry,
+    cwd: app,
+    managedSettings: h.path("none.json"),
+  });
+  return { h, inv, app, web: "" };
+}
+
+const titles = (table: Table) => table.columns.map((c) => c.title);
+const names = (table: Table) => table.rows.map((r) => r.row?.name ?? r.project?.name);
+const cells = (row: TableRow | undefined) => row?.cells.map((c) => c.trim());
+const byName = (table: Table, name: string) => table.rows.find((r) => r.row?.name === name);
+/** A path as the screen shows it, in this OS's separators and case: compare with `pathKey`. */
+const sameText = (a: string | undefined, b: string) => pathKey(a ?? "") === pathKey(b);
+
+const LONG = `a-skill-with-a-name-long-enough-to-crowd-out-every-column-${"x".repeat(2)}`;
+
+describe("tables", () => {
+  it("lists Claude's global skills with their use, and the project's hidden copy with its tag", async () => {
+    const { inv, app } = await seed();
+    const global = buildTable(inv, "claude", "skill", "global", app, NOW, 100, "");
+    expect(titles(global)).toEqual(["NAME", "USES", "LAST USED"]);
+    expect(names(global)).toEqual(["eli5", "old-one"]);
+    expect(cells(byName(global, "eli5"))).toEqual(["eli5", "4", "1d ago"]);
+    // Never used: the count is 0 and there is no time to say.
+    expect(cells(byName(global, "old-one"))).toEqual(["old-one", "0", "—"]);
+    expect(byName(global, "old-one")?.tag).toEqual({ text: "unused", tone: "warning" });
+    expect(byName(global, "eli5")?.tag).toBeUndefined();
+    // USES is right-aligned, its gap after it.
+    const uses = global.columns[1];
+    if (!uses) throw new Error("no USES column");
+    expect(uses.align).toBe("right");
+    expect(byName(global, "eli5")?.cells[1]).toBe(`${"4".padStart(uses.width - 2)}  `);
+    expect(columnText("USES", uses)).toBe(`${"USES".padStart(uses.width - 2)}  `);
+
+    const project = buildTable(inv, "claude", "skill", "project", app, NOW, 100, "");
+    expect(names(project)).toEqual(["deploy-check", "eli5"]);
+    expect(byName(project, "eli5")?.tag).toEqual({ text: "hidden by Global copy", tone: "muted" });
+    // A hidden copy never loads: Claude counts its name's use under the copy that wins.
+    expect(cells(byName(project, "eli5"))).toEqual(["eli5", "—", "—"]);
+    expect(byName(project, "eli5")?.row?.items[0]?.location.project).toBe(app);
+  });
+
+  it("adds FROM after the first column in Loaded here", async () => {
+    const { inv, app } = await seed();
+    const loaded = buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, "");
+    expect(titles(loaded)).toEqual(["NAME", "FROM", "USES", "LAST USED"]);
+    expect(names(loaded)).toEqual(["deploy-check", "eli5", "old-one"]);
+    expect(byName(loaded, "eli5")?.cells[1]?.trim()).toBe("Global");
+    expect(byName(loaded, "deploy-check")?.cells[1]?.trim()).toBe("Project");
+    expect(loaded.header).toBe(
+      `LOADED HERE — what Claude Code loads in ${path.join("~", "repos", "app")}, in at least one account`,
+    );
+    expect(loaded.count).toBe(3);
+    expect(loaded.empty).toBe("");
+  });
+
+  it("gives Codex skills a muted DESCRIPTION and no use", async () => {
+    const { inv, app } = await seed();
+    const global = buildTable(inv, "codex", "skill", "global", app, NOW, 100, "");
+    expect(titles(global)).toEqual(["NAME", "DESCRIPTION"]);
+    expect(global.columns[1]?.muted).toBe(true);
+    expect(cells(global.rows[0])).toEqual(["eli5", "eli5 skill"]);
+    expect(titles(buildTable(inv, "codex", "skill", "loaded", app, NOW, 100, ""))).toEqual([
+      "NAME",
+      "FROM",
+      "DESCRIPTION",
+    ]);
+  });
+
+  it("says when a hook runs in plain words, and what it runs", async () => {
+    const { inv, app } = await seed();
+    const hooks = buildTable(inv, "claude", "hook", "global", app, NOW, 100, "");
+    expect(titles(hooks)).toEqual(["WHEN", "RUNS"]);
+    expect(hooks.rows[0]?.cells[0]?.trim()).toBe("When Claude finishes replying");
+    expect(hooks.rows[0]?.cells[1]?.trim()).toBe("notify-me");
+    expect(titles(buildTable(inv, "claude", "hook", "loaded", app, NOW, 100, ""))).toEqual(["WHEN", "FROM", "RUNS"]);
+  });
+
+  it("sorts hooks by when they run, two on one event in the inventory's order", async () => {
+    const { inv, app } = await seed((h) =>
+      h.write(".claude/settings.json", {
+        hooks: {
+          Stop: [{ hooks: [{ type: "command", command: "second-by-name" }] }],
+          SessionStart: [{ hooks: [{ type: "command", command: "zz-first" }] }],
+          PreToolUse: [
+            {
+              matcher: "Bash",
+              hooks: [
+                { type: "command", command: "b-one" },
+                { type: "command", command: "a-two" },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    const hooks = buildTable(inv, "claude", "hook", "global", app, NOW, 100, "");
+    expect(hooks.rows.map((r) => [r.cells[0]?.trim(), r.cells[1]?.trim()])).toEqual([
+      ["Before Bash runs", "b-one"],
+      ["Before Bash runs", "a-two"],
+      ["When a session starts", "zz-first"],
+      ["When Claude finishes replying", "second-by-name"],
+    ]);
+  });
+
+  it("lists other projects with their path and count, and opens one in the project's columns", async () => {
+    const { inv, app, web } = await seed();
+    const list = buildTable(inv, "claude", "skill", "other", app, NOW, 100, "");
+    expect(titles(list)).toEqual(["PROJECT", "PATH", "COUNT"]);
+    expect(list.rows).toHaveLength(1);
+    expect(list.rows[0]?.project).toEqual({ path: web, name: "web", count: 1 });
+    expect(list.rows[0]?.row).toBeUndefined();
+    expect(list.rows[0]?.key).toBe(web);
+    expect(cells(list.rows[0])?.[0]).toBe("web");
+    expect(sameText(cells(list.rows[0])?.[1], path.join("~", "repos", "web"))).toBe(true);
+    expect(cells(list.rows[0])?.[2]).toBe("1");
+    expect(list.columns[2]?.align).toBe("right");
+    expect(list.count).toBe(1);
+
+    const opened = buildTable(inv, "claude", "skill", "other", app, NOW, 100, "", web);
+    expect(titles(opened)).toEqual(["NAME", "USES", "LAST USED"]);
+    expect(names(opened)).toEqual(["web-only"]);
+    expect(opened.header.startsWith("OTHER PROJECTS › web — ")).toBe(true);
+    expect(opened.count).toBe(1);
+  });
+
+  it("lists what is not used in 90 days with where it is", async () => {
+    const { inv, app } = await seed();
+    const unused = buildTable(inv, "claude", "skill", "unused", app, NOW, 100, "");
+    expect(titles(unused)).toEqual(["NAME", "WHERE", "LAST USED"]);
+    expect(unused.rows.map(cells)).toEqual([
+      ["deploy-check", "app", "—"],
+      ["old-one", "Global", "—"],
+      ["web-only", "web", "—"],
+    ]);
+    expect(unused.rows.every((r) => r.tag?.text === "unused" && r.tag.tone === "warning")).toBe(true);
+  });
+
+  it("says which Claude accounts have an MCP server, and what a Codex one runs", async () => {
+    const { inv, app } = await seed((h, app, web) => {
+      h.claude("default", ".claude", {
+        projects: { [app]: {}, [web]: {} },
+        mcpServers: { github: { command: "gh-mcp" }, solo: { command: "solo-mcp" } },
+      });
+      h.claude("work", ".claude-work", { projects: { [app]: {} }, mcpServers: { github: { command: "gh-mcp" } } });
+      h.codex("personal", ".codex", '[mcp_servers.exa]\ncommand = "npx"\n');
+    });
+    const claude = buildTable(inv, "claude", "mcp", "global", app, NOW, 100, "");
+    expect(titles(claude)).toEqual(["NAME", "ACCOUNTS"]);
+    // github is one row for both accounts' copies.
+    expect(claude.rows.map(cells)).toEqual([
+      ["github", "all"],
+      ["solo", "default"],
+    ]);
+    expect(claude.count).toBe(2);
+    expect(byName(claude, "github")?.row?.items).toHaveLength(2);
+    expect(byName(claude, "github")?.key).toBe("mcp:claude:account:-:github");
+    // A parent folder's .mcp.json is every account's.
+    expect(cells(buildTable(inv, "claude", "mcp", "parents", app, NOW, 100, "").rows[0])).toEqual(["tools", "all"]);
+    const codex = buildTable(inv, "codex", "mcp", "global", app, NOW, 100, "");
+    expect(titles(codex)).toEqual(["NAME", "RUNS"]);
+    expect(codex.rows.map(cells)).toEqual([["exa", "npx"]]);
+  });
+
+  it("lists plugins with what they contain", async () => {
+    const { inv, app } = await seed((h) => {
+      const kit = h.path(".claude/plugins/cache/m/kit/1.0.0");
+      h.write(".claude/plugins/installed_plugins.json", { plugins: { "kit@m": [{ installPath: kit }] } });
+      h.write(".claude/settings.json", { enabledPlugins: { "kit@m": true } });
+      h.skill(".claude/plugins/cache/m/kit/1.0.0/skills", "kit-skill");
+      h.write(".claude/plugins/cache/m/kit/1.0.0/hooks/hooks.json", {
+        hooks: { SessionStart: [{ hooks: [{ type: "command", command: "kit-start" }] }] },
+      });
+    });
+    const plugins = buildTable(inv, "claude", "skill", "plugins", app, NOW, 100, "");
+    expect(titles(plugins)).toEqual(["NAME", "CONTAINS"]);
+    expect(plugins.rows.map(cells)).toEqual([["kit@m", "1 skill · 1 hook"]]);
+    expect(plugins.count).toBe(1);
+    expect(
+      byName(buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, ""), "kit:kit-skill")?.cells[1]?.trim(),
+    ).toBe("kit");
+  });
+
+  it("sums a Cloud skill's use over the accounts that have it, and takes the latest", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", {
+      projects: { [app]: {} },
+      oauthAccount: { organizationUuid: "org1", accountUuid: "acc1" },
+      skillUsage: { pdf: { usageCount: 2, lastUsedAt: NOW - 3 * DAY } },
+    });
+    h.claude("work", ".claude-work", {
+      projects: { [app]: {} },
+      oauthAccount: { organizationUuid: "org1", accountUuid: "acc2" },
+      skillUsage: { pdf: { usageCount: 3, lastUsedAt: NOW - DAY } },
+    });
+    h.skill(".claude/skills/synced/org1_acc1", "pdf");
+    h.skill(".claude/skills/synced/org1_acc2", "pdf");
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: app,
+      managedSettings: h.path("none.json"),
+    });
+    const cloud = buildTable(inv, "claude", "skill", "cloud", app, NOW, 100, "");
+    expect(cloud.rows).toHaveLength(1);
+    expect(cloud.rows[0]?.row?.items).toHaveLength(2);
+    expect(cells(cloud.rows[0])).toEqual(["pdf", "5", "1d ago"]);
+  });
+
+  it("names the scope in the header as scopeSentence says it", async () => {
+    const { inv, app } = await seed();
+    const global = buildTable(inv, "claude", "skill", "global", app, NOW, 100, "");
+    expect(global.header.startsWith("GLOBAL — ")).toBe(true);
+    expect(global.header).toContain(path.join("~", ".claude", "skills"));
+  });
+});
+
+describe("empty tables", () => {
+  it("says a sentence for an empty project and an empty Loaded here (Review Focus 1)", async () => {
+    const { inv, app } = await bare();
+    const project = buildTable(inv, "claude", "hook", "project", app, NOW, 80, "");
+    expect(project.rows).toEqual([]);
+    expect(project.count).toBe(0);
+    expect(project.empty).toBe("Nothing in this project's own files.");
+    expect(buildTable(inv, "claude", "hook", "loaded", app, NOW, 80, "").empty).toBe("Nothing is loaded here.");
+    expect(buildTable(inv, "claude", "hook", "global", app, NOW, 80, "").empty).toBe("None.");
+    expect(buildTable(inv, "claude", "hook", "other", app, NOW, 80, "").empty).toBe("None.");
+  });
+
+  it("with no project, leaves the Project sentence to the header alone (Review Focus 3)", async () => {
+    const { inv } = await seed();
+    const project = buildTable(inv, "claude", "skill", "project", undefined, NOW, 80, "");
+    expect(project.header).toBe("PROJECT — no project · pick one with p");
+    expect(project.rows).toEqual([]);
+    expect(project.empty).toBe("");
+  });
+
+  it("says a search matched nothing, and still counts the scope's rows", async () => {
+    const { inv, app } = await seed();
+    const none = buildTable(inv, "claude", "skill", "loaded", app, NOW, 80, "zzz");
+    expect(none.rows).toEqual([]);
+    expect(none.count).toBe(3);
+    expect(none.empty).toBe("Nothing matches /zzz.");
+  });
+});
+
+describe("search", () => {
+  it("finds global items by their file as the screen shows it, ~ for home", async () => {
+    const { inv, app } = await seed();
+    const found = buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, path.join("~", ".claude"));
+    expect(names(found)).toEqual(["eli5", "old-one"]);
+    expect(found.count).toBe(3);
+  });
+
+  it("matches names and descriptions in any case, and an other project's name", async () => {
+    const { inv, app } = await seed();
+    expect(names(buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, "ELI"))).toEqual(["eli5"]);
+    expect(names(buildTable(inv, "claude", "skill", "global", app, NOW, 100, "simply"))).toEqual(["eli5"]);
+    expect(names(buildTable(inv, "claude", "skill", "other", app, NOW, 100, "WEB"))).toEqual(["web"]);
+    expect(names(buildTable(inv, "claude", "skill", "other", app, NOW, 100, "nope"))).toEqual([]);
+  });
+
+  it("matches a summary value as read and with ~ for home", async () => {
+    const { inv, app, h } = await seed((h) =>
+      h.write(".claude/settings.json", {
+        hooks: { Stop: [{ hooks: [{ type: "command", command: path.join(h.home, "bin", "notify") }] }] },
+      }),
+    );
+    const shown = buildTable(inv, "claude", "hook", "global", app, NOW, 100, path.join("~", "bin"));
+    expect(shown.rows).toHaveLength(1);
+    expect(sameText(shown.rows[0]?.cells[1]?.trim(), path.join("~", "bin", "notify"))).toBe(true);
+    expect(buildTable(inv, "claude", "hook", "global", app, NOW, 100, path.join(h.home, "bin")).rows).toHaveLength(1);
+    expect(buildTable(inv, "claude", "hook", "global", app, NOW, 100, "notify").rows).toHaveLength(1);
+  });
+});
+
+describe("widths", () => {
+  it("cuts a long name with … and keeps every row within the width (Review Focus 4)", async () => {
+    const { inv, app } = await seed((h) => h.skill(".claude/skills", LONG));
+    expect(LONG).toHaveLength(60);
+    const table = buildTable(inv, "claude", "skill", "global", app, NOW, 40, "");
+    for (const row of table.rows) expect(row.cells.join("").length).toBeLessThanOrEqual(40);
+    expect(byName(table, LONG)?.cells[0]?.trimEnd().endsWith("…")).toBe(true);
+    // The tag still fits beside the cells.
+    for (const row of table.rows) {
+      expect(row.cells.join("").length + (row.tag?.text.length ?? 0)).toBeLessThanOrEqual(40);
+    }
+  });
+
+  it("sizes the name to its widest cell and leaves the rest to the tag", async () => {
+    const { inv, app } = await seed();
+    const table = buildTable(inv, "claude", "skill", "global", app, NOW, 100, "");
+    // "old-one" and its gap.
+    expect(table.columns[0]?.width).toBe("old-one".length + 2);
+    // The columns stay put while a search narrows the rows.
+    expect(buildTable(inv, "claude", "skill", "global", app, NOW, 100, "eli").columns).toEqual(table.columns);
+  });
+
+  it("fits every table of every scope at every width: cells as wide as their column, cells and tag within the width", async () => {
+    const { inv, app, web } = await seed((h) => {
+      h.skill(".claude/skills", LONG, `${"a long description ".repeat(8)}`);
+      h.skill(".agents/skills", LONG, `${"a long description ".repeat(8)}`);
+      h.write(".claude/settings.json", {
+        hooks: { Stop: [{ hooks: [{ type: "command", command: `run ${"x".repeat(120)}` }] }] },
+      });
+    });
+    for (const tool of ["claude", "codex"] as const) {
+      for (const kind of KINDS) {
+        const scopes = scopesFor(inv, tool, kind, app, NOW);
+        const tables = scopes.map((s) => s.id).map((scope) => ({ scope, other: undefined as string | undefined }));
+        tables.push({ scope: "other", other: web });
+        for (const { scope, other } of tables) {
+          for (const width of [16, 30, 40, 60, 80, 100, 140]) {
+            const table = buildTable(inv, tool, kind, scope, app, NOW, width, "", other);
+            const what = `${tool} ${kind} ${scope} ${other ?? ""} at ${width}`;
+            expect(
+              table.columns.reduce((sum, c) => sum + c.width, 0),
+              what,
+            ).toBeLessThanOrEqual(width);
+            for (const row of table.rows) {
+              expect(
+                row.cells.map((c) => c.length),
+                what,
+              ).toEqual(table.columns.map((c) => c.width));
+              expect(row.cells.join("").length + (row.tag?.text.length ?? 0), what).toBeLessThanOrEqual(width);
+            }
+          }
+        }
+      }
+    }
+  });
+});
+
+describe("kinds", () => {
+  it("names the kinds in the bar's order", () => {
+    expect(KINDS).toEqual(["skill", "mcp", "hook"]);
+    expect(KINDS.map((k) => KIND_LABEL[k])).toEqual(["Skills", "MCP", "Hooks"]);
+  });
+});
+
+describe("paneLayout", () => {
+  it("puts two panes side by side from 100 columns, the scope list as wide as its widest line", async () => {
+    const { inv, app } = await seed();
+    const list = scopesFor(inv, "claude", "skill", app, NOW);
+    const two = paneLayout(140, 40, list);
+    expect(two.mode).toBe("two");
+    // "Not used in 90 days" + two spaces + "3", and 4 for the marker and the room before the divider.
+    expect(two.scopeWidth).toBe("Not used in 90 days".length + 2 + 1 + 4);
+    expect(two.scopeWidth).toBeLessThanOrEqual(32);
+    expect(two.scopeWidth + DIVIDER_COLUMNS + two.tableWidth).toBe(140 - CHROME_COLUMNS);
+    expect(paneLayout(100, 40, list).mode).toBe("two");
+  });
+
+  it("keeps the scope pane to 32 columns", () => {
+    const wide: ScopeEntry[] = [{ id: "loaded", label: "x".repeat(40), count: 12345 }];
+    expect(paneLayout(140, 40, wide).scopeWidth).toBe(32);
+  });
+
+  it("shows one pane at a time under 100 columns, at the full width", () => {
+    const one = paneLayout(99, 40, []);
+    expect(one.mode).toBe("one");
+    expect(one.tableWidth).toBe(99 - CHROME_COLUMNS);
+    expect(one.scopeWidth).toBe(99 - CHROME_COLUMNS);
+  });
+
+  it("leaves the chrome its rows and the frame two rows short of the terminal", () => {
+    // Title, tool and kind bar, status and hints.
+    expect(CHROME_ROWS).toBe(13);
+    expect(paneLayout(140, 40, []).height).toBe(40 - 2 - CHROME_ROWS);
+    expect(paneLayout(80, 24, []).height).toBe(24 - 2 - CHROME_ROWS);
+    // A size that is not a number, as from a stream that is no terminal, reads as 80 by 24.
+    expect(paneLayout(Number.NaN, Number.NaN, [])).toEqual(paneLayout(80, 24, []));
+  });
+});
