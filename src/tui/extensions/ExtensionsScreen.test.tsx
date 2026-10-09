@@ -38,6 +38,9 @@ const KEY = ["sk", "ant", "api03", "Q2xhdXNvbmFUZXN0S2V5MTIzNDU2Nzg5MA"].join("-
 const TAB = "\t";
 const UP = "\u001B[A";
 const RIGHT = "\u001B[C";
+const LEFT = "\u001B[D";
+const PAGE_UP = "\u001B[5~";
+const PAGE_DOWN = "\u001B[6~";
 const DAY = 86_400_000;
 
 /** Waits for a frame whose text, colours aside, passes `check`, and returns that text. */
@@ -154,7 +157,8 @@ describe("ExtensionsScreen", () => {
 
   it("switches to Codex on tab, whose list has no Not used in 90 days", async () => {
     const inv = await seed(more);
-    // 200 days on, every skill but none of Codex's is old enough to be called unused.
+    // 200 days on, Claude's skills are old enough to be called unused. Codex keeps no record of
+    // use, so none of its skills is ever called that.
     const later = () => Date.now() + 200 * DAY;
     const instance = mount(<ExtensionsScreen load={async () => inv} onExit={vi.fn()} now={later} />, 140, 40);
     expect(await seen(instance, (f) => f.includes("deploy-check"))).toContain("Not used in 90 days");
@@ -342,7 +346,7 @@ describe("ExtensionsScreen", () => {
   });
 
   it("shows one pane at a time at 80 by 24: the scopes, enter for the table, esc back", async () => {
-    const { instance } = screen(await seed(), 80, 24);
+    const { instance, onExit } = screen(await seed(), 80, 24);
     const first = await seen(instance, (f) => f.includes("Loaded here"));
     expect(first).not.toContain("LOADED HERE");
     expect(first).not.toContain("deploy-check");
@@ -359,6 +363,10 @@ describe("ExtensionsScreen", () => {
     await press(instance, ESC);
     const back = await seen(instance, (f) => f.includes("Loaded here"));
     expect(back).not.toContain("LOADED HERE");
+    expect(onExit).not.toHaveBeenCalled();
+    // Leaving draws nothing here: the App would unmount the screen, and onExit is a stand-in.
+    await type(instance, ESC);
+    expect(onExit).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the scope list narrow on a narrow terminal, each count next to its label", async () => {
@@ -369,6 +377,166 @@ describe("ExtensionsScreen", () => {
     const count = line.search(/\d+ *$/);
     expect(count).toBeGreaterThan(start);
     expect(count - start).toBeLessThan(32);
+  });
+
+  it("keeps the open details on their row across a reload, wherever the row has moved to", async () => {
+    const inv = await seed();
+    // The row above deploy-check goes: deploy-check moves up one, and eli5 takes its old place.
+    const moved: Inventory = { ...inv, items: inv.items.filter((i) => !i.name.startsWith("a-very-long")) };
+    const load = vi.fn<() => Promise<Inventory>>().mockResolvedValueOnce(inv).mockResolvedValue(moved);
+    const instance = mount(<ExtensionsScreen load={load} onExit={vi.fn()} />, 140, 40);
+    await seen(instance, (f) => f.includes("deploy-check"));
+    await press(instance, RIGHT);
+    await moveTo(instance, "deploy-check");
+    await press(instance, ENTER);
+    await seen(instance, (f) => f.includes("PROJECT › deploy-check"));
+    await press(instance, "r");
+    const after = await seen(instance, (f) => f.includes("Read "));
+    expect(after).toContain("PROJECT › deploy-check");
+    expect(hintLine(after)).not.toContain("enter details");
+    // And the table under them has its cursor on the row too.
+    await press(instance, ESC);
+    expect(focusedOn(await seen(instance, (f) => f.includes("LOADED HERE")), "deploy-check")).toBe(true);
+  });
+
+  it("keeps the table's cursor on its row across a reload", async () => {
+    const inv = await seed();
+    const moved: Inventory = { ...inv, items: inv.items.filter((i) => !i.name.startsWith("a-very-long")) };
+    const load = vi.fn<() => Promise<Inventory>>().mockResolvedValueOnce(inv).mockResolvedValue(moved);
+    const instance = mount(<ExtensionsScreen load={load} onExit={vi.fn()} />, 140, 40);
+    await seen(instance, (f) => f.includes("deploy-check"));
+    await press(instance, RIGHT);
+    await moveTo(instance, "deploy-check");
+    await press(instance, "r");
+    const after = await seen(instance, (f) => f.includes("Read "));
+    expect(after).not.toContain("a-very-long");
+    expect(focusedOn(after, "deploy-check")).toBe(true);
+  });
+
+  it("goes back to the table when a reload takes the open row away, and says so", async () => {
+    const inv = await seed();
+    const gone: Inventory = { ...inv, items: inv.items.filter((i) => i.name !== "deploy-check") };
+    const load = vi.fn<() => Promise<Inventory>>().mockResolvedValueOnce(inv).mockResolvedValue(gone);
+    const instance = mount(<ExtensionsScreen load={load} onExit={vi.fn()} />, 140, 40);
+    await seen(instance, (f) => f.includes("deploy-check"));
+    await press(instance, RIGHT);
+    await moveTo(instance, "deploy-check");
+    await press(instance, ENTER);
+    await seen(instance, (f) => f.includes("PROJECT › deploy-check"));
+    await press(instance, "r");
+    const frame = await seen(instance, (f) => f.includes("That item is gone."));
+    expect(frame).not.toContain("deploy-check");
+    // The nearest row, the one that took its place, has the cursor; no row's details are open.
+    expect(focusedOn(frame, "eli5")).toBe(true);
+    expect(frame).not.toContain("GLOBAL › eli5");
+    expect(hintLine(frame)).toContain("enter details");
+    // No frame showed another row's details in its place.
+    expect(instance.frames.some((f) => stripAnsi(f).includes("GLOBAL › eli5"))).toBe(false);
+  });
+
+  it("goes back to Loaded here and the scope list on tab and on 1 2 3, from another scope's table", async () => {
+    const { instance } = screen(await seed(more), 140, 40);
+    await seen(instance, (f) => f.includes("deploy-check"));
+    for (const keys of [TAB, TAB, "2", "3", "1"]) {
+      await press(instance, DOWN);
+      await press(instance, RIGHT);
+      const inTable = await seen(instance, (f) => f.includes("▸ Project") && f.includes("← scopes"));
+      expect(hintLine(inTable)).not.toContain("→ open");
+      await press(instance, keys);
+      const back = await seen(instance, (f) => f.includes("▸ Loaded here"));
+      expect(back, `after ${JSON.stringify(keys)}`).not.toContain(symbol.cursor);
+      expect(hintLine(back), `after ${JSON.stringify(keys)}`).toContain("→ open");
+    }
+  });
+
+  it("says where the matrix is on Codex's MCP tab", async () => {
+    const { instance } = screen(await seed(more), 140, 40);
+    await seen(instance, (f) => f.includes("deploy-check"));
+    await press(instance, TAB);
+    await press(instance, "2");
+    await press(instance, "m");
+    const frame = await seen(instance, (f) => f.includes("The matrix is on Claude's MCP tab."));
+    expect(frame).toContain("Claude  [Codex]");
+    expect(frame).not.toContain("SERVER");
+  });
+
+  it("moves the table's cursor a page at a time on pgdn and pgup", async () => {
+    const many = (h: TestHome) => {
+      for (let n = 1; n <= 12; n++) h.skill(".claude/skills", `s${String(n).padStart(2, "0")}`);
+    };
+    const { instance } = screen(await seed(many), 80, 24);
+    await seen(instance, (f) => f.includes("Loaded here"));
+    await press(instance, ENTER);
+    await seen(instance, (f) => focusedOn(f, "a-very-long"));
+    // Fifteen rows; six show at 80 by 24, over the line that says how many more. A page moves
+    // five, so the row the cursor was on stays in view.
+    await press(instance, PAGE_DOWN);
+    await seen(instance, (f) => focusedOn(f, "s03"));
+    await press(instance, PAGE_DOWN);
+    await seen(instance, (f) => focusedOn(f, "s08"));
+    await press(instance, PAGE_UP);
+    await seen(instance, (f) => focusedOn(f, "s03"));
+    await press(instance, PAGE_UP);
+    await seen(instance, (f) => focusedOn(f, "a-very-long"));
+  });
+
+  it("goes from the details to the table and from the table to the scopes on ←", async () => {
+    const { instance } = screen(await seed(), 140, 40);
+    await seen(instance, (f) => f.includes("deploy-check"));
+    await press(instance, RIGHT);
+    await moveTo(instance, "deploy-check");
+    await press(instance, ENTER);
+    await seen(instance, (f) => f.includes("PROJECT › deploy-check"));
+    await press(instance, LEFT);
+    const table = await seen(instance, (f) => !f.includes("PROJECT › deploy-check"));
+    expect(focusedOn(table, "deploy-check")).toBe(true);
+    await press(instance, LEFT);
+    const scopes = await seen(instance, (f) => !f.includes(symbol.cursor));
+    expect(hintLine(scopes)).toContain("→ open");
+  });
+
+  it("keeps the cursor on a row when a search leaves fewer rows than it was down", async () => {
+    const { instance } = screen(await seed(), 140, 40);
+    await seen(instance, (f) => f.includes("deploy-check"));
+    await press(instance, RIGHT);
+    // The last row of three.
+    await moveTo(instance, "eli5");
+    await press(instance, "/");
+    await typeSlowly(instance, "deploy");
+    await press(instance, ENTER);
+    const searched = await seen(instance, (f) => f.includes("/deploy") && !f.includes("▏"));
+    expect(searched).not.toContain("eli5");
+    expect(focusedOn(searched, "deploy-check")).toBe(true);
+    await press(instance, ENTER);
+    await seen(instance, (f) => f.includes("PROJECT › deploy-check"));
+  });
+
+  it.each([
+    [60, 24],
+    [80, 24],
+  ])("keeps every frame inside a %i by %i terminal through Codex, Hooks, an other project and a search", async (columns, rows) => {
+    const { instance } = screen(await seed(more), columns, rows);
+    await seen(instance, (f) => f.includes("Read "));
+    await press(instance, TAB);
+    await press(instance, ENTER);
+    await seen(instance, (f) => f.includes("Explain things to Codex"));
+    await press(instance, TAB);
+    await press(instance, "3");
+    await press(instance, ENTER);
+    await seen(instance, (f) => f.includes("When Claude finishes replying"));
+    await press(instance, "1");
+    await scopeTo(instance, "Other projects");
+    await press(instance, ENTER);
+    await moveTo(instance, "web");
+    await press(instance, ENTER);
+    await seen(instance, (f) => f.includes("web-only"));
+    await press(instance, "/");
+    await typeSlowly(instance, "web");
+    await seen(instance, (f) => f.includes("/web▏"));
+    for (const frame of instance.frames) {
+      expect(height(frame)).toBeLessThanOrEqual(rows - 2);
+      for (const line of stripAnsi(frame).split("\n")) expect(line.length).toBeLessThanOrEqual(columns);
+    }
   });
 
   it("picks no project: the subtitle and the Project table say to pick one (Review Focus 3)", async () => {
@@ -406,6 +574,12 @@ describe("ExtensionsScreen", () => {
     expect(frame).toMatch(/Extensions │ ~\n/);
     expect(frame).toMatch(/Loaded here +0/);
     expect(frame).toMatch(/Project +0/);
+    // The empty table has the focus: there is no row to open, so enter is not offered.
+    await press(instance, RIGHT);
+    const empty = hintLine(await seen(instance, (f) => f.includes("← scopes")));
+    expect(empty).not.toContain("enter");
+    expect(empty).toContain("esc back");
+    await press(instance, LEFT);
     await press(instance, DOWN);
     expect(await seen(instance, (f) => f.includes("PROJECT — "))).toContain("Nothing in this project's own files.");
   });

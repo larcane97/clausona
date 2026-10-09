@@ -356,6 +356,11 @@ export const CHROME_ROWS = 13;
 export const CHROME_COLUMNS = 4;
 /** The `│` between the two panes and the space after it. */
 export const DIVIDER_COLUMNS = 2;
+/**
+ * The lines a pane draws above its rows: the table's header and its column titles, or the
+ * details' title and the blank line under it.
+ */
+export const PANE_HEAD_ROWS = 2;
 /** The `✦` before the table's selected row and the space after it: the table's cells start after them. */
 export const CURSOR_COLUMNS = 2;
 /** The width from which the scope list and the table go side by side. */

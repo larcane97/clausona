@@ -23,6 +23,7 @@ import {
   type Kind,
   listRoom,
   maxDetailTop,
+  PANE_HEAD_ROWS,
   paneLayout,
   scopeLines,
   scrolled,
@@ -82,6 +83,11 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   const [otherProject, setOtherProject] = useState<string | undefined>(undefined);
   const [focus, setFocus] = useState<Focus>("scopes");
   const [rowCursor, setRowCursor] = useState(0);
+  /**
+   * The key of the row the cursor is on, which it follows when a reload moves the row; undefined
+   * for a new table, where it starts at the top.
+   */
+  const [rowKey, setRowKey] = useState<string | undefined>(undefined);
   const [query, setQuery] = useState("");
   const [typing, setTyping] = useState(false);
   /** Where `/` was pressed: esc while typing goes back there. */
@@ -100,7 +106,9 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   const rowTop = useRef(0);
   const matrixTop = useRef(0);
   /** The Other projects list's cursor when a project was opened from it, to come back to. */
-  const listCursor = useRef(0);
+  const listCursor = useRef<{ index: number; key?: string }>({ index: 0 });
+  /** The selected row's key as last drawn, kept by a reload for the cursor to follow. */
+  const selectedKey = useRef<string | undefined>(undefined);
   const { columns, rows: terminalRows } = useTerminalSize();
 
   // The latest props, read when a load starts. A caller that passes a new `load` on every render
@@ -112,6 +120,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   const reload = useCallback(() => {
     const id = ++request.current;
     const { load: read, now: clock } = source.current;
+    setRowKey(selectedKey.current);
     setInventory(null);
     setError(null);
     const started = clock();
@@ -161,8 +170,19 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     [inventory, tool, kind, current, project, loadedAt, layout.tableWidth, query, opened],
   );
   const rows = table?.rows ?? [];
-  const at = Math.min(rowCursor, Math.max(0, rows.length - 1));
+  const found = rowKey === undefined ? -1 : rows.findIndex((row) => row.key === rowKey);
+  const at = found >= 0 ? found : Math.min(rowCursor, Math.max(0, rows.length - 1));
   const selected = rows[at];
+  selectedKey.current = selected?.key;
+  if (table !== null && rowKey !== undefined && found < 0) {
+    // The row the cursor was on has gone, as a reload can take it: the cursor stays where it was,
+    // on the row that took its place, and its details close rather than show that row's. Set
+    // while drawing, so no frame shows them first.
+    setRowKey(selected?.key);
+    setRowCursor(at);
+    if (focus === "details") setFocus("table");
+    if (focus !== "scopes") setStatus("That item is gone.");
+  }
   // Details only for a row of the inventory: a line of the Other projects list opens that project.
   const shown = focus === "details" && selected?.row ? "details" : focus === "details" ? "table" : focus;
   const details = useMemo(() => {
@@ -171,15 +191,15 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     return { title: title?.text ?? "", rows: detailRows(lines, layout.tableWidth) };
   }, [inventory, shown, selected, project, loadedAt, layout.tableWidth]);
   // The details' rows under their title and the blank line after it, and how far they scroll.
-  const detailRoom = Math.max(0, layout.height - 2);
+  const detailRoom = Math.max(0, layout.height - PANE_HEAD_ROWS);
   const detailMax = details ? maxDetailTop(details.rows.length, detailRoom) : 0;
   const detailPage = Math.max(1, detailRoom - 2);
-  const rowRoom = listRoom(Math.max(0, layout.height - 2), rows.length);
+  const rowRoom = listRoom(Math.max(0, layout.height - PANE_HEAD_ROWS), rows.length);
   const matrix = useMemo(() => (inventory && project ? buildMatrix(inventory, project) : null), [inventory, project]);
 
   /** Another table: the row cursor goes back to the top and a search, which was for the last one, ends. */
   const freshTable = () => {
-    setRowCursor(0);
+    pointAt(0);
     setQuery("");
     setTyping(false);
     setDetailTop(0);
@@ -193,7 +213,15 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     const next = scopes[Math.max(0, Math.min(scopes.length - 1, scopeAt + delta))];
     if (next && next.id !== current) toScope(next.id);
   };
-  const moveRow = (delta: number) => setRowCursor(Math.max(0, Math.min(rows.length - 1, at + delta)));
+  /** The cursor on row `index` of this table, or at `index` of a table to come when `key` is undefined. */
+  function pointAt(index: number, key?: string) {
+    setRowCursor(index);
+    setRowKey(key);
+  }
+  const moveRow = (delta: number) => {
+    const next = Math.max(0, Math.min(rows.length - 1, at + delta));
+    pointAt(next, rows[next]?.key);
+  };
   const scrollDetail = (delta: number) =>
     setDetailTop((t) => Math.max(0, Math.min(detailMax, Math.min(t, detailMax) + delta)));
 
@@ -215,7 +243,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       else if (key.backspace || key.delete) setQuery((q) => q.slice(0, -1));
       else if (input && !key.ctrl && !key.meta && !key.tab && !key.upArrow && !key.downArrow)
         setQuery((q) => q + input);
-      setRowCursor(0);
+      pointAt(0);
       return;
     }
     if (view === "picker") {
@@ -257,7 +285,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     if (kindKey !== undefined && /^[123]$/.test(input)) {
       setKind(kindKey);
       toScope("loaded");
-      if (focus === "details") setFocus("table");
+      setFocus("scopes");
       return;
     }
     if (input === "r") {
@@ -302,12 +330,12 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     if (shown === "table") {
       if (key.escape && query !== "") {
         setQuery("");
-        setRowCursor(0);
+        pointAt(0);
       } else if (key.escape || key.leftArrow) {
         if (opened !== undefined) {
           setOtherProject(undefined);
           freshTable();
-          setRowCursor(listCursor.current);
+          pointAt(listCursor.current.index, listCursor.current.key);
         } else setFocus("scopes");
       } else if (key.upArrow) moveRow(-1);
       else if (key.downArrow) moveRow(1);
@@ -315,10 +343,11 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       else if (key.pageDown) moveRow(Math.max(1, rowRoom - 1));
       else if (key.return) {
         if (selected?.project) {
-          listCursor.current = at;
+          listCursor.current = { index: at, key: selected.key };
           setOtherProject(selected.project.path);
           freshTable();
         } else if (selected?.row) {
+          pointAt(at, selected.key);
           setDetailTop(0);
           setFocus("details");
         }
@@ -416,7 +445,10 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
                 // account by account, comes before search.
                 [
                   { keys: "↑↓", action: "move", rank: 0 },
-                  { keys: "enter", action: selected?.project ? "open" : "details", rank: 1 },
+                  // An empty table has no row to open.
+                  ...(rows.length > 0
+                    ? [{ keys: "enter", action: selected?.project ? "open" : "details", rank: 1 }]
+                    : []),
                   { keys: "←", action: opened !== undefined ? "projects" : "scopes", rank: 6 },
                   { keys: "/", action: "search", rank: 5 },
                   ...(tool === "claude" && kind === "mcp" ? [{ keys: "m", action: "matrix", rank: 4 }] : []),
