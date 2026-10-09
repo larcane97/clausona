@@ -286,6 +286,40 @@ describe("RouteForm", () => {
     expect(columnOf(text(instance), "every account", "▸")).toBe(-1);
   });
 
+  // Each entry carried a mark slot of its own, and `(+ add)` a space for one, so the fallback
+  // began a column right of every other field's value.
+  it("starts the fallback in the column of the other fields' values, each entry's mark two columns before it", async () => {
+    const empty = setup({ columns: 80 });
+    await opened(empty.instance);
+    const value = columnOf(text(empty.instance), "Tool", "● claude");
+    expect(value).toBeGreaterThan(0);
+    expect(columnOf(text(empty.instance), "Fallback", "(+ add)")).toBe(value);
+    await tabTo(empty.instance, "Fallback");
+    expect(columnOf(text(empty.instance), "Fallback", "(+ add)")).toBe(value);
+    expect(columnOf(text(empty.instance), "Fallback", "▸")).toBe(-1);
+
+    const spec: RouteSpec = { tool: "claude", from: ["work"], fallback: ["team", "side"] };
+    const { instance } = setup({ edit: "two", spec, columns: 80 });
+    await opened(instance);
+    const entries = ["1. claude:team", "2. claude:side", "(+ add)"];
+    const columns = () => entries.map((entry) => columnOf(text(instance), "Fallback", entry));
+    const at = columns();
+    expect(at[0]).toBe(value);
+    // The gap, then the slot a mark sits in, between each entry and the next.
+    expect(at[1]).toBe(at[0] + entries[0].length + 4);
+    expect(at[2]).toBe(at[1] + entries[1].length + 4);
+    expect(columnOf(text(instance), "Fallback", "▸")).toBe(-1);
+
+    await tabTo(instance, "Fallback");
+    expect(row(text(instance), "Fallback")).toMatch(/Fallback ▸ 1\. claude:team\s+2\. claude:side\s+\(\+ add\)$/);
+    expect(columnOf(text(instance), "Fallback", "▸")).toBe(at[0] - 2);
+    expect(columns()).toEqual(at);
+    await press(instance, DOWN);
+    expect(row(text(instance), "Fallback")).toMatch(/1\. claude:team\s+▸ 2\. claude:side\s+\(\+ add\)$/);
+    expect(columnOf(text(instance), "Fallback", "▸")).toBe(at[1] - 2);
+    expect(columns()).toEqual(at);
+  });
+
   // The hints follow the focus, so each set fits on one line where all of them did not.
   it("shows the keys of the focused field, on one line at 80 columns", async () => {
     const { instance } = setup({ edit: "solo", columns: 80 });
@@ -514,7 +548,7 @@ describe("RouteForm", () => {
     expect(row(text(instance), "Add to fallback")).toMatch(/^\s*Add to fallback\s+claude:side ›\s+1 of 3$/);
     await press(instance, ENTER);
     expect(text(instance)).not.toContain("Add to fallback");
-    expect(row(text(instance), "Fallback")).toMatch(/▸1\. claude:side\s+\(\+ add\)$/);
+    expect(row(text(instance), "Fallback")).toMatch(/▸ 1\. claude:side\s+\(\+ add\)$/);
 
     await press(instance, "a");
     // What is in the fallback already is not offered again.
@@ -531,14 +565,14 @@ describe("RouteForm", () => {
     // team up to the front, then work removed.
     await press(instance, DOWN);
     await press(instance, "[");
-    expect(row(text(instance), "Fallback")).toMatch(/▸1\. claude:team\s+2\. claude:side\s+3\. claude:work/);
+    expect(row(text(instance), "Fallback")).toMatch(/▸ 1\. claude:team\s+2\. claude:side\s+3\. claude:work/);
     await press(instance, DOWN);
     await press(instance, DOWN);
     await press(instance, "x");
-    expect(row(text(instance), "Fallback")).toMatch(/1\. claude:team\s+▸2\. claude:side\s+\(\+ add\)$/);
+    expect(row(text(instance), "Fallback")).toMatch(/1\. claude:team\s+▸ 2\. claude:side\s+\(\+ add\)$/);
     // The last entry has nowhere further down to go.
     await type(instance, "]");
-    expect(row(text(instance), "Fallback")).toMatch(/1\. claude:team\s+▸2\. claude:side/);
+    expect(row(text(instance), "Fallback")).toMatch(/1\. claude:team\s+▸ 2\. claude:side/);
 
     await save(instance);
     await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith("spare"));

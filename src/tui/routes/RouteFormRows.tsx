@@ -234,8 +234,13 @@ export function AccountRows({
 }
 
 /**
- * `1. <id>  2. <id>  (+ add)`, the entry at `cursor` marked while the field has the focus. An
+ * `1. <id>    2. <id>    (+ add)`, the entry at `cursor` marked while the field has the focus. An
  * entry the pool takes already (one written with the CLI) says so: it adds nothing.
+ *
+ * The first entry, or `(+ add)` when there is none, starts where every field's value does, its
+ * `▸` being the Line's (`rowMark`) in the label column, as the every-account row's is. Each later
+ * entry, and `(+ add)` after them, has its `▸` slot before it, after the gap: the marks sit two
+ * columns before the numbers, as the accounts' do, and moving the cursor moves no entry.
  */
 export function FallbackEntries({
   entries,
@@ -247,18 +252,19 @@ export function FallbackEntries({
   pool: ReadonlySet<string>;
 }) {
   return (
-    <Box columnGap={2} flexWrap="wrap">
+    <Box columnGap={GAP} flexWrap="wrap">
       {entries.map((entry, index) => (
         <Box key={entry} flexShrink={0}>
+          {index > 0 ? <RowMark on={index === cursor} /> : null}
           <Text color={index === cursor ? color.cursor : color.text}>
-            {`${index === cursor ? "▸" : " "}${index + 1}. ${entry}`}
+            {`${index + 1}. ${entry}`}
             {pool.has(entry) ? <Text color={color.muted}> in the pool</Text> : null}
           </Text>
         </Box>
       ))}
       <Box flexShrink={0}>
-        {/* After the slot an entry's mark sits in, so the gaps match. */}
-        <Text color={color.muted}> (+ add)</Text>
+        {entries.length > 0 ? <RowMark on={false} /> : null}
+        <Text color={color.muted}>(+ add)</Text>
       </Box>
     </Box>
   );

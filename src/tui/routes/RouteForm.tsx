@@ -533,7 +533,10 @@ export function RouteForm(props: RouteFormProps) {
         <Line label="">
           <Text color={color.muted}>{limitsText(limits.maxUsage, state.strategy)}</Text>
         </Line>
-        <Line {...line("fallback", "Fallback")}>
+        <Line
+          {...line("fallback", "Fallback")}
+          rowMark={focusOn("fallback") && state.fallback.length > 0 && state.cursor === 0}
+        >
           <FallbackEntries entries={state.fallback} cursor={focusOn("fallback") ? state.cursor : null} pool={pool} />
         </Line>
         {picking !== null ? (
