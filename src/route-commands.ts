@@ -20,7 +20,7 @@ import {
   updateRoutes,
 } from "./core/routes-store.js";
 import { accent, bold, dim, helpSection, helpUsage, stripAnsi, success } from "./lib/cli-style.js";
-import { askTool, confirmNewRoute, type RouteIo, terminalIo } from "./lib/route-create.js";
+import { confirmNewRoute, type RouteIo, terminalIo } from "./lib/route-create.js";
 import {
   describeSpec,
   explainJson,
@@ -35,7 +35,6 @@ import {
   defaultRouteDeps,
   membersOf,
   NoAccountError,
-  onlyTool,
   type RouteDeps,
   rankRouteNow,
   resolveRoute,
@@ -223,17 +222,7 @@ async function addRoute(args: string[], io: RouteIo, deps: RouteDeps): Promise<s
   const prefixed = (options.from ?? []).map((pattern) => /^(claude|codex):/.exec(pattern)?.[1]);
   const fromPrefix =
     prefixed.length > 0 && prefixed.every((tool) => tool && tool === prefixed[0]) ? prefixed[0] : undefined;
-  const tool =
-    parseTool(read.values.get("--tool")) ??
-    (fromPrefix as "claude" | "codex" | undefined) ??
-    onlyTool(registry) ??
-    (io.interactive ? await askTool(io) : undefined);
-  if (!tool) {
-    const why = Object.values(registry.profiles).some((profile) => profile.kind !== "api")
-      ? "there are accounts for both"
-      : "no subscription account is registered yet";
-    throw new Error(`Pass --tool claude or --tool codex: ${why}.`);
-  }
+  const tool = parseTool(read.values.get("--tool")) ?? (fromPrefix as "claude" | "codex" | undefined) ?? "claude";
 
   let spec = applyOverrides(newRouteSpec(tool), options);
   if (spec.reserveUsage === undefined) spec.reserveUsage = Math.max(DEFAULT_RESERVE_USAGE, spec.maxUsage ?? 0);

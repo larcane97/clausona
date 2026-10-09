@@ -1,21 +1,27 @@
 import { carriesCredentialToken, looksLikeCredential } from "../core/credential-token.js";
-import { applyOverrides, DEFAULT_RESERVE_USAGE, newRouteSpec, withDefaults } from "../core/route-config.js";
+import {
+  applyOverrides,
+  DEFAULT_RESERVE_USAGE,
+  newRouteSpec,
+  type RouteTool,
+  toolsOf,
+  withDefaults,
+} from "../core/route-config.js";
 import { readRoutes } from "../core/routes-store.js";
 import { createRoute } from "../route-commands.js";
-import type { Registry, ToolName } from "../types.js";
+import type { Registry } from "../types.js";
 import {
   CREDENTIAL_AS_NAME_ERROR,
   type ParsedProfileRef,
   parseProfileRef,
   validateProfileName,
 } from "./profile-ref.js";
-import { askTool, confirmNewRoute, type RouteIo, terminalIo } from "./route-create.js";
+import { confirmNewRoute, type RouteIo, terminalIo } from "./route-create.js";
 import { renderNoAccount, renderNote } from "./route-render.js";
 import {
   checkRouteMembers,
   defaultRouteDeps,
   NoAccountError,
-  onlyTool,
   type ResolvedRoute,
   type RouteDeps,
   rankRouteNow,
@@ -52,7 +58,7 @@ export function runTarget(input: string, registry: Registry): ParsedProfileRef {
         : /^[A-Za-z][A-Za-z0-9-]*$/.test(input.slice(0, colon)) && validateProfileName(input.slice(colon + 1)).ok;
     if (!refShaped) {
       throw new Error(
-        `'${input}' is not a profile or a tool. To pass a prompt, name the tool: clausona run ${onlyTool(registry) ?? "claude"} ${shellQuote(input)}`,
+        `'${input}' is not a profile or a tool. To pass a prompt, name the tool: clausona run claude ${shellQuote(input)}`,
       );
     }
     throw error;
@@ -66,14 +72,13 @@ function isProfileName(name: string, registry: Registry): boolean {
 
 /**
  * Whether the tool's first argument names a registered profile: an exact id, or a bare name of
- * the tool in play (any tool's while it is not known yet).
+ * the tool in play (any tool's while it is not known yet, or on an `all` route).
  */
-function namesProfile(arg: string | undefined, registry: Registry, tool: ToolName | undefined): boolean {
+function namesProfile(arg: string | undefined, registry: Registry, tool: RouteTool | undefined): boolean {
   if (arg === undefined) return false;
   if (Object.hasOwn(registry.profiles, arg)) return true;
   if (arg.includes(":")) return false;
-  const tools: ToolName[] = tool ? [tool] : ["claude", "codex"];
-  return tools.some((candidate) => Object.hasOwn(registry.profiles, `${candidate}:${arg}`));
+  return toolsOf(tool ?? "all").some((candidate) => Object.hasOwn(registry.profiles, `${candidate}:${arg}`));
 }
 
 async function offerToCreate(
@@ -88,10 +93,8 @@ async function offerToCreate(
   io.say(
     `Route '${error.routeName}' does not exist.${error.existing.length ? ` Existing routes: ${error.existing.join(", ")}.` : ""}`,
   );
-  const tool = run.tool ?? onlyTool(registry) ?? (await askTool(io));
-  if (!tool) throw new Error("Nothing was created, and nothing was run: say claude or codex.");
   const { route: _name, ...overrides } = run.options;
-  const proposed = applyOverrides(newRouteSpec(tool), overrides);
+  const proposed = applyOverrides(newRouteSpec(run.tool ?? "claude"), overrides);
   // As `route add` writes it: the reserve spelled out, even when a cut above 95% moved it.
   if (proposed.reserveUsage === undefined) {
     proposed.reserveUsage = Math.max(DEFAULT_RESERVE_USAGE, proposed.maxUsage ?? 0);
@@ -147,7 +150,7 @@ export async function runRouted(
   if (
     (resolved || unknown) &&
     !run.sawSeparator &&
-    namesProfile(run.toolArgs[0], registry, resolved?.route.tool ?? run.tool)
+    namesProfile(run.toolArgs[0], registry, resolved?.onlyTool ?? resolved?.route.tool ?? run.tool)
   ) {
     throw new Error(
       "Routing options cannot be combined with a profile. Run it by name: clausona run <profile> …, or put it after -- to pass it to the tool.",
@@ -169,8 +172,11 @@ export async function runRouted(
     return launch(active, run.toolArgs);
   }
 
+  // An `all` route run without a tool word reads the arguments as either tool's: a resume that
+  // either tool would see is not missed.
+  const runTools = toolsOf(resolved.onlyTool ?? resolved.route.tool);
   const ranking = await rankRouteNow(resolved, deps, {
-    resume: isResumeRun(resolved.route.tool, run.toolArgs),
+    resume: runTools.some((tool) => isResumeRun(tool, run.toolArgs)),
     record: true,
   });
   if (ranking.outcome.kind === "none") throw new NoAccountError(renderNoAccount(resolved.name, ranking, deps.clock()));

@@ -1,4 +1,4 @@
-import { type RouteOverrides, STRATEGIES, type Strategy } from "../core/route-config.js";
+import { ROUTE_TOOLS, type RouteOverrides, type RouteTool, STRATEGIES, type Strategy } from "../core/route-config.js";
 import type { ToolName } from "../types.js";
 
 /**
@@ -54,6 +54,13 @@ export function parseTool(value: string | undefined): ToolName | undefined {
   if (value === undefined) return undefined;
   if (value !== "claude" && value !== "codex") throw new Error("--tool must be claude or codex.");
   return value;
+}
+
+/** `--tool` of the `route` subcommands: claude, codex, or all for a route over both. */
+export function parseRouteTool(value: string | undefined): RouteTool | undefined {
+  if (value === undefined) return undefined;
+  if (!ROUTE_TOOLS.includes(value as RouteTool)) throw new Error("--tool must be claude, codex or all.");
+  return value as RouteTool;
 }
 
 export function toRoutingOptions(values: Map<string, string>): RoutingOptions {

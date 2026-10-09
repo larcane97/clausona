@@ -7,6 +7,7 @@ import {
   checkRouteName,
   checkRoutesFile,
   newRouteSpec,
+  toolsOf,
   withDefaults,
 } from "./route-config.js";
 
@@ -196,7 +197,7 @@ describe("checkRoute", () => {
   });
 
   it("needs a tool", () => {
-    expect(checkRoute("main", { from: ["*"] })).toEqual(['routes.main.tool: must be "claude" or "codex"']);
+    expect(checkRoute("main", { from: ["*"] })).toEqual(['routes.main.tool: must be "claude", "codex" or "all"']);
   });
 
   it("refuses something that is not an object", () => {
@@ -244,6 +245,28 @@ describe("checkRoute", () => {
   });
 });
 
+describe("all routes", () => {
+  it("accepts either tool's prefix on an all route", () => {
+    expect(checkPattern("claude:work", "all")).toBeNull();
+    expect(checkPattern("codex:*", "all")).toBeNull();
+    expect(checkPattern("gpt:x", "all")).toBe("'gpt:x' names unknown tool 'gpt', but this route is for all");
+  });
+
+  it("still refuses a key behind a prefix on an all route, without quoting it", () => {
+    for (const pattern of [`codex:${keyShaped()}`, `gpt:${keyShaped()}`]) {
+      expect(checkPattern(pattern, "all")).toBe("looks like an API key, not a profile name or email pattern");
+    }
+  });
+
+  it("accepts all as a tool and defaults new routes to claude", () => {
+    expect(checkRoute("any", { tool: "all", from: ["*"] })).toEqual([]);
+    expect(checkRoute("bad", { tool: "gpt" })).toEqual(['routes.bad.tool: must be "claude", "codex" or "all"']);
+    expect(newRouteSpec().tool).toBe("claude");
+    expect(toolsOf("all")).toEqual(["claude", "codex"]);
+    expect(toolsOf("codex")).toEqual(["codex"]);
+  });
+});
+
 describe("checkRoutesFile", () => {
   it("accepts a file and keeps keys a later version writes", () => {
     const raw = { version: 1, routes: { main: { tool: "claude" } }, dirs: { "~/w": { claude: "main" } } };
@@ -271,7 +294,7 @@ describe("checkRoutesFile", () => {
     expect(checkRoutesFile(raw)).toEqual({
       ok: false,
       problems: [
-        'routes.a.tool: must be "claude" or "codex"',
+        'routes.a.tool: must be "claude", "codex" or "all"',
         "routes.b.strategy: must be one of round-robin, headroom, expiring",
       ],
     });

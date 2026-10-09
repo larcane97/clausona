@@ -248,6 +248,85 @@ describe("skips", () => {
   });
 });
 
+describe("all routes", () => {
+  const W = member("claude:work");
+  const CT = member("codex:team");
+  const quotas = { "claude:work": snap(30, 30), "codex:team": snap(10, 10) };
+
+  it("ranks both tools' members together", () => {
+    const ranking = rankRoute({
+      route: withDefaults({ tool: "all" }),
+      members: [W, CT],
+      quotas,
+      lastPicked: {},
+      now: NOW,
+      resume: false,
+    });
+    expect(ranking.rows.map((row) => row.id)).toEqual(["claude:work", "codex:team"]);
+    expect(ranking.outcome).toMatchObject({ kind: "picked", id: "codex:team" });
+  });
+
+  it("narrows to one tool when the run names it", () => {
+    const ranking = rankRoute({
+      route: withDefaults({ tool: "all" }),
+      members: [W, CT],
+      quotas,
+      lastPicked: {},
+      now: NOW,
+      resume: false,
+      onlyTool: "claude",
+    });
+    expect(ranking.rows.map((row) => row.id)).toEqual(["claude:work"]);
+  });
+
+  // Review Focus 4
+  it("matches a bare name in whichever tool has it, and shows an unknown name once", () => {
+    const ranking = rankRoute({
+      route: withDefaults({ tool: "all", from: ["gone", "work"] }),
+      members: [W, CT],
+      quotas,
+      lastPicked: {},
+      now: NOW,
+      resume: false,
+    });
+    expect(ranking.rows.map((row) => [row.id, row.skip ?? row.status])).toEqual([
+      ["claude:work", "picked"],
+      ["gone", "not-registered"],
+    ]);
+  });
+
+  // The other tool's members are left out of a narrowed run, not shown as rows: a name only that
+  // tool has is not "not registered", and neither are its excluded members or prefixed names.
+  it("leaves the other tool out of a narrowed run entirely", () => {
+    const ranking = rankRoute({
+      route: withDefaults({ tool: "all", from: ["work", "team", "codex:gone", "gone"], exclude: ["codex:*"] }),
+      members: [W, CT],
+      quotas,
+      lastPicked: {},
+      now: NOW,
+      resume: false,
+      onlyTool: "claude",
+    });
+    expect(ranking.rows.map((row) => [row.id, row.skip ?? row.status])).toEqual([
+      ["claude:work", "picked"],
+      ["gone", "not-registered"],
+    ]);
+    expect(ranking.excluded).toEqual([]);
+  });
+
+  it("still names an unknown name by its tool on a one-tool route", () => {
+    const ranking = rankRoute({
+      route: withDefaults({ tool: "codex", from: ["gone", "team"] }),
+      members: [W, CT],
+      quotas,
+      lastPicked: {},
+      now: NOW,
+      resume: false,
+    });
+    expect(ranking.rows.map((row) => row.id)).toEqual(["codex:team", "codex:gone"]);
+  });
+});
+
 describe("blockingReset", () => {
   it("is the latest reset among the windows at or above the limit", () => {
     const ranking = rank(

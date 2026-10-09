@@ -10,9 +10,9 @@ import { editInEditor } from "./editor.js";
 import {
   checkRouteMembers,
   defaultRouteDeps,
+  inferRouteTool,
   membersOf,
   NoAccountError,
-  onlyTool,
   quotaTargets,
   type RouteDeps,
   rankRouteNow,
@@ -83,17 +83,6 @@ describe("membersOf", () => {
   });
 });
 
-describe("onlyTool", () => {
-  it("is undefined when both tools have subscription profiles", () => {
-    expect(onlyTool(REGISTRY)).toBeUndefined();
-  });
-
-  it("is the tool when only one has any", () => {
-    const { "codex:x": _, ...claudeOnly } = REGISTRY.profiles;
-    expect(onlyTool({ ...REGISTRY, profiles: claudeOnly })).toBe("claude");
-  });
-});
-
 describe("resolveRoute", () => {
   const file = {
     version: 1 as const,
@@ -135,7 +124,8 @@ describe("resolveRoute", () => {
       route: { tool: "codex" },
     });
     expect(resolveRoute(file, { options: { from: ["claude:a", "claude:b"] } })?.route.tool).toBe("claude");
-    expect(() => resolveRoute(file, { options: { from: ["a"] } })).toThrow(/Say which tool --from is for/);
+    // Unprefixed names, no tool word: a claude route, as `route add` makes one.
+    expect(resolveRoute(file, { options: { from: ["a"] } })?.route.tool).toBe("claude");
   });
 
   it("is null when the run names no route", () => {
@@ -258,6 +248,81 @@ describe("rankRouteNow", () => {
       if (outcome.kind === "picked") picks.push(outcome.id);
     }
     expect(picks).toEqual(["claude:a", "claude:b", "claude:c"]);
+  });
+});
+
+describe("all routes in the service", () => {
+  it("lists members of both tools", () => {
+    expect(membersOf(REGISTRY, "all").map((m) => m.id)).toEqual([
+      "claude:a",
+      "claude:b",
+      "claude:c",
+      "claude:glm",
+      "codex:x",
+    ]);
+  });
+
+  it("lets a tool word narrow a stored all route", () => {
+    const file = { version: 1 as const, routes: { any: { tool: "all" as const } } };
+    expect(resolveRoute(file, { tool: "codex", options: { route: "any" } })).toMatchObject({
+      name: "any",
+      onlyTool: "codex",
+    });
+    // Without one, the whole route is ranked.
+    expect(resolveRoute(file, { options: { route: "any" } })).not.toHaveProperty("onlyTool");
+  });
+
+  it("infers the tool of an unsaved route, defaulting to claude", () => {
+    const file = { version: 1 as const, routes: {} };
+    expect(resolveRoute(file, { options: { from: ["a"] } })?.route.tool).toBe("claude");
+    expect(resolveRoute(file, { options: { from: ["codex:*"] } })?.route.tool).toBe("codex");
+    expect(resolveRoute(file, { options: { from: ["claude:a", "codex:x"] } })?.route.tool).toBe("all");
+  });
+
+  it("narrows an unsaved all route by the tool word, and keeps a one-tool one as the word says", () => {
+    const file = { version: 1 as const, routes: {} };
+    expect(resolveRoute(file, { tool: "codex", options: { from: ["claude:a", "codex:x"] } })).toMatchObject({
+      route: { tool: "all" },
+      onlyTool: "codex",
+    });
+    expect(resolveRoute(file, { tool: "codex", options: { from: ["a"] } })).not.toHaveProperty("onlyTool");
+    // The word and the prefixes disagree: the prefix is checked against the word's tool.
+    expect(() => resolveRoute(file, { tool: "codex", options: { from: ["claude:a"] } })).toThrow(
+      "--from route.from[0]: 'claude:a' names a claude profile, but this route is for codex",
+    );
+  });
+
+  it("asks quota only for the narrowed tool", () => {
+    const route = withDefaults({ tool: "all" });
+    expect(quotaTargets(route, membersOf(REGISTRY, "all"), false, "codex").map((t) => t.id)).toEqual(["codex:x"]);
+    expect(quotaTargets(route, membersOf(REGISTRY, "all"), false).map((t) => t.id)).toEqual([
+      "claude:a",
+      "claude:b",
+      "claude:c",
+      "codex:x",
+    ]);
+  });
+
+  it("ranks and reads only the tool a run names", async () => {
+    const d = deps({ "claude:a": snap(1, 1), "codex:x": snap(50, 50) });
+    const ranking = await rankRouteNow({ route: withDefaults({ tool: "all" }), onlyTool: "codex" }, d, {
+      resume: false,
+      record: false,
+    });
+    expect(d.asked).toEqual([["codex:x"]]);
+    expect(ranking.rows.map((row) => row.id)).toEqual(["codex:x"]);
+    expect(ranking.outcome).toMatchObject({ kind: "picked", id: "codex:x" });
+  });
+});
+
+describe("inferRouteTool", () => {
+  it("is the tool every entry is prefixed with, all for both, and nothing for a bare entry", () => {
+    expect(inferRouteTool(["claude:a", "claude:*@example.com"])).toBe("claude");
+    expect(inferRouteTool(["codex:x"])).toBe("codex");
+    expect(inferRouteTool(["claude:a", "codex:x"])).toBe("all");
+    expect(inferRouteTool(["claude:a", "b"])).toBeUndefined();
+    expect(inferRouteTool(["*@example.com"])).toBeUndefined();
+    expect(inferRouteTool(["gpt:x"])).toBeUndefined();
   });
 });
 

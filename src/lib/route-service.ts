@@ -7,9 +7,11 @@ import {
   type RouteOverrides,
   type RouteSpec,
   type RoutesFile,
+  type RouteTool,
+  toolsOf,
   withDefaults,
 } from "../core/route-config.js";
-import { expandPatterns, type Member } from "../core/route-patterns.js";
+import { expandPatterns, type Member, splitToolPrefix } from "../core/route-patterns.js";
 import { pickWithRecord, type RoutesPaths, readPicks, routesPaths } from "../core/routes-store.js";
 import { type Ranking, rankRoute } from "../core/routing.js";
 import type { QuotaSnapshot, Registry, ToolName } from "../types.js";
@@ -64,13 +66,15 @@ export class UnknownRouteError extends Error {
   }
 }
 
-export function membersOf(registry: Registry, tool: ToolName): Member[] {
+/** The registry's profiles of every tool a route of `tool` takes, as routing sees them. */
+export function membersOf(registry: Registry, tool: RouteTool): Member[] {
+  const tools = toolsOf(tool);
   return Object.entries(registry.profiles)
-    .filter(([, profile]) => profile.tool === tool)
+    .filter(([, profile]) => tools.includes(profile.tool))
     .map(([id, profile]) => ({
       id,
-      tool,
-      name: id.slice(tool.length + 1),
+      tool: profile.tool,
+      name: id.slice(profile.tool.length + 1),
       email: profile.email ?? "",
       kind: profile.kind === "api" ? "api" : "subscription",
       sharesSessions: Boolean(profile.isPrimary || profile.mergeSessions),
@@ -78,16 +82,13 @@ export function membersOf(registry: Registry, tool: ToolName): Member[] {
     }));
 }
 
-export function onlyTool(registry: Registry): ToolName | undefined {
-  const tools = new Set(
-    Object.values(registry.profiles)
-      .filter((profile) => profile.kind !== "api")
-      .map((profile) => profile.tool),
-  );
-  return tools.size === 1 ? [...tools][0] : undefined;
-}
-
-export type ResolvedRoute = { name?: string; route: Route; resolvedBy: ResolvedBy };
+export type ResolvedRoute = {
+  name?: string;
+  route: Route;
+  resolvedBy: ResolvedBy;
+  /** The tool a run named for an `all` route: only its members are ranked (RankInput.onlyTool). */
+  onlyTool?: ToolName;
+};
 
 /** The field options a run may give, as their flags, in the order an error lists them. */
 const FIELD_FLAGS: ReadonlyArray<[keyof RouteOverrides, string]> = [
@@ -114,16 +115,28 @@ function unionPatterns(...lists: string[][]): string[] {
   });
 }
 
-function inferTool(patterns: string[]): ToolName | undefined {
-  const tools = new Set(patterns.map((pattern) => /^(claude|codex):/.exec(pattern)?.[1] as ToolName | undefined));
-  if (tools.size !== 1) return undefined;
-  return [...tools][0];
+/**
+ * The tool the `tool:` prefixes of `patterns` say: the one every entry names, or `all` when they
+ * name both. Undefined when any entry has no tool prefix, as checkPattern reads one.
+ */
+export function inferRouteTool(patterns: string[]): RouteTool | undefined {
+  const tools = new Set<ToolName>();
+  for (const pattern of patterns) {
+    const { prefix } = splitToolPrefix(pattern);
+    if (prefix !== "claude" && prefix !== "codex") return undefined;
+    tools.add(prefix);
+  }
+  if (tools.size === 0) return undefined;
+  return tools.size === 1 ? [...tools][0] : "all";
 }
 
 /**
  * The route a run names: a stored one (`--route`), or an unsaved one (`--from`), with the run's
  * field options applied over it. Each replaces its field for the run, except `--exclude`, which
  * adds to the route's own exclude list. Null when the run names neither and gives no field options.
+ *
+ * A tool word must be a one-tool route's own tool; on an `all` route it narrows the run to that
+ * tool. An unsaved route takes the tool word, else the tool its prefixes say, else claude.
  */
 export function resolveRoute(
   file: RoutesFile,
@@ -132,21 +145,20 @@ export function resolveRoute(
   const { tool, options } = run;
   const { route: name, ...overrides } = options;
   let spec: RouteSpec;
+  let onlyTool: ToolName | undefined;
   if (name !== undefined) {
     const nameProblem = checkRouteName(name);
     if (nameProblem) throw new Error(nameProblem);
     const stored = file.routes[name];
     if (!stored) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
-    if (tool && stored.tool !== tool) throw new Error(`Route '${name}' is for ${stored.tool}, not ${tool}.`);
+    if (tool && stored.tool === "all") onlyTool = tool;
+    else if (tool && stored.tool !== tool) throw new Error(`Route '${name}' is for ${stored.tool}, not ${tool}.`);
     spec = stored;
   } else if (options.from !== undefined) {
-    const inferred = tool ?? inferTool(options.from);
-    if (!inferred) {
-      throw new Error(
-        "Say which tool --from is for: clausona run claude --from … or clausona run codex --from …, or prefix the names (claude:work).",
-      );
-    }
-    spec = { tool: inferred };
+    const inferred = inferRouteTool(options.from);
+    // `run claude --from claude:a,codex:x`: a route over both, narrowed to the tool the run names.
+    if (tool && inferred === "all") onlyTool = tool;
+    spec = { tool: onlyTool ? "all" : (tool ?? inferred ?? "claude") };
   } else {
     // Without a route these would be dropped, and the tool run on its active profile as if they
     // were never given. Only the flags are named: an option's value is never echoed.
@@ -167,14 +179,20 @@ export function resolveRoute(
   const merged = applyOverrides(spec, runOverrides);
   const problems = checkRoute(name ?? "inline", merged, name ? `routes.${name}` : "--from route");
   if (problems.length) throw new Error(problems.join("\n"));
-  return { ...(name ? { name } : {}), route: withDefaults(merged), resolvedBy: name ? "flag" : "inline" };
+  return {
+    ...(name ? { name } : {}),
+    route: withDefaults(merged),
+    resolvedBy: name ? "flag" : "inline",
+    ...(onlyTool ? { onlyTool } : {}),
+  };
 }
 
 /**
  * The members whose quota a route needs: listed, not excluded, and subscription profiles; on a
- * resumed run, only those that share sessions, since ranking skips the others whatever they read.
+ * resumed run, only those that share sessions, since ranking skips the others whatever they read;
+ * on a run narrowed to one tool of an `all` route, only that tool's.
  */
-export function quotaTargets(route: Route, members: Member[], resume: boolean): QuotaTarget[] {
+export function quotaTargets(route: Route, members: Member[], resume: boolean, onlyTool?: ToolName): QuotaTarget[] {
   const excluded = new Set(expandPatterns(route.exclude, members).members.map((entry) => entry.member.id));
   const seen = new Set<string>();
   const targets: QuotaTarget[] = [];
@@ -185,6 +203,7 @@ export function quotaTargets(route: Route, members: Member[], resume: boolean): 
     // An excluded or skipped account is not touched at all: no quota read, so no token renewal either.
     if (member.kind !== "subscription" || excluded.has(member.id) || seen.has(member.id)) continue;
     if (resume && !member.sharesSessions) continue;
+    if (onlyTool && member.tool !== onlyTool) continue;
     seen.add(member.id);
     targets.push({ id: member.id, tool: member.tool, configDir: member.configDir });
   }
@@ -192,17 +211,26 @@ export function quotaTargets(route: Route, members: Member[], resume: boolean): 
 }
 
 export async function rankRouteNow(
-  resolved: Pick<ResolvedRoute, "route">,
+  resolved: Pick<ResolvedRoute, "route" | "onlyTool">,
   deps: RouteDeps,
   options: { resume: boolean; record: boolean },
 ): Promise<Ranking> {
   const registry = await deps.loadRegistry();
   if (!registry) throw await noRegistryError();
-  const members = membersOf(registry, resolved.route.tool);
+  const { route, onlyTool } = resolved;
+  const members = membersOf(registry, route.tool);
   // Read first: it can take seconds, and the pick-record lock is held only for the pick itself.
-  const quotas = await deps.collectQuotas(quotaTargets(resolved.route, members, options.resume));
+  const quotas = await deps.collectQuotas(quotaTargets(route, members, options.resume, onlyTool));
   const rank = (lastPicked: Record<string, string>) =>
-    rankRoute({ route: resolved.route, members, quotas, lastPicked, now: deps.clock(), resume: options.resume });
+    rankRoute({
+      route,
+      members,
+      quotas,
+      lastPicked,
+      now: deps.clock(),
+      resume: options.resume,
+      ...(onlyTool ? { onlyTool } : {}),
+    });
   if (!options.record) return rank(await readPicks(deps.paths));
   return pickWithRecord(
     (lastPicked) => {

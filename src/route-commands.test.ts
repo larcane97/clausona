@@ -183,23 +183,22 @@ describe("route add", () => {
     expect(Object.keys(file().routes)).toEqual(["main"]);
   });
 
-  it("asks for --tool, and says why, when it cannot tell the tool", async () => {
-    const { deps, io } = setup();
-    const withRegistry = (profiles: Registry["profiles"]): RouteDeps => ({
+  it("makes a claude route when neither --tool nor the --from prefixes say otherwise", async () => {
+    const { deps, io, file } = setup();
+    const both: RouteDeps = {
       ...deps,
-      loadRegistry: async () => ({ ...REGISTRY, profiles }),
-    });
-    const both = withRegistry({
-      ...REGISTRY.profiles,
-      "codex:x": { tool: "codex", configDir: "/home/u/.codex", email: "x@example.com" },
-    });
-    await expect(runRouteCommand(["add", "main"], io, both)).rejects.toThrow(
-      "Pass --tool claude or --tool codex: there are accounts for both.",
-    );
-    const apiOnly = withRegistry({ "claude:glm": REGISTRY.profiles["claude:glm"] });
-    await expect(runRouteCommand(["add", "main"], io, apiOnly)).rejects.toThrow(
-      "Pass --tool claude or --tool codex: no subscription account is registered yet.",
-    );
+      loadRegistry: async () => ({
+        ...REGISTRY,
+        profiles: {
+          ...REGISTRY.profiles,
+          "codex:x": { tool: "codex", configDir: "/home/u/.codex", email: "x@example.com" },
+        },
+      }),
+    };
+    await runRouteCommand(["add", "main"], io, both);
+    await runRouteCommand(["add", "cx", "--from", "codex:*"], io, both);
+    expect(file().routes.main.tool).toBe("claude");
+    expect(file().routes.cx.tool).toBe("codex");
   });
 
   it("asks before creating in a terminal, and creates nothing on no", async () => {
@@ -411,7 +410,7 @@ describe("route edit", () => {
     const said: string[] = [];
     const io: RouteIo = { interactive: true, ask: async () => "", say: (text) => said.push(stripAnsi(text)) };
     await runRouteCommand(["edit"], io, deps);
-    expect(said.join("\n")).toContain('routes.main.tool: must be "claude" or "codex"');
+    expect(said.join("\n")).toContain('routes.main.tool: must be "claude", "codex" or "all"');
     expect(JSON.parse(readFileSync(deps.paths.routesPath, "utf8")).routes.main).toEqual({ tool: "claude" });
   });
 

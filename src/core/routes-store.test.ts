@@ -59,7 +59,7 @@ describe("parseRoutesText", () => {
     expect(error).toBeInstanceOf(RoutesFileError);
     expect(error.filePath).toBe("routes.json");
     expect(error.newer).toBe(false);
-    expect(error.problems).toEqual(['routes.a.tool: must be "claude" or "codex"']);
+    expect(error.problems).toEqual(['routes.a.tool: must be "claude", "codex" or "all"']);
   });
 
   it("says on which line and column the JSON breaks", () => {

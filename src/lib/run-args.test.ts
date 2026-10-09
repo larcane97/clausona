@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isResumeRun, readOptions, readRunArgs, toRoutingOptions } from "./run-args.js";
+import { isResumeRun, parseRouteTool, readOptions, readRunArgs, toRoutingOptions } from "./run-args.js";
 
 describe("readRunArgs", () => {
   it("reads routing options, then hands the rest to the tool", () => {
@@ -97,6 +97,15 @@ describe("readOptions", () => {
       "route set",
     );
     expect(toRoutingOptions(read.values)).toEqual({ maxUsage: 85, from: ["a", "b"] });
+  });
+});
+
+describe("parseRouteTool", () => {
+  it("parses --tool including all", () => {
+    expect(parseRouteTool("all")).toBe("all");
+    expect(parseRouteTool("codex")).toBe("codex");
+    expect(parseRouteTool(undefined)).toBeUndefined();
+    expect(() => parseRouteTool("gpt")).toThrow("--tool must be claude, codex or all.");
   });
 });
 

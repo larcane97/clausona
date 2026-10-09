@@ -18,9 +18,19 @@ export const DEFAULT_RESERVE_USAGE = 95;
 
 export const ROUTES_VERSION = 1;
 
+/** A route's tool: one of them, or `all`, whose pool spans the subscription profiles of both. */
+export type RouteTool = ToolName | "all";
+
+export const ROUTE_TOOLS: readonly RouteTool[] = ["claude", "codex", "all"];
+
+/** The tools whose profiles a route of `tool` takes. */
+export function toolsOf(tool: RouteTool): ToolName[] {
+  return tool === "all" ? ["claude", "codex"] : [tool];
+}
+
 /** A route as stored. Only `tool` is required; withDefaults fills in the rest. */
 export type RouteSpec = {
-  tool: ToolName;
+  tool: RouteTool;
   from?: string[];
   exclude?: string[];
   strategy?: Strategy;
@@ -31,7 +41,7 @@ export type RouteSpec = {
 
 /** A route with every default applied: what ranking works on. */
 export type Route = {
-  tool: ToolName;
+  tool: RouteTool;
   from: string[];
   exclude: string[];
   strategy: Strategy;
@@ -54,7 +64,7 @@ export function emptyRoutesFile(): RoutesFile {
 }
 
 /** What `route add` and the unknown-route prompt create: the defaults, written out. */
-export function newRouteSpec(tool: ToolName): RouteSpec {
+export function newRouteSpec(tool: RouteTool = "claude"): RouteSpec {
   return {
     tool,
     from: ["*"],
@@ -108,6 +118,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isRouteTool(value: unknown): value is RouteTool {
+  return ROUTE_TOOLS.includes(value as RouteTool);
+}
+
 function isPercent(value: unknown, min: number): boolean {
   return typeof value === "number" && Number.isFinite(value) && value >= min && value <= 100;
 }
@@ -120,8 +134,11 @@ export function checkRouteName(name: string): string | null {
   return `Invalid route name '${name}': start with a letter or digit, and use only letters, digits, '.', '_' and '-'.`;
 }
 
-/** A pattern's problem, or null. A key-shaped pattern is never quoted back. */
-export function checkPattern(pattern: unknown, tool: ToolName): string | null {
+/**
+ * A pattern's problem, or null. A key-shaped pattern is never quoted back. A `tool:` prefix must
+ * name the route's tool; on an `all` route it may name either.
+ */
+export function checkPattern(pattern: unknown, tool: RouteTool): string | null {
   if (typeof pattern !== "string" || pattern.trim() === "") return "must be a non-empty string";
   // Each piece as well as the whole: `claude:<key>` does not start with 'sk-', and a shorter key
   // behind a prefix or a space stays under the length ceiling, so the checks below would store
@@ -134,7 +151,7 @@ export function checkPattern(pattern: unknown, tool: ToolName): string | null {
   }
   // Split as the matcher splits it, so a name and an email pattern read a prefix the same way.
   const { prefix, body } = splitToolPrefix(pattern);
-  if (prefix !== null && prefix !== tool) {
+  if (prefix !== null && !toolsOf(tool).includes(prefix as ToolName)) {
     const what = TOOLS.includes(prefix) ? `a ${prefix} profile` : `unknown tool '${prefix}'`;
     return `'${pattern}' names ${what}, but this route is for ${tool}`;
   }
@@ -164,8 +181,8 @@ export function checkRoute(name: string, raw: unknown, at = `routes.${name}`): s
     );
   }
   const tool = raw.tool;
-  if (tool !== "claude" && tool !== "codex") {
-    problems.push(`${at}.tool: must be "claude" or "codex"`);
+  if (!isRouteTool(tool)) {
+    problems.push(`${at}.tool: must be "claude", "codex" or "all"`);
     return problems;
   }
   for (const key of ["from", "exclude", "fallback"] as const) {

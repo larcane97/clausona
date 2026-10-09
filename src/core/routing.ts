@@ -1,6 +1,6 @@
 import type { QuotaSnapshot, QuotaWindow, ToolName } from "../types.js";
-import type { Route } from "./route-config.js";
-import { type Expansion, expandPatterns, type Member } from "./route-patterns.js";
+import { type Route, type RouteTool, toolsOf } from "./route-config.js";
+import { type Expansion, expandPatterns, type Member, splitToolPrefix } from "./route-patterns.js";
 
 /**
  * Picks a profile for a route. Pure: the caller brings the members, their quota and the pick
@@ -61,6 +61,11 @@ export type RankInput = {
   lastPicked: Record<string, string>;
   now: number;
   resume: boolean;
+  /**
+   * The one tool of an `all` route a run names (`clausona run claude --route any`): only that
+   * tool's members are ranked, and the other tool's are left out entirely, not shown as rows.
+   */
+  onlyTool?: ToolName;
 };
 
 export function usageOf(snapshot: QuotaSnapshot | undefined, now: number): { usage?: Usage; skip?: SkipReason } {
@@ -155,8 +160,10 @@ function decide(route: Route, rows: Row[], now: number): Outcome {
   return { kind: "none", soonest: soonestReset(rows, route.reserveUsage) };
 }
 
-function qualified(name: string, tool: ToolName): string {
-  return name.includes(":") ? name : `${tool}:${name}`;
+/** A name that matched nobody, as its row shows it: an `all` route's bare name is either tool's. */
+function qualified(name: string, tool: RouteTool): string {
+  if (name.includes(":") || tool === "all") return name;
+  return `${tool}:${name}`;
 }
 
 function rowFor(member: Member, role: Row["role"], pattern: string, input: RankInput): Row {
@@ -177,8 +184,12 @@ function rowFor(member: Member, role: Row["role"], pattern: string, input: RankI
 }
 
 export function rankRoute(input: RankInput): Ranking {
-  const { route } = input;
-  const members = input.members.filter((member) => member.tool === route.tool);
+  const { route, onlyTool } = input;
+  const tools = toolsOf(route.tool);
+  // Expanded over every tool of the route even when a run names one, so that a name only the
+  // other tool has is left out of the run rather than called not registered.
+  const members = input.members.filter((member) => tools.includes(member.tool));
+  const inRun = (tool: string | null) => !onlyTool || tool === null || tool === onlyTool;
   const excludedBy = new Map<string, string>();
   for (const { member, pattern } of expandPatterns(route.exclude, members).members) excludedBy.set(member.id, pattern);
 
@@ -186,6 +197,7 @@ export function rankRoute(input: RankInput): Ranking {
   const excluded: Ranking["excluded"] = [];
   const add = (role: Row["role"], expansion: Expansion) => {
     for (const { member, pattern } of expansion.members) {
+      if (!inRun(member.tool)) continue;
       // A member already in the pool stays there; listing it as a fallback too changes nothing.
       if (rows.some((row) => row.id === member.id)) continue;
       const by = excludedBy.get(member.id);
@@ -196,6 +208,7 @@ export function rankRoute(input: RankInput): Ranking {
       rows.push(rowFor(member, role, pattern, input));
     }
     for (const name of expansion.unknownNames) {
+      if (!inRun(splitToolPrefix(name.trim()).prefix)) continue;
       const id = qualified(name, route.tool);
       // Named in both lists, or as `gone` and `claude:gone`: still one row, where it was first named.
       if (rows.some((row) => row.id === id)) continue;
