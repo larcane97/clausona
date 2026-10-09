@@ -30,7 +30,7 @@ import {
   reinstallCommand,
   versionOfTag,
 } from "./core/update.js";
-import { EXTENSIONS_FLAGS, EXTENSIONS_VALUE_FLAGS, runExtensionsCommand, usageLine } from "./extensions/cli.js";
+import { EXTENSIONS_FLAGS, EXTENSIONS_VALUE_FLAGS, runExtensionsCommand, usageParts } from "./extensions/cli.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import {
   describeOtherAccount,
@@ -1044,22 +1044,26 @@ function subcommandHelpText(command: string): string | undefined {
 
     case "skills":
     case "mcp":
-    case "hooks":
+    case "hooks": {
+      const [usage, more] = usageParts(command);
       return [
         "",
         `  ${accent(`clausona ${command}`)} ${dim("— What every account and project can load")}`,
         "",
         `  ${bold("USAGE")}`,
-        helpUsage(usageLine(command)),
+        helpUsage(usage),
+        // The rest of the options under the first, past `clausona <command> ls `.
+        helpUsage(`${" ".repeat(`clausona ${command} ls `.length)}${more}`),
         "",
         `  ${bold("OPTIONS")}`,
         `    ${accent("--project <path>".padEnd(20))}${dim("Show it as seen from that project (default: the one you are in)")}`,
         `    ${accent("--all-projects".padEnd(20))}${dim("Include every project's own items")}`,
         `    ${accent("--tool <tool>".padEnd(20))}${dim("claude or codex")}`,
         `    ${accent("--filter <name>".padEnd(20))}${dim("cleanup, duplicates or off (off in any one account counts)")}`,
-        `    ${accent("--json".padEnd(20))}${dim("Machine-readable, with state (stateByAccount for servers every account sees), usage and where each one is defined")}`,
+        `    ${accent("--json".padEnd(20))}${dim("JSON: state (stateByAccount for servers all accounts see), usage, location")}`,
         "",
       ].join("\n");
+    }
 
     default:
       return undefined;

@@ -16,8 +16,16 @@ export const EXTENSIONS_FLAGS = ["--json", "--all-projects", ...EXTENSIONS_VALUE
 const FILTERS = ["cleanup", "duplicates", "off"] as const;
 type ListFilter = (typeof FILTERS)[number];
 
+/** The usage in two parts, so help can put the second under the first in 100 columns. */
+export function usageParts(command: ExtensionsCommand): [string, string] {
+  return [
+    `clausona ${command} ls [--json] [--project <path> | --all-projects]`,
+    "[--tool claude|codex] [--filter cleanup|duplicates|off]",
+  ];
+}
+
 export function usageLine(command: ExtensionsCommand): string {
-  return `clausona ${command} ls [--json] [--project <path> | --all-projects] [--tool claude|codex] [--filter cleanup|duplicates|off]`;
+  return usageParts(command).join(" ");
 }
 
 type ListOptions = { json: boolean; allProjects: boolean; project?: string; tool?: ToolName; filter?: ListFilter };
