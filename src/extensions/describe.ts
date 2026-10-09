@@ -27,7 +27,7 @@ import {
   stateLoads,
   type ToolName,
 } from "./scopes.js";
-import { codexTrusted, relevantIn } from "./state.js";
+import { codexTrusted, relevantIn, STASH_KEY } from "./state.js";
 
 /**
  * The words the Extensions screen and the CLI say about a row: its tags, a hook's event in plain
@@ -394,6 +394,8 @@ function stateParts(
   }
   if (state.value === "pending-approval") return { word: "pending approval" };
   if (state.value !== "off") return { word: "on" };
+  // The stash file is clausona's, no setting of the tool's: no place to name.
+  if (state.setBy?.key === STASH_KEY) return { word: "off everywhere", because: "kept by clausona" };
   return state.setBy ? { word: "off", because: settingPlace(inv, item, project, state.setBy.file) } : { word: "off" };
 }
 
@@ -464,6 +466,10 @@ function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined)
   }
   if (state.value === "off") {
     if (!state.setBy) return [{ label: "Loaded", text: "off: no settings file turns it on", tone: "warning" }];
+    if (state.setBy.key === STASH_KEY) {
+      const text = "off everywhere — clausona keeps its settings so you can turn it back on";
+      return [{ label: "Loaded", text, tone: "warning" }];
+    }
     const place = settingPlace(inv, item, project, state.setBy.file);
     const here = isProjectSetting(inv, state.setBy.file);
     return [{ label: "Loaded", text: `${here ? "off here" : "off everywhere"} (${place})`, tone: "warning" }];
