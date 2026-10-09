@@ -44,8 +44,10 @@ export type Row = {
 };
 
 /**
- * `overflow`: everyone was at the cut or over it, and the one with the most left was taken. The
- * name is what `--json` says, kept from when a route had a limit for that stage.
+ * The stage that found the pick, as `--json` names it (`stage`): `pool`, an account of the pool
+ * under the cut, by the strategy; `fallback`, the first fallback account under the cut; and
+ * `overflow`, when everyone was at the cut or over it and the one with the most left, still under
+ * 100%, was taken.
  */
 export type Stage = "pool" | "fallback" | "overflow";
 

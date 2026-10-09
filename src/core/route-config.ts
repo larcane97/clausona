@@ -118,8 +118,9 @@ function isRouteTool(value: unknown): value is RouteTool {
   return ROUTE_TOOLS.includes(value as RouteTool);
 }
 
-function isPercent(value: unknown, min: number): boolean {
-  return typeof value === "number" && Number.isFinite(value) && value >= min && value <= 100;
+/** A route's limit: a number from 1 to 100. */
+function isLimit(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 1 && value <= 100;
 }
 
 /**
@@ -200,7 +201,7 @@ export function checkRoute(name: string, raw: unknown, at = `routes.${name}`): s
   }
   // `null` is refused like any other non-number, as it is for every other key.
   const maxUsage = raw.maxUsage === undefined ? DEFAULT_MAX_USAGE : raw.maxUsage;
-  if (!isPercent(maxUsage, 1)) problems.push(`${at}.maxUsage: must be a number from 1 to 100`);
+  if (!isLimit(maxUsage)) problems.push(`${at}.maxUsage: must be a number from 1 to 100`);
   return problems;
 }
 
