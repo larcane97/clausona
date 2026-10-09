@@ -61,7 +61,12 @@ export async function readClaudeSkills(ctx: ClaudeContext, projects: Project[], 
 
 /**
  * Legacy commands: `<dir>/<name>.md`, and one level of subfolders, which Claude Code lists by
- * file name with the folder as a namespace in the description - so the name is the file's.
+ * file name with the folder as a namespace in the description - so the name is the file's. A
+ * `.md` link whose target is gone is listed too, as a skill folder's is, so it can be cleaned up.
+ *
+ * Claude Code records a command's use under its name. For one in a subfolder `<sub>:<name>` is
+ * looked up as well: a guess, not verified, which can only keep a command off the not-used list,
+ * never put one on it.
  */
 async function readCommandFiles(
   dir: string,
@@ -76,8 +81,9 @@ async function readCommandFiles(
       const file = path.join(dir, sub, entry);
       const info = await entryInfo(file);
       if (info.kind === "dir" && sub === "") return visit(entry);
-      if (info.kind !== "file" || !entry.endsWith(".md")) return [];
-      const text = await readText(file, out.warnings);
+      const broken = info.kind === "missing" && info.link?.broken === true ? info.link : undefined;
+      if ((info.kind !== "file" && !broken) || !entry.endsWith(".md")) return [];
+      const text = broken ? undefined : await readText(file, out.warnings);
       const front = text === undefined ? {} : parseFrontmatter(text);
       const name = `${prefix}${entry.slice(0, -3)}`;
       const item: Extension = {
@@ -86,8 +92,9 @@ async function readCommandFiles(
         name,
         ...(front.description ? { description: front.description } : {}),
         location: { ...location, file },
+        ...(broken ? { link: broken } : {}),
         ...(info.createdAt !== undefined ? { createdAt: info.createdAt } : {}),
-        usageKeys: [name],
+        usageKeys: sub ? [name, `${sub}:${name}`] : [name],
         summary: sub ? { type: "command", namespace: sub } : { type: "command" },
       };
       return [item];

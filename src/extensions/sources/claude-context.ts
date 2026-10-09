@@ -3,6 +3,7 @@ import path from "node:path";
 import { claudeJsonPathForConfigDir } from "../../core/paths.js";
 import type { Registry } from "../../types.js";
 import type { Collector, Project, SettingsLayer, Warning } from "../model.js";
+import { localSettingsFile, projectSettingsFile } from "../places.js";
 import { isHomeProject } from "../projects.js";
 import { IO_LIMIT, isRecord, listNames, mapLimit, pathKey, readJsonObject, realPath, samePath } from "../read.js";
 
@@ -78,6 +79,16 @@ export async function loadClaudeAccounts(
 }
 
 /**
+ * registry.primarySources.claude, else the primary account's configDir, else <home>/.claude -
+ * what loadClaudeContext uses.
+ */
+export function claudePrimaryDir(registry: Registry, accounts: ClaudeAccount[], homeDir: string): string {
+  return (
+    registry.primarySources.claude ?? accounts.find((a) => a.isPrimary)?.configDir ?? path.join(homeDir, ".claude")
+  );
+}
+
+/**
  * The settings files Claude Code reads and every account's plugin installs. One user
  * `settings.json` stands for every account: clausona links each profile's to the primary's.
  */
@@ -90,8 +101,7 @@ export async function loadClaudeContext(options: {
   warnings: Warning[];
 }): Promise<ClaudeContext> {
   const { accounts, registry, homeDir, projects, warnings } = options;
-  const primaryDir =
-    registry.primarySources.claude ?? accounts.find((a) => a.isPrimary)?.configDir ?? path.join(homeDir, ".claude");
+  const primaryDir = claudePrimaryDir(registry, accounts, homeDir);
   const wanted: Omit<SettingsFile, "data">[] = [
     ...(await managedDropIns(options.managedSettings, warnings)).map((file) => ({ file, layer: "managed" as const })),
     { file: options.managedSettings, layer: "managed" },
@@ -100,18 +110,8 @@ export async function loadClaudeContext(options: {
       // In the home dir, Claude Code's project settings are the user settings; it skips them there.
       ...(isHomeProject(project, homeDir)
         ? []
-        : [
-            {
-              file: path.join(project.path, ".claude", "settings.json"),
-              layer: "project" as const,
-              project: project.path,
-            },
-          ]),
-      {
-        file: path.join(project.path, ".claude", "settings.local.json"),
-        layer: "local" as const,
-        project: project.path,
-      },
+        : [{ file: projectSettingsFile(project.path), layer: "project" as const, project: project.path }]),
+      { file: localSettingsFile(project.path), layer: "local" as const, project: project.path },
     ]),
   ];
   const [read, plugins] = await Promise.all([

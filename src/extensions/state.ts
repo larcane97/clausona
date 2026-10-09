@@ -112,8 +112,19 @@ export function pluginState(inv: Inventory, pluginId: string, project?: string):
   return { value: "off" };
 }
 
-function claudeSkillOverride(inv: Inventory, name: string, project: string | undefined): EffectiveState | undefined {
+/**
+ * The `skillOverrides` value Claude Code takes for `name` in `project`, and where it is set;
+ * undefined when no settings file sets one. `skip` leaves those layers out, for "what is left
+ * below the one I am about to change".
+ */
+export function claudeSkillOverride(
+  inv: Inventory,
+  name: string,
+  project: string | undefined,
+  skip: readonly SettingsLayer[] = [],
+): EffectiveState | undefined {
   for (const layer of PRECEDENCE) {
+    if (skip.includes(layer)) continue;
     for (const entry of inv.facts.claudeSkillOverrides) {
       if (entry.layer !== layer || !applies(entry, project)) continue;
       const value = entry.map[name];
@@ -222,8 +233,30 @@ function codexSkillState(inv: Inventory, item: Extension): EffectiveState {
   return { value: hit.enabled ? "on" : "off", setBy: { file: hit.file, key } };
 }
 
+/**
+ * Whether `file` is a managed settings layer the inventory read: organisation policy, which
+ * clausona never writes.
+ */
+export function isManagedSetting(inv: Inventory, file: string): boolean {
+  const managed = (entry: { file: string; layer: SettingsLayer }) =>
+    entry.layer === "managed" && samePath(entry.file, file);
+  return inv.facts.claudeSkillOverrides.some(managed) || inv.facts.claudeEnabledPlugins.some(managed);
+}
+
+/**
+ * Whether Codex trusts `project`: a [projects."<key>"] table with trust_level = "trusted" whose
+ * key samePaths it. Codex 0.159.3 ignores the `.codex/` folder of any other project, one it has
+ * no record of too.
+ */
+export function codexTrusted(inv: Inventory, project: string | undefined): boolean {
+  return project !== undefined && inv.facts.codexTrust.some((t) => t.trusted && samePath(t.project, project));
+}
+
+/** The user's `mcp_servers.<name>.enabled`, or the project's when Codex trusts the project. */
 function codexMcpState(inv: Inventory, item: Extension, project: string | undefined): EffectiveState {
-  const entries = inv.facts.codexMcpEnabled.filter((e) => e.name === item.name);
+  const entries = inv.facts.codexMcpEnabled.filter(
+    (e) => e.name === item.name && (e.project === undefined || codexTrusted(inv, e.project)),
+  );
   const here = project === undefined ? undefined : entries.find((e) => samePath(e.project, project));
   const hit = here ?? entries.find((e) => e.project === undefined);
   if (!hit) return { value: "on" };

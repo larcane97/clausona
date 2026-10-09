@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { valueHash } from "../hash.js";
 import { type Collector, emptyFacts, type Project } from "../model.js";
 import { pathKey } from "../read.js";
 import { TestHome } from "../test-home.js";
@@ -92,6 +93,59 @@ describe("readClaudeHooks and readClaudePlugins", () => {
       },
     ]);
     expect(out.warnings).toEqual([]);
+  });
+
+  it("says where each hook sits in its file, and fingerprints its raw entry", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    const app = h.project("repos/app");
+    h.write(".claude/settings.json", {
+      hooks: {
+        Stop: [{ hooks: [{ type: "command", command: "notify" }] }],
+        PreToolUse: [
+          { matcher: "Edit", hooks: [{ type: "command", command: "fmt" }] },
+          {
+            matcher: "Bash",
+            hooks: [
+              { type: "command", command: "guard" },
+              { type: "command", command: "log", timeout: 5 },
+            ],
+          },
+        ],
+      },
+    });
+    // What is no command still holds its place: "setup" is the third entry.
+    h.write("repos/app/.claude/settings.json", {
+      hooks: { SessionStart: [{ hooks: [null, "setup", { type: "command", command: "setup" }] }] },
+    });
+    // A plugin's hooks.json written without the "hooks" key: the events sit at the root.
+    const sp = h.path(".claude/plugins/cache/m/sp/1.0.0");
+    h.write(".claude/plugins/installed_plugins.json", { plugins: { "sp@m": [{ installPath: sp }] } });
+    h.write(".claude/plugins/cache/m/sp/1.0.0/hooks/hooks.json", {
+      SessionStart: [{ hooks: [{ type: "command", command: "sp-start" }] }],
+    });
+
+    const out = await inventoryOf(h, [{ path: app, tools: ["claude"], profiles: [] }]);
+
+    const byCommand = (command: string) => {
+      const item = out.items.find((i) => i.kind === "hook" && i.summary?.command === command);
+      if (!item) throw new Error(`no hook ${command}`);
+      return item;
+    };
+    expect(byCommand("notify").hook).toEqual({ base: "hooks", event: "Stop", group: 0, index: 0 });
+    expect(out.facts.fingerprints[byCommand("notify").id]).toBe(valueHash({ type: "command", command: "notify" }));
+    expect(byCommand("log").hook).toEqual({ base: "hooks", event: "PreToolUse", matcher: "Bash", group: 1, index: 1 });
+    expect(out.facts.fingerprints[byCommand("log").id]).toBe(
+      valueHash({ type: "command", command: "log", timeout: 5 }),
+    );
+    expect(byCommand("fmt").hook).toEqual({ base: "hooks", event: "PreToolUse", matcher: "Edit", group: 0, index: 0 });
+    expect(byCommand("setup").hook).toEqual({ base: "hooks", event: "SessionStart", group: 0, index: 2 });
+    expect(byCommand("sp-start").hook).toEqual({ base: "root", event: "SessionStart", group: 0, index: 0 });
+    expect(out.facts.fingerprints[byCommand("sp-start").id]).toBe(valueHash({ type: "command", command: "sp-start" }));
+    // One fingerprint per hook listed, none for what is no command.
+    const hooks = out.items.filter((i) => i.kind === "hook");
+    expect(Object.keys(out.facts.fingerprints).sort()).toEqual(hooks.map((i) => i.id).sort());
   });
 
   it("gives each install of one plugin its own items", async () => {

@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import type { Registry } from "../types.js";
 import {
   type Collector,
@@ -5,14 +7,17 @@ import {
   emptyFacts,
   type Inventory,
   type Mark,
+  type Places,
   type Scope,
   type Usage,
   type Warning,
 } from "./model.js";
+import { stashDir } from "./places.js";
 import { collectProjects, type ProjectRecord, recordedPaths, resolveCurrentProject } from "./projects.js";
 import { hashTree, isRecord, mapLimit, pathKey, samePath } from "./read.js";
 import {
   type ClaudeAccount,
+  claudePrimaryDir,
   collectClaudeSettingsFacts,
   loadClaudeAccounts,
   loadClaudeContext,
@@ -21,7 +26,7 @@ import {
 import { readClaudeHooks, readClaudePlugins } from "./sources/claude-hooks.js";
 import { readClaudeMcp } from "./sources/claude-mcp.js";
 import { readClaudeSkills } from "./sources/claude-skills.js";
-import { codexProjectRecords, loadCodexContext, readCodex } from "./sources/codex.js";
+import { type CodexContext, codexProjectRecords, loadCodexContext, readCodex } from "./sources/codex.js";
 import { isMcpjsonServer, relevantIn, stateOf } from "./state.js";
 
 export type LoadOptions = {
@@ -30,6 +35,8 @@ export type LoadOptions = {
   cwd: string;
   /** Where to look for Claude Code's managed settings; tests point it at a file of their own. */
   managedSettings?: string;
+  /** Where clausona keeps what it took out to turn off everywhere; default stashDir(homeDir). */
+  stashDir?: string;
 };
 
 const DAY = 86_400_000;
@@ -91,6 +98,20 @@ export async function loadInventory(options: LoadOptions): Promise<Inventory> {
     usage: sumUsage(accounts),
     hashes: await hashDuplicates(items),
     warnings: uniqueWarnings(warnings),
+    places: placesOf(options, accounts, codex),
+  };
+}
+
+/** The files a write can touch that belong to an account or a tool rather than to one item, and the stash dir. */
+function placesOf(options: LoadOptions, accounts: ClaudeAccount[], codex: CodexContext | undefined): Places {
+  const { homeDir, registry } = options;
+  return {
+    ...(accounts.length > 0
+      ? { claudeUserSettings: path.join(claudePrimaryDir(registry, accounts, homeDir), "settings.json") }
+      : {}),
+    claudeJson: Object.fromEntries(accounts.map((account) => [account.id, account.jsonPath])),
+    ...(codex ? { codexConfig: codex.configFile, codexHooks: path.join(codex.primary.dir, "hooks.json") } : {}),
+    stashDir: options.stashDir ?? stashDir(homeDir),
   };
 }
 

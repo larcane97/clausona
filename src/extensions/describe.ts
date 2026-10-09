@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { CLEANUP_GRACE_DAYS, CLEANUP_UNUSED_DAYS, folderKey, marksOf, usageOf } from "./inventory.js";
 import type { EffectiveState, Extension, Inventory, StateValue } from "./model.js";
+import { isClaudeJson } from "./places.js";
 import {
   type AccountState,
   accountStates,
@@ -26,7 +27,7 @@ import {
   stateLoads,
   type ToolName,
 } from "./scopes.js";
-import { relevantIn } from "./state.js";
+import { codexTrusted, relevantIn } from "./state.js";
 
 /**
  * The words the Extensions screen and the CLI say about a row: its tags, a hook's event in plain
@@ -376,7 +377,7 @@ function settingPlace(inv: Inventory, item: Extension, project: string | undefin
   const here = viewFrom(item, project);
   const whose = here === undefined || samePath(here, project) ? "this project's" : `${projectName(here, inv)}'s`;
   // An account's .claude.json holds an entry per project, wherever the file is.
-  const inside = here !== undefined && path.basename(file) !== ".claude.json" && isWithin(file, here);
+  const inside = here !== undefined && !isClaudeJson(file) && isWithin(file, here);
   return `${whose} ${inside ? path.relative(here, file) : `entry in ${tilde(file, inv.homeDir)}`}`;
 }
 
@@ -655,9 +656,9 @@ function mcpLines(inv: Inventory, row: ScopeRow, project: string | undefined): D
     });
   }
   // Codex has no accounts here: its server has one state, said as a skill's is.
-  lines.push(
-    ...(firstOf(row).location.tool === "codex" ? loadedLines(inv, row, project) : accountLines(inv, row, project)),
-  );
+  const codex = firstOf(row).location.tool === "codex";
+  lines.push(...(codex ? loadedLines(inv, row, project) : accountLines(inv, row, project)));
+  if (codex) lines.push(...trustLines(inv, row, project));
   row.items.forEach((copy, i) => {
     const loc = copy.location;
     const entry =
@@ -667,6 +668,22 @@ function mcpLines(inv: Inventory, row: ScopeRow, project: string | undefined): D
     lines.push({ label: i === 0 ? "File" : "", text: `${tilde(loc.file, inv.homeDir)}${entry}` });
   });
   return lines;
+}
+
+/**
+ * Why a Codex server's switch in the project it is read in does not count: Codex reads a
+ * project's `.codex/` only once it trusts the project. Said only where that folder names the
+ * server, so the state shown would differ if Codex read it.
+ */
+function trustLines(inv: Inventory, row: ScopeRow, project: string | undefined): DetailLine[] {
+  const here = viewFrom(firstOf(row), project);
+  if (here === undefined || codexTrusted(inv, here)) return [];
+  const ignored = inv.facts.codexMcpEnabled.some(
+    (entry) => entry.project !== undefined && samePath(entry.project, here) && entry.name === row.name,
+  );
+  return ignored
+    ? [{ label: "Trust", text: "Codex does not trust this project, so it ignores its .codex folder.", tone: "warning" }]
+    : [];
 }
 
 function hookLines(inv: Inventory, row: ScopeRow, project: string | undefined): DetailLine[] {

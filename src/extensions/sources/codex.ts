@@ -3,11 +3,13 @@ import path from "node:path";
 import { parse } from "smol-toml";
 
 import type { Registry } from "../../types.js";
+import { valueHash } from "../hash.js";
 import type { Collector, Location, Project, Warning } from "../model.js";
+import { codexProjectConfig, codexProjectHooks } from "../places.js";
 import { isHomeProject, type ProjectRecord, recordedPaths } from "../projects.js";
 import { isRecord, readJsonObject, readText, realPath, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
-import { addHooks } from "./claude-hooks.js";
+import { addHooksFile } from "./claude-hooks.js";
 import { readSkillFolders, type SkillLocation } from "./skill-dirs.js";
 
 export type CodexHome = { id: string; dir: string; isPrimary: boolean };
@@ -78,8 +80,10 @@ export function codexProjectRecords(ctx: CodexContext): ProjectRecord[] {
  * Codex's skills, MCP servers and hooks, and the switches for them: `[[skills.config]]` in the
  * user config.toml (by name, or by the SKILL.md path - the only per-project skill switch, since
  * Codex ignores `[[skills.config]]` in a project's config; spec, Spike 1), and
- * `mcp_servers.<name>.enabled` in the user and project config.toml. Codex keeps no skill usage
- * on disk that we found, so its skills carry no usage keys.
+ * `mcp_servers.<name>.enabled` in the user and project config.toml. Beside them, the trust the
+ * user config.toml records for each project: Codex 0.159.3 reads a project's `.codex/` only
+ * when it trusts the project, so `state.ts` leaves the switches of any other out. Codex keeps
+ * no skill usage on disk that we found, so its skills carry no usage keys.
  */
 export async function readCodex(ctx: CodexContext, projects: Project[], out: Collector): Promise<void> {
   const noUsage = { usageKeys: () => [] };
@@ -121,13 +125,12 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
     jobs.push(readSkillFolders(path.join(project.path, ".agents", "skills"), here, project.path, out, noUsage));
     jobs.push(
       (async () => {
-        const file = path.join(project.path, ".codex", "config.toml");
+        const file = codexProjectConfig(project.path);
         const config = await readTomlObject(file, out.warnings);
         if (config) addServers(config, { ...here, file }, project.path, out);
-        const hooksFile = path.join(project.path, ".codex", "hooks.json");
+        const hooksFile = codexProjectHooks(project.path);
         const hooks = await readJsonObject(hooksFile, out.warnings);
-        if (hooks)
-          addHooks(isRecord(hooks.hooks) ? hooks.hooks : hooks, { ...here, file: hooksFile }, project.path, out);
+        if (hooks) addHooksFile(hooks, { ...here, file: hooksFile }, project.path, out);
       })(),
     );
   }
@@ -135,11 +138,14 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
     (async () => {
       const file = path.join(ctx.primary.dir, "hooks.json");
       const hooks = await readJsonObject(file, out.warnings);
-      if (hooks) addHooks(isRecord(hooks.hooks) ? hooks.hooks : hooks, { ...global, file }, "-", out);
+      if (hooks) addHooksFile(hooks, { ...global, file }, "-", out);
     })(),
   );
   if (ctx.config) {
     addServers(ctx.config, { ...global, file: ctx.configFile }, "-", out);
+    for (const [project, table] of Object.entries(isRecord(ctx.config.projects) ? ctx.config.projects : {})) {
+      if (isRecord(table)) out.facts.codexTrust.push({ project, trusted: table.trust_level === "trusted" });
+    }
     const skills = isRecord(ctx.config.skills) ? ctx.config.skills : undefined;
     for (const entry of Array.isArray(skills?.config) ? skills.config : []) {
       if (!isRecord(entry) || typeof entry.enabled !== "boolean") continue;
@@ -167,13 +173,9 @@ function addServers(config: Record<string, unknown>, location: Location, owner: 
   for (const [name, server] of Object.entries(isRecord(config.mcp_servers) ? config.mcp_servers : {})) {
     if (!isRecord(server)) continue;
     if (server.command !== undefined || server.url !== undefined) {
-      out.items.push({
-        id: `mcp:codex:${location.scope}:${owner}:${name}`,
-        kind: "mcp",
-        name,
-        location,
-        summary: mcpSummary(server),
-      });
+      const id = `mcp:codex:${location.scope}:${owner}:${name}`;
+      out.items.push({ id, kind: "mcp", name, location, summary: mcpSummary(server) });
+      out.facts.fingerprints[id] = valueHash(server);
     }
     if (typeof server.enabled === "boolean") {
       out.facts.codexMcpEnabled.push({

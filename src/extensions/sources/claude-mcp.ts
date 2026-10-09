@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { valueHash } from "../hash.js";
 import type { Collector, Location, Project } from "../model.js";
 import { isRecord, isWithin, pathKey, readJsonObject, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
@@ -140,6 +141,7 @@ function addServers(
     if (ids.has(id)) continue;
     ids.add(id);
     out.items.push({ id, kind: "mcp", name: full, location, summary: mcpSummary(config) });
+    out.facts.fingerprints[id] = valueHash(config);
   }
 }
 

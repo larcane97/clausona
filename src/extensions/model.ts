@@ -25,6 +25,22 @@ export type Location = {
   accounts?: string[];
 };
 
+/** Where a hook command sits in its file: hooks[event][group].hooks[index], under "hooks" or at the root. */
+export type HookPlace = { base: "hooks" | "root"; event: string; matcher?: string; group: number; index: number };
+
+/** The files and folders a write can touch that the inventory knows by account, not by item. */
+export type Places = {
+  /** The primary's settings.json, which every Claude profile links to; undefined without Claude accounts. */
+  claudeUserSettings?: string;
+  /** Each Claude profile id's .claude.json (claudeJsonPathForConfigDir). */
+  claudeJson: Record<string, string>;
+  /** The primary Codex home's config.toml and hooks.json; undefined without Codex. */
+  codexConfig?: string;
+  codexHooks?: string;
+  /** <home>/.clausona/extensions/stash */
+  stashDir: string;
+};
+
 export type Extension = {
   /** Stable across reads: kind:tool:scope:owner:name. */
   id: string;
@@ -45,6 +61,13 @@ export type Extension = {
   usageKeys?: string[];
   /** What is shown about it, already redacted. */
   summary?: Record<string, string>;
+  /** Hooks: where the command sits in its file. */
+  hook?: HookPlace;
+  /**
+   * What clausona took out of its file to turn it off everywhere: the stash file and its id,
+   * when (ms), and `gone` once the file it came from no longer exists.
+   */
+  stashed?: { file: string; id: string; at: number; gone?: true };
 };
 
 export const SKILL_VISIBILITY = ["on", "name-only", "user-invocable-only", "off"] as const;
@@ -90,6 +113,16 @@ export type StateFacts = {
   }[];
   codexSkillConfig: { file: string; name?: string; path?: string; enabled: boolean }[];
   codexMcpEnabled: { file: string; project?: string; name: string; enabled: boolean }[];
+  /**
+   * Item id -> valueHash of its raw entry, for MCP servers and hooks: a write checks the entry is
+   * still the one read. Never printed.
+   */
+  fingerprints: Record<string, string>;
+  /**
+   * Each `[projects."<P>"]` table in the user config.toml, in key order: Codex reads a project's
+   * .codex folder only when it trusts the project.
+   */
+  codexTrust: { project: string; trusted: boolean }[];
 };
 
 export function emptyFacts(): StateFacts {
@@ -100,6 +133,8 @@ export function emptyFacts(): StateFacts {
     claudeMcpjson: [],
     codexSkillConfig: [],
     codexMcpEnabled: [],
+    fingerprints: {},
+    codexTrust: [],
   };
 }
 
@@ -120,4 +155,5 @@ export type Inventory = {
   /** Skill folder hashes by item id, for names defined in more than one place. */
   hashes: Record<string, string>;
   warnings: Warning[];
+  places: Places;
 };
