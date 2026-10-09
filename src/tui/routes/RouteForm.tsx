@@ -82,6 +82,12 @@ const CHANGED = "routes.json changed since this form opened; it was reloaded. Re
 /** The name never changes the spec, so the preview runs on a stand-in until one is typed, or while it is refused. */
 const PREVIEW_NAME = "preview";
 
+/** What a pattern field takes, said after it while it is focused and empty. */
+const PATTERN_TEXT = {
+  from: "globs or emails, comma-separated",
+  exclude: "names or globs, comma-separated",
+} as const;
+
 const STRATEGY_TEXT: Record<Strategy, string> = {
   "round-robin": "takes accounts in turn",
   headroom: "picks the account with the most room",
@@ -396,6 +402,14 @@ export function RouteForm(props: RouteFormProps) {
     label,
     error: state.errors[field] !== undefined,
   });
+  const patternText = (field: keyof typeof PATTERN_TEXT) =>
+    focusOn(field) && typing && state[TEXT_KEYS[field]] === "" ? (
+      <Box marginLeft={2} flexShrink={1}>
+        <Text color={color.muted} wrap="truncate-end">
+          {PATTERN_TEXT[field]}
+        </Text>
+      </Box>
+    ) : null;
   const subLabel = (field: FormField, text: string, width: number) => (
     <SubLabel text={text} width={width} focused={focusOn(field)} error={state.errors[field] !== undefined} />
   );
@@ -438,10 +452,12 @@ export function RouteForm(props: RouteFormProps) {
         <Line {...line("from", "Patterns")}>
           {subLabel("from", "from", 9)}
           {textField("from")}
+          {patternText("from")}
         </Line>
         <Line {...line("exclude", "")}>
           {subLabel("exclude", "exclude", 9)}
           {textField("exclude")}
+          {patternText("exclude")}
         </Line>
         <Line {...line("strategy", "Strategy")}>
           <Radio

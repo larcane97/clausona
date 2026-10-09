@@ -290,6 +290,24 @@ describe("RouteForm", () => {
     expect(row(frame, "claude:team")).toMatch(/\[x\] claude:team\s+5%\s+22%$/);
   });
 
+  // Focused and empty, a pattern field said nothing about what it takes.
+  it("says what a pattern field takes while it is focused and empty, within 80 columns", async () => {
+    const { instance, deps } = setup({ columns: 80 });
+    await opened(instance, deps);
+    expect(text(instance)).not.toContain("comma-separated");
+
+    await tabTo(instance, "from");
+    expect(row(text(instance), "from")).toMatch(/Patterns\s+from\s+\S?\s+globs or emails, comma-separated$/);
+    for (const line of lines(text(instance))) expect(line.length).toBeLessThanOrEqual(80);
+    await press(instance, "*@work.example");
+    expect(row(text(instance), "from")).toMatch(/from\s+\*@work\.example\s*$/);
+
+    await tabTo(instance, "exclude ");
+    expect(row(text(instance), "exclude ")).toMatch(/^✦\s+exclude\s+\S?\s+names or globs, comma-separated$/);
+    expect(row(text(instance), "from")).not.toContain("comma-separated");
+    for (const line of lines(text(instance))) expect(line.length).toBeLessThanOrEqual(80);
+  });
+
   it("moves the focus with tab and back with shift+tab", async () => {
     const { instance, deps } = setup();
     await opened(instance, deps);
