@@ -108,5 +108,3 @@ The same `~/.clausona/fleet.json` as the other fleet plugins: `workers`, `routin
   of the pane it runs in.
 - herdr reads each pane's screen to tell an agent's state. It recognizes Claude Code and Codex
   started through `clausona run`.
-- Run end to end on macOS so far, and herdr's worktree commands were checked on Linux. If
-  something breaks on Linux or Windows, please open an issue.

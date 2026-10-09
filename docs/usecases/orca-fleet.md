@@ -107,4 +107,3 @@ The same `~/.clausona/fleet.json` as the other fleet plugins: `workers`, `routin
 - Orca must be open on the same machine.
 - `orca terminal read` returns scrollback only, so the orchestrator reads a worker's current screen
   from `orca terminal show`.
-- Run end to end on macOS so far. If something breaks on Linux or Windows, please open an issue.

@@ -65,10 +65,10 @@
       },
       {
         "@type": "Question",
-        "name": "Which platforms does this work on?",
+        "name": "Does it work on Windows and Linux?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "Orca has builds for macOS, Windows and Linux, and the plugin uses the same orca commands on each. The commands the main session runs are plain shell, and it has PowerShell forms for Codex on Windows. We've run it end to end on macOS so far. If something breaks on Linux or Windows, please open an issue."
+          "text": "Yes. Orca and clausona both run on macOS, Windows and Linux, and the plugin drives Orca with the same orca commands on all three. On Windows, a Codex main session runs its commands in PowerShell, and the plugin gives it the PowerShell forms."
         }
       },
       {
@@ -154,8 +154,8 @@ codex plugin add orca-fleet@clausona</code></pre>
       <h2 id="questions">Questions</h2>
       <h3>Does Orca need to be open?</h3>
       <p>Yes. The <code>orca</code> command talks to the running app, so keep Orca open on the same machine. The main session can run in an Orca terminal or anywhere else on that machine.</p>
-      <h3>Which platforms does this work on?</h3>
-      <p>Orca has builds for macOS, Windows and Linux, and the plugin uses the same <code>orca</code> commands on each. The commands the main session runs are plain shell, and it has PowerShell forms for Codex on Windows. We've run it end to end on macOS so far. If something breaks on Linux or Windows, please open an issue.</p>
+      <h3>Does it work on Windows and Linux?</h3>
+      <p>Yes. Orca and clausona both run on macOS, Windows and Linux, and the plugin drives Orca with the same <code>orca</code> commands on all three. On Windows, a Codex main session runs its commands in PowerShell, and the plugin gives it the PowerShell forms.</p>
       <h3>Can removing a worker lose work?</h3>
       <p>Orca deletes the worktree and its local branch, so the main session removes a worker only after its branch is pushed and its worktree is clean. <code>orca worktree rm</code> refuses a worktree with uncommitted changes, and the main session never forces it.</p>
       <h3>Do I need the plugin to give Orca tabs different accounts?</h3>

@@ -65,10 +65,10 @@
       },
       {
         "@type": "Question",
-        "name": "Which platforms does this work on?",
+        "name": "Does it work on Windows and Linux?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "herdr has builds for macOS, Linux and Windows, and the plugin uses the same herdr commands on each. The commands the main session runs are plain shell, and it has PowerShell forms for Codex on Windows. We've run it end to end on macOS so far. If something breaks on Linux or Windows, please open an issue."
+          "text": "Yes. herdr and clausona both run on macOS, Linux and Windows, and the plugin drives herdr with the same commands on all three. On Windows, a Codex main session runs its commands in PowerShell, and the plugin gives it the PowerShell forms."
         }
       },
       {
@@ -155,8 +155,8 @@ codex plugin add herdr-fleet@clausona</code></pre>
       <h2 id="questions">Questions</h2>
       <h3>Does the main session have to run inside herdr?</h3>
       <p>Yes. herdr's commands talk to the session of the pane they run in, so start Claude Code or Codex in a herdr pane and ask from there.</p>
-      <h3>Which platforms does this work on?</h3>
-      <p>herdr has builds for macOS, Linux and Windows, and the plugin uses the same herdr commands on each. The commands the main session runs are plain shell, and it has PowerShell forms for Codex on Windows. We've run it end to end on macOS so far. If something breaks on Linux or Windows, please open an issue.</p>
+      <h3>Does it work on Windows and Linux?</h3>
+      <p>Yes. herdr and clausona both run on macOS, Linux and Windows, and the plugin drives herdr with the same commands on all three. On Windows, a Codex main session runs its commands in PowerShell, and the plugin gives it the PowerShell forms.</p>
       <h3>Can removing a worker lose work?</h3>
       <p>Only uncommitted changes could, and <code>herdr worktree remove</code> refuses a worktree that has them. The main session never forces it, and it checks that the branch is pushed first.</p>
       <h3>Do I need the plugin to give herdr panes different accounts?</h3>
