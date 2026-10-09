@@ -14,6 +14,7 @@ import {
   isAccountCopy,
   isAccountServer,
   otherProjects,
+  rowKey,
   rowsIn,
   SCOPE_LABEL,
   type ScopeId,
@@ -211,8 +212,8 @@ function rowsFor(
 }
 
 /**
- * Every row `show` can pick from: each place's, and each item no place lists - a skill of a
- * plugin that is off - as a row of its own, as rowsIn makes every row but an account server's.
+ * Every row `show` can pick from: each place's, and what no place lists - a skill of a plugin
+ * that is off - grouped by its row key, as rowsIn groups every account's copy of one thing.
  */
 function everyRow(
   inv: Inventory,
@@ -224,11 +225,25 @@ function everyRow(
   const kind = KIND[command];
   const rows = rowsFor(inv, command, tool, "all", project, now);
   const listed = new Set(rows.flatMap((row) => row.items.map((item) => item.id)));
-  const rest = inv.items
-    .filter((item) => item.kind === kind && item.location.tool === tool && !listed.has(item.id))
-    .map((item) => ({ key: item.id, name: item.name, items: [item] }));
-  return unique([...rows, ...rest]);
+  const rest = new Map<string, ScopeRow>();
+  for (const item of inv.items) {
+    if (item.kind !== kind || item.location.tool !== tool || listed.has(item.id)) continue;
+    const key = rowKey(item);
+    const row = rest.get(key) ?? { key, name: item.name, items: [] };
+    row.items.push(item);
+    rest.set(key, row);
+  }
+  return unique([...rows, ...rest.values()]);
 }
+
+/**
+ * Where `show` looks with no --scope, in turn; the first that has the name decides: what loads
+ * here, then this project's places and everyone's, then every other project.
+ */
+const SHOW_TIERS: readonly ((scope: Exclude<ScopeId, "loaded" | "unused">) => boolean)[] = [
+  (scope) => scope !== "other",
+  (scope) => scope === "other",
+];
 
 /** The Claude accounts that have a row; undefined for one every account sees, [] for Codex. */
 function holders(row: ScopeRow): string[] | undefined {
@@ -377,7 +392,9 @@ function listText(
   columns: number,
 ): string {
   const scope = options.scope ?? "loaded";
-  const noun = rows.length === 1 ? NOUN[command].one : NOUN[command].many;
+  // Plugins lists the plugins that bring the kind, so it counts plugins.
+  const nouns = scope === "plugins" ? { one: "plugin", many: "plugins" } : NOUN[command];
+  const noun = rows.length === 1 ? nouns.one : nouns.many;
   const where = project === undefined ? "no project" : `project ${tilde(project, inv.homeDir)}`;
   const lines = [`${rows.length} ${noun} · ${scopeLabel(scope, options.tools)} · ${where}`, ""];
   if (rows.length === 0) {
@@ -476,25 +493,32 @@ function show(
 ): string {
   const accounts = accountIds(inv, options.accounts);
   const isId = (row: ScopeRow, id: string) => row.key === id || row.items.some((item) => item.id === id);
-  const found = options.tools.flatMap((tool) => {
-    const every = everyRow(inv, command, tool, project, now);
-    const scope = options.scope;
-    // A scope's own rows, and the rows whose place it is, such as a plugin's skill under plugins.
-    const pool =
-      scope === undefined
-        ? every
-        : unique([
-            ...rowsFor(inv, command, tool, scope, project, now),
-            ...every.filter((row) => homeScope(firstOf(row), project) === scope),
-          ]);
-    return pool.filter(
-      (row) =>
-        // A name can be an id too, so an id from ls --json works as it is given.
-        (options.name === undefined || row.name === options.name || isId(row, options.name)) &&
-        (options.id === undefined || isId(row, options.id)) &&
-        heldBy(row, accounts),
-    );
-  });
+  const matches = (row: ScopeRow) =>
+    // A name can be an id too, so an id from ls --json works as it is given.
+    (options.name === undefined || row.name === options.name || isId(row, options.name)) &&
+    (options.id === undefined || isId(row, options.id)) &&
+    heldBy(row, accounts);
+  const scope = options.scope;
+  const everyByTool = options.tools.map((tool) => ({ tool, every: everyRow(inv, command, tool, project, now) }));
+  // With --scope, that scope's rows and the rows whose place it is, such as a plugin's skill
+  // under plugins. Without, in tiers: the first one with a match is where the name is looked up.
+  const pools: ScopeRow[][] =
+    scope !== undefined
+      ? [
+          everyByTool.flatMap(({ tool, every }) =>
+            unique([
+              ...rowsFor(inv, command, tool, scope, project, now),
+              ...every.filter((row) => homeScope(firstOf(row), project) === scope),
+            ]),
+          ),
+        ]
+      : [
+          options.tools.flatMap((tool) => rowsFor(inv, command, tool, "loaded", project, now)),
+          ...SHOW_TIERS.map((inTier) =>
+            everyByTool.flatMap(({ every }) => every.filter((row) => inTier(homeScope(firstOf(row), project)))),
+          ),
+        ];
+  const found = pools.map((pool) => pool.filter(matches)).find((rows) => rows.length > 0) ?? [];
   const noun = NOUN[command].one;
   if (found.length === 0) {
     const narrowed =
@@ -612,7 +636,10 @@ const HELP: Record<ExtensionsCommand, HelpPage> = {
     showSummary: "Everything about one skill: files, state per account, use",
     lsDefault: "By default, every skill Claude Code and Codex load in this project.",
     lsSummary: "in one scope (default: everything loaded in this project)",
-    showAbout: ["Files, where it loads and for which accounts, how often it is used, and other copies."],
+    showAbout: [
+      "Files, where it loads and for which accounts, how often it is used, and other copies.",
+      "Looks in what loads here first, then this project and global, then other projects.",
+    ],
     lsExamples: [
       ["clausona skills ls --scope project", "Skills this project defines"],
       ["clausona skills ls --scope unused --tool claude", "Claude skills not used in 90 days"],
@@ -630,7 +657,10 @@ const HELP: Record<ExtensionsCommand, HelpPage> = {
     showSummary: "Everything about one MCP server: what it runs, state per account",
     lsDefault: "By default, every MCP server Claude Code and Codex load in this project.",
     lsSummary: "in one scope (default: everything loaded in this project)",
-    showAbout: ["What it runs, which accounts have it and whether it is on here. Secret values are never shown."],
+    showAbout: [
+      "What it runs, which accounts have it and whether it is on here. Secret values are never shown.",
+      "Looks in what loads here first, then this project and global, then other projects.",
+    ],
     lsExamples: [
       ["clausona mcp ls --scope global --tool claude", "Servers every project gets"],
       ["clausona mcp ls --json", "Servers loaded here, per account"],
@@ -649,8 +679,8 @@ const HELP: Record<ExtensionsCommand, HelpPage> = {
     lsDefault: "By default, every hook Claude Code and Codex run in this project.",
     lsSummary: "in one scope (default: everything that runs in this project)",
     showAbout: [
-      "When it runs, what it runs and which file it is in.",
-      'Takes an id from ls --json, or a name such as "Stop" when only one hook has it.',
+      'When it runs, what it runs and which file it is in. Takes a name such as "Stop", or an id.',
+      "Looks in what runs here first, then this project and global, then other projects.",
     ],
     lsExamples: [
       ["clausona hooks ls", "Hooks that run in this project"],
