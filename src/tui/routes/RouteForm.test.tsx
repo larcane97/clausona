@@ -18,6 +18,8 @@ const PATH = "/home/u/.clausona/routes.json";
 const TAB = "\t";
 const SHIFT_TAB = "\u001B[Z";
 const RIGHT = "\u001B[C";
+const LEFT = "\u001B[D";
+const UP = "\u001B[A";
 const ERASE = "\u007F";
 const SPACE = " ";
 
@@ -173,7 +175,8 @@ async function downTo(instance: Instance, target: RegExp) {
 }
 
 const accountRow = (id: string) => new RegExp(`▸ \\[.\\] ${id}\\b`);
-const pickerRow = (id: string) => new RegExp(`^\\s*▸ ${id}$`);
+/** The picker's one line, offering `id`: `Add to fallback  ‹ claude:side ›  2 of 4`. */
+const pickerRow = (id: string) => new RegExp(`^\\s*Add to fallback\\s+(‹ )?${id}( ›)?\\s+\\d+ of \\d+$`);
 
 /** Replaces what a text field holds, the cursor being at its end as it is when the field is reached. */
 async function retype(instance: Instance, length: number, value: string) {
@@ -262,7 +265,7 @@ describe("RouteForm", () => {
     }
 
     await press(instance, "a");
-    expect(hintLines(text(instance))).toEqual(["↑↓ move │ enter add │ esc close"]);
+    expect(hintLines(text(instance))).toEqual(["←→ choose │ enter add │ esc close"]);
     await press(instance, ESC);
     await press(instance, "x");
     await press(instance, ESC);
@@ -366,11 +369,7 @@ describe("RouteForm", () => {
     await tabTo(instance, "Fallback");
 
     await press(instance, "a");
-    const picker = text(instance);
-    expect(picker).toContain("Add to fallback");
-    for (const id of ["claude:ops-share", "claude:side", "claude:team", "claude:work"]) {
-      expect(lines(picker).some((line) => new RegExp(`^\\s*[▸ ] ${id}$`).test(inside(line)))).toBe(true);
-    }
+    expect(row(text(instance), "Add to fallback")).toMatch(pickerRow("claude:ops-share"));
     await downTo(instance, pickerRow("claude:side"));
     await press(instance, ENTER);
     expect(text(instance)).not.toContain("Add to fallback");
@@ -378,8 +377,9 @@ describe("RouteForm", () => {
 
     await press(instance, "a");
     // What is in the fallback already is not offered again.
-    expect(lines(text(instance)).some((line) => /^\s*[▸ ] claude:side$/.test(inside(line)))).toBe(false);
-    await downTo(instance, pickerRow("claude:team"));
+    expect(row(text(instance), "Add to fallback")).toMatch(/claude:ops-share ›\s+1 of 3$/);
+    await press(instance, RIGHT);
+    expect(row(text(instance), "Add to fallback")).toMatch(/‹ claude:team ›\s+2 of 3$/);
     await press(instance, ENTER);
     await press(instance, "a");
     await downTo(instance, pickerRow("claude:work"));
@@ -401,6 +401,41 @@ describe("RouteForm", () => {
     await save(instance);
     await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith("spare"));
     expect(routes(disk).spare.fallback).toEqual(["team", "side"]);
+  });
+
+  // The 8 accounts of a claude + codex form listed under the fallback ran the form off a
+  // 34-row terminal, the title first; the picker is one line, whatever the number of accounts.
+  it("offers the fallback accounts on one line, one at a time, so the picker adds a single line", async () => {
+    const { instance, deps } = setup();
+    await opened(instance, deps);
+    await tabTo(instance, "Tool");
+    await press(instance, RIGHT);
+    await press(instance, RIGHT);
+    await tabTo(instance, "Fallback");
+    const closed = lines(text(instance)).length;
+
+    await press(instance, "a");
+    expect(lines(text(instance))).toHaveLength(closed + 1);
+    const picker = () => row(text(instance), "Add to fallback");
+    // The first has nothing before it, the last nothing after it.
+    expect(picker()).toMatch(/^\s*Add to fallback\s+claude:ops-share ›\s+1 of 5$/);
+    await type(instance, LEFT);
+    expect(picker()).toMatch(/\s+claude:ops-share ›\s+1 of 5$/);
+    await press(instance, RIGHT);
+    expect(picker()).toMatch(/‹ claude:side ›\s+2 of 5$/);
+    await press(instance, DOWN);
+    await press(instance, DOWN);
+    await press(instance, DOWN);
+    expect(picker()).toMatch(/‹ codex:x\s+5 of 5$/);
+    await type(instance, RIGHT);
+    expect(picker()).toMatch(/‹ codex:x\s+5 of 5$/);
+    await press(instance, UP);
+    expect(picker()).toMatch(/‹ claude:work ›\s+4 of 5$/);
+    expect(lines(text(instance))).toHaveLength(closed + 1);
+
+    await press(instance, ENTER);
+    expect(text(instance)).not.toContain("Add to fallback");
+    expect(row(text(instance), "Fallback")).toMatch(/1\. claude:work\s+\(\+ add\)$/);
   });
 
   it("closes the picker on esc without leaving the form or adding anything", async () => {

@@ -114,7 +114,7 @@ const EVERY_FIELD_HINTS: Hint[] = [
   { keys: "esc", action: "cancel" },
 ];
 const PICKER_HINTS = [
-  { keys: "↑↓", action: "move" },
+  { keys: "←→", action: "choose" },
   { keys: "enter", action: "add" },
   { keys: "esc", action: "close" },
 ];
@@ -295,11 +295,13 @@ export function RouteForm(props: RouteFormProps) {
     if (alive.current) setSaving(false);
   }
 
+  /** The picker is one line: ←→ step through it, and ↑↓ as well, as they did when it was a list. */
   function pick(key: Key) {
     if (key.escape) setPicking(null);
-    else if (key.upArrow) setPicking((row) => Math.max(0, (row ?? 0) - 1));
-    else if (key.downArrow) setPicking((row) => Math.max(0, Math.min(candidates.length - 1, (row ?? 0) + 1)));
-    else if (key.return) {
+    else if (key.leftArrow || key.upArrow) setPicking((row) => Math.max(0, (row ?? 0) - 1));
+    else if (key.rightArrow || key.downArrow) {
+      setPicking((row) => Math.max(0, Math.min(candidates.length - 1, (row ?? 0) + 1)));
+    } else if (key.return) {
       const chosen = candidates[picking ?? 0];
       if (chosen) dispatch({ type: "fallback-add", id: chosen.id });
       setPicking(null);

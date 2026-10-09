@@ -183,19 +183,33 @@ export function FallbackEntries({ entries, cursor }: { entries: string[]; cursor
   );
 }
 
-/** The accounts that can still join the fallback, under its line, to pick one from. */
+/**
+ * The accounts that can still join the fallback, one at a time on a line under it, with `‹` and
+ * `›` where there are more. A list of them all ran the form off a 34-row terminal once a
+ * claude + codex route offered eight; one line fits whatever the number of accounts.
+ */
 export function FallbackPicker({ ids, cursor }: { ids: string[]; cursor: number }) {
+  const id = ids[cursor];
   return (
-    <Box flexDirection="column" paddingLeft={CURSOR + LABEL}>
-      <Text color={color.secondary}>Add to fallback</Text>
-      {ids.length === 0 ? (
-        <Text color={color.muted}>Every account is in the fallback already.</Text>
+    <Box flexDirection="row" paddingLeft={CURSOR + LABEL} columnGap={2}>
+      <Box flexShrink={0}>
+        <Text color={color.secondary}>Add to fallback</Text>
+      </Box>
+      {id === undefined ? (
+        <Text color={color.muted}>every account is in it already</Text>
       ) : (
-        ids.map((id, index) => (
-          <Text key={id} color={index === cursor ? color.cursor : color.text} wrap="truncate-end">
-            {`${index === cursor ? "▸" : " "} ${id}`}
-          </Text>
-        ))
+        <>
+          <Box flexShrink={1}>
+            <Text wrap="truncate-end">
+              <Text color={color.muted}>{cursor > 0 ? "‹ " : "  "}</Text>
+              <Text color={color.cursor}>{id}</Text>
+              <Text color={color.muted}>{cursor < ids.length - 1 ? " ›" : "  "}</Text>
+            </Text>
+          </Box>
+          <Box flexShrink={0}>
+            <Text color={color.muted}>{`${cursor + 1} of ${ids.length}`}</Text>
+          </Box>
+        </>
       )}
     </Box>
   );
