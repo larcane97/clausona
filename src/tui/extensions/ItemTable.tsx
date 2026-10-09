@@ -1,7 +1,7 @@
 import { Box, Text } from "ink";
 
 import { color, symbol } from "../theme.js";
-import { columnText, listRoom, type Table, type TagTone } from "./screen-model.js";
+import { columnText, listRoom, PANE_HEAD_ROWS, type Table, type TagTone } from "./screen-model.js";
 import { cell } from "./view-model.js";
 
 const TONE: Record<TagTone, string> = { muted: color.muted, warning: color.warning, error: color.error };
@@ -35,7 +35,7 @@ export function ItemTable({ table, width, height, cursor, top, focused }: Props)
   const dash = words.indexOf(DASH);
   const name = dash < 0 ? words : words.slice(0, dash);
   const sentence = dash < 0 ? "" : words.slice(dash);
-  const room = listRoom(Math.max(0, height - 2), table.rows.length);
+  const room = listRoom(Math.max(0, height - PANE_HEAD_ROWS), table.rows.length);
   const visible = table.rows.slice(top, top + room);
   const below = table.rows.length - top - visible.length;
   return (

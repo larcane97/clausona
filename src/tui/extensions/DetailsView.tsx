@@ -2,7 +2,7 @@ import { Box, Text } from "ink";
 
 import type { DetailLine } from "../../extensions/describe.js";
 import { color } from "../theme.js";
-import { DETAIL_LABEL_WIDTH, type DetailRow, detailWindow } from "./screen-model.js";
+import { DETAIL_LABEL_WIDTH, type DetailRow, detailWindow, PANE_HEAD_ROWS } from "./screen-model.js";
 import { cell } from "./view-model.js";
 
 const TONE: Record<NonNullable<DetailLine["tone"]>, string> = {
@@ -28,7 +28,7 @@ type Props = {
  * labels in a column of their own. What is hidden above and below is counted on a line of its own.
  */
 export function DetailsView({ title, rows, width, height, top }: Props) {
-  const scroll = detailWindow(rows.length, Math.max(0, height - 2), top);
+  const scroll = detailWindow(rows.length, Math.max(0, height - PANE_HEAD_ROWS), top);
   return (
     <Box flexDirection="column" width={width} flexShrink={0}>
       <Text color={color.text} bold wrap="truncate-end">
