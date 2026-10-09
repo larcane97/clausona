@@ -182,15 +182,18 @@ describe("ExtensionsScreen", () => {
     expect(closed).toContain("deploy-check");
   });
 
-  it("picks no project, which closes every project's group", async () => {
+  it("picks no project, which closes every project's group and hides the This project column", async () => {
     const { instance } = screen(await seed(), 140);
-    await seen(instance, (f) => f.includes("eli5"));
+    expect(await seen(instance, (f) => f.includes("eli5"))).toContain("THIS PROJECT");
     await press(instance, "p");
     await seen(instance, (f) => f.includes("No project — user settings only"));
     await press(instance, UP);
     await press(instance, ENTER);
     const frame = await seen(instance, (f) => f.includes("No project") && f.includes("▸ Project · app"));
     expect(frame).not.toContain("deploy-check");
+    // The header says what to do about it, as the spec words it, and no column claims a project.
+    expect(frame).toContain("Extensions │ No project — pick one with p");
+    expect(frame).not.toContain("THIS PROJECT");
   });
 
   it("lists the home dir in the picker as ~, the project it was started in", async () => {
@@ -466,7 +469,7 @@ describe("ExtensionsScreen", () => {
       return seen(instance, (f) => f.includes("Accounts"));
     };
     const stacked = await githubAt(100);
-    expect(stacked).not.toMatch(/│ … +│/);
+    expect(stacked).not.toMatch(/│ (…|↓ \d+ more) +│/);
     // As tall as the side-by-side frame, whose detail always takes the whole body.
     expect(height(stacked)).toBe(height(await githubAt(140)));
   });

@@ -299,8 +299,8 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     );
   }
 
-  const subtitle = project ? tilde(project, inventory.homeDir) : "No project";
-  const columnsFor = listColumns(tab, layout.listWidth, need);
+  const subtitle = project ? tilde(project, inventory.homeDir) : "No project — pick one with p";
+  const columnsFor = listColumns(tab, layout.listWidth, need, project !== undefined);
   const room = listRoom(layout.listHeight, rows.length);
   listTop.current = scrolled(listTop.current, at, room, rows.length);
   const matrixRoom = Math.max(1, fullHeight - 3);

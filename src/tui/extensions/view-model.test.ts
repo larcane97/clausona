@@ -109,6 +109,13 @@ describe("buildRows", () => {
     expect(countItems(inv, { ...base, tab: "skills", project: app })).toBe(4);
   });
 
+  it("leaves a server that waits for approval out of Loaded here: Claude Code does not start it", async () => {
+    const { app, inv } = await seed(projectServer);
+    expect(items(buildRows(inv, { ...base, tab: "mcp", project: app })).map((r) => r.name)).toContain("docs");
+    const loaded = items(buildRows(inv, { ...base, tab: "mcp", project: app, filter: "loaded" })).map((r) => r.name);
+    expect(loaded).toEqual(["exa", "pg-dev"]);
+  });
+
   it("reads MCP state per account and hooks with their command", async () => {
     const { app, inv } = await seed();
     const mcp = buildRows(inv, { ...base, tab: "mcp", project: app });
@@ -494,6 +501,15 @@ describe("layout helpers", () => {
   it("reads a size it cannot know as 80 by 24", () => {
     expect(pickLayout(Number.NaN, Number.POSITIVE_INFINITY)).toEqual(pickLayout(80, 24));
     expect(pickLayout(Number.NaN, 24).mode).toBe("list");
+  });
+
+  it("has no This project column when there is no project", () => {
+    for (const tab of ["skills", "mcp"] as const) {
+      const here = listColumns(tab, 100, 30);
+      const none = listColumns(tab, 100, 30, false);
+      expect(here.state).toBeGreaterThan(0);
+      expect(none).toEqual({ ...here, state: 0 });
+    }
   });
 
   it("drops columns before the name gets too short", () => {
