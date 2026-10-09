@@ -10,6 +10,12 @@ import {
 } from "./model.js";
 import { isWithin, pathKey, samePath } from "./read.js";
 
+/**
+ * The `setBy.key` of a stashed item's state: off everywhere, its entry out of the tool's file and
+ * in the stash file `setBy.file` names.
+ */
+export const STASH_KEY = "stash";
+
 /** Claude Code reads settings in this order; the first that sets a key wins. */
 const PRECEDENCE: readonly SettingsLayer[] = ["managed", "local", "project", "user"];
 
@@ -52,7 +58,10 @@ export function relevantIn(item: Extension, project: string | undefined): boolea
  * own server. A plugin's servers go by names of their own (`plugin:<plugin>:<name>`).
  */
 function rankedMcp(inv: Inventory, name: string, project: string, profile: string | undefined): Extension[] {
-  const named = inv.items.filter((i) => i.kind === "mcp" && i.location.tool === "claude" && i.name === name);
+  // A stashed copy is out of its file: Claude Code does not see it, so it wins over nothing.
+  const named = inv.items.filter(
+    (i) => i.kind === "mcp" && i.location.tool === "claude" && i.name === name && !i.stashed,
+  );
   const own = (i: Extension) => profile !== undefined && i.location.profile === profile;
   const local = named.filter((i) => own(i) && i.location.scope === "local" && samePath(i.location.project, project));
   const mcpjson = named
@@ -269,9 +278,11 @@ function codexMcpState(inv: Inventory, item: Extension, project: string | undefi
  * Claude MCP server's (`disabledMcpServers`, an approval, a local server), and a Claude project
  * skill's (an account's own same-name skill). For what any account can see (a `.mcp.json` or
  * plugin server, a project skill), callers pass `profile`: without one, every account's
- * approvals are merged and no account's own switch or copy applies.
+ * approvals are merged and no account's own switch or copy applies. A stashed item is off
+ * everywhere, whatever the switches say.
  */
 export function stateOf(inv: Inventory, item: Extension, project?: string, profile?: string): EffectiveState {
+  if (item.stashed) return { value: "off", setBy: { file: item.stashed.file, key: STASH_KEY } };
   switch (item.kind) {
     case "skill":
       return item.location.tool === "claude"
