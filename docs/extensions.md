@@ -245,9 +245,9 @@ The columns:
   `<Event> <matcher>`.
 - TOOL appears only when both tools are listed.
 - WHERE is where the row comes from: `Project`, `Global`, `Cloud`, the plugin's name, a
-  parent folder such as `~/repos`, `Built in`, `Managed`, or another project's name. It adds
-  ` · work` for one account's own skill, ` · 2 accounts` for Cloud copies, and ` · command`
-  for a legacy command file.
+  parent folder's `.mcp.json` such as `~/repos/.mcp.json`, `Built in`, `Managed`, or another
+  project's name. It adds ` · work` for one account's own skill, ` · 2 accounts` for Cloud
+  copies, and ` · command` for a legacy command file.
 - USES and LAST USED (skills): the uses summed over accounts, and how long ago the
   last one was (`38m ago`, `5d ago`, `4mo ago`). A skill never used reads `0` and `never`. A
   hidden copy, a Codex skill and a plugin row read `—` in both.
@@ -282,7 +282,8 @@ terminal is narrow, long cells are cut with `…`; JSON is never cut.
 | `StopFailure` | When replying fails |
 
 A matcher of `*` on a tool event reads "any tool". An event clausona does not know is shown by
-its name.
+its name. A Codex hook names Codex where these name Claude: its `Stop` reads "When Codex
+finishes replying".
 
 ## CLI reference
 
@@ -480,7 +481,7 @@ apply; the others are always there, `null` when empty.
 | `tool` | string | `claude` or `codex`. |
 | `name` | string | The name `show` takes. |
 | `scope` | string | Where the row lives, seen from the project: `project`, `parents`, `global`, `cloud`, `plugins`, `builtin`, `managed` or `other`. Never `loaded` or `unused`, which are worked out. |
-| `from` | string | The WHERE label: `Project`, `Global`, `Cloud`, a plugin's name, a parent folder, another project's name, `Built in`, `Managed`. |
+| `from` | string | The WHERE label: `Project`, `Global`, `Cloud`, a plugin's name, a parent folder's `.mcp.json`, another project's name, `Built in`, `Managed`. |
 | `project` | string or null | The project the row belongs to, or the folder of a parent `.mcp.json`. `null` for what no project owns. |
 | `plugin` | string | When set: the plugin, `<plugin>@<marketplace>`, for a plugin row and what a plugin brings. |
 | `accounts` | string[] | When set: the profile ids of the accounts that have the row, primary first. Set when the row is held or switched per account. |

@@ -64,6 +64,7 @@ it("colours a tag by its tone: unused amber, a broken link red", async () => {
   const table: Table = {
     header: "GLOBAL — loads in every project",
     count: 2,
+    countText: "2",
     columns: [{ key: "name", title: "NAME", width: 8 }],
     rows: [
       { key: "a", cells: ["old     "], tag: { text: "unused", tone: "warning" } },

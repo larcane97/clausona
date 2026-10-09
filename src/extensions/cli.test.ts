@@ -731,13 +731,14 @@ describe("ls, a .mcp.json in a parent dir", () => {
     const { h, app } = ancestorSeed();
     const parents = await run(h, app, "mcp", ["ls", "--scope", "parents"]);
     expect(firstLine(parents)).toMatch(/^3 MCP servers · Parent folders · /);
-    expect(parents).toMatch(/^tools\s+claude\s+~\s+all$/m);
-    expect(parents).toMatch(/^shared\s+claude\s+~[\\/]repos\s+all\s+pending approval$/m);
-    expect(parents).toMatch(/^notes\s+claude\s+~\s+all\s+pending approval$/m);
+    // WHERE names the .mcp.json the server is in.
+    expect(parents).toMatch(/^tools\s+claude\s+~[\\/]\.mcp\.json\s+all$/m);
+    expect(parents).toMatch(/^shared\s+claude\s+~[\\/]repos[\\/]\.mcp\.json\s+all\s+pending approval$/m);
+    expect(parents).toMatch(/^notes\s+claude\s+~[\\/]\.mcp\.json\s+all\s+pending approval$/m);
     // Only tools is approved here, in one account: it is all that loads.
     const loaded = await run(h, app, "mcp", ["ls"]);
     expect(firstLine(loaded)).toMatch(/^1 MCP server · Loaded here · /);
-    expect(loaded).toMatch(/^tools\s+claude\s+~\s+all$/m);
+    expect(loaded).toMatch(/^tools\s+claude\s+~[\\/]\.mcp\.json\s+all$/m);
     const json = JSON.parse(await run(h, app, "mcp", ["ls", "--json"]));
     expect(json.items[0].project).toBe(h.home);
     expect(json.items[0].stateByAccount).toEqual({ "claude:default": "on", "claude:work": "pending-approval" });

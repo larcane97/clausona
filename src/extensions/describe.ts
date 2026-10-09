@@ -63,20 +63,21 @@ const TOOL_EVENTS = new Map<string, (tool: string) => string>([
   ["PostToolUseFailure", (tool) => `After ${tool} fails`],
 ]);
 
-const EVENTS = new Map<string, string>([
-  ["UserPromptSubmit", "When you send a message"],
-  ["Notification", "When Claude sends a notification"],
-  ["Stop", "When Claude finishes replying"],
-  ["SubagentStop", "When a subagent finishes"],
-  ["SessionStart", "When a session starts"],
-  ["SessionEnd", "When a session ends"],
-  ["PreCompact", "Before the conversation is compacted"],
-  ["PermissionRequest", "When Claude asks for permission"],
-  ["Interrupt", "When you interrupt"],
-  ["StopFailure", "When replying fails"],
+/** The other events, in words that name the hook's own tool where they name one: "Claude", "Codex". */
+const EVENTS = new Map<string, (who: string) => string>([
+  ["UserPromptSubmit", () => "When you send a message"],
+  ["Notification", (who) => `When ${who} sends a notification`],
+  ["Stop", (who) => `When ${who} finishes replying`],
+  ["SubagentStop", () => "When a subagent finishes"],
+  ["SessionStart", () => "When a session starts"],
+  ["SessionEnd", () => "When a session ends"],
+  ["PreCompact", () => "Before the conversation is compacted"],
+  ["PermissionRequest", (who) => `When ${who} asks for permission`],
+  ["Interrupt", () => "When you interrupt"],
+  ["StopFailure", () => "When replying fails"],
 ]);
 
-/** A hook in plain words: "Before Bash runs", "When Claude finishes replying". */
+/** A hook in plain words: "Before Bash runs", "When Claude finishes replying", "When Codex finishes replying". */
 export function hookWhen(item: Extension): string {
   // The sources name a hook "<Event> <matcher>", or "<Event>" when it has no matcher.
   const space = item.name.indexOf(" ");
@@ -84,7 +85,7 @@ export function hookWhen(item: Extension): string {
   const matcher = space < 0 ? undefined : item.name.slice(space + 1);
   const tool = TOOL_EVENTS.get(event);
   if (tool) return tool(matcher === undefined || matcher === "*" ? "any tool" : matcher);
-  const words = EVENTS.get(event) ?? event;
+  const words = EVENTS.get(event)?.(TOOL_WORD[item.location.tool]) ?? event;
   return matcher === undefined ? words : `${words} (${matcher})`;
 }
 
@@ -95,15 +96,27 @@ function pluginName(item: Extension): string {
 }
 
 /**
- * Where a row in Loaded here comes from: "Project", "Global", "Cloud", "~/repos" (parent
- * folder), the plugin's name, "Built in", "Managed".
+ * Where a row in Loaded here comes from: "Project", "Global", "Cloud", the `.mcp.json` of a
+ * parent folder ("~/.mcp.json", "~/repos/.mcp.json"), the plugin's name, "Built in", "Managed".
  */
 export function fromLabel(item: Extension, inv: Inventory, project: string | undefined): string {
   const scope = homeScope(item, project);
   if (scope === "plugins" || (scope === "other" && item.location.scope === "plugin")) return pluginName(item);
-  if (scope === "parents" || scope === "other") return projectName(item.location.project ?? "", inv);
+  if (scope === "parents") return tilde(item.location.file, inv.homeDir);
+  if (scope === "other") return projectName(item.location.project ?? "", inv);
   if (scope === "builtin") return "Built in";
   return SCOPE_LABEL[scope](item.location.tool);
+}
+
+/**
+ * Where a row is, as a WHERE column says it: FROM's words, "Project" for this project's own and
+ * "Global" for the user's, and for another project's own, that project's name - a plugin
+ * installed for it too.
+ */
+export function whereLabel(item: Extension, inv: Inventory, project: string | undefined): string {
+  return homeScope(item, project) === "other"
+    ? projectName(item.location.project ?? "", inv)
+    : fromLabel(item, inv, project);
 }
 
 /**

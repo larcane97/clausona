@@ -6,17 +6,17 @@ import {
   accountsWord,
   type DetailLine,
   detailsOf,
-  fromLabel,
   hookWhen,
   jsonItem,
   rowAccounts,
   tagsOf,
   usageCells,
+  whereLabel,
 } from "./describe.js";
 import { ExitError } from "./exit-error.js";
 import { CLEANUP_UNUSED_DAYS, loadInventory } from "./inventory.js";
 import type { Extension, Inventory } from "./model.js";
-import { projectName, shortProfile, tilde, tildeIn } from "./present.js";
+import { shortProfile, tilde, tildeIn } from "./present.js";
 import { entryInfo } from "./read.js";
 import {
   homeScope,
@@ -329,9 +329,7 @@ function nothingToList(command: ExtensionsCommand, scope: Scope, tools: ToolName
 /** Where a row is: where it comes from, and for another project's own, that project. */
 function whereCell(inv: Inventory, row: ScopeRow, project: string | undefined): string {
   const item = firstOf(row);
-  const loc = item.location;
-  const place =
-    homeScope(item, project) === "other" ? projectName(loc.project ?? "", inv) : fromLabel(item, inv, project);
+  const place = whereLabel(item, inv, project);
   // Whose a skill is - an account's own folder, or Cloud's copies, one row for every account -
   // and whether it is a legacy command, or two rows read as one twice. A server's row has ACCOUNTS.
   const owners = row.items.flatMap((copy) =>

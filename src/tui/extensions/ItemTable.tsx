@@ -29,7 +29,7 @@ type Props = {
  * and an empty sentence - the header has said it - is no line at all.
  */
 export function ItemTable({ table, width, height, cursor, top, focused }: Props) {
-  const count = String(table.count);
+  const count = table.countText;
   // The header's words cut to what the count leaves, then the count after a space.
   const words = cell(table.header, Math.max(0, width - count.length - 1));
   const dash = words.indexOf(DASH);
