@@ -251,6 +251,23 @@ describe("RoutesScreen", () => {
     expect(detail).toContain("Press n to create your first route.");
   });
 
+  // Left to wrap, the sentence broke after "5-hour" at 121 columns and the next line began with
+  // its space. It is two lines, broken where `csn route list` breaks it, at every width.
+  it("draws the empty state's explanation on the two lines the CLI uses, none starting with a space", async () => {
+    for (const columns of [80, 100, 121, 160]) {
+      const { instance } = setup({ file: { version: 1, routes: {} }, columns });
+      const frame = await until(instance, (f) => f.includes("Press n"));
+      const first = lines(frame).find((line) => line.includes("A route picks")) ?? "";
+      const second = lines(frame).find((line) => line.includes("5-hour")) ?? "";
+      const at = first.indexOf("A route picks");
+      expect(first.slice(at).trimEnd(), `${columns}`).toBe(
+        "A route picks the account for you: the next one in turn that is",
+      );
+      expect(second.slice(at).trimEnd(), `${columns}`).toBe("under 80% of its 5-hour and weekly limits.");
+      instance.unmount();
+    }
+  });
+
   // Review Focus 5: a hand-edited routes.json that does not check out.
   it("shows what is wrong with routes.json and where to fix it, and answers only esc", async () => {
     const error = new RoutesFileError("/home/u/.clausona/routes.json", [

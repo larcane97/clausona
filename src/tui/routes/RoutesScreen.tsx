@@ -2,10 +2,10 @@ import { Box, type Key, Text, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { QuotaTarget } from "../../core/quota-store.js";
-import { DEFAULT_MAX_USAGE, type RouteSpec, type RoutesFile, withDefaults } from "../../core/route-config.js";
+import { type RouteSpec, type RoutesFile, withDefaults } from "../../core/route-config.js";
 import { RoutesFileError } from "../../core/routes-store.js";
 import { type Ranking, rankRoute } from "../../core/routing.js";
-import { freeNow } from "../../lib/route-render.js";
+import { freeNow, ROUTE_IS } from "../../lib/route-render.js";
 import { membersOf, quotaTargets } from "../../lib/route-service.js";
 import type { QuotaSnapshot, Registry } from "../../types.js";
 import { Chrome } from "../components/Chrome.js";
@@ -348,12 +348,15 @@ function FileProblem({ error }: { error: unknown }) {
   );
 }
 
+/** Broken into lines as `route list` breaks it: left to wrap, a line could begin with a space. */
 function NoRoutes() {
   return (
     <Box flexDirection="column">
-      <Text color={color.text}>
-        {`A route picks the account for you: the next one in turn that is under ${DEFAULT_MAX_USAGE}% of its 5-hour and weekly limits.`}
-      </Text>
+      {ROUTE_IS.map((line) => (
+        <Text key={line} color={color.text}>
+          {line}
+        </Text>
+      ))}
       <Box marginTop={1}>
         <Text color={color.secondary}>Press n to create your first route.</Text>
       </Box>

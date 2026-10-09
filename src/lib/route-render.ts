@@ -312,14 +312,19 @@ function nobodyText(ranking: Ranking): string {
 
 // ─── route list ─────────────────────────────────────────────────────
 
+/** What a route is, in the two lines `route list` and the Routes screen both break it into. */
+export const ROUTE_IS = [
+  "A route picks the account for you: the next one in turn that is",
+  `under ${DEFAULT_MAX_USAGE}% of its 5-hour and weekly limits.`,
+] as const;
+
 export function renderRoutesEmpty(): string {
   const example = (command: string, text: string) => `    ${accent(command.padEnd(33))}${dim(text)}`;
   return [
     "",
     `  ${bold("No routes yet.")}`,
     "",
-    "  A route picks the account for you: the next one in turn that is",
-    `  under ${DEFAULT_MAX_USAGE}% of its 5-hour and weekly limits.`,
+    ...ROUTE_IS.map((line) => `  ${line}`),
     "",
     example("csn route add main", "every Claude account, taking turns"),
     example("csn run --route main", "run on the account it picks"),
