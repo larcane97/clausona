@@ -258,7 +258,7 @@ async function addRoute(args: string[], deps: RouteDeps): Promise<string> {
   return [
     success(`Created route ${bold(name)}`),
     await routeDetail(name, spec, deps),
-    dim(`    Run on it: csn run --route ${name}`),
+    dim(`    Run on it: clausona run --route ${name}`),
     "",
   ].join("\n");
 }

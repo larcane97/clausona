@@ -8,7 +8,7 @@ description: Run Claude Code or Codex on whichever clausona account has quota le
 clausona keeps several Claude Code and Codex accounts on one machine. A **route** is a named
 group of those accounts and a rule for picking one of them by how much of its plan quota is
 used. `clausona run --route <name>` starts the tool on the account the rule picks right now.
-(`csn` is the same command as `clausona`.)
+(`csn` is an alias for `clausona` that only the user's interactive shell has. Run `clausona`.)
 
 Run `clausona route --help` once before anything else. It lists every command, option and exit
 code of the installed version. Where it differs from this skill, it wins.

@@ -361,7 +361,7 @@ describe("runRouted", () => {
     it("refuses the tool's arguments without a tool word, launching and recording nothing", async () => {
       const s = setup({ registry: BOTH, quotas: BOTH_QUOTAS, routes: ANY });
       await expect(runRouted(["--route", "any", "-p", "hi"], s.launch, s.io, s.deps)).rejects.toThrow(
-        /^Route any has claude and codex accounts\. Say which tool these arguments are for: csn run claude --route any … \(or codex\)\.$/,
+        /^Route any has claude and codex accounts\. Say which tool these arguments are for: clausona run claude --route any … \(or codex\)\.$/,
       );
       await expect(runRouted(["--route", "any", "--", "exec", "hi"], s.launch, s.io, s.deps)).rejects.toThrow(
         /^Route any has claude and codex accounts\./,
@@ -403,7 +403,7 @@ describe("runRouted", () => {
       expect(error).toBeInstanceOf(NoAccountError);
       const text = stripAnsi(error.message);
       expect(text.split("\n")[0]).toBe("No claude account in route any is free right now.");
-      expect(text).toContain("csn route explain any --tool claude");
+      expect(text).toContain("clausona route explain any --tool claude");
       expect(text).not.toContain("codex:");
       expect(s.launches).toEqual([]);
     });

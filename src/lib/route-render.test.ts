@@ -101,9 +101,9 @@ describe("usageText", () => {
 describe("skipText", () => {
   it("says why a member is skipped, and the command that fixes it", () => {
     const row = (skip: SkipReason): Row => ({ id: "claude:old", role: "pool", pattern: "*", skip, status: "skipped" });
-    expect(skipText(row("signed-out"))).toBe("signed out (csn login claude:old)");
-    expect(skipText(row("expired"))).toBe("sign-in expired (csn login claude:old)");
-    expect(skipText(row("no-reading"))).toBe("no quota reading (csn list --refresh)");
+    expect(skipText(row("signed-out"))).toBe("signed out (clausona login claude:old)");
+    expect(skipText(row("expired"))).toBe("sign-in expired (clausona login claude:old)");
+    expect(skipText(row("no-reading"))).toBe("no quota reading (clausona list --refresh)");
     expect(skipText(row("not-registered"))).toBe("not registered");
     expect(skipText(row("keeps-own-sessions"))).toBe("keeps its own sessions, so it cannot resume a shared one");
     expect(skipText(row("api-not-supported"))).toBe("API profile: routes take subscription profiles only for now");
@@ -128,9 +128,9 @@ describe("renderRoutesEmpty", () => {
         "  A route picks the account for you: the next one in turn that is",
         "  under 80% of its 5-hour and weekly limits.",
         "",
-        "    csn route add main               every Claude account, taking turns",
-        "    csn run --route main             run on the account it picks",
-        "    csn route                        create and edit routes in the dashboard",
+        "    clausona route add main          every Claude account, taking turns",
+        "    clausona run --route main        run on the account it picks",
+        "    clausona route                   create and edit routes in the dashboard",
         "",
       ].join("\n"),
     );
@@ -255,7 +255,7 @@ describe("renderRouteDetail", () => {
     expect(text).toMatch(/^ {4}claude:work\s+12% 1h\s+34% 2d\s+3m ago$/m);
     expect(text).toMatch(/^ {4}claude:side\s+88% 1h\s+40% 2d\s+over 80%$/m);
     expect(text).toMatch(/^ {4}claude:personal\s+96% 1h\s+81% 2d\s+over 80%$/m);
-    expect(text).toMatch(/^ {4}claude:old\s+—\s+—\s+signed out \(csn login claude:old\)$/m);
+    expect(text).toMatch(/^ {4}claude:old\s+—\s+—\s+signed out \(clausona login claude:old\)$/m);
     expect(text).toContain("\n    claude:ops-share  excluded by *-share\n");
     expect(text).not.toContain("Nobody can be picked");
     expect(text.endsWith("\n")).toBe(true);
@@ -299,7 +299,7 @@ describe("renderRouteDetail", () => {
       { "claude:team": quota(99, 1), "claude:work": quota(1, 99) },
     );
     const text = plain(renderRouteDetail("main", r, at(120)));
-    expect(text.endsWith("\n\n  Nobody can be picked now; csn run --route main would exit 75.\n")).toBe(true);
+    expect(text.endsWith("\n\n  Nobody can be picked now; clausona run --route main would exit 75.\n")).toBe(true);
   });
 
   it("names the tool of a narrowed all route in the run that would exit 75", () => {
@@ -313,7 +313,9 @@ describe("renderRouteDetail", () => {
       onlyTool: "claude",
     });
     const text = plain(renderRouteDetail("any", r, { ...at(120), onlyTool: "claude" }));
-    expect(text.endsWith("\n\n  Nobody can be picked now; csn run claude --route any would exit 75.\n")).toBe(true);
+    expect(text.endsWith("\n\n  Nobody can be picked now; clausona run claude --route any would exit 75.\n")).toBe(
+      true,
+    );
   });
 
   it("names both tools for an all route, and titles an unsaved one", () => {
@@ -343,7 +345,7 @@ describe("renderRouteDetail", () => {
     expect(widest(text)).toBeLessThanOrEqual(80);
     // The signed-out row gives up its dashes before the table gives up a column.
     expect(plain(text)).toMatch(/^ {4}ACCOUNT\s+5H\s+7D\s+LAST PICKED$/m);
-    expect(plain(text)).toMatch(/^ {4}claude:old\s+signed out \(csn login claude:old\)$/m);
+    expect(plain(text)).toMatch(/^ {4}claude:old\s+signed out \(clausona login claude:old\)$/m);
 
     // The longest words a row can carry: a resumed run's skip, and a reserve pick.
     const loners = ["claude:team", "claude:work", "claude:personal"].map((id) => ({
@@ -436,8 +438,8 @@ describe("renderNoAccount", () => {
     expect(text).toContain("in 1h (5H resets)   soonest");
     expect(text).toMatch(/^ {4}claude:side\s+96% 1h\s+40% 3d\s+in 1h \(5H resets\) {3}soonest$/m);
     expect(text).toMatch(/^ {4}claude:personal\s+88% 2h\s+97% 2d\s+in 2d \(7D resets\)$/m);
-    expect(text).toMatch(/^ {4}claude:old\s+signed out \(csn login claude:old\)$/m);
-    expect(text).toContain("\n\n    Run again after 1h, or see everything with: csn route explain main\n");
+    expect(text).toMatch(/^ {4}claude:old\s+signed out \(clausona login claude:old\)$/m);
+    expect(text).toContain("\n\n    Run again after 1h, or see everything with: clausona route explain main\n");
     // Soonest first; the skipped last.
     expect(text.indexOf("claude:side")).toBeLessThan(text.indexOf("claude:personal"));
     expect(text.indexOf("claude:personal")).toBeLessThan(text.indexOf("claude:old"));
@@ -448,7 +450,7 @@ describe("renderNoAccount", () => {
     const offline = rank({ tool: "claude", from: ["*", "gone"] }, {});
     const text = plain(renderNoAccount("main", offline, at(120)));
     expect(text).toContain(
-      "\n    No quota could be read for any member: check the network, or run csn list --refresh.\n",
+      "\n    No quota could be read for any member: check the network, or run clausona list --refresh.\n",
     );
     expect(text).toMatch(/^ {4}claude:gone\s+not registered$/m);
     expect(text).not.toMatch(/over|at or above|Run again/);
@@ -456,7 +458,7 @@ describe("renderNoAccount", () => {
     const narrow = renderNoAccount("main", offline, at(80));
     expect(widest(narrow)).toBeLessThanOrEqual(80);
     expect(plain(narrow)).toContain(
-      "    No quota could be read for any member: check the network, or run\n    csn list --refresh.",
+      "    No quota could be read for any member: check the network, or run\n    clausona list --refresh.",
     );
   });
 
@@ -468,7 +470,7 @@ describe("renderNoAccount", () => {
     const text = plain(renderNoAccount("main", r, at(120)));
     expect(text).toMatch(/^ {4}claude:team\s.*\s{2}now \(5H resets\)\s+soonest$/m);
     expect(text).toMatch(/^ {4}claude:work\s.*\s{2}in 2h \(5H resets\)$/m);
-    expect(text).toContain("\n    Run again now, or see everything with: csn route explain main\n");
+    expect(text).toContain("\n    Run again now, or see everything with: clausona route explain main\n");
     expect(text).not.toMatch(/\bin now\b|after now/);
   });
 
@@ -487,26 +489,26 @@ describe("renderNoAccount", () => {
       });
     const text = plain(renderNoAccount("any", narrowed(["*"]), { ...at(120), onlyTool: "claude" }));
     expect(text.split("\n")[0]).toBe("No claude account in route any is free right now.");
-    expect(text).toContain("or see everything with: csn route explain any --tool claude\n");
+    expect(text).toContain("or see everything with: clausona route explain any --tool claude\n");
     expect(text).not.toContain("codex:x");
 
     const inline = plain(
       renderNoAccount(undefined, narrowed(["claude:*", "codex:*"]), { ...at(120), onlyTool: "claude" }),
     );
     expect(inline.split("\n")[0]).toBe("No claude account in the inline route is free right now.");
-    expect(inline).toContain("csn route explain --tool claude --from 'claude:*,codex:*'");
+    expect(inline).toContain("clausona route explain --tool claude --from 'claude:*,codex:*'");
 
     // Without narrowing, the headline and the hint stay as they are.
     const whole = plain(renderNoAccount("main", narrowed(["*"]), at(120)));
     expect(whole.split("\n")[0]).toBe("No account in route main is free right now.");
-    expect(whole).toContain("csn route explain main\n");
+    expect(whole).toContain("clausona route explain main\n");
   });
 
   it("says later when no reset is known", () => {
     const r = rank({ tool: "claude", from: ["team"] }, { "claude:team": quota(99, 99, null, null) });
     const text = plain(renderNoAccount("main", r, at(120)));
     expect(text).toMatch(/^ {4}claude:team\s+99%\s+99%\s+—$/m);
-    expect(text).toContain("    Run again later, or see everything with: csn route explain main\n");
+    expect(text).toContain("    Run again later, or see everything with: clausona route explain main\n");
   });
 
   it("gives an unsaved route's explain command", () => {
@@ -516,7 +518,7 @@ describe("renderNoAccount", () => {
     );
     const text = plain(renderNoAccount(undefined, r, at(120)));
     expect(text.split("\n")[0]).toBe("No account in the inline route is free right now.");
-    expect(text).toContain("csn route explain --tool claude --from 'team,work'");
+    expect(text).toContain("clausona route explain --tool claude --from 'team,work'");
   });
 
   it("says when the patterns match nobody, or the exclude took everyone", () => {
@@ -616,7 +618,7 @@ describe("terminal width", () => {
 
     columns(50, 200);
     expect(plain(renderNoAccount("main", busy, { now: NOW }))).toContain(
-      "    Run again after 1h, or see everything with: csn route explain main\n",
+      "    Run again after 1h, or see everything with: clausona route explain main\n",
     );
     expect(plain(renderRouteTable(rows, [], { now: NOW })).split("\n")[1]).not.toContain("TOOL");
   });
@@ -626,7 +628,7 @@ describe("terminal width", () => {
     expect(widest(renderNoAccount("main", busy, { now: NOW }))).toBeLessThanOrEqual(50);
     columns(undefined, undefined);
     expect(plain(renderNoAccount("main", busy, { now: NOW }))).toContain(
-      "    Run again after 1h, or see everything with: csn route explain main\n",
+      "    Run again after 1h, or see everything with: clausona route explain main\n",
     );
   });
 });

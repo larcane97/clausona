@@ -36,11 +36,11 @@ export function usageText(usage?: Usage): string {
 export function skipText(row: Pick<Row, "id" | "skip">): string {
   switch (row.skip) {
     case "signed-out":
-      return `signed out (csn login ${row.id})`;
+      return `signed out (clausona login ${row.id})`;
     case "expired":
-      return `sign-in expired (csn login ${row.id})`;
+      return `sign-in expired (clausona login ${row.id})`;
     case "no-reading":
-      return "no quota reading (csn list --refresh)";
+      return "no quota reading (clausona list --refresh)";
     case "not-registered":
       return "not registered";
     case "keeps-own-sessions":
@@ -326,9 +326,9 @@ export function renderRoutesEmpty(): string {
     "",
     ...ROUTE_IS.map((line) => `  ${line}`),
     "",
-    example("csn route add main", "every Claude account, taking turns"),
-    example("csn run --route main", "run on the account it picks"),
-    example("csn route", "create and edit routes in the dashboard"),
+    example("clausona route add main", "every Claude account, taking turns"),
+    example("clausona run --route main", "run on the account it picks"),
+    example("clausona route", "create and edit routes in the dashboard"),
     "",
   ].join("\n");
 }
@@ -550,7 +550,7 @@ export function renderRouteDetail(
   const lines = ["", box(title, settingsLines(ranking.route, width)), "", ...memberLines(ranking, width, now)];
   if (ranking.outcome.kind === "none") {
     const narrowed = ranking.route.tool === "all" ? options.onlyTool : undefined;
-    const run = name ? `csn run ${narrowed ? `${narrowed} ` : ""}--route ${name}` : "csn run";
+    const run = name ? `clausona run ${narrowed ? `${narrowed} ` : ""}--route ${name}` : "clausona run";
     lines.push("", ...wrap(`Nobody can be picked now; ${unbroken(run)} would exit 75.`, width, "  "));
   }
   lines.push("");
@@ -619,9 +619,12 @@ export function renderNoAccount(
   const headline = `No ${narrowed ? `${narrowed} ` : ""}account in ${name ? `route ${name}` : "the inline route"} is free right now.`;
   const indent = " ".repeat(INDENT);
   if (rows.length === 0) {
-    return [headline, "", ...wrap(`${nobodyText(ranking)} See ${unbroken("csn route list")}.`, width, indent), ""].join(
-      "\n",
-    );
+    return [
+      headline,
+      "",
+      ...wrap(`${nobodyText(ranking)} See ${unbroken("clausona route list")}.`, width, indent),
+      "",
+    ].join("\n");
   }
 
   const soonest = outcome.kind === "none" ? outcome.soonest : undefined;
@@ -661,12 +664,12 @@ export function renderNoAccount(
   );
 
   const explain = name
-    ? `csn route explain ${name}${narrowed ? ` --tool ${narrowed}` : ""}`
-    : `csn route explain --tool ${narrowed ?? route.tool} --from ${shellQuote(route.from.join(","))}`;
+    ? `clausona route explain ${name}${narrowed ? ` --tool ${narrowed}` : ""}`
+    : `clausona route explain --tool ${narrowed ?? route.tool} --from ${shellQuote(route.from.join(","))}`;
   const when = soonest ? formatResetIn(soonest.at, new Date(now)) : undefined;
   const again = when === "now" ? "now" : when ? `after ${unbroken(when)}` : "later";
   const advice = nothingRead(rows)
-    ? `No quota could be read for any member: check the network, or run ${unbroken("csn list --refresh")}.`
+    ? `No quota could be read for any member: check the network, or run ${unbroken("clausona list --refresh")}.`
     : `Run again ${again}, or see everything with: ${unbroken(explain)}`;
   return [headline, "", ...fitTable(tables, width), "", ...wrap(advice, width, indent), ""].join("\n");
 }

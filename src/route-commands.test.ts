@@ -148,7 +148,7 @@ describe("route add", () => {
     const { run, file } = setup();
     const out = await run("add", "main", "--tool", "claude");
     expect(out).toContain("Created route main");
-    expect(out).toContain("csn run --route main");
+    expect(out).toContain("clausona run --route main");
     expect(file().routes.main).toEqual({
       tool: "claude",
       from: ["*"],
@@ -167,7 +167,7 @@ describe("route add", () => {
     expect(out).toContain("╭─ main ─");
     expect(out).toMatch(/^ {2}▸ claude:a\s.*picked next$/m);
     expect(out).not.toContain("codex:x");
-    expect(lines.slice(-2)).toEqual(["    Run on it: csn run --route main", ""]);
+    expect(lines.slice(-2)).toEqual(["    Run on it: clausona run --route main", ""]);
     expect(out).not.toContain("See the ranking");
   });
 
@@ -475,9 +475,9 @@ describe("route explain and pick", () => {
     )) as NoAccountError;
     expect(none).toBeInstanceOf(NoAccountError);
     expect(stripAnsi(none.message).split("\n")[0]).toBe("No claude account in route any is free right now.");
-    expect(stripAnsi(none.message)).toContain("csn route explain any --tool claude");
+    expect(stripAnsi(none.message)).toContain("clausona route explain any --tool claude");
     const narrowed = await run("explain", "any", "--tool", "claude", "--max-usage", "1", "--reserve-usage", "1");
-    expect(narrowed).toContain("Nobody can be picked now; csn run claude --route any would exit 75.");
+    expect(narrowed).toContain("Nobody can be picked now; clausona run claude --route any would exit 75.");
     await run("add", "main");
     await expect(run("explain", "main", "--tool", "codex")).rejects.toThrow("Route 'main' is for claude, not codex.");
     await expect(run("explain", "main", "--tool", "all")).rejects.toThrow("Route 'main' is for claude, not all.");

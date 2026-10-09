@@ -16,7 +16,10 @@ clausona run --route main -- -p "run the tests"
 ```
 
 That line goes to stderr. The tool's own output stays on stdout, so you can still pipe it or
-redirect it to a file. (`csn` works everywhere `clausona` does.)
+redirect it to a file.
+
+`csn` is an alias that clausona's shell hook adds to your interactive shell. A script or an
+agent's shell doesn't have it, so this page and every hint clausona prints say `clausona`.
 
 If you would rather see it all on one screen, run `clausona route` with nothing after it. That
 opens the [Routes screen](#the-routes-screen), where you can look through your routes and create
@@ -173,7 +176,7 @@ $ clausona route add work --from '*@work.example' --exclude '*-share'
     claude:team        5% 1h    22% 3d    11h ago
     claude:ops-share  excluded by *-share
 
-    Run on it: csn run --route work
+    Run on it: clausona run --route work
 ```
 
 The table is the one `route explain` prints, described in
@@ -417,7 +420,7 @@ with arguments has to say which tool they are for. Name the tool before `--route
 tool's accounts are ranked. Without it, clausona stops before it picks anything:
 
 ```
-  ✘ Route any has claude and codex accounts. Say which tool these arguments are for: csn run claude --route any … (or codex).
+  ✘ Route any has claude and codex accounts. Say which tool these arguments are for: clausona run claude --route any … (or codex).
 ```
 
 `route explain` and `route pick` narrow an `all` route the same way with `--tool`:
@@ -464,7 +467,7 @@ $ clausona run --route busy -- -p "run the tests"
     claude:personal  96% 1h    81% 2d    in 1h 15m (5H resets)   soonest
     claude:side      88% 1h    40% 3d    in 1h 57m (5H resets)
 
-    Run again after 1h 15m, or see everything with: csn route explain busy
+    Run again after 1h 15m, or see everything with: clausona route explain busy
 ```
 
 The run exits with code 75 and launches nothing. `FREE AGAIN` is when the account drops back
@@ -496,7 +499,7 @@ $ clausona route explain main
     claude:team        5% 1h    22% 3d    11h ago
     claude:side       88% 1h    40% 3d                 over 80%
     claude:personal   96% 1h    81% 2d                 over 80%
-    claude:old        —         —                      signed out (csn login claude:old)
+    claude:old        —         —                      signed out (clausona login claude:old)
     claude:ops-share  excluded by *-share
 ```
 
@@ -511,7 +514,7 @@ strategy that reads it.
 says so under the table:
 
 ```
-  Nobody can be picked now; csn run --route busy would exit 75.
+  Nobody can be picked now; clausona run --route busy would exit 75.
 ```
 
 It takes the same field options as a run. `--resume` ranks the route as a resumed run would, and

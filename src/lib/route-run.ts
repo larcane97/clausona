@@ -80,8 +80,8 @@ function checkArgsHaveTool(name: string | undefined, tool: RouteTool, run: RunAr
   if (tool !== "all" || run.tool || run.toolArgs.length === 0) return;
   throw new Error(
     name
-      ? `Route ${name} has claude and codex accounts. Say which tool these arguments are for: csn run claude --route ${name} … (or codex).`
-      : "The inline route has claude and codex accounts. Say which tool these arguments are for: csn run claude --from … (or codex).",
+      ? `Route ${name} has claude and codex accounts. Say which tool these arguments are for: clausona run claude --route ${name} … (or codex).`
+      : "The inline route has claude and codex accounts. Say which tool these arguments are for: clausona run claude --from … (or codex).",
   );
 }
 

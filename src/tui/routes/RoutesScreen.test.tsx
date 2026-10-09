@@ -278,7 +278,7 @@ describe("RoutesScreen", () => {
 
     expect(frame).toContain("/home/u/.clausona/routes.json cannot be used");
     expect(frame).toContain("routes.main.maxUsage: must be a number from 1 to 100");
-    expect(frame).toContain("Fix it with csn route edit.");
+    expect(frame).toContain("Fix it with clausona route edit.");
 
     for (const key of ["d", "y", "r", "n", "e", DOWN, "\r"]) await type(instance, key);
     expect(text(instance)).toBe(frame);

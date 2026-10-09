@@ -339,7 +339,7 @@ function FileProblem({ error }: { error: unknown }) {
           {/* A file from a newer clausona is fixed by updating, which its problem says. */}
           {error.newer ? null : (
             <Box marginTop={1}>
-              <Text color={color.secondary}>Fix it with csn route edit.</Text>
+              <Text color={color.secondary}>Fix it with clausona route edit.</Text>
             </Box>
           )}
         </>
