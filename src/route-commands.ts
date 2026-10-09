@@ -1,4 +1,3 @@
-import { carriesCredentialToken, looksLikeCredential } from "./core/credential-token.js";
 import type { QuotaTarget } from "./core/quota-store.js";
 import {
   applyOverrides,
@@ -7,6 +6,7 @@ import {
   checkRouteName,
   DEFAULT_RESERVE_USAGE,
   emptyRoutesFile,
+  holdsKey,
   newRouteSpec,
   type Route,
   type RouteOverrides,
@@ -506,8 +506,8 @@ export async function runRouteCommand(
     case "pick":
       return pickRoute(rest, deps);
     default:
-      if (looksLikeCredential(sub) || carriesCredentialToken(sub))
-        throw new Error("That is not a route command. Run `clausona route --help` for the list.");
+      // Not quoted back when it holds something key-shaped, as a route name or a pattern is not.
+      if (holdsKey(sub)) throw new Error("Unknown route command. Run `clausona route --help` for the list.");
       throw new Error(`Unknown route command '${sub}'. Run \`clausona route --help\` for the list.`);
   }
 }

@@ -1,5 +1,4 @@
-import { carriesCredentialToken, looksLikeCredential } from "../core/credential-token.js";
-import { type RouteTool, toolsOf, withDefaults } from "../core/route-config.js";
+import { holdsKey, type RouteTool, toolsOf, withDefaults } from "../core/route-config.js";
 import { readRoutes } from "../core/routes-store.js";
 import { createRoute, newRouteFrom } from "../route-commands.js";
 import type { Registry } from "../types.js";
@@ -39,11 +38,7 @@ export function runTarget(input: string, registry: Registry): ParsedProfileRef {
   try {
     return parseProfileRef(input, registry);
   } catch (error) {
-    if (
-      [input, ...input.split(/[\s,:]+/)].some((piece) => looksLikeCredential(piece) || carriesCredentialToken(piece))
-    ) {
-      throw new Error(CREDENTIAL_AS_NAME_ERROR);
-    }
+    if (holdsKey(input)) throw new Error(CREDENTIAL_AS_NAME_ERROR);
     // Shaped like a reference (`work`, `claude:work`, `gemini:work`): parseProfileRef's message
     // says what is wrong with it. Anything else is not a name at all.
     const colon = input.indexOf(":");

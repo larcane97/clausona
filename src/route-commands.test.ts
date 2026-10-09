@@ -498,7 +498,11 @@ describe("unknown subcommands", () => {
     // Short, and not starting with sk-: only a check for a key anywhere in it catches this one.
     const token = ["hf", "Ab".repeat(17)].join("_");
     const tokenError = (await run(token).catch((e: unknown) => e)) as Error;
-    expect(tokenError.message).toBe("That is not a route command. Run `clausona route --help` for the list.");
+    expect(tokenError.message).toBe("Unknown route command. Run `clausona route --help` for the list.");
+    // A key behind a prefix: neither the whole nor the start of it looks like one, only a piece.
+    const prefixed = `x:${["sk", "ant", "y".repeat(5)].join("-")}`;
+    const prefixedError = (await run(prefixed).catch((e: unknown) => e)) as Error;
+    expect(prefixedError.message).toBe("Unknown route command. Run `clausona route --help` for the list.");
   });
 });
 
