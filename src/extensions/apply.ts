@@ -96,6 +96,14 @@ export type ManifestEntry = {
   touched?: { path: (string | number)[]; hash: string | null }[];
   createdDirs?: string[];
   lock?: true;
+  /**
+   * A stash file: the index in `entries` of the JSON edit it goes with. Undo removes it, or puts
+   * it back, only once that edit is undone or was never made, so the entry ends up in exactly one
+   * place: the tool's file or the stash.
+   */
+  with?: number;
+  /** Set once an undo has dealt with it - put back, or left alone for good. A `locked` skip leaves it unset, to try again. */
+  undone?: UndoOutcome;
   done: boolean;
 };
 
@@ -127,13 +135,17 @@ export type UndoPreview = {
   operation: OperationRef;
   files: { path: string; action: "put back" | "remove" | "edit back" }[];
 };
-export type UndoSkip = { file: string; reason: "changed" | "occupied" | "locked" | "missing" };
+export type UndoSkip = { file: string; reason: "changed" | "occupied" | "locked" | "missing" | "failed" };
+/** What undo did with one entry, once it is settled: anything but `locked`. */
+export type UndoOutcome = "restored" | Exclude<UndoSkip["reason"], "locked">;
 export type UndoResult = { operation: OperationRef; restored: string[]; skipped: UndoSkip[] };
 
 const MANIFEST = "manifest.json";
 const COMMANDS: ReadonlySet<string> = new Set(["skills", "mcp", "hooks"] satisfies ExtensionsCommand[]);
 const WHATS: ReadonlySet<string> = new Set(["json", "toml", "folder", "file", "link", "stash"]);
 const CHANGES: ReadonlySet<string> = new Set(["edited", "created", "removed"]);
+const LINK_TYPES: ReadonlySet<string> = new Set(["dir", "file", "junction"]);
+const OUTCOMES: ReadonlySet<string> = new Set(["restored", "changed", "occupied", "missing", "failed"]);
 
 const hashOf = (value: unknown): string | null => (value === undefined ? null : valueHash(value));
 
@@ -189,9 +201,10 @@ function detailOf(error: unknown): string {
 }
 
 /**
- * Backs up what is there, records the entry (not done yet) and saves the manifest, then writes
- * `next` over the file through its link - a new file 0644, an existing one in its own mode - and
- * marks the entry done. What it records first is what undo needs if the write is never finished.
+ * Backs up what is there, records the entry - with the hash it will have, not done yet - and saves
+ * the manifest, then writes `next` over the file through its link - a new file 0644, an existing
+ * one in its own mode - and marks the entry done. What it records first is what undo needs if the
+ * write is never recorded done. A stash entry it is given is tied to it. Returns its index.
  */
 async function replaceFile(
   run: Run,
@@ -199,8 +212,8 @@ async function replaceFile(
   what: "json" | "toml",
   read: FileRead | undefined,
   next: string,
-  more: { lock?: boolean; touched?: ManifestEntry["touched"] } = {},
-): Promise<void> {
+  more: { lock?: boolean; touched?: ManifestEntry["touched"]; stash?: ManifestEntry } = {},
+): Promise<number> {
   const real = read?.real ?? (await realOrSelf(file));
   let backup: string | null = null;
   if (read) {
@@ -215,21 +228,27 @@ async function replaceFile(
     change: read ? "edited" : "created",
     backup,
     hashBefore: read ? bytesHash(read.bytes) : null,
-    hashAfter: null,
+    // Known before the write, so a file that holds it was written, done or not.
+    hashAfter: bytesHash(next),
+    ...(more.touched ? { touched: more.touched } : {}),
     ...(more.lock ? { lock: true as const } : {}),
     done: false,
   };
   run.manifest.entries.push(entry);
+  const at = run.manifest.entries.length - 1;
+  if (more.stash) more.stash.with = at;
   await save(run);
   if (!read) {
     const made = await ensureDir(path.dirname(real));
-    if (made.length > 0) entry.createdDirs = made;
+    if (made.length > 0) {
+      entry.createdDirs = made;
+      await save(run);
+    }
   }
   await writeAtomic(real, next, read ? read.mode & 0o777 : 0o644);
-  entry.hashAfter = bytesHash(next);
-  if (more.touched) entry.touched = more.touched;
   entry.done = true;
   await save(run);
+  return at;
 }
 
 /** A stash file as clausona wrote it, or undefined when it is not one. */
@@ -319,10 +338,11 @@ async function jsonChange(run: Run, change: JsonChange): Promise<Stop | undefine
   // As asked already: nothing to write, back up or undo.
   if (next === text) return undefined;
 
+  let stashEntry: ManifestEntry | undefined;
   if (stashed) {
     // Written before the entry leaves its file, so at every moment one of the two holds it.
     await writePrivate(stashed.file, stashed.text);
-    run.manifest.entries.push({
+    stashEntry = {
       path: stashed.file,
       what: "stash",
       change: "created",
@@ -330,9 +350,14 @@ async function jsonChange(run: Run, change: JsonChange): Promise<Stop | undefine
       hashBefore: null,
       hashAfter: bytesHash(stashed.text),
       done: true,
-    });
+    };
+    run.manifest.entries.push(stashEntry);
   }
-  await replaceFile(run, file, "json", read, next, { lock: change.lock, touched: touchedIn(next, change.edits) });
+  const edited = await replaceFile(run, file, "json", read, next, {
+    lock: change.lock,
+    touched: touchedIn(next, change.edits),
+    ...(stashEntry ? { stash: stashEntry } : {}),
+  });
 
   if (kept) {
     // The kept copy goes into the backup, where undo finds it to put back.
@@ -344,6 +369,7 @@ async function jsonChange(run: Run, change: JsonChange): Promise<Stop | undefine
       backup: into.rel,
       hashBefore: bytesHash(kept.read.bytes),
       hashAfter: null,
+      with: edited,
       done: false,
     };
     run.manifest.entries.push(entry);
@@ -529,31 +555,71 @@ async function operationIds(env: WriteEnv): Promise<string[]> {
     .reverse();
 }
 
-function isEntry(value: unknown): value is ManifestEntry {
+const isHash = (value: unknown) => value === null || typeof value === "string";
+const isIndex = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
+
+function isTouched(value: unknown): boolean {
   return (
-    isRecord(value) &&
-    typeof value.path === "string" &&
-    typeof value.what === "string" &&
-    WHATS.has(value.what) &&
-    typeof value.change === "string" &&
-    CHANGES.has(value.change) &&
-    (value.backup === null || typeof value.backup === "string") &&
+    Array.isArray(value) &&
+    value.every(
+      (t) =>
+        isRecord(t) &&
+        Array.isArray(t.path) &&
+        t.path.every((seg) => typeof seg === "string" || isIndex(seg)) &&
+        isHash(t.hash),
+    )
+  );
+}
+
+/** Every key an entry may hold, of its type: a damaged manifest is no manifest, and undo never trips on one. */
+function isEntry(value: unknown): value is ManifestEntry {
+  if (!isRecord(value)) return false;
+  const { path: at, named, what, change, backup, link, hashBefore, hashAfter, touched, createdDirs } = value;
+  return (
+    typeof at === "string" &&
+    (named === undefined || typeof named === "string") &&
+    typeof what === "string" &&
+    WHATS.has(what) &&
+    typeof change === "string" &&
+    CHANGES.has(change) &&
+    (backup === null || typeof backup === "string") &&
+    (link === undefined ||
+      (isRecord(link) &&
+        typeof link.target === "string" &&
+        typeof link.type === "string" &&
+        LINK_TYPES.has(link.type))) &&
+    isHash(hashBefore) &&
+    isHash(hashAfter) &&
+    (touched === undefined || isTouched(touched)) &&
+    (createdDirs === undefined || (Array.isArray(createdDirs) && createdDirs.every((d) => typeof d === "string"))) &&
+    (value.lock === undefined || value.lock === true) &&
+    (value.with === undefined || isIndex(value.with)) &&
+    (value.undone === undefined || (typeof value.undone === "string" && OUTCOMES.has(value.undone))) &&
     typeof value.done === "boolean"
   );
 }
 
 function isManifest(value: unknown): value is Manifest {
-  return (
-    isRecord(value) &&
-    value.version === 1 &&
-    typeof value.id === "string" &&
-    typeof value.command === "string" &&
-    COMMANDS.has(value.command) &&
-    typeof value.summary === "string" &&
-    typeof value.createdAt === "string" &&
-    (value.undoneAt === null || typeof value.undoneAt === "string") &&
-    Array.isArray(value.entries) &&
-    value.entries.every(isEntry)
+  if (
+    !isRecord(value) ||
+    value.version !== 1 ||
+    typeof value.id !== "string" ||
+    typeof value.command !== "string" ||
+    !COMMANDS.has(value.command) ||
+    typeof value.verb !== "string" ||
+    typeof value.reach !== "string" ||
+    typeof value.summary !== "string" ||
+    typeof value.createdAt !== "string" ||
+    !(value.undoneAt === null || typeof value.undoneAt === "string") ||
+    !Array.isArray(value.entries) ||
+    !value.entries.every(isEntry)
+  ) {
+    return false;
+  }
+  const entries = value.entries as ManifestEntry[];
+  // Only a stash entry goes with an edit, and that edit is a JSON one of the same operation.
+  return entries.every(
+    (entry) => entry.with === undefined || (entry.what === "stash" && entries[entry.with]?.what === "json"),
   );
 }
 
@@ -569,20 +635,35 @@ async function readManifest(dir: string): Promise<Manifest | undefined> {
   }
 }
 
+/** The hash of what is at `file` now; null when nothing is there. */
+async function hashNow(file: string): Promise<string | null> {
+  const current = await readMaybe(file);
+  return current ? bytesHash(current.bytes) : null;
+}
+
 /**
- * Whether an entry's change was made: done, or a move into the backup that a stop or a crash kept
- * from being recorded done - its backup is there and its own place is empty.
+ * Whether an entry's change was made: done, or - when a stop or a crash kept it from being
+ * recorded done - a file that holds what the write was to leave, or a move into the backup whose
+ * backup is there and whose own place is empty. Anything it cannot look at reads as not made.
  */
 async function changeMade(entry: ManifestEntry, dir: string): Promise<boolean> {
   if (entry.done) return true;
-  const moved =
-    entry.change === "removed" && (entry.what === "folder" || entry.what === "file" || entry.what === "stash");
-  const backup = backupPath(dir, entry.backup);
-  if (!moved || backup === undefined) return false;
-  return (await entryKind(backup)) !== "missing" && (await entryKind(entry.path)) === "missing";
+  try {
+    if (entry.what === "json" || entry.what === "toml") {
+      return entry.hashAfter !== null && (await hashNow(entry.path)) === entry.hashAfter;
+    }
+    const moved =
+      entry.change === "removed" && (entry.what === "folder" || entry.what === "file" || entry.what === "stash");
+    const backup = backupPath(dir, entry.backup);
+    if (!moved || backup === undefined) return false;
+    return (await entryKind(backup)) !== "missing" && (await entryKind(entry.path)) === "missing";
+  } catch {
+    return false;
+  }
 }
 
-type Found = { manifest: Manifest; dir: string; made: ManifestEntry[] };
+/** The newest operation not undone yet, and the indexes of its entries with a change made that no undo has settled. */
+type Found = { manifest: Manifest; dir: string; made: number[] };
 
 /** The newest operation not undone yet (of `command`, when given) with a change made. */
 async function newestOperation(env: WriteEnv, command?: ExtensionsCommand): Promise<Found | null> {
@@ -591,8 +672,10 @@ async function newestOperation(env: WriteEnv, command?: ExtensionsCommand): Prom
     const manifest = await readManifest(dir);
     if (!manifest || manifest.undoneAt !== null) continue;
     if (command !== undefined && manifest.command !== command) continue;
-    const made: ManifestEntry[] = [];
-    for (const entry of manifest.entries) if (await changeMade(entry, dir)) made.push(entry);
+    const made: number[] = [];
+    for (const [at, entry] of manifest.entries.entries()) {
+      if (entry.undone === undefined && (await changeMade(entry, dir))) made.push(at);
+    }
     if (made.length > 0) return { manifest, dir, made };
   }
   return null;
@@ -607,7 +690,8 @@ export async function lastOperation(env: WriteEnv, command?: ExtensionsCommand):
   const found = await newestOperation(env, command);
   if (!found) return null;
   const files: UndoPreview["files"] = [];
-  for (const entry of found.made) {
+  for (const at of found.made) {
+    const entry = found.manifest.entries[at] as ManifestEntry;
     const file = { path: shown(entry), action: actionOf(entry) };
     if (!files.some((f) => f.path === file.path && f.action === file.action)) files.push(file);
   }
@@ -707,25 +791,81 @@ async function undoEntry(entry: ManifestEntry, dir: string, env: WriteEnv): Prom
 /**
  * Undoes the newest operation not undone yet (of `command`, when given), last change first, so a
  * file changed twice ends as it was before the first. Each change goes back only while it holds
- * what apply wrote; the rest is listed as skipped and left alone. Null when there is none.
+ * what apply wrote; the rest is listed as skipped and left alone. A stash file goes with its JSON
+ * edit: that edit is undone first, and the stash file follows only once it is undone or was never
+ * made - else it is skipped for the same reason, so the entry stays in one place. A step that
+ * fails is skipped as `failed`, and what went back before it is still recorded. While anything is
+ * skipped `locked`, the operation stays the one the next undo takes, for the entries left. Null
+ * when there is none.
  */
 export async function undo(env: WriteEnv, command?: ExtensionsCommand): Promise<UndoResult | null> {
   const found = await newestOperation(env, command);
   if (!found) return null;
-  const { manifest, dir, made } = found;
+  const { manifest, dir } = found;
+  const entries = manifest.entries;
+  const made = new Set(found.made);
+  const outcomes = new Map<number, Outcome>();
+  const order: number[] = [];
+  const record = (at: number, outcome: Outcome): Outcome => {
+    outcomes.set(at, outcome);
+    order.push(at);
+    return outcome;
+  };
+  const undoAt = async (at: number): Promise<Outcome> => {
+    const known = outcomes.get(at) ?? entries[at]?.undone;
+    if (known !== undefined) return known;
+    const entry = entries[at] as ManifestEntry;
+    try {
+      return record(at, await undoEntry(entry, dir, env));
+    } catch {
+      return record(at, "failed");
+    }
+  };
+  /** Whether a stash entry's step may go ahead: "go", or the reason to skip it with. */
+  const pairAllows = async (stash: ManifestEntry): Promise<"go" | Outcome> => {
+    const edit = stash.with === undefined ? undefined : entries[stash.with];
+    if (stash.with === undefined || !edit) return "go";
+    if (edit.undone !== undefined || made.has(stash.with)) {
+      const outcome = await undoAt(stash.with);
+      return outcome === "restored" ? "go" : outcome;
+    }
+    // Never made only when the file is still as it was before the edit; otherwise it may hold
+    // the edit under later changes, and the stash file stays.
+    const before = await hashNow(edit.path).catch(() => undefined);
+    return before === edit.hashBefore ? "go" : "changed";
+  };
+
+  for (let at = entries.length - 1; at >= 0; at--) {
+    if (!made.has(at) || outcomes.has(at)) continue;
+    const entry = entries[at] as ManifestEntry;
+    if (entry.what === "stash") {
+      const allowed = await pairAllows(entry);
+      if (allowed !== "go") {
+        record(at, allowed);
+        continue;
+      }
+    }
+    await undoAt(at);
+  }
+
   const restored: string[] = [];
   const skipped: UndoSkip[] = [];
-  for (const entry of [...made].reverse()) {
-    const outcome = await undoEntry(entry, dir, env);
+  for (const at of order) {
+    const entry = entries[at] as ManifestEntry;
+    const outcome = outcomes.get(at) as Outcome;
+    if (outcome !== "locked") entry.undone = outcome;
     const file = shown(entry);
     if (outcome !== "restored") skipped.push({ file, reason: outcome });
     else if (!restored.includes(file)) restored.push(file);
   }
-  // Nothing put back because Claude Code was saving: the same operation is tried again next time,
-  // rather than the one before it.
-  const tryAgain = restored.length === 0 && skipped.some((skip) => skip.reason === "locked");
-  if (!tryAgain) manifest.undoneAt = new Date(env.now()).toISOString();
-  manifest.undo = { restored, skipped };
+  // Claude Code was saving: the entries left are tried again by the next undo, rather than the
+  // operation before this one.
+  if (!skipped.some((skip) => skip.reason === "locked")) manifest.undoneAt = new Date(env.now()).toISOString();
+  const earlier = manifest.undo;
+  manifest.undo = {
+    restored: [...new Set([...(earlier?.restored ?? []), ...restored])],
+    skipped: [...(earlier?.skipped ?? []).filter((skip) => skip.reason !== "locked"), ...skipped],
+  };
   await save({ dir, manifest });
   return { operation: refOf(manifest, dir), restored, skipped };
 }

@@ -11,8 +11,11 @@ import {
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-/** A seam into `rename`: the next `exdev` calls fail as a move across file systems does. */
-const fsHooks = vi.hoisted(() => ({ exdev: 0 }));
+/**
+ * Seams into `rename` and `cp`: the next `exdev` renames fail as a move across file systems does,
+ * and with `cpFails` the next copy runs, then fails as a disk that filled up would.
+ */
+const fsHooks = vi.hoisted(() => ({ exdev: 0, cpFails: false }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   const rename: typeof actual.rename = async (from, to) => {
@@ -22,7 +25,13 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     }
     return actual.rename(from, to);
   };
-  return { ...actual, default: { ...actual, rename }, rename };
+  const cp: typeof actual.cp = async (from, to, options) => {
+    await actual.cp(from, to, options);
+    if (!fsHooks.cpFails) return;
+    fsHooks.cpFails = false;
+    throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+  };
+  return { ...actual, default: { ...actual, rename, cp }, rename, cp };
 });
 
 import { hashTree, samePath } from "../read.js";
@@ -44,6 +53,7 @@ import {
 const homes: TestHome[] = [];
 afterEach(() => {
   fsHooks.exdev = 0;
+  fsHooks.cpFails = false;
   for (const home of homes.splice(0)) home.dispose();
 });
 
@@ -143,6 +153,25 @@ describe("moveTo", () => {
     expect(fsHooks.exdev).toBe(0);
     expect(existsSync(from)).toBe(false);
     expect(await hashTree(to)).toBe(before);
+    // Nothing left aside next to either end.
+    expect(readdirSync(h.path("skills"))).toEqual([]);
+    expect(readdirSync(h.path("backup"))).toEqual(["1"]);
+  });
+
+  it("puts the folder back, and leaves no copy, when a copy across file systems fails", async () => {
+    const h = home();
+    h.skill("skills", "old-one");
+    const from = h.path("skills", "old-one");
+    const before = await hashTree(from);
+    mkdirSync(h.path("backup"));
+
+    fsHooks.exdev = 1;
+    fsHooks.cpFails = true;
+    await expect(moveTo(from, h.path("backup", "1"))).rejects.toMatchObject({ code: "ENOSPC" });
+
+    expect(await hashTree(from)).toBe(before);
+    expect(readdirSync(h.path("skills"))).toEqual(["old-one"]);
+    expect(readdirSync(h.path("backup"))).toEqual([]);
   });
 
   it.skipIf(onWindows)("keeps a link inside the folder a link, without following it", async () => {
