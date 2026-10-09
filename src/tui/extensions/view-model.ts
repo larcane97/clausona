@@ -10,8 +10,8 @@ import {
   viewFrom,
   whereLabel,
 } from "../../extensions/present.js";
-import { samePath } from "../../extensions/read.js";
-import { pluginState, relevantIn, stateOf } from "../../extensions/state.js";
+import { isWithin, samePath } from "../../extensions/read.js";
+import { isMcpjsonServer, pluginState, relevantIn, stateOf } from "../../extensions/state.js";
 import type { ToolName } from "../../types.js";
 
 export { shortProfile, tilde } from "../../extensions/present.js";
@@ -115,7 +115,7 @@ export function column(text: string, width: number): string {
 type GroupInfo = { key: string; label: string; order: number; open: boolean; plugin?: string; project?: string };
 
 /** Which group a row goes in, its order, and whether it starts open. */
-function groupOf(item: Extension, tab: Tab, project: string | undefined, homeDir: string): GroupInfo {
+function groupOf(item: Extension, tab: Tab, project: string | undefined, inv: Inventory): GroupInfo {
   const loc = item.location;
   if (loc.scope === "plugin") {
     const name = (loc.plugin ?? "").split("@")[0];
@@ -124,7 +124,7 @@ function groupOf(item: Extension, tab: Tab, project: string | undefined, homeDir
     if (loc.project !== undefined) {
       return {
         key: `plugin:${loc.plugin}|${loc.project}`,
-        label: `Plugin · ${name} · ${projectName(loc.project, homeDir)}`,
+        label: `Plugin · ${name} · ${projectName(loc.project, inv)}`,
         order: 3,
         open: false,
         ...plugin,
@@ -133,11 +133,21 @@ function groupOf(item: Extension, tab: Tab, project: string | undefined, homeDir
     }
     return { key: `plugin:${loc.plugin}`, label: `Plugin · ${name}`, order: 3, open: false, ...plugin };
   }
+  // A parent dir's .mcp.json loads here, after this project's own: a group of its own, by file,
+  // apart from what else that dir holds, which loads there only.
+  if (
+    loc.project !== undefined &&
+    isMcpjsonServer(item) &&
+    isWithin(project, loc.project) &&
+    !samePath(loc.project, project)
+  ) {
+    return { key: `mcpjson:${loc.project}`, label: `From ${tilde(loc.file, inv.homeDir)}`, order: 2.5, open: true };
+  }
   if (loc.project !== undefined) {
     const here = project !== undefined && samePath(loc.project, project);
     return {
       key: `project:${loc.project}`,
-      label: `Project · ${projectName(loc.project, homeDir)}`,
+      label: `Project · ${projectName(loc.project, inv)}`,
       order: here ? 2 : 7,
       open: here,
     };
@@ -279,7 +289,7 @@ export function buildRows(inv: Inventory, o: ViewOptions): Row[] {
   for (const item of inv.items) {
     if (item.kind !== kind || !passes(inv, item, o, duplicates)) continue;
     if (query && !matches(item, query)) continue;
-    const info = groupOf(item, o.tab, o.project, inv.homeDir);
+    const info = groupOf(item, o.tab, o.project, inv);
     const group = groups.get(info.key) ?? { info, byKey: new Map() };
     groups.set(info.key, group);
     const rowKey = o.tab === "hooks" ? item.id : item.name;
@@ -315,7 +325,7 @@ export function buildRows(inv: Inventory, o: ViewOptions): Row[] {
         state: rowState(inv, items, o.project),
         used: rowUsed(inv, items, o.now),
         extra: rowExtra(items, inv.homeDir),
-        marks: [...new Set(items.flatMap((i) => marksOf(inv, i, o.now)))],
+        marks: [...new Set(items.flatMap((i) => marksOf(inv, i, o.now, o.project)))],
       });
     }
   }
@@ -340,7 +350,7 @@ export function detailOf(inv: Inventory, row: ItemRow, project: string | undefin
   for (const item of row.items) {
     lines.push({
       label: "Where",
-      text: `${item.location.tool === "claude" ? "Claude" : "Codex"} ${whereLabel(item, inv.homeDir)} · ${tilde(item.location.file, inv.homeDir)}`,
+      text: `${item.location.tool === "claude" ? "Claude" : "Codex"} ${whereLabel(item, inv)} · ${tilde(item.location.file, inv.homeDir)}`,
     });
     if (item.link) {
       lines.push({
@@ -381,7 +391,7 @@ export function detailOf(inv: Inventory, row: ItemRow, project: string | undefin
       const from = state.setBy ? ` (${tilde(state.setBy.file, inv.homeDir)})` : "";
       lines.push({
         label,
-        text: `${tool} ${who}${state.value}${from}${state.shadowedBy ? " · a global skill of the same name wins" : ""}`,
+        text: `${tool} ${who}${state.value}${from}${shadowNote(inv, item, state)}`,
         ...(state.value === "off" ? { tone: "warning" as const } : {}),
       });
     }
@@ -395,7 +405,7 @@ export function detailOf(inv: Inventory, row: ItemRow, project: string | undefin
     const offIn = overridable
       ? inv.facts.claudeSkillOverrides
           .filter((o) => o.project && o.map[first.name] === "off" && !samePath(o.project, project))
-          .map((o) => projectName(o.project ?? "", inv.homeDir))
+          .map((o) => projectName(o.project ?? "", inv))
       : [];
     if (offIn.length > 0) lines.push({ label: "Off in", text: [...new Set(offIn)].join(", ") });
     const usage = usageOf(inv, row.items);
@@ -432,6 +442,14 @@ export function detailOf(inv: Inventory, row: ItemRow, project: string | undefin
     if (accounts.length > 0) lines.push({ label: "Accounts", text: accounts.map(shortProfile).join(", ") });
   }
   return lines;
+}
+
+/** What wins over a shadowed copy: a personal skill of its name, or a nearer `.mcp.json`. */
+function shadowNote(inv: Inventory, item: Extension, state: EffectiveState): string {
+  if (!state.shadowedBy) return "";
+  if (item.kind === "skill") return " · a global skill of the same name wins";
+  const winner = inv.items.find((i) => i.id === state.shadowedBy);
+  return winner ? ` · ${tilde(winner.location.file, inv.homeDir)} wins` : "";
 }
 
 /**
@@ -499,7 +517,13 @@ export function buildMatrix(inv: Inventory, project: string): Matrix {
             (i) =>
               i.name === name && (column.key === "codex" ? i.location.tool === "codex" : inClaudeColumn(i, column.key)),
           )
-          .sort((a, b) => SCOPE_RANK.indexOf(a.location.scope) - SCOPE_RANK.indexOf(b.location.scope));
+          .sort(
+            (a, b) =>
+              SCOPE_RANK.indexOf(a.location.scope) - SCOPE_RANK.indexOf(b.location.scope) ||
+              // Of two .mcp.json copies, the nearer one: Claude Code starts that one.
+              Number(Boolean(stateOf(inv, a, project).shadowedBy)) -
+                Number(Boolean(stateOf(inv, b, project).shadowedBy)),
+          );
         const item = candidates[0];
         if (!item) return "absent";
         const value = stateOf(inv, item, project, column.key === "codex" ? undefined : column.key).value;

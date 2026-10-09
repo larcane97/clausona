@@ -172,7 +172,7 @@ export async function runExtensionsCommand(
                 }
               : {}),
             usage: usageOf(inv, [item]) ?? null,
-            marks: marksOf(inv, item, now),
+            marks: marksOf(inv, item, now, project),
           };
         }),
         warnings: inv.warnings,
@@ -203,12 +203,12 @@ export async function runExtensionsCommand(
       return [
         item.name,
         item.location.tool,
-        whereLabel(item, inv.homeDir),
+        whereLabel(item, inv),
         // Already redacted when read: a hook's summary passes its command line through redactCommand.
         ...(hooks ? [tildeIn(item.summary?.command ?? item.summary?.prompt ?? "", inv.homeDir)] : []),
         stateWord(inv, item, project),
         ...(skills ? [item.location.tool === "claude" ? String(usage?.total ?? 0) : "—"] : []),
-        marksOf(inv, item, now).join(", "),
+        marksOf(inv, item, now, project).join(", "),
       ];
     });
     // A hook's name is short and its matcher is what tells it apart; its command line is the

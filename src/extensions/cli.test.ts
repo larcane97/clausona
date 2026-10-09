@@ -315,3 +315,39 @@ describe("ls --project through a link", () => {
     expect(json.items.find((i: { name: string }) => i.name === "github").state.value).toBe("off");
   });
 });
+
+describe("ls, a .mcp.json in a parent dir", () => {
+  function ancestorSeed() {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", { projects: { [app]: { enabledMcpjsonServers: ["tools"] } } });
+    h.claude("work", ".claude-work", { projects: { [app]: {} } });
+    h.write(".mcp.json", { mcpServers: { tools: { command: "tools-mcp" }, notes: { command: "home-notes" } } });
+    h.write("repos/.mcp.json", { mcpServers: { shared: { command: "repos-shared" } } });
+    h.write("repos/app/.mcp.json", { mcpServers: { notes: { command: "app-notes" } } });
+    return { h, app };
+  }
+
+  it("lists its servers in the project, with the project's approvals, and a name the nearer file wins as shadowed", async () => {
+    const { h, app } = ancestorSeed();
+    const text = await run(h, app, "mcp", ["ls"]);
+    expect(text).toMatch(/^4 MCP servers · /);
+    expect(text).toMatch(/^tools\s+claude\s+project ~\s+1\/2 on$/m);
+    expect(text).toMatch(/^shared\s+claude\s+project ~\/repos\s+pending-approval$/m);
+    expect(text).toMatch(/^notes\s+claude\s+project app\s+pending-approval$/m);
+    expect(text).toMatch(/^notes\s+claude\s+project ~\s+pending-approval\s+shadowed$/m);
+    const json = JSON.parse(await run(h, app, "mcp", ["ls", "--json"]));
+    const tools = json.items.find((i: { name: string }) => i.name === "tools");
+    expect(tools.project).toBe(h.home);
+    expect(tools.stateByAccount.map((s: { value: string }) => s.value)).toEqual(["on", "pending-approval"]);
+  });
+
+  it("lists each file's servers once with --all-projects", async () => {
+    const { h, app } = ancestorSeed();
+    const rows = (await run(h, app, "mcp", ["ls", "--all-projects"])).split("\n");
+    expect(rows.filter((line) => line.startsWith("tools "))).toHaveLength(1);
+    expect(rows.filter((line) => line.startsWith("shared "))).toHaveLength(1);
+    expect(rows.filter((line) => line.startsWith("notes "))).toHaveLength(2);
+  });
+});

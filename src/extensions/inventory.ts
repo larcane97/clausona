@@ -22,7 +22,7 @@ import { readClaudeHooks, readClaudePlugins } from "./sources/claude-hooks.js";
 import { readClaudeMcp } from "./sources/claude-mcp.js";
 import { readClaudeSkills } from "./sources/claude-skills.js";
 import { codexProjectRecords, loadCodexContext, readCodex } from "./sources/codex.js";
-import { stateOf } from "./state.js";
+import { isMcpjsonServer, relevantIn, stateOf } from "./state.js";
 
 export type LoadOptions = {
   homeDir: string;
@@ -222,14 +222,25 @@ function loadTogether(a: Extension, b: Extension): boolean {
   return one === undefined || other === undefined || samePath(one, other);
 }
 
-/** Why a row deserves a second look. */
-export function marksOf(inv: Inventory, item: Extension, now: number): Mark[] {
+/**
+ * Why a row deserves a second look, seen from `project`: a `.mcp.json` server is shadowed only
+ * in a project below its dir whose nearer `.mcp.json` defines the name again.
+ */
+export function marksOf(inv: Inventory, item: Extension, now: number, project?: string): Mark[] {
   const marks: Mark[] = [];
   if (item.link?.broken) marks.push("broken-link");
   if (
     item.kind === "skill" &&
     item.location.scope === "project" &&
     stateOf(inv, item, item.location.project).shadowedBy
+  ) {
+    marks.push("shadowed");
+  }
+  if (
+    project !== undefined &&
+    isMcpjsonServer(item) &&
+    relevantIn(item, project) &&
+    stateOf(inv, item, project).shadowedBy
   ) {
     marks.push("shadowed");
   }

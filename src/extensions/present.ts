@@ -1,8 +1,8 @@
 import path from "node:path";
 
 import type { EffectiveState, Extension, Inventory } from "./model.js";
-import { samePath } from "./read.js";
-import { stateOf } from "./state.js";
+import { isWithin, samePath } from "./read.js";
+import { isMcpjsonServer, stateOf } from "./state.js";
 
 /**
  * How the inventory reads on screen, shared by `clausona skills|mcp|hooks ls` and the dashboard:
@@ -49,26 +49,35 @@ export function tildeIn(text: string, homeDir: string): string {
   return text.replace(new RegExp(`${PATH_START}${home}${PATH_END}`, process.platform === "win32" ? "gi" : "g"), "~");
 }
 
-/** A project in a word: its folder's name, and `~` for the home dir. */
-export function projectName(project: string, homeDir: string): string {
-  return samePath(project, homeDir) ? "~" : path.basename(project);
+/**
+ * A project in a word: its folder's name, and `~` for the home dir. A parent dir read for its
+ * `.mcp.json` alone is no project, and goes by its path: `~/repos`.
+ */
+export function projectName(dir: string, inv: Pick<Inventory, "homeDir" | "projects">): string {
+  if (samePath(dir, inv.homeDir)) return "~";
+  return inv.projects.some((p) => samePath(p.path, dir)) ? path.basename(dir) : tilde(dir, inv.homeDir);
 }
 
 /** Where an item is defined, in a few words: `project app`, `local work · ~`, `plugin superpowers`. */
-export function whereLabel(item: Extension, homeDir: string): string {
+export function whereLabel(item: Extension, inv: Pick<Inventory, "homeDir" | "projects">): string {
   const loc = item.location;
   const parts: string[] = [SCOPE_WORD[loc.scope]];
   if (loc.scope === "plugin" && loc.plugin) parts.push(loc.plugin.split("@")[0] ?? loc.plugin);
   else if (loc.profile) parts.push(shortProfile(loc.profile));
   if (loc.project && loc.scope !== "plugin") {
-    parts.push(`${loc.profile ? "· " : ""}${projectName(loc.project, homeDir)}`);
+    parts.push(`${loc.profile ? "· " : ""}${projectName(loc.project, inv)}`);
   }
   return parts.join(" ");
 }
 
-/** The project an item is read in: its own when it has one, else the one the list is seen from. */
+/**
+ * The project an item is read in: its own when it has one, else the one the list is seen from.
+ * A `.mcp.json` server of a dir above that project loads there, so it is read there too.
+ */
 export function viewFrom(item: Extension, project: string | undefined): string | undefined {
-  return item.location.project ?? project;
+  const own = item.location.project;
+  if (own === undefined) return project;
+  return isMcpjsonServer(item) && isWithin(project, own) ? project : own;
 }
 
 /** What `item` is with no account named: every account's approvals merged. */

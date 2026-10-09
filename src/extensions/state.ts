@@ -8,7 +8,7 @@ import {
   SKILL_VISIBILITY,
   type SkillVisibility,
 } from "./model.js";
-import { samePath } from "./read.js";
+import { isWithin, pathKey, samePath } from "./read.js";
 
 /** Claude Code reads settings in this order; the first that sets a key wins. */
 const PRECEDENCE: readonly SettingsLayer[] = ["managed", "local", "project", "user"];
@@ -24,10 +24,40 @@ function applies(entry: { layer: SettingsLayer; project?: string }, project: str
   );
 }
 
-/** Whether `item` can load in `project` at all: anything no project owns, or that project's own. */
+/**
+ * A server from a `.mcp.json`. Claude Code 2.1.294 reads that file in every session started in
+ * the dir that holds it or in any dir below: from the start dir and each parent up to the
+ * filesystem root, the nearest file winning a name. Its `location.project` is that dir, which
+ * is a project, or a parent dir of one read for its `.mcp.json` alone (see readClaudeMcp).
+ */
+export function isMcpjsonServer(item: Extension): boolean {
+  return item.kind === "mcp" && item.location.tool === "claude" && item.location.scope === "project";
+}
+
+/**
+ * Whether `item` can load in `project` at all: anything no project owns, that project's own,
+ * and a `.mcp.json` server of the project's dir or of a dir above it.
+ */
 export function relevantIn(item: Extension, project: string | undefined): boolean {
   if (item.location.project === undefined) return true;
-  return project !== undefined && samePath(item.location.project, project);
+  if (project === undefined) return false;
+  return isMcpjsonServer(item) ? isWithin(project, item.location.project) : samePath(item.location.project, project);
+}
+
+/**
+ * The `.mcp.json` server of `item`'s name that wins over it in `project`: the one in the
+ * nearest file between the project and `item`'s own, as Claude Code merges them, nearest last.
+ */
+function nearerMcpjson(inv: Inventory, item: Extension, project: string): Extension | undefined {
+  const own = item.location.project;
+  let winner: Extension | undefined;
+  for (const other of inv.items) {
+    const at = other.location.project;
+    if (other === item || other.name !== item.name || !isMcpjsonServer(other) || samePath(at, own)) continue;
+    if (!isWithin(project, at) || !isWithin(at, own)) continue;
+    if (!winner || pathKey(at ?? "").length > pathKey(winner.location.project ?? "").length) winner = other;
+  }
+  return winner;
 }
 
 /** A plugin is on only where some settings file enables it; installed and named nowhere is off. */
@@ -84,28 +114,41 @@ function claudeMcpState(
   // Claude Code has no global off for an MCP server: with no project it is on.
   if (project === undefined) return { value: "on" };
   if (item.location.scope === "project") {
-    // An approval with no project comes from user or managed settings and applies in every project.
-    const approvals = inv.facts.claudeMcpjson.filter(
-      (a) =>
-        (a.project === undefined || samePath(a.project, project)) &&
-        (a.profile === undefined || profile === undefined || a.profile === profile),
-    );
-    const denied = approvals.find((a) => a.disabled.includes(item.name));
-    if (denied) return { value: "off", setBy: { file: denied.file, key: "disabledMcpjsonServers" } };
-    const allowed = approvals.find((a) => a.enableAll || a.enabled.includes(item.name));
-    if (allowed) {
-      return {
-        value: "on",
-        setBy: { file: allowed.file, key: allowed.enableAll ? "enableAllProjectMcpServers" : "enabledMcpjsonServers" },
-      };
-    }
-    return { value: "pending-approval" };
+    // Approved by name in the project it is read in, whichever dir's .mcp.json defines it.
+    const state = mcpjsonApproval(inv, item, project, profile);
+    const winner = nearerMcpjson(inv, item, project);
+    return winner ? { ...state, shadowedBy: winner.id } : state;
   }
   const owner = profile ?? item.location.profile;
   const off = inv.facts.claudeMcpDisabled.find(
     (d) => d.profile === owner && samePath(d.project, project) && d.names.includes(item.name),
   );
   return off ? { value: "off", setBy: { file: off.file, key: "disabledMcpServers" } } : { value: "on" };
+}
+
+/** A `.mcp.json` server's approval in `project`, for `profile` or every account merged. */
+function mcpjsonApproval(
+  inv: Inventory,
+  item: Extension,
+  project: string,
+  profile: string | undefined,
+): EffectiveState {
+  // An approval with no project comes from user or managed settings and applies in every project.
+  const approvals = inv.facts.claudeMcpjson.filter(
+    (a) =>
+      (a.project === undefined || samePath(a.project, project)) &&
+      (a.profile === undefined || profile === undefined || a.profile === profile),
+  );
+  const denied = approvals.find((a) => a.disabled.includes(item.name));
+  if (denied) return { value: "off", setBy: { file: denied.file, key: "disabledMcpjsonServers" } };
+  const allowed = approvals.find((a) => a.enableAll || a.enabled.includes(item.name));
+  if (allowed) {
+    return {
+      value: "on",
+      setBy: { file: allowed.file, key: allowed.enableAll ? "enableAllProjectMcpServers" : "enabledMcpjsonServers" },
+    };
+  }
+  return { value: "pending-approval" };
 }
 
 function codexSkillState(inv: Inventory, item: Extension): EffectiveState {

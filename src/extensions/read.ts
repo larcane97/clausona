@@ -295,3 +295,11 @@ export function pathKey(p: string): string {
 export function samePath(a: string | undefined, b: string | undefined): boolean {
   return a !== undefined && b !== undefined && pathKey(a) === pathKey(b);
 }
+
+/** Whether `p` is `dir` or inside it, compared as `samePath` compares. */
+export function isWithin(p: string | undefined, dir: string | undefined): boolean {
+  if (p === undefined || dir === undefined) return false;
+  const inner = pathKey(p);
+  const outer = pathKey(dir);
+  return inner === outer || inner.startsWith(outer.endsWith(path.sep) ? outer : outer + path.sep);
+}
