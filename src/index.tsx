@@ -5,6 +5,7 @@ import { runCommand } from "./commands.js";
 import { spawnCommandSync } from "./core/process.js";
 import { trackUsage } from "./core/track-usage.js";
 import { createUpdater, type UpdateOffer } from "./core/update.js";
+import { ExitError } from "./extensions/exit-error.js";
 import { dropLauncherCompileCache } from "./installer.js";
 import { accent, ok, fail as xMark } from "./lib/cli-style.js";
 import { runRouted, runTarget } from "./lib/route-run.js";
@@ -139,9 +140,11 @@ async function main() {
 }
 
 /**
- * Prints a failed command's error and returns the exit code to leave with: the error's own
- * `exitCode` when it has one (75 for "no account available"), else 1. An error carrying
- * `stdout` - `route pick --json` - prints that instead, so a script still gets its JSON.
+ * Prints why a command failed and returns the exit code to leave with: the error's own code when
+ * it has one - an ExitError's (1 for not found, 2 for bad usage or a name several items have), or
+ * an `exitCode` such as 75 for "no account available" - else 1. An error carrying `stdout` - the
+ * `--json` answer to an ambiguous name, `route pick --json` - prints that instead, alone, so a
+ * script reading stdout gets its JSON and stderr stays empty.
  */
 export function reportError(
   error: unknown,
@@ -155,6 +158,7 @@ export function reportError(
     const message = error instanceof Error ? error.message : String(error);
     err.write(`  ${xMark} ${message}\n`);
   }
+  if (error instanceof ExitError) return error.code;
   return typeof extra.exitCode === "number" ? extra.exitCode : 1;
 }
 
