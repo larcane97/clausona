@@ -36,22 +36,30 @@ const FIELD_LABEL: Record<FormField, string> = {
 
 const labelColor = (focused: boolean, error: boolean) => (error ? color.error : focused ? color.text : color.secondary);
 
-/** One line of the form: the focus mark, the field's label, and what it holds. */
+/**
+ * One line of the form: the focus mark, the field's label, and what it holds. `rowMark` is for a
+ * list whose first row is on this line: that row's `▸` slot, at the end of the label column, so
+ * the row starts where every field's value does. True while the list's cursor is on it.
+ */
 export function Line({
   focused = false,
   label,
   error = false,
+  rowMark,
   children,
-}: PropsWithChildren<{ focused?: boolean; label: string; error?: boolean }>) {
+}: PropsWithChildren<{ focused?: boolean; label: string; error?: boolean; rowMark?: boolean }>) {
   return (
     <Box flexDirection="row">
       <Box width={CURSOR} flexShrink={0}>
         <Text color={color.cursor}>{focused ? symbol.cursor : " "}</Text>
       </Box>
       <Box width={LABEL} flexShrink={0}>
-        <Text color={labelColor(focused, error)} bold={focused}>
-          {label}
-        </Text>
+        <Box width={rowMark === undefined ? LABEL : LABEL - MARK} flexShrink={0}>
+          <Text color={labelColor(focused, error)} bold={focused}>
+            {label}
+          </Text>
+        </Box>
+        {rowMark === undefined ? null : <RowMark on={rowMark} />}
       </Box>
       <Box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0}>
         {children}
@@ -136,10 +144,19 @@ export function accountWindow(
   return { start: from, end: Math.min(total, from + room(from)) };
 }
 
-/** `↑ 3 more` or `↓ 12 more`, where the window leaves accounts out. */
+/** A list row's `▸` while the cursor is on it, in a slot of its own either way. */
+function RowMark({ on }: { on: boolean }) {
+  return (
+    <Box width={MARK} flexShrink={0}>
+      <Text color={color.cursor}>{on ? "▸" : " "}</Text>
+    </Box>
+  );
+}
+
+/** `↑ 3 more` or `↓ 12 more`, where the window leaves accounts out: under the accounts' boxes. */
 function MoreLine({ arrow, count }: { arrow: "↑" | "↓"; count: number }) {
   return (
-    <Box paddingLeft={2 + MARK}>
+    <Box paddingLeft={MARK}>
       <Text color={color.muted}>{`${arrow} ${count} more`}</Text>
     </Box>
   );
@@ -149,6 +166,9 @@ function MoreLine({ arrow, count }: { arrow: "↑" | "↓"; count: number }) {
  * Row 0, every account, then one row per account with its quota; out of the route reads
  * `excluded`, and an account with no quota says why. `lines` is the most lines the accounts may
  * take, their counts above and below included: the rest scroll with the cursor, and row 0 stays.
+ *
+ * Row 0's box starts where the other fields' values do, its `▸` being the Line's (`rowMark`) in
+ * the label column; an account's `▸` is under that box, and its own box two columns in.
  */
 export function AccountRows({
   state,
@@ -168,11 +188,6 @@ export function AccountRows({
   lines?: number;
 }) {
   const idWidth = Math.max(0, ...listed.map((account) => account.id.length));
-  const mark = (row: number) => (
-    <Box width={MARK} flexShrink={0}>
-      <Text color={color.cursor}>{focused && state.cursor === row ? "▸" : " "}</Text>
-    </Box>
-  );
   // Where the window began last time: it moves only as far as the cursor takes it.
   const began = useRef(0);
   const cursor = focused && state.cursor > 0 ? state.cursor - 1 : null;
@@ -180,12 +195,9 @@ export function AccountRows({
   began.current = view.start;
   return (
     <Box flexDirection="column" flexGrow={1} minWidth={0}>
-      <Box flexDirection="row">
-        {mark(0)}
-        <Text color={color.text} wrap="truncate-end">
-          {`[${state.every ? "x" : " "}] every account (*), new ones join`}
-        </Text>
-      </Box>
+      <Text color={color.text} wrap="truncate-end">
+        {`[${state.every ? "x" : " "}] every account (*), new ones join`}
+      </Text>
       {view.start > 0 ? <MoreLine arrow="↑" count={view.start} /> : null}
       {listed.slice(view.start, view.end).map((account, at) => {
         const index = view.start + at;
@@ -195,8 +207,8 @@ export function AccountRows({
         const live = snapshot?.state === "ok";
         const note = out ? "excluded" : noQuotaReason(account.id, snapshot, now);
         return (
-          <Box key={account.id} flexDirection="row" paddingLeft={2}>
-            {mark(index + 1)}
+          <Box key={account.id} flexDirection="row">
+            <RowMark on={focused && state.cursor === index + 1} />
             <Box width={4 + idWidth} flexShrink={1} minWidth={0}>
               <Text color={out ? color.muted : color.text} wrap="truncate-end">
                 {`[${ticked ? "x" : " "}] ${account.id}`}

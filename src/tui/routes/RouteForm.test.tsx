@@ -150,6 +150,11 @@ const lines = (frame: string) => frame.split("\n");
 /** A line of the box without its borders and padding. */
 const inside = (line: string) => line.replace(/^\s*│\s?/, "").replace(/\s*│\s*$/, "");
 const row = (frame: string, label: string) => inside(lines(frame).find((line) => line.includes(label)) ?? "");
+/** The column `value` starts in on the first line carrying `label`, or -1. */
+const columnOf = (frame: string, label: string | RegExp, value: string) =>
+  (lines(frame).find((line) => (typeof label === "string" ? line.includes(label) : label.test(line))) ?? "").indexOf(
+    value,
+  );
 
 /** Painted: the form reads nothing before its first save. */
 async function opened(instance: Instance) {
@@ -255,6 +260,32 @@ describe("RouteForm", () => {
     expect(row(frame, "Fallback")).toMatch(/Fallback\s+\(\+ add\)$/);
     expect(frame).toContain("Now: 3 of 4 accounts under 80% · next claude:team");
     expect(hintLines(frame)).toEqual([TAIL]);
+  });
+
+  // The every-account row drew its `▸` slot before its box, which began two columns right of
+  // every other field's value; the marks hang before the boxes now.
+  it("starts the every-account box in the column of the other fields' values, each row's mark before its box", async () => {
+    const { instance } = setup({ edit: "main", columns: 80 });
+    await opened(instance);
+    const frame = text(instance);
+    const value = columnOf(frame, "Name", "main");
+    expect(value).toBeGreaterThan(0);
+    expect(columnOf(frame, "Tool", "● claude")).toBe(value);
+    expect(columnOf(frame, "Patterns", "from")).toBe(value);
+    expect(columnOf(frame, "Strategy", "● round-robin")).toBe(value);
+    expect(columnOf(frame, "Limits", "skip at")).toBe(value);
+    expect(columnOf(frame, "every account", "[x] every account")).toBe(value);
+    const ids = ["claude:ops-share", "claude:side", "claude:team", "claude:work"];
+    for (const id of ids) expect(columnOf(frame, id, "["), id).toBe(value + 2);
+    // The quota columns still line up with each other.
+    expect(new Set(ids.map((id) => columnOf(frame, id, "%")))).toHaveLength(1);
+
+    await tabTo(instance, "Accounts");
+    expect(columnOf(text(instance), "every account", "▸")).toBe(value - 2);
+    await downTo(instance, accountRow("claude:team"));
+    expect(columnOf(text(instance), "claude:team", "▸")).toBe(value);
+    expect(columnOf(text(instance), "claude:team", "[x]")).toBe(value + 2);
+    expect(columnOf(text(instance), "every account", "▸")).toBe(-1);
   });
 
   // The hints follow the focus, so each set fits on one line where all of them did not.
@@ -874,6 +905,9 @@ describe("RouteForm", () => {
       expect(shown).toEqual(ids("claude").slice(0, shown.length));
       expect(more(first, "↓")).toBe(20 - shown.length);
       expect(first).not.toMatch(/↑ \d+ more/);
+      // The counts sit under the accounts' boxes.
+      const box = columnOf(first, "claude:acct-01", "[");
+      expect(columnOf(first, /↓ \d+ more/, "↓")).toBe(box);
 
       await tabTo(instance, "Accounts");
       for (const [index, id] of ids("claude").entries()) {
@@ -889,6 +923,7 @@ describe("RouteForm", () => {
         if (index === 19) expect(more(frame, "↓")).toBe(0);
       }
       expect(more(text(instance), "↑")).toBeGreaterThan(0);
+      expect(columnOf(text(instance), /↑ \d+ more/, "↑")).toBe(box);
       // Back up to the top: the first account comes back into the window.
       for (let i = 0; i < 20; i++) await press(instance, UP);
       expect(text(instance)).toMatch(/▸ \[x\] every account/);

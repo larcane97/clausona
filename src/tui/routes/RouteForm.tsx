@@ -473,7 +473,7 @@ export function RouteForm(props: RouteFormProps) {
             focused={focusOn("tool")}
           />
         </Line>
-        <Line {...line("accounts", "Accounts")}>
+        <Line {...line("accounts", "Accounts")} rowMark={focusOn("accounts") && state.cursor === 0}>
           <AccountRows
             state={state}
             listed={listed}
