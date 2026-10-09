@@ -477,6 +477,16 @@ describe("renderNote", () => {
   it("is empty when nobody was picked", () => {
     expect(renderNote("main", ranking({}))).toBe("");
   });
+
+  // A fraction under 100 (Codex reports them) rounded up to 100%, which cannot run, as it ran.
+  it("never says 100% of an account it picked under 100", () => {
+    const r = rank({ tool: "claude", from: ["team"] }, { "claude:team": quota(99.6, 40) });
+    expect(plain(renderNote("main", r))).toBe(
+      "  ▸ claude:team  route main, most room left (all over 80%), 99% of 5H used",
+    );
+    expect(usageText({ percent: 99.6, window: "5H", stale: false })).toBe("99% 5H");
+    expect(plain(renderRouteDetail("main", r, at(120)))).toMatch(/^ {2}▸ claude:team\s+99% 1h\s+40% 2d/m);
+  });
 });
 
 describe("renderNoAccount", () => {

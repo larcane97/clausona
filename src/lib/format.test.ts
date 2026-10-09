@@ -38,6 +38,16 @@ function snapshot(overrides: Partial<QuotaSnapshot> = {}): QuotaSnapshot {
 describe("formatQuotaPercent", () => {
   it("rounds to a whole percent", () => {
     expect(formatQuotaPercent({ usedPercent: 44.6, resetsAt: null })).toBe("45%");
+    expect(formatQuotaPercent({ usedPercent: 98.5, resetsAt: null })).toBe("99%");
+  });
+
+  // An account at 100% cannot run: one at 99.6 can, and was picked while it read 100%.
+  it("never reads 100% under 100", () => {
+    for (const usedPercent of [99, 99.5, 99.6, 99.99]) {
+      expect(formatQuotaPercent({ usedPercent, resetsAt: null }), String(usedPercent)).toBe("99%");
+    }
+    expect(formatQuotaPercent({ usedPercent: 100, resetsAt: null })).toBe("100%");
+    expect(formatQuotaPercent({ usedPercent: 100.4, resetsAt: null })).toBe("100%");
   });
 
   it("renders an em dash when the window is absent", () => {

@@ -20,7 +20,14 @@ import {
 } from "../core/routing.js";
 import type { QuotaWindow, ToolName } from "../types.js";
 import { accent, bold, box, dim, dimmer, padEnd, secondary, truncate, warnIcon, yellow } from "./cli-style.js";
-import { formatAge, formatQuotaPercent, formatResetIn, formatResetShort, styledQuota } from "./format.js";
+import {
+  formatAge,
+  formatQuotaPercent,
+  formatResetIn,
+  formatResetShort,
+  styledQuota,
+  wholeQuotaPercent,
+} from "./format.js";
 
 /**
  * Text and JSON for routing. Pure: `now` and the terminal width come in, nothing is read. The
@@ -33,7 +40,7 @@ export type ResolvedBy = "flag" | "inline";
 
 export function usageText(usage?: Usage): string {
   if (!usage) return "—";
-  return `${Math.round(usage.percent)}% ${usage.window}${usage.stale ? " (stale)" : ""}`;
+  return `${wholeQuotaPercent(usage.percent)}% ${usage.window}${usage.stale ? " (stale)" : ""}`;
 }
 
 export function skipText(row: Pick<Row, "id" | "skip">): string {
@@ -687,7 +694,7 @@ export function renderNote(name: string | undefined, ranking: Ranking): string {
   const usage = ranking.rows.find((row) => row.id === outcome.id)?.usage;
   const parts = [routeLabel(name), pickedWhy(ranking)];
   if (usage) {
-    parts.push(`${Math.round(usage.percent)}% of ${usage.window} used${usage.stale ? ", last reading" : ""}`);
+    parts.push(`${wholeQuotaPercent(usage.percent)}% of ${usage.window} used${usage.stale ? ", last reading" : ""}`);
   }
   return `  ${accent("▸")} ${bold(outcome.id)}  ${dim(parts.join(", "))}`;
 }
