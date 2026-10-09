@@ -157,9 +157,10 @@ export function hiddenHere(inv: Inventory, row: ScopeRow, project: string | unde
 
 /**
  * A row's USES and LAST USED, the same in `ls` and on the screen: the total across accounts, and
- * how long ago it was last used, "—" when it never was. Both "—" where there is no use to count:
- * a Codex skill (Codex keeps no record), a plugin (its use is its skills'), a hidden copy (its
- * use is counted under the copy that wins: a count on both rows would read twice).
+ * how long ago it was last used, "never" when it never was (the spec's Tables). Both "—" where
+ * there is no use to count: a Codex skill (Codex keeps no record), a plugin (its use is its
+ * skills'), a hidden copy (its use is counted under the copy that wins: a count on both rows
+ * would read twice).
  */
 export function usageCells(
   inv: Inventory,
@@ -170,8 +171,7 @@ export function usageCells(
   const item = firstOf(row);
   if (item.kind !== "skill" || item.location.tool !== "claude" || hiddenHere(inv, row, project)) return ["—", "—"];
   const usage = usageOf(inv, row.items);
-  const never = usage === undefined || (usage.total === 0 && usage.lastUsedAt === undefined);
-  return [String(usage?.total ?? 0), never ? "—" : agoWords(usage?.lastUsedAt, now)];
+  return [String(usage?.total ?? 0), agoWords(usage?.lastUsedAt, now)];
 }
 
 /**

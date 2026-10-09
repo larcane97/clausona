@@ -227,10 +227,10 @@ describe("hiddenHere and usageCells", () => {
     expect(usageCells(inv, single(webEli5), app, NOW)).toEqual(["—", "—"]);
   });
 
-  it("gives the total and how long ago, a dash where there is nothing to count or it was never used", async () => {
+  it("gives the total and how long ago or never, a dash where there is nothing to count", async () => {
     const { inv, app } = await seed();
     expect(usageCells(inv, single(claudeSkill(inv, "eli5")), app, NOW)).toEqual(["4", "1d ago"]);
-    expect(usageCells(inv, single(claudeSkill(inv, "old-one")), app, NOW)).toEqual(["0", "—"]);
+    expect(usageCells(inv, single(claudeSkill(inv, "old-one")), app, NOW)).toEqual(["0", "never"]);
     // A hidden copy's use is the winner's.
     expect(usageCells(inv, single(claudeSkill(inv, "eli5", app)), app, NOW)).toEqual(["—", "—"]);
     // Codex keeps no record.

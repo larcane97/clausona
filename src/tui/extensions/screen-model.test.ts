@@ -101,8 +101,8 @@ describe("tables", () => {
     expect(titles(global)).toEqual(["NAME", "USES", "LAST USED"]);
     expect(names(global)).toEqual(["eli5", "old-one"]);
     expect(cells(byName(global, "eli5"))).toEqual(["eli5", "4", "1d ago"]);
-    // Never used: the count is 0 and there is no time to say.
-    expect(cells(byName(global, "old-one"))).toEqual(["old-one", "0", "—"]);
+    // Never used: the count is 0, and LAST USED says never.
+    expect(cells(byName(global, "old-one"))).toEqual(["old-one", "0", "never"]);
     expect(byName(global, "old-one")?.tag).toEqual({ text: "unused", tone: "warning" });
     expect(byName(global, "eli5")?.tag).toBeUndefined();
     // USES is right-aligned, its gap after it.
@@ -209,9 +209,9 @@ describe("tables", () => {
     const unused = buildTable(inv, "claude", "skill", "unused", app, NOW, 100, "");
     expect(titles(unused)).toEqual(["NAME", "WHERE", "LAST USED"]);
     expect(unused.rows.map(cells)).toEqual([
-      ["deploy-check", "app", "—"],
-      ["old-one", "Global", "—"],
-      ["web-only", "web", "—"],
+      ["deploy-check", "app", "never"],
+      ["old-one", "Global", "never"],
+      ["web-only", "web", "never"],
     ]);
     expect(unused.rows.every((r) => r.tag?.text === "unused" && r.tag.tone === "warning")).toBe(true);
     // A search reads WHERE as the row shows it.
