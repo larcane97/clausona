@@ -10,12 +10,19 @@ import {
   validateProfileName,
 } from "./profile-ref.js";
 import { type RouteIo, terminalIo } from "./route-io.js";
-import { renderNewRoutePreview, renderNoAccount, renderNote } from "./route-render.js";
+import {
+  renderNewRoutePreview,
+  renderNoAccount,
+  renderNote,
+  renderNothingToCreate,
+  takesNobody,
+} from "./route-render.js";
 import {
   checkRouteMembers,
   defaultRouteDeps,
   inferRouteTool,
   NoAccountError,
+  otherToolTaking,
   type ResolvedRoute,
   type RouteDeps,
   rankRouteNow,
@@ -106,6 +113,12 @@ async function offerToCreate(
   // given to --from must be refused without being shown or written to routes.json.
   checkRouteMembers(error.routeName, spec, registry);
   const ranking = await rankRouteNow({ route: withDefaults(spec) }, deps, { resume: false, record: false });
+  // A route that takes nobody could only exit 75: not proposed, so not asked about or written.
+  if (takesNobody(ranking)) {
+    throw new Error(
+      renderNothingToCreate(error.routeName, ranking, { other: otherToolTaking(spec, registry), overrides }),
+    );
+  }
   io.say(renderNewRoutePreview(error.routeName, spec, ranking));
   if (!(await io.confirm(`  Create it and run? ${accent("(Y/n)")} `))) {
     throw new Error("Nothing was created, and nothing was run.");

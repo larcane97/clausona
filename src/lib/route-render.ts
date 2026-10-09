@@ -342,10 +342,59 @@ function quotaCell(row: Row, which: UsageWindow, percentAt: number, withReset: b
 }
 
 /** Why a route has no rows: its patterns matched nobody, or its exclude took everyone they matched. */
-function nobodyText(ranking: Ranking): string {
+function nobodyText(ranking: Ranking, tool?: ToolName): string {
   const { route } = ranking;
   const after = ranking.excluded.length ? ` after excluding ${route.exclude.join(", ")}` : "";
-  return `No profile matches ${route.from.join(", ")}${after}.`;
+  return `No ${tool ? `${tool} ` : ""}profile matches ${route.from.join(", ")}${after}.`;
+}
+
+/** Whether a route takes no account at all: nothing it names is registered, or its exclude took them. */
+export const takesNobody = (ranking: Ranking) => ranking.rows.every((row) => row.skip === "not-registered");
+
+/** Where to look when a route takes nobody and the other tool's accounts are no help either. */
+const SEE_PROFILES = `See your profiles: ${unbroken("clausona list")}`;
+
+/**
+ * What `route add` says after the line that its new route takes nobody: how to make it a route of
+ * `other`, the other tool, when the same patterns take some of its accounts; else where to look.
+ * `overrides` are the options add was given, which the route made again keeps.
+ */
+export function nobodyAdvice(name: string, other: ToolName | undefined, overrides: RouteOverrides): string {
+  if (!other) return SEE_PROFILES;
+  const again = command([
+    `clausona route remove ${name} &&`,
+    `clausona route add ${name}`,
+    `--tool ${other}`,
+    ...fieldFlags(overrides),
+  ]);
+  return `For your ${other} accounts, make it a ${other} route: ${again}`;
+}
+
+/**
+ * What `run --route <unknown>` says in place of proposing a route that would take no account:
+ * nothing is asked and nothing created, since the route could only exit 75. `other` is the other
+ * tool, when the same patterns take some of its accounts: the run that proposes a route of
+ * those is named, with the run's options.
+ */
+export function renderNothingToCreate(
+  name: string,
+  ranking: Ranking,
+  options: { other?: ToolName; overrides?: RouteOverrides; width?: number } = {},
+): string {
+  const width = options.width ?? terminalWidth("stderr");
+  const { route } = ranking;
+  const { other } = options;
+  const run = other
+    ? command([`clausona run ${other}`, `--route ${name}`, ...fieldFlags(options.overrides ?? {})])
+    : undefined;
+  const advice = run ? `To run on your ${other} accounts: ${run}` : SEE_PROFILES;
+  const nobody = nobodyText(ranking, route.tool === "all" ? undefined : route.tool);
+  return [
+    `Route ${name} does not exist, and nothing was created.`,
+    "",
+    ...wrap(`${nobody} ${advice}`, width, " ".repeat(INDENT)),
+    "",
+  ].join("\n");
 }
 
 // ─── route list ─────────────────────────────────────────────────────
@@ -510,7 +559,7 @@ export function detailOrder(rows: Row[]): Row[] {
   return [...rows].sort((a, b) => group(a) - group(b) || (group(a) === 1 ? usage(a) - usage(b) : 0));
 }
 
-function memberLines(ranking: Ranking, width: number, now: number): string[] {
+function memberLines(ranking: Ranking, width: number, now: number, nobodyHint?: string): string[] {
   const members = detailOrder(ranking.rows.filter((row) => row.skip !== "not-registered"));
   const others: Array<[string, string]> = [
     ...ranking.rows
@@ -523,7 +572,7 @@ function memberLines(ranking: Ranking, width: number, now: number): string[] {
   if (members.length === 0) {
     const list: Table = { header: false, columns: [{ label: "" }, { label: "" }], rows: otherRows };
     return [
-      ...wrap(nobodyText(ranking), width, " ".repeat(INDENT)),
+      ...wrap(`${nobodyText(ranking)}${nobodyHint ? ` ${nobodyHint}` : ""}`, width, " ".repeat(INDENT)),
       ...(otherRows.length ? fitTable([list], width) : []),
     ];
   }
@@ -577,17 +626,19 @@ function memberLines(ranking: Ranking, width: number, now: number): string[] {
  * `route explain`, and what `route add` and `route set` show: the settings, then every member.
  * `onlyTool` is the tool an explain narrowed an `all` route to, as a run naming it would;
  * `overrides` are the field options the explain was given, which the run it names carries too.
+ * `nobodyHint` follows the line that says the route takes nobody, when it does.
  */
 export function renderRouteDetail(
   name: string | undefined,
   ranking: Ranking,
-  options: { width?: number; now?: number; onlyTool?: ToolName; overrides?: RouteOverrides } = {},
+  options: { width?: number; now?: number; onlyTool?: ToolName; overrides?: RouteOverrides; nobodyHint?: string } = {},
 ): string {
   const width = options.width ?? terminalWidth();
   const now = options.now ?? Date.now();
   const { route } = ranking;
   const title = truncate(name ?? "inline route", Math.max(8, width - 12));
-  const lines = ["", box(title, settingsLines(route, width)), "", ...memberLines(ranking, width, now)];
+  const members = memberLines(ranking, width, now, options.nobodyHint);
+  const lines = ["", box(title, settingsLines(route, width)), "", ...members];
   if (ranking.outcome.kind === "none") {
     const narrowed = route.tool === "all" ? options.onlyTool : undefined;
     // An unsaved route's tool is the run's tool word; on an `all` route the --from prefixes say it.

@@ -171,6 +171,26 @@ describe("route add", () => {
     expect(out).not.toContain("See the ranking");
   });
 
+  // A Codex-only machine: `route add main` makes a claude route, which takes nobody.
+  it("says how to make a route that takes nobody into one of the other tool's accounts", async () => {
+    const { deps, run, file } = setup();
+    const codexOnly: Registry = { ...REGISTRY, profiles: { "codex:x": REGISTRY.profiles["codex:x"] } };
+    deps.loadRegistry = async () => codexOnly;
+    const out = (await run("add", "main", "--max-usage", "70")).replace(/\s+/g, " ");
+    expect(file().routes.main.tool).toBe("claude");
+    expect(out).toContain(
+      "No profile matches *. For your codex accounts, make it a codex route: clausona route remove main && clausona route add main --tool codex --max-usage 70",
+    );
+
+    // Nobody of either tool: the list of profiles, to see what there is.
+    const none = (await run("add", "work", "--from", "gone")).replace(/\s+/g, " ");
+    expect(none).toContain("No profile matches gone. See your profiles: clausona list");
+    // A route that takes someone says neither.
+    const some = await run("add", "cx", "--tool", "codex");
+    expect(some).not.toContain("No profile matches");
+    expect(some).not.toContain("clausona list");
+  });
+
   it("takes --tool all, and the tool the --from prefixes say", async () => {
     const { run, file } = setup();
     await run("add", "any", "--tool", "all");

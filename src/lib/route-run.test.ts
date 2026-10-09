@@ -254,6 +254,45 @@ describe("runRouted", () => {
     expect(s.launches).toEqual([["claude:solo", ["-p", "hi"]]]);
   });
 
+  // With only Codex accounts, the claude route `run --route main` would make takes nobody, and
+  // creating it only to exit 75 helps no one.
+  it("asks nothing and creates nothing when the route would take no account, and names the run that would", async () => {
+    const codexOnly: Registry = {
+      ...REGISTRY,
+      activeProfiles: { codex: "codex:x" },
+      profiles: { "codex:x": BOTH.profiles["codex:x"], "codex:y": BOTH.profiles["codex:y"] },
+    };
+    const s = setup({ registry: codexOnly, quotas: BOTH_QUOTAS, interactive: true, answers: ["y"] });
+    const error = (await runRouted(
+      ["--route", "main", "--strategy", "headroom", "-p", "hi"],
+      s.launch,
+      s.io,
+      s.deps,
+    ).catch((e: unknown) => e)) as Error;
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(NoAccountError);
+    const text = stripAnsi(error.message);
+    expect(text.split("\n")[0]).toBe("Route main does not exist, and nothing was created.");
+    expect(text.replace(/\s+/g, " ")).toContain(
+      "No claude profile matches *. To run on your codex accounts: clausona run codex --route main --strategy headroom",
+    );
+    expect(s.confirmed).toEqual([]);
+    expect(s.notes).toEqual([]);
+    expect(() => readFileSync(s.paths.routesPath)).toThrow();
+    expect(s.launches).toEqual([]);
+
+    // Nobody of either tool: the list of profiles.
+    const t = setup({ interactive: true, answers: ["y"] });
+    const nobody = (await runRouted(["--route", "main", "--from", "gone"], t.launch, t.io, t.deps).catch(
+      (e: unknown) => e,
+    )) as Error;
+    expect(stripAnsi(nobody.message).replace(/\s+/g, " ")).toContain(
+      "No claude profile matches gone. See your profiles: clausona list",
+    );
+    expect(t.confirmed).toEqual([]);
+    expect(() => readFileSync(t.paths.routesPath)).toThrow();
+  });
+
   it("proposes the run's options over the defaults, and asks once", async () => {
     const s = setup({ interactive: true, answers: ["", "y"] });
     await runRouted(["--route", "work", "--strategy", "headroom", "--exclude", "solo"], s.launch, s.io, s.deps);

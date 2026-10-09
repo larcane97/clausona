@@ -151,6 +151,10 @@ means for the arguments you pass.
 
 `route set` keeps the route's tool. To change it, use the Routes screen or `route edit`.
 
+On a machine with only Codex accounts, `clausona route add main` still makes a Claude Code route,
+and that route takes nobody. `route add` says so, and gives the commands that make it a Codex
+route instead.
+
 ### What `route add` shows
 
 `route add` writes the route straight away, then shows what it made: the settings in a box, and
@@ -448,6 +452,11 @@ exits 1. The routing options you gave go into the new route. Its tool is the one
 in `clausona run codex --route nightly`, else the one the `--from` prefixes say, else Claude
 Code. Apart from `route edit` after a bad save, this is the only question the routing commands
 ask.
+
+A route that would take no account is not offered, since a run on it could only exit 75.
+clausona asks nothing, creates nothing and exits 1. If the other tool has accounts the same
+patterns would take, it names that run, such as `clausona run codex --route nightly`. Otherwise
+it points you to `clausona list`.
 
 Without a terminal nothing is created. clausona prints the command that would create it and
 exits 1:

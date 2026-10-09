@@ -247,6 +247,21 @@ export async function rankRouteNow(
   );
 }
 
+/**
+ * The other tool, when a route of one tool takes none of the accounts the same patterns would
+ * take of the other's: the tool a Codex-only user meant when a run or `route add` made a claude
+ * route by default. Undefined for an `all` route, or when the other tool's accounts are no help.
+ */
+export function otherToolTaking(spec: RouteSpec, registry: Registry): ToolName | undefined {
+  if (spec.tool === "all") return undefined;
+  const other: ToolName = spec.tool === "claude" ? "codex" : "claude";
+  const route = withDefaults({ ...spec, tool: other });
+  const members = membersOf(registry, other).filter((member) => member.kind === "subscription");
+  const excluded = new Set(expandPatterns(route.exclude, members).members.map((entry) => entry.member.id));
+  const taken = [...expandPatterns(route.from, members).members, ...expandPatterns(route.fallback, members).members];
+  return taken.some((entry) => !excluded.has(entry.member.id)) ? other : undefined;
+}
+
 /** For add and set: the route's own problems, then the API profiles this version refuses. */
 export function checkRouteMembers(name: string, spec: RouteSpec, registry: Registry): void {
   const problems = checkRoute(name, spec);

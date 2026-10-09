@@ -29,11 +29,13 @@ import { accent, bold, dim, helpSection, helpUsage, stripAnsi, success } from ".
 import { type RouteIo, terminalIo } from "./lib/route-io.js";
 import {
   explainJson,
+  nobodyAdvice,
   pickJson,
   renderNoAccount,
   renderRouteDetail,
   renderRoutesEmpty,
   renderRouteTable,
+  takesNobody,
 } from "./lib/route-render.js";
 import {
   checkRouteMembers,
@@ -41,6 +43,7 @@ import {
   inferRouteTool,
   membersOf,
   NoAccountError,
+  otherToolTaking,
   quotaTargets,
   type RouteDeps,
   rankRouteNow,
@@ -233,10 +236,14 @@ export async function createRoute(name: string, spec: RouteSpec, deps: RouteDeps
   }, deps.paths);
 }
 
-/** The route's settings box and members, as `route explain` shows them; nothing is recorded. */
-async function routeDetail(name: string, spec: RouteSpec, deps: RouteDeps): Promise<string> {
+/**
+ * The route's settings box and members, as `route explain` shows them; nothing is recorded.
+ * `advise` says what to do about a route that takes nobody.
+ */
+async function routeDetail(name: string, spec: RouteSpec, deps: RouteDeps, advise?: () => string): Promise<string> {
   const ranking = await rankRouteNow({ route: withDefaults(spec) }, deps, { resume: false, record: false });
-  return renderRouteDetail(name, ranking, { now: deps.clock() });
+  const nobodyHint = advise && takesNobody(ranking) ? advise() : undefined;
+  return renderRouteDetail(name, ranking, { now: deps.clock(), nobodyHint });
 }
 
 /** Asks nothing: the flags say everything, and what was created is shown. */
@@ -255,9 +262,11 @@ async function addRoute(args: string[], deps: RouteDeps): Promise<string> {
   const spec = newRouteFrom(tool, options);
   checkRouteMembers(name, spec, registry);
   await createRoute(name, spec, deps);
+  // A Codex-only user's `route add main` makes a claude route: it is said how to make it codex's.
+  const advise = () => nobodyAdvice(name, otherToolTaking(spec, registry), options);
   return [
     success(`Created route ${bold(name)}`),
-    await routeDetail(name, spec, deps),
+    await routeDetail(name, spec, deps, advise),
     dim(`    Run on it: clausona run --route ${name}`),
     "",
   ].join("\n");
