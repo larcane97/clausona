@@ -138,12 +138,13 @@ describe("ExtensionsScreen", () => {
     expect(frame).toMatch(/Extensions │ ~[\\/]repos[\\/]app/);
     expect(frame).toContain("[Claude]  Codex");
     expect(frame).toContain("Skills · MCP · Hooks");
-    // The project everything is seen from, the folder's own, then a rule, then the scopes.
+    // The project everything is seen from, the folder's own, right above the scopes: no rule
+    // between them, the ▾ sets it apart.
     const lines = frame.split("\n");
     const row = lines.findIndex((line) => line.includes("▾ app (here)"));
     expect(row).toBeGreaterThan(0);
-    expect(lines[row + 1]).toMatch(/^ +─{4,} +│/);
-    expect(lines[row + 2]).toContain("▸ Loaded");
+    expect(lines[row + 1]).toContain("▸ Loaded");
+    expect(lines[row + 2]).toMatch(/^ +─{4,} +│/);
     expect(frame).toContain("LOADED — ");
     expect(frame).toContain("eli5");
     // The scope list has the focus, so no row has the cursor yet.
@@ -328,6 +329,51 @@ describe("ExtensionsScreen", () => {
     const list = await seen(instance, (f) => listOpen(f, "MCP servers"));
     expect(list).toMatch(/▸ ~ \(here\) +1/);
     expect(list).toMatch(/ {3}app +—/);
+  });
+
+  it("takes no key but its own while the project list is open: tab, 1, /, r, m and w change nothing", async () => {
+    const { instance, load } = screen(await seed(more), 140, 40);
+    await seen(instance, (f) => f.includes("deploy-check"));
+    await press(instance, "p");
+    const list = await seen(instance, (f) => listOpen(f));
+    for (const key of [TAB, "1", "2", "/", "r", "m", "w"]) {
+      await type(instance, key);
+      expect(stripAnsi(instance.lastFrame() ?? ""), JSON.stringify(key)).toBe(list);
+    }
+    expect(load).toHaveBeenCalledTimes(1);
+    // Still Claude's skills, seen from app, when it closes.
+    await press(instance, ESC);
+    const after = await seen(instance, (f) => !listOpen(f));
+    expect(after).toContain("[Claude]  Codex");
+    expect(after).toContain("▾ app (here)");
+    expect(after).toContain("▸ Loaded");
+    expect(after).toContain("deploy-check");
+    expect(after).not.toContain("/▏");
+  });
+
+  it("fits Claude's skill scopes on a 24-row terminal, Not used in 90 days and all, with no more line", async () => {
+    // Every scope Claude's skills have here: Cloud and Plugins too, and 200 days on, Not used.
+    const everyScope = (h: TestHome) => {
+      const app = h.path("repos", "app");
+      h.claude("default", ".claude", {
+        projects: { [app]: {} },
+        oauthAccount: { organizationUuid: "org1", accountUuid: "acc1" },
+      });
+      h.skill(".claude/skills/synced/org1_acc1", "pdf");
+      const kit = h.path(".claude/plugins/cache/m/kit/1.0.0");
+      h.write(".claude/plugins/installed_plugins.json", { plugins: { "kit@m": [{ installPath: kit }] } });
+      h.write(".claude/settings.json", { enabledPlugins: { "kit@m": true } });
+      h.skill(".claude/plugins/cache/m/kit/1.0.0/skills", "kit-skill");
+    };
+    const inv = await seed(everyScope);
+    const later = () => Date.now() + 200 * DAY;
+    const instance = mount(<ExtensionsScreen load={async () => inv} onExit={vi.fn()} now={later} />, 80, 24);
+    const frame = await seen(instance, (f) => f.includes("▸ Loaded"));
+    for (const label of ["▾ app (here)", "Project", "Global", "Cloud", "Plugins", "Not used in 90 days"]) {
+      expect(frame, label).toContain(label);
+    }
+    expect(frame).not.toMatch(/↓ \d+ more/);
+    expect(height(frame)).toBeLessThanOrEqual(22);
   });
 
   it("scrolls a long project list, and says how many more are below", async () => {

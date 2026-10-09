@@ -329,8 +329,11 @@ export const DIVIDER_COLUMNS = 2;
  * details' title and the blank line under it.
  */
 export const PANE_HEAD_ROWS = 2;
-/** The lines the scope list draws above the scopes: the project row and the rule under it. */
-export const PROJECT_ROWS = 2;
+/**
+ * The lines the scope list draws above the scopes: the project row. No rule under it - its ▾ and
+ * bold name set it apart - so a 24-row terminal still shows every Claude skill scope.
+ */
+export const PROJECT_ROWS = 1;
 /** The line the project list draws above the projects: its heading. */
 export const LIST_HEAD_ROWS = 1;
 
@@ -338,6 +341,8 @@ export const LIST_HEAD_ROWS = 1;
 export const NO_PROJECT = "No project";
 /** What follows the name of the project the folder csn was started in belongs to. */
 const HERE = " (here)";
+/** The fewest spaces between a project's name and its count, so the count never reads as part of the name. */
+const COUNT_GAP = 2;
 /** The project list's heading, before the kind's noun. */
 const PROJECT_HEADING = "PROJECT";
 /** The `✦` before the table's selected row and the space after it: the table's cells start after them. */
@@ -476,24 +481,27 @@ function countText(entry: ProjectEntry): string {
 
 /**
  * The columns the project row and the project list take whole: the widest line - "▸ ", the name,
- * its " (here)", a space, the count, and the two columns before the divider - or the heading,
- * PROJECT and the kind's noun two apart, from where the marker is. The row is one of the lines,
- * shorter by its count. The same whichever project is picked, so the pane keeps its width.
+ * its " (here)", the two spaces, the count, and the two columns before the divider - or the
+ * heading, PROJECT and the kind's noun two apart, from where the marker is. The row is one of the
+ * lines, shorter by its count. The same whichever project is picked, so the pane keeps its width.
  */
 export function projectPaneWidth(entries: ProjectEntry[], noun: string): number {
   const countWidth = Math.max(0, ...entries.map((e) => countText(e).length));
-  const widest = Math.max(0, ...entries.map((e) => e.name.length + (e.here ? HERE.length : 0) + 1 + countWidth));
+  const widest = Math.max(
+    0,
+    ...entries.map((e) => e.name.length + (e.here ? HERE.length : 0) + COUNT_GAP + countWidth),
+  );
   return Math.max(widest + 4, `${PROJECT_HEADING}  ${noun}`.length + 2);
 }
 
 /**
  * A project's name, and " (here)" for the folder's own, in `room` columns: the name is cut with …
- * first, so "(here)" stays while a letter of the name and its … are left beside it.
+ * first, down to the … alone, so "(here)" stays while that much fits beside it.
  */
 export function projectLabel(name: string, here: boolean, room: number): { name: string; here: string } {
   const mark = here ? HERE : "";
   if (name.length + mark.length <= room) return { name, here: mark };
-  if (here && room >= mark.length + 2) return { name: cell(name, room - mark.length), here: mark };
+  if (here && room >= mark.length + 1) return { name: cell(name, room - mark.length), here: mark };
   return { name: cell(name, room).trimEnd(), here: "" };
 }
 
@@ -502,9 +510,10 @@ export type ProjectLine = { key: string; name: string; here: string; count: stri
 
 /**
  * The project list in a pane `width` wide, laid out as the scope list is: after the marker's two
- * columns, each line runs to two columns before the divider - the name cut with … and the count,
- * or — for none, right-aligned. The heading is PROJECT where the marker is and the kind's noun
- * where the counts end, the noun left out when there is no room for both.
+ * columns, each line runs to two columns before the divider - the name cut with …, two spaces at
+ * least, and the count, or — for none, right-aligned. Where room is short the name gives way,
+ * never the gap or "(here)". The heading is PROJECT where the marker is and the kind's noun where
+ * the counts end, the noun left out when there is no room for both.
  */
 export function projectListLines(
   entries: ProjectEntry[],
@@ -513,12 +522,13 @@ export function projectListLines(
 ): { title: string; noun: string; lines: ProjectLine[] } {
   const inner = Math.max(0, width - 4);
   const counts = entries.map(countText);
-  const room = Math.max(0, inner - Math.max(0, ...counts.map((c) => c.length)) - 1);
+  const room = Math.max(0, inner - Math.max(0, ...counts.map((c) => c.length)) - COUNT_GAP);
   const lines = entries.map((entry, i) => {
     const label = projectLabel(entry.name, entry.here, room);
     const left = inner - label.name.length - label.here.length;
     const count = counts[i] ?? "";
-    return { key: entry.key, ...label, count: count.length <= left ? count.padStart(left) : "", entry };
+    // A count with no room for the gap before it is left out, as a tag with no room is.
+    return { key: entry.key, ...label, count: count.length + COUNT_GAP <= left ? count.padStart(left) : "", entry };
   });
   const head = Math.max(0, width - 2);
   const fits = PROJECT_HEADING.length + 2 + noun.length <= head;
