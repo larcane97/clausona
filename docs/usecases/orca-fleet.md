@@ -1,6 +1,6 @@
 # Run an Orca fleet across your accounts
 
-![A main Claude Code session in Orca opens a worktree per task, named for its task and clausona profile, then checks each branch and removes the worktrees](../../assets/orca-fleet.gif)
+![A main Claude Code session in Orca, on Opus, opens a worktree per task named for its account, one on Sonnet with a second Claude account and one on DeepSeek through an API, then checks each branch and removes the worktrees](../../assets/orca-fleet.gif)
 
 [Orca](https://github.com/stablyai/orca) runs coding agents side by side, each in its own git
 worktree, and lists them in its sidebar. clausona gives each of those agents its own account.

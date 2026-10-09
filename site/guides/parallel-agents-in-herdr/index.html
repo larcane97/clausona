@@ -116,13 +116,13 @@
         <p>Install the <code>herdr-fleet</code> plugin. It brings <code>fleet-core</code>, the rules all the fleet plugins share, with it:</p>
 <pre data-copy><code>claude plugin marketplace add larcane97/clausona
 claude plugin install herdr-fleet@clausona</code></pre>
-        <p>Then, in a herdr pane, ask Claude Code something like "Split these across my accounts in herdr: add a CONTRIBUTING.md, and add an .editorconfig."</p>
+        <p>Then, in a herdr pane, ask Claude Code something like "Split these across my accounts in herdr: write a CONTRIBUTING.md with Sonnet on claude:side, and add an .editorconfig on DeepSeek."</p>
         <p>It plans the work and starts a worker pane per task, on the account each one should use. It checks what comes back before it cleans up.</p>
       </div>
 
       <figure class="figure">
-        <img class="demo" src="../../assets/herdr-fleet.gif" width="1200" height="820" loading="lazy" alt="A main Claude Code session in herdr opens a worktree per task, starts both workers on a DeepSeek profile, then checks each branch and removes the worktrees.">
-        <figcaption>A real run, sped up. The main session runs on its own account and both workers run on DeepSeek. The main session checks each branch before it removes the worktree.</figcaption>
+        <img class="demo" src="../../assets/herdr-fleet.gif" width="1200" height="820" loading="lazy" alt="A main Claude Code session in herdr, on Opus with its own account, starts one worker on Sonnet with a second Claude account and one on DeepSeek through an API, each in its own worktree and pane, then checks each branch, sends a follow-up where needed and removes the worktrees.">
+        <figcaption>A real run, sped up. The main session runs Opus on its own account. One worker runs Sonnet on a second account and the other runs DeepSeek through an API, and the main session checks each branch before it removes the worktree.</figcaption>
       </figure>
 
       <h2 id="see">What you see in herdr</h2>

@@ -116,13 +116,13 @@
         <p>Install the <code>orca-fleet</code> plugin. It brings <code>fleet-core</code>, the rules all the fleet plugins share, with it:</p>
 <pre data-copy><code>claude plugin marketplace add larcane97/clausona
 claude plugin install orca-fleet@clausona</code></pre>
-        <p>Then, in an Orca terminal, ask Claude Code something like "Split these across my accounts in Orca: add a CODE_OF_CONDUCT.md, and add a .prettierrc. Use DeepSeek for both."</p>
+        <p>Then, in an Orca terminal, ask Claude Code something like "Split these across my accounts in Orca: write a CODE_OF_CONDUCT.md with Sonnet on claude:side, and add a .prettierrc on DeepSeek."</p>
         <p>It plans the work and starts a worker per task in its own Orca worktree, on the account each one should use. It checks what comes back before it cleans up.</p>
       </div>
 
       <figure class="figure">
-        <img class="demo" src="../../assets/orca-fleet.gif" width="1200" height="699" loading="lazy" alt="A main Claude Code session in Orca opens a worktree per task, named for the task and its clausona profile, runs both workers on DeepSeek, then checks each branch and removes the worktrees.">
-        <figcaption>A real run, sped up. Each worker is an Orca worktree named after its task and profile, and the main session checks each branch before it removes the worktree.</figcaption>
+        <img class="demo" src="../../assets/orca-fleet.gif" width="1200" height="699" loading="lazy" alt="A main Claude Code session in Orca, on Opus with its own account, opens a worktree per task named for the account it runs on, one on Sonnet with a second Claude account and one on DeepSeek through an API, then checks each branch and removes the worktrees.">
+        <figcaption>A real run, sped up. Each worker is an Orca worktree named after its task and account: one runs Sonnet on a second account, the other DeepSeek through an API. The main session checks each branch before it removes the worktree.</figcaption>
       </figure>
 
       <h2 id="see">What you see in Orca</h2>

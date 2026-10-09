@@ -1,6 +1,6 @@
 # Run a herdr fleet across your accounts
 
-![A main Claude Code session in herdr starts two workers on DeepSeek, each in its own worktree, then checks each branch and removes the worktrees](../../assets/herdr-fleet.gif)
+![A main Claude Code session in herdr, on Opus, starts one worker on Sonnet with a second Claude account and one on DeepSeek through an API, then checks each branch and removes the worktrees](../../assets/herdr-fleet.gif)
 
 [herdr](https://github.com/ogulcancelik/herdr) keeps coding agents running in terminal panes and
 shows each one's state in its sidebar. clausona gives each of those agents its own account. With
