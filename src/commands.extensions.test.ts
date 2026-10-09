@@ -41,7 +41,7 @@ describe("skills, mcp and hooks commands", () => {
         "                      | unused | all",
     );
     expect(await ls("mcp")).toContain(
-      "--account <name>  Only this Claude account (repeatable): in Loaded here, the rows that\n" +
+      "--account <name>  Only this Claude account (repeatable): in Loaded, the rows that\n" +
         "                      load for it; in any other scope, the rows it has",
     );
     expect(await ls("hooks")).toMatch(

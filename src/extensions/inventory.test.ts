@@ -392,7 +392,7 @@ describe("loadInventory, the home dir as a project", () => {
       "claude:work",
       "codex:personal",
     ]);
-    // Seen from another project the home dir is still one of the projects, as the picker lists them.
+    // Seen from another project the home dir is still one of the projects, as the project list lists them.
     expect((await load(h, app)).projects.map((p) => p.path)).toEqual([home, app]);
   });
 

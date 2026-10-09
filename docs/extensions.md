@@ -27,8 +27,8 @@ and `work`, the projects `~/app` and `~/site`, and a plugin `kit@demo`.
 
 Everything is seen from one project. It is the git root that holds the current directory, or
 the directory itself outside a repository. The home folder can be the project too.
-`--project <path>` looks from another one, and `p` picks one on the screen. At the filesystem
-root there is no project.
+`--project <path>` looks from another one, and on the screen the project list picks one (see
+[On the screen](#on-the-screen)). At the filesystem root there is no project.
 
 The other projects are the folders that Claude Code or Codex recorded in any account and that
 still exist.
@@ -50,12 +50,12 @@ The text output names an account by its short name (`work`), JSON by its profile
 
 ## Scopes
 
-A scope is a place things come from. Two of them, Loaded here and Not used in 90 days, are
+A scope is a place things come from. Two of them, Loaded and Not used in 90 days, are
 worked out from the others.
 
 | Scope | `--scope` | Applies to | Its header on the screen |
 |---|---|---|---|
-| Loaded here | `loaded` | every tool and kind | `what Claude Code loads in ~/app, in at least one account` |
+| Loaded | `loaded` | every tool and kind | `what Claude Code loads in ~/app, in at least one account` |
 | Project | `project` | every tool and kind | the project's own files, listed below |
 | Parent folders | `parents` | Claude MCP | `.mcp.json in ~/repos · loads here too` |
 | Global | `global` | every tool and kind | the user's own files, listed below, then `· loads in every project` |
@@ -63,11 +63,11 @@ worked out from the others.
 | Plugins | `plugins` | Claude skills, MCP and hooks | `plugins that bring skills, installed for you or for this project` |
 | Built-in | `builtin` | Claude and Codex skills | Claude: `skills that come with Claude Code · only the ones your settings name`; Codex: `skills that come with Codex · in its skills/.system folder` |
 | Managed | `managed` | Claude MCP and hooks | `your organization's managed settings · apply in every project` |
-| Other projects | `other` | every tool and kind | `projects with skills of their own · they load there, not here` |
+| Other projects | `other` | every tool and kind, in the CLI | none: the screen has the project list instead |
 | Not used in 90 days | `unused` | Claude skills | `not used in 90 days in any account, or never used and older than 14 days` |
 
 The header says "runs" for hooks and names MCP servers or hooks where the table above says
-skills. Codex's Loaded here reads `what Codex loads in ~/app`, with no accounts: Codex
+skills. Codex's Loaded reads `what Codex loads in ~/app`, with no accounts: Codex
 profiles share one configuration.
 
 Project and Global are these files. The header names the folders it found.
@@ -84,19 +84,20 @@ Project and Global are these files. The header names the folders it found.
 `~/.claude` stands for the primary Claude Code folder, which every account's `settings.json`
 and `skills` link to. Codex's home is the primary Codex folder, `~/.codex` by default.
 
-Each tool and kind lists its scopes in this order:
+The screen lists the scopes of each tool and kind in this order:
 
 | Tool, kind | Scopes |
 |---|---|
-| Claude skills | Loaded here, Project, Global, Cloud, Plugins, Built-in, Other projects, Not used in 90 days |
-| Claude MCP | Loaded here, Project, Parent folders, Global, Plugins, Managed, Other projects |
-| Claude hooks | Loaded here, Project, Global, Plugins, Managed, Other projects |
-| Codex skills | Loaded here, Project, Global, Built-in, Other projects |
-| Codex MCP | Loaded here, Project, Global, Other projects |
-| Codex hooks | Loaded here, Project, Global, Other projects |
+| Claude skills | Loaded, Project, Global, Cloud, Plugins, Built-in, Not used in 90 days |
+| Claude MCP | Loaded, Project, Parent folders, Global, Plugins, Managed |
+| Claude hooks | Loaded, Project, Global, Plugins, Managed |
+| Codex skills | Loaded, Project, Global, Built-in |
+| Codex MCP | Loaded, Project, Global |
+| Codex hooks | Loaded, Project, Global |
 
-The screen always shows Loaded here and Project, and the others only when they hold something.
-The CLI takes every scope its command has, for either tool, and says so when one is empty.
+The screen always shows Loaded and Project, and the others only when they hold something.
+The CLI takes every scope its command has, for either tool, and says so when one is empty. It
+also has Other projects, `--scope other`. [Scope values](#scope-values) lists them all.
 
 Some scopes need a word more:
 
@@ -108,9 +109,9 @@ Some scopes need a word more:
   `~/.claude/skills/synced`.
 - Plugins lists the plugins themselves (rows of kind `plugin`) that bring at least one
   thing of the kind, installed for everyone or for this project. A plugin installed only for
-  another project is under Other projects. In JSON a plugin row has `contains`, the names of
-  what it brings. What a plugin brings is in Loaded here while the plugin is on, and in `all`,
-  with the plugin's name as WHERE.
+  another project is under Plugins seen from that project, and under Other projects in the CLI.
+  In JSON a plugin row has `contains`, the names of what it brings. What a plugin brings is in
+  Loaded while the plugin is on, and in `all`, with the plugin's name as WHERE.
 - Built-in: skills that come with the tool itself. You can turn them off, but not delete
   them.
   - Claude Code keeps its built-in skills (such as `claude-api`) inside the program, not
@@ -121,12 +122,13 @@ Some scopes need a word more:
 - Managed: the administrator's managed settings, `managed-settings.json` and the files in
   `managed-settings.d/`. In this version that means hooks: clausona reads no managed MCP file,
   so `mcp ls --scope managed` is always empty.
-- Other projects: on the screen, a list of projects with a count each; `enter` opens one.
-  `ls --scope other` lists the rows of every other project at once, each with its `project`.
+- Other projects, in the CLI only: `ls --scope other` lists the rows of every other project at
+  once, each with its `project`. On the screen, pick that project from the project list to see
+  its rows.
 
-### Loaded here
+### Loaded
 
-Loaded here is the union of what loads in this project:
+Loaded is the union of what loads in this project:
 
 - what no project owns: Global, Cloud, built-in and managed items;
 - what an enabled plugin brings, installed for everyone or for this project;
@@ -135,7 +137,7 @@ Loaded here is the union of what loads in this project:
 
 Then it takes out what is off, a `.mcp.json` server still pending approval, a skill whose link
 is broken (there is no `SKILL.md` to read), and a copy that a same-name copy wins over. For
-Claude, a row is in Loaded here when it loads in at least one account.
+Claude, a row is in Loaded when it loads in at least one account.
 
 ### Which copy wins
 
@@ -157,7 +159,7 @@ one is `pending approval`.
 The copy that loses is tagged with the scope of the one that wins: `hidden by Global copy` for
 a Global skill, `hidden by Project copy` for a local server or this project's `.mcp.json`, and
 `hidden by Parent folders copy` for a `.mcp.json` in a folder above. It gets the tag only when
-it loses in every account that has it, and is then not in Loaded here. When it loses in some
+it loses in every account that has it, and is then not in Loaded. When it loses in some
 accounts only, it still loads here, with no `hidden by` tag, and its details say where it is
 hidden: `Loaded  on in personal · hidden by the Global copy in work`.
 
@@ -207,7 +209,7 @@ A row can carry several tags. They are listed most important first: `broken link
 
 | Tag | When |
 |---|---|
-| `broken link` | The skill's folder is a link whose target is missing. It does not load, so it is not in Loaded here. |
+| `broken link` | The skill's folder is a link whose target is missing. It does not load, so it is not in Loaded. |
 | `off` | Off in every account that has it, by a user or managed setting, or because nothing turns it on (a plugin no settings file enables). |
 | `off here` | Off in every account by this project's own settings: its `.claude/settings*.json`, an account's entry for it in `.claude.json`, or its `.codex/config.toml`. |
 | `off in N of M accounts` | Off in N accounts and on in the others. M counts the accounts that have the row; for a server every account sees, the accounts that have opened this project. |
@@ -226,7 +228,8 @@ The rule uses two constants, `CLEANUP_UNUSED_DAYS = 90` and `CLEANUP_GRACE_DAYS 
 
 - It covers Claude skills only. Codex keeps no record of use.
 - It covers the skills you can delete one at a time: those in Global (an account's own folder
-  too), Project and Other projects. Cloud, plugin and built-in skills are left out.
+  too), this project and every other project. WHERE reads Project for this project's own and
+  names any other project. Cloud, plugin and built-in skills are left out.
 - A skill is unused when its last use, in any account, was more than 90 days ago.
 - A skill that was never used is unused when its folder is more than 14 days old. Its age is
   the folder's birth time, or its modification time where there is none. The details say it:
@@ -246,7 +249,7 @@ over it share one count.
 
 ```
 $ csn skills ls
-8 skills · Loaded here · project ~/app
+8 skills · Loaded · project ~/app
 
 NAME           TOOL    WHERE               USES  LAST USED  NOTE
 deploy-check   claude  Project             9     5d ago
@@ -334,7 +337,7 @@ Those two say where ids come from and link to this page online, at its JSON and
 | `--scope <scope>` | For `ls`, the scope to list, `loaded` by default. For `show`, the one scope to look in. |
 | `--tool <tool>` | `claude` or `codex`. Both by default. |
 | `--project <path>` | Look from another project. A relative path is read from the current directory, and a leading `~` is the home folder, so `--project '~/app'` works without a shell. It must be a directory, and its git root is used, as for the current directory. |
-| `--account <name>` | MCP only. In Loaded here, the default scope, keep the rows that load for this Claude account; in any other scope, the rows it has, on or off. Give it more than once for several accounts. It takes `work` or `claude:work`, lists Claude rows only, and cannot be used with `--tool codex`. |
+| `--account <name>` | MCP only. In Loaded, the default scope, keep the rows that load for this Claude account; in any other scope, the rows it has, on or off. Give it more than once for several accounts. It takes `work` or `claude:work`, lists Claude rows only, and cannot be used with `--tool codex`. |
 | `--id <id>` | `show` only. A row key or a copy's id, from `ls --json`. |
 | `--json` | Print JSON version 1, described under [JSON](#json). |
 
@@ -346,7 +349,7 @@ outside `mcp` and `--id` with `ls` are all bad usage, exit code 2.
 
 | Value | Scope | skills | mcp | hooks |
 |---|---|---|---|---|
-| `loaded` | Loaded here, the default | ✓ | ✓ | ✓ |
+| `loaded` | Loaded, the default | ✓ | ✓ | ✓ |
 | `project` | Project | ✓ | ✓ | ✓ |
 | `parents` | Parent folders | | ✓ | |
 | `global` | Global | ✓ | ✓ | ✓ |
@@ -360,7 +363,7 @@ outside `mcp` and `--id` with `ls` are all bad usage, exit code 2.
 
 `all` is the places together, each row once: Project, Parent folders, Global, Cloud, Plugins,
 the built-in scope, Managed and Other projects. In place of each plugin it lists what the plugin
-brings of the kind, on or off, with the same row ids as in Loaded here. So `hooks ls --scope all`
+brings of the kind, on or off, with the same row ids as in Loaded. So `hooks ls --scope all`
 lists hooks only, and its title counts hooks. The title reads `All scopes` where a scope's
 name would be, as in `4 hooks · All scopes · project ~/app`. The plugins themselves are in
 `plugins`.
@@ -377,7 +380,7 @@ plugins of one name from two marketplaces make that short name ambiguous.
 
 Without `--scope`, `show` looks in tiers. The first tier that has a match decides:
 
-1. Rows in Loaded here.
+1. Rows in Loaded.
 2. If none match: rows in Project, Parent folders, Global, Cloud, Plugins, Built-in and
    Managed, whether they load here or not. This tier also holds
    what no scope lists, such as a skill of a plugin that is off.
@@ -390,7 +393,7 @@ loads here, even when another project has its own.
 `--scope` replaces the tiers with that one scope. It takes every value `ls --scope` takes, and
 looks in that scope's rows and in the rows that live there, such as what plugins bring under
 `plugins`. With `--scope all` a plugin itself is not among them; it is under `plugins`.
-`--tool` and `--account` narrow every tier. In Loaded here, `--account` keeps the rows that
+`--tool` and `--account` narrow every tier. In Loaded, `--account` keeps the rows that
 load for that account, as `ls` does; in the other tiers, the rows it has. It only picks which
 rows match: the details still list every account.
 
@@ -698,7 +701,7 @@ state. A `.mcp.json` server in a project no account has opened has none either, 
 merges every account's approvals.
 
 A name in several places is not ambiguous by itself. Claude Code takes one server per name, so
-a user `github` and this project's `.mcp.json` `github` make one row in Loaded here, the copy
+a user `github` and this project's `.mcp.json` `github` make one row in Loaded, the copy
 that wins (see [Which copy wins](#which-copy-wins)), and `show` shows that one. Only when two
 copies each load in a different account, such as one account's local server and another's user
 server, does `show` exit 2 and print `candidates`. Then add `--account work` for the one that
@@ -712,7 +715,7 @@ csn hooks ls --tool claude --json \
   | jq '.items[] | select(.summary.event == "Stop") | {command: .summary.command, file, from}'
 ```
 
-Loaded here lists the hooks that run in this project, plugins' included. The event is in
+Loaded lists the hooks that run in this project, plugins' included. The event is in
 `summary.event`; `Stop` is "When Claude finishes replying". `summary.command`, or
 `summary.prompt`, is what runs, and `file` is where it is set. `csn hooks show Stop` shows
 one; when several hooks are on Stop, it exits 2 and lists their ids.
@@ -724,19 +727,33 @@ second level. The scope list is on the left and the chosen scope's table on the 
 columns or more both show; below that, one at a time: scopes, then the table, then the
 details.
 
-The screen's tables differ a little from the CLI's. They have no TOOL column, Loaded here adds
+The project row sits above the scopes, with a rule under it. It names the project everything
+is seen from, such as `▾ app (here)`. `(here)` marks the project of the folder you started
+`csn` in, and with no project the row reads `▾ No project`.
+
+`p`, or `↑` from Loaded to the row and then `enter`, opens the project list in the scope
+list's place. The heading reads `PROJECT` with the kind on the right: `skills`, `MCP servers`
+or `hooks`. The project you are looking from comes first. Every other project that Claude Code
+or Codex recorded follows, by name, with the count of its own rows of this tool and kind, the
+ones its Project scope lists. A project with none shows `—`. `No project` is last. When two
+projects have the same folder name, the folder above is shown too, as in `work/site`.
+
+Picking a project shows every scope as seen from it, and goes back to Loaded. The title bar
+and the table's header name it. `esc` or `←` closes the list and changes nothing.
+
+The screen's tables differ a little from the CLI's. They have no TOOL column, Loaded adds
 FROM, and Codex skills show their description.
 
 | Key | What it does |
 |---|---|
-| `tab` | Switch between Claude and Codex, back to Loaded here. |
-| `1` `2` `3` | Skills, MCP, Hooks, back to Loaded here. |
-| `↑` `↓` `pgup` `pgdn` | Move. |
-| `→` or `enter` | From the scope list into the table. |
-| `enter` | On a row, its details. On another project, its table. |
-| `←` or `esc` | Back one step. `esc` on the scope list leaves the screen. |
+| `tab` | Switch between Claude and Codex, back to Loaded. |
+| `1` `2` `3` | Skills, MCP, Hooks, back to Loaded. |
+| `↑` `↓` `pgup` `pgdn` | Move. `↑` from the first scope goes to the project row, `↓` comes back. |
+| `→` or `enter` | From the scope list into the table. On the project row, the project list. |
+| `enter` | On a row, its details. In the project list, look from that project. |
+| `←` or `esc` | Back one step. `esc` on the scope list or the project row leaves the screen. In the project list, close it. |
 | `/` | Search the table. `enter` keeps the search, `esc` drops it. |
-| `p` | Pick the project. |
+| `p` | Open the project list, from anywhere but a search. |
 | `m` | A matrix of servers by account: which account starts which server in this project. On Claude's MCP tab, with a project picked. |
 | `r` | Read the files again. |
 | `w` | The files that could not be read, when there are any. |

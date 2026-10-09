@@ -27,7 +27,8 @@ export type ScopeId =
   | "unused";
 
 export const SCOPE_LABEL: Record<ScopeId, (tool: ToolName) => string> = {
-  loaded: () => "Loaded here",
+  // What loads in the project everything is seen from, whichever one is picked.
+  loaded: () => "Loaded",
   project: () => "Project",
   parents: () => "Parent folders",
   global: () => "Global",
@@ -41,17 +42,20 @@ export const SCOPE_LABEL: Record<ScopeId, (tool: ToolName) => string> = {
 
 export type ScopeEntry = { id: ScopeId; label: string; count: number };
 
-/** The left pane's order per tool and kind. */
+/**
+ * The left pane's order per tool and kind. The screen has no Other projects: its project list
+ * picks another project to see everything from. The CLI keeps `--scope other`, in its own list.
+ */
 const ORDER: Record<ToolName, Record<ItemKind, readonly ScopeId[]>> = {
   claude: {
-    skill: ["loaded", "project", "global", "cloud", "plugins", "builtin", "other", "unused"],
-    mcp: ["loaded", "project", "parents", "global", "plugins", "managed", "other"],
-    hook: ["loaded", "project", "global", "plugins", "managed", "other"],
+    skill: ["loaded", "project", "global", "cloud", "plugins", "builtin", "unused"],
+    mcp: ["loaded", "project", "parents", "global", "plugins", "managed"],
+    hook: ["loaded", "project", "global", "plugins", "managed"],
   },
   codex: {
-    skill: ["loaded", "project", "global", "builtin", "other"],
-    mcp: ["loaded", "project", "global", "other"],
-    hook: ["loaded", "project", "global", "other"],
+    skill: ["loaded", "project", "global", "builtin"],
+    mcp: ["loaded", "project", "global"],
+    hook: ["loaded", "project", "global"],
   },
 };
 
@@ -76,10 +80,7 @@ export function scopesFor(
 ): ScopeEntry[] {
   const entries: ScopeEntry[] = [];
   for (const id of ORDER[tool][kind]) {
-    const count =
-      id === "other"
-        ? otherProjects(inv, tool, kind, project).length
-        : rowsIn(inv, tool, kind, id, project, now).length;
+    const count = rowsIn(inv, tool, kind, id, project, now).length;
     if (count > 0 || ALWAYS.has(id)) entries.push({ id, label: SCOPE_LABEL[id](tool), count });
   }
   return entries;
@@ -224,8 +225,8 @@ function byAccount(inv: Inventory): (a: Extension, b: Extension) => number {
 
 /**
  * itemsIn as rows. A row of copies holds every account's (or install's) copy, primary first, and
- * is listed when any copy is: in Loaded here, one account loading it is enough. Every other row
- * is one item, keyed by its id.
+ * is listed when any copy is: in Loaded, one account loading it is enough. Every other row is
+ * one item, keyed by its id.
  */
 export function rowsIn(
   inv: Inventory,

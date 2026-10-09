@@ -20,7 +20,13 @@ import {
   KINDS,
   listRoom,
   maxDetailTop,
+  NO_PROJECT,
+  type ProjectEntry,
   paneLayout,
+  projectLabel,
+  projectList,
+  projectListLines,
+  projectPaneWidth,
   scopeLines,
   scrolled,
   type Table,
@@ -93,9 +99,9 @@ async function bare(): Promise<Seeded> {
 }
 
 const titles = (table: Table) => table.columns.map((c) => c.title);
-const names = (table: Table) => table.rows.map((r) => r.row?.name ?? r.project?.name);
+const names = (table: Table) => table.rows.map((r) => r.row.name);
 const cells = (row: TableRow | undefined) => row?.cells.map((c) => c.trim());
-const byName = (table: Table, name: string) => table.rows.find((r) => r.row?.name === name);
+const byName = (table: Table, name: string) => table.rows.find((r) => r.row.name === name);
 /** A path as the screen shows it, in this OS's separators and case: compare with `pathKey`. */
 const sameText = (a: string | undefined, b: string) => pathKey(a ?? "") === pathKey(b);
 
@@ -124,10 +130,10 @@ describe("tables", () => {
     expect(byName(project, "eli5")?.tag).toEqual({ text: "hidden by Global copy", tone: "muted" });
     // A hidden copy never loads: Claude counts its name's use under the copy that wins.
     expect(cells(byName(project, "eli5"))).toEqual(["eli5", "—", "—"]);
-    expect(byName(project, "eli5")?.row?.items[0]?.location.project).toBe(app);
+    expect(byName(project, "eli5")?.row.items[0]?.location.project).toBe(app);
   });
 
-  it("adds FROM after the first column in Loaded here", async () => {
+  it("adds FROM after the first column in Loaded", async () => {
     const { inv, app } = await seed();
     const loaded = buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, "");
     expect(titles(loaded)).toEqual(["NAME", "FROM", "USES", "LAST USED"]);
@@ -135,7 +141,7 @@ describe("tables", () => {
     expect(byName(loaded, "eli5")?.cells[1]?.trim()).toBe("Global");
     expect(byName(loaded, "deploy-check")?.cells[1]?.trim()).toBe("Project");
     expect(loaded.header).toBe(
-      `LOADED HERE — what Claude Code loads in ${path.join("~", "repos", "app")}, in at least one account`,
+      `LOADED — what Claude Code loads in ${path.join("~", "repos", "app")}, in at least one account`,
     );
     expect(loaded.count).toBe(3);
     expect(loaded.empty).toBe("");
@@ -190,27 +196,6 @@ describe("tables", () => {
     ]);
   });
 
-  it("lists other projects with their path and count, and opens one in the project's columns", async () => {
-    const { inv, app, web } = await seed();
-    const list = buildTable(inv, "claude", "skill", "other", app, NOW, 100, "");
-    expect(titles(list)).toEqual(["PROJECT", "PATH", "COUNT"]);
-    expect(list.rows).toHaveLength(1);
-    expect(list.rows[0]?.project).toEqual({ path: web, name: "web", count: 1 });
-    expect(list.rows[0]?.row).toBeUndefined();
-    expect(list.rows[0]?.key).toBe(web);
-    expect(cells(list.rows[0])?.[0]).toBe("web");
-    expect(sameText(cells(list.rows[0])?.[1], path.join("~", "repos", "web"))).toBe(true);
-    expect(cells(list.rows[0])?.[2]).toBe("1");
-    expect(list.columns[2]?.align).toBe("right");
-    expect(list.count).toBe(1);
-
-    const opened = buildTable(inv, "claude", "skill", "other", app, NOW, 100, "", web);
-    expect(titles(opened)).toEqual(["NAME", "USES", "LAST USED"]);
-    expect(names(opened)).toEqual(["web-only"]);
-    expect(opened.header.startsWith("OTHER PROJECTS › web — ")).toBe(true);
-    expect(opened.count).toBe(1);
-  });
-
   it("lists what is not used in 90 days with where it is", async () => {
     const { inv, app } = await seed();
     const unused = buildTable(inv, "claude", "skill", "unused", app, NOW, 100, "");
@@ -243,7 +228,7 @@ describe("tables", () => {
       ["solo", "default"],
     ]);
     expect(claude.count).toBe(2);
-    expect(byName(claude, "github")?.row?.items).toHaveLength(2);
+    expect(byName(claude, "github")?.row.items).toHaveLength(2);
     expect(byName(claude, "github")?.key).toBe("mcp:claude:account:-:github");
     // A search reads ACCOUNTS as the row shows it.
     expect(names(buildTable(inv, "claude", "mcp", "global", app, NOW, 100, "default"))).toEqual(["solo"]);
@@ -312,7 +297,7 @@ describe("tables", () => {
     });
     const cloud = buildTable(inv, "claude", "skill", "cloud", app, NOW, 100, "");
     expect(cloud.rows).toHaveLength(1);
-    expect(cloud.rows[0]?.row?.items).toHaveLength(2);
+    expect(cloud.rows[0]?.row.items).toHaveLength(2);
     expect(cells(cloud.rows[0])).toEqual(["pdf", "5", "1d ago"]);
   });
 
@@ -325,7 +310,7 @@ describe("tables", () => {
 });
 
 describe("empty tables", () => {
-  it("says a sentence for an empty project and an empty Loaded here (Review Focus 1)", async () => {
+  it("says a sentence for an empty project and an empty Loaded (Review Focus 1)", async () => {
     const { inv, app } = await bare();
     const project = buildTable(inv, "claude", "hook", "project", app, NOW, 80, "");
     expect(project.rows).toEqual([]);
@@ -333,7 +318,6 @@ describe("empty tables", () => {
     expect(project.empty).toBe("Nothing in this project's own files.");
     expect(buildTable(inv, "claude", "hook", "loaded", app, NOW, 80, "").empty).toBe("Nothing is loaded here.");
     expect(buildTable(inv, "claude", "hook", "global", app, NOW, 80, "").empty).toBe("None.");
-    expect(buildTable(inv, "claude", "hook", "other", app, NOW, 80, "").empty).toBe("None.");
   });
 
   it("with no project, leaves the Project sentence to the header alone (Review Focus 3)", async () => {
@@ -370,12 +354,11 @@ describe("search", () => {
     expect(buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, "  ").countText).toBe("3");
   });
 
-  it("matches names and descriptions in any case, and an other project's name", async () => {
+  it("matches names and descriptions in any case", async () => {
     const { inv, app } = await seed();
     expect(names(buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, "ELI"))).toEqual(["eli5"]);
     expect(names(buildTable(inv, "claude", "skill", "global", app, NOW, 100, "simply"))).toEqual(["eli5"]);
-    expect(names(buildTable(inv, "claude", "skill", "other", app, NOW, 100, "WEB"))).toEqual(["web"]);
-    expect(names(buildTable(inv, "claude", "skill", "other", app, NOW, 100, "nope"))).toEqual([]);
+    expect(names(buildTable(inv, "claude", "skill", "global", app, NOW, 100, "nope"))).toEqual([]);
   });
 
   it("matches what the row shows: a hook's WHEN, a FROM, but not a count or a time", async () => {
@@ -424,7 +407,7 @@ describe("widths", () => {
   });
 
   it("fits every table of every scope at every width: cells as wide as their column, cells and tag within the width", async () => {
-    const { inv, app, web } = await seed((h) => {
+    const { inv, app } = await seed((h) => {
       h.skill(".claude/skills", LONG, `${"a long description ".repeat(8)}`);
       h.skill(".agents/skills", LONG, `${"a long description ".repeat(8)}`);
       h.write(".claude/settings.json", {
@@ -433,13 +416,10 @@ describe("widths", () => {
     });
     for (const tool of ["claude", "codex"] as const) {
       for (const kind of KINDS) {
-        const scopes = scopesFor(inv, tool, kind, app, NOW);
-        const tables = scopes.map((s) => s.id).map((scope) => ({ scope, other: undefined as string | undefined }));
-        tables.push({ scope: "other", other: web });
-        for (const { scope, other } of tables) {
+        for (const { id: scope } of scopesFor(inv, tool, kind, app, NOW)) {
           for (const width of [16, 30, 40, 60, 80, 100, 140]) {
-            const table = buildTable(inv, tool, kind, scope, app, NOW, width, "", other);
-            const what = `${tool} ${kind} ${scope} ${other ?? ""} at ${width}`;
+            const table = buildTable(inv, tool, kind, scope, app, NOW, width, "");
+            const what = `${tool} ${kind} ${scope} at ${width}`;
             expect(
               table.columns.reduce((sum, c) => sum + c.width, 0),
               what,
@@ -527,6 +507,160 @@ describe("tag width", () => {
   });
 });
 
+describe("projectList", () => {
+  const shape = (list: ProjectEntry[]) => list.map((e) => [e.name, e.here, e.current, e.count]);
+
+  it("puts the project seen from first, then every other recorded one, then No project", async () => {
+    const { inv, app, web } = await seed();
+    const list = projectList(inv, "claude", "skill", app, app);
+    expect(shape(list)).toEqual([
+      ["app", true, true, 2],
+      ["web", false, false, 1],
+      [NO_PROJECT, false, false, 0],
+    ]);
+    expect(list.map((e) => e.path)).toEqual([app, web, undefined]);
+    expect(new Set(list.map((e) => e.key)).size).toBe(list.length);
+    // Seen from web, web is first and the current one; app keeps its (here).
+    expect(shape(projectList(inv, "claude", "skill", web, app))).toEqual([
+      ["web", false, true, 1],
+      ["app", true, false, 2],
+      [NO_PROJECT, false, false, 0],
+    ]);
+    // With no project picked, No project is the current one, still last.
+    expect(shape(projectList(inv, "claude", "skill", undefined, app))).toEqual([
+      ["app", true, false, 2],
+      ["web", false, false, 1],
+      [NO_PROJECT, false, true, 0],
+    ]);
+    // Started where there is no project: no project is here.
+    expect(projectList(inv, "claude", "skill", app, undefined).some((e) => e.here)).toBe(false);
+  });
+
+  it("orders the others by name, not by path, and names two folders of one name with the folder above", async () => {
+    const { inv, app } = await seed((h, app, web) => {
+      const recorded = ["a/zed", "b/alpha", "work/site", "mine/site"].map((dir) => h.project(dir));
+      h.claude("default", ".claude", {
+        projects: Object.fromEntries([app, web, ...recorded].map((dir) => [dir, {}])),
+      });
+    });
+    expect(projectList(inv, "claude", "skill", app, app).map((e) => e.name)).toEqual([
+      "app",
+      "alpha",
+      path.join("mine", "site"),
+      "web",
+      path.join("work", "site"),
+      "zed",
+      NO_PROJECT,
+    ]);
+  });
+
+  it("counts each project's own rows of the tool and kind, as its Project scope lists them", async () => {
+    const { inv, app, web } = await seed((h, app, web) => {
+      // One local server two accounts gave app: one row. web's .mcp.json, one more.
+      const pg = { command: "pg-mcp" };
+      h.claude("default", ".claude", { projects: { [app]: { mcpServers: { pg } }, [web]: {} } });
+      h.claude("work", ".claude-work", { projects: { [app]: { mcpServers: { pg } } } });
+      h.write("repos/web/.mcp.json", { mcpServers: { docs: { command: "docs-mcp" } } });
+      // A plugin installed for web brings a skill: web's Plugins, not its own files.
+      const sp = h.path(".claude/plugins/cache/m/sp/1.0.0");
+      h.write(".claude/plugins/installed_plugins.json", {
+        plugins: { "sp@m": [{ scope: "local", projectPath: web, installPath: sp }] },
+      });
+      h.skill(".claude/plugins/cache/m/sp/1.0.0/skills", "sp-skill");
+    });
+    const counts = (kind: (typeof KINDS)[number]) => projectList(inv, "claude", kind, app, app).map((e) => e.count);
+    expect(counts("skill")).toEqual([2, 1, 0]);
+    expect(counts("mcp")).toEqual([1, 1, 0]);
+    expect(counts("hook")).toEqual([0, 0, 0]);
+    for (const tool of ["claude", "codex"] as const) {
+      for (const kind of KINDS) {
+        // The same from wherever it is seen, and what Project counts once the project is picked.
+        const fromWeb = projectList(inv, tool, kind, web, app);
+        for (const entry of fromWeb.filter((e) => e.path !== undefined)) {
+          const project = scopesFor(inv, tool, kind, entry.path, NOW).find((s) => s.id === "project");
+          expect(entry.count, `${tool} ${kind} ${entry.name}`).toBe(project?.count);
+        }
+        const byKey = (list: ProjectEntry[]) => Object.fromEntries(list.map((e) => [e.key, e.count]));
+        expect(byKey(fromWeb)).toEqual(byKey(projectList(inv, tool, kind, app, app)));
+      }
+    }
+  });
+});
+
+describe("project list widths", () => {
+  const entry = (name: string, count: number, here = false): ProjectEntry => ({
+    key: name,
+    path: path.join(path.sep, name),
+    name,
+    here,
+    current: false,
+    count,
+  });
+  const none: ProjectEntry = { key: "none", name: NO_PROJECT, here: false, current: true, count: 0 };
+  const entries = [
+    entry("agency-platform", 35, true),
+    entry("a-project-with-a-very-long-name", 7),
+    entry("web", 0),
+    none,
+  ];
+  const text = (line: { name: string; here: string; count: string }) => `${line.name}${line.here}${line.count}`;
+
+  it("cuts a long name with …, keeps (here), right-aligns the counts and fits the pane", () => {
+    const { title, noun, lines } = projectListLines(entries, "skills", 26);
+    // PROJECT where the marker is, the noun where the counts end: two columns before the divider.
+    expect(`${title}${noun}`).toBe(`PROJECT${" ".repeat(26 - 2 - "PROJECT".length - "skills".length)}skills`);
+    expect(noun).toBe("skills");
+    // After the marker's two columns, every line runs to the same column: 26 less 4.
+    expect(lines.map(text)).toEqual([
+      "agency-plat… (here) 35",
+      "a-project-with-a-v…  7",
+      `web${" ".repeat(18)}—`,
+      `${NO_PROJECT}${" ".repeat(11)}—`,
+    ]);
+    expect(lines.map((l) => l.here.trimEnd())).toEqual([" (here)", "", "", ""]);
+    expect(lines.map((l) => l.entry)).toEqual(entries);
+    // Wide enough, nothing is cut.
+    expect(projectListLines(entries, "skills", 40).lines[0]).toMatchObject({
+      name: "agency-platform",
+      here: " (here)",
+    });
+  });
+
+  it("takes the widest line whole, or the heading, the same whichever project is picked", () => {
+    // "▸ " + "a-project-with-a-very-long-name" + " " + "35" + 2 before the divider.
+    expect(projectPaneWidth(entries, "skills")).toBe(2 + 31 + 1 + 2 + 2);
+    expect(projectPaneWidth([entry("agency-platform", 4, true), none], "skills")).toBe(
+      2 + "agency-platform (here)".length + 1 + 1 + 2,
+    );
+    // From where the marker is to two columns before the divider.
+    expect(projectPaneWidth([entry("app", 4), none], "MCP servers")).toBe("PROJECT  MCP servers".length + 2);
+    // At that width, every line whole: nothing cut.
+    const width = projectPaneWidth(entries, "skills");
+    const { lines } = projectListLines(entries, "skills", width);
+    expect(lines.map((l) => l.name)).toEqual(entries.map((e) => e.name));
+    expect(lines.every((l) => !l.name.includes("…"))).toBe(true);
+  });
+
+  it("leaves the noun out of a heading with no room for it, and every line within the width", () => {
+    const narrow = projectListLines(entries, "MCP servers", 16);
+    expect(narrow.title).toBe("PROJECT");
+    expect(narrow.noun).toBe("");
+    for (const width of [0, 4, 8, 12, 16, 20, 26, 32]) {
+      const { title, noun, lines } = projectListLines(entries, "MCP servers", width);
+      expect(`${title}${noun}`.length, `at ${width}`).toBeLessThanOrEqual(Math.max(0, width - 2));
+      for (const line of lines) expect(text(line).length, `at ${width}`).toBeLessThanOrEqual(Math.max(0, width - 4));
+    }
+  });
+
+  it("cuts the name before (here), and drops (here) only when no letter of the name would be left", () => {
+    expect(projectLabel("agency-platform", true, 30)).toEqual({ name: "agency-platform", here: " (here)" });
+    expect(projectLabel("agency-platform", true, 14)).toEqual({ name: "agency…", here: " (here)" });
+    expect(projectLabel("agency-platform", true, 8)).toEqual({ name: "agency-…", here: "" });
+    expect(projectLabel("agency-platform", false, 8)).toEqual({ name: "agency-…", here: "" });
+    expect(projectLabel(NO_PROJECT, false, 30)).toEqual({ name: NO_PROJECT, here: "" });
+  });
+});
+
 describe("kinds", () => {
   it("names the kinds in the bar's order", () => {
     expect(KINDS).toEqual(["skill", "mcp", "hook"]);
@@ -554,20 +688,36 @@ describe("paneLayout", () => {
 
   it("shows one pane at a time under 100 columns: the table at the full width, the scope list as narrow as beside it", () => {
     const scopes: ScopeEntry[] = [
-      { id: "loaded", label: "Loaded here", count: 162 },
+      { id: "loaded", label: "Loaded", count: 162 },
       { id: "project", label: "Project", count: 35 },
     ];
     const one = paneLayout(99, 40, scopes);
     expect(one.mode).toBe("one");
     expect(one.tableWidth).toBe(99 - CHROME_COLUMNS);
-    // Each count stays next to its label: "Loaded here  162" and 4 for the marker and the edge.
-    expect(one.scopeWidth).toBe("Loaded here  162".length + 4);
+    // Each count stays next to its label: "Loaded  162" and 4 for the marker and the edge.
+    expect(one.scopeWidth).toBe("Loaded  162".length + 4);
     expect(one.scopeWidth).toBe(paneLayout(140, 40, scopes).scopeWidth);
     expect(paneLayout(80, 24, [{ id: "loaded", label: "x".repeat(40), count: 1 }]).scopeWidth).toBe(32);
     // Never wider than the terminal leaves.
     expect(paneLayout(20, 24, [{ id: "loaded", label: "x".repeat(40), count: 1 }]).scopeWidth).toBe(
       20 - CHROME_COLUMNS,
     );
+  });
+
+  it("widens the scope pane to what the project row and list take, to 32 at most", () => {
+    const scopes: ScopeEntry[] = [
+      { id: "loaded", label: "Loaded", count: 3 },
+      { id: "project", label: "Project", count: 1 },
+    ];
+    // "Project  1", and 4 for the marker and the edge.
+    expect(paneLayout(140, 40, scopes).scopeWidth).toBe("Project  1".length + 4);
+    expect(paneLayout(140, 40, scopes, 10).scopeWidth).toBe("Project  1".length + 4);
+    expect(paneLayout(140, 40, scopes, 26).scopeWidth).toBe(26);
+    expect(paneLayout(140, 40, scopes, 40).scopeWidth).toBe(32);
+    expect(paneLayout(20, 24, scopes, 26).scopeWidth).toBe(20 - CHROME_COLUMNS);
+    // The table gives it the columns: the panes still fill the width.
+    const two = paneLayout(140, 40, scopes, 26);
+    expect(two.scopeWidth + DIVIDER_COLUMNS + two.tableWidth).toBe(140 - CHROME_COLUMNS);
   });
 
   it("leaves the chrome its rows and the frame two rows short of the terminal", () => {
@@ -583,7 +733,7 @@ describe("paneLayout", () => {
 describe("scopeLines", () => {
   const entry = (id: ScopeEntry["id"], count = 1): ScopeEntry => ({ id, label: id, count });
 
-  it("puts a rule after Loaded here and another before Not used in 90 days", () => {
+  it("puts a rule after Loaded and another before Not used in 90 days", () => {
     const lines = scopeLines([entry("loaded"), entry("project"), entry("global"), entry("unused")]);
     expect(lines.map((l) => (l.type === "rule" ? "─" : l.entry.id))).toEqual([
       "loaded",

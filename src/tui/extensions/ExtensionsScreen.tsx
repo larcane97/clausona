@@ -2,16 +2,15 @@ import { Spinner } from "@inkjs/ui";
 import { Box, Text, useInput } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { detailsOf } from "../../extensions/describe.js";
+import { detailsOf, NOUN } from "../../extensions/describe.js";
 import type { Inventory } from "../../extensions/model.js";
-import { samePath } from "../../extensions/read.js";
 import { type ScopeId, scopesFor } from "../../extensions/scopes.js";
 import { Chrome } from "../components/Chrome.js";
 import { color } from "../theme.js";
 import { DetailsView } from "./DetailsView.js";
 import { ItemTable } from "./ItemTable.js";
 import { McpMatrix } from "./McpMatrix.js";
-import { ProjectPicker } from "./ProjectPicker.js";
+import { ProjectList } from "./ProjectList.js";
 import { ScopeList } from "./ScopeList.js";
 import {
   buildTable,
@@ -21,10 +20,16 @@ import {
   detailRows,
   KINDS,
   type Kind,
+  LIST_HEAD_ROWS,
   listRoom,
   maxDetailTop,
+  NO_PROJECT,
   PANE_HEAD_ROWS,
+  PROJECT_ROWS,
+  type ProjectEntry,
   paneLayout,
+  projectList,
+  projectPaneWidth,
   scopeLines,
   scrolled,
   type Tool,
@@ -33,9 +38,12 @@ import { ToolKindBar } from "./ToolKindBar.js";
 import { useTerminalSize } from "./use-terminal-size.js";
 import { buildMatrix, tilde, took } from "./view-model.js";
 
-type View = "main" | "picker" | "matrix" | "warnings";
-/** Which pane the keys move: the scope list, the table, or a row's details in its place. */
-type Focus = "scopes" | "table" | "details";
+type View = "main" | "matrix" | "warnings";
+/**
+ * Which pane the keys move: the project row above the scopes, the scope list, the table, or a
+ * row's details in its place.
+ */
+type Focus = "project" | "scopes" | "table" | "details";
 type Props = { load: () => Promise<Inventory>; onExit: () => void; now?: () => number };
 type Hint = { keys: string; action: string };
 
@@ -77,10 +85,8 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [tool, setTool] = useState<Tool>("claude");
   const [kind, setKind] = useState<Kind>("skill");
-  /** The chosen scope. The list's cursor is where it is in the list: one that has gone reads as Loaded here. */
+  /** The chosen scope. The list's cursor is where it is in the list: one that has gone reads as Loaded. */
   const [scope, setScope] = useState<ScopeId>("loaded");
-  /** The project opened from the Other projects list. */
-  const [otherProject, setOtherProject] = useState<string | undefined>(undefined);
   const [focus, setFocus] = useState<Focus>("scopes");
   const [rowCursor, setRowCursor] = useState(0);
   /**
@@ -95,7 +101,12 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   /** null until the user picks: until then the project csn was started in. */
   const [picked, setPicked] = useState<{ project?: string } | null>(null);
   const [view, setView] = useState<View>("main");
-  const [pickerCursor, setPickerCursor] = useState(0);
+  /**
+   * Whether the project list is open, in the scope list's place. The focus under it stays as it
+   * was, for esc to go back to.
+   */
+  const [listOpen, setListOpen] = useState(false);
+  const [listCursor, setListCursor] = useState(0);
   const [matrixCursor, setMatrixCursor] = useState(0);
   const [matrixOffset, setMatrixOffset] = useState(0);
   /** The details' first row. */
@@ -103,10 +114,9 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   /** One line about the last thing done, shown until the next key. */
   const [status, setStatus] = useState("");
   const scopeTop = useRef(0);
+  const listTop = useRef(0);
   const rowTop = useRef(0);
   const matrixTop = useRef(0);
-  /** The Other projects list's cursor when a project was opened from it, to come back to. */
-  const listCursor = useRef<{ index: number; key?: string }>({ index: 0 });
   /** The selected row's key as last drawn, kept by a reload for the cursor to follow. */
   const selectedKey = useRef<string | undefined>(undefined);
   const { columns, rows: terminalRows } = useTerminalSize();
@@ -145,29 +155,30 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     () => (inventory ? scopesFor(inventory, tool, kind, project, loadedAt) : []),
     [inventory, tool, kind, project, loadedAt],
   );
+  const projects = useMemo(
+    () => (inventory ? projectList(inventory, tool, kind, project, inventory.currentProject) : []),
+    [inventory, tool, kind, project],
+  );
+  /** The project everything is seen from, as the row names it: No project until the files are read. */
+  const seenFrom: ProjectEntry = projects.find((entry) => entry.current) ?? {
+    key: "none",
+    name: NO_PROJECT,
+    here: false,
+    current: true,
+    count: 0,
+  };
   const scopeAt = Math.max(
     0,
     scopes.findIndex((s) => s.id === scope),
   );
   const current = scopes[scopeAt]?.id ?? "loaded";
-  const opened = current === "other" ? otherProject : undefined;
-  const layout = paneLayout(columns, terminalRows, scopes);
+  const layout = paneLayout(columns, terminalRows, scopes, projectPaneWidth(projects, NOUN[kind]));
   const table = useMemo(
     () =>
       inventory
-        ? buildTable(
-            inventory,
-            tool,
-            kind,
-            current,
-            project,
-            loadedAt,
-            layout.tableWidth - CURSOR_COLUMNS,
-            query,
-            opened,
-          )
+        ? buildTable(inventory, tool, kind, current, project, loadedAt, layout.tableWidth - CURSOR_COLUMNS, query)
         : null,
-    [inventory, tool, kind, current, project, loadedAt, layout.tableWidth, query, opened],
+    [inventory, tool, kind, current, project, loadedAt, layout.tableWidth, query],
   );
   const rows = table?.rows ?? [];
   const found = rowKey === undefined ? -1 : rows.findIndex((row) => row.key === rowKey);
@@ -181,12 +192,12 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     setRowKey(selected?.key);
     setRowCursor(at);
     if (focus === "details") setFocus("table");
-    if (focus !== "scopes") setStatus("That item is gone.");
+    if (focus === "table" || focus === "details") setStatus("That item is gone.");
   }
-  // Details only for a row of the inventory: a line of the Other projects list opens that project.
-  const shown = focus === "details" && selected?.row ? "details" : focus === "details" ? "table" : focus;
+  // Details only for a row there is: an empty table keeps the focus on itself.
+  const shown = focus === "details" && !selected ? "table" : focus;
   const details = useMemo(() => {
-    if (!inventory || shown !== "details" || !selected?.row) return null;
+    if (!inventory || shown !== "details" || !selected) return null;
     const [title, ...lines] = detailsOf(inventory, selected.row, project, loadedAt);
     return { title: title?.text ?? "", rows: detailRows(lines, layout.tableWidth) };
   }, [inventory, shown, selected, project, loadedAt, layout.tableWidth]);
@@ -195,6 +206,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   const detailMax = details ? maxDetailTop(details.rows.length, detailRoom) : 0;
   const detailPage = Math.max(1, detailRoom - 2);
   const rowRoom = listRoom(Math.max(0, layout.height - PANE_HEAD_ROWS), rows.length);
+  const projectRoom = listRoom(Math.max(0, layout.height - LIST_HEAD_ROWS), projects.length);
   const matrix = useMemo(() => (inventory && project ? buildMatrix(inventory, project) : null), [inventory, project]);
 
   /** Another table: the row cursor goes back to the top and a search, which was for the last one, ends. */
@@ -206,7 +218,6 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   };
   const toScope = (id: ScopeId) => {
     setScope(id);
-    setOtherProject(undefined);
     freshTable();
   };
   const moveScope = (delta: number) => {
@@ -224,6 +235,12 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   };
   const scrollDetail = (delta: number) =>
     setDetailTop((t) => Math.max(0, Math.min(detailMax, Math.min(t, detailMax) + delta)));
+  /** The project list, its cursor on the project everything is seen from. */
+  const openList = () => {
+    setListCursor(Math.max(0, projects.indexOf(seenFrom)));
+    setListOpen(true);
+  };
+  const moveList = (delta: number) => setListCursor((c) => Math.max(0, Math.min(projects.length - 1, c + delta)));
 
   useInput((input, key) => {
     // A status line answers the key before this one; any key moves on from it.
@@ -246,17 +263,19 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       pointAt(0);
       return;
     }
-    if (view === "picker") {
-      const count = inventory.projects.length + 1;
-      if (key.escape) setView("main");
-      else if (key.upArrow) setPickerCursor((c) => (c - 1 + count) % count);
-      else if (key.downArrow) setPickerCursor((c) => (c + 1) % count);
+    if (listOpen) {
+      // esc and ← leave everything as it was; enter sees every scope from the project picked.
+      if (key.escape || key.leftArrow) setListOpen(false);
+      else if (key.upArrow) moveList(-1);
+      else if (key.downArrow) moveList(1);
+      else if (key.pageUp) moveList(-Math.max(1, projectRoom - 1));
+      else if (key.pageDown) moveList(Math.max(1, projectRoom - 1));
       else if (key.return) {
-        const chosen = pickerCursor === 0 ? undefined : inventory.projects[pickerCursor - 1]?.path;
+        const chosen = projects[listCursor]?.path;
         setPicked(chosen === undefined ? {} : { project: chosen });
         toScope("loaded");
         setFocus("scopes");
-        setView("main");
+        setListOpen(false);
       }
       return;
     }
@@ -297,9 +316,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       return;
     }
     if (input === "p") {
-      const index = inventory.projects.findIndex((p) => samePath(p.path, project));
-      setPickerCursor(index + 1);
-      setView("picker");
+      openList();
       return;
     }
     if (input === "m") {
@@ -331,35 +348,30 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       if (key.escape && query !== "") {
         setQuery("");
         pointAt(0);
-      } else if (key.escape || key.leftArrow) {
-        if (opened !== undefined) {
-          setOtherProject(undefined);
-          freshTable();
-          pointAt(listCursor.current.index, listCursor.current.key);
-        } else setFocus("scopes");
-      } else if (key.upArrow) moveRow(-1);
+      } else if (key.escape || key.leftArrow) setFocus("scopes");
+      else if (key.upArrow) moveRow(-1);
       else if (key.downArrow) moveRow(1);
       else if (key.pageUp) moveRow(-Math.max(1, rowRoom - 1));
       else if (key.pageDown) moveRow(Math.max(1, rowRoom - 1));
-      else if (key.return) {
-        if (selected?.project) {
-          listCursor.current = { index: at, key: selected.key };
-          setOtherProject(selected.project.path);
-          freshTable();
-        } else if (selected?.row) {
-          pointAt(at, selected.key);
-          setDetailTop(0);
-          setFocus("details");
-        }
+      else if (key.return && selected) {
+        pointAt(at, selected.key);
+        setDetailTop(0);
+        setFocus("details");
       }
       return;
     }
-    // The scope list.
+    // The left pane: esc leaves the screen from the project row as from the scopes.
     if (key.escape) {
       if (query !== "") setQuery("");
       else onExit();
-    } else if (key.upArrow) moveScope(-1);
-    else if (key.downArrow) moveScope(1);
+    } else if (shown === "project") {
+      if (key.downArrow) setFocus("scopes");
+      else if (key.return || key.rightArrow) openList();
+    } else if (key.upArrow) {
+      // Up from the first scope is the project row.
+      if (scopeAt === 0) setFocus("project");
+      else moveScope(-1);
+    } else if (key.downArrow) moveScope(1);
     else if (key.pageUp) moveScope(-Math.max(1, layout.height - 1));
     else if (key.pageDown) moveScope(Math.max(1, layout.height - 1));
     else if (key.rightArrow || key.return) setFocus("table");
@@ -398,7 +410,13 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     0,
     lines.findIndex((line) => line.type === "scope" && line.entry.id === current),
   );
-  scopeTop.current = scrolled(scopeTop.current, scopeLine, listRoom(layout.height, lines.length), lines.length);
+  scopeTop.current = scrolled(
+    scopeTop.current,
+    scopeLine,
+    listRoom(Math.max(0, layout.height - PROJECT_ROWS), lines.length),
+    lines.length,
+  );
+  listTop.current = scrolled(listTop.current, listCursor, projectRoom, projects.length);
   rowTop.current = scrolled(rowTop.current, at, rowRoom, rows.length);
   const matrixRoom = Math.max(1, layout.height - 3);
   matrixTop.current = scrolled(matrixTop.current, matrixCursor, matrixRoom, matrix?.rows.length ?? 0);
@@ -419,10 +437,10 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
         { keys: "enter", action: "keep" },
         { keys: "esc", action: "clear" },
       ])
-    : view === "picker"
+    : listOpen
       ? inOrder([
           { keys: "↑↓", action: "move" },
-          { keys: "enter", action: "choose" },
+          { keys: "enter", action: "pick" },
           { keys: "esc", action: "cancel" },
         ])
       : view === "matrix"
@@ -446,19 +464,21 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
                 [
                   { keys: "↑↓", action: "move", rank: 0 },
                   // An empty table has no row to open.
-                  ...(rows.length > 0
-                    ? [{ keys: "enter", action: selected?.project ? "open" : "details", rank: 1 }]
-                    : []),
-                  { keys: "←", action: opened !== undefined ? "projects" : "scopes", rank: 6 },
+                  ...(rows.length > 0 ? [{ keys: "enter", action: "details", rank: 1 }] : []),
+                  { keys: "←", action: "scopes", rank: 6 },
                   { keys: "/", action: "search", rank: 5 },
                   ...(tool === "claude" && kind === "mcp" ? [{ keys: "m", action: "matrix", rank: 4 }] : []),
+                  { keys: "p", action: "project", rank: 7 },
                   ...unreadable.map((hint) => ({ ...hint, rank: 3 })),
                   { keys: "esc", action: "back", rank: 2 },
                 ]
-              : // The kinds come before search and the tools: the bar names them, but no key.
+              : // The kinds come before search and the tools: the bar names them, but no key. On
+                // the project row, enter opens the project list where → opens a scope's table.
                 [
                   { keys: "↑↓", action: "move", rank: 0 },
-                  { keys: "→", action: "open", rank: 1 },
+                  shown === "project"
+                    ? { keys: "enter", action: "projects", rank: 1 }
+                    : { keys: "→", action: "open", rank: 1 },
                   { keys: "tab", action: TOOL_LABEL[OTHER_TOOL[tool]], rank: 6 },
                   { keys: "1 2 3", action: "kind", rank: 4 },
                   { keys: "/", action: "search", rank: 5 },
@@ -467,8 +487,20 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
                   { keys: "esc", action: "back", rank: 2 },
                 ];
 
-  const scopeList = (
+  // The left pane: the project list while it is open, else the project row and the scopes.
+  const left = listOpen ? (
+    <ProjectList
+      entries={projects}
+      noun={NOUN[kind]}
+      cursor={listCursor}
+      width={layout.scopeWidth}
+      height={layout.height}
+      top={listTop.current}
+    />
+  ) : (
     <ScopeList
+      project={seenFrom}
+      projectFocused={shown === "project"}
       scopes={scopes}
       selected={current}
       focused={shown === "scopes"}
@@ -492,21 +524,22 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       height={layout.height}
       cursor={at}
       top={rowTop.current}
-      focused={shown === "table"}
+      focused={!listOpen && shown === "table"}
     />
   );
-  // One pane: the one the focus is on, at the full width. Two: the scope list, the divider and
-  // the table or the details. The panes keep their height, so the footer stays put.
+  // One pane: the one the focus is on - the project list while it is open - at the full width.
+  // Two: the left pane, the divider and the table or the details. The panes keep their height,
+  // so the footer stays put.
   const panes =
     layout.mode === "one" ? (
-      shown === "scopes" ? (
-        scopeList
+      listOpen || shown === "scopes" || shown === "project" ? (
+        left
       ) : (
         right
       )
     ) : (
       <>
-        {scopeList}
+        {left}
         <Box
           borderStyle="single"
           borderColor={color.dim}
@@ -526,16 +559,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       <Box marginBottom={1}>
         <ToolKindBar tool={tool} kind={kind} query={query} typing={typing} width={innerWidth} />
       </Box>
-      {view === "picker" ? (
-        <ProjectPicker
-          projects={inventory.projects}
-          {...(project ? { current: project } : {})}
-          {...(inventory.currentProject ? { here: inventory.currentProject } : {})}
-          cursor={pickerCursor}
-          height={layout.height}
-          homeDir={inventory.homeDir}
-        />
-      ) : view === "matrix" && matrix ? (
+      {view === "matrix" && matrix ? (
         <McpMatrix
           matrix={matrix}
           cursor={matrixCursor}

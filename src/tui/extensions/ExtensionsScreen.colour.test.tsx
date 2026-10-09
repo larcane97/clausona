@@ -41,20 +41,35 @@ it("lights the current tool and kind: the tool in brackets, the kind in the acce
   expect(painted(frame, color.muted, "Hooks")).toBe(true);
 });
 
-it("marks the selected scope in the accent colour while the list has the focus, muted when not", async () => {
+it("marks the selected scope, and the project row, in the accent colour while it has the focus, muted when not", async () => {
   const { render } = await import("ink-testing-library");
   const { ScopeList } = await import("./ScopeList.js");
   const { color } = await import("../theme.js");
   const scopes = [
-    { id: "loaded" as const, label: "Loaded here", count: 3 },
+    { id: "loaded" as const, label: "Loaded", count: 3 },
     { id: "project" as const, label: "Project", count: 1 },
   ];
-  const draw = (focused: boolean) =>
+  const project = { key: "app", path: "app", name: "app", here: true, current: true, count: 1 };
+  const draw = (focused: boolean, projectFocused = false) =>
     render(
-      <ScopeList scopes={scopes} selected="project" focused={focused} width={20} height={6} top={0} />,
+      <ScopeList
+        project={project}
+        projectFocused={projectFocused}
+        scopes={scopes}
+        selected="project"
+        focused={focused}
+        width={20}
+        height={6}
+        top={0}
+      />,
     ).lastFrame() ?? "";
   expect(painted(draw(true), color.accent, "▸")).toBe(true);
   expect(painted(draw(false), color.muted, "▸")).toBe(true);
+  expect(painted(draw(true), color.muted, "▾")).toBe(true);
+  expect(painted(draw(false, true), color.accent, "▾")).toBe(true);
+  // The name is the text's colour, its (here) muted.
+  expect(painted(draw(true), color.text, "app")).toBe(true);
+  expect(painted(draw(true), color.muted, "(here)")).toBe(true);
 });
 
 it("colours a tag by its tone: unused amber, a broken link red", async () => {
@@ -67,8 +82,18 @@ it("colours a tag by its tone: unused amber, a broken link red", async () => {
     countText: "2",
     columns: [{ key: "name", title: "NAME", width: 8 }],
     rows: [
-      { key: "a", cells: ["old     "], tag: { text: "unused", tone: "warning" } },
-      { key: "b", cells: ["gone    "], tag: { text: "broken link", tone: "error" } },
+      {
+        key: "a",
+        cells: ["old     "],
+        tag: { text: "unused", tone: "warning" },
+        row: { key: "a", name: "old", items: [] },
+      },
+      {
+        key: "b",
+        cells: ["gone    "],
+        tag: { text: "broken link", tone: "error" },
+        row: { key: "b", name: "gone", items: [] },
+      },
     ],
     empty: "",
   };

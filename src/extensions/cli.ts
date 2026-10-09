@@ -95,7 +95,7 @@ function badUsage(message: string): ExitError {
 type Options = {
   sub: "ls" | "show";
   json: boolean;
-  /** Absent: ls lists Loaded here, show looks everywhere. */
+  /** Absent: ls lists Loaded, show looks everywhere. */
   scope?: Scope;
   tools: ToolName[];
   project?: string;
@@ -288,7 +288,7 @@ const SHOW_TIERS: readonly ((scope: Exclude<ScopeId, "loaded" | "unused">) => bo
 ];
 
 /**
- * Whether --account keeps the row: in Loaded here, when it loads for one of `accounts`
+ * Whether --account keeps the row: in Loaded, when it loads for one of `accounts`
  * (`loadsFor`); in any other scope, when one of them has it. --account lists Claude rows alone,
  * so no Codex row is asked.
  */
@@ -531,7 +531,7 @@ function show(
   // A plugin goes by its name before the `@` too: `superpowers` for `superpowers@official`.
   const isName = (row: ScopeRow, name: string) =>
     row.name === name || (firstOf(row).kind === "plugin" && row.name.split("@")[0] === name);
-  // In Loaded here, --account keeps the rows that load for the account, as ls does.
+  // In Loaded, --account keeps the rows that load for the account, as ls does.
   const matches = (row: ScopeRow, loaded: boolean) =>
     // A name can be an id too, so an id from ls --json works as it is given.
     (options.name === undefined || isName(row, options.name) || isId(row, options.name)) &&
@@ -795,10 +795,10 @@ export function extensionsHelp(command: ExtensionsCommand, sub?: "ls" | "show"):
   const page = HELP[command];
   const { one, many } = NOUN[command];
   const mcp = command === "mcp";
-  // ls lists Loaded here by default, and show looks there first: what loads for the account.
+  // ls lists Loaded by default, and show looks there first: what loads for the account.
   const account = mcp
     ? [
-        option("--account <name>", "Only this Claude account (repeatable): in Loaded here, the rows that"),
+        option("--account <name>", "Only this Claude account (repeatable): in Loaded, the rows that"),
         optionMore("load for it; in any other scope, the rows it has"),
       ]
     : [];

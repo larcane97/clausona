@@ -72,7 +72,7 @@ describe("skills ls", () => {
   it("lists what loads here by default, titled with the scope and the project", async () => {
     const { h, app } = seed();
     const text = await run(h, app, "skills", ["ls"]);
-    expect(firstLine(text)).toMatch(/^4 skills · Loaded here · project ~[\\/]repos[\\/]app$/);
+    expect(firstLine(text)).toMatch(/^4 skills · Loaded · project ~[\\/]repos[\\/]app$/);
     expect(text).toMatch(/^NAME\s+TOOL\s+WHERE\s+USES\s+LAST USED\s+NOTE$/m);
     // The Global eli5 wins over app's, so it is the one listed.
     expect(text).toMatch(/^eli5\s+claude\s+Global\s+4\s+1d ago$/m);
@@ -84,7 +84,7 @@ describe("skills ls", () => {
   it("has no TOOL column when one tool is asked for", async () => {
     const { h, app } = seed();
     const text = await run(h, app, "skills", ["ls", "--tool", "claude"]);
-    expect(firstLine(text)).toMatch(/^3 skills · Loaded here · project ~/);
+    expect(firstLine(text)).toMatch(/^3 skills · Loaded · project ~/);
     expect(text).toMatch(/^NAME\s+WHERE\s+USES\s+LAST USED\s+NOTE$/m);
     expect(text).not.toMatch(/codex/);
   });
@@ -136,7 +136,7 @@ describe("skills ls", () => {
     expect(fromWeb).not.toContain("deploy-check");
   });
 
-  it("lists every place but Loaded here once with --scope all", async () => {
+  it("lists every place but Loaded once with --scope all", async () => {
     const { h, app } = seed();
     const json = JSON.parse(await run(h, app, "skills", ["ls", "--scope", "all", "--json"]));
     const names = json.items.map(
@@ -225,7 +225,7 @@ describe("skills ls", () => {
       ["hook", "SessionStart", "plugins"],
       ["hook", "Stop", "global"],
     ]);
-    // The key is the row's, as in Loaded here, so the hook is one row there and here.
+    // The key is the row's, as in Loaded, so the hook is one row there and here.
     const loaded = JSON.parse(await run(h, app, "hooks", ["ls", "--json"]));
     expect(json.items[0].id).toBe(loaded.items.find((i: { name: string }) => i.name === "SessionStart").id);
     expect(firstLine(await run(h, app, "hooks", ["ls", "--scope", "all"]))).toMatch(/^2 hooks · All scopes · /);
@@ -252,13 +252,12 @@ describe("skills ls", () => {
     expect(firstLine(text)).toMatch(/^1 skill · Built-in · project ~/);
     expect(text).toMatch(/^claude-api\s+Built-in\s+0\s+never\s+off$/m);
     const inv = await loadInventory({ homeDir: h.home, registry: h.registry, cwd: app });
-    // In the scope list, after Plugins' place and before Other projects.
+    // In the screen's scope list, after Plugins' place and before Not used in 90 days.
     expect(scopesFor(inv, "claude", "skill", app, NOW).map((s) => s.id)).toEqual([
       "loaded",
       "project",
       "global",
       "builtin",
-      "other",
       "unused",
     ]);
     expect(scopeSentence("builtin", "claude", "skill", inv, app)).toBe(
@@ -268,9 +267,7 @@ describe("skills ls", () => {
 
   it("says why there is nothing to list", async () => {
     const { h, app } = seed();
-    expect(await run(h, app, "hooks", ["ls"])).toMatch(
-      /^0 hooks · Loaded here · project .+\n\nNothing is loaded here\.$/,
-    );
+    expect(await run(h, app, "hooks", ["ls"])).toMatch(/^0 hooks · Loaded · project .+\n\nNothing is loaded here\.$/);
     expect(await run(h, app, "hooks", ["ls", "--scope", "project"])).toMatch(
       /^0 hooks · Project · project .+\n\nNothing in this project's own files\.$/,
     );
@@ -309,7 +306,7 @@ describe("ls with no project (Review Focus 3)", () => {
     // At the filesystem root there is no project: no git root, and the root is never one.
     const root = path.parse(h.home).root;
     const text = await run(h, root, "skills", ["ls", "--tool", "claude"]);
-    expect(firstLine(text)).toMatch(/^2 skills · Loaded here · no project$/);
+    expect(firstLine(text)).toMatch(/^2 skills · Loaded · no project$/);
     expect(text).toMatch(/^eli5\s+Global\s/m);
     expect(text).toMatch(/^old-one\s+Global\s/m);
     expect(await run(h, root, "skills", ["ls", "--scope", "project"])).toMatch(
@@ -490,7 +487,7 @@ describe("what an agent tripped on", () => {
     expect(fresh).toMatch(/^Used {6}never, in any account · added 3d ago$/m);
   });
 
-  it("leaves a broken link out of Loaded here, tagged where it is listed", async () => {
+  it("leaves a broken link out of Loaded, tagged where it is listed", async () => {
     const { h, app } = seed();
     h.link(h.path("gone", "lost"), ".claude/skills/lost");
     expect(await run(h, app, "skills", ["ls", "--tool", "claude"])).not.toMatch(/^lost\s/m);
@@ -617,7 +614,7 @@ describe("mcp, a server in several accounts", () => {
     const { h, app } = accountsSeed();
     // github is off in work, so it does not load for work; jira does.
     const loaded = await run(h, app, "mcp", ["ls", "--account", "work"]);
-    expect(firstLine(loaded)).toMatch(/^1 MCP server · Loaded here · /);
+    expect(firstLine(loaded)).toMatch(/^1 MCP server · Loaded · /);
     expect(loaded).toMatch(/^jira\s+Global\s+work$/m);
     expect(loaded).not.toMatch(/^github\s/m);
     const names = async (args: string[]) =>
@@ -661,7 +658,7 @@ describe("mcp, one server per name, as Claude Code picks it", () => {
   it("takes an approved .mcp.json copy over the user one, and shows it without asking which", async () => {
     const { h, app } = precedenceSeed({ enabledMcpjsonServers: ["github"] });
     const loaded = await run(h, app, "mcp", ["ls", "--tool", "claude"]);
-    expect(firstLine(loaded)).toMatch(/^1 MCP server · Loaded here · /);
+    expect(firstLine(loaded)).toMatch(/^1 MCP server · Loaded · /);
     expect(loaded).toMatch(/^github\s+Project\s+all$/m);
     expect(await run(h, app, "mcp", ["ls", "--scope", "global", "--tool", "claude"])).toMatch(
       /^github\s+Global\s+all\s+hidden by Project copy$/m,
@@ -674,7 +671,7 @@ describe("mcp, one server per name, as Claude Code picks it", () => {
   it("takes the user copy over a .mcp.json one still pending approval", async () => {
     const { h, app } = precedenceSeed({});
     const loaded = await run(h, app, "mcp", ["ls", "--tool", "claude"]);
-    expect(firstLine(loaded)).toMatch(/^1 MCP server · Loaded here · /);
+    expect(firstLine(loaded)).toMatch(/^1 MCP server · Loaded · /);
     expect(loaded).toMatch(/^github\s+Global\s+all$/m);
     expect(await run(h, app, "mcp", ["ls", "--scope", "project", "--tool", "claude"])).toMatch(
       /^github\s+Project\s+all\s+pending approval$/m,
@@ -694,7 +691,7 @@ describe("mcp, one server per name, as Claude Code picks it", () => {
     const team = await run(h, app, "mcp", ["show", "--id", json.items[1].id]);
     expect(team).toMatch(/^Accounts {2}personal {2}hidden by the Project copy$/m);
     expect(team).toMatch(/^ {10}work {6}on$/m);
-    // In Loaded here, --account keeps what loads for the account: one github each, no ambiguity.
+    // In Loaded, --account keeps what loads for the account: one github each, no ambiguity.
     for (const [account, from] of [
       ["personal", "gh-local"],
       ["work", "gh-team"],
@@ -769,7 +766,7 @@ describe("skills, a project skill an account's own copy hides", () => {
 });
 
 describe("ls, a skill turned off", () => {
-  it("leaves it out of Loaded here and tags it where it is", async () => {
+  it("leaves it out of Loaded and tags it where it is", async () => {
     const { h, app } = seed();
     h.write("repos/app/.claude/settings.local.json", { skillOverrides: { eli5: "off" } });
     expect(await run(h, app, "skills", ["ls", "--tool", "claude"])).not.toMatch(/^eli5\s/m);
@@ -806,7 +803,7 @@ describe("hooks ls", () => {
       },
     });
     const wide = await run(h, app, "hooks", ["ls"], 160);
-    expect(firstLine(wide)).toMatch(/^2 hooks · Loaded here · /);
+    expect(firstLine(wide)).toMatch(/^2 hooks · Loaded · /);
     expect(wide).toMatch(/^NAME\s+TOOL\s+WHERE\s+WHEN\s+RUNS\s+NOTE$/m);
     expect(wide).toMatch(/^PreToolUse Bash\s+claude\s+Global\s+Before Bash runs\s+audit-bash --api-key <hidden>$/m);
     const narrow = await run(h, app, "hooks", ["ls"], 70);
@@ -852,7 +849,7 @@ describe("ls from the home dir", () => {
   it("lists what Claude Code started there loads: the account's home servers and ~/.mcp.json", async () => {
     const { h } = homeSeed();
     const text = await run(h, h.home, "mcp", ["ls"]);
-    expect(firstLine(text)).toBe("2 MCP servers · Loaded here · project ~");
+    expect(firstLine(text)).toBe("2 MCP servers · Loaded · project ~");
     expect(text).toMatch(/^home-db\s+claude\s+Project\s+default$/m);
     expect(text).toMatch(/^notes\s+claude\s+Project\s+all$/m);
     // github is off for the home dir in the one account that has it.
@@ -935,7 +932,7 @@ describe("ls, a .mcp.json in a parent dir", () => {
     expect(parents).toMatch(/^notes\s+claude\s+~[\\/]\.mcp\.json\s+all\s+pending approval$/m);
     // Only tools is approved here, in one account: it is all that loads.
     const loaded = await run(h, app, "mcp", ["ls"]);
-    expect(firstLine(loaded)).toMatch(/^1 MCP server · Loaded here · /);
+    expect(firstLine(loaded)).toMatch(/^1 MCP server · Loaded · /);
     expect(loaded).toMatch(/^tools\s+claude\s+~[\\/]\.mcp\.json\s+all$/m);
     const json = JSON.parse(await run(h, app, "mcp", ["ls", "--json"]));
     expect(json.items[0].project).toBe(h.home);

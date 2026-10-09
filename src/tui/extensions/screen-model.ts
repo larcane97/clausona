@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import {
   accountsWord,
   containsWords,
@@ -10,11 +12,12 @@ import {
   whereLabel,
 } from "../../extensions/describe.js";
 import type { Extension, Inventory } from "../../extensions/model.js";
-import { tilde, tildeIn } from "../../extensions/present.js";
+import { projectName, tilde, tildeIn } from "../../extensions/present.js";
+import { pathKey, samePath } from "../../extensions/read.js";
 import {
+  homeScope,
   type ItemKind,
-  type OtherProject,
-  otherProjects,
+  rowKey,
   rowsIn,
   type ScopeEntry,
   type ScopeId,
@@ -42,14 +45,13 @@ export type TagTone = "muted" | "warning" | "error";
 
 /**
  * One line of a table: its cells, each as wide as its column, and the tag after them, cut to what
- * is left. A row of the inventory carries `row`; a line of the Other projects list, `project`.
+ * is left, and the row of the inventory it shows.
  */
 export type TableRow = {
   key: string;
   cells: string[];
   tag?: { text: string; tone: TagTone };
-  row?: ScopeRow;
-  project?: OtherProject;
+  row: ScopeRow;
 };
 
 /**
@@ -181,15 +183,6 @@ function rowSpecs(
   return [lead, ...from, ...rest[tool][kind]];
 }
 
-/** The Other projects list, before one is opened. */
-function otherSpecs(inv: Inventory): Spec<OtherProject>[] {
-  return [
-    { key: "project", title: "PROJECT", fit: "lead", text: (p) => p.name },
-    { key: "path", title: "PATH", fit: "flex", text: (p) => tilde(p.path, inv.homeDir) },
-    { key: "count", title: "COUNT", fit: "fixed", align: "right", search: false, text: (p) => String(p.count) },
-  ];
-}
-
 /**
  * What a search looks in besides the row's cells: names, descriptions, files and summary values,
  * each as read and as shown.
@@ -218,7 +211,7 @@ function sortRows(rows: ScopeRow[], kind: Kind, scope: ScopeId): ScopeRow[] {
   return [...rows].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-type Line = { key: string; texts: string[]; tag?: string; haystack: string[]; row?: ScopeRow; project?: OtherProject };
+type Line = { key: string; texts: string[]; tag?: string; haystack: string[]; row: ScopeRow };
 
 /**
  * Each column's width, its gap included, summing to at most `width`. Every column starts as wide as
@@ -276,8 +269,7 @@ function layOut(heads: Head[], lines: Line[], width: number, query: string): Pic
         key: l.key,
         cells: columns.map((col, i) => columnText(l.texts[i] ?? "", col)),
         ...(l.tag !== undefined && text !== "" ? { tag: { text, tone: toneOf(l.tag) } } : {}),
-        ...(l.row ? { row: l.row } : {}),
-        ...(l.project ? { project: l.project } : {}),
+        row: l.row,
       };
     });
   return { columns, rows };
@@ -290,7 +282,7 @@ function nothingIn(scope: ScopeId, project: string | undefined): string {
   return "None.";
 }
 
-/** The right pane for a scope (or an other project when `otherProject` is set), filtered by `query`. */
+/** The right pane for a scope, filtered by `query`. */
 export function buildTable(
   inv: Inventory,
   tool: Tool,
@@ -300,39 +292,23 @@ export function buildTable(
   now: number,
   width: number,
   query: string,
-  otherProject?: string,
 ): Table {
-  const header = scopeSentence(scope, tool, kind, inv, project, otherProject);
+  const header = scopeSentence(scope, tool, kind, inv, project);
   const q = query.trim();
-  let laid: Pick<Table, "columns" | "rows">;
-  let total: number;
-  if (scope === "other" && otherProject === undefined) {
-    const projects = otherProjects(inv, tool, kind, project);
-    const specs = otherSpecs(inv);
-    const lines = projects.map((p) => ({
-      key: p.path,
-      texts: specs.map((spec) => spec.text(p)),
-      haystack: [p.name, p.path, tilde(p.path, inv.homeDir)],
-      project: p,
-    }));
-    laid = layOut(specs, lines, width, q);
-    total = projects.length;
-  } else {
-    const rows = sortRows(rowsIn(inv, tool, kind, scope, project, now, otherProject), kind, scope);
-    const specs = rowSpecs(inv, tool, kind, scope, project, now);
-    const lines = rows.map((row) => {
-      const tag = tagsOf(inv, row, project, now)[0];
-      return {
-        key: row.key,
-        texts: specs.map((spec) => spec.text(row)),
-        ...(tag !== undefined ? { tag } : {}),
-        haystack: rowHaystack(inv, row),
-        row,
-      };
-    });
-    laid = layOut(specs, lines, width, q);
-    total = rows.length;
-  }
+  const rows = sortRows(rowsIn(inv, tool, kind, scope, project, now), kind, scope);
+  const specs = rowSpecs(inv, tool, kind, scope, project, now);
+  const lines = rows.map((row) => {
+    const tag = tagsOf(inv, row, project, now)[0];
+    return {
+      key: row.key,
+      texts: specs.map((spec) => spec.text(row)),
+      ...(tag !== undefined ? { tag } : {}),
+      haystack: rowHaystack(inv, row),
+      row,
+    };
+  });
+  const laid = layOut(specs, lines, width, q);
+  const total = rows.length;
   const empty = laid.rows.length > 0 ? "" : total > 0 ? `Nothing matches /${q}.` : nothingIn(scope, project);
   const countText = q === "" ? String(total) : `${laid.rows.length} of ${total}`;
   return { header, count: total, countText, ...laid, empty };
@@ -353,6 +329,17 @@ export const DIVIDER_COLUMNS = 2;
  * details' title and the blank line under it.
  */
 export const PANE_HEAD_ROWS = 2;
+/** The lines the scope list draws above the scopes: the project row and the rule under it. */
+export const PROJECT_ROWS = 2;
+/** The line the project list draws above the projects: its heading. */
+export const LIST_HEAD_ROWS = 1;
+
+/** The project list's last line, for looking from no project: user settings only. */
+export const NO_PROJECT = "No project";
+/** What follows the name of the project the folder csn was started in belongs to. */
+const HERE = " (here)";
+/** The project list's heading, before the kind's noun. */
+const PROJECT_HEADING = "PROJECT";
 /** The `✦` before the table's selected row and the space after it: the table's cells start after them. */
 export const CURSOR_COLUMNS = 2;
 /** The width from which the scope list and the table go side by side. */
@@ -363,13 +350,15 @@ const SCOPE_PANE_MAX = 32;
 export type PaneLayout = { mode: "two" | "one"; scopeWidth: number; tableWidth: number; height: number };
 
 /**
- * Two panes at >= 100 columns; scope pane = widest "label  count" + 4, at most 32. Under 100, one
- * pane at a time: the table and the details at the full width, the scope list as wide as beside
- * the table, left-aligned. Widths are inside Chrome's padding; `height` is the panes'
- * rows, so the frame is `rows - 2` at most (ink clears the scrollback for a frame as tall as the
- * terminal). A size that is not a number, as from a stream that is no terminal, reads as 80 by 24.
+ * Two panes at >= 100 columns; scope pane = widest "label  count" + 4, or what the project row
+ * and the project list take (`projects`, from projectPaneWidth) when that is more, at most 32.
+ * Under 100, one pane at a time: the table and the details at the full width, the scope list and
+ * the project list as wide as beside the table, left-aligned. Widths are inside Chrome's padding;
+ * `height` is the panes' rows, so the frame is `rows - 2` at most (ink clears the scrollback for a
+ * frame as tall as the terminal). A size that is not a number, as from a stream that is no
+ * terminal, reads as 80 by 24.
  */
-export function paneLayout(columns: number, rows: number, scopes: ScopeEntry[]): PaneLayout {
+export function paneLayout(columns: number, rows: number, scopes: ScopeEntry[], projects = 0): PaneLayout {
   const across = Number.isFinite(columns) ? columns : 80;
   const down = Number.isFinite(rows) ? rows : 24;
   const width = Math.max(1, across - CHROME_COLUMNS);
@@ -377,26 +366,165 @@ export function paneLayout(columns: number, rows: number, scopes: ScopeEntry[]):
   // The marker before a label ("▸ ") and two spaces before the divider. One pane alone keeps this
   // width too, so a count sits next to its label rather than across the terminal from it.
   const widest = Math.max(0, ...scopes.map((s) => `${s.label}  ${s.count}`.length));
-  const scopeWidth = Math.min(SCOPE_PANE_MAX, widest + 4, width);
+  const scopeWidth = Math.min(SCOPE_PANE_MAX, Math.max(widest + 4, projects), width);
   if (across < TWO_PANES_FROM) return { mode: "one", scopeWidth, tableWidth: width, height };
   return { mode: "two", scopeWidth, tableWidth: Math.max(1, width - scopeWidth - DIVIDER_COLUMNS), height };
 }
 
-/** A line of the scope list: a scope, or the rule that sets Loaded here and Not used in 90 days apart. */
+/** A line of the scope list: a scope, or the rule that sets Loaded and Not used in 90 days apart. */
 export type ScopeLine = { type: "scope"; key: string; entry: ScopeEntry } | { type: "rule"; key: string };
 
-/** The scope list's lines: a rule after Loaded here and another before Not used in 90 days, when there. */
+/** The scope list's lines: a rule after Loaded and another before Not used in 90 days, when there. */
 export function scopeLines(scopes: ScopeEntry[]): ScopeLine[] {
   const lines: ScopeLine[] = [];
   for (const entry of scopes) {
     const prev = lines.at(-1);
-    // One rule where the two stand together: Loaded here, then Not used in 90 days.
+    // One rule where the two stand together: Loaded, then Not used in 90 days.
     if (prev?.type === "scope" && (prev.entry.id === "loaded" || entry.id === "unused")) {
       lines.push({ type: "rule", key: `rule-${entry.id}` });
     }
     lines.push({ type: "scope", key: entry.id, entry });
   }
   return lines;
+}
+
+/** A line of the project list: a recorded project, or No project. */
+export type ProjectEntry = {
+  key: string;
+  /** Undefined for No project. */
+  path?: string;
+  name: string;
+  /** The project the folder csn was started in belongs to: it reads "(here)". */
+  here: boolean;
+  /** The project everything is seen from now. */
+  current: boolean;
+  /** Its own rows of the tool and kind, as its Project scope lists them once it is picked. */
+  count: number;
+};
+
+/** How many of each name there are. */
+function counted(names: string[]): (name: string) => number {
+  const counts = new Map<string, number>();
+  for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
+  return (name) => counts.get(name) ?? 0;
+}
+
+/**
+ * Each recorded project's name, by path key: `projectName`, and the folder above it too where two
+ * projects share a folder name - `work/site`, `mine/site` - or the path where even that is one.
+ */
+function projectNames(inv: Inventory): Map<string, string> {
+  const named = inv.projects.map((p) => ({ dir: p.path, name: projectName(p.path, inv) }));
+  const shared = counted(named.map((p) => p.name));
+  const longer = named.map((p) =>
+    shared(p.name) > 1 ? { ...p, name: path.join(path.basename(path.dirname(p.dir)), p.name) } : p,
+  );
+  const still = counted(longer.map((p) => p.name));
+  return new Map(longer.map((p) => [pathKey(p.dir), still(p.name) > 1 ? tilde(p.dir, inv.homeDir) : p.name]));
+}
+
+/**
+ * The project list: `project`, the one everything is seen from, first; then every other recorded
+ * project, by name; then No project. `here` is the project of the folder csn was started in. Each
+ * counts its own rows of the tool and kind - what its Project scope lists once it is picked -
+ * read in one pass over the inventory.
+ */
+export function projectList(
+  inv: Inventory,
+  tool: Tool,
+  kind: Kind,
+  project: string | undefined,
+  here: string | undefined,
+): ProjectEntry[] {
+  // An item is a project's own when, seen from that project, it is in Project: not a plugin's,
+  // Cloud's, built in or managed. Counted in rows, as the table lists them.
+  const own = new Map<string, Set<string>>();
+  for (const item of inv.items) {
+    const dir = item.location.project;
+    if (item.kind !== kind || item.location.tool !== tool || dir === undefined) continue;
+    if (homeScope(item, dir) !== "project") continue;
+    const key = pathKey(dir);
+    const rows = own.get(key) ?? new Set<string>();
+    rows.add(rowKey(item));
+    own.set(key, rows);
+  }
+  const names = projectNames(inv);
+  const entry = (dir: string): ProjectEntry => {
+    const key = pathKey(dir);
+    return {
+      key,
+      path: dir,
+      name: names.get(key) ?? projectName(dir, inv),
+      here: samePath(dir, here),
+      current: samePath(dir, project),
+      count: own.get(key)?.size ?? 0,
+    };
+  };
+  const first = project === undefined ? [] : [entry(project)];
+  const others = inv.projects
+    .filter((p) => !samePath(p.path, project))
+    .map((p) => entry(p.path))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+  const none: ProjectEntry = { key: "none", name: NO_PROJECT, here: false, current: project === undefined, count: 0 };
+  return [...first, ...others, none];
+}
+
+/** A project's count as the list says it: — for none. */
+function countText(entry: ProjectEntry): string {
+  return entry.count > 0 ? String(entry.count) : "—";
+}
+
+/**
+ * The columns the project row and the project list take whole: the widest line - "▸ ", the name,
+ * its " (here)", a space, the count, and the two columns before the divider - or the heading,
+ * PROJECT and the kind's noun two apart, from where the marker is. The row is one of the lines,
+ * shorter by its count. The same whichever project is picked, so the pane keeps its width.
+ */
+export function projectPaneWidth(entries: ProjectEntry[], noun: string): number {
+  const countWidth = Math.max(0, ...entries.map((e) => countText(e).length));
+  const widest = Math.max(0, ...entries.map((e) => e.name.length + (e.here ? HERE.length : 0) + 1 + countWidth));
+  return Math.max(widest + 4, `${PROJECT_HEADING}  ${noun}`.length + 2);
+}
+
+/**
+ * A project's name, and " (here)" for the folder's own, in `room` columns: the name is cut with …
+ * first, so "(here)" stays while a letter of the name and its … are left beside it.
+ */
+export function projectLabel(name: string, here: boolean, room: number): { name: string; here: string } {
+  const mark = here ? HERE : "";
+  if (name.length + mark.length <= room) return { name, here: mark };
+  if (here && room >= mark.length + 2) return { name: cell(name, room - mark.length), here: mark };
+  return { name: cell(name, room).trimEnd(), here: "" };
+}
+
+/** A line of the project list as drawn after the marker: the name, its (here), the count right-aligned. */
+export type ProjectLine = { key: string; name: string; here: string; count: string; entry: ProjectEntry };
+
+/**
+ * The project list in a pane `width` wide, laid out as the scope list is: after the marker's two
+ * columns, each line runs to two columns before the divider - the name cut with … and the count,
+ * or — for none, right-aligned. The heading is PROJECT where the marker is and the kind's noun
+ * where the counts end, the noun left out when there is no room for both.
+ */
+export function projectListLines(
+  entries: ProjectEntry[],
+  noun: string,
+  width: number,
+): { title: string; noun: string; lines: ProjectLine[] } {
+  const inner = Math.max(0, width - 4);
+  const counts = entries.map(countText);
+  const room = Math.max(0, inner - Math.max(0, ...counts.map((c) => c.length)) - 1);
+  const lines = entries.map((entry, i) => {
+    const label = projectLabel(entry.name, entry.here, room);
+    const left = inner - label.name.length - label.here.length;
+    const count = counts[i] ?? "";
+    return { key: entry.key, ...label, count: count.length <= left ? count.padStart(left) : "", entry };
+  });
+  const head = Math.max(0, width - 2);
+  const fits = PROJECT_HEADING.length + 2 + noun.length <= head;
+  return fits
+    ? { title: PROJECT_HEADING.padEnd(head - noun.length), noun, lines }
+    : { title: cell(PROJECT_HEADING, head).trimEnd(), noun: "", lines };
 }
 
 /**

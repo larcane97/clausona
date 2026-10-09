@@ -76,18 +76,17 @@ function find(inv: Inventory, test: (item: Inventory["items"][number]) => boolea
 describe("scopes", () => {
   it("lists the Claude skill scopes in order, with counts, and leaves out the empty optional ones", async () => {
     const { inv, app } = await seed();
+    // The screen has no Other projects: its project list takes that place. The CLI keeps it.
     expect(scopesFor(inv, "claude", "skill", app, NOW).map((s) => [s.id, s.count])).toEqual([
       ["loaded", 3],
       ["project", 2],
       ["global", 2],
-      ["other", 1],
       ["unused", 3],
     ]);
     expect(scopesFor(inv, "claude", "skill", app, NOW).map((s) => s.label)).toEqual([
-      "Loaded here",
+      "Loaded",
       "Project",
       "Global",
-      "Other projects",
       "Not used in 90 days",
     ]);
     // Never used and past the grace period, wherever they are; eli5 was used yesterday.
@@ -154,7 +153,7 @@ describe("scopes", () => {
     expect(itemsIn(inv, "codex", "skill", "unused", app, NOW)).toEqual([]);
   });
 
-  it("shows Loaded here and Project at 0 when the project has nothing of a kind (Review Focus 1)", async () => {
+  it("shows Loaded and Project at 0 when the project has nothing of a kind (Review Focus 1)", async () => {
     const h = new TestHome();
     homes.push(h);
     const app = h.project("repos/app");
@@ -167,7 +166,7 @@ describe("scopes", () => {
     });
     const scopes = scopesFor(inv, "claude", "hook", app, NOW);
     expect(scopes).toEqual([
-      { id: "loaded", label: "Loaded here", count: 0 },
+      { id: "loaded", label: "Loaded", count: 0 },
       { id: "project", label: "Project", count: 0 },
     ]);
   });
@@ -213,7 +212,7 @@ describe("scopes", () => {
     // sp brings a hook, kit none: neither is listed under hooks' Plugins from app.
     expect(itemsIn(inv, "claude", "hook", "plugins", app, NOW)).toEqual([]);
     expect(itemsIn(inv, "claude", "hook", "plugins", web, NOW)).toEqual([sp]);
-    // The enabled plugin's skill loads here; the plugin itself is a row of Plugins, not of Loaded here.
+    // The enabled plugin's skill loads here; the plugin itself is a row of Plugins, not of Loaded.
     const loaded = itemsIn(inv, "claude", "skill", "loaded", app, NOW).map((i) => i.name);
     expect(loaded).toContain("kit:kit-skill");
     expect(loaded).not.toContain("kit@m");
@@ -223,6 +222,9 @@ describe("scopes", () => {
   });
 
   it("labels every scope in the words the screen and the CLI use", () => {
+    // The same whichever project is picked: what loads in the one seen from.
+    expect(SCOPE_LABEL.loaded("claude")).toBe("Loaded");
+    expect(SCOPE_LABEL.other("claude")).toBe("Other projects");
     expect(SCOPE_LABEL.builtin("claude")).toBe("Built-in");
     expect(SCOPE_LABEL.builtin("codex")).toBe("Built-in");
     expect(SCOPE_LABEL.parents("claude")).toBe("Parent folders");
@@ -231,7 +233,7 @@ describe("scopes", () => {
     expect(SCOPE_LABEL.plugins("claude")).toBe("Plugins");
   });
 
-  it("keeps a broken link out of Loaded here, where it is still listed and counted unused", async () => {
+  it("keeps a broken link out of Loaded, where it is still listed and counted unused", async () => {
     const { inv, app } = await seed((h) => h.link(h.path("gone", "lost"), ".claude/skills/lost"));
     const names = (scope: "loaded" | "global" | "unused") =>
       itemsIn(inv, "claude", "skill", scope, app, NOW).map((i) => i.name);
@@ -245,7 +247,7 @@ describe("scopes", () => {
       h.write(".claude/settings.json", { skillOverrides: { "claude-api": "off" } }),
     );
     const scopes = scopesFor(inv, "claude", "skill", app, NOW);
-    expect(scopes.map((s) => s.id)).toEqual(["loaded", "project", "global", "builtin", "other", "unused"]);
+    expect(scopes.map((s) => s.id)).toEqual(["loaded", "project", "global", "builtin", "unused"]);
     expect(itemsIn(inv, "claude", "skill", "builtin", app, NOW).map((i) => i.name)).toEqual(["claude-api"]);
     // It is off, so it does not load here.
     expect(itemsIn(inv, "claude", "skill", "loaded", app, NOW).map((i) => i.name)).not.toContain("claude-api");
@@ -305,7 +307,7 @@ describe("rows", () => {
     ]);
   });
 
-  it("lists a server in Loaded here with every copy when it loads in one account", async () => {
+  it("lists a server in Loaded with every copy when it loads in one account", async () => {
     const { inv, app } = await servers();
     const github = rowsIn(inv, "claude", "mcp", "loaded", app, NOW).find((r) => r.name === "github");
     expect(github?.key).toBe("mcp:claude:account:-:github");
@@ -517,7 +519,7 @@ describe("one copy per name, account by account", () => {
     );
   }
 
-  /** Loaded here's row keys, sorted. */
+  /** Loaded's row keys, sorted. */
   const loadedKeys = ({ inv, app }: Seeded, kind: "skill" | "mcp") =>
     rowsIn(inv, "claude", kind, "loaded", app, NOW)
       .map((r) => r.key)
