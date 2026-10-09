@@ -179,14 +179,26 @@ export function AccountRows({
   );
 }
 
-/** `1. <id>  2. <id>  (+ add)`, the entry at `cursor` marked while the field has the focus. */
-export function FallbackEntries({ entries, cursor }: { entries: string[]; cursor: number | null }) {
+/**
+ * `1. <id>  2. <id>  (+ add)`, the entry at `cursor` marked while the field has the focus. An
+ * entry the pool takes already (one written with the CLI) says so: it adds nothing.
+ */
+export function FallbackEntries({
+  entries,
+  cursor,
+  pool,
+}: {
+  entries: string[];
+  cursor: number | null;
+  pool: ReadonlySet<string>;
+}) {
   return (
     <Box columnGap={2} flexWrap="wrap">
       {entries.map((entry, index) => (
         <Box key={entry} flexShrink={0}>
           <Text color={index === cursor ? color.cursor : color.text}>
             {`${index === cursor ? "▸" : " "}${index + 1}. ${entry}`}
+            {pool.has(entry) ? <Text color={color.muted}> in the pool</Text> : null}
           </Text>
         </Box>
       ))}
@@ -198,20 +210,43 @@ export function FallbackEntries({ entries, cursor }: { entries: string[]; cursor
   );
 }
 
+/** Why the picker has nothing to offer: no accounts, none outside the pool, or those all added. */
+export type NothingToAdd = "accounts" | "outside" | "left";
+
+/**
+ * The pool already takes every account it does not exclude, so a fallback could add none: said
+ * on the picker's line, from the labels' column, so that it fits 80 columns in the form's frame.
+ */
+const POOL_TAKES_ALL = "The pool takes every account; untick every account (*) or narrow it.";
+
 /**
  * The accounts that can still join the fallback, one at a time on a line under it, with `‹` and
  * `›` where there are more. A list of them all ran the form off a 34-row terminal once a
- * claude + codex route offered eight; one line fits whatever the number of accounts.
+ * claude + codex route offered eight; one line fits whatever the number of accounts. `none` says
+ * why there is nothing to offer, when there is not.
  */
-export function FallbackPicker({ ids, cursor }: { ids: string[]; cursor: number }) {
+export function FallbackPicker({ ids, cursor, none }: { ids: string[]; cursor: number; none: NothingToAdd }) {
   const id = ids[cursor];
+  if (id === undefined && none === "outside") {
+    return (
+      <Box flexDirection="row" paddingLeft={CURSOR}>
+        <Box flexShrink={1} minWidth={1}>
+          <Text color={color.muted} wrap="truncate-end">
+            {POOL_TAKES_ALL}
+          </Text>
+        </Box>
+      </Box>
+    );
+  }
   return (
     <Box flexDirection="row" paddingLeft={CURSOR + LABEL} columnGap={2}>
       <Box flexShrink={0}>
         <Text color={color.secondary}>Add to fallback</Text>
       </Box>
       {id === undefined ? (
-        <Text color={color.muted}>every account is in it already</Text>
+        <Text color={color.muted}>
+          {none === "accounts" ? "there are no accounts to add" : "every account outside the pool is in it"}
+        </Text>
       ) : (
         <>
           <Box flexShrink={1}>

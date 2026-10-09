@@ -109,7 +109,8 @@ A glob or an email pattern never matches an API profile. Naming one exactly is r
 are billed per use, and this version keeps them out of routes.
 
 `exclude` applies to `from` and `fallback` alike. An account listed in both `from` and
-`fallback` counts as a pool member.
+`fallback` counts as a pool member. So a fallback only helps for accounts the pool leaves out,
+and the form on the Routes screen offers only those.
 
 A pattern that looks like an API key or a token is refused, and clausona does not print it back.
 Route names get the same check.

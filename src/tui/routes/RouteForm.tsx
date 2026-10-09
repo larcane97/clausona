@@ -189,7 +189,6 @@ export function RouteForm(props: RouteFormProps) {
     const route = withDefaults(spec);
     return rankRoute({ route, members: membersOf(registry, route.tool), quotas, lastPicked, now, resume: false });
   }, [state, accounts, registry, quotas, lastPicked, now]);
-  const candidates = listed.filter((account) => !state.fallback.includes(account.id));
 
   /**
    * Unticked under every account, or matched by an exclude pattern: either way out of the route. A
@@ -207,6 +206,28 @@ export function RouteForm(props: RouteFormProps) {
         .map((account) => account.id),
     );
   }, [listed, members, state.every, state.ticked, state.excludeText]);
+
+  /**
+   * The pool's accounts, as the preview ranks them; while the form holds a problem there is no
+   * preview, and the ticks say it.
+   */
+  const pool = useMemo(
+    () =>
+      new Set(
+        preview
+          ? preview.rows.filter((row) => row.role === "pool").map((row) => row.id)
+          : state.every
+            ? listed.map((account) => account.id)
+            : state.ticked,
+      ),
+    [preview, listed, state.every, state.ticked],
+  );
+  /**
+   * What a fallback entry can add: an account outside the pool, which ranking already tries
+   * first, and outside the excludes, which leave a fallback account out as well.
+   */
+  const outside = listed.filter((account) => !pool.has(account.id) && !excluded.has(account.id));
+  const candidates = outside.filter((account) => !state.fallback.includes(account.id));
 
   const dispatch = (action: FormAction) => setState((current) => reduceForm(current, action, accounts));
   const showErrors = (errors: Errors) => setState((current) => ({ ...current, errors }));
@@ -480,9 +501,15 @@ export function RouteForm(props: RouteFormProps) {
           <Text color={color.muted}>]%</Text>
         </Line>
         <Line {...line("fallback", "Fallback")}>
-          <FallbackEntries entries={state.fallback} cursor={focusOn("fallback") ? state.cursor : null} />
+          <FallbackEntries entries={state.fallback} cursor={focusOn("fallback") ? state.cursor : null} pool={pool} />
         </Line>
-        {picking !== null ? <FallbackPicker ids={candidates.map((account) => account.id)} cursor={picking} /> : null}
+        {picking !== null ? (
+          <FallbackPicker
+            ids={candidates.map((account) => account.id)}
+            cursor={picking}
+            none={listed.length === 0 ? "accounts" : outside.length === 0 ? "outside" : "left"}
+          />
+        ) : null}
       </Box>
       <NowLine ranking={preview} />
       <ErrorLines errors={state.errors} />

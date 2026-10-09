@@ -185,6 +185,19 @@ async function retype(instance: Instance, length: number, value: string) {
   await press(instance, value);
 }
 
+/**
+ * Unticks `every account (*)`, which leaves every account ticked as the from list, then each of
+ * `ids`: what makes room for a fallback.
+ */
+async function untickEvery(instance: Instance, ids: string[]) {
+  await tabTo(instance, "Accounts");
+  await press(instance, SPACE);
+  for (const id of ids) {
+    await downTo(instance, accountRow(id));
+    await press(instance, SPACE);
+  }
+}
+
 async function save(instance: Instance) {
   await type(instance, ENTER);
 }
@@ -416,20 +429,22 @@ describe("RouteForm", () => {
     const { instance, deps, onDone, disk } = setup();
     await opened(instance, deps);
     await press(instance, "spare");
+    // The pool is ops-share alone, which leaves three accounts to fall back on.
+    await untickEvery(instance, ["claude:side", "claude:team", "claude:work"]);
     await tabTo(instance, "Fallback");
 
     await press(instance, "a");
-    expect(row(text(instance), "Add to fallback")).toMatch(pickerRow("claude:ops-share"));
-    await downTo(instance, pickerRow("claude:side"));
+    expect(row(text(instance), "Add to fallback")).toMatch(/^\s*Add to fallback\s+claude:side ›\s+1 of 3$/);
     await press(instance, ENTER);
     expect(text(instance)).not.toContain("Add to fallback");
     expect(row(text(instance), "Fallback")).toMatch(/▸1\. claude:side\s+\(\+ add\)$/);
 
     await press(instance, "a");
     // What is in the fallback already is not offered again.
-    expect(row(text(instance), "Add to fallback")).toMatch(/claude:ops-share ›\s+1 of 3$/);
+    expect(row(text(instance), "Add to fallback")).toMatch(/claude:team ›\s+1 of 2$/);
     await press(instance, RIGHT);
-    expect(row(text(instance), "Add to fallback")).toMatch(/‹ claude:team ›\s+2 of 3$/);
+    expect(row(text(instance), "Add to fallback")).toMatch(/‹ claude:work\s+2 of 2$/);
+    await press(instance, LEFT);
     await press(instance, ENTER);
     await press(instance, "a");
     await downTo(instance, pickerRow("claude:work"));
@@ -450,17 +465,76 @@ describe("RouteForm", () => {
 
     await save(instance);
     await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith("spare"));
-    expect(routes(disk).spare.fallback).toEqual(["team", "side"]);
+    expect(routes(disk).spare).toMatchObject({ from: ["ops-share"], fallback: ["team", "side"] });
+  });
+
+  // The pool comes first, and a member already in it is skipped as a fallback: under every
+  // account (*), which a new route starts on, each account the picker offered did nothing.
+  it("offers only accounts outside the pool and its excludes, and says what makes room when there are none", async () => {
+    const { instance, deps } = setup({ columns: 80 });
+    await opened(instance, deps);
+    await tabTo(instance, "Fallback");
+
+    await press(instance, "a");
+    const message = "The pool takes every account; untick every account (*) or narrow it.";
+    expect(text(instance)).toContain(message);
+    expect(text(instance)).not.toContain("Add to fallback");
+    for (const line of lines(text(instance))) expect(line.length).toBeLessThanOrEqual(80);
+    await press(instance, ENTER);
+    expect(text(instance)).not.toContain(message);
+    expect(row(text(instance), "Fallback")).toMatch(/Fallback\s+\(\+ add\)$/);
+
+    // Unticked, every account leaves them all ticked: still nobody outside the pool.
+    await untickEvery(instance, []);
+    await tabTo(instance, "Fallback");
+    await press(instance, "a");
+    expect(text(instance)).toContain(message);
+    await press(instance, ESC);
+    // Unticked from the from list, side is outside the pool: the one account to offer.
+    await tabTo(instance, "Accounts");
+    await downTo(instance, accountRow("claude:side"));
+    await press(instance, SPACE);
+    await tabTo(instance, "Fallback");
+    await press(instance, "a");
+    expect(row(text(instance), "Add to fallback")).toMatch(/^\s*Add to fallback\s+claude:side\s+1 of 1$/);
+  });
+
+  it("leaves out of the picker an account the exclude takes, and one in the pool by name", async () => {
+    // main takes every account but ops-share, which its exclude takes: nothing to offer.
+    const main = setup({ edit: "main", columns: 80 });
+    await opened(main.instance, main.deps);
+    await tabTo(main.instance, "Fallback");
+    await press(main.instance, "a");
+    expect(text(main.instance)).toContain("The pool takes every account; untick every account (*) or narrow it.");
+
+    // solo's pool is work, and team is its fallback already.
+    const solo = setup({ edit: "solo" });
+    await opened(solo.instance, solo.deps);
+    await tabTo(solo.instance, "Fallback");
+    await press(solo.instance, "a");
+    expect(row(text(solo.instance), "Add to fallback")).toMatch(/claude:ops-share ›\s+1 of 2$/);
+    await press(solo.instance, RIGHT);
+    expect(row(text(solo.instance), "Add to fallback")).toMatch(/‹ claude:side\s+2 of 2$/);
+  });
+
+  it("marks a fallback entry the pool takes already, as one written with the CLI can be", async () => {
+    const file: RoutesFile = {
+      version: 1,
+      routes: { cli: { tool: "claude", from: ["*"], fallback: ["side", "nobody"] } },
+    };
+    const { instance, deps } = setup({ edit: "cli", file, columns: 80 });
+    await opened(instance, deps);
+    expect(row(text(instance), "Fallback")).toMatch(
+      /Fallback\s+1\. claude:side in the pool\s+2\. nobody\s+\(\+ add\)$/,
+    );
   });
 
   // The 8 accounts of a claude + codex form listed under the fallback ran the form off a
   // 34-row terminal, the title first; the picker is one line, whatever the number of accounts.
   it("offers the fallback accounts on one line, one at a time, so the picker adds a single line", async () => {
-    const { instance, deps } = setup();
+    // A claude + codex route of one account: the four others are offered.
+    const { instance, deps } = setup({ edit: "pair", spec: { tool: "all", from: ["claude:team"] } });
     await opened(instance, deps);
-    await tabTo(instance, "Tool");
-    await press(instance, RIGHT);
-    await press(instance, RIGHT);
     await tabTo(instance, "Fallback");
     const closed = lines(text(instance)).length;
 
@@ -468,19 +542,18 @@ describe("RouteForm", () => {
     expect(lines(text(instance))).toHaveLength(closed + 1);
     const picker = () => row(text(instance), "Add to fallback");
     // The first has nothing before it, the last nothing after it.
-    expect(picker()).toMatch(/^\s*Add to fallback\s+claude:ops-share ›\s+1 of 5$/);
+    expect(picker()).toMatch(/^\s*Add to fallback\s+claude:ops-share ›\s+1 of 4$/);
     await type(instance, LEFT);
-    expect(picker()).toMatch(/\s+claude:ops-share ›\s+1 of 5$/);
+    expect(picker()).toMatch(/\s+claude:ops-share ›\s+1 of 4$/);
     await press(instance, RIGHT);
-    expect(picker()).toMatch(/‹ claude:side ›\s+2 of 5$/);
+    expect(picker()).toMatch(/‹ claude:side ›\s+2 of 4$/);
     await press(instance, DOWN);
     await press(instance, DOWN);
-    await press(instance, DOWN);
-    expect(picker()).toMatch(/‹ codex:x\s+5 of 5$/);
+    expect(picker()).toMatch(/‹ codex:x\s+4 of 4$/);
     await type(instance, RIGHT);
-    expect(picker()).toMatch(/‹ codex:x\s+5 of 5$/);
+    expect(picker()).toMatch(/‹ codex:x\s+4 of 4$/);
     await press(instance, UP);
-    expect(picker()).toMatch(/‹ claude:work ›\s+4 of 5$/);
+    expect(picker()).toMatch(/‹ claude:work ›\s+3 of 4$/);
     expect(lines(text(instance))).toHaveLength(closed + 1);
 
     await press(instance, ENTER);
