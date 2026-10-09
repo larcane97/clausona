@@ -427,6 +427,75 @@ describe("widths", () => {
   });
 });
 
+describe("tag width", () => {
+  const HIDDEN = "hidden by Global copy";
+  const widths = (table: Table) => table.columns.map((c) => c.width);
+  /** What the columns leave the tag. */
+  const tagRoom = (table: Table, width: number) => width - table.columns.reduce((sum, c) => sum + c.width, 0);
+  /**
+   * The project table: NAME as wide as "deploy-check" and its gap (14), USES (6), LAST USED (11).
+   * At its least NAME keeps 10, 8 characters and the gap, so the columns take 27 at least.
+   */
+  const project = (inv: Inventory, app: string, width: number) =>
+    buildTable(inv, "claude", "skill", "project", app, NOW, width, "");
+
+  it("shows a tag whole where it fits", async () => {
+    const { inv, app } = await seed();
+    for (const width of [14 + 6 + 11 + HIDDEN.length, 100]) {
+      expect(byName(project(inv, app, width), "eli5")?.tag).toEqual({ text: HIDDEN, tone: "muted" });
+    }
+    expect(widths(project(inv, app, 52))).toEqual([14, 6, 11]);
+  });
+
+  it("cuts a tag with … and keeps it 12 wide at a narrow width, NAME giving way first", async () => {
+    // github is off for app in work only.
+    const { inv, app } = await seed((h, app, web) => {
+      h.claude("default", ".claude", { projects: { [app]: {}, [web]: {} }, mcpServers: { github: { command: "gh" } } });
+      h.claude("work", ".claude-work", {
+        projects: { [app]: { disabledMcpServers: ["github"] } },
+        mcpServers: { github: { command: "gh" } },
+      });
+    });
+    const servers = buildTable(inv, "claude", "mcp", "global", app, NOW, 30, "");
+    const tag = byName(servers, "github")?.tag;
+    expect(tag?.text).toBe("off in 1 of…");
+    expect(tag?.text).toHaveLength(12);
+    // NAME (8) and ACCOUNTS (10) fit whole beside it.
+    expect(widths(servers)).toEqual([8, 10]);
+    // The project table at 40: NAME is cut to 11 so the tag keeps its 12.
+    const skills = project(inv, app, 40);
+    expect(widths(skills)).toEqual([11, 6, 11]);
+    expect(byName(skills, "eli5")?.tag?.text).toBe("hidden by G…");
+    expect(byName(skills, "deploy-check")?.cells[0]?.trimEnd()).toBe("deploy-c…");
+    // At every width: at least 12 whenever the columns at their least leave 12, else all they leave.
+    for (let width = 16; width <= 80; width++) {
+      const table = project(inv, app, width);
+      const room = tagRoom(table, width);
+      if (width >= 27 + 12) expect(room, `at ${width}`).toBeGreaterThanOrEqual(12);
+      else expect(room, `at ${width}`).toBe(Math.max(0, width - 27));
+      const text = byName(table, "eli5")?.tag?.text ?? "";
+      expect(text, `at ${width}`).toHaveLength(Math.min(HIDDEN.length, room));
+      if (text !== "" && text.length < HIDDEN.length) expect(text.endsWith("…"), `at ${width}`).toBe(true);
+    }
+  });
+
+  it("lets the tag give way once NAME is down to 10, then drops it, then cuts columns from the right", async () => {
+    const { inv, app } = await seed();
+    // The tag takes what is left: 3 at 30.
+    const at30 = project(inv, app, 30);
+    expect(widths(at30)).toEqual([10, 6, 11]);
+    expect(byName(at30, "eli5")?.tag).toEqual({ text: "hi…", tone: "muted" });
+    // Nothing left at 27: no tag, every column at its least.
+    const at27 = project(inv, app, 27);
+    expect(widths(at27)).toEqual([10, 6, 11]);
+    expect(at27.rows.every((r) => r.tag === undefined)).toBe(true);
+    // Narrower, the last column gives way; NAME keeps its 10.
+    const at20 = project(inv, app, 20);
+    expect(widths(at20)).toEqual([10, 6, 4]);
+    expect(at20.rows.every((r) => r.tag === undefined && r.cells.join("").length <= 20)).toBe(true);
+  });
+});
+
 describe("kinds", () => {
   it("names the kinds in the bar's order", () => {
     expect(KINDS).toEqual(["skill", "mcp", "hook"]);

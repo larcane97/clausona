@@ -69,7 +69,7 @@ describe("skills ls", () => {
     // The Global eli5 wins over app's, so it is the one listed.
     expect(text).toMatch(/^eli5\s+claude\s+Global\s+4\s+1d ago$/m);
     expect(text).toMatch(/^eli5\s+codex\s+Global\s+—\s+—$/m);
-    expect(text).toMatch(/^deploy-check\s+claude\s+Project\s+0\s+never\s+unused$/m);
+    expect(text).toMatch(/^deploy-check\s+claude\s+Project\s+0\s+—\s+unused$/m);
     expect(text).not.toContain("web-only");
   });
 
@@ -90,7 +90,7 @@ describe("skills ls", () => {
     const { h, app } = seed();
     const text = await run(h, app, "skills", ["ls", "--scope", "project"]);
     expect(firstLine(text)).toMatch(/^2 skills · Project · project ~/);
-    expect(text).toMatch(/^deploy-check\s+claude\s+Project\s+0\s+never\s+unused$/m);
+    expect(text).toMatch(/^deploy-check\s+claude\s+Project\s+0\s+—\s+unused$/m);
     expect(text).toMatch(/^eli5\s+claude\s+Project\s+—\s+—\s+hidden by Global copy$/m);
     expect(text).not.toContain("old-one");
   });
@@ -111,9 +111,9 @@ describe("skills ls", () => {
     const { h, app } = seed();
     const text = await run(h, app, "skills", ["ls", "--scope", "unused", "--tool", "claude"]);
     expect(firstLine(text)).toMatch(/^3 skills · Not used in 90 days · project ~/);
-    expect(text).toMatch(/^deploy-check\s+Project\s+0\s+never\s+unused$/m);
-    expect(text).toMatch(/^old-one\s+Global\s+0\s+never\s+unused$/m);
-    expect(text).toMatch(/^web-only\s+web\s+0\s+never\s+unused$/m);
+    expect(text).toMatch(/^deploy-check\s+Project\s+0\s+—\s+unused$/m);
+    expect(text).toMatch(/^old-one\s+Global\s+0\s+—\s+unused$/m);
+    expect(text).toMatch(/^web-only\s+web\s+0\s+—\s+unused$/m);
     expect(text).not.toContain("eli5");
   });
 
@@ -121,7 +121,7 @@ describe("skills ls", () => {
     const { h, app, web } = seed();
     const other = await run(h, app, "skills", ["ls", "--scope", "other"]);
     expect(firstLine(other)).toMatch(/^1 skill · Other projects · project ~/);
-    expect(other).toMatch(/^web-only\s+claude\s+web\s+0\s+never\s+unused$/m);
+    expect(other).toMatch(/^web-only\s+claude\s+web\s+0\s+—\s+unused$/m);
     const fromWeb = await run(h, app, "skills", ["ls", "--project", web]);
     expect(firstLine(fromWeb)).toMatch(/project ~[\\/]repos[\\/]web$/);
     expect(fromWeb).toContain("web-only");
@@ -172,7 +172,7 @@ describe("skills ls", () => {
     h.write(".claude/settings.json", { skillOverrides: { "claude-api": "off" } });
     const text = await run(h, app, "skills", ["ls", "--scope", "builtin", "--tool", "claude"]);
     expect(firstLine(text)).toMatch(/^1 skill · Built into Claude Code · project ~/);
-    expect(text).toMatch(/^claude-api\s+Built in\s+0\s+never\s+off$/m);
+    expect(text).toMatch(/^claude-api\s+Built in\s+0\s+—\s+off$/m);
     const inv = await loadInventory({ homeDir: h.home, registry: h.registry, cwd: app });
     // In the scope list, after Plugins' place and before Other projects.
     expect(scopesFor(inv, "claude", "skill", app, NOW).map((s) => s.id)).toEqual([
@@ -220,8 +220,8 @@ describe("ls, rows that differ only in whose they are", () => {
     expect(cloud).toMatch(/^pdf\s+claude\s+Cloud · 2 accounts\s/m);
     expect(cloud.match(/^pdf\s/gm)).toHaveLength(1);
     const global = await run(h, app, "skills", ["ls", "--scope", "global"]);
-    expect(global).toMatch(/^eli5\s+claude\s+Global\s+0\s+never\s+unused$/m);
-    expect(global).toMatch(/^eli5\s+claude\s+Global · command\s+0\s+never\s+unused$/m);
+    expect(global).toMatch(/^eli5\s+claude\s+Global\s+0\s+—\s+unused$/m);
+    expect(global).toMatch(/^eli5\s+claude\s+Global · command\s+0\s+—\s+unused$/m);
   });
 });
 
@@ -527,9 +527,7 @@ describe("ls, a skill turned off", () => {
   it("reads another project's item in that project's own settings", async () => {
     const { h, app } = seed();
     h.write("repos/web/.claude/settings.local.json", { skillOverrides: { "web-only": "off" } });
-    expect(await run(h, app, "skills", ["ls", "--scope", "other"])).toMatch(
-      /^web-only\s+claude\s+web\s+0\s+never\s+off/m,
-    );
+    expect(await run(h, app, "skills", ["ls", "--scope", "other"])).toMatch(/^web-only\s+claude\s+web\s+0\s+—\s+off/m);
   });
 });
 

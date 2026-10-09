@@ -4,18 +4,17 @@ import { accent, bold, dim, helpUsage, truncate } from "../lib/cli-style.js";
 import type { Registry, ToolName } from "../types.js";
 import {
   accountsWord,
-  agoWords,
   type DetailLine,
   detailsOf,
   fromLabel,
-  hiddenHere,
   hookWhen,
   jsonItem,
   rowAccounts,
   tagsOf,
+  usageCells,
 } from "./describe.js";
 import { ExitError } from "./exit-error.js";
-import { CLEANUP_UNUSED_DAYS, loadInventory, usageOf } from "./inventory.js";
+import { CLEANUP_UNUSED_DAYS, loadInventory } from "./inventory.js";
 import type { Extension, Inventory } from "./model.js";
 import { projectName, shortProfile, tilde, tildeIn } from "./present.js";
 import { entryInfo } from "./read.js";
@@ -346,15 +345,8 @@ function kindCells(
 ): string[] {
   const item = firstOf(row);
   switch (command) {
-    case "skills": {
-      // Codex keeps no usage record, and a plugin's use is its skills'. A hidden copy's use is
-      // counted under the copy that wins: a count on both rows would read twice.
-      if (item.kind !== "skill" || item.location.tool !== "claude" || hiddenHere(inv, row, project)) {
-        return ["—", "—"];
-      }
-      const usage = usageOf(inv, row.items);
-      return [String(usage?.total ?? 0), agoWords(usage?.lastUsedAt, now)];
-    }
+    case "skills":
+      return usageCells(inv, row, project, now);
     case "mcp":
       return [accountsWord(inv, row)];
     case "hooks": {

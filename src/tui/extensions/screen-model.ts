@@ -1,13 +1,4 @@
-import {
-  accountsWord,
-  agoWords,
-  fromLabel,
-  hiddenHere,
-  hookWhen,
-  scopeSentence,
-  tagsOf,
-} from "../../extensions/describe.js";
-import { usageOf } from "../../extensions/inventory.js";
+import { accountsWord, fromLabel, hookWhen, scopeSentence, tagsOf, usageCells } from "../../extensions/describe.js";
 import type { Extension, Inventory } from "../../extensions/model.js";
 import { projectName, tilde, tildeIn } from "../../extensions/present.js";
 import {
@@ -103,18 +94,6 @@ function toneOf(tag: string): TagTone {
   return "muted";
 }
 
-/** A Claude skill's use, summed over the row's copies. */
-function usesWord(inv: Inventory, row: ScopeRow, project: string | undefined): string {
-  return hiddenHere(inv, row, project) ? "—" : String(usageOf(inv, row.items)?.total ?? 0);
-}
-
-/** When the row was last used in any account; "—" when it never was. */
-function lastUsedWord(inv: Inventory, row: ScopeRow, project: string | undefined, now: number): string {
-  const usage = hiddenHere(inv, row, project) ? undefined : usageOf(inv, row.items);
-  if (usage === undefined || (usage.total === 0 && usage.lastUsedAt === undefined)) return "—";
-  return agoWords(usage.lastUsedAt, now);
-}
-
 function count(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
@@ -151,7 +130,7 @@ function rowSpecs(
     title: "LAST USED",
     fit: "fixed",
     search: false,
-    text: (row) => lastUsedWord(inv, row, project, now),
+    text: (row) => usageCells(inv, row, project, now)[1],
   };
   if (scope === "plugins") {
     return [name, { key: "contains", title: "CONTAINS", fit: "flex", text: (row) => containsWords(inv, row) }];
@@ -179,7 +158,7 @@ function rowSpecs(
           fit: "fixed",
           align: "right",
           search: false,
-          text: (row) => usesWord(inv, row, project),
+          text: (row) => usageCells(inv, row, project, now)[0],
         },
         lastUsed,
       ],

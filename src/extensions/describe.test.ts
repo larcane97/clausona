@@ -7,15 +7,18 @@ import {
   agoWords,
   detailsOf,
   fromLabel,
+  hiddenHere,
   hookWhen,
   jsonItem,
   rowAccounts,
   scopeSentence,
   statesByAccount,
   tagsOf,
+  usageCells,
 } from "./describe.js";
 import { loadInventory } from "./inventory.js";
 import type { Extension, Inventory } from "./model.js";
+import { stateHere, viewFrom } from "./present.js";
 import { isAccountCopy, rowsIn, type ScopeRow } from "./scopes.js";
 import { TestHome } from "./test-home.js";
 
@@ -206,6 +209,33 @@ describe("tagsOf", () => {
     const { inv, app } = await seed({ more: (h) => h.link(path.join(h.home, "gone"), ".claude/skills/dangling") });
     expect(tagsOf(inv, single(claudeSkill(inv, "dangling")), app, NOW)).toEqual(["broken link"]);
     expect(tagsOf(inv, single(find(inv, (i) => i.name === "tools", "tools")), app, NOW)).toEqual(["pending approval"]);
+  });
+});
+
+describe("hiddenHere and usageCells", () => {
+  it("judges another project's copy in its own project, wherever it is seen from", async () => {
+    const { inv, app, web } = await seed({ more: (h) => h.skill("repos/web/.claude/skills", "eli5") });
+    const global = claudeSkill(inv, "eli5");
+    const webEli5 = claudeSkill(inv, "eli5", web);
+    // Read in web, its own project, not in app, the project the list is seen from.
+    expect(viewFrom(webEli5, app)).toBe(web);
+    expect(stateHere(inv, webEli5, app).shadowedBy).toBe(global.id);
+    // The Global copy wins in web as anywhere: hidden seen from app, from web and from no project.
+    for (const from of [app, web, undefined]) expect(hiddenHere(inv, single(webEli5), from), String(from)).toBe(true);
+    expect(hiddenHere(inv, single(claudeSkill(inv, "web-only", web)), app)).toBe(false);
+    expect(hiddenHere(inv, single(global), app)).toBe(false);
+    expect(usageCells(inv, single(webEli5), app, NOW)).toEqual(["—", "—"]);
+  });
+
+  it("gives the total and how long ago, a dash where there is nothing to count or it was never used", async () => {
+    const { inv, app } = await seed();
+    expect(usageCells(inv, single(claudeSkill(inv, "eli5")), app, NOW)).toEqual(["4", "1d ago"]);
+    expect(usageCells(inv, single(claudeSkill(inv, "old-one")), app, NOW)).toEqual(["0", "—"]);
+    // A hidden copy's use is the winner's.
+    expect(usageCells(inv, single(claudeSkill(inv, "eli5", app)), app, NOW)).toEqual(["—", "—"]);
+    // Codex keeps no record.
+    const codex = find(inv, (i) => i.kind === "skill" && i.location.tool === "codex", "codex eli5");
+    expect(usageCells(inv, single(codex), app, NOW)).toEqual(["—", "—"]);
   });
 });
 
