@@ -15,7 +15,8 @@ Code, invoke it with the Skill tool. If that fails, or you run in Codex, read th
 files that exists, where `<base>` is this skill's base directory:
 
 - `<base>/../../../fleet-core/skills/fleet-core/SKILL.md`
-- `<base>/../../../../fleet-core/*/skills/fleet-core/SKILL.md`
+- `<base>/../../../../fleet-core/*/skills/fleet-core/SKILL.md` (if several versions match, read the
+  highest)
 
 If none exists, stop and tell the user to install it: `claude plugin install fleet-core@clausona`
 in Claude Code, or `codex plugin add fleet-core@clausona` in Codex.
@@ -47,12 +48,12 @@ For each task, after `fleet-core` picked its profile:
    worktree lands under `~/.herdr/worktrees/`.
 2. **Start.** `herdr pane run <pane> "clausona run <profile> -- <args>"`, with the arguments from
    `fleet-core` section 4. Codex workers keep `--disable hooks`.
-3. **Name it.** `herdr agent rename <pane> <name>`, with a name such as `w1-docs`: lowercase letters,
-   digits, `-` or `_`, starting with a letter, up to 32 characters. Use the name from now on.
-4. **Check it started.** Within 20 seconds, `herdr agent list` shows the pane with agent `claude` or
+3. **Check it started.** Within 20 seconds, `herdr agent list` shows the pane with agent `claude` or
    `codex`. If not, read the pane (`herdr pane read <pane> --source recent-unwrapped --lines 60`).
    If the launch line never ran, for example because the shell was still starting, run it once more.
    Otherwise tell the user what the screen shows.
+4. **Name it.** `herdr agent rename <pane> <name>`, with a name such as `w1-docs`: lowercase letters,
+   digits, `-` or `_`, starting with a letter, up to 32 characters. Use the name from now on.
 5. **Folder trust.** The first worker of a profile in a repo that profile never trusted asks
    whether to trust the folder, and herdr shows it as `blocked`. Read the screen
    (`herdr agent read <name> --source visible`) and answer only that question, and only about
@@ -66,7 +67,8 @@ For each task, after `fleet-core` picked its profile:
    `agent wait` right after the keys returns the old `blocked` state.
 6. **Brief.** Write it as `fleet-core` section 5 says, then send and wait in one command:
    `herdr agent prompt <name> "Read .fleet-brief.md in this folder and do what it says." --wait --timeout 1800000`.
-   In Claude Code, run it as a background task (section 3).
+   In Claude Code, run it as a background task (section 3). In Codex, use the Codex form in
+   section 3 instead.
 7. **Record** the name, pane, workspace, worktree, branch and profile in the table.
 
 Start workers on the same Claude Code profile one at a time, each after the previous one shows its
@@ -89,6 +91,14 @@ The user can switch to any worker's pane in herdr, read along and type into it a
 - **Follow-up:** write the file, then
   `herdr agent prompt <name> "Read .fleet-followup-<n>.md in this folder and do what it says." --wait --timeout 1800000`.
   `agent prompt` refuses an agent at a prompt (`agent_blocked`); read its screen first.
+- **After a `timeout`:** read the screen. If the worker still works, wait again with
+  `herdr agent wait <name> --timeout <ms>`, which matches `idle`, `done` or `blocked`. Never send
+  the line again just to wait: the worker would get it twice.
+- **In Codex** (one foreground wait at a time, three minutes each): give every worker its brief
+  before you wait on any. Send each with
+  `herdr agent prompt <name> "<one line>" --wait --until working --until blocked --timeout 20000`,
+  which returns once the worker has picked the line up. Then wait on each unfinished worker in turn
+  with `herdr agent wait <name> --timeout 180000`, and read it when the wait returns.
 
 A `timeout` or `agent_prompt_stalled` does not prove a prompt was lost. Read the screen before
 sending again.
@@ -98,6 +108,7 @@ sending again.
 1. `herdr pane split <old pane> --direction down --cwd <worktree> --no-focus`, and read the new
    pane id.
 2. Start the new profile there, as in section 2, steps 2 to 6, with `fleet-core` section 9's brief.
+   Name the new agent with a new suffix, such as `w1-docs-2`: the old one still holds its name.
 3. `herdr pane close <old pane>`.
 
 ## 5. Retiring

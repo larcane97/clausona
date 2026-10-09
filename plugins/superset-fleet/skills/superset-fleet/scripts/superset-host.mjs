@@ -118,7 +118,7 @@ async function call(host, procedure, input, { mutation = false } = {}) {
   if (response.status === 404 && typeof message === "string" && message.startsWith("No procedure found")) {
     throw new CliError(
       `the Superset host API has changed (${procedure} is gone). Update the plugin with ` +
-        "`claude plugin update clausona@clausona`, or log the Superset CLI in with `superset auth login` and use it instead.",
+        "`claude plugin update superset-fleet@clausona` (in Codex, `codex plugin marketplace upgrade`, then `codex plugin add superset-fleet@clausona`), or log the Superset CLI in with `superset auth login` and use it instead.",
     );
   }
   if (!response.ok) throw new CliError(`${procedure} failed: ${message ?? `HTTP ${response.status}`}`, response.status);

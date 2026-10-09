@@ -96,7 +96,9 @@ flowchart LR
    ```
 
    In Claude Code, `clausona@clausona` is now an alias: installing it installs `superset-fleet`.
-   In Codex it no longer carries a skill, so run the three commands above.
+   If you installed it before, updating it does not add the new plugin, and Claude Code reports a
+   missing dependency: run `claude plugin install superset-fleet@clausona` once. In Codex the alias
+   no longer carries a skill, so run the three commands above.
 
 ## A run
 

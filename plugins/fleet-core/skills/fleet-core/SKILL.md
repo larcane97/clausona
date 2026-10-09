@@ -56,14 +56,16 @@ older name. The keys:
 - `retire`: `ask` (the default) or `auto` (section 11).
 - `permissions`: how workers run, per tool, for example
   `{"claude": "acceptEdits", "codex": "on-request", "codexSandbox": "workspace-write"}`.
-  `claude` is a Claude Code permission mode. `codex` is a Codex approval policy: `untrusted`,
-  `on-failure`, `on-request` or `never`. `codexSandbox` is the Codex sandbox: `workspace-write`
-  (the default) or `danger-full-access`. Section 4 says what each means for commits.
+  `claude` is a Claude Code permission mode. `codex` is the Codex approval policy passed to `-a`:
+  `on-request` or `never` (Codex rejects other values on its command line). `codexSandbox` is the
+  Codex sandbox: `workspace-write` (the default) or `danger-full-access`. Section 4 says what each
+  means for commits.
 
 When a `permissions` value you need is missing, use what a worker config or the profile's own
 settings already set (Claude Code's `permissions.defaultMode`; Codex's `approval_policy` and
-`sandbox_mode` in its `config.toml`), and say which mode the workers get. If nothing sets one, ask
-the user once, and save the answer to `fleet.json` when they agree.
+`sandbox_mode` in its `config.toml`, only when they hold one of the values above), and say which
+mode the workers get. If nothing sets one, ask the user once, and save the answer to `fleet.json`
+when they agree.
 
 When the user asks to change a default ("never use claude:personal for workers", "always retire
 finished workers"), update that key in `~/.clausona/fleet.json` and keep its other keys. If only
@@ -119,8 +121,7 @@ flags only, never the brief.
 
 - `-s <permissions.codexSandbox> -a <permissions.codex>`. In `workspace-write`, Codex keeps `.git`
   read-only and has no network, so a worker must ask before it commits and again before it pushes:
-  with `on-request` or `on-failure` the user approves each one (section 8), and with `never` both
-  fail. A Codex worker commits and pushes on its own only in `danger-full-access`, which turns the
+  with `on-request` the user approves each one (section 8), and with `never` both fail. A Codex worker commits and pushes on its own only in `danger-full-access`, which turns the
   sandbox off; that is the user's call. When you ask the user for a Codex policy, say this.
 - `-c check_for_update_on_startup=false`. Otherwise Codex can open with an update question whose
   highlighted answer runs a global `npm install`.
@@ -191,9 +192,12 @@ would have to.
   what it returns, and wait again.
 
 The runner skill says how to send and wait so that a wait never returns at once on a worker that
-has not started its turn yet. Wait on a worker again only after you sent it something: a brief, a
-follow-up, or keys. A worker that has already stopped makes most waits return at once, so waiting
-on it again without sending anything only loops.
+has not started its turn yet. Wait on a worker again only after you sent it something (a brief, a
+follow-up, or keys), or after a wait timed out while it was still working. A worker that has
+already stopped makes most waits return at once, so waiting on it again without either only loops.
+
+In Codex, start every worker before you wait on any: one foreground wait at a time would otherwise
+start the workers one after another. The runner skill gives the Codex forms.
 
 When a worker waits for the user (a permission prompt, or a question you passed on), use the
 runner's "until it works again" wait if it has one. Otherwise, read that worker's screen whenever
@@ -228,8 +232,9 @@ A DONE line is a claim. Before marking a task completed, in its worktree:
 
 - `git log --oneline <base>..HEAD` shows the work.
 - `git status --porcelain` prints nothing.
-- `git rev-list --count @{u}..HEAD` prints 0: the branch is pushed. It fails when the branch has no
-  upstream, that is, when it was never pushed.
+- `git rev-list --count "@{u}..HEAD"` prints 0: the branch is pushed (keep the quotes: PowerShell
+  reads a bare `@{` as the start of a hash table). It fails when the branch has no upstream, that
+  is, when it was never pushed.
 - Read the diff against what the brief asked.
 - Run the brief's check commands yourself.
 - For risky changes, also run a blind checker on a third profile of the main tool, from the

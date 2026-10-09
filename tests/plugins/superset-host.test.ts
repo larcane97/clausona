@@ -150,7 +150,8 @@ describe("host discovery and calls", () => {
     const r = await run(["status"]);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/the Superset host API has changed \(project\.list is gone\)/);
-    expect(r.stderr).toMatch(/claude plugin update clausona@clausona/);
+    expect(r.stderr).toMatch(/claude plugin update superset-fleet@clausona/);
+    expect(r.stderr).not.toMatch(/clausona@clausona/);
   });
 
   it("does not mistake a missing resource for API drift", async () => {

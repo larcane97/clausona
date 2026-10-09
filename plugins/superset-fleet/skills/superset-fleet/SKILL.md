@@ -18,7 +18,8 @@ that fails, or you run in Codex, read the first of these files that exists, wher
 skill's base directory:
 
 - `<base>/../../../fleet-core/skills/fleet-core/SKILL.md`
-- `<base>/../../../../fleet-core/*/skills/fleet-core/SKILL.md`
+- `<base>/../../../../fleet-core/*/skills/fleet-core/SKILL.md` (if several versions match, read the
+  highest)
 
 If none exists, stop and tell the user to install it: `claude plugin install fleet-core@clausona`
 in Claude Code, or `codex plugin add fleet-core@clausona` in Codex.

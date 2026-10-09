@@ -15,7 +15,8 @@ Code, invoke it with the Skill tool. If that fails, or you run in Codex, read th
 files that exists, where `<base>` is this skill's base directory:
 
 - `<base>/../../../fleet-core/skills/fleet-core/SKILL.md`
-- `<base>/../../../../fleet-core/*/skills/fleet-core/SKILL.md`
+- `<base>/../../../../fleet-core/*/skills/fleet-core/SKILL.md` (if several versions match, read the
+  highest)
 
 If none exists, stop and tell the user to install it: `claude plugin install fleet-core@clausona`
 in Claude Code, or `codex plugin add fleet-core@clausona` in Codex.
@@ -69,7 +70,7 @@ For each task, after `fleet-core` picked its profile:
      `orca terminal send --terminal <handle> --enter`.
 7. **Brief.** Write it as `fleet-core` section 5 says, then
    `orca terminal send --terminal <handle> --text "Read .fleet-brief.md in this folder and do what it says." --enter`,
-   and start waiting on it (section 3).
+   and start waiting on it (section 3). In Codex, wait only once every worker has its brief.
 8. **Record** the handle, worktree, branch and profile in the table.
 
 Start workers on the same Claude Code profile one at a time, each after the previous one shows its
@@ -95,6 +96,11 @@ The user can open any worker's tab in Orca, read along and type into it at any t
 - **Follow-up:** write the file, then
   `orca terminal send --terminal <handle> --text "Read .fleet-followup-<n>.md in this folder and do what it says." --enter`,
   and wait as above.
+- **After a timeout:** read the screen. If the worker still works, wait again without the pause.
+- **In Codex** (one foreground wait at a time, three minutes each): give every worker its brief
+  before you wait on any, then wait on each unfinished worker in turn with
+  `orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 180000`. Keep the five-second
+  pause only for a worker you sent something to in the last five seconds.
 
 Orca has no "until it works again" wait. For a worker the user is answering, follow `fleet-core`
 section 7.

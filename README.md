@@ -339,7 +339,8 @@ claude plugin install superset-fleet@clausona   # or herdr-fleet, orca-fleet
 In Codex, add the shared rules too: `codex plugin marketplace add larcane97/clausona`, then
 `codex plugin add fleet-core@clausona` and the runner's plugin. See the
 [Superset](docs/usecases/superset-fleet.md), [herdr](docs/usecases/herdr-fleet.md) and
-[Orca](docs/usecases/orca-fleet.md) pages.
+[Orca](docs/usecases/orca-fleet.md) pages. If you installed `clausona@clausona` before, run
+`claude plugin install superset-fleet@clausona` once after updating it.
 
 ### How is this different from setting `CLAUDE_CONFIG_DIR` myself?
 
