@@ -191,7 +191,7 @@ function redactAt(line: Line, i: number): number {
     (word.startsWith("-H") ? hideHeader(line, i, "-H", word.slice(2)) : undefined) ??
     (assigned === undefined ? undefined : hideHeader(line, i, `${name}=`, assigned)) ??
     (assigned !== undefined && USER_FLAG.test(name) ? hideUserinfo(line, i, `${name}=`, assigned) : undefined) ??
-    (assigned !== undefined && COOKIE_FLAG.test(name) ? hideValue(line, i, `${name}=`, "", assigned) : undefined) ??
+    (assigned !== undefined && COOKIE_FLAG.test(name) ? hideCookie(line, i, `${name}=`, assigned) : undefined) ??
     (ATTACHED_USER.test(word) ? hideUserinfo(line, i, word.slice(0, 2), word.slice(2)) : undefined);
   if (special !== undefined) return special;
   if (carriesCredentialToken(word)) {
@@ -206,7 +206,12 @@ function redactAt(line: Line, i: number): number {
     return hideFollowing(line, i, quote !== "" && !body.includes(quote) ? quote : "");
   const afterColon = (line.words[i - 1] ?? "").endsWith(":");
   const scheme = AUTH_SCHEME.test(body) || ENDING_SCHEME.test(word) || (afterColon && TOKEN_SCHEME.test(body));
-  if (isSecretFlag(body) || COOKIE_FLAG.test(body) || scheme) {
+  // After a scheme, the next word is the credential, whatever its shape.
+  if (scheme) return hideWord(line, i + 1);
+  if (isSecretFlag(body) || COOKIE_FLAG.test(body)) {
+    // A flag that takes no value - `-b` in many tools, `--auth` - before another option: that
+    // option is read by its own rules, so `-b --api-key x` hides x. No secret starts with `-`.
+    if ((line.words[i + 1] ?? "").startsWith("-")) return i;
     return hideWord(line, i + 1);
   }
   if (USER_FLAG.test(body)) return hideUserinfo(line, i + 1, "", line.words[i + 1] ?? "") ?? i;
@@ -248,6 +253,17 @@ function argEnd(line: Line, i: number): number {
 }
 
 /**
+ * The last word of a value hidden to the end of `words[i]`'s argument - and when that argument
+ * ends in a bare `Bearer` or `Basic`, of the next argument too, which then holds the credential:
+ * `--header "Authorization: Bearer" "$TOKEN"`.
+ */
+function valueEnd(line: Line, i: number): number {
+  const last = argEnd(line, i);
+  const word = (line.words[last] ?? "").replace(/^["']+|["']+$/g, "");
+  return AUTH_SCHEME.test(word) && last + 1 < line.words.length ? argEnd(line, last + 1) : last;
+}
+
+/**
  * Shows `prefix` and HIDDEN in place of a value that starts in `words[at]`, and returns the
  * index of the value's last word. `rest` is the value's text in that word after `quote`, the
  * quote it is in, if any: the value runs to the quote's closing - in this word or a later one,
@@ -262,7 +278,7 @@ function hideValue(line: Line, at: number, prefix: string, quote: string, rest: 
     // its spaces; a shell's command line, whose words are the shell's own, ends at each word.
     if (!line.ends[at]) {
       line.shown.push(`${prefix}${HIDDEN}`);
-      return argEnd(line, at);
+      return valueEnd(line, at);
     }
     line.shown.push(`${prefix}${HIDDEN}${closingTail(rest)}`);
     return at;
@@ -300,7 +316,7 @@ function hideFollowing(line: Line, i: number, openQuote: string): number {
   if (openQuote !== "") return hideValue(line, i + 1, "", openQuote, next);
   let last = i + 1;
   if (!line.ends[i]) {
-    last = argEnd(line, i);
+    last = valueEnd(line, i);
   } else {
     if (next.startsWith("-")) return i;
     while (last + 1 < line.words.length && !(line.words[last + 1] ?? "").startsWith("-")) last++;
@@ -338,7 +354,7 @@ function hideHeader(line: Line, i: number, prefix: string, text: string): number
   if (inWord !== "" && !AUTH_SCHEME.test(inWord) && !TOKEN_SCHEME.test(inWord)) {
     if (quote === "" && !line.ends[i]) {
       line.shown.push(`${head}${HIDDEN}`);
-      return argEnd(line, i);
+      return valueEnd(line, i);
     }
     return hideValue(line, i, head, quote, value);
   }
@@ -358,6 +374,15 @@ function hideUserinfo(line: Line, at: number, prefix: string, text: string): num
   const colon = body.indexOf(":");
   if (colon < 0 || body.includes("://")) return undefined;
   return hideValue(line, at, `${prefix}${quote}${body.slice(0, colon + 1)}`, quote, body.slice(colon + 1));
+}
+
+/**
+ * Hides a cookie list that follows `prefix` in `words[at]` - `--cookie=` - with a quote it
+ * opens running on to its closing, as a hook command split at spaces has `"a=1` `sid=x"`.
+ */
+function hideCookie(line: Line, at: number, prefix: string, text: string): number {
+  const quote = leadingQuote(text);
+  return hideValue(line, at, `${prefix}${quote}`, quote, text.slice(quote.length));
 }
 
 /** A word with every URL in it shown as `showUrl` does, and the text around them by `redactText`. */

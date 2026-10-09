@@ -314,6 +314,48 @@ describe("redactCommand after a shell's command option", () => {
   });
 });
 
+describe("redactCommand after a flag that takes no value, or a bare auth scheme", () => {
+  const HEX = "0123456789abcdef".repeat(2);
+  const command = (line: string) => hookSummary("Stop", undefined, { type: "command", command: line }).command ?? "";
+  const mcp = (args: string[]) => mcpSummary({ command: "tool", args }).command ?? "";
+
+  it("reads an option after -b, --cookie or a secret-named flag by its own rule, so its secret stays hidden", () => {
+    const shown = [
+      [mcp(["-b", "--api-key", HEX]), "tool -b --api-key <hidden>"],
+      [mcp(["--cookie", "--password", HEX]), "tool --cookie --password <hidden>"],
+      [redactCommand(["srv", "--auth", "--api-key", HEX]), "srv --auth --api-key <hidden>"],
+      [command(`tool -b --api-key ${HEX}`), "tool -b --api-key <hidden>"],
+      [command(`tool --cookie --password ${HEX}`), "tool --cookie --password <hidden>"],
+      [command(`srv --auth --api-key ${HEX}`), "srv --auth --api-key <hidden>"],
+      // A cookie that is a value is hidden as before.
+      [command(`curl -b sid=${HEX} https://h.example`), "curl -b <hidden> https://h.example"],
+      [command(`curl --cookie sid=${HEX} https://h.example`), "curl --cookie <hidden> https://h.example"],
+    ];
+    for (const [actual, expected] of shown) {
+      expect(actual).toBe(expected);
+      expect(actual).not.toContain(HEX);
+    }
+  });
+
+  it("hides all of a quoted cookie assignment, to its closing quote", () => {
+    const shown = command(`curl --cookie="a=1 sid=${HEX}" https://h.example`);
+    expect(shown).toBe('curl --cookie="<hidden>" https://h.example');
+    expect(shown).not.toContain(HEX);
+  });
+
+  it("hides the argument after one that ends in a bare Bearer or Basic", () => {
+    const shown = [
+      [mcp(["--header", "Authorization: Bearer", HEX]), "tool --header Authorization: <hidden>"],
+      [mcp(["--header", "Authorization: Basic", HEX, "--verbose"]), "tool --header Authorization: <hidden> --verbose"],
+      [mcp(["-c", "Authorization: Bearer", HEX]), "tool -c Authorization: <hidden>"],
+    ];
+    for (const [actual, expected] of shown) {
+      expect(actual).toBe(expected);
+      expect(actual).not.toContain(HEX);
+    }
+  });
+});
+
 describe("mcpSummary", () => {
   it("shows transport, command and the names - never the values - of env and headers", () => {
     const summary = mcpSummary({
