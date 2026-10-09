@@ -195,7 +195,7 @@ export async function runExtensionsCommand(
       return [
         item.name,
         item.location.tool,
-        whereLabel(item),
+        whereLabel(item, inv.homeDir),
         // Already redacted when read: a hook's summary passes its command line through redactCommand.
         ...(hooks ? [tildeIn(item.summary?.command ?? item.summary?.prompt ?? "", inv.homeDir)] : []),
         stateWord(inv, item, project),

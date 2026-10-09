@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { duplicateGroups, loadInventory, marksOf, usageOf } from "./inventory.js";
+import { stateOf } from "./state.js";
 import { TestHome } from "./test-home.js";
 
 const homes: TestHome[] = [];
@@ -330,5 +331,136 @@ describe("loadInventory", () => {
     expect(inv.items.length).toBeGreaterThan(300);
     // Windows runners open fresh files many times slower (Defender scans each one), so their bound is wider.
     expect(performance.now() - started).toBeLessThan(process.platform === "win32" ? 8000 : 3000);
+  });
+});
+
+describe("loadInventory, the home dir as a project", () => {
+  /**
+   * What Claude Code keys by cwd when it starts in the home dir: the account's projects[<home>]
+   * entry, ~/.mcp.json and ~/.claude/settings.local.json. Beside them, what is the user's own
+   * config there and must not be read a second time as the home project's.
+   */
+  function homeSeed() {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    const home = h.home;
+    const main = h.claude("default", ".claude", {
+      mcpServers: { github: { command: "gh-mcp" } },
+      projects: {
+        [home]: {
+          mcpServers: { "home-db": { command: "db-mcp" } },
+          disabledMcpServers: ["github"],
+          enabledMcpjsonServers: ["notes"],
+        },
+        [app]: {},
+      },
+    });
+    h.claude("work", ".claude-work", { projects: { [home]: {} } });
+    h.write(".mcp.json", { mcpServers: { notes: { command: "notes-mcp" } } });
+    const local = h.write(".claude/settings.local.json", {
+      skillOverrides: { eli5: "off" },
+      hooks: { Stop: [{ hooks: [{ type: "command", command: "home-notify" }] }] },
+    });
+    h.write(".claude/settings.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "user-notify" }] }] } });
+    h.skill(".claude/skills", "eli5");
+    h.write(".claude/commands/hello.md", "# hello\n");
+    const tomlHome = home.replaceAll("\\", "\\\\");
+    h.codex(
+      "personal",
+      ".codex",
+      `[projects."${tomlHome}"]\ntrust_level = "trusted"\n\n[mcp_servers.exa]\ncommand = "npx"\n`,
+    );
+    h.skill(".agents/skills", "agents-only");
+    h.write(".codex/hooks.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "codex-notify" }] }] } });
+    return { h, app, home, main, local };
+  }
+  const load = (h: TestHome, cwd: string) =>
+    loadInventory({ homeDir: h.home, registry: h.registry, cwd, managedSettings: h.path("none.json") });
+  const find = (inv: Awaited<ReturnType<typeof load>>, name: string, scope?: string) => {
+    const found = inv.items.filter((i) => i.name === name && (scope === undefined || i.location.scope === scope));
+    if (found.length !== 1) throw new Error(`${found.length} items named ${name}`);
+    return found[0] as (typeof found)[number];
+  };
+
+  it("is the current project in the home dir, and a known project once an account recorded it", async () => {
+    const { h, app, home } = homeSeed();
+    const inv = await load(h, home);
+    expect(inv.currentProject).toBe(home);
+    expect(inv.projects.find((p) => p.path === home)?.profiles).toEqual([
+      "claude:default",
+      "claude:work",
+      "codex:personal",
+    ]);
+    // Seen from another project the home dir is still one of the projects, as the picker lists them.
+    expect((await load(h, app)).projects.map((p) => p.path)).toEqual([home, app]);
+  });
+
+  it("reads the account's projects[<home>] entry: its local servers, its switches and its .mcp.json approvals", async () => {
+    const { h, app, home, main } = homeSeed();
+    const inv = await load(h, home);
+    const homeDb = find(inv, "home-db");
+    expect(homeDb.location).toMatchObject({ scope: "local", profile: "claude:default", project: home });
+    const github = find(inv, "github");
+    expect(stateOf(inv, github, home)).toEqual({
+      value: "off",
+      setBy: { file: main.jsonPath, key: "disabledMcpServers" },
+    });
+    expect(stateOf(inv, github, app).value).toBe("on");
+    const notes = find(inv, "notes");
+    expect(stateOf(inv, notes, home, "claude:default")).toEqual({
+      value: "on",
+      setBy: { file: main.jsonPath, key: "enabledMcpjsonServers" },
+    });
+    expect(stateOf(inv, notes, home, "claude:work").value).toBe("pending-approval");
+  });
+
+  it("reads ~/.mcp.json as the home project's .mcp.json", async () => {
+    const { h, home } = homeSeed();
+    const notes = find(await load(h, home), "notes");
+    expect(notes.location).toEqual({ tool: "claude", scope: "project", project: home, file: h.path(".mcp.json") });
+  });
+
+  it("reads ~/.claude/settings.local.json as the home project's local settings", async () => {
+    const { h, app, home, local } = homeSeed();
+    const inv = await load(h, home);
+    const eli5 = find(inv, "eli5");
+    expect(stateOf(inv, eli5, home)).toEqual({ value: "off", setBy: { file: local, key: "skillOverrides.eli5" } });
+    expect(stateOf(inv, eli5, app).value).toBe("on");
+    expect(find(inv, "Stop", "local").location).toMatchObject({ project: home, file: local });
+  });
+
+  it("reads the switch of a plugin installed locally for the home dir from ~/.claude/settings.local.json", async () => {
+    const { h, app, home, local } = homeSeed();
+    const lp = h.path(".claude/plugins/cache/m/lp/1.0.0");
+    h.write(".claude/plugins/installed_plugins.json", {
+      plugins: { "lp@m": [{ installPath: lp, scope: "local", projectPath: home }] },
+    });
+    h.write(".claude/settings.local.json", { enabledPlugins: { "lp@m": true } });
+    const inv = await load(h, home);
+    const plugin = find(inv, "lp@m");
+    expect(stateOf(inv, plugin, home)).toEqual({ value: "on", setBy: { file: local, key: "enabledPlugins.lp@m" } });
+    expect(stateOf(inv, plugin, app).value).toBe("off");
+  });
+
+  it("does not read the user's own config again as the home project's", async () => {
+    const { h, home } = homeSeed();
+    const inv = await load(h, home);
+    const where = (kind: string) =>
+      inv.items
+        .filter((i) => i.kind === kind)
+        .map((i) => `${i.location.tool}|${i.location.scope}|${i.name}|${i.summary?.command ?? ""}`)
+        .sort();
+    // ~/.claude/skills, ~/.claude/commands and ~/.agents/skills once each, as the user's.
+    expect(where("skill")).toEqual(["claude|global|eli5|", "claude|global|hello|", "codex|global|agents-only|"]);
+    // ~/.claude/settings.json and ~/.codex/hooks.json once each, as the user's; settings.local.json as the home's.
+    expect(where("hook")).toEqual([
+      "claude|global|Stop|user-notify",
+      "claude|local|Stop|home-notify",
+      "codex|global|Stop|codex-notify",
+    ]);
+    // ~/.codex/config.toml once, as the user's.
+    expect(inv.items.filter((i) => i.name === "exa").map((i) => i.location.scope)).toEqual(["global"]);
+    expect(inv.warnings).toEqual([]);
   });
 });

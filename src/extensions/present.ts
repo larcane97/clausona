@@ -49,13 +49,20 @@ export function tildeIn(text: string, homeDir: string): string {
   return text.replace(new RegExp(`${PATH_START}${home}${PATH_END}`, process.platform === "win32" ? "gi" : "g"), "~");
 }
 
-/** Where an item is defined, in a few words: `project app`, `local work · app`, `plugin superpowers`. */
-export function whereLabel(item: Extension): string {
+/** A project in a word: its folder's name, and `~` for the home dir. */
+export function projectName(project: string, homeDir: string): string {
+  return samePath(project, homeDir) ? "~" : path.basename(project);
+}
+
+/** Where an item is defined, in a few words: `project app`, `local work · ~`, `plugin superpowers`. */
+export function whereLabel(item: Extension, homeDir: string): string {
   const loc = item.location;
   const parts: string[] = [SCOPE_WORD[loc.scope]];
   if (loc.scope === "plugin" && loc.plugin) parts.push(loc.plugin.split("@")[0] ?? loc.plugin);
   else if (loc.profile) parts.push(shortProfile(loc.profile));
-  if (loc.project && loc.scope !== "plugin") parts.push(`${loc.profile ? "· " : ""}${path.basename(loc.project)}`);
+  if (loc.project && loc.scope !== "plugin") {
+    parts.push(`${loc.profile ? "· " : ""}${projectName(loc.project, homeDir)}`);
+  }
   return parts.join(" ");
 }
 

@@ -109,7 +109,7 @@ export type Collector = { items: Extension[]; facts: StateFacts; warnings: Warni
 export type Inventory = {
   items: Extension[];
   projects: Project[];
-  /** The git root holding cwd, or cwd; absent in the home dir. */
+  /** The git root holding cwd, or cwd - the home dir too; absent only at the filesystem root. */
   currentProject?: string;
   homeDir: string;
   /** Claude profile ids, primary first: the MCP matrix's columns. */
