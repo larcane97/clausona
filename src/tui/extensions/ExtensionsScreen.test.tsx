@@ -545,6 +545,77 @@ describe("ExtensionsScreen", () => {
     expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
   });
 
+  describe("a long command", () => {
+    const words = [
+      "/opt/servers/long-command-mcp/dist/index.js",
+      "--config",
+      "/etc/long-command-mcp/config.json",
+      "--workspace",
+      "/srv/projects/a-workspace-with-a-rather-long-name",
+      "--log-level",
+      "debug",
+      "--end-marker-zz",
+    ];
+    const longServer = (h: TestHome) => {
+      h.write("repos/app/.mcp.json", { mcpServers: { "long-cmd": { command: "node", args: words } } });
+    };
+    /** The detail pane's rows: the text between its borders, on the lines that have them. */
+    const paneRows = (frame: string) =>
+      frame
+        .split("\n")
+        .map((line) => /│ (.*?) *│\s*$/.exec(line)?.[1] ?? "")
+        .filter(Boolean);
+
+    it("wraps it in the pane beside the list, every word shown and every line inside the pane", async () => {
+      const { instance } = screen(await seed(longServer), 140, 40);
+      await seen(instance, (f) => f.includes("eli5"));
+      await press(instance, TAB);
+      await moveTo(instance, "long-cmd");
+      const frame = await seen(instance, (f) => f.includes("--end-marker-zz"));
+      const rows = paneRows(frame);
+      const command = rows.findIndex((row) => row.startsWith("Command"));
+      expect(command).toBeGreaterThan(0);
+      // The Command line and the lines it runs on to, under its label's column.
+      const end = rows.findIndex((row, i) => i > command && !row.startsWith(" "));
+      const wrapped = rows.slice(command, end < 0 ? undefined : end);
+      expect(wrapped.length).toBeGreaterThan(2);
+      // Every character in order across the lines: a word longer than a line is broken inside it.
+      expect(
+        wrapped
+          .join("")
+          .replace(/^Command/, "")
+          .replace(/\s+/g, ""),
+      ).toBe(`node${words.join("")}`);
+      expect(frame).not.toMatch(/…/);
+      for (const line of frame.split("\n")) expect(line.length).toBeLessThanOrEqual(140);
+    });
+
+    it("says how many lines are below when the pane beside the list cannot hold them", async () => {
+      const { instance } = screen(await seed(longServer), 140, 20);
+      await seen(instance, (f) => f.includes("eli5"));
+      await press(instance, TAB);
+      await moveTo(instance, "long-cmd");
+      const frame = await seen(instance, (f) => f.includes("Where"));
+      expect(frame).toMatch(/│ ↓ \d+ more +│/);
+      for (const shown of instance.frames) expect(height(shown)).toBeLessThan(20);
+    });
+
+    it("scrolls to the end of it in the full-screen detail", async () => {
+      const { instance } = screen(await seed(longServer), 60, 24);
+      await seen(instance, (f) => f.includes("eli5"));
+      await press(instance, TAB);
+      await moveTo(instance, "long-cmd");
+      await press(instance, ENTER);
+      let frame = await seen(instance, (f) => f.includes("Where"));
+      for (let i = 0; i < 20 && !frame.includes("--end-marker-zz"); i++) {
+        await press(instance, DOWN);
+        frame = stripAnsi(instance.lastFrame() ?? "");
+      }
+      expect(frame).toContain("--end-marker-zz");
+      for (const line of frame.split("\n")) expect(line.length).toBeLessThanOrEqual(60);
+    });
+  });
+
   it("hints no scrolling for a full-screen detail that fits", async () => {
     const { instance } = screen(await seed(), 60, 30);
     await seen(instance, (f) => f.includes("Global"));

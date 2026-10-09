@@ -167,7 +167,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   const detailRoom = Math.max(0, layout.detailHeight - 3);
   const detailMax =
     inventory && view === "detail"
-      ? maxDetailTop(paneLines(inventory, selected, project, loadedAt, held).length, detailRoom)
+      ? maxDetailTop(paneLines(inventory, selected, project, loadedAt, held, layout.detailWidth).length, detailRoom)
       : 0;
   const detailPage = Math.max(1, detailRoom - 2);
 

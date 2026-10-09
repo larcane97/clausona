@@ -17,6 +17,7 @@ import {
   nameWidth,
   pickLayout,
   type Row,
+  wrapText,
 } from "./view-model.js";
 
 const homes: TestHome[] = [];
@@ -545,6 +546,13 @@ describe("layout helpers", () => {
     // What fits does not scroll.
     expect(maxDetailTop(7, 7)).toBe(0);
     expect(detailWindow(7, 7, 2)).toEqual({ start: 0, end: 7, above: 0, below: 0 });
+  });
+
+  it("wraps text at spaces within a width, and a word longer than a line inside it", () => {
+    expect(wrapText("npx -y @acme/server --flag value", 12)).toEqual(["npx -y", "@acme/server", "--flag value"]);
+    expect(wrapText(`node ${"a".repeat(25)}`, 10)).toEqual(["node", "a".repeat(10), "a".repeat(10), "a".repeat(5)]);
+    expect(wrapText("short", 40)).toEqual(["short"]);
+    expect(wrapText("", 40)).toEqual([""]);
   });
 
   it("cuts long text with an ellipsis on one line, and pads short text", () => {
