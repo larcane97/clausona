@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Run parallel Claude Code and Codex agents in Orca, each on its own account</title>
+  <meta name="description" content="Let one Claude Code or Codex session split a job across Orca worktrees, with each worker on a different account or an API model such as DeepSeek. Install the orca-fleet plugin and ask.">
+  <link rel="canonical" href="https://larcane97.github.io/clausona/guides/parallel-agents-in-orca/">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="clausona">
+  <meta property="og:title" content="Run parallel Claude Code and Codex agents in Orca, each on its own account">
+  <meta property="og:description" content="Let one Claude Code or Codex session split a job across Orca worktrees, with each worker on a different account or an API model such as DeepSeek. Install the orca-fleet plugin and ask.">
+  <meta property="og:url" content="https://larcane97.github.io/clausona/guides/parallel-agents-in-orca/">
+  <meta property="og:image" content="https://larcane97.github.io/clausona/assets/orca-fleet.png">
+  <meta property="article:published_time" content="2026-10-09">
+  <meta property="article:modified_time" content="2026-10-09">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Recursive:wght,CASL,MONO@300..900,0..1,0..1&display=swap">
+  <link rel="stylesheet" href="../../style.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Run parallel Claude Code and Codex agents in Orca, each on its own account",
+    "description": "Let one Claude Code or Codex session split a job across Orca worktrees, with each worker on a different account or an API model such as DeepSeek. Install the orca-fleet plugin and ask.",
+    "datePublished": "2026-10-09",
+    "dateModified": "2026-10-09",
+    "inLanguage": "en",
+    "image": "https://larcane97.github.io/clausona/assets/orca-fleet.png",
+    "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
+    "mainEntityOfPage": "https://larcane97.github.io/clausona/guides/parallel-agents-in-orca/",
+    "about": [
+      { "@type": "SoftwareApplication", "name": "Orca", "url": "https://github.com/stablyai/orca" },
+      { "@type": "SoftwareApplication", "name": "Claude Code" },
+      { "@type": "SoftwareApplication", "name": "Codex CLI" },
+      { "@type": "SoftwareApplication", "name": "clausona", "url": "https://github.com/larcane97/clausona" }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      { "@type": "ListItem", "position": 1, "name": "clausona", "item": "https://larcane97.github.io/clausona/" },
+      { "@type": "ListItem", "position": 2, "name": "Parallel agents in Orca", "item": "https://larcane97.github.io/clausona/guides/parallel-agents-in-orca/" }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "Does Orca need to be open?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. The orca command talks to the running app, so keep Orca open on the same machine. The main session can run in an Orca terminal or anywhere else on that machine."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does it work on Windows and Linux?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. Orca and clausona both run on macOS, Windows and Linux, and the plugin drives Orca with the same orca commands on all three. On Windows, a Codex main session runs its commands in PowerShell, and the plugin gives it the PowerShell forms."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can removing a worker lose work?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Orca deletes the worktree and its local branch, so the main session removes a worker only after its branch is pushed and its worktree is clean. orca worktree rm refuses a worktree with uncommitted changes, and the main session never forces it."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Do I need the plugin to give Orca tabs different accounts?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. clausona run claude:work in any Orca terminal runs that tab on that account. The plugin adds a coordinator that plans the work and checks it."
+        }
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="wordmark" href="../../">clausona</a>
+      <nav class="site-nav" aria-label="Site">
+        <a href="../multiple-claude-code-accounts/">Claude Code</a>
+        <a href="../multiple-codex-cli-accounts/">Codex</a>
+        <a href="../parallel-claude-code-agents/">Agent fleets</a>
+        <a href="../../ko/" hreflang="ko" lang="ko">한국어</a>
+        <a href="https://github.com/larcane97/clausona">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <article class="article">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../../">clausona</a> / <a href="../parallel-claude-code-agents/">Agent fleets</a></nav>
+      <h1>Run parallel Claude Code and Codex agents in Orca, each on its own account</h1>
+      <p class="lead">Orca gives every agent its own worktree and tab. With clausona, each of those agents can also run on its own account, or on a model like DeepSeek.</p>
+      <p class="updated">Updated <time datetime="2026-10-09">October 9, 2026</time></p>
+
+      <div class="answer">
+        <p>Install the <code>orca-fleet</code> plugin. It brings <code>fleet-core</code>, the rules all the fleet plugins share, with it:</p>
+<pre data-copy><code>claude plugin marketplace add larcane97/clausona
+claude plugin install orca-fleet@clausona</code></pre>
+        <p>Then, in an Orca terminal, ask Claude Code something like "Split these across my accounts in Orca: write a CODE_OF_CONDUCT.md with Sonnet on claude:side, and add a .prettierrc on DeepSeek."</p>
+        <p>It plans the work and starts a worker per task in its own Orca worktree, on the account each one should use. It checks what comes back before it cleans up.</p>
+      </div>
+
+      <figure class="figure">
+        <img class="demo" src="../../assets/orca-fleet.gif" width="1200" height="699" loading="lazy" alt="A main Claude Code session in Orca, on Opus with its own account, opens a worktree per task named for the account it runs on, one on Sonnet with a second Claude account and one on DeepSeek through an API, then checks each branch and removes the worktrees.">
+        <figcaption>A real run, sped up. Each worker is an Orca worktree named after its task and account: one runs Sonnet on a second account, the other DeepSeek through an API. The main session checks each branch before it removes the worktree.</figcaption>
+      </figure>
+
+      <h2 id="see">What you see in Orca</h2>
+      <p>Each worker shows up in Orca's sidebar as a worktree. Its name says what the worker is doing and which clausona profile it runs on, so you can tell the accounts apart at a glance.</p>
+      <p>For Claude Code workers, Orca's sidebar also shows whether they're working or done, and <code>orca worktree ps</code> gives their last reply. Orca's hooks live in the Claude Code settings that clausona shares, so that works on every profile.</p>
+      <p>You can open any worker's tab and type into it. If one heads the wrong way, you stop that one and leave the rest alone.</p>
+
+      <h2 id="run">How a run goes</h2>
+      <p>The main session reads your profiles with <code>clausona list</code> and picks one per task. If neither your request nor <code>fleet.json</code> names the accounts, it shows you the plan and waits for your OK.</p>
+      <p>Then it creates a worktree per task with <code>orca worktree create</code>, opens a terminal there, and sends <code>clausona run</code> for the chosen profile once the shell is ready.</p>
+      <p>Orca has its own account switcher, and it sets <code>CODEX_HOME</code> in its terminals. <code>clausona run</code> overrides that for the worker it starts, so each tab runs on the account the plan chose.</p>
+      <p>The brief goes into a file in the worktree, and the worker gets one line telling it to read that file. Orca's <code>terminal wait</code> then tells the main session when the worker's screen goes quiet.</p>
+      <p>When a worker says it's done, the main session checks for itself: the commits, the diff, and a clean, pushed branch. Then it removes the worktree with <code>orca worktree rm</code>, after you approve (the default) or right away if <code>retire</code> is <code>auto</code>. Orca refuses one with uncommitted changes, and it also deletes the local branch, which is why the push check comes first.</p>
+      <p>Orca keeps worktrees under <code>~/orca/workspaces</code>. If you have a <code>~/.mcp.json</code> in your home folder, Claude Code would ask about "new MCP servers" there, so Claude Code workers start with <code>--strict-mcp-config</code>.</p>
+
+      <h2 id="codex">Codex as the main session</h2>
+      <p>Codex can coordinate too. Install the plugins in Codex. There are no plugin dependencies there, so add <code>fleet-core</code> yourself:</p>
+<pre data-copy><code>codex plugin marketplace add larcane97/clausona
+codex plugin add fleet-core@clausona
+codex plugin add orca-fleet@clausona</code></pre>
+      <p>A Codex fleet uses Codex accounts by default, and a Claude Code fleet uses Claude Code accounts. The other tool's profiles only join when you name them or list them in <code>workers</code>.</p>
+      <p>Codex workers don't show their state in Orca's sidebar, because Orca's Codex hooks live in Orca's own Codex folder. The main session reads their screens instead.</p>
+      <p>In Codex's default sandbox, a Codex worker can't write to <code>.git</code> or reach the network. So it asks before it commits and again before it pushes, and you approve those in its tab. If you'd rather it did that on its own, add <code>"codexSandbox": "danger-full-access"</code> to <code>permissions</code> in the settings file below. That turns Codex's sandbox off for workers.</p>
+
+      <h2 id="settings">Settings</h2>
+      <p>The fleet plugins share one file, <code>~/.clausona/fleet.json</code>. It can list the profiles that may be workers, your routing rules in plain words, a usage limit, and whether finished workers are removed automatically. The <a href="../parallel-claude-code-agents/#routing">agent fleets guide</a> explains each key.</p>
+      <p>You can also just say it, for example "always remove finished workers", and the main session updates the file.</p>
+
+      <h2 id="questions">Questions</h2>
+      <h3>Does Orca need to be open?</h3>
+      <p>Yes. The <code>orca</code> command talks to the running app, so keep Orca open on the same machine. The main session can run in an Orca terminal or anywhere else on that machine.</p>
+      <h3>Does it work on Windows and Linux?</h3>
+      <p>Yes. Orca and clausona both run on macOS, Windows and Linux, and the plugin drives Orca with the same <code>orca</code> commands on all three. On Windows, a Codex main session runs its commands in PowerShell, and the plugin gives it the PowerShell forms.</p>
+      <h3>Can removing a worker lose work?</h3>
+      <p>Orca deletes the worktree and its local branch, so the main session removes a worker only after its branch is pushed and its worktree is clean. <code>orca worktree rm</code> refuses a worktree with uncommitted changes, and the main session never forces it.</p>
+      <h3>Do I need the plugin to give Orca tabs different accounts?</h3>
+      <p>No. <code>clausona run claude:work</code> in any Orca terminal runs that tab on that account. The plugin adds a coordinator that plans the work and checks it.</p>
+
+      <section class="cta" aria-labelledby="try">
+        <h2 id="try">Start with your accounts</h2>
+        <p>clausona and the plugins are free and open source. Set up <a href="../multiple-claude-code-accounts/">your accounts</a> first, then add the plugin.</p>
+        <p>The reference page is on <a href="https://github.com/larcane97/clausona/blob/main/docs/usecases/orca-fleet.md">GitHub</a>, where a star helps other people find it.</p>
+      </section>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>clausona is open source under the MIT license, on <a href="https://github.com/larcane97/clausona">GitHub</a>, and listed in <a href="https://github.com/hesreallyhim/awesome-claude-code">Awesome Claude Code</a>.</p>
+      <p>clausona is an independent open-source project, not affiliated with Anthropic, OpenAI or the other projects named here.</p>
+    </div>
+  </footer>
+  <script src="../../copy.js"></script>
+</body>
+</html>

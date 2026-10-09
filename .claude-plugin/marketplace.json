@@ -1,12 +1,28 @@
 {
   "name": "clausona",
   "owner": { "name": "larcane97", "url": "https://github.com/larcane97" },
-  "description": "Claude Code plugins from clausona, the profile manager for Claude Code and Codex accounts.",
+  "description": "Claude Code and Codex plugins from clausona, the profile manager for Claude Code and Codex accounts.",
   "plugins": [
     {
-      "name": "clausona",
-      "source": "./plugins/clausona",
+      "name": "superset-fleet",
+      "source": "./plugins/superset-fleet",
       "description": "Run parallel agents in Superset, each on its own clausona account or API model."
-    }
+    },
+    {
+      "name": "herdr-fleet",
+      "source": "./plugins/herdr-fleet",
+      "description": "Run parallel agents in herdr panes, each on its own clausona account or API model."
+    },
+    {
+      "name": "orca-fleet",
+      "source": "./plugins/orca-fleet",
+      "description": "Run parallel agents in Orca worktrees, each on its own clausona account or API model."
+    },
+    {
+      "name": "fleet-core",
+      "source": "./plugins/fleet-core",
+      "description": "Shared rules for the fleet plugins; installed with them."
+    },
+    { "name": "clausona", "source": "./plugins/clausona", "description": "Old name for superset-fleet; installs it." }
   ]
 }

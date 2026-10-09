@@ -1,10 +1,10 @@
 {
   "name": "clausona",
-  "version": "0.1.0",
-  "description": "Run parallel agents in Superset, each on its own clausona account or API model, then check and retire them.",
+  "version": "0.2.0",
+  "description": "Old name for superset-fleet; installs it. Install superset-fleet@clausona, herdr-fleet@clausona or orca-fleet@clausona instead.",
   "author": { "name": "larcane97", "url": "https://github.com/larcane97" },
   "homepage": "https://github.com/larcane97/clausona/blob/main/docs/usecases/superset-fleet.md",
   "repository": "https://github.com/larcane97/clausona",
   "license": "MIT",
-  "keywords": ["superset", "clausona", "multi-account", "parallel-agents", "orchestration"]
+  "dependencies": ["superset-fleet"]
 }

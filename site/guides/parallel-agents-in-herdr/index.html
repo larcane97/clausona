@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Run parallel Claude Code and Codex agents in herdr, each on its own account</title>
+  <meta name="description" content="Let one Claude Code or Codex session split a job across herdr panes, with each worker on a different account or an API model such as DeepSeek. Install the herdr-fleet plugin and ask.">
+  <link rel="canonical" href="https://larcane97.github.io/clausona/guides/parallel-agents-in-herdr/">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="clausona">
+  <meta property="og:title" content="Run parallel Claude Code and Codex agents in herdr, each on its own account">
+  <meta property="og:description" content="Let one Claude Code or Codex session split a job across herdr panes, with each worker on a different account or an API model such as DeepSeek. Install the herdr-fleet plugin and ask.">
+  <meta property="og:url" content="https://larcane97.github.io/clausona/guides/parallel-agents-in-herdr/">
+  <meta property="og:image" content="https://larcane97.github.io/clausona/assets/herdr-fleet.png">
+  <meta property="article:published_time" content="2026-10-09">
+  <meta property="article:modified_time" content="2026-10-09">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Recursive:wght,CASL,MONO@300..900,0..1,0..1&display=swap">
+  <link rel="stylesheet" href="../../style.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Run parallel Claude Code and Codex agents in herdr, each on its own account",
+    "description": "Let one Claude Code or Codex session split a job across herdr panes, with each worker on a different account or an API model such as DeepSeek. Install the herdr-fleet plugin and ask.",
+    "datePublished": "2026-10-09",
+    "dateModified": "2026-10-09",
+    "inLanguage": "en",
+    "image": "https://larcane97.github.io/clausona/assets/herdr-fleet.png",
+    "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
+    "mainEntityOfPage": "https://larcane97.github.io/clausona/guides/parallel-agents-in-herdr/",
+    "about": [
+      { "@type": "SoftwareApplication", "name": "herdr", "url": "https://github.com/ogulcancelik/herdr" },
+      { "@type": "SoftwareApplication", "name": "Claude Code" },
+      { "@type": "SoftwareApplication", "name": "Codex CLI" },
+      { "@type": "SoftwareApplication", "name": "clausona", "url": "https://github.com/larcane97/clausona" }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      { "@type": "ListItem", "position": 1, "name": "clausona", "item": "https://larcane97.github.io/clausona/" },
+      { "@type": "ListItem", "position": 2, "name": "Parallel agents in herdr", "item": "https://larcane97.github.io/clausona/guides/parallel-agents-in-herdr/" }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "Does the main session have to run inside herdr?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. herdr's commands talk to the session of the pane they run in, so start Claude Code or Codex in a herdr pane and ask from there."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does it work on Windows and Linux?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. herdr and clausona both run on macOS, Linux and Windows, and the plugin drives herdr with the same commands on all three. On Windows, a Codex main session runs its commands in PowerShell, and the plugin gives it the PowerShell forms."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can removing a worker lose work?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Only uncommitted changes could, and herdr worktree remove refuses a worktree that has them. The main session never forces it, and it checks that the branch is pushed first."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Do I need the plugin to give herdr panes different accounts?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. clausona run claude:work in any pane runs that pane on that account. The plugin adds a coordinator that plans the work and checks it."
+        }
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="wordmark" href="../../">clausona</a>
+      <nav class="site-nav" aria-label="Site">
+        <a href="../multiple-claude-code-accounts/">Claude Code</a>
+        <a href="../multiple-codex-cli-accounts/">Codex</a>
+        <a href="../parallel-claude-code-agents/">Agent fleets</a>
+        <a href="../../ko/" hreflang="ko" lang="ko">한국어</a>
+        <a href="https://github.com/larcane97/clausona">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <article class="article">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../../">clausona</a> / <a href="../parallel-claude-code-agents/">Agent fleets</a></nav>
+      <h1>Run parallel Claude Code and Codex agents in herdr, each on its own account</h1>
+      <p class="lead">herdr already keeps your agents in panes you can watch. With clausona, each of those panes can run on a different account, or on a model like DeepSeek.</p>
+      <p class="updated">Updated <time datetime="2026-10-09">October 9, 2026</time></p>
+
+      <div class="answer">
+        <p>Install the <code>herdr-fleet</code> plugin. It brings <code>fleet-core</code>, the rules all the fleet plugins share, with it:</p>
+<pre data-copy><code>claude plugin marketplace add larcane97/clausona
+claude plugin install herdr-fleet@clausona</code></pre>
+        <p>Then, in a herdr pane, ask Claude Code something like "Split these across my accounts in herdr: write a CONTRIBUTING.md with Sonnet on claude:side, and add an .editorconfig on DeepSeek."</p>
+        <p>It plans the work and starts a worker pane per task, on the account each one should use. It checks what comes back before it cleans up.</p>
+      </div>
+
+      <figure class="figure">
+        <img class="demo" src="../../assets/herdr-fleet.gif" width="1200" height="820" loading="lazy" alt="A main Claude Code session in herdr, on Opus with its own account, starts one worker on Sonnet with a second Claude account and one on DeepSeek through an API, each in its own worktree and pane, then checks each branch, sends a follow-up where needed and removes the worktrees.">
+        <figcaption>A real run, sped up. The main session runs Opus on its own account. One worker runs Sonnet on a second account and the other runs DeepSeek through an API, and the main session checks each branch before it removes the worktree.</figcaption>
+      </figure>
+
+      <h2 id="see">What you see in herdr</h2>
+      <p>Each worker gets its own git worktree and a workspace in herdr's sidebar. The label says what the worker is doing and which clausona profile it runs on, so you can tell the accounts apart at a glance.</p>
+      <p>herdr's agents list shows every worker as working, idle, blocked or done. It reads that from the pane itself, so it works for Claude Code and Codex alike.</p>
+      <p>You can switch to any worker's pane and type into it. If one heads the wrong way, you stop that one and leave the rest alone.</p>
+
+      <h2 id="run">How a run goes</h2>
+      <p>The main session reads your profiles with <code>clausona list</code> and picks one per task. If neither your request nor <code>fleet.json</code> names the accounts, it shows you the plan and waits for your OK.</p>
+      <p>Then it creates a worktree per task with <code>herdr worktree create</code> and starts <code>clausona run</code> for the chosen profile in that pane.</p>
+      <p>The brief goes into a file in the worktree. The worker just gets one line telling it to read that file, so nothing long has to be pasted into a terminal.</p>
+      <p>The main session waits with <code>herdr agent prompt --wait</code>. That only returns once the worker has actually started and then stopped, which means the main session isn't woken by a worker that hasn't picked up its brief yet.</p>
+      <p>When a worker says it's done, the main session checks for itself. It looks at the commits, the diff and a clean, pushed branch. Then it removes the worktree with <code>herdr worktree remove</code>, after you approve (the default) or right away if <code>retire</code> is <code>auto</code>. herdr refuses to remove one with uncommitted changes, and the branch stays.</p>
+      <p>The first time a profile meets your repo, Claude Code or Codex asks whether to trust the folder. herdr shows that as blocked. The main session reads the screen and answers it for the repo you asked it to work on, and for nothing else.</p>
+
+      <h2 id="codex">Codex as the main session</h2>
+      <p>Codex can coordinate too. Install the plugins in Codex. There are no plugin dependencies there, so add <code>fleet-core</code> yourself:</p>
+<pre data-copy><code>codex plugin marketplace add larcane97/clausona
+codex plugin add fleet-core@clausona
+codex plugin add herdr-fleet@clausona</code></pre>
+      <p>A Codex fleet uses Codex accounts by default, and a Claude Code fleet uses Claude Code accounts. The other tool's profiles only join when you name them or list them in <code>workers</code>.</p>
+      <p>Codex workers start with <code>--disable hooks</code>, so they don't stop at Codex's "Hooks need review" screen. Whether to trust hooks stays your decision.</p>
+      <p>In Codex's default sandbox, a Codex worker can't write to <code>.git</code> or reach the network. So it asks before it commits and again before it pushes, and you approve those in its pane. If you'd rather it did that on its own, add <code>"codexSandbox": "danger-full-access"</code> to <code>permissions</code> in the settings file below. That turns Codex's sandbox off for workers.</p>
+      <p>One more Codex setting matters here. If your Codex config has <code>inherit = "core"</code> under <code>[shell_environment_policy]</code>, Codex hides herdr's variables from the commands it runs. Start the main session with <code>-c shell_environment_policy.inherit=all</code> and it can reach herdr again.</p>
+
+      <h2 id="settings">Settings</h2>
+      <p>The fleet plugins share one file, <code>~/.clausona/fleet.json</code>. It can list the profiles that may be workers, your routing rules in plain words, a usage limit, and whether finished workers are removed automatically. The <a href="../parallel-claude-code-agents/#routing">agent fleets guide</a> explains each key.</p>
+      <p>You can also just say it, for example "never use claude:personal for workers", and the main session updates the file.</p>
+
+      <h2 id="questions">Questions</h2>
+      <h3>Does the main session have to run inside herdr?</h3>
+      <p>Yes. herdr's commands talk to the session of the pane they run in, so start Claude Code or Codex in a herdr pane and ask from there.</p>
+      <h3>Does it work on Windows and Linux?</h3>
+      <p>Yes. herdr and clausona both run on macOS, Linux and Windows, and the plugin drives herdr with the same commands on all three. On Windows, a Codex main session runs its commands in PowerShell, and the plugin gives it the PowerShell forms.</p>
+      <h3>Can removing a worker lose work?</h3>
+      <p>Only uncommitted changes could, and <code>herdr worktree remove</code> refuses a worktree that has them. The main session never forces it, and it checks that the branch is pushed first.</p>
+      <h3>Do I need the plugin to give herdr panes different accounts?</h3>
+      <p>No. <code>clausona run claude:work</code> in any pane runs that pane on that account. The plugin adds a coordinator that plans the work and checks it.</p>
+
+      <section class="cta" aria-labelledby="try">
+        <h2 id="try">Start with your accounts</h2>
+        <p>clausona and the plugins are free and open source. Set up <a href="../multiple-claude-code-accounts/">your accounts</a> first, then add the plugin.</p>
+        <p>The reference page is on <a href="https://github.com/larcane97/clausona/blob/main/docs/usecases/herdr-fleet.md">GitHub</a>, where a star helps other people find it.</p>
+      </section>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>clausona is open source under the MIT license, on <a href="https://github.com/larcane97/clausona">GitHub</a>, and listed in <a href="https://github.com/hesreallyhim/awesome-claude-code">Awesome Claude Code</a>.</p>
+      <p>clausona is an independent open-source project, not affiliated with Anthropic, OpenAI or the other projects named here.</p>
+    </div>
+  </footer>
+  <script src="../../copy.js"></script>
+</body>
+</html>

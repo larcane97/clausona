@@ -9,4 +9,4 @@ docs/superpowers/
 *.local.*
 .DS_Store
 
-plugins/clausona/evals/results/
+plugins/*/evals/results/

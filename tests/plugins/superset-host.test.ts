@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // The helper ships inside the plugin and runs straight from Node, so it is tested the way the
 // skill runs it: as a child process, against a fake Superset host.
-const SCRIPT = path.resolve("plugins/clausona/skills/superset-fleet/scripts/superset-host.mjs");
+const SCRIPT = path.resolve("plugins/superset-fleet/skills/superset-fleet/scripts/superset-host.mjs");
 const TOKEN = ["fake", "host", "token", "for", "tests"].join("-");
 
 type Seen = { method: string; procedure: string; input: unknown; auth: string | undefined };
@@ -150,7 +150,8 @@ describe("host discovery and calls", () => {
     const r = await run(["status"]);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/the Superset host API has changed \(project\.list is gone\)/);
-    expect(r.stderr).toMatch(/claude plugin update clausona@clausona/);
+    expect(r.stderr).toMatch(/claude plugin update superset-fleet@clausona/);
+    expect(r.stderr).not.toMatch(/clausona@clausona/);
   });
 
   it("does not mistake a missing resource for API drift", async () => {
@@ -490,6 +491,41 @@ describe("agents", () => {
         presetId: "custom",
       },
     ]);
+  });
+
+  it("adds a Codex config with the codex args after --", async () => {
+    replies["settings.agentConfigs.add"] = { json: { id: "c3", label: "Codex · personal", env: {} } };
+    await run([
+      "agents",
+      "add-config",
+      "--label",
+      "Codex · personal",
+      "--profile",
+      "codex:personal",
+      "--command",
+      "/opt/bin/clausona",
+      "--",
+      "-s",
+      "workspace-write",
+      "-a",
+      "on-request",
+    ]);
+    expect(seen.map((s) => s.input)).toEqual([
+      {
+        label: "Codex · personal",
+        command: "/opt/bin/clausona",
+        args: ["run", "codex:personal", "--", "-s", "workspace-write", "-a", "on-request"],
+        promptTransport: "argv",
+        promptArgs: [],
+        env: {},
+        presetId: "custom",
+      },
+    ]);
+  });
+
+  it("names the tool args generically in its usage", async () => {
+    const r = await run(["--help"]);
+    expect(r.stdout + r.stderr).toContain("[-- <tool args>...]");
   });
 
   it("removes a config", async () => {

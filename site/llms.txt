@@ -15,8 +15,10 @@ Facts:
 
 - [How to use multiple Claude Code accounts on one machine](https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/): CLAUDE_CONFIG_DIR by hand, what must not be shared, and the clausona way, including shared conversation history.
 - [How to use multiple Codex CLI accounts on one machine](https://larcane97.github.io/clausona/guides/multiple-codex-cli-accounts/): one CODEX_HOME per account, which files to share, and which must stay with each account.
-- [Run parallel Claude Code agents on different accounts and models](https://larcane97.github.io/clausona/guides/parallel-claude-code-agents/): subagents run out of sight and all spend one account. Instead, run each agent as a separate Claude Code session with `clausona run <profile>` in any runner (a terminal, tmux, herdr, Orca or Superset), on an account or an API model such as DeepSeek. Today the superset-fleet skill adds a coordinator in Superset that plans, routes by rules and usage, checks and retires workers.
+- [Run parallel Claude Code agents on different accounts and models](https://larcane97.github.io/clausona/guides/parallel-claude-code-agents/): subagents run out of sight and all spend one account. Instead, run each agent as a separate Claude Code session with `clausona run <profile>` in any runner (a terminal, tmux, herdr, Orca or Superset), on an account or an API model such as DeepSeek. The superset-fleet, herdr-fleet and orca-fleet plugins add a coordinator in each runner: one Claude Code or Codex session plans, routes by rules and usage, checks and retires workers. Install only the one for your runner.
 - [Claude Code와 Codex 계정 여러 개를 동시에 쓰는 법](https://larcane97.github.io/clausona/ko/): the same guide in Korean.
+- [Run parallel Claude Code and Codex agents in herdr](https://larcane97.github.io/clausona/guides/parallel-agents-in-herdr/): the herdr-fleet plugin. One session in a herdr pane creates a worktree per task with `herdr worktree create`, starts `clausona run <profile>` in each pane, waits with `herdr agent prompt --wait`, checks the pushed branch and, once you approve, removes the worktree without force.
+- [Run parallel Claude Code and Codex agents in Orca](https://larcane97.github.io/clausona/guides/parallel-agents-in-orca/): the orca-fleet plugin. One session creates an Orca worktree per task, starts `clausona run <profile>` in its terminal (overriding the CODEX_HOME Orca sets), waits with `orca terminal wait --for tui-idle`, checks the pushed branch and, once you approve, removes the worktree, which also deletes its local branch.
 - [Claude Code 에이전트를 여러 계정과 모델로 병렬 실행하기](https://larcane97.github.io/clausona/ko/parallel-agents/): the parallel agents guide in Korean.
 
 ## Project
@@ -24,5 +26,7 @@ Facts:
 - [GitHub repository and README](https://github.com/larcane97/clausona)
 - [How it works](https://github.com/larcane97/clausona/blob/main/docs/how-it-works.md)
 - [Superset fleet use case](https://github.com/larcane97/clausona/blob/main/docs/usecases/superset-fleet.md)
+- [herdr fleet use case](https://github.com/larcane97/clausona/blob/main/docs/usecases/herdr-fleet.md)
+- [Orca fleet use case](https://github.com/larcane97/clausona/blob/main/docs/usecases/orca-fleet.md)
 - [Plan quota](https://github.com/larcane97/clausona/blob/main/docs/plan-quota.md)
 - [API profiles](https://github.com/larcane97/clausona/blob/main/docs/api-profiles.md)
