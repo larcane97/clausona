@@ -391,12 +391,12 @@ describe("RouteForm", () => {
     expect(columnOf(frame, "exclude ", EXCLUDE)).toBe(start);
     expect(frame).not.toContain("comma-separated");
 
-    // Focused, after the field's cursor.
+    // Focused, its first character is the cursor: it does not move.
     await tabTo(instance, "from");
     expect(row(text(instance), "Patterns")).toMatch(
       /^✦\s+Patterns\s+from\s+adds matches, e\.g\. \*@work\.example, team-\*$/,
     );
-    expect(columnOf(text(instance), "Patterns", FROM)).toBe(start + 1);
+    expect(columnOf(text(instance), "Patterns", FROM)).toBe(start);
     for (const line of lines(text(instance))) expect(line.length).toBeLessThanOrEqual(80);
     // Where the typed text goes, and gone once anything is.
     await press(instance, "q");
@@ -405,7 +405,7 @@ describe("RouteForm", () => {
 
     await tabTo(instance, "exclude ");
     expect(row(text(instance), "exclude ")).toMatch(/^✦\s+exclude\s+leaves matches out, e\.g\. \*-share, old$/);
-    expect(columnOf(text(instance), "exclude ", EXCLUDE)).toBe(start + 1);
+    expect(columnOf(text(instance), "exclude ", EXCLUDE)).toBe(start);
     expect(text(instance)).not.toContain(FROM);
     for (const line of lines(text(instance))) expect(line.length).toBeLessThanOrEqual(80);
   });
@@ -414,11 +414,14 @@ describe("RouteForm", () => {
   it("cuts an empty pattern field's example short inside the frame of a narrow terminal", async () => {
     const { instance } = setup({ columns: 50 });
     await opened(instance);
+    const start = columnOf(text(instance), "Patterns", "adds matches");
     await tabTo(instance, "from");
     const frame = text(instance);
     const line = lines(frame).find((each) => each.includes("Patterns")) ?? "";
     expect(line).toMatch(/from\s+adds matches,.*… │$/);
     expect(line.length).toBe(lines(frame).find((each) => each.includes("Tool"))?.length);
+    // Where it was before the field had the focus.
+    expect(columnOf(frame, "Patterns", "adds matches")).toBe(start);
   });
 
   it("moves the focus with tab and back with shift+tab", async () => {

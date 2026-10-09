@@ -100,8 +100,9 @@ const removedText = (name: string) => `Route ${name} was removed in another wind
 const PREVIEW_NAME = "preview";
 
 /**
- * What a pattern field does, with an example: drawn where its text goes (after the cursor, while
- * it has the focus) as long as it is empty, so the form says what goes in it before it is reached.
+ * What a pattern field does, with an example: drawn where its text goes as long as it is empty, so
+ * the form says what goes in it before it is reached. While it has the focus, its first character
+ * is the cursor, as the limit's default is, so focusing it moves nothing.
  */
 const PATTERN_PLACEHOLDER = {
   from: "adds matches, e.g. *@work.example, team-*",
@@ -436,6 +437,32 @@ export function RouteForm(props: RouteFormProps) {
         </Box>
       );
     }
+    if (value === "" && (field === "from" || field === "exclude")) {
+      // The input takes the keys and draws nothing; the example is drawn here, its first character
+      // the cursor while focused, where the first one typed goes. It takes the room it is given
+      // rather than shrink to fit, which ran it a column past the frame in a narrow terminal.
+      const example = PATTERN_PLACEHOLDER[field];
+      return (
+        <>
+          <FieldInput
+            value={value}
+            cursor={cursor}
+            focus={focus}
+            showCursor={focusOn(field)}
+            conceal
+            onChange={onChange}
+          />
+          <Box flexGrow={1} flexBasis={0} minWidth={1}>
+            <Text wrap="truncate-end">
+              <Text color={focus ? undefined : color.muted} inverse={focus}>
+                {example.slice(0, 1)}
+              </Text>
+              <Text color={color.muted}>{example.slice(1)}</Text>
+            </Text>
+          </Box>
+        </>
+      );
+    }
     return (
       <FieldInput
         value={value}
@@ -453,16 +480,6 @@ export function RouteForm(props: RouteFormProps) {
     label,
     error: state.errors[field] !== undefined,
   });
-  const patternPlaceholder = (field: keyof typeof PATTERN_PLACEHOLDER) =>
-    state[TEXT_KEYS[field]] === "" ? (
-      // The room the cursor leaves, rather than shrunk beside it: two shrinking parts rounded the
-      // pair a column past the frame in a narrow terminal.
-      <Box flexGrow={1} flexBasis={0} minWidth={1}>
-        <Text color={color.muted} wrap="truncate-end">
-          {PATTERN_PLACEHOLDER[field]}
-        </Text>
-      </Box>
-    ) : null;
   const subLabel = (field: FormField, text: string, width: number) => (
     <SubLabel text={text} width={width} focused={focusOn(field)} error={state.errors[field] !== undefined} />
   );
@@ -507,12 +524,10 @@ export function RouteForm(props: RouteFormProps) {
         <Line {...line("from", "Patterns")}>
           {subLabel("from", "from", 9)}
           {textField("from")}
-          {patternPlaceholder("from")}
         </Line>
         <Line {...line("exclude", "")}>
           {subLabel("exclude", "exclude", 9)}
           {textField("exclude")}
-          {patternPlaceholder("exclude")}
         </Line>
         <Line {...line("strategy", "Strategy")}>
           <Radio
