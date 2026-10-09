@@ -1,6 +1,7 @@
 import type { ToolName } from "../types.js";
 import { statesByAccount } from "./describe.js";
 import type { Extension, Inventory, SettingsLayer, SkillVisibility, StateFacts } from "./model.js";
+import { isClaudeJson } from "./places.js";
 import { stateHere, tilde, viewFrom } from "./present.js";
 import { samePath } from "./read.js";
 import { type ItemKind, isAccountServer, type ScopeRow } from "./scopes.js";
@@ -182,7 +183,10 @@ const TOOL_NAME: Record<ToolName, string> = { claude: "Claude Code", codex: "Cod
  * row's item); `~file` is already tilded; `a` and `b` are row ids.
  */
 export type RefusalFill = Partial<
-  Record<"name" | "plugin" | "command" | "~file" | "id" | "Tool" | "Scope label" | "a" | "b" | "project name", string>
+  Record<
+    "name" | "plugin" | "command" | "~file" | "id" | "Tool" | "Scope label" | "a" | "b" | "project name" | "short",
+    string
+  >
 >;
 
 function filled(words: Words | undefined, tool: ToolName, values: Record<string, string>): string | undefined {
@@ -191,11 +195,23 @@ function filled(words: Words | undefined, tool: ToolName, values: Record<string,
   return text.replace(/\{([^{}]+)\}/g, (whole, key: string) => values[key] ?? whole);
 }
 
-/** The refusal `code` for a row of `tool`, its words filled in. */
-export function refusal(code: RefusalCode, row: { key: string; name: string }, tool: ToolName, fill: RefusalFill) {
+/**
+ * What the TUI says instead of "Press d to delete the copy clausona kept." for one account's copy
+ * of a server whose row holds other accounts' copies too: d on the row would delete theirs as well.
+ */
+export const ONE_ACCOUNT_KEYS = "Press d and choose only {short} in the dialog.";
+
+/** The refusal `code` for a row of `tool`, its words filled in; `keysInstead` stands in for the table's keys words. */
+export function refusal(
+  code: RefusalCode,
+  row: { key: string; name: string },
+  tool: ToolName,
+  fill: RefusalFill,
+  keysInstead?: string,
+) {
   const spec = REFUSALS[code];
   const values: Record<string, string> = { name: row.name, ...fill, "Claude Code|Codex": TOOL_NAME[tool] };
-  const keys = filled(spec.keys, tool, values);
+  const keys = filled(keysInstead ?? spec.keys, tool, values);
   const flags = filled(spec.flags, tool, values);
   const made: Refusal = {
     rowKey: row.key,
@@ -215,7 +231,17 @@ export function refusalText(refusal: Refusal, voice: "keys" | "flags"): string {
 }
 
 export type StopReason = "changed" | "locked" | "conflict" | "failed";
-export type Stop = { file: string; reason: StopReason; detail?: string; name?: string; rowKey?: string };
+export type Stop = {
+  file: string;
+  reason: StopReason;
+  detail?: string;
+  name?: string;
+  /**
+   * For `conflict`: the stashed copy's item id (apply fills it from the change it stopped at),
+   * which `rm --id` narrows the row to (`rowForId`), so the hint deletes that copy alone.
+   */
+  rowKey?: string;
+};
 
 /** Why an apply stopped, in words: the file from the home dir, then what to do in that voice. */
 export function stopText(stop: Stop, voice: "keys" | "flags", homeDir: string, command: ExtensionsCommand): string {
@@ -226,10 +252,10 @@ export function stopText(stop: Stop, voice: "keys" | "flags", homeDir: string, c
     case "locked":
       return `Claude Code is saving ${file}. Try again in a moment.`;
     case "conflict": {
-      const next =
-        voice === "keys" || stop.rowKey === undefined
-          ? "Press d to delete the copy clausona kept."
-          : `Delete the copy clausona kept: clausona ${command} rm --id ${stop.rowKey}.`;
+      const byId = `Delete the copy clausona kept: clausona ${command} rm --id ${stop.rowKey ?? "'<id>'"}.`;
+      // A server back in an account's .claude.json is in the same row as the copy clausona kept,
+      // in the same account: d there, whichever accounts are chosen, would delete it too.
+      const next = voice === "flags" || isClaudeJson(stop.file) ? byId : "Press d to delete the copy clausona kept.";
       return `${stop.name ?? "It"} is back in ${file} already. ${next}`;
     }
     case "failed":
@@ -299,7 +325,8 @@ export function mcpDisabled(inv: Inventory, profile: string, project: string | u
   );
 }
 
-function chosen(accounts: readonly string[] | undefined, profile: string | undefined): boolean {
+/** Whether an action's accounts take `profile`: all of them when it names none, and what is no account's. */
+export function chosenAccount(accounts: readonly string[] | undefined, profile: string | undefined): boolean {
   return accounts === undefined || profile === undefined || accounts.includes(profile);
 }
 
@@ -336,11 +363,11 @@ function offAt(
       }
       if (!isAccountServer(first)) {
         const states = statesByAccount(inv, row, project)
-          ?.filter((a) => chosen(accounts, a.profile))
+          ?.filter((a) => chosenAccount(accounts, a.profile))
           .map((a) => a.state);
         return isOff(states ?? [stateHere(inv, first, project)]);
       }
-      const copies = row.items.filter((copy) => chosen(accounts, copy.location.profile));
+      const copies = row.items.filter((copy) => chosenAccount(accounts, copy.location.profile));
       if (!here) return copies.length > 0 && copies.every((copy) => copy.stashed);
       // Here: what each account that has opened the project reads; a server kept by clausona is off.
       const states = copies.flatMap((copy: Extension) => {

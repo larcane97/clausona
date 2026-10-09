@@ -1,3 +1,5 @@
+import { mkdirSync, symlinkSync } from "node:fs";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { type Collector, emptyFacts } from "../model.js";
@@ -136,6 +138,26 @@ describe("readClaudeSkills", () => {
     expect(byId("skill:claude:global:-:command:review").usageKeys).toEqual(["review"]);
     expect(out.warnings).toEqual([]);
   });
+
+  // A file symlink needs privileges on Windows; skill folders' links (junctions) are tested there.
+  it.skipIf(process.platform === "win32")(
+    "marks a command file that is a working link, as a skill folder's",
+    async () => {
+      const h = new TestHome();
+      homes.push(h);
+      h.claude("default", ".claude");
+      const target = h.write("dotfiles/commands/ship.md", "---\ndescription: Ship it\n---\nShip.");
+      mkdirSync(h.path(".claude", "commands"), { recursive: true });
+      symlinkSync(target, h.path(".claude", "commands", "ship.md"), "file");
+
+      const out = await inventoryOf(h, []);
+      const ship = out.items.find((i) => i.id === "skill:claude:global:-:command:ship");
+      expect(ship).toMatchObject({ name: "ship", description: "Ship it", summary: { type: "command" } });
+      expect(ship?.link?.broken).toBe(false);
+      expect(samePath(ship?.link?.target, target)).toBe(true);
+      expect(out.warnings).toEqual([]);
+    },
+  );
 
   it("lists a plugin's skills once per install, each with its own id", async () => {
     const h = new TestHome();
