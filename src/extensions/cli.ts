@@ -2,7 +2,17 @@ import path from "node:path";
 
 import { accent, bold, dim, helpUsage, truncate } from "../lib/cli-style.js";
 import type { Registry, ToolName } from "../types.js";
-import { agoWords, type DetailLine, detailsOf, fromLabel, hookWhen, jsonItem, tagsOf } from "./describe.js";
+import {
+  accountsWord,
+  agoWords,
+  type DetailLine,
+  detailsOf,
+  fromLabel,
+  hookWhen,
+  jsonItem,
+  rowAccounts,
+  tagsOf,
+} from "./describe.js";
 import { ExitError } from "./exit-error.js";
 import { CLEANUP_UNUSED_DAYS, loadInventory, usageOf } from "./inventory.js";
 import type { Extension, Inventory } from "./model.js";
@@ -11,7 +21,6 @@ import { entryInfo } from "./read.js";
 import {
   homeScope,
   type ItemKind,
-  isAccountCopy,
   isAccountServer,
   otherProjects,
   rowKey,
@@ -245,27 +254,10 @@ const SHOW_TIERS: readonly ((scope: Exclude<ScopeId, "loaded" | "unused">) => bo
   (scope) => scope === "other",
 ];
 
-/** The Claude accounts that have a row; undefined for one every account sees, [] for Codex. */
-function holders(row: ScopeRow): string[] | undefined {
-  const first = firstOf(row);
-  const loc = first.location;
-  if (loc.tool !== "claude") return [];
-  // A row of copies is every account's that has one: its own copy, or an install's accounts.
-  if (isAccountCopy(first)) {
-    return [
-      ...new Set(
-        row.items.flatMap((copy) =>
-          copy.location.profile !== undefined ? [copy.location.profile] : (copy.location.accounts ?? []),
-        ),
-      ),
-    ];
-  }
-  return loc.profile !== undefined ? [loc.profile] : loc.accounts;
-}
-
-function heldBy(row: ScopeRow, accounts: string[]): boolean {
+/** Whether one of `accounts` has the row; --account lists Claude rows alone, so no Codex row is asked. */
+function heldBy(inv: Inventory, row: ScopeRow, accounts: string[]): boolean {
   if (accounts.length === 0) return true;
-  const who = holders(row);
+  const who = rowAccounts(inv, row);
   return who === undefined || who.some((p) => accounts.includes(p));
 }
 
@@ -338,15 +330,6 @@ function whereCell(inv: Inventory, row: ScopeRow, project: string | undefined): 
   return `${place}${whose}${command}`;
 }
 
-/** "all", "2 of 3" or the one account's name, for a Claude server; "—" for Codex's. */
-function accountsCell(inv: Inventory, row: ScopeRow): string {
-  if (firstOf(row).location.tool !== "claude") return "—";
-  const who = holders(row);
-  if (who === undefined || inv.claudeProfiles.every((p) => who.includes(p))) return "all";
-  if (who.length === 1) return shortProfile(who[0] ?? "");
-  return `${who.length} of ${inv.claudeProfiles.length}`;
-}
-
 const KIND_COLUMNS: Record<ExtensionsCommand, string[]> = {
   skills: ["USES", "LAST USED"],
   mcp: ["ACCOUNTS"],
@@ -363,7 +346,7 @@ function kindCells(command: ExtensionsCommand, inv: Inventory, row: ScopeRow, no
       return [String(usage?.total ?? 0), agoWords(usage?.lastUsedAt, now)];
     }
     case "mcp":
-      return [accountsCell(inv, row)];
+      return [accountsWord(inv, row)];
     case "hooks": {
       if (item.kind !== "hook") return ["—", "—"];
       // Already redacted when read: a hook's summary passes its command line through redactCommand.
@@ -497,7 +480,7 @@ function show(
     // A name can be an id too, so an id from ls --json works as it is given.
     (options.name === undefined || row.name === options.name || isId(row, options.name)) &&
     (options.id === undefined || isId(row, options.id)) &&
-    heldBy(row, accounts);
+    heldBy(inv, row, accounts);
   const scope = options.scope;
   const everyByTool = options.tools.map((tool) => ({ tool, every: everyRow(inv, command, tool, project, now) }));
   // With --scope, that scope's rows and the rows whose place it is, such as a plugin's skill
@@ -560,7 +543,7 @@ export async function runExtensionsCommand(
   const rows = byName(
     options.tools
       .flatMap((tool) => rowsFor(inv, command, tool, scope, project, now))
-      .filter((row) => heldBy(row, accounts)),
+      .filter((row) => heldBy(inv, row, accounts)),
   );
   if (options.json) {
     return JSON.stringify(

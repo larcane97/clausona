@@ -3,18 +3,20 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  accountsWord,
   agoWords,
   detailsOf,
   fromLabel,
   hookWhen,
   jsonItem,
+  rowAccounts,
   scopeSentence,
   statesByAccount,
   tagsOf,
 } from "./describe.js";
 import { loadInventory } from "./inventory.js";
 import type { Extension, Inventory } from "./model.js";
-import { rowsIn, type ScopeRow } from "./scopes.js";
+import { isAccountCopy, rowsIn, type ScopeRow } from "./scopes.js";
 import { TestHome } from "./test-home.js";
 
 const DAY = 86_400_000;
@@ -361,6 +363,57 @@ describe("detailsOf", () => {
       { label: "Contains", text: "2 skills · 0 MCP servers · 1 hook" },
       { label: "", text: "plan, review, SessionStart" },
     ]);
+  });
+});
+
+describe("rowAccounts and accountsWord", () => {
+  /** One install's copy of a plugin's server, as the sources read one: `accounts` only when given. */
+  const install = (dir: string, accounts?: string[]): Extension => ({
+    id: `mcp:claude:plugin:sp@m|user|-|/${dir}:plugin:sp:search`,
+    kind: "mcp",
+    name: "plugin:sp:search",
+    location: {
+      tool: "claude",
+      scope: "plugin",
+      plugin: "sp@m",
+      file: `/${dir}/.mcp.json`,
+      ...(accounts ? { accounts } : {}),
+    },
+  });
+  const row = (...items: Extension[]): ScopeRow => ({ key: "row", name: "plugin:sp:search", items });
+
+  it("is every account for a row of copies that name none, never 0 of N", async () => {
+    const { inv } = await seed();
+    const bare = row(install("a"), install("b"));
+    expect(bare.items.every(isAccountCopy)).toBe(true);
+    expect(rowAccounts(inv, bare)).toBeUndefined();
+    expect(accountsWord(inv, bare)).toBe("all");
+    expect(accountsWord(inv, row(install("a", [])))).toBe("all");
+  });
+
+  it("names the one account, counts several of all, and says all when every account has it", async () => {
+    const { inv } = await seed();
+    const three = { ...inv, claudeProfiles: [...inv.claudeProfiles, "claude:solo"] };
+    const work = row(install("a", ["claude:work"]));
+    expect(rowAccounts(three, work)).toEqual(["claude:work"]);
+    expect(accountsWord(three, work)).toBe("work");
+    const two = row(install("a", ["claude:work"]), install("b", ["claude:default"]));
+    expect(rowAccounts(three, two)).toEqual(["claude:default", "claude:work"]);
+    expect(accountsWord(three, two)).toBe("2 of 3");
+    expect(accountsWord(inv, two)).toBe("all");
+    // A server in each account's own .claude.json: the accounts whose file has it.
+    const both = await seed(github);
+    const server = serverRow(both.inv, "global", both.app, "github");
+    expect(accountsWord(both.inv, server)).toBe("all");
+    expect(accountsWord({ ...both.inv, claudeProfiles: [...both.inv.claudeProfiles, "claude:solo"] }, server)).toBe(
+      "2 of 3",
+    );
+  });
+
+  it("is a dash for a Codex row", async () => {
+    const { inv } = await seed();
+    const codex = find(inv, (i) => i.location.tool === "codex" && i.kind === "skill", "a Codex skill");
+    expect(accountsWord(inv, row(codex))).toBe("—");
   });
 });
 
