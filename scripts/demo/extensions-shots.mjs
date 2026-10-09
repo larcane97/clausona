@@ -48,7 +48,9 @@ const steps = (onePane) => {
   const intoTable = onePane ? [] : ["Right"];
   return [
     ["01-loaded", [], "Loaded here\\s+\\d+"],
-    ["02-global", ["Down", "Down", ...open], "GLOBAL — "],
+    // The project's own skills: its eli5 is hidden by the Global one.
+    ["02a-project", ["Down", ...open], "hidden by Global copy"],
+    ["02-global", [...back, "Down", ...open], "GLOBAL — "],
     // Past Cloud, Plugins and Other projects to Not used in 90 days, the last scope.
     ["03-unused", [...back, "Down", "Down", "Down", "Down", ...open], "NOT USED IN 90 DAYS — "],
     // db-migrate, the never-used project skill, is the first row.
