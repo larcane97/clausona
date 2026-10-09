@@ -339,9 +339,13 @@ are in.
 and if you changed something it asks first whether to throw the changes away.
 
 A save goes through the same checks as `route add` and `route set`, so whatever they refuse is
-refused here too. The field turns red, and the problem is listed under the form. If
-`routes.json` was changed in another terminal while the form was open, the save does not write
-over it. The form reloads the file and says so, and you can look it over before you save again.
+refused here too. The field turns red, and the problem is listed under the form.
+
+Another terminal may change `routes.json` while the form is open. A change to other routes is
+kept, and the save goes ahead with what you typed. A change to the route you are editing is not
+written over: the form reloads that route and says so, and you can look it over before you save
+again. If that route was removed, the form says so and keeps what you typed. Press `enter` again
+to save it back, or `esc` to leave it removed.
 
 ## Running on a route
 

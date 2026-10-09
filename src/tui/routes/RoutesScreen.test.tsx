@@ -97,7 +97,6 @@ function setup(
     collectQuotas: vi.fn<Collect>(options.collect ?? (async () => QUOTAS)),
     readPicks: vi.fn(async () => ({})),
     clock: () => NOW,
-    readRoutesText: vi.fn(async () => `${JSON.stringify(current, null, 2)}\n`),
   } satisfies RoutesScreenDeps;
   const onExit = vi.fn();
   const tree = <RoutesScreen deps={deps} onExit={onExit} />;
@@ -515,19 +514,20 @@ describe("RoutesScreen", () => {
     expect(Object.keys(file().routes)).toHaveLength(3);
   });
 
-  // M4: the form found routes.json changed and reloaded its route; the list behind it must too.
+  // M4: the form found its route changed and reloaded it; the list behind it must be read again too.
   it("shows routes.json as it is now after a form that found it changed is left", async () => {
-    const { instance, deps, replace } = setup();
+    const { instance, replace } = setup();
     await ranked(instance);
     await press(instance, DOWN);
     await press(instance, "e");
     await until(instance, (f) => f.includes("Edit solo"));
-    // The form has read routes.json for its save to compare with.
-    await vi.waitFor(() => expect(deps.readRoutesText).toHaveBeenCalledTimes(1));
-    replace({ ...FILE, routes: { ...FILE.routes, other: { tool: "codex" } } });
+    replace({
+      ...FILE,
+      routes: { ...FILE.routes, solo: { ...FILE.routes.solo, maxUsage: 70 }, other: { tool: "codex" } },
+    });
 
     await type(instance, ENTER);
-    await until(instance, (f) => f.includes("changed since"));
+    await until(instance, (f) => f.includes("changed in another window"));
     await type(instance, ESC);
 
     const frame = await until(instance, (f) => !f.includes("Edit solo") && /other/.test(f));

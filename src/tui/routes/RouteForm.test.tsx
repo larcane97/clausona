@@ -91,8 +91,6 @@ function memoryDisk(initial: RoutesFile | null) {
   return disk;
 }
 
-type Deps = RoutesScreenDeps & { readRoutesText: ReturnType<typeof vi.fn<RoutesScreenDeps["readRoutesText"]>> };
-
 function setup(
   options: {
     edit?: string;
@@ -103,8 +101,6 @@ function setup(
     rows?: number;
     registry?: Registry;
     quotas?: Record<string, QuotaSnapshot>;
-    /** Runs before the form is drawn, which is when it reads routes.json. */
-    prepare?: (deps: Deps) => void;
   } = {},
 ) {
   const disk = memoryDisk(options.file === undefined ? FILE : options.file);
@@ -125,9 +121,7 @@ function setup(
     collectQuotas: vi.fn<RoutesScreenDeps["collectQuotas"]>(async () => QUOTAS),
     readPicks: vi.fn(async () => ({})),
     clock: () => NOW,
-    readRoutesText: vi.fn<RoutesScreenDeps["readRoutesText"]>(async () => disk.text),
   } satisfies RoutesScreenDeps;
-  options.prepare?.(deps);
   const onDone = vi.fn();
   const name = options.edit;
   const tree = (
@@ -157,10 +151,9 @@ const lines = (frame: string) => frame.split("\n");
 const inside = (line: string) => line.replace(/^\s*│\s?/, "").replace(/\s*│\s*$/, "");
 const row = (frame: string, label: string) => inside(lines(frame).find((line) => line.includes(label)) ?? "");
 
-/** Painted, and routes.json read once for the save to compare against. */
-async function opened(instance: Instance, deps: { readRoutesText: unknown }) {
+/** Painted: the form reads nothing before its first save. */
+async function opened(instance: Instance) {
   await until(instance, (f) => f.includes("Name"));
-  await vi.waitFor(() => expect(deps.readRoutesText).toHaveBeenCalledTimes(1));
 }
 
 /** Tabs to the field on the line carrying `label`. */
@@ -224,8 +217,8 @@ function hintLines(frame: string): string[] {
 
 describe("RouteForm", () => {
   it("creates a route with the defaults from a name and enter", async () => {
-    const { instance, deps, onDone, disk } = setup();
-    await opened(instance, deps);
+    const { instance, onDone, disk } = setup();
+    await opened(instance);
 
     await press(instance, "daily");
     await save(instance);
@@ -242,8 +235,8 @@ describe("RouteForm", () => {
   });
 
   it("lays out every field, with the subscription accounts of the tool and their quota", async () => {
-    const { instance, deps } = setup();
-    await opened(instance, deps);
+    const { instance } = setup();
+    await opened(instance);
     const frame = text(instance);
 
     expect(frame).toContain("New route");
@@ -266,8 +259,8 @@ describe("RouteForm", () => {
 
   // The hints follow the focus, so each set fits on one line where all of them did not.
   it("shows the keys of the focused field, on one line at 80 columns", async () => {
-    const { instance, deps } = setup({ edit: "solo", columns: 80 });
-    await opened(instance, deps);
+    const { instance } = setup({ edit: "solo", columns: 80 });
+    await opened(instance);
     const expected: Array<[string, string]> = [
       ["Name", TAIL],
       ["Tool", `←→ choose │ ${TAIL}`],
@@ -294,15 +287,15 @@ describe("RouteForm", () => {
 
   // As `clausona route list` and the screen say it: offline is not "nobody can be picked".
   it("says there is no quota reading, not that nobody can be picked, when none was read", async () => {
-    const { instance, deps } = setup({ edit: "main", quotas: {} });
-    await opened(instance, deps);
+    const { instance } = setup({ edit: "main", quotas: {} });
+    await opened(instance);
     expect(text(instance)).toContain("Now: no quota reading");
     expect(text(instance)).not.toContain("nobody can be picked");
 
     // Read, and everyone over the reserve: nobody can be picked.
     const full = Object.fromEntries(Object.keys(QUOTAS).map((id) => [id, snap(99, 99)]));
     const busy = setup({ edit: "main", quotas: full });
-    await opened(busy.instance, busy.deps);
+    await opened(busy.instance);
     expect(text(busy.instance)).toContain("Now: nobody can be picked");
   });
 
@@ -313,8 +306,8 @@ describe("RouteForm", () => {
       "claude:work": { state: "expired", fetchedAt: NOW },
       "claude:ops-share": { state: "missing", fetchedAt: NOW },
     };
-    const { instance, deps } = setup({ edit: "main", quotas, columns: 80 });
-    await opened(instance, deps);
+    const { instance } = setup({ edit: "main", quotas, columns: 80 });
+    await opened(instance);
     const frame = text(instance);
 
     expect(row(frame, "claude:side")).toMatch(/\[x\] claude:side\s+—\s+—\s+signed out$/);
@@ -325,8 +318,8 @@ describe("RouteForm", () => {
 
   // Focused and empty, a pattern field said nothing about what it takes.
   it("says what a pattern field takes while it is focused and empty, within 80 columns", async () => {
-    const { instance, deps } = setup({ columns: 80 });
-    await opened(instance, deps);
+    const { instance } = setup({ columns: 80 });
+    await opened(instance);
     expect(text(instance)).not.toContain("comma-separated");
 
     await tabTo(instance, "from");
@@ -342,8 +335,8 @@ describe("RouteForm", () => {
   });
 
   it("moves the focus with tab and back with shift+tab", async () => {
-    const { instance, deps } = setup();
-    await opened(instance, deps);
+    const { instance } = setup();
+    await opened(instance);
     expect(focusedOn(text(instance), "Name")).toBe(true);
 
     await press(instance, TAB);
@@ -355,8 +348,8 @@ describe("RouteForm", () => {
   });
 
   it("saves an account unticked under every account as an exclude, and says who is left", async () => {
-    const { instance, deps, onDone, disk } = setup();
-    await opened(instance, deps);
+    const { instance, onDone, disk } = setup();
+    await opened(instance);
     await press(instance, "daily");
 
     await tabTo(instance, "Accounts");
@@ -371,8 +364,8 @@ describe("RouteForm", () => {
   });
 
   it("lists both tools' accounts for claude + codex, and saves the route as all", async () => {
-    const { instance, deps, onDone, disk } = setup();
-    await opened(instance, deps);
+    const { instance, onDone, disk } = setup();
+    await opened(instance);
     await press(instance, "both");
 
     await tabTo(instance, "Tool");
@@ -396,8 +389,8 @@ describe("RouteForm", () => {
   });
 
   it("changes the strategy with the arrows, and says what the new one does", async () => {
-    const { instance, deps, onDone, disk } = setup();
-    await opened(instance, deps);
+    const { instance, onDone, disk } = setup();
+    await opened(instance);
     await press(instance, "roomy");
 
     await tabTo(instance, "Strategy");
@@ -412,7 +405,7 @@ describe("RouteForm", () => {
 
   it("shows the reserve's problem when the limit is raised above it, and writes nothing", async () => {
     const { instance, deps, onDone, disk } = setup();
-    await opened(instance, deps);
+    await opened(instance);
     await press(instance, "tight");
 
     await tabTo(instance, "skip at");
@@ -432,8 +425,8 @@ describe("RouteForm", () => {
   });
 
   it("adds fallback accounts from a picker, reorders and removes them, and saves their order", async () => {
-    const { instance, deps, onDone, disk } = setup();
-    await opened(instance, deps);
+    const { instance, onDone, disk } = setup();
+    await opened(instance);
     await press(instance, "spare");
     // The pool is ops-share alone, which leaves three accounts to fall back on.
     await untickEvery(instance, ["claude:side", "claude:team", "claude:work"]);
@@ -477,8 +470,8 @@ describe("RouteForm", () => {
   // The pool comes first, and a member already in it is skipped as a fallback: under every
   // account (*), which a new route starts on, each account the picker offered did nothing.
   it("offers only accounts outside the pool and its excludes, and says what makes room when there are none", async () => {
-    const { instance, deps } = setup({ columns: 80 });
-    await opened(instance, deps);
+    const { instance } = setup({ columns: 80 });
+    await opened(instance);
     await tabTo(instance, "Fallback");
 
     await press(instance, "a");
@@ -508,14 +501,14 @@ describe("RouteForm", () => {
   it("leaves out of the picker an account the exclude takes, and one in the pool by name", async () => {
     // main takes every account but ops-share, which its exclude takes: nothing to offer.
     const main = setup({ edit: "main", columns: 80 });
-    await opened(main.instance, main.deps);
+    await opened(main.instance);
     await tabTo(main.instance, "Fallback");
     await press(main.instance, "a");
     expect(text(main.instance)).toContain("The pool takes every account; untick every account (*) or narrow it.");
 
     // solo's pool is work, and team is its fallback already.
     const solo = setup({ edit: "solo" });
-    await opened(solo.instance, solo.deps);
+    await opened(solo.instance);
     await tabTo(solo.instance, "Fallback");
     await press(solo.instance, "a");
     expect(row(text(solo.instance), "Add to fallback")).toMatch(/claude:ops-share ›\s+1 of 2$/);
@@ -528,8 +521,8 @@ describe("RouteForm", () => {
       version: 1,
       routes: { cli: { tool: "claude", from: ["*"], fallback: ["side", "nobody"] } },
     };
-    const { instance, deps } = setup({ edit: "cli", file, columns: 80 });
-    await opened(instance, deps);
+    const { instance } = setup({ edit: "cli", file, columns: 80 });
+    await opened(instance);
     expect(row(text(instance), "Fallback")).toMatch(
       /Fallback\s+1\. claude:side in the pool\s+2\. nobody\s+\(\+ add\)$/,
     );
@@ -539,8 +532,8 @@ describe("RouteForm", () => {
   // 34-row terminal, the title first; the picker is one line, whatever the number of accounts.
   it("offers the fallback accounts on one line, one at a time, so the picker adds a single line", async () => {
     // A claude + codex route of one account: the four others are offered.
-    const { instance, deps } = setup({ edit: "pair", spec: { tool: "all", from: ["claude:team"] } });
-    await opened(instance, deps);
+    const { instance } = setup({ edit: "pair", spec: { tool: "all", from: ["claude:team"] } });
+    await opened(instance);
     await tabTo(instance, "Fallback");
     const closed = lines(text(instance)).length;
 
@@ -568,8 +561,8 @@ describe("RouteForm", () => {
   });
 
   it("closes the picker on esc without leaving the form or adding anything", async () => {
-    const { instance, deps, onDone } = setup();
-    await opened(instance, deps);
+    const { instance, onDone } = setup();
+    await opened(instance);
     await tabTo(instance, "Fallback");
 
     await press(instance, "a");
@@ -581,8 +574,8 @@ describe("RouteForm", () => {
   });
 
   it("opens an edit with the route as it is, the pattern-excluded account painted excluded", async () => {
-    const { instance, deps } = setup({ edit: "main" });
-    await opened(instance, deps);
+    const { instance } = setup({ edit: "main" });
+    await opened(instance);
     const frame = text(instance);
 
     expect(frame).toContain("Edit main");
@@ -595,7 +588,7 @@ describe("RouteForm", () => {
 
   it("renames a route: the new key is written and the old one removed", async () => {
     const { instance, deps, onDone, disk } = setup({ edit: "solo" });
-    await opened(instance, deps);
+    await opened(instance);
 
     await press(instance, "-2");
     expect(row(text(instance), "Name")).toMatch(/Name\s+solo-2$/);
@@ -608,22 +601,9 @@ describe("RouteForm", () => {
     expect(routes(disk)["solo-2"]).toEqual(FILE.routes.solo);
   });
 
-  it("reads routes.json once more at save when the read at open failed, and saves", async () => {
-    const { instance, deps, onDone, disk } = setup({
-      prepare: (deps) => deps.readRoutesText.mockRejectedValueOnce(new Error("EACCES: permission denied")),
-    });
-    await opened(instance, deps);
-
-    await press(instance, "daily");
-    await save(instance);
-
-    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith("daily"));
-    expect(routes(disk).daily).toBeDefined();
-  });
-
   it("says why a write failed, keeps the inputs, and saves the next time", async () => {
     const { instance, deps, onDone, disk } = setup();
-    await opened(instance, deps);
+    await opened(instance);
     deps.updateRoutes.mockRejectedValueOnce(new Error("Timed out waiting for another clausona process."));
 
     await press(instance, "daily");
@@ -640,8 +620,8 @@ describe("RouteForm", () => {
   });
 
   it("refuses to rename a route onto another route's name", async () => {
-    const { instance, deps, onDone, disk } = setup({ edit: "solo" });
-    await opened(instance, deps);
+    const { instance, onDone, disk } = setup({ edit: "solo" });
+    await opened(instance);
 
     await retype(instance, 4, "main");
     await save(instance);
@@ -653,8 +633,8 @@ describe("RouteForm", () => {
   });
 
   it("refuses a new route under a name that is taken", async () => {
-    const { instance, deps, onDone, disk } = setup();
-    await opened(instance, deps);
+    const { instance, onDone, disk } = setup();
+    await opened(instance);
 
     await press(instance, "main");
     await save(instance);
@@ -664,31 +644,83 @@ describe("RouteForm", () => {
     expect(onDone).not.toHaveBeenCalled();
   });
 
-  // Review Focus 3: routes.json changed by another terminal while the form is open.
-  it("writes nothing when routes.json changed after it opened, keeps a new route's inputs, and saves the next time", async () => {
-    const { instance, deps, onDone, disk } = setup();
-    await opened(instance, deps);
+  // Review Focus 3: routes.json changed by another terminal while the form is open. Only the
+  // route the form edits is its business: a change to another route is kept, and so are the inputs.
+  it("saves a new route at once when another window changed other routes, keeping their change", async () => {
+    const { instance, onDone, disk } = setup();
+    await opened(instance);
     const changed = { ...FILE, routes: { ...FILE.routes, other: { tool: "codex" as const } } };
     disk.text = toText(changed);
 
     await press(instance, "daily");
     await save(instance);
 
-    const frame = await until(instance, (f) => f.includes("changed since"));
-    expect(frame).toContain("routes.json changed since this form opened; it was reloaded. Review and save again.");
-    expect(routes(disk)).toEqual(changed.routes);
-    expect(deps.updateRoutes).not.toHaveBeenCalled();
-    expect(onDone).not.toHaveBeenCalled();
-    expect(row(frame, "Name")).toMatch(/Name\s+daily$/);
-
-    await save(instance);
     await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith("daily"));
     expect(Object.keys(routes(disk))).toEqual(["main", "solo", "other", "daily"]);
+    expect(routes(disk).other).toEqual({ tool: "codex" });
+  });
+
+  it("saves an edit, its inputs as they are, when another window changed only other routes", async () => {
+    const { instance, onDone, disk } = setup({ edit: "main" });
+    await opened(instance);
+    const changed = {
+      ...FILE,
+      routes: { ...FILE.routes, solo: { ...FILE.routes.solo, maxUsage: 70 }, other: { tool: "codex" as const } },
+    };
+    disk.text = toText(changed);
+
+    await tabTo(instance, "Strategy");
+    await press(instance, RIGHT);
+    await save(instance);
+
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith("main"));
+    expect(routes(disk)).toEqual({ ...changed.routes, main: { ...FILE.routes.main, strategy: "headroom" } });
+  });
+
+  it("says an edited route was removed in another window, and writes it again only on a second enter", async () => {
+    const { instance, onDone, disk } = setup({ edit: "main" });
+    await opened(instance);
+    const { main: _gone, ...rest } = FILE.routes;
+    disk.text = toText({ ...FILE, routes: rest });
+
+    await tabTo(instance, "Strategy");
+    await press(instance, RIGHT);
+    await save(instance);
+
+    const frame = await until(instance, (f) => f.includes("removed"));
+    expect(frame).toContain("✘ Route main was removed in another window.");
+    expect(hintLines(frame)).toEqual(["←→ choose │ tab next field │ enter save it again │ esc cancel"]);
+    // Nothing written, and the inputs kept.
+    expect(routes(disk)).toEqual(rest);
+    expect(row(frame, "Strategy")).toMatch(/● headroom/);
+    expect(onDone).not.toHaveBeenCalled();
+
+    await save(instance);
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith("main"));
+    expect(routes(disk)).toEqual({ ...rest, main: { ...FILE.routes.main, strategy: "headroom" } });
+  });
+
+  it("leaves a route removed in another window removed when the form is left with esc", async () => {
+    const { instance, onDone, disk } = setup({ edit: "main" });
+    await opened(instance);
+    const { main: _gone, ...rest } = FILE.routes;
+    disk.text = toText({ ...FILE, routes: rest });
+
+    await tabTo(instance, "Strategy");
+    await press(instance, RIGHT);
+    await save(instance);
+    await until(instance, (f) => f.includes("Route main was removed in another window."));
+
+    await press(instance, ESC);
+    expect(text(instance)).toContain("Discard changes? (y/N)");
+    await type(instance, "y");
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(null));
+    expect(routes(disk)).toEqual(rest);
   });
 
   it("reloads an edited route that changed on disk after the form opened, and does not overwrite it", async () => {
-    const { instance, deps, onDone, disk } = setup({ edit: "main" });
-    await opened(instance, deps);
+    const { instance, onDone, disk } = setup({ edit: "main" });
+    await opened(instance);
     const changed = { ...FILE, routes: { ...FILE.routes, main: { ...FILE.routes.main, maxUsage: 70 } } };
     disk.text = toText(changed);
 
@@ -696,7 +728,8 @@ describe("RouteForm", () => {
     await press(instance, RIGHT);
     await save(instance);
 
-    const frame = await until(instance, (f) => f.includes("changed since"));
+    const frame = await until(instance, (f) => f.includes("changed in another window"));
+    expect(frame).toContain("✘ Route main was changed in another window; it was reloaded. Review and save again.");
     // The route as it is now, the edit gone: the user reviews it and saves again.
     expect(row(frame, "Strategy")).toMatch(/● round-robin/);
     expect(row(frame, "skip at")).toMatch(/\[70\]%$/);
@@ -705,17 +738,17 @@ describe("RouteForm", () => {
   });
 
   it("does not overwrite a route that changed before the form opened on it", async () => {
-    // The screen read the route earlier; routes.json has been changed since, so the spec the form
-    // was given is not the one on disk, though the file has not changed while the form was open.
+    // The screen read the route earlier, and it has changed on disk since: the spec the form was
+    // given is not the one on disk, though nothing changed while the form was open.
     const onDisk = { ...FILE, routes: { ...FILE.routes, main: { ...FILE.routes.main, maxUsage: 70 } } };
-    const { instance, deps, onDone, disk } = setup({ edit: "main", spec: FILE.routes.main, file: onDisk });
-    await opened(instance, deps);
+    const { instance, onDone, disk } = setup({ edit: "main", spec: FILE.routes.main, file: onDisk });
+    await opened(instance);
 
     await tabTo(instance, "Strategy");
     await press(instance, RIGHT);
     await save(instance);
 
-    const frame = await until(instance, (f) => f.includes("changed since"));
+    const frame = await until(instance, (f) => f.includes("changed in another window"));
     expect(row(frame, "skip at")).toMatch(/\[70\]%$/);
     expect(routes(disk)).toEqual(onDisk.routes);
     expect(onDone).not.toHaveBeenCalled();
@@ -723,7 +756,7 @@ describe("RouteForm", () => {
 
   it("asks before discarding changes on esc: n keeps the form, y leaves it", async () => {
     const { instance, deps, onDone } = setup();
-    await opened(instance, deps);
+    await opened(instance);
     await press(instance, "d");
 
     await press(instance, ESC);
@@ -742,8 +775,8 @@ describe("RouteForm", () => {
   });
 
   it("leaves at once on esc when nothing changed", async () => {
-    const { instance, deps, onDone } = setup({ edit: "main" });
-    await opened(instance, deps);
+    const { instance, onDone } = setup({ edit: "main" });
+    await opened(instance);
 
     await type(instance, ESC);
     await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(null));
@@ -752,7 +785,7 @@ describe("RouteForm", () => {
 
   it("refuses an API profile named by a pattern", async () => {
     const { instance, deps, onDone, disk } = setup();
-    await opened(instance, deps);
+    await opened(instance);
     await press(instance, "paid");
     await tabTo(instance, "from");
     await press(instance, "gateway");
@@ -768,8 +801,8 @@ describe("RouteForm", () => {
   it("never draws a key typed as the name, and refuses it", async () => {
     // Built from pieces, so the file carries nothing a secret scanner takes for a key.
     const key = ["sk", "ant", "api03", ["Qm7", "Zt4", "Wb9", "Lp2"].join("").repeat(4)].join("-");
-    const { instance, deps, onDone, disk } = setup();
-    await opened(instance, deps);
+    const { instance, onDone, disk } = setup();
+    await opened(instance);
 
     await press(instance, key);
     expect(row(text(instance), "Name")).toMatch(/Name\s+•{8}$/);
@@ -783,8 +816,8 @@ describe("RouteForm", () => {
 
   it("never draws a key pasted into a pattern field, and refuses it", async () => {
     const key = ["sk", "ant", "api03", ["Hd5", "Rk8", "Vn3", "Jc6"].join("").repeat(4)].join("-");
-    const { instance, deps, onDone } = setup();
-    await opened(instance, deps);
+    const { instance, onDone } = setup();
+    await opened(instance);
     await press(instance, "keyed");
     await tabTo(instance, "from");
 
@@ -798,8 +831,8 @@ describe("RouteForm", () => {
   });
 
   it("shows a long list of patterns as it is: only a key is hidden", async () => {
-    const { instance, deps } = setup();
-    await opened(instance, deps);
+    const { instance } = setup();
+    await opened(instance);
     await tabTo(instance, "from");
 
     const emails = "alice@work.example.com, bob@work.example.com, carol@work.example.com";
@@ -830,8 +863,8 @@ describe("RouteForm", () => {
     // frame on every render: the form flickered, the scrollback went, Name and Tool off the top.
     it("lists only the accounts that fit, the cursor's always among them, and scrolls with it", async () => {
       const ROWS = 34;
-      const { instance, deps } = setup({ registry: MANY, rows: ROWS, columns: 80 });
-      await opened(instance, deps);
+      const { instance } = setup({ registry: MANY, rows: ROWS, columns: 80 });
+      await opened(instance);
       const first = text(instance);
       expect(lines(first).length).toBeLessThan(ROWS);
       expect(first).toContain("Name");
@@ -876,8 +909,8 @@ describe("RouteForm", () => {
     });
 
     it("lists fewer when the terminal is resized smaller, and both tools' accounts in the same room", async () => {
-      const { instance, watched, deps } = setup({ registry: MANY, rows: 40, columns: 80 });
-      await opened(instance, deps);
+      const { instance, watched } = setup({ registry: MANY, rows: 40, columns: 80 });
+      await opened(instance);
       const tall = shownIds(text(instance)).length;
 
       watched?.resize(80, 30);
@@ -893,8 +926,8 @@ describe("RouteForm", () => {
     });
 
     it("keeps three accounts on screen however short the terminal", async () => {
-      const { instance, deps } = setup({ registry: MANY, rows: 12, columns: 80 });
-      await opened(instance, deps);
+      const { instance } = setup({ registry: MANY, rows: 12, columns: 80 });
+      await opened(instance);
       // Two accounts and the count below them: three lines.
       expect(shownIds(text(instance))).toHaveLength(2);
       expect(more(text(instance), "↓")).toBe(18);
@@ -902,8 +935,8 @@ describe("RouteForm", () => {
   });
 
   it("fits 80 columns without wrapping a line", async () => {
-    const { instance, deps } = setup({ edit: "main", columns: 80 });
-    await opened(instance, deps);
+    const { instance } = setup({ edit: "main", columns: 80 });
+    await opened(instance);
     const frame = text(instance);
 
     expect(row(frame, "claude:ops-share")).toMatch(/\[ \] claude:ops-share\s+0%\s+64%\s+excluded$/);

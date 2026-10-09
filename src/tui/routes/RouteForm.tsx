@@ -48,7 +48,7 @@ import { errorText, type RoutesScreenDeps } from "./routes-deps.js";
  * The Routes screen's form: a new route (`n`) or the selected one (`e`), with everything the CLI
  * can set. The state and its rules are route-form-state.ts and its lines RouteFormRows.tsx; this
  * holds the state, turns keys into its actions, previews who would be picked, and saves through
- * updateRoutes - and only over the routes.json it opened on.
+ * updateRoutes - never over a change another window made to the route it edits.
  */
 
 type Errors = RouteFormState["errors"];
@@ -91,7 +91,9 @@ const MIN_ACCOUNT_LINES = 3;
 /** What a field holding something key-shaped shows instead: a constant, as the API form's key field. */
 const MASK = "•".repeat(8);
 
-const CHANGED = "routes.json changed since this form opened; it was reloaded. Review and save again.";
+const changedText = (name: string) =>
+  `Route ${name} was changed in another window; it was reloaded. Review and save again.`;
+const removedText = (name: string) => `Route ${name} was removed in another window.`;
 
 /** The name never changes the spec, so the preview runs on a stand-in until one is typed, or while it is refused. */
 const PREVIEW_NAME = "preview";
@@ -133,6 +135,12 @@ const EVERY_FIELD_HINTS: Hint[] = [
   { keys: "enter", action: "save" },
   { keys: "esc", action: "cancel" },
 ];
+/** Once the form said its route was removed in another window: enter writes it back. */
+const RECREATE_HINTS: Hint[] = [
+  { keys: "tab", action: "next field" },
+  { keys: "enter", action: "save it again" },
+  { keys: "esc", action: "cancel" },
+];
 const PICKER_HINTS = [
   { keys: "←→", action: "choose" },
   { keys: "enter", action: "add" },
@@ -160,7 +168,7 @@ function step<T>(options: readonly T[], current: T, delta: 1 | -1): T {
 /** Two specs as routes.json writes them; key order counts, which can only call a match a change. */
 const sameSpec = (a: RouteSpec | undefined, b: RouteSpec | undefined) => JSON.stringify(a) === JSON.stringify(b);
 
-type Outcome = "saved" | "changed" | Errors;
+type Outcome = "saved" | "changed" | "removed" | Errors;
 
 export function RouteForm(props: RouteFormProps) {
   const { accounts, quotas, lastPicked, registry, deps, now, onDone } = props;
@@ -177,22 +185,21 @@ export function RouteForm(props: RouteFormProps) {
   const [picking, setPicking] = useState<number | null>(null);
   const [asking, setAsking] = useState(false);
   const [saving, setSaving] = useState(false);
-  /** routes.json as it was when the form opened (or last reloaded): a save compares the file with it. */
-  const base = useRef<Promise<string | null>>(undefined);
+  /**
+   * The edited route was removed in another window, and the form said so: the next save writes it
+   * again, which the user asks for by pressing enter once more.
+   */
+  const [recreate, setRecreate] = useState(false);
   /** The route the edit started from: under the lock it must still be the one on disk. */
   const startSpec = useRef(props.spec);
   const alive = useRef(true);
 
   useEffect(() => {
     alive.current = true;
-    const read = deps.readRoutesText();
-    // A failed read is a failed save, reported then.
-    read.catch(() => {});
-    base.current = read;
     return () => {
       alive.current = false;
     };
-  }, [deps]);
+  }, []);
 
   const listed = useMemo(() => accountsFor(state.tool, accounts), [state.tool, accounts]);
   const members = useMemo(() => new Map(membersOf(registry, "all").map((member) => [member.id, member])), [registry]);
@@ -246,33 +253,21 @@ export function RouteForm(props: RouteFormProps) {
   const showErrors = (errors: Errors) => setState((current) => ({ ...current, errors }));
 
   /**
-   * routes.json as the form opened on it. If that read failed it is read once more, here, and
-   * becomes what later saves compare with: a failed read at open no longer fails every save. A
-   * change made before this read is then not seen by the compare, but an edited route is still
-   * checked under the lock below.
+   * Writes the route into routes.json as it is under the lock: what another window changed in
+   * the other routes stays, and the inputs are saved over it. The edited route itself is checked
+   * there, against the one the edit started from (the screen's earlier read): one changed
+   * meanwhile is not written over, and one removed meanwhile is written again only once the
+   * user, told so, saves again.
    */
-  async function openedText(): Promise<string | null | undefined> {
-    try {
-      return await base.current;
-    } catch {
-      const read = deps.readRoutesText();
-      base.current = read;
-      return read;
-    }
-  }
-
-  /** Writes the route, unless routes.json is not what the form opened on. */
   async function write(name: string, spec: RouteSpec): Promise<Outcome> {
-    const opened = await openedText();
-    const current = await deps.readRoutesText();
-    if (current !== opened) return "changed";
     let outcome: Outcome = "saved";
     await deps.updateRoutes((file) => {
-      // The text compare above leaves a moment before the lock, and the spec came from the
-      // screen's earlier read: the route on disk, under the lock, is the one that counts.
-      if (original !== undefined && !sameSpec(storedRoute(file, original), startSpec.current)) {
-        outcome = "changed";
-        return null;
+      if (original !== undefined) {
+        const onDisk = storedRoute(file, original);
+        if (onDisk === undefined ? !recreate : !sameSpec(onDisk, startSpec.current)) {
+          outcome = onDisk === undefined ? "removed" : "changed";
+          return null;
+        }
       }
       if (name !== original && Object.hasOwn(file.routes, name)) {
         outcome = { name: `Route '${name}' already exists.` };
@@ -285,23 +280,24 @@ export function RouteForm(props: RouteFormProps) {
     return outcome;
   }
 
-  /** Starts again from routes.json as it is now: an edit takes its route from it, a new route keeps its inputs. */
-  async function reload() {
-    const [text, file] = await Promise.all([deps.readRoutesText(), deps.readRoutes()]);
-    base.current = Promise.resolve(text);
-    const fresh = original === undefined ? undefined : storedRoute(file, original);
+  /** Starts the edit again from its route as it is on disk now, which another window changed. */
+  async function reload(name: string) {
+    const fresh = storedRoute(await deps.readRoutes(), name);
     startSpec.current = fresh;
     if (!alive.current) return;
-    if (original !== undefined && fresh) {
-      const name = original;
+    if (fresh) {
       setState((current) => ({
         ...initialFormState({ mode: "edit", name, spec: fresh }, accounts),
         focus: current.focus,
-        errors: { form: CHANGED },
+        errors: { form: changedText(name) },
       }));
-    } else {
-      showErrors({ form: CHANGED });
-    }
+    } else removed(name);
+  }
+
+  /** The inputs stay, and nothing is written until enter is pressed again. */
+  function removed(name: string) {
+    setRecreate(true);
+    showErrors({ form: removedText(name) });
   }
 
   async function save() {
@@ -325,8 +321,9 @@ export function RouteForm(props: RouteFormProps) {
         onDone(name);
         return;
       }
-      if (outcome === "changed") await reload();
-      else showErrors(outcome);
+      if (outcome === "changed" && original !== undefined) await reload(original);
+      else if (outcome === "removed" && original !== undefined) removed(original);
+      else if (typeof outcome === "object") showErrors(outcome);
     } catch (error) {
       if (alive.current) showErrors({ form: errorText(error) });
     }
@@ -464,7 +461,7 @@ export function RouteForm(props: RouteFormProps) {
           ? CONFIRM_HINTS
           : picking !== null
             ? PICKER_HINTS
-            : [...(FIELD_HINTS[state.focus] ?? []), ...EVERY_FIELD_HINTS]
+            : [...(FIELD_HINTS[state.focus] ?? []), ...(recreate ? RECREATE_HINTS : EVERY_FIELD_HINTS)]
       }
     >
       <Box flexDirection="column" borderStyle="round" borderColor={color.dim} paddingX={1}>

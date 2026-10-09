@@ -1,6 +1,6 @@
 import { collectQuotas, type QuotaTarget } from "../../core/quota-store.js";
 import type { RoutesFile } from "../../core/route-config.js";
-import { readPicks, readRoutes, readRoutesText, routesPaths, updateRoutes } from "../../core/routes-store.js";
+import { readPicks, readRoutes, routesPaths, updateRoutes } from "../../core/routes-store.js";
 import { loadRegistry, registryProblem } from "../../lib/service.js";
 import type { QuotaSnapshot, Registry } from "../../types.js";
 
@@ -20,8 +20,6 @@ export type RoutesScreenDeps = {
   collectQuotas: (targets: QuotaTarget[], options?: { refresh?: boolean }) => Promise<Record<string, QuotaSnapshot>>;
   readPicks: () => Promise<Record<string, string>>;
   clock: () => number;
-  /** routes.json as it is on disk, or null for none: the form saves only over the text it opened on. */
-  readRoutesText: () => Promise<string | null>;
 };
 
 export function defaultRoutesScreenDeps(): RoutesScreenDeps {
@@ -34,7 +32,6 @@ export function defaultRoutesScreenDeps(): RoutesScreenDeps {
     collectQuotas: (targets, options) => collectQuotas(targets, { refresh: options?.refresh }),
     readPicks: () => readPicks(paths),
     clock: () => Date.now(),
-    readRoutesText: () => readRoutesText(paths),
   };
 }
 
