@@ -401,6 +401,45 @@ describe("buildMatrix", () => {
   });
 });
 
+describe("the home dir as the project", () => {
+  it("reads This project from the home dir's entries, in a group named ~", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude", {
+      mcpServers: { github: { command: "gh-mcp" } },
+      projects: { [h.home]: { mcpServers: { "home-db": { command: "db-mcp" } }, disabledMcpServers: ["github"] } },
+    });
+    h.write(".mcp.json", { mcpServers: { notes: { command: "notes-mcp" } } });
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: h.home,
+      managedSettings: h.path("none.json"),
+    });
+    expect(inv.currentProject).toBe(h.home);
+    const rows = buildRows(inv, { ...base, tab: "mcp", project: h.home });
+    expect(labels(rows)).toEqual([
+      "# User (1)",
+      "  github claude off",
+      "# Project · ~ (2)",
+      "  home-db claude on",
+      "  notes claude pending-approval",
+    ]);
+    const homeDb = items(rows).find((r) => r.name === "home-db");
+    if (homeDb?.type !== "item") throw new Error("no home-db row");
+    expect(detailOf(inv, homeDb, h.home, Date.now())).toContainEqual({
+      label: "Where",
+      text: `Claude local default · ~ · ${path.join("~", ".claude.json")}`,
+    });
+    // Seen from no project, the home dir's own servers are another project's, closed.
+    expect(labels(buildRows(inv, { ...base, tab: "mcp" }))).toEqual([
+      "# User (1)",
+      "  github claude on",
+      "# Project · ~ (2) +",
+    ]);
+  });
+});
+
 describe("layout helpers", () => {
   it("picks side, stacked and list layouts by width", () => {
     expect(pickLayout(140, 40).mode).toBe("side");

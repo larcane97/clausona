@@ -48,7 +48,7 @@ export async function loadInventory(options: LoadOptions): Promise<Inventory> {
   const warnings: Warning[] = [];
   const out: Collector = { items: [], facts: emptyFacts(), warnings };
   const [currentProject, accounts, codex] = await Promise.all([
-    resolveCurrentProject(options.cwd, homeDir),
+    resolveCurrentProject(options.cwd),
     loadClaudeAccounts(registry, homeDir, warnings),
     loadCodexContext(registry, homeDir, warnings),
   ]);
@@ -56,7 +56,7 @@ export async function loadInventory(options: LoadOptions): Promise<Inventory> {
     ...accounts.map((a) => ({ tool: "claude" as const, profile: a.id, paths: recordedPaths(a.json?.projects) })),
     ...(codex ? codexProjectRecords(codex) : []),
   ];
-  const projects = await collectProjects(records, homeDir, currentProject);
+  const projects = await collectProjects(records, currentProject);
   // The Claude and Codex sources write apart - each its own items and facts, and warnings are
   // sorted below - so they read side by side.
   const readClaude = async (): Promise<void> => {

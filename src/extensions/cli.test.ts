@@ -222,3 +222,46 @@ describe("ls options and warnings", () => {
     expect(leakedWindows([text], KEY)).toEqual([]);
   });
 });
+
+describe("ls from the home dir", () => {
+  function homeSeed() {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", {
+      mcpServers: { github: { command: "gh-mcp" } },
+      projects: {
+        [h.home]: { mcpServers: { "home-db": { command: "db-mcp" } }, disabledMcpServers: ["github"] },
+        [app]: {},
+      },
+    });
+    h.claude("work", ".claude-work", { projects: { [h.home]: { enabledMcpjsonServers: ["notes"] } } });
+    h.write(".mcp.json", { mcpServers: { notes: { command: "notes-mcp" } } });
+    return { h, app };
+  }
+
+  it("lists what Claude Code started there reads: the account's home servers, ~/.mcp.json and the switches", async () => {
+    const { h } = homeSeed();
+    const text = await run(h, h.home, "mcp", ["ls"]);
+    expect(text).toMatch(/^3 MCP servers · project ~$/m);
+    expect(text).toMatch(/^github\s+claude\s+account default\s+off$/m);
+    expect(text).toMatch(/^home-db\s+claude\s+local default · ~\s+on$/m);
+    expect(text).toMatch(/^notes\s+claude\s+project ~\s+1\/2 on$/m);
+  });
+
+  it("reads --project ~ as the home project, from anywhere", async () => {
+    const { h, app } = homeSeed();
+    expect(await run(h, app, "mcp", ["ls", "--project", h.home])).toBe(await run(h, h.home, "mcp", ["ls"]));
+    // From app, the home dir's own servers do not load.
+    const fromApp = await run(h, app, "mcp", ["ls"]);
+    expect(fromApp).not.toContain("home-db");
+    expect(fromApp).toMatch(/^github\s+claude\s+account default\s+on$/m);
+  });
+
+  it("lists the home servers once with --all-projects", async () => {
+    const { h, app } = homeSeed();
+    const rows = (await run(h, app, "mcp", ["ls", "--all-projects"])).split("\n");
+    expect(rows.filter((line) => line.startsWith("home-db "))).toHaveLength(1);
+    expect(rows.filter((line) => line.startsWith("notes "))).toHaveLength(1);
+  });
+});

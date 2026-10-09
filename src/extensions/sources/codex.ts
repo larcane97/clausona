@@ -4,7 +4,7 @@ import { parse } from "smol-toml";
 
 import type { Registry } from "../../types.js";
 import type { Collector, Location, Project, Warning } from "../model.js";
-import { type ProjectRecord, recordedPaths } from "../projects.js";
+import { isHomeProject, type ProjectRecord, recordedPaths } from "../projects.js";
 import { isRecord, readJsonObject, readText, realPath, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
 import { addHooks } from "./claude-hooks.js";
@@ -115,6 +115,8 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
     );
   }
   for (const project of projects) {
+    // The home dir's .agents/skills and .codex/ are the user's own, read above.
+    if (isHomeProject(project, ctx.homeDir)) continue;
     const here: SkillLocation = { tool: "codex", scope: "project", project: project.path };
     jobs.push(readSkillFolders(path.join(project.path, ".agents", "skills"), here, project.path, out, noUsage));
     jobs.push(

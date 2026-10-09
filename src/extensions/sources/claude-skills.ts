@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import type { Collector, Extension, Project } from "../model.js";
+import { isHomeProject } from "../projects.js";
 import { entryInfo, IO_LIMIT, isRecord, listNames, mapLimit, parseFrontmatter, readText } from "../read.js";
 import { type ClaudeContext, pluginOwner, sharesPrimaryEntry } from "./claude-context.js";
 import { readSkillFolders, type SkillLocation } from "./skill-dirs.js";
@@ -35,6 +36,8 @@ export async function readClaudeSkills(ctx: ClaudeContext, projects: Project[], 
   }
   jobs.push(readSynced(ctx, out));
   for (const project of projects) {
+    // The home dir's .claude/skills and .claude/commands are the user's own, read above.
+    if (isHomeProject(project, ctx.homeDir)) continue;
     const here: SkillLocation = { tool: "claude", scope: "project", project: project.path };
     jobs.push(readSkillFolders(path.join(project.path, ".claude", "skills"), here, project.path, out));
     jobs.push(readCommandFiles(path.join(project.path, ".claude", "commands"), here, project.path, out));

@@ -1,9 +1,8 @@
-import path from "node:path";
-
 import { duplicateGroups, folderKey, marksOf, usageOf } from "../../extensions/inventory.js";
 import type { EffectiveState, Extension, Inventory, Mark } from "../../extensions/model.js";
 import {
   accountStates,
+  projectName,
   shortProfile,
   stateHere,
   tilde,
@@ -95,7 +94,7 @@ export function column(text: string, width: number): string {
 type GroupInfo = { key: string; label: string; order: number; open: boolean; plugin?: string; project?: string };
 
 /** Which group a row goes in, its order, and whether it starts open. */
-function groupOf(item: Extension, tab: Tab, project: string | undefined): GroupInfo {
+function groupOf(item: Extension, tab: Tab, project: string | undefined, homeDir: string): GroupInfo {
   const loc = item.location;
   if (loc.scope === "plugin") {
     const name = (loc.plugin ?? "").split("@")[0];
@@ -104,7 +103,7 @@ function groupOf(item: Extension, tab: Tab, project: string | undefined): GroupI
     if (loc.project !== undefined) {
       return {
         key: `plugin:${loc.plugin}|${loc.project}`,
-        label: `Plugin · ${name} · ${path.basename(loc.project)}`,
+        label: `Plugin · ${name} · ${projectName(loc.project, homeDir)}`,
         order: 3,
         open: false,
         ...plugin,
@@ -117,7 +116,7 @@ function groupOf(item: Extension, tab: Tab, project: string | undefined): GroupI
     const here = project !== undefined && samePath(loc.project, project);
     return {
       key: `project:${loc.project}`,
-      label: `Project · ${path.basename(loc.project)}`,
+      label: `Project · ${projectName(loc.project, homeDir)}`,
       order: here ? 2 : 7,
       open: here,
     };
@@ -256,7 +255,7 @@ export function buildRows(inv: Inventory, o: ViewOptions): Row[] {
   for (const item of inv.items) {
     if (item.kind !== kind || !passes(inv, item, o, duplicates)) continue;
     if (query && !matches(item, query)) continue;
-    const info = groupOf(item, o.tab, o.project);
+    const info = groupOf(item, o.tab, o.project, inv.homeDir);
     const group = groups.get(info.key) ?? { info, byKey: new Map() };
     groups.set(info.key, group);
     const rowKey = o.tab === "hooks" ? item.id : item.name;
@@ -317,7 +316,7 @@ export function detailOf(inv: Inventory, row: ItemRow, project: string | undefin
   for (const item of row.items) {
     lines.push({
       label: "Where",
-      text: `${item.location.tool === "claude" ? "Claude" : "Codex"} ${whereLabel(item)} · ${tilde(item.location.file, inv.homeDir)}`,
+      text: `${item.location.tool === "claude" ? "Claude" : "Codex"} ${whereLabel(item, inv.homeDir)} · ${tilde(item.location.file, inv.homeDir)}`,
     });
     if (item.link) {
       lines.push({
@@ -372,7 +371,7 @@ export function detailOf(inv: Inventory, row: ItemRow, project: string | undefin
     const offIn = overridable
       ? inv.facts.claudeSkillOverrides
           .filter((o) => o.project && o.map[first.name] === "off" && !samePath(o.project, project))
-          .map((o) => path.basename(o.project ?? ""))
+          .map((o) => projectName(o.project ?? "", inv.homeDir))
       : [];
     if (offIn.length > 0) lines.push({ label: "Off in", text: [...new Set(offIn)].join(", ") });
     const usage = usageOf(inv, row.items);

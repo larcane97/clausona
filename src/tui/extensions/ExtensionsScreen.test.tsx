@@ -193,6 +193,27 @@ describe("ExtensionsScreen", () => {
     expect(frame).not.toContain("deploy-check");
   });
 
+  it("lists the home dir in the picker as ~, the project it was started in", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", {
+      projects: { [h.home]: { mcpServers: { "home-db": { command: "db-mcp" } } }, [app]: {} },
+    });
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: h.home,
+      managedSettings: h.path("none.json"),
+    });
+    const { instance } = screen(inv, 140);
+    await seen(instance, (f) => f.includes("Extensions │ ~"));
+    await press(instance, "p");
+    const picker = await seen(instance, (f) => f.includes("Show the inventory as seen from:"));
+    expect(picker).toMatch(new RegExp(`${symbol.cursor} ${symbol.checkboxOn} ~ here · 1 Claude acct`));
+    expect(picker).toMatch(/○ ~[\\/]repos[\\/]app/);
+  });
+
   it("lists unreadable files and goes back on esc, then leaves", async () => {
     const { instance, onExit } = screen(await seed(), 140);
     await seen(instance, (f) => f.includes("eli5"));
@@ -234,7 +255,8 @@ describe("ExtensionsScreen", () => {
     });
     const { instance } = screen(inv, 100);
     const frame = await seen(instance, (f) => f.includes("Nothing here"));
-    expect(frame).toContain("No project");
+    // Started in the home dir, which is a project for what Claude Code keys by it.
+    expect(frame).toMatch(/Extensions │ ~\n/);
   });
 
   it("says so when no account has opened the project the matrix is for", async () => {

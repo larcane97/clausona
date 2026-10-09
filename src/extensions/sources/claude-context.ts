@@ -3,6 +3,7 @@ import path from "node:path";
 import { claudeJsonPathForConfigDir } from "../../core/paths.js";
 import type { Registry } from "../../types.js";
 import type { Collector, Project, SettingsLayer, Warning } from "../model.js";
+import { isHomeProject } from "../projects.js";
 import { IO_LIMIT, isRecord, listNames, mapLimit, pathKey, readJsonObject, realPath, samePath } from "../read.js";
 
 export type ClaudeAccount = {
@@ -96,7 +97,16 @@ export async function loadClaudeContext(options: {
     { file: options.managedSettings, layer: "managed" },
     { file: path.join(primaryDir, "settings.json"), layer: "user" },
     ...projects.flatMap((project) => [
-      { file: path.join(project.path, ".claude", "settings.json"), layer: "project" as const, project: project.path },
+      // In the home dir, Claude Code's project settings are the user settings; it skips them there.
+      ...(isHomeProject(project, homeDir)
+        ? []
+        : [
+            {
+              file: path.join(project.path, ".claude", "settings.json"),
+              layer: "project" as const,
+              project: project.path,
+            },
+          ]),
       {
         file: path.join(project.path, ".claude", "settings.local.json"),
         layer: "local" as const,
@@ -137,8 +147,9 @@ async function managedDropIns(managedSettings: string, warnings: Warning[]): Pro
 
 function pluginScope(entry: Record<string, unknown>, homeDir: string): Pick<PluginInstall, "scope" | "project"> {
   const scope = entry.scope === "project" || entry.scope === "local" ? entry.scope : "user";
-  // A plugin installed for the home dir is the user's own: the home dir is not a project
-  // here, and in it Claude Code's project settings are the user settings.
+  // A plugin installed for the home dir is listed as the user's own: in the home dir Claude
+  // Code's project settings are the user settings, and a local install's switch is in
+  // ~/.claude/settings.local.json, which is read as the home project's local settings.
   if (scope === "user" || typeof entry.projectPath !== "string" || samePath(entry.projectPath, homeDir)) {
     return { scope: "user" };
   }
