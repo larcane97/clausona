@@ -484,7 +484,9 @@ export async function runRouteCommand(
   deps: RouteDeps = defaultRouteDeps(),
 ): Promise<string> {
   const [sub, ...rest] = args;
-  if (!sub || sub === "--help" || sub === "-h" || sub === "help") return routeHelp();
+  // In a terminal, bare `route` opens the dashboard's Routes screen (index.tsx renders it).
+  if (!sub) return io.interactive ? "__OPEN_TUI__:routes" : routeHelp();
+  if (sub === "--help" || sub === "-h" || sub === "help") return routeHelp();
   if (rest.includes("--help") || rest.includes("-h")) return routeHelp(sub);
   switch (sub) {
     case "list":

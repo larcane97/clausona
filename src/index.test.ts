@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands.js";
-import { isMainModule, parseCommand, reportError, writeCommandResult } from "./index.js";
+import { isMainModule, parseCommand, reportError, TUI_SCREENS, writeCommandResult } from "./index.js";
 
 describe("parseCommand", () => {
   it("defaults to interactive mode with no args", () => {
@@ -59,6 +59,12 @@ describe("parseCommand", () => {
       profile: "claude:work",
       args: ["--route", "x"],
     });
+  });
+});
+
+describe("TUI_SCREENS", () => {
+  it("lists every screen a command may open, the Routes screen of `csn route` among them", () => {
+    expect([...TUI_SCREENS].sort()).toEqual(["dashboard", "doctor", "init", "routes", "use"]);
   });
 });
 

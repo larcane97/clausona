@@ -112,6 +112,12 @@ describe("route help", () => {
     expect(await run()).toBe(await run("--help"));
   });
 
+  it("gives way to the Routes screen with no arguments in a terminal, and still prints on --help", async () => {
+    const { deps } = setup();
+    expect(await runRouteCommand([], NEVER_ASKS, deps)).toBe("__OPEN_TUI__:routes");
+    expect(stripAnsi(await runRouteCommand(["--help"], NEVER_ASKS, deps))).toContain("COMMANDS");
+  });
+
   it("says add takes --tool, defaults to claude, and asks nothing", async () => {
     const { run } = setup();
     const add = await run("add", "--help");

@@ -38,9 +38,10 @@ export function parseCommand(argv: string[]): ParsedCommand {
   return { kind: "command", command, args };
 }
 
-type TuiScreen = "dashboard" | "use" | "doctor" | "init";
+type TuiScreen = "dashboard" | "use" | "routes" | "doctor" | "init";
 
-const TUI_SCREENS = new Set<string>(["dashboard", "use", "doctor", "init"]);
+/** The screens a command may open by returning `__OPEN_TUI__:<screen>`. */
+export const TUI_SCREENS: ReadonlySet<string> = new Set<TuiScreen>(["dashboard", "use", "routes", "doctor", "init"]);
 
 /**
  * React and Ink are the bulk of this bundle's startup cost, and nothing but the TUI needs

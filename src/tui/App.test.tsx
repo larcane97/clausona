@@ -51,8 +51,32 @@ vi.mock("../lib/service", async (importOriginal) => ({
   discoverAccounts: vi.fn(async () => []),
   addProfile: vi.fn(),
   addApiProfile: vi.fn(async () => ({ name: "gateway", configDir: "/Users/test/.claude-gateway" })),
+  // The Routes screen's: what the dashboard's profile is to routing.
+  loadRegistry: vi.fn(async () => ({
+    version: 2,
+    primarySources: { claude: "/Users/test/.claude" },
+    activeProfiles: { claude: "claude:default" },
+    profiles: {
+      "claude:default": { tool: "claude", configDir: "/Users/test/.claude", email: "default@example.com" },
+    },
+  })),
 }));
 
+// The Routes screen reads routes.json and the pick record, and quota, none of them from this HOME.
+vi.mock("../core/routes-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../core/routes-store.js")>()),
+  readRoutes: vi.fn(async () => ({ version: 1, routes: { main: { tool: "claude" } } })),
+  updateRoutes: vi.fn(async () => {
+    throw new Error("nothing in these tests writes routes.json");
+  }),
+  readPicks: vi.fn(async () => ({})),
+}));
+vi.mock("../core/quota-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../core/quota-store.js")>()),
+  collectQuotas: vi.fn(async () => ({})),
+}));
+
+import { stripAnsi } from "../lib/cli-style.js";
 import { fitModel } from "../lib/format.js";
 import { BRACKETED_PASTE_OFF, BRACKETED_PASTE_ON } from "../lib/prompt-secret.js";
 
@@ -2613,6 +2637,35 @@ describe("App over a profiles.json that cannot be read", () => {
     const frame = await waitForFrame(lastFrame, (f) => f.includes("could not be read"));
 
     expect(frame).not.toContain("Initialize");
+  });
+});
+
+describe("App's Routes screen", () => {
+  it("is listed below Profiles, opens on Enter, and goes back to the dashboard on esc", async () => {
+    const instance = render(<App initialScreen="dashboard" />);
+    const dashboard = stripAnsi(
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Dashboard") && f.includes("Routes")),
+    );
+    const at = (text: string) => dashboard.split("\n").findIndex((line) => line.includes(text));
+    expect(at("Pick accounts by plan quota")).toBeGreaterThan(at("Switch, add, or remove accounts"));
+    expect(at("Pick accounts by plan quota")).toBeLessThan(at("View cost and token usage"));
+
+    await press(instance, DOWN);
+    expect(focusedOn(instance.lastFrame() ?? "", "Routes")).toBe(true);
+    await press(instance, ENTER);
+    const routes = stripAnsi(await waitForFrame(instance.lastFrame, (f) => f.includes("Fallback")));
+    expect(routes).toMatch(/▸ main\s+claude/);
+    expect(routes).not.toContain("Dashboard");
+
+    await press(instance, ESC);
+    await waitForFrame(instance.lastFrame, (f) => f.includes("Dashboard") && f.includes("Profiles"));
+  });
+
+  it("opens on the route list when the App starts there", async () => {
+    const { lastFrame } = render(<App initialScreen="routes" />);
+    const frame = stripAnsi(await waitForFrame(lastFrame, (f) => f.includes("Fallback")));
+
+    expect(frame).toMatch(/▸ main\s+claude/);
   });
 });
 

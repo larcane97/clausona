@@ -53,7 +53,7 @@ export function skipText(row: Row): string {
 }
 
 /** skipText without the command that fixes it, for a line that lists accounts side by side. */
-const skipReason = (row: Row) => skipText(row).replace(/ \(.*\)$/, "");
+export const skipReason = (row: Row) => skipText(row).replace(/ \(.*\)$/, "");
 
 export function toolLabel(tool: RouteTool): string {
   return tool === "all" ? "claude + codex" : tool;
@@ -366,7 +366,7 @@ function nothingRead(rows: Row[]): boolean {
  * Members free now - not skipped, and under the cut - out of every member: a skipped one counts
  * (it is in the route, just unusable now), a name that is not registered does not.
  */
-function freeNow(ranking: Ranking): { free: number; members: number } {
+export function freeNow(ranking: Ranking): { free: number; members: number } {
   const members = ranking.rows.filter((row) => row.skip !== "not-registered");
   const free = members.filter(
     (row) => !row.skip && row.usage !== undefined && row.usage.percent < ranking.route.maxUsage,
@@ -461,7 +461,7 @@ function lastPickedCell(row: Row, now: number): Cell {
 }
 
 /** The pick first, then the others by usage, then the skipped; ranking order within each. */
-function detailOrder(rows: Row[]): Row[] {
+export function detailOrder(rows: Row[]): Row[] {
   const group = (row: Row) => (row.status === "picked" ? 0 : row.skip ? 2 : 1);
   const usage = (row: Row) => row.usage?.percent ?? 0;
   return [...rows].sort((a, b) => group(a) - group(b) || (group(a) === 1 ? usage(a) - usage(b) : 0));
