@@ -45,7 +45,8 @@ const DAY = 24 * HOUR;
 
 const TOOL_WORD: Record<ToolName, string> = { claude: "Claude", codex: "Codex" };
 const TOOL_NAME: Record<ToolName, string> = { claude: "Claude Code", codex: "Codex" };
-const NOUN: Record<ItemKind, string> = { skill: "skills", mcp: "MCP servers", hook: "hooks" };
+/** A kind's items in a word, as the headers say them. */
+export const NOUN: Record<ItemKind, string> = { skill: "skills", mcp: "MCP servers", hook: "hooks" };
 
 /** "38m ago", "5h ago", "13d ago", "3mo ago", "2y ago"; "never" for undefined. */
 export function agoWords(then: number | undefined, now: number): string {
@@ -98,7 +99,7 @@ function pluginName(item: Extension): string {
 }
 
 /**
- * Where a row in Loaded here comes from: "Project", "Global", "Cloud", the `.mcp.json` of a
+ * Where a row in Loaded comes from: "Project", "Global", "Cloud", the `.mcp.json` of a
  * parent folder ("~/.mcp.json", "~/repos/.mcp.json"), the plugin's name, "Built-in", "Managed".
  */
 export function fromLabel(item: Extension, inv: Inventory, project: string | undefined): string {
@@ -182,7 +183,7 @@ export function hiddenHere(inv: Inventory, row: ScopeRow, project: string | unde
 }
 
 /**
- * Whether a row loads here for one of `profiles`, as Loaded here reads it, account by account:
+ * Whether a row loads here for one of `profiles`, as Loaded reads it, account by account:
  * relevant here, not a broken link, and that account's state loads (`stateLoads`). A row read in
  * one state for every account loads for each account that has it.
  */
@@ -354,8 +355,7 @@ function sentence(scope: ScopeId, tool: ToolName, kind: ItemKind, inv: Inventory
 
 /**
  * The table's header line: the scope's name in caps, a dash, and one plain sentence saying what
- * the scope is - "GLOBAL — ~/.claude/skills · loads in every project". An other project's table
- * is headed with its name.
+ * the scope is - "GLOBAL — ~/.claude/skills · loads in every project".
  */
 export function scopeSentence(
   scope: ScopeId,
@@ -363,14 +363,8 @@ export function scopeSentence(
   kind: ItemKind,
   inv: Inventory,
   project: string | undefined,
-  otherProject?: string,
 ): string {
-  const name = SCOPE_LABEL[scope](tool).toUpperCase();
-  if (scope === "other" && otherProject !== undefined) {
-    const loads = kind === "hook" ? "run" : "load";
-    return `${name} › ${projectName(otherProject, inv)} — ${tilde(otherProject, inv.homeDir)} · its ${NOUN[kind]} ${loads} there, not here`;
-  }
-  return `${name} — ${sentence(scope, tool, kind, inv, project)}`;
+  return `${SCOPE_LABEL[scope](tool).toUpperCase()} — ${sentence(scope, tool, kind, inv, project)}`;
 }
 
 /**

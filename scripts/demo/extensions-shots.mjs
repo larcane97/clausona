@@ -47,25 +47,29 @@ const steps = (onePane) => {
   const back = onePane ? ["Left"] : [];
   const intoTable = onePane ? [] : ["Right"];
   return [
-    ["01-loaded", [], "Loaded here\\s+\\d+"],
+    // The project row on top names the project everything is seen from.
+    ["01-loaded", [], "▾ app \\(here\\)[\\s\\S]*Loaded\\s+\\d+"],
     // The project's own skills: its eli5 is hidden by the Global one.
     ["02a-project", ["Down", ...open], "hidden by Global copy"],
     ["02-global", [...back, "Down", ...open], "GLOBAL — "],
-    // Past Cloud, Plugins and Other projects to Not used in 90 days, the last scope.
-    ["03-unused", [...back, "Down", "Down", "Down", "Down", ...open], "NOT USED IN 90 DAYS — "],
+    // Past Cloud and Plugins to Not used in 90 days, the last scope.
+    ["03-unused", [...back, "Down", "Down", "Down", ...open], "NOT USED IN 90 DAYS — "],
     // db-migrate, the never-used project skill, is the first row.
     ["04-details", [...intoTable, "Enter"], "PROJECT › db-migrate"],
-    ["05-codex", ["Escape", "Escape", "Tab", ...open], "LOADED HERE — what Codex"],
-    ["06-claude-mcp", ["Tab", "Type 2", ...open], "LOADED HERE — what Claude Code loads[\\s\\S]*docs-search"],
+    ["05-codex", ["Escape", "Escape", "Tab", ...open], "LOADED — what Codex"],
+    ["06-claude-mcp", ["Tab", "Type 2", ...open], "LOADED — what Claude Code loads[\\s\\S]*docs-search"],
     // github, the second row: off in the work account here.
     ["07-mcp-details", [...intoTable, "Down", "Enter"], "GLOBAL › github"],
     ["08-matrix", ["Escape", "Type m"], "SERVER"],
-    ["09-hooks", ["Escape", "Type 3", ...open], "LOADED HERE — what Claude Code runs"],
-    // Past Project, Global and Plugins to Other projects, the last scope, then web, its one row.
-    ["10-other-projects", [...back, "Down", "Down", "Down", "Down", "Right", "Enter"], "OTHER PROJECTS › web"],
+    ["09-hooks", ["Escape", "Type 3", ...open], "LOADED — what Claude Code runs"],
+    // The project list, in the scope list's place: app first, then web, then No project.
+    ["10-projects", [...back, "Type p"], "PROJECT\\s+hooks"],
+    // web picked: every scope is seen from it, back on Loaded with the scope list focused.
+    ["10b-web", ["Down", "Enter"], "▾ web"],
     // 1 for Skills: the search is in the table on screen, and Hooks has no eli.
-    ["11-search", ["Escape", "Escape", "Type 1", "Type /", "Type eli", "Enter"], "(?m)\\Weli *$"],
-    ["12-picker", ["Escape", "Type p"], "Show the inventory as seen from:"],
+    ["11-search", ["Type 1", "Type /", "Type eli", "Enter"], "(?m)\\Weli *$"],
+    // The list again, seen from web: web first, and app still (here).
+    ["12-projects-from-web", ["Escape", "Type p"], "PROJECT\\s+skills[\\s\\S]*web[\\s\\S]*app \\(here\\)"],
   ];
 };
 
@@ -105,7 +109,7 @@ for (const { columns, rows } of SIZES) {
     "Down",
     "Down",
     "Enter",
-    "Wait+Screen@60s /Loaded here\\s+\\d+/",
+    "Wait+Screen@60s /Loaded\\s+\\d+/",
     "Sleep 500ms",
     "Show",
   ];

@@ -295,8 +295,8 @@ describe("fromLabel and scopeSentence", () => {
       "CLOUD — skills on your claude.ai accounts, different per account",
     );
     expect(scopeSentence("project", "claude", "skill", inv, undefined)).toBe("PROJECT — no project · pick one with p");
-    expect(scopeSentence("other", "claude", "skill", inv, app, web)).toMatch(
-      /^OTHER PROJECTS › web — ~[\\/]repos[\\/]web/,
+    expect(scopeSentence("loaded", "claude", "skill", inv, web)).toMatch(
+      /^LOADED — what Claude Code loads in ~[\\/]repos[\\/]web, in at least one account$/,
     );
     expect(scopeSentence("parents", "claude", "mcp", inv, app)).toBe(
       "PARENT FOLDERS — .mcp.json in ~ · loads here too",
