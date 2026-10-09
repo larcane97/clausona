@@ -129,6 +129,29 @@ describe("skills ls", () => {
     ]);
   });
 
+  it("counts plugins under --scope plugins", async () => {
+    const { h, app } = seed();
+    const kit = h.path(".claude/plugins/cache/m/kit/1.0.0");
+    const sp = h.path(".claude/plugins/cache/m/sp/1.0.0");
+    h.write(".claude/plugins/installed_plugins.json", {
+      plugins: { "kit@m": [{ installPath: kit }], "sp@m": [{ installPath: sp }] },
+    });
+    h.write(".claude/settings.json", { enabledPlugins: { "kit@m": true, "sp@m": true } });
+    h.skill(".claude/plugins/cache/m/kit/1.0.0/skills", "kit-a");
+    h.skill(".claude/plugins/cache/m/kit/1.0.0/skills", "kit-b");
+    h.skill(".claude/plugins/cache/m/sp/1.0.0/skills", "sp-skill");
+    h.write(".claude/plugins/cache/m/sp/1.0.0/hooks/hooks.json", {
+      hooks: { SessionStart: [{ hooks: [{ type: "command", command: "sp-start" }] }] },
+    });
+    const skills = await run(h, app, "skills", ["ls", "--scope", "plugins"]);
+    expect(firstLine(skills)).toMatch(/^2 plugins · Plugins · project ~/);
+    expect(skills).toMatch(/^kit@m\s+claude\s+kit\s/m);
+    expect(firstLine(await run(h, app, "hooks", ["ls", "--scope", "plugins"]))).toMatch(/^1 plugin · Plugins · /);
+    expect(await run(h, app, "mcp", ["ls", "--scope", "plugins"])).toMatch(
+      /^0 plugins · Plugins · .+\n\nNo plugin brings MCP servers\.$/,
+    );
+  });
+
   it("says why there is nothing to list", async () => {
     const { h, app } = seed();
     expect(await run(h, app, "hooks", ["ls"])).toMatch(
@@ -295,31 +318,43 @@ describe("ls --json", () => {
 });
 
 describe("show", () => {
-  it("refuses a name several items have, listing them, with exit code 2", async () => {
+  it("refuses a name several loaded items have, listing them, with exit code 2", async () => {
     const { h, app } = seed();
+    // Claude's Global eli5 and Codex's both load here; app's own is hidden, so it is not asked about.
     const error = await failure(run(h, app, "skills", ["show", "eli5"]));
     expect(error.code).toBe(2);
     // Text output: the candidates are in the message, for stderr, and nothing goes to stdout.
     expect(error.stdout).toBeUndefined();
     const lines = error.message.split("\n");
-    expect(lines[0]).toBe("3 skills are named 'eli5':");
-    expect(lines.filter((line) => line.includes("--id 'skill:"))).toHaveLength(3);
+    expect(lines[0]).toBe("2 skills are named 'eli5':");
+    expect(lines.filter((line) => line.includes("--id 'skill:"))).toHaveLength(2);
     expect(lines.at(-1)?.trim()).toBe("Pick one with --tool, --scope or --id <id>.");
     const json = await failure(run(h, app, "skills", ["show", "eli5", "--json"]));
     expect(json.code).toBe(2);
     const parsed = JSON.parse(json.stdout ?? "");
     expect(parsed.error).toBe("ambiguous");
-    expect(parsed.candidates).toHaveLength(3);
-    expect(parsed.candidates).toContainEqual({
-      id: expect.stringMatching(/^skill:claude:project:/),
-      tool: "claude",
-      scope: "project",
-      project: app,
-      account: null,
-    });
-    for (const candidate of parsed.candidates) {
-      expect(Object.keys(candidate)).toEqual(["id", "tool", "scope", "project", "account"]);
-    }
+    expect(parsed.candidates).toEqual([
+      { id: "skill:claude:global:-:eli5", tool: "claude", scope: "global", project: null, account: null },
+      { id: "skill:codex:global:agents:eli5", tool: "codex", scope: "global", project: null, account: null },
+    ]);
+  });
+
+  it("looks in what loads here first, then this project and global, then other projects", async () => {
+    const { h, app } = seed();
+    h.skill("repos/web/.claude/skills", "eli5");
+    // Global, app and web each have one: the Global one is what loads here.
+    expect(firstLine(await run(h, app, "skills", ["show", "eli5", "--tool", "claude"]))).toBe("GLOBAL › eli5");
+    // Nothing here has web-only: it is found in the other projects.
+    const webOnly = await run(h, app, "skills", ["show", "web-only"]);
+    expect(firstLine(webOnly)).toBe("OTHER PROJECTS › web-only");
+    // Not loaded, but this project's own: found before web's.
+    h.write("repos/app/.claude/settings.local.json", { skillOverrides: { "deploy-check": "off" } });
+    h.skill("repos/web/.claude/skills", "deploy-check");
+    expect(firstLine(await run(h, app, "skills", ["show", "deploy-check"]))).toBe("PROJECT › deploy-check");
+    // The first tier with the name decides: Codex's web-only loads here, so web's is not asked about.
+    h.skill(".agents/skills", "web-only");
+    const codexFirst = await run(h, app, "skills", ["show", "web-only", "--json"]);
+    expect(JSON.parse(codexFirst)).toMatchObject({ tool: "codex", scope: "global", name: "web-only" });
   });
 
   it("shows one copy picked with --tool and --scope, or with --id", async () => {
