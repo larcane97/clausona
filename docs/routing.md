@@ -40,11 +40,12 @@ clausona then goes through four stages and stops at the first one that finds som
    you change it. The route's strategy picks one of them.
 2. If nobody in the pool is under `maxUsage`, the fallback. clausona takes the first account in
    `fallback` that is.
-3. If there is still nobody, the reserve. Any account of the route, pool or fallback, can be
-   picked while its usage is under `reserveUsage` (95% unless you change it), and the one with
-   the lowest usage wins. This is the last stretch that the 80% cut held back.
-4. Otherwise nobody is picked. clausona lists the route's accounts, each with when it resets or
-   why it was skipped, and exits with code 75. Nothing is launched.
+3. If there is still nobody, the account with the most left. Any account of the route, pool or
+   fallback, can be picked while its usage is under 100%, and the one with the lowest usage wins,
+   at 90% or at 99%.
+4. Otherwise nobody is picked, because every account is at 100% or was skipped. clausona lists
+   the route's accounts, each with when it resets or why it was skipped, and exits with code 75.
+   Nothing is launched.
 
 An account that is signed out, or whose sign-in has expired, is skipped at every stage. So is one
 whose quota could not be read. `clausona route explain` gives the reason for each.
@@ -118,7 +119,7 @@ Route names get the same check.
 ## Managing routes
 
 ```bash
-clausona route add main                                     # every Claude Code account, round-robin, 80% / 95%
+clausona route add main                                     # every Claude Code account, round-robin, skip at 80%
 clausona route add any --tool all                           # Claude Code and Codex accounts in one route
 clausona route add work --from '*@example.com' --exclude '*-share'
 clausona route add solo --from work --fallback personal --strategy headroom
@@ -165,15 +166,15 @@ every account in the route with its usage now.
 $ clausona route add work --from '*@work.example' --exclude '*-share'
   ✔ Created route work
 
-  ╭─ work ──────────────────────────────────────╮
-  │                                             │
-  │  Tool       claude                          │
-  │  Strategy   round-robin (next in turn)      │
-  │  Limits     skip at 80%, reserve up to 95%  │
-  │  Accounts   *@work.example except *-share   │
-  │  Fallback   none                            │
-  │                                             │
-  ╰─────────────────────────────────────────────╯
+  ╭─ work ───────────────────────────────────────────────────────────╮
+  │                                                                  │
+  │  Tool       claude                                               │
+  │  Strategy   round-robin (next in turn)                           │
+  │  Limits     skip at 80%; if all are, the one with the most left  │
+  │  Accounts   *@work.example except *-share                        │
+  │  Fallback   none                                                 │
+  │                                                                  │
+  ╰──────────────────────────────────────────────────────────────────╯
 
     ACCOUNT            5H        7D       LAST PICKED
     ─────────────────────────────────────────────────
@@ -200,25 +201,25 @@ and it changes nothing.
 ```
 $ clausona route list
 
-    ROUTE  TOOL            STRATEGY     LIMITS     FREE NOW  NEXT
-    ────────────────────────────────────────────────────────────────────────────────
-    any    claude + codex  round-robin  80% / 95%  5 of 8    codex:team
-    busy   claude          round-robin  80% / 85%  0 of 2    none, soonest in 1h 17m
-    main   claude          round-robin  80% / 95%  2 of 5    claude:work
-    solo   claude          headroom     80% / 95%  2 of 2    claude:work
+    ROUTE  TOOL            STRATEGY     SKIP AT  FREE NOW  NEXT
+    ──────────────────────────────────────────────────────────────────────────────
+    any    claude + codex  round-robin  80%      5 of 8    codex:team
+    busy   claude          round-robin  80%      0 of 2    none, soonest in 1h 15m
+    main   claude          round-robin  80%      2 of 5    claude:work
+    solo   claude          headroom     80%      2 of 2    claude:work
 ```
 
-`LIMITS` is the cut and the reserve. `FREE NOW` counts the accounts under the cut right now, out
-of every account in the route. One that is signed out still counts as a member, just not as free.
-`NEXT` is the account a run would get now. When nobody can be picked it says `none`, and when the
-first account frees up.
+`SKIP AT` is the cut. `FREE NOW` counts the accounts under the cut right now, out of every
+account in the route. One that is signed out still counts as a member, just not as free. `NEXT`
+is the account a run would get now. When nobody can be picked it says `none`, and when the first
+account frees up.
 
 `route list` records nothing. With `--no-quota` it reads no quota at all, and `FREE NOW` and
 `NEXT` show `—`. They show the same dash when no reading could be had for any account of a route,
 which is what happens offline.
 
 On a narrow terminal the table drops columns rather than wrap a row: `TOOL` goes first, then
-`LIMITS`, then `STRATEGY`.
+`SKIP AT`, then `STRATEGY`.
 
 ### Changing one
 
@@ -249,8 +250,7 @@ Routes live in `~/.clausona/routes.json`:
       "from": ["*"],
       "exclude": ["personal"],
       "strategy": "round-robin",
-      "maxUsage": 80,
-      "reserveUsage": 95
+      "maxUsage": 80
     }
   }
 }
@@ -263,7 +263,6 @@ Routes live in `~/.clausona/routes.json`:
 | `exclude` | `[]` | a list of patterns |
 | `strategy` | `"round-robin"` | `"round-robin"`, `"headroom"` or `"expiring"` |
 | `maxUsage` | `80` | a number from 1 to 100 |
-| `reserveUsage` | `95`, or `maxUsage` if that is higher | a number from `maxUsage` to 100 |
 | `fallback` | `[]` | a list of patterns |
 
 Any other key in a route is refused.
@@ -323,7 +322,7 @@ to `clausona route edit`.
 | Accounts | A row for every account (`*`), then a row per subscription account of the tool (of both, for `claude + codex`) with its 5H and 7D usage. `space` ticks and unticks |
 | Patterns | More `from` and `exclude` patterns, such as `team-*` or `*@example.com` |
 | Strategy | `round-robin`, `headroom` or `expiring`, chosen with `←` `→` |
-| Limits | `skip at` is the cut and `reserve up to` the reserve. Left blank, the default applies |
+| Limits | `skip at` is the cut. Left blank, the default applies. The line under it says what is picked when every account is at the cut |
 | Fallback | Accounts tried in order when nobody in the pool is under the cut. `a` adds one, `x` removes it, `[` and `]` move it |
 
 The ticks become the route's lists. With the `every account (*)` row ticked, `from` is `*`, and
@@ -366,9 +365,8 @@ You can name the tool too, as in `clausona run claude --route main`. A route sav
 tool is then refused. On an `all` route the tool word narrows the run instead (see
 [Running on an all route](#running-on-an-all-route)).
 
-`--strategy`, `--max-usage`, `--reserve-usage` and `--fallback` replace their field for one run.
-So does `--from` next to `--route`. If `--max-usage` goes above the route's reserve, the reserve
-moves up with it for that run.
+`--strategy`, `--max-usage` and `--fallback` replace their field for one run. So does `--from`
+next to `--route`.
 
 `--exclude` adds to the route's own exclude list instead of replacing it. On a route that
 excludes `*-share`, `--exclude old` leaves out `old` and the share accounts both. None of these
@@ -476,18 +474,19 @@ exits 1:
 $ clausona run --route busy -- -p "run the tests"
   ✘ No account in route busy is free right now.
 
-    ACCOUNT           5H        7D       FREE AGAIN
-    ──────────────────────────────────────────────────────────
-    claude:personal  96% 1h    81% 2d    in 1h 15m (5H resets)   soonest
-    claude:side      88% 1h    40% 3d    in 1h 57m (5H resets)
+    ACCOUNT            5H         7D       FREE AGAIN
+    ────────────────────────────────────────────────────────────
+    claude:personal  100% 1h     81% 2d    in 1h 15m (5H resets)   soonest
+    claude:side      100% 1h     40% 3d    in 1h 57m (5H resets)
 
     Run again after 1h 15m, or see everything with: clausona route explain busy
 ```
 
-The run exits with code 75 and launches nothing. `FREE AGAIN` is when the account drops back
-under the route's reserve, which on `busy` is 85%. That takes every window at or above the
-reserve to reset, and the column says which one is last. An account that is skipped, such as a
-signed-out one, is listed under the others with the reason.
+The run exits with code 75 and launches nothing. That happens only when every account is at
+100% of a window or is skipped. `FREE AGAIN` is when the account can run again, once every
+window at 100% has reset, and the column says which one is last. An account that is skipped,
+such as a signed-out one, is listed under the others with the reason. When every account is
+skipped, no reset will help, and the last line says to look at those reasons instead.
 
 On an `all` route narrowed to one tool, the message is about that tool's accounts only, as in
 "No claude account in route any is free right now."
@@ -497,15 +496,15 @@ On an `all` route narrowed to one tool, the message is about that tool's account
 ```
 $ clausona route explain main
 
-  ╭─ main ──────────────────────────────────────╮
-  │                                             │
-  │  Tool       claude                          │
-  │  Strategy   round-robin (next in turn)      │
-  │  Limits     skip at 80%, reserve up to 95%  │
-  │  Accounts   * except *-share                │
-  │  Fallback   none                            │
-  │                                             │
-  ╰─────────────────────────────────────────────╯
+  ╭─ main ───────────────────────────────────────────────────────────╮
+  │                                                                  │
+  │  Tool       claude                                               │
+  │  Strategy   round-robin (next in turn)                           │
+  │  Limits     skip at 80%; if all are, the one with the most left  │
+  │  Accounts   * except *-share                                     │
+  │  Fallback   none                                                 │
+  │                                                                  │
+  ╰──────────────────────────────────────────────────────────────────╯
 
     ACCOUNT            5H        7D       LAST PICKED
     ─────────────────────────────────────────────────
@@ -535,9 +534,8 @@ It takes the same field options as a run. `--resume` ranks the route as a resume
 `--tool` narrows an `all` route to one tool's accounts. A route that is not saved is ranked with
 `clausona route explain --tool claude --from '<patterns>'`.
 
-Fallback members are marked `(fallback)`. A pick at the fallback or reserve stage says so, in the
-table and in the run's note. Here `solo`'s cut is lowered for one look, so its only pool member
-is over it:
+Fallback members are marked `(fallback)`. A pick from the fallback says so, in the table and in
+the run's note. Here `solo`'s cut is lowered for one look, so its only pool member is over it:
 
 ```
 $ clausona route explain solo --max-usage 30
@@ -551,6 +549,24 @@ $ clausona route explain solo --max-usage 30
 ```
 $ clausona run --route solo --max-usage 30 -- -p "run the tests"
   ▸ claude:team  route solo, fallback, 22% of 7D used
+```
+
+When every account is at the cut or over it, the one with the most left is picked, and that says
+so too:
+
+```
+$ clausona route explain main
+  …
+    ACCOUNT            5H        7D       LAST PICKED
+    ─────────────────────────────────────────────────
+  ▸ claude:team       85% 1h    22% 3d    never        picked: most room left (all over 80%)
+    claude:side       88% 1h    40% 3d                 over 80%
+    claude:work       12% 3h    91% 4d                 over 80%
+```
+
+```
+$ clausona run --route main -- -p "run the tests"
+  ▸ claude:team  route main, most room left (all over 80%), 85% of 5H used
 ```
 
 ## For scripts and agents
@@ -596,7 +612,8 @@ Without a terminal an unknown `--route` creates nothing.
 }
 ```
 
-`stage` is `pool`, `fallback` or `reserve`. `route` is null for an unsaved route.
+`stage` is `pool`, `fallback` or `reserve`. `reserve` is the third stage: every account was at the
+cut or over it, and the one with the most left was picked. `route` is null for an unsaved route.
 
 When nobody can be picked, the JSON is still printed on stdout, and the exit code is 75:
 
@@ -619,7 +636,7 @@ When nobody can be picked, the JSON is still printed on stdout, and the exit cod
 |---|---|
 | `route` | The route's name, or null for an unsaved route |
 | `resolvedBy` | `"flag"` for a saved route, `"inline"` for one made from `--from` |
-| `settings` | The route with every default filled in: `tool`, `from`, `exclude`, `strategy`, `maxUsage`, `reserveUsage`, `fallback`. `tool` is `"claude"`, `"codex"` or `"all"` |
+| `settings` | The route with every default filled in: `tool`, `from`, `exclude`, `strategy`, `maxUsage`, `fallback`. `tool` is `"claude"`, `"codex"` or `"all"` |
 | `outcome` | `{ "kind": "picked", "id", "stage", "reason" }`, or `{ "kind": "none" }` plus `soonest` (`{ "id", "at" }`) when a reset time is known |
 | `members` | One entry per account, below |
 | `excluded` | Accounts the exclude list took out, as `{ "profile", "matchedBy" }` |
@@ -638,8 +655,8 @@ Each entry in `members`:
 | `fiveHour`, `sevenDay` | `{ "usedPercent", "resetsAt" }` with `resetsAt` an ISO time or null, or null |
 | `lastPickedAt` | The ISO time of the last pick, or null |
 
-An account picked at the reserve stage has the status `picked`, even though its usage is over
-`maxUsage`. Percentages are not rounded in JSON. Fields are only ever added.
+An account picked at the `reserve` stage has the status `picked`, even though its usage is at or
+over `maxUsage`. Percentages are not rounded in JSON. Fields are only ever added.
 
 `route list --json` gives `{ "routes": [...] }`. Each entry has `name`, `route` (the settings
 with defaults, where `tool` can be `"all"` too), `members` and `fallbackMembers` (profile ids,

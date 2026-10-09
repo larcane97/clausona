@@ -167,9 +167,9 @@ The run says on stderr which account it got:
 ```
 
 By default an account at 80% or more of its 5-hour or weekly limit is used only when no other
-account in the route is under 80%, and one at 95% or more is never picked. When every account is
-that full, clausona says when each one resets and exits with code 75 instead of starting a
-session.
+account in the route is under 80%. Then the one with the most left is picked, even at 99%. Only
+when every account is at 100% does clausona say when each one resets and exit with code 75
+instead of starting a session.
 
 A route is for Claude Code unless you say otherwise. `--tool codex` makes a Codex route, and
 `--tool all` makes one that takes the accounts of both tools. `clausona route` on its own opens

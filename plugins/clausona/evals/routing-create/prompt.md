@@ -20,4 +20,4 @@ $ clausona list --json   (abridged)
  {"name":"claude:glm","tool":"claude","kind":"api","model":"z-ai/glm-5.3"}]
 
 $ clausona route list
-No routes yet. Create one: clausona route add <name>   (every subscription account, round-robin, max 80%, reserve 95%)
+No routes yet. Create one: clausona route add <name>   (every subscription account, round-robin, max 80%)

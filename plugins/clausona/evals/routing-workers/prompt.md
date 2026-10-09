@@ -16,7 +16,7 @@ Do not run anything. Here is what the commands you need would print. Tell me, st
 with the exact commands, what you will do, including what happens if no account is free.
 
 $ clausona route list
-  main  claude · round-robin · max 80% · reserve 95%
+  main  claude · round-robin · max 80%
         from * · 3 member(s)
 
 $ clausona route explain main --json   (abridged)

@@ -24,8 +24,9 @@ the help.) A user who would rather look through routes on that screen can run it
 - clausona stops at the first stage that finds someone:
   1. **pool**: `from` members under `maxUsage` (default 80), chosen by the strategy.
   2. **fallback**: the first `fallback` member, in listed order, under `maxUsage`.
-  3. **reserve**: any member of the route under `reserveUsage` (default 95), lowest usage first.
-  4. **nobody**: nothing is launched, exit code **75**.
+  3. **reserve**: every member is at `maxUsage` or over it, so the one with the most left
+     (lowest usage) is taken, pool or fallback, at 90% or 99% alike.
+  4. **nobody**: every member is at 100% or skipped. Nothing is launched, exit code **75**.
 - Strategies: `round-robin` (default; the account picked longest ago, a never-picked one
   first), `headroom` (lowest usage), `expiring` (lowest usage among accounts whose weekly limit
   resets within 24 hours; with none, as `headroom`).
@@ -78,8 +79,8 @@ then prints the route it made. So the asking is yours to do, before you write:
    yourself, and do not use `route edit`: it opens an editor for a person.
 
 ```bash
-clausona route add <name> [--tool claude|codex|all] --from '<patterns>' [--exclude '<patterns>'] [--fallback '<patterns>'] [--strategy <s>] [--max-usage <n>] [--reserve-usage <n>]
-clausona route set <name> [--from …] [--exclude …] [--fallback …] [--strategy …] [--max-usage …] [--reserve-usage …] [--add …] [--drop …] [--no-fallback]
+clausona route add <name> [--tool claude|codex|all] --from '<patterns>' [--exclude '<patterns>'] [--fallback '<patterns>'] [--strategy <s>] [--max-usage <n>]
+clausona route set <name> [--from …] [--exclude …] [--fallback …] [--strategy …] [--max-usage …] [--add …] [--drop …] [--no-fallback]
 clausona route rename <old> <new>
 clausona route remove <name>
 ```
@@ -113,10 +114,9 @@ clausona run claude --from '<patterns>' -- -p "<prompt>"    # an unsaved route
 clausona run --route <name> --strategy headroom -- -p "…"   # change a field for this run only
 ```
 
-- Routing options (`--route`, `--from`, `--exclude`, `--strategy`, `--max-usage`,
-  `--reserve-usage`, `--fallback`) go before the tool's own arguments. A `--` ends them, and
-  everything after it goes to the tool untouched (`--model`, `--permission-mode`,
-  `--output-format json`, …).
+- Routing options (`--route`, `--from`, `--exclude`, `--strategy`, `--max-usage`, `--fallback`)
+  go before the tool's own arguments. A `--` ends them, and everything after it goes to the tool
+  untouched (`--model`, `--permission-mode`, `--output-format json`, …).
 - The field options need `--route` or `--from`. On their own they are refused with exit 1.
 - On an `all` route (`settings.tool` is `all`), put the tool word before `--route` whenever you
   pass arguments: `clausona run claude --route <name> -- -p "…"`. Only that tool's accounts are
@@ -152,8 +152,8 @@ the user.
 - Each pick records the turn, so the next pick takes the next account under the cut. Never start
   every worker on one `pick` result, and never on ids copied from `explain`, which records nothing.
 - With fewer accounts under the cut than workers, later picks come back to an account already in
-  use, and a pick at the reserve stage takes the lowest usage, not the next turn. Tell the user
-  which workers share an account.
+  use. Once every account is over the cut, a pick (stage `reserve`) takes the one with the most
+  left, not the next turn. Tell the user which workers share an account.
 - One `clausona run --route main -- -p …` per worker also takes its own turn. Use `pick` when you
   want the id before you start.
 - On an `all` route a pick can be an account of either tool. Pick with `--tool claude` (or
@@ -166,13 +166,15 @@ the user.
 
 ## When nobody is free (exit 75)
 
-Nothing was launched. The message on stderr lists each account with its usage and when it
-resets, and marks the soonest (with `--json`, `soonest.at`). Tell the user which account frees up
-first, and when. Workers already started keep running.
+Nothing was launched. Every account of the route is at 100% of a window, or was skipped. The
+message on stderr lists each account with its usage and when it resets, or why it was skipped,
+and marks the soonest reset (with `--json`, `soonest.at`). Tell the user which account frees up
+first, and when, and which skipped ones `clausona login <profile>` would bring back. Workers
+already started keep running.
 
-Do not raise `--max-usage` or `--reserve-usage`, or run an account by name, to get past the
-limit unless the user says so. If they do, name the risk: the session may stop midway when that
-account hits its limit.
+A higher `--max-usage` does not help: past the cut, any account under 100% is already taken. Do
+not run an account by name to get past the limit unless the user says so. If they do, name the
+risk: that account is at its limit, so the session may stop at once.
 
 ## When a run stopped on a usage limit
 
