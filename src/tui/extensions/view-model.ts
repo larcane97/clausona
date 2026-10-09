@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { duplicateGroups, marksOf, usageOf } from "../../extensions/inventory.js";
+import { duplicateGroups, folderKey, marksOf, usageOf } from "../../extensions/inventory.js";
 import type { EffectiveState, Extension, Inventory, Mark } from "../../extensions/model.js";
 import {
   accountStates,
@@ -11,7 +11,7 @@ import {
   viewFrom,
   whereLabel,
 } from "../../extensions/present.js";
-import { pathKey, samePath } from "../../extensions/read.js";
+import { samePath } from "../../extensions/read.js";
 import { pluginState, relevantIn, stateOf } from "../../extensions/state.js";
 import type { ToolName } from "../../types.js";
 
@@ -334,9 +334,7 @@ export function detailOf(inv: Inventory, row: ItemRow, project: string | undefin
     const hashes = new Set((group ?? []).map((i) => inv.hashes[i.id]).filter((h): h is string => h !== undefined));
     if (group && hashes.size > 0) {
       // A folder counts once, however many links lead to it; a broken link holds no copy.
-      const folders = new Set(
-        group.filter((i) => !i.link?.broken).map((i) => pathKey(i.link ? i.link.target : i.location.file)),
-      );
+      const folders = new Set(group.filter((i) => !i.link?.broken).map(folderKey));
       const copies = `${folders.size} ${folders.size === 1 ? "copy" : "copies"}`;
       lines.push({
         label: "Copies",

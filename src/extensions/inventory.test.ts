@@ -209,6 +209,32 @@ describe("loadInventory", () => {
     expect(linked.filter((i) => inv.hashes[i.id] !== undefined)).toEqual([]);
   });
 
+  it("counts the skills of a whole skills dir that is a link as the folders it leads to, not second copies", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    h.codex("personal", ".codex", "");
+    h.skill(".agents/skills", "eli5");
+    h.skill(".agents/skills", "plannotator");
+    // The natural way to end the drift: one folder of skills, which Claude Code reads through a link.
+    h.link(".agents/skills", ".claude/skills");
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: h.home,
+      managedSettings: h.path("none.json"),
+    });
+    const eli5 = inv.items.filter((i) => i.name === "eli5");
+    expect(eli5.map((i) => i.location.tool).sort()).toEqual(["claude", "codex"]);
+    // Each copy keeps the path its tool reads it by.
+    expect(eli5.map((i) => i.location.file).sort()).toEqual(
+      [h.path(".agents/skills/eli5"), h.path(".claude/skills/eli5")].sort(),
+    );
+    expect(duplicateGroups(inv.items)).toEqual([]);
+    expect(inv.hashes).toEqual({});
+    for (const item of eli5) expect(marksOf(inv, item, Date.now())).not.toContain("differs");
+  });
+
   it("marks a skill link whose target is gone broken-link and cleanup, and does not hash it", async () => {
     const { h, app } = seed();
     h.skill(".agents/skills", "ghost");

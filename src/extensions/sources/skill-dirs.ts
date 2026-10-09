@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import type { Collector, Extension, Location } from "../model.js";
-import { entryInfo, IO_LIMIT, listNames, mapLimit, parseFrontmatter, readText } from "../read.js";
+import { entryInfo, IO_LIMIT, listNames, mapLimit, parseFrontmatter, readText, realPath } from "../read.js";
 
 export type SkillLocation = Omit<Location, "file">;
 
@@ -27,6 +27,9 @@ export async function readSkillFolders(
     if (info.kind !== "dir" && !broken) return undefined;
     const text = broken ? undefined : await readText(path.join(folder, "SKILL.md"), out.warnings);
     if (!broken && text === undefined) return undefined;
+    // A skills dir that is itself a link leaves no link on the folders inside it, so only the
+    // real path tells that `~/.claude/skills/x` and `~/.agents/skills/x` are one folder.
+    const realFolder = broken ? undefined : await realPath(folder).catch(() => undefined);
     const front = text === undefined ? {} : parseFrontmatter(text);
     const name = `${options.prefix ?? ""}${entry}`;
     const item: Extension = {
@@ -36,6 +39,7 @@ export async function readSkillFolders(
       ...(front.description ? { description: front.description } : {}),
       location: { ...location, file: folder },
       ...(info.link ? { link: info.link } : {}),
+      ...(realFolder !== undefined ? { realFolder } : {}),
       ...(info.createdAt !== undefined ? { createdAt: info.createdAt } : {}),
       usageKeys: options.usageKeys ? options.usageKeys(name) : [name],
     };

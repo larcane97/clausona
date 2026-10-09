@@ -153,9 +153,12 @@ export function usageOf(inv: Inventory, items: Extension[]): Usage | undefined {
   return merged;
 }
 
-/** The folder a skill's files are in: a working link's target, else the skill's own folder. */
-function realFolder(item: Extension): string {
-  return item.link && !item.link.broken ? item.link.target : item.location.file;
+/**
+ * The folder a skill's files are in, as one key for every path that leads to it: its real path
+ * as read, else a working link's target, else the skill's own folder.
+ */
+export function folderKey(item: Extension): string {
+  return pathKey(item.realFolder ?? (item.link && !item.link.broken ? item.link.target : item.location.file));
 }
 
 /**
@@ -174,7 +177,7 @@ export function duplicateGroups(items: Extension[]): Extension[][] {
     byName.set(item.name, group);
   }
   // pathKey is what samePath compares, so a set of keys counts the folders samePath tells apart.
-  return [...byName.values()].filter((group) => new Set(group.map((item) => pathKey(realFolder(item)))).size > 1);
+  return [...byName.values()].filter((group) => new Set(group.map(folderKey)).size > 1);
 }
 
 /**
