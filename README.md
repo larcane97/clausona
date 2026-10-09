@@ -184,6 +184,24 @@ Code shows "Detected a custom API key in your environment" with the cursor on
 The model, where the key lives, per-profile settings, changing the endpoint, and what
 clausona hides or clears from the environment: **[docs/api-profiles.md](docs/api-profiles.md)**.
 
+## Extensions
+
+`csn skills`, `csn mcp` and `csn hooks` list the skills, MCP servers and hooks that Claude Code
+and Codex load, for every account, seen from one project. The dashboard's Extensions screen
+shows the same. Both only read files, and secret values are never shown.
+
+```bash
+csn skills ls --scope project                 # the skills this project defines
+csn skills ls --scope unused --tool claude    # Claude skills not used in 90 days
+```
+
+`ls` lists one scope, by default what loads in this project; `show <name>` tells everything
+about one item, such as which accounts have an MCP server and whether it is on here. Add
+`--json` for scripts and coding agents.
+
+Scopes, tags, every option, the JSON fields and recipes for agents:
+**[docs/extensions.md](docs/extensions.md)**.
+
 ## Commands
 
 `<profile>` accepts either a bare name (e.g. `work`) when it is unique across all tools, or a `tool:name` prefix (e.g. `claude:work`, `codex:work`) when disambiguation is needed.
@@ -207,6 +225,9 @@ clausona hides or clears from the environment: **[docs/api-profiles.md](docs/api
 | `clausona config <profile> --key \| --key-from <source>`            | Change an API profile's key, or where it is read from |
 | `clausona config <profile> --show [--json]`                         | Print a profile's settings (`--json` adds the catalog) |
 | `clausona doctor [--json]`                                          | Check profile health                                 |
+| `clausona skills ls\|show`                                          | Skills each project loads, by scope                  |
+| `clausona mcp ls\|show`                                             | MCP servers each project loads, by scope             |
+| `clausona hooks ls\|show`                                           | Hooks each project runs, by scope                    |
 | `clausona repair <profile>`                                         | Fix broken shared links                              |
 | `clausona login <profile>`                                          | Re-authenticate a profile                            |
 | `clausona update [--yes]`                                           | Update to the latest release (asks first; `--yes` skips) |

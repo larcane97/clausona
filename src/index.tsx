@@ -5,6 +5,7 @@ import { runCommand } from "./commands.js";
 import { spawnCommandSync } from "./core/process.js";
 import { trackUsage } from "./core/track-usage.js";
 import { createUpdater, type UpdateOffer } from "./core/update.js";
+import { ExitError } from "./extensions/exit-error.js";
 import { dropLauncherCompileCache } from "./installer.js";
 import { accent, ok, fail as xMark } from "./lib/cli-style.js";
 import { parseProfileRef } from "./lib/profile-ref.js";
@@ -120,10 +121,30 @@ async function main() {
     }
     writeCommandResult(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`  ${xMark} ${message}\n`);
-    process.exitCode = 1;
+    process.exitCode = writeCommandError(error);
   }
+}
+
+/**
+ * Prints why a command failed and returns the exit code. An ExitError carries its own code, and
+ * may carry an answer for stdout instead - the `--json` object for a name several items have -
+ * which then goes alone, so a script reading stdout gets JSON and stderr stays empty. Any other
+ * error is a message on stderr and exit code 1.
+ */
+export function writeCommandError(
+  error: unknown,
+  streams: { out: { write(chunk: string): unknown }; err: { write(chunk: string): unknown } } = {
+    out: process.stdout,
+    err: process.stderr,
+  },
+): number {
+  if (error instanceof ExitError && error.stdout !== undefined) {
+    writeCommandResult(error.stdout, streams.out);
+    return error.code;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  streams.err.write(`  ${xMark} ${message}\n`);
+  return error instanceof ExitError ? error.code : 1;
 }
 
 /**
