@@ -80,9 +80,9 @@ export function formAccounts(registry: Registry): FormAccount[] {
 /**
  * The form's lines besides its accounts, when nothing wraps: the chrome's header (5 with its
  * padding) and footer (5), the frame's borders and its other fields' lines (11, the strategy's
- * and the limits' descriptions among them), the every-account row, the Now line, and one more,
- * since ink redraws the whole screen once its output is as tall as the terminal. A question, the
- * saving note, the picker and each error take one or more besides.
+ * and the limits' descriptions among them, cut short rather than wrapped), the every-account
+ * row, the Now line, and one more, since ink redraws the whole screen once its output is as tall
+ * as the terminal. A question, the saving note, the picker and each error take one or more besides.
  */
 const FORM_LINES = 24;
 
@@ -537,7 +537,9 @@ export function RouteForm(props: RouteFormProps) {
           />
         </Line>
         <Line label="">
-          <Text color={color.muted}>{STRATEGY_TEXT[state.strategy]}</Text>
+          <Text color={color.muted} wrap="truncate-end">
+            {STRATEGY_TEXT[state.strategy]}
+          </Text>
         </Line>
         <Line {...line("max", "Limits")}>
           {subLabel("max", "skip at", 9)}
@@ -546,7 +548,9 @@ export function RouteForm(props: RouteFormProps) {
           <Text color={color.muted}>]%</Text>
         </Line>
         <Line label="">
-          <Text color={color.muted}>{limitsText(limits.maxUsage, state.strategy)}</Text>
+          <Text color={color.muted} wrap="truncate-end">
+            {limitsText(limits.maxUsage, state.strategy)}
+          </Text>
         </Line>
         <Line
           {...line("fallback", "Fallback")}

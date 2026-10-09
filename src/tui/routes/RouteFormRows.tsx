@@ -304,9 +304,11 @@ export function FallbackPicker({ ids, cursor, none }: { ids: string[]; cursor: n
         <Text color={color.secondary}>Add to fallback</Text>
       </Box>
       {id === undefined ? (
-        <Text color={color.muted}>
-          {none === "accounts" ? "there are no accounts to add" : "every account outside the pool is in it"}
-        </Text>
+        <Box flexShrink={1} minWidth={1}>
+          <Text color={color.muted} wrap="truncate-end">
+            {none === "accounts" ? "there are no accounts to add" : "every account outside the pool is in it"}
+          </Text>
+        </Box>
       ) : (
         <>
           <Box flexShrink={1}>

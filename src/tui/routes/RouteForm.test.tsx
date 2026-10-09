@@ -1045,6 +1045,30 @@ describe("RouteForm", () => {
       expect(more(text(instance), "↓")).toBe(40 - shownIds(text(instance)).length);
     });
 
+    // The limit's description wrapped below 75 columns and the strategy's below 67: a line the
+    // form's count leaves out, which made it as tall as the terminal again, redrawn whole.
+    it("cuts the strategy's and the limit's descriptions short in a narrow terminal, one line short of it still", async () => {
+      const ROWS = 34;
+      const below = (instance: Instance, label: string) => {
+        const all = lines(text(instance));
+        return inside(all[all.findIndex((line) => line.includes(label)) + 1] ?? "");
+      };
+      const { instance } = setup({ registry: MANY, rows: ROWS, columns: 70 });
+      await opened(instance);
+      expect(below(instance, "skip at")).toMatch(/^\s+under 80% in turn; if none, the one .*…$/);
+      expect(below(instance, "Strategy")).toMatch(/^\s+takes accounts in turn$/);
+      expect(lines(text(instance)).length).toBe(ROWS - 1);
+      for (const line of lines(text(instance))) expect(line.length).toBeLessThanOrEqual(70);
+
+      const narrow = setup({ registry: MANY, rows: ROWS, columns: 64 });
+      await opened(narrow.instance);
+      await tabTo(narrow.instance, "Strategy");
+      await press(narrow.instance, LEFT);
+      expect(below(narrow.instance, "Strategy")).toMatch(/^\s+uses weekly limits that reset .*…$/);
+      expect(below(narrow.instance, "skip at")).toMatch(/^\s+under 80% first; if none, .*…$/);
+      expect(lines(text(narrow.instance)).length).toBe(ROWS - 1);
+    });
+
     it("keeps three accounts on screen however short the terminal", async () => {
       const { instance } = setup({ registry: MANY, rows: 12, columns: 80 });
       await opened(instance);
