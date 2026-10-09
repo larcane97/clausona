@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { type Collector, emptyFacts } from "../model.js";
+import { samePath } from "../read.js";
 import { TestHome } from "../test-home.js";
 import { collectClaudeSettingsFacts, loadClaudeAccounts, loadClaudeContext } from "./claude-context.js";
 import { readClaudeSkills } from "./claude-skills.js";
@@ -82,6 +83,58 @@ describe("readClaudeSkills", () => {
     expect(byName["plugin:superpowers:brainstorming"]?.usageKeys).toEqual(["superpowers:brainstorming"]);
     expect(byName["plugin:superpowers:brainstorming"]?.location.accounts).toEqual(["claude:default"]);
     expect(new Set(out.items.map((i) => i.id)).size).toBe(out.items.length);
+  });
+
+  it("lists a command file whose link leads nowhere, and keys a namespaced command's use two ways", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    h.write(".claude/commands/review.md", "Review.");
+    h.link(h.path("gone", "lost.md"), ".claude/commands/lost.md");
+    h.link(h.path("gone", "old.md"), ".claude/commands/ops/old.md");
+    h.write(".claude/commands/ops/deploy.md", "---\ndescription: Deploy it\n---\nDeploy.");
+    // A link to nothing that is no .md file is no command.
+    h.link(h.path("gone", "notes"), ".claude/commands/notes");
+
+    const out = await inventoryOf(h, []);
+    const byId = (id: string) => {
+      const item = out.items.find((i) => i.id === id);
+      if (!item) throw new Error(`no ${id}`);
+      return item;
+    };
+    expect(out.items.map((i) => i.id).sort()).toEqual(
+      [
+        "skill:claude:global:-:command:lost",
+        "skill:claude:global:-:command:ops/deploy",
+        "skill:claude:global:-:command:ops/old",
+        "skill:claude:global:-:command:review",
+      ].sort(),
+    );
+    const lost = byId("skill:claude:global:-:command:lost");
+    expect(lost).toMatchObject({
+      kind: "skill",
+      name: "lost",
+      location: { tool: "claude", scope: "global" },
+      usageKeys: ["lost"],
+      summary: { type: "command" },
+    });
+    expect(lost.link?.broken).toBe(true);
+    expect(samePath(lost.link?.target, h.path("gone", "lost.md"))).toBe(true);
+    expect(samePath(lost.location.file, h.path(".claude", "commands", "lost.md"))).toBe(true);
+    expect(lost.createdAt).toBeTypeOf("number");
+    expect(lost.description).toBeUndefined();
+    expect(byId("skill:claude:global:-:command:ops/old")).toMatchObject({
+      name: "old",
+      summary: { type: "command", namespace: "ops" },
+      usageKeys: ["old", "ops:old"],
+      link: { broken: true },
+    });
+    const deploy = byId("skill:claude:global:-:command:ops/deploy");
+    expect(deploy.usageKeys).toEqual(["deploy", "ops:deploy"]);
+    expect(deploy.description).toBe("Deploy it");
+    expect(deploy.link).toBeUndefined();
+    expect(byId("skill:claude:global:-:command:review").usageKeys).toEqual(["review"]);
+    expect(out.warnings).toEqual([]);
   });
 
   it("lists a plugin's skills once per install, each with its own id", async () => {

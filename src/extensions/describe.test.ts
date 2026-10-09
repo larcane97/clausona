@@ -419,6 +419,44 @@ describe("detailsOf", () => {
       { label: "", text: "plan, review, SessionStart" },
     ]);
   });
+
+  it("says Codex ignores an untrusted project's .codex folder, where that folder switches the server", async () => {
+    const { inv, app, web } = await seed({
+      // app is trusted; web, which only Claude has recorded, is not.
+      more: (h, app) => {
+        h.write(
+          ".codex/config.toml",
+          [
+            `[projects.'${app}']`,
+            'trust_level = "trusted"',
+            "",
+            "[mcp_servers.docs]",
+            'command = "docs"',
+            "",
+            "[mcp_servers.exa]",
+            'command = "npx"',
+            "",
+          ].join("\n"),
+        );
+        h.write("repos/app/.codex/config.toml", "[mcp_servers.docs]\nenabled = false\n");
+        h.write("repos/web/.codex/config.toml", "[mcp_servers.docs]\nenabled = false\n");
+      },
+    });
+    const codexServer = (name: string) =>
+      single(find(inv, (i) => i.kind === "mcp" && i.location.tool === "codex" && i.name === name, name));
+    expect(detailsOf(inv, codexServer("docs"), web, NOW)).toEqual([
+      { text: "GLOBAL › docs" },
+      { label: "Runs", text: "docs" },
+      { label: "Loaded", text: "on in every project" },
+      { label: "Trust", text: "Codex does not trust this project, so it ignores its .codex folder.", tone: "warning" },
+      { label: "File", text: `~${path.sep}${path.join(".codex", "config.toml")}` },
+    ]);
+    const fromApp = detailsOf(inv, codexServer("docs"), app, NOW);
+    expect(fromApp.find((l) => l.label === "Loaded")?.text).toMatch(/^off here /);
+    expect(fromApp.some((l) => l.label === "Trust")).toBe(false);
+    // web's .codex folder does not name exa, so there is nothing it ignores to say.
+    expect(detailsOf(inv, codexServer("exa"), web, NOW).some((l) => l.label === "Trust")).toBe(false);
+  });
 });
 
 describe("rowAccounts and accountsWord", () => {

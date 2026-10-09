@@ -3,8 +3,10 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { tagsOf } from "./describe.js";
 import { duplicateGroups, loadInventory, marksOf, usageOf } from "./inventory.js";
-import { relevantIn, stateOf } from "./state.js";
+import { rowsIn } from "./scopes.js";
+import { codexTrusted, relevantIn, stateOf } from "./state.js";
 import { TestHome } from "./test-home.js";
 
 const homes: TestHome[] = [];
@@ -318,6 +320,43 @@ describe("loadInventory", () => {
     expect(inv.warnings.map((w) => w.file)).toEqual([path.join(realpathSync.native(sp), "hooks", "hooks.json")]);
   });
 
+  it("says where the writes go: the user settings, each account's .claude.json, Codex's files, the stash", async () => {
+    const { h, app } = seed();
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: app,
+      managedSettings: h.path("none.json"),
+    });
+    expect(inv.places).toEqual({
+      claudeUserSettings: h.path(".claude", "settings.json"),
+      claudeJson: { "claude:default": h.path(".claude.json"), "claude:work": h.path(".claude-work", ".claude.json") },
+      codexConfig: h.path(".codex", "config.toml"),
+      codexHooks: h.path(".codex", "hooks.json"),
+      stashDir: h.path(".clausona", "extensions", "stash"),
+    });
+  });
+
+  it("has no Claude places without a Claude account, and takes the stash dir it is given", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.codex("personal", ".codex-main");
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: h.home,
+      managedSettings: h.path("none.json"),
+      stashDir: h.path("elsewhere", "stash"),
+    });
+    expect(inv.places).toEqual({
+      claudeJson: {},
+      codexConfig: h.path(".codex-main", "config.toml"),
+      codexHooks: h.path(".codex-main", "hooks.json"),
+      stashDir: h.path("elsewhere", "stash"),
+    });
+    expect("claudeUserSettings" in inv.places).toBe(false);
+  });
+
   it("reads a few hundred items quickly", async () => {
     const { h, app } = seed();
     for (let i = 0; i < 300; i++) h.skill(".claude/skills", `bulk-${i}`);
@@ -547,5 +586,87 @@ describe("loadInventory, a .mcp.json in a parent dir", () => {
     expect(stateOf(inv, homeNotes, web).shadowedBy).toBeUndefined();
     const reposShared = server(inv, "shared", h.path("repos/.mcp.json"));
     expect(stateOf(inv, server(inv, "shared", h.path(".mcp.json")), app).shadowedBy).toBe(reposShared.id);
+  });
+});
+
+describe("loadInventory, Codex project trust", () => {
+  it("ignores the .codex switches of a project Codex does not trust or has not recorded", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    const web = h.project("repos/web");
+    // Recorded by a Claude account only: Codex has no trust for it.
+    const notes = h.project("repos/notes");
+    h.claude("default", ".claude", { projects: { [notes]: {} } });
+    // Literal keys, so a Windows path's backslashes are not escapes.
+    h.codex(
+      "personal",
+      ".codex",
+      [
+        `[projects.'${app}']`,
+        'trust_level = "trusted"',
+        "",
+        `[projects.'${web}']`,
+        'trust_level = "untrusted"',
+        "",
+        "[mcp_servers.docs]",
+        'command = "docs"',
+        "",
+      ].join("\n"),
+    );
+    for (const dir of ["repos/app", "repos/web", "repos/notes"]) {
+      h.write(`${dir}/.codex/config.toml`, "[mcp_servers.docs]\nenabled = false\n");
+    }
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: app,
+      managedSettings: h.path("none.json"),
+    });
+    const docs = inv.items.find((i) => i.kind === "mcp" && i.location.tool === "codex" && i.name === "docs");
+    if (!docs) throw new Error("no docs");
+    expect(stateOf(inv, docs, app)).toEqual({
+      value: "off",
+      setBy: { file: path.join(app, ".codex", "config.toml"), key: "mcp_servers.docs.enabled" },
+    });
+    expect(stateOf(inv, docs, web)).toEqual({ value: "on" });
+    expect(stateOf(inv, docs, notes)).toEqual({ value: "on" });
+    expect(codexTrusted(inv, app)).toBe(true);
+    expect(codexTrusted(inv, web)).toBe(false);
+    expect(codexTrusted(inv, notes)).toBe(false);
+    expect(codexTrusted(inv, h.path("elsewhere"))).toBe(false);
+    expect(codexTrusted(inv, undefined)).toBe(false);
+  });
+});
+
+describe("loadInventory, legacy commands and the not-used rule", () => {
+  it("counts a command's use by name, a namespaced one's by <folder>:<name> too; a broken link is unused", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    /** 200 days after the fixture's files were made, past the grace period for each. */
+    const NOW = Date.now() + 200 * DAY;
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", {
+      projects: { [app]: {} },
+      skillUsage: {
+        ship: { usageCount: 3, lastUsedAt: NOW - 10 * DAY },
+        "ops:deploy": { usageCount: 1, lastUsedAt: NOW - DAY },
+      },
+    });
+    h.write(".claude/commands/ship.md", "Ship it.");
+    h.write(".claude/commands/ops/deploy.md", "Deploy it.");
+    h.write(".claude/commands/never.md", "Never run.");
+    h.link(h.path("gone", "lost.md"), ".claude/commands/lost.md");
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: app,
+      managedSettings: h.path("none.json"),
+    });
+    const unused = rowsIn(inv, "claude", "skill", "unused", app, NOW);
+    expect(unused.map((row) => row.name).sort()).toEqual(["lost", "never"]);
+    const lost = unused.find((row) => row.name === "lost");
+    if (!lost) throw new Error("no lost row");
+    expect(tagsOf(inv, lost, app, NOW)).toEqual(["broken link"]);
   });
 });

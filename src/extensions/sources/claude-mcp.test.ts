@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import { valueHash } from "../hash.js";
 import { type Collector, emptyFacts, type Project } from "../model.js";
 import { TestHome } from "../test-home.js";
 import { loadClaudeAccounts, loadClaudeContext } from "./claude-context.js";
@@ -64,6 +65,13 @@ describe("readClaudeMcp", () => {
       ["claude:default", ["docs"], []],
       ["-", [], ["extra"]],
     ]);
+    // Each server's raw entry, hashed, so a write can tell it is still the one that was read.
+    expect(out.facts.fingerprints["mcp:claude:account:claude:default:stitch"]).toBe(valueHash({ command: "stitch" }));
+    const print = (name: string) => out.facts.fingerprints[out.items.find((i) => i.name === name)?.id ?? ""];
+    expect(print("pg-dev")).toBe(valueHash({ command: "pg" }));
+    expect(print("docs")).toBe(valueHash({ command: "docs" }));
+    expect(print("plugin:context7:context7")).toBe(valueHash({ command: "ctx7" }));
+    expect(Object.keys(out.facts.fingerprints).sort()).toEqual(out.items.map((i) => i.id).sort());
   });
 
   it("keeps the first of a plugin server defined in both its .mcp.json and its manifest", async () => {
