@@ -132,6 +132,17 @@ describe("mcp ls, a server more than one account sees", () => {
   });
 });
 
+describe("ls STATE", () => {
+  it("is the state word itself for a shadowed copy, with the shadowing a note beside it", async () => {
+    const { h, app } = seed();
+    h.skill("repos/app/.claude/skills", "eli5");
+    h.write("repos/app/.claude/settings.local.json", { skillOverrides: { eli5: "off" } });
+    const text = await run(h, app, "skills", ["ls"]);
+    expect(text).toMatch(/^eli5\s+claude\s+project app\s+off\s+0\s+shadowed$/m);
+    expect(text).toMatch(/^eli5\s+claude\s+global\s+off\s+0$/m);
+  });
+});
+
 describe("ls --all-projects", () => {
   it("reads another project's item in that project's own settings", async () => {
     const { h, app } = seed();
