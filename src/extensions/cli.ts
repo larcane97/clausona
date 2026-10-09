@@ -4,6 +4,7 @@ import { accent, bold, dim, helpUsage, truncate } from "../lib/cli-style.js";
 import type { Registry, ToolName } from "../types.js";
 import {
   accountsWord,
+  containsWords,
   type DetailLine,
   detailsOf,
   hookWhen,
@@ -139,7 +140,21 @@ function positionals(args: string[]): string[] {
  * The options after the subcommand. A value is never echoed back, as no option's is elsewhere:
  * only a scope that exists, which is no secret, is named in a message.
  */
-async function parseOptions(command: ExtensionsCommand, sub: "ls" | "show", args: string[], cwd: string) {
+/** `~` and `~/…` as the home dir, as a shell would, so a quoted path works too. */
+function expandHome(given: string, homeDir: string): string {
+  if (given === "~") return homeDir;
+  // Windows takes either separator after it; elsewhere a backslash is part of a name.
+  const sep = process.platform === "win32" ? /^~[\\/]/ : /^~\//;
+  return sep.test(given) ? path.join(homeDir, given.slice(2)) : given;
+}
+
+async function parseOptions(
+  command: ExtensionsCommand,
+  sub: "ls" | "show",
+  args: string[],
+  cwd: string,
+  homeDir: string,
+) {
   const scope = flagValue(args, "--scope");
   if (scope !== undefined) {
     if (!(EVERY_SCOPE as readonly string[]).includes(scope)) {
@@ -166,7 +181,7 @@ async function parseOptions(command: ExtensionsCommand, sub: "ls" | "show", args
     throw badUsage(`show needs a name or --id <id>. Run clausona ${command} show --help.`);
   }
   const given = flagValue(args, "--project");
-  const project = given === undefined ? undefined : path.resolve(cwd, given);
+  const project = given === undefined ? undefined : path.resolve(cwd, expandHome(given, homeDir));
   // Without the check, a mistyped path would quietly become the project the list is seen from.
   if (project !== undefined && (await entryInfo(project)).kind !== "dir") {
     throw badUsage("--project: no such directory.");
@@ -372,12 +387,13 @@ function kindCells(
   }
 }
 
-function warningLines(inv: Inventory): string[] {
+/** The files that could not be read, after a list (`what` "this list") or the details ("this"). */
+function warningLines(inv: Inventory, what: string): string[] {
   if (inv.warnings.length === 0) return [];
   // A warning's message is a fixed phrase plus a position, never the file's contents.
   return [
     "",
-    "Could not read every file:",
+    `Could not read every file, so ${what} may miss what they hold:`,
     ...inv.warnings.map((w) => `  ${tilde(w.file, inv.homeDir)}: ${w.message}`),
   ];
 }
@@ -400,16 +416,20 @@ function listText(
   if (rows.length === 0) {
     lines.push(nothingToList(command, scope, options.tools, project));
   } else {
-    // The TOOL column only says something when both tools are listed.
+    // The TOOL column only says something when both tools are listed. Plugins lists plugins,
+    // whatever the kind: what each brings, as the screen's Plugins table has it.
     const both = options.tools.length > 1;
-    const header = ["NAME", ...(both ? ["TOOL"] : []), "WHERE", ...KIND_COLUMNS[command], "NOTE"];
+    const plugins = scope === "plugins";
+    const middle = plugins ? ["CONTAINS"] : ["WHERE", ...KIND_COLUMNS[command]];
+    const header = ["NAME", ...(both ? ["TOOL"] : []), ...middle, "NOTE"];
     const body = rows.map((row) => {
       const item = firstOf(row);
       return [
         row.name,
         ...(both ? [item.location.tool] : []),
-        whereCell(inv, row, project),
-        ...kindCells(command, inv, row, project, now),
+        ...(plugins
+          ? [containsWords(inv, row)]
+          : [whereCell(inv, row, project), ...kindCells(command, inv, row, project, now)]),
         tagsOf(inv, row, project, now)[0] ?? "",
       ];
     });
@@ -420,7 +440,7 @@ function listText(
     );
     lines.push(...table([header, ...body], columns, giveWay));
   }
-  lines.push(...warningLines(inv));
+  lines.push(...warningLines(inv, "this list"));
   return lines.join("\n");
 }
 
@@ -493,9 +513,12 @@ function show(
 ): string {
   const accounts = accountIds(inv, options.accounts);
   const isId = (row: ScopeRow, id: string) => row.key === id || row.items.some((item) => item.id === id);
+  // A plugin goes by its name before the `@` too: `superpowers` for `superpowers@official`.
+  const isName = (row: ScopeRow, name: string) =>
+    row.name === name || (firstOf(row).kind === "plugin" && row.name.split("@")[0] === name);
   const matches = (row: ScopeRow) =>
     // A name can be an id too, so an id from ls --json works as it is given.
-    (options.name === undefined || row.name === options.name || isId(row, options.name)) &&
+    (options.name === undefined || isName(row, options.name) || isId(row, options.name)) &&
     (options.id === undefined || isId(row, options.id)) &&
     heldBy(inv, row, accounts);
   const scope = options.scope;
@@ -532,7 +555,7 @@ function show(
   if (row === undefined || more.length > 0) throw ambiguous(command, options, found, project, inv.homeDir);
   const details = detailsOf(inv, row, project, now);
   if (options.json) return JSON.stringify({ version: 1, ...jsonItem(inv, row, project, now), details }, null, 2);
-  return [...detailText(details), ...warningLines(inv)].join("\n");
+  return [...detailText(details), ...warningLines(inv, "this")].join("\n");
 }
 
 // ─── The command ────────────────────────────────────────────────────
@@ -557,7 +580,7 @@ export async function runExtensionsCommand(
   }
   const sub = given ?? "ls";
   if (sub !== "ls" && sub !== "show") throw badUsage(`Unknown subcommand '${sub}'. Run clausona ${command} --help.`);
-  const options = await parseOptions(command, sub, given === undefined ? args : args.slice(1), deps.cwd);
+  const options = await parseOptions(command, sub, given === undefined ? args : args.slice(1), deps.cwd, deps.homeDir);
   const inv = await loadInventory({
     homeDir: deps.homeDir,
     registry: deps.registry,
@@ -616,6 +639,9 @@ function table(rows: string[][], width: number, giveWay: number[]): string[] {
 }
 
 // ─── Help ───────────────────────────────────────────────────────────
+
+/** docs/extensions.md, online, for a reader who has the help and not the repo. */
+const DOCS_URL = "https://github.com/larcane97/clausona/blob/main/docs/extensions.md";
 
 /** Where an option's text starts, and an example's description. */
 const OPTION_COLUMN = 18;
@@ -749,8 +775,13 @@ export function extensionsHelp(command: ExtensionsCommand, sub?: "ls" | "show"):
   const { one, many } = NOUN[command];
   const mcp = command === "mcp";
   const account = mcp ? [option("--account <name>", "Only this Claude account (repeatable)")] : [];
-  const project = option("--project <path>", "Look from another project instead of the current dir");
-  const json = option("--json", "JSON output (version 1), described in docs/extensions.md#json");
+  const project = option("--project <path>", "Look from another project instead of the current dir (~ works)");
+  const json = [option("--json", "JSON output (version 1). Its fields:"), optionMore(`${DOCS_URL}#json`)];
+  // Where ids come from, and the docs' section on how they are made.
+  const ids = section("IDS", [
+    `    ${dim('An id is the "id" field of ls --json. Pass it back as it is, to show --id or as the name.')}`,
+    `    ${dim(`${DOCS_URL}#ids-and-row-keys`)}`,
+  ]);
   if (sub === "ls") {
     const [first = "", ...rest] = scopeList(SCOPES[command].map((s) => (s === "loaded" ? "loaded (default)" : s)));
     return [
@@ -765,8 +796,9 @@ export function extensionsHelp(command: ExtensionsCommand, sub?: "ls" | "show"):
         option("--tool <tool>", "claude | codex (default: both)"),
         ...account,
         project,
-        json,
+        ...json,
       ]),
+      ...ids,
       ...section("EXAMPLES", page.lsExamples.map(example)),
       `  ${bold("EXIT CODES")}   ${dim("0 ok · 1 error · 2 bad usage")}`,
       "",
@@ -786,11 +818,12 @@ export function extensionsHelp(command: ExtensionsCommand, sub?: "ls" | "show"):
         option("--tool <tool>", `claude | codex, when both have a ${kind} by this name`),
         option("--scope <scope>", "Look in this scope only, to pick one copy:"),
         ...scopes,
-        option("--id <id>", "An exact id from ls --json, instead of a name"),
+        option("--id <id>", 'An exact id, the "id" field of ls --json, instead of a name'),
         ...account,
         project,
-        json,
+        ...json,
       ]),
+      ...ids,
       ...section("EXAMPLES", page.showExamples.map(example)),
       `  ${bold("EXIT CODES")}   ${dim("0 ok · 1 not found or error · 2 bad usage or several matches")}`,
       "",
@@ -810,7 +843,8 @@ export function extensionsHelp(command: ExtensionsCommand, sub?: "ls" | "show"):
       `    ${accent("show".padEnd(8))}${dim(page.showSummary)}`,
     ]),
     `  ${dim("Run")} ${accent(`clausona ${command} ls --help`)} ${dim("or")} ${accent(`clausona ${command} show --help`)} ${dim("for options and examples.")}`,
-    `  ${dim("Reference: docs/extensions.md (scopes, tags, JSON fields).")}`,
+    `  ${dim("Reference: docs/extensions.md (scopes, tags, ids, JSON fields), also at")}`,
+    `  ${dim(DOCS_URL)}`,
     "",
   ].join("\n");
 }

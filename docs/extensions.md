@@ -131,9 +131,9 @@ Loaded here is the union of what loads in this project:
 - this project's own items;
 - the `.mcp.json` servers of this folder and the folders above it.
 
-Then it takes out what is off, a `.mcp.json` server still pending approval, and a copy that a
-same-name copy wins over. For Claude, a row is in Loaded here when it loads in at least one
-account.
+Then it takes out what is off, a `.mcp.json` server still pending approval, a skill whose link
+is broken (there is no `SKILL.md` to read), and a copy that a same-name copy wins over. For
+Claude, a row is in Loaded here when it loads in at least one account.
 
 ### Which copy wins
 
@@ -187,7 +187,7 @@ A row can carry several tags. They are listed most important first: `broken link
 
 | Tag | When |
 |---|---|
-| `broken link` | The skill's folder is a link whose target is missing. |
+| `broken link` | The skill's folder is a link whose target is missing. It does not load, so it is not in Loaded here. |
 | `off` | Off in every account that has it, by a user or managed setting, or because nothing turns it on (a plugin no settings file enables). |
 | `off here` | Off in every account by this project's own settings: its `.claude/settings*.json`, an account's entry for it in `.claude.json`, or its `.codex/config.toml`. |
 | `off in N of M accounts` | Off in N accounts and on in the others. M counts the accounts that have the row; for a server every account sees, the accounts that have opened this project. |
@@ -209,7 +209,9 @@ The rule uses two constants, `CLEANUP_UNUSED_DAYS = 90` and `CLEANUP_GRACE_DAYS 
 - It covers the skills you can delete one at a time: those in Global (an account's own folder
   too), Project and Other projects. Cloud, plugin and built-in skills are left out.
 - A skill is unused when its last use, in any account, was more than 90 days ago.
-- A skill that was never used is unused when its folder is more than 14 days old.
+- A skill that was never used is unused when its folder is more than 14 days old. Its age is
+  the folder's birth time, or its modification time where there is none. The details say it:
+  `Used  never, in any account · added 3d ago`.
 - A broken link is listed too. Its tag is `broken link`.
 - A skill used with no time recorded is not called unused. Neither is a never-used skill
   whose age could not be read.
@@ -257,6 +259,9 @@ The columns:
   with `~` for the home folder.
 - NOTE: the first tag.
 
+`--scope plugins` lists plugins, so its table is NAME, TOOL, CONTAINS and NOTE for skills, MCP
+and hooks alike. CONTAINS says what each plugin brings, every kind: `4 skills · 1 hook`.
+
 The title says how many rows, the scope, and the project. A scope with no rows prints one
 sentence instead of the table, such as "Nothing in this project's own files." When the
 terminal is narrow, long cells are cut with `…`; JSON is never cut.
@@ -302,12 +307,14 @@ clausona hooks  show <id|name> [--tool claude|codex] [--scope <scope>] [--id <id
 
 With no subcommand, `ls` runs: `csn skills --scope project` is `csn skills ls --scope project`.
 `--help` or `-h` prints the command's help; `ls --help` and `show --help` print their own pages.
+Those two say where ids come from and link to this page online, at its JSON and
+[Ids and row keys](#ids-and-row-keys) sections.
 
 | Option | Meaning |
 |---|---|
 | `--scope <scope>` | For `ls`, the scope to list, `loaded` by default. For `show`, the one scope to look in. |
 | `--tool <tool>` | `claude` or `codex`. Both by default. |
-| `--project <path>` | Look from another project. A relative path is read from the current directory. It must be a directory, and its git root is used, as for the current directory. |
+| `--project <path>` | Look from another project. A relative path is read from the current directory, and a leading `~` is the home folder, so `--project '~/app'` works without a shell. It must be a directory, and its git root is used, as for the current directory. |
 | `--account <name>` | MCP only. Keep the rows this Claude account has. Give it more than once for several accounts. It takes `work` or `claude:work`, lists Claude rows only, and cannot be used with `--tool codex`. |
 | `--id <id>` | `show` only. A row key or a copy's id, from `ls --json`. |
 | `--json` | Print JSON version 1, described under [JSON](#json). |
@@ -346,7 +353,8 @@ lists nothing.
 
 `show` takes one name, or an id in its place, or `--id <id>`. A name is matched exactly, case
 included. It is the NAME column: `eli5`, `kit:plan`, `kit@demo`, `Stop`,
-`"PreToolUse Bash"`.
+`"PreToolUse Bash"`. A plugin also goes by its name before the `@`: `kit` finds `kit@demo`. Two
+plugins of one name from two marketplaces make that short name ambiguous.
 
 Without `--scope`, `show` looks in tiers. The first tier that has a match decides:
 
@@ -389,6 +397,11 @@ Used      613 times · last 38m ago
 Also in   Claude › Project (different content)
           Codex › Global (same content)
 ```
+
+A skill never used says when it was added, `never, in any account · added 3d ago`, so the
+14 days' grace of the not-used rule can be read off it. A Codex row says its state in one
+`Loaded` line, such as `on in every project` or `off everywhere (~/.codex/config.toml)`, and
+names no account: Codex profiles share one configuration.
 
 ```
 $ csn mcp show github
@@ -448,8 +461,9 @@ A name nothing has prints `No skill named 'nope'.` and exits 1. When `--tool`, `
 `--account` narrowed the search, it adds "Leave out --tool, --scope or --account to look
 further."
 
-When a file cannot be read, the text output ends with "Could not read every file:" and the
-files, and JSON lists them in `warnings`. The exit code stays 0.
+When a file cannot be read, the text output ends with "Could not read every file, so this
+list may miss what they hold:" and each file, with a position or a reason and never what it
+holds. JSON lists them in `warnings`. The exit code stays 0.
 
 ## JSON
 
@@ -681,7 +695,7 @@ columns or more both show; below that, one at a time: scopes, then the table, th
 details.
 
 The screen's tables differ a little from the CLI's. They have no TOOL column, Loaded here adds
-FROM, Plugins shows CONTAINS, and Codex skills show their description.
+FROM, and Codex skills show their description.
 
 | Key | What it does |
 |---|---|

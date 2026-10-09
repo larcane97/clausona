@@ -222,6 +222,15 @@ describe("scopes", () => {
     expect(SCOPE_LABEL.plugins("claude")).toBe("Plugins");
   });
 
+  it("keeps a broken link out of Loaded here, where it is still listed and counted unused", async () => {
+    const { inv, app } = await seed((h) => h.link(h.path("gone", "lost"), ".claude/skills/lost"));
+    const names = (scope: "loaded" | "global" | "unused") =>
+      itemsIn(inv, "claude", "skill", scope, app, NOW).map((i) => i.name);
+    expect(names("loaded")).not.toContain("lost");
+    expect(names("global")).toContain("lost");
+    expect(names("unused")).toContain("lost");
+  });
+
   it("files a Claude built-in skill under its own scope, shown only when there is one", async () => {
     const { inv, app } = await seed((h) =>
       h.write(".claude/settings.json", { skillOverrides: { "claude-api": "off" } }),
