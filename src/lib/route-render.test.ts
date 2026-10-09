@@ -607,6 +607,22 @@ describe("renderNoAccount", () => {
     expect(text).not.toContain("No profile matches *.");
   });
 
+  // No account is held back by a limit, so no reset will free one: their reasons say what will.
+  it("points to each account's reason when every one is skipped, not to a later run", () => {
+    const out = rank(
+      { tool: "claude", from: ["team", "work"] },
+      { "claude:team": signedOut, "claude:work": signedOut },
+    );
+    const text = plain(renderNoAccount("main", out, at(120)));
+    expect(text.split("\n")[0]).toBe("No account in route main is free right now.");
+    expect(text).not.toContain("ACCOUNT");
+    expect(text).toMatch(/^ {4}claude:team\s+signed out \(clausona login claude:team\)$/m);
+    expect(text).toContain(
+      "\n\n    Each account above says why it is skipped. See everything with: clausona route explain main\n",
+    );
+    expect(text).not.toMatch(/Run again|later/);
+  });
+
   // Review Focus 1.
   it("never wraps a row at 80 columns", () => {
     expect(widest(renderNoAccount("main", busy, at(80)))).toBeLessThanOrEqual(80);

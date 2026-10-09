@@ -771,9 +771,12 @@ export function renderNoAccount(
   ]);
   const when = soonest ? formatResetIn(soonest.at, new Date(now)) : undefined;
   const again = when === "now" ? "now" : when ? `after ${unbroken(when)}` : "later";
+  // Nobody held back by a limit, only skipped members: no reset frees them, and their reasons say what will.
   const advice = nothingRead(rows)
     ? `No quota could be read for any member: check the network, or run ${unbroken("clausona list --refresh")}.`
-    : `Run again ${again}, or see everything with: ${explain}`;
+    : held.length === 0
+      ? `Each account above says why it is skipped. See everything with: ${explain}`
+      : `Run again ${again}, or see everything with: ${explain}`;
   return [headline, "", ...fitTable(tables, width), "", ...wrap(advice, width, indent), ""].join("\n");
 }
 
