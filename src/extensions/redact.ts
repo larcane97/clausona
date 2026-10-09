@@ -209,13 +209,37 @@ function redactAt(line: Line, i: number): number {
   // After a scheme, the next word is the credential, whatever its shape.
   if (scheme) return hideWord(line, i + 1);
   if (isSecretFlag(body) || COOKIE_FLAG.test(body)) {
-    // A flag that takes no value - `-b` in many tools, `--auth` - before another option: that
-    // option is read by its own rules, so `-b --api-key x` hides x. No secret starts with `-`.
-    if ((line.words[i + 1] ?? "").startsWith("-")) return i;
+    // The next word is this flag's value, dash or not - a URL-safe token or a password can start
+    // with one - unless its own rule hides what it carries: then this flag takes no value (`-b`
+    // in many tools, `--auth`), and taking the word would print that word's secret instead.
+    if (hidesOwnValue(line.words[i + 1] ?? "")) return i;
     return hideWord(line, i + 1);
   }
   if (USER_FLAG.test(body)) return hideUserinfo(line, i + 1, "", line.words[i + 1] ?? "") ?? i;
   return i;
+}
+
+/**
+ * Whether `word`'s own rule hides the value it carries or takes: an option spelled out and named
+ * for a secret (`--api-key`, `--token=x`), curl's cookie and user options, `-H`/`--header`, an
+ * auth scheme, a header named for a secret (`X-Api-Key:`). Only a double-dash option name
+ * counts as named for a secret: a dash-led token can read like a single-dash one (`-xKey9…`).
+ */
+function hidesOwnValue(word: string): boolean {
+  const body = word.slice(leadingQuote(word).length);
+  if (COOKIE_FLAG.test(body) || USER_FLAG.test(body) || /^(-H|--header)$/.test(body) || AUTH_SCHEME.test(body)) {
+    return true;
+  }
+  const option = /^(--[\w.-]+)(=?)/.exec(body);
+  if (option) {
+    const [whole = "", name = "", assigns = ""] = option;
+    const spelled = assigns !== "" || whole === body;
+    // `--api-key`, `--token=x`; and `--cookie=x`, `--user=u:p`, whose values their rules hide.
+    if (spelled && isSecretName(name.slice(2))) return true;
+    if (assigns !== "" && (COOKIE_FLAG.test(name) || USER_FLAG.test(name))) return true;
+  }
+  const header = /^([\w.-]+)\s*:/.exec(body);
+  return header !== null && (isSecretName(header[1] ?? "") || /^cookie$/i.test(header[1] ?? ""));
 }
 
 function leadingQuote(text: string): string {
