@@ -6,16 +6,16 @@ import {
   scopeSentence,
   tagsOf,
   usageCells,
+  whereLabel,
 } from "../../extensions/describe.js";
 import type { Extension, Inventory } from "../../extensions/model.js";
-import { projectName, tilde, tildeIn } from "../../extensions/present.js";
+import { tilde, tildeIn } from "../../extensions/present.js";
 import {
   type ItemKind,
   type OtherProject,
   otherProjects,
   pluginContents,
   rowsIn,
-  SCOPE_LABEL,
   type ScopeEntry,
   type ScopeId,
   type ScopeRow,
@@ -53,11 +53,19 @@ export type TableRow = {
 };
 
 /**
- * The right pane. `count` is the scope's rows before the search, as the left pane counts them.
- * `empty` is what to say in place of rows when there are none; "" when there are rows, or when
- * the header has said it already.
+ * The right pane. `count` is the scope's rows before the search, as the left pane counts them;
+ * `countText` is how the header says it: "13", or "1 of 13" - the matches of them - while a
+ * search is on. `empty` is what to say in place of rows when there are none; "" when there are
+ * rows, or when the header has said it already.
  */
-export type Table = { header: string; count: number; columns: Column[]; rows: TableRow[]; empty: string };
+export type Table = {
+  header: string;
+  count: number;
+  countText: string;
+  columns: Column[];
+  rows: TableRow[];
+  empty: string;
+};
 
 /**
  * How a column takes room: the first (`lead`, NAME or WHEN) as much as its widest cell; a `fixed`
@@ -144,10 +152,8 @@ function rowSpecs(
     return [name, { key: "contains", title: "CONTAINS", fit: "flex", text: (row) => containsWords(inv, row) }];
   }
   if (scope === "unused") {
-    const where = (row: ScopeRow) => {
-      const own = firstOf(row).location.project;
-      return own === undefined ? SCOPE_LABEL.global(tool) : projectName(own, inv);
-    };
+    // As the CLI's WHERE says it: Project, Global, or another project's name.
+    const where = (row: ScopeRow) => whereLabel(firstOf(row), inv, project);
     return [name, { key: "where", title: "WHERE", fit: "fixed", text: where }, lastUsed];
   }
   const lead: Spec<ScopeRow> =
@@ -343,7 +349,8 @@ export function buildTable(
     total = rows.length;
   }
   const empty = laid.rows.length > 0 ? "" : total > 0 ? `Nothing matches /${q}.` : nothingIn(scope, project);
-  return { header, count: total, ...laid, empty };
+  const countText = q === "" ? String(total) : `${laid.rows.length} of ${total}`;
+  return { header, count: total, countText, ...laid, empty };
 }
 
 /**

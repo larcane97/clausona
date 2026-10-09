@@ -237,10 +237,13 @@ describe("ExtensionsScreen", () => {
     expect(searched).toContain("eli5");
     expect(searched).not.toContain("deploy-check");
     expect(searched).not.toContain("a-very-long");
+    // The header counts the matches of the rows, right-aligned at the pane's edge.
+    expect(searched.split("\n").find((line) => line.includes("LOADED HERE — "))).toMatch(/ 1 of 3$/);
     await press(instance, ESC);
     const cleared = await seen(instance, (f) => !f.includes("/eli"));
     expect(cleared).toContain("deploy-check");
     expect(cleared).toContain("eli5");
+    expect(cleared.split("\n").find((line) => line.includes("LOADED HERE — "))).toMatch(/[^f] 3$/);
   });
 
   it("takes every key as search text while typing", async () => {
@@ -266,6 +269,8 @@ describe("ExtensionsScreen", () => {
     const matrix = await seen(instance, (f) => f.includes("SERVER"));
     expect(matrix).toContain("default");
     expect(matrix).toContain("work");
+    // The legend says pending approval in the tag's words.
+    expect(matrix).toContain("? pending approval");
     await press(instance, ESC);
     await press(instance, "1");
     await seen(instance, (f) => f.includes("deploy-check"));

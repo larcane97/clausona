@@ -15,6 +15,7 @@ import {
   statesByAccount,
   tagsOf,
   usageCells,
+  whereLabel,
 } from "./describe.js";
 import { loadInventory } from "./inventory.js";
 import type { Extension, Inventory } from "./model.js";
@@ -146,6 +147,19 @@ describe("hookWhen", () => {
     // An event named like an object's own property is an event like any other.
     expect(hookWhen(hook("constructor"))).toBe("constructor");
   });
+
+  it("names the hook's own tool where the words name one", () => {
+    const codex = (name: string): Extension => ({
+      ...hook(name),
+      location: { tool: "codex", scope: "global", file: "/hooks.json" },
+    });
+    expect(hookWhen(codex("Stop"))).toBe("When Codex finishes replying");
+    expect(hookWhen(codex("Notification"))).toBe("When Codex sends a notification");
+    expect(hookWhen(codex("PermissionRequest"))).toBe("When Codex asks for permission");
+    expect(hookWhen(codex("PreToolUse Bash"))).toBe("Before Bash runs");
+    expect(hookWhen(hook("Notification"))).toBe("When Claude sends a notification");
+    expect(hookWhen(hook("PermissionRequest"))).toBe("When Claude asks for permission");
+  });
 });
 
 describe("tagsOf", () => {
@@ -244,14 +258,14 @@ describe("fromLabel and scopeSentence", () => {
     const { inv, app, h } = await seed();
     expect(fromLabel(claudeSkill(inv, "eli5"), inv, app)).toBe("Global");
     expect(fromLabel(claudeSkill(inv, "deploy-check", app), inv, app)).toBe("Project");
-    // A parent folder goes by its path: here the home dir's .mcp.json.
+    // A parent folder's server goes by its file: here the home dir's .mcp.json.
     expect(
       fromLabel(
         find(inv, (i) => i.name === "tools", "tools"),
         inv,
         app,
       ),
-    ).toBe("~");
+    ).toBe(path.join("~", ".mcp.json"));
     expect(
       fromLabel(
         find(inv, (i) => i.name === "tools", "tools"),
@@ -259,6 +273,17 @@ describe("fromLabel and scopeSentence", () => {
         h.home,
       ),
     ).toBe("Project");
+  });
+
+  it("says where a row is as WHERE does: Project here, Global, or another project's name", async () => {
+    const { inv, app, web } = await seed();
+    expect(whereLabel(claudeSkill(inv, "deploy-check", app), inv, app)).toBe("Project");
+    expect(whereLabel(claudeSkill(inv, "eli5"), inv, app)).toBe("Global");
+    expect(whereLabel(claudeSkill(inv, "web-only", web), inv, app)).toBe("web");
+    // In FROM's words where it has them.
+    expect(whereLabel(claudeSkill(inv, "deploy-check", app), inv, app)).toBe(
+      fromLabel(claudeSkill(inv, "deploy-check", app), inv, app),
+    );
   });
 
   it("heads a table with the scope's name and one plain sentence", async () => {

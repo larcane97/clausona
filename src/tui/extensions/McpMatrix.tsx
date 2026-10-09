@@ -73,7 +73,7 @@ export function McpMatrix({ matrix, cursor, top, height, width, offset }: Props)
       })}
       <Text color={color.muted} wrap="truncate-end">
         {"  "}
-        {symbol.dot} on {symbol.circle} off ? pending-approval · not here
+        {symbol.dot} on {symbol.circle} off ? pending approval · not here
       </Text>
     </Box>
   );

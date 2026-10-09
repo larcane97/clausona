@@ -215,8 +215,9 @@ describe("tables", () => {
     const { inv, app } = await seed();
     const unused = buildTable(inv, "claude", "skill", "unused", app, NOW, 100, "");
     expect(titles(unused)).toEqual(["NAME", "WHERE", "LAST USED"]);
+    // This project's reads Project, as FROM and the CLI's WHERE say it; another project's, its name.
     expect(unused.rows.map(cells)).toEqual([
-      ["deploy-check", "app", "never"],
+      ["deploy-check", "Project", "never"],
       ["old-one", "Global", "never"],
       ["web-only", "web", "never"],
     ]);
@@ -251,6 +252,20 @@ describe("tables", () => {
     const codex = buildTable(inv, "codex", "mcp", "global", app, NOW, 100, "");
     expect(titles(codex)).toEqual(["NAME", "RUNS"]);
     expect(codex.rows.map(cells)).toEqual([["exa", "npx"]]);
+  });
+
+  it("says which parent folder's .mcp.json a loaded server is from, and still fits a narrow table", async () => {
+    const { inv, app } = await seed((h, app, web) =>
+      h.claude("default", ".claude", { projects: { [app]: { enabledMcpjsonServers: ["tools"] }, [web]: {} } }),
+    );
+    const loaded = buildTable(inv, "claude", "mcp", "loaded", app, NOW, 100, "");
+    expect(titles(loaded)).toEqual(["NAME", "FROM", "ACCOUNTS"]);
+    expect(byName(loaded, "tools")?.cells[1]?.trim()).toBe(path.join("~", ".mcp.json"));
+    const narrow = buildTable(inv, "claude", "mcp", "loaded", app, NOW, 30, "");
+    expect(narrow.rows).toHaveLength(1);
+    for (const row of narrow.rows) {
+      expect(row.cells.join("").length + (row.tag?.text.length ?? 0)).toBeLessThanOrEqual(30);
+    }
   });
 
   it("lists plugins with what they contain", async () => {
@@ -334,6 +349,7 @@ describe("empty tables", () => {
     const none = buildTable(inv, "claude", "skill", "loaded", app, NOW, 80, "zzz");
     expect(none.rows).toEqual([]);
     expect(none.count).toBe(3);
+    expect(none.countText).toBe("0 of 3");
     expect(none.empty).toBe("Nothing matches /zzz.");
   });
 });
@@ -344,6 +360,14 @@ describe("search", () => {
     const found = buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, path.join("~", ".claude"));
     expect(names(found)).toEqual(["eli5", "old-one"]);
     expect(found.count).toBe(3);
+  });
+
+  it("counts the matches of the rows while a search is on, and the rows alone when not", async () => {
+    const { inv, app } = await seed();
+    expect(buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, "").countText).toBe("3");
+    expect(buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, "ELI").countText).toBe("1 of 3");
+    // Spaces alone are no search.
+    expect(buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, "  ").countText).toBe("3");
   });
 
   it("matches names and descriptions in any case, and an other project's name", async () => {
