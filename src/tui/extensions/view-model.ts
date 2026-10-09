@@ -1,13 +1,21 @@
 import path from "node:path";
 
-import { accountStates, shortProfile, stateHere, tilde, tildeIn, viewFrom, whereLabel } from "../../extensions/cli.js";
 import { duplicateGroups, marksOf, usageOf } from "../../extensions/inventory.js";
 import type { EffectiveState, Extension, Inventory, Mark } from "../../extensions/model.js";
+import {
+  accountStates,
+  shortProfile,
+  stateHere,
+  tilde,
+  tildeIn,
+  viewFrom,
+  whereLabel,
+} from "../../extensions/present.js";
 import { pathKey, samePath } from "../../extensions/read.js";
 import { pluginState, relevantIn, stateOf } from "../../extensions/state.js";
 import type { ToolName } from "../../types.js";
 
-export { shortProfile, tilde } from "../../extensions/cli.js";
+export { shortProfile, tilde } from "../../extensions/present.js";
 
 export type Tab = "skills" | "mcp" | "hooks";
 export const TABS: readonly Tab[] = ["skills", "mcp", "hooks"];
