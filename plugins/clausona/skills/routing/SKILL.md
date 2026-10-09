@@ -179,7 +179,8 @@ risk: that account is at its limit, so the session may stop at once.
 ## When a run stopped on a usage limit
 
 Start it again on the route. The spent account is now at or above the cut, so another one is
-picked. Readings are cached for up to 5 minutes: if `explain` still shows the spent account as
-eligible, add `--exclude` with it for this run. The route's own excludes still apply. To carry on
-the same session, pass `-c` or `--resume` after `--`; that run only goes to accounts that share
-sessions.
+picked. But readings are cached for up to 5 minutes, and with every account over the cut, a
+cached reading under 100% can pick the spent one again: if `explain` would still pick it, or
+shows it `eligible`, add `--exclude` with it for this run. The route's own excludes still apply.
+To carry on the same session, pass `-c` or `--resume` after `--`; that run only goes to accounts
+that share sessions.
