@@ -104,6 +104,7 @@ export type EntryInfo = {
   kind: "dir" | "file" | "missing" | "other";
   /** Set for a symlink or junction; `broken` when what it names is gone. */
   link?: { target: string; broken: boolean };
+  /** When the entry itself appeared: for a link, the link's own birth time, not its target's. */
   createdAt?: number;
 };
 
@@ -124,8 +125,10 @@ export async function entryInfo(p: string): Promise<EntryInfo> {
   const raw = await limited(() => readlink(p)).catch(() => "");
   const target = path.resolve(path.dirname(p), raw);
   const followed = await limited(() => stat(p)).catch(() => null);
-  if (!followed) return { kind: "missing", link: { target, broken: true } };
-  return { kind: kindOf(followed), link: { target, broken: false }, createdAt: createdAt(followed) };
+  // A link dates from when it was made, not from its target: a skill linked in today is new
+  // here, however old the folder it leads to.
+  if (!followed) return { kind: "missing", link: { target, broken: true }, createdAt: createdAt(own) };
+  return { kind: kindOf(followed), link: { target, broken: false }, createdAt: createdAt(own) };
 }
 
 /**

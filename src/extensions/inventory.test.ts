@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { realpathSync, utimesSync } from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it } from "vitest";
@@ -186,6 +186,30 @@ describe("loadInventory", () => {
     expect(createdAt).toBeDefined();
     expect(marksOf(inv, byName("no-age"), later)).toContain("cleanup");
     expect(marksOf(inv, noAge, later)).not.toContain("cleanup");
+  });
+
+  it("dates a skill that is a link by the link, so a fresh link to an old folder is in its grace period", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    const old = new Date(Date.now() - 60 * DAY);
+    // An old folder of skills kept outside Claude Code's dir. On macOS an earlier mtime moves the
+    // birth time back too; elsewhere the folder may still read as new, and the case holds anyway.
+    const folder = h.skill("library", "brand-new-here");
+    utimesSync(path.join(folder, "SKILL.md"), old, old);
+    utimesSync(folder, old, old);
+    h.link("library/brand-new-here", ".claude/skills/brand-new-here");
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: h.home,
+      managedSettings: h.path("none.json"),
+    });
+    const item = inv.items.find((i) => i.name === "brand-new-here");
+    if (!item) throw new Error("brand-new-here");
+    expect(item.link?.broken).toBe(false);
+    expect(marksOf(inv, item, Date.now())).not.toContain("cleanup");
+    expect(marksOf(inv, item, Date.now() + 15 * DAY)).toContain("cleanup");
   });
 
   it("counts a link to another listed folder as that folder, not a second copy", async () => {
