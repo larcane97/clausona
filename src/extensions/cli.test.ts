@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { leakedWindows } from "../test-leaks.js";
 import { type ExtensionsCommand, runExtensionsCommand } from "./cli.js";
+import { scopeSentence } from "./describe.js";
 import { ExitError } from "./exit-error.js";
+import { loadInventory } from "./inventory.js";
+import { scopesFor } from "./scopes.js";
 import { TestHome } from "./test-home.js";
 
 const DAY = 86_400_000;
@@ -149,6 +152,27 @@ describe("skills ls", () => {
     expect(firstLine(await run(h, app, "hooks", ["ls", "--scope", "plugins"]))).toMatch(/^1 plugin · Plugins · /);
     expect(await run(h, app, "mcp", ["ls", "--scope", "plugins"])).toMatch(
       /^0 plugins · Plugins · .+\n\nNo plugin brings MCP servers\.$/,
+    );
+  });
+
+  it("lists Built into Claude Code: a skill your settings name that is on no disk", async () => {
+    const { h, app } = seed();
+    h.write(".claude/settings.json", { skillOverrides: { "claude-api": "off" } });
+    const text = await run(h, app, "skills", ["ls", "--scope", "builtin", "--tool", "claude"]);
+    expect(firstLine(text)).toMatch(/^1 skill · Built into Claude Code · project ~/);
+    expect(text).toMatch(/^claude-api\s+Built in\s+0\s+never\s+off$/m);
+    const inv = await loadInventory({ homeDir: h.home, registry: h.registry, cwd: app });
+    // In the scope list, after Plugins' place and before Other projects.
+    expect(scopesFor(inv, "claude", "skill", app, NOW).map((s) => s.id)).toEqual([
+      "loaded",
+      "project",
+      "global",
+      "builtin",
+      "other",
+      "unused",
+    ]);
+    expect(scopeSentence("builtin", "claude", "skill", inv, app)).toBe(
+      "BUILT INTO CLAUDE CODE — skills that come with Claude Code, named in your settings",
     );
   });
 

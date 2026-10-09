@@ -340,13 +340,31 @@ function stateWords(inv: Inventory, item: Extension, project: string | undefined
   return because === undefined ? word : `${word} (${because})`;
 }
 
-/** The accounts an item is in when not every one: an account's own, or a plugin's installs. */
-function holders(inv: Inventory, item: Extension): string[] | undefined {
-  const loc = item.location;
-  if (loc.profile !== undefined) return [loc.profile];
-  const accounts = loc.accounts;
-  if (accounts && !inv.claudeProfiles.every((p) => accounts.includes(p))) return accounts;
-  return undefined;
+/**
+ * Which accounts have a row, primary first, or undefined when every account of its tool has it.
+ * A copy is its own account's, or its install's accounts'; a copy with neither - a `.mcp.json` or
+ * managed server, a Codex item - is every account's. Never an empty list.
+ */
+export function rowAccounts(inv: Inventory, row: ScopeRow): string[] | undefined {
+  const lists = row.items.map((copy) =>
+    copy.location.profile !== undefined ? [copy.location.profile] : copy.location.accounts,
+  );
+  if (lists.some((list) => list === undefined || list.length === 0)) return undefined;
+  const who = [...new Set(lists.flat() as string[])];
+  if (firstOf(row).location.tool === "claude" && inv.claudeProfiles.every((p) => who.includes(p))) return undefined;
+  const rank = (profile: string) => {
+    const at = inv.claudeProfiles.indexOf(profile);
+    return at < 0 ? inv.claudeProfiles.length : at;
+  };
+  return who.sort((a, b) => rank(a) - rank(b));
+}
+
+/** A Claude row's ACCOUNTS cell: "all", "2 of 3", or the one account's short name; "—" for Codex. */
+export function accountsWord(inv: Inventory, row: ScopeRow): string {
+  if (firstOf(row).location.tool !== "claude") return "—";
+  const who = rowAccounts(inv, row);
+  if (who === undefined) return "all";
+  return who.length === 1 ? shortProfile(who[0] ?? "") : `${who.length} of ${inv.claudeProfiles.length}`;
 }
 
 /**
@@ -388,7 +406,7 @@ function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined)
   if (state.value === "pending-approval") return [{ label: "Loaded", text: "pending approval here", tone: "warning" }];
   const own = item.location.project;
   const where = own === undefined ? "every project" : samePath(own, project) ? "this project" : projectName(own, inv);
-  const who = perAccount?.map((a) => a.profile) ?? holders(inv, item);
+  const who = perAccount?.map((a) => a.profile) ?? rowAccounts(inv, row);
   if (who === undefined || inv.claudeProfiles.every((p) => who.includes(p))) {
     return [{ label: "Loaded", text: `on in every account, ${where}` }];
   }
