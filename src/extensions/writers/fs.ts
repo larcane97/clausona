@@ -76,6 +76,11 @@ export async function realOrSelf(file: string): Promise<string> {
   return realOrSelf(path.resolve(dir, target));
 }
 
+/** A name next to `p` that nothing else uses: `${p}.clausona-${pid}-${random}.${tag}`. */
+function besideName(p: string, tag: string): string {
+  return `${p}.clausona-${process.pid}-${randomBytes(6).toString("hex")}.${tag}`;
+}
+
 const RENAME_TRIES = 5;
 const RENAME_PAUSE_MS = 50;
 const BUSY: ReadonlySet<string> = new Set(["EPERM", "EBUSY", "EACCES"]);
@@ -100,7 +105,7 @@ async function renameOver(from: string, to: string): Promise<void> {
  * the old file or the new one, never half of one.
  */
 export async function writeAtomic(real: string, text: string | Uint8Array, mode: number): Promise<void> {
-  const temp = `${real}.clausona-${process.pid}-${randomBytes(6).toString("hex")}.tmp`;
+  const temp = besideName(real, "tmp");
   // "wx": a file already at the temp name, or a link there, is never written through.
   const handle = await open(temp, "wx", mode);
   try {
@@ -163,23 +168,37 @@ export async function entryKind(p: string): Promise<"dir" | "file" | "link" | "m
 }
 
 /**
- * rename; on EXDEV, cp(from, to, { recursive: true, verbatimSymlinks: true, preserveTimestamps:
- * true }) then rm(from, { recursive: true }). Neither follows a link inside.
+ * rename; on EXDEV, across file systems: `from` is renamed aside in its own folder first, then
+ * cp(aside, temp next to `to`, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true })
+ * and the temp renamed to `to`, then rm(aside, { recursive: true }). Neither follows a link inside.
+ * So `from` is empty from before a copy can exist, and `to` holds the whole copy or nothing: a
+ * move cut short is never taken for one made. A copy that fails is removed and `from` put back.
  */
 export async function moveTo(from: string, to: string): Promise<void> {
   try {
     await rename(from, to);
+    return;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
-    await cp(from, to, {
+  }
+  const aside = besideName(from, "moving");
+  const copy = besideName(to, "copying");
+  await rename(from, aside);
+  try {
+    await cp(aside, copy, {
       recursive: true,
       verbatimSymlinks: true,
       preserveTimestamps: true,
       force: false,
       errorOnExist: true,
     });
-    await rm(from, { recursive: true });
+    await rename(copy, to);
+  } catch (error) {
+    await rm(copy, { recursive: true, force: true }).catch(() => {});
+    await rename(aside, from).catch(() => {});
+    throw error;
   }
+  await rm(aside, { recursive: true });
 }
 
 /**

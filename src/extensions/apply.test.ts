@@ -1,11 +1,14 @@
 import {
+  chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -360,6 +363,46 @@ describe("apply: .claude.json under Claude Code's lock", () => {
     expect(after.lastSessionId).toBe("x");
   });
 
+  it.skipIf(onWindows)(
+    "edits a linked .claude.json through its link, under the lock at the path it is named by",
+    async () => {
+      const { h, app } = home((h) => {
+        // ~/.claude.json kept in a dotfiles folder.
+        mkdirSync(h.path("dotfiles"));
+        renameSync(h.path(".claude.json"), h.path("dotfiles", "claude.json"));
+        symlinkSync(h.path("dotfiles", "claude.json"), h.path(".claude.json"));
+      });
+      const env: WriteEnv = { ...writeEnvFor(h.home, clock()), lockWaitMs: 300 };
+      const link = h.path(".claude.json");
+      const real = realpathSync(h.path("dotfiles", "claude.json"));
+      const before = readFileSync(real, "utf8");
+      const p = await planNow(h, app, "mcp", "off", "here", github);
+      expect(p.changes.map((c) => c.file)).toEqual([link]);
+      const holding = async <T>(run: () => Promise<T>): Promise<T> => {
+        const release = await acquireDirLock(`${link}.lock`, { staleMs: 10_000, updateMs: 5_000 });
+        if (!release) throw new Error("lock not taken");
+        try {
+          return await run();
+        } finally {
+          await release();
+        }
+      };
+
+      expect(await holding(() => apply(p, env))).toMatchObject({ status: "stopped", stop: { reason: "locked" } });
+      expect(readFileSync(real, "utf8")).toBe(before);
+      const applied = await apply(p, env);
+
+      if (applied.status !== "applied") throw new Error(applied.status);
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(json(real).projects[app].disabledMcpServers).toEqual(["github"]);
+      expect(manifestOf(applied.operation.dir).entries).toMatchObject([{ path: real, named: link, lock: true }]);
+      expect(await holding(() => undo(env))).toMatchObject({ skipped: [{ file: link, reason: "locked" }] });
+      expect(await undo(env)).toMatchObject({ restored: [link], skipped: [] });
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(readFileSync(real, "utf8")).toBe(before);
+    },
+  );
+
   it("leaves an undo it could not lock to try again, rather than walk past it", async () => {
     const { h, app } = home();
     const env: WriteEnv = { ...writeEnvFor(h.home, clock()), lockWaitMs: 300 };
@@ -592,6 +635,127 @@ describe("apply: what clausona keeps aside", () => {
   });
 });
 
+describe("undo: what clausona keeps aside goes with its edit", () => {
+  it("keeps what it kept when the edit it goes with cannot be undone", async () => {
+    const { h, app } = home();
+    const env = writeEnvFor(h.home, clock());
+    const settings = h.path(".claude", "settings.json");
+    await apply(await planNow(h, app, "hooks", "off", "everywhere", notifyA), env);
+    const kept = stashFiles(h);
+    expect(kept).toHaveLength(1);
+    setIn(settings, (value) => {
+      value.hooks.Stop[0].hooks.push({ type: "command", command: "notify-c" });
+    });
+
+    const undone = await undo(env);
+
+    expect(undone?.restored).toEqual([]);
+    expect(undone?.skipped).toEqual([
+      { file: settings, reason: "changed" },
+      { file: kept[0], reason: "changed" },
+    ]);
+    expect(stashFiles(h)).toEqual(kept);
+    const inv = await load(h, app);
+    expect(tagsOf(inv, hookRow(inv, app, "notify-a"), app, NOW)).toContain("off");
+    expect(await lastOperation(env)).toBeNull();
+  });
+
+  it("leaves what it kept for the next undo while Claude Code holds the lock of its edit", async () => {
+    const { h, app } = home();
+    const env: WriteEnv = { ...writeEnvFor(h.home, clock()), lockWaitMs: 300 };
+    const [mine, work] = [h.path(".claude.json"), h.path(".claude-work", ".claude.json")];
+    const before = [mine, work].map((file) => readFileSync(file, "utf8"));
+    const applied = await apply(await planNow(h, app, "mcp", "off", "everywhere", figma), env);
+    if (applied.status !== "applied") throw new Error(applied.status);
+    const [keptMine, keptWork] = manifestOf(applied.operation.dir)
+      .entries.filter((entry) => entry.what === "stash")
+      .map((entry) => entry.path);
+
+    const release = await acquireDirLock(`${mine}.lock`, { staleMs: 10_000, updateMs: 5_000 });
+    if (!release) throw new Error("lock not taken");
+    const first = await undo(env).finally(release);
+
+    expect(first?.restored).toEqual([work, keptWork]);
+    expect(first?.skipped).toEqual([
+      { file: mine, reason: "locked" },
+      { file: keptMine, reason: "locked" },
+    ]);
+    expect(readFileSync(work, "utf8")).toBe(before[1]);
+    expect(json(mine).mcpServers).not.toHaveProperty("figma");
+    expect(stashFiles(h)).toEqual([keptMine]);
+    expect(await lastOperation(env)).toEqual({
+      operation: applied.operation,
+      files: [
+        { path: keptMine, action: "remove" },
+        { path: mine, action: "edit back" },
+      ],
+    });
+
+    expect(await undo(env)).toMatchObject({
+      operation: { id: applied.operation.id },
+      restored: [mine, keptMine],
+      skipped: [],
+    });
+    expect(readFileSync(mine, "utf8")).toBe(before[0]);
+    expect(stashFiles(h)).toEqual([]);
+    expect(await lastOperation(env)).toBeNull();
+  });
+
+  it("puts a kept copy back only once the edit that took it out of the backup is undone", async () => {
+    const { h, app } = home();
+    const env: WriteEnv = { ...writeEnvFor(h.home, clock()), lockWaitMs: 300 };
+    const [mine, work] = [h.path(".claude.json"), h.path(".claude-work", ".claude.json")];
+    await apply(await planNow(h, app, "mcp", "off", "everywhere", figma), env);
+    const kept = stashFiles(h);
+    const keptText = kept.map((file) => readFileSync(file, "utf8"));
+    const offText = [mine, work].map((file) => readFileSync(file, "utf8"));
+    const on = await apply(await planNow(h, app, "mcp", "on", "everywhere", figma), env);
+    if (on.status !== "applied") throw new Error(on.status);
+    expect(stashFiles(h)).toEqual([]);
+    const keptMine = manifestOf(on.operation.dir).entries.find((e) => e.what === "stash")?.path;
+
+    const release = await acquireDirLock(`${mine}.lock`, { staleMs: 10_000, updateMs: 5_000 });
+    if (!release) throw new Error("lock not taken");
+    const first = await undo(env).finally(release);
+
+    // Never both live and kept: mine stays put back, and its kept copy stays in the backup.
+    expect(first?.skipped).toEqual([
+      { file: mine, reason: "locked" },
+      { file: keptMine, reason: "locked" },
+    ]);
+    expect(json(mine).mcpServers.figma).toEqual({ command: "figma" });
+    expect(json(work).mcpServers).not.toHaveProperty("figma");
+    expect(stashFiles(h)).toEqual(kept.filter((file) => file !== keptMine));
+
+    expect(await undo(env)).toMatchObject({ operation: { id: on.operation.id }, skipped: [] });
+    expect([mine, work].map((file) => readFileSync(file, "utf8"))).toEqual(offText);
+    expect(stashFiles(h)).toEqual(kept);
+    expect(kept.map((file) => readFileSync(file, "utf8"))).toEqual(keptText);
+    const inv = await load(h, app);
+    expect(tagsOf(inv, rowIn(inv, app, "global", "figma", "claude", "mcp"), app, NOW)).toContain("off");
+  });
+
+  it("undoes two changes to one file last first, so the file ends as it was", async () => {
+    const { h, app } = home();
+    const env = writeEnvFor(h.home, clock());
+    const settings = h.path(".claude", "settings.json");
+    const before = readFileSync(settings, "utf8");
+    const p = await planNow(h, app, "hooks", "off", "everywhere", (inv, project) => [
+      hookRow(inv, project, "notify-a"),
+      hookRow(inv, project, "notify-b"),
+    ]);
+    expect(p.changes.map((c) => c.file)).toEqual([settings, settings]);
+
+    expect(await apply(p, env)).toMatchObject({ status: "applied", done: 2 });
+    expect(json(settings).hooks).not.toHaveProperty("Stop");
+    expect(stashFiles(h)).toHaveLength(2);
+
+    expect(await undo(env)).toMatchObject({ skipped: [] });
+    expect(readFileSync(settings, "utf8")).toBe(before);
+    expect(stashFiles(h)).toEqual([]);
+  });
+});
+
 describe("undo in real life", () => {
   it("stops at the first change that cannot go ahead, and undo puts back what was done", async () => {
     const { h, app } = home();
@@ -662,6 +826,111 @@ describe("undo in real life", () => {
     expect((await undo(env))?.operation.id).toBe(a.status === "applied" ? a.operation.id : "");
     expect(existsSync(file)).toBe(false);
     expect(await undo(env)).toBeNull();
+  });
+
+  it("takes a write that was made but never recorded done as made", async () => {
+    const { h, app } = home();
+    const env = writeEnvFor(h.home, clock());
+    const file = path.join(app, ".claude", "settings.local.json");
+    const applied = await apply(await planNow(h, app, "skills", "off", "here", eli5), env);
+    if (applied.status !== "applied") throw new Error(applied.status);
+    // What a crash between the write and the manifest's last save leaves.
+    const manifest = manifestOf(applied.operation.dir);
+    for (const entry of manifest.entries) entry.done = false;
+    writeFileSync(path.join(applied.operation.dir, "manifest.json"), JSON.stringify(manifest));
+
+    expect(await lastOperation(env)).toMatchObject({ files: [{ path: file, action: "remove" }] });
+    expect(await undo(env)).toMatchObject({ restored: [file], skipped: [] });
+    expect(existsSync(file)).toBe(false);
+
+    // Not done, and the file does not hold what the write was to leave: never made.
+    const again = await apply(await planNow(h, app, "skills", "off", "here", eli5), env);
+    if (again.status !== "applied") throw new Error(again.status);
+    const notMade = manifestOf(again.operation.dir);
+    for (const entry of notMade.entries) entry.done = false;
+    writeFileSync(path.join(again.operation.dir, "manifest.json"), JSON.stringify(notMade));
+    writeFileSync(file, "{}\n");
+    expect(await lastOperation(env)).toBeNull();
+  });
+
+  it.skipIf(onWindows || process.getuid?.() === 0)(
+    "records what it put back when a later step fails, and says which failed",
+    async () => {
+      const { h, app } = home();
+      const env = writeEnvFor(h.home, clock());
+      const skills = h.path(".claude", "skills");
+      const [oldOne, deploy] = [path.join(skills, "old-one"), path.join(app, ".claude", "skills", "deploy-check")];
+      const applied = await apply(
+        await planNow(h, app, "skills", "rm", "here", (inv) => [
+          rowIn(inv, app, "global", "old-one"),
+          rowIn(inv, app, "project", "deploy-check"),
+        ]),
+        env,
+      );
+      if (applied.status !== "applied") throw new Error(applied.status);
+      const entries = manifestOf(applied.operation.dir).entries;
+      expect(entries.map((e) => e.what)).toEqual(["folder", "folder"]);
+
+      chmodSync(skills, 0o500);
+      let undone: Awaited<ReturnType<typeof undo>>;
+      try {
+        undone = await undo(env);
+      } finally {
+        chmodSync(skills, 0o755);
+      }
+
+      expect(undone).toMatchObject({
+        restored: [entries[1]?.path],
+        skipped: [{ file: entries[0]?.path, reason: "failed" }],
+      });
+      expect(existsSync(path.join(deploy, "SKILL.md"))).toBe(true);
+      expect(existsSync(oldOne)).toBe(false);
+      expect(existsSync(path.join(applied.operation.dir, "files", "1", "SKILL.md"))).toBe(true);
+      expect(manifestOf(applied.operation.dir).undo).toEqual({
+        restored: [entries[1]?.path],
+        skipped: [{ file: entries[0]?.path, reason: "failed" }],
+      });
+    },
+  );
+
+  it("passes over a damaged manifest as no operation, never tripping on it", async () => {
+    const { h, app } = home();
+    const env = writeEnvFor(h.home, clock());
+    const good = await apply(await planNow(h, app, "skills", "off", "here", eli5), env);
+    if (good.status !== "applied") throw new Error(good.status);
+    const entry = {
+      path: h.path("x.json"),
+      what: "json",
+      change: "edited",
+      backup: "files/1",
+      hashBefore: "a",
+      hashAfter: "b",
+      done: true,
+    };
+    const damages: Record<string, unknown>[] = [
+      { touched: "x" },
+      { touched: [{ path: [{}], hash: null }] },
+      { link: { target: "/x", type: "hardlink" } },
+      { createdDirs: [1] },
+      { named: 5 },
+      { with: 7 },
+      { with: 0 },
+      { undone: "maybe" },
+      { hashAfter: 3 },
+      { lock: "yes" },
+    ];
+    for (const [n, damage] of damages.entries()) {
+      const id = `29991231T000000${String(n).padStart(3, "0")}Z-mcp-off`;
+      const dir = path.join(env.backupRoot, id);
+      mkdirSync(dir, { recursive: true });
+      const manifest = { ...manifestOf(good.operation.dir), id, command: "mcp", entries: [{ ...entry, ...damage }] };
+      writeFileSync(path.join(dir, "manifest.json"), JSON.stringify(manifest));
+    }
+
+    expect((await lastOperation(env))?.operation.id).toBe(good.operation.id);
+    expect(await lastOperation(env, "mcp")).toBeNull();
+    expect(await undo(env, "mcp")).toBeNull();
+    expect((await undo(env))?.operation.id).toBe(good.operation.id);
   });
 
   it("finds the newest operation of one command", async () => {
