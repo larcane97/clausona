@@ -219,6 +219,14 @@ describe("runRouted", () => {
     expect(() => readFileSync(s.paths.routesPath)).toThrow();
   });
 
+  it("takes a route name every object has for an unknown route, not for one in routes.json", async () => {
+    const s = setup({ routes: MAIN });
+    await expect(runRouted(["--route", "constructor"], s.launch, s.io, s.deps)).rejects.toBeInstanceOf(
+      UnknownRouteError,
+    );
+    expect(s.launches).toEqual([]);
+  });
+
   it("offers to create an unknown route in a terminal, then runs on it", async () => {
     const s = setup({ interactive: true, answers: ["y"] });
     await runRouted(["--route", "work", "-p", "hi"], s.launch, s.io, s.deps);

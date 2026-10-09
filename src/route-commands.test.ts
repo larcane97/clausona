@@ -346,6 +346,26 @@ describe("route set, rename, remove", () => {
     expect(await run("remove", "all")).toContain("Removed route all");
     expect(file().routes).toEqual({});
   });
+
+  // Every object has these, so a lookup that is not of own keys finds one in every routes.json.
+  it("takes names every object has as route names like any other", async () => {
+    const { run, file } = setup();
+    await run("add", "main");
+    await expect(run("remove", "toString")).rejects.toThrow(/^Route 'toString' does not exist\./);
+    await expect(run("set", "constructor", "--strategy", "headroom")).rejects.toThrow(
+      /^Route 'constructor' does not exist\./,
+    );
+    await expect(run("rename", "valueOf", "other")).rejects.toThrow(/^Route 'valueOf' does not exist\./);
+    await expect(run("explain", "hasOwnProperty")).rejects.toThrow(/^Route 'hasOwnProperty' does not exist\./);
+    expect(Object.keys(file().routes)).toEqual(["main"]);
+
+    expect(await run("add", "toString")).toContain("Created route toString");
+    expect(file().routes.toString).toMatchObject({ tool: "claude", from: ["*"] });
+    await run("rename", "main", "constructor");
+    expect(Object.keys(file().routes).sort()).toEqual(["constructor", "toString"]);
+    expect(await run("remove", "toString")).toContain("Removed route toString");
+    expect(Object.keys(file().routes)).toEqual(["constructor"]);
+  });
 });
 
 describe("route list", () => {

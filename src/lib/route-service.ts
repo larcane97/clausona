@@ -8,6 +8,7 @@ import {
   type RouteSpec,
   type RoutesFile,
   type RouteTool,
+  storedRoute,
   toolsOf,
   withDefaults,
 } from "../core/route-config.js";
@@ -150,7 +151,7 @@ export function resolveRoute(
   if (name !== undefined) {
     const nameProblem = checkRouteName(name);
     if (nameProblem) throw new Error(nameProblem);
-    const stored = file.routes[name];
+    const stored = storedRoute(file, name);
     if (!stored) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
     if (tool && stored.tool === "all") {
       if (tool !== "all") onlyTool = tool;

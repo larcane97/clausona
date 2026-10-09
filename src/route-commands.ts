@@ -12,6 +12,7 @@ import {
   type RouteOverrides,
   type RouteSpec,
   type RouteTool,
+  storedRoute,
   withDefaults,
 } from "./core/route-config.js";
 import { expandPatterns } from "./core/route-patterns.js";
@@ -225,7 +226,7 @@ export function newRouteFrom(tool: RouteTool, overrides: RouteOverrides): RouteS
 /** Writes a new route, refusing a name someone created meanwhile. */
 export async function createRoute(name: string, spec: RouteSpec, deps: RouteDeps): Promise<void> {
   await updateRoutes((file) => {
-    if (file.routes[name])
+    if (storedRoute(file, name))
       throw new Error(`Route '${name}' already exists. Change it with clausona route set ${name} …`);
     file.routes[name] = spec;
     return file;
@@ -248,7 +249,7 @@ async function addRoute(args: string[], deps: RouteDeps): Promise<string> {
   const options = toRoutingOptions(read.values);
   const tool = parseRouteTool(read.values.get("--tool")) ?? inferRouteTool(options.from ?? []) ?? "claude";
   const registry = await registryOrThrow(deps);
-  if ((await readRoutes(deps.paths)).routes[name]) {
+  if (storedRoute(await readRoutes(deps.paths), name)) {
     throw new Error(`Route '${name}' already exists. Change it with clausona route set ${name} …`);
   }
   const spec = newRouteFrom(tool, options);
@@ -283,7 +284,7 @@ async function setRoute(args: string[], deps: RouteDeps): Promise<string> {
   }
   const registry = await registryOrThrow(deps);
   const written = await updateRoutes((file) => {
-    const current = file.routes[name];
+    const current = storedRoute(file, name);
     if (!current) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
     const next = applyOverrides(current, options);
     if (add.length || drop.length) {
@@ -330,9 +331,9 @@ async function renameRoute(args: string[], deps: RouteDeps): Promise<string> {
   const from = routeNameArg(oldArg, "rename");
   const to = routeNameArg(newArg, "rename");
   await updateRoutes((file) => {
-    const spec = file.routes[from];
+    const spec = storedRoute(file, from);
     if (!spec) throw new UnknownRouteError(from, Object.keys(file.routes).sort());
-    if (file.routes[to]) throw new Error(`Route '${to}' already exists.`);
+    if (storedRoute(file, to)) throw new Error(`Route '${to}' already exists.`);
     delete file.routes[from];
     file.routes[to] = spec;
     return file;
@@ -346,7 +347,7 @@ async function removeRoute(args: string[], deps: RouteDeps): Promise<string> {
   if (extra.length) throw new Error(`${usage("remove")}\nRun \`clausona route remove --help\` for usage.`);
   const name = routeNameArg(nameArg, "remove");
   await updateRoutes((file) => {
-    if (!file.routes[name]) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
+    if (!storedRoute(file, name)) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
     delete file.routes[name];
     return file;
   }, deps.paths);

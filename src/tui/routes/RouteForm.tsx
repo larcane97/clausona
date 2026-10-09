@@ -7,6 +7,7 @@ import {
   type RouteSpec,
   STRATEGIES,
   type Strategy,
+  storedRoute,
   withDefaults,
 } from "../../core/route-config.js";
 import { matchesMember } from "../../core/route-patterns.js";
@@ -143,9 +144,6 @@ function step<T>(options: readonly T[], current: T, delta: 1 | -1): T {
   return options[(at + delta + options.length) % options.length] ?? current;
 }
 
-const own = (routes: Record<string, RouteSpec>, name: string) =>
-  Object.hasOwn(routes, name) ? routes[name] : undefined;
-
 /** Two specs as routes.json writes them; key order counts, which can only call a match a change. */
 const sameSpec = (a: RouteSpec | undefined, b: RouteSpec | undefined) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -238,7 +236,7 @@ export function RouteForm(props: RouteFormProps) {
     await deps.updateRoutes((file) => {
       // The text compare above leaves a moment before the lock, and the spec came from the
       // screen's earlier read: the route on disk, under the lock, is the one that counts.
-      if (original !== undefined && !sameSpec(own(file.routes, original), startSpec.current)) {
+      if (original !== undefined && !sameSpec(storedRoute(file, original), startSpec.current)) {
         outcome = "changed";
         return null;
       }
@@ -257,7 +255,7 @@ export function RouteForm(props: RouteFormProps) {
   async function reload() {
     const [text, file] = await Promise.all([deps.readRoutesText(), deps.readRoutes()]);
     base.current = Promise.resolve(text);
-    const fresh = original === undefined ? undefined : own(file.routes, original);
+    const fresh = original === undefined ? undefined : storedRoute(file, original);
     startSpec.current = fresh;
     if (!alive.current) return;
     if (original !== undefined && fresh) {

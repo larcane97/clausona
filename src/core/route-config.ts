@@ -63,6 +63,14 @@ export function emptyRoutesFile(): RoutesFile {
   return { version: ROUTES_VERSION, routes: {} };
 }
 
+/**
+ * The route stored under `name`, or undefined. Own keys only: `toString` and `constructor` are on
+ * every object, and are route names like any other.
+ */
+export function storedRoute(file: RoutesFile, name: string): RouteSpec | undefined {
+  return Object.hasOwn(file.routes, name) ? file.routes[name] : undefined;
+}
+
 /** What `route add` and the unknown-route prompt create: the defaults, written out. */
 export function newRouteSpec(tool: RouteTool = "claude"): RouteSpec {
   return {
