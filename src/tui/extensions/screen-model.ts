@@ -367,7 +367,8 @@ export type PaneLayout = { mode: "two" | "one"; scopeWidth: number; tableWidth: 
 
 /**
  * Two panes at >= 100 columns; scope pane = widest "label  count" + 4, at most 32. Under 100, one
- * pane at a time at the full width. Widths are inside Chrome's padding; `height` is the panes'
+ * pane at a time: the table and the details at the full width, the scope list as wide as beside
+ * the table, left-aligned. Widths are inside Chrome's padding; `height` is the panes'
  * rows, so the frame is `rows - 2` at most (ink clears the scrollback for a frame as tall as the
  * terminal). A size that is not a number, as from a stream that is no terminal, reads as 80 by 24.
  */
@@ -376,10 +377,11 @@ export function paneLayout(columns: number, rows: number, scopes: ScopeEntry[]):
   const down = Number.isFinite(rows) ? rows : 24;
   const width = Math.max(1, across - CHROME_COLUMNS);
   const height = Math.max(1, down - 2 - CHROME_ROWS);
-  if (across < TWO_PANES_FROM) return { mode: "one", scopeWidth: width, tableWidth: width, height };
-  // The marker before a label ("▸ ") and two spaces before the divider.
+  // The marker before a label ("▸ ") and two spaces before the divider. One pane alone keeps this
+  // width too, so a count sits next to its label rather than across the terminal from it.
   const widest = Math.max(0, ...scopes.map((s) => `${s.label}  ${s.count}`.length));
-  const scopeWidth = Math.min(SCOPE_PANE_MAX, widest + 4);
+  const scopeWidth = Math.min(SCOPE_PANE_MAX, widest + 4, width);
+  if (across < TWO_PANES_FROM) return { mode: "one", scopeWidth, tableWidth: width, height };
   return { mode: "two", scopeWidth, tableWidth: Math.max(1, width - scopeWidth - DIVIDER_COLUMNS), height };
 }
 
