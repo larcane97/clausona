@@ -68,8 +68,9 @@ A worker runs on a profile through a Superset agent config whose command is
 
 - **Claude Code configs** take the arguments from `fleet-core` section 4. Superset ignores a
   launch's model and effort for custom configs, so they go in the config's args.
-- **Codex configs** take `-s workspace-write -a <policy> -c check_for_update_on_startup=false -c mcp_servers={}`,
-  plus `-m` and `-c model_reasoning_effort=…` when wanted. Leave hooks on, unlike in `fleet-core`
+- **Codex configs** take `-s <sandbox> -a <policy> -c check_for_update_on_startup=false -c mcp_servers={}`,
+  with the sandbox and policy from `fleet-core` section 4, plus `-m` and
+  `-c model_reasoning_effort=…` when wanted. Leave hooks on, unlike in `fleet-core`
   section 4: in a Superset terminal, the `codex` that clausona starts goes through Superset's
   wrapper, which turns hooks on and reports each turn's end to Superset. That is what
   `H terminals wait` reads.

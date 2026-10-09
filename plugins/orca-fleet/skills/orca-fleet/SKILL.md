@@ -52,11 +52,14 @@ For each task, after `fleet-core` picked its profile:
    does not work for a plain shell.
 4. **Start.** `orca terminal send --terminal <handle> --text "clausona run <profile> -- <args>" --enter`,
    with the arguments from `fleet-core` section 4. Codex workers keep `--disable hooks`.
-5. **Check it started.** After about 10 seconds, read the screen:
-   `orca terminal show --terminal <handle> --json`, field `.result.terminal.preview`. It shows the
-   current screen, including Claude Code's and Codex's full-screen views; `orca terminal read` does
-   not. If the launch line never ran, send it once more. Otherwise tell the user what the screen
-   shows.
+5. **Check it started.** After about 10 seconds, run `orca terminal show --terminal <handle> --json`.
+   The tool has started when `.result.terminal.title` is no longer the shell's (Claude Code sets
+   `✳ Claude Code`), or when `orca worktree ps --json` lists an agent under the worktree. The
+   `preview` field shows the screen, but it can lag behind a full-screen app that is still
+   starting, so never resend the launch line on the preview alone: a line sent to a running
+   Claude Code becomes its first prompt. Send it once more only when the title is still the
+   shell's after 20 seconds and the preview shows the launch line never ran. Otherwise tell the
+   user what the screen shows.
 6. **Folder trust.** The first worker of a profile in a repo that profile never trusted asks
    whether to trust the folder. Answer only that question, and only about this repository:
    - Claude Code ("Is this a project you created or one you trust?"): the highlighted answer is
@@ -86,7 +89,9 @@ The user can open any worker's tab in Orca, read along and type into it at any t
   under its worktree with `state` and `lastAssistantMessage`, from Orca's hooks (clausona shares
   them across profiles). If `state` is still `working`, wait again without the pause. Codex workers
   do not appear there; read their screen.
-- **Read:** `orca terminal show --terminal <handle> --json`, field `.result.terminal.preview`.
+- **Read:** `orca terminal show --terminal <handle> --json`, field `.result.terminal.preview`. It
+  shows the current screen, including Claude Code's and Codex's full-screen views, once they are up;
+  `orca terminal read` returns only scrollback.
 - **Follow-up:** write the file, then
   `orca terminal send --terminal <handle> --text "Read .fleet-followup-<n>.md in this folder and do what it says." --enter`,
   and wait as above.

@@ -16,9 +16,17 @@ workers, read them and remove them. This skill says everything else.
 
 **Shells.** Commands here are written for a POSIX shell. Claude Code runs them in Bash, on Windows
 too (Git Bash). Codex on Windows runs PowerShell: there, read `"$(cat <file>)"` as
-`(Get-Content -Raw <file>)`, and `<cmd> </dev/null` as `$null | <cmd>`. `~` is your home
+`(Get-Content -Raw <file>)`, `$(command -v clausona)` as `(Get-Command clausona).Source`, and
+`<cmd> </dev/null` as `$null | <cmd>`. `~` is your home
 directory: `%USERPROFILE%` on Windows. The shell can be zsh, which does not split an unquoted
 variable into words: loop over paths written out one by one, not over a variable holding several.
+
+**Hidden variables in Codex.** A Codex config can pass your commands only a few environment
+variables: `[shell_environment_policy]` with `inherit = "core"` or `"none"`, usually in
+`~/.codex/config.toml`. Then `CODEX_HOME`, and the variables a runner sets in its terminals such
+as herdr's `HERDR_*`, look unset even when they are set. When one you need is unset in Codex, look
+for that setting. If it is there, tell the user: the fix is to start this Codex session again with
+`-c shell_environment_policy.inherit=all` added to its command, which changes that session only.
 
 ## 1. Profiles and the main session
 
@@ -33,7 +41,8 @@ variable into words: loop over paths written out one by one, not over a variable
 The **main tool** is the tool you run in: `claude` in Claude Code, `codex` in Codex. The **main
 profile** is the one whose `configDir` equals `$CLAUDE_CONFIG_DIR` (or `~/.claude` when it is unset)
 in Claude Code, or `$CODEX_HOME` (or `~/.codex`) in Codex. It coordinates and is never a worker.
-(`isActive` in the list is something else: the profile `clausona use` picked.)
+(`isActive` in the list is something else: the profile `clausona use` picked.) If Codex hides
+`CODEX_HOME` (Shells), you cannot tell which profile you run on: ask the user, unless they said.
 
 ## 2. Settings
 
@@ -45,13 +54,16 @@ older name. The keys:
 - `routing`: the user's own rules, in words, for example `"claude:glm never edits files under src/"`.
 - `maxUsage`: the usage threshold in section 3, in percent. The default is 90.
 - `retire`: `ask` (the default) or `auto` (section 11).
-- `permissions`: how workers run, per tool, for example `{"claude": "acceptEdits", "codex": "on-request"}`.
+- `permissions`: how workers run, per tool, for example
+  `{"claude": "acceptEdits", "codex": "on-request", "codexSandbox": "workspace-write"}`.
   `claude` is a Claude Code permission mode. `codex` is a Codex approval policy: `untrusted`,
-  `on-failure`, `on-request` or `never`.
+  `on-failure`, `on-request` or `never`. `codexSandbox` is the Codex sandbox: `workspace-write`
+  (the default) or `danger-full-access`. Section 4 says what each means for commits.
 
 When a `permissions` value you need is missing, use what a worker config or the profile's own
-settings already set (Claude Code's `permissions.defaultMode`), and say which mode the workers get.
-If nothing sets one, ask the user once, and save the answer to `fleet.json` when they agree.
+settings already set (Claude Code's `permissions.defaultMode`; Codex's `approval_policy` and
+`sandbox_mode` in its `config.toml`), and say which mode the workers get. If nothing sets one, ask
+the user once, and save the answer to `fleet.json` when they agree.
 
 When the user asks to change a default ("never use claude:personal for workers", "always retire
 finished workers"), update that key in `~/.clausona/fleet.json` and keep its other keys. If only
@@ -105,7 +117,11 @@ flags only, never the brief.
 
 **Codex workers:**
 
-- `-s workspace-write -a <permissions.codex>`.
+- `-s <permissions.codexSandbox> -a <permissions.codex>`. In `workspace-write`, Codex keeps `.git`
+  read-only and has no network, so a worker must ask before it commits and again before it pushes:
+  with `on-request` or `on-failure` the user approves each one (section 8), and with `never` both
+  fail. A Codex worker commits and pushes on its own only in `danger-full-access`, which turns the
+  sandbox off; that is the user's call. When you ask the user for a Codex policy, say this.
 - `-c check_for_update_on_startup=false`. Otherwise Codex can open with an update question whose
   highlighted answer runs a global `npm install`.
 - `-c 'mcp_servers={}'`, unless the task needs an MCP server: a worker would otherwise start every

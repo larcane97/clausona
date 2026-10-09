@@ -26,7 +26,9 @@ Stop and tell the user what is missing if any of these fails.
 
 1. You run inside a herdr pane: `HERDR_ENV` is `1` (`test "${HERDR_ENV:-}" = 1`; in PowerShell,
    `$env:HERDR_ENV -eq '1'`). herdr's CLI talks to the session of the pane it runs in. Do not
-   control herdr from outside it.
+   control herdr from outside it. In Codex, `HERDR_ENV` is also unset when Codex hides the
+   environment (`fleet-core`, Shells). If it does, do not tell the user they are outside herdr:
+   tell them to start Codex again in this pane with `-c shell_environment_policy.inherit=all`.
 2. `herdr status` shows a running server. Before a command group's first use, run the group alone
    (`herdr worktree`, `herdr agent`, `herdr pane`) to see its current syntax. Never run bare
    `herdr`: it starts the interface.
