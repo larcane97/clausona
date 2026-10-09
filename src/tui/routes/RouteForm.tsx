@@ -406,7 +406,8 @@ export function RouteForm(props: RouteFormProps) {
     <Chrome
       title="Routes"
       subtitle={original === undefined ? "New route" : `Edit ${original}`}
-      footer={asking ? "Discard changes? (y/N)" : saving ? "Saving…" : undefined}
+      question={asking ? "Discard changes? (y/N)" : undefined}
+      footer={saving ? "Saving…" : undefined}
       hints={
         asking
           ? CONFIRM_HINTS

@@ -263,11 +263,8 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
   // The form answers its own keys.
   useInput(onInput, { isActive: form === null });
 
-  const footer = removing
-    ? `Remove route ${removing}? (y/N)`
-    : refreshing
-      ? "Reading quota again…"
-      : message || undefined;
+  const question = removing ? `Remove route ${removing}? (y/N)` : undefined;
+  const footer = refreshing ? "Reading quota again…" : message || undefined;
   const hints = removing ? CONFIRM_HINTS : loaded.kind === "ready" ? HINTS : BACK_HINTS;
 
   if (loaded.kind !== "ready") {
@@ -299,7 +296,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
 
   const wide = columns >= WIDE_AT;
   return (
-    <Chrome title="Routes" footer={footer} hints={hints}>
+    <Chrome title="Routes" footer={footer} question={question} hints={hints}>
       <Box flexDirection={wide ? "row" : "column"} gap={wide ? 2 : 1} width="100%">
         <Box
           flexDirection="column"
