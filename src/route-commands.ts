@@ -4,7 +4,6 @@ import {
   checkPattern,
   checkRoute,
   checkRouteName,
-  DEFAULT_RESERVE_USAGE,
   emptyRoutesFile,
   holdsKey,
   newRouteSpec,
@@ -65,7 +64,6 @@ const FIELD_HELP: [string, string][] = [
   ["--exclude <patterns>", "Leave these out of from and fallback"],
   ["--strategy <s>", "round-robin (default), headroom or expiring"],
   ["--max-usage <n>", "Cut members at or above n% (default: 80)"],
-  ["--reserve-usage <n>", "Reserve stage up to n% (default: 95)"],
   ["--fallback <patterns>", "Tried in order when the pool has nobody under the cut"],
 ];
 
@@ -148,7 +146,7 @@ export function routeHelp(sub?: string): string {
     helpSection("COMMANDS", [
       ["(no arguments)", "In a terminal, open the Routes screen of the dashboard"],
       ["list", "Show routes, how many accounts are free now, and who is next"],
-      ["add <name>", "Create a route (every claude subscription, round-robin, 80% / 95%)"],
+      ["add <name>", "Create a route (every claude subscription, round-robin, skip at 80%)"],
       ["set <name>", "Change some of a route's fields"],
       ["rename <old> <new>", "Rename a route"],
       ["remove <name>", "Remove a route"],
@@ -167,7 +165,7 @@ export function routeHelp(sub?: string): string {
     `    ${dim("usage = the higher of the account's 5H and 7D windows")}`,
     `    ${dim("1. pool      from-members under max-usage, by strategy")}`,
     `    ${dim("2. fallback  fallback-members under max-usage, first in listed order")}`,
-    `    ${dim("3. reserve   any member under reserve-usage, lowest usage first")}`,
+    `    ${dim("3. reserve   any member under 100%, lowest usage first")}`,
     `    ${dim("4. nobody    exit 75")}`,
     `    ${dim("round-robin: picked longest ago · headroom: lowest usage ·")}`,
     `    ${dim("expiring: weekly limit resetting within 24h first")}`,
@@ -218,12 +216,10 @@ function routeNameArg(name: string | undefined, sub: string): string {
 
 /**
  * A new route as `route add` writes it, and as `run --route <unknown>` proposes it: the defaults
- * for the tool with the options given, and the reserve spelled out even when a cut above 95% moved it.
+ * for the tool with the options given.
  */
 export function newRouteFrom(tool: RouteTool, overrides: RouteOverrides): RouteSpec {
-  const spec = applyOverrides(newRouteSpec(tool), overrides);
-  if (spec.reserveUsage === undefined) spec.reserveUsage = Math.max(DEFAULT_RESERVE_USAGE, spec.maxUsage ?? 0);
-  return spec;
+  return applyOverrides(newRouteSpec(tool), overrides);
 }
 
 /** Writes a new route, refusing a name someone created meanwhile. */
@@ -288,7 +284,7 @@ async function setRoute(args: string[], deps: RouteDeps): Promise<string> {
   if (noFallback && options.fallback) throw new Error("--fallback and --no-fallback cannot be used together.");
   if (Object.keys(options).length === 0 && !add.length && !drop.length && !noFallback) {
     throw new Error(
-      "Nothing to change. Pass at least one of --from, --add, --drop, --exclude, --strategy, --max-usage, --reserve-usage, --fallback, --no-fallback.",
+      "Nothing to change. Pass at least one of --from, --add, --drop, --exclude, --strategy, --max-usage, --fallback, --no-fallback.",
     );
   }
   const registry = await registryOrThrow(deps);

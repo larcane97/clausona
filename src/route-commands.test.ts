@@ -37,14 +37,14 @@ const snap = (five: number, seven: number): QuotaSnapshot => ({
   weekly: { usedPercent: seven, resetsAt: null },
 });
 
-function setup(
-  quotas: Record<string, QuotaSnapshot> = {
-    "claude:a": snap(10, 10),
-    "claude:b": snap(20, 20),
-    "claude:c": snap(30, 30),
-    "codex:x": snap(5, 5),
-  },
-) {
+const QUOTAS: Record<string, QuotaSnapshot> = {
+  "claude:a": snap(10, 10),
+  "claude:b": snap(20, 20),
+  "claude:c": snap(30, 30),
+  "codex:x": snap(5, 5),
+};
+
+function setup(quotas: Record<string, QuotaSnapshot> = QUOTAS) {
   const dir = mkdtempSync(path.join(tmpdir(), "clausona-route-cmd-"));
   temps.push(dir);
   const deps: RouteDeps = {
@@ -154,7 +154,6 @@ describe("route add", () => {
       from: ["*"],
       strategy: "round-robin",
       maxUsage: 80,
-      reserveUsage: 95,
     });
   });
 
@@ -229,7 +228,6 @@ describe("route add", () => {
       exclude: ["c"],
       strategy: "headroom",
       maxUsage: 70,
-      reserveUsage: 95,
     });
   });
 
@@ -355,6 +353,9 @@ describe("route set, rename, remove", () => {
     const { run } = setup();
     await run("add", "main");
     await expect(run("set", "main")).rejects.toThrow(/^Nothing to change/);
+    await expect(run("set", "main")).rejects.toThrow(
+      "Nothing to change. Pass at least one of --from, --add, --drop, --exclude, --strategy, --max-usage, --fallback, --no-fallback.",
+    );
     await expect(run("set", "work", "--strategy", "headroom")).rejects.toThrow(/Route 'work' does not exist/);
   });
 
@@ -409,8 +410,8 @@ describe("route list", () => {
     await run("add", "main");
     await run("add", "any", "--tool", "all", "--strategy", "headroom");
     const out = await run("list");
-    expect(out).toMatch(/^ {4}any\s+claude \+ codex\s+headroom\s+80% \/ 95%\s+3 of 4\s+codex:x$/m);
-    expect(out).toMatch(/^ {4}main\s+claude\s+round-robin\s+80% \/ 95%\s+2 of 3\s+claude:a$/m);
+    expect(out).toMatch(/^ {4}any\s+claude \+ codex\s+headroom\s+80%\s+3 of 4\s+codex:x$/m);
+    expect(out).toMatch(/^ {4}main\s+claude\s+round-robin\s+80%\s+2 of 3\s+claude:a$/m);
     // Ranked as explain ranks, so nothing is recorded.
     expect(() => readFileSync(deps.paths.picksPath)).toThrow();
   });
@@ -424,7 +425,7 @@ describe("route list", () => {
       return {};
     };
     const out = await run("list", "--no-quota");
-    expect(out).toMatch(/^ {4}main\s+claude\s+round-robin\s+80% \/ 95%\s+—\s+—$/m);
+    expect(out).toMatch(/^ {4}main\s+claude\s+round-robin\s+80%\s+—\s+—$/m);
     expect(reads).toBe(0);
     await run("list", "--json");
     expect(reads).toBe(0);
@@ -438,8 +439,8 @@ describe("route list", () => {
       JSON.stringify({ version: 1, routes: { main: { tool: "claude", from: ["gone", "*"] } } }),
     );
     const out = await run("list");
-    expect(out).toMatch(/^ {4}ROUTE\s+TOOL\s+STRATEGY\s+LIMITS\s+FREE NOW\s+NEXT$/m);
-    expect(out).toMatch(/^ {4}main\s+claude\s+round-robin\s+80% \/ 95%/m);
+    expect(out).toMatch(/^ {4}ROUTE\s+TOOL\s+STRATEGY\s+SKIP AT\s+FREE NOW\s+NEXT$/m);
+    expect(out).toMatch(/^ {4}main\s+claude\s+round-robin\s+80%/m);
     expect(out).toContain("  ⚠ main names 'gone', which is not a registered profile.");
     const json = JSON.parse(await run("list", "--json"));
     expect(json.routes[0]).toMatchObject({
@@ -476,21 +477,10 @@ describe("route explain and pick", () => {
   it("explains an unsaved route", async () => {
     const { run } = setup();
     expect(await run("explain", "--tool", "claude", "--from", "b,c")).toContain("inline route");
-    const none = await run(
-      "explain",
-      "--tool",
-      "claude",
-      "--from",
-      "b,c",
-      "--exclude",
-      "c",
-      "--max-usage",
-      "1",
-      "--reserve-usage",
-      "1",
-    );
+    const { run: runFull } = setup({ ...QUOTAS, "claude:b": snap(100, 20) });
+    const none = await runFull("explain", "--tool", "claude", "--from", "b,c", "--exclude", "c", "--max-usage", "1");
     expect(none.replace(/\s+/g, " ")).toContain(
-      "Nobody can be picked now; clausona run claude --from 'b,c' --exclude 'c' --max-usage 1 --reserve-usage 1 would exit 75.",
+      "Nobody can be picked now; clausona run claude --from 'b,c' --exclude 'c' --max-usage 1 would exit 75.",
     );
     const both = await run("explain", "--tool", "all", "--from", "a,x");
     expect(both).toMatch(/^ {4}claude:a\s/m);
@@ -506,18 +496,20 @@ describe("route explain and pick", () => {
     expect(await run("explain", "any")).toMatch(/^ {4}claude:a\s/m);
     expect(await run("pick", "any", "--tool", "claude")).toBe("claude:a");
     // Nobody of the narrowed tool is free: the 75 message names the tool and explains it alone.
-    const none = (await run("pick", "any", "--tool", "claude", "--max-usage", "1", "--reserve-usage", "1").catch(
-      (e: unknown) => e,
-    )) as NoAccountError;
+    const full = setup({ ...QUOTAS, "claude:a": snap(100, 0), "claude:b": snap(100, 0), "claude:c": snap(0, 100) });
+    await full.run("add", "any", "--tool", "all");
+    const none = (await full
+      .run("pick", "any", "--tool", "claude", "--max-usage", "1")
+      .catch((e: unknown) => e)) as NoAccountError;
     expect(none).toBeInstanceOf(NoAccountError);
     expect(stripAnsi(none.message).split("\n")[0]).toBe("No claude account in route any is free right now.");
     expect(stripAnsi(none.message).replace(/\s+/g, " ")).toContain(
-      "clausona route explain any --tool claude --max-usage 1 --reserve-usage 1",
+      "clausona route explain any --tool claude --max-usage 1",
     );
-    const narrowed = await run("explain", "any", "--tool", "claude", "--max-usage", "1", "--reserve-usage", "1");
+    const narrowed = await full.run("explain", "any", "--tool", "claude", "--max-usage", "1");
     // With the options the explain was given: without them the run would rank another route.
     expect(narrowed).toContain(
-      "Nobody can be picked now; clausona run claude --route any --max-usage 1 --reserve-usage 1 would exit 75.",
+      "Nobody can be picked now; clausona run claude --route any --max-usage 1 would exit 75.",
     );
     await run("add", "main");
     await expect(run("explain", "main", "--tool", "codex")).rejects.toThrow("Route 'main' is for claude, not codex.");
@@ -536,7 +528,7 @@ describe("route explain and pick", () => {
   });
 
   it("fails with exit code 75 when nobody can be picked, as JSON when asked", async () => {
-    const { run } = setup({ "claude:a": snap(99, 0), "claude:b": snap(99, 0), "claude:c": snap(99, 0) });
+    const { run } = setup({ "claude:a": snap(100, 0), "claude:b": snap(100, 0), "claude:c": snap(0, 100) });
     await run("add", "main");
     const error = (await run("pick", "main").catch((e: unknown) => e)) as NoAccountError;
     expect(error).toBeInstanceOf(NoAccountError);
@@ -544,6 +536,28 @@ describe("route explain and pick", () => {
     expect(stripAnsi(error.message).split("\n")[0]).toBe("No account in route main is free right now.");
     const jsonError = (await run("pick", "main", "--json").catch((e: unknown) => e)) as NoAccountError;
     expect(JSON.parse(jsonError.stdout ?? "")).toMatchObject({ profile: null });
+  });
+});
+
+describe("the reserve limit, which routes no longer have", () => {
+  it("is an unknown option to every route command, and no help offers it", async () => {
+    const { run } = setup();
+    await run("add", "main");
+    for (const args of [
+      ["add", "work", "--reserve-usage", "90"],
+      ["set", "main", "--reserve-usage", "90"],
+      ["explain", "main", "--reserve-usage", "90"],
+      ["pick", "main", "--reserve-usage", "90"],
+    ]) {
+      await expect(run(...args), args[0]).rejects.toThrow(
+        `Unknown option: --reserve-usage\nRun \`clausona route ${args[0]} --help\` for usage.`,
+      );
+    }
+    for (const page of [await run("--help"), await run("add", "--help"), await run("set", "--help")]) {
+      expect(page).not.toMatch(/reserve-usage|95%/);
+    }
+    expect(stripAnsi(await runCommand("run", ["--help"]))).not.toContain("--reserve-usage");
+    expect(await run("--help")).toContain("3. reserve   any member under 100%, lowest usage first");
   });
 });
 

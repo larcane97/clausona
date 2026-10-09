@@ -30,7 +30,6 @@ const FIELD_LABEL: Record<FormField, string> = {
   exclude: "Exclude",
   strategy: "Strategy",
   max: "Skip at",
-  reserve: "Reserve up to",
   fallback: "Fallback",
 };
 
@@ -68,7 +67,7 @@ export function Line({
   );
 }
 
-/** The name of one of the two fields under a label: `from` and `exclude`, `skip at` and `reserve up to`. */
+/** The name of a field under a label: `from` and `exclude` under Patterns, `skip at` under Limits. */
 export function SubLabel({
   text,
   width,

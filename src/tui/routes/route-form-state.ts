@@ -20,7 +20,7 @@ import type { ToolName } from "../../types.js";
  * writes that form, so changing the tool changes how every ticked account is saved.
  */
 
-export type FormField = "name" | "tool" | "accounts" | "from" | "exclude" | "strategy" | "max" | "reserve" | "fallback";
+export type FormField = "name" | "tool" | "accounts" | "from" | "exclude" | "strategy" | "max" | "fallback";
 export const FORM_FIELDS: readonly FormField[] = [
   "name",
   "tool",
@@ -29,7 +29,6 @@ export const FORM_FIELDS: readonly FormField[] = [
   "exclude",
   "strategy",
   "max",
-  "reserve",
   "fallback",
 ];
 
@@ -52,7 +51,6 @@ export type RouteFormState = {
   strategy: Strategy;
   /** Blank leaves the limit unset, so the route takes the default. */
   maxText: string;
-  reserveText: string;
   /** Ordered: an account's id, or a pattern kept as written. */
   fallback: string[];
   focus: FormField;
@@ -67,7 +65,7 @@ export type FormAction =
   | { type: "cursor"; delta: 1 | -1 }
   /** accounts: tick or untick the cursor row, or row 0, "every account". */
   | { type: "toggle" }
-  | { type: "text"; field: "name" | "from" | "exclude" | "max" | "reserve"; value: string }
+  | { type: "text"; field: "name" | "from" | "exclude" | "max"; value: string }
   | { type: "tool"; tool: RouteTool }
   | { type: "strategy"; strategy: Strategy }
   | { type: "fallback-add"; id: string }
@@ -88,7 +86,6 @@ export const TEXT_KEYS = {
   from: "fromText",
   exclude: "excludeText",
   max: "maxText",
-  reserve: "reserveText",
 } as const;
 
 /** The subscription accounts a route of `tool` takes, by id. The caller leaves API profiles out. */
@@ -156,7 +153,6 @@ export function initialFormState(
     excludeText: joinList(excludeText),
     strategy: spec.strategy ?? DEFAULT_STRATEGY,
     maxText: spec.maxUsage === undefined ? "" : String(spec.maxUsage),
-    reserveText: spec.reserveUsage === undefined ? "" : String(spec.reserveUsage),
     // `side` and `claude:side` are one account, held once as it is saved once.
     fallback: unique((spec.fallback ?? []).map((entry) => fromAccount.get(entry) ?? entry)),
     focus: "name",
@@ -294,7 +290,6 @@ const PROBLEM = /^route(?:\.(\w+))?(?:\[(\d+)\])?: (.*)$/s;
 const FIELD_OF: Partial<Record<string, ErrorKey>> = {
   exclude: "exclude",
   maxUsage: "max",
-  reserveUsage: "reserve",
   fallback: "fallback",
 };
 
@@ -333,7 +328,6 @@ export function formToSpec(
   if (exclude.length > 0) spec.exclude = exclude;
   spec.strategy = state.strategy;
   if (state.maxText.trim() !== "") spec.maxUsage = Number(state.maxText.trim());
-  if (state.reserveText.trim() !== "") spec.reserveUsage = Number(state.reserveText.trim());
   if (fallback.length > 0) spec.fallback = fallback;
 
   const errors: RouteFormState["errors"] = {};

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { isResumeRun, parseRouteTool, readOptions, readRunArgs, toRoutingOptions } from "./run-args.js";
+import {
+  isResumeRun,
+  parseRouteTool,
+  ROUTE_FIELD_OPTIONS,
+  readOptions,
+  readRunArgs,
+  toRoutingOptions,
+} from "./run-args.js";
 
 describe("readRunArgs", () => {
   it("reads routing options, then hands the rest to the tool", () => {
@@ -33,8 +40,8 @@ describe("readRunArgs", () => {
       "*-share",
       "--max-usage",
       "70",
-      "--reserve-usage",
-      "90",
+      "--strategy",
+      "expiring",
       "--fallback",
       "dalsoo",
     ]);
@@ -42,8 +49,17 @@ describe("readRunArgs", () => {
       route: "main",
       exclude: ["*-share"],
       maxUsage: 70,
-      reserveUsage: 90,
+      strategy: "expiring",
       fallback: ["dalsoo"],
+    });
+  });
+
+  // Routes have no reserve limit: the option an earlier build took is the tool's, like any other.
+  it("does not read --reserve-usage", () => {
+    expect(readRunArgs(["--route", "main", "--reserve-usage", "90"])).toEqual({
+      options: { route: "main" },
+      toolArgs: ["--reserve-usage", "90"],
+      sawSeparator: false,
     });
   });
 
@@ -88,6 +104,9 @@ describe("readOptions", () => {
     expect(() => readOptions(["--nope=1"], { values: [], flags: [] }, "route list")).toThrow(
       "Unknown option: --nope\nRun `clausona route list --help` for usage.",
     );
+    expect(() =>
+      readOptions(["--reserve-usage", "90"], { values: ROUTE_FIELD_OPTIONS, flags: [] }, "route set"),
+    ).toThrow("Unknown option: --reserve-usage\nRun `clausona route set --help` for usage.");
   });
 
   it("converts the routing fields", () => {

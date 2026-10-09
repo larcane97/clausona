@@ -14,7 +14,6 @@ export const ROUTE_FIELD_OPTIONS: readonly string[] = [
   "--exclude",
   "--strategy",
   "--max-usage",
-  "--reserve-usage",
   "--fallback",
 ];
 
@@ -78,9 +77,6 @@ export function toRoutingOptions(values: Map<string, string>): RoutingOptions {
         break;
       case "--max-usage":
         options.maxUsage = parsePercent(flag, value);
-        break;
-      case "--reserve-usage":
-        options.reserveUsage = parsePercent(flag, value);
         break;
     }
   }

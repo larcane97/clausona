@@ -204,7 +204,10 @@ describe("runRouted", () => {
   });
 
   it("exits 75 when nobody can be picked", async () => {
-    const s = setup({ routes: MAIN, quotas: { "claude:a": snap(99), "claude:b": snap(99), "claude:solo": snap(99) } });
+    const s = setup({
+      routes: MAIN,
+      quotas: { "claude:a": snap(100), "claude:b": snap(100), "claude:solo": snap(100) },
+    });
     const error = (await runRouted(["--route", "main"], s.launch, s.io, s.deps).catch(
       (e: unknown) => e,
     )) as NoAccountError;
@@ -214,12 +217,12 @@ describe("runRouted", () => {
   });
 
   it("points exit 75 at an explain that ranks with the run's options and its resume", async () => {
-    const s = setup({ routes: MAIN });
-    const args = ["--route", "main", "--exclude", "b", "--max-usage", "1", "--reserve-usage", "1", "--", "-c"];
+    const s = setup({ routes: MAIN, quotas: { "claude:a": snap(100), "claude:b": snap(10), "claude:solo": snap(5) } });
+    const args = ["--route", "main", "--exclude", "b", "--max-usage", "1", "--", "-c"];
     const error = (await runRouted(args, s.launch, s.io, s.deps).catch((e: unknown) => e)) as NoAccountError;
     expect(error).toBeInstanceOf(NoAccountError);
     expect(stripAnsi(error.message).replace(/\s+/g, " ")).toContain(
-      "see everything with: clausona route explain main --exclude 'b' --max-usage 1 --reserve-usage 1 --resume",
+      "see everything with: clausona route explain main --exclude 'b' --max-usage 1 --resume",
     );
     expect(s.launches).toEqual([]);
   });
@@ -246,7 +249,6 @@ describe("runRouted", () => {
       from: ["*"],
       strategy: "round-robin",
       maxUsage: 80,
-      reserveUsage: 95,
     });
     expect(s.notes[0]).toContain("Route work does not exist yet. It would take every claude account,");
     expect(s.notes[0]).toContain("claude:solo 5%");
@@ -302,7 +304,6 @@ describe("runRouted", () => {
       exclude: ["solo"],
       strategy: "headroom",
       maxUsage: 80,
-      reserveUsage: 95,
     });
     expect(s.notes[0]).toContain("taking the one with the most room");
     expect(s.confirmed).toHaveLength(1);
@@ -349,15 +350,6 @@ describe("runRouted", () => {
       /claude:glm is an API profile/,
     );
     expect(() => readFileSync(s.paths.routesPath)).toThrow();
-  });
-
-  it("writes the reserve out when a cut above 95% moved it, as route add does", async () => {
-    const s = setup({ interactive: true, answers: ["y"] });
-    await runRouted(["--route", "work", "--max-usage", "98"], s.launch, s.io, s.deps);
-    expect(JSON.parse(readFileSync(s.paths.routesPath, "utf8")).routes.work).toMatchObject({
-      maxUsage: 98,
-      reserveUsage: 98,
-    });
   });
 
   it("creates and runs nothing when the answer is no, or the input closes", async () => {
@@ -445,7 +437,7 @@ describe("runRouted", () => {
     });
 
     it("names the tool, and explains only it, when nobody of the narrowed tool is free", async () => {
-      const quotas = { ...BOTH_QUOTAS, "claude:a": snap(99), "claude:b": snap(99), "claude:solo": snap(99) };
+      const quotas = { ...BOTH_QUOTAS, "claude:a": snap(100), "claude:b": snap(100), "claude:solo": snap(100) };
       const s = setup({ registry: BOTH, quotas, routes: ANY });
       const error = (await runRouted(["claude", "--route", "any", "-p", "hi"], s.launch, s.io, s.deps).catch(
         (e: unknown) => e,

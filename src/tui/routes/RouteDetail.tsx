@@ -44,9 +44,7 @@ export function RouteDetail({ entry, pending }: { entry: Entry; pending: boolean
       <Text color={color.text} bold wrap="truncate-end">
         {name}
       </Text>
-      <Text color={color.muted}>
-        {`${toolLabel(route.tool)} · ${route.strategy} · skip at ${route.maxUsage}%, reserve to ${route.reserveUsage}%`}
-      </Text>
+      <Text color={color.muted}>{`${toolLabel(route.tool)} · ${route.strategy} · skip at ${route.maxUsage}%`}</Text>
       <Setting
         label="Accounts"
         value={`${route.from.join(", ")}${route.exclude.length ? ` except ${route.exclude.join(", ")}` : ""}`}
@@ -63,7 +61,7 @@ type Line = { key: string; id: string; picked: boolean; fallback: boolean; row?:
 function statusOf(row: Row, ranking: Ranking): string {
   const { outcome, route } = ranking;
   if (row.status === "picked")
-    return outcome.kind === "picked" && outcome.stage === "reserve" ? "next (reserve)" : "next";
+    return outcome.kind === "picked" && outcome.stage === "reserve" ? "next (most room left)" : "next";
   if (row.status === "over-limit") return `over ${route.maxUsage}%`;
   return "";
 }

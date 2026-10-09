@@ -46,7 +46,6 @@ const FILE: RoutesFile = {
       exclude: ["*-share"],
       strategy: "round-robin",
       maxUsage: 80,
-      reserveUsage: 95,
     },
     wide: { tool: "all", from: ["*"] },
   },
@@ -209,7 +208,8 @@ describe("RoutesScreen", () => {
     expect(list[1]).toMatch(/^▸ solo/);
     expect(list[0]).toMatch(/^main/);
     expect(detail.find(Boolean)).toBe("solo");
-    expect(detail).toContain("claude · headroom · skip at 80%, reserve to 95%");
+    expect(detail).toContain("claude · headroom · skip at 80%");
+    expect(detail.join("\n")).not.toContain("reserve");
     expect(detail).toContain("Accounts  work");
     expect(detail).toContain("Fallback  team");
     expect(row(detail, "claude:team")).toContain("claude:team (fallback)");
@@ -223,7 +223,7 @@ describe("RoutesScreen", () => {
     const { detail } = panes(await ranked(instance));
 
     expect(detail.find(Boolean)).toBe("main");
-    expect(detail).toContain("claude · round-robin · skip at 80%, reserve to 95%");
+    expect(detail).toContain("claude · round-robin · skip at 80%");
     expect(detail).toContain("Accounts  * except *-share");
     expect(detail).toContain("Fallback  none");
     expect(row(detail, "ACCOUNT")).toMatch(/ACCOUNT\s+5H\s+7D/);
@@ -406,6 +406,18 @@ describe("RoutesScreen", () => {
     for (const line of all) expect(line.length).toBeLessThanOrEqual(80);
   });
 
+  // Everyone at the cut or over it: the one with the most left is next, and says why.
+  it("says when the next pick is the one with the most left, within 80 columns", async () => {
+    const busy = { ...QUOTAS, "claude:team": snap(85, 22), "claude:work": snap(12, 97) };
+    const { instance } = setup({ columns: 80, collect: async () => busy });
+    const all = lines(await ranked(instance));
+    expect(all.find((line) => line.includes("claude:team"))).toMatch(
+      /▸ claude:team\s.*85%.*22%\s+next \(most room left\)$/,
+    );
+    expect(all.find((line) => line.includes("claude:work"))).toMatch(/claude:work\s.*12%.*97%\s+over 80%$/);
+    for (const line of all) expect(line.length).toBeLessThanOrEqual(80);
+  });
+
   it("opens a new route form on n, and lists and selects the route it saves", async () => {
     const { instance, file } = setup();
     await ranked(instance);
@@ -421,7 +433,6 @@ describe("RoutesScreen", () => {
       from: ["*"],
       strategy: "round-robin",
       maxUsage: 80,
-      reserveUsage: 95,
     });
     const { list, detail } = panes(frame);
     expect(list.map((line) => line.split(/\s+/).filter((word) => word !== "▸")[0])).toEqual([

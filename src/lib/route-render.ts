@@ -10,6 +10,8 @@ import {
 } from "../core/route-config.js";
 import {
   blockingReset,
+  FULL,
+  mostLeftReason,
   type Ranking,
   type Row,
   type SkipReason,
@@ -104,7 +106,6 @@ function fieldFlags(overrides: RouteOverrides): string[] {
   patterns("--exclude", overrides.exclude);
   if (overrides.strategy !== undefined) flags.push(`--strategy ${overrides.strategy}`);
   if (overrides.maxUsage !== undefined) flags.push(`--max-usage ${overrides.maxUsage}`);
-  if (overrides.reserveUsage !== undefined) flags.push(`--reserve-usage ${overrides.reserveUsage}`);
   patterns("--fallback", overrides.fallback);
   return flags;
 }
@@ -423,21 +424,21 @@ export function renderRoutesEmpty(): string {
 /** A route as `route list` shows it; no ranking with `--no-quota`. */
 export type RouteListRow = { name: string; route: Route; ranking?: Ranking };
 
-type RouteColumn = "route" | "tool" | "strategy" | "limits" | "free" | "next";
+type RouteColumn = "route" | "tool" | "strategy" | "skipAt" | "free" | "next";
 
 const ROUTE_LABELS: Record<RouteColumn, string> = {
   route: "ROUTE",
   tool: "TOOL",
   strategy: "STRATEGY",
-  limits: "LIMITS",
+  skipAt: "SKIP AT",
   free: "FREE NOW",
   next: "NEXT",
 };
 
-/** Widest first. TOOL goes first, then LIMITS, then STRATEGY; the name and who is free never do. */
+/** Widest first. TOOL goes first, then SKIP AT, then STRATEGY; the name and who is free never do. */
 const ROUTE_LAYOUTS: RouteColumn[][] = [
-  ["route", "tool", "strategy", "limits", "free", "next"],
-  ["route", "strategy", "limits", "free", "next"],
+  ["route", "tool", "strategy", "skipAt", "free", "next"],
+  ["route", "strategy", "skipAt", "free", "next"],
   ["route", "strategy", "free", "next"],
   ["route", "free", "next"],
 ];
@@ -490,7 +491,7 @@ export function renderRouteTable(
       route: [[name]],
       tool: [[toolLabel(route.tool), secondary]],
       strategy: [[route.strategy, secondary]],
-      limits: [[`${route.maxUsage}% / ${route.reserveUsage}%`, secondary]],
+      skipAt: [[`${route.maxUsage}%`, secondary]],
       free: count ? [[`${count.free} of ${count.members}`, count.free === 0 ? yellow : undefined]] : [["—", dim]],
       next: ranking ? nextCell(ranking, now) : [["—", dim]],
     };
@@ -524,7 +525,7 @@ function settingsLines(route: Route, width: number): string[] {
   return [
     ...entry("Tool", toolLabel(route.tool)),
     ...entry("Strategy", STRATEGY_WORDS[route.strategy]),
-    ...entry("Limits", `skip at ${route.maxUsage}%, reserve up to ${route.reserveUsage}%`),
+    ...entry("Limits", `skip at ${route.maxUsage}%; if all are, the one with the most left`),
     ...entry(
       "Accounts",
       `${route.from.join(", ")}${route.exclude.length ? ` except ${route.exclude.join(", ")}` : ""}`,
@@ -538,7 +539,7 @@ function statusCell(row: Row, ranking: Ranking): Cell {
   if (row.status === "picked" && outcome.kind === "picked") {
     if (outcome.stage === "pool") return [["picked next", accent]];
     if (outcome.stage === "fallback") return [["picked: fallback", accent]];
-    return [[`picked: reserve, most room up to ${route.reserveUsage}%`, accent]];
+    return [[`picked: ${mostLeftReason(route)}`, accent]];
   }
   if (row.status === "over-limit") return [[`over ${route.maxUsage}%`, yellow]];
   if (row.skip) return [[skipText(row), dim]];
@@ -661,7 +662,7 @@ function pickedWhy(ranking: Ranking): string {
   const { outcome, route } = ranking;
   if (outcome.kind !== "picked") return "";
   if (outcome.stage === "fallback") return "fallback";
-  if (outcome.stage === "reserve") return "reserve";
+  if (outcome.stage === "reserve") return mostLeftReason(route);
   if (route.strategy === "round-robin") return "next in turn";
   // routing.ts says which of the two `expiring` took.
   if (route.strategy === "expiring" && outcome.reason.startsWith("weekly limit resets")) {
@@ -685,7 +686,7 @@ export function renderNote(name: string | undefined, ranking: Ranking): string {
 /** A reset nobody knows sorts after every known one. */
 const resetOrder = (at: string | null) => (at === null ? Number.MAX_SAFE_INTEGER : Date.parse(at));
 
-/** When every window at or above the reserve will have reset, and which window that is. */
+/** When every window at or above `limit` will have reset, and which window that is. */
 function freeAgainCell(row: Row, limit: number, at: string | null, now: number): Cell {
   if (!at) return [["—", dim]];
   const ms = Date.parse(at);
@@ -729,7 +730,7 @@ export function renderNoAccount(
   // Soonest free first, a reset nobody knows last, then the members that are skipped.
   const held = rows
     .filter((row) => !row.skip)
-    .map((row) => ({ row, at: blockingReset(row, route.reserveUsage) }))
+    .map((row) => ({ row, at: blockingReset(row, FULL) }))
     .sort((a, b) => resetOrder(a.at) - resetOrder(b.at));
   const skipped = rows.filter((row) => row.skip);
   const percent = percentWidth(rows);
@@ -751,7 +752,7 @@ export function renderNoAccount(
               [[row.id]],
               quotaCell(row, "5H", percent, resets, now),
               quotaCell(row, "7D", percent, resets, now),
-              freeAgainCell(row, route.reserveUsage, at, now),
+              freeAgainCell(row, FULL, at, now),
               row.id === soonest?.id ? [["soonest", accent]] : [],
             ],
           }),
@@ -880,7 +881,6 @@ export function explainJson(name: string | undefined, resolvedBy: ResolvedBy, ra
       exclude: [...route.exclude],
       strategy: route.strategy,
       maxUsage: route.maxUsage,
-      reserveUsage: route.reserveUsage,
       fallback: [...route.fallback],
     },
     outcome:

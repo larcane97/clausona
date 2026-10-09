@@ -96,7 +96,6 @@ const FIELD_FLAGS: ReadonlyArray<[keyof RouteOverrides, string]> = [
   ["exclude", "--exclude"],
   ["strategy", "--strategy"],
   ["maxUsage", "--max-usage"],
-  ["reserveUsage", "--reserve-usage"],
   ["fallback", "--fallback"],
 ];
 

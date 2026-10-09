@@ -75,7 +75,7 @@ describe("accountsFor", () => {
 });
 
 describe("a new form", () => {
-  it("starts on every claude account, round-robin, 80% and 95%, with the name focused", () => {
+  it("starts on every claude account, round-robin, skipping at 80%, with the name focused", () => {
     expect(newForm()).toEqual({
       mode: "new",
       name: "",
@@ -86,7 +86,6 @@ describe("a new form", () => {
       excludeText: "",
       strategy: "round-robin",
       maxText: "80",
-      reserveText: "95",
       fallback: [],
       focus: "name",
       cursor: 0,
@@ -179,7 +178,7 @@ describe("an edit form", () => {
 
   it("leaves limits the spec does not set blank, and saves them unset", () => {
     const state = editForm({ tool: "codex", from: ["x"], strategy: "expiring" });
-    expect([state.maxText, state.reserveText]).toEqual(["", ""]);
+    expect(state.maxText).toBe("");
     expect(formToSpec(state, ACCOUNTS).spec).toEqual({ tool: "codex", from: ["x"], strategy: "expiring" });
   });
 });
@@ -404,13 +403,9 @@ describe("formToSpec", () => {
     expect(formToSpec(state, ACCOUNTS).spec?.from).toEqual(["*", "*@side.example.com"]);
   });
 
-  it("reads the limits as numbers", () => {
-    const state = run(
-      named(newForm()),
-      { type: "text", field: "max", value: " 70 " },
-      { type: "text", field: "reserve", value: "90" },
-    );
-    expect(formToSpec(state, ACCOUNTS).spec).toMatchObject({ maxUsage: 70, reserveUsage: 90 });
+  it("reads the limit as a number", () => {
+    const state = run(named(newForm()), { type: "text", field: "max", value: " 70 " });
+    expect(formToSpec(state, ACCOUNTS).spec).toMatchObject({ maxUsage: 70 });
   });
 
   it("asks for an account when from would be empty", () => {
@@ -463,7 +458,6 @@ describe("formToSpec", () => {
     ["a from pattern", (s) => run(s, { type: "text", field: "from", value: "codex:*" }), "from", /names a codex/],
     ["an exclude pattern", (s) => run(s, { type: "text", field: "exclude", value: "a b" }), "exclude", /not a profile/],
     ["the cut", (s) => run(s, { type: "text", field: "max", value: "0" }), "max", /from 1 to 100/],
-    ["the reserve", (s) => run(s, { type: "text", field: "reserve", value: "60" }), "reserve", /from maxUsage \(80\)/],
     ["a fallback", (s) => ({ ...s, fallback: ["codex:x"] }), "fallback", /names a codex/],
     ["anything else", (s) => ({ ...s, strategy: "fastest" as Strategy }), "form", /must be one of/],
   ])("puts a problem with %s on its field, without the location", (_label, act, field, message) => {
@@ -497,7 +491,6 @@ describe("errors", () => {
     from: "f",
     exclude: "e",
     max: "m",
-    reserve: "r",
     fallback: "b",
     form: "x",
   };
@@ -539,7 +532,6 @@ describe("a round trip through the form", () => {
       exclude: ["*-share"],
       strategy: "headroom",
       maxUsage: 80,
-      reserveUsage: 95,
       fallback: ["side"],
     },
     { tool: "claude", from: ["*"], exclude: ["*-share", "side"], strategy: "round-robin", maxUsage: 70 },
@@ -551,7 +543,7 @@ describe("a round trip through the form", () => {
       strategy: "round-robin",
       fallback: ["claude:team"],
     },
-    { tool: "codex", from: ["x"], strategy: "headroom", maxUsage: 60, reserveUsage: 100 },
+    { tool: "codex", from: ["x"], strategy: "headroom", maxUsage: 60 },
   ])("saves the spec it was opened with: %j", (spec) => {
     expect(formToSpec(editForm(spec), ACCOUNTS)).toEqual({ name: "main", spec, errors: {} });
   });

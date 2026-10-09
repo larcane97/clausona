@@ -86,14 +86,14 @@ describe("membersOf", () => {
 describe("resolveRoute", () => {
   const file = {
     version: 1 as const,
-    routes: { main: { tool: "claude" as const, from: ["*"], maxUsage: 80, reserveUsage: 95 } },
+    routes: { main: { tool: "claude" as const, from: ["*"], maxUsage: 80 } },
   };
 
   it("finds a stored route and applies the run's overrides", () => {
     expect(resolveRoute(file, { options: { route: "main", strategy: "headroom" } })).toEqual({
       name: "main",
       resolvedBy: "flag",
-      route: withDefaults({ tool: "claude", from: ["*"], maxUsage: 80, reserveUsage: 95, strategy: "headroom" }),
+      route: withDefaults({ tool: "claude", from: ["*"], maxUsage: 80, strategy: "headroom" }),
     });
   });
 
@@ -141,11 +141,9 @@ describe("resolveRoute", () => {
     );
     expect(() =>
       resolveRoute(file, {
-        options: { fallback: ["b"], reserveUsage: 90, maxUsage: 70, strategy: "expiring", exclude: ["work"] },
+        options: { fallback: ["b"], maxUsage: 70, strategy: "expiring", exclude: ["work"] },
       }),
-    ).toThrow(
-      /^--exclude, --strategy, --max-usage, --reserve-usage and --fallback need --route <name> or --from <patterns>\.$/,
-    );
+    ).toThrow(/^--exclude, --strategy, --max-usage and --fallback need --route <name> or --from <patterns>\.$/);
   });
 
   it("checks the run's overrides, without quoting a key-shaped one", () => {

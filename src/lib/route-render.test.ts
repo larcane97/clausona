@@ -148,10 +148,10 @@ describe("renderRouteTable", () => {
     },
   );
   const busyQuotas = {
-    "claude:team": quota(99, 10, 2),
-    "claude:work": quota(99, 10, 3),
-    "claude:side": quota(99, 10, 4),
-    "claude:personal": quota(99, 10, 5),
+    "claude:team": quota(100, 10, 2),
+    "claude:work": quota(100, 10, 3),
+    "claude:side": quota(100, 10, 4),
+    "claude:personal": quota(100, 10, 5),
   };
   const busy = rank({ tool: "all", exclude: ["*-share"] }, busyQuotas);
   const rows: RouteListRow[] = [
@@ -166,38 +166,36 @@ describe("renderRouteTable", () => {
     const lines = text.split("\n");
     expect(lines[0]).toBe("");
     expect(lines.at(-1)).toBe("");
-    expect(lines[1]).toMatch(/^ {4}ROUTE\s+TOOL\s+STRATEGY\s+LIMITS\s+FREE NOW\s+NEXT$/);
+    expect(lines[1]).toMatch(/^ {4}ROUTE\s+TOOL\s+STRATEGY\s+SKIP AT\s+FREE NOW\s+NEXT$/);
     expect(lines[2]).toMatch(/^ {4}─+$/);
     // Free: team, work and personal; side is over the cut, old has no reading, ops-share is excluded.
-    expect(text).toMatch(/^ {4}main\s+claude\s+round-robin\s+80% \/ 95%\s+3 of 5\s+claude:team$/m);
-    expect(text).toMatch(
-      /^ {4}everything\s+claude \+ codex\s+round-robin\s+80% \/ 95%\s+0 of 5\s+none, soonest in 2h$/m,
-    );
+    expect(text).toMatch(/^ {4}main\s+claude\s+round-robin\s+80%\s+3 of 5\s+claude:team$/m);
+    expect(text).toMatch(/^ {4}everything\s+claude \+ codex\s+round-robin\s+80%\s+0 of 5\s+none, soonest in 2h$/m);
   });
 
   it("shows dashes for a route that was not ranked (--no-quota)", () => {
-    expect(plain(renderRouteTable(rows, [], at(120)))).toMatch(/^ {4}solo\s+claude\s+headroom\s+80% \/ 95%\s+—\s+—$/m);
+    expect(plain(renderRouteTable(rows, [], at(120)))).toMatch(/^ {4}solo\s+claude\s+headroom\s+80%\s+—\s+—$/m);
   });
 
   // Review Focus 2: offline, nothing was read, so nobody is free or next: dashes, as with --no-quota.
   it("shows dashes when no member's quota could be read", () => {
     const offline = rank({ tool: "claude", from: ["*", "gone"] }, {});
     expect(plain(renderRouteTable([{ name: "offline", route: offline.route, ranking: offline }], [], at(120)))).toMatch(
-      /^ {4}offline\s+claude\s+round-robin\s+80% \/ 95%\s+—\s+—$/m,
+      /^ {4}offline\s+claude\s+round-robin\s+80%\s+—\s+—$/m,
     );
   });
 
   it("says now for a reset that has already passed", () => {
-    const late = rank({ tool: "claude", from: ["team"] }, { "claude:team": quota(99, 10, -1) });
+    const late = rank({ tool: "claude", from: ["team"] }, { "claude:team": quota(100, 10, -1) });
     expect(plain(renderRouteTable([{ name: "late", route: late.route, ranking: late }], [], at(120)))).toMatch(
-      /^ {4}late\s+claude\s+round-robin\s+80% \/ 95%\s+0 of 1\s+none, soonest now$/m,
+      /^ {4}late\s+claude\s+round-robin\s+80%\s+0 of 1\s+none, soonest now$/m,
     );
   });
 
   it("says none when nobody is free and no reset is known", () => {
-    const stuck = rank({ tool: "claude", from: ["team"] }, { "claude:team": quota(99, 99, null, null) });
+    const stuck = rank({ tool: "claude", from: ["team"] }, { "claude:team": quota(100, 100, null, null) });
     expect(plain(renderRouteTable([{ name: "stuck", route: stuck.route, ranking: stuck }], [], at(120)))).toMatch(
-      /^ {4}stuck\s+claude\s+round-robin\s+80% \/ 95%\s+0 of 1\s+none$/m,
+      /^ {4}stuck\s+claude\s+round-robin\s+80%\s+0 of 1\s+none$/m,
     );
   });
 
@@ -208,8 +206,8 @@ describe("renderRouteTable", () => {
     expect(lines[index - 1]).toBe("");
   });
 
-  // Review Focus 1: an 80-column terminal never wraps a row; TOOL goes first, then LIMITS.
-  it("drops TOOL, then LIMITS, rather than wrap a row", () => {
+  // Review Focus 1: an 80-column terminal never wraps a row; TOOL goes first, then SKIP AT.
+  it("drops TOOL, then SKIP AT, rather than wrap a row", () => {
     const wide = plain(renderRouteTable(rows, warnings, at(120)));
     expect(wide.split("\n")[1]).toContain("TOOL");
 
@@ -217,8 +215,8 @@ describe("renderRouteTable", () => {
     expect(widest(at80)).toBeLessThanOrEqual(80);
     const header80 = plain(at80).split("\n")[1];
     expect(header80).not.toContain("TOOL");
-    expect(header80).toMatch(/ROUTE\s+STRATEGY\s+LIMITS\s+FREE NOW\s+NEXT/);
-    expect(plain(at80)).toMatch(/everything\s+round-robin\s+80% \/ 95%\s+0 of 5\s+none, soonest in 2h/);
+    expect(header80).toMatch(/ROUTE\s+STRATEGY\s+SKIP AT\s+FREE NOW\s+NEXT/);
+    expect(plain(at80)).toMatch(/everything\s+round-robin\s+80%\s+0 of 5\s+none, soonest in 2h/);
 
     const at60 = renderRouteTable(rows, warnings, at(60));
     expect(widest(at60)).toBeLessThanOrEqual(60);
@@ -244,7 +242,7 @@ describe("renderRouteDetail", () => {
     for (const line of [
       "  │  Tool       claude",
       "  │  Strategy   round-robin (next in turn)",
-      "  │  Limits     skip at 80%, reserve up to 95%",
+      "  │  Limits     skip at 80%; if all are, the one with the most left",
       "  │  Accounts   * except *-share",
       "  │  Fallback   none",
     ]) {
@@ -283,20 +281,30 @@ describe("renderRouteDetail", () => {
     expect(text).toMatch(/^ {4}claude:team\s+85% 1h\s+10% 2d\s+over 80%$/m);
   });
 
-  it("says when the pick comes from the reserve", () => {
+  it("says when everyone is over the cut and the pick is the one with the most left", () => {
     const r = rank(
       { tool: "claude", from: ["team", "work"], strategy: "expiring" },
       { "claude:team": quota(85, 10), "claude:work": quota(90, 10) },
     );
     const text = plain(renderRouteDetail("main", r, at(120)));
     expect(text).toContain("  │  Strategy   expiring (weekly limit resetting within 24h first)");
-    expect(text).toMatch(/▸ claude:team\s+85% 1h\s+10% 2d\s+picked: reserve, most room up to 95%$/m);
+    expect(text).toMatch(/▸ claude:team\s+85% 1h\s+10% 2d\s+picked: most room left \(all over 80%\)$/m);
+    expect(text).toMatch(/^ {4}claude:work\s+90% 1h\s+10% 2d\s+over 80%$/m);
+
+    // At 99% too: past the cut, only a window at 100% holds an account back.
+    const full = rank(
+      { tool: "claude", from: ["team", "work"], strategy: "headroom", maxUsage: 50 },
+      { "claude:team": quota(99, 10), "claude:work": quota(100, 10) },
+    );
+    expect(plain(renderRouteDetail("main", full, at(120)))).toMatch(
+      /▸ claude:team\s+99% 1h\s+10% 2d\s+picked: most room left \(all over 50%\)$/m,
+    );
   });
 
   it("says when nobody can be picked, and that a run would exit 75", () => {
     const r = rank(
       { tool: "claude", from: ["team", "work"] },
-      { "claude:team": quota(99, 1), "claude:work": quota(1, 99) },
+      { "claude:team": quota(100, 1), "claude:work": quota(1, 100) },
     );
     const text = plain(renderRouteDetail("main", r, at(120)));
     expect(text.endsWith("\n\n  Nobody can be picked now; clausona run --route main would exit 75.\n")).toBe(true);
@@ -306,7 +314,7 @@ describe("renderRouteDetail", () => {
     const r = rankRoute({
       route: withDefaults({ tool: "all" }),
       members: [member("claude:team"), member("codex:x")],
-      quotas: { "claude:team": quota(99, 10), "codex:x": quota(5, 5) },
+      quotas: { "claude:team": quota(100, 10), "codex:x": quota(5, 5) },
       lastPicked: {},
       now: NOW,
       resume: false,
@@ -320,7 +328,7 @@ describe("renderRouteDetail", () => {
 
   // `clausona run would exit 75` named no route: a bare run ranks none, and runs the active profile.
   it("names the run of an unsaved route, with its options, as the one that would exit 75", () => {
-    const busy = { "claude:team": quota(99, 1), "claude:work": quota(1, 99), "claude:old": quota(99, 99) };
+    const busy = { "claude:team": quota(100, 1), "claude:work": quota(1, 100), "claude:old": quota(100, 100) };
     const inline = rank({ tool: "claude", from: ["team", "work", "old"], exclude: ["old"] }, busy);
     expect(plain(renderRouteDetail(undefined, inline, at(120)))).toMatch(
       /\n\n {2}Nobody can be picked now; clausona run claude --from 'team,work,old' --exclude 'old' would exit 75\.\n$/,
@@ -340,7 +348,7 @@ describe("renderRouteDetail", () => {
     const both = rankRoute({
       route: withDefaults({ tool: "all", from: ["claude:*", "codex:*"] }),
       members: [member("claude:team"), member("codex:x")],
-      quotas: { "claude:team": quota(99, 10), "codex:x": quota(5, 5) },
+      quotas: { "claude:team": quota(100, 10), "codex:x": quota(5, 5) },
       lastPicked: {},
       now: NOW,
       resume: false,
@@ -388,7 +396,7 @@ describe("renderRouteDetail", () => {
     expect(plain(text)).toMatch(/^ {4}ACCOUNT\s+5H\s+7D\s+LAST PICKED$/m);
     expect(plain(text)).toMatch(/^ {4}claude:old\s+signed out \(clausona login claude:old\)$/m);
 
-    // The longest words a row can carry: a resumed run's skip, and a reserve pick.
+    // The longest words a row can carry: a resumed run's skip, and a pick of the one with the most left.
     const loners = ["claude:team", "claude:work", "claude:personal"].map((id) => ({
       ...member(id),
       sharesSessions: id === "claude:team",
@@ -401,7 +409,7 @@ describe("renderRouteDetail", () => {
     const resumed = rank({ tool: "claude" }, resumedQuotas, { members: loners, resume: true });
     const long = renderRouteDetail("main", resumed, at(80));
     expect(plain(long)).toContain("keeps its own sessions, so it cannot resume a shared one");
-    expect(plain(long)).toContain("picked: reserve, most room up to 95%");
+    expect(plain(long)).toContain("picked: most room left (all over 80%)");
     expect(widest(long)).toBeLessThanOrEqual(80);
 
     // Wider still with a fallback mark: the words are cut, the row still does not wrap.
@@ -428,7 +436,9 @@ describe("renderNote", () => {
 
   it("says the stage when the pool had nobody, and an unsaved route", () => {
     const r = ranking({ "claude:team": snap(85, 0), "claude:work": snap(90, 0), "claude:old": snap(0, 99) });
-    expect(plain(renderNote(undefined, r))).toBe("  ▸ claude:team  inline route, reserve, 85% of 5H used");
+    expect(plain(renderNote(undefined, r))).toBe(
+      "  ▸ claude:team  inline route, most room left (all over 80%), 85% of 5H used",
+    );
     const fallback = rank(
       { tool: "claude", from: ["team"], fallback: ["work"] },
       { "claude:team": quota(90, 0), "claude:work": quota(10, 20) },
@@ -463,9 +473,9 @@ describe("renderNote", () => {
 
 describe("renderNoAccount", () => {
   const quotas = {
-    "claude:side": quota(96, 40, 1, 72),
-    // With the reserve at 95, only the weekly window holds this one back.
-    "claude:personal": quota(88, 97, 2, 48),
+    "claude:side": quota(100, 40, 1, 72),
+    // Only the weekly window, at 100%, holds this one back.
+    "claude:personal": quota(88, 100, 2, 48),
     "claude:old": signedOut,
   };
   const busy = rank({ tool: "claude", from: ["personal", "side", "old"] }, quotas);
@@ -477,8 +487,8 @@ describe("renderNoAccount", () => {
     expect(lines[1]).toBe("");
     expect(text).toMatch(/^ {4}ACCOUNT\s+5H\s+7D\s+FREE AGAIN$/m);
     expect(text).toContain("in 1h (5H resets)   soonest");
-    expect(text).toMatch(/^ {4}claude:side\s+96% 1h\s+40% 3d\s+in 1h \(5H resets\) {3}soonest$/m);
-    expect(text).toMatch(/^ {4}claude:personal\s+88% 2h\s+97% 2d\s+in 2d \(7D resets\)$/m);
+    expect(text).toMatch(/^ {4}claude:side\s+100% 1h\s+40% 3d\s+in 1h \(5H resets\) {3}soonest$/m);
+    expect(text).toMatch(/^ {4}claude:personal\s+88% 2h\s+100% 2d\s+in 2d \(7D resets\)$/m);
     expect(text).toMatch(/^ {4}claude:old\s+signed out \(clausona login claude:old\)$/m);
     expect(text).toContain("\n\n    Run again after 1h, or see everything with: clausona route explain main\n");
     // Soonest first; the skipped last.
@@ -506,7 +516,7 @@ describe("renderNoAccount", () => {
   it("says now for a reset that has already passed", () => {
     const r = rank(
       { tool: "claude", from: ["team", "work"] },
-      { "claude:team": quota(99, 10, -1), "claude:work": quota(99, 10, 2) },
+      { "claude:team": quota(100, 10, -1), "claude:work": quota(100, 10, 2) },
     );
     const text = plain(renderNoAccount("main", r, at(120)));
     expect(text).toMatch(/^ {4}claude:team\s.*\s{2}now \(5H resets\)\s+soonest$/m);
@@ -517,7 +527,7 @@ describe("renderNoAccount", () => {
 
   it("names the tool a run narrowed an all route to, and explains that tool only", () => {
     const both = [...["claude:team", "claude:work"].map(member), member("codex:x")];
-    const quotas = { "claude:team": quota(99, 10), "claude:work": quota(99, 10, 2), "codex:x": quota(5, 5) };
+    const quotas = { "claude:team": quota(100, 10), "claude:work": quota(100, 10, 2), "codex:x": quota(5, 5) };
     const narrowed = (from: string[]) =>
       rankRoute({
         route: withDefaults({ tool: "all", from }),
@@ -546,16 +556,16 @@ describe("renderNoAccount", () => {
   });
 
   it("says later when no reset is known", () => {
-    const r = rank({ tool: "claude", from: ["team"] }, { "claude:team": quota(99, 99, null, null) });
+    const r = rank({ tool: "claude", from: ["team"] }, { "claude:team": quota(100, 100, null, null) });
     const text = plain(renderNoAccount("main", r, at(120)));
-    expect(text).toMatch(/^ {4}claude:team\s+99%\s+99%\s+—$/m);
+    expect(text).toMatch(/^ {4}claude:team\s+100%\s+100%\s+—$/m);
     expect(text).toContain("    Run again later, or see everything with: clausona route explain main\n");
   });
 
   it("gives an unsaved route's explain command", () => {
     const r = rank(
       { tool: "claude", from: ["team", "work"] },
-      { "claude:team": quota(99, 1), "claude:work": quota(99, 1) },
+      { "claude:team": quota(100, 1), "claude:work": quota(100, 1) },
     );
     const text = plain(renderNoAccount(undefined, r, at(120)));
     expect(text.split("\n")[0]).toBe("No account in the inline route is free right now.");
@@ -565,11 +575,11 @@ describe("renderNoAccount", () => {
   // `route explain main` alone ranks the route as stored: not the cut, the excludes or the
   // resume the run ranked with, so it could show someone free the run did not have.
   it("gives the explain the run's own options, so it ranks what the run ranked", () => {
-    const overrides = { exclude: ["o'neil"], maxUsage: 50, reserveUsage: 60, strategy: "headroom" as const };
+    const overrides = { exclude: ["o'neil"], maxUsage: 50, strategy: "headroom" as const };
     const r = rank({ tool: "claude", from: ["personal", "side", "old"], ...overrides }, quotas);
     const text = plain(renderNoAccount("main", r, { ...at(200), overrides, resume: true }));
     expect(text).toContain(
-      "or see everything with: clausona route explain main --exclude 'o'\\''neil' --strategy headroom --max-usage 50 --reserve-usage 60 --resume\n",
+      "or see everything with: clausona route explain main --exclude 'o'\\''neil' --strategy headroom --max-usage 50 --resume\n",
     );
 
     const fallback = { from: ["personal"], fallback: ["side", "old"] };
@@ -581,10 +591,9 @@ describe("renderNoAccount", () => {
     // Broken between its options at 80 columns, never inside one.
     const narrow = plain(renderNoAccount("main", r, { ...at(80), overrides, resume: true }));
     expect(widest(narrow)).toBeLessThanOrEqual(80);
-    expect(narrow.split("\n").slice(-4)).toEqual([
+    expect(narrow.split("\n").slice(-3)).toEqual([
       "    Run again after 1h, or see everything with: clausona route explain main",
-      "    --exclude 'o'\\''neil' --strategy headroom --max-usage 50 --reserve-usage 60",
-      "    --resume",
+      "    --exclude 'o'\\''neil' --strategy headroom --max-usage 50 --resume",
       "",
     ]);
   });
@@ -671,7 +680,7 @@ describe("terminal width", () => {
   };
 
   const team = [member("claude:team"), member("claude:work")];
-  const quotas = { "claude:team": quota(99, 10), "claude:work": quota(99, 10, 2) };
+  const quotas = { "claude:team": quota(100, 10), "claude:work": quota(100, 10, 2) };
   const busy = rank({ tool: "claude" }, quotas, { members: team });
   const spec: RouteSpec = { tool: "claude" };
   const open = rank(spec, { "claude:team": quota(5, 1), "claude:work": quota(12, 1) }, { members: team });
@@ -710,6 +719,12 @@ describe("JSON", () => {
       stage: "pool",
       usage: { percent: 40, window: "5H", stale: false },
       reason: "next in turn",
+    });
+    const most = ranking({ "claude:team": snap(85, 30), "claude:work": snap(20, 99), "claude:old": snap(100, 0) });
+    expect(pickJson("main", most)).toMatchObject({
+      profile: "claude:team",
+      stage: "reserve",
+      reason: "most room left (all over 80%)",
     });
   });
 
@@ -760,15 +775,7 @@ describe("JSON", () => {
       excluded: object[];
     };
     expect(keys(json)).toEqual(["emptyPatterns", "excluded", "members", "outcome", "resolvedBy", "route", "settings"]);
-    expect(keys(json.settings)).toEqual([
-      "exclude",
-      "fallback",
-      "from",
-      "maxUsage",
-      "reserveUsage",
-      "strategy",
-      "tool",
-    ]);
+    expect(keys(json.settings)).toEqual(["exclude", "fallback", "from", "maxUsage", "strategy", "tool"]);
     expect(keys(json.outcome)).toEqual(["id", "kind", "reason", "stage"]);
     for (const entry of json.members) {
       expect(keys(entry)).toEqual([
@@ -790,7 +797,7 @@ describe("JSON", () => {
 
     const none = explainJson("main", "flag", withInternals(ranking({}))) as { outcome: object };
     expect(keys(none.outcome)).toEqual(["kind"]);
-    const busy = ranking({ "claude:team": snap(99, 1), "claude:work": snap(99, 1), "claude:old": snap(99, 1) });
+    const busy = ranking({ "claude:team": snap(100, 1), "claude:work": snap(100, 1), "claude:old": snap(100, 1) });
     const soon = explainJson("main", "flag", withInternals(busy)) as { outcome: { soonest: object } };
     expect(keys(soon.outcome)).toEqual(["kind", "soonest"]);
     expect(keys(soon.outcome.soonest)).toEqual(["at", "id"]);
@@ -801,7 +808,7 @@ describe("JSON", () => {
     const picked = pickJson("main", withInternals(r)) as { usage: object };
     expect(keys(picked)).toEqual(["profile", "reason", "route", "stage", "usage"]);
     expect(keys(picked.usage)).toEqual(["percent", "stale", "window"]);
-    const busy = ranking({ "claude:team": snap(99, 1), "claude:work": snap(99, 1), "claude:old": snap(99, 1) });
+    const busy = ranking({ "claude:team": snap(100, 1), "claude:work": snap(100, 1), "claude:old": snap(100, 1) });
     const none = pickJson("main", withInternals(busy)) as { soonest: object };
     expect(keys(none)).toEqual(["profile", "reason", "route", "soonest", "stage", "usage"]);
     expect(keys(none.soonest)).toEqual(["at", "id"]);

@@ -23,13 +23,8 @@ describe("withDefaults", () => {
       exclude: [],
       strategy: "round-robin",
       maxUsage: 80,
-      reserveUsage: 95,
       fallback: [],
     });
-  });
-
-  it("turns the reserve off when the cut is above 95", () => {
-    expect(withDefaults({ tool: "codex", maxUsage: 98 }).reserveUsage).toBe(98);
   });
 });
 
@@ -40,7 +35,6 @@ describe("newRouteSpec", () => {
       from: ["*"],
       strategy: "round-robin",
       maxUsage: 80,
-      reserveUsage: 95,
     });
   });
 });
@@ -55,11 +49,6 @@ describe("applyOverrides", () => {
       maxUsage: 70,
       exclude: ["*-share"],
     });
-  });
-
-  it("drops a stored reserve that a higher cut would leave below it", () => {
-    const spec = { tool: "claude" as const, maxUsage: 80, reserveUsage: 95 };
-    expect(applyOverrides(spec, { maxUsage: 98 })).toEqual({ tool: "claude", maxUsage: 98 });
   });
 });
 
@@ -194,7 +183,6 @@ describe("checkRoute", () => {
       exclude: ["*-share"],
       strategy: "headroom",
       maxUsage: 80,
-      reserveUsage: 95,
       fallback: ["dalsoo"],
     };
     expect(checkRoute("main", route)).toEqual([]);
@@ -249,12 +237,6 @@ describe("checkRoute", () => {
     ]);
   });
 
-  it("refuses a reserve below the cut", () => {
-    expect(checkRoute("main", { tool: "claude", maxUsage: 90, reserveUsage: 85 })).toEqual([
-      "routes.main.reserveUsage: must be a number from maxUsage (90) to 100",
-    ]);
-  });
-
   it("points at a pattern by its index", () => {
     expect(checkRoute("main", { tool: "claude", fallback: ["ok", "codex:x"] })).toEqual([
       "routes.main.fallback[1]: 'codex:x' names a codex profile, but this route is for claude",
@@ -292,6 +274,22 @@ describe("checkRoutesFile", () => {
   it("accepts a file and keeps keys a later version writes", () => {
     const raw = { version: 1, routes: { main: { tool: "claude" } }, dirs: { "~/w": { claude: "main" } } };
     expect(checkRoutesFile(raw)).toEqual({ ok: true, file: raw });
+  });
+
+  // An earlier build of this version wrote a reserve limit, which routes no longer have.
+  it("accepts a route with the reserveUsage an earlier build wrote, whatever it holds, and drops it", () => {
+    const raw = {
+      version: 1,
+      routes: {
+        main: { tool: "claude", maxUsage: 80, reserveUsage: 95 },
+        odd: { tool: "codex", maxUsage: 90, reserveUsage: "85" },
+      },
+    };
+    expect(checkRoute("main", raw.routes.odd)).toEqual([]);
+    expect(checkRoutesFile(raw)).toEqual({
+      ok: true,
+      file: { version: 1, routes: { main: { tool: "claude", maxUsage: 80 }, odd: { tool: "codex", maxUsage: 90 } } },
+    });
   });
 
   it("reads a missing routes object as none", () => {

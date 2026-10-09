@@ -147,7 +147,7 @@ describe("stages", () => {
     });
   });
 
-  it("uses the member with the most room up to the reserve when everyone is over the cut", () => {
+  it("uses the member with the most left when everyone is over the cut", () => {
     const ranking = rank(
       { from: ["a", "b"], fallback: ["c"] },
       { "claude:a": snap(85, 0), "claude:b": snap(0, 92), "claude:c": snap(88, 0) },
@@ -156,17 +156,34 @@ describe("stages", () => {
       kind: "picked",
       id: "claude:a",
       stage: "reserve",
-      reason: "most room up to 95%",
+      reason: "most room left (all over 80%)",
     });
   });
 
-  it("finds nobody past the reserve, and names the soonest reset", () => {
+  // No limit past the cut: an account at 99% still runs when it is the one with the most left.
+  it("uses the member with the most left at 99% too, a fallback member as well", () => {
+    const quotas = { "claude:a": snap(100, 0), "claude:b": snap(0, 99.5), "claude:c": snap(99, 40) };
+    expect(rank({ from: ["a", "b"], fallback: ["c"] }, quotas).outcome).toEqual({
+      kind: "picked",
+      id: "claude:c",
+      stage: "reserve",
+      reason: "most room left (all over 80%)",
+    });
+    expect(rank({ from: ["*"], maxUsage: 50 }, quotas).outcome).toMatchObject({
+      id: "claude:c",
+      reason: "most room left (all over 50%)",
+    });
+  });
+
+  it("finds nobody only when every member is at 100% or cannot be used, and names the soonest reset", () => {
     const quotas = {
-      "claude:a": snap(97, 0, { session: { usedPercent: 97, resetsAt: inHours(5) } }),
-      "claude:b": snap(99, 0, { session: { usedPercent: 99, resetsAt: inHours(1) } }),
-      "claude:c": snap(0, 96, { weekly: { usedPercent: 96, resetsAt: inHours(72) } }),
+      "claude:a": snap(100, 0, { session: { usedPercent: 100, resetsAt: inHours(5) } }),
+      "claude:b": snap(104, 0, { session: { usedPercent: 104, resetsAt: inHours(1) } }),
+      "claude:c": snap(0, 100, { weekly: { usedPercent: 100, resetsAt: inHours(72) } }),
     };
     expect(rank({}, quotas).outcome).toEqual({ kind: "none", soonest: { id: "claude:b", at: inHours(1) } });
+    const fullOrOut = { "claude:a": quotas["claude:a"], "claude:b": snap(1, 1, { state: "missing" }) };
+    expect(rank({}, fullOrOut).outcome).toEqual({ kind: "none", soonest: { id: "claude:a", at: inHours(5) } });
   });
 
   // Review Focus 4: a pool member also listed as a fallback is one member, in the pool.

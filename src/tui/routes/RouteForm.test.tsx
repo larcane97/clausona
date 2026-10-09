@@ -58,7 +58,6 @@ const FILE: RoutesFile = {
       exclude: ["*-share"],
       strategy: "round-robin",
       maxUsage: 80,
-      reserveUsage: 95,
     },
     solo: { tool: "claude", from: ["work"], fallback: ["team"], strategy: "headroom" },
   },
@@ -234,7 +233,6 @@ describe("RouteForm", () => {
       from: ["*"],
       strategy: "round-robin",
       maxUsage: 80,
-      reserveUsage: 95,
     });
     expect(Object.keys(routes(disk))).toEqual(["main", "solo", "daily"]);
   });
@@ -256,7 +254,7 @@ describe("RouteForm", () => {
     expect(row(frame, "Strategy")).toMatch(/Strategy\s+● round-robin\s+○ headroom\s+○ expiring$/);
     expect(frame).toContain("takes accounts in turn");
     expect(row(frame, "skip at")).toMatch(/Limits\s+skip at\s+\[80\]%$/);
-    expect(row(frame, "reserve up to")).toMatch(/reserve up to\s+\[95\]%$/);
+    expect(frame).not.toContain("reserve");
     expect(row(frame, "Fallback")).toMatch(/Fallback\s+\(\+ add\)$/);
     expect(frame).toContain("Now: 3 of 4 accounts under 80% · next claude:team");
     expect(hintLines(frame)).toEqual([TAIL]);
@@ -300,7 +298,6 @@ describe("RouteForm", () => {
       ["exclude ", TAIL],
       ["Strategy", `←→ choose │ ${TAIL}`],
       ["skip at", TAIL],
-      ["reserve up to", TAIL],
       ["Fallback", `a add │ x remove │ [ ] reorder │ ${TAIL}`],
     ];
     for (const [label, hints] of expected) {
@@ -323,8 +320,8 @@ describe("RouteForm", () => {
     expect(text(instance)).toContain("Now: no quota reading");
     expect(text(instance)).not.toContain("nobody can be picked");
 
-    // Read, and everyone over the reserve: nobody can be picked.
-    const full = Object.fromEntries(Object.keys(QUOTAS).map((id) => [id, snap(99, 99)]));
+    // Read, and everyone at 100%: nobody can be picked.
+    const full = Object.fromEntries(Object.keys(QUOTAS).map((id) => [id, snap(100, 40)]));
     const busy = setup({ edit: "main", quotas: full });
     await opened(busy.instance);
     expect(text(busy.instance)).toContain("Now: nobody can be picked");
@@ -440,7 +437,6 @@ describe("RouteForm", () => {
       from: ["*"],
       strategy: "round-robin",
       maxUsage: 80,
-      reserveUsage: 95,
     });
   });
 
@@ -459,53 +455,48 @@ describe("RouteForm", () => {
     expect(routes(disk).roomy.strategy).toBe("headroom");
   });
 
-  // Asked what `skip at` and `reserve up to` mean: the line under them says it, in their numbers.
-  it("says under the limits in what order they pick, in the numbers typed or the defaults", async () => {
+  // Asked what `skip at` means: the line under it says it, in its number.
+  it("says under the limit in what order it picks, in the number typed or the default", async () => {
     const { instance } = setup({ columns: 80 });
     await opened(instance);
     const below = () => {
       const all = lines(text(instance));
-      return inside(all[all.findIndex((line) => line.includes("reserve up to")) + 1] ?? "");
+      return inside(all[all.findIndex((line) => line.includes("skip at")) + 1] ?? "");
     };
-    expect(below()).toMatch(/^\s+under 80% first; if none, the most room under 95%$/);
+    expect(below()).toMatch(/^\s+under 80% in turn; if none, the one with the most left$/);
     expect(columnOf(text(instance), "under 80%", "under")).toBe(columnOf(text(instance), "Limits", "skip at"));
+    // The limit's value starts where the patterns' do.
+    expect(columnOf(text(instance), "Limits", "[")).toBe(columnOf(text(instance), "Patterns", "adds matches"));
 
     await tabTo(instance, "skip at");
     await retype(instance, 2, "70");
-    expect(below()).toMatch(/^\s+under 70% first; if none, the most room under 95%$/);
-    await tabTo(instance, "reserve up to");
-    await retype(instance, 2, "100");
-    expect(below()).toMatch(/^\s+under 70% first; if none, the most room under 100%$/);
+    expect(below()).toMatch(/^\s+under 70% in turn; if none, the one with the most left$/);
     for (const line of lines(text(instance))) expect(line.length).toBeLessThanOrEqual(80);
+    // Blank, the limit is its default, as the field shows.
+    for (let i = 0; i < 2; i++) await press(instance, ERASE);
+    expect(below()).toMatch(/^\s+under 80% in turn; if none, the one with the most left$/);
+    await press(instance, "98");
 
-    // Blank, the reserve is its default, which rises with the cut, as the field shows.
-    for (let i = 0; i < 3; i++) await press(instance, ERASE);
-    await tabTo(instance, "skip at");
-    await retype(instance, 2, "98");
-    expect(below()).toMatch(/^\s+under 98% first; if none, the most room under 98%$/);
-    expect(row(text(instance), "reserve up to")).toMatch(/\[98\]%$/);
+    // Only round-robin takes them in turn.
+    await tabTo(instance, "Strategy");
+    await press(instance, RIGHT);
+    expect(below()).toMatch(/^\s+under 98% first; if none, the one with the most left$/);
     // As typed still while another field holds a problem, and no preview is made.
     await untickEvery(instance, ["claude:ops-share", "claude:side", "claude:team", "claude:work"]);
     expect(text(instance)).toContain("Now: —");
-    expect(below()).toMatch(/^\s+under 98% first; if none, the most room under 98%$/);
+    expect(below()).toMatch(/^\s+under 98% first; if none, the one with the most left$/);
   });
 
-  it("shows the reserve's problem when the limit is raised above it, and writes nothing", async () => {
+  it("shows the limit's problem on its field, and writes nothing", async () => {
     const { instance, deps, onDone, disk } = setup();
     await opened(instance);
     await press(instance, "tight");
 
     await tabTo(instance, "skip at");
-    await retype(instance, 2, "90");
-    await tabTo(instance, "reserve up to");
-    await retype(instance, 2, "85");
-    expect(row(text(instance), "skip at")).toMatch(/\[90\]%$/);
-    // Still focused: the text cursor sits after the value.
-    expect(row(text(instance), "reserve up to")).toMatch(/\[85 ?\]%$/);
-
+    await retype(instance, 2, "101");
     await save(instance);
     const frame = await until(instance, (f) => f.includes("must be a number"));
-    expect(frame).toContain("Reserve up to: must be a number from maxUsage (90) to 100");
+    expect(frame).toContain("Skip at: must be a number from 1 to 100");
     expect(deps.updateRoutes).not.toHaveBeenCalled();
     expect(routes(disk).tight).toBeUndefined();
     expect(onDone).not.toHaveBeenCalled();
@@ -953,7 +944,8 @@ describe("RouteForm", () => {
       const { instance } = setup({ registry: MANY, rows: ROWS, columns: 80 });
       await opened(instance);
       const first = text(instance);
-      expect(lines(first).length).toBeLessThan(ROWS);
+      // One line short of the terminal, and not more: each line the form does not need is an account's.
+      expect(lines(first).length).toBe(ROWS - 1);
       expect(first).toContain("Name");
       expect(first).toContain("every account (*)");
       const shown = shownIds(first);

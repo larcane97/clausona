@@ -6,8 +6,11 @@ import { compareIds, type Expansion, expandPatterns, type Member, splitToolPrefi
  * Picks a profile for a route. Pure: the caller brings the members, their quota and the pick
  * record. One number drives everything - an account's usage, the higher of its 5H and 7D
  * windows - through the stages: pool under maxUsage by strategy, fallback under maxUsage in
- * listed order, anyone under reserveUsage by lowest usage, else nobody.
+ * listed order, anyone under 100% by lowest usage, else nobody.
  */
+
+/** Past the cut, any account under this can run: one at 100% of a window cannot. */
+export const FULL = 100;
 
 /** A failed reading's last numbers are trusted this long. */
 export const STALE_LIMIT_MS = 60 * 60 * 1000;
@@ -40,6 +43,10 @@ export type Row = {
   status: "picked" | "eligible" | "over-limit" | "skipped";
 };
 
+/**
+ * `reserve`: everyone was at the cut or over it, and the one with the most left was taken. The
+ * name is what `--json` says, kept from when a route had a limit for that stage.
+ */
 export type Stage = "pool" | "fallback" | "reserve";
 
 export type Outcome =
@@ -136,6 +143,9 @@ function soonestReset(rows: Row[], limit: number): { id: string; at: string } | 
   return best;
 }
 
+/** Why the reserve stage took its account; route-render.ts shows the same words. */
+export const mostLeftReason = (route: Route) => `most room left (all over ${route.maxUsage}%)`;
+
 function decide(route: Route, rows: Row[], now: number): Outcome {
   const pool = under(
     rows.filter((row) => row.role === "pool"),
@@ -152,11 +162,11 @@ function decide(route: Route, rows: Row[], now: number): Outcome {
   if (fallback.length > 0) {
     return { kind: "picked", id: fallback[0].id, stage: "fallback", reason: `first fallback under ${route.maxUsage}%` };
   }
-  const reserve = under(rows, route.reserveUsage).sort(byUsage);
+  const reserve = under(rows, FULL).sort(byUsage);
   if (reserve.length > 0) {
-    return { kind: "picked", id: reserve[0].id, stage: "reserve", reason: `most room up to ${route.reserveUsage}%` };
+    return { kind: "picked", id: reserve[0].id, stage: "reserve", reason: mostLeftReason(route) };
   }
-  return { kind: "none", soonest: soonestReset(rows, route.reserveUsage) };
+  return { kind: "none", soonest: soonestReset(rows, FULL) };
 }
 
 /** A name that matched nobody, as its row shows it: an `all` route's bare name is either tool's. */

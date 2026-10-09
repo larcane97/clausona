@@ -14,7 +14,6 @@ export const STRATEGIES: readonly Strategy[] = ["round-robin", "headroom", "expi
 
 export const DEFAULT_STRATEGY: Strategy = "round-robin";
 export const DEFAULT_MAX_USAGE = 80;
-export const DEFAULT_RESERVE_USAGE = 95;
 
 export const ROUTES_VERSION = 1;
 
@@ -35,7 +34,6 @@ export type RouteSpec = {
   exclude?: string[];
   strategy?: Strategy;
   maxUsage?: number;
-  reserveUsage?: number;
   fallback?: string[];
 };
 
@@ -46,7 +44,6 @@ export type Route = {
   exclude: string[];
   strategy: Strategy;
   maxUsage: number;
-  reserveUsage: number;
   fallback: string[];
 };
 
@@ -78,20 +75,16 @@ export function newRouteSpec(tool: RouteTool = "claude"): RouteSpec {
     from: ["*"],
     strategy: DEFAULT_STRATEGY,
     maxUsage: DEFAULT_MAX_USAGE,
-    reserveUsage: DEFAULT_RESERVE_USAGE,
   };
 }
 
 export function withDefaults(spec: RouteSpec): Route {
-  const maxUsage = spec.maxUsage ?? DEFAULT_MAX_USAGE;
   return {
     tool: spec.tool,
     from: spec.from ?? ["*"],
     exclude: spec.exclude ?? [],
     strategy: spec.strategy ?? DEFAULT_STRATEGY,
-    maxUsage,
-    // A route that cuts above 95% has no reserve stage, rather than a reserve below its cut.
-    reserveUsage: spec.reserveUsage ?? Math.max(DEFAULT_RESERVE_USAGE, maxUsage),
+    maxUsage: spec.maxUsage ?? DEFAULT_MAX_USAGE,
     fallback: spec.fallback ?? [],
   };
 }
@@ -102,24 +95,19 @@ export function applyOverrides(spec: RouteSpec, overrides: RouteOverrides): Rout
   if (overrides.exclude !== undefined) next.exclude = overrides.exclude;
   if (overrides.strategy !== undefined) next.strategy = overrides.strategy;
   if (overrides.maxUsage !== undefined) next.maxUsage = overrides.maxUsage;
-  if (overrides.reserveUsage !== undefined) next.reserveUsage = overrides.reserveUsage;
   if (overrides.fallback !== undefined) next.fallback = overrides.fallback;
-  // `--max-usage 98` on a route storing reserveUsage 95 means "cut at 98", not an error about
-  // the reserve the user did not mention: the reserve goes back to its default for this cut.
-  if (
-    overrides.maxUsage !== undefined &&
-    overrides.reserveUsage === undefined &&
-    next.reserveUsage !== undefined &&
-    next.reserveUsage < overrides.maxUsage
-  ) {
-    delete next.reserveUsage;
-  }
   return next;
 }
 
 const ROUTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const NAME_PATTERN = /^[A-Za-z0-9._*?-]+$/;
-const ROUTE_KEYS = new Set(["tool", "from", "exclude", "strategy", "maxUsage", "reserveUsage", "fallback"]);
+const ROUTE_KEYS = new Set(["tool", "from", "exclude", "strategy", "maxUsage", "fallback"]);
+/**
+ * Keys an earlier build of this version wrote and routes no longer have: `reserveUsage`, the limit
+ * past the cut that a route once had. Accepted whatever they hold, and left out of the file as it
+ * is read, so the next write drops them.
+ */
+const RETIRED_KEYS = new Set(["reserveUsage"]);
 const TOOLS: readonly string[] = ["claude", "codex"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -183,7 +171,7 @@ export function checkRoute(name: string, raw: unknown, at = `routes.${name}`): s
 
   const problems: string[] = [];
   for (const key of Object.keys(raw)) {
-    if (ROUTE_KEYS.has(key)) continue;
+    if (ROUTE_KEYS.has(key) || RETIRED_KEYS.has(key)) continue;
     // The key is quoted below, so a key-shaped one is not.
     problems.push(holdsKey(key) ? `${at}: an unknown key looks like an API key` : `${at}: unknown key '${key}'`);
   }
@@ -213,12 +201,6 @@ export function checkRoute(name: string, raw: unknown, at = `routes.${name}`): s
   // `null` is refused like any other non-number, as it is for every other key.
   const maxUsage = raw.maxUsage === undefined ? DEFAULT_MAX_USAGE : raw.maxUsage;
   if (!isPercent(maxUsage, 1)) problems.push(`${at}.maxUsage: must be a number from 1 to 100`);
-  if (raw.reserveUsage !== undefined) {
-    const floor = isPercent(maxUsage, 1) ? (maxUsage as number) : DEFAULT_MAX_USAGE;
-    if (!isPercent(raw.reserveUsage, floor)) {
-      problems.push(`${at}.reserveUsage: must be a number from maxUsage (${floor}) to 100`);
-    }
-  }
   return problems;
 }
 
@@ -240,5 +222,11 @@ export function checkRoutesFile(raw: unknown): RoutesCheck {
   const routes = (raw.routes ?? {}) as Record<string, unknown>;
   const problems = Object.entries(routes).flatMap(([name, spec]) => checkRoute(name, spec));
   if (problems.length > 0) return { ok: false, problems };
-  return { ok: true, file: { ...raw, version: ROUTES_VERSION, routes: routes as Record<string, RouteSpec> } };
+  const kept = Object.fromEntries(
+    Object.entries(routes as Record<string, Record<string, unknown>>).map(([name, spec]) => [
+      name,
+      Object.fromEntries(Object.entries(spec).filter(([key]) => !RETIRED_KEYS.has(key))) as RouteSpec,
+    ]),
+  );
+  return { ok: true, file: { ...raw, version: ROUTES_VERSION, routes: kept } };
 }
