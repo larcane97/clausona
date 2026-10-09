@@ -81,7 +81,7 @@ function tableIn(table: Record<string, unknown>, key: string): Record<string, un
 }
 
 /** Whether a [[skills.config]] entry is the one `selector` names: by its name, or by its path as samePath compares; Codex ignores an entry with both. */
-function selects(entry: unknown, selector: SkillSelector): boolean {
+export function selects(entry: unknown, selector: SkillSelector): boolean {
   if (!isTable(entry)) return false;
   if ("name" in selector) return entry.name === selector.name && entry.path === undefined;
   return typeof entry.path === "string" && entry.name === undefined && samePath(entry.path, selector.path);

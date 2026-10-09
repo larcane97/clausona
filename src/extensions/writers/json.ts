@@ -36,7 +36,8 @@ export class JsonEditError extends Error {
 }
 
 const IN_THE_WAY = "has a value of another type where the change goes";
-const NO_PROJECT = "has no entry for that project";
+/** The message when a path's project has no entry in the file: it went since the inventory read it. */
+export const NO_PROJECT = "has no entry for that project";
 
 export type JsonStyle = { indent: string; eol: "\n" | "\r\n"; finalNewline: boolean; bom: boolean };
 
@@ -284,6 +285,22 @@ export function applyJsonEdits(
   const root = structuredClone(value);
   for (const edit of edits) applyOne(root, edit, entry);
   return root;
+}
+
+/**
+ * A copy of `root` with `value` at `path`, its parents made as objects, or with the key taken out
+ * when `value` is undefined. A key already there keeps its place among its siblings. What undo
+ * puts back, path by path; throws as `set` does when a value of another type is in the way.
+ */
+export function withValueAt(root: Record<string, unknown>, path: JsonPath, value: unknown): Record<string, unknown> {
+  const out = structuredClone(root);
+  if (value === undefined) {
+    remove(out, path);
+  } else {
+    const { parent, key } = parentMade(out, path);
+    put(parent, key, structuredClone(value));
+  }
+  return out;
 }
 
 export function writeJsonText(value: Record<string, unknown>, style: JsonStyle): string {
