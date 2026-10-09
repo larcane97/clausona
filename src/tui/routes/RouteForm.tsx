@@ -98,10 +98,13 @@ const removedText = (name: string) => `Route ${name} was removed in another wind
 /** The name never changes the spec, so the preview runs on a stand-in until one is typed, or while it is refused. */
 const PREVIEW_NAME = "preview";
 
-/** What a pattern field takes, said after it while it is focused and empty. */
-const PATTERN_TEXT = {
-  from: "globs or emails, comma-separated",
-  exclude: "names or globs, comma-separated",
+/**
+ * What a pattern field does, with an example: drawn where its text goes (after the cursor, while
+ * it has the focus) as long as it is empty, so the form says what goes in it before it is reached.
+ */
+const PATTERN_PLACEHOLDER = {
+  from: "adds matches, e.g. *@work.example, team-*",
+  exclude: "leaves matches out, e.g. *-share, old",
 } as const;
 
 const STRATEGY_TEXT: Record<Strategy, string> = {
@@ -436,11 +439,13 @@ export function RouteForm(props: RouteFormProps) {
     label,
     error: state.errors[field] !== undefined,
   });
-  const patternText = (field: keyof typeof PATTERN_TEXT) =>
-    focusOn(field) && typing && state[TEXT_KEYS[field]] === "" ? (
-      <Box marginLeft={2} flexShrink={1}>
+  const patternPlaceholder = (field: keyof typeof PATTERN_PLACEHOLDER) =>
+    state[TEXT_KEYS[field]] === "" ? (
+      // The room the cursor leaves, rather than shrunk beside it: two shrinking parts rounded the
+      // pair a column past the frame in a narrow terminal.
+      <Box flexGrow={1} flexBasis={0} minWidth={1}>
         <Text color={color.muted} wrap="truncate-end">
-          {PATTERN_TEXT[field]}
+          {PATTERN_PLACEHOLDER[field]}
         </Text>
       </Box>
     ) : null;
@@ -487,12 +492,12 @@ export function RouteForm(props: RouteFormProps) {
         <Line {...line("from", "Patterns")}>
           {subLabel("from", "from", 9)}
           {textField("from")}
-          {patternText("from")}
+          {patternPlaceholder("from")}
         </Line>
         <Line {...line("exclude", "")}>
           {subLabel("exclude", "exclude", 9)}
           {textField("exclude")}
-          {patternText("exclude")}
+          {patternPlaceholder("exclude")}
         </Line>
         <Line {...line("strategy", "Strategy")}>
           <Radio

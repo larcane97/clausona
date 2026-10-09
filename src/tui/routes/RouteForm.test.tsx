@@ -251,8 +251,8 @@ describe("RouteForm", () => {
     expect(row(frame, "claude:side")).toMatch(/^\s+\[x\] claude:side\s+88%\s+40%$/);
     expect(frame).not.toContain("gateway");
     expect(frame).not.toContain("codex:x");
-    expect(row(frame, "from")).toMatch(/Patterns\s+from$/);
-    expect(row(frame, "exclude ")).toMatch(/^\s+exclude$/);
+    expect(row(frame, "from")).toMatch(/Patterns\s+from\s+adds matches, e\.g\. \*@work\.example, team-\*$/);
+    expect(row(frame, "exclude ")).toMatch(/^\s+exclude\s+leaves matches out, e\.g\. \*-share, old$/);
     expect(row(frame, "Strategy")).toMatch(/Strategy\s+● round-robin\s+○ headroom\s+○ expiring$/);
     expect(frame).toContain("takes accounts in turn");
     expect(row(frame, "skip at")).toMatch(/Limits\s+skip at\s+\[80\]%$/);
@@ -347,22 +347,47 @@ describe("RouteForm", () => {
     expect(row(frame, "claude:team")).toMatch(/\[x\] claude:team\s+5%\s+22%$/);
   });
 
-  // Focused and empty, a pattern field said nothing about what it takes.
-  it("says what a pattern field takes while it is focused and empty, within 80 columns", async () => {
+  // An empty pattern field read a bare `from` or `exclude`, and what it takes only while focused,
+  // without an example.
+  it("shows what an empty pattern field does, with an example, focused or not, within 80 columns", async () => {
+    const FROM = "adds matches, e.g. *@work.example, team-*";
+    const EXCLUDE = "leaves matches out, e.g. *-share, old";
     const { instance } = setup({ columns: 80 });
     await opened(instance);
-    expect(text(instance)).not.toContain("comma-separated");
+    const frame = text(instance);
+    const start = columnOf(frame, "Patterns", FROM);
+    expect(start).toBeGreaterThan(columnOf(frame, "Patterns", "from"));
+    expect(columnOf(frame, "exclude ", EXCLUDE)).toBe(start);
+    expect(frame).not.toContain("comma-separated");
 
+    // Focused, after the field's cursor.
     await tabTo(instance, "from");
-    expect(row(text(instance), "from")).toMatch(/Patterns\s+from\s+\S?\s+globs or emails, comma-separated$/);
+    expect(row(text(instance), "Patterns")).toMatch(
+      /^✦\s+Patterns\s+from\s+adds matches, e\.g\. \*@work\.example, team-\*$/,
+    );
+    expect(columnOf(text(instance), "Patterns", FROM)).toBe(start + 1);
     for (const line of lines(text(instance))) expect(line.length).toBeLessThanOrEqual(80);
-    await press(instance, "*@work.example");
-    expect(row(text(instance), "from")).toMatch(/from\s+\*@work\.example\s*$/);
+    // Where the typed text goes, and gone once anything is.
+    await press(instance, "q");
+    expect(columnOf(text(instance), "Patterns", "q")).toBe(start);
+    expect(row(text(instance), "Patterns")).toMatch(/from\s+q\s*$/);
 
     await tabTo(instance, "exclude ");
-    expect(row(text(instance), "exclude ")).toMatch(/^✦\s+exclude\s+\S?\s+names or globs, comma-separated$/);
-    expect(row(text(instance), "from")).not.toContain("comma-separated");
+    expect(row(text(instance), "exclude ")).toMatch(/^✦\s+exclude\s+leaves matches out, e\.g\. \*-share, old$/);
+    expect(columnOf(text(instance), "exclude ", EXCLUDE)).toBe(start + 1);
+    expect(text(instance)).not.toContain(FROM);
     for (const line of lines(text(instance))) expect(line.length).toBeLessThanOrEqual(80);
+  });
+
+  // Shrunk beside the field's cursor, the example ran a column into the frame's padding.
+  it("cuts an empty pattern field's example short inside the frame of a narrow terminal", async () => {
+    const { instance } = setup({ columns: 50 });
+    await opened(instance);
+    await tabTo(instance, "from");
+    const frame = text(instance);
+    const line = lines(frame).find((each) => each.includes("Patterns")) ?? "";
+    expect(line).toMatch(/from\s+adds matches,.*… │$/);
+    expect(line.length).toBe(lines(frame).find((each) => each.includes("Tool"))?.length);
   });
 
   it("moves the focus with tab and back with shift+tab", async () => {
