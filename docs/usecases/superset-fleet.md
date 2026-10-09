@@ -4,12 +4,12 @@
 
 [Superset](https://superset.sh) runs many coding agents side by side, each in its own git
 worktree and its own tab. clausona gives each of those agents its own account. With both, one
-Claude Code session can split a job across several workers. Each worker draws on a different
-account's limits, or on an API model. You watch every one of them in Superset, and step in
-whenever you like.
+Claude Code or Codex session can split a job across several workers. Each worker draws on a
+different account's limits, or on an API model. You watch every one of them in Superset, and
+step in whenever you like.
 
 The `superset-fleet` skill, shipped as a plugin from this repo, teaches the coordinating
-session how to do it.
+session how to do it. The same pattern runs in [herdr](herdr-fleet.md) and [Orca](orca-fleet.md).
 
 ## Why not subagents?
 
@@ -17,7 +17,7 @@ session how to do it.
   five uses up one account's 5-hour window five times as fast.
 - **Visibility.** A subagent runs out of sight. You see its result, not its work, and you
   cannot type into it.
-- **Each Superset worker is an ordinary Claude Code session in a tab.** You can read along,
+- **Each Superset worker is an ordinary Claude Code or Codex session in a tab.** You can read along,
   answer its questions, or stop it.
 
 ## How it fits together
@@ -80,16 +80,27 @@ flowchart LR
    would wait at them.
 
 3. **Install the plugin.** clausona shares plugins across profiles, so one install reaches every
-   profile:
+   profile. `fleet-core`, the rules all fleet plugins share, comes along with it:
 
    ```bash
    claude plugin marketplace add larcane97/clausona
-   claude plugin install clausona@clausona
+   claude plugin install superset-fleet@clausona
    ```
+
+   In Codex, which has no plugin dependencies, add `fleet-core` yourself:
+
+   ```bash
+   codex plugin marketplace add larcane97/clausona
+   codex plugin add fleet-core@clausona
+   codex plugin add superset-fleet@clausona
+   ```
+
+   In Claude Code, `clausona@clausona` is now an alias: installing it installs `superset-fleet`.
+   In Codex it no longer carries a skill, so run the three commands above.
 
 ## A run
 
-In a Claude Code session in a Superset project, ask for the work:
+In a Claude Code or Codex session in a Superset project, ask for the work:
 
 > Split these across my accounts in Superset: add a `--json` flag to `notes list`, write tests
 > for `src/parse.ts`, and fix the broken links in `docs/`.
@@ -109,12 +120,15 @@ The orchestrator then:
 
 ## Settings
 
-Settings live in `~/.clausona/superset-fleet.json`. What you say in the conversation wins over
-the file, and the file wins over the defaults.
+Settings live in `~/.clausona/fleet.json`, shared by every fleet plugin. An older
+`~/.clausona/superset-fleet.json` is still read until the first change, which writes `fleet.json`.
+What you say in the conversation wins over the file, and the file wins over the defaults.
 
 **Choosing the workers.**
-- By default any Claude profile with headroom can be a worker, except the orchestrator's own.
-  A profile at 90% or more of its 5-hour or weekly limit is skipped.
+- By default any profile with headroom can be a worker, except the orchestrator's own, as long
+  as it belongs to the orchestrator's tool: Claude Code profiles for a Claude Code session, Codex
+  profiles for a Codex session. The other tool's profiles are used only when you name them or list them in `workers`. A
+  profile at 90% or more of its 5-hour or weekly limit is skipped.
 - To choose them yourself, name them in the request, or set them in the file:
 
   ```json
@@ -128,6 +142,11 @@ the file, and the file wins over the defaults.
   - `workers`: the only profiles that can be workers.
   - `routing`: your own rules for which task goes where, in plain words.
   - `maxUsage`: the usage, in percent, at which a profile is skipped. The default is 90.
+  - `permissions`: how workers run, per tool, for example
+    `{"claude": "acceptEdits", "codex": "on-request", "codexSandbox": "workspace-write"}`. The
+    orchestrator asks once if it needs one that is missing. `codexSandbox` is
+    `workspace-write` (the default) or `danger-full-access`; see the Codex notes below for what that
+    means for commits.
 - Or tell the orchestrator, for example "never use claude:personal for workers", and it updates
   the file.
 
@@ -157,7 +176,22 @@ the file, and the file wins over the defaults.
 - Check whether your endpoint honours prompt caching. Without it, every turn re-reads the whole
   conversation and long sessions slow down.
 
+**Codex.**
+- A Codex session can be the orchestrator. It uses `superset-orchestrate`, the Codex copy of
+  Superset's protocol that Superset installs in `~/.agents/skills`, and waits for workers a few
+  minutes at a time.
+- A Codex worker runs through an agent whose arguments are, for example,
+  `run codex:personal -- -s workspace-write -a on-request -c check_for_update_on_startup=false -c mcp_servers={}`.
+  In a Superset terminal the `codex` it starts goes through Superset's wrapper, so Superset sees
+  each turn end, the same as for Claude Code workers.
+- In Codex's `workspace-write` sandbox, `.git` is read-only and there is no network, so a Codex
+  worker asks before it commits and again before it pushes. With `on-request` you approve each
+  one in its terminal; with `never` they fail. A Codex worker commits and pushes on its own only
+  with `"codexSandbox": "danger-full-access"`, which turns Codex's sandbox off.
+- The first Codex worker in a repo that Codex never trusted asks "Trust this folder?". The
+  orchestrator answers it for the repo you asked it to work on.
+
 ## Limits
 
-- Workers are Claude Code sessions. Codex workers are not covered yet.
 - Superset must be running on the same machine (the desktop app, or `superset start`).
+- The orchestrator is the only session that coordinates. Workers start no agents of their own.
