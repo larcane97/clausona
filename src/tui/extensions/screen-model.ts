@@ -1,4 +1,12 @@
-import { accountsWord, fromLabel, hookWhen, scopeSentence, tagsOf, usageCells } from "../../extensions/describe.js";
+import {
+  accountsWord,
+  type DetailLine,
+  fromLabel,
+  hookWhen,
+  scopeSentence,
+  tagsOf,
+  usageCells,
+} from "../../extensions/describe.js";
 import type { Extension, Inventory } from "../../extensions/model.js";
 import { projectName, tilde, tildeIn } from "../../extensions/present.js";
 import {
@@ -13,7 +21,7 @@ import {
   type ScopeRow,
   type ToolName,
 } from "../../extensions/scopes.js";
-import { COLUMN_GAP, cell, column } from "./view-model.js";
+import { COLUMN_GAP, cell, column, wrapText } from "./view-model.js";
 
 /**
  * What the Extensions screen shows, before ink draws it: one table per tool, kind and scope, its
@@ -348,6 +356,8 @@ export const CHROME_ROWS = 13;
 export const CHROME_COLUMNS = 4;
 /** The `│` between the two panes and the space after it. */
 export const DIVIDER_COLUMNS = 2;
+/** The `✦` before the table's selected row and the space after it: the table's cells start after them. */
+export const CURSOR_COLUMNS = 2;
 /** The width from which the scope list and the table go side by side. */
 export const TWO_PANES_FROM = 100;
 /** The widest the scope list gets. */
@@ -371,4 +381,94 @@ export function paneLayout(columns: number, rows: number, scopes: ScopeEntry[]):
   const widest = Math.max(0, ...scopes.map((s) => `${s.label}  ${s.count}`.length));
   const scopeWidth = Math.min(SCOPE_PANE_MAX, widest + 4);
   return { mode: "two", scopeWidth, tableWidth: Math.max(1, width - scopeWidth - DIVIDER_COLUMNS), height };
+}
+
+/** A line of the scope list: a scope, or the rule that sets Loaded here and Not used in 90 days apart. */
+export type ScopeLine = { type: "scope"; key: string; entry: ScopeEntry } | { type: "rule"; key: string };
+
+/** The scope list's lines: a rule after Loaded here and another before Not used in 90 days, when there. */
+export function scopeLines(scopes: ScopeEntry[]): ScopeLine[] {
+  const lines: ScopeLine[] = [];
+  for (const entry of scopes) {
+    const prev = lines.at(-1);
+    // One rule where the two stand together: Loaded here, then Not used in 90 days.
+    if (prev?.type === "scope" && (prev.entry.id === "loaded" || entry.id === "unused")) {
+      lines.push({ type: "rule", key: `rule-${entry.id}` });
+    }
+    lines.push({ type: "scope", key: entry.id, entry });
+  }
+  return lines;
+}
+
+/**
+ * The lines a list `height` lines tall shows of `total`: all of them when they fit, else one
+ * fewer, kept for the line that says how many more are below.
+ */
+export function listRoom(height: number, total: number): number {
+  return total <= height || height < 2 ? Math.max(0, height) : height - 1;
+}
+
+/**
+ * Keeps `cursor` inside a window `room` lines tall that starts at `top`, and the window inside the
+ * `total` lines there are: when a search narrows the table, the window moves up rather than show
+ * blank lines below the last row.
+ */
+export function scrolled(top: number, cursor: number, room: number, total: number): number {
+  const kept = cursor < top ? cursor : cursor >= top + room ? cursor - room + 1 : top;
+  return Math.max(0, Math.min(kept, total - room));
+}
+
+/**
+ * The furthest a detail of `total` lines scrolls in `room` rows: to where the last line shows
+ * under the line that says how many are above. Nothing scrolls when all fit, or when the room
+ * cannot hold a line between the two markers.
+ */
+export function maxDetailTop(total: number, room: number): number {
+  return total <= room || room < 3 ? 0 : total - (room - 1);
+}
+
+/**
+ * The lines a detail shows from `top`: `start` to `end`, after a line that says how many are
+ * above when any are, and before one that says how many are below when any are.
+ */
+export function detailWindow(
+  total: number,
+  room: number,
+  top: number,
+): { start: number; end: number; above: number; below: number } {
+  const start = Math.max(0, Math.min(top, maxDetailTop(total, room)));
+  if (total <= room || room < 3) return { start: 0, end: Math.min(total, room), above: 0, below: 0 };
+  const shown = room - (start > 0 ? 1 : 0);
+  const end = total - start <= shown ? total : start + shown - 1;
+  return { start, end, above: start, below: total - end };
+}
+
+/** The column a detail line's label takes, its gap included. */
+export const DETAIL_LABEL_WIDTH = 10;
+
+export type DetailRow = DetailLine & { id: string };
+
+/**
+ * A detail's lines as the screen draws them in `width` columns, one row each. A long value
+ * wraps under its label's column, a command or a URL too, so it is read in full; a line with no
+ * label, as a description, wraps at the full width. Each row has an id of its own: two
+ * accounts' lines can both read `on`.
+ */
+export function detailRows(lines: DetailLine[], width: number): DetailRow[] {
+  const seen = new Map<string, number>();
+  return lines.flatMap((line) => {
+    const room = line.label === undefined ? width : width - DETAIL_LABEL_WIDTH;
+    return wrapText(line.text, room).map((text, i) => {
+      const label = line.label === undefined ? undefined : i === 0 ? line.label : "";
+      const content = `${label ?? ""}\0${text}`;
+      const repeat = seen.get(content) ?? 0;
+      seen.set(content, repeat + 1);
+      return {
+        ...(label === undefined ? {} : { label }),
+        text,
+        ...(line.tone ? { tone: line.tone } : {}),
+        id: `${content}\0${repeat}`,
+      };
+    });
+  });
 }
