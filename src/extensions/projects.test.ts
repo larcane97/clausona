@@ -46,7 +46,7 @@ describe("collectProjects", () => {
     const app = h.project("repos/app");
     const web = h.project("repos/web");
     const here = h.project("repos/here");
-    const projects = await collectProjects(
+    const { projects, current } = await collectProjects(
       [
         { tool: "claude", profile: "claude:work", paths: [app, h.path("repos/deleted"), h.home] },
         { tool: "claude", profile: "claude:personal", paths: [app, web] },
@@ -60,6 +60,22 @@ describe("collectProjects", () => {
       { path: here, tools: [], profiles: [] },
       { path: web, tools: ["claude", "codex"], profiles: ["claude:personal", "codex:personal"] },
     ]);
+    expect(current).toBe(here);
+  });
+
+  it("finds the current dir among the recorded projects by its real path, either way round", async () => {
+    const h = newHome();
+    const app = h.project("repos/app");
+    h.link("repos/app", "links/app");
+    const viaLink = h.path("links/app");
+    const recordedReal = await collectProjects([{ tool: "claude", profile: "claude:work", paths: [app] }], viaLink);
+    expect(recordedReal).toEqual({
+      projects: [{ path: app, tools: ["claude"], profiles: ["claude:work"] }],
+      current: app,
+    });
+    const recordedLink = await collectProjects([{ tool: "claude", profile: "claude:work", paths: [viaLink] }], app);
+    expect(recordedLink.current).toBe(viaLink);
+    expect(recordedLink.projects.map((p) => p.path)).toEqual([viaLink]);
   });
 
   it("reads the keys of a recorded projects object", () => {
