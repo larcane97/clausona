@@ -265,3 +265,42 @@ describe("ls from the home dir", () => {
     expect(rows.filter((line) => line.startsWith("notes "))).toHaveLength(1);
   });
 });
+
+describe("ls --project through a link", () => {
+  function linkedSeed() {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.link("repos/app", "links/app");
+    h.claude("default", ".claude", {
+      mcpServers: { github: { command: "gh-mcp" } },
+      projects: { [app]: { mcpServers: { "pg-dev": { command: "pg" } }, disabledMcpServers: ["github"] } },
+    });
+    return { h, app };
+  }
+
+  it("is the project recorded at the link's real path", async () => {
+    const { h, app } = linkedSeed();
+    const json = JSON.parse(await run(h, h.home, "mcp", ["ls", "--json", "--project", h.path("links/app")]));
+    expect(json.currentProject).toBe(app);
+    expect(json.projects.map((p: { path: string }) => p.path)).toEqual([app]);
+    const text = await run(h, h.home, "mcp", ["ls", "--project", h.path("links/app")]);
+    expect(text).toMatch(/^github\s+claude\s+account default\s+off$/m);
+    expect(text).toMatch(/^pg-dev\s+claude\s+local default · app\s+on$/m);
+  });
+
+  it("is the project recorded at the link, for the real path, when that is the path Claude Code saw", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.project("repos/app");
+    h.link("repos/app", "links/app");
+    const linked = h.path("links/app");
+    h.claude("default", ".claude", {
+      mcpServers: { github: { command: "gh-mcp" } },
+      projects: { [linked]: { disabledMcpServers: ["github"] } },
+    });
+    const json = JSON.parse(await run(h, h.home, "mcp", ["ls", "--json", "--project", h.path("repos/app")]));
+    expect(json.currentProject).toBe(linked);
+    expect(json.items.find((i: { name: string }) => i.name === "github").state.value).toBe("off");
+  });
+});

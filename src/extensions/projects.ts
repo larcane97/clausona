@@ -2,7 +2,7 @@ import path from "node:path";
 
 import type { ToolName } from "../types.js";
 import type { Project } from "./model.js";
-import { entryInfo, gitRoot, isRecord, pathKey } from "./read.js";
+import { entryInfo, gitRoot, IO_LIMIT, isRecord, mapLimit, pathKey, realPath, samePath } from "./read.js";
 
 /** The project paths one profile's tool has recorded. */
 export type ProjectRecord = { tool: ToolName; profile: string; paths: string[] };
@@ -32,8 +32,14 @@ export function isHomeProject(project: Project, homeDir: string): boolean {
   return pathKey(project.path) === pathKey(homeDir);
 }
 
-/** Every recorded project that still exists, plus the current one, sorted by path. */
-export async function collectProjects(records: ProjectRecord[], current?: string): Promise<Project[]> {
+/**
+ * Every recorded project that still exists, sorted by path, with the current one among them:
+ * the recorded project it is (see `asRecorded`), else itself, added.
+ */
+export async function collectProjects(
+  records: ProjectRecord[],
+  current?: string,
+): Promise<{ projects: Project[]; current?: string }> {
   const byKey = new Map<string, Project>();
   const add = (p: string, tool?: ToolName, profile?: string) => {
     const resolved = path.resolve(p);
@@ -44,11 +50,34 @@ export async function collectProjects(records: ProjectRecord[], current?: string
     byKey.set(key, project);
   };
   for (const record of records) for (const p of record.paths) add(p, record.tool, record.profile);
-  if (current) add(current);
-  const kept = await Promise.all(
-    [...byKey.values()].map(async (project) => ((await entryInfo(project.path)).kind === "dir" ? project : undefined)),
-  );
-  return kept.filter((p): p is Project => p !== undefined).sort((a, b) => a.path.localeCompare(b.path));
+  const kept = (
+    await Promise.all(
+      [...byKey.values()].map(async (project) =>
+        (await entryInfo(project.path)).kind === "dir" ? project : undefined,
+      ),
+    )
+  ).filter((p): p is Project => p !== undefined);
+  const byPath = (a: Project, b: Project) => a.path.localeCompare(b.path);
+  if (current === undefined) return { projects: kept.sort(byPath) };
+  const recorded = await asRecorded(current, kept);
+  if (recorded) return { projects: kept.sort(byPath), current: recorded.path };
+  const own =
+    (await entryInfo(current)).kind === "dir" ? [{ path: path.resolve(current), tools: [], profiles: [] }] : [];
+  return { projects: [...kept, ...own].sort(byPath), current };
+}
+
+/**
+ * The recorded project `dir` is, if any. Claude Code keys a project by the path it was started
+ * in, which can run through a link - `~/links/app` for the `~/repos/app` it leads to - so a
+ * recorded path names `dir` when it is `dir`, or when the two lead to one real folder.
+ */
+async function asRecorded(dir: string, projects: Project[]): Promise<Project | undefined> {
+  const named = projects.find((p) => samePath(p.path, dir));
+  if (named) return named;
+  const real = await realPath(dir).catch(() => undefined);
+  if (real === undefined) return undefined;
+  const reals = await mapLimit(projects, IO_LIMIT, (p) => realPath(p.path).catch(() => undefined));
+  return projects.find((_, i) => samePath(reals[i], real));
 }
 
 /** The keys of a recorded `projects` object, or none. */
