@@ -386,6 +386,20 @@ describe("runRouted", () => {
       expect(s.launches[1]).toEqual(["codex:x", ["resume"]]);
     });
 
+    it("names the tool, and explains only it, when nobody of the narrowed tool is free", async () => {
+      const quotas = { ...BOTH_QUOTAS, "claude:a": snap(99), "claude:b": snap(99), "claude:solo": snap(99) };
+      const s = setup({ registry: BOTH, quotas, routes: ANY });
+      const error = (await runRouted(["claude", "--route", "any", "-p", "hi"], s.launch, s.io, s.deps).catch(
+        (e: unknown) => e,
+      )) as NoAccountError;
+      expect(error).toBeInstanceOf(NoAccountError);
+      const text = stripAnsi(error.message);
+      expect(text.split("\n")[0]).toBe("No claude account in route any is free right now.");
+      expect(text).toContain("csn route explain any --tool claude");
+      expect(text).not.toContain("codex:");
+      expect(s.launches).toEqual([]);
+    });
+
     it("refuses a profile of either tool after the routing options, unless a tool word narrows it", async () => {
       for (const args of [
         ["--route", "any", "claude:b"],

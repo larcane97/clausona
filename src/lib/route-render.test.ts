@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { type RouteSpec, withDefaults } from "../core/route-config.js";
 import type { Member } from "../core/route-patterns.js";
@@ -179,6 +179,21 @@ describe("renderRouteTable", () => {
     expect(plain(renderRouteTable(rows, [], at(120)))).toMatch(/^ {4}solo\s+claude\s+headroom\s+80% \/ 95%\s+—\s+—$/m);
   });
 
+  // Review Focus 2: offline, nothing was read, so nobody is free or next: dashes, as with --no-quota.
+  it("shows dashes when no member's quota could be read", () => {
+    const offline = rank({ tool: "claude", from: ["*", "gone"] }, {});
+    expect(plain(renderRouteTable([{ name: "offline", route: offline.route, ranking: offline }], [], at(120)))).toMatch(
+      /^ {4}offline\s+claude\s+round-robin\s+80% \/ 95%\s+—\s+—$/m,
+    );
+  });
+
+  it("says now for a reset that has already passed", () => {
+    const late = rank({ tool: "claude", from: ["team"] }, { "claude:team": quota(99, 10, -1) });
+    expect(plain(renderRouteTable([{ name: "late", route: late.route, ranking: late }], [], at(120)))).toMatch(
+      /^ {4}late\s+claude\s+round-robin\s+80% \/ 95%\s+0 of 1\s+none, soonest now$/m,
+    );
+  });
+
   it("says none when nobody is free and no reset is known", () => {
     const stuck = rank({ tool: "claude", from: ["team"] }, { "claude:team": quota(99, 99, null, null) });
     expect(plain(renderRouteTable([{ name: "stuck", route: stuck.route, ranking: stuck }], [], at(120)))).toMatch(
@@ -285,6 +300,20 @@ describe("renderRouteDetail", () => {
     );
     const text = plain(renderRouteDetail("main", r, at(120)));
     expect(text.endsWith("\n\n  Nobody can be picked now; csn run --route main would exit 75.\n")).toBe(true);
+  });
+
+  it("names the tool of a narrowed all route in the run that would exit 75", () => {
+    const r = rankRoute({
+      route: withDefaults({ tool: "all" }),
+      members: [member("claude:team"), member("codex:x")],
+      quotas: { "claude:team": quota(99, 10), "codex:x": quota(5, 5) },
+      lastPicked: {},
+      now: NOW,
+      resume: false,
+      onlyTool: "claude",
+    });
+    const text = plain(renderRouteDetail("any", r, { ...at(120), onlyTool: "claude" }));
+    expect(text.endsWith("\n\n  Nobody can be picked now; csn run claude --route any would exit 75.\n")).toBe(true);
   });
 
   it("names both tools for an all route, and titles an unsaved one", () => {
@@ -431,6 +460,48 @@ describe("renderNoAccount", () => {
     );
   });
 
+  it("says now for a reset that has already passed", () => {
+    const r = rank(
+      { tool: "claude", from: ["team", "work"] },
+      { "claude:team": quota(99, 10, -1), "claude:work": quota(99, 10, 2) },
+    );
+    const text = plain(renderNoAccount("main", r, at(120)));
+    expect(text).toMatch(/^ {4}claude:team\s.*\s{2}now \(5H resets\)\s+soonest$/m);
+    expect(text).toMatch(/^ {4}claude:work\s.*\s{2}in 2h \(5H resets\)$/m);
+    expect(text).toContain("\n    Run again now, or see everything with: csn route explain main\n");
+    expect(text).not.toMatch(/\bin now\b|after now/);
+  });
+
+  it("names the tool a run narrowed an all route to, and explains that tool only", () => {
+    const both = [...["claude:team", "claude:work"].map(member), member("codex:x")];
+    const quotas = { "claude:team": quota(99, 10), "claude:work": quota(99, 10, 2), "codex:x": quota(5, 5) };
+    const narrowed = (from: string[]) =>
+      rankRoute({
+        route: withDefaults({ tool: "all", from }),
+        members: both,
+        quotas,
+        lastPicked: {},
+        now: NOW,
+        resume: false,
+        onlyTool: "claude",
+      });
+    const text = plain(renderNoAccount("any", narrowed(["*"]), { ...at(120), onlyTool: "claude" }));
+    expect(text.split("\n")[0]).toBe("No claude account in route any is free right now.");
+    expect(text).toContain("or see everything with: csn route explain any --tool claude\n");
+    expect(text).not.toContain("codex:x");
+
+    const inline = plain(
+      renderNoAccount(undefined, narrowed(["claude:*", "codex:*"]), { ...at(120), onlyTool: "claude" }),
+    );
+    expect(inline.split("\n")[0]).toBe("No claude account in the inline route is free right now.");
+    expect(inline).toContain("csn route explain --tool claude --from 'claude:*,codex:*'");
+
+    // Without narrowing, the headline and the hint stay as they are.
+    const whole = plain(renderNoAccount("main", narrowed(["*"]), at(120)));
+    expect(whole.split("\n")[0]).toBe("No account in route main is free right now.");
+    expect(whole).toContain("csn route explain main\n");
+  });
+
   it("says later when no reset is known", () => {
     const r = rank({ tool: "claude", from: ["team"] }, { "claude:team": quota(99, 99, null, null) });
     const text = plain(renderNoAccount("main", r, at(120)));
@@ -508,6 +579,54 @@ describe("renderNewRoutePreview", () => {
     expect(widest(text)).toBeLessThanOrEqual(60);
     expect(text).toContain(
       "\n    claude:team 5%   claude:work 12%\n    claude:side 88% (over)   claude:personal 96% (over)\n",
+    );
+  });
+});
+
+describe("terminal width", () => {
+  const saved = {
+    stdout: Object.getOwnPropertyDescriptor(process.stdout, "columns"),
+    stderr: Object.getOwnPropertyDescriptor(process.stderr, "columns"),
+  };
+  afterEach(() => {
+    for (const name of ["stdout", "stderr"] as const) {
+      const descriptor = saved[name];
+      if (descriptor) Object.defineProperty(process[name], "columns", descriptor);
+      else delete (process[name] as { columns?: number }).columns;
+    }
+  });
+  const columns = (stdout: number | undefined, stderr: number | undefined) => {
+    Object.defineProperty(process.stdout, "columns", { value: stdout, configurable: true, writable: true });
+    Object.defineProperty(process.stderr, "columns", { value: stderr, configurable: true, writable: true });
+  };
+
+  const team = [member("claude:team"), member("claude:work")];
+  const quotas = { "claude:team": quota(99, 10), "claude:work": quota(99, 10, 2) };
+  const busy = rank({ tool: "claude" }, quotas, { members: team });
+  const spec: RouteSpec = { tool: "claude" };
+  const open = rank(spec, { "claude:team": quota(5, 1), "claude:work": quota(12, 1) }, { members: team });
+  const rows: RouteListRow[] = [{ name: "everything-claude", route: busy.route, ranking: busy }];
+
+  // The exit-75 message and the new-route preview are written to stderr; tables are written to stdout.
+  it("sizes what goes to stderr by stderr, and the rest by stdout", () => {
+    columns(200, 50);
+    expect(widest(renderNoAccount("main", busy, { now: NOW }))).toBeLessThanOrEqual(50);
+    expect(widest(renderNewRoutePreview("work", spec, open))).toBeLessThanOrEqual(50);
+    expect(plain(renderRouteTable(rows, [], { now: NOW })).split("\n")[1]).toContain("TOOL");
+
+    columns(50, 200);
+    expect(plain(renderNoAccount("main", busy, { now: NOW }))).toContain(
+      "    Run again after 1h, or see everything with: csn route explain main\n",
+    );
+    expect(plain(renderRouteTable(rows, [], { now: NOW })).split("\n")[1]).not.toContain("TOOL");
+  });
+
+  it("falls back to stdout's width when stderr has none, then to 120", () => {
+    columns(50, undefined);
+    expect(widest(renderNoAccount("main", busy, { now: NOW }))).toBeLessThanOrEqual(50);
+    columns(undefined, undefined);
+    expect(plain(renderNoAccount("main", busy, { now: NOW }))).toContain(
+      "    Run again after 1h, or see everything with: csn route explain main\n",
     );
   });
 });

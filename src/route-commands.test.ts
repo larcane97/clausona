@@ -443,6 +443,15 @@ describe("route explain and pick", () => {
     expect(codex).not.toMatch(/claude:/);
     expect(await run("explain", "any")).toMatch(/^ {4}claude:a\s/m);
     expect(await run("pick", "any", "--tool", "claude")).toBe("claude:a");
+    // Nobody of the narrowed tool is free: the 75 message names the tool and explains it alone.
+    const none = (await run("pick", "any", "--tool", "claude", "--max-usage", "1", "--reserve-usage", "1").catch(
+      (e: unknown) => e,
+    )) as NoAccountError;
+    expect(none).toBeInstanceOf(NoAccountError);
+    expect(stripAnsi(none.message).split("\n")[0]).toBe("No claude account in route any is free right now.");
+    expect(stripAnsi(none.message)).toContain("csn route explain any --tool claude");
+    const narrowed = await run("explain", "any", "--tool", "claude", "--max-usage", "1", "--reserve-usage", "1");
+    expect(narrowed).toContain("Nobody can be picked now; csn run claude --route any would exit 75.");
     await run("add", "main");
     await expect(run("explain", "main", "--tool", "codex")).rejects.toThrow("Route 'main' is for claude, not codex.");
     await expect(run("explain", "main", "--tool", "all")).rejects.toThrow("Route 'main' is for claude, not all.");

@@ -15,7 +15,7 @@ import {
   type Usage,
   type UsageWindow,
 } from "../core/routing.js";
-import type { QuotaWindow } from "../types.js";
+import type { QuotaWindow, ToolName } from "../types.js";
 import { accent, bold, box, dim, dimmer, padEnd, secondary, truncate, warnIcon, yellow } from "./cli-style.js";
 import { formatAge, formatQuotaPercent, formatResetIn, formatResetShort, styledQuota } from "./format.js";
 
@@ -74,7 +74,18 @@ const STRATEGY_PHRASES: Record<Strategy, string> = {
 
 const routeLabel = (name: string | undefined) => (name ? `route ${name}` : "inline route");
 
-const terminalWidth = () => process.stdout.columns ?? 120;
+/**
+ * The width of the terminal the text goes to. The exit-75 message and the new-route preview go to
+ * stderr, which can be a terminal of its own while stdout is piped; the rest goes to stdout.
+ */
+const terminalWidth = (stream: "stdout" | "stderr" = "stdout") =>
+  (stream === "stderr" ? process.stderr.columns : undefined) ?? process.stdout.columns ?? 120;
+
+/** When a reset comes: `in 2h`, or `now` once it is due (a cached reading can outlive its reset). */
+function resetsIn(at: string, now: number): string {
+  const left = formatResetIn(at, new Date(now));
+  return left === "now" ? left : `in ${left}`;
+}
 
 /** A string quoted for a POSIX shell, so a command in a message can be pasted as it is. */
 const shellQuote = (text: string) => `'${text.replace(/'/g, "'\\''")}'`;
@@ -339,6 +350,18 @@ const ROUTE_LAYOUTS: RouteColumn[][] = [
   ["route", "free", "next"],
 ];
 
+/** Skips decided without a quota reading: quotaTargets leaves these members out (route-service.ts). */
+const NOT_LOOKED_UP: ReadonlySet<SkipReason> = new Set(["not-registered", "api-not-supported", "keeps-own-sessions"]);
+
+/**
+ * Whether no quota could be read for any member (offline, say). Only rows whose quota was looked
+ * up count: an unregistered name or an API profile has none to read.
+ */
+function nothingRead(rows: Row[]): boolean {
+  const looked = rows.filter((row) => !row.skip || !NOT_LOOKED_UP.has(row.skip));
+  return looked.length > 0 && looked.every((row) => row.skip === "no-reading");
+}
+
 /**
  * Members free now - not skipped, and under the cut - out of every member: a skipped one counts
  * (it is in the route, just unusable now), a name that is not registered does not.
@@ -355,7 +378,7 @@ function nextCell(ranking: Ranking, now: number): Cell {
   const { outcome } = ranking;
   if (outcome.kind === "picked") return [[outcome.id, accent]];
   if (!outcome.soonest) return [["none", yellow]];
-  return [[`none, soonest in ${formatResetIn(outcome.soonest.at, new Date(now))}`, yellow]];
+  return [[`none, soonest ${resetsIn(outcome.soonest.at, now)}`, yellow]];
 }
 
 /** `route list`: one row per route, then the warnings. No routes at all is the empty state. */
@@ -367,7 +390,9 @@ export function renderRouteTable(
   if (rows.length === 0) return renderRoutesEmpty();
   const width = options.width ?? terminalWidth();
   const now = options.now ?? Date.now();
-  const cells = rows.map(({ name, route, ranking }): Record<RouteColumn, Cell> => {
+  const cells = rows.map(({ name, route, ranking: given }): Record<RouteColumn, Cell> => {
+    // A ranking with nothing read says nothing about who is free: dashes, as with --no-quota.
+    const ranking = given && !nothingRead(given.rows) ? given : undefined;
     const count = ranking ? freeNow(ranking) : undefined;
     return {
       route: [[name]],
@@ -505,18 +530,22 @@ function memberLines(ranking: Ranking, width: number, now: number): string[] {
   return fitTable(tables, width);
 }
 
-/** `route explain`, and what `route add` and `route set` show: the settings, then every member. */
+/**
+ * `route explain`, and what `route add` and `route set` show: the settings, then every member.
+ * `onlyTool` is the tool an explain narrowed an `all` route to, as a run naming it would.
+ */
 export function renderRouteDetail(
   name: string | undefined,
   ranking: Ranking,
-  options: { width?: number; now?: number } = {},
+  options: { width?: number; now?: number; onlyTool?: ToolName } = {},
 ): string {
   const width = options.width ?? terminalWidth();
   const now = options.now ?? Date.now();
   const title = truncate(name ?? "inline route", Math.max(8, width - 12));
   const lines = ["", box(title, settingsLines(ranking.route, width)), "", ...memberLines(ranking, width, now)];
   if (ranking.outcome.kind === "none") {
-    const run = name ? `csn run --route ${name}` : "csn run";
+    const narrowed = ranking.route.tool === "all" ? options.onlyTool : undefined;
+    const run = name ? `csn run ${narrowed ? `${narrowed} ` : ""}--route ${name}` : "csn run";
     lines.push("", ...wrap(`Nobody can be picked now; ${unbroken(run)} would exit 75.`, width, "  "));
   }
   lines.push("");
@@ -551,9 +580,6 @@ export function renderNote(name: string | undefined, ranking: Ranking): string {
   return `  ${accent("▸")} ${bold(outcome.id)}  ${dim(parts.join(", "))}`;
 }
 
-/** Skips decided without a quota reading: quotaTargets leaves these members out (route-service.ts). */
-const NOT_LOOKED_UP: ReadonlySet<SkipReason> = new Set(["not-registered", "api-not-supported", "keeps-own-sessions"]);
-
 /** A reset nobody knows sorts after every known one. */
 const resetOrder = (at: string | null) => (at === null ? Number.MAX_SAFE_INTEGER : Date.parse(at));
 
@@ -567,22 +593,25 @@ function freeAgainCell(row: Row, limit: number, at: string | null, now: number):
     Boolean(window.resetsAt) &&
     Date.parse(window.resetsAt as string) === ms;
   const which: UsageWindow = resetsThen(row.sevenDay) ? "7D" : "5H";
-  return [[`in ${formatResetIn(at, new Date(now))} (${which} resets)`, secondary]];
+  return [[`${resetsIn(at, now)} (${which} resets)`, secondary]];
 }
 
 /**
  * Exit 75's message: who is held back and until when, and what to do. NoAccountError prints it
- * after a `✘`, so its first line is the headline and the rest is indented under it.
+ * after a `✘`, on stderr, so its first line is the headline and the rest is indented under it.
+ * `onlyTool` is the tool a run narrowed an `all` route to: the message is about that tool's
+ * accounts only, and so is the explain it points to.
  */
 export function renderNoAccount(
   name: string | undefined,
   ranking: Ranking,
-  options: { width?: number; now?: number } = {},
+  options: { width?: number; now?: number; onlyTool?: ToolName } = {},
 ): string {
-  const width = options.width ?? terminalWidth();
+  const width = options.width ?? terminalWidth("stderr");
   const now = options.now ?? Date.now();
   const { route, rows, outcome } = ranking;
-  const headline = `No account in ${name ? `route ${name}` : "the inline route"} is free right now.`;
+  const narrowed = route.tool === "all" ? options.onlyTool : undefined;
+  const headline = `No ${narrowed ? `${narrowed} ` : ""}account in ${name ? `route ${name}` : "the inline route"} is free right now.`;
   const indent = " ".repeat(INDENT);
   if (rows.length === 0) {
     return [headline, "", ...wrap(`${nobodyText(ranking)} See ${unbroken("csn route list")}.`, width, indent), ""].join(
@@ -627,16 +656,13 @@ export function renderNoAccount(
   );
 
   const explain = name
-    ? `csn route explain ${name}`
-    : `csn route explain --tool ${route.tool} --from ${shellQuote(route.from.join(","))}`;
-  // Only rows whose quota was looked up count: an unregistered name or an API profile has none to read.
-  const looked = rows.filter((row) => !row.skip || !NOT_LOOKED_UP.has(row.skip));
-  const offline = looked.length > 0 && looked.every((row) => row.skip === "no-reading");
-  const advice = offline
+    ? `csn route explain ${name}${narrowed ? ` --tool ${narrowed}` : ""}`
+    : `csn route explain --tool ${narrowed ?? route.tool} --from ${shellQuote(route.from.join(","))}`;
+  const when = soonest ? formatResetIn(soonest.at, new Date(now)) : undefined;
+  const again = when === "now" ? "now" : when ? `after ${unbroken(when)}` : "later";
+  const advice = nothingRead(rows)
     ? `No quota could be read for any member: check the network, or run ${unbroken("csn list --refresh")}.`
-    : soonest
-      ? `Run again after ${unbroken(formatResetIn(soonest.at, new Date(now)))}, or see everything with: ${unbroken(explain)}`
-      : `Run again later, or see everything with: ${unbroken(explain)}`;
+    : `Run again ${again}, or see everything with: ${unbroken(explain)}`;
   return [headline, "", ...fitTable(tables, width), "", ...wrap(advice, width, indent), ""].join("\n");
 }
 
@@ -653,7 +679,7 @@ export function renderNewRoutePreview(
   ranking: Ranking,
   options: { width?: number } = {},
 ): string {
-  const width = options.width ?? terminalWidth();
+  const width = options.width ?? terminalWidth("stderr");
   const route = withDefaults(spec);
   // An exact profile name reads as the account it is; a glob or an email pattern stays a pattern.
   const named = (pattern: string) =>

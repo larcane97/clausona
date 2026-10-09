@@ -185,7 +185,9 @@ export async function runRouted(
     record: true,
   });
   if (ranking.outcome.kind === "none") {
-    throw new NoAccountError(renderNoAccount(resolved.name, ranking, { now: deps.clock() }));
+    throw new NoAccountError(
+      renderNoAccount(resolved.name, ranking, { now: deps.clock(), onlyTool: resolved.onlyTool }),
+    );
   }
   io.say(renderNote(resolved.name, ranking));
   return launch(ranking.outcome.id, run.toolArgs);
