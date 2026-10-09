@@ -149,7 +149,7 @@ describe("scopes", () => {
       ["global", 1],
       ["builtin", 1],
     ]);
-    expect(scopes.find((s) => s.id === "builtin")?.label).toBe("Built into Codex");
+    expect(scopes.find((s) => s.id === "builtin")?.label).toBe("Built-in");
     expect(scopes.map((s) => s.id)).not.toContain("unused");
     expect(itemsIn(inv, "codex", "skill", "unused", app, NOW)).toEqual([]);
   });
@@ -223,8 +223,8 @@ describe("scopes", () => {
   });
 
   it("labels every scope in the words the screen and the CLI use", () => {
-    expect(SCOPE_LABEL.builtin("claude")).toBe("Built into Claude Code");
-    expect(SCOPE_LABEL.builtin("codex")).toBe("Built into Codex");
+    expect(SCOPE_LABEL.builtin("claude")).toBe("Built-in");
+    expect(SCOPE_LABEL.builtin("codex")).toBe("Built-in");
     expect(SCOPE_LABEL.parents("claude")).toBe("Parent folders");
     expect(SCOPE_LABEL.managed("claude")).toBe("Managed");
     expect(SCOPE_LABEL.cloud("claude")).toBe("Cloud");
