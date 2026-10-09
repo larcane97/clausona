@@ -137,13 +137,27 @@ Claude, a row is in Loaded here when it loads in at least one account.
 
 ### Which copy wins
 
-Claude Code ranks skills managed first, then personal (Global), then project. clausona reads no
-managed skills, so in practice a Global skill wins over a Project skill of the same name. The
-Project row is then tagged `hidden by Global copy` and is not in Loaded here.
+Claude Code loads one copy of a name. clausona works out which one as Claude Code does, account
+by account.
 
-For `.mcp.json` servers, the nearest file wins a name. A copy farther up reads
-`hidden by Project copy`, or `hidden by Parent folders copy` when the winner is in a nearer
-parent folder.
+For skills, Claude Code ranks managed first, then personal (Global), then project. clausona
+reads no managed skills, so in practice a Global skill wins over a Project skill of the same
+name. A skill in the primary's skills folder wins in every account. A skill in one account's
+own skills folder wins in that account only.
+
+For MCP servers, Claude Code takes one server per name: the account's local server first, then
+the `.mcp.json` ones, then the account's user server. Of two `.mcp.json` files, the nearest
+wins. A `.mcp.json` copy wins over a user server only once it is approved for that account,
+because Claude Code leaves out a pending or denied one before it picks. So with a user `github`
+and a `.mcp.json` `github` that no one has approved, the user copy loads and the `.mcp.json`
+one is `pending approval`.
+
+The copy that loses is tagged with the scope of the one that wins: `hidden by Global copy` for
+a Global skill, `hidden by Project copy` for a local server or this project's `.mcp.json`, and
+`hidden by Parent folders copy` for a `.mcp.json` in a folder above. It gets the tag only when
+it loses in every account that has it, and is then not in Loaded here. When it loses in some
+accounts only, it still loads here, with no `hidden by` tag, and its details say where it is
+hidden: `Loaded  on in personal · hidden by the Global copy in work`.
 
 `skillOverrides` and `enabledPlugins` are read the way Claude Code reads them: managed
 settings first, then the project's `.claude/settings.local.json`, then its
@@ -155,14 +169,18 @@ The `state` of an item in JSON is one of these:
 
 | State | Meaning |
 |---|---|
-| `on` | It loads, unless a tag says it is hidden. |
+| `on` | The switch is on. It loads unless a tag says `hidden by …` or `broken link`. |
 | `off` | It is turned off. |
 | `name-only` | A Claude skill set to `name-only` in `skillOverrides`. The details say "Shows as name only". |
 | `user-invocable-only` | A Claude skill set to `user-invocable-only` in `skillOverrides`. The details say "Shows as only when you call it". |
 | `pending-approval` | A `.mcp.json` server not approved yet. Claude Code does not start it. |
 | `mixed` | The accounts differ: `stateByAccount` has each one's. |
 
-A hidden copy keeps its own `state`; only its tags say it is hidden.
+`state` is the switch's value and nothing more. A row loads here when its state is `on`,
+`name-only` or `user-invocable-only` and no tag says `hidden by …` or `broken link`. A hidden
+copy and a broken link keep their own `state`; only the tags say they do not load. A `mixed`
+row loads in the accounts whose `stateByAccount` value is `on`, except where another copy wins
+there, which its details say.
 
 The switches are read from these places:
 
@@ -192,14 +210,13 @@ A row can carry several tags. They are listed most important first: `broken link
 | `off here` | Off in every account by this project's own settings: its `.claude/settings*.json`, an account's entry for it in `.claude.json`, or its `.codex/config.toml`. |
 | `off in N of M accounts` | Off in N accounts and on in the others. M counts the accounts that have the row; for a server every account sees, the accounts that have opened this project. |
 | `pending approval` | A `.mcp.json` server that no account has approved in this project. |
-| `hidden by Project copy` | A same-name copy in Project wins in every account. |
-| `hidden by Global copy` | A same-name copy in Global wins in every account. |
-| `hidden by Parent folders copy` | A `.mcp.json` copy in a nearer parent folder wins in every account. |
+| `hidden by Project copy` | In every account that has it, a same-name copy in Project wins: the account's local server, or this project's `.mcp.json`. |
+| `hidden by Global copy` | In every account that has it, a same-name skill in Global wins: the primary's, or the account's own. |
+| `hidden by Parent folders copy` | In every account that has it, a same-name `.mcp.json` copy in a parent folder wins. |
 | `unused` | A Claude skill the rule below calls unused. |
 
-The three `hidden by` tags are the forms of `hidden by <scope> copy`, which names the winning
-copy's scope. A Global copy can win over a Project skill, and a nearer `.mcp.json` over a
-farther one.
+The three `hidden by` tags are the forms of `hidden by <scope> copy`, which names the scope of
+the copy that wins. [Which copy wins](#which-copy-wins) says which copy that is.
 
 ### Not used in 90 days
 
@@ -315,7 +332,7 @@ Those two say where ids come from and link to this page online, at its JSON and
 | `--scope <scope>` | For `ls`, the scope to list, `loaded` by default. For `show`, the one scope to look in. |
 | `--tool <tool>` | `claude` or `codex`. Both by default. |
 | `--project <path>` | Look from another project. A relative path is read from the current directory, and a leading `~` is the home folder, so `--project '~/app'` works without a shell. It must be a directory, and its git root is used, as for the current directory. |
-| `--account <name>` | MCP only. Keep the rows this Claude account has. Give it more than once for several accounts. It takes `work` or `claude:work`, lists Claude rows only, and cannot be used with `--tool codex`. |
+| `--account <name>` | MCP only. In Loaded here, the default scope, keep the rows that load for this Claude account; in any other scope, the rows it has, on or off. Give it more than once for several accounts. It takes `work` or `claude:work`, lists Claude rows only, and cannot be used with `--tool codex`. |
 | `--id <id>` | `show` only. A row key or a copy's id, from `ls --json`. |
 | `--json` | Print JSON version 1, described under [JSON](#json). |
 
@@ -371,8 +388,9 @@ loads here, even when another project has its own.
 `--scope` replaces the tiers with that one scope. It takes every value `ls --scope` takes, and
 looks in that scope's rows and in the rows that live there, such as what plugins bring under
 `plugins`. With `--scope all` a plugin itself is not among them; it is under `plugins`.
-`--tool` and `--account` narrow every tier. `--account` picks which rows match; the details
-still list every account.
+`--tool` and `--account` narrow every tier. In Loaded here, `--account` keeps the rows that
+load for that account, as `ls` does; in the other tiers, the rows it has. It only picks which
+rows match: the details still list every account.
 
 ```
 $ csn skills show eli5
@@ -494,13 +512,13 @@ apply; the others are always there, `null` when empty.
 | `kind` | string | `skill`, `mcp`, `hook`, or `plugin` for a plugin's own row. |
 | `tool` | string | `claude` or `codex`. |
 | `name` | string | The name `show` takes. |
-| `scope` | string | Where the row lives, seen from the project: `project`, `parents`, `global`, `cloud`, `plugins`, `builtin`, `managed` or `other`. Never `loaded` or `unused`, which are worked out. |
-| `from` | string | The WHERE label: `Project`, `Global`, `Cloud`, a plugin's name, a parent folder's `.mcp.json`, another project's name, `Built in`, `Managed`. |
+| `scope` | string | Where the row lives, seen from the project: `project`, `parents`, `global`, `cloud`, `plugins`, `builtin`, `managed` or `other`. Never `loaded` or `unused`, which are worked out. The field to read for where a row lives: its values are stable. |
+| `from` | string | Display text, the WHERE label: `Project`, `Global`, `Cloud`, a plugin's name, a parent folder's `.mcp.json`, another project's name, `Built in`, `Managed`. Its wording can change within version 1. |
 | `project` | string or null | The project the row belongs to, or the folder of a parent `.mcp.json`. `null` for what no project owns. |
 | `plugin` | string | When set: the plugin, `<plugin>@<marketplace>`, for a plugin row and what a plugin brings. |
-| `accounts` | string[] | When set: the profile ids of the accounts that have the row, primary first. Set when the row is held or switched per account. |
+| `accounts` | string[] | When set: the profile ids of the accounts that have the row, primary first. Set when the row is held, switched or hidden per account. |
 | `state` | string | One of the states above, or `mixed` when the accounts differ. |
-| `stateByAccount` | object | When set: profile id to state, for a row switched per account. |
+| `stateByAccount` | object | When set: profile id to state, for a row read per account. |
 | `usage` | object or null | Claude skills only: `{ total, lastUsedAt, byAccount }`. `null` otherwise. |
 | `tags` | string[] | Every tag that applies, most important first. |
 | `file` | string | The file or folder that defines the row. For a row of copies, the first copy's. |
@@ -598,6 +616,9 @@ ambiguous error. Within version 1, keys can be added, and new values can appear 
 `state`, `tags`, `summary` and `contains`. A key keeps its name, type and meaning. A change
 that breaks this comes with `version: 2`.
 
+`from` and `details` are display text, written for people: their wording can change within
+version 1. Read `scope` for where a row lives and `tags` for what holds it back.
+
 So check `version`, read keys by name, and skip the ones you do not know.
 
 ## Safety
@@ -666,14 +687,21 @@ same name makes `show` find two servers, exit 2 and ask which one.
 
 `accounts` lists the profile ids that have the server; an account not in it does not have it.
 `stateByAccount` gives each one's state in this project: `on`, `off` or `pending-approval`.
+It is each account's switch: where another copy of the name wins in an account, it still reads
+that account's switch, and that account's line in `details` says the copy is hidden, as in
+`hidden by the Project copy`.
 
 A Codex server has no `accounts`, because Codex has no accounts here; its `state` is the one
 state. A `.mcp.json` server in a project no account has opened has none either, and its `state`
 merges every account's approvals.
 
-If the name is still in several places, such as Global and this project's `.mcp.json`, the
-command exits 2 and prints `candidates`; run it again with one `--id`. To list what one account
-has, run `csn mcp ls --scope all --account work --json`.
+A name in several places is not ambiguous by itself. Claude Code takes one server per name, so
+a user `github` and this project's `.mcp.json` `github` make one row in Loaded here, the copy
+that wins (see [Which copy wins](#which-copy-wins)), and `show` shows that one. Only when two
+copies each load in a different account, such as one account's local server and another's user
+server, does `show` exit 2 and print `candidates`. Then add `--account work` for the one that
+loads in `work`, or run it again with one `--id`. To list what one account has, on or off, run
+`csn mcp ls --scope all --account work --json`.
 
 ### Which hooks run when Claude finishes replying?
 

@@ -9,6 +9,7 @@ import {
   detailsOf,
   hookWhen,
   jsonItem,
+  loadsFor,
   rowAccounts,
   tagsOf,
   usageCells,
@@ -286,9 +287,20 @@ const SHOW_TIERS: readonly ((scope: Exclude<ScopeId, "loaded" | "unused">) => bo
   (scope) => scope === "other",
 ];
 
-/** Whether one of `accounts` has the row; --account lists Claude rows alone, so no Codex row is asked. */
-function heldBy(inv: Inventory, row: ScopeRow, accounts: string[]): boolean {
+/**
+ * Whether --account keeps the row: in Loaded here, when it loads for one of `accounts`
+ * (`loadsFor`); in any other scope, when one of them has it. --account lists Claude rows alone,
+ * so no Codex row is asked.
+ */
+function heldBy(
+  inv: Inventory,
+  row: ScopeRow,
+  accounts: string[],
+  project: string | undefined,
+  loaded: boolean,
+): boolean {
   if (accounts.length === 0) return true;
+  if (loaded) return loadsFor(inv, row, project, accounts);
   const who = rowAccounts(inv, row);
   return who === undefined || who.some((p) => accounts.includes(p));
 }
@@ -434,10 +446,13 @@ function listText(
       ];
     });
     // WHEN says a hook's NAME again in plain words, so it gives way first; then what it runs,
-    // the long cell. NAME is what show takes, and goes last.
-    const giveWay = (command === "hooks" ? ["WHEN", "RUNS", "NAME", "WHERE"] : ["NAME", "WHERE"]).map((title) =>
-      header.indexOf(title),
-    );
+    // the long cell. NAME is what show takes, and goes last. A plugin's CONTAINS goes before it.
+    const order = plugins
+      ? ["CONTAINS", "NAME"]
+      : command === "hooks"
+        ? ["WHEN", "RUNS", "NAME", "WHERE"]
+        : ["NAME", "WHERE"];
+    const giveWay = order.map((title) => header.indexOf(title)).filter((column) => column >= 0);
     lines.push(...table([header, ...body], columns, giveWay));
   }
   lines.push(...warningLines(inv, "this list"));
@@ -516,32 +531,38 @@ function show(
   // A plugin goes by its name before the `@` too: `superpowers` for `superpowers@official`.
   const isName = (row: ScopeRow, name: string) =>
     row.name === name || (firstOf(row).kind === "plugin" && row.name.split("@")[0] === name);
-  const matches = (row: ScopeRow) =>
+  // In Loaded here, --account keeps the rows that load for the account, as ls does.
+  const matches = (row: ScopeRow, loaded: boolean) =>
     // A name can be an id too, so an id from ls --json works as it is given.
     (options.name === undefined || isName(row, options.name) || isId(row, options.name)) &&
     (options.id === undefined || isId(row, options.id)) &&
-    heldBy(inv, row, accounts);
+    heldBy(inv, row, accounts, project, loaded);
   const scope = options.scope;
   const everyByTool = options.tools.map((tool) => ({ tool, every: everyRow(inv, command, tool, project, now) }));
   // With --scope, that scope's rows and the rows whose place it is, such as a plugin's skill
   // under plugins. Without, in tiers: the first one with a match is where the name is looked up.
-  const pools: ScopeRow[][] =
+  const pools: { rows: ScopeRow[]; loaded: boolean }[] =
     scope !== undefined
       ? [
-          everyByTool.flatMap(({ tool, every }) =>
-            unique([
-              ...rowsFor(inv, command, tool, scope, project, now),
-              ...every.filter((row) => homeScope(firstOf(row), project) === scope),
-            ]),
-          ),
+          {
+            rows: everyByTool.flatMap(({ tool, every }) =>
+              unique([
+                ...rowsFor(inv, command, tool, scope, project, now),
+                ...every.filter((row) => homeScope(firstOf(row), project) === scope),
+              ]),
+            ),
+            loaded: scope === "loaded",
+          },
         ]
       : [
-          options.tools.flatMap((tool) => rowsFor(inv, command, tool, "loaded", project, now)),
-          ...SHOW_TIERS.map((inTier) =>
-            everyByTool.flatMap(({ every }) => every.filter((row) => inTier(homeScope(firstOf(row), project)))),
-          ),
+          { rows: options.tools.flatMap((tool) => rowsFor(inv, command, tool, "loaded", project, now)), loaded: true },
+          ...SHOW_TIERS.map((inTier) => ({
+            rows: everyByTool.flatMap(({ every }) => every.filter((row) => inTier(homeScope(firstOf(row), project)))),
+            loaded: false,
+          })),
         ];
-  const found = pools.map((pool) => pool.filter(matches)).find((rows) => rows.length > 0) ?? [];
+  const found =
+    pools.map(({ rows, loaded }) => rows.filter((row) => matches(row, loaded))).find((rows) => rows.length > 0) ?? [];
   const noun = NOUN[command].one;
   if (found.length === 0) {
     const narrowed =
@@ -596,7 +617,7 @@ export async function runExtensionsCommand(
   const rows = byName(
     options.tools
       .flatMap((tool) => rowsFor(inv, command, tool, scope, project, now))
-      .filter((row) => heldBy(inv, row, accounts)),
+      .filter((row) => heldBy(inv, row, accounts, project, scope === "loaded")),
   );
   if (options.json) {
     return JSON.stringify(
@@ -774,7 +795,13 @@ export function extensionsHelp(command: ExtensionsCommand, sub?: "ls" | "show"):
   const page = HELP[command];
   const { one, many } = NOUN[command];
   const mcp = command === "mcp";
-  const account = mcp ? [option("--account <name>", "Only this Claude account (repeatable)")] : [];
+  // ls lists Loaded here by default, and show looks there first: what loads for the account.
+  const account = mcp
+    ? [
+        option("--account <name>", "Only this Claude account (repeatable): in Loaded here, the rows that"),
+        optionMore("load for it; in any other scope, the rows it has"),
+      ]
+    : [];
   const project = option("--project <path>", "Look from another project instead of the current dir (~ works)");
   const json = [option("--json", "JSON output (version 1). Its fields:"), optionMore(`${DOCS_URL}#json`)];
   // Where ids come from, and the docs' section on how they are made.

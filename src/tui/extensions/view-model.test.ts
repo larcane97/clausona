@@ -81,6 +81,31 @@ describe("buildMatrix", () => {
   });
 });
 
+describe("buildMatrix, one server per name", () => {
+  /** App's .mcp.json has a stitch, which work has as a user server too, and a pg-dev, which default has as a local one. */
+  const sameNames = (h: TestHome) =>
+    h.write("repos/app/.mcp.json", { mcpServers: { stitch: { command: "team" }, "pg-dev": { command: "team" } } });
+
+  it("takes in each account the copy Claude Code takes: local, then an approved .mcp.json one, then the user's", async () => {
+    const pending = await seed(sameNames);
+    const cells = (m: ReturnType<typeof buildMatrix>) => Object.fromEntries(m.rows.map((r) => [r.name, r.cells]));
+    // In work the .mcp.json stitch waits for approval, so work's own stitch is the one: off for app.
+    expect(cells(buildMatrix(pending.inv, pending.app))).toMatchObject({
+      stitch: ["pending", "off", "absent"],
+      "pg-dev": ["on", "pending", "absent"],
+    });
+    const approved = await seed((h) => {
+      sameNames(h);
+      h.write("repos/app/.claude/settings.json", { enabledMcpjsonServers: ["stitch", "pg-dev"] });
+    });
+    // Approved, the .mcp.json stitch wins over work's; default's local pg-dev still wins over it.
+    expect(cells(buildMatrix(approved.inv, approved.app))).toMatchObject({
+      stitch: ["on", "on", "absent"],
+      "pg-dev": ["on", "on", "absent"],
+    });
+  });
+});
+
 describe("a .mcp.json in a parent dir", () => {
   async function ancestorSeed() {
     const h = new TestHome();

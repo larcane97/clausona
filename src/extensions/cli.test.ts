@@ -189,6 +189,25 @@ describe("skills ls", () => {
     expect(loaded.items.filter((i: object) => "contains" in i)).toEqual([]);
   });
 
+  it("cuts a narrow Plugins table in CONTAINS before NAME, whatever the command", async () => {
+    const { h, app } = seed();
+    const sp = h.path(".claude/plugins/cache/m/long-plugin-name/1.0.0");
+    h.write(".claude/plugins/installed_plugins.json", { plugins: { "long-plugin-name@m": [{ installPath: sp }] } });
+    h.write(".claude/settings.json", { enabledPlugins: { "long-plugin-name@m": true } });
+    h.skill(".claude/plugins/cache/m/long-plugin-name/1.0.0/skills", "one");
+    h.write(".claude/plugins/cache/m/long-plugin-name/1.0.0/hooks/hooks.json", {
+      hooks: { SessionStart: [{ hooks: [{ type: "command", command: "start" }] }] },
+    });
+    for (const command of ["skills", "hooks"] as const) {
+      const wide = await run(h, app, command, ["ls", "--scope", "plugins", "--tool", "claude"]);
+      expect(wide).toMatch(/^long-plugin-name@m {2}1 skill · 1 hook$/m);
+      const narrow = await run(h, app, command, ["ls", "--scope", "plugins", "--tool", "claude"], 36);
+      expect(narrow).toMatch(/^long-plugin-nam… {2}1 skill · 1…$/m);
+      // The table's lines, after the title and the blank line.
+      for (const line of narrow.split("\n").slice(2)) expect(line.length).toBeLessThanOrEqual(36);
+    }
+  });
+
   it("lists what plugins bring with --scope all, in place of the plugins", async () => {
     const { h, app } = seed();
     const sp = h.path(".claude/plugins/cache/m/sp/1.0.0");
@@ -594,6 +613,22 @@ describe("mcp, a server in several accounts", () => {
     expect(await run(h, app, "mcp", ["ls", "--tool", "claude", "--account", "default"])).not.toContain("jira");
   });
 
+  it("keeps with --account what loads for that account, and in another scope what it has", async () => {
+    const { h, app } = accountsSeed();
+    // github is off in work, so it does not load for work; jira does.
+    const loaded = await run(h, app, "mcp", ["ls", "--account", "work"]);
+    expect(firstLine(loaded)).toMatch(/^1 MCP server · Loaded here · /);
+    expect(loaded).toMatch(/^jira\s+Global\s+work$/m);
+    expect(loaded).not.toMatch(/^github\s/m);
+    const names = async (args: string[]) =>
+      JSON.parse(await run(h, app, "mcp", [...args, "--json"])).items.map((i: { name: string }) => i.name);
+    expect(await names(["ls", "--account", "work", "--scope", "loaded"])).toEqual(["jira"]);
+    expect(await names(["ls", "--account", "default"])).toEqual(["github"]);
+    // Every other scope keeps the rows the account has, on or off.
+    expect(await names(["ls", "--account", "work", "--scope", "global"])).toEqual(["github", "jira"]);
+    expect(await names(["ls", "--account", "work", "--scope", "all"])).toEqual(["github", "jira"]);
+  });
+
   it("shows it by its name, its row key or any account's copy's id", async () => {
     const { h, app } = accountsSeed();
     const text = await run(h, app, "mcp", ["show", "github"]);
@@ -606,6 +641,68 @@ describe("mcp, a server in several accounts", () => {
     expect(await run(h, app, "mcp", ["show", "github", "--account", "work"])).toBe(text);
     expect(await failure(run(h, app, "mcp", ["show", "github", "--account", "solo"]))).toMatchObject({ code: 1 });
     expect(await failure(run(h, app, "mcp", ["show", "github", "--account", "nobody"]))).toMatchObject({ code: 2 });
+  });
+});
+
+describe("mcp, one server per name, as Claude Code picks it", () => {
+  /** personal and work, each with a user github; app's .mcp.json has a github too, and `entry` is each account's entry for app. */
+  function precedenceSeed(entry: Record<string, unknown>, work: Record<string, unknown> = entry) {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    const user = { github: { command: "gh-user" } };
+    h.claude("personal", ".claude", { projects: { [app]: entry }, mcpServers: user });
+    h.claude("work", ".claude-work", { projects: { [app]: work }, mcpServers: user });
+    h.write("repos/app/.mcp.json", { mcpServers: { github: { command: "gh-team" } } });
+    h.codex("personal", ".codex", '[mcp_servers.github]\ncommand = "gh-codex"\n');
+    return { h, app };
+  }
+
+  it("takes an approved .mcp.json copy over the user one, and shows it without asking which", async () => {
+    const { h, app } = precedenceSeed({ enabledMcpjsonServers: ["github"] });
+    const loaded = await run(h, app, "mcp", ["ls", "--tool", "claude"]);
+    expect(firstLine(loaded)).toMatch(/^1 MCP server · Loaded here · /);
+    expect(loaded).toMatch(/^github\s+Project\s+all$/m);
+    expect(await run(h, app, "mcp", ["ls", "--scope", "global", "--tool", "claude"])).toMatch(
+      /^github\s+Global\s+all\s+hidden by Project copy$/m,
+    );
+    const shown = await run(h, app, "mcp", ["show", "github", "--tool", "claude"]);
+    expect(firstLine(shown)).toBe("PROJECT › github");
+    expect(shown).toMatch(/^Runs {6}gh-team$/m);
+  });
+
+  it("takes the user copy over a .mcp.json one still pending approval", async () => {
+    const { h, app } = precedenceSeed({});
+    const loaded = await run(h, app, "mcp", ["ls", "--tool", "claude"]);
+    expect(firstLine(loaded)).toMatch(/^1 MCP server · Loaded here · /);
+    expect(loaded).toMatch(/^github\s+Global\s+all$/m);
+    expect(await run(h, app, "mcp", ["ls", "--scope", "project", "--tool", "claude"])).toMatch(
+      /^github\s+Project\s+all\s+pending approval$/m,
+    );
+    expect(firstLine(await run(h, app, "mcp", ["show", "github", "--tool", "claude"]))).toBe("GLOBAL › github");
+  });
+
+  it("takes an account's local copy over the others in that account, and says so per account", async () => {
+    const local = { mcpServers: { github: { command: "gh-local" } } };
+    const { h, app } = precedenceSeed(local, { enabledMcpjsonServers: ["github"] });
+    const json = JSON.parse(await run(h, app, "mcp", ["ls", "--tool", "claude", "--json"]));
+    // personal's local one and the .mcp.json one, which work approved; both user ones lose.
+    expect(json.items.map((i: { scope: string; accounts?: string[] }) => [i.scope, i.accounts])).toEqual([
+      ["project", ["claude:personal"]],
+      ["project", ["claude:personal", "claude:work"]],
+    ]);
+    const team = await run(h, app, "mcp", ["show", "--id", json.items[1].id]);
+    expect(team).toMatch(/^Accounts {2}personal {2}hidden by the Project copy$/m);
+    expect(team).toMatch(/^ {10}work {6}on$/m);
+    // In Loaded here, --account keeps what loads for the account: one github each, no ambiguity.
+    for (const [account, from] of [
+      ["personal", "gh-local"],
+      ["work", "gh-team"],
+    ] as const) {
+      const shown = await run(h, app, "mcp", ["show", "github", "--tool", "claude", "--account", account]);
+      expect(shown).toMatch(new RegExp(`^Runs {6}${from}$`, "m"));
+      expect(await run(h, app, "mcp", ["ls", "--account", account])).toMatch(/^1 MCP server · /);
+    }
   });
 });
 
@@ -646,6 +743,28 @@ describe("mcp ls, a server more than one account sees", () => {
     const search = parsed.items.find((i: { name: string }) => i.name === "plugin:sp:search");
     expect(search.accounts).toEqual(["claude:default", "claude:work"]);
     expect(search.stateByAccount).toEqual({ "claude:default": "on", "claude:work": "off" });
+  });
+});
+
+describe("skills, a project skill an account's own copy hides", () => {
+  it("loads it in the other accounts, untagged, and says per account where it is hidden", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.claude("personal", ".claude", { projects: { [app]: {} } });
+    h.claude("work", ".claude-work", { projects: { [app]: {} } });
+    h.skill("repos/app/.claude/skills", "deploy");
+    h.skill(".claude-work/skills", "deploy");
+    const project = await run(h, app, "skills", ["ls", "--scope", "project"]);
+    expect(project).toMatch(/^deploy\s+claude\s+Project\s+0\s+never\s+unused$/m);
+    const loaded = await run(h, app, "skills", ["ls"]);
+    expect(loaded).toMatch(/^deploy\s+claude\s+Project\s/m);
+    expect(loaded).toMatch(/^deploy\s+claude\s+Global · work\s/m);
+    const shown = await run(h, app, "skills", ["show", "deploy", "--scope", "project"]);
+    expect(shown).toMatch(/^Loaded {4}on in personal · hidden by the Global copy in work$/m);
+    const json = JSON.parse(await run(h, app, "skills", ["show", "deploy", "--scope", "project", "--json"]));
+    expect(json.stateByAccount).toEqual({ "claude:personal": "on", "claude:work": "on" });
+    expect(json.tags).toEqual(["unused"]);
   });
 });
 

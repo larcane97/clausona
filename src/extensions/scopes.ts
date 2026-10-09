@@ -1,6 +1,6 @@
 import type { ToolName } from "../types.js";
 import { marksOf } from "./inventory.js";
-import type { Extension, Inventory } from "./model.js";
+import type { EffectiveState, Extension, Inventory } from "./model.js";
 import { accountStates, projectName, stateHere } from "./present.js";
 import { isWithin, pathKey, samePath } from "./read.js";
 import { isMcpjsonServer, relevantIn } from "./state.js";
@@ -278,15 +278,22 @@ export function otherProjects(
 }
 
 /**
+ * Whether a state loads: not off, not pending approval (Claude Code does not start a `.mcp.json`
+ * server until it is approved), not hidden by a same-name copy that wins.
+ */
+export function stateLoads(state: EffectiveState): boolean {
+  return state.value !== "off" && state.value !== "pending-approval" && !state.shadowedBy;
+}
+
+/**
  * Whether the item loads in `project` in at least one account: relevant there, not a broken link,
- * not off, not pending approval, not hidden by a nearer copy.
+ * and a state that loads (`stateLoads`) - each account's, where it is read per account.
  */
 export function loadsHere(inv: Inventory, item: Extension, project: string | undefined): boolean {
   // A link to nothing has no SKILL.md for Claude Code or Codex to read.
   if (!relevantIn(item, project) || item.link?.broken === true) return false;
   const states = accountStates(inv, item, project)?.map((a) => a.state) ?? [stateHere(inv, item, project)];
-  // Claude Code does not start a .mcp.json server until it is approved.
-  return states.some((s) => s.value !== "off" && s.value !== "pending-approval" && !s.shadowedBy);
+  return states.some(stateLoads);
 }
 
 /** Whether `item` is something the plugin install `install` brings. */

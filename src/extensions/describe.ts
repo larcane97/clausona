@@ -23,8 +23,10 @@ import {
   SCOPE_LABEL,
   type ScopeId,
   type ScopeRow,
+  stateLoads,
   type ToolName,
 } from "./scopes.js";
+import { relevantIn } from "./state.js";
 
 /**
  * The words the Extensions screen and the CLI say about a row: its tags, a hook's event in plain
@@ -160,12 +162,37 @@ function firstOf(row: ScopeRow): Extension {
 }
 
 /**
- * Whether a row is a copy that a same-name copy wins over here. Claude Code records a skill's use
- * by name, under the copy that wins, and a hidden copy never loads: the table's USES and LAST
- * USED read "—" for it, and its details say where its use is counted.
+ * The same-name copy that wins over a row here in every account that has it, each read on its
+ * own (`statesByAccount`): undefined when the row loads, or is hidden, in some accounts only.
+ * Of copies that win in different accounts, the primary-most account's names it.
+ */
+function winnerOf(inv: Inventory, row: ScopeRow, project: string | undefined): Extension | undefined {
+  const states = statesByAccount(inv, row, project)?.map((a) => a.state) ?? [stateHere(inv, firstOf(row), project)];
+  const id = states.length > 0 && states.every((s) => s.shadowedBy) ? states[0]?.shadowedBy : undefined;
+  return id === undefined ? undefined : inv.items.find((i) => i.id === id);
+}
+
+/**
+ * Whether a row is a copy that a same-name copy wins over here, in every account. Claude Code
+ * records a skill's use by name, under the copy that wins, and a hidden copy never loads: the
+ * table's USES and LAST USED read "—" for it, and its details say where its use is counted.
  */
 export function hiddenHere(inv: Inventory, row: ScopeRow, project: string | undefined): boolean {
-  return stateHere(inv, firstOf(row), project).shadowedBy !== undefined;
+  return winnerOf(inv, row, project) !== undefined;
+}
+
+/**
+ * Whether a row loads here for one of `profiles`, as Loaded here reads it, account by account:
+ * relevant here, not a broken link, and that account's state loads (`stateLoads`). A row read in
+ * one state for every account loads for each account that has it.
+ */
+export function loadsFor(inv: Inventory, row: ScopeRow, project: string | undefined, profiles: string[]): boolean {
+  const item = firstOf(row);
+  if (!relevantIn(item, project) || item.link?.broken === true) return false;
+  const perAccount = statesByAccount(inv, row, project);
+  if (perAccount) return perAccount.some((a) => profiles.includes(a.profile) && stateLoads(a.state));
+  const who = rowAccounts(inv, row);
+  return (who === undefined || who.some((p) => profiles.includes(p))) && stateLoads(stateHere(inv, item, project));
 }
 
 /**
@@ -226,8 +253,8 @@ export function tagsOf(inv: Inventory, row: ScopeRow, project: string | undefine
     tags.push(`off in ${off.length} of ${states.length} accounts`);
   }
   if (states.length > 0 && states.every((s) => s.value === "pending-approval")) tags.push("pending approval");
-  const winnerId = states.length > 0 && states.every((s) => s.shadowedBy) ? states[0]?.shadowedBy : undefined;
-  const winner = winnerId === undefined ? undefined : inv.items.find((i) => i.id === winnerId);
+  // Hidden in every account: hidden in some only, the row still loads here.
+  const winner = winnerOf(inv, row, project);
   if (winner) tags.push(`hidden by ${scopeLabel(winner, project)} copy`);
   if (!broken && marksOf(inv, item, now).includes("cleanup")) tags.push("unused");
   return tags;

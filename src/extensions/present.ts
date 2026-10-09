@@ -87,12 +87,27 @@ export function stateHere(inv: Inventory, item: Extension, project: string | und
 
 export type AccountState = { profile: string; state: EffectiveState };
 
+/** Whether some account's own skills folder has a Claude skill of `name`. */
+function ownSkillNamed(inv: Inventory, name: string): boolean {
+  return inv.items.some(
+    (other) =>
+      other.kind === "skill" &&
+      other.location.tool === "claude" &&
+      other.location.scope === "account" &&
+      other.name === name,
+  );
+}
+
 /**
- * A Claude MCP server that every account opening the project sees (.mcp.json, plugin) is
- * switched per account, so it is read per account. Only the accounts that can load it count:
- * Claude accounts, and for a plugin's server the ones with the plugin installed. Codex records
- * projects too, but never loads a Claude server. Undefined for any other item, and when no such
- * account has recorded the project.
+ * What every account sees but each reads its own way, read per account:
+ * - a Claude MCP server that every account opening the project sees (.mcp.json, plugin), which
+ *   each account switches, and a local server can hide. Only the accounts that can load it
+ *   count: Claude accounts that have recorded the project, and for a plugin's server the ones
+ *   with the plugin installed. Codex records projects too, but never loads a Claude server;
+ * - a Claude project skill that an account's own same-name skill hides in that account only, in
+ *   every Claude account.
+ * Undefined for any other item, and for such a server when no such account has recorded the
+ * project.
  */
 export function accountStates(
   inv: Inventory,
@@ -100,14 +115,17 @@ export function accountStates(
   project: string | undefined,
 ): AccountState[] | undefined {
   const here = viewFrom(item, project);
-  if (item.kind !== "mcp" || item.location.tool !== "claude" || item.location.profile !== undefined || !here) {
-    return undefined;
+  const loc = item.location;
+  if (loc.tool !== "claude" || loc.profile !== undefined || !here) return undefined;
+  const read = (profiles: string[]) =>
+    profiles.map((profile) => ({ profile, state: stateOf(inv, item, here, profile) }));
+  if (item.kind === "skill") {
+    return loc.scope === "project" && ownSkillNamed(inv, item.name) ? read(inv.claudeProfiles) : undefined;
   }
-  const accounts =
-    item.location.scope === "plugin" && item.location.accounts ? item.location.accounts : inv.claudeProfiles;
+  if (item.kind !== "mcp") return undefined;
+  const accounts = loc.scope === "plugin" && loc.accounts ? loc.accounts : inv.claudeProfiles;
   const profiles = (inv.projects.find((p) => samePath(p.path, here))?.profiles ?? []).filter((profile) =>
     accounts.includes(profile),
   );
-  if (profiles.length === 0) return undefined;
-  return profiles.map((profile) => ({ profile, state: stateOf(inv, item, here, profile) }));
+  return profiles.length === 0 ? undefined : read(profiles);
 }

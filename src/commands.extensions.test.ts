@@ -40,7 +40,10 @@ describe("skills, mcp and hooks commands", () => {
       "--scope <scope>   loaded (default) | project | global | cloud | plugins | builtin | other\n" +
         "                      | unused | all",
     );
-    expect(await ls("mcp")).toContain("--account <name>  Only this Claude account (repeatable)");
+    expect(await ls("mcp")).toContain(
+      "--account <name>  Only this Claude account (repeatable): in Loaded here, the rows that\n" +
+        "                      load for it; in any other scope, the rows it has",
+    );
     expect(await ls("hooks")).toMatch(
       /--scope <scope> {3}loaded \(default\) \| project \| global \| plugins \| managed/,
     );
