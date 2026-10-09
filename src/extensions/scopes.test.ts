@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { loadInventory } from "./inventory.js";
 import type { Inventory } from "./model.js";
-import { homeScope, itemsIn, otherProjects, SCOPE_LABEL, scopesFor } from "./scopes.js";
+import { pathKey } from "./read.js";
+import { homeScope, itemsIn, otherProjects, rowsIn, SCOPE_LABEL, scopesFor } from "./scopes.js";
 import { TestHome } from "./test-home.js";
 
 const DAY = 86_400_000;
@@ -233,5 +234,79 @@ describe("scopes", () => {
     expect(path.basename(itemsIn(inv, "claude", "skill", "builtin", app, NOW)[0]?.location.file ?? "")).toBe(
       "settings.json",
     );
+  });
+});
+
+describe("rows", () => {
+  /**
+   * Two accounts that each define github (user scope) and pg-dev (local, for app); work turned
+   * github off for app. Only default has solo.
+   */
+  async function servers(): Promise<Seeded> {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    const web = h.project("repos/web");
+    h.claude("default", ".claude", {
+      projects: { [app]: { mcpServers: { "pg-dev": { command: "pg" } } }, [web]: {} },
+      mcpServers: { github: { command: "gh-mcp" }, solo: { command: "solo-mcp" } },
+    });
+    h.claude("work", ".claude-work", {
+      projects: { [app]: { disabledMcpServers: ["github"], mcpServers: { "pg-dev": { command: "pg" } } } },
+      mcpServers: { github: { command: "gh-mcp" } },
+    });
+    h.skill(".claude/skills", "eli5");
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: app,
+      managedSettings: h.path("none.json"),
+    });
+    return { h, inv, app, web };
+  }
+
+  const shape = (rows: ReturnType<typeof rowsIn>) =>
+    rows.map((r) => ({ key: r.key, name: r.name, accounts: r.items.map((i) => i.location.profile) }));
+
+  it("makes one row of a server that several accounts define, with every account's copy", async () => {
+    const { inv, app } = await servers();
+    expect(shape(rowsIn(inv, "claude", "mcp", "global", app, NOW))).toEqual([
+      { key: "mcp:claude:global:-:github", name: "github", accounts: ["claude:default", "claude:work"] },
+      // One account's server keeps the same kind of key, so a key does not change as accounts add it.
+      { key: "mcp:claude:global:-:solo", name: "solo", accounts: ["claude:default"] },
+    ]);
+    expect(shape(rowsIn(inv, "claude", "mcp", "project", app, NOW))).toEqual([
+      { key: `mcp:claude:project:${pathKey(app)}:pg-dev`, name: "pg-dev", accounts: ["claude:default", "claude:work"] },
+    ]);
+    // Counted as rows: github is one server, not two.
+    expect(itemsIn(inv, "claude", "mcp", "global", app, NOW)).toHaveLength(3);
+    expect(scopesFor(inv, "claude", "mcp", app, NOW).map((s) => [s.id, s.count])).toEqual([
+      ["loaded", 3],
+      ["project", 1],
+      ["global", 2],
+    ]);
+  });
+
+  it("lists a server in Loaded here with every copy when it loads in one account", async () => {
+    const { inv, app } = await servers();
+    const github = rowsIn(inv, "claude", "mcp", "loaded", app, NOW).find((r) => r.name === "github");
+    expect(github?.key).toBe("mcp:claude:global:-:github");
+    expect(github?.items.map((i) => i.location.profile)).toEqual(["claude:default", "claude:work"]);
+  });
+
+  it("keys every other row by its item's id", async () => {
+    const { inv, app } = await servers();
+    const rows = rowsIn(inv, "claude", "skill", "global", app, NOW);
+    expect(rows.map((r) => [r.key, r.items.length])).toEqual(
+      itemsIn(inv, "claude", "skill", "global", app, NOW).map((i) => [i.id, 1]),
+    );
+  });
+
+  it("counts an other project's servers as rows too", async () => {
+    const { inv, app, web } = await servers();
+    expect(otherProjects(inv, "claude", "mcp", web)).toEqual([{ path: app, name: "app", count: 1 }]);
+    expect(shape(rowsIn(inv, "claude", "mcp", "other", web, NOW, app))).toEqual([
+      { key: `mcp:claude:other:${pathKey(app)}:pg-dev`, name: "pg-dev", accounts: ["claude:default", "claude:work"] },
+    ]);
   });
 });

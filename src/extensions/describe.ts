@@ -13,12 +13,21 @@ import {
   viewFrom,
 } from "./present.js";
 import { isWithin, pathKey, samePath } from "./read.js";
-import { homeScope, type ItemKind, pluginContents, SCOPE_LABEL, type ScopeId, type ToolName } from "./scopes.js";
+import {
+  homeScope,
+  type ItemKind,
+  isAccountServer,
+  pluginContents,
+  SCOPE_LABEL,
+  type ScopeId,
+  type ScopeRow,
+  type ToolName,
+} from "./scopes.js";
 
 /**
- * The words the Extensions screen and the CLI say about an item: its tags, a hook's event in
- * plain words, how long ago, the details view's lines and the JSON v1 item. Pure, like scopes.ts:
- * it reads the inventory, and what it shows of an MCP server or a hook is the redacted summary.
+ * The words the Extensions screen and the CLI say about a row: its tags, a hook's event in plain
+ * words, how long ago, the details view's lines and the JSON v1 item. Pure, like scopes.ts: it
+ * reads the inventory, and what it shows of an MCP server or a hook is the redacted summary.
  */
 
 /** One of the verbatim tags: off, off here, off in N of M accounts, unused, broken link, pending approval, hidden by … copy. */
@@ -96,39 +105,25 @@ export function fromLabel(item: Extension, inv: Inventory, project: string | und
 }
 
 /**
- * The state of each account that has the item, for a Claude MCP server that is switched per
- * account: a `.mcp.json` or plugin server every account sees (`accountStates`), or a server
- * defined in accounts' own `.claude.json` - one copy per account, the copies of one name, scope
- * and project read together as one server. Accounts in the inventory's order, primary first.
- * Undefined for every other item, which has one state.
+ * The state of each account, for a Claude MCP row that is switched per account: a row of account
+ * servers - each account's own copy, read in that account - or a `.mcp.json` or plugin server
+ * every account sees (`accountStates`). Undefined for every other row, which has one state.
  */
 export function statesByAccount(
   inv: Inventory,
-  item: Extension,
+  row: ScopeRow,
   project: string | undefined,
 ): AccountState[] | undefined {
-  const shared = accountStates(inv, item, project);
-  if (shared) return shared;
-  const loc = item.location;
-  if (item.kind !== "mcp" || loc.tool !== "claude" || loc.profile === undefined) return undefined;
-  const rank = (profile: string) => {
-    const at = inv.claudeProfiles.indexOf(profile);
-    return at < 0 ? inv.claudeProfiles.length : at;
-  };
-  return inv.items
-    .filter(
-      (other) =>
-        other.kind === "mcp" &&
-        other.location.tool === "claude" &&
-        other.name === item.name &&
-        other.location.scope === loc.scope &&
-        other.location.profile !== undefined &&
-        (loc.project === undefined
-          ? other.location.project === undefined
-          : samePath(other.location.project, loc.project)),
-    )
-    .map((copy) => ({ profile: copy.location.profile as string, state: stateHere(inv, copy, project) }))
-    .sort((a, b) => rank(a.profile) - rank(b.profile));
+  const first = firstOf(row);
+  if (!isAccountServer(first)) return accountStates(inv, first, project);
+  return row.items.map((copy) => ({ profile: copy.location.profile as string, state: stateHere(inv, copy, project) }));
+}
+
+/** A row's first item: its only one, or the primary-most account's copy. Rows are never empty. */
+function firstOf(row: ScopeRow): Extension {
+  const first = row.items[0];
+  if (!first) throw new Error(`Row ${row.key} has no items.`);
+  return first;
 }
 
 /**
@@ -155,11 +150,12 @@ function scopeLabel(item: Extension, project: string | undefined): string {
 }
 
 /** Every tag that applies, most important first: broken link > off > off here > off in N of M accounts > pending approval > hidden by … > unused. */
-export function tagsOf(inv: Inventory, item: Extension, project: string | undefined, now: number): Tag[] {
+export function tagsOf(inv: Inventory, row: ScopeRow, project: string | undefined, now: number): Tag[] {
+  const item = firstOf(row);
   const tags: Tag[] = [];
   const broken = item.link?.broken === true;
   if (broken) tags.push("broken link");
-  const perAccount = statesByAccount(inv, item, project);
+  const perAccount = statesByAccount(inv, row, project);
   const states = perAccount?.map((a) => a.state) ?? [stateHere(inv, item, project)];
   const off = states.filter((s) => s.value === "off");
   if (states.length > 0 && off.length === states.length) {
@@ -346,8 +342,9 @@ function loadedLine(inv: Inventory, item: Extension, project: string | undefined
 }
 
 /** Each account's state of an MCP server, one line each, and "on in every account" when that says it all. */
-function accountLines(inv: Inventory, item: Extension, project: string | undefined): DetailLine[] {
-  const perAccount = statesByAccount(inv, item, project);
+function accountLines(inv: Inventory, row: ScopeRow, project: string | undefined): DetailLine[] {
+  const item = firstOf(row);
+  const perAccount = statesByAccount(inv, row, project);
   if (!perAccount) {
     const words = stateWords(inv, item, project, stateHere(inv, item, project));
     return [{ label: "Accounts", text: `${words} in every account` }];
@@ -361,7 +358,7 @@ function accountLines(inv: Inventory, item: Extension, project: string | undefin
     return [{ label: "Accounts", text: `${words[0]?.words} in every account` }];
   }
   // A server in accounts' own .claude.json is not in the others; a shared one is in each that opened the project.
-  const others = item.location.profile !== undefined && !every;
+  const others = isAccountServer(item) && !every;
   const rows = [...words, ...(others ? [{ name: "others", words: "not added" }] : [])];
   const width = Math.max(...rows.map((r) => r.name.length));
   return rows.map((r, i) => ({ label: i === 0 ? "Accounts" : "", text: `${r.name.padEnd(width)}  ${r.words}` }));
@@ -465,24 +462,34 @@ function secretNames(summary: Record<string, string> | undefined): string[] {
   return [summary?.env, summary?.headers].flatMap((list) => (list ? list.split(", ").filter(Boolean) : []));
 }
 
-function mcpLines(inv: Inventory, item: Extension, project: string | undefined): DetailLine[] {
-  const loc = item.location;
+function mcpLines(inv: Inventory, row: ScopeRow, project: string | undefined): DetailLine[] {
   const lines: DetailLine[] = [];
-  const runs = item.summary?.command ?? item.summary?.url;
-  if (runs) lines.push({ label: "Runs", text: tildeIn(runs, inv.homeDir) });
-  const secrets = secretNames(item.summary);
+  // Each account's copy can run another command: then each line says whose it is.
+  const runs = row.items.flatMap((copy) => {
+    const text = copy.summary?.command ?? copy.summary?.url;
+    return text ? [{ text: tildeIn(text, inv.homeDir), who: shortProfile(copy.location.profile ?? "") }] : [];
+  });
+  const commands = [...new Set(runs.map((r) => r.text))];
+  commands.forEach((text, i) => {
+    const who = runs.filter((r) => r.text === text).map((r) => r.who);
+    lines.push({ label: i === 0 ? "Runs" : "", text: commands.length === 1 ? text : `${text} (in ${who.join(", ")})` });
+  });
+  const secrets = [...new Set(row.items.flatMap((copy) => secretNames(copy.summary)))];
   if (secrets.length > 0) {
     lines.push({
       label: "Secrets",
       text: `${secrets.join(", ")} (${secrets.length === 1 ? "value" : "values"} hidden)`,
     });
   }
-  lines.push(...accountLines(inv, item, project));
-  const entry =
-    loc.scope === "local" && loc.project !== undefined
-      ? ` (${samePath(loc.project, project) ? "this project's" : `${projectName(loc.project, inv)}'s`} entry)`
-      : "";
-  lines.push({ label: "File", text: `${tilde(loc.file, inv.homeDir)}${entry}` });
+  lines.push(...accountLines(inv, row, project));
+  row.items.forEach((copy, i) => {
+    const loc = copy.location;
+    const entry =
+      loc.scope === "local" && loc.project !== undefined
+        ? ` (${samePath(loc.project, project) ? "this project's" : `${projectName(loc.project, inv)}'s`} entry)`
+        : "";
+    lines.push({ label: i === 0 ? "File" : "", text: `${tilde(loc.file, inv.homeDir)}${entry}` });
+  });
   return lines;
 }
 
@@ -533,14 +540,15 @@ function pluginLines(inv: Inventory, item: Extension, project: string | undefine
 }
 
 /** The details view: title line first ("GLOBAL › eli5"), then the lines of the spec's Details section that apply. */
-export function detailsOf(inv: Inventory, item: Extension, project: string | undefined, now: number): DetailLine[] {
-  const title = `${scopeLabel(item, project).toUpperCase()} › ${item.kind === "plugin" ? pluginName(item) : item.name}`;
+export function detailsOf(inv: Inventory, row: ScopeRow, project: string | undefined, now: number): DetailLine[] {
+  const item = firstOf(row);
+  const title = `${scopeLabel(item, project).toUpperCase()} › ${item.kind === "plugin" ? pluginName(item) : row.name}`;
   const lines: DetailLine[] = [{ text: title }];
   switch (item.kind) {
     case "skill":
       return [...lines, ...skillLines(inv, item, project, now)];
     case "mcp":
-      return [...lines, ...mcpLines(inv, item, project)];
+      return [...lines, ...mcpLines(inv, row, project)];
     case "hook":
       return [...lines, ...hookLines(inv, item, project)];
     case "plugin":
@@ -548,15 +556,20 @@ export function detailsOf(inv: Inventory, item: Extension, project: string | und
   }
 }
 
-/** The JSON v1 item. */
+/**
+ * The JSON v1 item. A row of account servers is one item: its id is the row key, `copies` lists
+ * each account's copy, and `file`, `project` and `summary` are the first copy's.
+ */
 export function jsonItem(
   inv: Inventory,
-  item: Extension,
+  row: ScopeRow,
   project: string | undefined,
   now: number,
 ): Record<string, unknown> {
+  const item = firstOf(row);
   const loc = item.location;
-  const perAccount = statesByAccount(inv, item, project);
+  const merged = isAccountServer(item);
+  const perAccount = statesByAccount(inv, row, project);
   const accounts =
     perAccount?.map((a) => a.profile) ?? (loc.profile ? [loc.profile] : loc.accounts && [...loc.accounts]);
   const values = [...new Set((perAccount?.map((a) => a.state) ?? [stateHere(inv, item, project)]).map((s) => s.value))];
@@ -564,10 +577,10 @@ export function jsonItem(
   const counted = item.kind === "skill" && loc.tool === "claude";
   const usage = counted ? usageOf(inv, [item]) : undefined;
   return {
-    id: item.id,
+    id: merged ? row.key : item.id,
     kind: item.kind,
     tool: loc.tool,
-    name: item.name,
+    name: row.name,
     scope: homeScope(item, project),
     from: fromLabel(item, inv, project),
     project: loc.project ?? null,
@@ -582,8 +595,11 @@ export function jsonItem(
           byAccount: { ...usage?.byProfile },
         }
       : null,
-    tags: tagsOf(inv, item, project, now),
+    tags: tagsOf(inv, row, project, now),
     file: loc.file,
+    ...(merged
+      ? { copies: row.items.map((copy) => ({ id: copy.id, account: copy.location.profile, file: copy.location.file })) }
+      : {}),
     description: item.description ?? null,
     alsoIn: copiesOf(inv, item, project).map((copy) => ({
       tool: copy.item.location.tool,

@@ -14,6 +14,7 @@ import {
 } from "./describe.js";
 import { loadInventory } from "./inventory.js";
 import type { Extension, Inventory } from "./model.js";
+import { rowsIn, type ScopeRow } from "./scopes.js";
 import { TestHome } from "./test-home.js";
 
 const DAY = 86_400_000;
@@ -84,6 +85,27 @@ const claudeSkill = (inv: Inventory, name: string, project?: string) =>
     name,
   );
 
+/** The row of one item, as rowsIn gives every item but a Claude MCP server of accounts' own. */
+const single = (item: Extension): ScopeRow => ({ key: item.id, name: item.name, items: [item] });
+
+/** The Claude MCP row named `name` in `scope`, from app. */
+function serverRow(inv: Inventory, scope: "global" | "project", app: string, name: string): ScopeRow {
+  const row = rowsIn(inv, "claude", "mcp", scope, app, NOW).find((r) => r.name === name);
+  if (!row) throw new Error(`no ${name} row`);
+  return row;
+}
+
+/** github in both accounts - default's with a secret in its args and env - and off for app in work. */
+const github = {
+  defaultJson: () => ({
+    mcpServers: { github: { command: "gh-mcp", args: ["--api-key", KEY], env: { GITHUB_TOKEN: KEY } } },
+  }),
+  workJson: (app: string) => ({
+    projects: { [app]: { disabledMcpServers: ["github"] } },
+    mcpServers: { github: { command: "gh-mcp" } },
+  }),
+};
+
 /** A hook item named as the sources name one: "<Event> <matcher>" or "<Event>". */
 function hook(name: string): Extension {
   return {
@@ -125,49 +147,42 @@ describe("tagsOf", () => {
   it("tags the project's eli5 as hidden by the global one, which wins as Claude Code resolves a name", async () => {
     const { inv, app } = await seed();
     // Claude Code: personal over project.
-    expect(tagsOf(inv, claudeSkill(inv, "eli5", app), app, NOW)).toEqual(["hidden by Global copy"]);
-    expect(tagsOf(inv, claudeSkill(inv, "eli5"), app, NOW)).toEqual([]);
+    expect(tagsOf(inv, single(claudeSkill(inv, "eli5", app)), app, NOW)).toEqual(["hidden by Global copy"]);
+    expect(tagsOf(inv, single(claudeSkill(inv, "eli5")), app, NOW)).toEqual([]);
   });
 
   it("says off here for a setting of this project's, and off for one of the user's", async () => {
     const local = await seed({
       more: (h) => h.write("repos/app/.claude/settings.local.json", { skillOverrides: { "old-one": "off" } }),
     });
-    expect(tagsOf(local.inv, claudeSkill(local.inv, "old-one"), local.app, NOW)).toEqual(["off here", "unused"]);
+    expect(tagsOf(local.inv, single(claudeSkill(local.inv, "old-one")), local.app, NOW)).toEqual([
+      "off here",
+      "unused",
+    ]);
     const user = await seed({
       more: (h) => h.write(".claude/settings.json", { skillOverrides: { "old-one": "off" } }),
     });
-    expect(tagsOf(user.inv, claudeSkill(user.inv, "old-one"), user.app, NOW)).toEqual(["off", "unused"]);
+    expect(tagsOf(user.inv, single(claudeSkill(user.inv, "old-one")), user.app, NOW)).toEqual(["off", "unused"]);
   });
 
   it("says off in 1 of 2 accounts for a server one account turned off here", async () => {
-    const { inv, app } = await seed({
-      defaultJson: () => ({ mcpServers: { github: { command: "gh-mcp" } } }),
-      workJson: (app) => ({
-        projects: { [app]: { disabledMcpServers: ["github"] } },
-        mcpServers: { github: { command: "gh-mcp" } },
-      }),
-    });
-    const copies = inv.items.filter((i) => i.kind === "mcp" && i.name === "github");
-    expect(copies).toHaveLength(2);
-    for (const copy of copies) expect(tagsOf(inv, copy, app, NOW)).toEqual(["off in 1 of 2 accounts"]);
-    expect(statesByAccount(inv, copies[0] as Extension, app)?.map((a) => [a.profile, a.state.value])).toEqual([
+    const { inv, app } = await seed(github);
+    const row = serverRow(inv, "global", app, "github");
+    expect(row.items).toHaveLength(2);
+    expect(tagsOf(inv, row, app, NOW)).toEqual(["off in 1 of 2 accounts"]);
+    expect(statesByAccount(inv, row, app)?.map((a) => [a.profile, a.state.value])).toEqual([
       ["claude:default", "on"],
       ["claude:work", "off"],
     ]);
+    // One account's copy alone is that account's server: off where it is off, and nothing else.
+    const work = row.items.find((i) => i.location.profile === "claude:work") as Extension;
+    expect(tagsOf(inv, { key: row.key, name: "github", items: [work] }, app, NOW)).toEqual(["off here"]);
   });
 
   it("puts broken link first and leaves unused out after it; a .mcp.json server waits for approval", async () => {
     const { inv, app } = await seed({ more: (h) => h.link(path.join(h.home, "gone"), ".claude/skills/dangling") });
-    expect(tagsOf(inv, claudeSkill(inv, "dangling"), app, NOW)).toEqual(["broken link"]);
-    expect(
-      tagsOf(
-        inv,
-        find(inv, (i) => i.name === "tools", "tools"),
-        app,
-        NOW,
-      ),
-    ).toEqual(["pending approval"]);
+    expect(tagsOf(inv, single(claudeSkill(inv, "dangling")), app, NOW)).toEqual(["broken link"]);
+    expect(tagsOf(inv, single(find(inv, (i) => i.name === "tools", "tools")), app, NOW)).toEqual(["pending approval"]);
   });
 });
 
@@ -214,7 +229,7 @@ describe("fromLabel and scopeSentence", () => {
 describe("detailsOf", () => {
   it("shows a skill: title, description, file with ~, where it loads, use, and its other copies", async () => {
     const { inv, app } = await seed();
-    const lines = detailsOf(inv, claudeSkill(inv, "eli5"), app, NOW);
+    const lines = detailsOf(inv, single(claudeSkill(inv, "eli5")), app, NOW);
     expect(lines[0]).toEqual({ text: "GLOBAL › eli5" });
     expect(lines[1]).toEqual({ text: "Explain things simply" });
     const file = lines.find((l) => l.label === "File");
@@ -235,7 +250,7 @@ describe("detailsOf", () => {
 
   it("says why a hidden copy does not load, and that its use is counted under the winner", async () => {
     const { inv, app } = await seed();
-    const lines = detailsOf(inv, claudeSkill(inv, "eli5", app), app, NOW);
+    const lines = detailsOf(inv, single(claudeSkill(inv, "eli5", app)), app, NOW);
     expect(lines[0]).toEqual({ text: "PROJECT › eli5" });
     expect(lines.find((l) => l.label === "Loaded")?.text).toMatch(/^no, the Global copy wins \(~[\\/]\.claude[\\/]/);
     expect(lines.find((l) => l.label === "Used")?.text).toBe("counted under the copy that wins");
@@ -248,50 +263,43 @@ describe("detailsOf", () => {
         h.write(".claude/settings.json", { skillOverrides: { eli5: "name-only" } });
       },
     });
-    const off = detailsOf(inv, claudeSkill(inv, "old-one"), app, NOW);
+    const off = detailsOf(inv, single(claudeSkill(inv, "old-one")), app, NOW);
     expect(off.find((l) => l.label === "Loaded")?.text).toMatch(
       /^off here \(this project's \.claude[\\/]settings\.local\.json\)$/,
     );
-    const shown = detailsOf(inv, claudeSkill(inv, "eli5"), app, NOW);
+    const shown = detailsOf(inv, single(claudeSkill(inv, "eli5")), app, NOW);
     expect(shown.find((l) => l.label === "Shows as")?.text).toMatch(
       /^name only \(~[\\/]\.claude[\\/]settings\.json\)$/,
     );
   });
 
-  it("shows a server's command and secret names, never their values, and each account's state", async () => {
-    const { inv, app } = await seed({
-      defaultJson: () => ({
-        mcpServers: { github: { command: "gh-mcp", args: ["--api-key", KEY], env: { GITHUB_TOKEN: KEY } } },
-      }),
-      workJson: (app) => ({
-        projects: { [app]: { disabledMcpServers: ["github"] } },
-        mcpServers: { github: { command: "gh-mcp" } },
-      }),
-    });
-    const server = find(inv, (i) => i.name === "github" && i.location.profile === "claude:default", "github");
-    const lines = detailsOf(inv, server, app, NOW);
+  it("shows a server's commands and secret names, never their values, and each account's state", async () => {
+    const { inv, app } = await seed(github);
+    const lines = detailsOf(inv, serverRow(inv, "global", app, "github"), app, NOW);
     expect(lines[0]).toEqual({ text: "GLOBAL › github" });
     expect(JSON.stringify(lines)).not.toContain(KEY);
-    expect(lines.find((l) => l.label === "Runs")?.text.startsWith("gh-mcp --api-key ")).toBe(true);
+    // The two accounts' copies run different commands, so each says whose it is.
+    const runsAt = lines.findIndex((l) => l.label === "Runs");
+    expect(lines[runsAt]?.text).toMatch(/^gh-mcp --api-key \S+ \(in default\)$/);
+    expect(lines[runsAt + 1]).toEqual({ label: "", text: "gh-mcp (in work)" });
     expect(lines.find((l) => l.label === "Secrets")?.text).toBe("GITHUB_TOKEN (value hidden)");
     const accountsAt = lines.findIndex((l) => l.label === "Accounts");
     expect(lines[accountsAt]?.text).toBe("default  on");
     expect(lines[accountsAt + 1]?.text).toMatch(
       /^work {5}off \(this project's entry in ~[\\/]\.claude-work[\\/]\.claude\.json\)$/,
     );
-    expect(lines.find((l) => l.label === "File")?.text).toBe("~/.claude.json".replace("/", path.sep));
+    const fileAt = lines.findIndex((l) => l.label === "File");
+    expect(lines.slice(fileAt, fileAt + 2).map((l) => l.text)).toEqual([
+      `~${path.sep}.claude.json`,
+      `~${path.sep}${path.join(".claude-work", ".claude.json")}`,
+    ]);
   });
 
   it("shows a local server's accounts, the ones without it too, and whose entry its file is", async () => {
     const { inv, app } = await seed({
       defaultJson: (app) => ({ projects: { [app]: { mcpServers: { "pg-dev": { command: "pg" } } } } }),
     });
-    const lines = detailsOf(
-      inv,
-      find(inv, (i) => i.name === "pg-dev", "pg-dev"),
-      app,
-      NOW,
-    );
+    const lines = detailsOf(inv, serverRow(inv, "project", app, "pg-dev"), app, NOW);
     expect(lines[0]).toEqual({ text: "PROJECT › pg-dev" });
     const accountsAt = lines.findIndex((l) => l.label === "Accounts");
     expect(lines.slice(accountsAt, accountsAt + 2).map((l) => l.text)).toEqual(["default  on", "others   not added"]);
@@ -300,12 +308,7 @@ describe("detailsOf", () => {
 
   it("shows a hook in plain words", async () => {
     const { inv, app } = await seed();
-    const lines = detailsOf(
-      inv,
-      find(inv, (i) => i.kind === "hook", "hook"),
-      app,
-      NOW,
-    );
+    const lines = detailsOf(inv, single(find(inv, (i) => i.kind === "hook", "hook")), app, NOW);
     expect(lines).toEqual([
       { text: "GLOBAL › Stop" },
       { label: "When", text: "Claude finishes replying" },
@@ -328,12 +331,7 @@ describe("detailsOf", () => {
         });
       },
     });
-    const lines = detailsOf(
-      inv,
-      find(inv, (i) => i.kind === "plugin", "kit@m"),
-      app,
-      NOW,
-    );
+    const lines = detailsOf(inv, single(find(inv, (i) => i.kind === "plugin", "kit@m")), app, NOW);
     expect(lines).toEqual([
       { text: "PLUGINS › kit" },
       { text: "A kit" },
@@ -348,7 +346,7 @@ describe("detailsOf", () => {
 describe("jsonItem", () => {
   it("gives a skill's fields in the documented order", async () => {
     const { inv, app } = await seed();
-    const item = jsonItem(inv, claudeSkill(inv, "eli5"), app, NOW);
+    const item = jsonItem(inv, single(claudeSkill(inv, "eli5")), app, NOW);
     expect(Object.keys(item)).toEqual([
       "id",
       "kind",
@@ -382,18 +380,10 @@ describe("jsonItem", () => {
     ]);
   });
 
-  it("gives a server's accounts and each account's state, and never a secret value", async () => {
-    const { inv, app } = await seed({
-      defaultJson: () => ({
-        mcpServers: { github: { command: "gh-mcp", args: ["--api-key", KEY], env: { GITHUB_TOKEN: KEY } } },
-      }),
-      workJson: (app) => ({
-        projects: { [app]: { disabledMcpServers: ["github"] } },
-        mcpServers: { github: { command: "gh-mcp" } },
-      }),
-    });
-    const server = find(inv, (i) => i.name === "github" && i.location.profile === "claude:default", "github");
-    const item = jsonItem(inv, server, app, NOW);
+  it("gives a server row its key, every account's copy and state, and never a secret value", async () => {
+    const { inv, app } = await seed(github);
+    const row = serverRow(inv, "global", app, "github");
+    const item = jsonItem(inv, row, app, NOW);
     expect(Object.keys(item)).toEqual([
       "id",
       "kind",
@@ -408,11 +398,19 @@ describe("jsonItem", () => {
       "usage",
       "tags",
       "file",
+      "copies",
       "description",
       "alsoIn",
       "summary",
     ]);
+    const [mine, theirs] = row.items as [Extension, Extension];
     expect(item).toMatchObject({
+      id: "mcp:claude:global:-:github",
+      file: mine.location.file,
+      copies: [
+        { id: mine.id, account: "claude:default", file: mine.location.file },
+        { id: theirs.id, account: "claude:work", file: theirs.location.file },
+      ],
       accounts: ["claude:default", "claude:work"],
       state: "mixed",
       stateByAccount: { "claude:default": "on", "claude:work": "off" },
