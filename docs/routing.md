@@ -7,16 +7,20 @@ rule, and `clausona run --route <name>` starts Claude Code or Codex on whichever
 picks right now. The pick goes by how much of each account's plan limits is already used.
 
 ```bash
-clausona route add main                            # every account, taking turns
+clausona route add main                            # every Claude Code account, taking turns
 clausona run --route main -- -p "run the tests"
 ```
 
 ```
-→ claude:team · route main · usage 40% (5H) · round-robin
+  ▸ claude:work  route main, next in turn, 34% of 7D used
 ```
 
 That line goes to stderr. The tool's own output stays on stdout, so you can still pipe it or
 redirect it to a file. (`csn` works everywhere `clausona` does.)
+
+If you would rather see it all on one screen, run `clausona route` with nothing after it. That
+opens the [Routes screen](#the-routes-screen), where you can look through your routes and create
+or change one in a form.
 
 Routes are made of subscription accounts. In this version an API profile cannot be part of one.
 
@@ -24,7 +28,8 @@ Routes are made of subscription accounts. In this version an API profile cannot 
 
 Each account gets one number, its usage: the higher of its 5-hour and 7-day windows. An account
 at 0% of its 5-hour window and 99% of its week has a usage of 99%. Every rule below looks at that
-number and nothing else, and it is the number `clausona route explain` shows.
+number and nothing else. A run's note gives it, as in `34% of 7D used`, and so does
+`clausona route explain --json`, as `usage`.
 
 clausona then goes through four stages and stops at the first one that finds someone.
 
@@ -85,13 +90,15 @@ shell leaves the `*` alone.
 
 | Pattern | Matches |
 |---|---|
-| `*` | Every subscription account of the route's tool, including ones you add later |
+| `*` | Every subscription account of the route's tool, including ones you add later. On an `all` route, those of both tools |
 | `work` | The profile named `work` |
 | `team-*`, `claude:team-*` | Profile names. `*` matches any run of characters, `?` matches one |
 | `*@example.com` | Account emails |
 
 Matching ignores case. A `claude:` or `codex:` prefix works on names and on email patterns, but
-it has to name the route's own tool: `codex:work` in a Claude Code route is refused.
+it has to name the route's own tool: `codex:work` in a Claude Code route is refused. On an `all`
+route either prefix is fine, and a name without one matches in both tools, so `personal` there
+means `claude:personal` and `codex:personal`.
 
 A glob or an email pattern never matches an API profile. Naming one exactly is refused by
 `route add` and `route set`, with the command to run it by name instead
@@ -107,7 +114,8 @@ Route names get the same check.
 ## Managing routes
 
 ```bash
-clausona route add main                                     # every account, round-robin, 80% / 95%
+clausona route add main                                     # every Claude Code account, round-robin, 80% / 95%
+clausona route add any --tool all                           # Claude Code and Codex accounts in one route
 clausona route add work --from '*@example.com' --exclude '*-share'
 clausona route add solo --from work --fallback personal --strategy headroom
 clausona route set main --exclude personal                  # replace one field
@@ -116,43 +124,93 @@ clausona route set solo --no-fallback
 clausona route rename work office
 clausona route remove office
 clausona route edit                                         # routes.json in $VISUAL or $EDITOR
-clausona route list                                         # every route and its members
+clausona route list                                         # every route, how many are free, who is next
+clausona route                                              # the Routes screen, in a terminal
 ```
 
 A route name starts with a letter or a digit, and the rest is letters, digits, `.`, `_` and `-`.
 
-Each route is for one tool. `route add` takes it from `--tool claude` or `--tool codex`, or from
-a prefix that every `--from` entry shares. If only one tool has subscription accounts, it uses
-that one. Otherwise it asks in a terminal, and without a terminal it stops and asks for `--tool`.
+The subcommands ask nothing. The one exception is `route edit`, which offers to open the file
+again when what you saved has a problem.
 
-### Creating one in a terminal
+### Which tool a route is for
 
-In a terminal, `route add` shows the accounts the route would use before it writes anything:
+A route is for Claude Code, for Codex, or for both. `route add` takes it from `--tool claude`,
+`--tool codex` or `--tool all`. Without `--tool` it makes a Claude Code route.
+
+The prefixes in `--from` can stand in for `--tool`. When every entry starts with `codex:`, as in
+`--from 'codex:team,codex:personal'`, the route is for Codex. Entries with both prefixes make an
+`all` route. If any entry has no prefix, the default holds.
+
+An `all` route ranks the accounts of both tools together, by the same usage number, so a run on
+it can land on either tool. [Running on an all route](#running-on-an-all-route) covers what that
+means for the arguments you pass.
+
+`route set` keeps the route's tool. To change it, use the Routes screen or `route edit`.
+
+### What `route add` shows
+
+`route add` writes the route straight away, then shows what it made: the settings in a box, and
+every account in the route with its usage now.
 
 ```
-Create 'main' now?
-  pool      * · 2 of 4 account(s) under 80% now
-            claude:old, claude:team, claude:work
-            claude:personal (signed out (clausona login claude:personal))
-  strategy  round-robin · max 80% · reserve 95%
-[Y]es · [e]dit · [n]o
+$ clausona route add work --from '*@work.example' --exclude '*-share'
+  ✔ Created route work
+
+  ╭─ work ──────────────────────────────────────╮
+  │                                             │
+  │  Tool       claude                          │
+  │  Strategy   round-robin (next in turn)      │
+  │  Limits     skip at 80%, reserve up to 95%  │
+  │  Accounts   *@work.example except *-share   │
+  │  Fallback   none                            │
+  │                                             │
+  ╰─────────────────────────────────────────────╯
+
+    ACCOUNT            5H        7D       LAST PICKED
+    ─────────────────────────────────────────────────
+  ▸ claude:work       12% 3h    34% 4d    never        picked next
+    claude:team        5% 1h    22% 3d    11h ago
+    claude:ops-share  excluded by *-share
+
+    Run on it: csn run --route work
 ```
 
-The first line counts the accounts a run could take right now, the ones under the cut. Every
-account in the pool is listed under it.
+The table is the one `route explain` prints, described in
+[Seeing the ranking](#seeing-the-ranking).
 
-Enter or `y` creates it, and `n` leaves everything as it was.
+To look before you create, rank the route without saving it:
+`clausona route explain --tool claude --from '*@work.example' --exclude '*-share'` prints the same
+box and table, titled `inline route`, and writes nothing.
 
-`e` lists every subscription account of the tool with a number. Type numbers to tick or untick
-accounts and press Enter when the list is right. Then name a strategy, or press Enter to keep
-the one shown. The screen comes back with your changes.
+Earlier versions asked before creating a route in a terminal, and `--yes` (or `-y`) skipped the
+question. The question is gone. `--yes` is still accepted, so scripts that pass it keep working,
+and it changes nothing.
 
-Unticking an account makes the route's `from` the names you kept and drops its exclude list, so
-an account you add later will not be in the route. If you leave the list as it was, the patterns
-stay. A `*` route with every account ticked keeps `*` and drops its exclude list.
+### Listing them
 
-`--yes` (or `-y`) skips the question. Without a terminal, in a script or an agent's shell,
-nothing is asked and the route is created as given.
+```
+$ clausona route list
+
+    ROUTE  TOOL            STRATEGY     LIMITS     FREE NOW  NEXT
+    ────────────────────────────────────────────────────────────────────────────────
+    any    claude + codex  round-robin  80% / 95%  5 of 8    codex:team
+    busy   claude          round-robin  80% / 85%  0 of 2    none, soonest in 1h 17m
+    main   claude          round-robin  80% / 95%  2 of 5    claude:work
+    solo   claude          headroom     80% / 95%  2 of 2    claude:work
+```
+
+`LIMITS` is the cut and the reserve. `FREE NOW` counts the accounts under the cut right now, out
+of every account in the route. One that is signed out still counts as a member, just not as free.
+`NEXT` is the account a run would get now. When nobody can be picked it says `none`, and when the
+first account frees up.
+
+`route list` records nothing. With `--no-quota` it reads no quota at all, and `FREE NOW` and
+`NEXT` show `—`. They show the same dash when no reading could be had for any account of a route,
+which is what happens offline.
+
+On a narrow terminal the table drops columns rather than wrap a row: `TOOL` goes first, then
+`LIMITS`, then `STRATEGY`.
 
 ### Changing one
 
@@ -165,6 +223,8 @@ and adds to the list (see [Running on a route](#running-on-a-route)).
 in `from` itself, so it cannot take one account out of `*` or `*@example.com`. Use `--exclude`
 for that. A route needs at least one entry in `from`, so dropping the last one is refused unless
 `--add` puts another in. `--no-fallback` removes the fallback list.
+
+Like `add`, `route set` prints the route as it stands after the change.
 
 `route rename` and `route remove` act straight away. Neither one asks first.
 
@@ -190,7 +250,7 @@ Routes live in `~/.clausona/routes.json`:
 
 | Field | Default | Allowed |
 |---|---|---|
-| `tool` | required | `"claude"` or `"codex"` |
+| `tool` | required | `"claude"`, `"codex"` or `"all"` (both) |
 | `from` | `["*"]` | a non-empty list of patterns |
 | `exclude` | `[]` | a list of patterns |
 | `strategy` | `"round-robin"` | `"round-robin"`, `"headroom"` or `"expiring"` |
@@ -211,8 +271,69 @@ what is wrong. That includes `clausona run claude` with no route named. `clauson
 does not read the file.
 
 Removing a profile leaves its routes alone. A name that is no longer registered is skipped, and
-both `route list` and `route explain` point it out. `route list` also warns about patterns that
-match nobody.
+both `route list` and `route explain` point it out. They point out patterns that match nobody
+too. `route list` puts both under its table:
+
+```
+  ⚠ ghost names 'gone', which is not a registered profile.
+  ⚠ ghost: 'x-*' matches nobody.
+```
+
+## The Routes screen
+
+In a terminal, `clausona route` with no arguments opens the dashboard's Routes screen. You can
+also get there from the dashboard itself (`clausona`), where Routes is the item under Profiles.
+Without a terminal, in a script or an agent's shell, `clausona route` prints the help instead.
+
+The screen lists your routes on the left. Each line has the route's name, its tool, and how many
+of its accounts are free now, as in `2/5`. On the right is the route under the cursor: its
+settings, then every account with gauges for its 5H and 7D windows, the one a run would get
+next, and why any other is held back. On a terminal under 100 columns the detail sits under the
+list instead.
+
+| Key | Does |
+|---|---|
+| `↑` `↓` | Move between routes |
+| `n` | Open the form for a new route |
+| `e` | Open the form on the selected route |
+| `d` | Remove the selected route, once you answer `y` |
+| `r` | Read the quota again |
+| `esc` | Back to the dashboard, or out if you came in with `clausona route` |
+
+The screen never records a pick. It writes `routes.json` only when you remove a route or save one
+from the form. If the file cannot be used, the screen says what is wrong with it and points you
+to `clausona route edit`.
+
+### The form
+
+`n` and `e` open the same form. It holds everything `route add` and `route set` can set.
+
+| Field | What it holds |
+|---|---|
+| Name | The route's name. Changing it on an existing route renames the route |
+| Tool | `claude`, `codex` or `claude + codex`, chosen with `←` `→` |
+| Accounts | A row for every account (`*`), then a row per subscription account of the tool (of both, for `claude + codex`) with its 5H and 7D usage. `space` ticks and unticks |
+| Patterns | More `from` and `exclude` patterns, such as `team-*` or `*@example.com` |
+| Strategy | `round-robin`, `headroom` or `expiring`, chosen with `←` `→` |
+| Limits | `skip at` is the cut and `reserve up to` the reserve. Left blank, the default applies |
+| Fallback | Accounts tried in order when nobody in the pool is under the cut. `a` adds one, `x` removes it, `[` and `]` move it |
+
+The ticks become the route's lists. With the `every account (*)` row ticked, `from` is `*`, and
+each account you untick goes into the exclude list. An account you add later joins the route.
+With that row unticked, `from` is the accounts you ticked, in the order you ticked them, and an
+account you add later stays out.
+
+Under the form, a `Now:` line says how many accounts are under the cut and who would be picked
+next, for the route as the form holds it. The hints along the bottom change with the field you
+are in.
+
+`tab` moves to the next field and `shift+tab` back. `enter` saves from any field. `esc` leaves,
+and if you changed something it asks first whether to throw the changes away.
+
+A save goes through the same checks as `route add` and `route set`, so whatever they refuse is
+refused here too. The field turns red, and the problem is listed under the form. If
+`routes.json` was changed in another terminal while the form was open, the save does not write
+over it. The form reloads the file and says so, and you can look it over before you save again.
 
 ## Running on a route
 
@@ -220,6 +341,7 @@ match nobody.
 clausona run --route main -- -p "run the tests"
 clausona run --route main --strategy headroom -- -p "a long refactor"   # for this run only
 clausona run claude --from 'team-*' --max-usage 90 -- -p "quick question"  # an unsaved route
+clausona run codex --route any -- exec "review this"   # only the Codex accounts of an all route
 clausona run claude -- -p "hi"            # no route: the active profile, as plain claude would
 clausona run claude:team -- -p "hi"       # one account by name, whatever its quota
 ```
@@ -229,7 +351,8 @@ ends them, and so does a `--`, which is dropped. Everything after goes to the to
 `clausona run --route main -p hi --strategy headroom`, Claude Code gets the `--strategy`.
 
 You can name the tool too, as in `clausona run claude --route main`. A route saved for the other
-tool is then refused.
+tool is then refused. On an `all` route the tool word narrows the run instead (see
+[Running on an all route](#running-on-an-all-route)).
 
 `--strategy`, `--max-usage`, `--reserve-usage` and `--fallback` replace their field for one run.
 So does `--from` next to `--route`. If `--max-usage` goes above the route's reserve, the reserve
@@ -239,9 +362,9 @@ moves up with it for that run.
 excludes `*-share`, `--exclude old` leaves out `old` and the share accounts both. None of these
 options is saved.
 
-`--from` without `--route` makes an unsaved route, which the note calls an "inline route". It
-needs to know its tool, so write `clausona run claude --from …` or put a `claude:` or `codex:`
-prefix on every entry.
+`--from` without `--route` makes an unsaved route, which the note calls an "inline route". Its
+tool is the one you name, as in `clausona run codex --from …`. Without a tool word it goes by the
+prefixes, as `route add` does, and otherwise it is a Claude Code route.
 
 The field options need `--route` or `--from` to work on. On their own they are refused, so a
 run never lands on an account you meant to exclude:
@@ -254,7 +377,7 @@ With no routing options at all, `clausona run claude` and `clausona run codex` r
 active profile, and say so on stderr:
 
 ```
-→ claude:work · active profile (no route)
+  ▸ claude:personal  active profile (no route)
 ```
 
 If you have a profile named `claude` or `codex`, `clausona run claude` runs that profile.
@@ -277,60 +400,149 @@ is refused with the fix:
   ✘ 'fix the bug' is not a profile or a tool. To pass a prompt, name the tool: clausona run claude 'fix the bug'
 ```
 
+### Running on an all route
+
+```bash
+clausona run --route any                                # interactive, in the picked account's tool
+clausona run codex --route any -- exec "review this"
+clausona run claude --route any -- -p "run the tests"
+```
+
+An `all` route holds accounts of both tools, so a pick can land on either one. With no arguments
+for the tool that is fine. `clausona run --route any` starts an interactive session in whichever
+tool the picked account belongs to.
+
+Arguments are another matter, because Claude Code and Codex do not take the same ones. A run
+with arguments has to say which tool they are for. Name the tool before `--route`, and only that
+tool's accounts are ranked. Without it, clausona stops before it picks anything:
+
+```
+  ✘ Route any has claude and codex accounts. Say which tool these arguments are for: csn run claude --route any … (or codex).
+```
+
+`route explain` and `route pick` narrow an `all` route the same way with `--tool`:
+`clausona route pick any --tool claude` takes a turn among the Claude Code accounts only.
+
 ### A route that does not exist
 
-In a terminal, an unknown `--route` offers to create the route. You get the same screen as
-`route add`, ending in `[Y]es and run`, and the routing options you gave go into the new route.
-If clausona cannot tell which tool it is for, it asks first. Answer yes and the run starts on it.
+In a terminal, an unknown `--route` offers to create the route. clausona says in a sentence what
+the new route would take, lists those accounts with their usage now, and asks once:
+
+```
+$ clausona run --route nightly --exclude '*-share' -- -p "run the tests"
+
+  Route nightly does not exist yet. It would take every claude account
+  except *-share, taking turns and skipping any at 80% or more:
+
+    claude:team 22%   claude:work 34%   claude:side 88% (over)   claude:personal 96% (over)
+    claude:old (signed out)
+
+  Create it and run? (Y/n)
+```
+
+Enter or `y` saves the route and starts the run on it. `n` creates nothing, runs nothing and
+exits 1. The routing options you gave go into the new route. Its tool is the one you named, as
+in `clausona run codex --route nightly`, else the one the `--from` prefixes say, else Claude
+Code. Apart from `route edit` after a bad save, this is the only question the routing commands
+ask.
 
 Without a terminal nothing is created. clausona prints the command that would create it and
 exits 1:
 
 ```
-  ✘ Route 'nightly' does not exist. Existing routes: main. Create it: clausona route add nightly
+  ✘ Route 'nightly' does not exist. Existing routes: any, busy, main, solo. Create it: clausona route add nightly
 ```
 
 ### When nobody is free
 
 ```
-  ✘ No account is available for route busy.
-    claude:old       99% 7D, resets in 19h 59m   ← soonest
-    claude:personal  signed out (clausona login claude:personal)
-  Retry later, or name a profile: clausona run claude:old
+$ clausona run --route busy -- -p "run the tests"
+  ✘ No account in route busy is free right now.
+
+    ACCOUNT           5H        7D       FREE AGAIN
+    ──────────────────────────────────────────────────────────
+    claude:personal  96% 1h    81% 2d    in 1h 15m (5H resets)   soonest
+    claude:side      88% 1h    40% 3d    in 1h 57m (5H resets)
+
+    Run again after 1h 15m, or see everything with: csn route explain busy
 ```
 
-The run exits with code 75 and launches nothing. The reset time is when the account drops back
-under the route's reserve.
+The run exits with code 75 and launches nothing. `FREE AGAIN` is when the account drops back
+under the route's reserve, which on `busy` is 85%. That takes every window at or above the
+reserve to reset, and the column says which one is last. An account that is skipped, such as a
+signed-out one, is listed under the others with the reason.
+
+On an `all` route narrowed to one tool, the message is about that tool's accounts only, as in
+"No claude account in route any is free right now."
 
 ## Seeing the ranking
 
 ```
 $ clausona route explain main
-route main (claude · round-robin · max 80% · reserve 95%)
-    PROFILE            5H    7D  USAGE            LAST PICKED
-    claude:old         0%   99%  99% 7D           1d ago       at or above 80%
-    claude:personal     —     —  —                —            skipped: signed out (clausona login claude:personal)
-  → claude:team       40%   30%  40% 5H           never        picked: next in turn
-    claude:work       20%   70%  70% 7D           3m ago
+
+  ╭─ main ──────────────────────────────────────╮
+  │                                             │
+  │  Tool       claude                          │
+  │  Strategy   round-robin (next in turn)      │
+  │  Limits     skip at 80%, reserve up to 95%  │
+  │  Accounts   * except *-share                │
+  │  Fallback   none                            │
+  │                                             │
+  ╰─────────────────────────────────────────────╯
+
+    ACCOUNT            5H        7D       LAST PICKED
+    ─────────────────────────────────────────────────
+  ▸ claude:work       12% 3h    34% 4d    never        picked next
+    claude:team        5% 1h    22% 3d    11h ago
+    claude:side       88% 1h    40% 3d                 over 80%
+    claude:personal   96% 1h    81% 2d                 over 80%
+    claude:old        —         —                      signed out (csn login claude:old)
+    claude:ops-share  excluded by *-share
 ```
 
-The arrow marks the account a run would get now. `explain` launches nothing and records
-nothing. It exits 0 even when nobody could be picked, and says so under the table.
+The box is the route with every default filled in. Under it comes every account, with its 5H
+and 7D use and the time until each resets. The `▸` and "picked next" mark the account a run
+would get now. "over 80%" is an account at or above the cut, and a skipped account says why in
+grey. At the bottom are the entries nothing was ranked for, such as an account the exclude list
+took out or a name that is not registered. `LAST PICKED` appears on round-robin routes, the one
+strategy that reads it.
+
+`explain` launches nothing and records nothing. It exits 0 even when nobody could be picked, and
+says so under the table:
+
+```
+  Nobody can be picked now; csn run --route busy would exit 75.
+```
 
 It takes the same field options as a run. `--resume` ranks the route as a resumed run would, and
-`clausona route explain --tool claude --from '<patterns>'` ranks a route that is not saved.
+`--tool` narrows an `all` route to one tool's accounts. A route that is not saved is ranked with
+`clausona route explain --tool claude --from '<patterns>'`.
 
-Fallback members are marked `(fallback)` in the table. A run that picks at the fallback or
-reserve stage says so in its note:
+Fallback members are marked `(fallback)`. A pick at the fallback or reserve stage says so, in the
+table and in the run's note. Here `solo`'s cut is lowered for one look, so its only pool member
+is over it:
 
 ```
-→ claude:team · route solo (fallback) · usage 40% (5H) · every pool member at or above 80%
+$ clausona route explain solo --max-usage 30
+  …
+    ACCOUNT                  5H        7D
+    ──────────────────────────────────────────
+  ▸ claude:team (fallback)   5% 1h    22% 3d    picked: fallback
+    claude:work             12% 3h    34% 4d    over 30%
+```
+
+```
+$ clausona run --route solo --max-usage 30 -- -p "run the tests"
+  ▸ claude:team  route solo, fallback, 22% of 7D used
 ```
 
 ## For scripts and agents
 
 A Claude Code or Codex session can drive routing for you. `clausona route --help` is written for
 it, so have it read that first.
+
+The Routes screen is for people. An agent's shell has no terminal, so `clausona route` with no
+arguments only prints the help there, and the agent works with the subcommands below.
 
 ```bash
 clausona route list --json                 # every route and its members
@@ -344,20 +556,25 @@ a run does. To start several workers, call `pick` once per worker on a round-rob
 each call takes the next account. On a `headroom` or `expiring` route, picks made close together
 land on the same account, because their readings are cached for 5 minutes.
 
-Create and change routes with `route add`, `route set` and `route remove` rather than by writing
-`routes.json`. An agent creating a route for you should show you its accounts first:
-`clausona route explain --tool claude --from '<patterns>'` ranks a route without saving it.
+On an `all` route a pick can come back as an account of either tool, and `clausona run "$id"`
+starts the right one. When the worker's arguments are for one tool, pick with `--tool`:
+`clausona route pick any --tool codex`.
 
-Without a terminal, `route add` never asks, and an unknown `--route` creates nothing.
+Create and change routes with `route add`, `route set` and `route remove` rather than by writing
+`routes.json`. These never ask, in a terminal or not, so an agent creating a route for you should
+first show you its accounts and wait for your OK. It can rank the route without saving it, with
+`clausona route explain --tool claude --from '<patterns>'`.
+
+Without a terminal an unknown `--route` creates nothing.
 
 ### `pick --json`
 
 ```json
 {
-  "profile": "claude:team",
+  "profile": "claude:work",
   "route": "main",
   "stage": "pool",
-  "usage": { "percent": 40, "window": "5H", "stale": false },
+  "usage": { "percent": 34, "window": "7D", "stale": false },
   "reason": "next in turn"
 }
 ```
@@ -373,7 +590,7 @@ When nobody can be picked, the JSON is still printed on stdout, and the exit cod
   "stage": null,
   "usage": null,
   "reason": "no account is available",
-  "soonest": { "id": "claude:old", "at": "2026-10-09T14:25:27.529Z" }
+  "soonest": { "id": "claude:personal", "at": "2026-10-09T16:58:18.767Z" }
 }
 ```
 
@@ -385,7 +602,7 @@ When nobody can be picked, the JSON is still printed on stdout, and the exit cod
 |---|---|
 | `route` | The route's name, or null for an unsaved route |
 | `resolvedBy` | `"flag"` for a saved route, `"inline"` for one made from `--from` |
-| `settings` | The route with every default filled in: `tool`, `from`, `exclude`, `strategy`, `maxUsage`, `reserveUsage`, `fallback` |
+| `settings` | The route with every default filled in: `tool`, `from`, `exclude`, `strategy`, `maxUsage`, `reserveUsage`, `fallback`. `tool` is `"claude"`, `"codex"` or `"all"` |
 | `outcome` | `{ "kind": "picked", "id", "stage", "reason" }`, or `{ "kind": "none" }` plus `soonest` (`{ "id", "at" }`) when a reset time is known |
 | `members` | One entry per account, below |
 | `excluded` | Accounts the exclude list took out, as `{ "profile", "matchedBy" }` |
@@ -408,15 +625,15 @@ An account picked at the reserve stage has the status `picked`, even though its 
 `maxUsage`. Percentages are not rounded in JSON. Fields are only ever added.
 
 `route list --json` gives `{ "routes": [...] }`. Each entry has `name`, `route` (the settings
-with defaults), `members` and `fallbackMembers` (profile ids, after the exclude list),
-`excluded`, `unknownNames` and `emptyPatterns`.
+with defaults, where `tool` can be `"all"` too), `members` and `fallbackMembers` (profile ids,
+after the exclude list), `excluded`, `unknownNames` and `emptyPatterns`.
 
 ### Exit codes
 
 | Code | Meaning |
 |---|---|
 | the tool's own | The tool ran. |
-| 1 | A usage error, an unknown route without a terminal, or a `routes.json` that cannot be used. |
+| 1 | A usage error, an unknown route without a terminal (or answered `n` in one), or a `routes.json` that cannot be used. |
 | 75 | No account is available now, from `run` or `pick`. Retry later, or name a profile. |
 
 ### The routing skill

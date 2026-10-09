@@ -13,6 +13,10 @@ used. `clausona run --route <name>` starts the tool on the account the rule pick
 Run `clausona route --help` once before anything else. It lists every command, option and exit
 code of the installed version. Where it differs from this skill, it wins.
 
+`clausona route` with no arguments opens the Routes screen, a TUI meant for a person at a
+terminal. Do not run it; use the subcommands below. (In a shell without a terminal it only prints
+the help.) A user who would rather look through routes on that screen can run it themselves.
+
 ## What decides the pick
 
 - An account's **usage** is the higher of its 5H and 7D windows: 0% 5H with 99% 7D is 99%.
@@ -40,6 +44,8 @@ clausona list --json                       # every profile, with its email and q
 
 `explain --json` gives:
 
+- `settings`: the route with its defaults. `settings.tool` is `claude`, `codex` or `all` (a route
+  over the accounts of both tools).
 - `outcome`: `{"kind": "picked", "id", "stage", "reason"}`, or `{"kind": "none"}` with
   `soonest` (`{"id", "at"}`) when a reset time is known. `explain` exits 0 even when nobody could
   be picked, so read `outcome.kind`.
@@ -54,12 +60,12 @@ run (`--strategy`, `--max-usage`, …) and `--resume`, to show what a run like t
 
 ## Creating or changing a route for the user
 
-In an agent's shell there is no terminal, so `route add` and `route set` write straight away and
-ask nothing. Before writing:
+`route add` and `route set` never ask, in a terminal or not. They write at once, and `route add`
+then prints the route it made. So the asking is yours to do, before you write:
 
-1. Show the user which accounts the route would hold. Rank it unsaved and list its members with
-   their usage: `clausona route explain --tool <claude|codex> --from '<patterns>' [--exclude '<patterns>']`.
-   For a change, show the route as it is (`route list --json`) and as it would be.
+1. Show the user which accounts the route would hold. Rank it unsaved and show them the result:
+   `clausona route explain --tool <claude|codex|all> --from '<patterns>' [--exclude '<patterns>']`.
+   For a change, show the route as it is (`route explain <name>`) and as it would be.
 2. Ask before including accounts that look like someone else's or shared: another person's name
    or email, `*-share`. Leave them out until the user says yes.
 3. `*` takes every subscription account of the tool, including ones added later. When the user
@@ -72,17 +78,21 @@ ask nothing. Before writing:
    yourself, and do not use `route edit`: it opens an editor for a person.
 
 ```bash
-clausona route add <name> [--tool <claude|codex>] --from '<patterns>' [--exclude '<patterns>'] [--fallback '<patterns>'] [--strategy <s>] [--max-usage <n>] [--reserve-usage <n>]
+clausona route add <name> [--tool claude|codex|all] --from '<patterns>' [--exclude '<patterns>'] [--fallback '<patterns>'] [--strategy <s>] [--max-usage <n>] [--reserve-usage <n>]
 clausona route set <name> [--from …] [--exclude …] [--fallback …] [--strategy …] [--max-usage …] [--reserve-usage …] [--add …] [--drop …] [--no-fallback]
 clausona route rename <old> <new>
 clausona route remove <name>
 ```
 
+- `--tool` is the route's tool: `claude` (the default), `codex`, or `all` for one route over the
+  accounts of both tools. Without `--tool`, `--from` entries that all carry one tool's prefix
+  (`codex:a,codex:b`) make a route for that tool, and prefixes of both tools make an `all` route.
+  Check `clausona list --json` for which tools have accounts. `route set` cannot change the tool.
+- `--yes` is accepted and does nothing. You do not need it.
 - Patterns are comma-separated profile names or globs (`team-*`, `claude:team-*`). A pattern
   with an `@` matches account emails. Matching ignores case. Quote the list.
-- `--tool` is needed only when both Claude Code and Codex have accounts, and not even then when
-  every `--from` entry has a `claude:` or `codex:` prefix. Check `clausona list --json` for which
-  tools have accounts.
+- On an `all` route a name without a prefix matches in both tools: `personal` is
+  `claude:personal` and `codex:personal`. Use the prefixed id to mean one account.
 - In `route set`, each field option replaces its whole field: `--exclude old` makes the exclude
   list just `old`. To add to a list, pass its current entries too (from `route list --json`).
 - `--add` and `--drop` change `from` one entry at a time. `--drop` removes only an entry written
@@ -98,6 +108,7 @@ clausona route remove <name>
 ```bash
 clausona run --route <name> -- -p "<prompt>"                # Claude Code, non-interactive
 clausona run --route <name> -- exec "<prompt>"              # a Codex route
+clausona run codex --route <name> -- exec "<prompt>"        # an all route: name the tool
 clausona run claude --from '<patterns>' -- -p "<prompt>"    # an unsaved route
 clausona run --route <name> --strategy headroom -- -p "…"   # change a field for this run only
 ```
@@ -107,6 +118,10 @@ clausona run --route <name> --strategy headroom -- -p "…"   # change a field f
   everything after it goes to the tool untouched (`--model`, `--permission-mode`,
   `--output-format json`, …).
 - The field options need `--route` or `--from`. On their own they are refused with exit 1.
+- On an `all` route (`settings.tool` is `all`), put the tool word before `--route` whenever you
+  pass arguments: `clausona run claude --route <name> -- -p "…"`. Only that tool's accounts are
+  ranked. Arguments without a tool word are refused with exit 1, because Claude Code and Codex
+  take different ones. `route explain` and `route pick` narrow the same way with `--tool`.
 - Next to `--route`, `--exclude x` leaves `x` out for this run on top of the route's own
   excludes. The other field options replace their field for this run. Nothing is saved.
 - Never put a profile right after routing options: `clausona run --route main claude:work` is
@@ -141,6 +156,8 @@ the user.
   which workers share an account.
 - One `clausona run --route main -- -p …` per worker also takes its own turn. Use `pick` when you
   want the id before you start.
+- On an `all` route a pick can be an account of either tool. Pick with `--tool claude` (or
+  `codex`) so every id is of the tool your worker command is written for.
 - On a `headroom` or `expiring` route, picks made close together land on the same account
   (readings are cached for 5 minutes). Add `--strategy round-robin` to each `pick`, or use a
   round-robin route.

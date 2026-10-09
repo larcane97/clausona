@@ -66,7 +66,7 @@ You don't sign in again, and you don't reinstall plugins.
 - **Pure CLI passthrough** — no wrapping, no proxying, no background process. `claude` and `codex` run directly and unmodified. Compatible with oh-my-claudecode, Cline, codex plugins, and any other tool in your stack.
 - **Lightweight** — a single shell hook and a few symlinks. No daemon, no server, and no startup overhead: `claude` and `codex` start from a small cached script, and clausona itself runs only when something changed — a profile switch, a plugin install — or for a profile it can't cache, such as an API profile ([details](docs/how-it-works.md#the-launch-cache)).
 - **Usage tracking** — per-profile cost and token usage, tracked locally (Claude Code only for now)
-- **Interactive dashboard** — TUI for managing profiles, viewing usage, and running health checks
+- **Interactive dashboard** — TUI for managing profiles and routes, viewing usage, and running health checks
 
 ## Install
 
@@ -155,7 +155,7 @@ You can let clausona choose the account. A route is a named group of accounts an
 picking one of them by plan quota:
 
 ```bash
-clausona route add main                          # every account, taking turns
+clausona route add main                          # every Claude Code account, taking turns
 clausona route explain main                      # who would be picked now, and why
 clausona run --route main -- -p "run the tests"
 ```
@@ -163,13 +163,18 @@ clausona run --route main -- -p "run the tests"
 The run says on stderr which account it got:
 
 ```
-→ claude:team · route main · usage 40% (5H) · round-robin
+  ▸ claude:work  route main, next in turn, 34% of 7D used
 ```
 
 By default an account at 80% or more of its 5-hour or weekly limit is used only when no other
 account in the route is under 80%, and one at 95% or more is never picked. When every account is
 that full, clausona says when each one resets and exits with code 75 instead of starting a
 session.
+
+A route is for Claude Code unless you say otherwise. `--tool codex` makes a Codex route, and
+`--tool all` makes one that takes the accounts of both tools. `clausona route` on its own opens
+the Routes screen, where you can look through your routes and create or edit one in a form. It
+is also on the dashboard, under Profiles.
 
 Patterns like `*@example.com`, fallbacks, the strategies, and the JSON that scripts and agents
 read: **[docs/routing.md](docs/routing.md)**.
@@ -225,6 +230,7 @@ clausona hides or clears from the environment: **[docs/api-profiles.md](docs/api
 | `clausona run <profile> [-- args...]`                               | Run the tool's CLI with a specific profile (a leading `--` is dropped) |
 | `clausona run --route <name> [-- args...]`                          | Run on the account a [route](docs/routing.md) picks |
 | `clausona route add\|set\|rename\|remove\|edit\|list\|explain\|pick …` | Manage [routes](docs/routing.md) |
+| `clausona route`                                                    | Open the [Routes screen](docs/routing.md#the-routes-screen) (in a terminal) |
 | `clausona list [--json] [--refresh] [--no-quota] [--no-renew]`      | List all profiles with plan quota and usage          |
 | `clausona usage [profile] [--period=today\|week\|month\|all]`       | View cost and token usage                            |
 | `clausona current [--json]`                                         | Show active profile                                  |
@@ -348,8 +354,9 @@ access token when it needs to.
 
 ### Can clausona pick the account with quota left?
 
-Yes. `clausona route add main` makes a route of every account of one tool, and
-`clausona run --route main` starts on the next one in turn that is under 80% of its limits.
+Yes. `clausona route add main` makes a route of every Claude Code account (`--tool codex` for
+Codex, `--tool all` for both), and `clausona run --route main` starts on the next one in turn
+that is under 80% of its limits.
 With `--strategy headroom` it takes the account with the most room instead. See
 [Routing](docs/routing.md).
 
