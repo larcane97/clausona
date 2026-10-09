@@ -144,7 +144,7 @@ describe("skills ls", () => {
 });
 
 describe("ls, rows that differ only in whose they are", () => {
-  it("names the account of each Cloud copy, and a legacy command as one", async () => {
+  it("lists a Cloud skill once, with how many accounts have it, and names a legacy command as one", async () => {
     const h = new TestHome();
     homes.push(h);
     const app = h.project("repos/app");
@@ -158,8 +158,8 @@ describe("ls, rows that differ only in whose they are", () => {
     h.skill(".claude/skills", "eli5");
     h.write(".claude/commands/eli5.md", "Explain it simply\n");
     const cloud = await run(h, app, "skills", ["ls", "--scope", "cloud"]);
-    expect(cloud).toMatch(/^pdf\s+claude\s+Cloud · default\s/m);
-    expect(cloud).toMatch(/^pdf\s+claude\s+Cloud · work\s/m);
+    expect(cloud).toMatch(/^pdf\s+claude\s+Cloud · 2 accounts\s/m);
+    expect(cloud.match(/^pdf\s/gm)).toHaveLength(1);
     const global = await run(h, app, "skills", ["ls", "--scope", "global"]);
     expect(global).toMatch(/^eli5\s+claude\s+Global\s+0\s+never\s+unused$/m);
     expect(global).toMatch(/^eli5\s+claude\s+Global · command\s+0\s+never\s+unused$/m);

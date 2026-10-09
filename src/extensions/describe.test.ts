@@ -444,3 +444,121 @@ describe("jsonItem", () => {
     expect(item.summary).toMatchObject({ env: "GITHUB_TOKEN" });
   });
 });
+
+describe("rows across accounts", () => {
+  /** Three accounts: default and work have Cloud's pdf, and kit installed for everyone, each from its own folder. */
+  async function shared() {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", {
+      projects: { [app]: {} },
+      oauthAccount: { organizationUuid: "org1", accountUuid: "acc1" },
+    });
+    h.claude("work", ".claude-work", { oauthAccount: { organizationUuid: "org1", accountUuid: "acc2" } });
+    h.claude("solo", ".claude-solo");
+    h.skill(".claude/skills/synced/org1_acc1", "pdf", "Read PDFs");
+    h.skill(".claude/skills/synced/org1_acc2", "pdf", "Read PDFs");
+    h.skill(".claude/skills", "pdf", "My own pdf");
+    const kitA = h.path(".claude/plugins/cache/m/kit/1.0.0");
+    const kitB = h.path(".claude-work/plugins/cache/m/kit/1.0.0");
+    h.write(".claude/plugins/installed_plugins.json", { plugins: { "kit@m": [{ installPath: kitA }] } });
+    h.write(".claude-work/plugins/installed_plugins.json", { plugins: { "kit@m": [{ installPath: kitB }] } });
+    h.write(".claude/settings.json", { enabledPlugins: { "kit@m": true } });
+    h.skill(".claude/plugins/cache/m/kit/1.0.0/skills", "plan");
+    h.skill(".claude-work/plugins/cache/m/kit/1.0.0/skills", "plan");
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: app,
+      managedSettings: h.path("none.json"),
+    });
+    const row = (scope: "cloud" | "plugins" | "loaded", name: string): ScopeRow => {
+      const found = rowsIn(inv, "claude", "skill", scope, app, NOW).find((r) => r.name === name);
+      if (!found) throw new Error(`no ${name} row`);
+      return found;
+    };
+    return { h, inv, app, row };
+  }
+
+  it("reads a Cloud skill's row per account, and says which accounts have it", async () => {
+    const { inv, app, row } = await shared();
+    const pdf = row("cloud", "pdf");
+    expect(statesByAccount(inv, pdf, app)?.map((a) => [a.profile, a.state.value])).toEqual([
+      ["claude:default", "on"],
+      ["claude:work", "on"],
+    ]);
+    expect(tagsOf(inv, pdf, app, NOW)).toEqual([]);
+    const lines = detailsOf(inv, pdf, app, NOW);
+    expect(lines[0]).toEqual({ text: "CLOUD › pdf" });
+    const loadedAt = lines.findIndex((l) => l.label === "Loaded");
+    expect(lines.slice(loadedAt, loadedAt + 2)).toEqual([
+      { label: "Loaded", text: "on in 2 accounts, every project" },
+      { label: "", text: "default, work" },
+    ]);
+    const fileAt = lines.findIndex((l) => l.label === "File");
+    expect(lines[fileAt + 1]).toEqual({ label: "", text: "and 1 more copy", tone: "muted" });
+    // The row's own copies are not "also" anywhere: only the global pdf is.
+    // A Cloud copy is never hashed, so whether the two say the same is not known.
+    expect(lines.filter((l) => l.label === "Also in").map((l) => l.text)).toEqual(["Claude › Global"]);
+  });
+
+  it("gives a Cloud skill's row its key and every account's copy in JSON", async () => {
+    const { inv, app, row } = await shared();
+    const pdf = row("cloud", "pdf");
+    const item = jsonItem(inv, pdf, app, NOW);
+    expect(Object.keys(item)).toEqual([
+      "id",
+      "kind",
+      "tool",
+      "name",
+      "scope",
+      "from",
+      "project",
+      "accounts",
+      "state",
+      "stateByAccount",
+      "usage",
+      "tags",
+      "file",
+      "copies",
+      "description",
+      "alsoIn",
+    ]);
+    expect(item).toMatchObject({
+      id: "skill:claude:synced:-:pdf",
+      scope: "cloud",
+      accounts: ["claude:default", "claude:work"],
+      stateByAccount: { "claude:default": "on", "claude:work": "on" },
+      copies: pdf.items.map((i) => ({ id: i.id, account: i.location.profile, file: i.location.file })),
+      file: pdf.items[0]?.location.file,
+    });
+    expect(item.alsoIn).toEqual([{ tool: "claude", scope: "global", project: null, sameContent: null }]);
+  });
+
+  it("shows a plugin installed in two accounts as one, with what its installs bring merged", async () => {
+    const { inv, app, row } = await shared();
+    const kit = row("plugins", "kit@m");
+    expect(kit.items).toHaveLength(2);
+    expect(detailsOf(inv, kit, app, NOW)).toEqual([
+      { text: "PLUGINS › kit" },
+      { label: "Installed", text: "for you (every project)" },
+      { label: "Loaded", text: "on in 2 accounts, every project" },
+      { label: "", text: "default, work" },
+      { label: "Contains", text: "1 skill · 0 MCP servers · 0 hooks" },
+      { label: "", text: "plan" },
+    ]);
+    const item = jsonItem(inv, kit, app, NOW);
+    expect(item).toMatchObject({
+      id: "plugin:claude:user:-:kit@m",
+      plugin: "kit@m",
+      accounts: ["claude:default", "claude:work"],
+      copies: kit.items.map((i) => ({ id: i.id, accounts: i.location.accounts, file: i.location.file })),
+    });
+    // What it brings is one row too, in both accounts.
+    const plan = row("loaded", "kit:plan");
+    expect(plan.items).toHaveLength(2);
+    expect(statesByAccount(inv, plan, app)?.map((a) => a.profile)).toEqual(["claude:default", "claude:work"]);
+    expect(detailsOf(inv, plan, app, NOW).some((l) => l.label === "Also in")).toBe(false);
+  });
+});
