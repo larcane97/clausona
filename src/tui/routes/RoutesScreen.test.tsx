@@ -7,7 +7,8 @@ import { RoutesFileError } from "../../core/routes-store.js";
 import { stripAnsi } from "../../lib/cli-style.js";
 import type { QuotaSnapshot, Registry } from "../../types.js";
 import { DOWN, ENTER, ESC, type Instance, press, renderAt, type, waitForFrame } from "../test-drive.js";
-import { RoutesScreen, type RoutesScreenDeps } from "./RoutesScreen.js";
+import { RoutesScreen } from "./RoutesScreen.js";
+import type { RoutesScreenDeps } from "./routes-deps.js";
 
 vi.setConfig({ testTimeout: 15_000 });
 
@@ -70,10 +71,20 @@ const QUOTAS: Record<string, QuotaSnapshot> = {
 
 type Collect = RoutesScreenDeps["collectQuotas"];
 
-function setup(options: { file?: RoutesFile; collect?: Collect; readError?: Error; columns?: number } = {}) {
+function setup(
+  options: {
+    file?: RoutesFile;
+    collect?: Collect;
+    readError?: Error;
+    columns?: number;
+    /** profiles.json as `loadRegistry` reads it, and why it cannot be used when it reads as none. */
+    registry?: { loads: Registry | null; problem: string | null };
+  } = {},
+) {
   let current: RoutesFile = structuredClone(options.file ?? FILE);
   const deps = {
-    loadRegistry: vi.fn(async () => REGISTRY),
+    loadRegistry: vi.fn(async () => (options.registry ? options.registry.loads : REGISTRY)),
+    registryProblem: vi.fn(async (): Promise<string | null> => options.registry?.problem ?? null),
     readRoutes: vi.fn(async () => {
       if (options.readError) throw options.readError;
       return structuredClone(current);
@@ -91,7 +102,16 @@ function setup(options: { file?: RoutesFile; collect?: Collect; readError?: Erro
   const onExit = vi.fn();
   const tree = <RoutesScreen deps={deps} onExit={onExit} />;
   const instance: Instance = options.columns ? renderAt(tree, options.columns) : render(tree);
-  return { deps, onExit, instance, file: () => current };
+  return {
+    deps,
+    onExit,
+    instance,
+    file: () => current,
+    /** routes.json changed by another terminal. */
+    replace: (file: RoutesFile) => {
+      current = structuredClone(file);
+    },
+  };
 }
 
 const text = (instance: Instance) => stripAnsi(instance.lastFrame() ?? "");
@@ -425,5 +445,81 @@ describe("RoutesScreen", () => {
     expect(options?.refresh).not.toBe(true);
     const frame = await until(instance, (f) => /claude:side\s+88%\s+40%/.test(f));
     expect(frame).toContain("Now: 3 of 5 accounts under 80% · next claude:team");
+  });
+
+  // I1: profiles.json that cannot be read loads as no registry at all.
+  it("shows why profiles.json cannot be used, and answers only esc", async () => {
+    const problem =
+      "~/.clausona/profiles.json could not be read: it is not valid JSON. Fix it by hand, or move it aside and run 'clausona init' to set clausona up again.";
+    const { instance, deps, onExit } = setup({ registry: { loads: null, problem } });
+    const frame = await until(instance, (f) => f.includes("could not be read"));
+
+    expect(prose(lines(frame))).toContain(problem);
+    expect(frame).not.toContain("0/0");
+    for (const key of ["n", "e", "d", "y", "r", DOWN, "\r"]) await type(instance, key);
+    expect(text(instance)).toBe(frame);
+    expect(deps.collectQuotas).not.toHaveBeenCalled();
+    expect(deps.updateRoutes).not.toHaveBeenCalled();
+    expect(onExit).not.toHaveBeenCalled();
+
+    await type(instance, ESC);
+    await vi.waitFor(() => expect(onExit).toHaveBeenCalledTimes(1));
+  });
+
+  it("asks why profiles.json reads as nothing only when it does", async () => {
+    const { instance, deps } = setup();
+    await ranked(instance);
+
+    expect(deps.registryProblem).not.toHaveBeenCalled();
+  });
+
+  it("lands in the empty state when the only route is deleted", async () => {
+    const { instance, file } = setup({ file: { version: 1, routes: { solo: FILE.routes.solo } } });
+    await ranked(instance);
+
+    await press(instance, "d");
+    await press(instance, "y");
+    const frame = await until(instance, (f) => f.includes("No routes yet."));
+    expect(prose(panes(frame).detail)).toContain("Press n to create your first route.");
+    expect(file().routes).toEqual({});
+  });
+
+  it("says why a delete failed, and keeps the route", async () => {
+    const { instance, deps, file } = setup();
+    await ranked(instance);
+    deps.updateRoutes.mockRejectedValueOnce(new Error("Timed out waiting for another clausona process."));
+
+    await press(instance, "d");
+    await press(instance, "y");
+    const frame = await until(instance, (f) => f.includes("Timed out"));
+    expect(frame).toContain("✘ Timed out waiting for another clausona process.");
+    expect(panes(frame).list).toHaveLength(3);
+    expect(Object.keys(file().routes)).toHaveLength(3);
+  });
+
+  // M4: the form found routes.json changed and reloaded its route; the list behind it must too.
+  it("shows routes.json as it is now after a form that found it changed is left", async () => {
+    const { instance, deps, replace } = setup();
+    await ranked(instance);
+    await press(instance, DOWN);
+    await press(instance, "e");
+    await until(instance, (f) => f.includes("Edit solo"));
+    // The form has read routes.json for its save to compare with.
+    await vi.waitFor(() => expect(deps.readRoutesText).toHaveBeenCalledTimes(1));
+    replace({ ...FILE, routes: { ...FILE.routes, other: { tool: "codex" } } });
+
+    await type(instance, ENTER);
+    await until(instance, (f) => f.includes("changed since"));
+    await type(instance, ESC);
+
+    const frame = await until(instance, (f) => !f.includes("Edit solo") && /other/.test(f));
+    expect(panes(frame).list.map((line) => line.split(/\s+/).filter((word) => word !== "▸")[0])).toEqual([
+      "main",
+      "other",
+      "solo",
+      "wide",
+    ]);
+    // Still on the route the form was opened on.
+    expect(panes(frame).detail.find(Boolean)).toBe("solo");
   });
 });

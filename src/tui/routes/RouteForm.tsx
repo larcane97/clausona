@@ -27,7 +27,6 @@ import {
   Radio,
   SubLabel,
 } from "./RouteFormRows.js";
-import type { RoutesScreenDeps } from "./RoutesScreen.js";
 import {
   accountsFor,
   type FormAccount,
@@ -40,6 +39,7 @@ import {
   splitList,
   TEXT_KEYS,
 } from "./route-form-state.js";
+import { errorText, type RoutesScreenDeps } from "./routes-deps.js";
 
 /**
  * The Routes screen's form: a new route (`n`) or the selected one (`e`), with everything the CLI
@@ -88,14 +88,28 @@ const STRATEGY_TEXT: Record<Strategy, string> = {
   expiring: "uses weekly limits that reset within 24h first",
 };
 
-const HINTS = [
+type Hint = { keys: string; action: string };
+
+/**
+ * The keys of the focused field, before the ones every field takes: all of them at once did not
+ * fit 80 columns, and the second line began with a separator. The fallback leaves out `↑↓ move`,
+ * the one its `▸` and the accounts' hints make plain, so the set fits too.
+ */
+const FIELD_HINTS: Partial<Record<FormField, Hint[]>> = {
+  tool: [{ keys: "←→", action: "choose" }],
+  accounts: [
+    { keys: "↑↓", action: "move" },
+    { keys: "space", action: "toggle" },
+  ],
+  strategy: [{ keys: "←→", action: "choose" }],
+  fallback: [
+    { keys: "a", action: "add" },
+    { keys: "x", action: "remove" },
+    { keys: "[ ]", action: "reorder" },
+  ],
+};
+const EVERY_FIELD_HINTS: Hint[] = [
   { keys: "tab", action: "next field" },
-  { keys: "↑↓", action: "move" },
-  { keys: "space", action: "toggle" },
-  { keys: "←→", action: "choose" },
-  { keys: "a", action: "add fallback" },
-  { keys: "x", action: "remove" },
-  { keys: "[ ]", action: "reorder" },
   { keys: "enter", action: "save" },
   { keys: "esc", action: "cancel" },
 ];
@@ -108,8 +122,6 @@ const CONFIRM_HINTS = [
   { keys: "y", action: "discard" },
   { keys: "n/esc", action: "keep editing" },
 ];
-
-const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
  * Whether a field's value is drawn as the mask: what the save would refuse as a key, asked as the
@@ -195,9 +207,26 @@ export function RouteForm(props: RouteFormProps) {
   const dispatch = (action: FormAction) => setState((current) => reduceForm(current, action, accounts));
   const showErrors = (errors: Errors) => setState((current) => ({ ...current, errors }));
 
+  /**
+   * routes.json as the form opened on it. If that read failed it is read once more, here, and
+   * becomes what later saves compare with: a failed read at open no longer fails every save. A
+   * change made before this read is then not seen by the compare, but an edited route is still
+   * checked under the lock below.
+   */
+  async function openedText(): Promise<string | null | undefined> {
+    try {
+      return await base.current;
+    } catch {
+      const read = deps.readRoutesText();
+      base.current = read;
+      return read;
+    }
+  }
+
   /** Writes the route, unless routes.json is not what the form opened on. */
   async function write(name: string, spec: RouteSpec): Promise<Outcome> {
-    const [opened, current] = await Promise.all([base.current, deps.readRoutesText()]);
+    const opened = await openedText();
+    const current = await deps.readRoutesText();
     if (current !== opened) return "changed";
     let outcome: Outcome = "saved";
     await deps.updateRoutes((file) => {
@@ -376,7 +405,13 @@ export function RouteForm(props: RouteFormProps) {
       title="Routes"
       subtitle={original === undefined ? "New route" : `Edit ${original}`}
       footer={asking ? "Discard changes? (y/N)" : saving ? "Saving…" : undefined}
-      hints={asking ? CONFIRM_HINTS : picking !== null ? PICKER_HINTS : HINTS}
+      hints={
+        asking
+          ? CONFIRM_HINTS
+          : picking !== null
+            ? PICKER_HINTS
+            : [...(FIELD_HINTS[state.focus] ?? []), ...EVERY_FIELD_HINTS]
+      }
     >
       <Box flexDirection="column" borderStyle="round" borderColor={color.dim} paddingX={1}>
         <Line {...line("name", "Name")}>{textField("name")}</Line>

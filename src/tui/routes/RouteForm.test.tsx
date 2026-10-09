@@ -8,7 +8,7 @@ import type { QuotaSnapshot, Registry } from "../../types.js";
 import { DOWN, ENTER, ESC, focusedOn, type Instance, press, renderAt, type, waitForFrame } from "../test-drive.js";
 import { windowsOnScreen } from "../test-frames.js";
 import { formAccounts, RouteForm } from "./RouteForm.js";
-import type { RoutesScreenDeps } from "./RoutesScreen.js";
+import type { RoutesScreenDeps } from "./routes-deps.js";
 
 vi.setConfig({ testTimeout: 15_000 });
 
@@ -89,10 +89,22 @@ function memoryDisk(initial: RoutesFile | null) {
   return disk;
 }
 
-function setup(options: { edit?: string; spec?: RouteSpec; file?: RoutesFile | null; columns?: number } = {}) {
+type Deps = RoutesScreenDeps & { readRoutesText: ReturnType<typeof vi.fn<RoutesScreenDeps["readRoutesText"]>> };
+
+function setup(
+  options: {
+    edit?: string;
+    spec?: RouteSpec;
+    file?: RoutesFile | null;
+    columns?: number;
+    /** Runs before the form is drawn, which is when it reads routes.json. */
+    prepare?: (deps: Deps) => void;
+  } = {},
+) {
   const disk = memoryDisk(options.file === undefined ? FILE : options.file);
   const deps = {
     loadRegistry: vi.fn(async () => REGISTRY),
+    registryProblem: vi.fn(async () => null),
     readRoutes: vi.fn(async () => disk.file()),
     updateRoutes: vi.fn<RoutesScreenDeps["updateRoutes"]>(async (update) => {
       const current = disk.file();
@@ -106,8 +118,9 @@ function setup(options: { edit?: string; spec?: RouteSpec; file?: RoutesFile | n
     collectQuotas: vi.fn<RoutesScreenDeps["collectQuotas"]>(async () => QUOTAS),
     readPicks: vi.fn(async () => ({})),
     clock: () => NOW,
-    readRoutesText: vi.fn(async () => disk.text),
+    readRoutesText: vi.fn<RoutesScreenDeps["readRoutesText"]>(async () => disk.text),
   } satisfies RoutesScreenDeps;
+  options.prepare?.(deps);
   const onDone = vi.fn();
   const name = options.edit;
   const tree = (
@@ -174,6 +187,18 @@ async function save(instance: Instance) {
 
 const routes = (disk: ReturnType<typeof memoryDisk>) => disk.file().routes;
 
+const TAIL = "tab next field │ enter save │ esc cancel";
+
+/** What is under the footer's rule: the question, if one is asked, and the hints. */
+function hintLines(frame: string): string[] {
+  const all = lines(frame);
+  const rule = all.length - 1 - [...all].reverse().findIndex((line) => /^\s*─{10,}/.test(line));
+  return all
+    .slice(rule + 1)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 describe("RouteForm", () => {
   it("creates a route with the defaults from a name and enter", async () => {
     const { instance, deps, onDone, disk } = setup();
@@ -213,19 +238,35 @@ describe("RouteForm", () => {
     expect(row(frame, "reserve up to")).toMatch(/reserve up to\s+\[95\]%$/);
     expect(row(frame, "Fallback")).toMatch(/Fallback\s+\(\+ add\)$/);
     expect(frame).toContain("Now: 3 of 4 accounts under 80% · next claude:team");
-    for (const hint of [
-      "tab next field",
-      "↑↓ move",
-      "space toggle",
-      "←→ choose",
-      "a add fallback",
-      "x remove",
-      "[ ] reorder",
-      "enter save",
-      "esc cancel",
-    ]) {
-      expect(frame).toContain(hint);
+    expect(hintLines(frame)).toEqual([TAIL]);
+  });
+
+  // The hints follow the focus, so each set fits on one line where all of them did not.
+  it("shows the keys of the focused field, on one line at 80 columns", async () => {
+    const { instance, deps } = setup({ edit: "solo", columns: 80 });
+    await opened(instance, deps);
+    const expected: Array<[string, string]> = [
+      ["Name", TAIL],
+      ["Tool", `←→ choose │ ${TAIL}`],
+      ["Accounts", `↑↓ move │ space toggle │ ${TAIL}`],
+      ["from", TAIL],
+      ["exclude ", TAIL],
+      ["Strategy", `←→ choose │ ${TAIL}`],
+      ["skip at", TAIL],
+      ["reserve up to", TAIL],
+      ["Fallback", `a add │ x remove │ [ ] reorder │ ${TAIL}`],
+    ];
+    for (const [label, hints] of expected) {
+      await tabTo(instance, label);
+      expect(hintLines(text(instance)), label).toEqual([hints]);
     }
+
+    await press(instance, "a");
+    expect(hintLines(text(instance))).toEqual(["↑↓ move │ enter add │ esc close"]);
+    await press(instance, ESC);
+    await press(instance, "x");
+    await press(instance, ESC);
+    expect(hintLines(text(instance))).toEqual(["Discard changes? (y/N)", "y discard │ n/esc keep editing"]);
   });
 
   it("moves the focus with tab and back with shift+tab", async () => {
@@ -397,8 +438,41 @@ describe("RouteForm", () => {
     await save(instance);
 
     await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith("solo-2"));
+    // One write under one lock: the old key goes and the new one comes in the same update.
+    expect(deps.updateRoutes).toHaveBeenCalledTimes(1);
     expect(Object.keys(routes(disk))).toEqual(["main", "solo-2"]);
     expect(routes(disk)["solo-2"]).toEqual(FILE.routes.solo);
+  });
+
+  it("reads routes.json once more at save when the read at open failed, and saves", async () => {
+    const { instance, deps, onDone, disk } = setup({
+      prepare: (deps) => deps.readRoutesText.mockRejectedValueOnce(new Error("EACCES: permission denied")),
+    });
+    await opened(instance, deps);
+
+    await press(instance, "daily");
+    await save(instance);
+
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith("daily"));
+    expect(routes(disk).daily).toBeDefined();
+  });
+
+  it("says why a write failed, keeps the inputs, and saves the next time", async () => {
+    const { instance, deps, onDone, disk } = setup();
+    await opened(instance, deps);
+    deps.updateRoutes.mockRejectedValueOnce(new Error("Timed out waiting for another clausona process."));
+
+    await press(instance, "daily");
+    await save(instance);
+
+    const frame = await until(instance, (f) => f.includes("Timed out"));
+    expect(frame).toContain("✘ Timed out waiting for another clausona process.");
+    expect(row(frame, "Name")).toMatch(/Name\s+daily$/);
+    expect(routes(disk).daily).toBeUndefined();
+    expect(onDone).not.toHaveBeenCalled();
+
+    await save(instance);
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith("daily"));
   });
 
   it("refuses to rename a route onto another route's name", async () => {

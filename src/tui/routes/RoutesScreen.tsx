@@ -1,26 +1,19 @@
 import { Box, type Key, Text, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { collectQuotas, type QuotaTarget } from "../../core/quota-store.js";
+import type { QuotaTarget } from "../../core/quota-store.js";
 import { DEFAULT_MAX_USAGE, type RouteSpec, type RoutesFile, withDefaults } from "../../core/route-config.js";
-import {
-  RoutesFileError,
-  readPicks,
-  readRoutes,
-  readRoutesText,
-  routesPaths,
-  updateRoutes,
-} from "../../core/routes-store.js";
+import { RoutesFileError } from "../../core/routes-store.js";
 import { type Ranking, rankRoute } from "../../core/routing.js";
 import { freeNow } from "../../lib/route-render.js";
 import { membersOf, quotaTargets } from "../../lib/route-service.js";
-import { loadRegistry } from "../../lib/service.js";
 import type { QuotaSnapshot, Registry } from "../../types.js";
 import { Chrome } from "../components/Chrome.js";
 import { color, symbol } from "../theme.js";
 import { useWidth } from "../use-width.js";
 import { type Entry, GAP, MARK, RouteDetail } from "./RouteDetail.js";
 import { formAccounts, RouteForm } from "./RouteForm.js";
+import { defaultRoutesScreenDeps, errorText, type RoutesScreenDeps } from "./routes-deps.js";
 
 /**
  * The dashboard's Routes screen: every route, and the one selected with its members ranked as
@@ -28,31 +21,6 @@ import { formAccounts, RouteForm } from "./RouteForm.js";
  * and writes only when a route is removed, or saved from its form (RouteForm.tsx); a pick is
  * never recorded here.
  */
-
-/** What the screen reaches outside itself, injectable for tests. */
-export type RoutesScreenDeps = {
-  loadRegistry: () => Promise<Registry | null>;
-  readRoutes: () => Promise<RoutesFile>;
-  updateRoutes: (update: (file: RoutesFile) => RoutesFile | null) => Promise<RoutesFile>;
-  collectQuotas: (targets: QuotaTarget[], options?: { refresh?: boolean }) => Promise<Record<string, QuotaSnapshot>>;
-  readPicks: () => Promise<Record<string, string>>;
-  clock: () => number;
-  /** routes.json as it is on disk, or null for none: the form saves only over the text it opened on. */
-  readRoutesText: () => Promise<string | null>;
-};
-
-export function defaultRoutesScreenDeps(): RoutesScreenDeps {
-  const paths = routesPaths();
-  return {
-    loadRegistry,
-    readRoutes: () => readRoutes(paths),
-    updateRoutes: (update) => updateRoutes(update, paths),
-    collectQuotas: (targets, options) => collectQuotas(targets, { refresh: options?.refresh }),
-    readPicks: () => readPicks(paths),
-    clock: () => Date.now(),
-    readRoutesText: () => readRoutesText(paths),
-  };
-}
 
 /** From this many terminal columns the detail sits beside the list; below, under it. */
 const WIDE_AT = 100;
@@ -85,8 +53,6 @@ type FormOpen = { mode: "new" } | { mode: "edit"; name: string; spec: RouteSpec 
 
 /** Without profiles.json the form has no accounts to offer, and every pattern names nobody. */
 const NO_PROFILES: Registry = { version: 2, primarySources: {}, activeProfiles: {}, profiles: {} };
-
-const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** Every route, by name, ranked on `reading`; with none yet, on nothing, which lists the members only. */
 function rankAll(file: RoutesFile, registry: Registry | null, reading: Reading | null, now: number): Entry[] {
@@ -176,7 +142,14 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
     void (async () => {
       try {
         const [file, registry] = await Promise.all([io.readRoutes(), io.loadRegistry()]);
+        // A profiles.json that cannot be read loads as none at all, which listed every route with
+        // no accounts. None that is not there is clausona not set up, which the App sends to init.
+        const problem = registry === null ? await io.registryProblem() : null;
         if (!alive.current) return;
+        if (problem) {
+          setLoaded({ kind: "broken", error: new Error(problem) });
+          return;
+        }
         // Painted at once; the quota follows.
         setLoaded({ kind: "ready", file, registry });
         await rank(file, registry, false);
@@ -219,7 +192,9 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
     if (loaded.kind !== "ready") return;
     setForm(open);
     if (!loaded.registry) return;
-    // One cached read for the accounts the screen has not read: no route takes them yet.
+    // The form offers every subscription account, so the ones no route takes are read too: from
+    // the quota cache while it is fresh, else fetched, which may renew a lapsed sign-in as the
+    // dashboard's own read does (collectQuotas' rules, never a forced refresh).
     const read = new Set([
       ...targetsOf(loaded.file, loaded.registry).map((target) => target.id),
       ...Object.keys(extra),
@@ -231,16 +206,22 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
     });
   }
 
-  /** Back to the list; after a save, routes.json read again and the saved route selected. */
+  /**
+   * Back to the list, with routes.json read again whichever way the form was left: it may have
+   * saved, or found the file changed by another terminal and reloaded. The saved route is
+   * selected, else the one that was.
+   */
   async function closeForm(saved: string | null) {
     setForm(null);
-    if (saved === null || loaded.kind !== "ready") return;
+    if (loaded.kind !== "ready") return;
     const { registry } = loaded;
+    const keep = saved ?? selected?.name;
     try {
       const file = await io.readRoutes();
       if (!alive.current) return;
+      if (saved === null && JSON.stringify(file) === JSON.stringify(loaded.file)) return;
       setLoaded({ kind: "ready", file, registry });
-      setCursor(Math.max(0, Object.keys(file.routes).sort().indexOf(saved)));
+      setCursor(Math.max(0, keep === undefined ? 0 : Object.keys(file.routes).sort().indexOf(keep)));
       await rank(file, registry, false);
     } catch (error) {
       if (alive.current) setLoaded({ kind: "broken", error });

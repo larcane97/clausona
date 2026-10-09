@@ -6,6 +6,7 @@ import { freeNow } from "../../lib/route-render.js";
 import type { QuotaSnapshot } from "../../types.js";
 import { QuotaCell } from "../components/QuotaCell.js";
 import { color, symbol } from "../theme.js";
+import { GAP, MARK } from "./RouteDetail.js";
 import { FORM_FIELDS, type FormAccount, type FormField, type RouteFormState } from "./route-form-state.js";
 
 /**
@@ -17,9 +18,6 @@ import { FORM_FIELDS, type FormAccount, type FormField, type RouteFormState } fr
 
 const CURSOR = 2;
 const LABEL = 11;
-/** A row's mark (`▸`) and the space after it. */
-const MARK = 2;
-const GAP = 2;
 /** A quota cell's percentage, as the spec's form shows it: no gauge, no reset. */
 const QUOTA = 4;
 
