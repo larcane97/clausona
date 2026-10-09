@@ -16,7 +16,7 @@
   <meta property="og:url" content="https://larcane97.github.io/clausona/ko/parallel-agents/">
   <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
   <meta property="article:published_time" content="2026-10-08">
-  <meta property="article:modified_time" content="2026-10-09">
+  <meta property="article:modified_time" content="2026-10-10">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="../../favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -30,7 +30,7 @@
     "headline": "Claude Code 에이전트를 여러 계정과 모델로 병렬 실행하기",
     "description": "서브에이전트 대신 에이전트마다 독립된 Claude Code 세션을 띄우고, 각각 다른 계정이나 DeepSeek 같은 API 모델에 맡기는 방법. 어느 터미널에서든 되고, Superset, herdr, Orca에서는 조율 플러그인이 배정과 검증을 맡습니다.",
     "datePublished": "2026-10-08",
-    "dateModified": "2026-10-09",
+    "dateModified": "2026-10-10",
     "inLanguage": "ko",
     "image": "https://larcane97.github.io/clausona/assets/superset-fleet.gif",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
@@ -101,7 +101,7 @@
       <nav class="crumbs" aria-label="현재 위치"><a href="../../">clausona</a> / <a href="../">가이드</a></nav>
       <h1>Claude Code 에이전트를 여러 계정과 모델로 병렬 실행하기</h1>
       <p class="lead">작업 하나를 다섯 갈래로 나눌 때 보통은 Claude Code(클로드 코드)의 서브에이전트를 씁니다. 부모 세션이 다섯 개를 한꺼번에 띄워 놓고, 각자 일을 마치면 돌려준 결과만 받아 보는 식이죠.</p>
-      <p class="updated"><time datetime="2026-10-09">2026년 10월 9일</time> 업데이트</p>
+      <p class="updated"><time datetime="2026-10-10">2026년 10월 10일</time> 업데이트</p>
       <p>그런데 서브에이전트는 일하는 과정이 보이지 않습니다. 다섯 개 중 하나만 골라 끼어들기도 어렵고요. 게다가 다섯 개가 모두 같은 계정을 씁니다.</p>
       <p>이 글에서는 에이전트마다 독립된 Claude Code 세션을 띄우는 방법을 다룹니다. 세션마다 지켜보다가 끼어들 수 있고, 각 세션을 정해 둔 계정이나 모델로 보낼 수 있습니다. 회사 계정과 두 번째 구독 계정은 물론, DeepSeek 같은 API 모델도 됩니다.</p>
 
@@ -148,9 +148,9 @@ claude plugin install superset-fleet@clausona   # herdr-fleet, orca-fleet도 같
       <p>어느 터미널이든 <code>clausona run claude:work</code>로 그 계정의 Claude Code 세션을 띄웁니다. 도구마다 다른 건 이 명령을 넣는 자리뿐이에요.</p>
       <p><strong>tmux</strong>에서는 새 창으로 띄우면 됩니다.</p>
 <pre data-copy><code>tmux new-window 'clausona run claude:work'</code></pre>
-      <p><a href="https://github.com/ogulcancelik/herdr">herdr</a>는 에이전트 창을 유지하고 창마다 상태를 보여 주는 터미널 런타임입니다. 창을 하나 열고 그 안에서 <code>clausona run claude:work</code>를 실행하면 됩니다. herdr에서는 <code>herdr-fleet</code> 플러그인이 조율을 맡아요. 자세한 내용은 <a href="../../guides/parallel-agents-in-herdr/" hreflang="en">herdr 가이드</a>(영문)에 있습니다.</p>
+      <p><a href="https://github.com/ogulcancelik/herdr">herdr</a>는 에이전트 창을 유지하고 창마다 상태를 보여 주는 터미널 런타임입니다. 창을 하나 열고 그 안에서 <code>clausona run claude:work</code>를 실행하면 됩니다. herdr에서는 <code>herdr-fleet</code> 플러그인이 조율을 맡아요. 자세한 내용은 <a href="../parallel-agents-in-herdr/">herdr 가이드</a>에 있습니다.</p>
       <p><a href="https://github.com/stablyai/orca">Orca</a>는 코딩 에이전트를 각자의 git worktree에서 나란히 돌리는 오픈소스 데스크톱 앱입니다. 어떤 CLI 에이전트든 실행할 수 있습니다. Orca 터미널에서 <code>clausona run claude:work</code>를 실행하면 그 계정으로 Claude Code가 뜹니다.</p>
-      <p>참고로 Orca에는 Claude와 Codex 계정을 바꾸는 자체 기능이 있습니다. Orca에서는 <code>orca-fleet</code> 플러그인이 조율을 맡고, 자세한 내용은 <a href="../../guides/parallel-agents-in-orca/" hreflang="en">Orca 가이드</a>(영문)에 있습니다.</p>
+      <p>참고로 Orca에는 Claude와 Codex 계정을 바꾸는 자체 기능이 있습니다. Orca에서는 <code>orca-fleet</code> 플러그인이 조율을 맡고, 자세한 내용은 <a href="../parallel-agents-in-orca/">Orca 가이드</a>에 있습니다.</p>
       <p><a href="https://superset.sh">Superset</a>에서는 커스텀 에이전트로 등록합니다. command에는 <code>command -v clausona</code>가 출력하는 전체 경로를 넣고, arguments는 <code>run claude:work -- --model claude-sonnet-5-5 --effort high --permission-mode acceptEdits --strict-mcp-config</code>처럼 둡니다. 자세한 순서는 <a href="#setup">조율 스킬 설정하기</a>에 있습니다.</p>
       <p>조율 플러그인은 그 위에 다음 일을 더합니다.</p>
       <ul>
