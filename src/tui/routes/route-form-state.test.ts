@@ -421,6 +421,16 @@ describe("formToSpec", () => {
     expect(Object.keys(bad.errors)).toEqual(["name"]);
   });
 
+  // An empty name is the form's first mistake (the CLI never has one), and "Invalid route name ''"
+  // read like a glitch.
+  it("asks for a name when there is none, rather than calling an empty one invalid", () => {
+    for (const name of ["", "   "]) {
+      const result = formToSpec(named(newForm(), name), ACCOUNTS);
+      expect(result.spec).toBeUndefined();
+      expect(result.errors).toEqual({ name: "Give the route a name." });
+    }
+  });
+
   it("refuses a key-shaped name without quoting it anywhere", () => {
     const key = keyShaped();
     const state = run(named(newForm(), key), { type: "text", field: "max", value: "nope" });

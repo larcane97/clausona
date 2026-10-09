@@ -79,6 +79,8 @@ export type FormAction =
 type ErrorKey = keyof RouteFormState["errors"];
 
 const PICK_ONE = "Pick at least one account.";
+/** An empty name, which checkRouteName would quote back as `Invalid route name ''`. */
+const NO_NAME = "Give the route a name.";
 
 /** The text fields, and the state key each one edits. */
 export const TEXT_KEYS = {
@@ -334,7 +336,7 @@ export function formToSpec(
   if (fallback.length > 0) spec.fallback = fallback;
 
   const errors: RouteFormState["errors"] = {};
-  const nameProblem = checkRouteName(name);
+  const nameProblem = name === "" ? NO_NAME : checkRouteName(name);
   if (nameProblem) errors.name = nameProblem;
   // An empty from list is not saved, and a route without one takes every account.
   if (from.length === 0) errors.accounts = PICK_ONE;
