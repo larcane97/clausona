@@ -83,6 +83,27 @@ export function cell(text: string, width: number): string {
 }
 
 /**
+ * `text` in lines of at most `width` characters, broken at spaces, and inside a word longer than
+ * a line: a command line or a URL is read in full, however long, where `cell` would cut it.
+ */
+export function wrapText(text: string, width: number): string[] {
+  const room = Math.max(1, width);
+  const lines: string[] = [];
+  let line = "";
+  for (const word of text.split(/ +/).filter(Boolean)) {
+    if (line !== "" && line.length + 1 + word.length <= room) {
+      line += ` ${word}`;
+      continue;
+    }
+    if (line !== "") lines.push(line);
+    let rest = word;
+    for (; rest.length > room; rest = rest.slice(room)) lines.push(rest.slice(0, room));
+    line = rest;
+  }
+  return line !== "" || lines.length === 0 ? [...lines, line] : lines;
+}
+
+/**
  * One column of a table drawn without separators: `text` cut to `width` less COLUMN_GAP, then
  * padded to `width`. A cut text then still has the gap before the next column, where `cell`
  * would run its ellipsis into it.
