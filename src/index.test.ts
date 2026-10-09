@@ -102,7 +102,7 @@ describe("reportError", () => {
   it("writes an ExitError's stdout alone, so stdout is the JSON and stderr stays empty", () => {
     const err = sink();
     const out = sink();
-    const json = JSON.stringify({ error: "ambiguous", candidates: [] });
+    const json = JSON.stringify({ version: 1, error: "ambiguous", candidates: [] });
     expect(reportError(new ExitError("2 skills are named 'eli5':", 2, json), err.stream, out.stream)).toBe(2);
     expect(out.chunks).toEqual([`${json}\n`]);
     expect(err.chunks).toEqual([]);

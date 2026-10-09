@@ -67,6 +67,7 @@ const ITEM_KEYS = [
   "alsoIn",
   "link",
   "summary",
+  "contains",
 ];
 
 const CANDIDATE_KEYS = ["id", "tool", "scope", "project", "account"];
@@ -141,8 +142,14 @@ function seed() {
   });
   h.codex("personal", ".codex");
   h.skill(".agents/skills", "eli5");
+  // The managed settings are the home's own, so the test never reads this machine's.
   const run = (command: ExtensionsCommand, args: string[]) =>
-    runExtensionsCommand(command, args, { homeDir: h.home, cwd: app, registry: h.registry });
+    runExtensionsCommand(command, args, {
+      homeDir: h.home,
+      cwd: app,
+      registry: h.registry,
+      managedSettings: h.path("managed-settings.json"),
+    });
   return { run };
 }
 
@@ -175,10 +182,13 @@ describe("docs/extensions.md", () => {
 
     const { run } = seed();
     const items: Record<string, unknown>[] = [];
+    // `all` has every place's rows but the plugins, which `plugins` lists.
     for (const command of COMMANDS) {
-      const out = JSON.parse(await run(command, ["ls", "--scope", "all", "--json"]));
-      expect(Object.keys(out)).toEqual(ENVELOPE_KEYS);
-      items.push(...out.items);
+      for (const scope of ["all", "plugins"]) {
+        const out = JSON.parse(await run(command, ["ls", "--scope", scope, "--json"]));
+        expect(Object.keys(out)).toEqual(ENVELOPE_KEYS);
+        items.push(...out.items);
+      }
     }
     // Each item writes some of the keys, in the documented order, and between them every key.
     for (const item of items) expect(inOrder(Object.keys(item), ITEM_KEYS), Object.keys(item).join(",")).toBe(true);
@@ -188,6 +198,7 @@ describe("docs/extensions.md", () => {
   it("documents what show --json adds, and the ambiguous error", async () => {
     const { run } = seed();
     const shown = JSON.parse(await run("skills", ["show", "eli5", "--tool", "claude", "--json"]));
+    expect(Object.keys(shown)[0]).toBe("version");
     expect(Object.keys(shown).at(-1)).toBe("details");
     for (const key of ["details", "label", "text", "tone"]) expect(DOC).toContain(`\`${key}\``);
 
@@ -197,9 +208,9 @@ describe("docs/extensions.md", () => {
     );
     if (!(error instanceof ExitError) || error.stdout === undefined) throw new Error("expected an ambiguous name");
     const body = JSON.parse(error.stdout);
-    expect(Object.keys(body)).toEqual(["error", "candidates"]);
+    expect(Object.keys(body)).toEqual(["version", "error", "candidates"]);
     expect(Object.keys(body.candidates[0])).toEqual(CANDIDATE_KEYS);
-    expect(DOC).toContain('"error": "ambiguous"');
+    expect(DOC).toContain('{\n  "version": 1,\n  "error": "ambiguous",');
     for (const key of ["candidates", ...CANDIDATE_KEYS]) expect(DOC).toContain(`\`${key}\``);
   });
 

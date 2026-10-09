@@ -46,6 +46,24 @@ describe("skills, mcp and hooks commands", () => {
     );
   });
 
+  it("spell out on the show page every scope ls takes", async () => {
+    const page = async (command: string, sub: string) => stripAnsi(await runCommand(command, [sub, "--help"]));
+    for (const command of ["skills", "mcp", "hooks"]) {
+      const values = (help: string) =>
+        (/--scope <scope>\s+([\s\S]*?)\n\s+--/.exec(help)?.[1] ?? "")
+          .replace("Look in this scope only, to pick one copy:", "")
+          .replace("(default)", "")
+          .split("|")
+          .map((value) => value.trim());
+      expect(values(await page(command, "show"))).toEqual(values(await page(command, "ls")));
+    }
+    expect(await page("skills", "show")).toContain(
+      "--scope <scope>   Look in this scope only, to pick one copy:\n" +
+        "                      loaded | project | global | cloud | plugins | builtin | other | unused\n" +
+        "                      | all",
+    );
+  });
+
   it("are in the main help", async () => {
     const help = stripAnsi(await runCommand("help", []));
     expect(help).toMatch(/skills ls\|show\s+Skills each project loads, by scope/);
