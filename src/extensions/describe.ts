@@ -99,14 +99,14 @@ function pluginName(item: Extension): string {
 
 /**
  * Where a row in Loaded here comes from: "Project", "Global", "Cloud", the `.mcp.json` of a
- * parent folder ("~/.mcp.json", "~/repos/.mcp.json"), the plugin's name, "Built in", "Managed".
+ * parent folder ("~/.mcp.json", "~/repos/.mcp.json"), the plugin's name, "Built-in", "Managed".
  */
 export function fromLabel(item: Extension, inv: Inventory, project: string | undefined): string {
   const scope = homeScope(item, project);
   if (scope === "plugins" || (scope === "other" && item.location.scope === "plugin")) return pluginName(item);
   if (scope === "parents") return tilde(item.location.file, inv.homeDir);
   if (scope === "other") return projectName(item.location.project ?? "", inv);
-  if (scope === "builtin") return "Built in";
+  if (scope === "builtin") return "Built-in";
   return SCOPE_LABEL[scope](item.location.tool);
 }
 
@@ -341,8 +341,8 @@ function sentence(scope: ScopeId, tool: ToolName, kind: ItemKind, inv: Inventory
       return `plugins that bring ${NOUN[kind]}, installed for you or for this project`;
     case "builtin":
       return tool === "claude"
-        ? "skills that come with Claude Code, named in your settings"
-        : "skills that come with Codex";
+        ? "skills that come with Claude Code · only the ones your settings name"
+        : "skills that come with Codex · in its skills/.system folder";
     case "managed":
       return "your organization's managed settings · apply in every project";
     case "other":

@@ -245,12 +245,12 @@ describe("skills ls", () => {
     expect(text).toMatch(/^SessionEnd\s+claude\s+Managed\s+When a session ends\s+audit$/m);
   });
 
-  it("lists Built into Claude Code: a skill your settings name that is on no disk", async () => {
+  it("lists Built-in: a Claude Code skill your settings name that is on no disk", async () => {
     const { h, app } = seed();
     h.write(".claude/settings.json", { skillOverrides: { "claude-api": "off" } });
     const text = await run(h, app, "skills", ["ls", "--scope", "builtin", "--tool", "claude"]);
-    expect(firstLine(text)).toMatch(/^1 skill · Built into Claude Code · project ~/);
-    expect(text).toMatch(/^claude-api\s+Built in\s+0\s+never\s+off$/m);
+    expect(firstLine(text)).toMatch(/^1 skill · Built-in · project ~/);
+    expect(text).toMatch(/^claude-api\s+Built-in\s+0\s+never\s+off$/m);
     const inv = await loadInventory({ homeDir: h.home, registry: h.registry, cwd: app });
     // In the scope list, after Plugins' place and before Other projects.
     expect(scopesFor(inv, "claude", "skill", app, NOW).map((s) => s.id)).toEqual([
@@ -262,7 +262,7 @@ describe("skills ls", () => {
       "unused",
     ]);
     expect(scopeSentence("builtin", "claude", "skill", inv, app)).toBe(
-      "BUILT INTO CLAUDE CODE — skills that come with Claude Code, named in your settings",
+      "BUILT-IN — skills that come with Claude Code · only the ones your settings name",
     );
   });
 

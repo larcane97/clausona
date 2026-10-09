@@ -33,7 +33,7 @@ export const SCOPE_LABEL: Record<ScopeId, (tool: ToolName) => string> = {
   global: () => "Global",
   cloud: () => "Cloud",
   plugins: () => "Plugins",
-  builtin: (tool) => (tool === "claude" ? "Built into Claude Code" : "Built into Codex"),
+  builtin: () => "Built-in",
   managed: () => "Managed",
   other: () => "Other projects",
   unused: () => "Not used in 90 days",

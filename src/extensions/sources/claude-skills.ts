@@ -141,7 +141,7 @@ function addOverrideOnlySkills(out: Collector): void {
         id: `skill:claude:builtin:-:${key}`,
         kind: "skill",
         name: key,
-        description: "Built in to Claude Code, or no longer installed",
+        description: "Comes with Claude Code, or no longer installed",
         location: { tool: "claude", scope: "builtin", file: overrides.file },
         usageKeys: [key],
       });

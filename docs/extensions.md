@@ -61,8 +61,7 @@ worked out from the others.
 | Global | `global` | every tool and kind | the user's own files, listed below, then `· loads in every project` |
 | Cloud | `cloud` | Claude skills | `skills on your claude.ai accounts, different per account` |
 | Plugins | `plugins` | Claude skills, MCP and hooks | `plugins that bring skills, installed for you or for this project` |
-| Built into Claude Code | `builtin` | Claude skills | `skills that come with Claude Code, named in your settings` |
-| Built into Codex | `builtin` | Codex skills | `skills that come with Codex` |
+| Built-in | `builtin` | Claude and Codex skills | Claude: `skills that come with Claude Code · only the ones your settings name`; Codex: `skills that come with Codex · in its skills/.system folder` |
 | Managed | `managed` | Claude MCP and hooks | `your organization's managed settings · apply in every project` |
 | Other projects | `other` | every tool and kind | `projects with skills of their own · they load there, not here` |
 | Not used in 90 days | `unused` | Claude skills | `not used in 90 days in any account, or never used and older than 14 days` |
@@ -89,10 +88,10 @@ Each tool and kind lists its scopes in this order:
 
 | Tool, kind | Scopes |
 |---|---|
-| Claude skills | Loaded here, Project, Global, Cloud, Plugins, Built into Claude Code, Other projects, Not used in 90 days |
+| Claude skills | Loaded here, Project, Global, Cloud, Plugins, Built-in, Other projects, Not used in 90 days |
 | Claude MCP | Loaded here, Project, Parent folders, Global, Plugins, Managed, Other projects |
 | Claude hooks | Loaded here, Project, Global, Plugins, Managed, Other projects |
-| Codex skills | Loaded here, Project, Global, Built into Codex, Other projects |
+| Codex skills | Loaded here, Project, Global, Built-in, Other projects |
 | Codex MCP | Loaded here, Project, Global, Other projects |
 | Codex hooks | Loaded here, Project, Global, Other projects |
 
@@ -112,10 +111,13 @@ Some scopes need a word more:
   another project is under Other projects. In JSON a plugin row has `contains`, the names of
   what it brings. What a plugin brings is in Loaded here while the plugin is on, and in `all`,
   with the plugin's name as WHERE.
-- Built into Claude Code: names in `skillOverrides` that match no skill on disk. clausona
-  cannot tell a built-in skill from one removed since, so it lists both here. Shown only when
-  there is one.
-- Built into Codex: the skills in the `skills/.system` folder of Codex's home.
+- Built-in: skills that come with the tool itself. You can turn them off, but not delete
+  them.
+  - Claude Code keeps its built-in skills (such as `claude-api`) inside the program, not
+    in files, so clausona lists only the names your `skillOverrides` mention and no skill on
+    disk answers to. It cannot tell a built-in skill from one removed since, so it lists
+    both. Shown only when there is one.
+  - Codex keeps them in the `skills/.system` folder of its home, which it fills itself.
 - Managed: the administrator's managed settings, `managed-settings.json` and the files in
   `managed-settings.d/`. In this version that means hooks: clausona reads no managed MCP file,
   so `mcp ls --scope managed` is always empty.
@@ -254,7 +256,7 @@ kit:plan       claude  kit                 0     never
 old-notes      claude  Global              0     never      unused
 pdf            claude  Cloud · 2 accounts  0     never
 pr-summary     claude  Global              3     4mo ago    unused
-skill-creator  codex   Built in            —     —
+skill-creator  codex   Built-in            —     —
 ```
 
 The columns:
@@ -264,7 +266,7 @@ The columns:
   `<Event> <matcher>`.
 - TOOL appears only when both tools are listed.
 - WHERE is where the row comes from: `Project`, `Global`, `Cloud`, the plugin's name, a
-  parent folder's `.mcp.json` such as `~/repos/.mcp.json`, `Built in`, `Managed`, or another
+  parent folder's `.mcp.json` such as `~/repos/.mcp.json`, `Built-in`, `Managed`, or another
   project's name. It adds ` · work` for one account's own skill, ` · 2 accounts` for Cloud
   copies, and ` · command` for a legacy command file.
 - USES and LAST USED (skills): the uses summed over accounts, and how long ago the
@@ -350,7 +352,7 @@ outside `mcp` and `--id` with `ls` are all bad usage, exit code 2.
 | `global` | Global | ✓ | ✓ | ✓ |
 | `cloud` | Cloud | ✓ | | |
 | `plugins` | Plugins | ✓ | ✓ | ✓ |
-| `builtin` | Built into Claude Code, Built into Codex | ✓ | | |
+| `builtin` | Built-in | ✓ | | |
 | `managed` | Managed | | ✓ | ✓ |
 | `other` | Other projects | ✓ | ✓ | ✓ |
 | `unused` | Not used in 90 days | ✓ | | |
@@ -376,8 +378,8 @@ plugins of one name from two marketplaces make that short name ambiguous.
 Without `--scope`, `show` looks in tiers. The first tier that has a match decides:
 
 1. Rows in Loaded here.
-2. If none match: rows in Project, Parent folders, Global, Cloud, Plugins, Built into Claude
-   Code or Built into Codex, and Managed, whether they load here or not. This tier also holds
+2. If none match: rows in Project, Parent folders, Global, Cloud, Plugins, Built-in and
+   Managed, whether they load here or not. This tier also holds
    what no scope lists, such as a skill of a plugin that is off.
 3. If none match: rows in Other projects.
 
@@ -513,7 +515,7 @@ apply; the others are always there, `null` when empty.
 | `tool` | string | `claude` or `codex`. |
 | `name` | string | The name `show` takes. |
 | `scope` | string | Where the row lives, seen from the project: `project`, `parents`, `global`, `cloud`, `plugins`, `builtin`, `managed` or `other`. Never `loaded` or `unused`, which are worked out. The field to read for where a row lives: its values are stable. |
-| `from` | string | Display text, the WHERE label: `Project`, `Global`, `Cloud`, a plugin's name, a parent folder's `.mcp.json`, another project's name, `Built in`, `Managed`. Its wording can change within version 1. |
+| `from` | string | Display text, the WHERE label: `Project`, `Global`, `Cloud`, a plugin's name, a parent folder's `.mcp.json`, another project's name, `Built-in`, `Managed`. Its wording can change within version 1. |
 | `project` | string or null | The project the row belongs to, or the folder of a parent `.mcp.json`. `null` for what no project owns. |
 | `plugin` | string | When set: the plugin, `<plugin>@<marketplace>`, for a plugin row and what a plugin brings. |
 | `accounts` | string[] | When set: the profile ids of the accounts that have the row, primary first. Set when the row is held, switched or hidden per account. |
