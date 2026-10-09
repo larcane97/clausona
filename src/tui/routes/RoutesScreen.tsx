@@ -5,7 +5,7 @@ import type { QuotaTarget } from "../../core/quota-store.js";
 import { type RouteSpec, type RoutesFile, withDefaults } from "../../core/route-config.js";
 import { RoutesFileError } from "../../core/routes-store.js";
 import { type Ranking, rankRoute } from "../../core/routing.js";
-import { freeNow, ROUTE_IS } from "../../lib/route-render.js";
+import { freeNow, nothingRead, ROUTE_IS } from "../../lib/route-render.js";
 import { membersOf, quotaTargets } from "../../lib/route-service.js";
 import type { QuotaSnapshot, Registry } from "../../types.js";
 import { Chrome } from "../components/Chrome.js";
@@ -364,10 +364,13 @@ function NoRoutes() {
   );
 }
 
-/** `<free>/<members>`, as `route list` counts them; `…` for free until the quota is read. */
+/**
+ * `<free>/<members>`, as `route list` counts them; `…` for free until the quota is read, and `—`
+ * when none of it could be (offline), which says nothing about who is free.
+ */
 function countText(ranking: Ranking, pending: boolean): string {
   const { free, members } = freeNow(ranking);
-  return `${pending ? "…" : free}/${members}`;
+  return `${pending ? "…" : nothingRead(ranking.rows) ? "—" : free}/${members}`;
 }
 
 function RouteList({ entries, index, pending }: { entries: Entry[]; index: number; pending: boolean }) {
@@ -381,7 +384,9 @@ function RouteList({ entries, index, pending }: { entries: Entry[]; index: numbe
     <Box ref={list} flexDirection="column">
       {entries.map((entry, i) => {
         const focused = i === index;
-        const nobody = !pending && freeNow(entry.ranking).free === 0;
+        // Muted, not a warning, when nothing was read: that is not nobody free.
+        const unread = pending || nothingRead(entry.ranking.rows);
+        const nobody = !unread && freeNow(entry.ranking).free === 0;
         return (
           <Box key={entry.name} flexDirection="row">
             <Box width={MARK} flexShrink={0}>
@@ -396,7 +401,7 @@ function RouteList({ entries, index, pending }: { entries: Entry[]; index: numbe
               <Text color={color.muted}>{entry.route.tool}</Text>
             </Box>
             <Box marginLeft={GAP} flexShrink={0}>
-              <Text color={pending ? color.muted : nobody ? color.warning : color.text}>
+              <Text color={unread ? color.muted : nobody ? color.warning : color.text}>
                 {counts[i].padStart(countWidth)}
               </Text>
             </Box>

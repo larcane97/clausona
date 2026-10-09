@@ -2,7 +2,7 @@ import { Box, Text } from "ink";
 import type { PropsWithChildren } from "react";
 
 import { type Ranking, usageOf } from "../../core/routing.js";
-import { freeNow, skipReason } from "../../lib/route-render.js";
+import { freeNow, nothingRead, skipReason } from "../../lib/route-render.js";
 import type { QuotaSnapshot } from "../../types.js";
 import { QuotaCell } from "../components/QuotaCell.js";
 import { color, symbol } from "../theme.js";
@@ -230,10 +230,16 @@ export function FallbackPicker({ ids, cursor }: { ids: string[]; cursor: number 
   );
 }
 
-/** Who the route would pick now, from the quota already read: what `csn route explain` would say. */
+/**
+ * Who the route would pick now, from the quota already read: what `clausona route explain` would
+ * say. Nothing read (offline) is said as such, as `route list` and the Routes screen say it.
+ */
 export function NowLine({ ranking }: { ranking: Ranking | null }) {
   if (!ranking) return <Text color={color.muted}>Now: —</Text>;
   const { outcome } = ranking;
+  if (outcome.kind !== "picked" && nothingRead(ranking.rows)) {
+    return <Text color={color.muted}>Now: no quota reading</Text>;
+  }
   if (outcome.kind !== "picked") return <Text color={color.warning}>Now: nobody can be picked</Text>;
   const { free, members } = freeNow(ranking);
   return (

@@ -449,7 +449,7 @@ const NOT_LOOKED_UP: ReadonlySet<SkipReason> = new Set(["not-registered", "api-n
  * Whether no quota could be read for any member (offline, say). Only rows whose quota was looked
  * up count: an unregistered name or an API profile has none to read.
  */
-function nothingRead(rows: Row[]): boolean {
+export function nothingRead(rows: Row[]): boolean {
   const looked = rows.filter((row) => !row.skip || !NOT_LOOKED_UP.has(row.skip));
   return looked.length > 0 && looked.every((row) => row.skip === "no-reading");
 }

@@ -273,6 +273,20 @@ describe("RouteForm", () => {
     expect(hintLines(text(instance))).toEqual(["Discard changes? (y/N)", "y discard │ n/esc keep editing"]);
   });
 
+  // As `clausona route list` and the screen say it: offline is not "nobody can be picked".
+  it("says there is no quota reading, not that nobody can be picked, when none was read", async () => {
+    const { instance, deps } = setup({ edit: "main", quotas: {} });
+    await opened(instance, deps);
+    expect(text(instance)).toContain("Now: no quota reading");
+    expect(text(instance)).not.toContain("nobody can be picked");
+
+    // Read, and everyone over the reserve: nobody can be picked.
+    const full = Object.fromEntries(Object.keys(QUOTAS).map((id) => [id, snap(99, 99)]));
+    const busy = setup({ edit: "main", quotas: full });
+    await opened(busy.instance, busy.deps);
+    expect(text(busy.instance)).toContain("Now: nobody can be picked");
+  });
+
   it("says why an account has no quota, as the Routes screen does, and excluded before that", async () => {
     const quotas: Record<string, QuotaSnapshot> = {
       ...QUOTAS,

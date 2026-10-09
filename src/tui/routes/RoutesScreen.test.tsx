@@ -291,15 +291,16 @@ describe("RoutesScreen", () => {
   });
 
   // Review Focus 2: offline, or nothing readable.
-  it("shows no quota reading on every member and nobody free when no quota can be read", async () => {
+  // Nothing read says nothing about who is free: a dash, as `clausona route list` prints, not 0.
+  it("shows no quota reading on every member and a dash for who is free when no quota can be read", async () => {
     const { instance } = setup({ collect: async () => ({}) });
     const frame = await until(instance, (f) => f.includes("no quota reading"));
     const { list, detail } = panes(frame);
 
     expect(list).toEqual([
-      expect.stringMatching(/^▸ main\s+claude\s+0\/4$/),
-      expect.stringMatching(/^solo\s+claude\s+0\/2$/),
-      expect.stringMatching(/^wide\s+all\s+0\/6$/),
+      expect.stringMatching(/^▸ main\s+claude\s+—\/4$/),
+      expect.stringMatching(/^solo\s+claude\s+—\/2$/),
+      expect.stringMatching(/^wide\s+all\s+—\/6$/),
     ]);
     for (const id of ["claude:team", "claude:work", "claude:side", "claude:old"]) {
       expect(row(detail, id)).toMatch(new RegExp(`^${id}\\s+no quota reading$`));
@@ -315,7 +316,7 @@ describe("RoutesScreen", () => {
     });
     const frame = await until(instance, (f) => f.includes("no quota reading"));
 
-    expect(panes(frame).list[0]).toMatch(/0\/4$/);
+    expect(panes(frame).list[0]).toMatch(/—\/4$/);
   });
 
   it("reads the quota again on r, refreshing it", async () => {
