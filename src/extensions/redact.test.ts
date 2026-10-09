@@ -236,6 +236,84 @@ describe("redactCommand on a token that is not key-shaped", () => {
   });
 });
 
+describe("redactCommand after a shell's command option", () => {
+  const HEX = "0123456789abcdef".repeat(2);
+
+  it("reads another program's -c, -C or /c argument as one value, so all of it stays hidden", () => {
+    const shown = [
+      [redactCommand(["srv", "-c", `AUTH_HEADER=Bearer ${HEX}`]), "srv -c AUTH_HEADER=<hidden>"],
+      [redactCommand(["make", "-C", `TOKEN=a ${HEX}`]), "make -C TOKEN=<hidden>"],
+      [redactCommand(["srv", "-c", `--api-key a ${HEX}`]), "srv -c --api-key <hidden>"],
+      [redactCommand(["tool", "/c", `TOKEN=a ${HEX}`]), "tool /c TOKEN=<hidden>"],
+    ];
+    for (const [actual, expected] of shown) {
+      expect(actual).toBe(expected);
+      expect(actual).not.toContain(HEX);
+    }
+  });
+
+  it("still reads a shell's command line word by word, its secret hidden and its command shown", () => {
+    const shown = [
+      [redactCommand(["bash", "-c", `API_KEY=${HEX} npx srv`]), "bash -c API_KEY=<hidden> npx srv"],
+      [redactCommand(["sh", "-euc", `API_KEY=${HEX} npx srv`]), "sh -euc API_KEY=<hidden> npx srv"],
+      [redactCommand(["/bin/zsh", "-lc", `npx srv --token ${HEX}`]), "/bin/zsh -lc npx srv --token <hidden>"],
+      [redactCommand(["env", "bash", "-c", `API_KEY=${HEX} npx srv`]), "env bash -c API_KEY=<hidden> npx srv"],
+      [
+        redactCommand(["docker", "exec", "ctr", "sh", "-c", `API_KEY=${HEX} run`]),
+        "docker exec ctr sh -c API_KEY=<hidden> run",
+      ],
+      [
+        redactCommand(["bash", "-e", "-o", "pipefail", "-c", `TOKEN=${HEX} run`]),
+        "bash -e -o pipefail -c TOKEN=<hidden> run",
+      ],
+      [redactCommand(["cmd", "/c", `set TOKEN=${HEX} && srv`]), "cmd /c set TOKEN=<hidden> && srv"],
+      [
+        redactCommand(["C:\\Windows\\System32\\CMD.EXE", "/K", `srv --token ${HEX}`]),
+        "C:\\Windows\\System32\\CMD.EXE /K srv --token <hidden>",
+      ],
+      [redactCommand(["pwsh", "-Command", `srv --api-key ${HEX} -v`]), "pwsh -Command srv --api-key <hidden> -v"],
+      [
+        redactCommand(["powershell.exe", "-c", `srv --api-key ${HEX} -v`]),
+        "powershell.exe -c srv --api-key <hidden> -v",
+      ],
+    ];
+    for (const [actual, expected] of shown) {
+      expect(actual).toBe(expected);
+      expect(actual).not.toContain(HEX);
+    }
+  });
+
+  it("matches a POSIX shell's -c with its case, as the shell does", () => {
+    // bash -C is noclobber, not a command line: its argument stays one value.
+    expect(redactCommand(["bash", "-C", `TOKEN=a ${HEX}`])).toBe("bash -C TOKEN=<hidden>");
+  });
+
+  it("hides a passphrase, and a cookie after -b or --cookie", () => {
+    const shown = [
+      [
+        redactCommand(["srv", "--passphrase", HEX, `KEY_PASSPHRASE=${HEX}`]),
+        "srv --passphrase <hidden> KEY_PASSPHRASE=<hidden>",
+      ],
+      [
+        redactCommand([
+          "curl",
+          "-b",
+          `session=${HEX}`,
+          "--cookie",
+          `sid=${HEX}`,
+          `--cookie=sid=${HEX}`,
+          "https://h.example",
+        ]),
+        "curl -b <hidden> --cookie <hidden> --cookie=<hidden> https://h.example",
+      ],
+    ];
+    for (const [actual, expected] of shown) {
+      expect(actual).toBe(expected);
+      expect(actual).not.toContain(HEX);
+    }
+  });
+});
+
 describe("mcpSummary", () => {
   it("shows transport, command and the names - never the values - of env and headers", () => {
     const summary = mcpSummary({

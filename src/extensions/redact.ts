@@ -4,13 +4,14 @@ import { isRecord } from "./read.js";
 
 /**
  * The words that mark a name as holding a secret: `GITHUB_TOKEN`, `--api-key`, `X-Auth-Token`,
- * `apiKey`, `client_secret`, `Authorization`, `GITHUB_PAT`.
+ * `apiKey`, `client_secret`, `Authorization`, `GITHUB_PAT`, `--passphrase`.
  */
 const SECRET_WORDS = [
   "key",
   "token",
   "secret",
   "password",
+  "passphrase",
   "passwd",
   "pwd",
   "auth",
@@ -79,6 +80,9 @@ const TOKEN_SCHEME = /^token$/i;
 /** curl's options for `user:password`, its own and the proxy's. Only these: `-k` takes no value. */
 const USER_FLAG = /^(-u|--user|-U|--proxy-user)$/;
 
+/** curl's option for the cookies to send, which carry a session as a password would. */
+const COOKIE_FLAG = /^(-b|--cookie)$/;
+
 /** `-ualice:pw`: the short option with the user attached, which no `=` or URL looks like. */
 const ATTACHED_USER = /^-[uU][^\s:=/-][^\s:=/]*:/;
 
@@ -88,8 +92,52 @@ const URL_RUN = /[a-z][a-z0-9+.-]*:\/\/[^\s"'`]+/gi;
 /** A command line's words, and whether each ends an argument: an MCP server's can hold several. */
 type Line = { words: string[]; ends: boolean[]; shown: string[] };
 
-/** A shell's option for a command line, `bash -c`, `sh -lc`, `cmd /c`: the next argument's words are separate. */
-const SHELL_COMMAND = /^(-[a-z]?c|\/c)$/i;
+/** A POSIX shell's option for a command line: `-c`, alone or ending a run of short options (`-lc`, `-euc`). */
+const POSIX_COMMAND = /^-[a-zA-Z]*c$/;
+
+/** Each shell, by program name, with the option whose value is a command line for it to run. */
+const SHELL_COMMAND = new Map<string, RegExp>([
+  ...["sh", "bash", "zsh", "dash", "ksh", "fish", "ash"].map((shell) => [shell, POSIX_COMMAND] as const),
+  ["cmd", /^\/[cCkK]$/],
+  // PowerShell's parameters ignore case.
+  ["powershell", /^-c(ommand)?$/i],
+  ["pwsh", /^-c(ommand)?$/i],
+]);
+
+/** A program's name from how a command line names it: `/bin/bash` and `C:\Windows\cmd.exe` are bash and cmd. */
+function programName(word: string): string {
+  return (word.split(/[\\/]/).pop() ?? "").toLowerCase().replace(/\.exe$/, "");
+}
+
+/** An option rather than a program: `-e`, `--`, or a cmd switch such as `/d` or `/e:on`. */
+function isOption(word: string): boolean {
+  return word.startsWith("-") || /^\/[a-z](:\S*)?$/i.test(word);
+}
+
+/**
+ * Whether `args[at]` is a shell's option for a command line, so the next argument's words are
+ * the shell's own words rather than one value. The shell is the program - `args[0]` - or the
+ * nearest word before the option that is no option itself, so `env bash -c` and
+ * `docker exec ctr sh -c` count too. After any other program's `-c`, `-C` or `/c` the argument
+ * stays one value, which hides all of a value that runs through it (`make -C "TOKEN=a b"`):
+ * a shell this does not know is over-hidden, never shown.
+ *
+ * Known limits, as the name rules have them anywhere: a password in free-form text - SQL's
+ * `psql -c "ALTER ROLE r PASSWORD 'x'"` - is no secret-named key or option and is shown, and so
+ * is a spaced value in a one-argument form body (`-d "user=bob&password=a b"` shows `b`).
+ */
+function isShellCommand(args: string[], at: number): boolean {
+  const option = args[at];
+  if (option === undefined || at < 1) return false;
+  let nearest: string | undefined;
+  for (let i = at - 1; i >= 0 && nearest === undefined; i--) {
+    const word = args[i] ?? "";
+    if (!isOption(word)) nearest = word;
+  }
+  return [args[0], nearest].some(
+    (program) => program !== undefined && SHELL_COMMAND.get(programName(program))?.test(option) === true,
+  );
+}
 
 /**
  * A command line as the inventory shows it, for reading, not running. Every argument is read
@@ -114,7 +162,7 @@ export function redactCommand(args: string[]): string {
   const line: Line = { words: [], ends: [], shown: [] };
   for (const [n, arg] of args.entries()) {
     const words = arg.split(/\s+/).filter(Boolean);
-    const commandLine = SHELL_COMMAND.test(args[n - 1] ?? "");
+    const commandLine = isShellCommand(args, n - 1);
     for (const [k, word] of words.entries()) {
       line.words.push(word);
       line.ends.push(commandLine || k === words.length - 1);
@@ -143,6 +191,7 @@ function redactAt(line: Line, i: number): number {
     (word.startsWith("-H") ? hideHeader(line, i, "-H", word.slice(2)) : undefined) ??
     (assigned === undefined ? undefined : hideHeader(line, i, `${name}=`, assigned)) ??
     (assigned !== undefined && USER_FLAG.test(name) ? hideUserinfo(line, i, `${name}=`, assigned) : undefined) ??
+    (assigned !== undefined && COOKIE_FLAG.test(name) ? hideValue(line, i, `${name}=`, "", assigned) : undefined) ??
     (ATTACHED_USER.test(word) ? hideUserinfo(line, i, word.slice(0, 2), word.slice(2)) : undefined);
   if (special !== undefined) return special;
   if (carriesCredentialToken(word)) {
@@ -157,7 +206,7 @@ function redactAt(line: Line, i: number): number {
     return hideFollowing(line, i, quote !== "" && !body.includes(quote) ? quote : "");
   const afterColon = (line.words[i - 1] ?? "").endsWith(":");
   const scheme = AUTH_SCHEME.test(body) || ENDING_SCHEME.test(word) || (afterColon && TOKEN_SCHEME.test(body));
-  if (isSecretFlag(body) || scheme) {
+  if (isSecretFlag(body) || COOKIE_FLAG.test(body) || scheme) {
     return hideWord(line, i + 1);
   }
   if (USER_FLAG.test(body)) return hideUserinfo(line, i + 1, "", line.words[i + 1] ?? "") ?? i;
@@ -203,13 +252,15 @@ function argEnd(line: Line, i: number): number {
  * index of the value's last word. `rest` is the value's text in that word after `quote`, the
  * quote it is in, if any: the value runs to the quote's closing - in this word or a later one,
  * or the end - and what follows that is shown, redacted. An unquoted value is the rest of the
- * word, with any closing quotes or brackets after it shown - or, when the word starts an
- * argument of several words, the rest of that argument.
+ * word, with any closing quotes or brackets after it shown - or, when the word is not the last
+ * of its argument, the rest of that argument.
  */
 function hideValue(line: Line, at: number, prefix: string, quote: string, rest: string): number {
   if (quote === "") {
-    // An argument that starts with the value and goes on is all value: `API_KEY=a b`, `alice:a b`.
-    if (line.ends[at - 1] !== false && !line.ends[at]) {
+    // An argument that goes on past the value's word is value to its end: `API_KEY=a b`,
+    // `alice:a b`, and `--api-key a b` as one argument. It is one value to the program, whatever
+    // its spaces; a shell's command line, whose words are the shell's own, ends at each word.
+    if (!line.ends[at]) {
       line.shown.push(`${prefix}${HIDDEN}`);
       return argEnd(line, at);
     }
@@ -228,15 +279,11 @@ function hideValue(line: Line, at: number, prefix: string, quote: string, rest: 
   return last;
 }
 
-/** Hides `words[at]`, a secret on its own: what follows `--api-key` or `Bearer`. All of an argument that it starts. */
+/** Hides `words[at]`, a secret on its own: what follows `--api-key` or `Bearer`, and the rest of its argument. */
 function hideWord(line: Line, at: number): number {
   const word = line.words[at] ?? "";
   const quote = leadingQuote(word);
   if (quote !== "") return hideValue(line, at, quote, quote, word.slice(1));
-  if (line.ends[at - 1] !== false && !line.ends[at]) {
-    line.shown.push(HIDDEN);
-    return argEnd(line, at);
-  }
   return hideValue(line, at, "", "", word);
 }
 
