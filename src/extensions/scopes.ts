@@ -79,7 +79,7 @@ export function scopesFor(
     const count =
       id === "other"
         ? otherProjects(inv, tool, kind, project).length
-        : itemsIn(inv, tool, kind, id, project, now).length;
+        : rowsIn(inv, tool, kind, id, project, now).length;
     if (count > 0 || ALWAYS.has(id)) entries.push({ id, label: SCOPE_LABEL[id](tool), count });
   }
   return entries;
@@ -142,6 +142,71 @@ export function itemsIn(
   }
 }
 
+/**
+ * A table row: one item, or - for a Claude MCP server defined in several accounts' .claude.json
+ * (scope account, or local for one project) - every account's copy under one name.
+ */
+export type ScopeRow = { key: string; name: string; items: Extension[] };
+
+/**
+ * A Claude MCP server one account's `.claude.json` holds: a user-scope one, or a local one for
+ * one project. Each account's copy of a name is its own item; a row puts them back together.
+ */
+export function isAccountServer(item: Extension): boolean {
+  const loc = item.location;
+  return (
+    item.kind === "mcp" &&
+    loc.tool === "claude" &&
+    loc.profile !== undefined &&
+    (loc.scope === "account" || loc.scope === "local")
+  );
+}
+
+/**
+ * A row's key: an account server's is `mcp:claude:<homeScope>:<project or ->:<name>` - the same
+ * with one account's copy as with many, so it does not change as accounts add the server.
+ */
+function rowKey(item: Extension, project: string | undefined): string {
+  if (!isAccountServer(item)) return item.id;
+  const own = item.location.scope === "local" ? item.location.project : undefined;
+  return `mcp:claude:${homeScope(item, project)}:${own === undefined ? "-" : pathKey(own)}:${item.name}`;
+}
+
+/**
+ * itemsIn as rows. A row of account servers holds every account's copy, primary first, and is
+ * listed when any copy is: in Loaded here, one account loading it is enough. Every other row is
+ * one item, keyed by its id.
+ */
+export function rowsIn(
+  inv: Inventory,
+  tool: ToolName,
+  kind: ItemKind,
+  scope: ScopeId,
+  project: string | undefined,
+  now: number,
+  otherProject?: string,
+): ScopeRow[] {
+  const listed = itemsIn(inv, tool, kind, scope, project, now, otherProject);
+  // Every account's copies by row key, read once: a row holds them all, listed here or not.
+  const copies = new Map<string, Extension[]>();
+  if (listed.some(isAccountServer)) {
+    const rank = (item: Extension) => {
+      const at = inv.claudeProfiles.indexOf(item.location.profile ?? "");
+      return at < 0 ? inv.claudeProfiles.length : at;
+    };
+    for (const item of inv.items.filter(isAccountServer).sort((a, b) => rank(a) - rank(b))) {
+      const key = rowKey(item, project);
+      copies.set(key, [...(copies.get(key) ?? []), item]);
+    }
+  }
+  const rows = new Map<string, ScopeRow>();
+  for (const item of listed) {
+    const key = rowKey(item, project);
+    if (!rows.has(key)) rows.set(key, { key, name: item.name, items: copies.get(key) ?? [item] });
+  }
+  return [...rows.values()];
+}
+
 export type OtherProject = { path: string; name: string; count: number };
 
 /** Other projects that have at least one item of this tool and kind, by name. */
@@ -151,16 +216,19 @@ export function otherProjects(
   kind: ItemKind,
   project: string | undefined,
 ): OtherProject[] {
-  const byKey = new Map<string, OtherProject>();
+  // Counted in rows, as the project's table lists them: the rows' keys, by project.
+  const byKey = new Map<string, { path: string; rows: Set<string> }>();
   for (const item of ofKind(inv, tool, kind)) {
     const dir = item.location.project;
     if (dir === undefined || homeScope(item, project) !== "other") continue;
     const key = pathKey(dir);
-    const known = byKey.get(key);
-    if (known) known.count += 1;
-    else byKey.set(key, { path: dir, name: projectName(dir, inv), count: 1 });
+    const known = byKey.get(key) ?? { path: dir, rows: new Set<string>() };
+    known.rows.add(rowKey(item, project));
+    byKey.set(key, known);
   }
-  return [...byKey.values()].sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
+  return [...byKey.values()]
+    .map(({ path, rows }) => ({ path, name: projectName(path, inv), count: rows.size }))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
 }
 
 /**
