@@ -224,7 +224,10 @@ function passes(inv: Inventory, item: Extension, o: ViewOptions, duplicates: Set
       return true;
     case "loaded": {
       if (!relevantIn(item, o.project)) return false;
-      return statesOf(inv, [item], o.project).some((s) => s.value !== "off" && !s.shadowedBy);
+      // Claude Code does not start a .mcp.json server until it is approved.
+      return statesOf(inv, [item], o.project).some(
+        (s) => s.value !== "off" && s.value !== "pending-approval" && !s.shadowedBy,
+      );
     }
     case "cleanup":
       return marksOf(inv, item, o.now).includes("cleanup");
@@ -560,9 +563,10 @@ function after(...widths: number[]): number {
 /**
  * Column widths for a list `width` wide whose names need `need` columns: optional columns go
  * before the name drops under 8, and the name takes what it needs of what they leave. What it
- * does not need is left after the last column, so the columns sit beside the names.
+ * does not need is left after the last column, so the columns sit beside the names. With no
+ * project there is no This project column: the spec hides it then.
  */
-export function listColumns(tab: Tab, width: number, need = Number.POSITIVE_INFINITY): Columns {
+export function listColumns(tab: Tab, width: number, need = Number.POSITIVE_INFINITY, project = true): Columns {
   const inner = width - 2;
   const wanted = Math.max(8, need);
   if (tab === "hooks") {
@@ -573,12 +577,12 @@ export function listColumns(tab: Tab, width: number, need = Number.POSITIVE_INFI
   }
   if (tab === "mcp") {
     // Wide enough for the longest state word, pending-approval.
-    const state = 16;
+    const state = project ? 16 : 0;
     const extra = inner >= 60 ? 8 : 0;
     const tool = inner >= 40 ? 4 : 0;
     return { name: Math.min(wanted, Math.max(8, inner - after(tool, extra, state))), tool, extra, used: 0, state };
   }
-  const state = inner >= 50 ? 20 : 12;
+  const state = !project ? 0 : inner >= 50 ? 20 : 12;
   const used = inner >= 70 ? 13 : 0;
   const tool = inner >= 40 ? 4 : 0;
   return { name: Math.min(wanted, Math.max(8, inner - after(tool, used, state))), tool, extra: 0, used, state };
