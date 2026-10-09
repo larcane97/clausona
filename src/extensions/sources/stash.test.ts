@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -188,7 +189,27 @@ describe("readStash", () => {
     expect(warnings).toHaveLength(2);
     expect(warnings[0]?.file).toBe(broken);
     expect(warnings[0]?.message).toMatch(/^is not valid JSON at /);
-    expect(warnings[1]).toEqual({ file: other, message: "is not a stash file clausona can read" });
+    expect(warnings[1]).toEqual({ file: other, message: "is not a file clausona can read back" });
+  });
+
+  it("skips a file whose id is not its name, so ids stay unique", async () => {
+    const { h, app, work } = seed();
+    const stash = {
+      kind: "mcp" as const,
+      tool: "claude" as const,
+      name: "stitch",
+      file: work.jsonPath,
+      path: ["mcpServers", "stitch"],
+      scope: "account" as const,
+      profile: "claude:work",
+      entry: { command: "stitch" },
+    };
+    const original = stashed(h, stash, "mcp:claude:account:claude:work:stitch");
+    const copy = h.write(path.join(STASH, "copy.json"), readFileSync(original, "utf8"));
+    const inv = await load(h, app);
+
+    expect(inv.items.filter((i) => i.stashed).map((i) => i.stashed?.file)).toEqual([original]);
+    expect(inv.warnings).toEqual([{ file: copy, message: "is not a file clausona can read back" }]);
   });
 
   it("reads nothing, and says nothing, when there is no stash dir", async () => {
