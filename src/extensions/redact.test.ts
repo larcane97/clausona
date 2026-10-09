@@ -337,6 +337,28 @@ describe("redactCommand after a flag that takes no value, or a bare auth scheme"
     }
   });
 
+  it("hides a flag's value that starts with a dash, unless that word's own rule hides what it carries", () => {
+    // URL-safe base64 tokens and generated passwords can start with a dash. Built from pieces.
+    const DASHED = ["-AbC9xyz", "x"].join("_");
+    const LOOKS_NAMED = ["-xKey9", "AbC"].join("");
+    const shown = [
+      [mcp(["--token", DASHED]), "tool --token <hidden>"],
+      [command(`tool --token ${DASHED}`), "tool --token <hidden>"],
+      [mcp(["--password", "-Xk9_q2", "--v"]), "tool --password <hidden> --v"],
+      [command("tool --password -Xk9_q2 --v"), "tool --password <hidden> --v"],
+      // A dash-led token that a single-dash option name would match is still a value.
+      [mcp(["--token", LOOKS_NAMED]), "tool --token <hidden>"],
+      [mcp(["-b", "Bearer", HEX]), "tool -b Bearer <hidden>"],
+      [mcp(["--token", "Bearer", HEX]), "tool --token Bearer <hidden>"],
+      [command(`tool -b X-Api-Key: ${HEX}`), "tool -b X-Api-Key: <hidden>"],
+      [mcp(["--token", `--api-key=${HEX}`]), "tool --token --api-key=<hidden>"],
+    ];
+    for (const [actual, expected] of shown) {
+      expect(actual).toBe(expected);
+      for (const secret of [HEX, DASHED, "-Xk9_q2", LOOKS_NAMED]) expect(actual).not.toContain(secret);
+    }
+  });
+
   it("hides all of a quoted cookie assignment, to its closing quote", () => {
     const shown = command(`curl --cookie="a=1 sid=${HEX}" https://h.example`);
     expect(shown).toBe('curl --cookie="<hidden>" https://h.example');
