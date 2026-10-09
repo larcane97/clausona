@@ -278,11 +278,12 @@ export function otherProjects(
 }
 
 /**
- * Whether the item loads in `project` in at least one account: relevant there, not off, not
- * pending approval, not hidden by a nearer copy.
+ * Whether the item loads in `project` in at least one account: relevant there, not a broken link,
+ * not off, not pending approval, not hidden by a nearer copy.
  */
 export function loadsHere(inv: Inventory, item: Extension, project: string | undefined): boolean {
-  if (!relevantIn(item, project)) return false;
+  // A link to nothing has no SKILL.md for Claude Code or Codex to read.
+  if (!relevantIn(item, project) || item.link?.broken === true) return false;
   const states = accountStates(inv, item, project)?.map((a) => a.state) ?? [stateHere(inv, item, project)];
   // Claude Code does not start a .mcp.json server until it is approved.
   return states.some((s) => s.value !== "off" && s.value !== "pending-approval" && !s.shadowedBy);

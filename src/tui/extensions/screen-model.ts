@@ -1,5 +1,6 @@
 import {
   accountsWord,
+  containsWords,
   type DetailLine,
   fromLabel,
   hookWhen,
@@ -14,7 +15,6 @@ import {
   type ItemKind,
   type OtherProject,
   otherProjects,
-  pluginContents,
   rowsIn,
   type ScopeEntry,
   type ScopeId,
@@ -108,21 +108,6 @@ function toneOf(tag: string): TagTone {
   if (tag === "broken link") return "error";
   if (tag === "unused") return "warning";
   return "muted";
-}
-
-function count(n: number, noun: string): string {
-  return `${n} ${noun}${n === 1 ? "" : "s"}`;
-}
-
-/** What a plugin brings, the kinds it has: "14 skills · 1 hook". */
-function containsWords(inv: Inventory, row: ScopeRow): string {
-  const contents = pluginContents(inv, row);
-  const parts = [
-    contents.skill.length > 0 ? count(contents.skill.length, "skill") : "",
-    contents.mcp.length > 0 ? count(contents.mcp.length, "MCP server") : "",
-    contents.hook.length > 0 ? count(contents.hook.length, "hook") : "",
-  ].filter(Boolean);
-  return parts.length > 0 ? parts.join(" · ") : "—";
 }
 
 /** What a server or a hook runs: its command, URL or prompt, the home dir as ~. Already redacted. */

@@ -168,8 +168,14 @@ describe("skills ls", () => {
     });
     const skills = await run(h, app, "skills", ["ls", "--scope", "plugins"]);
     expect(firstLine(skills)).toMatch(/^2 plugins · Plugins · project ~/);
-    expect(skills).toMatch(/^kit@m\s+claude\s+kit\s/m);
-    expect(firstLine(await run(h, app, "hooks", ["ls", "--scope", "plugins"]))).toMatch(/^1 plugin · Plugins · /);
+    // As the screen's Plugins table: what each brings, every kind, whichever command lists it.
+    expect(skills).toMatch(/^NAME\s+TOOL\s+CONTAINS\s+NOTE$/m);
+    expect(skills).toMatch(/^kit@m\s+claude\s+2 skills$/m);
+    expect(skills).toMatch(/^sp@m\s+claude\s+1 skill · 1 hook$/m);
+    const hooks = await run(h, app, "hooks", ["ls", "--scope", "plugins", "--tool", "claude"]);
+    expect(firstLine(hooks)).toMatch(/^1 plugin · Plugins · /);
+    expect(hooks).toMatch(/^NAME\s+CONTAINS\s+NOTE$/m);
+    expect(hooks).toMatch(/^sp@m\s+1 skill · 1 hook$/m);
     expect(await run(h, app, "mcp", ["ls", "--scope", "plugins"])).toMatch(
       /^0 plugins · Plugins · .+\n\nNo plugin brings MCP servers\.$/,
     );
@@ -360,8 +366,17 @@ describe("ls options", () => {
     h.write("repos/app/.claude/settings.local.json", `{ "token": "${KEY}", nope`);
     const text = await run(h, app, "skills", ["ls"]);
     const bad = path.join("~", "repos", "app", ".claude", "settings.local.json");
-    expect(text).toContain(`\n\nCould not read every file:\n  ${bad}: `);
-    expect(leakedWindows([text], KEY)).toEqual([]);
+    expect(text).toContain(`\n\nCould not read every file, so this list may miss what they hold:\n  ${bad}: `);
+    const shown = await run(h, app, "skills", ["show", "deploy-check"]);
+    expect(shown).toContain(`\n\nCould not read every file, so this may miss what they hold:\n  ${bad}: `);
+    expect(leakedWindows([text, shown], KEY)).toEqual([]);
+  });
+
+  it("reads a leading ~ in --project as the home dir, as a shell would", async () => {
+    const { h, app, web } = seed();
+    const fromWeb = await run(h, app, "skills", ["ls", "--project", "~/repos/web"]);
+    expect(fromWeb).toBe(await run(h, app, "skills", ["ls", "--project", web]));
+    expect(JSON.parse(await run(h, app, "skills", ["ls", "--project=~", "--json"])).project).toBe(h.home);
   });
 });
 
@@ -403,6 +418,70 @@ describe("ls --json", () => {
     expect(text).toMatch(/^github\s+claude\s+Global\s+all$/m);
     expect(text).toMatch(/^exa\s+codex\s+Global\s+—$/m);
     expect(leakedWindows([out, text], KEY)).toEqual([]);
+  });
+});
+
+describe("what an agent tripped on", () => {
+  it("finds a plugin by its name before the @, and calls two such plugins ambiguous", async () => {
+    const { h, app } = seed();
+    const kit = h.path(".claude/plugins/cache/m/kit/1.0.0");
+    h.write(".claude/plugins/installed_plugins.json", { plugins: { "kit@m": [{ installPath: kit }] } });
+    h.write(".claude/settings.json", { enabledPlugins: { "kit@m": true } });
+    h.skill(".claude/plugins/cache/m/kit/1.0.0/skills", "kit-a");
+    const short = await run(h, app, "skills", ["show", "kit"]);
+    expect(firstLine(short)).toBe("PLUGINS › kit");
+    expect(await run(h, app, "skills", ["show", "kit@m"])).toBe(short);
+    const other = h.path(".claude/plugins/cache/x/kit/2.0.0");
+    h.write(".claude/plugins/installed_plugins.json", {
+      plugins: { "kit@m": [{ installPath: kit }], "kit@x": [{ installPath: other }] },
+    });
+    h.skill(".claude/plugins/cache/x/kit/2.0.0/skills", "kit-b");
+    const both = await failure(run(h, app, "skills", ["show", "kit", "--json"]));
+    expect(both.code).toBe(2);
+    expect(JSON.parse(both.stdout ?? "").candidates.map((c: { id: string }) => c.id)).toEqual([
+      expect.stringMatching(/kit@m$/),
+      expect.stringMatching(/kit@x$/),
+    ]);
+  });
+
+  it("says a Codex row's state without accounts, Codex having none here", async () => {
+    const { h, app } = seed();
+    const skill = await run(h, app, "skills", ["show", "eli5", "--tool", "codex"]);
+    expect(skill).toMatch(/^Loaded {4}on in every project$/m);
+    const server = await run(h, app, "mcp", ["show", "exa"]);
+    expect(server).toMatch(/^Loaded {4}on in every project$/m);
+    h.write(".codex/config.toml", '[mcp_servers.exa]\ncommand = "npx"\nenabled = false\n');
+    const off = await run(h, app, "mcp", ["show", "exa", "--scope", "global"]);
+    expect(off).toMatch(/^Loaded {4}off everywhere \(~[\\/]\.codex[\\/]config\.toml\)$/m);
+    for (const text of [skill, server, off]) expect(text).not.toMatch(/account/);
+  });
+
+  it("says how long ago a never-used skill was added, as the not-used rule reads it", async () => {
+    const { h, app } = seed();
+    // 200 days on, by NOW: past the 14 days' grace, so it is unused.
+    expect(await run(h, app, "skills", ["show", "deploy-check"])).toMatch(
+      /^Used {6}never, in any account · added 6mo ago$/m,
+    );
+    const fresh = await runExtensionsCommand("skills", ["show", "deploy-check"], {
+      homeDir: h.home,
+      cwd: app,
+      registry: h.registry,
+      now: Date.now() + 3 * DAY,
+    });
+    expect(fresh).toMatch(/^Used {6}never, in any account · added 3d ago$/m);
+  });
+
+  it("leaves a broken link out of Loaded here, tagged where it is listed", async () => {
+    const { h, app } = seed();
+    h.link(h.path("gone", "lost"), ".claude/skills/lost");
+    expect(await run(h, app, "skills", ["ls", "--tool", "claude"])).not.toMatch(/^lost\s/m);
+    expect(await run(h, app, "skills", ["ls", "--scope", "global", "--tool", "claude"])).toMatch(
+      /^lost\s+Global\s+0\s+never\s+broken link$/m,
+    );
+    expect(await run(h, app, "skills", ["ls", "--scope", "unused", "--tool", "claude"])).toMatch(
+      /^lost\s+Global\s+0\s+never\s+broken link$/m,
+    );
+    expect(await run(h, app, "skills", ["show", "lost"])).toMatch(/^Loaded {4}no, its link leads nowhere$/m);
   });
 });
 

@@ -415,6 +415,8 @@ export function accountsWord(inv: Inventory, row: ScopeRow): string {
  */
 function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined): DetailLine[] {
   const item = firstOf(row);
+  // A link to nothing has no SKILL.md to read, whatever the settings say.
+  if (item.link?.broken) return [{ label: "Loaded", text: "no, its link leads nowhere", tone: "error" }];
   const perAccount = statesByAccount(inv, row, project);
   const parts = perAccount?.map((a) => ({ name: shortProfile(a.profile), ...stateParts(inv, item, project, a.state) }));
   const groups = new Map<string, { word: string; because?: string; names: string[] }>();
@@ -447,6 +449,11 @@ function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined)
   if (state.value === "pending-approval") return [{ label: "Loaded", text: "pending approval here", tone: "warning" }];
   const own = item.location.project;
   const where = own === undefined ? "every project" : samePath(own, project) ? "this project" : projectName(own, inv);
+  // Codex profiles share one configuration: no account to name, but a profile's own skills folder.
+  if (item.location.tool === "codex") {
+    const profile = item.location.profile;
+    return [{ label: "Loaded", text: `on in ${where}${profile ? `, for profile ${shortProfile(profile)}` : ""}` }];
+  }
   const who = perAccount?.map((a) => a.profile) ?? rowAccounts(inv, row);
   if (who === undefined || inv.claudeProfiles.every((p) => who.includes(p))) {
     return [{ label: "Loaded", text: `on in every account, ${where}` }];
@@ -585,7 +592,10 @@ function usedLines(inv: Inventory, row: ScopeRow, project: string | undefined, n
     return [{ label: "Used", text: "counted under the copy that wins", tone: "muted" }];
   const usage = usageOf(inv, row.items);
   if (!usage || (usage.total === 0 && usage.lastUsedAt === undefined)) {
-    return [{ label: "Used", text: "never, in any account", tone: "muted" }];
+    // The time the not-used rule reads (birth time, else mtime), so its 14 days' grace shows.
+    const born = row.items.flatMap((copy) => (copy.createdAt === undefined ? [] : [copy.createdAt]));
+    const added = born.length === 0 ? "" : ` · added ${agoWords(Math.min(...born), now)}`;
+    return [{ label: "Used", text: `never, in any account${added}`, tone: "muted" }];
   }
   const last = usage.lastUsedAt === undefined ? "" : ` · last ${agoWords(usage.lastUsedAt, now)}`;
   const lines: DetailLine[] = [
@@ -623,7 +633,10 @@ function mcpLines(inv: Inventory, row: ScopeRow, project: string | undefined): D
       text: `${secrets.join(", ")} (${secrets.length === 1 ? "value" : "values"} hidden)`,
     });
   }
-  lines.push(...accountLines(inv, row, project));
+  // Codex has no accounts here: its server has one state, said as a skill's is.
+  lines.push(
+    ...(firstOf(row).location.tool === "codex" ? loadedLines(inv, row, project) : accountLines(inv, row, project)),
+  );
   row.items.forEach((copy, i) => {
     const loc = copy.location;
     const entry =
@@ -648,6 +661,17 @@ function hookLines(inv: Inventory, row: ScopeRow, project: string | undefined): 
 
 function count(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
+/** What a plugin row brings, the kinds it has, for a CONTAINS cell: "14 skills · 1 hook", or "—". */
+export function containsWords(inv: Inventory, row: ScopeRow): string {
+  const contents = pluginContents(inv, row);
+  const parts = [
+    contents.skill.length > 0 ? count(contents.skill.length, "skill") : "",
+    contents.mcp.length > 0 ? count(contents.mcp.length, "MCP server") : "",
+    contents.hook.length > 0 ? count(contents.hook.length, "hook") : "",
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : "—";
 }
 
 function pluginLines(inv: Inventory, row: ScopeRow, project: string | undefined): DetailLine[] {
