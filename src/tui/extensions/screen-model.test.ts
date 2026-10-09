@@ -214,6 +214,8 @@ describe("tables", () => {
       ["web-only", "web", "—"],
     ]);
     expect(unused.rows.every((r) => r.tag?.text === "unused" && r.tag.tone === "warning")).toBe(true);
+    // A search reads WHERE as the row shows it.
+    expect(names(buildTable(inv, "claude", "skill", "unused", app, NOW, 100, "global"))).toEqual(["old-one"]);
   });
 
   it("says which Claude accounts have an MCP server, and what a Codex one runs", async () => {
@@ -235,6 +237,8 @@ describe("tables", () => {
     expect(claude.count).toBe(2);
     expect(byName(claude, "github")?.row?.items).toHaveLength(2);
     expect(byName(claude, "github")?.key).toBe("mcp:claude:account:-:github");
+    // A search reads ACCOUNTS as the row shows it.
+    expect(names(buildTable(inv, "claude", "mcp", "global", app, NOW, 100, "default"))).toEqual(["solo"]);
     // A parent folder's .mcp.json is every account's.
     expect(cells(buildTable(inv, "claude", "mcp", "parents", app, NOW, 100, "").rows[0])).toEqual(["tools", "all"]);
     const codex = buildTable(inv, "codex", "mcp", "global", app, NOW, 100, "");
@@ -256,6 +260,7 @@ describe("tables", () => {
     expect(titles(plugins)).toEqual(["NAME", "CONTAINS"]);
     expect(plugins.rows.map(cells)).toEqual([["kit@m", "1 skill · 1 hook"]]);
     expect(plugins.count).toBe(1);
+    expect(names(buildTable(inv, "claude", "skill", "plugins", app, NOW, 100, "hook"))).toEqual(["kit@m"]);
     expect(
       byName(buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, ""), "kit:kit-skill")?.cells[1]?.trim(),
     ).toBe("kit");
@@ -340,6 +345,15 @@ describe("search", () => {
     expect(names(buildTable(inv, "claude", "skill", "global", app, NOW, 100, "simply"))).toEqual(["eli5"]);
     expect(names(buildTable(inv, "claude", "skill", "other", app, NOW, 100, "WEB"))).toEqual(["web"]);
     expect(names(buildTable(inv, "claude", "skill", "other", app, NOW, 100, "nope"))).toEqual([]);
+  });
+
+  it("matches what the row shows: a hook's WHEN, a FROM, but not a count or a time", async () => {
+    const { inv, app } = await seed();
+    const stop = buildTable(inv, "claude", "hook", "global", app, NOW, 100, "finishes");
+    expect(stop.rows.map((r) => r.cells[0]?.trim())).toEqual(["When Claude finishes replying"]);
+    expect(names(buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, "project"))).toEqual(["deploy-check"]);
+    // eli5 was used "1d ago": a time is no word to search for.
+    expect(buildTable(inv, "claude", "skill", "global", app, NOW, 100, "d ago").rows).toEqual([]);
   });
 
   it("matches a summary value as read and with ~ for home", async () => {

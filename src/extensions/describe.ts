@@ -147,6 +147,15 @@ function firstOf(row: ScopeRow): Extension {
 }
 
 /**
+ * Whether a row is a copy that a same-name copy wins over here. Claude Code records a skill's use
+ * by name, under the copy that wins, and a hidden copy never loads: the table's USES and LAST
+ * USED read "—" for it, and its details say where its use is counted.
+ */
+export function hiddenHere(inv: Inventory, row: ScopeRow, project: string | undefined): boolean {
+  return stateHere(inv, firstOf(row), project).shadowedBy !== undefined;
+}
+
+/**
  * Whether a setting was read from a project's own place: its `.claude/settings*.json`, an
  * account's `.claude.json` entry for it, or its `.codex/config.toml`. Told from the facts the
  * sources recorded with a project, not from where the file is: in the home dir every file is
@@ -529,7 +538,7 @@ function skillLines(inv: Inventory, row: ScopeRow, project: string | undefined, 
   }
   lines.push(...loadedLines(inv, row, project));
   const state = stateHere(inv, item, project);
-  if (loc.tool === "claude") lines.push(...usedLines(inv, row.items, state, now));
+  if (loc.tool === "claude") lines.push(...usedLines(inv, row, project, now));
   lines.push(...alsoInLines(inv, row, project));
   const shows = SHOWS_AS[state.value];
   if (shows !== undefined) {
@@ -539,10 +548,10 @@ function skillLines(inv: Inventory, row: ScopeRow, project: string | undefined, 
   return lines;
 }
 
-function usedLines(inv: Inventory, items: Extension[], state: EffectiveState, now: number): DetailLine[] {
-  // Claude Code records a skill's use by name, and a hidden copy never loads.
-  if (state.shadowedBy) return [{ label: "Used", text: "counted under the copy that wins", tone: "muted" }];
-  const usage = usageOf(inv, items);
+function usedLines(inv: Inventory, row: ScopeRow, project: string | undefined, now: number): DetailLine[] {
+  if (hiddenHere(inv, row, project))
+    return [{ label: "Used", text: "counted under the copy that wins", tone: "muted" }];
+  const usage = usageOf(inv, row.items);
   if (!usage || (usage.total === 0 && usage.lastUsedAt === undefined)) {
     return [{ label: "Used", text: "never, in any account", tone: "muted" }];
   }

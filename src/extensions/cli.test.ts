@@ -91,8 +91,20 @@ describe("skills ls", () => {
     const text = await run(h, app, "skills", ["ls", "--scope", "project"]);
     expect(firstLine(text)).toMatch(/^2 skills · Project · project ~/);
     expect(text).toMatch(/^deploy-check\s+claude\s+Project\s+0\s+never\s+unused$/m);
-    expect(text).toMatch(/^eli5\s+claude\s+Project\s+4\s+1d ago\s+hidden by Global copy$/m);
+    expect(text).toMatch(/^eli5\s+claude\s+Project\s+—\s+—\s+hidden by Global copy$/m);
     expect(text).not.toContain("old-one");
+  });
+
+  it("gives a hidden copy no use of its own: Claude counts it under the copy that wins", async () => {
+    const { h, app } = seed();
+    const text = await run(h, app, "skills", ["ls", "--scope", "all", "--tool", "claude"]);
+    expect(text).toMatch(/^eli5\s+Global\s+4\s+1d ago$/m);
+    expect(text).toMatch(/^eli5\s+Project\s+—\s+—\s+hidden by Global copy$/m);
+    // --json keeps the data as read: usage is not a cell.
+    const json = JSON.parse(await run(h, app, "skills", ["ls", "--scope", "project", "--tool", "claude", "--json"]));
+    const hidden = json.items.find((i: { name: string }) => i.name === "eli5");
+    expect(hidden.tags).toEqual(["hidden by Global copy"]);
+    expect(hidden.usage.total).toBe(4);
   });
 
   it("lists the Claude skills not used in 90 days with --scope unused", async () => {

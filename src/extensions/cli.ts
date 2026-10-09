@@ -8,6 +8,7 @@ import {
   type DetailLine,
   detailsOf,
   fromLabel,
+  hiddenHere,
   hookWhen,
   jsonItem,
   rowAccounts,
@@ -336,12 +337,21 @@ const KIND_COLUMNS: Record<ExtensionsCommand, string[]> = {
   hooks: ["WHEN", "RUNS"],
 };
 
-function kindCells(command: ExtensionsCommand, inv: Inventory, row: ScopeRow, now: number): string[] {
+function kindCells(
+  command: ExtensionsCommand,
+  inv: Inventory,
+  row: ScopeRow,
+  project: string | undefined,
+  now: number,
+): string[] {
   const item = firstOf(row);
   switch (command) {
     case "skills": {
-      // Codex keeps no usage record, and a plugin's use is its skills'.
-      if (item.kind !== "skill" || item.location.tool !== "claude") return ["—", "—"];
+      // Codex keeps no usage record, and a plugin's use is its skills'. A hidden copy's use is
+      // counted under the copy that wins: a count on both rows would read twice.
+      if (item.kind !== "skill" || item.location.tool !== "claude" || hiddenHere(inv, row, project)) {
+        return ["—", "—"];
+      }
       const usage = usageOf(inv, row.items);
       return [String(usage?.total ?? 0), agoWords(usage?.lastUsedAt, now)];
     }
@@ -392,7 +402,7 @@ function listText(
         row.name,
         ...(both ? [item.location.tool] : []),
         whereCell(inv, row, project),
-        ...kindCells(command, inv, row, now),
+        ...kindCells(command, inv, row, project, now),
         tagsOf(inv, row, project, now)[0] ?? "",
       ];
     });

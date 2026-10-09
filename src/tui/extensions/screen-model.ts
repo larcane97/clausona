@@ -1,7 +1,15 @@
-import { accountsWord, agoWords, fromLabel, hookWhen, scopeSentence, tagsOf } from "../../extensions/describe.js";
+import {
+  accountsWord,
+  agoWords,
+  fromLabel,
+  hiddenHere,
+  hookWhen,
+  scopeSentence,
+  tagsOf,
+} from "../../extensions/describe.js";
 import { usageOf } from "../../extensions/inventory.js";
 import type { Extension, Inventory } from "../../extensions/model.js";
-import { projectName, stateHere, tilde, tildeIn } from "../../extensions/present.js";
+import { projectName, tilde, tildeIn } from "../../extensions/present.js";
 import {
   type ItemKind,
   type OtherProject,
@@ -59,7 +67,11 @@ export type Table = { header: string; count: number; columns: Column[]; rows: Ta
  */
 type Fit = "lead" | "fixed" | "flex";
 
-type Head = { key: string; title: string; fit: Fit; align?: "right"; muted?: true };
+/**
+ * A column's title and how it is drawn. `search: false` keeps a count or a time out of what a
+ * search reads: "/2" is not every row used twice or two days ago.
+ */
+type Head = { key: string; title: string; fit: Fit; align?: "right"; muted?: true; search?: false };
 type Spec<T> = Head & { text: (line: T) => string };
 
 /** The room a tag takes at least, when a row has one. */
@@ -91,22 +103,14 @@ function toneOf(tag: string): TagTone {
   return "muted";
 }
 
-/**
- * Whether the row is a copy a same-name copy wins over. Claude Code records a skill's use by
- * name, and a hidden copy never loads: the use is the winner's, as the details say.
- */
-function hidden(inv: Inventory, row: ScopeRow, project: string | undefined): boolean {
-  return stateHere(inv, firstOf(row), project).shadowedBy !== undefined;
-}
-
 /** A Claude skill's use, summed over the row's copies. */
 function usesWord(inv: Inventory, row: ScopeRow, project: string | undefined): string {
-  return hidden(inv, row, project) ? "—" : String(usageOf(inv, row.items)?.total ?? 0);
+  return hiddenHere(inv, row, project) ? "—" : String(usageOf(inv, row.items)?.total ?? 0);
 }
 
 /** When the row was last used in any account; "—" when it never was. */
 function lastUsedWord(inv: Inventory, row: ScopeRow, project: string | undefined, now: number): string {
-  const usage = hidden(inv, row, project) ? undefined : usageOf(inv, row.items);
+  const usage = hiddenHere(inv, row, project) ? undefined : usageOf(inv, row.items);
   if (usage === undefined || (usage.total === 0 && usage.lastUsedAt === undefined)) return "—";
   return agoWords(usage.lastUsedAt, now);
 }
@@ -146,6 +150,7 @@ function rowSpecs(
     key: "last-used",
     title: "LAST USED",
     fit: "fixed",
+    search: false,
     text: (row) => lastUsedWord(inv, row, project, now),
   };
   if (scope === "plugins") {
@@ -168,7 +173,14 @@ function rowSpecs(
   const rest: Record<Tool, Record<Kind, Spec<ScopeRow>[]>> = {
     claude: {
       skill: [
-        { key: "uses", title: "USES", fit: "fixed", align: "right", text: (row) => usesWord(inv, row, project) },
+        {
+          key: "uses",
+          title: "USES",
+          fit: "fixed",
+          align: "right",
+          search: false,
+          text: (row) => usesWord(inv, row, project),
+        },
         lastUsed,
       ],
       mcp: [{ key: "accounts", title: "ACCOUNTS", fit: "fixed", text: (row) => accountsWord(inv, row) }],
@@ -196,11 +208,14 @@ function otherSpecs(inv: Inventory): Spec<OtherProject>[] {
   return [
     { key: "project", title: "PROJECT", fit: "lead", text: (p) => p.name },
     { key: "path", title: "PATH", fit: "flex", text: (p) => tilde(p.path, inv.homeDir) },
-    { key: "count", title: "COUNT", fit: "fixed", align: "right", text: (p) => String(p.count) },
+    { key: "count", title: "COUNT", fit: "fixed", align: "right", search: false, text: (p) => String(p.count) },
   ];
 }
 
-/** What a search looks in: names, descriptions, files and summary values, each as read and as shown. */
+/**
+ * What a search looks in besides the row's cells: names, descriptions, files and summary values,
+ * each as read and as shown.
+ */
 function rowHaystack(inv: Inventory, row: ScopeRow): string[] {
   return [
     row.name,
@@ -272,8 +287,10 @@ function layOut(heads: Head[], lines: Line[], width: number, query: string): Pic
   }));
   const left = Math.max(0, width) - widths.reduce((sum, w) => sum + w, 0);
   const needle = query.toLowerCase();
+  // What the row shows - WHEN, FROM, ACCOUNTS, CONTAINS, WHERE - in full, as well as what it holds.
+  const searched = (l: Line) => [...l.texts.filter((_, i) => heads[i]?.search !== false), ...l.haystack];
   const rows = lines
-    .filter((l) => needle === "" || l.haystack.some((text) => text.toLowerCase().includes(needle)))
+    .filter((l) => needle === "" || searched(l).some((text) => text.toLowerCase().includes(needle)))
     .map((l): TableRow => {
       // Cut to what the columns leave; a tag with no room at all is left out.
       const text = l.tag === undefined ? "" : cell(l.tag, left).trimEnd();
