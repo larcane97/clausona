@@ -271,12 +271,12 @@ describe("rows", () => {
   it("makes one row of a server that several accounts define, with every account's copy", async () => {
     const { inv, app } = await servers();
     expect(shape(rowsIn(inv, "claude", "mcp", "global", app, NOW))).toEqual([
-      { key: "mcp:claude:global:-:github", name: "github", accounts: ["claude:default", "claude:work"] },
+      { key: "mcp:claude:account:-:github", name: "github", accounts: ["claude:default", "claude:work"] },
       // One account's server keeps the same kind of key, so a key does not change as accounts add it.
-      { key: "mcp:claude:global:-:solo", name: "solo", accounts: ["claude:default"] },
+      { key: "mcp:claude:account:-:solo", name: "solo", accounts: ["claude:default"] },
     ]);
     expect(shape(rowsIn(inv, "claude", "mcp", "project", app, NOW))).toEqual([
-      { key: `mcp:claude:project:${pathKey(app)}:pg-dev`, name: "pg-dev", accounts: ["claude:default", "claude:work"] },
+      { key: `mcp:claude:local:${pathKey(app)}:pg-dev`, name: "pg-dev", accounts: ["claude:default", "claude:work"] },
     ]);
     // Counted as rows: github is one server, not two.
     expect(itemsIn(inv, "claude", "mcp", "global", app, NOW)).toHaveLength(3);
@@ -290,7 +290,7 @@ describe("rows", () => {
   it("lists a server in Loaded here with every copy when it loads in one account", async () => {
     const { inv, app } = await servers();
     const github = rowsIn(inv, "claude", "mcp", "loaded", app, NOW).find((r) => r.name === "github");
-    expect(github?.key).toBe("mcp:claude:global:-:github");
+    expect(github?.key).toBe("mcp:claude:account:-:github");
     expect(github?.items.map((i) => i.location.profile)).toEqual(["claude:default", "claude:work"]);
   });
 
@@ -302,11 +302,19 @@ describe("rows", () => {
     );
   });
 
+  it("keys a server's row the same from every project", async () => {
+    const { inv, app, web } = await servers();
+    const fromApp = rowsIn(inv, "claude", "mcp", "project", app, NOW).find((r) => r.name === "pg-dev");
+    const fromWeb = rowsIn(inv, "claude", "mcp", "other", web, NOW, app).find((r) => r.name === "pg-dev");
+    expect(fromApp?.key).toBeDefined();
+    expect(fromWeb?.key).toBe(fromApp?.key);
+  });
+
   it("counts an other project's servers as rows too", async () => {
     const { inv, app, web } = await servers();
     expect(otherProjects(inv, "claude", "mcp", web)).toEqual([{ path: app, name: "app", count: 1 }]);
     expect(shape(rowsIn(inv, "claude", "mcp", "other", web, NOW, app))).toEqual([
-      { key: `mcp:claude:other:${pathKey(app)}:pg-dev`, name: "pg-dev", accounts: ["claude:default", "claude:work"] },
+      { key: `mcp:claude:local:${pathKey(app)}:pg-dev`, name: "pg-dev", accounts: ["claude:default", "claude:work"] },
     ]);
   });
 });

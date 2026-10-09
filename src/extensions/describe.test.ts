@@ -165,6 +165,27 @@ describe("tagsOf", () => {
     expect(tagsOf(user.inv, single(claudeSkill(user.inv, "old-one")), user.app, NOW)).toEqual(["off", "unused"]);
   });
 
+  it("in the home dir, says off for the user's settings and off here for its local settings", async () => {
+    const at = async (file: string) => {
+      const h = new TestHome();
+      homes.push(h);
+      h.claude("default", ".claude");
+      h.skill(".claude/skills", "x");
+      h.write(file, { skillOverrides: { x: "off" } });
+      // Started in the home dir, which is then the project: every file is under it.
+      const inv = await loadInventory({
+        homeDir: h.home,
+        registry: h.registry,
+        cwd: h.home,
+        managedSettings: h.path("none.json"),
+      });
+      expect(inv.currentProject).toBe(h.home);
+      return tagsOf(inv, single(claudeSkill(inv, "x")), h.home, NOW);
+    };
+    expect((await at(".claude/settings.json"))[0]).toBe("off");
+    expect((await at(".claude/settings.local.json"))[0]).toBe("off here");
+  });
+
   it("says off in 1 of 2 accounts for a server one account turned off here", async () => {
     const { inv, app } = await seed(github);
     const row = serverRow(inv, "global", app, "github");
@@ -405,7 +426,7 @@ describe("jsonItem", () => {
     ]);
     const [mine, theirs] = row.items as [Extension, Extension];
     expect(item).toMatchObject({
-      id: "mcp:claude:global:-:github",
+      id: "mcp:claude:account:-:github",
       file: mine.location.file,
       copies: [
         { id: mine.id, account: "claude:default", file: mine.location.file },

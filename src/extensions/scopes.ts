@@ -163,13 +163,15 @@ export function isAccountServer(item: Extension): boolean {
 }
 
 /**
- * A row's key: an account server's is `mcp:claude:<homeScope>:<project or ->:<name>` - the same
- * with one account's copy as with many, so it does not change as accounts add the server.
+ * A row's key: an account server's is `mcp:claude:<account|local>:<project or ->:<name>`, from
+ * where it is stored alone - the same from every project, and the same with one account's copy
+ * as with many, so it does not change as accounts add the server.
  */
-function rowKey(item: Extension, project: string | undefined): string {
+function rowKey(item: Extension): string {
   if (!isAccountServer(item)) return item.id;
-  const own = item.location.scope === "local" ? item.location.project : undefined;
-  return `mcp:claude:${homeScope(item, project)}:${own === undefined ? "-" : pathKey(own)}:${item.name}`;
+  const loc = item.location;
+  const own = loc.scope === "local" ? loc.project : undefined;
+  return `mcp:claude:${loc.scope}:${own === undefined ? "-" : pathKey(own)}:${item.name}`;
 }
 
 /**
@@ -195,13 +197,13 @@ export function rowsIn(
       return at < 0 ? inv.claudeProfiles.length : at;
     };
     for (const item of inv.items.filter(isAccountServer).sort((a, b) => rank(a) - rank(b))) {
-      const key = rowKey(item, project);
+      const key = rowKey(item);
       copies.set(key, [...(copies.get(key) ?? []), item]);
     }
   }
   const rows = new Map<string, ScopeRow>();
   for (const item of listed) {
-    const key = rowKey(item, project);
+    const key = rowKey(item);
     if (!rows.has(key)) rows.set(key, { key, name: item.name, items: copies.get(key) ?? [item] });
   }
   return [...rows.values()];
@@ -223,7 +225,7 @@ export function otherProjects(
     if (dir === undefined || homeScope(item, project) !== "other") continue;
     const key = pathKey(dir);
     const known = byKey.get(key) ?? { path: dir, rows: new Set<string>() };
-    known.rows.add(rowKey(item, project));
+    known.rows.add(rowKey(item));
     byKey.set(key, known);
   }
   return [...byKey.values()]
