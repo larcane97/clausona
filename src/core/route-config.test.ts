@@ -6,6 +6,7 @@ import {
   checkRoute,
   checkRouteName,
   checkRoutesFile,
+  holdsKey,
   newRouteSpec,
   toolsOf,
   withDefaults,
@@ -62,6 +63,22 @@ describe("applyOverrides", () => {
   });
 });
 
+describe("holdsKey", () => {
+  it.each([
+    ["a key", () => keyShaped()],
+    ["a key behind a tool's prefix", () => `claude:${keyShaped()}`],
+    ["a key after a pattern", () => `me@example.com, ${keyShaped()}`],
+    ["a piece that starts like a key", () => "team sk-x"],
+    ["a vendor token", () => ["hf", "Ab".repeat(17)].join("_")],
+  ])("finds %s", (_what, text) => {
+    expect(holdsKey(text())).toBe(true);
+  });
+
+  it.each(["main", "*@work.example.com", "claude:team", ""])("finds nothing in %j", (text) => {
+    expect(holdsKey(text)).toBe(false);
+  });
+});
+
 describe("checkRouteName", () => {
   it.each(["main", "work-2", "a.b_c", "9lives"])("accepts %s", (name) => {
     expect(checkRouteName(name)).toBeNull();
@@ -75,6 +92,10 @@ describe("checkRouteName", () => {
     const problem = checkRouteName(keyShaped()) ?? "";
     expect(problem).toMatch(/API key/);
     expect(problem).not.toContain(keyShaped());
+  });
+
+  it("never quotes a name a piece of which starts like a key", () => {
+    expect(checkRouteName("team sk-x")).toBe("That looks like an API key, not a route name.");
   });
 
   it("never quotes a vendor token as a name", () => {

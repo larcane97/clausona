@@ -126,10 +126,21 @@ function isPercent(value: unknown, min: number): boolean {
   return typeof value === "number" && Number.isFinite(value) && value >= min && value <= 100;
 }
 
+/**
+ * Whether text holds something shaped like a key, so that it is neither stored nor quoted back:
+ * the whole of it, or a piece of it between spaces, commas and colons, starts like one or carries
+ * one anywhere. Pieces as well as the whole: `claude:<key>` does not start with 'sk-', and a
+ * shorter key behind a prefix or a space stays under the length ceiling. A key anywhere: a vendor
+ * token (`hf_…`, `AIza…`, `ghp_…`) is short and does not start with 'sk-', so only
+ * carriesCredentialToken sees it. Route names, patterns and the TUI's route form all ask this.
+ */
+export function holdsKey(text: string): boolean {
+  return [text, ...text.split(/[\s,:]+/)].some((piece) => looksLikeCredential(piece) || carriesCredentialToken(piece));
+}
+
 export function checkRouteName(name: string): string | null {
-  // Checked first, so the message below never echoes something key-shaped. A vendor token
-  // (`hf_…`, `ghp_…`) fits the name rule and the length ceiling, so it is looked for anywhere too.
-  if (looksLikeCredential(name) || carriesCredentialToken(name)) return "That looks like an API key, not a route name.";
+  // Checked first, so the message below never echoes something key-shaped.
+  if (holdsKey(name)) return "That looks like an API key, not a route name.";
   if (ROUTE_NAME.test(name)) return null;
   return `Invalid route name '${name}': start with a letter or digit, and use only letters, digits, '.', '_' and '-'.`;
 }
@@ -140,15 +151,8 @@ export function checkRouteName(name: string): string | null {
  */
 export function checkPattern(pattern: unknown, tool: RouteTool): string | null {
   if (typeof pattern !== "string" || pattern.trim() === "") return "must be a non-empty string";
-  // Each piece as well as the whole: `claude:<key>` does not start with 'sk-', and a shorter key
-  // behind a prefix or a space stays under the length ceiling, so the checks below would store
-  // it in routes.json or quote it back. And a key anywhere in it: a vendor token (`hf_…`, `AIza…`,
-  // `ghp_…`) is short and does not start with 'sk-', so only carriesCredentialToken sees it.
-  if (
-    [pattern, ...pattern.split(/[\s,:]+/)].some((piece) => looksLikeCredential(piece) || carriesCredentialToken(piece))
-  ) {
-    return "looks like an API key, not a profile name or email pattern";
-  }
+  // Before anything below would store it in routes.json or quote it back.
+  if (holdsKey(pattern)) return "looks like an API key, not a profile name or email pattern";
   // Split as the matcher splits it, so a name and an email pattern read a prefix the same way.
   const { prefix, body } = splitToolPrefix(pattern);
   if (prefix !== null && !toolsOf(tool).includes(prefix as ToolName)) {
@@ -172,13 +176,8 @@ export function checkRoute(name: string, raw: unknown, at = `routes.${name}`): s
   const problems: string[] = [];
   for (const key of Object.keys(raw)) {
     if (ROUTE_KEYS.has(key)) continue;
-    // A vendor token (`ghp_…`, `hf_…`) is short and does not start with 'sk-': only
-    // carriesCredentialToken sees it, and the key is quoted below.
-    problems.push(
-      looksLikeCredential(key) || carriesCredentialToken(key)
-        ? `${at}: an unknown key looks like an API key`
-        : `${at}: unknown key '${key}'`,
-    );
+    // The key is quoted below, so a key-shaped one is not.
+    problems.push(holdsKey(key) ? `${at}: an unknown key looks like an API key` : `${at}: unknown key '${key}'`);
   }
   const tool = raw.tool;
   if (!isRouteTool(tool)) {

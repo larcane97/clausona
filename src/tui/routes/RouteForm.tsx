@@ -1,8 +1,14 @@
 import { Box, type Key, Text, useInput } from "ink";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { carriesCredentialToken, looksLikeCredential } from "../../core/credential-token.js";
-import { ROUTE_TOOLS, type RouteSpec, STRATEGIES, type Strategy, withDefaults } from "../../core/route-config.js";
+import {
+  holdsKey,
+  ROUTE_TOOLS,
+  type RouteSpec,
+  STRATEGIES,
+  type Strategy,
+  withDefaults,
+} from "../../core/route-config.js";
 import { matchesMember } from "../../core/route-patterns.js";
 import { type Ranking, rankRoute } from "../../core/routing.js";
 import { toolLabel } from "../../lib/route-render.js";
@@ -106,14 +112,12 @@ const CONFIRM_HINTS = [
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
- * Whether a field's value is drawn as the mask: a key anywhere in it, or a piece of it that starts
- * like one or is as long as one - the pieces as checkPattern cuts a pattern, so what the save
- * would refuse as a key is never drawn. Pieces, not the whole: a list of three emails is longer
- * than a name can be, and is not a key.
+ * Whether a field's value is drawn as the mask: what the save would refuse as a key, asked as the
+ * save asks it. A pattern field is asked entry by entry, as checkPattern is given them: a list of
+ * three emails is longer than one name can be, and is not a key.
  */
-const keyShaped = (value: string) =>
-  carriesCredentialToken(value) ||
-  value.split(/[\s,:]+/).some((piece) => looksLikeCredential(piece) || carriesCredentialToken(piece));
+const keyShaped = (field: TextField, value: string) =>
+  field === "from" || field === "exclude" ? splitList(value).some(holdsKey) : holdsKey(value);
 
 /** The next of `options` to the left or right of `current`, round from one end to the other. */
 function step<T>(options: readonly T[], current: T, delta: 1 | -1): T {
@@ -335,7 +339,7 @@ export function RouteForm(props: RouteFormProps) {
       setCaret({ field, at });
     };
     const cursor = caret?.field === field ? caret.at : value.length;
-    if (keyShaped(value)) {
+    if (keyShaped(field, value)) {
       // The input takes the keystrokes and draws nothing, so the value can still be erased.
       return (
         <Box>
