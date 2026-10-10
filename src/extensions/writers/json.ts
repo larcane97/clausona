@@ -141,10 +141,15 @@ export function entryAt(root: unknown, edit: JsonEdit): unknown {
   return undefined;
 }
 
-/** Every hook in `place`'s event, in whichever group: what a hook put back there would sit beside. */
+/**
+ * Every hook in the groups of `place`'s event that have its matcher: the groups a hook put back
+ * there can join, so what it would sit beside. The same command under another matcher is
+ * another hook.
+ */
 export function hooksIn(root: unknown, place: HookPlace): unknown[] {
   const groups = valueAt(root, eventPath(place));
-  return Array.isArray(groups) ? groups.flatMap((group) => (isGroup(group) ? group.hooks : [])) : [];
+  if (!Array.isArray(groups)) return [];
+  return groups.flatMap((group) => (isGroup(group) && sameMatcher(group, place) ? group.hooks : []));
 }
 
 /** The path whose value an edit changes, resolved: its own path, or [base..., event] for a hook edit. Undo compares and restores these. */
@@ -194,6 +199,11 @@ function matcherOf(group: Record<string, unknown>): string | undefined {
   return typeof group.matcher === "string" && group.matcher !== "" ? group.matcher : undefined;
 }
 
+/** Whether a group has a place's matcher, "" and none being the same on either side. */
+function sameMatcher(group: Record<string, unknown>, place: HookPlace): boolean {
+  return matcherOf(group) === (place.matcher || undefined);
+}
+
 function isGroup(value: unknown): value is Record<string, unknown> & { hooks: unknown[] } {
   return isRecord(value) && Array.isArray(value.hooks);
 }
@@ -227,11 +237,11 @@ function hookRestore(root: Record<string, unknown>, place: HookPlace, entry: unk
   const groups = events[place.event];
   if (!Array.isArray(groups)) throw new JsonEditError(IN_THE_WAY);
   const own = groups[place.group];
-  if (isGroup(own) && matcherOf(own) === place.matcher) {
+  if (isGroup(own) && sameMatcher(own, place)) {
     own.hooks.splice(Math.min(place.index, own.hooks.length), 0, entry);
     return;
   }
-  const same = groups.find((group) => isGroup(group) && matcherOf(group) === place.matcher);
+  const same = groups.find((group) => isGroup(group) && sameMatcher(group, place));
   if (isGroup(same)) same.hooks.push(entry);
   else groups.push({ ...(place.matcher ? { matcher: place.matcher } : {}), hooks: [entry] });
 }

@@ -701,6 +701,28 @@ describe("apply: what clausona keeps aside", () => {
     expect(stashFiles(h)).toEqual(kept);
   });
 
+  it("puts a hook back beside the same command under another matcher, which is another hook", async () => {
+    const { h, app } = home();
+    const env = writeEnvFor(h.home, clock());
+    const settings = h.path(".claude", "settings.json");
+    const before = readFileSync(settings, "utf8");
+    await apply(await planNow(h, app, "hooks", "off", "everywhere", notifyA), env);
+    const bash = { matcher: "Bash", hooks: [{ type: "command", command: "notify-a" }] };
+    setIn(settings, (value) => {
+      value.hooks.Stop.push(bash);
+    });
+    const inv = await load(h, app);
+    const keptRow = rowsIn(inv, "claude", "hook", "global", app, NOW).find(
+      (r) => r.items[0]?.summary?.command === "notify-a" && r.items[0]?.stashed,
+    ) as ScopeRow;
+    const p = plan(contextFor(h, inv, app), "hooks", act("on", "everywhere", [keptRow]));
+
+    expect(await apply(p, env)).toMatchObject({ status: "applied", done: 1 });
+
+    expect(json(settings).hooks.Stop).toEqual([...JSON.parse(before).hooks.Stop, bash]);
+    expect(stashFiles(h)).toEqual([]);
+  });
+
   it("stops when a hook was put above the one it takes out, and takes nothing out", async () => {
     const { h, app } = home();
     const env = writeEnvFor(h.home, clock());
