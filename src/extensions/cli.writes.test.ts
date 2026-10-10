@@ -28,17 +28,18 @@ const NOW = Date.now() + 200 * DAY;
 // Built from pieces, so no key-shaped string sits in the source.
 const KEY = ["sk", "ant", "api03", "Q2xhdXNvbmFUZXN0S2V5MTIzNDU2Nzg5MA"].join("-");
 
-/** The test's own git runs: not told where a repo is by a hook's environment. */
-function gitEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]) delete env[name];
-  return env;
-}
+/** The test's own git runs: not told where a repo is by a hook's environment (spawn leaves undefined out). */
+const GIT_ENV: NodeJS.ProcessEnv = {
+  ...process.env,
+  GIT_DIR: undefined,
+  GIT_WORK_TREE: undefined,
+  GIT_INDEX_FILE: undefined,
+};
 
-const hasGit = spawnSync("git", ["--version"], { env: gitEnv() }).status === 0;
+const hasGit = spawnSync("git", ["--version"], { env: GIT_ENV }).status === 0;
 
 function git(cwd: string, args: string[]): void {
-  const result = spawnSync("git", args, { cwd, env: gitEnv(), encoding: "utf8" });
+  const result = spawnSync("git", args, { cwd, env: GIT_ENV, encoding: "utf8" });
   if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr}`);
 }
 
