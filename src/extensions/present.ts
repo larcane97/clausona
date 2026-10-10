@@ -31,6 +31,29 @@ export function tilde(p: string, homeDir: string): string {
   return p.startsWith(homeDir + path.sep) ? `~${p.slice(homeDir.length)}` : p;
 }
 
+/** A path cut to `width` from its middle: its start, `…`, and as many of its last parts as fit. */
+export function middleCut(p: string, width: number): string {
+  if (p.length <= width) return p;
+  if (width < 3) return width <= 0 ? "" : `${p.slice(0, width - 1)}…`;
+  // Each part but the first starts with its separator.
+  const parts = p.split(/(?=[\\/])/);
+  let tail = "";
+  for (let at = parts.length - 1; at > 0; at--) {
+    const next = `${parts[at]}${tail}`;
+    // Room for the `…` and one character of the start.
+    if (next.length + 2 > width) break;
+    tail = next;
+  }
+  if (tail === "") {
+    const head = Math.ceil((width - 1) / 2);
+    return `${p.slice(0, head)}…${p.slice(p.length - (width - 1 - head))}`;
+  }
+  const head = p.slice(0, width - 1 - tail.length);
+  // The start up to its last separator, so the cut reads as parts left out.
+  const sep = Math.max(head.lastIndexOf("/"), head.lastIndexOf("\\"));
+  return `${sep > 0 ? head.slice(0, sep + 1) : head}…${tail}`;
+}
+
 /** What may stand before and after a path in a command line: its start or end, a space, a quote, a list separator. */
 const PATH_START = String.raw`(?<=^|[\s"'=:;,(])`;
 const PATH_END = String.raw`(?=$|[\s"':;,)]|${path.sep.replace(/\\/g, "\\\\")})`;
