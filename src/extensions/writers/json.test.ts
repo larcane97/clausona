@@ -7,6 +7,7 @@ import {
   DEFAULT_JSON_STYLE,
   editJson,
   entryAt,
+  hooksIn,
   type JsonEdit,
   JsonEditError,
   type JsonPath,
@@ -141,6 +142,19 @@ describe("hook edits", () => {
     expect(applyJsonEdits({ Stop: [{ hooks: [A, B] }] }, [{ op: "hook-remove", place: root }])).toEqual({
       Stop: [{ hooks: [B] }],
     });
+  });
+
+  it("lists the hooks a hook put back would sit beside: its event's groups with its matcher, '' as none", () => {
+    const value = {
+      hooks: {
+        Stop: [{ matcher: "", hooks: [A] }, { matcher: "Bash", hooks: [B] }, { hooks: [B] }],
+      },
+    };
+    expect(hooksIn(value, stop)).toEqual([A, B]);
+    expect(hooksIn(value, { ...stop, matcher: "" })).toEqual([A, B]);
+    expect(hooksIn(value, { ...stop, matcher: "Bash" })).toEqual([B]);
+    expect(hooksIn(value, { ...stop, matcher: "Edit" })).toEqual([]);
+    expect(hooksIn({}, stop)).toEqual([]);
   });
 
   it("puts a hook back in its group, or a group with its matcher, or a new group", () => {

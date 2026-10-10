@@ -308,7 +308,7 @@ async function jsonChange(run: Run, change: JsonChange): Promise<Stop | undefine
 
   // What a restore puts back. Something at its place already is a conflict, which says more
   // than the expect of nothing there would: a server by its name, a hook - many share an event -
-  // by an entry the same as the kept one.
+  // by an entry the same as the kept one in a group with its matcher.
   let kept: { stash: StashFile; read: FileRead; file: string } | undefined;
   if (change.fromStash !== undefined) {
     const stashRead = await readMaybe(change.fromStash);
