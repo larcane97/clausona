@@ -70,6 +70,15 @@ describe("skills, mcp and hooks commands", () => {
     }
   });
 
+  it("point to the recipes for agents from the overview and the rm page", async () => {
+    const recipes = "https://github.com/larcane97/clausona/blob/main/docs/extensions.md#recipes-for-agents";
+    for (const command of COMMANDS) {
+      for (const args of [["--help"], ["rm", "--help"]]) {
+        expect(stripAnsi(await runCommand(command, args)), `${command} ${args.join(" ")}`).toContain(`  ${recipes}\n`);
+      }
+    }
+  });
+
   it("give off and on one page", async () => {
     for (const command of COMMANDS) {
       expect(await runCommand(command, ["off", "--help"])).toBe(await runCommand(command, ["on", "--help"]));

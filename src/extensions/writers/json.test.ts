@@ -9,6 +9,8 @@ import {
   entryAt,
   type JsonEdit,
   JsonEditError,
+  type JsonPath,
+  NO_PROJECT,
   readJsonText,
   resolvePath,
   touchedPath,
@@ -96,6 +98,30 @@ describe("resolvePath", () => {
     expect(resolvePath({ projects: { [path.join(path.sep, "q")]: {} } }, at)).toBeUndefined();
     expect(valueAt({ projects: { [slashed]: { x: 1 } } }, at)).toBe(1);
     expect(valueAt({ projects: {} }, at)).toBeUndefined();
+  });
+});
+
+describe("an edit under a project's key (rule E)", () => {
+  const P = path.join(path.sep, "p");
+  const at = (...rest: string[]): JsonPath => ["projects", { projectKey: P }, ...rest];
+  const edits: JsonEdit[] = [
+    { op: "set", path: at("skillOverrides", "eli5"), value: "off" },
+    { op: "list-add", path: at("disabledMcpServers"), value: "github" },
+    { op: "restore", path: at("mcpServers", "figma") },
+  ];
+
+  it("throws NO_PROJECT for a project with no entry, and never makes one", () => {
+    const other = path.join(path.sep, "q");
+    for (const value of [{}, { projects: {} }, { projects: { [other]: {} } }]) {
+      for (const edit of edits) {
+        const error = thrown(() => applyJsonEdits(value, [edit], { command: "figma" }));
+        expect(error, `${edit.op} in ${JSON.stringify(value)}`).toBeInstanceOf(JsonEditError);
+        expect((error as Error).message).toBe(NO_PROJECT);
+        expect(thrown(() => editJson(JSON.stringify(value), [edit], { command: "figma" }))).toBeInstanceOf(
+          JsonEditError,
+        );
+      }
+    }
   });
 });
 

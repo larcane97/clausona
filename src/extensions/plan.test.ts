@@ -859,6 +859,44 @@ describe("plan: Claude MCP servers", () => {
     ]);
   });
 
+  it("notes an account that still keeps a server off here when it goes back on everywhere", async () => {
+    const { h, app, web, inv, ctx } = await seed((h, appDir, webDir) => {
+      // Default's github kept by clausona; work's in its file, and off in app.
+      const mine = h.claude("default", ".claude", {
+        oauthAccount: { organizationUuid: "org", accountUuid: "one" },
+        projects: { [appDir]: {}, [webDir]: {} },
+        mcpServers: { figma: { command: "figma" } },
+      });
+      const id = stashIdFor("mcp:claude:account:claude:default:github", NOW - DAY);
+      h.write(
+        path.join(STASH, stashFileName(id)),
+        stashText({
+          version: 1,
+          id,
+          kind: "mcp",
+          tool: "claude",
+          name: "github",
+          file: mine.jsonPath,
+          path: ["mcpServers", "github"],
+          scope: "account",
+          profile: "claude:default",
+          entry: { command: "gh" },
+          stashedAt: new Date(NOW - DAY).toISOString(),
+        }),
+      );
+    });
+    const github = rowIn(inv, app, "global", "github", "claude", "mcp");
+    const on = plan(ctx, "mcp", act("on", "everywhere", [github]));
+    expect(on.changes).toMatchObject([
+      { file: h.path(".claude.json"), edits: [{ op: "restore", path: ["mcpServers", "github"] }] },
+    ]);
+    expect(on.unchanged).toEqual([{ rowKey: github.key, name: "github", why: "not off everywhere in work" }]);
+    expect(on.notes).toEqual(["Still off in this project for work."]);
+    // Seen from web, where work has turned nothing off, there is nothing to note.
+    const fromWeb = rowIn(inv, web, "global", "github", "claude", "mcp");
+    expect(plan(contextFor(h, inv, web), "mcp", act("on", "everywhere", [fromWeb])).notes).toEqual([]);
+  });
+
   it("refuses to put a server back into a file that is gone, and deletes the copy clausona kept instead", async () => {
     let stashFile = "";
     const { h, app, inv, ctx } = await seed((h, appDir) => {

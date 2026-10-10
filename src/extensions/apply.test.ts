@@ -255,10 +255,54 @@ describe("apply", () => {
     const undone = await undo(env);
     expect(undone).toMatchObject({ operation: { id: operation.id }, skipped: [] });
     expect(undone?.restored).toHaveLength(1);
+    // The change made the file: undo took it away again.
+    expect(undone?.removed).toEqual(undone?.restored);
     expect(existsSync(file)).toBe(false);
     expect(existsSync(path.join(bare, ".claude"))).toBe(false);
     expect(manifestOf(operation.dir).undoneAt).toEqual(expect.any(String));
     expect(await undo(env)).toBeNull();
+    expect(await lastOperation(env)).toBeNull();
+  });
+
+  it("makes nothing, and offers no undo, when what it would write is there already", async () => {
+    const { h, app } = home();
+    const env = writeEnvFor(h.home, clock());
+    const work = h.path(".claude-work", ".claude.json");
+    const older = await apply(await planNow(h, app, "mcp", "off", "here", github), env);
+    if (older.status !== "applied") throw new Error(older.status);
+    const p = await planNow(h, app, "mcp", "off", "here", figma, { accounts: ["claude:work"] });
+    expect(p.changes.map((c) => c.file)).toEqual([work]);
+    // `/mcp disable figma` in Claude Code, between the plan and the apply.
+    setIn(work, (value) => {
+      value.projects[app].disabledMcpServers.push("figma");
+    });
+    const left = readFileSync(work, "utf8");
+
+    expect(await apply(p, env)).toEqual({ status: "nothing" });
+
+    expect(readFileSync(work, "utf8")).toBe(left);
+    expect(opDirs(env)).toEqual([older.operation.id]);
+    expect((await lastOperation(env))?.operation).toEqual(older.operation);
+    expect((await lastOperation(env, "mcp"))?.operation).toEqual(older.operation);
+  });
+
+  it("counts only the changes it made when it stops", async () => {
+    const { h, app } = home();
+    const env = writeEnvFor(h.home, clock());
+    const [mine, work] = [h.path(".claude.json"), h.path(".claude-work", ".claude.json")];
+    const p = await planNow(h, app, "mcp", "off", "here", figma);
+    expect(p.changes.map((c) => c.file)).toEqual([mine, work]);
+    // Default's is there already, and work's project entry went.
+    setIn(mine, (value) => {
+      value.projects[app].disabledMcpServers = ["figma"];
+    });
+    setIn(work, (value) => {
+      delete value.projects[app];
+    });
+
+    const result = await apply(p, env);
+
+    expect(result).toMatchObject({ status: "stopped", done: 0, total: 2, stop: { reason: "changed", file: work } });
     expect(await lastOperation(env)).toBeNull();
   });
 
@@ -357,7 +401,7 @@ describe("apply: .claude.json under Claude Code's lock", () => {
 
     const undone = await undo(env);
 
-    expect(undone).toMatchObject({ restored: [claudeJson], skipped: [] });
+    expect(undone).toMatchObject({ restored: [claudeJson], removed: [], skipped: [] });
     const after = json(claudeJson);
     expect(after.projects[app].disabledMcpServers ?? []).not.toContain("github");
     expect(after.lastSessionId).toBe("x");
@@ -617,6 +661,44 @@ describe("apply: what clausona keeps aside", () => {
     await apply(await planNow(h, app, "hooks", "on", "everywhere", notifyA), env);
     expect(commands()).toEqual(["notify-a", "notify-b"]);
     expect(stashFiles(h)).toEqual([]);
+  });
+
+  it("stops with a conflict when the hook is back already, and keeps what it kept", async () => {
+    const { h, app } = home();
+    const env = writeEnvFor(h.home, clock());
+    const settings = h.path(".claude", "settings.json");
+    await apply(await planNow(h, app, "hooks", "off", "everywhere", notifyA), env);
+    const kept = stashFiles(h);
+    expect(kept).toHaveLength(1);
+    // The same hook, added back by hand.
+    setIn(settings, (value) => {
+      value.hooks.Stop[0].hooks.unshift({ type: "command", command: "notify-a" });
+    });
+    const left = readFileSync(settings, "utf8");
+    const inv = await load(h, app);
+    const rows = rowsIn(inv, "claude", "hook", "global", app, NOW).filter(
+      (r) => r.items[0]?.summary?.command === "notify-a",
+    );
+    expect(rows).toHaveLength(2);
+    const keptRow = rows.find((r) => r.items[0]?.stashed) as ScopeRow;
+    const p = plan(contextFor(h, inv, app), "hooks", act("on", "everywhere", [keptRow]));
+    expect(p.refused).toEqual([]);
+    expect(p.changes).toHaveLength(1);
+
+    const result = await apply(p, env);
+
+    expect(result).toMatchObject({
+      status: "stopped",
+      done: 0,
+      stop: { reason: "conflict", file: settings, rowKey: keptRow.items[0]?.id },
+    });
+    if (result.status !== "stopped") throw new Error(result.status);
+    expect(stopText(result.stop, "flags", h.home, "hooks")).toBe(
+      `${result.stop.name} is back in ${tilde(settings, h.home)} already. ` +
+        `Delete the copy clausona kept: clausona hooks rm --id ${keptRow.items[0]?.id}.`,
+    );
+    expect(readFileSync(settings, "utf8")).toBe(left);
+    expect(stashFiles(h)).toEqual(kept);
   });
 
   it("stops when a hook was put above the one it takes out, and takes nothing out", async () => {

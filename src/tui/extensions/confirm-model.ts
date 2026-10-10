@@ -56,7 +56,7 @@ const REFUSALS_SHOWN = 2;
 const GAP = "  ";
 /** The fewest columns a cut path keeps. */
 const PATH_MIN = 12;
-const UNDO_NOTE = "Puts back what the change changed, unless it changed since.";
+const UNDO_NOTE = "Puts back what changed, unless it changed since.";
 const UNDO_HINT = "Press u afterwards to put them back.";
 
 /** The columns `rows` take, two spaces apart: each as wide as its widest cell, and only those someone fills. */

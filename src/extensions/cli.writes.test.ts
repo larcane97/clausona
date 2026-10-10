@@ -508,6 +508,17 @@ describe("mcp off and rm", () => {
     });
   });
 
+  it("says the plan's notes after what it did, as the prompt and the dry run do", async () => {
+    const { h, web } = seed();
+    const { run } = cli(h, web);
+    const note = "  Note:\n      work has not opened this project";
+    expect(stripAnsi(await run("mcp", ["off", "figma", "--tool", "claude", "--dry-run"]))).toContain(note);
+    const text = stripAnsi(await run("mcp", ["off", "figma", "--tool", "claude", "--yes"]));
+    expect(text).toMatch(/^ {2}✔ Turned off figma in this project/);
+    expect(text).toContain("Undo: clausona mcp undo");
+    expect(text).toContain(note);
+  });
+
   it("deletes only the copy clausona kept when --id names that copy", async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);
@@ -584,6 +595,34 @@ describe("an apply that stops", () => {
   });
 });
 
+describe("an apply whose changes are there already", () => {
+  it("says there was nothing to do, offers no undo, and leaves undo the change before it", async () => {
+    const { h, app } = seed();
+    const { run } = cli(h, app);
+    await run("mcp", ["off", "figma", "--account", "work", "--tool", "claude", "--yes"]);
+    const backups = h.path(".clausona", "backups", "extensions");
+    const before = readdirSync(backups);
+    const text = stripAnsi(
+      await run("mcp", ["off", "github", "--tool", "claude"], {
+        interactive: true,
+        confirm: async () => {
+          // `/mcp disable github` in Claude Code, while the prompt waits.
+          const value = json(h.path(".claude.json"));
+          value.projects[app].disabledMcpServers = ["github"];
+          h.write(".claude.json", value);
+          return true;
+        },
+      }),
+    );
+    expect(text.split("\n")[0]).toBe("  Nothing to do.");
+    expect(text).not.toContain("Undo");
+    expect(readdirSync(backups)).toEqual(before);
+    expect(stripAnsi(await run("mcp", ["undo", "--dry-run"]))).toContain(
+      "Undo: Turned off figma in this project, for work?",
+    );
+  });
+});
+
 describe("hooks off and on", () => {
   it("calls two Stop hooks ambiguous, turns one off by --id and puts it back", async () => {
     const { h, app } = seed();
@@ -641,7 +680,9 @@ describe("undo", () => {
     expect(existsSync(local)).toBe(true);
     const text = stripAnsi(await run("skills", ["undo", "--yes"]));
     expect(text.split("\n")[0]).toBe("  ✔ Undid: Turned off eli5 in this project");
-    expect(text).toContain(`${tilde(local, h.home)}  put back`);
+    // The change made the file, so undo took it away, as its preview said.
+    expect(text).toContain(`${tilde(local, h.home)}  removed`);
+    expect(text).not.toContain("put back");
     expect(existsSync(local)).toBe(false);
     const none = await failure(run("skills", ["undo", "--yes"]));
     expect(none).toMatchObject({ code: 1, kind: "nothing-to-undo", message: "Nothing to undo for skills." });

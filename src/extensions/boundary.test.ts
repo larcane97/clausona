@@ -123,4 +123,9 @@ describe("who may touch the file system", () => {
       module === "extensions/apply" || module.startsWith("extensions/writers/") || module === "extensions/git-tracked";
     expect(importers(writes, false).filter((file) => file.startsWith("tui/"))).toEqual([]);
   });
+
+  it("has the TUI never import the CLI, not even for a type", () => {
+    const cli = (module: string) => module === "extensions/cli" || module === "extensions/cli-help";
+    expect(importers(cli).filter((file) => file.startsWith("tui/"))).toEqual([]);
+  });
 });

@@ -573,7 +573,9 @@ the change is refused.
 has the server changes. On the screen the dialog lists the accounts to pick from.
 
 Off everywhere takes the server out of each account's `.claude.json`. clausona keeps the entry
-it took out, so that `on --everywhere` can put it back where it was.
+it took out, so that `on --everywhere` can put it back where it was. `on --everywhere` leaves an
+account's switch in this project as it is. When one still turns the server off here, the plan
+says so in a note, `Still off in this project for work.`
 
 Neither Claude Code nor Codex has a switch for one hook in one project. So `hooks off` and
 `hooks on` always work everywhere: off takes the hook out of its settings file and clausona
@@ -587,9 +589,9 @@ keeps its settings so you can turn it back on`. A server keeps its id. A hook's 
 `hook:<tool>:<scope>:stash-<id>:<name>`. Read ids again from `ls --json` before you pass one to
 `on`.
 
-`on --everywhere`, or `g` on the screen, puts it back. If something of that name is back in that
-place by then, the change stops with a conflict and clausona keeps its copy. `rm` deletes the
-copy clausona kept: it goes into the backup like any other file.
+`on --everywhere`, or `g` on the screen, puts it back. If a server of that name, or the same
+hook, is back in that place by then, the change stops with a conflict and clausona keeps its
+copy. `rm` deletes the copy clausona kept: it goes into the backup like any other file.
 
 ### What each change writes
 
@@ -750,7 +752,7 @@ $ csn skills undo --dry-run
       ~/.claude/skills/old-one  put back
       ~/.claude/skills/notes    put back
 
-  Puts back what the change changed, unless it changed since.
+  Puts back what changed, unless it changed since.
 
   Dry run: nothing changed. Run it again with --yes to undo it.
 ```

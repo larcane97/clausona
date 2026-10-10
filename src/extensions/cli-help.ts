@@ -36,6 +36,12 @@ export const NOUN: Record<ExtensionsCommand, { one: string; many: string }> = {
 /** docs/extensions.md, online, for a reader who has the help and not the repo. */
 const DOCS_URL = "https://github.com/larcane97/clausona/blob/main/docs/extensions.md";
 
+/** The docs' recipes, as the other pointers are written: what is there, then where. */
+const RECIPES = [
+  `  ${dim("Recipes for agents, each a question with its commands:")}`,
+  `  ${dim(`${DOCS_URL}#recipes-for-agents`)}`,
+];
+
 /** Where an option's text starts, and an example's description. */
 const OPTION_COLUMN = 18;
 const EXAMPLE_COLUMN = 51;
@@ -415,6 +421,7 @@ function writeHelp(command: ExtensionsCommand, sub: WriteSub): string {
     "",
     `  ${dim("Backups, undo and why a change is refused:")}`,
     `  ${dim(`${DOCS_URL}#changing-things`)}`,
+    ...(name === "rm" ? RECIPES : []),
     "",
   ].join("\n");
 }
@@ -520,6 +527,7 @@ export function extensionsHelp(command: ExtensionsCommand, sub?: Sub): string {
     `  ${dim("Run")} ${accent(`clausona ${command} <subcommand> --help`)} ${dim("for options and examples.")}`,
     `  ${dim("Reference: docs/extensions.md (scopes, tags, ids, JSON fields), also at")}`,
     `  ${dim(DOCS_URL)}`,
+    ...RECIPES,
     "",
   ].join("\n");
 }

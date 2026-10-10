@@ -29,6 +29,7 @@ import {
 import {
   editJson,
   entryAt,
+  hooksIn,
   type JsonEdit,
   JsonEditError,
   NO_PROJECT,
@@ -138,7 +139,13 @@ export type UndoPreview = {
 export type UndoSkip = { file: string; reason: "changed" | "occupied" | "locked" | "missing" | "failed" };
 /** What undo did with one entry, once it is settled: anything but `locked`. */
 export type UndoOutcome = "restored" | Exclude<UndoSkip["reason"], "locked">;
-export type UndoResult = { operation: OperationRef; restored: string[]; skipped: UndoSkip[] };
+export type UndoResult = {
+  operation: OperationRef;
+  restored: string[];
+  /** Of `restored`, the files undo took away again: the first change to each made it. */
+  removed: string[];
+  skipped: UndoSkip[];
+};
 
 const MANIFEST = "manifest.json";
 const COMMANDS: ReadonlySet<string> = new Set(["skills", "mcp", "hooks"] satisfies ExtensionsCommand[]);
@@ -300,13 +307,19 @@ async function jsonChange(run: Run, change: JsonChange): Promise<Stop | undefine
   }
 
   // What a restore puts back. Something at its place already is a conflict, which says more
-  // than the expect of nothing there would.
+  // than the expect of nothing there would: a server by its name, a hook - many share an event -
+  // by an entry the same as the kept one.
   let kept: { stash: StashFile; read: FileRead; file: string } | undefined;
   if (change.fromStash !== undefined) {
     const stashRead = await readMaybe(change.fromStash);
     const stash = stashRead ? parseStashText(stashRead.text) : undefined;
     if (!stashRead || !stash) return changed(change.fromStash);
-    if (change.edits.some((edit) => edit.op === "restore" && valueAt(value, edit.path) !== undefined)) {
+    const keptHash = valueHash(stash.entry);
+    const back = (edit: JsonEdit): boolean =>
+      edit.op === "restore"
+        ? valueAt(value, edit.path) !== undefined
+        : edit.op === "hook-restore" && hooksIn(value, edit.place).some((hook) => valueHash(hook) === keptHash);
+    if (change.edits.some(back)) {
       return { file, reason: "conflict", name: stash.name, rowKey: stashItem(stash, change.fromStash).id };
     }
     kept = { stash, read: stashRead, file: change.fromStash };
@@ -503,7 +516,8 @@ async function applyChange(run: Run, change: FileChange): Promise<Stop | undefin
 /**
  * Carries out `plan`'s changes in order, each behind a backup, and stops at the first that cannot
  * go ahead: what was done before it stays done, and undoable. A plan without changes makes
- * nothing, not even the backup folder.
+ * nothing, not even the backup folder; one whose changes were all in place already leaves none.
+ * `done` counts the changes that wrote something.
  */
 export async function apply(plan: Plan, env: WriteEnv): Promise<ApplyResult> {
   if (plan.changes.length === 0) return { status: "nothing" };
@@ -530,9 +544,17 @@ export async function apply(plan: Plan, env: WriteEnv): Promise<ApplyResult> {
   let done = 0;
   let stop: Stop | undefined;
   for (const change of plan.changes) {
+    const recorded = manifest.entries.length;
     stop = await applyChange(run, change);
     if (stop) break;
-    done += 1;
+    // A change found in place already records nothing, and is none made.
+    if (manifest.entries.length > recorded) done += 1;
+  }
+  if (!stop && manifest.entries.length === 0) {
+    // Every change was in place already: nothing to undo, so no operation for undo to find. An
+    // empty folder left by a failed remove is passed over by undo all the same.
+    await removeTree(dir, env.backupRoot).catch(() => undefined);
+    return { status: "nothing" };
   }
   manifest.status = stop ? "stopped" : "applied";
   if (stop) manifest.stop = stop;
@@ -850,14 +872,22 @@ export async function undo(env: WriteEnv, command?: ExtensionsCommand): Promise<
 
   const restored: string[] = [];
   const skipped: UndoSkip[] = [];
+  /** Each file put back, and the first of its changes that undo put back. */
+  const first = new Map<string, number>();
   for (const at of order) {
     const entry = entries[at] as ManifestEntry;
     const outcome = outcomes.get(at) as Outcome;
     if (outcome !== "locked") entry.undone = outcome;
     const file = shown(entry);
-    if (outcome !== "restored") skipped.push({ file, reason: outcome });
-    else if (!restored.includes(file)) restored.push(file);
+    if (outcome !== "restored") {
+      skipped.push({ file, reason: outcome });
+      continue;
+    }
+    if (!restored.includes(file)) restored.push(file);
+    if (at < (first.get(file) ?? Number.POSITIVE_INFINITY)) first.set(file, at);
   }
+  // A file ends as it was before the first change undo put back: not there, when that change made it.
+  const removed = restored.filter((file) => entries[first.get(file) ?? -1]?.change === "created");
   // Claude Code was saving: the entries left are tried again by the next undo, rather than the
   // operation before this one.
   if (!skipped.some((skip) => skip.reason === "locked")) manifest.undoneAt = new Date(env.now()).toISOString();
@@ -867,7 +897,7 @@ export async function undo(env: WriteEnv, command?: ExtensionsCommand): Promise<
     skipped: [...(earlier?.skipped ?? []).filter((skip) => skip.reason !== "locked"), ...skipped],
   };
   await save({ dir, manifest });
-  return { operation: refOf(manifest, dir), restored, skipped };
+  return { operation: refOf(manifest, dir), restored, removed, skipped };
 }
 
 /** Removes operation dirs beyond the newest `keep`; returns the ids removed. */

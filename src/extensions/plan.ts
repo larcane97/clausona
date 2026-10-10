@@ -649,6 +649,11 @@ function planAccountServer(run: Run, row: ScopeRow): Outcome {
           );
       } else if (!copy.stashed) {
         unchanged(out, row, `not off everywhere in ${short(copy)}`);
+        // Its switch in this project stays as it is. Said in no voice of keys or flags: a note
+        // reaches the dialog, the CLI and JSON alike.
+        if (mcpDisabled(inv, account ?? "", viewFrom(copy, run.ctx.project), name)) {
+          note(out, `Still off in this project for ${short(copy)}.`);
+        }
       } else if (copy.stashed.gone) {
         // d on a row that holds other accounts' copies too would delete theirs: pick this one's account.
         const others = row.items.some((other) => other.location.profile !== copy.location.profile);
