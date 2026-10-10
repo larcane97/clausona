@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -97,7 +97,7 @@ function seed() {
   return { h, app, web };
 }
 
-type RunOptions = { interactive?: boolean; confirm?: (question: string) => Promise<boolean> };
+type RunOptions = { interactive?: boolean; confirm?: (question: string) => Promise<boolean>; columns?: number };
 
 /** Runs in `cwd` of `h`, as commands.ts does - JSON errors with --json - on a clock of its own. */
 function cli(h: TestHome, cwd: string, more: Pick<WriteEnv, "lockWaitMs"> = {}) {
@@ -118,7 +118,7 @@ function cli(h: TestHome, cwd: string, more: Pick<WriteEnv, "lockWaitMs"> = {}) 
           cwd,
           registry: h.registry,
           now: NOW,
-          columns: 200,
+          columns: options.columns ?? 200,
           managedSettings: h.path("managed-settings.json"),
           interactive: options.interactive ?? false,
           ...(options.confirm ? { confirm: options.confirm } : {}),
@@ -264,6 +264,40 @@ describe("skills off", () => {
     expect(json(local).skillOverrides).toEqual({ eli5: "off" });
   });
 
+  it("takes --yes or --dry-run with --json, even on a terminal, rather than mix text and JSON", async () => {
+    const { h, app } = seed();
+    const { run } = cli(h, app);
+    const asked: string[] = [];
+    const terminal: RunOptions = {
+      interactive: true,
+      confirm: async (question) => {
+        asked.push(question);
+        return true;
+      },
+    };
+    const message = "With --json, add --yes to go ahead, or --dry-run to see the plan.";
+    const error = await failure(run("skills", ["off", "eli5", "--tool", "claude", "--json"], terminal));
+    expect(error).toMatchObject({ code: 2, kind: "usage", message });
+    expect(JSON.parse(error.stdout ?? "")).toEqual({ version: 1, error: "usage", message });
+    expect(existsSync(h.path(".clausona"))).toBe(false);
+    await run("skills", ["off", "eli5", "--tool", "claude", "--yes"]);
+    expect(await failure(run("skills", ["undo", "--json"], terminal))).toMatchObject({ code: 2, message });
+    expect(asked).toEqual([]);
+    expect(existsSync(path.join(app, ".claude", "settings.local.json"))).toBe(true);
+  });
+
+  it("cuts a long path from its middle to fit, and keeps what changes whole", async () => {
+    const { h, app } = seed();
+    const { run } = cli(h, app);
+    const sep = path.sep;
+    // At 72 the cut lands on a separator short of the room it has: the gap stays two spaces.
+    for (const columns of [70, 72]) {
+      const text = stripAnsi(await run("skills", ["visibility", "eli5", "name-only", "--dry-run"], { columns }));
+      for (const line of text.split("\n")) expect(line.length).toBeLessThanOrEqual(columns);
+      expect(text).toContain(`      ~${sep}…${sep}.claude${sep}settings.local.json  skillOverrides.eli5 → name-only\n`);
+    }
+  });
+
   it("says nothing is to do when it is off already, and exits 0", async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);
@@ -403,12 +437,10 @@ describe("skills visibility", () => {
   it("sets the level here, and takes one of the four levels as the last word", async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);
-    const text = stripAnsi(await run("skills", ["visibility", "eli5", "name-only", "--tool", "claude", "--yes"]));
+    const text = stripAnsi(await run("skills", ["visibility", "eli5", "name-only", "--yes"]));
     expect(text).toContain("✔ eli5 shows as name only in this project");
     expect(json(path.join(app, ".claude", "settings.local.json")).skillOverrides).toEqual({ eli5: "name-only" });
-    const plan = JSON.parse(
-      await run("skills", ["visibility", "eli5", "on", "--tool", "claude", "--everywhere", "--dry-run", "--json"]),
-    );
+    const plan = JSON.parse(await run("skills", ["visibility", "eli5", "on", "--everywhere", "--dry-run", "--json"]));
     expect(plan).toMatchObject({ verb: "visibility", everywhere: true, level: "on" });
     expect(inOrder(Object.keys(plan), PLAN_JSON_KEYS)).toBe(true);
     expect(await failure(run("skills", ["visibility", "eli5", "loud"]))).toMatchObject({
@@ -416,10 +448,37 @@ describe("skills visibility", () => {
       message: "visibility takes on, name-only, user-invocable-only or off.",
     });
     expect(await failure(run("skills", ["visibility", "eli5", "old-one", "off"]))).toMatchObject({ code: 2 });
+    // A name first, then the level.
+    const needsName = "visibility needs a name or --id <id>, then the level. Run clausona skills visibility --help.";
+    expect(await failure(run("skills", ["visibility"]))).toMatchObject({ code: 2, kind: "usage", message: needsName });
+    expect(await failure(run("skills", ["visibility", "on"]))).toMatchObject({ code: 2, message: needsName });
     expect(await failure(run("mcp", ["visibility", "github"]))).toMatchObject({
       code: 2,
       message:
         "Unknown subcommand 'visibility'. clausona mcp takes ls, show, off, on, rm or undo. Run clausona mcp --help.",
+    });
+  });
+});
+
+describe("skills visibility, a Claude skill's alone", () => {
+  it("plans the Claude copy of a name both tools load, and takes no --tool", async () => {
+    const { h, app } = seed();
+    const { run } = cli(h, app);
+    // Claude's and Codex's eli5 both load here: off calls it ambiguous, visibility does not.
+    expect(await failure(run("skills", ["off", "eli5", "--dry-run"]))).toMatchObject({ code: 2, kind: "ambiguous" });
+    const plan = JSON.parse(await run("skills", ["visibility", "eli5", "name-only", "--dry-run", "--json"]));
+    expect(plan.changes.map((c: { rows: string[] }) => c.rows)).toEqual([["skill:claude:global:-:eli5"]]);
+    for (const tool of ["codex", "claude"]) {
+      expect(await failure(run("skills", ["visibility", "eli5", "on", "--tool", tool]))).toMatchObject({
+        code: 2,
+        kind: "usage",
+        message: "visibility is for Claude skills only.",
+      });
+    }
+    // Nothing narrowed it to Claude's but visibility itself, so no flag is named to leave out.
+    expect(await failure(run("skills", ["visibility", "nope", "on"]))).toMatchObject({
+      code: 1,
+      message: "No skill named 'nope'.",
     });
   });
 });
@@ -587,7 +646,10 @@ describe("undo", () => {
     expect(error).toMatchObject({ code: 1, kind: "changed" });
     expect(error.message).toContain(`${tilde(local, h.home)}  changed since`);
     const body = JSON.parse(error.stdout ?? "");
+    expect(Object.keys(body)).toEqual(["version", "error", "message", "operation", "restored", "skipped"]);
     expect(body).toMatchObject({ version: 1, error: "changed", restored: [] });
+    expect(body.operation).toMatchObject({ summary: "Turned off eli5 in this project" });
+    expect(Object.keys(body.operation)).toEqual(["id", "summary", "createdAt"]);
     expect(body.skipped).toEqual([{ file: local, reason: "changed" }]);
     expect(json(local).skillOverrides).toEqual({ eli5: "on" });
   });
@@ -611,6 +673,48 @@ describe("secrets", () => {
     await run("mcp", ["rm", "pg-dev", "--yes", "--json"]);
     await run("mcp", ["undo", "--yes"]);
     expect(read(h.path(".claude.json"))).toContain("GITHUB_TOKEN");
+  });
+});
+
+describe("undo, and what clausona kept aside", () => {
+  /** notify-a turned off: taken out of user settings and kept by clausona. */
+  async function turnedOff(h: TestHome, run: ReturnType<typeof cli>["run"]) {
+    const listed = JSON.parse(await run("hooks", ["ls", "--json"]));
+    const notifyA = listed.items.find((i: { summary: { command?: string } }) => i.summary.command === "notify-a");
+    await run("hooks", ["off", "--id", notifyA.id, "--yes"]);
+    return h.path(".claude", "settings.json");
+  }
+
+  it("names the user's file, never clausona's own, when a change since keeps it from going back", async () => {
+    const { h, app } = seed();
+    const { run } = cli(h, app);
+    const settings = await turnedOff(h, run);
+    h.write(path.join(".claude", "settings.json"), {
+      hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-c" }] }] },
+    });
+    const error = await failure(run("hooks", ["undo", "--yes", "--json"]));
+    expect(error).toMatchObject({ code: 1, kind: "changed" });
+    expect(error.message).toContain(`${tilde(settings, h.home)}  changed since`);
+    expect(error.message).not.toContain(".clausona");
+    const body = JSON.parse(error.stdout ?? "");
+    expect(body.skipped).toEqual([{ file: settings, reason: "changed" }]);
+    expect(error.stdout).not.toContain(".clausona");
+  });
+
+  it("still fails when only the copy clausona kept could not be dealt with, and says so without its path", async () => {
+    const { h, app } = seed();
+    const { run } = cli(h, app);
+    const settings = await turnedOff(h, run);
+    const keptDir = h.path(".clausona", "extensions", "stash");
+    for (const file of readdirSync(keptDir)) rmSync(path.join(keptDir, file));
+    const error = await failure(run("hooks", ["undo", "--yes", "--json"]));
+    expect(error).toMatchObject({ code: 1, kind: "changed" });
+    expect(stripAnsi(error.message)).toContain(`${tilde(settings, h.home)}  put back`);
+    expect(stripAnsi(error.message)).toMatch(/^ {4}the copy clausona kept +is gone$/m);
+    expect(error.message).not.toContain(".clausona");
+    const body = JSON.parse(error.stdout ?? "");
+    expect(body).toMatchObject({ restored: [settings], skipped: [] });
+    expect(read(settings)).toContain("notify-a");
   });
 });
 

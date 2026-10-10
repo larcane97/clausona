@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { runCommand } from "./commands.js";
-import { SUBS } from "./extensions/cli.js";
+import { EXTENSIONS_FLAGS, SUBS } from "./extensions/cli.js";
 import { ExitError } from "./extensions/exit-error.js";
 import { stripAnsi } from "./lib/cli-style.js";
 
@@ -41,9 +41,13 @@ describe("skills, mcp and hooks commands", () => {
   });
 
   it("take the flags of a change", async () => {
-    // Known to the command, so refused - if at all - by the subcommand, not as an unknown option.
-    for (const flag of ["--everywhere", "--dry-run", "--yes", "-y", "--tracked"]) {
-      await expect(runCommand("skills", ["show", "--help", flag])).resolves.toContain("clausona skills show");
+    const changes = ["--everywhere", "--dry-run", "--yes", "-y", "--tracked"];
+    expect(EXTENSIONS_FLAGS).toEqual(expect.arrayContaining(changes));
+    // Each passes the option check: the unknown option after it is the one named. Nothing is read.
+    for (const flag of changes) {
+      for (const command of COMMANDS) {
+        await expect(runCommand(command, ["off", flag, "--bogus"])).rejects.toThrow(/^Unknown option: --bogus\n/);
+      }
     }
   });
 
@@ -89,6 +93,14 @@ describe("skills, mcp and hooks commands", () => {
       "--tracked         Delete it even if git tracks it, which changes the repo\n",
     );
     expect(await page("skills", "visibility")).not.toContain("--tool <tool>");
+    // A change's page says where an id goes there; ls and show keep theirs.
+    const here = 'An id is the "id" field of ls --json. Pass it back as it is, to --id here or as the name.';
+    expect(off).toContain(here);
+    expect(await page("hooks", "rm")).toContain(here);
+    expect(await page("skills", "ls")).toContain("Pass it back as it is, to show --id or as the name.");
+    // Hooks are off or on everywhere: the overview offers no --everywhere, as the off | on page.
+    expect(stripAnsi(await runCommand("hooks", ["--help"]))).not.toContain("--everywhere");
+    expect(await page("hooks", "off")).not.toContain("--everywhere");
     expect(await page("mcp", "off")).toContain("--account <name>  Only this Claude account (repeatable)\n");
     expect(await page("hooks", "undo")).toContain("clausona hooks undo — Put back what the last hooks change changed");
     expect(await page("mcp", "undo")).toContain(
