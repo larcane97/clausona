@@ -16,6 +16,7 @@ import {
   DIVIDER_COLUMNS,
   detailRows,
   detailWindow,
+  entryLines,
   KIND_LABEL,
   KINDS,
   listRoom,
@@ -29,6 +30,7 @@ import {
   projectPaneWidth,
   scopeLines,
   scrolled,
+  statusLines,
   type Table,
   type TableRow,
 } from "./screen-model.js";
@@ -845,5 +847,36 @@ describe("detailRows", () => {
     const rows = detailRows([{ label: "Runs", text: word }], 30);
     expect(rows.map((r) => r.text).join("")).toBe(word);
     expect(rows.every((r) => r.text.length <= 20)).toBe(true);
+  });
+});
+
+describe("the actions line and the status line", () => {
+  const ENTRIES = ["space off here", "g off everywhere", "d delete", "v name only"];
+
+  it("breaks the actions line between entries, never inside one", () => {
+    expect(entryLines(ENTRIES, 80)).toEqual(["space off here · g off everywhere · d delete · v name only"]);
+    const lines = entryLines(ENTRIES, 40);
+    expect(lines).toEqual(["space off here · g off everywhere", "d delete · v name only"]);
+    for (const text of lines) {
+      expect(text.length).toBeLessThanOrEqual(40);
+      // Each line is whole entries.
+      for (const part of text.split(" · ")) expect(ENTRIES).toContain(part);
+    }
+    // An entry wider than a line is a line of its own, as long as it is.
+    expect(entryLines(["space off everywhere", "d delete"], 12)).toEqual(["space off everywhere", "d delete"]);
+  });
+
+  it("wraps a status that does not fit onto a second line, and cuts it past that", () => {
+    expect(statusLines("", 56)).toEqual([]);
+    expect(statusLines("Nothing changed.", 56)).toEqual(["Nothing changed."]);
+    const off = "Turned off figma in this project, for personal and work · u to undo";
+    const two = statusLines(off, 56);
+    expect(two).toHaveLength(2);
+    expect(two.join(" ")).toBe(off);
+    for (const text of two) expect(text.length).toBeLessThanOrEqual(56);
+    const long = statusLines(`${off} ${off} ${off}`, 56);
+    expect(long).toHaveLength(2);
+    expect(long[1]?.endsWith("…")).toBe(true);
+    expect(long[1]?.length).toBeLessThanOrEqual(56);
   });
 });

@@ -59,47 +59,78 @@ const PATH_MIN = 12;
 const UNDO_NOTE = "Puts back what the change changed, unless it changed since.";
 const UNDO_HINT = "Press u afterwards to put them back.";
 
-/**
- * A file and what follows it, two spaces apart, in `width` columns: a path gives way first, from
- * its middle, down to PATH_MIN; then the line is cut at its end. `lead` goes before the file; a
- * kept copy's words are no path, and are only cut at the end.
- */
-function pathLine(lead: string, file: string, rest: string[], width: number): string {
-  const after = rest.filter((part) => part !== "");
-  const whole = (p: string) => [lead + p, ...after].join(GAP);
-  const over = whole(file).length - width;
-  const fitted = over > 0 && file !== KEPT_COPY ? middleCut(file, Math.max(PATH_MIN, file.length - over)) : file;
-  return cell(whole(fitted), width).trimEnd();
+/** The columns `rows` take, two spaces apart: each as wide as its widest cell, and only those someone fills. */
+function columnsOf(rows: string[][]): { used: number[]; widths: number[]; total: number } {
+  const count = Math.max(0, ...rows.map((row) => row.length));
+  const used = Array.from({ length: count }, (_, c) => c).filter((c) => rows.some((row) => (row[c] ?? "") !== ""));
+  const widths = used.map((c) => Math.max(...rows.map((row) => (row[c] ?? "").length)));
+  return { used, widths, total: widths.reduce((sum, w) => sum + w, 0) + GAP.length * Math.max(0, used.length - 1) };
 }
 
-/** The change lines: one per plan line, or with several accounts to pick from, one per account. */
+/**
+ * Lines of cells, two spaces apart, every column but the last as wide as its widest cell, so each
+ * starts at the same place on every line, as the CLI's columns do; a column nobody fills is left
+ * out. When that is wider than `width`, the `path` column gives way first, down to PATH_MIN - a
+ * path cut from its middle, a kept copy's words at their end - then each line is cut at its end.
+ */
+function aligned(rows: string[][], width: number, path?: number): string[] {
+  const { used, widths, total } = columnsOf(rows);
+  const at = path === undefined ? -1 : used.indexOf(path);
+  const room = widths[at];
+  if (room !== undefined && total > width) widths[at] = Math.max(Math.min(PATH_MIN, room), room - (total - width));
+  return rows.map((row) => {
+    const cells = used.map((c, i) => {
+      const text = row[c] ?? "";
+      const w = widths[i] ?? 0;
+      const fitted =
+        i !== at || text.length <= w ? text : text === KEPT_COPY ? cell(text, w).trimEnd() : middleCut(text, w);
+      return i === used.length - 1 ? fitted : fitted.padEnd(w);
+    });
+    return cell(cells.join(GAP), width).trimEnd();
+  });
+}
+
+/**
+ * The change lines: one per plan line - file, what, note - or with several accounts to pick from,
+ * one per account. A picker line too wide for its file leaves the file out: the account says whose
+ * .claude.json it is, and what changes stays whole for as long as it fits.
+ */
 function changeLines(dialog: Extract<Dialog, { type: "plan" }>, opts: Opts): DialogLine[] {
   const { plan, full } = dialog;
   const home = (file: string) => fileWords(file, opts.homeDir, opts.stashDir);
   const lines = plan.changes.flatMap((change) => change.lines);
-  const plain = (line: PlanLine, at: number): DialogLine => ({
-    key: `change-${at}`,
-    text: pathLine("", home(line.file), [line.what, line.note ?? ""], opts.width),
-  });
+  const plain = (rows: PlanLine[], from: number): DialogLine[] =>
+    aligned(
+      rows.map((line) => [home(line.file), line.what, line.note ?? ""]),
+      opts.width,
+      0,
+    ).map((text, at) => ({ key: `change-${from + at}`, text }));
   const accounts = plan.accounts ?? [];
-  if (accounts.length <= 1) return lines.map(plain);
+  if (accounts.length <= 1) return plain(lines, 0);
   const fullLines = full.changes.flatMap((change) => change.lines);
-  // The names padded alike, so the files line up.
-  const nameWidth = Math.max(...accounts.map((account) => shortProfile(account.profile).length));
-  const picker = accounts.map((account, at): DialogLine => {
+  const rows = accounts.map((account, at) => {
     const own = fullLines.filter((line) => line.account === account.profile);
     const whats = [...new Set(own.map((line) => line.what))].join(", ");
     const box = account.chosen ? symbol.checkboxOn : symbol.checkboxOff;
-    const name = shortProfile(account.profile).padEnd(nameWidth);
-    const lead = `${at === dialog.cursor ? symbol.cursor : " "} ${box} ${name}${GAP}`;
-    return {
-      key: `account-${account.profile}`,
-      text: pathLine(lead, own[0] ? home(own[0].file) : "", [whats], opts.width),
-      ...(at === dialog.cursor ? { cursor: true } : {}),
-    };
+    const lead = `${at === dialog.cursor ? symbol.cursor : " "} ${box} ${shortProfile(account.profile)}`;
+    return [lead, own[0] ? home(own[0].file) : "", whats];
   });
+  const fits = columnsOf(rows).total <= opts.width;
+  const picker = aligned(fits ? rows : rows.map(([lead = "", , whats = ""]) => [lead, whats]), opts.width).map(
+    (text, at): DialogLine => ({
+      key: `account-${accounts[at]?.profile ?? at}`,
+      text,
+      ...(at === dialog.cursor ? { cursor: true } : {}),
+    }),
+  );
   // What no account owns - a project's settings file - is the same whichever accounts are picked.
-  return [...picker, ...lines.filter((line) => line.account === undefined).map(plain)];
+  return [
+    ...picker,
+    ...plain(
+      lines.filter((line) => line.account === undefined),
+      picker.length,
+    ),
+  ];
 }
 
 type Parts = {
@@ -130,10 +161,11 @@ function partsOf(dialog: Dialog, opts: Opts): Parts {
       head: [{ key: "question", text: cell(`Undo: ${summary}?`, width).trimEnd(), tone: "text", bold: true }],
       firstRefusal: [],
       moreRefusals: [],
-      changes: dialog.preview.files.map((file, at) => ({
-        key: `file-${at}`,
-        text: pathLine("", tilde(file.path, opts.homeDir), [file.action], width),
-      })),
+      changes: aligned(
+        dialog.preview.files.map((file) => [tilde(file.path, opts.homeDir), file.action]),
+        width,
+        0,
+      ).map((text, at) => ({ key: `file-${at}`, text })),
       footer: muted("footer", UNDO_NOTE, width),
       top: dialog.top,
     };

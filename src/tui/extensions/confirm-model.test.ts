@@ -15,6 +15,8 @@ const BACKUP = at(".clausona", "backups", "extensions");
 const STASH = at(".clausona", "extensions", "stash");
 const OPTS = { homeDir: HOME, backupRoot: BACKUP, stashDir: STASH };
 const BACKUP_LINE = `Backup: ${tilded(".clausona", "backups", "extensions")}${path.sep}`;
+/** notes's line under old-one's: its note starts where it would after old-one's longer path. */
+const NOTES_LINE = `${tilded(".claude", "skills", "notes").padEnd(tilded(".claude", "skills", "old-one").length)}  link only, target kept`;
 const PRESS_U = "Press u afterwards to put them back.";
 
 function line(file: string, more: Partial<PlanLine> = {}): PlanLine {
@@ -80,7 +82,7 @@ describe("dialogView: a plan", () => {
       "Delete 2 skills?",
       "",
       tilded(".claude", "skills", "old-one"),
-      `${tilded(".claude", "skills", "notes")}  link only, target kept`,
+      NOTES_LINE,
       "",
       BACKUP_LINE,
       PRESS_U,
@@ -98,14 +100,14 @@ describe("dialogView: a plan", () => {
     expect(texts(dialogOf(DELETE_TWO), 56, 5)).toEqual([
       "Delete 2 skills?",
       tilded(".claude", "skills", "old-one"),
-      `${tilded(".claude", "skills", "notes")}  link only, target kept`,
+      NOTES_LINE,
       BACKUP_LINE,
       PRESS_U,
     ]);
     expect(texts(dialogOf(DELETE_TWO), 56, 4)).toEqual([
       "Delete 2 skills?",
       tilded(".claude", "skills", "old-one"),
-      `${tilded(".claude", "skills", "notes")}  link only, target kept`,
+      NOTES_LINE,
       BACKUP_LINE,
     ]);
   });
@@ -171,7 +173,7 @@ describe("dialogView: a plan", () => {
       "work has not opened this project",
       "",
       tilded(".claude", "skills", "old-one"),
-      `${tilded(".claude", "skills", "notes")}  link only, target kept`,
+      NOTES_LINE,
       "",
       BACKUP_LINE,
       PRESS_U,
@@ -181,7 +183,7 @@ describe("dialogView: a plan", () => {
       "Delete 2 skills?",
       "pdf can't: It comes back from claude.ai.",
       tilded(".claude", "skills", "old-one"),
-      `${tilded(".claude", "skills", "notes")}  link only, target kept`,
+      NOTES_LINE,
       BACKUP_LINE,
     ]);
   });
@@ -248,7 +250,7 @@ describe("dialogView: a plan", () => {
     expect(view.lines.map((l) => l.text)).toEqual([
       "Turn off figma in this project, for default?",
       "",
-      `  ◉ default  ${tilded(".claude.json")}  disabledMcpServers + figma`,
+      `  ◉ default  ${tilded(".claude.json").padEnd(tilded(".claude-work", ".claude.json").length)}  disabledMcpServers + figma`,
       `✦ ○ work     ${tilded(".claude-work", ".claude.json")}  disabledMcpServers + figma`,
       "",
       BACKUP_LINE,
@@ -262,6 +264,32 @@ describe("dialogView: a plan", () => {
       "space pick",
       "↑↓ move",
     ]);
+    // Too narrow for the files: the account says whose .claude.json it is, and what changes stays whole.
+    const narrow = texts(dialogOf(plan, { full, cursor: 1 }), 56, 12);
+    expect(narrow.slice(2, 4)).toEqual([
+      "  ◉ default  disabledMcpServers + figma",
+      "✦ ○ work     disabledMcpServers + figma",
+    ]);
+    for (const text of narrow) expect(text).not.toContain("…");
+    // Narrower still: what changes is cut at its end.
+    expect(texts(dialogOf(plan, { full, cursor: 1 }), 30, 12)[3]).toBe("✦ ○ work     disabledMcpServe…");
+  });
+
+  it("starts each column at the same place on every change line", () => {
+    const edit = (file: string, what: string, note?: string): FileChange =>
+      removal(line(file, { change: "edit", what, ...(note !== undefined ? { note } : {}) }));
+    const plan = planOf({
+      verb: "off",
+      question: "Turn off 2 skills in this project?",
+      changes: [
+        edit(at("repos", "app", ".claude", "settings.local.json"), "skillOverrides.eli5 → off", "changes the repo"),
+        edit(at(".codex", "config.toml"), "skills.config eli5 → off"),
+      ],
+    });
+    const [first = "", second = ""] = texts(dialogOf(plan), 100, 9).slice(2, 4);
+    expect(first.indexOf("skillOverrides")).toBe(second.indexOf("skills.config"));
+    expect(first.endsWith("→ off  changes the repo")).toBe(true);
+    expect(second.endsWith("skills.config eli5 → off")).toBe(true);
   });
 
   it("names a copy clausona kept in words, never by its path", () => {
@@ -306,7 +334,10 @@ describe("dialogView: undo", () => {
       summary: "Turned off eli5 in this project",
       createdAt: "2026-10-10T04:36:48.123Z",
     },
-    files: [{ path: at("repos", "app", ".claude", "settings.local.json"), action: "remove" }],
+    files: [
+      { path: at("repos", "app", ".claude", "settings.local.json"), action: "remove" },
+      { path: at(".claude.json"), action: "edit back" },
+    ],
   };
 
   it("asks, lists each file and what undo does to it, and says what it leaves alone", () => {
@@ -315,6 +346,7 @@ describe("dialogView: undo", () => {
       "Undo: Turned off eli5 in this project?",
       "",
       `${tilded("repos", "app", ".claude", "settings.local.json")}  remove`,
+      `${tilded(".claude.json").padEnd(tilded("repos", "app", ".claude", "settings.local.json").length)}  edit back`,
       "",
       "Puts back what the change changed, unless it changed since.",
     ]);

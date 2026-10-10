@@ -412,6 +412,43 @@ describe("ExtensionsScreen: writes", () => {
     }
   });
 
+  it("keeps the marked rows' keys, a long status and a refusal's end in sight at 60 by 24", async () => {
+    const { h, app } = seed();
+    const instance = mount(h, app, 60, 24);
+    await openRow(instance, "Not used in 90 days", "old-one");
+    await press(instance, "x");
+    await rowTo(instance, "lost", UP);
+    await press(instance, "x");
+    const marked = hintLine(await seen(instance, (f) => f.includes("· 2 marked")));
+    expect(marked).toContain("d delete");
+    expect(marked).toContain("x mark");
+    await press(instance, ESC);
+    await press(instance, ESC);
+    await press(instance, "2");
+    await seen(instance, (f) => f.includes("▸ Loaded"));
+    await scopeTo(instance, "Global");
+    await press(instance, RIGHT);
+    await rowTo(instance, "figma");
+    await press(instance, SPACE);
+    await seen(instance, (f) => f.includes("◉ work"));
+    await press(instance, "y");
+    // Two lines for a status one cannot hold: its end, how to undo, is still there.
+    const off = await seen(instance, (f) => /for default and work · u to undo/.test(f.replace(/\n +/g, " ")));
+    expect(off.split("\n").filter((line) => /Turned off figma|u to undo/.test(line)).length).toBe(2);
+    await press(instance, LEFT);
+    await press(instance, "1");
+    await seen(instance, (f) => f.includes("▸ Loaded"));
+    await scopeTo(instance, "Cloud");
+    await press(instance, RIGHT);
+    await rowTo(instance, "pdf");
+    await press(instance, "d");
+    await seen(instance, (f) => /Press space to turn it off\s+instead\./.test(f.replace(/\n +/g, " ")));
+    for (const frame of instance.frames) {
+      expect(height(frame)).toBeLessThanOrEqual(24 - 2);
+      for (const line of stripAnsi(frame).split("\n")) expect(line.length).toBeLessThanOrEqual(60);
+    }
+  });
+
   it("keeps the apply's status when the row under the cursor goes", async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);
