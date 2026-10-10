@@ -266,7 +266,7 @@ describe("plan: Claude skills", () => {
     const { h, app, inv, ctx } = await seed();
     const oldOne = rowIn(inv, app, "global", "old-one");
     const p = plan(ctx, "skills", act("rm", "here", [oldOne]));
-    const real = realpathSync(h.path(".claude/skills/old-one"));
+    const real = realpathSync.native(h.path(".claude/skills/old-one"));
     expect(p.changes).toEqual([
       {
         kind: "remove",
@@ -305,7 +305,7 @@ describe("plan: Claude skills", () => {
         ],
       },
     ]);
-    const shared = realpathSync(h.path("shared/notes"));
+    const shared = realpathSync.native(h.path("shared/notes"));
     expect(p.changes.some((c) => samePath(c.file, shared) || samePath(c.file, h.path("shared/notes")))).toBe(false);
   });
 
@@ -392,7 +392,7 @@ describe("plan: Claude skills", () => {
     expect(both.changes).toHaveLength(1);
     const change = both.changes[0];
     expect(change?.kind).toBe("remove");
-    expect(samePath(change?.file, realpathSync(h.path(".agents/skills/shared-one")))).toBe(true);
+    expect(samePath(change?.file, realpathSync.native(h.path(".agents/skills/shared-one")))).toBe(true);
     expect(change?.lines).toHaveLength(1);
     expect(change?.lines[0]?.rows).toEqual([claude.key, codex.key]);
     expect(both.question).toBe("Delete 2 skills?");

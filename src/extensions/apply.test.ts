@@ -418,7 +418,7 @@ describe("apply: .claude.json under Claude Code's lock", () => {
       });
       const env: WriteEnv = { ...writeEnvFor(h.home, clock()), lockWaitMs: 300 };
       const link = h.path(".claude.json");
-      const real = realpathSync(h.path("dotfiles", "claude.json"));
+      const real = realpathSync.native(h.path("dotfiles", "claude.json"));
       const before = readFileSync(real, "utf8");
       const p = await planNow(h, app, "mcp", "off", "here", github);
       expect(p.changes.map((c) => c.file)).toEqual([link]);
@@ -506,7 +506,7 @@ describe("apply: folders and links", () => {
     ]);
 
     const undone = await undo(env);
-    expect(undone).toMatchObject({ restored: [realpathSync(folder)], skipped: [] });
+    expect(undone).toMatchObject({ restored: [realpathSync.native(folder)], skipped: [] });
     expect(await hashTree(folder)).toBe(before);
     expect(existsSync(backup)).toBe(false);
   });
@@ -525,7 +525,7 @@ describe("apply: folders and links", () => {
     expect(existsSync(link)).toBe(false);
     expect(existsSync(h.path("shared", "notes", "SKILL.md"))).toBe(true);
     await undo(env);
-    expect(realpathSync(link)).toBe(realpathSync(h.path("shared", "notes")));
+    expect(realpathSync.native(link)).toBe(realpathSync.native(h.path("shared", "notes")));
   });
 
   it("leaves the backup where it is when something is at the folder's place again", async () => {
