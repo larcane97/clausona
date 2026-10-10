@@ -672,13 +672,17 @@ after the exclude list), `excluded`, `unknownNames` and `emptyPatterns`.
 
 ### The routing skill
 
-The clausona plugin for Claude Code has a `routing` skill that teaches a session all of this.
+The `routing` plugin has a skill of the same name that teaches a session all of this.
 clausona shares plugins across profiles, so one install reaches every account:
 
 ```bash
 claude plugin marketplace add larcane97/clausona
-claude plugin install clausona@clausona
+claude plugin install routing@clausona
 ```
 
-For Codex, copy `plugins/clausona/skills/routing/SKILL.md` from this repository into
-`~/.agents/skills/clausona-routing/`.
+In Codex:
+
+```bash
+codex plugin marketplace add larcane97/clausona
+codex plugin add routing@clausona
+```
