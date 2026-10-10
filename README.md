@@ -182,7 +182,7 @@ clausona hides or clears from the environment: **[docs/api-profiles.md](docs/api
 
 `csn skills`, `csn mcp` and `csn hooks` list the skills, MCP servers and hooks that Claude Code
 and Codex load, for every account, seen from one project. The dashboard's Extensions screen
-shows the same. Both only read files, and secret values are never shown.
+shows the same. Secret values are never shown.
 
 ```bash
 csn skills ls --scope project                 # the skills this project defines
@@ -190,10 +190,20 @@ csn skills ls --scope unused --tool claude    # Claude skills not used in 90 day
 ```
 
 `ls` lists one scope, by default what loads in this project; `show <name>` tells everything
-about one item, such as which accounts have an MCP server and whether it is on here. Add
-`--json` for scripts and coding agents.
+about one item, such as which accounts have an MCP server and whether it is on here. Both only
+read files.
 
-Scopes, tags, every option, the JSON fields and recipes for agents:
+`off`, `on`, `rm` and `undo` change things, each after a confirm step and behind a backup:
+
+```bash
+csn skills rm old-one --dry-run               # what deleting it would change
+csn mcp off github --account work             # off in this project, for one account
+csn skills undo                               # put back the last skills change
+```
+
+The screen does the same with keys. Add `--json` for scripts and coding agents.
+
+Scopes, tags, every option, what each change writes, the JSON fields and recipes for agents:
 **[docs/extensions.md](docs/extensions.md)**.
 
 ## Commands
@@ -219,9 +229,9 @@ Scopes, tags, every option, the JSON fields and recipes for agents:
 | `clausona config <profile> --key \| --key-from <source>`            | Change an API profile's key, or where it is read from |
 | `clausona config <profile> --show [--json]`                         | Print a profile's settings (`--json` adds the catalog) |
 | `clausona doctor [--json]`                                          | Check profile health                                 |
-| `clausona skills ls\|show`                                          | Skills each project loads, by scope                  |
-| `clausona mcp ls\|show`                                             | MCP servers each project loads, by scope             |
-| `clausona hooks ls\|show`                                           | Hooks each project runs, by scope                    |
+| `clausona skills ls\|show\|off\|on\|rm`                             | Skills each project loads; turn them off or delete them |
+| `clausona mcp ls\|show\|off\|on\|rm`                                | MCP servers each project loads; turn them off or delete them |
+| `clausona hooks ls\|show\|off\|on\|rm`                              | Hooks each project runs; turn them off or delete them |
 | `clausona repair <profile>`                                         | Fix broken shared links                              |
 | `clausona login <profile>`                                          | Re-authenticate a profile                            |
 | `clausona update [--yes]`                                           | Update to the latest release (asks first; `--yes` skips) |

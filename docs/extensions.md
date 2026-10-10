@@ -6,9 +6,9 @@
 that Claude Code and Codex load, for every account clausona manages, seen from one project.
 The dashboard's Extensions screen shows the same rows.
 
-The commands and the screen only read files. In this version nothing here changes a file. A
-later version adds ways to turn things off and to delete them, each with a confirm step and an
-undo.
+`ls` and `show` only read files. `off`, `on`, `visibility`, `rm` and `undo` change them, each
+after a confirm step and behind a backup, and `undo` puts the last change back. The screen has
+the same changes as keys.
 
 `csn` is the same command as `clausona`. The examples use the fictional accounts `personal`
 and `work`, the projects `~/app` and `~/site`, and a plugin `kit@demo`.
@@ -18,6 +18,7 @@ and `work`, the projects `~/app` and `~/site`, and a plugin `kit@demo`.
 - [States and tags](#states-and-tags)
 - [Reading the tables](#reading-the-tables)
 - [CLI reference](#cli-reference)
+- [Changing things](#changing-things)
 - [JSON](#json)
 - [Safety](#safety)
 - [Recipes for agents](#recipes-for-agents)
@@ -318,32 +319,60 @@ finishes replying".
 clausona skills ls   [--scope <scope>] [--tool claude|codex] [--project <path>] [--json]
 clausona skills show <name> [--tool claude|codex] [--scope <scope>] [--id <id>]
                      [--project <path>] [--json]
+clausona skills off|on <name>... [--everywhere] [change options]
+clausona skills visibility <name> <on|name-only|user-invocable-only|off> [--everywhere]
+                     [change options]
+clausona skills rm   <name>... [change options]
+clausona skills undo [--dry-run] [--yes] [--json]
 clausona mcp    ls   [--scope <scope>] [--tool claude|codex] [--account <name>]...
                      [--project <path>] [--json]
 clausona mcp    show <name> [--tool claude|codex] [--scope <scope>] [--id <id>]
                      [--account <name>]... [--project <path>] [--json]
+clausona mcp    off|on <name>... [--everywhere] [--account <name>]... [change options]
+clausona mcp    rm   <name>... [--account <name>]... [change options]
+clausona mcp    undo [--dry-run] [--yes] [--json]
 clausona hooks  ls   [--scope <scope>] [--tool claude|codex] [--project <path>] [--json]
 clausona hooks  show <id|name> [--tool claude|codex] [--scope <scope>] [--id <id>]
                      [--project <path>] [--json]
+clausona hooks  off|on <id|name>... [change options]
+clausona hooks  rm   <id|name>... [change options]
+clausona hooks  undo [--dry-run] [--yes] [--json]
+
+change options: [--tool claude|codex] [--scope <scope>] [--id <id>]... [--project <path>]
+                [--tracked] [--dry-run] [--yes] [--json]
 ```
 
+`visibility` takes one name or one `--id`, and no `--tool`: it is for Claude skills only.
+
 With no subcommand, `ls` runs: `csn skills --scope project` is `csn skills ls --scope project`.
-`--help` or `-h` prints the command's help; `ls --help` and `show --help` print their own pages.
-Those two say where ids come from and link to this page online, at its JSON and
-[Ids and row keys](#ids-and-row-keys) sections.
+`--help` or `-h` prints the command's help, and every subcommand has a page of its own:
+`csn skills rm --help`. `off --help` and `on --help` print the same page. The pages link to
+this page online, at its JSON, [Ids and row keys](#ids-and-row-keys) and
+[Changing things](#changing-things) sections.
 
 | Option | Meaning |
 |---|---|
-| `--scope <scope>` | For `ls`, the scope to list, `loaded` by default. For `show`, the one scope to look in. |
+| `--scope <scope>` | For `ls`, the scope to list, `loaded` by default. For `show`, `off`, `on`, `visibility` and `rm`, the one scope to look in. |
 | `--tool <tool>` | `claude` or `codex`. Both by default. |
-| `--project <path>` | Look from another project. A relative path is read from the current directory, and a leading `~` is the home folder, so `--project '~/app'` works without a shell. It must be a directory, and its git root is used, as for the current directory. |
-| `--account <name>` | MCP only. In Loaded, the default scope, keep the rows that load for this Claude account; in any other scope, the rows it has, on or off. Give it more than once for several accounts. It takes `work` or `claude:work`, lists Claude rows only, and cannot be used with `--tool codex`. |
-| `--id <id>` | `show` only. A row key or a copy's id, from `ls --json`. |
+| `--project <path>` | Look from another project, and make a change there. A relative path is read from the current directory, and a leading `~` is the home folder, so `--project '~/app'` works without a shell. It must be a directory, and its git root is used, as for the current directory. |
+| `--account <name>` | MCP only. In Loaded, the default scope, keep the rows that load for this Claude account; in any other scope, the rows it has, on or off. With `off`, `on` and `rm`, change this account only. Give it more than once for several accounts. It takes `work` or `claude:work`, lists Claude rows only, and cannot be used with `--tool codex`. |
+| `--id <id>` | `show`, `off`, `on`, `visibility` and `rm`. A row key or a copy's id, from `ls --json`. `off`, `on` and `rm` take it more than once, for several rows; `show` and `visibility` take one. |
+| `--everywhere` | `off`, `on` and `visibility`: in every project, not only this one. Hooks always change everywhere, so for them it changes nothing. See [Off and on](#off-and-on). |
+| `--tracked` | `off`, `on`, `visibility` and `rm`: go ahead with a change to a file or folder git tracks, which changes the repo. See [Delete](#delete). |
+| `--dry-run` | `off`, `on`, `visibility`, `rm` and `undo`: print the plan and change nothing. |
+| `--yes`, `-y` | `off`, `on`, `visibility`, `rm` and `undo`: do not ask first. Needed when there is no terminal, and with `--json`. |
 | `--json` | Print JSON version 1, described under [JSON](#json). |
 
 A value can follow its option as `--scope project` or `--scope=project`. A value cannot start
 with `-`. An unknown option, a value that is not in the list, a name after `ls`, `--account`
-outside `mcp` and `--id` with `ls` are all bad usage, exit code 2.
+outside `mcp` and `--id` with `ls` are all bad usage, exit code 2. So is an option the
+subcommand does not take, such as `--everywhere` with `rm`, `--tool` with `visibility`, or a
+name with `undo`.
+
+An unknown subcommand is bad usage too, and says which ones there are:
+`Unknown subcommand 'nope'. clausona skills takes ls, show, off, on, visibility, rm or undo.`
+An unknown command, as in `csn nope`, prints `Unknown command 'nope'. Run clausona --help.` and
+exits 2.
 
 ### Scope values
 
@@ -465,20 +494,24 @@ same when a plugin updates; a copy's id holds the plugin's install folder, which
 hook's id holds its place in its file (`#<group>.<index>`), which moves when hooks above it are
 added or removed.
 
-`--id`, and a name given as an id, take a row key or the id of any copy. A copy's id picks its
-whole row.
+`--id`, and a name given as an id, take a row key or the id of any copy. For `show`, a copy's
+id picks its whole row. A change takes that copy alone, so `csn mcp rm --id` with one account's
+copy leaves the other accounts' copies as they are.
 
 ### Output, errors and exit codes
 
-Text and JSON go to stdout. An error goes to stderr as one plain-text line or block, with
-`--json` too. The one exception is an ambiguous name with `--json`: its object goes to stdout
-and stderr stays empty. A JSON body for the other errors is a planned follow-up.
+Text and JSON go to stdout. Without `--json`, an error goes to stderr as one plain-text line or
+block. With `--json`, every error is one JSON object on stdout, and stderr stays empty. Its
+`error` names the kind of error; [Errors](#errors) lists them.
 
 | Code | When |
 |---|---|
-| 0 | OK |
-| 1 | Not found, or another failure, such as clausona not set up yet |
-| 2 | Bad usage, an unknown option, or an ambiguous name |
+| 0 | Done, or nothing to do |
+| 1 | Not found, refused, changed since it was read, locked, conflict, failed, or nothing to undo |
+| 2 | Bad usage, an unknown option or command, an ambiguous name, or a change without --yes where it can't ask: no terminal, or --json |
+
+A dry run exits 0, even when it lists rows that can't change. So does a change with nothing to
+do, and a question answered no.
 
 A name nothing has prints `No skill named 'nope'.` and exits 1. When `--tool`, `--scope` or
 `--account` narrowed the search, it adds "Leave out --tool, --scope or --account to look
@@ -488,10 +521,298 @@ When a file cannot be read, the text output ends with "Could not read every file
 list may miss what they hold:" and each file, with a position or a reason and never what it
 holds. JSON lists them in `warnings`. The exit code stays 0.
 
+## Changing things
+
+`off` and `on` turn a row off or back on, `visibility` sets how much of a Claude skill Claude
+Code shows, and `rm` deletes. Each takes one or more names, or `--id`s from `ls --json`. A name
+is looked up the way `show` looks (see [show](#show)), so `csn skills rm eli5` takes the copy
+that loads here, and `--scope`, `--tool` or `--id` picks another. A name that several rows have
+is ambiguous and exits 2, as with `show`.
+
+A change is planned first and shown, and made only once you agree. Every file it touches is
+backed up first, and `undo` puts the change back. On the screen the same changes are keys, see
+[Changing things from the screen](#changing-things-from-the-screen).
+
+### Off and on
+
+Here is the project everything is seen from: the current one, or `--project`. Everywhere is
+every project, through your user settings for Claude Code and through Codex's own
+`config.toml`. Without `--everywhere`, `off` and `on` work here. On the screen `space` is here
+and `g` is everywhere. [What each change writes](#what-each-change-writes) has the key and the
+file for each tool and kind.
+
+`on` takes back what `off` wrote at the same level. It removes the value, or writes the row on
+there where removing it would leave a value below that still turns it off. For a plugin, `on`
+always writes `true`. When a file at another level still turns the row off, the plan says so in
+a note, such as `Still off in ~/app/.claude/settings.local.json`.
+
+Some rows can only be switched one way:
+
+- Codex turns a user skill off everywhere or nowhere, so off here is refused for it.
+- Claude Code turns a `.mcp.json` server on or off per project, so everywhere is refused for it.
+- A plugin installed for one project can't be switched everywhere.
+- Codex reads a project's `.codex` folder only in a project it trusts, so a change there, such
+  as a Codex MCP server off here, is refused in any other project. In the home folder that
+  folder is your user config, so use `--everywhere` there.
+- What a plugin brings is turned on and off with the plugin. Switch the plugin itself, with
+  `--scope plugins`: `csn skills off kit@demo --scope plugins`. A plugin's MCP server has a
+  switch of its own here, in each account, so `mcp off` works on one in this project.
+
+[Refusals](#refusals) has every reason a change can't be made, in the words the CLI and the
+screen use.
+
+A Claude MCP server that accounts hold in their `.claude.json`, a user server or a local one, is
+switched in each account's entry for the project: `projects[<project>].disabledMcpServers`, the
+list `/mcp disable` writes. A plugin's server is switched the same way. Claude Code makes that
+entry the first time an account opens the project, and clausona never makes one. So off here
+changes only the accounts that have opened the project, and leaves out the others with a note,
+`work has not opened this project`. When no account that has the server has opened the project,
+the change is refused.
+
+`--account <name>`, once or more, changes those accounts only. Without it, every account that
+has the server changes. On the screen the dialog lists the accounts to pick from.
+
+Off everywhere takes the server out of each account's `.claude.json`. clausona keeps the entry
+it took out, so that `on --everywhere` can put it back where it was.
+
+Neither Claude Code nor Codex has a switch for one hook in one project. So `hooks off` and
+`hooks on` always work everywhere: off takes the hook out of its settings file and clausona
+keeps it, and on puts it back. `--everywhere` is taken and changes nothing. On the screen `g`
+turns a hook off, and `space` says why it can't.
+
+A server or a hook taken out and kept by clausona still has its row, in its own scope and in
+`--scope all`, with the tag `off`. It is not in Loaded, since it does not load. Its details read
+`off everywhere (kept by clausona)`. Its id changes to
+`<kind>:<tool>:<scope>:stash-<id>:<name>`, so read it again from `ls --json` before you pass it
+to `on`.
+
+`on --everywhere`, or `g` on the screen, puts it back. If something of that name is back in that
+place by then, the change stops with a conflict and clausona keeps its copy. `rm` deletes the
+copy clausona kept: it goes into the backup like any other file.
+
+### What each change writes
+
+A path with no `~`, such as `.claude/settings.local.json`, is in the project. `~/.claude` is
+the primary Claude Code folder, and Codex's home is `~/.codex` by default, as under
+[Scopes](#scopes).
+
+| Tool, kind | Off here | Off everywhere | Delete |
+|---|---|---|---|
+| Claude skills | `skillOverrides.<name>` set to `"off"` in `.claude/settings.local.json` | `skillOverrides.<name>` set to `"off"` in `~/.claude/settings.json` | The folder moves into the backup. A link is removed and its target kept. A legacy command's `.md` file moves into the backup. |
+| Claude plugins | `enabledPlugins.<id>` set to `false` in `.claude/settings.local.json` | `enabledPlugins.<id>` set to `false` in `~/.claude/settings.json` | Refused: `/plugin` in Claude Code uninstalls a plugin. |
+| Claude MCP, user and local servers | The name added to `projects[<project>].disabledMcpServers` in each account's `.claude.json` | Taken out of each account's `.claude.json` and kept by clausona | `mcpServers.<name>` deleted from each account's `.claude.json`, or from the project's entry there for a local server |
+| Claude MCP, `.mcp.json` servers | The name added to `disabledMcpjsonServers` and taken out of `enabledMcpjsonServers`, in `.claude/settings.local.json` | Refused | `mcpServers.<name>` deleted from that `.mcp.json` |
+| Claude MCP, a plugin's servers | As for a user server | Refused: switch the plugin | Refused: it goes with the plugin |
+| Claude hooks | Refused: hooks are switched everywhere | Taken out of its settings file and kept by clausona | Deleted from its settings file |
+| Codex skills | A project skill: a `[[skills.config]]` entry with the `path` of its `SKILL.md` and `enabled = false`, in Codex's `config.toml`. A user skill: refused | A `[[skills.config]]` entry with its `name` and `enabled = false`, in Codex's `config.toml` | As for Claude skills. A built-in skill is refused. |
+| Codex MCP | `mcp_servers.<name>.enabled = false` in the project's `.codex/config.toml` | A user server: `mcp_servers.<name>.enabled = false` in Codex's `config.toml`. A project server: refused | `[mcp_servers.<name>]` deleted from the `config.toml` that defines it |
+| Codex hooks | Refused: hooks are switched everywhere | Taken out of its `hooks.json` and kept by clausona | Deleted from its `hooks.json` |
+
+`.claude/settings.local.json` is the project's own Claude Code settings, the ones not shared
+with the repo. When a change needs a file that is not there yet, such as a project's first
+`.claude/settings.local.json`, it makes the file, and the plan says `create`.
+
+`on` writes in the same places. For a `.mcp.json` server it also takes the name out of
+`disabledMcpjsonServers` in each account's entry for the project, where an account turned it
+down. A server turned off in your user settings or in the project's shared
+`.claude/settings.json` stays off whatever is written here, so `on` is refused and the reason
+names that file. `visibility` writes `skillOverrides.<name>` as off does, with the level as the
+value.
+
+A JSON file keeps its indent, key order, line endings and last newline. A TOML file is changed
+line by line, so its comments stay, and the result is read back and checked before it is saved.
+
+### Visibility
+
+A Claude skill has four levels, the values of `skillOverrides` that Claude Code reads:
+
+| Level | Claude Code shows the skill |
+|---|---|
+| `on` | as the full skill |
+| `name-only` | as its name only |
+| `user-invocable-only` | only when you call it |
+| `off` | not at all: it is off |
+
+`csn skills visibility eli5 name-only` sets it in this project, in
+`.claude/settings.local.json`. With `--everywhere` it goes in your user settings,
+`~/.claude/settings.json`. `on` shows the full skill again: it takes this level's value out, or
+writes `on` where a value below would still hold the skill back. `off` is the same as
+`csn skills off`.
+
+Only Claude skills have levels, so `visibility` looks at Claude's skills alone and takes no
+`--tool`. On the screen, `v` in a Claude skill's details moves it to the next level, in this
+project: full skill, name only, only when you call it, off, then the full skill again.
+
+### Delete
+
+`rm` deletes the thing a row names, wherever the row has a copy of it: a skill's folder, a
+server's entry in each account's `.claude.json`, a hook's entry in its settings file.
+`--account` keeps it to some accounts.
+
+A skill's folder moves into the backup, so `undo` can move it back. A folder reached through a
+linked folder above it is deleted at its real path, and the plan names that path,
+`the folder at ~/dotfiles/skills/eli5`. A skill that is itself a link is unlinked. The link goes
+and what it leads to stays, and the plan says `link only, target kept`. A broken link is removed
+the same way.
+
+A link can make one folder two rows. With `~/.claude/skills` linked to `~/.agents/skills`, each
+skill there is a Claude row and a Codex row, and deleting one would delete the other's folder
+too. So it is refused unless both rows are in the same `rm`, as in
+`csn skills rm --id '<id>' --id '<other id>'`, or both are marked with `x` on the screen. Then
+the folder moves once.
+
+A file or folder that git tracks in a project changes the repo when it changes. The CLI refuses
+such a change unless you add `--tracked`, for `off`, `on` and `visibility` as well as `rm`.
+What is in your home folder and in no project counts as not tracked, even when the home folder
+is a repository.
+
+On the screen, `d` on what git tracks opens the dialog with a warning,
+`Git tracks deploy-check in app, so deleting changes the repo.` It offers `o` to turn it off
+here instead, `y` to delete it anyway, and `n`. The other keys mark such a line
+`changes the repo`, and the dialog is your consent. When git is not there or fails, the file
+counts as not tracked, and the change is backed up all the same.
+
+Some things can't be deleted here:
+
+- A Cloud skill comes back from claude.ai. Turn it off instead.
+- A built-in skill comes with the tool. Turn it off instead.
+- A plugin is uninstalled with `/plugin` in Claude Code, and what it brings goes with it.
+- What your organization's managed settings set stays as they set it. clausona changes nothing
+  managed.
+
+### Confirm, backups and undo
+
+Before anything changes, the plan is shown: a question, a line per file with what changes in
+it, what is already as asked, what can't change and why, and where the backup goes. The CLI
+prints it and asks, no by default. The screen shows it in a dialog.
+
+```
+$ csn skills rm old-one notes
+  Delete 2 skills?
+
+      ~/.claude/skills/old-one
+      ~/.claude/skills/notes    link only, target kept
+
+  Backup: ~/.clausona/backups/extensions/
+  Run clausona skills undo afterwards to put them back.
+  Apply? (y/N) y
+  ✔ Deleted 2 skills
+    Backup: ~/.clausona/backups/extensions/20261010T043648123Z-skills-rm
+    Undo: clausona skills undo
+```
+
+Answering no prints `Cancelled. Nothing changed.` and exits 0.
+
+`--yes`, or `-y`, goes ahead without asking. Where there is no terminal to ask on, as when a
+script or an agent runs it, a change without `--yes` is bad usage and exits 2:
+`This changes files, and there is no terminal to confirm on. Add --yes to go ahead, or --dry-run to see the plan.`
+With `--json` it needs `--yes` on a terminal too, so that stdout stays one JSON object:
+`With --json, add --yes to go ahead, or --dry-run to see the plan.`
+
+`--dry-run` prints the plan, as JSON with `--json`, and changes nothing, not even
+`~/.clausona`. It exits 0. The text ends
+`Dry run: nothing changed. Run it again with --yes to apply.`, or, when some rows can't change,
+says to leave them out first.
+
+In the CLI a change is all or nothing. When any row it names can't change, nothing changes: it
+exits 1 and lists each row with its reason, after `Nothing changed: 1 of 2 can't be deleted.`
+The screen changes the rows that can, and the dialog lists the others.
+
+Before it writes, clausona copies each file it will change into
+`~/.clausona/backups/extensions/<id>/`, with a `manifest.json` that says what changed. A deleted
+folder or file is moved there. The id is the time and the change, as in
+`20261010T043648123Z-skills-rm`. clausona keeps the last 50 changes and removes the backups of
+older ones.
+
+The backup folders are 0700 and their files 0600, so only you can read them. A copy of
+`.claude.json` or of a settings file can hold MCP secrets.
+
+`.claude.json` is changed only under Claude Code's own lock, `.claude.json.lock` next to it, so
+clausona never writes it while Claude Code does. When the lock is not free within 15 seconds,
+the change stops: `Claude Code is saving ~/.claude.json. Try again in a moment.`
+
+Just before it writes a file, clausona reads it again and checks that what the plan changes is
+still as it was read. When something else changed it meanwhile, the change stops there:
+`~/.claude.json changed since it was read. Run the command again.` What it did before the stop
+is kept as one change, which `undo` puts back. Each file is written to a temporary file next to
+it, then renamed over it, so a file is never left half written.
+
+`csn skills undo` puts back the newest skills change not undone yet. `mcp undo` and `hooks undo`
+do the same for theirs. Run it again to go one change further back. On the screen, `u` takes
+the newest change of any kind. Undo shows what it will put back and asks too, and it takes
+`--yes`, `--dry-run` and `--json`.
+
+```
+$ csn skills undo --dry-run
+  Undo: Deleted 2 skills?
+
+      ~/.claude/skills/old-one  put back
+      ~/.claude/skills/notes    put back
+
+  Puts back what the change changed, unless it changed since.
+
+  Dry run: nothing changed. Run it again with --yes to undo it.
+```
+
+Undo puts back only what still holds what the change wrote. A file that something else changed
+since is left alone, and undo says so next to its path: `changed since`. When some files go back
+and others don't, it starts `Undid part of it:`, lists each file, and exits 1. When none goes
+back, it starts `Could not undo:`.
+
+For a JSON file, undo looks at each key the change wrote, not at the whole file. Claude Code
+rewrites `.claude.json` all the time, and the rest of the file can change without getting in the
+way. A TOML file, a folder or a link goes back only when it is as the change left it.
+
+A file left alone because Claude Code is saving it reads `Claude Code is saving it`. That change
+stays the next undo's, so running undo again in a moment finishes it.
+
+Undo never names the copies clausona kept by their path. It calls one `the copy clausona kept`,
+and it goes back, or stays, with the file it came from.
+
+Those copies are files in `~/.clausona/extensions/stash/`, one per entry, 0600 like the backups.
+clausona reads them to list what it took out, so leave them to it: `rm` and `on --everywhere`
+deal with them.
+
+### Refusals
+
+When a row can't change, the plan says why. The screen's words name keys and the CLI's name
+options. With `--json`, `refused[].code` is the code below and `refused[].reason` the reason in
+the CLI's words. In the table `<tool>` is the tool's name and `<scope>` a scope's label.
+
+| Code | Says | On the screen | In the CLI |
+|---|---|---|---|
+| `plugin-item` | It comes with the plugin `<plugin>`. | Turn the plugin on or off in Plugins. | Turn the plugin on or off: `clausona <command> off <plugin> --scope plugins`. |
+| `cloud-delete` | It comes back from claude.ai. | Press `space` to turn it off instead. | Turn it off instead: `clausona skills off <name>`. |
+| `builtin-delete` | It comes with `<tool>`. | Claude: Press `space` to turn it off instead. Codex: Press `g` to turn it off instead. | Claude: Turn it off instead: `clausona skills off <name>`. Codex: Turn it off instead: `clausona skills off <name> --everywhere`. |
+| `plugin-delete` | Use `/plugin` in Claude Code to uninstall a plugin. | | |
+| `plugin-project-everywhere` | It is installed for this project only. | Press `space`. | Leave out `--everywhere`. |
+| `hook-here` | `<tool>` has no per-project switch for hooks. | Press `g` to turn it off everywhere. | |
+| `managed` | It is set by your organization's policy. | | |
+| `codex-user-here` | Codex turns a user skill off everywhere or nowhere. | Press `g`. | Add `--everywhere`. |
+| `codex-untrusted` | Codex does not trust this project, so it ignores its `.codex` folder. | Trust the project in Codex first. | Trust the project in Codex first. |
+| `codex-project-everywhere` | It is defined in this project only. | Press `space`. | Leave out `--everywhere`. |
+| `codex-home-here` | In your home folder, Codex's project config is your user config. | Press `g`. | Add `--everywhere`. |
+| `mcpjson-everywhere` | Claude Code turns a `.mcp.json` server on or off per project. | Press `space`. | Leave out `--everywhere`. |
+| `broken-link` | Its link leads nowhere. | Press `d` to remove the link. | Remove the link: `clausona skills rm <name>`. |
+| `no-visibility` | Only a Claude skill has visibility levels. | | |
+| `no-project` | There is no project to change it in. | Pick one with `p`. | Run it in a project, or pass `--project <path>`. |
+| `stashed-here` | It is off everywhere. | Press `g` to turn it back on. | Turn it back on with `--everywhere`. |
+| `stash-gone` | `<file>`, where it came from, is gone. | Press `d` to delete the copy clausona kept. | Delete the copy clausona kept: `clausona <command> rm --id <id>`. |
+| `unreadable` | `<file>` could not be read. | Fix it, then try again. | Fix it, then try again. |
+| `one-folder` | It is the same folder as `<tool> › <scope> <name>`, through a link. | Mark both with `x` and delete them together. | Delete both together: `clausona skills rm --id <id> --id <other id>`. |
+| `tracked` | Git tracks it in `<project>`, so this changes the repo. | Press `o` to turn it off here instead, or `y` to go ahead. | Add `--tracked` to go ahead, or turn it off: `clausona <command> off <name>`. |
+| `no-account` | No account that has it has opened this project. | | |
+| `elsewhere` | It is turned off in `<file>`, which applies here. | Change it there. | Change it there. |
+
+On the screen, `stash-gone` on one account's server, in a row other accounts share, says
+`Press d and choose only work in the dialog.` instead, since `d` on the row would delete the
+other accounts' copies too.
+
 ## JSON
 
 `ls --json` prints one object, the envelope. `show --json` prints one item, with `version`
-first and `details` last. Both are indented with two spaces. Paths are absolute; the text
+first and `details` last. A change prints its plan or what it did, `undo` what it put back, and
+an error an object of its own. All are indented with two spaces. Paths are absolute; the text
 output writes `~` for the home folder, JSON does not.
 
 ### The envelope
@@ -595,6 +916,174 @@ apply.
 `details` is written for people to read. Its wording can change within version 1, so read the
 item's own fields where they have what you need.
 
+### Plans and results
+
+`off`, `on`, `visibility` and `rm` with `--json` print one object: the plan with `--dry-run`,
+or what was done. It has these keys, in this order; a key marked "when set" is left out when it
+does not apply.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `version` | number | `1`. |
+| `command` | string | `skills`, `mcp` or `hooks`. |
+| `verb` | string | `off`, `on`, `visibility` or `rm`. |
+| `everywhere` | boolean | `true` for a change everywhere: `--everywhere`, and every hooks `off` and `on`. `false` for `rm`. |
+| `level` | string | When set: for `visibility`, the level asked for. |
+| `dryRun` | boolean | `true` with `--dry-run`. |
+| `applied` | boolean | When set, which is never in a dry run: `true` once the change is made, `false` when there was nothing to do. |
+| `question` | string | The plan's question, such as `Delete old-one?`. Display text. |
+| `changes` | object[] | One per file line, below. Empty when nothing changes. |
+| `unchanged` | object[] | The rows already as asked, below. |
+| `refused` | object[] | The rows that can't change, below. Only a dry run lists any: a change with one exits 1 with the error `refused`. |
+| `notes` | string[] | What else to know, such as `work has not opened this project`. Display text. |
+| `accounts` | object[] | When set: for a Claude MCP server, each account with a change as `{ profile, chosen }`, `chosen` being whether `--account` took it. |
+| `backupRoot` | string | The folder backups go in, `~/.clausona/backups/extensions` in full. |
+| `operation` | object | When set: once applied, `{ id, backup }`, the change's id and its backup folder. |
+
+Each of `changes`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `file` | string | The file or folder that changes. A deleted folder is named where its row lists it; `note` says when its real path is elsewhere. A copy clausona kept is named by its path here, under `~/.clausona/extensions/stash/`, where the text output says "the copy clausona kept". |
+| `change` | string | `edit`, `create` for a file not there yet, `delete` for a folder or file moved into the backup, or `unlink` for a link removed. |
+| `what` | string | What changes in it, such as `skillOverrides.eli5 → off`, `disabledMcpServers + github` or `mcpServers.github taken out, kept by clausona`. Empty for a folder or file deleted. Display text. |
+| `account` | string or null | The profile id when the file is that account's `.claude.json`, else `null`. |
+| `note` | string or null | Such as `link only, target kept`, `changes the repo` or `the folder at ~/dotfiles/skills/eli5`. |
+| `tracked` | boolean | `true` when git tracks it and `--tracked` let the change go ahead. |
+| `rows` | string[] | The row keys this line is for, as `id` in `ls --json`. |
+
+Each of `refused`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | The row's key. |
+| `name` | string | The row's name. |
+| `code` | string | Why, as a code from [Refusals](#refusals). Read this one. |
+| `reason` | string | The reason and what to do, in the CLI's words. Display text. |
+
+Each of `unchanged`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | The row's key. |
+| `name` | string | The row's name. |
+| `why` | string | Such as `already off in this project` or `already off in work`. Display text. |
+
+`csn skills rm old-one pdf --dry-run --json`, where `pdf` is a Cloud skill:
+
+```json
+{
+  "version": 1,
+  "command": "skills",
+  "verb": "rm",
+  "everywhere": false,
+  "dryRun": true,
+  "question": "Delete old-one?",
+  "changes": [
+    {
+      "file": "/home/you/.claude/skills/old-one",
+      "change": "delete",
+      "what": "",
+      "account": null,
+      "note": null,
+      "tracked": false,
+      "rows": ["skill:claude:global:-:old-one"]
+    }
+  ],
+  "unchanged": [],
+  "refused": [
+    {
+      "id": "skill:claude:synced:-:pdf",
+      "name": "pdf",
+      "code": "cloud-delete",
+      "reason": "It comes back from claude.ai. Turn it off instead: clausona skills off pdf."
+    }
+  ],
+  "notes": [],
+  "backupRoot": "/home/you/.clausona/backups/extensions"
+}
+```
+
+A plan names files, keys and server names. It never holds what a server's or a hook's entry
+holds.
+
+### Undo
+
+`undo --json` prints one object. A dry run has `files`, what undo would do; once it is done,
+`restored` and `skipped`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `version` | number | `1`. |
+| `command` | string | `skills`, `mcp` or `hooks`. |
+| `verb` | string | `undo`. |
+| `dryRun` | boolean | `true` with `--dry-run`. |
+| `operation` | object | The change it undoes: `{ id, summary, createdAt }`. `summary` is what the change said when it was done, such as `Deleted old-one`. |
+| `files` | object[] | When set, in a dry run: `{ path, action }` for each file, `action` being `put back`, `remove` or `edit back`. |
+| `restored` | string[] | When set, once done: the paths it put back. |
+| `skipped` | object[] | When set, once done: `{ file, reason }` for each file it left alone. |
+
+`skipped[].reason` is one of these, with the words the text output puts after the path:
+
+- `changed`: changed since
+- `occupied`: something is there again
+- `locked`: Claude Code is saving it
+- `missing`: is gone
+- `failed`: could not be put back
+
+An undo that left a file alone exits 1, and its object is an error: `locked` when Claude Code
+was saving every file it left alone, else `changed`. The error has `operation`, `restored` and
+`skipped` too. So an undo that exits 0 has `skipped: []`.
+
+The copies clausona kept are left out of `files`, `restored` and `skipped`. Each goes back, or
+stays, with the file it came from, which is listed.
+
+### Errors
+
+With `--json`, every error is one object on stdout:
+
+```json
+{
+  "version": 1,
+  "error": "refused",
+  "message": "Nothing changed: 1 of 2 can't be deleted.\n    pdf  It comes back from claude.ai. Turn it off instead: clausona skills off pdf.",
+  "refused": [
+    {
+      "id": "skill:claude:synced:-:pdf",
+      "name": "pdf",
+      "code": "cloud-delete",
+      "reason": "It comes back from claude.ai. Turn it off instead: clausona skills off pdf."
+    }
+  ]
+}
+```
+
+`error` is one of the kinds below; read it to tell errors apart. `message` is what the command
+prints without `--json`, and it can run over several lines. It never quotes what a file holds
+or the value of an option.
+
+| Kind | Exit code | When |
+|---|---|---|
+| `usage` | 2 | Bad usage: an unknown option or subcommand, a value not in its list, an option the subcommand does not take, or a change or an undo without `--yes` where it can't ask. |
+| `ambiguous` | 2 | A name matches several rows. See [The ambiguous error](#the-ambiguous-error). |
+| `not-found` | 1 | No row has that name or id. |
+| `refused` | 1 | A row the change names can't change, so nothing changed. |
+| `changed` | 1 | A file changed since it was read, so the change stopped there. Or undo left a file alone. |
+| `conflict` | 1 | Something being put back is in its place again. |
+| `locked` | 1 | Claude Code was saving `.claude.json` and its lock did not come free in time. Or undo left files alone for that reason only. |
+| `failed` | 1 | A file could not be changed, or something else went wrong, such as clausona not set up yet. |
+| `nothing-to-undo` | 1 | No change of that command is left to undo. |
+
+Some kinds add keys after `message`:
+
+- `refused` adds `refused`, the rows and their reasons, as in a plan.
+- `changed`, `locked`, `conflict` and `failed`, when a change stopped, add `operation`, which is
+  `{ id, backup }`; `done` and `total`, how many of its file changes were made; and `file`, the
+  file it stopped at. What was made is one change, which `undo` puts back.
+- `changed` and `locked` from an undo add `operation`, which is `{ id, summary, createdAt }`,
+  and `restored` and `skipped`, as under [Undo](#undo).
+- `ambiguous` adds `name`, the name given, and `candidates`.
+
 ### The ambiguous error
 
 With `--json`, a name that matches several rows prints this on stdout and exits 2:
@@ -603,6 +1092,8 @@ With `--json`, a name that matches several rows prints this on stdout and exits 
 {
   "version": 1,
   "error": "ambiguous",
+  "message": "2 skills are named 'eli5':\n    claude  global  —  —  --id 'skill:claude:global:-:eli5'\n    codex   global  —  —  --id 'skill:codex:global:agents:eli5'\n    Pick one with --tool, --scope or --id <id>.",
+  "name": "eli5",
   "candidates": [
     { "id": "skill:claude:global:-:eli5", "tool": "claude", "scope": "global", "project": null, "account": null },
     { "id": "skill:codex:global:agents:eli5", "tool": "codex", "scope": "global", "project": null, "account": null }
@@ -610,36 +1101,51 @@ With `--json`, a name that matches several rows prints this on stdout and exits 
 }
 ```
 
-Each of `candidates` has `id`, the row's id to pass to `--id`; `tool`; `scope`; `project`, or
-`null`; and `account`, the profile id when the row is one account's single copy, else `null`.
-They are the candidates of one tier (see [show](#show)).
+`message` is the text the command prints without `--json`. `name` is the name given, and is
+left out when the rows matched an `--id`. Each of `candidates` has `id`, the row's id to pass to
+`--id`; `tool`; `scope`; `project`, or `null`; and `account`, the profile id when the row is one
+account's single copy, else `null`. They are the candidates of one tier (see [show](#show)).
+A change looks a name up the same way, so it prints the same object.
 
 ### Versioning
 
-Every JSON output starts with `"version": 1`: the `ls` envelope, the `show` item and the
-ambiguous error. Within version 1, keys can be added, and new values can appear in `scope`,
+Every JSON output starts with `"version": 1`: the `ls` envelope, the `show` item, a plan, an
+undo and every error. Within version 1, keys can be added, and new values can appear in `scope`,
 `state`, `tags`, `summary` and `contains`. A key keeps its name, type and meaning. A change
 that breaks this comes with `version: 2`.
 
 `from` and `details` are display text, written for people: their wording can change within
-version 1. Read `scope` for where a row lives and `tags` for what holds it back.
+version 1. So are a plan's `question`, `what`, `why`, `reason` and `notes`, and an error's
+`message`. Read `scope` for where a row lives, `tags` for what holds it back, `code` for why a
+row can't change and `error` for what went wrong.
 
 So check `version`, read keys by name, and skip the ones you do not know.
 
 ## Safety
 
-These commands and the screen only read. They never write, lock or move a file of Claude Code
-or Codex, and they keep no cache: each run reads the files as they are.
+`ls` and `show` only read, and so does the screen until you answer `y` in its dialog. They
+never write, lock or move a file of Claude Code or Codex, and they keep no cache: each run
+reads the files as they are.
 
-Secret values stay out of every output, the screen, the text and `--json`:
+The changes go through the confirm step and the backup in
+[Confirm, backups and undo](#confirm-backups-and-undo). Nothing is written before you agree, or
+pass `--yes`, and every file is backed up before it is written.
+
+Secret values stay out of every output, the screen, the text and `--json`, plans included:
 
 - An MCP server's env and header values are never copied out of its config. Only their names
   are shown, such as `GITHUB_TOKEN (value hidden)`.
 - In a command line, a URL or a hook's command, a value that looks like a secret reads
   `<hidden>`, such as the word after `--api-key` or a token in a URL.
 - A warning about a file names the file and a position in it, never what the file holds.
+- A plan or an error names files, keys and server names, never what a server's or a hook's
+  entry holds.
 
-Nothing leaves the machine. Listing makes no network call.
+The backups, and the copies clausona keeps of what it took out, do hold whole entries, secrets
+included. Their folders are 0700 and their files 0600, so only you can read them, and nothing
+prints them.
+
+Nothing leaves the machine. Listing and changing make no network call.
 
 ## Recipes for agents
 
@@ -720,6 +1226,59 @@ Loaded lists the hooks that run in this project, plugins' included. The event is
 `summary.prompt`, is what runs, and `file` is where it is set. `csn hooks show Stop` shows
 one; when several hooks are on Stop, it exits 2 and lists their ids.
 
+### Remove unused global skills
+
+```bash
+csn skills ls --scope unused --tool claude --json \
+  | jq -r '.items[] | select(.scope == "global") | .id'
+csn skills rm --id '<id>' --id '<id>' --dry-run --json
+csn skills rm --id '<id>' --id '<id>' --yes
+csn skills undo --yes        # if it was a mistake
+```
+
+Pass each id from the first command to `--id`. `--yes` is there because an agent has no
+terminal to answer on; without it the change exits 2 and changes nothing.
+
+Read the dry run before the real one. `refused` lists what can't go, each with a `code`. For
+global skills that is most likely `one-folder`: a skill whose folder another row shares through
+a link, such as the Codex row of a skills folder linked to `~/.agents/skills`. A change with any
+refused row changes nothing, so leave those ids out, or add the other row's id. In `changes`, a
+line whose `note` reads `link only, target kept` is a skill that is a link, a broken one
+included: the link goes and the folder it leads to stays.
+
+`csn skills undo --yes` puts back the newest skills change, which is this one if nothing came
+after it.
+
+### Turn one MCP server off for one account here
+
+```bash
+csn mcp off github --tool claude --account work --dry-run
+csn mcp off github --tool claude --account work --yes
+csn mcp show github --tool claude --json | jq '.stateByAccount'
+```
+
+The dry run's `changes` has one line, in work's `.claude.json`, with `what`
+`disabledMcpServers + github`. When work has not opened this project, the dry run lists github
+in `refused` with the code `no-account` instead, since clausona never makes the project's entry
+in an account's `.claude.json`. Afterwards `stateByAccount` reads `off` for `claude:work`, and
+the other accounts are as they were.
+
+### Turn a hook off everywhere and back on
+
+```bash
+csn hooks ls --json | jq '.items[] | {id, name, command: .summary.command}'
+csn hooks off --id '<id>' --yes
+csn hooks ls --scope all --json | jq '.items[] | select(.state == "off") | {id, name}'
+csn hooks on --id '<new id>' --yes
+```
+
+Off takes the hook out of its settings file, in every project, and clausona keeps it. It no
+longer runs, so it leaves Loaded, the default scope; `--scope all` and its own scope still list
+it, with the state `off` and a new id. `on` takes that new id and puts the hook back.
+
+A hook's id holds its place in its file, so taking one out moves the ids of the hooks after it
+on the same event. Read the ids again before the next change.
+
 ## On the screen
 
 Run `csn` and choose Extensions. Claude and Codex are tabs, and Skills, MCP and Hooks are the
@@ -744,6 +1303,8 @@ and the table's header name it. `esc` or `←` closes the list and changes nothi
 The screen's tables differ a little from the CLI's. They have no TOOL column, Loaded adds
 FROM, and Codex skills show their description.
 
+### Keys
+
 | Key | What it does |
 |---|---|
 | `tab` | Switch between Claude and Codex, back to Loaded. |
@@ -757,6 +1318,49 @@ FROM, and Codex skills show their description.
 | `m` | A matrix of servers by account: which account starts which server in this project. On Claude's MCP tab, with a project picked. |
 | `r` | Read the files again. |
 | `w` | The files that could not be read, when there are any. |
+| `space` | Turn the marked rows, or the row under the cursor, off or on here. In the details, the row shown. |
+| `g` | Turn the same rows off or on everywhere. |
+| `d` | Delete the same rows. |
+| `x` | In the table, mark the row, or unmark it. `esc` in the table clears the marks before it goes back. |
+| `u` | Undo the newest change, of any kind. From the scopes, the table or the details. |
+| `v` | In a Claude skill's details, move it to its next visibility, in this project. |
 
 Search matches a row's name, description, file, summary values, and the text cells the table
 shows. It does not match the numbers in USES and LAST USED.
+
+### Changing things from the screen
+
+`space`, `g` and `d` act on the marked rows when there are any, else on the row under the
+cursor. The table's header counts the marks, as in `13 · 2 marked`. Marks clear when the table
+changes, by `tab`, `1` `2` `3`, another scope or another project, and after a change is made.
+In the scope list these keys say `Open the table first: →`. `v` outside a Claude skill's
+details says `v changes a Claude skill's visibility, in its details.`
+
+A row's details end with what the keys would do to it, such as
+`space off here · g off everywhere · d delete · v name only`. A key that would be refused is
+left out.
+
+When the row can't change, nothing opens, and the status line says why, in keys:
+`It comes back from claude.ai. Press space to turn it off instead.` When none of the marked rows
+can, it says how many can't and why the first one can't. When there is nothing to do, it says
+that: `Nothing to do: already off in this project.`
+
+Otherwise a dialog takes the panes' place, before anything changes. It has the question, such as
+`Turn off eli5 in this project?`, then a line per file with what changes in it, the rows that
+can't change and why, the backup folder, and `Press u afterwards to put them back.` `y` makes
+the change, `n` or `esc` closes it and changes nothing, and `pgup` and `pgdn` scroll its lines.
+
+For a Claude MCP server that several accounts have, the dialog lists the accounts, each `◉`
+when it is picked and `○` when not. `↑` and `↓` move, and `space` picks an account or leaves it
+out. The question follows, as in `Turn off figma in this project, for personal?`. `y` with no
+account picked says `Pick at least one account.` and the dialog stays.
+
+`d` on something git tracks opens the dialog with a warning,
+`Git tracks deploy-check in app, so deleting changes the repo.`, and `o` there turns it off here
+instead. `y` deletes it anyway.
+
+Once a change is made, the status line says what was done and that `u` undoes it, as in
+`Turned off eli5 in this project · u to undo`. A change that stopped says why. `u` opens a dialog
+for the newest change, `Undo: Turned off eli5 in this project?`, and once it is done the status
+line reads `Undid: Turned off eli5 in this project`, or says how many files it left alone and
+why.
