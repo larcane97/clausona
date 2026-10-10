@@ -73,10 +73,13 @@ const inventory: Inventory = {
     claudeMcpjson: [],
     codexSkillConfig: [],
     codexMcpEnabled: [],
+    fingerprints: {},
+    codexTrust: [],
   },
   usage: {},
   hashes: {},
   warnings: [],
+  places: { claudeJson: { "claude:default": "/h/.claude.json" }, stashDir: "/h/.clausona/extensions/stash" },
 };
 
 describe("Extensions from the dashboard", () => {

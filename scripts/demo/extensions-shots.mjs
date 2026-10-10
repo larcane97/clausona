@@ -2,6 +2,10 @@
 //   pnpm build && node scripts/demo/extensions-shots.mjs [140 100 72 60 80x24]
 // An entry is `<cols>`, a terminal that many columns wide and 900px tall, or `<cols>x<rows>`.
 // Needs vhs and Docker, like demo.tape; everything runs in the throwaway demo container.
+//
+// To try the writes by hand, or for an agent to test them: the same container without the
+// db-migrate mount, so every unused skill can be deleted (run after `pnpm build`).
+//   docker run --rm -it --network none -e HOME=/Users/alex -e TZ=UTC -w /Users/alex/app -v "$PWD/dist:/opt/clausona:ro" -v "$PWD/scripts/demo:/opt/demo:ro" clausona-demo bash --rcfile /opt/demo/extensions-rc.sh -i
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -41,11 +45,17 @@ const TWO_PANES_FROM = 100;
  * step presses one too many. Under 100 columns the screen shows one pane at a time, and there
  * a scope's table shows only on → (`open`), where two panes show it beside the list: a step
  * whose two-pane shot shows a table goes in, and the next one comes back out on ← (`back`).
+ * The action keys - space, d, x - work on the table's rows, so for them both layouts go into
+ * the table (`table`) and back out to the scopes (`scopes`). A `Wait <regexp>` among the keys
+ * waits for that screen before the keys after it.
  */
 const steps = (onePane) => {
   const open = onePane ? ["Right"] : [];
   const back = onePane ? ["Left"] : [];
   const intoTable = onePane ? [] : ["Right"];
+  const table = ["Right"];
+  const scopes = ["Left"];
+  const down = (n) => Array.from({ length: n }, () => "Down");
   return [
     // The project row on top names the project everything is seen from.
     ["01-loaded", [], "▾ app \\(here\\)[\\s\\S]*Loaded\\s+\\d+"],
@@ -58,8 +68,8 @@ const steps = (onePane) => {
     ["04-details", [...intoTable, "Enter"], "PROJECT › db-migrate"],
     ["05-codex", ["Escape", "Escape", "Tab", ...open], "LOADED — what Codex"],
     ["06-claude-mcp", ["Tab", "Type 2", ...open], "LOADED — what Claude Code loads[\\s\\S]*docs-search"],
-    // github, the second row: off in the work account here.
-    ["07-mcp-details", [...intoTable, "Down", "Enter"], "GLOBAL › github"],
+    // github, the third row, after docs-search and figma: off in the work account here.
+    ["07-mcp-details", [...intoTable, "Down", "Down", "Enter"], "GLOBAL › github"],
     ["08-matrix", ["Escape", "Type m"], "SERVER"],
     ["09-hooks", ["Escape", "Type 3", ...open], "LOADED — what Claude Code runs"],
     // The project list, in the scope list's place: app first, then web, then No project.
@@ -71,6 +81,36 @@ const steps = (onePane) => {
     ["11-search", ["Type 1", "Type /", "Type eli", "Enter"], "(?m)\\Weli *$"],
     // The list again, seen from web: web first, and app still (here).
     ["12-projects-from-web", ["Escape", "Type p"], "PROJECT\\s+skills[\\s\\S]*web[\\s\\S]*app \\(here\\)"],
+    // The writes, from app again. Not used in 90 days, by name: db-migrate, which is mounted from
+    // the host and so cannot be moved, then the two Global rows, gone-helper and sentry-cli.
+    [
+      "13-marked",
+      ["Down", "Enter", "Wait ▾ app \\(here\\)", "Type 1", ...down(5), ...table, "Down", "Type x", "Down", "Type x"],
+      "2 marked",
+    ],
+    // gone-helper is a link: only the link goes.
+    ["14-confirm-delete", ["Type d"], "Delete 2 skills\\?[\\s\\S]*link only, target kept"],
+    ["15-deleted", ["Type y"], "Deleted 2 skills · u to undo"],
+    ["16-undo-confirm", ["Type u"], "Undo: Deleted 2 skills\\?"],
+    ["17-undone", ["Type y"], "Undid: Deleted 2 skills"],
+    // Up past Plugins to Cloud: its pdf comes back from claude.ai, so d says why not.
+    ["18-refusal", [...scopes, "Up", "Up", ...table, "Type d"], "It comes back from claude\\.ai"],
+    // MCP's Global, past Project and Parent folders: figma, on in both accounts, is its first row.
+    // The question names the accounts it changes in, cut at the narrow sizes.
+    [
+      "19-picker",
+      ["Type 2", ...down(3), ...table, "Space"],
+      "Turn off figma in this project[\\s\\S]*◉ personal[\\s\\S]*◉ work",
+    ],
+    ["20-off", ["Type y"], "Turned off figma in this project"],
+    // eli5, Global's second row: its details end with the keys that apply to it, on one line or
+    // two. Page down scrolls to that end where the details do not all fit, as in 24 rows.
+    [
+      "21-details-actions",
+      ["Type 1", ...down(2), ...table, "Down", "Enter", "PageDown"],
+      "space off here[\\s\\S]*g off everywhere[\\s\\S]*d delete[\\s\\S]*v name\\s+only",
+    ],
+    ["22-visibility", ["Type v"], "Show eli5 as name only in this project\\?"],
   ];
 };
 
@@ -115,7 +155,10 @@ for (const { columns, rows } of SIZES) {
     "Show",
   ];
   for (const [name, keys, screen] of steps(columns < TWO_PANES_FROM)) {
-    for (const key of keys) lines.push(key.startsWith("Type ") ? `Type "${key.slice(5)}"` : key, "Sleep 300ms");
+    for (const key of keys) {
+      if (key.startsWith("Wait ")) lines.push(`Wait+Screen@15s /${key.slice(5)}/`, "Sleep 300ms");
+      else lines.push(key.startsWith("Type ") ? `Type "${key.slice(5)}"` : key, "Sleep 300ms");
+    }
     // vhs saves a screenshot from the next frame it records; the sleep after it lets that frame
     // come before the next step's first key.
     lines.push(
@@ -125,6 +168,8 @@ for (const { columns, rows } of SIZES) {
       "Sleep 200ms",
     );
   }
+  // The last dialog cancelled: nothing it asked about is changed.
+  lines.push("Escape", "Wait+Screen@15s /Nothing changed\\./");
   const tape = path.join(build, `ext-${size}.tape`);
   writeFileSync(tape, `${lines.join("\n")}\n`);
   execFileSync("vhs", [tape], { stdio: "inherit" });

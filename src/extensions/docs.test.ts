@@ -5,17 +5,30 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runCommand } from "../commands.js";
 import { stripAnsi } from "../lib/cli-style.js";
-import { type ExtensionsCommand, extensionsHelp, runExtensionsCommand } from "./cli.js";
+import { LEFT_ALONE, REFUSAL_CODES, REFUSALS } from "./actions.js";
+import { KEEP_OPERATIONS } from "./apply.js";
+import {
+  CHANGE_JSON_KEYS,
+  type ExtensionsCommand,
+  extensionsHelp,
+  PLAN_JSON_KEYS,
+  REFUSED_JSON_KEYS,
+  runExtensionsCommand,
+  SUBS,
+  UNCHANGED_JSON_KEYS,
+  UNDO_JSON_KEYS,
+  withJsonErrors,
+} from "./cli.js";
 import { hookWhen } from "./describe.js";
-import { ExitError } from "./exit-error.js";
+import { ERROR_KINDS, ExitError } from "./exit-error.js";
 import { CLEANUP_GRACE_DAYS, CLEANUP_UNUSED_DAYS } from "./inventory.js";
 import { SCOPE_LABEL, type ScopeId } from "./scopes.js";
 import { TestHome } from "./test-home.js";
 
 /**
  * docs/extensions.md and the README's Extensions section, kept in step with the code: every
- * scope label, tag, `--scope` value, row key form and JSON field the CLI has is in the docs, in
- * its words, and in the tables that list them.
+ * scope label, tag, `--scope` value, row key form, JSON field, refusal and error kind the CLI
+ * has is in the docs, in its words, and in the tables that list them.
  */
 
 /** A file of the repo, or "" when it is missing, so each case says what it lacks. */
@@ -116,6 +129,54 @@ function section(doc: string, title: string): string[] {
   return lines.slice(start + 1, end < 0 ? undefined : end);
 }
 
+/** Each table under `### <title>`, up to the next heading, as the backticked names in its first column. */
+function tableNamesEach(doc: string, title: string): string[][] {
+  const tables: string[][] = [];
+  let current: string[] | undefined;
+  for (const line of section(doc, title)) {
+    if (!line.startsWith("|")) current = undefined;
+    else if (current === undefined) {
+      // The header row starts a table.
+      current = [];
+      tables.push(current);
+    } else if (!/^\|[-| ]+\|$/.test(line)) {
+      // The first cell: a name holds no pipe, escaped or not.
+      const name = code(line.split("|")[1]?.trim());
+      if (name !== undefined) current.push(name);
+    }
+  }
+  return tables;
+}
+
+/** The section headings' anchors, as GitHub makes them. */
+const anchors = (doc: string) =>
+  doc
+    .split("\n")
+    .filter((line) => /^#{1,4} /.test(line))
+    .map((line) =>
+      line
+        .replace(/^#+ /, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9 -]/g, "")
+        .replace(/ /g, "-"),
+    );
+
+/**
+ * A refusal's words as the Refusals table writes them: each `{x}` as `<x>`, a few under a
+ * shorter name. The table puts commands and placeholders in backticks, which `plain` drops.
+ */
+const PLACEHOLDER: Record<string, string> = {
+  "~file": "file",
+  "project name": "project",
+  "Claude Code|Codex": "tool",
+  Tool: "tool",
+  "Scope label": "scope",
+  a: "id",
+  b: "other id",
+};
+const placeheld = (text: string) => text.replace(/\{([^{}]+)\}/g, (_, key: string) => `<${PLACEHOLDER[key] ?? key}>`);
+const plain = (cells: string[]) => cells.join(" ").replaceAll("`", "");
+
 /** Whether `keys` appear in `order` in the same order, any of them left out. */
 function inOrder(keys: string[], order: string[]): boolean {
   let at = 0;
@@ -213,14 +274,16 @@ function seed() {
   });
   h.codex("personal", ".codex");
   h.skill(".agents/skills", "eli5");
-  // The managed settings are the home's own, so the test never reads this machine's.
-  const run = (command: ExtensionsCommand, args: string[]) =>
+  // The managed settings are the home's own, so the test never reads this machine's. `terminal`
+  // runs it as if on one, answering yes.
+  const run = (command: ExtensionsCommand, args: string[], terminal = false) =>
     runExtensionsCommand(command, args, {
       homeDir: h.home,
       cwd: app,
       registry: h.registry,
       now: NOW,
       managedSettings: h.path("managed-settings.json"),
+      ...(terminal ? { interactive: true, confirm: async () => true, print: () => {} } : {}),
     });
   /** Every item `ls --json` writes: `all` has every place's rows but the plugins, which `plugins` lists. */
   const items = async () => {
@@ -322,15 +385,24 @@ describe("docs/extensions.md", () => {
 
   it("gives the exit codes the CLI exits with", async () => {
     expect(table(DOC, "Output, errors and exit codes").rows).toEqual([
-      ["0", "OK"],
-      ["1", "Not found, or another failure, such as clausona not set up yet"],
-      ["2", "Bad usage, an unknown option, or an ambiguous name"],
+      ["0", "Done, or nothing to do"],
+      ["1", "Not found, refused, changed since it was read, locked, conflict, failed, or nothing to undo"],
+      [
+        "2",
+        "Bad usage, an unknown option or command, an ambiguous name, or a change without --yes where it can't ask: no terminal, or --json",
+      ],
     ]);
     const { run } = seed();
     await expect(run("skills", ["ls"])).resolves.toMatch(/^\d+ skills · /);
+    await expect(run("skills", ["rm", "old-one", "--dry-run"])).resolves.toContain("Dry run: nothing changed.");
+    await expect(run("skills", ["off", "old-one", "--everywhere", "--yes"])).resolves.toContain("Nothing to do.");
     expect((await failure(run("skills", ["show", "nope"]))).code).toBe(1);
+    expect((await failure(run("skills", ["rm", "pdf", "--yes"]))).code).toBe(1);
+    expect((await failure(run("skills", ["undo", "--yes"]))).code).toBe(1);
     expect((await failure(run("skills", ["ls", "--scope", "nope"]))).code).toBe(2);
     expect((await failure(run("skills", ["show", "eli5"]))).code).toBe(2);
+    expect((await failure(run("skills", ["rm", "old-one"]))).code).toBe(2);
+    expect((await failure(run("skills", ["rm", "old-one", "--json"], true))).code).toBe(2);
   });
 
   it("has a JSON section whose tables list the envelope and item keys the CLI writes, in order", async () => {
@@ -353,10 +425,144 @@ describe("docs/extensions.md", () => {
 
     const error = await failure(run("skills", ["show", "eli5", "--json"]));
     const body = JSON.parse(error.stdout ?? "");
-    expect(Object.keys(body)).toEqual(["version", "error", "candidates"]);
+    // Like every --json failure it has a message; the name given comes before the candidates.
+    expect(Object.keys(body)).toEqual(["version", "error", "message", "name", "candidates"]);
     expect(Object.keys(body.candidates[0])).toEqual(CANDIDATE_KEYS);
-    expect(DOC).toContain('{\n  "version": 1,\n  "error": "ambiguous",');
-    for (const key of ["candidates", ...CANDIDATE_KEYS]) expect(DOC).toContain(`\`${key}\``);
+    expect(DOC).toContain('{\n  "version": 1,\n  "error": "ambiguous",\n  "message": ');
+    for (const key of ["message", "name", "candidates", ...CANDIDATE_KEYS]) expect(DOC).toContain(`\`${key}\``);
+  });
+
+  it("has a Changing things section, in the contents, with each of its parts", () => {
+    expect(DOC).toContain("- [Changing things](#changing-things)");
+    const lines = DOC.split("\n");
+    const start = lines.indexOf("## Changing things");
+    const end = lines.indexOf("## JSON");
+    expect(start).toBeGreaterThan(lines.indexOf("## CLI reference"));
+    expect(end).toBeGreaterThan(start);
+    const parts = [
+      "Off and on",
+      "What each change writes",
+      "Visibility",
+      "Delete",
+      "Confirm, backups and undo",
+      "Refusals",
+    ];
+    const at = parts.map((part) => lines.indexOf(`### ${part}`));
+    expect(at.every((i) => i > start && i < end)).toBe(true);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+  });
+
+  it("lists every refusal in the Refusals table, in REFUSAL_CODES order, in its words", () => {
+    expect(tableNames(DOC, "Refusals")).toEqual([...REFUSAL_CODES]);
+    const rows = table(DOC, "Refusals").rows;
+    for (const code of REFUSAL_CODES) {
+      const text = plain(rows.find((row) => row[0] === `\`${code}\``) ?? []);
+      const { reason, keys, flags } = REFUSALS[code];
+      // A reason and its hints are one text, or one per tool where the tools differ: each is there.
+      for (const words of [reason, keys, flags]) {
+        if (words === undefined) continue;
+        const texts = typeof words === "string" ? [words] : [words.claude, words.codex];
+        for (const one of texts) expect(text, code).toContain(placeheld(one));
+      }
+    }
+  });
+
+  it("lists the keys a plan, a change, a refusal, an unchanged row and an undo write, in order", async () => {
+    expect(tableNamesEach(DOC, "Plans and results")).toEqual([
+      PLAN_JSON_KEYS,
+      CHANGE_JSON_KEYS,
+      REFUSED_JSON_KEYS,
+      UNCHANGED_JSON_KEYS,
+    ]);
+    expect(tableNames(DOC, "Plans and results")).toEqual([
+      ...PLAN_JSON_KEYS,
+      ...CHANGE_JSON_KEYS,
+      ...REFUSED_JSON_KEYS,
+      ...UNCHANGED_JSON_KEYS,
+    ]);
+    expect(tableNames(DOC, "Undo")).toEqual(UNDO_JSON_KEYS);
+    // The reasons undo leaves a file alone for, by code and in its words.
+    const undo = section(DOC, "Undo").join("\n");
+    for (const [reason, words] of Object.entries(LEFT_ALONE)) {
+      expect(undo).toContain(`\`${reason}\``);
+      expect(undo).toContain(words);
+    }
+
+    const { run } = seed();
+    // pdf is a Cloud skill, so the dry run has a refusal too.
+    const plan = JSON.parse(await run("skills", ["rm", "old-one", "pdf", "--dry-run", "--json"]));
+    expect(inOrder(Object.keys(plan), [...PLAN_JSON_KEYS]), Object.keys(plan).join(",")).toBe(true);
+    expect(plan.changes).toHaveLength(1);
+    expect(plan.refused).toHaveLength(1);
+    for (const change of plan.changes) expect(inOrder(Object.keys(change), [...CHANGE_JSON_KEYS])).toBe(true);
+    for (const refused of plan.refused) expect(inOrder(Object.keys(refused), [...REFUSED_JSON_KEYS])).toBe(true);
+    const already = JSON.parse(await run("skills", ["off", "old-one", "--everywhere", "--dry-run", "--json"]));
+    expect(already.unchanged).toHaveLength(1);
+    for (const row of already.unchanged) expect(inOrder(Object.keys(row), [...UNCHANGED_JSON_KEYS])).toBe(true);
+  });
+
+  it("lists every error kind with its exit code, and the keys an error object has", async () => {
+    const { header, rows } = table(DOC, "Errors");
+    expect(header).toEqual(["Kind", "Exit code", "When"]);
+    expect(tableNames(DOC, "Errors")).toEqual([...ERROR_KINDS]);
+    for (const row of rows) {
+      const kind = code(row[0]);
+      expect(row[1], kind).toBe(kind === "usage" || kind === "ambiguous" ? "2" : "1");
+    }
+    const errors = section(DOC, "Errors").join("\n");
+    expect(errors).toContain('{\n  "version": 1,\n  "error": "refused",\n  "message": ');
+    for (const key of ["refused", "operation", "done", "total", "file", "restored", "skipped", "name"]) {
+      expect(errors).toContain(`\`${key}\``);
+    }
+
+    const { run } = seed();
+    const args = ["rm", "old-one", "pdf", "--yes", "--json"];
+    const body = JSON.parse((await failure(withJsonErrors(args, () => run("skills", args)))).stdout ?? "");
+    expect(Object.keys(body)).toEqual(["version", "error", "message", "refused"]);
+    expect(body.error).toBe("refused");
+  });
+
+  it("names where backups and the copies clausona keeps go, how many it keeps, and the agent's commands", () => {
+    for (const text of [
+      "csn skills ls --scope unused --tool claude --json",
+      "csn skills rm --id '<id>' --id '<id>' --dry-run --json",
+      "csn skills rm --id '<id>' --id '<id>' --yes",
+      "csn skills undo --yes",
+      "~/.clausona/backups/extensions/",
+      "~/.clausona/extensions/stash/",
+      "manifest.json",
+      `last ${KEEP_OPERATIONS}`,
+    ]) {
+      expect(DOC).toContain(text);
+    }
+  });
+
+  it("has the keys that change things in the screen's Keys table", () => {
+    expect(tableNames(DOC, "Keys")).toEqual(expect.arrayContaining(["space", "g", "d", "x", "u", "v"]));
+  });
+
+  it("never says stash in its prose: only in code and in the folder's path", () => {
+    let fenced = false;
+    const prose: string[] = [];
+    for (const line of DOC.split("\n")) {
+      if (line.startsWith("```")) fenced = !fenced;
+      else if (!fenced && !line.includes(".clausona/extensions/stash")) prose.push(line.replace(/`[^`]*`/g, ""));
+    }
+    expect(prose.filter((line) => /\bstash/i.test(line))).toEqual([]);
+  });
+
+  it("has a heading for every place in it the help pages link to", () => {
+    const linked = new Set(
+      COMMANDS.flatMap((command) =>
+        [undefined, ...SUBS[command]].flatMap((sub) =>
+          [...stripAnsi(extensionsHelp(command, sub)).matchAll(/docs\/extensions\.md#([a-z0-9-]+)/g)].map(
+            (match) => match[1] ?? "",
+          ),
+        ),
+      ),
+    );
+    expect(linked).toContain("changing-things");
+    expect(anchors(DOC)).toEqual(expect.arrayContaining([...linked]));
   });
 
   it("says each hook event in the words the CLI and the screen use", () => {
@@ -378,14 +584,19 @@ describe("README", () => {
     expect(README).toContain("docs/extensions.md");
     expect(README).toContain("csn skills ls --scope project");
     expect(README).toContain("csn skills ls --scope unused --tool claude");
+    expect(README).toContain("csn skills rm old-one --dry-run");
   });
 
-  it("lists skills, mcp and hooks in Commands with the main help's words", async () => {
+  it("lists skills, mcp and hooks in Commands with the main help's subcommands and words", async () => {
     const help = stripAnsi(await runCommand("help", []));
+    const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     for (const command of COMMANDS) {
-      const words = new RegExp(`^\\s+${command} ls\\|show\\s+(.+)$`, "m").exec(help)?.[1];
-      expect(words).toBeDefined();
-      expect(README).toMatch(new RegExp(`^\\| \`clausona ${command} ls\\\\\\|show\`\\s+\\| ${words}\\s+\\|$`, "m"));
+      const [, subs = "", words = ""] = new RegExp(`^\\s+${command} (ls\\|\\S+)\\s+(.+)$`, "m").exec(help) ?? [];
+      // The help lists the subcommands that change things too.
+      expect(subs.split("|"), command).toEqual(expect.arrayContaining(["ls", "show", "off", "on", "rm"]));
+      // In the README's table a pipe in a cell is escaped.
+      const cell = literal(`\`clausona ${command} ${subs.replaceAll("|", "\\|")}\``);
+      expect(README).toMatch(new RegExp(`^\\| ${cell}\\s+\\| ${literal(words)}\\s+\\|$`, "m"));
     }
   });
 });

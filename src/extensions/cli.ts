@@ -1,7 +1,29 @@
 import path from "node:path";
 
-import { accent, bold, dim, helpUsage, truncate } from "../lib/cli-style.js";
+import { accent, bold, dim, success, truncate } from "../lib/cli-style.js";
 import type { Registry, ToolName } from "../types.js";
+import {
+  type Action,
+  type ExtensionsCommand,
+  fileWords,
+  KEPT_COPY,
+  LEFT_ALONE,
+  type Refusal,
+  refusalText,
+  type StopReason,
+  stopText,
+} from "./actions.js";
+import {
+  type ApplyResult,
+  apply,
+  lastOperation,
+  type UndoPreview,
+  type UndoSkip,
+  undo,
+  type WriteEnv,
+  writeEnvFor,
+} from "./apply.js";
+import { extensionsHelp, NOUN, SCOPES, type Scope, SUBS, type Sub } from "./cli-help.js";
 import {
   accountsWord,
   containsWords,
@@ -15,11 +37,13 @@ import {
   usageCells,
   whereLabel,
 } from "./describe.js";
-import { ExitError } from "./exit-error.js";
+import { type ErrorKind, ExitError } from "./exit-error.js";
+import { planChecked } from "./git-tracked.js";
 import { CLEANUP_UNUSED_DAYS, loadInventory } from "./inventory.js";
-import type { Extension, Inventory } from "./model.js";
-import { shortProfile, tilde, tildeIn } from "./present.js";
-import { entryInfo } from "./read.js";
+import { type Extension, type Inventory, SKILL_VISIBILITY, type SkillVisibility } from "./model.js";
+import { type Plan, type PlanLine, rowForId } from "./plan.js";
+import { middleCut, shortProfile, tilde, tildeIn } from "./present.js";
+import { entryInfo, isWithin } from "./read.js";
 import {
   homeScope,
   type ItemKind,
@@ -34,20 +58,65 @@ import {
 } from "./scopes.js";
 
 /**
- * `clausona skills|mcp|hooks ls|show`: the rows of one scope as a table or JSON v1, and one row's
- * details. Read-only, like the screen: it reads the inventory and prints what describe.ts says.
+ * `clausona skills|mcp|hooks`: `ls` and `show` read - the rows of one scope as a table or JSON
+ * v1, and one row's details, as describe.ts says them. `off`, `on`, `visibility` and `rm` plan a
+ * change (planChecked), show it, ask, and apply it behind a backup (apply.ts); `undo` puts back
+ * the newest one. With `--json` every answer is one object, an error too (withJsonErrors).
  */
 
-export type ExtensionsCommand = "skills" | "mcp" | "hooks";
+export type { ExtensionsCommand } from "./actions.js";
+export { extensionsHelp, SUBS, type Sub } from "./cli-help.js";
+
+/** The subcommands that change files. */
+const WRITES: readonly Sub[] = ["off", "on", "visibility", "rm", "undo"];
 
 const KIND: Record<ExtensionsCommand, ItemKind> = { skills: "skill", mcp: "mcp", hooks: "hook" };
 const TOOLS: readonly ToolName[] = ["claude", "codex"];
 const TOOL_NAME: Record<ToolName, string> = { claude: "Claude Code", codex: "Codex" };
 
 export const EXTENSIONS_VALUE_FLAGS = ["--scope", "--tool", "--project", "--id", "--account"];
-export const EXTENSIONS_FLAGS = ["--json", "--help", ...EXTENSIONS_VALUE_FLAGS];
+export const EXTENSIONS_FLAGS = [
+  "--json",
+  "--help",
+  "--everywhere",
+  "--dry-run",
+  "--yes",
+  "-y",
+  "--tracked",
+  ...EXTENSIONS_VALUE_FLAGS,
+];
 
-type Scope = ScopeId | "all";
+/** The keys of each JSON object a change prints, in their order; an absent one is left out. */
+export const PLAN_JSON_KEYS: readonly string[] = [
+  "version",
+  "command",
+  "verb",
+  "everywhere",
+  "level",
+  "dryRun",
+  "applied",
+  "question",
+  "changes",
+  "unchanged",
+  "refused",
+  "notes",
+  "accounts",
+  "backupRoot",
+  "operation",
+];
+export const CHANGE_JSON_KEYS: readonly string[] = ["file", "change", "what", "account", "note", "tracked", "rows"];
+export const REFUSED_JSON_KEYS: readonly string[] = ["id", "name", "code", "reason"];
+export const UNCHANGED_JSON_KEYS: readonly string[] = ["id", "name", "why"];
+export const UNDO_JSON_KEYS: readonly string[] = [
+  "version",
+  "command",
+  "verb",
+  "dryRun",
+  "operation",
+  "files",
+  "restored",
+  "skipped",
+];
 
 const EVERY_SCOPE: readonly Scope[] = [
   "loaded",
@@ -63,45 +132,50 @@ const EVERY_SCOPE: readonly Scope[] = [
   "all",
 ];
 
-/** The scopes each command has in either tool, in the order the help lists them. */
-const SCOPES: Record<ExtensionsCommand, readonly Scope[]> = {
-  skills: ["loaded", "project", "global", "cloud", "plugins", "builtin", "other", "unused", "all"],
-  mcp: ["loaded", "project", "parents", "global", "plugins", "managed", "other", "all"],
-  hooks: ["loaded", "project", "global", "plugins", "managed", "other", "all"],
-};
-
 /** The places an item lives in: every scope but the derived ones, which `all` is made of. */
 function placesOf(command: ExtensionsCommand): ScopeId[] {
   return SCOPES[command].filter((s): s is ScopeId => s !== "loaded" && s !== "unused" && s !== "all");
 }
-
-const NOUN: Record<ExtensionsCommand, { one: string; many: string }> = {
-  skills: { one: "skill", many: "skills" },
-  mcp: { one: "MCP server", many: "MCP servers" },
-  hooks: { one: "hook", many: "hooks" },
-};
 
 /** "a, b or c". */
 function either(values: readonly string[]): string {
   return values.length < 2 ? values.join("") : `${values.slice(0, -1).join(", ")} or ${values.at(-1)}`;
 }
 
+/** "a, b and c". */
+function all(values: readonly string[]): string {
+  return values.length < 2 ? values.join("") : `${values.slice(0, -1).join(", ")} and ${values.at(-1)}`;
+}
+
 function badUsage(message: string): ExitError {
-  return new ExitError(message, 2);
+  return new ExitError(message, 2, undefined, "usage");
+}
+
+function isSub(command: ExtensionsCommand, word: string | undefined): word is Sub {
+  return word !== undefined && (SUBS[command] as readonly string[]).includes(word);
 }
 
 // ─── Arguments ──────────────────────────────────────────────────────
 
-type Options = {
-  sub: "ls" | "show";
+/** The parsed options: today's Options, exported, with names and ids as lists (show reads names[0] / ids[0]). */
+export type Options = {
+  sub: Sub;
   json: boolean;
-  /** Absent: ls lists Loaded, show looks everywhere. */
-  scope?: Scope;
+  /** Absent: ls lists Loaded, show and the writes look in the tiers. */
+  scope?: ScopeId | "all";
   tools: ToolName[];
   project?: string;
-  name?: string;
-  id?: string;
+  /** The positional names (visibility: without the level). show takes one. */
+  names: string[];
+  /** Every --id. show and visibility take one. */
+  ids: string[];
   accounts: string[];
+  everywhere: boolean;
+  dryRun: boolean;
+  yes: boolean;
+  tracked: boolean;
+  /** visibility only. */
+  level?: SkillVisibility;
 };
 
 function flagValue(args: string[], flag: string): string | undefined {
@@ -126,6 +200,11 @@ function flagValues(args: string[], flag: string): string[] {
   });
 }
 
+/** Whether the flag is given, as `--flag` or `--flag=…`. */
+function hasFlag(args: string[], flag: string): boolean {
+  return args.some((arg) => arg === flag || arg.startsWith(`${flag}=`));
+}
+
 /** The arguments that are neither a flag nor a flag's value. */
 function positionals(args: string[]): string[] {
   const found: string[] = [];
@@ -137,10 +216,6 @@ function positionals(args: string[]): string[] {
   return found;
 }
 
-/**
- * The options after the subcommand. A value is never echoed back, as no option's is elsewhere:
- * only a scope that exists, which is no secret, is named in a message.
- */
 /** `~` and `~/…` as the home dir, as a shell would, so a quoted path works too. */
 function expandHome(given: string, homeDir: string): string {
   if (given === "~") return homeDir;
@@ -149,13 +224,48 @@ function expandHome(given: string, homeDir: string): string {
   return sep.test(given) ? path.join(homeDir, given.slice(2)) : given;
 }
 
-async function parseOptions(
-  command: ExtensionsCommand,
-  sub: "ls" | "show",
-  args: string[],
-  cwd: string,
-  homeDir: string,
-) {
+/** Bad usage when `flag` is given to a subcommand outside `subs`, naming the ones it is for. */
+function onlyFor(command: ExtensionsCommand, sub: Sub, flag: string, isGiven: boolean, subs: readonly Sub[]): void {
+  if (isGiven && !subs.includes(sub)) {
+    throw badUsage(`${flag} is for ${all(SUBS[command].filter((s) => subs.includes(s)))}.`);
+  }
+}
+
+const VISIBILITY_NEEDS_NAME =
+  "visibility needs a name or --id <id>, then the level. Run clausona skills visibility --help.";
+
+/** The level visibility takes as its last word, and the names before it. */
+function visibilityWords(words: string[]): { level: SkillVisibility; names: string[] } {
+  const level = words.at(-1);
+  if (!(SKILL_VISIBILITY as readonly string[]).includes(level ?? "")) {
+    throw badUsage(`visibility takes ${either(SKILL_VISIBILITY)}.`);
+  }
+  return { level: level as SkillVisibility, names: words.slice(0, -1) };
+}
+
+/**
+ * The options after the subcommand. A value is never echoed back, as no option's is elsewhere:
+ * only a scope that exists, which is no secret, is named in a message.
+ */
+async function parseOptions(command: ExtensionsCommand, sub: Sub, args: string[], cwd: string, homeDir: string) {
+  const words = positionals(args);
+  if (
+    sub === "undo" &&
+    (words.length > 0 || ["--id", "--scope", "--tool", "--project", "--account"].some((flag) => hasFlag(args, flag)))
+  ) {
+    throw badUsage(
+      `undo takes no name, --id, --scope, --tool, --project or --account: it puts back the newest ${command} change.`,
+    );
+  }
+  const everywhere = args.includes("--everywhere");
+  const dryRun = args.includes("--dry-run");
+  const yes = args.includes("--yes") || args.includes("-y");
+  const tracked = args.includes("--tracked");
+  if (everywhere && sub === "rm") throw badUsage("rm deletes the thing itself: leave out --everywhere.");
+  onlyFor(command, sub, "--everywhere", everywhere, ["off", "on", "visibility"]);
+  onlyFor(command, sub, "--dry-run", dryRun, WRITES);
+  onlyFor(command, sub, args.includes("--yes") ? "--yes" : "-y", yes, WRITES);
+  onlyFor(command, sub, "--tracked", tracked, ["off", "on", "visibility", "rm"]);
   const scope = flagValue(args, "--scope");
   if (scope !== undefined) {
     if (!(EVERY_SCOPE as readonly string[]).includes(scope)) {
@@ -165,39 +275,54 @@ async function parseOptions(
       throw badUsage(`--scope ${scope} does not apply to ${command}.`);
     }
   }
+  // Only a Claude skill has visibility levels, so visibility looks at Claude's alone.
+  if (sub === "visibility" && hasFlag(args, "--tool")) throw badUsage("visibility is for Claude skills only.");
   const tool = flagValue(args, "--tool");
   if (tool !== undefined && tool !== "claude" && tool !== "codex") throw badUsage("--tool takes claude or codex.");
   const accounts = flagValues(args, "--account");
   if (accounts.length > 0 && command !== "mcp") throw badUsage("--account is for mcp only.");
   if (accounts.length > 0 && tool === "codex")
     throw badUsage("--account names a Claude account: leave out --tool codex.");
-  const id = flagValue(args, "--id");
-  if (id !== undefined && sub !== "show") throw badUsage(`--id is for show: clausona ${command} show --id <id>.`);
-  const names = positionals(args);
+  const ids = flagValues(args, "--id");
+  onlyFor(command, sub, "--id", ids.length > 0, ["show", "off", "on", "visibility", "rm"]);
+  if (sub === "show" && ids.length > 1) throw badUsage("show takes one --id.");
+  if (sub === "visibility" && words.length === 0 && ids.length === 0) throw badUsage(VISIBILITY_NEEDS_NAME);
+  const { level, names } = sub === "visibility" ? visibilityWords(words) : { level: undefined, names: words };
   if (sub === "ls" && names.length > 0) {
     throw badUsage(`ls takes no name. To see one ${NOUN[command].one}, run clausona ${command} show <name>.`);
   }
   if (sub === "show" && names.length > 1) throw badUsage("show takes one name.");
-  if (sub === "show" && names.length === 0 && id === undefined) {
-    throw badUsage(`show needs a name or --id <id>. Run clausona ${command} show --help.`);
+  if (sub !== "ls" && sub !== "undo" && names.length === 0 && ids.length === 0) {
+    throw badUsage(
+      sub === "visibility"
+        ? VISIBILITY_NEEDS_NAME
+        : `${sub} needs a name or --id <id>. Run clausona ${command} ${sub} --help.`,
+    );
   }
-  const given = flagValue(args, "--project");
-  const project = given === undefined ? undefined : path.resolve(cwd, expandHome(given, homeDir));
+  if (sub === "visibility" && names.length + ids.length > 1) throw badUsage("visibility takes one name or one --id.");
+  const at = flagValue(args, "--project");
+  const project = at === undefined ? undefined : path.resolve(cwd, expandHome(at, homeDir));
   // Without the check, a mistyped path would quietly become the project the list is seen from.
   if (project !== undefined && (await entryInfo(project)).kind !== "dir") {
     throw badUsage("--project: no such directory.");
   }
-  // --account names a Claude account, so it lists Claude's servers alone.
-  const tools: ToolName[] = tool !== undefined ? [tool] : accounts.length > 0 ? ["claude"] : [...TOOLS];
+  // --account names a Claude account, so it lists Claude's servers alone; visibility is Claude's.
+  const tools: ToolName[] =
+    tool !== undefined ? [tool] : accounts.length > 0 || sub === "visibility" ? ["claude"] : [...TOOLS];
   const options: Options = {
     sub,
     json: args.includes("--json"),
     ...(scope !== undefined ? { scope: scope as Scope } : {}),
     tools,
     ...(project !== undefined ? { project } : {}),
-    ...(names[0] !== undefined ? { name: names[0] } : {}),
-    ...(id !== undefined ? { id } : {}),
+    names,
+    ids,
     accounts,
+    everywhere,
+    dryRun,
+    yes,
+    tracked,
+    ...(level !== undefined ? { level } : {}),
   };
   return options;
 }
@@ -459,7 +584,7 @@ function listText(
   return lines.join("\n");
 }
 
-// ─── show ───────────────────────────────────────────────────────────
+// ─── show, and the rows a change is for ─────────────────────────────
 
 /** How `show` names a candidate, in the ambiguity error. */
 function candidateOf(row: ScopeRow, project: string | undefined) {
@@ -474,18 +599,20 @@ function candidateOf(row: ScopeRow, project: string | undefined) {
   };
 }
 
+/** Several rows for one name or id: exit 2, the candidates listed; with --json their object, with the name given. */
 function ambiguous(
   command: ExtensionsCommand,
   options: Options,
+  name: string | undefined,
   rows: ScopeRow[],
   project: string | undefined,
   homeDir: string,
 ) {
   const candidates = rows.map((row) => candidateOf(row, project));
   const what =
-    options.name === undefined
+    name === undefined
       ? `${rows.length} ${NOUN[command].many} match:`
-      : `${rows.length} ${NOUN[command].many} are named '${options.name}':`;
+      : `${rows.length} ${NOUN[command].many} are named '${name}':`;
   const cells = candidates.map((c) => [
     c.tool,
     c.scope,
@@ -496,10 +623,129 @@ function ambiguous(
   const message = [
     what,
     ...table(cells, Number.POSITIVE_INFINITY, []).map((line) => `    ${line}`),
-    "    Pick one with --tool, --scope or --id <id>.",
+    options.sub === "visibility"
+      ? "    Pick one with --scope or --id <id>."
+      : "    Pick one with --tool, --scope or --id <id>.",
   ].join("\n");
-  const stdout = options.json ? JSON.stringify({ version: 1, error: "ambiguous", candidates }, null, 2) : undefined;
-  return new ExitError(message, 2, stdout);
+  const body = { version: 1, error: "ambiguous", message, ...(name !== undefined ? { name } : {}), candidates };
+  const stdout = options.json ? JSON.stringify(body, null, 2) : undefined;
+  return new ExitError(message, 2, stdout, "ambiguous");
+}
+
+/** Rows named twice, or two copies of one row named by their ids, as one row each, in the order first met. */
+function folded(rows: ScopeRow[]): ScopeRow[] {
+  const byKey = new Map<string, ScopeRow>();
+  for (const row of rows) {
+    const known = byKey.get(row.key);
+    const ids = new Set(known?.items.map((item) => item.id));
+    byKey.set(row.key, known ? { ...known, items: [...known.items, ...row.items.filter((i) => !ids.has(i.id))] } : row);
+  }
+  return [...byKey.values()];
+}
+
+/** A plugin goes by its name before the `@` too: `superpowers` for `superpowers@official`. */
+function isName(row: ScopeRow, name: string): boolean {
+  return row.name === name || (firstOf(row).kind === "plugin" && row.name.split("@")[0] === name);
+}
+
+function isId(row: ScopeRow, id: string): boolean {
+  return row.key === id || row.items.some((item) => item.id === id);
+}
+
+/**
+ * The rows one name, one id, or (show) both pick: with --scope that scope's rows and the rows
+ * whose place it is, such as a plugin's skill under plugins; without, in tiers, and the first
+ * tier with a match is where the name is looked up (rule Q).
+ */
+function rowsPicked(
+  inv: Inventory,
+  command: ExtensionsCommand,
+  options: Options,
+  project: string | undefined,
+  now: number,
+  accounts: string[],
+  pick: { name: string | undefined; id: string | undefined },
+): ScopeRow[] {
+  // In Loaded, --account keeps the rows that load for the account, as ls does.
+  const matches = (row: ScopeRow, loaded: boolean) =>
+    // A name can be an id too, so an id from ls --json works as it is given.
+    (pick.name === undefined || isName(row, pick.name) || isId(row, pick.name)) &&
+    (pick.id === undefined || isId(row, pick.id)) &&
+    heldBy(inv, row, accounts, project, loaded);
+  const scope = options.scope;
+  const everyByTool = options.tools.map((tool) => ({ tool, every: everyRow(inv, command, tool, project, now) }));
+  const pools: { rows: ScopeRow[]; loaded: boolean }[] =
+    scope !== undefined
+      ? [
+          {
+            rows: everyByTool.flatMap(({ tool, every }) =>
+              unique([
+                ...rowsFor(inv, command, tool, scope, project, now),
+                ...every.filter((row) => homeScope(firstOf(row), project) === scope),
+              ]),
+            ),
+            loaded: scope === "loaded",
+          },
+        ]
+      : [
+          { rows: options.tools.flatMap((tool) => rowsFor(inv, command, tool, "loaded", project, now)), loaded: true },
+          ...SHOW_TIERS.map((inTier) => ({
+            rows: everyByTool.flatMap(({ every }) => every.filter((row) => inTier(homeScope(firstOf(row), project)))),
+            loaded: false,
+          })),
+        ];
+  return (
+    pools.map(({ rows, loaded }) => rows.filter((row) => matches(row, loaded))).find((rows) => rows.length > 0) ?? []
+  );
+}
+
+/**
+ * show's lookup, shared by the writes: the one row each name or id picks; ExitError not-found (1)
+ * or ambiguous (2) as show throws today. For a change, an id - given with --id, or as the name -
+ * that is one copy's picks that copy alone (rowForId), so `rm --id <a kept copy>` deletes it and
+ * no other account's; show shows the whole row. Rows picked twice fold into one.
+ */
+export function matchRows(
+  inv: Inventory,
+  command: ExtensionsCommand,
+  options: Options,
+  project: string | undefined,
+  now: number,
+): ScopeRow[] {
+  const accounts = accountIds(inv, options.accounts);
+  const picks =
+    options.sub === "show"
+      ? [{ name: options.names[0], id: options.ids[0] }]
+      : [
+          ...options.names.map((name) => ({ name, id: undefined })),
+          ...options.ids.map((id) => ({ name: undefined, id })),
+        ];
+  const noun = NOUN[command].one;
+  return folded(
+    picks.map((pick) => {
+      const found = rowsPicked(inv, command, options, project, now, accounts, pick);
+      if (found.length === 0) {
+        // visibility looks at Claude's alone by itself, and takes neither --tool nor --account.
+        const visibility = options.sub === "visibility";
+        const narrowed = visibility
+          ? options.scope !== undefined
+            ? " Leave out --scope to look further."
+            : ""
+          : options.scope !== undefined || options.tools.length < TOOLS.length || options.accounts.length > 0
+            ? " Leave out --tool, --scope or --account to look further."
+            : "";
+        const what = pick.name === undefined ? `No ${noun} has that id.` : `No ${noun} named '${pick.name}'.`;
+        throw new ExitError(`${what}${narrowed}`, 1, undefined, "not-found");
+      }
+      const [row, ...more] = found;
+      if (row === undefined || more.length > 0) {
+        throw ambiguous(command, options, pick.name, found, project, inv.homeDir);
+      }
+      if (options.sub === "show") return row;
+      const exact = pick.id ?? (pick.name !== undefined && !isName(row, pick.name) ? pick.name : undefined);
+      return exact === undefined ? row : (rowForId(row, exact) ?? row);
+    }),
+  );
 }
 
 /** The details view as text: the title, then each line with its label in a column of 10. */
@@ -526,62 +772,376 @@ function show(
   project: string | undefined,
   now: number,
 ): string {
-  const accounts = accountIds(inv, options.accounts);
-  const isId = (row: ScopeRow, id: string) => row.key === id || row.items.some((item) => item.id === id);
-  // A plugin goes by its name before the `@` too: `superpowers` for `superpowers@official`.
-  const isName = (row: ScopeRow, name: string) =>
-    row.name === name || (firstOf(row).kind === "plugin" && row.name.split("@")[0] === name);
-  // In Loaded, --account keeps the rows that load for the account, as ls does.
-  const matches = (row: ScopeRow, loaded: boolean) =>
-    // A name can be an id too, so an id from ls --json works as it is given.
-    (options.name === undefined || isName(row, options.name) || isId(row, options.name)) &&
-    (options.id === undefined || isId(row, options.id)) &&
-    heldBy(inv, row, accounts, project, loaded);
-  const scope = options.scope;
-  const everyByTool = options.tools.map((tool) => ({ tool, every: everyRow(inv, command, tool, project, now) }));
-  // With --scope, that scope's rows and the rows whose place it is, such as a plugin's skill
-  // under plugins. Without, in tiers: the first one with a match is where the name is looked up.
-  const pools: { rows: ScopeRow[]; loaded: boolean }[] =
-    scope !== undefined
-      ? [
-          {
-            rows: everyByTool.flatMap(({ tool, every }) =>
-              unique([
-                ...rowsFor(inv, command, tool, scope, project, now),
-                ...every.filter((row) => homeScope(firstOf(row), project) === scope),
-              ]),
-            ),
-            loaded: scope === "loaded",
-          },
-        ]
-      : [
-          { rows: options.tools.flatMap((tool) => rowsFor(inv, command, tool, "loaded", project, now)), loaded: true },
-          ...SHOW_TIERS.map((inTier) => ({
-            rows: everyByTool.flatMap(({ every }) => every.filter((row) => inTier(homeScope(firstOf(row), project)))),
-            loaded: false,
-          })),
-        ];
-  const found =
-    pools.map(({ rows, loaded }) => rows.filter((row) => matches(row, loaded))).find((rows) => rows.length > 0) ?? [];
-  const noun = NOUN[command].one;
-  if (found.length === 0) {
-    const narrowed =
-      options.scope !== undefined || options.tools.length < TOOLS.length || options.accounts.length > 0
-        ? " Leave out --tool, --scope or --account to look further."
-        : "";
-    const what = options.name === undefined ? `No ${noun} has that id.` : `No ${noun} named '${options.name}'.`;
-    throw new ExitError(`${what}${narrowed}`, 1);
-  }
-  const [row, ...more] = found;
-  if (row === undefined || more.length > 0) throw ambiguous(command, options, found, project, inv.homeDir);
+  const [row] = matchRows(inv, command, options, project, now);
+  if (row === undefined) throw new Error("show matched no row.");
   const details = detailsOf(inv, row, project, now);
   if (options.json) return JSON.stringify({ version: 1, ...jsonItem(inv, row, project, now), details }, null, 2);
   return [...detailText(details), ...warningLines(inv, "this")].join("\n");
 }
 
+// ─── Changes ────────────────────────────────────────────────────────
+
+const PROMPT = "  Apply? (y/N) ";
+const CANCELLED = "  Cancelled. Nothing changed.";
+const NO_TERMINAL =
+  "This changes files, and there is no terminal to confirm on. Add --yes to go ahead, or --dry-run to see the plan.";
+const JSON_NEEDS_YES = "With --json, add --yes to go ahead, or --dry-run to see the plan.";
+
+/** What a refused row could not be, in "Nothing changed: 1 of 2 can't be deleted." */
+const CANT: Record<Plan["verb"], string> = { off: "turned off", on: "turned on", visibility: "changed", rm: "deleted" };
+
+/** What an apply that stopped is called in --json's `error`. */
+const STOPPED: Record<StopReason, ErrorKind> = {
+  changed: "changed",
+  locked: "locked",
+  conflict: "conflict",
+  failed: "failed",
+};
+
+/** A change under way: what was asked, where its words go, and whether it can ask first. */
+type Talk = {
+  command: ExtensionsCommand;
+  options: Options;
+  homeDir: string;
+  env: WriteEnv;
+  columns: number;
+  /** Where the plan goes before the question. */
+  print: (text: string) => void;
+  /** Undefined when there is no terminal to ask on. */
+  confirm: ((question: string) => Promise<boolean>) | undefined;
+};
+
+const pretty = (value: unknown) => JSON.stringify(value, null, 2);
+
+/** The lines of a text without the blank ones at its end. */
+function trimmed(lines: string[]): string[] {
+  const out = [...lines];
+  while (out.at(-1) === "") out.pop();
+  return out;
+}
+
+function lineJson(line: PlanLine) {
+  return {
+    file: line.file,
+    change: line.change,
+    what: line.what,
+    account: line.account ?? null,
+    note: line.note ?? null,
+    tracked: line.tracked,
+    rows: [...line.rows],
+  };
+}
+
+function refusedJson(refusal: Refusal) {
+  return { id: refusal.rowKey, name: refusal.name, code: refusal.code, reason: refusalText(refusal, "flags") };
+}
+
+/** A plan as JSON v1, in PLAN_JSON_KEYS order: what it names, never a fingerprint or a value of an entry. */
+function planJson(
+  plan: Plan,
+  talk: Talk,
+  state: { dryRun: boolean; applied?: boolean; operation?: { id: string; backup: string } },
+) {
+  return {
+    version: 1,
+    command: plan.command,
+    verb: plan.verb,
+    everywhere: plan.verb !== "rm" && plan.reach === "everywhere",
+    ...(plan.level !== undefined ? { level: plan.level } : {}),
+    dryRun: state.dryRun,
+    ...(state.applied !== undefined ? { applied: state.applied } : {}),
+    question: plan.question,
+    changes: plan.changes.flatMap((change) => change.lines.map(lineJson)),
+    unchanged: plan.unchanged.map((u) => ({ id: u.rowKey, name: u.name, why: u.why })),
+    refused: plan.refused.map(refusedJson),
+    notes: [...plan.notes],
+    ...(plan.accounts ? { accounts: plan.accounts.map((a) => ({ profile: a.profile, chosen: a.chosen })) } : {}),
+    backupRoot: talk.env.backupRoot,
+    ...(state.operation ? { operation: state.operation } : {}),
+  };
+}
+
+/** A path, dim, keeping its padding outside the style. */
+function dimPath(cell: string): string {
+  const text = cell.trimEnd();
+  return `${dim(text)}${cell.slice(text.length)}`;
+}
+
+/**
+ * One line per file line: `{~file}  {what}  {account}  {note}`, a column nobody fills left out,
+ * cut to fit. A copy clausona kept is named in words; the JSON names its path.
+ */
+function changeLines(lines: PlanLine[], talk: Talk): string[] {
+  const cells = lines.map((line) => [
+    fileWords(line.file, talk.homeDir, talk.env.stashDir),
+    line.what,
+    line.account === undefined ? "" : shortProfile(line.account),
+    line.note ?? "",
+  ]);
+  const used = [0, 1, 2, 3].filter((c) => c === 0 || cells.some((row) => row[c] !== ""));
+  // The path gives way first, from its middle; then the note; what changes last.
+  const giveWay = [0, 3, 1].map((c) => used.indexOf(c)).filter((c) => c >= 0);
+  return fitted(
+    cells.map((row) => used.map((c) => row[c] ?? "")),
+    talk.columns - 6,
+    giveWay,
+    [0],
+  ).map(([file = "", ...rest]) => `      ${[dimPath(file), ...rest].join(" ".repeat(GAP))}`.trimEnd());
+}
+
+/** `{name}  {why}` for each row already as asked, dim, at `indent`. */
+function unchangedLines(plan: Plan, talk: Talk, indent: number): string[] {
+  const rows = plan.unchanged.map((u) => [u.name, u.why]);
+  return table(rows, talk.columns - indent, [1, 0]).map((line) => `${" ".repeat(indent)}${dim(line)}`);
+}
+
+/** `{name}  {reason and what to do}`, whole: the hint is a command to run. */
+function refusalLines(refused: Refusal[], indent: number): string[] {
+  const rows = refused.map((r) => [r.name, refusalText(r, "flags")]);
+  return table(rows, Number.POSITIVE_INFINITY, []).map((line) => `${" ".repeat(indent)}${line}`);
+}
+
+function notesLines(plan: Plan): string[] {
+  return plan.notes.length === 0 ? [] : ["  Note:", ...plan.notes.map((note) => `      ${note}`), ""];
+}
+
+/** The plan as the prompt and --dry-run show it: the question, the files, what is already so, the backup. */
+function planText(plan: Plan, talk: Talk, dryRun: boolean): string {
+  const lines = plan.changes.flatMap((change) => change.lines);
+  const out = [`  ${bold(plan.question)}`, ""];
+  if (lines.length > 0) out.push(...changeLines(lines, talk), "");
+  if (plan.unchanged.length > 0) out.push("  Already as asked:", ...unchangedLines(plan, talk, 6), "");
+  if (plan.refused.length > 0) out.push(`  Can't be ${CANT[plan.verb]}:`, ...refusalLines(plan.refused, 6), "");
+  out.push(...notesLines(plan));
+  if (lines.length > 0) {
+    const them = new Set(lines.flatMap((line) => line.rows)).size > 1 ? "them" : "it";
+    out.push(
+      `  Backup: ${dim(`${tilde(talk.env.backupRoot, talk.homeDir)}${path.sep}`)}`,
+      `  Run ${accent(`clausona ${talk.command} undo`)} afterwards to put ${them} back.`,
+      "",
+    );
+  }
+  if (dryRun) {
+    // A change with a refused row changes nothing at all (rule C), so --yes alone would not do.
+    out.push(
+      plan.refused.length > 0
+        ? `  Dry run: nothing changed. Leave out what can't be ${CANT[plan.verb]}, then run it again with --yes.`
+        : "  Dry run: nothing changed. Run it again with --yes to apply.",
+    );
+  }
+  return trimmed(out).join("\n");
+}
+
+function nothingText(plan: Plan, talk: Talk): string {
+  return trimmed(["  Nothing to do.", ...unchangedLines(plan, talk, 4), "", ...notesLines(plan)]).join("\n");
+}
+
+/** Rule C: any refused row, and nothing is applied; every reason is listed. */
+function refusedError(plan: Plan, asked: number): ExitError {
+  const rows = new Set(plan.refused.map((r) => r.rowKey)).size;
+  const message = [
+    `Nothing changed: ${rows} of ${asked} can't be ${CANT[plan.verb]}.`,
+    ...refusalLines(plan.refused, 4),
+  ];
+  return new ExitError(message.join("\n"), 1, undefined, "refused", { refused: plan.refused.map(refusedJson) });
+}
+
+/** An apply that stopped at a change: why, and how many were made before it, which undo puts back. */
+function stoppedError(result: Extract<ApplyResult, { status: "stopped" }>, talk: Talk): ExitError {
+  const { operation, done, total, stop } = result;
+  const made = done > 0 ? ` ${done} of ${total} changes were made; clausona ${talk.command} undo puts them back.` : "";
+  return new ExitError(
+    `${stopText(stop, "flags", talk.homeDir, talk.command, talk.env.stashDir)}${made}`,
+    1,
+    undefined,
+    STOPPED[stop.reason],
+    {
+      operation: { id: operation.id, backup: operation.dir },
+      done,
+      total,
+      file: stop.file,
+    },
+  );
+}
+
+/**
+ * Rule M: --yes goes ahead; a terminal shows `text` and asks, no by default; without one it is
+ * bad usage. So is --json without --yes, on a terminal too: stdout is to be one JSON object, not
+ * the plan as text before it.
+ */
+async function agreed(talk: Talk, text: string): Promise<boolean> {
+  if (talk.options.yes) return true;
+  if (!talk.confirm) throw badUsage(NO_TERMINAL);
+  if (talk.options.json) throw badUsage(JSON_NEEDS_YES);
+  talk.print(text);
+  return talk.confirm(PROMPT);
+}
+
+/** off, on, visibility or rm: the plan, then a dry run, a refusal, nothing to do, or - once agreed - the apply. */
+async function change(inv: Inventory, talk: Talk, now: number, git: string | undefined): Promise<string> {
+  const { command, options } = talk;
+  const project = inv.currentProject;
+  const rows = matchRows(inv, command, options, project, now);
+  const verb = options.sub as Action["verb"];
+  const action: Action = {
+    verb,
+    // Neither tool has a per-project switch for hooks (rule O); rm has no reach.
+    reach: verb !== "rm" && (options.everywhere || command === "hooks") ? "everywhere" : "here",
+    rows,
+    ...(options.level !== undefined ? { level: options.level } : {}),
+    ...(options.accounts.length > 0 ? { accounts: accountIds(inv, options.accounts) } : {}),
+    ...(options.tracked ? { tracked: true } : {}),
+  };
+  const ctx = { inv, project, now, stashDir: inv.places.stashDir };
+  const { plan } = await planChecked(ctx, command, action, git !== undefined ? { git } : {});
+  const nothing = plan.changes.length === 0 && plan.refused.length === 0;
+  if (options.dryRun) {
+    if (options.json) return pretty(planJson(plan, talk, { dryRun: true }));
+    return nothing ? nothingText(plan, talk) : planText(plan, talk, true);
+  }
+  if (plan.refused.length > 0) throw refusedError(plan, rows.length);
+  if (nothing)
+    return options.json ? pretty(planJson(plan, talk, { dryRun: false, applied: false })) : nothingText(plan, talk);
+  if (!(await agreed(talk, planText(plan, talk, false)))) return CANCELLED;
+  const result = await apply(plan, talk.env);
+  if (result.status === "stopped") throw stoppedError(result, talk);
+  if (result.status === "nothing") {
+    return options.json ? pretty(planJson(plan, talk, { dryRun: false, applied: false })) : nothingText(plan, talk);
+  }
+  const operation = { id: result.operation.id, backup: result.operation.dir };
+  if (options.json) return pretty(planJson(plan, talk, { dryRun: false, applied: true, operation }));
+  return trimmed([
+    success(plan.done),
+    `    Backup: ${dim(tilde(operation.backup, talk.homeDir))}`,
+    `    Undo: ${accent(`clausona ${command} undo`)}`,
+    "",
+    // What the prompt and the dry run note, such as a file that still keeps it off here.
+    ...notesLines(plan),
+  ]).join("\n");
+}
+
+function nothingToUndo(command: ExtensionsCommand): ExitError {
+  return new ExitError(`Nothing to undo for ${command}.`, 1, undefined, "nothing-to-undo");
+}
+
+function undoJson(
+  talk: Talk,
+  operation: UndoPreview["operation"],
+  dryRun: boolean,
+  outcome: { files?: UndoPreview["files"]; restored?: string[]; skipped?: UndoSkip[] },
+) {
+  return {
+    version: 1,
+    command: talk.command,
+    verb: "undo",
+    dryRun,
+    operation: { id: operation.id, summary: operation.summary, createdAt: operation.createdAt },
+    ...(outcome.files ? { files: outcome.files.map((f) => ({ path: f.path, action: f.action })) } : {}),
+    ...(outcome.restored ? { restored: outcome.restored } : {}),
+    ...(outcome.skipped ? { skipped: outcome.skipped.map((s) => ({ file: s.file, reason: s.reason })) } : {}),
+  };
+}
+
+/** `{~path}  {words}` per path, the path dim, cut to fit. */
+function pathLines(rows: [string, string][], talk: Talk, indent: number): string[] {
+  const cells = rows.map(([file, words]) => [tilde(file, talk.homeDir), words]);
+  return fitted(cells, talk.columns - indent, [0], [0]).map(
+    ([file = "", words = ""]) => `${" ".repeat(indent)}${dimPath(file)}${" ".repeat(GAP)}${words}`,
+  );
+}
+
+function previewText(summary: string, files: UndoPreview["files"], talk: Talk, dryRun: boolean): string {
+  return trimmed([
+    `  ${bold(`Undo: ${summary}?`)}`,
+    "",
+    ...pathLines(
+      files.map((f) => [f.path, f.action]),
+      talk,
+      6,
+    ),
+    ...(files.length > 0 ? [""] : []),
+    "  Puts back what changed, unless it changed since.",
+    ...(dryRun ? ["", "  Dry run: nothing changed. Run it again with --yes to undo it."] : []),
+  ]).join("\n");
+}
+
+/**
+ * undo: the newest change of this command not undone yet (rule F), previewed, agreed to, and put
+ * back. Paths in clausona's own folder of kept entries are left out of what it says; the
+ * manifest keeps them.
+ */
+async function undoLast(talk: Talk): Promise<string> {
+  const { command, options, env } = talk;
+  const own = (file: string) => isWithin(file, env.stashDir);
+  const preview = await lastOperation(env, command);
+  if (!preview) throw nothingToUndo(command);
+  const files = preview.files.filter((f) => !own(f.path));
+  const { summary } = preview.operation;
+  if (options.dryRun) {
+    return options.json
+      ? pretty(undoJson(talk, preview.operation, true, { files }))
+      : previewText(summary, files, talk, true);
+  }
+  if (!(await agreed(talk, previewText(summary, files, talk, false)))) return CANCELLED;
+  const result = await undo(env, command);
+  if (!result) throw nothingToUndo(command);
+  const restored = result.restored.filter((file) => !own(file));
+  // A file the change made is taken away again, as the preview's "remove" said.
+  const back = restored.map((file): [string, string] => [file, result.removed.includes(file) ? "removed" : "put back"]);
+  if (result.skipped.length > 0) {
+    // Only Claude Code saving a file: the operation stays the next undo's, for what is left.
+    const locked = result.skipped.every((skip) => skip.reason === "locked");
+    // A copy clausona kept goes with its edit, skipped for the edit's reason: the user's file is
+    // what is named. When such a copy is all that is left, it is said in words, not by its path.
+    const theirs = result.skipped.filter((skip) => !own(skip.file));
+    const left: [string, string][] =
+      theirs.length > 0
+        ? theirs.map((skip) => [skip.file, LEFT_ALONE[skip.reason]])
+        : [...new Set(result.skipped.map((skip) => LEFT_ALONE[skip.reason]))].map((words) => [KEPT_COPY, words]);
+    const { id, summary: done, createdAt } = result.operation;
+    const message = [
+      restored.length > 0 ? `Undid part of it: ${done}` : `Could not undo: ${done}`,
+      ...pathLines([...back, ...left], talk, 4),
+      ...(result.skipped.some((skip) => skip.reason === "locked") ? ["    Try again in a moment."] : []),
+    ];
+    throw new ExitError(message.join("\n"), 1, undefined, locked ? "locked" : "changed", {
+      operation: { id, summary: done, createdAt },
+      restored,
+      skipped: theirs.map((s) => ({ file: s.file, reason: s.reason })),
+    });
+  }
+  if (options.json) return pretty(undoJson(talk, result.operation, false, { restored, skipped: [] }));
+  return [success(`Undid: ${result.operation.summary}`), ...pathLines(back, talk, 4)].join("\n");
+}
+
 // ─── The command ────────────────────────────────────────────────────
 
-/** `clausona skills|mcp|hooks ls|show`. Bad usage and an ambiguous name throw ExitError code 2, not found code 1. */
+/**
+ * With --json, an ExitError without stdout and any other error become one JSON object on stdout:
+ * `{ version: 1, error: <kind>, message, …extra }`, the exit code kept. An ExitError that has its
+ * own stdout - the ambiguous object - goes as it is.
+ */
+export async function withJsonErrors(args: string[], run: () => Promise<string>): Promise<string> {
+  if (!args.includes("--json")) return run();
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof ExitError) {
+      if (error.stdout !== undefined) throw error;
+      const kind: ErrorKind = error.kind ?? (error.code === 2 ? "usage" : "not-found");
+      const body = { version: 1, error: kind, message: error.message, ...error.extra };
+      throw new ExitError(error.message, error.code, pretty(body), error.kind, error.extra);
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new ExitError(message, 1, pretty({ version: 1, error: "failed", message }), "failed");
+  }
+}
+
+/**
+ * `clausona skills|mcp|hooks <sub>`. Bad usage, an ambiguous name and a change with no terminal
+ * and no --yes throw ExitError code 2; not found, refused, changed, locked, conflict, failed and
+ * nothing to undo code 1.
+ */
 export async function runExtensionsCommand(
   command: ExtensionsCommand,
   args: string[],
@@ -593,15 +1153,44 @@ export async function runExtensionsCommand(
     columns?: number;
     /** Where to look for Claude Code's managed settings; tests point it at a file of their own. */
     managedSettings?: string;
+    /** stdin and stdout are both TTYs; default false. */
+    interactive?: boolean;
+    /** Asks the question and resolves to the answer; required when interactive. */
+    confirm?: (question: string) => Promise<boolean>;
+    /** Default writeEnvFor(homeDir). */
+    writeEnv?: WriteEnv;
+    /** The git binary, for tests. */
+    git?: string;
+    /** Where a change's plan goes before the question; default stdout. */
+    print?: (text: string) => void;
   },
 ): Promise<string> {
-  const given = args[0] !== undefined && !args[0].startsWith("-") ? args[0] : undefined;
+  const word = args[0] !== undefined && !args[0].startsWith("-") ? args[0] : undefined;
   if (args.includes("--help") || args.includes("-h")) {
-    return extensionsHelp(command, given === "ls" || given === "show" ? given : undefined);
+    return extensionsHelp(command, isSub(command, word) ? word : undefined);
   }
-  const sub = given ?? "ls";
-  if (sub !== "ls" && sub !== "show") throw badUsage(`Unknown subcommand '${sub}'. Run clausona ${command} --help.`);
-  const options = await parseOptions(command, sub, given === undefined ? args : args.slice(1), deps.cwd, deps.homeDir);
+  const sub = word ?? "ls";
+  if (!isSub(command, sub)) {
+    throw badUsage(
+      `Unknown subcommand '${sub}'. clausona ${command} takes ${either(SUBS[command])}. Run clausona ${command} --help.`,
+    );
+  }
+  const options = await parseOptions(command, sub, word === undefined ? args : args.slice(1), deps.cwd, deps.homeDir);
+  const columns = deps.columns ?? process.stdout.columns ?? 120;
+  const talk: Talk = {
+    command,
+    options,
+    homeDir: deps.homeDir,
+    env: deps.writeEnv ?? writeEnvFor(deps.homeDir),
+    columns,
+    print:
+      deps.print ??
+      ((text) => {
+        process.stdout.write(`${text}\n`);
+      }),
+    confirm: deps.interactive === true ? deps.confirm : undefined,
+  };
+  if (options.sub === "undo") return undoLast(talk);
   const inv = await loadInventory({
     homeDir: deps.homeDir,
     registry: deps.registry,
@@ -611,6 +1200,7 @@ export async function runExtensionsCommand(
   const project = inv.currentProject;
   const now = deps.now ?? Date.now();
   if (options.sub === "show") return show(inv, command, options, project, now);
+  if (options.sub !== "ls") return change(inv, talk, now, deps.git);
 
   const accounts = accountIds(inv, options.accounts);
   const scope = options.scope ?? "loaded";
@@ -620,258 +1210,44 @@ export async function runExtensionsCommand(
       .filter((row) => heldBy(inv, row, accounts, project, scope === "loaded")),
   );
   if (options.json) {
-    return JSON.stringify(
-      {
-        version: 1,
-        command,
-        project: project ?? null,
-        scope,
-        tools: options.tools,
-        items: rows.map((row) => jsonItem(inv, row, project, now)),
-        warnings: inv.warnings,
-      },
-      null,
-      2,
-    );
+    return pretty({
+      version: 1,
+      command,
+      project: project ?? null,
+      scope,
+      tools: options.tools,
+      items: rows.map((row) => jsonItem(inv, row, project, now)),
+      warnings: inv.warnings,
+    });
   }
-  return listText(inv, command, options, rows, project, now, deps.columns ?? process.stdout.columns ?? 120);
+  return listText(inv, command, options, rows, project, now, columns);
 }
 
+const GAP = 2;
+
 /**
- * Columns padded to their widest cell. When the terminal is narrow, the `giveWay` columns are
- * cut in turn, each to no less than 12 characters, until the row fits.
+ * Cells padded to their column's widest, the last left as it is. When the terminal is narrow,
+ * the `giveWay` columns are cut in turn, each to no less than 12 characters, until the row fits;
+ * a `middle` column (a path) is cut from its middle, any other at its end.
  */
-function table(rows: string[][], width: number, giveWay: number[]): string[] {
+function fitted(rows: string[][], width: number, giveWay: number[], middle: number[] = []): string[][] {
   const widths = (rows[0] ?? []).map((_, c) => Math.max(...rows.map((r) => (r[c] ?? "").length)));
-  const gap = 2;
-  let total = widths.reduce((a, b) => a + b, 0) + gap * (widths.length - 1);
+  let total = widths.reduce((a, b) => a + b, 0) + GAP * (widths.length - 1);
   for (const column of giveWay) {
     if (total <= width) break;
     const cut = Math.min(total - width, Math.max(0, (widths[column] ?? 0) - 12));
     widths[column] = (widths[column] ?? 0) - cut;
     total -= cut;
   }
-  return rows.map((row) =>
-    row
-      .map((cell, c) => truncate(cell, widths[c] ?? cell.length).padEnd(widths[c] ?? 0))
-      .join(" ".repeat(gap))
-      .trimEnd(),
+  const cut = rows.map((row) =>
+    row.map((cell, c) => (middle.includes(c) ? middleCut : truncate)(cell, widths[c] ?? cell.length)),
   );
+  // A path cut at a separator can come out shorter than its column: pad to what the cells hold.
+  const held = widths.map((_, c) => Math.max(...cut.map((r) => (r[c] ?? "").length)));
+  return cut.map((row) => row.map((cell, c) => (c === row.length - 1 ? cell : cell.padEnd(held[c] ?? 0))));
 }
 
-// ─── Help ───────────────────────────────────────────────────────────
-
-/** docs/extensions.md, online, for a reader who has the help and not the repo. */
-const DOCS_URL = "https://github.com/larcane97/clausona/blob/main/docs/extensions.md";
-
-/** Where an option's text starts, and an example's description. */
-const OPTION_COLUMN = 18;
-const EXAMPLE_COLUMN = 51;
-/** The widest a scope list's line gets past the option column, so a page stays in 100 columns. */
-const SCOPE_LIST_WIDTH = 72;
-
-type Example = [command: string, says?: string];
-
-type HelpPage = {
-  /** The overview's title, after the dash. */
-  about: string;
-  /** What `show` takes. */
-  showArg: string;
-  /** The overview's line for show. */
-  showSummary: string;
-  /** What ls lists by default, as one sentence. */
-  lsDefault: string;
-  /** ls's line in the overview, after the noun. */
-  lsSummary: string;
-  /** What show prints, one or two lines. */
-  showAbout: string[];
-  lsExamples: Example[];
-  showExamples: Example[];
-};
-
-const HELP: Record<ExtensionsCommand, HelpPage> = {
-  skills: {
-    about: "Skills Claude Code and Codex load, by where they come from",
-    showArg: "<name>",
-    showSummary: "Everything about one skill: files, state per account, use",
-    lsDefault: "By default, every skill Claude Code and Codex load in this project.",
-    lsSummary: "in one scope (default: everything loaded in this project)",
-    showAbout: [
-      "Files, where it loads and for which accounts, how often it is used, and other copies.",
-      "Looks in what loads here first, then this project and global, then other projects.",
-    ],
-    lsExamples: [
-      ["clausona skills ls --scope project", "Skills this project defines"],
-      ["clausona skills ls --scope unused --tool claude", "Claude skills not used in 90 days"],
-      ["clausona skills ls --project ~/repos/app --json", "Everything loaded in ~/repos/app"],
-    ],
-    showExamples: [
-      ["clausona skills show eli5", "One skill, as text"],
-      ["clausona skills show eli5 --tool codex --json", "The Codex copy, as JSON"],
-      ["clausona skills show --id 'skill:claude:global:-:eli5'"],
-    ],
-  },
-  mcp: {
-    about: "MCP servers Claude Code and Codex load, by where they come from",
-    showArg: "<name>",
-    showSummary: "Everything about one MCP server: what it runs, state per account",
-    lsDefault: "By default, every MCP server Claude Code and Codex load in this project.",
-    lsSummary: "in one scope (default: everything loaded in this project)",
-    showAbout: [
-      "What it runs, which accounts have it and whether it is on here. Secret values are never shown.",
-      "Looks in what loads here first, then this project and global, then other projects.",
-    ],
-    lsExamples: [
-      ["clausona mcp ls --scope global --tool claude", "Servers every project gets"],
-      ["clausona mcp ls --json", "Servers loaded here, per account"],
-      ["clausona mcp ls --scope other", "Servers other projects define"],
-    ],
-    showExamples: [
-      ["clausona mcp show github", "Which accounts have it, on or off here"],
-      ["clausona mcp show github --json"],
-      ["clausona mcp show github --account work"],
-    ],
-  },
-  hooks: {
-    about: "Hooks Claude Code and Codex run, by where they come from",
-    showArg: "<id|name>",
-    showSummary: "Everything about one hook: when it runs, what it runs, its file",
-    lsDefault: "By default, every hook Claude Code and Codex run in this project.",
-    lsSummary: "in one scope (default: everything that runs in this project)",
-    showAbout: [
-      'When it runs, what it runs and which file it is in. Takes a name such as "Stop", or an id.',
-      "Looks in what runs here first, then this project and global, then other projects.",
-    ],
-    lsExamples: [
-      ["clausona hooks ls", "Hooks that run in this project"],
-      ["clausona hooks ls --scope global", "Hooks from your user settings"],
-      ["clausona hooks ls --json"],
-    ],
-    showExamples: [
-      ["clausona hooks show Stop"],
-      ["clausona hooks show --id '<id>' --json"],
-      ['clausona hooks show "PreToolUse Bash" --tool claude'],
-    ],
-  },
-};
-
-function option(flag: string, text: string): string {
-  return `    ${accent(flag.padEnd(OPTION_COLUMN))}${dim(text)}`;
-}
-
-function optionMore(text: string): string {
-  return `    ${" ".repeat(OPTION_COLUMN)}${dim(text)}`;
-}
-
-/** `a | b | c`, cut into lines that fit, each further line starting with `| `. */
-function scopeList(values: string[]): string[] {
-  const lines: string[] = [];
-  let line = "";
-  for (const value of values) {
-    const next = line === "" ? value : `${line} | ${value}`;
-    if (line !== "" && next.length > SCOPE_LIST_WIDTH) {
-      lines.push(line);
-      line = `| ${value}`;
-    } else {
-      line = next;
-    }
-  }
-  if (line !== "") lines.push(line);
-  return lines;
-}
-
-function example([command, says]: Example): string {
-  if (says === undefined) return `    ${command}`;
-  const padded = command.length + 2 > EXAMPLE_COLUMN ? `${command}  ` : command.padEnd(EXAMPLE_COLUMN);
-  return `    ${padded}${dim(says)}`;
-}
-
-function section(title: string, lines: string[]): string[] {
-  return [`  ${bold(title)}`, ...lines, ""];
-}
-
-/** `clausona <command> --help`, or the page of `ls` or `show`. Every line fits in 100 columns. */
-export function extensionsHelp(command: ExtensionsCommand, sub?: "ls" | "show"): string {
-  const page = HELP[command];
-  const { one, many } = NOUN[command];
-  const mcp = command === "mcp";
-  // ls lists Loaded by default, and show looks there first: what loads for the account.
-  const account = mcp
-    ? [
-        option("--account <name>", "Only this Claude account (repeatable): in Loaded, the rows that"),
-        optionMore("load for it; in any other scope, the rows it has"),
-      ]
-    : [];
-  const project = option("--project <path>", "Look from another project instead of the current dir (~ works)");
-  const json = [option("--json", "JSON output (version 1). Its fields:"), optionMore(`${DOCS_URL}#json`)];
-  // Where ids come from, and the docs' section on how they are made.
-  const ids = section("IDS", [
-    `    ${dim('An id is the "id" field of ls --json. Pass it back as it is, to show --id or as the name.')}`,
-    `    ${dim(`${DOCS_URL}#ids-and-row-keys`)}`,
-  ]);
-  if (sub === "ls") {
-    const [first = "", ...rest] = scopeList(SCOPES[command].map((s) => (s === "loaded" ? "loaded (default)" : s)));
-    return [
-      "",
-      `  ${accent(`clausona ${command} ls`)} ${dim(`— List ${many}`)}`,
-      "",
-      `  ${dim(page.lsDefault)}`,
-      "",
-      ...section("OPTIONS", [
-        option("--scope <scope>", first),
-        ...rest.map(optionMore),
-        option("--tool <tool>", "claude | codex (default: both)"),
-        ...account,
-        project,
-        ...json,
-      ]),
-      ...ids,
-      ...section("EXAMPLES", page.lsExamples.map(example)),
-      `  ${bold("EXIT CODES")}   ${dim("0 ok · 1 error · 2 bad usage")}`,
-      "",
-    ].join("\n");
-  }
-  if (sub === "show") {
-    const kind = command === "mcp" ? "server" : one;
-    // Every value ls takes: one scope's rows, in place of the tiers below.
-    const scopes = scopeList([...SCOPES[command]]).map(optionMore);
-    return [
-      "",
-      `  ${accent(`clausona ${command} show`)} ${dim(`— Everything about one ${one}`)}`,
-      "",
-      ...page.showAbout.map((line) => `  ${dim(line)}`),
-      "",
-      ...section("OPTIONS", [
-        option("--tool <tool>", `claude | codex, when both have a ${kind} by this name`),
-        option("--scope <scope>", "Look in this scope only, to pick one copy:"),
-        ...scopes,
-        option("--id <id>", 'An exact id, the "id" field of ls --json, instead of a name'),
-        ...account,
-        project,
-        ...json,
-      ]),
-      ...ids,
-      ...section("EXAMPLES", page.showExamples.map(example)),
-      `  ${bold("EXIT CODES")}   ${dim("0 ok · 1 not found or error · 2 bad usage or several matches")}`,
-      "",
-    ].join("\n");
-  }
-  const accountUsage = mcp ? " [--account <name>]" : "";
-  return [
-    "",
-    `  ${accent(`clausona ${command}`)} ${dim(`— ${page.about}`)}`,
-    "",
-    ...section("USAGE", [
-      helpUsage(`clausona ${command} ls   [--scope <scope>] [--tool claude|codex] [--project <path>] [--json]`),
-      helpUsage(`clausona ${command} show ${page.showArg} [--tool …] [--scope …] [--id <id>]${accountUsage} [--json]`),
-    ]),
-    ...section("SUBCOMMANDS", [
-      `    ${accent("ls".padEnd(8))}${dim(`List ${many} ${page.lsSummary}`)}`,
-      `    ${accent("show".padEnd(8))}${dim(page.showSummary)}`,
-    ]),
-    `  ${dim("Run")} ${accent(`clausona ${command} ls --help`)} ${dim("or")} ${accent(`clausona ${command} show --help`)} ${dim("for options and examples.")}`,
-    `  ${dim("Reference: docs/extensions.md (scopes, tags, ids, JSON fields), also at")}`,
-    `  ${dim(DOCS_URL)}`,
-    "",
-  ].join("\n");
+/** `fitted`'s rows joined into lines. */
+function table(rows: string[][], width: number, giveWay: number[]): string[] {
+  return fitted(rows, width, giveWay).map((row) => row.join(" ".repeat(GAP)).trimEnd());
 }

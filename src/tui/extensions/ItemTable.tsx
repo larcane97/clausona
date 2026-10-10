@@ -20,16 +20,20 @@ type Props = {
   top: number;
   /** Whether the table has the focus: only then does the selected row carry the cursor. */
   focused: boolean;
+  /** The keys of the rows marked with x: a ◉ where the cursor goes, and a count in the header. */
+  marked?: ReadonlySet<string>;
 };
 
 /**
  * The right pane: the scope's header line with its count on the right, the column titles, and
  * the rows that fit from `top`, each cut to the width by the model. When rows do not fit, the
  * last line says how many more are below; when there are none, the table's sentence says why,
- * and an empty sentence - the header has said it - is no line at all.
+ * and an empty sentence - the header has said it - is no line at all. A marked row has a ◉ in
+ * the cursor's column; under the cursor, the ✦ and its name in the accent colour.
  */
-export function ItemTable({ table, width, height, cursor, top, focused }: Props) {
-  const count = table.countText;
+export function ItemTable({ table, width, height, cursor, top, focused, marked }: Props) {
+  const marks = marked === undefined ? 0 : table.rows.filter((row) => marked.has(row.key)).length;
+  const count = marks > 0 ? `${table.countText} · ${marks} marked` : table.countText;
   // The header's words cut to what the count leaves, then the count after a space.
   const words = cell(table.header, Math.max(0, width - count.length - 1));
   const dash = words.indexOf(DASH);
@@ -61,18 +65,18 @@ export function ItemTable({ table, width, height, cursor, top, focused }: Props)
       ) : null}
       {visible.map((row, i) => {
         const active = focused && top + i === cursor;
+        const isMarked = marked?.has(row.key) === true;
         return (
           <Text key={row.key} wrap="truncate-end">
-            <Text color={active ? color.cursor : color.dim}>{active ? symbol.cursor : " "} </Text>
+            <Text color={active ? color.cursor : isMarked ? color.accent : color.dim}>
+              {active ? symbol.cursor : isMarked ? symbol.checkboxOn : " "}{" "}
+            </Text>
             {row.cells.map((text, c) => {
               const col = table.columns[c];
               const lead = c === 0;
+              const tone = col?.muted ? color.muted : lead ? color.text : color.secondary;
               return (
-                <Text
-                  key={col?.key}
-                  color={col?.muted ? color.muted : lead ? color.text : color.secondary}
-                  bold={lead && active}
-                >
+                <Text key={col?.key} color={lead && active && isMarked ? color.accent : tone} bold={lead && active}>
                   {text}
                 </Text>
               );

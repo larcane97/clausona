@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import type { Registry } from "../types.js";
 import {
   type Collector,
@@ -5,14 +7,17 @@ import {
   emptyFacts,
   type Inventory,
   type Mark,
+  type Places,
   type Scope,
   type Usage,
   type Warning,
 } from "./model.js";
+import { stashDir } from "./places.js";
 import { collectProjects, type ProjectRecord, recordedPaths, resolveCurrentProject } from "./projects.js";
 import { hashTree, isRecord, mapLimit, pathKey, samePath } from "./read.js";
 import {
   type ClaudeAccount,
+  claudePrimaryDir,
   collectClaudeSettingsFacts,
   loadClaudeAccounts,
   loadClaudeContext,
@@ -21,7 +26,8 @@ import {
 import { readClaudeHooks, readClaudePlugins } from "./sources/claude-hooks.js";
 import { readClaudeMcp } from "./sources/claude-mcp.js";
 import { readClaudeSkills } from "./sources/claude-skills.js";
-import { codexProjectRecords, loadCodexContext, readCodex } from "./sources/codex.js";
+import { type CodexContext, codexProjectRecords, loadCodexContext, readCodex } from "./sources/codex.js";
+import { readStash } from "./sources/stash.js";
 import { isMcpjsonServer, relevantIn, stateOf } from "./state.js";
 
 export type LoadOptions = {
@@ -30,6 +36,8 @@ export type LoadOptions = {
   cwd: string;
   /** Where to look for Claude Code's managed settings; tests point it at a file of their own. */
   managedSettings?: string;
+  /** Where clausona keeps what it took out to turn off everywhere; default stashDir(homeDir). */
+  stashDir?: string;
 };
 
 const DAY = 86_400_000;
@@ -57,8 +65,8 @@ export async function loadInventory(options: LoadOptions): Promise<Inventory> {
     ...(codex ? codexProjectRecords(codex) : []),
   ];
   const { projects, current: currentProject } = await collectProjects(records, startedIn);
-  // The Claude and Codex sources write apart - each its own items and facts, and warnings are
-  // sorted below - so they read side by side.
+  // The Claude, Codex and stash sources write apart - each its own items and facts, and
+  // warnings are sorted below - so they read side by side.
   const readClaude = async (): Promise<void> => {
     if (accounts.length === 0) return;
     const ctx = await loadClaudeContext({
@@ -77,7 +85,13 @@ export async function loadInventory(options: LoadOptions): Promise<Inventory> {
       readClaudePlugins(ctx, out),
     ]);
   };
-  await Promise.all([readClaude(), codex ? readCodex(codex, projects, out) : undefined]);
+  const places = placesOf(options, accounts, codex);
+  // What clausona took out to turn off everywhere lists as off, where it came from.
+  await Promise.all([
+    readClaude(),
+    codex ? readCodex(codex, projects, out) : undefined,
+    readStash(places.stashDir, out),
+  ]);
   const items = out.items.sort(
     (a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
   );
@@ -91,6 +105,20 @@ export async function loadInventory(options: LoadOptions): Promise<Inventory> {
     usage: sumUsage(accounts),
     hashes: await hashDuplicates(items),
     warnings: uniqueWarnings(warnings),
+    places,
+  };
+}
+
+/** The files a write can touch that belong to an account or a tool rather than to one item, and the stash dir. */
+function placesOf(options: LoadOptions, accounts: ClaudeAccount[], codex: CodexContext | undefined): Places {
+  const { homeDir, registry } = options;
+  return {
+    ...(accounts.length > 0
+      ? { claudeUserSettings: path.join(claudePrimaryDir(registry, accounts, homeDir), "settings.json") }
+      : {}),
+    claudeJson: Object.fromEntries(accounts.map((account) => [account.id, account.jsonPath])),
+    ...(codex ? { codexConfig: codex.configFile, codexHooks: path.join(codex.primary.dir, "hooks.json") } : {}),
+    stashDir: options.stashDir ?? stashDir(homeDir),
   };
 }
 

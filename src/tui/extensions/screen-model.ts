@@ -609,3 +609,37 @@ export function detailRows(lines: DetailLine[], width: number): DetailRow[] {
     });
   });
 }
+
+/** What sets an actions line's entries apart. */
+const ENTRY_SEP = " · ";
+
+/**
+ * Entries - "space off here", "d delete" - joined by " · " into lines of at most `width`, broken
+ * only between two of them: a key is never parted from what it does. An entry wider than a line
+ * is a line of its own.
+ */
+export function entryLines(entries: string[], width: number): string[] {
+  const lines: string[] = [];
+  for (const entry of entries) {
+    const last = lines.at(-1);
+    if (last !== undefined && last.length + ENTRY_SEP.length + entry.length <= width) {
+      lines[lines.length - 1] = `${last}${ENTRY_SEP}${entry}`;
+    } else lines.push(entry);
+  }
+  return lines;
+}
+
+/** The most lines the status takes: the panes give up a row for the second. */
+export const STATUS_MAX_LINES = 2;
+
+/**
+ * The status line in lines of at most `width`: one when it fits, else wrapped onto a second, and
+ * that one cut at its end when the rest does not fit there either.
+ */
+export function statusLines(status: string, width: number): string[] {
+  if (status === "") return [];
+  const lines = wrapText(status, width);
+  if (lines.length <= STATUS_MAX_LINES) return lines;
+  const kept = lines.slice(0, STATUS_MAX_LINES - 1);
+  return [...kept, cell(lines.slice(STATUS_MAX_LINES - 1).join(" "), width).trimEnd()];
+}

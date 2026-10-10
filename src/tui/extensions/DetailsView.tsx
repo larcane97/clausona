@@ -39,7 +39,8 @@ export function DetailsView({ title, rows, width, height, top }: Props) {
       {rows.slice(scroll.start, scroll.end).map((row) => (
         <Text key={row.id} wrap="truncate-end">
           {row.label !== undefined ? <Text color={color.muted}>{cell(row.label, DETAIL_LABEL_WIDTH)}</Text> : null}
-          <Text color={row.tone ? TONE[row.tone] : color.secondary}>{row.text}</Text>
+          {/* A blank row, as before the actions line, is a line still: ink draws an empty one as none. */}
+          <Text color={row.tone ? TONE[row.tone] : color.secondary}>{row.text === "" ? " " : row.text}</Text>
         </Text>
       ))}
       {scroll.below > 0 ? <Text color={color.muted}>↓ {scroll.below} more</Text> : null}

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { valueHash } from "../hash.js";
 import { type Collector, emptyFacts } from "../model.js";
 import { TestHome } from "../test-home.js";
 import { codexProjectRecords, loadCodexContext, readCodex } from "./codex.js";
@@ -100,6 +101,56 @@ describe("readCodex", () => {
     expect(out.facts.codexMcpEnabled).toEqual([
       { file: path.join(app, ".codex", "config.toml"), project: app, name: "github", enabled: false },
     ]);
+  });
+
+  it("records which projects Codex trusts, fingerprints each server's table and places each hook", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    const web = h.project("repos/web");
+    // Literal keys, so a Windows path's backslashes are not escapes.
+    h.codex(
+      "personal",
+      ".codex",
+      [
+        `[projects.'${app}']`,
+        'trust_level = "trusted"',
+        "",
+        `[projects.'${web}']`,
+        'trust_level = "untrusted"',
+        "",
+        "[mcp_servers.exa]",
+        'command = "npx"',
+        'args = ["-y", "exa-mcp"]',
+        "",
+      ].join("\n"),
+    );
+    h.write("repos/app/.codex/config.toml", '[mcp_servers.own]\nurl = "https://own.example/mcp"\nenabled = true\n');
+    h.write(".codex/hooks.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "notify" }] }] } });
+    // Written without the "hooks" key: the events sit at the root.
+    h.write("repos/app/.codex/hooks.json", {
+      PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "guard" }] }],
+    });
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    const projects = [app, web].map((p) => ({ path: p, tools: ["codex" as const], profiles: [] }));
+    await readCodex(ctx, projects, out);
+
+    expect(out.facts.codexTrust).toEqual([
+      { project: app, trusted: true },
+      { project: web, trusted: false },
+    ]);
+    expect(out.facts.fingerprints["mcp:codex:global:-:exa"]).toBe(
+      valueHash({ command: "npx", args: ["-y", "exa-mcp"] }),
+    );
+    const own = out.items.find((i) => i.name === "own");
+    expect(own && out.facts.fingerprints[own.id]).toBe(valueHash({ url: "https://own.example/mcp", enabled: true }));
+    const hook = (command: string) => out.items.find((i) => i.kind === "hook" && i.summary?.command === command);
+    expect(hook("notify")?.hook).toEqual({ base: "hooks", event: "Stop", group: 0, index: 0 });
+    expect(hook("guard")?.hook).toEqual({ base: "root", event: "PreToolUse", matcher: "Bash", group: 0, index: 0 });
+    const guard = hook("guard");
+    expect(guard && out.facts.fingerprints[guard.id]).toBe(valueHash({ type: "command", command: "guard" }));
   });
 
   it("warns for a config.toml that does not parse and reads the rest", async () => {

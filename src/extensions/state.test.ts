@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import { type Extension, emptyFacts, type Inventory, type StateFacts } from "./model.js";
-import { claudeMcpTaken, pluginState, relevantIn, stateOf } from "./state.js";
+import {
+  claudeMcpTaken,
+  claudeSkillOverride,
+  codexTrusted,
+  isManagedSetting,
+  pluginState,
+  relevantIn,
+  stateOf,
+} from "./state.js";
 
 const P = "/repos/app";
 const Q = "/repos/web";
@@ -16,6 +24,7 @@ function inv(items: Extension[], facts: Partial<StateFacts> = {}): Inventory {
     usage: {},
     hashes: {},
     warnings: [],
+    places: { claudeJson: {}, stashDir: "/home/u/.clausona/extensions/stash" },
   };
 }
 function skill(
@@ -57,6 +66,18 @@ describe("Claude skills", () => {
     });
     expect(stateOf(i, eli5, Q).value).toBe("off");
     expect(stateOf(i, eli5).value).toBe("off");
+  });
+
+  it("reads what is left below the layers a change is about to skip", () => {
+    const i = inv([eli5], { claudeSkillOverrides: overrides });
+    expect(claudeSkillOverride(i, "eli5", P)?.value).toBe("name-only");
+    expect(claudeSkillOverride(i, "eli5", P, ["local"])).toEqual({
+      value: "user-invocable-only",
+      setBy: { file: `${P}/.claude/settings.json`, key: "skillOverrides.eli5" },
+    });
+    expect(claudeSkillOverride(i, "eli5", P, ["local", "project"])?.setBy?.file).toBe("/u/settings.json");
+    expect(claudeSkillOverride(i, "eli5", P, ["local", "project", "user"])).toBeUndefined();
+    expect(claudeSkillOverride(i, "eli5", undefined, ["user"])).toBeUndefined();
   });
 
   it("lets managed settings win, ignores an unknown value, and defaults to on", () => {
@@ -354,9 +375,53 @@ describe("Codex", () => {
         { file: "/c", name: "exa", enabled: true },
         { file: `${P}/.codex/config.toml`, project: P, name: "exa", enabled: false },
       ],
+      // Codex reads a project's .codex folder only once it trusts the project.
+      codexTrust: [{ project: P, trusted: true }],
     });
     expect(stateOf(i, exa, P).value).toBe("off");
     expect(stateOf(i, exa, Q).value).toBe("on");
+  });
+
+  it("ignores the switch of a project Codex does not trust, or has not recorded, and keeps the user's", () => {
+    const i = inv([exa], {
+      codexMcpEnabled: [
+        { file: "/c", name: "exa", enabled: false },
+        { file: `${P}/.codex/config.toml`, project: P, name: "exa", enabled: true },
+        { file: `${Q}/.codex/config.toml`, project: Q, name: "exa", enabled: true },
+      ],
+      codexTrust: [{ project: P, trusted: false }],
+    });
+    expect(stateOf(i, exa, P)).toEqual({ value: "off", setBy: { file: "/c", key: "mcp_servers.exa.enabled" } });
+    expect(stateOf(i, exa, Q).value).toBe("off");
+  });
+
+  it("trusts a project whose recorded key is the same path and says trusted", () => {
+    const i = inv([], {
+      codexTrust: [
+        { project: `${P}/`, trusted: true },
+        { project: Q, trusted: false },
+      ],
+    });
+    expect(codexTrusted(i, P)).toBe(true);
+    expect(codexTrusted(i, Q)).toBe(false);
+    expect(codexTrusted(i, "/repos/elsewhere")).toBe(false);
+    expect(codexTrusted(i, undefined)).toBe(false);
+  });
+});
+
+describe("isManagedSetting", () => {
+  it("is true for a managed settings file the inventory read, and for no other", () => {
+    const i = inv([], {
+      claudeSkillOverrides: [
+        { file: "/m/managed-settings.json", layer: "managed", map: {} },
+        { file: "/u/settings.json", layer: "user", map: {} },
+      ],
+      claudeEnabledPlugins: [{ file: "/m/managed-settings.d/10-a.json", layer: "managed", map: {} }],
+    });
+    expect(isManagedSetting(i, "/m/managed-settings.json")).toBe(true);
+    expect(isManagedSetting(i, "/m/managed-settings.d/10-a.json")).toBe(true);
+    expect(isManagedSetting(i, "/u/settings.json")).toBe(false);
+    expect(isManagedSetting(i, "/m/other.json")).toBe(false);
   });
 });
 

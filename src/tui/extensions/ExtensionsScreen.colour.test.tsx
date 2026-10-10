@@ -102,3 +102,57 @@ it("colours a tag by its tone: unused amber, a broken link red", async () => {
   expect(painted(frame, color.warning, "unused")).toBe(true);
   expect(painted(frame, color.error, "broken link")).toBe(true);
 });
+
+it("marks a row with ◉ in the accent colour, and under the cursor its name too", async () => {
+  const { render } = await import("ink-testing-library");
+  const { ItemTable } = await import("./ItemTable.js");
+  const { color } = await import("../theme.js");
+  const line = (key: string, name: string) => ({
+    key,
+    cells: [name.padEnd(8)],
+    row: { key, name, items: [] },
+  });
+  const table: Table = {
+    header: "GLOBAL — loads in every project",
+    count: 3,
+    countText: "3",
+    columns: [{ key: "name", title: "NAME", width: 8 }],
+    rows: [line("a", "first"), line("b", "second"), line("c", "third")],
+    empty: "",
+  };
+  const frame =
+    render(
+      <ItemTable table={table} width={40} height={8} cursor={0} top={0} focused={true} marked={new Set(["a", "b"])} />,
+    ).lastFrame() ?? "";
+  expect(frame).toContain("3 · 2 marked");
+  expect(painted(frame, color.cursor, "✦")).toBe(true);
+  expect(painted(frame, color.accent, "first")).toBe(true);
+  expect(painted(frame, color.accent, "◉")).toBe(true);
+  expect(painted(frame, color.text, "second")).toBe(true);
+  expect(painted(frame, color.text, "third")).toBe(true);
+});
+
+it("draws the confirm dialog's lines in their tones, the picker's cursor in the cursor colour", async () => {
+  const { render } = await import("ink-testing-library");
+  const { ConfirmDialog } = await import("./ConfirmDialog.js");
+  const { color } = await import("../theme.js");
+  const frame =
+    render(
+      <ConfirmDialog
+        width={50}
+        lines={[
+          { key: "q", text: "Delete deploy-check?", tone: "text", bold: true },
+          { key: "w", text: "Git tracks deploy-check in app", tone: "warning" },
+          { key: "b", text: "" },
+          { key: "a", text: "✦ ◉ default  ~/.claude.json", cursor: true },
+          { key: "f", text: "Backup: ~/.clausona/backups/extensions/", tone: "muted" },
+        ]}
+      />,
+    ).lastFrame() ?? "";
+  expect(painted(frame, color.text, "Delete deploy-check?")).toBe(true);
+  expect(painted(frame, color.warning, "Git tracks")).toBe(true);
+  expect(painted(frame, color.cursor, "✦")).toBe(true);
+  expect(painted(frame, color.text, " ◉ default")).toBe(true);
+  expect(painted(frame, color.muted, "Backup:")).toBe(true);
+  expect(frame.split("\n")).toHaveLength(5);
+});

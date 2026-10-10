@@ -30,7 +30,15 @@ import {
   reinstallCommand,
   versionOfTag,
 } from "./core/update.js";
-import { EXTENSIONS_FLAGS, EXTENSIONS_VALUE_FLAGS, extensionsHelp, runExtensionsCommand } from "./extensions/cli.js";
+import {
+  EXTENSIONS_FLAGS,
+  EXTENSIONS_VALUE_FLAGS,
+  type ExtensionsCommand,
+  extensionsHelp,
+  runExtensionsCommand,
+  SUBS,
+  withJsonErrors,
+} from "./extensions/cli.js";
 import { ExitError } from "./extensions/exit-error.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import {
@@ -131,6 +139,10 @@ async function activeProfileEnv(args: string[]) {
   const built = await buildProfileEnv(id, profile);
   for (const warning of built.warnings) process.stderr.write(`  ${warnIcon} ${warning}\n`);
   return { tool, registry, profile, built };
+}
+
+function isExtensionsCommand(command: string): command is ExtensionsCommand {
+  return command === "skills" || command === "mcp" || command === "hooks";
 }
 
 function helpFlag(args: string[]) {
@@ -1048,8 +1060,8 @@ function subcommandHelpText(command: string, args: string[] = []): string | unde
     case "skills":
     case "mcp":
     case "hooks": {
-      // `clausona skills ls --help` is the ls page; the subcommand comes first, as it is typed.
-      const sub = args[0] === "ls" || args[0] === "show" ? args[0] : undefined;
+      // `clausona skills rm --help` is rm's page; the subcommand comes first, as it is typed.
+      const sub = SUBS[command].find((name) => name === args[0]);
       return extensionsHelp(command, sub);
     }
 
@@ -1078,9 +1090,9 @@ function usageText() {
       ["current", "Show active profile details"],
       ["config <profile>", "Configure profile settings"],
       ["doctor", "Check profile health"],
-      ["skills ls|show", "Skills each project loads, by scope"],
-      ["mcp ls|show", "MCP servers each project loads, by scope"],
-      ["hooks ls|show", "Hooks each project runs, by scope"],
+      ["skills ls|show|off|on|rm", "Skills each project loads; turn them off or delete them"],
+      ["mcp ls|show|off|on|rm", "MCP servers each project loads; turn them off or delete them"],
+      ["hooks ls|show|off|on|rm", "Hooks each project runs; turn them off or delete them"],
       ["repair <profile>", "Repair shared links"],
       ["login <profile>", "Re-authenticate a profile"],
       ["remove <profile>", "Remove a profile"],
@@ -1101,6 +1113,24 @@ export async function runCommand(command: string, args: string[]) {
   if (command !== "help" && command !== "-h" && command !== "--help" && helpFlag(args)) {
     const helpText = subcommandHelpText(command, args);
     if (helpText) return helpText;
+  }
+
+  // With --json, every way these fail is one JSON object, an unknown option's too (#103).
+  if (isExtensionsCommand(command)) {
+    return withJsonErrors(args, async () => {
+      validateFlags(command, args);
+      const registry = await loadRegistry();
+      if (!registry) throw await noRegistryError();
+      return runExtensionsCommand(command, args, {
+        homeDir: homedir(),
+        cwd: process.cwd(),
+        registry,
+        // A change asks first, and only where someone can answer: the question on stdout, the
+        // answer from stdin. Enter alone is a no.
+        interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
+        confirm: (question) => askYesNo(question, process.stdin, process.stdout, false),
+      });
+    });
   }
 
   validateFlags(command, args);
@@ -1245,14 +1275,6 @@ export async function runCommand(command: string, args: string[]) {
       );
       const rendered = renderDoctor(results);
       return keysStored ? `${rendered}  ${dim(`Stored API keys are kept in ${secretStoreName()}.`)}\n` : rendered;
-    }
-
-    case "skills":
-    case "mcp":
-    case "hooks": {
-      const registry = await loadRegistry();
-      if (!registry) throw await noRegistryError();
-      return runExtensionsCommand(command, args, { homeDir: homedir(), cwd: process.cwd(), registry });
     }
 
     case "repair": {
@@ -1792,7 +1814,9 @@ export async function runCommand(command: string, args: string[]) {
       // of the error, and the exit status says it failed: a 0.4.0-beta answered `_launch` with
       // its usage on stdout and exit 0.
       if (command.startsWith("_")) throw new Error(`Unknown command: ${command}\n${usageText()}`);
-      return usageText();
+      // A public word this version does not know is a mistake, not a request for the help: one
+      // line and exit code 2, so an agent that guessed a name can tell (#104).
+      throw new ExitError(`Unknown command '${command}'. Run clausona --help.`, 2);
   }
 }
 
@@ -1810,13 +1834,15 @@ export type UpdateCommandDeps = {
 };
 
 /**
- * `(Y/n)`: an empty answer is a yes. Ctrl+D, or Ctrl+C at the prompt, closes it unanswered, and
- * that is a no: readline calls the question back for neither, and the command waited forever.
+ * `(Y/n)`: an empty answer is a yes, or with `defaultYes` false - a `(y/N)` question - a no.
+ * Ctrl+D, or Ctrl+C at the prompt, closes it unanswered, and that is a no: readline calls the
+ * question back for neither, and the command waited forever.
  */
 export function askYesNo(
   question: string,
   input: NodeJS.ReadableStream = process.stdin,
   output: NodeJS.WritableStream = process.stdout,
+  defaultYes = true,
 ): Promise<boolean> {
   return new Promise((resolve) => {
     const rl = createInterface({ input, output });
@@ -1832,7 +1858,7 @@ export function askYesNo(
     rl.on("SIGINT", () => answer(false));
     rl.question(question, (reply) => {
       const normalized = reply.trim().toLowerCase();
-      answer(normalized === "" || normalized === "y" || normalized === "yes");
+      answer(normalized === "" ? defaultYes : normalized === "y" || normalized === "yes");
     });
   });
 }

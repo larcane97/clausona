@@ -10,6 +10,12 @@ import {
 } from "./model.js";
 import { isWithin, pathKey, samePath } from "./read.js";
 
+/**
+ * The `setBy.key` of a stashed item's state: off everywhere, its entry out of the tool's file and
+ * in the stash file `setBy.file` names.
+ */
+export const STASH_KEY = "stash";
+
 /** Claude Code reads settings in this order; the first that sets a key wins. */
 const PRECEDENCE: readonly SettingsLayer[] = ["managed", "local", "project", "user"];
 
@@ -52,7 +58,10 @@ export function relevantIn(item: Extension, project: string | undefined): boolea
  * own server. A plugin's servers go by names of their own (`plugin:<plugin>:<name>`).
  */
 function rankedMcp(inv: Inventory, name: string, project: string, profile: string | undefined): Extension[] {
-  const named = inv.items.filter((i) => i.kind === "mcp" && i.location.tool === "claude" && i.name === name);
+  // A stashed copy is out of its file: Claude Code does not see it, so it wins over nothing.
+  const named = inv.items.filter(
+    (i) => i.kind === "mcp" && i.location.tool === "claude" && i.name === name && !i.stashed,
+  );
   const own = (i: Extension) => profile !== undefined && i.location.profile === profile;
   const local = named.filter((i) => own(i) && i.location.scope === "local" && samePath(i.location.project, project));
   const mcpjson = named
@@ -112,8 +121,19 @@ export function pluginState(inv: Inventory, pluginId: string, project?: string):
   return { value: "off" };
 }
 
-function claudeSkillOverride(inv: Inventory, name: string, project: string | undefined): EffectiveState | undefined {
+/**
+ * The `skillOverrides` value Claude Code takes for `name` in `project`, and where it is set;
+ * undefined when no settings file sets one. `skip` leaves those layers out, for "what is left
+ * below the one I am about to change".
+ */
+export function claudeSkillOverride(
+  inv: Inventory,
+  name: string,
+  project: string | undefined,
+  skip: readonly SettingsLayer[] = [],
+): EffectiveState | undefined {
   for (const layer of PRECEDENCE) {
+    if (skip.includes(layer)) continue;
     for (const entry of inv.facts.claudeSkillOverrides) {
       if (entry.layer !== layer || !applies(entry, project)) continue;
       const value = entry.map[name];
@@ -222,8 +242,30 @@ function codexSkillState(inv: Inventory, item: Extension): EffectiveState {
   return { value: hit.enabled ? "on" : "off", setBy: { file: hit.file, key } };
 }
 
+/**
+ * Whether `file` is a managed settings layer the inventory read: organisation policy, which
+ * clausona never writes.
+ */
+export function isManagedSetting(inv: Inventory, file: string): boolean {
+  const managed = (entry: { file: string; layer: SettingsLayer }) =>
+    entry.layer === "managed" && samePath(entry.file, file);
+  return inv.facts.claudeSkillOverrides.some(managed) || inv.facts.claudeEnabledPlugins.some(managed);
+}
+
+/**
+ * Whether Codex trusts `project`: a [projects."<key>"] table with trust_level = "trusted" whose
+ * key samePaths it. Codex 0.159.3 ignores the `.codex/` folder of any other project, one it has
+ * no record of too.
+ */
+export function codexTrusted(inv: Inventory, project: string | undefined): boolean {
+  return project !== undefined && inv.facts.codexTrust.some((t) => t.trusted && samePath(t.project, project));
+}
+
+/** The user's `mcp_servers.<name>.enabled`, or the project's when Codex trusts the project. */
 function codexMcpState(inv: Inventory, item: Extension, project: string | undefined): EffectiveState {
-  const entries = inv.facts.codexMcpEnabled.filter((e) => e.name === item.name);
+  const entries = inv.facts.codexMcpEnabled.filter(
+    (e) => e.name === item.name && (e.project === undefined || codexTrusted(inv, e.project)),
+  );
   const here = project === undefined ? undefined : entries.find((e) => samePath(e.project, project));
   const hit = here ?? entries.find((e) => e.project === undefined);
   if (!hit) return { value: "on" };
@@ -236,9 +278,11 @@ function codexMcpState(inv: Inventory, item: Extension, project: string | undefi
  * Claude MCP server's (`disabledMcpServers`, an approval, a local server), and a Claude project
  * skill's (an account's own same-name skill). For what any account can see (a `.mcp.json` or
  * plugin server, a project skill), callers pass `profile`: without one, every account's
- * approvals are merged and no account's own switch or copy applies.
+ * approvals are merged and no account's own switch or copy applies. A stashed item is off
+ * everywhere, whatever the switches say.
  */
 export function stateOf(inv: Inventory, item: Extension, project?: string, profile?: string): EffectiveState {
+  if (item.stashed) return { value: "off", setBy: { file: item.stashed.file, key: STASH_KEY } };
   switch (item.kind) {
     case "skill":
       return item.location.tool === "claude"
