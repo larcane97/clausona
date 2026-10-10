@@ -348,7 +348,7 @@ describe("dialogView: undo", () => {
       `${tilded("repos", "app", ".claude", "settings.local.json")}  remove`,
       `${tilded(".claude.json").padEnd(tilded("repos", "app", ".claude", "settings.local.json").length)}  edit back`,
       "",
-      "Puts back what the change changed, unless it changed since.",
+      "Puts back what changed, unless it changed since.",
     ]);
     expect(view.lines[0]?.bold).toBe(true);
     expect(view.lines.at(-1)?.tone).toBe("muted");
@@ -356,6 +356,14 @@ describe("dialogView: undo", () => {
       { keys: "y", action: "undo" },
       { keys: "n/esc", action: "cancel" },
     ]);
+  });
+
+  it("says what undo leaves alone whole in the 56 columns a 60-column screen gives it", () => {
+    const view = dialogView({ type: "undo", preview, top: 0, busy: false }, { width: 56, height: 9, ...OPTS });
+    expect(view.lines.at(-1)).toMatchObject({
+      key: "footer",
+      text: "Puts back what changed, unless it changed since.",
+    });
   });
 });
 
@@ -397,7 +405,13 @@ describe("the status after an apply or an undo", () => {
   });
 
   it("says what undo did, and what it left alone and why, never a path of clausona's own", () => {
-    const result = (more: Partial<UndoResult>): UndoResult => ({ operation, restored: [], skipped: [], ...more });
+    const result = (more: Partial<UndoResult>): UndoResult => ({
+      operation,
+      restored: [],
+      removed: [],
+      skipped: [],
+      ...more,
+    });
     const json = at(".claude.json");
     const work = at(".claude-work", ".claude.json");
     expect(undoneStatus(result({ restored: [json, kept] }), STASH)).toBe("Undid: Turned off figma in this project");

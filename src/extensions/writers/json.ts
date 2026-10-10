@@ -141,6 +141,12 @@ export function entryAt(root: unknown, edit: JsonEdit): unknown {
   return undefined;
 }
 
+/** Every hook in `place`'s event, in whichever group: what a hook put back there would sit beside. */
+export function hooksIn(root: unknown, place: HookPlace): unknown[] {
+  const groups = valueAt(root, eventPath(place));
+  return Array.isArray(groups) ? groups.flatMap((group) => (isGroup(group) ? group.hooks : [])) : [];
+}
+
 /** The path whose value an edit changes, resolved: its own path, or [base..., event] for a hook edit. Undo compares and restores these. */
 export function touchedPath(root: unknown, edit: JsonEdit): (string | number)[] | undefined {
   return edit.op === "hook-remove" || edit.op === "hook-restore" ? eventPath(edit.place) : resolvePath(root, edit.path);

@@ -240,7 +240,7 @@ describe("ExtensionsScreen: writes", () => {
     await press(instance, "u");
     const dialog = await seen(instance, (f) => f.includes("Undo: Turned off eli5 in this project?"));
     expect(hintLine(dialog)).toContain("y undo");
-    expect(dialog).toContain("Puts back what the change changed, unless it changed since.");
+    expect(dialog).toContain("Puts back what changed, unless it changed since.");
     await press(instance, "y");
     const undone = await seen(instance, (f) => f.includes("Undid: Turned off eli5 in this project"));
     expect(rowLine(undone, "eli5")).not.toContain("off here");

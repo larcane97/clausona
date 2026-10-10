@@ -1010,11 +1010,14 @@ async function change(inv: Inventory, talk: Talk, now: number, git: string | und
   }
   const operation = { id: result.operation.id, backup: result.operation.dir };
   if (options.json) return pretty(planJson(plan, talk, { dryRun: false, applied: true, operation }));
-  return [
+  return trimmed([
     success(plan.done),
     `    Backup: ${dim(tilde(operation.backup, talk.homeDir))}`,
     `    Undo: ${accent(`clausona ${command} undo`)}`,
-  ].join("\n");
+    "",
+    // What the prompt and the dry run note, such as a file that still keeps it off here.
+    ...notesLines(plan),
+  ]).join("\n");
 }
 
 function nothingToUndo(command: ExtensionsCommand): ExitError {
@@ -1057,7 +1060,7 @@ function previewText(summary: string, files: UndoPreview["files"], talk: Talk, d
       6,
     ),
     ...(files.length > 0 ? [""] : []),
-    "  Puts back what the change changed, unless it changed since.",
+    "  Puts back what changed, unless it changed since.",
     ...(dryRun ? ["", "  Dry run: nothing changed. Run it again with --yes to undo it."] : []),
   ]).join("\n");
 }
@@ -1083,7 +1086,8 @@ async function undoLast(talk: Talk): Promise<string> {
   const result = await undo(env, command);
   if (!result) throw nothingToUndo(command);
   const restored = result.restored.filter((file) => !own(file));
-  const back = restored.map((file): [string, string] => [file, "put back"]);
+  // A file the change made is taken away again, as the preview's "remove" said.
+  const back = restored.map((file): [string, string] => [file, result.removed.includes(file) ? "removed" : "put back"]);
   if (result.skipped.length > 0) {
     // Only Claude Code saving a file: the operation stays the next undo's, for what is left.
     const locked = result.skipped.every((skip) => skip.reason === "locked");
