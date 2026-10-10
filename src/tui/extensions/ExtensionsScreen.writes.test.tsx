@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +8,18 @@ import { loadInventory } from "../../extensions/inventory.js";
 import { writesFor } from "../../extensions/load.js";
 import { TestHome } from "../../extensions/test-home.js";
 import { stripAnsi } from "../../lib/cli-style.js";
-import { DOWN, ENTER, ESC, focusedOn, type Instance, press, renderAt, waitForFrame } from "../test-drive.js";
+import {
+  DOWN,
+  ENTER,
+  ESC,
+  focusedOn,
+  type Instance,
+  press,
+  renderAt,
+  type,
+  typeSlowly,
+  waitForFrame,
+} from "../test-drive.js";
 import { windowsOnScreen } from "../test-frames.js";
 import { ExtensionsScreen } from "./ExtensionsScreen.js";
 
@@ -19,6 +30,8 @@ const DAY = 86_400_000;
 const KEY = ["sk", "ant", "api03", "Q2xhdXNvbmFUZXN0S2V5MTIzNDU2Nzg5MA"].join("-");
 const UP = "\u001B[A";
 const RIGHT = "\u001B[C";
+const LEFT = "\u001B[D";
+const TAB = "\t";
 const SPACE = " ";
 const SETTINGS = {
   enabledPlugins: { "kit@m": true },
@@ -204,6 +217,10 @@ describe("ExtensionsScreen: writes", () => {
     for (const key of ["n", ESC]) {
       await press(instance, SPACE);
       await seen(instance, (f) => f.includes("Turn off eli5 in this project?"));
+      // ctrl+y and ctrl+n are not y and n.
+      await type(instance, "\u0019");
+      await type(instance, "\u000e");
+      expect(stripAnsi(instance.lastFrame() ?? "")).toContain("Turn off eli5 in this project?");
       await press(instance, key);
       const after = await seen(instance, (f) => f.includes("Nothing changed."));
       expect(after).not.toContain("Turn off eli5 in this project?");
@@ -312,6 +329,11 @@ describe("ExtensionsScreen: writes", () => {
       await seen(instance, (f) => f.includes("Turned off deploy-check in this project · u to undo"));
       expect(json(local(app)).skillOverrides).toEqual({ "deploy-check": "off" });
       expect(existsSync(path.join(app, ".claude", "skills", "deploy-check"))).toBe(true);
+      // Off instead, once it is off: nothing to do, and the status says why.
+      await press(instance, "d");
+      await seen(instance, (f) => f.includes("Git tracks deploy-check in app"));
+      await press(instance, "o");
+      await seen(instance, (f) => f.includes("Nothing to do: already off in this project."));
     },
   );
 
@@ -407,6 +429,10 @@ describe("ExtensionsScreen: writes", () => {
     const instance = mount(h, app, 140, 40, { writes: false });
     await openRow(instance, "Global", "eli5");
     expect(hintLine(stripAnsi(instance.lastFrame() ?? ""))).not.toContain("space on/off");
+    await press(instance, "x");
+    const marked = await seen(instance, (f) => f.includes("Changes are not available here."));
+    expect(marked).not.toContain("marked");
+    await press(instance, DOWN);
     await press(instance, SPACE);
     await seen(instance, (f) => f.includes("Changes are not available here."));
   });
@@ -421,7 +447,111 @@ describe("ExtensionsScreen: writes", () => {
     await seen(instance, (f) => f.includes("Turn off github in every project"));
     await press(instance, "y");
     await seen(instance, (f) => f.includes("Turned off github in every project"));
+    // Its copies are clausona's now: d names them in words, never by their path.
+    await press(instance, "d");
+    const dialog = await seen(instance, (f) => f.includes("Delete github?"));
+    expect(dialog).toContain("◉ default  the copy clausona kept");
+    expect(dialog).toContain("◉ work     the copy clausona kept");
+    await press(instance, "n");
+    await seen(instance, (f) => f.includes("Nothing changed."));
+    for (const frame of instance.frames) {
+      expect(stripAnsi(frame)).not.toContain(path.join(".clausona", "extensions"));
+      expect(stripAnsi(frame)).not.toContain("stash");
+    }
     expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+  });
+
+  it("names a copy clausona kept in words when a delete of it stops", async () => {
+    const { h, app } = seed();
+    const instance = mount(h, app, 140, 40);
+    await openRow(instance, "Global", "github", "2");
+    await press(instance, "g");
+    await seen(instance, (f) => f.includes("Turn off github in every project"));
+    await press(instance, "y");
+    await seen(instance, (f) => f.includes("Turned off github in every project"));
+    await press(instance, "d");
+    await seen(instance, (f) => f.includes("Delete github?"));
+    // The kept copies go before y gets to them.
+    const keptDir = h.path(".clausona", "extensions", "stash");
+    for (const file of readdirSync(keptDir)) rmSync(path.join(keptDir, file));
+    await press(instance, "y");
+    await seen(instance, (f) => f.includes("The copy clausona kept changed since it was read. Press r and try again."));
+    for (const frame of instance.frames) expect(stripAnsi(frame)).not.toContain("stash");
+  });
+
+  it("clears the marks on tab, 1 2 3, another scope and a project pick", async () => {
+    const { h, app } = seed();
+    const instance = mount(h, app, 140, 40);
+    await seen(instance, (f) => f.includes("Read "));
+    /** From the scope list: Global's table, eli5 marked. */
+    const mark = async () => {
+      await scopeTo(instance, "Global");
+      await press(instance, RIGHT);
+      await rowTo(instance, "eli5");
+      await press(instance, "x");
+      await seen(instance, (f) => f.includes("· 1 marked"));
+    };
+    /** Back in Global's table, with no marks. */
+    const unmarked = async () => {
+      await scopeTo(instance, "Global");
+      await press(instance, RIGHT);
+      expect(await seen(instance, (f) => f.includes("GLOBAL — ") && focusedOn(f, "eli5"))).not.toContain("marked");
+      await press(instance, LEFT);
+    };
+    for (const keys of [
+      [TAB, TAB],
+      ["2", "1"],
+      ["p", ENTER],
+      [LEFT, DOWN, UP],
+    ]) {
+      await mark();
+      for (const key of keys) await press(instance, key);
+      await seen(instance, (f) => !f.includes("marked"));
+      await unmarked();
+    }
+  });
+
+  it("clears the marks with esc before the search, and leaves marks the search hides to the next esc", async () => {
+    const { h, app } = seed();
+    const instance = mount(h, app, 140, 40);
+    await openRow(instance, "Global", "eli5");
+    await press(instance, "x");
+    await press(instance, "/");
+    await typeSlowly(instance, "eli");
+    await press(instance, ENTER);
+    await seen(instance, (f) => f.includes("/eli") && f.includes("· 1 marked"));
+    await press(instance, ESC);
+    const first = await seen(instance, (f) => !f.includes("marked"));
+    expect(first).toContain("/eli");
+    await press(instance, ESC);
+    await seen(instance, (f) => !f.includes("/eli"));
+    // A mark the search hides: esc ends the search, and the mark is there again.
+    await rowTo(instance, "old-one");
+    await press(instance, "x");
+    await press(instance, "/");
+    await typeSlowly(instance, "eli");
+    await press(instance, ENTER);
+    await seen(instance, (f) => f.includes("/eli") && !f.includes("marked"));
+    await press(instance, ESC);
+    const back = await seen(instance, (f) => !f.includes("/eli"));
+    expect(back).toContain("· 1 marked");
+  });
+
+  it("says how many marked rows cannot change when none of them would", async () => {
+    const { h, app } = seed();
+    const instance = mount(h, app, 140, 40);
+    await openRow(instance, "Global", "old-one");
+    await press(instance, SPACE);
+    await seen(instance, (f) => f.includes("Turn off old-one in this project?"));
+    await press(instance, "y");
+    await seen(instance, (f) => f.includes("Turned off old-one in this project · u to undo"));
+    // old-one is off already, and lost's link leads nowhere.
+    await press(instance, "x");
+    await rowTo(instance, "lost", UP);
+    await press(instance, "x");
+    await seen(instance, (f) => f.includes("· 2 marked"));
+    await press(instance, SPACE);
+    await seen(instance, (f) => f.includes("1 can't: Its link leads nowhere. Press d to remove the link."));
   });
 });
 

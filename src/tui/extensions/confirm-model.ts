@@ -1,12 +1,17 @@
 import path from "node:path";
 
-import { type Action, type ExtensionsCommand, KEPT_COPY, LEFT_ALONE, stopText } from "../../extensions/actions.js";
+import {
+  type Action,
+  type ExtensionsCommand,
+  fileWords,
+  KEPT_COPY,
+  LEFT_ALONE,
+  stopText,
+} from "../../extensions/actions.js";
 import type { ApplyResult, UndoPreview, UndoResult, UndoSkip } from "../../extensions/apply.js";
-import type { Inventory } from "../../extensions/model.js";
 import type { Plan, PlanLine } from "../../extensions/plan.js";
-import { middleCut, projectName, shortProfile, tilde } from "../../extensions/present.js";
-import { isWithin, samePath } from "../../extensions/read.js";
-import type { ScopeRow } from "../../extensions/scopes.js";
+import { middleCut, shortProfile, tilde } from "../../extensions/present.js";
+import { isWithin } from "../../extensions/read.js";
 import { symbol } from "../theme.js";
 import { cell } from "./view-model.js";
 
@@ -30,8 +35,6 @@ export type Dialog =
       busy: boolean;
       /** rm with tracked refusals: o offers off here instead. */
       offerOff: boolean;
-      /** The project, by name, that git tracks the refused rows in: what the offerOff warning names. */
-      trackedIn?: string;
     }
   | { type: "undo"; preview: UndoPreview; top: number; busy: boolean };
 
@@ -45,7 +48,8 @@ export type DialogLine = {
 
 export type DialogView = { lines: DialogLine[]; hints: { keys: string; action: string }[] };
 
-type Opts = { width: number; height: number; homeDir: string; backupRoot: string };
+/** `stashDir`: clausona's own kept copies, named in words, never by their path. */
+type Opts = { width: number; height: number; homeDir: string; backupRoot: string; stashDir: string };
 
 /** Refusal lines shown before the rest are counted on one line. */
 const REFUSALS_SHOWN = 2;
@@ -56,21 +60,22 @@ const UNDO_NOTE = "Puts back what the change changed, unless it changed since.";
 const UNDO_HINT = "Press u afterwards to put them back.";
 
 /**
- * A path and what follows it, two spaces apart, in `width` columns: the path gives way first,
- * from its middle, down to PATH_MIN; then the line is cut at its end. `lead` goes before the path.
+ * A file and what follows it, two spaces apart, in `width` columns: a path gives way first, from
+ * its middle, down to PATH_MIN; then the line is cut at its end. `lead` goes before the file; a
+ * kept copy's words are no path, and are only cut at the end.
  */
 function pathLine(lead: string, file: string, rest: string[], width: number): string {
   const after = rest.filter((part) => part !== "");
   const whole = (p: string) => [lead + p, ...after].join(GAP);
   const over = whole(file).length - width;
-  const fitted = over > 0 ? middleCut(file, Math.max(PATH_MIN, file.length - over)) : file;
+  const fitted = over > 0 && file !== KEPT_COPY ? middleCut(file, Math.max(PATH_MIN, file.length - over)) : file;
   return cell(whole(fitted), width).trimEnd();
 }
 
 /** The change lines: one per plan line, or with several accounts to pick from, one per account. */
 function changeLines(dialog: Extract<Dialog, { type: "plan" }>, opts: Opts): DialogLine[] {
   const { plan, full } = dialog;
-  const home = (file: string) => tilde(file, opts.homeDir);
+  const home = (file: string) => fileWords(file, opts.homeDir, opts.stashDir);
   const lines = plan.changes.flatMap((change) => change.lines);
   const plain = (line: PlanLine, at: number): DialogLine => ({
     key: `change-${at}`,
@@ -143,7 +148,9 @@ function partsOf(dialog: Dialog, opts: Opts): Parts {
   if (dialog.offerOff && tracked.length > 0) {
     const rows = new Set(tracked.map((r) => r.rowKey));
     const which = rows.size === 1 ? (tracked[0]?.name ?? "it") : `${rows.size} of these`;
-    const where = dialog.trackedIn !== undefined ? ` in ${dialog.trackedIn}` : "";
+    // The project the refusal itself names.
+    const project = tracked[0]?.project;
+    const where = project !== undefined ? ` in ${project}` : "";
     head.push({
       key: "warning",
       text: cell(`Git tracks ${which}${where}, so deleting changes the repo.`, width).trimEnd(),
@@ -256,13 +263,16 @@ export function scrollDialog<D extends Dialog>(dialog: D, pages: number, opts: O
   return { ...dialog, top: Math.max(0, Math.min(total - shown, top + pages * Math.max(1, shown))) };
 }
 
-/** The status line after an apply: what was done and that u undoes it, why it stopped, or nothing. */
-export function appliedStatus(result: ApplyResult, plan: Plan, homeDir: string): string {
+/**
+ * The status line after an apply: what was done and that u undoes it, why it stopped - a kept
+ * copy in words - or nothing.
+ */
+export function appliedStatus(result: ApplyResult, plan: Plan, homeDir: string, stashDir: string): string {
   switch (result.status) {
     case "applied":
       return `${plan.done} · u to undo`;
     case "stopped": {
-      const why = stopText(result.stop, "keys", homeDir, plan.command);
+      const why = stopText(result.stop, "keys", homeDir, plan.command, stashDir);
       // What was made before the stop is one operation, which u puts back.
       return result.done > 0 ? `${why.replace(/\.$/, "")}, ${result.done} of ${result.total} done · u to undo` : why;
     }
@@ -292,20 +302,4 @@ export function undoneStatus(result: UndoResult | null, stashDir: string): strin
   const retry = result.skipped.some((skip) => skip.reason === "locked") ? " · try again in a moment" : "";
   const some = result.restored.some((file) => !own(file));
   return `${some ? "Undid part of it" : "Could not undo"}: ${summary} · ${left}${retry}`;
-}
-
-/**
- * The project, by name, that holds a row's files - the innermost recorded one that is not the
- * home dir, as plan.ts finds the project a tracked file is in - for the warning a delete of what
- * git tracks gives.
- */
-export function trackedRepo(inv: Inventory, row: ScopeRow | undefined): string | undefined {
-  const item = row?.items[0];
-  if (!item) return undefined;
-  const files = [item.location.file, ...(item.realFolder ? [item.realFolder] : [])];
-  const holding = inv.projects
-    .map((p) => p.path)
-    .filter((dir) => !samePath(dir, inv.homeDir) && files.some((file) => isWithin(file, dir)))
-    .sort((a, b) => b.length - a.length)[0];
-  return holding === undefined ? undefined : projectName(holding, inv);
 }

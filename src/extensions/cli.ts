@@ -5,6 +5,7 @@ import type { Registry, ToolName } from "../types.js";
 import {
   type Action,
   type ExtensionsCommand,
+  fileWords,
   KEPT_COPY,
   LEFT_ALONE,
   type Refusal,
@@ -866,10 +867,13 @@ function dimPath(cell: string): string {
   return `${dim(text)}${cell.slice(text.length)}`;
 }
 
-/** One line per file line: `{~file}  {what}  {account}  {note}`, a column nobody fills left out, cut to fit. */
+/**
+ * One line per file line: `{~file}  {what}  {account}  {note}`, a column nobody fills left out,
+ * cut to fit. A copy clausona kept is named in words; the JSON names its path.
+ */
 function changeLines(lines: PlanLine[], talk: Talk): string[] {
   const cells = lines.map((line) => [
-    tilde(line.file, talk.homeDir),
+    fileWords(line.file, talk.homeDir, talk.env.stashDir),
     line.what,
     line.account === undefined ? "" : shortProfile(line.account),
     line.note ?? "",
@@ -947,7 +951,7 @@ function stoppedError(result: Extract<ApplyResult, { status: "stopped" }>, talk:
   const { operation, done, total, stop } = result;
   const made = done > 0 ? ` ${done} of ${total} changes were made; clausona ${talk.command} undo puts them back.` : "";
   return new ExitError(
-    `${stopText(stop, "flags", talk.homeDir, talk.command)}${made}`,
+    `${stopText(stop, "flags", talk.homeDir, talk.command, talk.env.stashDir)}${made}`,
     1,
     undefined,
     STOPPED[stop.reason],

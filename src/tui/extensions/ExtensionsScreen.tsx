@@ -18,7 +18,6 @@ import {
   dialogView,
   NOTHING_TO_UNDO,
   scrollDialog,
-  trackedRepo,
   undoneStatus,
 } from "./confirm-model.js";
 import { DetailsView } from "./DetailsView.js";
@@ -300,7 +299,13 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
   const command = COMMAND_OF[kind];
   const innerWidth = Math.max(1, columns - CHROME_COLUMNS);
   const dialogOpts = writes
-    ? { width: innerWidth, height: layout.height, homeDir: writes.homeDir, backupRoot: writes.backupRoot }
+    ? {
+        width: innerWidth,
+        height: layout.height,
+        homeDir: writes.homeDir,
+        backupRoot: writes.backupRoot,
+        stashDir: writes.stashDir,
+      }
     : undefined;
   const failed = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -336,11 +341,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
       } as const;
       const refused = plan.refused;
       if (action.verb === "rm" && refused.length > 0 && refused.every((r) => r.code === "tracked")) {
-        const repo = trackedRepo(
-          inventory,
-          action.rows.find((row) => row.key === refused[0]?.rowKey),
-        );
-        setDialog({ ...fresh, offerOff: true, ...(repo !== undefined ? { trackedIn: repo } : {}) });
+        setDialog({ ...fresh, offerOff: true });
         return;
       }
       if (plan.changes.length > 0) {
@@ -411,47 +412,51 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
     reload(after);
   };
 
-  /** y: the plan applied - deleted anyway, with off on offer - or the change undone. */
+  /**
+   * y: the plan applied - deleted anyway, with off on offer - or the change undone. Keys wait
+   * meanwhile, so a second y, however the terminal delivers it, never applies or undoes twice.
+   */
   const confirm = async (open: Dialog) => {
     if (!writes || !inventory) return;
-    if (open.type === "undo") {
-      setDialog({ ...open, busy: true });
-      let after: string;
-      try {
-        after = undoneStatus(await writes.undo(), writes.stashDir);
-      } catch (e) {
-        after = `Could not undo it: ${failed(e)}`;
+    if (open.type === "plan") {
+      const accounts = open.plan.accounts ?? [];
+      if (accounts.length > 1 && !accounts.some((a) => a.chosen)) {
+        setStatus(PICK_ONE);
+        return;
       }
-      finish(after);
-      return;
     }
-    const accounts = open.plan.accounts ?? [];
-    if (accounts.length > 1 && !accounts.some((a) => a.chosen)) {
-      setStatus(PICK_ONE);
-      return;
-    }
+    pending.current = true;
     setDialog({ ...open, busy: true });
-    const chosen = open.offerOff
-      ? planOf(contextFor(inventory, writes, open.tracked), open.command, { ...open.action, tracked: true })
-      : open.plan;
     let after: string;
     try {
-      after = appliedStatus(await writes.apply(chosen), chosen, writes.homeDir);
+      if (open.type === "undo") after = undoneStatus(await writes.undo(), writes.stashDir);
+      else {
+        const chosen = open.offerOff
+          ? planOf(contextFor(inventory, writes, open.tracked), open.command, { ...open.action, tracked: true })
+          : open.plan;
+        after = appliedStatus(await writes.apply(chosen), chosen, writes.homeDir, writes.stashDir);
+      }
     } catch (e) {
-      after = `Could not apply it: ${failed(e)}`;
+      after = `${open.type === "undo" ? "Could not undo it" : "Could not apply it"}: ${failed(e)}`;
+    } finally {
+      pending.current = false;
     }
     finish(after);
   };
 
-  /** The dialog's keys: y, n or esc, a page of lines, o for off instead, and the account picker's. */
+  /**
+   * The dialog's keys: y, n or esc, a page of lines, o for off instead, and the account picker's.
+   * A letter or space with ctrl or meta is none of them.
+   */
   const dialogKeys = (open: Dialog, input: string, key: Key) => {
     if (open.busy || !writes || !inventory || !dialogOpts) return;
-    if (key.escape || input === "n") {
+    const typed = key.ctrl || key.meta ? "" : input;
+    if (key.escape || typed === "n") {
       setDialog(null);
       setStatus(NOTHING_CHANGED);
-    } else if (input === "y") void confirm(open);
+    } else if (typed === "y") void confirm(open);
     else if (key.pageUp || key.pageDown) setDialog(scrollDialog(open, key.pageDown ? 1 : -1, dialogOpts));
-    else if (open.type === "plan") pickerKeys(open, input, key, writes, inventory);
+    else if (open.type === "plan") pickerKeys(open, typed, key, writes, inventory);
   };
 
   const pickerKeys = (open: PlanDialog, input: string, key: Key, w: ScreenWrites, inv: Inventory) => {
@@ -482,13 +487,13 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
   /** space g d v u x outside the dialog. */
   const actionKey = (input: string) => {
     const left = shown === "scopes" || shown === "project";
+    if (!writes) {
+      setStatus(NOT_AVAILABLE);
+      return;
+    }
     if (input === "x") {
       if (left) setStatus(TABLE_FIRST);
       else if (shown === "table" && selected) toggleMark(selected.key);
-      return;
-    }
-    if (!writes) {
-      setStatus(NOT_AVAILABLE);
       return;
     }
     if (input === "u") {
@@ -622,8 +627,9 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
       return;
     }
     if (shown === "table") {
-      // esc clears the marks first, then a search, then goes back to the scopes.
-      if (key.escape && marked.size > 0) setMarked(new Set());
+      // esc clears the marks first while it shows any, then a search, then goes back to the
+      // scopes: marks only a search hides do not take the esc that ends it.
+      if (key.escape && markedRows.length > 0) setMarked(new Set());
       else if (key.escape && query !== "") {
         setQuery("");
         pointAt(0);

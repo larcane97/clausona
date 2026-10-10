@@ -520,7 +520,11 @@ describe("mcp off and rm", () => {
     expect(readdirSync(keptDir)).toHaveLength(1);
     const plan = JSON.parse(await run("mcp", ["rm", "--id", kept.id, "--dry-run", "--json"]));
     expect(plan.question).toBe("Delete figma?");
+    // JSON names every file it touches; the text names clausona's own in words.
     expect(plan.changes.map((c: { file: string }) => path.dirname(c.file))).toEqual([keptDir]);
+    const text = stripAnsi(await run("mcp", ["rm", "--id", kept.id, "--dry-run"]));
+    expect(text).toMatch(/^ {6}the copy clausona kept {2}work$/m);
+    expect(text).not.toContain("stash");
     await run("mcp", ["rm", "--id", kept.id, "--yes"]);
     expect(json(h.path(".claude.json")).mcpServers.figma).toEqual({ command: "figma" });
     expect(readdirSync(keptDir)).toEqual([]);
@@ -528,6 +532,28 @@ describe("mcp off and rm", () => {
 });
 
 describe("an apply that stops", () => {
+  it("names a copy clausona kept in words when it went before the delete got to it", async () => {
+    const { h, app } = seed();
+    const { run, printed } = cli(h, app);
+    await run("mcp", ["off", "figma", "--everywhere", "--account", "work", "--tool", "claude", "--yes"]);
+    const keptDir = h.path(".clausona", "extensions", "stash");
+    const listed = JSON.parse(await run("mcp", ["ls", "--scope", "global", "--tool", "claude", "--json"]));
+    const figma = listed.items.find((i: { name: string }) => i.name === "figma");
+    const kept = figma.copies.find((c: { id: string }) => c.id.includes(":stash-"));
+    const error = await failure(
+      run("mcp", ["rm", "--id", kept.id], {
+        interactive: true,
+        confirm: async () => {
+          for (const file of readdirSync(keptDir)) rmSync(path.join(keptDir, file));
+          return true;
+        },
+      }),
+    );
+    expect(stripAnsi(printed.join("\n"))).toContain("the copy clausona kept");
+    expect(error).toMatchObject({ code: 1, kind: "changed" });
+    expect(error.message).toBe("The copy clausona kept changed since it was read. Run the command again.");
+  });
+
   it("says why and how much was made, with the operation in its JSON", async () => {
     const { h, app } = seed();
     const { run } = cli(h, app, { lockWaitMs: 300 });

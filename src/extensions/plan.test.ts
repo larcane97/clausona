@@ -418,8 +418,8 @@ describe("plan: Claude skills", () => {
     const tracked = { ...ctx, tracked: new Set([pathKey(h.path("repos/app/.claude/skills/deploy-check"))]) };
     const refused = plan(tracked, "skills", act("rm", "here", [deploy]));
     expect(refused.changes).toEqual([]);
-    expect(refused.refused.map((r) => [r.code, r.reason])).toEqual([
-      ["tracked", "Git tracks it in app, so this changes the repo."],
+    expect(refused.refused.map((r) => [r.code, r.reason, r.project])).toEqual([
+      ["tracked", "Git tracks it in app, so this changes the repo.", "app"],
     ]);
     expect(refusalText(refused.refused[0] as Plan["refused"][number], "flags")).toBe(
       "Git tracks it in app, so this changes the repo. Add --tracked to go ahead, or turn it off: clausona skills off deploy-check.",

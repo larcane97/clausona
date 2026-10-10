@@ -4,7 +4,7 @@ import { statesByAccount } from "./describe.js";
 import type { Extension, Inventory, SettingsLayer, SkillVisibility, StateFacts } from "./model.js";
 import { isClaudeJson } from "./places.js";
 import { stateHere, tilde, viewFrom } from "./present.js";
-import { samePath } from "./read.js";
+import { isWithin, samePath } from "./read.js";
 import { type ItemKind, isAccountServer, type ScopeRow } from "./scopes.js";
 import { pluginState, stateOf } from "./state.js";
 import type { SkillSelector } from "./writers/toml.js";
@@ -69,6 +69,8 @@ export type Refusal = {
   reason: string;
   keys?: string;
   flags?: string;
+  /** `tracked`: the project, by name, that the reason says git tracks it in - for the TUI's warning. */
+  project?: string;
 };
 
 /** One text, or one per tool where the tools differ. */
@@ -221,6 +223,7 @@ export function refusal(
     reason: filled(spec.reason, tool, values) ?? "",
     ...(keys !== undefined ? { keys } : {}),
     ...(flags !== undefined ? { flags } : {}),
+    ...(fill["project name"] !== undefined ? { project: fill["project name"] } : {}),
   };
   return made;
 }
@@ -244,12 +247,32 @@ export type Stop = {
   rowKey?: string;
 };
 
-/** Why an apply stopped, in words: the file from the home dir, then what to do in that voice. */
-export function stopText(stop: Stop, voice: "keys" | "flags", homeDir: string, command: ExtensionsCommand): string {
-  const file = tilde(stop.file, homeDir);
+/**
+ * A file as the user is told of it: from the home dir, or - for a file in clausona's own folder
+ * of kept copies, `stashDir` - in words. That path is clausona's, not theirs.
+ */
+export function fileWords(file: string, homeDir: string, stashDir: string): string {
+  return isWithin(file, stashDir) ? KEPT_COPY : tilde(file, homeDir);
+}
+
+/**
+ * Why an apply stopped, in words: the file from the home dir - a kept copy in words, when
+ * `stashDir` is given, as every caller that shows it gives it - then what to do in that voice.
+ */
+export function stopText(
+  stop: Stop,
+  voice: "keys" | "flags",
+  homeDir: string,
+  command: ExtensionsCommand,
+  stashDir?: string,
+): string {
+  const file = stashDir === undefined ? tilde(stop.file, homeDir) : fileWords(stop.file, homeDir, stashDir);
   switch (stop.reason) {
-    case "changed":
-      return `${file} changed since it was read. ${voice === "keys" ? "Press r and try again." : "Run the command again."}`;
+    case "changed": {
+      // The file starts the sentence: a path as it is, a kept copy's words with a capital.
+      const subject = file === KEPT_COPY ? `${KEPT_COPY.charAt(0).toUpperCase()}${KEPT_COPY.slice(1)}` : file;
+      return `${subject} changed since it was read. ${voice === "keys" ? "Press r and try again." : "Run the command again."}`;
+    }
     case "locked":
       return `Claude Code is saving ${file}. Try again in a moment.`;
     case "conflict": {
