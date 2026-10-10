@@ -854,7 +854,9 @@ describe("plan: Claude MCP servers", () => {
     expect(here.refused.map((r) => [r.code, refusalText(r, "keys")])).toEqual([
       ["stashed-here", "It is off everywhere. Press g to turn it back on."],
     ]);
-    expect(plan(ctx, "mcp", act("on", "here", [figma])).notes).toEqual(["work: off everywhere, g turns it back on"]);
+    expect(plan(ctx, "mcp", act("on", "here", [figma])).notes).toEqual([
+      "work is off everywhere: turn it on everywhere first.",
+    ]);
   });
 
   it("refuses to put a server back into a file that is gone, and deletes the copy clausona kept instead", async () => {

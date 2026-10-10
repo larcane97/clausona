@@ -698,7 +698,7 @@ function planAccountServer(run: Run, row: ScopeRow): Outcome {
   }
   if (verb === "on" && kept.length > 0) {
     if (kept.length === copies.length) return refused(run, row, "stashed-here");
-    for (const copy of kept) note(out, `${short(copy)}: off everywhere, g turns it back on`);
+    for (const copy of kept) note(out, `${short(copy)} is off everywhere: turn it on everywhere first.`);
   }
   if (opened === 0 && kept.length === 0) return refused(run, row, "no-account");
   return out;
