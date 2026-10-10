@@ -513,17 +513,16 @@ export function RouteForm(props: RouteFormProps) {
             focused={focusOn("tool")}
           />
         </Line>
-        <Line {...line("accounts", "Accounts")} rowMark={focusOn("accounts") && state.cursor === 0}>
-          <AccountRows
-            state={state}
-            listed={listed}
-            quotas={quotas}
-            excluded={excluded}
-            focused={focusOn("accounts")}
-            now={now}
-            lines={accountLines}
-          />
-        </Line>
+        <AccountRows
+          line={line("accounts", "Accounts")}
+          state={state}
+          listed={listed}
+          quotas={quotas}
+          excluded={excluded}
+          focused={focusOn("accounts")}
+          now={now}
+          lines={accountLines}
+        />
         <Line {...line("from", "Patterns")}>
           {subLabel("from", "from", 9)}
           {textField("from")}

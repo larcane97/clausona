@@ -261,8 +261,9 @@ describe("RouteForm", () => {
   });
 
   // The every-account row drew its `▸` slot before its box, which began two columns right of
-  // every other field's value; the marks hang before the boxes now.
-  it("starts the every-account box in the column of the other fields' values, each row's mark before its box", async () => {
+  // every other field's value; then the accounts' boxes began two columns right of its. The marks
+  // hang before the boxes now, in the label column.
+  it("starts every account row's box in the column of the other fields' values, each row's mark before its box", async () => {
     const { instance } = setup({ edit: "main", columns: 80 });
     await opened(instance);
     const frame = text(instance);
@@ -274,15 +275,15 @@ describe("RouteForm", () => {
     expect(columnOf(frame, "Limits", "skip at")).toBe(value);
     expect(columnOf(frame, "every account", "[x] every account")).toBe(value);
     const ids = ["claude:ops-share", "claude:side", "claude:team", "claude:work"];
-    for (const id of ids) expect(columnOf(frame, id, "["), id).toBe(value + 2);
+    for (const id of ids) expect(columnOf(frame, id, "["), id).toBe(value);
     // The quota columns still line up with each other.
     expect(new Set(ids.map((id) => columnOf(frame, id, "%")))).toHaveLength(1);
 
     await tabTo(instance, "Accounts");
     expect(columnOf(text(instance), "every account", "▸")).toBe(value - 2);
     await downTo(instance, accountRow("claude:team"));
-    expect(columnOf(text(instance), "claude:team", "▸")).toBe(value);
-    expect(columnOf(text(instance), "claude:team", "[x]")).toBe(value + 2);
+    expect(columnOf(text(instance), "claude:team", "▸")).toBe(value - 2);
+    expect(columnOf(text(instance), "claude:team", "[x]")).toBe(value);
     expect(columnOf(text(instance), "every account", "▸")).toBe(-1);
   });
 

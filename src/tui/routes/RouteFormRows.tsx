@@ -37,8 +37,8 @@ const labelColor = (focused: boolean, error: boolean) => (error ? color.error : 
 
 /**
  * One line of the form: the focus mark, the field's label, and what it holds. `rowMark` is for a
- * list whose first row is on this line: that row's `▸` slot, at the end of the label column, so
- * the row starts where every field's value does. True while the list's cursor is on it.
+ * list's row on this line: its `▸` slot, at the end of the label column, so the row starts where
+ * every field's value does. True while the list's cursor is on it.
  */
 export function Line({
   focused = false,
@@ -155,9 +155,9 @@ function RowMark({ on }: { on: boolean }) {
 /** `↑ 3 more` or `↓ 12 more`, where the window leaves accounts out: under the accounts' boxes. */
 function MoreLine({ arrow, count }: { arrow: "↑" | "↓"; count: number }) {
   return (
-    <Box paddingLeft={MARK}>
+    <Line label="">
       <Text color={color.muted}>{`${arrow} ${count} more`}</Text>
-    </Box>
+    </Line>
   );
 }
 
@@ -166,10 +166,11 @@ function MoreLine({ arrow, count }: { arrow: "↑" | "↓"; count: number }) {
  * `excluded`, and an account with no quota says why. `lines` is the most lines the accounts may
  * take, their counts above and below included: the rest scroll with the cursor, and row 0 stays.
  *
- * Row 0's box starts where the other fields' values do, its `▸` being the Line's (`rowMark`) in
- * the label column; an account's `▸` is under that box, and its own box two columns in.
+ * Each row is a Line of its own, row 0's carrying the field's label (`line`): every row's box
+ * starts where the other fields' values do, its `▸` (`rowMark`) in the label column.
  */
 export function AccountRows({
+  line,
   state,
   listed,
   quotas,
@@ -178,6 +179,7 @@ export function AccountRows({
   now,
   lines = Number.POSITIVE_INFINITY,
 }: {
+  line: { focused: boolean; label: string; error: boolean };
   state: RouteFormState;
   listed: FormAccount[];
   quotas: Record<string, QuotaSnapshot>;
@@ -193,10 +195,12 @@ export function AccountRows({
   const view = accountWindow(listed.length, lines, cursor, began.current);
   began.current = view.start;
   return (
-    <Box flexDirection="column" flexGrow={1} minWidth={0}>
-      <Text color={color.text} wrap="truncate-end">
-        {`[${state.every ? "x" : " "}] every account (*), new ones join`}
-      </Text>
+    <>
+      <Line {...line} rowMark={focused && state.cursor === 0}>
+        <Text color={color.text} wrap="truncate-end">
+          {`[${state.every ? "x" : " "}] every account (*), new ones join`}
+        </Text>
+      </Line>
       {view.start > 0 ? <MoreLine arrow="↑" count={view.start} /> : null}
       {listed.slice(view.start, view.end).map((account, at) => {
         const index = view.start + at;
@@ -206,8 +210,7 @@ export function AccountRows({
         const live = snapshot?.state === "ok";
         const note = out ? "excluded" : noQuotaReason(account.id, snapshot, now);
         return (
-          <Box key={account.id} flexDirection="row">
-            <RowMark on={focused && state.cursor === index + 1} />
+          <Line key={account.id} label="" rowMark={focused && state.cursor === index + 1}>
             <Box width={4 + idWidth} flexShrink={1} minWidth={0}>
               <Text color={out ? color.muted : color.text} wrap="truncate-end">
                 {`[${ticked ? "x" : " "}] ${account.id}`}
@@ -225,11 +228,11 @@ export function AccountRows({
                 <Text color={color.muted}>{note}</Text>
               </Box>
             ) : null}
-          </Box>
+          </Line>
         );
       })}
       {view.end < listed.length ? <MoreLine arrow="↓" count={listed.length - view.end} /> : null}
-    </Box>
+    </>
   );
 }
 
