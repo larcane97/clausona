@@ -5,6 +5,8 @@ import type { Registry, ToolName } from "../types.js";
 import {
   type Action,
   type ExtensionsCommand,
+  KEPT_COPY,
+  LEFT_ALONE,
   type Refusal,
   refusalText,
   type StopReason,
@@ -39,7 +41,7 @@ import { planChecked } from "./git-tracked.js";
 import { CLEANUP_UNUSED_DAYS, loadInventory } from "./inventory.js";
 import { type Extension, type Inventory, SKILL_VISIBILITY, type SkillVisibility } from "./model.js";
 import { type Plan, type PlanLine, rowForId } from "./plan.js";
-import { shortProfile, tilde, tildeIn } from "./present.js";
+import { middleCut, shortProfile, tilde, tildeIn } from "./present.js";
 import { entryInfo, isWithin } from "./read.js";
 import {
   homeScope,
@@ -787,18 +789,6 @@ const JSON_NEEDS_YES = "With --json, add --yes to go ahead, or --dry-run to see 
 /** What a refused row could not be, in "Nothing changed: 1 of 2 can't be deleted." */
 const CANT: Record<Plan["verb"], string> = { off: "turned off", on: "turned on", visibility: "changed", rm: "deleted" };
 
-/** Why undo left a file alone, after its path. */
-const LEFT_ALONE: Record<UndoSkip["reason"], string> = {
-  changed: "changed since",
-  occupied: "something is there again",
-  locked: "Claude Code is saving it",
-  missing: "is gone",
-  failed: "could not be put back",
-};
-
-/** How undo names a file of clausona's own that it left alone. */
-const KEPT_COPY = "the copy clausona kept";
-
 /** What an apply that stopped is called in --json's `error`. */
 const STOPPED: Record<StopReason, ErrorKind> = {
   changed: "changed",
@@ -1226,29 +1216,6 @@ export async function runExtensionsCommand(
 }
 
 const GAP = 2;
-
-/** A path cut to `width` from its middle: its start, `…`, and as many of its last parts as fit. */
-function middleCut(p: string, width: number): string {
-  if (p.length <= width) return p;
-  if (width < 3) return truncate(p, width);
-  // Each part but the first starts with its separator.
-  const parts = p.split(/(?=[\\/])/);
-  let tail = "";
-  for (let at = parts.length - 1; at > 0; at--) {
-    const next = `${parts[at]}${tail}`;
-    // Room for the `…` and one character of the start.
-    if (next.length + 2 > width) break;
-    tail = next;
-  }
-  if (tail === "") {
-    const head = Math.ceil((width - 1) / 2);
-    return `${p.slice(0, head)}…${p.slice(p.length - (width - 1 - head))}`;
-  }
-  const head = p.slice(0, width - 1 - tail.length);
-  // The start up to its last separator, so the cut reads as parts left out.
-  const sep = Math.max(head.lastIndexOf("/"), head.lastIndexOf("\\"));
-  return `${sep > 0 ? head.slice(0, sep + 1) : head}…${tail}`;
-}
 
 /**
  * Cells padded to their column's widest, the last left as it is. When the terminal is narrow,

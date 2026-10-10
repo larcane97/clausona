@@ -1,4 +1,5 @@
 import type { ToolName } from "../types.js";
+import type { UndoSkip } from "./apply.js";
 import { statesByAccount } from "./describe.js";
 import type { Extension, Inventory, SettingsLayer, SkillVisibility, StateFacts } from "./model.js";
 import { isClaudeJson } from "./places.js";
@@ -10,8 +11,8 @@ import type { SkillSelector } from "./writers/toml.js";
 
 /**
  * What a write is asked to do - an action on some rows - and the words around it: why a row
- * cannot change, in the TUI's voice (keys) and the CLI's (flags); why an apply stopped; and
- * which way a toggle key goes. Pure: it reads the inventory and nothing else.
+ * cannot change, in the TUI's voice (keys) and the CLI's (flags); why an apply stopped; why undo
+ * left a file alone; and which way a toggle key goes. Pure: it reads the inventory and nothing else.
  */
 
 export type ExtensionsCommand = "skills" | "mcp" | "hooks";
@@ -262,6 +263,18 @@ export function stopText(stop: Stop, voice: "keys" | "flags", homeDir: string, c
       return `Could not change ${file}: ${stop.detail ?? "unexpected error"}.`;
   }
 }
+
+/** Why undo left a file alone, after its path (CLI) or in the status line (TUI). */
+export const LEFT_ALONE: Readonly<Record<UndoSkip["reason"], string>> = {
+  changed: "changed since",
+  occupied: "something is there again",
+  locked: "Claude Code is saving it",
+  missing: "is gone",
+  failed: "could not be put back",
+};
+
+/** How undo names a file of clausona's own that it left alone. */
+export const KEPT_COPY = "the copy clausona kept";
 
 /** The visibility `v` goes to next: on → name-only → user-invocable-only → off → on. */
 export const NEXT_VISIBILITY: Record<SkillVisibility, SkillVisibility> = {

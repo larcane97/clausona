@@ -7,7 +7,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 
 import { bootstrapInitFromCurrentState } from "../commands.js";
 import { reinstallCommand, type UpdateOffer, type Updater } from "../core/update.js";
-import { loadInventoryHere } from "../extensions/load.js";
+import { loadInventoryHere, type ScreenWrites, writesHere } from "../extensions/load.js";
 import type { Inventory } from "../extensions/model.js";
 import {
   describeOtherAccount,
@@ -105,6 +105,8 @@ type AppProps = {
    * real one; tests pass their own so the App never reads a home directory.
    */
   loadExtensions?: () => Promise<Inventory>;
+  /** What the Extensions screen writes with. Left out, this user's home; tests pass their own. */
+  extensionWrites?: ScreenWrites;
   /** Called once an update is installed, just before the App exits: index.tsx then starts the new version. */
   onRestart?: (offer: UpdateOffer) => void;
 };
@@ -348,7 +350,13 @@ function useCommittedHandler<Args extends unknown[]>(handler: (...args: Args) =>
 
 // ── App ──
 
-export function App({ initialScreen = "dashboard", updater, onRestart, loadExtensions = loadInventoryHere }: AppProps) {
+export function App({
+  initialScreen = "dashboard",
+  updater,
+  onRestart,
+  loadExtensions = loadInventoryHere,
+  extensionWrites = writesHere(),
+}: AppProps) {
   const { exit } = useApp();
   const { stdout, write } = useStdout();
   const { internal_eventEmitter: inputEvents } = useStdin();
@@ -2198,6 +2206,7 @@ export function App({ initialScreen = "dashboard", updater, onRestart, loadExten
     return (
       <ExtensionsScreen
         load={loadExtensions}
+        writes={extensionWrites}
         onExit={() => {
           setMessage("");
           setCursor(0);
