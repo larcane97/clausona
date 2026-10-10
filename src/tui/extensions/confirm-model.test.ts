@@ -12,7 +12,8 @@ const at = (...parts: string[]) => path.join(HOME, ...parts);
 /** How a path under HOME reads: from ~, with the platform's separator. */
 const tilded = (...parts: string[]) => path.join("~", ...parts);
 const BACKUP = at(".clausona", "backups", "extensions");
-const OPTS = { homeDir: HOME, backupRoot: BACKUP };
+const STASH = at(".clausona", "extensions", "stash");
+const OPTS = { homeDir: HOME, backupRoot: BACKUP, stashDir: STASH };
 const BACKUP_LINE = `Backup: ${tilded(".clausona", "backups", "extensions")}${path.sep}`;
 const PRESS_U = "Press u afterwards to put them back.";
 
@@ -189,7 +190,7 @@ describe("dialogView: a plan", () => {
     const row = { key: "skill:claude:project:app:deploy-check", name: "deploy-check" };
     const tracked = refusal("tracked", row, "claude", { "project name": "app" });
     const plan = planOf({ question: "Delete deploy-check?", refused: [tracked] });
-    const view = dialogView(dialogOf(plan, { offerOff: true, trackedIn: "app" }), { width: 80, height: 12, ...OPTS });
+    const view = dialogView(dialogOf(plan, { offerOff: true }), { width: 80, height: 12, ...OPTS });
     expect(view.lines.map((l) => l.text)).toEqual([
       "Delete deploy-check?",
       "Git tracks deploy-check in app, so deleting changes the repo.",
@@ -207,7 +208,7 @@ describe("dialogView: a plan", () => {
       question: "Delete 2 skills?",
       refused: [tracked, refusal("tracked", { key: "b", name: "lint" }, "claude", { "project name": "app" })],
     });
-    expect(texts(dialogOf(two, { offerOff: true, trackedIn: "app" }), 80, 12)[1]).toBe(
+    expect(texts(dialogOf(two, { offerOff: true }), 80, 12)[1]).toBe(
       "Git tracks 2 of these in app, so deleting changes the repo.",
     );
   });
@@ -263,6 +264,34 @@ describe("dialogView: a plan", () => {
     ]);
   });
 
+  it("names a copy clausona kept in words, never by its path", () => {
+    const kept = (name: string, account: string) =>
+      removal(line(path.join(STASH, `${name}.json`), { change: "delete", account, rows: ["github"] }));
+    const plain = planOf({ command: "mcp", question: "Delete github?", changes: [kept("a", "claude:default")] });
+    expect(texts(dialogOf(plain), 80, 9)).toEqual([
+      "Delete github?",
+      "",
+      "the copy clausona kept",
+      "",
+      BACKUP_LINE,
+      PRESS_U,
+    ]);
+    const both = planOf({
+      command: "mcp",
+      question: "Delete github?",
+      changes: [kept("a", "claude:default"), kept("b", "claude:work")],
+      accounts: [
+        { profile: "claude:default", chosen: true },
+        { profile: "claude:work", chosen: true },
+      ],
+    });
+    const picker = texts(dialogOf(both), 80, 9);
+    expect(picker.slice(2, 4)).toEqual(["✦ ◉ default  the copy clausona kept", "  ◉ work     the copy clausona kept"]);
+    // Not cut from its middle as a path is.
+    expect(texts(dialogOf(plain), 14, 9)[2]).toBe("the copy clau…");
+    for (const text of [...picker, ...texts(dialogOf(plain), 14, 9)]) expect(text).not.toContain("stash");
+  });
+
   it("offers no keys while it applies", () => {
     expect(dialogView(dialogOf(DELETE_TWO, { busy: true }), { width: 56, height: 9, ...OPTS }).hints).toEqual([]);
   });
@@ -307,22 +336,32 @@ describe("the status after an apply or an undo", () => {
     createdAt: "2026-10-10T04:36:48.123Z",
   };
   const plan = planOf({ command: "mcp", verb: "off", done: "Turned off figma in this project" });
-  const STASH = at(".clausona", "extensions", "stash");
   const kept = path.join(STASH, "mcp-figma.json");
 
   it("says what was done and how to undo it, why an apply stopped, or that nothing changed", () => {
-    expect(appliedStatus({ status: "applied", operation, done: 2 }, plan, HOME)).toBe(
+    expect(appliedStatus({ status: "applied", operation, done: 2 }, plan, HOME, STASH)).toBe(
       "Turned off figma in this project · u to undo",
     );
     const stop = { file: at(".claude.json"), reason: "locked" as const };
     const stopped = (done: number): ApplyResult => ({ status: "stopped", operation, done, total: 2, stop });
-    expect(appliedStatus(stopped(0), plan, HOME)).toBe(
+    expect(appliedStatus(stopped(0), plan, HOME, STASH)).toBe(
       `Claude Code is saving ${tilded(".claude.json")}. Try again in a moment.`,
     );
-    expect(appliedStatus(stopped(1), plan, HOME)).toBe(
+    expect(appliedStatus(stopped(1), plan, HOME, STASH)).toBe(
       `Claude Code is saving ${tilded(".claude.json")}. Try again in a moment, 1 of 2 done · u to undo`,
     );
-    expect(appliedStatus({ status: "nothing" }, plan, HOME)).toBe("Nothing changed.");
+    expect(appliedStatus({ status: "nothing" }, plan, HOME, STASH)).toBe("Nothing changed.");
+    // A kept copy that went before the delete got to it: said in words.
+    const gone: ApplyResult = {
+      status: "stopped",
+      operation,
+      done: 0,
+      total: 1,
+      stop: { file: kept, reason: "changed" },
+    };
+    expect(appliedStatus(gone, plan, HOME, STASH)).toBe(
+      "The copy clausona kept changed since it was read. Press r and try again.",
+    );
   });
 
   it("says what undo did, and what it left alone and why, never a path of clausona's own", () => {
