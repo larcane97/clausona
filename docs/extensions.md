@@ -370,7 +370,7 @@ subcommand does not take, such as `--everywhere` with `rm`, `--tool` with `visib
 name with `undo`.
 
 An unknown subcommand is bad usage too, and says which ones there are:
-`Unknown subcommand 'nope'. clausona skills takes ls, show, off, on, visibility, rm or undo.`
+`Unknown subcommand 'nope'. clausona skills takes ls, show, off, on, visibility, rm or undo. Run clausona skills --help.`
 An unknown command, as in `csn nope`, prints `Unknown command 'nope'. Run clausona --help.` and
 exits 2.
 
@@ -581,10 +581,11 @@ keeps it, and on puts it back. `--everywhere` is taken and changes nothing. On t
 turns a hook off, and `space` says why it can't.
 
 A server or a hook taken out and kept by clausona still has its row, in its own scope and in
-`--scope all`, with the tag `off`. It is not in Loaded, since it does not load. Its details read
-`off everywhere (kept by clausona)`. Its id changes to
-`<kind>:<tool>:<scope>:stash-<id>:<name>`, so read it again from `ls --json` before you pass it
-to `on`.
+`--scope all`, with the tag `off`. It is not in Loaded, since it does not load. For a server the
+details read `off everywhere (kept by clausona)`. For a hook they read `off everywhere — clausona
+keeps its settings so you can turn it back on`. A server keeps its id. A hook's id changes to
+`hook:<tool>:<scope>:stash-<id>:<name>`. Read ids again from `ls --json` before you pass one to
+`on`.
 
 `on --everywhere`, or `g` on the screen, puts it back. If something of that name is back in that
 place by then, the change stops with a conflict and clausona keeps its copy. `rm` deletes the
@@ -1275,6 +1276,8 @@ csn hooks on --id '<new id>' --yes
 Off takes the hook out of its settings file, in every project, and clausona keeps it. It no
 longer runs, so it leaves Loaded, the default scope; `--scope all` and its own scope still list
 it, with the state `off` and a new id. `on` takes that new id and puts the hook back.
+It goes into its old group if the group is still there with the same matcher. Else it joins
+another group with that matcher, or gets a new group at the end of the event.
 
 A hook's id holds its place in its file, so taking one out moves the ids of the hooks after it
 on the same event. Read the ids again before the next change.
