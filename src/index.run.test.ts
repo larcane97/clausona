@@ -138,4 +138,12 @@ describe("clausona run", () => {
       });
     }
   }
+
+  it("says a prompt in the profile's place is not a profile or a tool, and launches nothing", async () => {
+    const h = await harness(true);
+    await expect(h.runProfile("fix the bug", [], "linux")).rejects.toThrow(
+      "'fix the bug' is not a profile or a tool. To pass a prompt, name the tool: clausona run claude 'fix the bug'",
+    );
+    expect(h.calls).toEqual([]);
+  });
 });

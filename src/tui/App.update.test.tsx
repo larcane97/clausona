@@ -108,12 +108,12 @@ describe("the dashboard's update", () => {
     const instance = render(<App initialScreen="dashboard" updater={updater} />);
     await waitForFrame(instance.lastFrame, (f) => f.includes("Dashboard") && f.includes("Usage"));
     await press(instance, DOWN);
-    expect(focusedOn(instance.lastFrame() ?? "", "Usage")).toBe(true);
+    expect(focusedOn(instance.lastFrame() ?? "", "Routes")).toBe(true);
 
     answer(OFFER);
 
     const frame = await waitForFrame(instance.lastFrame, offered);
-    expect(focusedOn(frame, "Usage")).toBe(true);
+    expect(focusedOn(frame, "Routes")).toBe(true);
   });
 
   it.each([

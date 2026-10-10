@@ -122,8 +122,16 @@ function isLiveQuota(state: QuotaSnapshot["state"]): boolean {
   return state === "ok";
 }
 
+/**
+ * A usage percentage as a whole number: rounded, except that a reading under 100 never reads 100.
+ * An account at 100% cannot run, and one at 99.6 (Codex reports fractions) can, and is picked.
+ */
+export function wholeQuotaPercent(percent: number): number {
+  return percent >= 99 && percent < 100 ? 99 : Math.round(percent);
+}
+
 export function formatQuotaPercent(window: QuotaWindow | undefined): string {
-  return window ? `${Math.round(window.usedPercent)}%` : "—";
+  return window ? `${wholeQuotaPercent(window.usedPercent)}%` : "—";
 }
 
 /** Colours a percentage by severity; anything not freshly fetched is dimmed instead. */

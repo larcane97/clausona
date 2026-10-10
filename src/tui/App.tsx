@@ -85,9 +85,10 @@ import { SelectList, type SelectListItem } from "./components/SelectList.js";
 import { StepIndicator } from "./components/StepIndicator.js";
 import { UpdatePanel, type UpdatePhase } from "./components/UpdatePanel.js";
 import { UsageTable } from "./components/UsageTable.js";
+import { RoutesScreen } from "./routes/RoutesScreen.js";
 import { color, symbol } from "./theme.js";
 
-type Screen = "dashboard" | "use" | "doctor" | "init" | "usage";
+type Screen = "dashboard" | "use" | "routes" | "doctor" | "init" | "usage";
 type InitStep = "loading" | "select" | "name" | "default" | "review" | "applying" | "done" | "error";
 
 type AppProps = {
@@ -1247,6 +1248,7 @@ export function App({ initialScreen = "dashboard", updater, onRestart }: AppProp
 
   const actions = [
     { id: "use", label: "Profiles", detail: "Switch, add, or remove accounts" },
+    { id: "routes", label: "Routes", detail: "Pick accounts by plan quota" },
     { id: "usage", label: "Usage", detail: "View cost and token usage" },
     { id: "init", label: "Initialize", detail: "Register discovered Claude accounts" },
     { id: "doctor", label: "Health check", detail: "Inspect profile integrity" },
@@ -1314,6 +1316,7 @@ export function App({ initialScreen = "dashboard", updater, onRestart }: AppProp
           exit();
         } else if (
           selectedAction === "use" ||
+          selectedAction === "routes" ||
           selectedAction === "doctor" ||
           selectedAction === "init" ||
           selectedAction === "usage"
@@ -2148,14 +2151,20 @@ export function App({ initialScreen = "dashboard", updater, onRestart }: AppProp
   // This hook runs before the `suspended` early return, so switch it off explicitly while a
   // child owns the terminal. Going inactive makes Ink drop its stdin listener, which lets
   // suspendTuiAndRun's pause() stop the reads; otherwise keys meant for the child (a pasted
-  // login code, Enter, Esc) would be taken and handled as TUI input.
-  useInput(handleInput, { isActive: !suspended });
+  // login code, Enter, Esc) would be taken and handled as TUI input. The Routes screen answers
+  // its own keys.
+  useInput(handleInput, { isActive: !suspended && screen !== "routes" });
 
   // ── Screens ──
 
   // TUI suspended for interactive child process (e.g. OAuth login)
   if (suspended) {
     return null;
+  }
+
+  // Its own reads, its own loading and its own errors: it needs nothing the App loads.
+  if (screen === "routes") {
+    return <RoutesScreen onExit={goBack} />;
   }
 
   // Loading

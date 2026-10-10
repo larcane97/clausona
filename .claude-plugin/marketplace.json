@@ -19,6 +19,11 @@
       "description": "Run parallel agents in Orca worktrees, each on its own clausona account or API model."
     },
     {
+      "name": "routing",
+      "source": "./plugins/routing",
+      "description": "Run Claude Code or Codex on whichever clausona account has quota left."
+    },
+    {
       "name": "fleet-core",
       "source": "./plugins/fleet-core",
       "description": "Shared rules for the fleet plugins; installed with them."

@@ -72,8 +72,11 @@ export type WatchedInstance = Instance & {
   watchFrames(listener: (frame: string) => void): () => void;
   /** The terminal-mode switches written to stdout, in order - kept out of `frames`. */
   modes: string[];
-  /** Resizes the terminal to `columns`, as a terminal does: the width changes, then `resize` fires. */
-  resize(columns: number): void;
+  /**
+   * Resizes the terminal to `columns` (and to `rows`, when given), as a terminal does: the size
+   * changes, then `resize` fires.
+   */
+  resize(columns: number, rows?: number): void;
 };
 
 const MODE_SWITCHES = new Set([BRACKETED_PASTE_ON, BRACKETED_PASTE_OFF]);
@@ -83,18 +86,20 @@ const MODE_SWITCHES = new Set([BRACKETED_PASTE_ON, BRACKETED_PASTE_OFF]);
  * columns, and what a one-line message loses at the panel's edge depends on exactly that.
  *
  * `tty` makes stdout say it is a terminal, which is what the App writes a mode switch to; such a
- * write goes to `modes`, not `frames`. `exitOnCtrlC` is ink's, off unless asked for.
+ * write goes to `modes`, not `frames`. `exitOnCtrlC` is ink's, off unless asked for. `rows` is the
+ * terminal's height, which stdout does not say without it.
  */
 export function renderAt(
   tree: ReactElement,
   columns: number,
-  options: { tty?: boolean; exitOnCtrlC?: boolean } = {},
+  options: { tty?: boolean; exitOnCtrlC?: boolean; rows?: number } = {},
 ): WatchedInstance {
   const frames: string[] = [];
   const modes: string[] = [];
   const watchers = new Set<(frame: string) => void>();
   const stdout = Object.assign(new EventEmitter(), {
     columns,
+    rows: options.rows,
     isTTY: options.tty === true,
     write: (frame: string) => {
       if (MODE_SWITCHES.has(frame)) {
@@ -126,8 +131,9 @@ export function renderAt(
       watchers.add(listener);
       return () => watchers.delete(listener);
     },
-    resize(width) {
+    resize(width, height) {
       stdout.columns = width;
+      if (height !== undefined) stdout.rows = height;
       stdout.emit("resize");
     },
   };

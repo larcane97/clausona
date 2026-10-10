@@ -16,6 +16,7 @@ import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot, QuotaWindow }
 import { color, symbol } from "../theme.js";
 import { useWidth } from "../use-width.js";
 import { Badge } from "./Badge.js";
+import { quotaColor } from "./QuotaCell.js";
 
 function Row({
   label,
@@ -60,22 +61,12 @@ function Separator() {
 
 const EM_DASH = "\u2014";
 
-const QUOTA_CRITICAL = 90;
-const QUOTA_WARNING = 75;
-
 const QUOTA_STATE_NOTE: Record<Exclude<QuotaSnapshot["state"], "ok">, string> = {
   expired: "sign-in lapsed \u2014 clausona login",
   missing: "no stored credential",
   cooldown: "rate limited, retrying later",
   error: "lookup failed",
 };
-
-function quotaColor(window: QuotaWindow, live: boolean): string {
-  if (!live) return color.muted;
-  if (window.usedPercent >= QUOTA_CRITICAL) return color.error;
-  if (window.usedPercent >= QUOTA_WARNING) return color.warning;
-  return color.text;
-}
 
 /** Row's label box plus its gap: what a row's value does not get of the panel's width. */
 const LABEL_COLUMN = 13;

@@ -11,12 +11,17 @@ type ChromeProps = PropsWithChildren<{
   /** Something to act on, after the title: the dashboard's "update available". */
   notice?: string;
   footer?: string;
+  /**
+   * A question waiting for a key, such as `Remove route main? (y/N)`: drawn where the footer
+   * goes, in place of it, as text and bold - not muted as a message is, so it is not missed.
+   */
+  question?: string;
   hints?: KeyHint[];
 }>;
 
 // Use fixed long width that flex container shrinks down gracefully
 // to prevent ink size recalculation bugs and nested redraws on resize
-export function Chrome({ title, subtitle, notice, footer, hints, children }: ChromeProps) {
+export function Chrome({ title, subtitle, notice, footer, question, hints, children }: ChromeProps) {
   const lineWidth = 150;
 
   return (
@@ -76,14 +81,20 @@ export function Chrome({ title, subtitle, notice, footer, hints, children }: Chr
       </Box>
 
       {/* ── Footer ── */}
-      {(hints && hints.length > 0) || footer ? (
+      {(hints && hints.length > 0) || footer || question ? (
         <Box marginTop={1} flexDirection="column">
           <Box flexDirection="row" width="100%" overflow="hidden" height={1}>
             <Box flexGrow={1} flexShrink={1} minWidth={1}>
               <Text color={color.dim}>{symbol.lineH.repeat(lineWidth)}</Text>
             </Box>
           </Box>
-          {footer ? (
+          {question ? (
+            <Box marginTop={1}>
+              <Text color={color.text} bold wrap="truncate-end">
+                {question}
+              </Text>
+            </Box>
+          ) : footer ? (
             <Box marginTop={1}>
               <Text color={color.muted} wrap="truncate-end">
                 {footer}
@@ -91,7 +102,7 @@ export function Chrome({ title, subtitle, notice, footer, hints, children }: Chr
             </Box>
           ) : null}
           {hints && hints.length > 0 ? (
-            <Box marginTop={footer ? 0 : 1}>
+            <Box marginTop={footer || question ? 0 : 1}>
               <KeyHints hints={hints} />
             </Box>
           ) : null}

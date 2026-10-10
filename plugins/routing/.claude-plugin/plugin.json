@@ -1,0 +1,10 @@
+{
+  "name": "routing",
+  "version": "0.1.0",
+  "description": "Run Claude Code or Codex on whichever clausona account has quota left, and set up, change or explain the routes that pick it.",
+  "author": { "name": "larcane97", "url": "https://github.com/larcane97" },
+  "homepage": "https://github.com/larcane97/clausona/blob/main/docs/routing.md",
+  "repository": "https://github.com/larcane97/clausona",
+  "license": "MIT",
+  "keywords": ["clausona", "multi-account", "routing", "quota", "claude-code", "codex"]
+}

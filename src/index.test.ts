@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands.js";
-import { isMainModule, parseCommand, writeCommandResult } from "./index.js";
+import { isMainModule, parseCommand, reportError, TUI_SCREENS, writeCommandResult } from "./index.js";
 
 describe("parseCommand", () => {
   it("defaults to interactive mode with no args", () => {
@@ -42,6 +42,52 @@ describe("parseCommand", () => {
       command: "run",
       args: ["--help"],
     });
+  });
+
+  it("sends run forms without a named profile to routing, untouched", () => {
+    expect(parseCommand(["run", "--route", "main", "--", "-p", "q"])).toEqual({
+      kind: "route",
+      args: ["--route", "main", "--", "-p", "q"],
+    });
+    expect(parseCommand(["run", "claude", "-p", "q"])).toEqual({ kind: "route", args: ["claude", "-p", "q"] });
+    expect(parseCommand(["run", "codex"])).toEqual({ kind: "route", args: ["codex"] });
+  });
+
+  it("still runs a named profile as before", () => {
+    expect(parseCommand(["run", "claude:work", "--route", "x"])).toEqual({
+      kind: "exec",
+      profile: "claude:work",
+      args: ["--route", "x"],
+    });
+  });
+});
+
+describe("TUI_SCREENS", () => {
+  it("lists every screen a command may open, the Routes screen of `csn route` among them", () => {
+    expect([...TUI_SCREENS].sort()).toEqual(["dashboard", "doctor", "init", "routes", "use"]);
+  });
+});
+
+describe("reportError", () => {
+  const sink = () => {
+    const chunks: string[] = [];
+    return { chunks, stream: { write: (chunk: string) => chunks.push(chunk) > 0 } };
+  };
+
+  it("prints the message and returns 1", () => {
+    const err = sink();
+    const out = sink();
+    expect(reportError(new Error("boom"), err.stream, out.stream)).toBe(1);
+    expect(err.chunks.join("")).toContain("boom");
+  });
+
+  it("returns an error's own exit code, and prints its stdout instead when it has one", () => {
+    const err = sink();
+    const out = sink();
+    const error = Object.assign(new Error("nobody"), { exitCode: 75, stdout: '{"profile":null}' });
+    expect(reportError(error, err.stream, out.stream)).toBe(75);
+    expect(out.chunks.join("")).toBe('{"profile":null}\n');
+    expect(err.chunks).toEqual([]);
   });
 });
 
