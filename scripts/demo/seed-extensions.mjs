@@ -108,9 +108,14 @@ mergeJson(".claude/settings.json", {
   },
 });
 
-// Accounts: MCP servers that differ by account, local servers, usage.
+// Accounts: MCP servers that differ by account, local servers, usage. figma, on in both
+// accounts, is the server the screenshots turn off with the account picker.
+const figma = { command: "npx", args: ["-y", "figma-mcp"] };
 mergeJson(".claude.json", {
-  mcpServers: { github: { command: "npx", args: ["-y", "github-mcp"], env: { GITHUB_TOKEN: "demo-placeholder" } } },
+  mcpServers: {
+    github: { command: "npx", args: ["-y", "github-mcp"], env: { GITHUB_TOKEN: "demo-placeholder" } },
+    figma,
+  },
   skillUsage: {
     eli5: { usageCount: 26, lastUsedAt: now - 2 * DAY },
     "sentry-cli": { usageCount: 3, lastUsedAt: now - 140 * DAY },
@@ -129,6 +134,7 @@ const work = JSON.parse(readFileSync(workFile, "utf8"));
 work.mcpServers = {
   linear: { type: "http", url: "https://mcp.linear.example/mcp" },
   github: { command: "npx", args: ["-y", "github-mcp"] },
+  figma,
 };
 work.projects[app] = { ...work.projects[app], disabledMcpServers: ["github"] };
 work.skillUsage = {
