@@ -10,7 +10,8 @@ type ChromeProps = PropsWithChildren<{
   subtitle?: string;
   /** Something to act on, after the title: the dashboard's "update available". */
   notice?: string;
-  footer?: string;
+  /** A line under the rule, or lines: each one cut at the edge, never wrapped. */
+  footer?: string | string[];
   /**
    * A question waiting for a key, such as `Remove route main? (y/N)`: drawn where the footer
    * goes, in place of it, as text and bold - not muted as a message is, so it is not missed.
@@ -21,8 +22,9 @@ type ChromeProps = PropsWithChildren<{
 
 // Use fixed long width that flex container shrinks down gracefully
 // to prevent ink size recalculation bugs and nested redraws on resize
-export function Chrome({ title, subtitle, notice, footer, question, hints, children }: ChromeProps) {
+export function Chrome({ title, subtitle, notice, footer: given, question, hints, children }: ChromeProps) {
   const lineWidth = 150;
+  const footer = given === undefined ? [] : (Array.isArray(given) ? given : [given]).filter((text) => text !== "");
 
   return (
     <Box flexDirection="column" paddingX={2} paddingY={1}>
@@ -81,7 +83,7 @@ export function Chrome({ title, subtitle, notice, footer, question, hints, child
       </Box>
 
       {/* ── Footer ── */}
-      {(hints && hints.length > 0) || footer || question ? (
+      {(hints && hints.length > 0) || footer.length > 0 || question ? (
         <Box marginTop={1} flexDirection="column">
           <Box flexDirection="row" width="100%" overflow="hidden" height={1}>
             <Box flexGrow={1} flexShrink={1} minWidth={1}>
@@ -94,15 +96,18 @@ export function Chrome({ title, subtitle, notice, footer, question, hints, child
                 {question}
               </Text>
             </Box>
-          ) : footer ? (
-            <Box marginTop={1}>
-              <Text color={color.muted} wrap="truncate-end">
-                {footer}
-              </Text>
+          ) : footer.length > 0 ? (
+            <Box marginTop={1} flexDirection="column">
+              {footer.map((text, at) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: the lines are in a fixed order, and two may read the same.
+                <Text key={at} color={color.muted} wrap="truncate-end">
+                  {text}
+                </Text>
+              ))}
             </Box>
           ) : null}
           {hints && hints.length > 0 ? (
-            <Box marginTop={footer || question ? 0 : 1}>
+            <Box marginTop={footer.length > 0 || question ? 0 : 1}>
               <KeyHints hints={hints} />
             </Box>
           ) : null}

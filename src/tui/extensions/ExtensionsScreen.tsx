@@ -31,6 +31,7 @@ import {
   CURSOR_COLUMNS,
   DIVIDER_COLUMNS,
   detailRows,
+  entryLines,
   KINDS,
   type Kind,
   LIST_HEAD_ROWS,
@@ -47,6 +48,7 @@ import {
   projectPaneWidth,
   scopeLines,
   scrolled,
+  statusLines,
   type Tool,
   tableLines,
   tableTop,
@@ -225,9 +227,12 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
     scopes.findIndex((s) => s.id === scope),
   );
   const current = scopes[scopeAt]?.id ?? "loaded";
+  // A status too long for its line takes a second, and the panes give up that row: the frame
+  // keeps its height.
+  const shownStatus = statusLines(status, Math.max(1, columns - CHROME_COLUMNS));
   const layout = paneLayout(
     columns,
-    terminalRows,
+    terminalRows - Math.max(0, shownStatus.length - 1),
     scopes,
     // Every project, whatever a search leaves, and No project where it can be the row: the pane
     // keeps its width.
@@ -293,7 +298,12 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
     const ctx = { inv: inventory, project, now: loadedAt, tracked: new Set<string>() };
     const actions =
       stashDir === undefined ? "" : actionsLine(keysFor({ ...ctx, stashDir }, COMMAND_OF[kind], selected.row));
-    const all: DetailLine[] = actions === "" ? lines : [...lines, { text: "" }, { text: actions, tone: "muted" }];
+    // On as many rows as it needs, each broken between two keys, never inside one.
+    const actionRows = entryLines(actions === "" ? [] : actions.split(" · "), layout.tableWidth);
+    const all: DetailLine[] =
+      actionRows.length === 0
+        ? lines
+        : [...lines, { text: "" }, ...actionRows.map((text): DetailLine => ({ text, tone: "muted" }))];
     return { title: title?.text ?? "", rows: detailRows(all, layout.tableWidth) };
   }, [inventory, shown, selected, project, loadedAt, layout.tableWidth, stashDir, kind]);
   // The details' rows under their title and the blank line after it, and how far they scroll.
@@ -833,8 +843,10 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
                     ? [
                         { keys: "space", action: "on/off", rank: 3 },
                         { keys: "g", action: "everywhere", rank: 10 },
-                        { keys: "d", action: "delete", rank: 4 },
-                        { keys: "x", action: "mark", rank: 9 },
+                        // With rows marked, delete and mark are what is about to be used: they
+                        // go last, right after move.
+                        { keys: "d", action: "delete", rank: markedRows.length > 0 ? 0.1 : 4 },
+                        { keys: "x", action: "mark", rank: markedRows.length > 0 ? 0.2 : 9 },
                       ]
                     : []),
                   ...(canWrite ? [{ keys: "u", action: "undo", rank: 5 }] : []),
@@ -943,7 +955,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
     );
 
   return (
-    <Chrome title="Extensions" subtitle={subtitle} footer={status || undefined} hints={fitHints(hints, innerWidth)}>
+    <Chrome title="Extensions" subtitle={subtitle} footer={shownStatus} hints={fitHints(hints, innerWidth)}>
       <Box marginBottom={1}>
         <ToolKindBar tool={tool} kind={kind} query={query} typing={typing} width={innerWidth} />
       </Box>
