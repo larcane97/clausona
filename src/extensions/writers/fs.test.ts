@@ -74,7 +74,7 @@ describe("writeAtomic", () => {
     const link = h.path(".claude", "settings.json");
 
     const real = await realOrSelf(link);
-    expect(real).toBe(realpathSync(h.path("dotfiles", "settings.json")));
+    expect(real).toBe(realpathSync.native(h.path("dotfiles", "settings.json")));
     await writeAtomic(real, '{\n  "theme": "light"\n}\n', 0o644);
 
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
@@ -132,7 +132,7 @@ describe("links", () => {
     expect(existsSync(h.path("shared", "notes", "SKILL.md"))).toBe(true);
 
     await makeLink(info.target, link, info.type);
-    expect(realpathSync(link)).toBe(realpathSync(h.path("shared", "notes")));
+    expect(realpathSync.native(link)).toBe(realpathSync.native(h.path("shared", "notes")));
     expect(existsSync(h.path("shared", "notes", "SKILL.md"))).toBe(true);
   });
 });
