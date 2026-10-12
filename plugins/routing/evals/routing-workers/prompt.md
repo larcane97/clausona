@@ -16,8 +16,9 @@ Do not run anything. Here is what the commands you need would print. Tell me, st
 with the exact commands, what you will do, including what happens if no account is free.
 
 $ clausona route list
-  main  claude · round-robin · max 80%
-        from * · 3 member(s)
+    ROUTE  TOOL    STRATEGY     SKIP AT  FREE NOW  NEXT
+    ───────────────────────────────────────────────────────
+    main   claude  round-robin  80%      3 of 3    claude:b
 
 $ clausona route explain main --json   (abridged)
 {"route":"main","outcome":{"kind":"picked","id":"claude:b","stage":"pool","reason":"next in turn"},

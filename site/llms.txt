@@ -32,3 +32,4 @@ Facts:
 - [Orca fleet use case](https://github.com/larcane97/clausona/blob/main/docs/usecases/orca-fleet.md)
 - [Plan quota](https://github.com/larcane97/clausona/blob/main/docs/plan-quota.md)
 - [API profiles](https://github.com/larcane97/clausona/blob/main/docs/api-profiles.md)
+- [Routing](https://github.com/larcane97/clausona/blob/main/docs/routing.md)

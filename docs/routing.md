@@ -122,7 +122,7 @@ Route names get the same check.
 clausona route add main                                     # every Claude Code account, round-robin, skip at 80%
 clausona route add any --tool all                           # Claude Code and Codex accounts in one route
 clausona route add work --from '*@example.com' --exclude '*-share'
-clausona route add solo --from work --fallback personal --strategy headroom
+clausona route add solo --from work --fallback team --strategy headroom
 clausona route set main --exclude personal                  # replace one field
 clausona route set solo --add contractor --drop work         # change from one entry at a time
 clausona route set solo --no-fallback

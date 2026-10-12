@@ -87,7 +87,7 @@ const SUB_HELP: Record<string, string[]> = {
     `    ${dim("clausona route add main                                   # every claude account, round-robin")}`,
     `    ${dim("clausona route add any --tool all                         # claude and codex accounts")}`,
     `    ${dim("clausona route add work --from '*@example.com' --exclude '*-share'")}`,
-    `    ${dim("clausona route add solo --from work --fallback personal --strategy headroom")}`,
+    `    ${dim("clausona route add solo --from work --fallback team --strategy headroom")}`,
   ],
   set: [
     helpUsage("clausona route set <name> [options] [--add <patterns>] [--drop <patterns>] [--no-fallback]"),

@@ -20,4 +20,13 @@ $ clausona list --json   (abridged)
  {"name":"claude:glm","tool":"claude","kind":"api","model":"z-ai/glm-5.3"}]
 
 $ clausona route list
-No routes yet. Create one: clausona route add <name>   (every subscription account, round-robin, max 80%)
+
+  No routes yet.
+
+  A route is a set of accounts for clausona run --route <name>.
+  It picks one for each run: by default the next in turn,
+  skipping any account once its 5-hour or weekly use reaches 80%.
+
+    clausona route add main          every Claude account, taking turns
+    clausona run --route main        run on the account it picks
+    clausona route                   create and edit routes in the dashboard
