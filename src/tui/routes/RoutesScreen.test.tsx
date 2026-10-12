@@ -245,24 +245,28 @@ describe("RoutesScreen", () => {
     const detail = prose(panes(frame).detail);
 
     expect(detail).toContain(
-      "A route picks the account for you: the next one in turn that is under 80% of its 5-hour and weekly limits.",
+      "A route is a set of accounts for clausona run --route <name>. It picks one for each run: by default the next in turn, skipping any account once its 5-hour or weekly use reaches 80%.",
     );
     expect(detail).toContain("Press n to create your first route.");
   });
 
   // Left to wrap, the sentence broke after "5-hour" at 121 columns and the next line began with
-  // its space. It is two lines, broken where `csn route list` breaks it, at every width.
-  it("draws the empty state's explanation on the two lines the CLI uses, none starting with a space", async () => {
+  // its space. It is three lines, broken where `csn route list` breaks it, at every width.
+  it("draws the empty state's explanation on the three lines the CLI uses, none starting with a space", async () => {
+    const expected = [
+      "A route is a set of accounts for clausona run --route <name>.",
+      "It picks one for each run: by default the next in turn,",
+      "skipping any account once its 5-hour or weekly use reaches 80%.",
+    ];
     for (const columns of [80, 100, 121, 160]) {
       const { instance } = setup({ file: { version: 1, routes: {} }, columns });
       const frame = await until(instance, (f) => f.includes("Press n"));
-      const first = lines(frame).find((line) => line.includes("A route picks")) ?? "";
-      const second = lines(frame).find((line) => line.includes("5-hour")) ?? "";
-      const at = first.indexOf("A route picks");
-      expect(first.slice(at).trimEnd(), `${columns}`).toBe(
-        "A route picks the account for you: the next one in turn that is",
-      );
-      expect(second.slice(at).trimEnd(), `${columns}`).toBe("under 80% of its 5-hour and weekly limits.");
+      const first = lines(frame).findIndex((line) => line.includes("A route is"));
+      const at = lines(frame)[first]?.indexOf("A route is") ?? -1;
+      const drawn = lines(frame)
+        .slice(first, first + expected.length)
+        .map((line) => line.slice(at).trimEnd());
+      expect(drawn, `${columns}`).toEqual(expected);
       instance.unmount();
     }
   });

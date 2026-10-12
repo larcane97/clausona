@@ -407,10 +407,11 @@ export function renderNothingToCreate(
 
 // ─── route list ─────────────────────────────────────────────────────
 
-/** What a route is, in the two lines `route list` and the Routes screen both break it into. */
+/** What a route is, in the three lines `route list` and the Routes screen both break it into. */
 export const ROUTE_IS = [
-  "A route picks the account for you: the next one in turn that is",
-  `under ${DEFAULT_MAX_USAGE}% of its 5-hour and weekly limits.`,
+  "A route is a set of accounts for clausona run --route <name>.",
+  "It picks one for each run: by default the next in turn,",
+  `skipping any account once its 5-hour or weekly use reaches ${DEFAULT_MAX_USAGE}%.`,
 ] as const;
 
 export function renderRoutesEmpty(): string {
