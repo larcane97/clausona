@@ -23,7 +23,8 @@ export const GAP = 2;
 /** The widths a quota cell is tried at, widest first: gauge and reset, percentage and reset, percentage. */
 const QUOTA_WIDTHS = [19, 8, 4];
 
-function Setting({ label, value }: { label: string; value: string }) {
+/** A muted label and its value, the label column 10 wide. */
+export function Setting({ label, value }: { label: string; value: string }) {
   return (
     <Box flexDirection="row">
       <Box width={10} flexShrink={0}>

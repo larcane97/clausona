@@ -139,6 +139,16 @@ function panes(frame: string): { list: string[]; detail: string[] } {
   };
 }
 
+/** The lines between the header's rule and the footer's, trimmed, blank ones left out. */
+function body(frame: string): string[] {
+  const all = lines(frame);
+  const rules = all.flatMap((line, i) => (/^\s*─{10,}\s*$/.test(line) ? [i] : []));
+  return all
+    .slice(rules[0] + 1, rules[1])
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 /** The detail's lines as one run of words, for text that wraps inside the pane. */
 const prose = (detail: string[]) => detail.join(" ").replace(/\s+/g, " ");
 
@@ -239,36 +249,64 @@ describe("RoutesScreen", () => {
     expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 
-  it("explains routes, and how to make one, when there are none", async () => {
-    const { instance } = setup({ file: { version: 1, routes: {} } });
-    const frame = await until(instance, (f) => f.includes("Press n"));
-    const detail = prose(panes(frame).detail);
-
-    expect(detail).toContain(
-      "A route is a set of accounts for clausona run --route <name>. It picks one for each run: by default the next in turn, skipping any account once its 5-hour or weekly use reaches 80%.",
-    );
-    expect(detail).toContain("Press n to create your first route.");
-  });
-
-  // Left to wrap, the sentence broke after "5-hour" at 121 columns and the next line began with
-  // its space. It is three lines, broken where `csn route list` breaks it, at every width.
-  it("draws the empty state's explanation on the three lines the CLI uses, none starting with a space", async () => {
-    const expected = [
-      "A route is a set of accounts for clausona run --route <name>.",
-      "It picks one for each run: by default the next in turn,",
-      "skipping any account once its 5-hour or weekly use reaches 80%.",
-    ];
-    for (const columns of [80, 100, 121, 160]) {
+  it("explains routes, the route n would make, and n, in one column when there are none", async () => {
+    for (const columns of [80, 120]) {
       const { instance } = setup({ file: { version: 1, routes: {} }, columns });
       const frame = await until(instance, (f) => f.includes("Press n"));
-      const first = lines(frame).findIndex((line) => line.includes("A route is"));
-      const at = lines(frame)[first]?.indexOf("A route is") ?? -1;
-      const drawn = lines(frame)
-        .slice(first, first + expected.length)
-        .map((line) => line.slice(at).trimEnd());
-      expect(drawn, `${columns}`).toEqual(expected);
+
+      expect(body(frame), `${columns}`).toEqual([
+        "No routes yet",
+        "A route picks an account for each run, so",
+        "you don't have to. Run on one with:",
+        "clausona run --route <name>",
+        "A new route, unless you change it:",
+        "Accounts  all 5 Claude accounts",
+        "Order     the next one in turn",
+        "Skip at   80% of the 5-hour or weekly limit",
+        "Press n to create one.",
+      ]);
       instance.unmount();
     }
+  });
+
+  it("counts the accounts a new route would take, API profiles not among them", async () => {
+    const one: Registry = {
+      ...REGISTRY,
+      profiles: {
+        "claude:solo": profile("claude", "solo"),
+        "claude:glm": profile("claude", "glm", { kind: "api" }),
+        "codex:x": profile("codex", "x"),
+      },
+    };
+    const single = setup({ file: { version: 1, routes: {} }, registry: { loads: one, problem: null } });
+    expect(body(await until(single.instance, (f) => f.includes("Press n")))).toContain(
+      "Accounts  your one Claude account",
+    );
+    single.instance.unmount();
+
+    const none = setup({ file: { version: 1, routes: {} }, registry: { loads: null, problem: null } });
+    expect(body(await until(none.instance, (f) => f.includes("Press n")))).toContain(
+      "Accounts  every Claude account (none yet)",
+    );
+  });
+
+  it("hints only the keys that do something while there are no routes", async () => {
+    const { instance } = setup({ file: { version: 1, routes: {} } });
+    const frame = await until(instance, (f) => f.includes("Press n"));
+
+    expect(frame).toContain("n new");
+    expect(frame).toContain("esc back");
+    for (const hint of ["↑↓ move", "e edit", "d delete", "r refresh"]) expect(frame).not.toContain(hint);
+  });
+
+  it("leaves the keys it does not hint unanswered while there are no routes", async () => {
+    const { instance, deps } = setup({ file: { version: 1, routes: {} } });
+    const frame = await until(instance, (f) => f.includes("Press n"));
+    const reads = deps.collectQuotas.mock.calls.length;
+
+    for (const key of ["r", "e", "d", DOWN]) await type(instance, key);
+    expect(text(instance)).toBe(frame);
+    expect(deps.collectQuotas).toHaveBeenCalledTimes(reads);
   });
 
   // Review Focus 5: a hand-edited routes.json that does not check out.
@@ -511,8 +549,8 @@ describe("RoutesScreen", () => {
 
     await press(instance, "d");
     await press(instance, "y");
-    const frame = await until(instance, (f) => f.includes("No routes yet."));
-    expect(prose(panes(frame).detail)).toContain("Press n to create your first route.");
+    const frame = await until(instance, (f) => f.includes("No routes yet"));
+    expect(body(frame)).toContain("Press n to create one.");
     expect(file().routes).toEqual({});
   });
 

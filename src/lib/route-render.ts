@@ -407,8 +407,8 @@ export function renderNothingToCreate(
 
 // ─── route list ─────────────────────────────────────────────────────
 
-/** What a route is, in the three lines `route list` and the Routes screen both break it into. */
-export const ROUTE_IS = [
+/** What a route is, as `route list` says it with no routes. */
+const ROUTE_IS = [
   "A route is a set of accounts for clausona run --route <name>.",
   "It picks one for each run: by default the next in turn,",
   `skipping any account once its 5-hour or weekly use reaches ${DEFAULT_MAX_USAGE}%.`,

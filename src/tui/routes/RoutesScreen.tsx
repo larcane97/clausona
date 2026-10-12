@@ -2,16 +2,17 @@ import { Box, type Key, Text, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { QuotaTarget } from "../../core/quota-store.js";
-import { type RouteSpec, type RoutesFile, withDefaults } from "../../core/route-config.js";
+import { DEFAULT_MAX_USAGE, type RouteSpec, type RoutesFile, withDefaults } from "../../core/route-config.js";
+import { expandPatterns } from "../../core/route-patterns.js";
 import { RoutesFileError } from "../../core/routes-store.js";
 import { type Ranking, rankRoute } from "../../core/routing.js";
-import { freeNow, nothingRead, ROUTE_IS } from "../../lib/route-render.js";
+import { freeNow, nothingRead } from "../../lib/route-render.js";
 import { membersOf, quotaTargets } from "../../lib/route-service.js";
 import type { QuotaSnapshot, Registry } from "../../types.js";
 import { Chrome } from "../components/Chrome.js";
 import { color, symbol } from "../theme.js";
 import { useWidth } from "../use-width.js";
-import { type Entry, GAP, MARK, RouteDetail } from "./RouteDetail.js";
+import { type Entry, GAP, MARK, RouteDetail, Setting } from "./RouteDetail.js";
 import { formAccounts, RouteForm } from "./RouteForm.js";
 import { defaultRoutesScreenDeps, errorText, type RoutesScreenDeps } from "./routes-deps.js";
 
@@ -37,6 +38,11 @@ const HINTS = [
 const CONFIRM_HINTS = [
   { keys: "y", action: "remove" },
   { keys: "n/esc", action: "cancel" },
+];
+/** With no routes there is nothing to move to, edit, delete or refresh. */
+const EMPTY_HINTS = [
+  { keys: "n", action: "new" },
+  { keys: "esc", action: "back" },
 ];
 const BACK_HINTS = [{ keys: "esc", action: "back" }];
 
@@ -245,7 +251,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
     const count = entries.length;
     if (key.upArrow && count > 0) setCursor((index - 1 + count) % count);
     else if (key.downArrow && count > 0) setCursor((index + 1) % count);
-    else if (input === "r") {
+    else if (input === "r" && count > 0) {
       setRefreshing(true);
       void rank(loaded.file, loaded.registry, true);
     } else if (input === "d" && selected) setRemoving(selected.name);
@@ -265,7 +271,13 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
 
   const question = removing ? `Remove route ${removing}? (y/N)` : undefined;
   const footer = refreshing ? "Reading quota again…" : message || undefined;
-  const hints = removing ? CONFIRM_HINTS : loaded.kind === "ready" ? HINTS : BACK_HINTS;
+  const hints = removing
+    ? CONFIRM_HINTS
+    : loaded.kind !== "ready"
+      ? BACK_HINTS
+      : entries.length === 0
+        ? EMPTY_HINTS
+        : HINTS;
 
   if (loaded.kind !== "ready") {
     return (
@@ -294,6 +306,14 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
     );
   }
 
+  if (entries.length === 0) {
+    return (
+      <Chrome title="Routes" footer={footer} hints={hints}>
+        <NoRoutes accounts={newRouteAccounts(loaded.registry)} />
+      </Chrome>
+    );
+  }
+
   const wide = columns >= WIDE_AT;
   return (
     <Chrome title="Routes" footer={footer} question={question} hints={hints}>
@@ -306,14 +326,10 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
           borderColor={color.dim}
           paddingX={1}
         >
-          {entries.length > 0 ? (
-            <RouteList entries={entries} index={index} pending={reading === null} />
-          ) : (
-            <Text color={color.muted}>No routes yet.</Text>
-          )}
+          <RouteList entries={entries} index={index} pending={reading === null} />
         </Box>
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={1}>
-          {selected ? <RouteDetail entry={selected} pending={reading === null} /> : <NoRoutes />}
+          {selected ? <RouteDetail entry={selected} pending={reading === null} /> : null}
         </Box>
       </Box>
     </Chrome>
@@ -348,17 +364,50 @@ function FileProblem({ error }: { error: unknown }) {
   );
 }
 
-/** Broken into lines as `route list` breaks it: left to wrap, a line could begin with a space. */
-function NoRoutes() {
+/** How many accounts the route `n` makes takes as it opens: `*` over the Claude accounts. */
+function newRouteAccounts(registry: Registry | null): number {
+  const route = withDefaults({ tool: "claude" });
+  return registry ? expandPatterns(route.from, membersOf(registry, route.tool)).members.length : 0;
+}
+
+function accountsText(count: number): string {
+  if (count === 0) return "every Claude account (none yet)";
+  return count === 1 ? "your one Claude account" : `all ${count} Claude accounts`;
+}
+
+/**
+ * What a route is and what `n` would make, in one column: an empty list box beside it read as a
+ * disabled field. Lines are broken here, not left to wrap, so that none begins with a space.
+ */
+function NoRoutes({ accounts }: { accounts: number }) {
   return (
     <Box flexDirection="column">
-      {ROUTE_IS.map((line) => (
-        <Text key={line} color={color.text}>
-          {line}
-        </Text>
-      ))}
+      <Text color={color.text} bold>
+        No routes yet
+      </Text>
+      <Box flexDirection="column" marginTop={1}>
+        <Text color={color.text}>A route picks an account for each run, so</Text>
+        <Text color={color.text}>you don't have to. Run on one with:</Text>
+      </Box>
+      <Box marginTop={1} paddingLeft={2}>
+        <Text color={color.brandLight}>clausona run --route {"<name>"}</Text>
+      </Box>
+      <Box flexDirection="column" marginTop={1}>
+        <Text color={color.secondary}>A new route, unless you change it:</Text>
+        <Box flexDirection="column" paddingLeft={2}>
+          <Setting label="Accounts" value={accountsText(accounts)} />
+          <Setting label="Order" value="the next one in turn" />
+          <Setting label="Skip at" value={`${DEFAULT_MAX_USAGE}% of the 5-hour or weekly limit`} />
+        </Box>
+      </Box>
       <Box marginTop={1}>
-        <Text color={color.secondary}>Press n to create your first route.</Text>
+        <Text color={color.text}>
+          Press{" "}
+          <Text color={color.active} bold>
+            n
+          </Text>{" "}
+          to create one.
+        </Text>
       </Box>
     </Box>
   );
