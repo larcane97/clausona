@@ -265,7 +265,7 @@ describe("settings that turn a whole kind off", () => {
     const stop = rowsIn(inv, "claude", "hook", "global", app, NOW)[0] as ScopeRow;
     expect(tagsOf(inv, stop, app, NOW)).toEqual(["off here"]);
     expect(detailsOf(inv, stop, app, NOW).find((l) => l.label === "Loaded")?.text).toBe(
-      "off here (disableAllHooks in this project's .claude/settings.local.json)",
+      `off here (disableAllHooks in this project's ${path.join(".claude", "settings.local.json")})`,
     );
   });
 
@@ -333,7 +333,7 @@ describe("managed MCP servers and the MCP lists", () => {
     const blocked = serverRow(allow.inv, "global", allow.app, "github");
     expect(tagsOf(allow.inv, blocked, allow.app, NOW)).toEqual(["off here"]);
     expect(detailsOf(allow.inv, blocked, allow.app, NOW).find((l) => l.label === "Accounts")?.text).toBe(
-      "off (not in allowedMcpServers in this project's .claude/settings.local.json) in every account",
+      `off (not in allowedMcpServers in this project's ${path.join(".claude", "settings.local.json")}) in every account`,
     );
   });
 });

@@ -853,14 +853,14 @@ describe("mcp ls --scope other, a .mcp.json server seen from outside its folder"
   it("says not here for one of a folder that is no project, which has no state of its own", async () => {
     const { h, app, site } = outside();
     const text = await run(h, site, "mcp", ["ls", "--scope", "other"]);
-    expect(text).toMatch(/^wiki\s+claude\s+~\/repos\s+all\s+not here$/m);
+    expect(text).toMatch(/^wiki\s+claude\s+~[\\/]repos\s+all\s+not here$/m);
     const wiki = JSON.parse(await run(h, site, "mcp", ["ls", "--scope", "other", "--json"])).items.find(
       (i: { name: string }) => i.name === "wiki",
     );
     expect(wiki).toMatchObject({ project: h.path("repos"), state: "not-here", tags: ["not here"] });
     expect(wiki).not.toHaveProperty("stateByAccount");
     expect(await run(h, site, "mcp", ["show", "wiki"])).toMatch(
-      /^Accounts {2}not here: it loads in the projects in ~\/repos, each with its own approvals$/m,
+      /^Accounts {2}not here: it loads in the projects in ~[\\/]repos, each with its own approvals$/m,
     );
     // Seen from app, below it, it has app's approvals.
     const fromApp = JSON.parse(await run(h, app, "mcp", ["ls", "--json"])).items.find(

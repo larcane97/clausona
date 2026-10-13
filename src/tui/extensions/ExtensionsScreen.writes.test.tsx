@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { loadInventory } from "../../extensions/inventory.js";
 import { writesFor } from "../../extensions/load.js";
+import { tilde } from "../../extensions/present.js";
 import { TestHome } from "../../extensions/test-home.js";
 import { stripAnsi } from "../../lib/cli-style.js";
 import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../../test-timeouts.js";
@@ -268,8 +269,9 @@ describe("ExtensionsScreen: writes", () => {
     const instance = mount(h, app, 140, 40);
     await openRow(instance, "Global", "figma", "2");
     await press(instance, SPACE);
+    const settings = tilde(h.path(".claude", "settings.json"), h.home);
     const frame = await seen(instance, (f) =>
-      f.includes("deniedMcpServers in ~/.claude/settings.json keeps it from starting. Change it there."),
+      f.includes(`deniedMcpServers in ${settings} keeps it from starting. Change it there.`),
     );
     expect(frame).not.toContain("Turn on figma");
     expect(hintLine(frame)).not.toContain("y apply");
@@ -285,10 +287,11 @@ describe("ExtensionsScreen: writes", () => {
     const instance = mount(h, app, 140, 40);
     await openRow(instance, "Built-in", "claude-api");
     await press(instance, SPACE);
+    const settings = tilde(h.path(".claude", "settings.json"), h.home);
     await seen(instance, (f) =>
       f
         .replace(/\n +/g, " ")
-        .includes("disableBundledSkills in ~/.claude/settings.json turns off the skills that come with Claude Code."),
+        .includes(`disableBundledSkills in ${settings} turns off the skills that come with Claude Code.`),
     );
   });
 

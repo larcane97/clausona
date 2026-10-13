@@ -430,7 +430,7 @@ describe("on, for what a setting elsewhere keeps off", () => {
     const error = await failure(run("mcp", ["on", "figma", "--yes"]));
     expect(error).toMatchObject({ code: 1, kind: "refused" });
     expect(error.message).toContain(
-      "figma  deniedMcpServers in ~/.claude/settings.json keeps it from starting. Change it there.",
+      `figma  deniedMcpServers in ${tilde(h.path(".claude", "settings.json"), h.home)} keeps it from starting. Change it there.`,
     );
     const body = JSON.parse((await failure(run("mcp", ["on", "figma", "--yes", "--json"]))).stdout ?? "");
     expect(body.refused[0]).toMatchObject({ name: "figma", code: "mcp-denied" });
@@ -442,7 +442,7 @@ describe("on, for what a setting elsewhere keeps off", () => {
       expect.objectContaining({
         name: "pg-dev",
         code: "managed-mcp",
-        reason: "~/managed-mcp.json lets only its own servers start. Only your organization can change that file.",
+        reason: `${tilde(h.path("managed-mcp.json"), h.home)} lets only its own servers start. Only your organization can change that file.`,
       }),
     ]);
     expect(existsSync(h.path(".clausona"))).toBe(false);
@@ -458,8 +458,7 @@ describe("on, for what a setting elsewhere keeps off", () => {
       expect.objectContaining({
         name: "claude-api",
         code: "bundled-off",
-        reason:
-          "disableBundledSkills in ~/.claude/settings.json turns off the skills that come with Claude Code. Change it there.",
+        reason: `disableBundledSkills in ${tilde(h.path(".claude", "settings.json"), h.home)} turns off the skills that come with Claude Code. Change it there.`,
       }),
     ]);
     expect(json(h.path(".claude", "settings.json")).skillOverrides).toEqual({ "claude-api": "off" });
@@ -478,10 +477,10 @@ describe("on --everywhere, with an account's own off left here", () => {
     const text = stripAnsi(await run("mcp", ["on", "figma", "--everywhere", "--dry-run"]));
     expect(text).toContain("mcpServers.figma put back");
     expect(text).toContain(
-      "Still off in this project for default (disabledMcpServers in ~/.claude.json). Turn it on here too.",
+      `Still off in this project for default (disabledMcpServers in ${tilde(h.path(".claude.json"), h.home)}). Turn it on here too.`,
     );
     expect(text).toContain(
-      "Still off in this project for work (disabledMcpServers in ~/.claude-work/.claude.json). Turn it on here too.",
+      `Still off in this project for work (disabledMcpServers in ${tilde(h.path(".claude-work", ".claude.json"), h.home)}). Turn it on here too.`,
     );
     const plan = JSON.parse(await run("mcp", ["on", "figma", "--everywhere", "--dry-run", "--json"]));
     expect(plan.notes).toHaveLength(2);

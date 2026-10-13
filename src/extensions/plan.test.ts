@@ -1088,7 +1088,7 @@ describe("plan: Claude MCP servers", () => {
     ]);
     expect(on.unchanged).toEqual([{ rowKey: github.key, name: "github", why: "not off everywhere in work" }]);
     expect(on.notes).toEqual([
-      "Still off in this project for work (disabledMcpServers in ~/.claude-work/.claude.json). Turn it on here too.",
+      `Still off in this project for work (disabledMcpServers in ${tilde(h.path(".claude-work", ".claude.json"), h.home)}). Turn it on here too.`,
     ]);
     // Seen from web, where work has turned nothing off, there is nothing to note.
     const fromWeb = rowIn(inv, web, "global", "github", "claude", "mcp");
@@ -1229,18 +1229,17 @@ describe("plan: a setting that keeps a Claude server or a built-in skill off", (
     refusalText(p.refused[0] as Plan["refused"][number], voice);
 
   it("refuses on for a server a deny list keeps from starting, naming the list and its file", async () => {
-    const { app, inv, ctx } = await seed((h) =>
+    const { h, app, inv, ctx } = await seed((h) =>
       h.write(".claude/settings.json", { ...SETTINGS, deniedMcpServers: [{ serverName: "figma" }] }),
     );
     const figma = rowIn(inv, app, "global", "figma", "claude", "mcp");
+    const said = `deniedMcpServers in ${tilde(h.path(".claude", "settings.json"), h.home)} keeps it from starting. Change it there.`;
     for (const reach of ["here", "everywhere"] as const) {
       const on = plan(ctx, "mcp", act("on", reach, [figma]));
       expect(codes(on)).toEqual(["mcp-denied"]);
       expect(on.changes).toEqual([]);
-      expect(text(on)).toBe("deniedMcpServers in ~/.claude/settings.json keeps it from starting. Change it there.");
-      expect(text(on, "keys")).toBe(
-        "deniedMcpServers in ~/.claude/settings.json keeps it from starting. Change it there.",
-      );
+      expect(text(on)).toBe(said);
+      expect(text(on, "keys")).toBe(said);
     }
     // Off still goes ahead: it stays off once the list lets it go.
     expect(codes(plan(ctx, "mcp", act("off", "here", [figma])))).toEqual([]);
@@ -1253,14 +1252,16 @@ describe("plan: a setting that keeps a Claude server or a built-in skill off", (
     const figma = rowIn(allow.inv, allow.app, "global", "figma", "claude", "mcp");
     const notAllowed = plan(allow.ctx, "mcp", act("on", "here", [figma]));
     expect(codes(notAllowed)).toEqual(["mcp-not-allowed"]);
-    expect(text(notAllowed)).toBe("allowedMcpServers in ~/.claude/settings.json leaves it out. Change it there.");
+    expect(text(notAllowed)).toBe(
+      `allowedMcpServers in ${tilde(allow.h.path(".claude", "settings.json"), allow.h.home)} leaves it out. Change it there.`,
+    );
 
     const exclusive = await seed((h) => h.write("managed-mcp.json", { mcpServers: {} }));
     const docs = rowIn(exclusive.inv, exclusive.app, "project", "docs-search", "claude", "mcp");
     const shutOut = plan(exclusive.ctx, "mcp", act("on", "here", [docs]));
     expect(codes(shutOut)).toEqual(["managed-mcp"]);
     expect(text(shutOut)).toBe(
-      "~/managed-mcp.json lets only its own servers start. Only your organization can change that file.",
+      `${tilde(exclusive.h.path("managed-mcp.json"), exclusive.h.home)} lets only its own servers start. Only your organization can change that file.`,
     );
 
     // A list in the managed settings is the organization's, as any managed setting is.
@@ -1298,7 +1299,7 @@ describe("plan: a setting that keeps a Claude server or a built-in skill off", (
   });
 
   it("refuses on and a visibility for a built-in skill while disableBundledSkills holds", async () => {
-    const { app, inv, ctx } = await seed((h) =>
+    const { h, app, inv, ctx } = await seed((h) =>
       h.write(".claude/settings.json", {
         ...SETTINGS,
         disableBundledSkills: true,
@@ -1314,7 +1315,7 @@ describe("plan: a setting that keeps a Claude server or a built-in skill off", (
       const p = plan(ctx, "skills", action);
       expect(codes(p)).toEqual(["bundled-off"]);
       expect(text(p, "keys")).toBe(
-        "disableBundledSkills in ~/.claude/settings.json turns off the skills that come with Claude Code. Change it there.",
+        `disableBundledSkills in ${tilde(h.path(".claude", "settings.json"), h.home)} turns off the skills that come with Claude Code. Change it there.`,
       );
     }
     expect(codes(plan(ctx, "skills", act("off", "here", [api])))).toEqual([]);
@@ -1367,7 +1368,7 @@ describe("plan: on everywhere, and what is still off in this project", () => {
       { file: h.path(".claude.json"), edits: [{ op: "restore", path: ["mcpServers", "github"] }] },
     ]);
     expect(on.notes).toEqual([
-      "Still off in this project for default (disabledMcpServers in ~/.claude.json). Turn it on here too.",
+      `Still off in this project for default (disabledMcpServers in ${tilde(h.path(".claude.json"), h.home)}). Turn it on here too.`,
     ]);
   });
 
@@ -1407,7 +1408,7 @@ describe("plan: on everywhere, and what is still off in this project", () => {
     const on = plan(skill.ctx, "skills", act("on", "everywhere", [appLint]));
     expect(on.changes).toEqual([]);
     expect(on.notes).toEqual([
-      `Still off in this project (skills.config ${tilde(skillFile(skill.app), skill.h.home)} in ~/.codex/config.toml). Turn it on here too.`,
+      `Still off in this project (skills.config ${tilde(skillFile(skill.app), skill.h.home)} in ${tilde(skill.h.path(".codex", "config.toml"), skill.h.home)}). Turn it on here too.`,
     ]);
 
     const server = await seed((h) => h.write("repos/app/.codex/config.toml", "[mcp_servers.docs]\nenabled = false\n"));
@@ -1590,7 +1591,7 @@ describe("plan: hooks and plugins", () => {
     const on = plan(user.ctx, "hooks", act("on", "everywhere", [notifyA]));
     expect(codes(on)).toEqual(["all-hooks-off"]);
     expect(refusalText(on.refused[0] as Plan["refused"][number], "flags")).toBe(
-      "disableAllHooks in ~/.claude/settings.json turns every hook off. Change it there.",
+      `disableAllHooks in ${tilde(user.h.path(".claude", "settings.json"), user.h.home)} turns every hook off. Change it there.`,
     );
     // Off still goes ahead: the hook stays out once disableAllHooks is gone.
     expect(plan(user.ctx, "hooks", act("off", "everywhere", [notifyA])).changes).toHaveLength(1);
