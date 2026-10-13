@@ -451,7 +451,9 @@ describe("Claude MCP under managed-mcp.json, allowedMcpServers and deniedMcpServ
     });
   });
 
-  it("lets a copy the lists block hide no other copy", () => {
+  // Claude Code 2.1.296 picks one copy per name before it checks the lists (bk, then Rz): a
+  // copy a list keeps from starting still hides the copies below it, and none of them starts.
+  it("lets a copy the lists block still hide the copies below it, as Claude Code picks before it checks", () => {
     const local = {
       ...named(
         ext("mcp", "gh-local", {
@@ -469,8 +471,17 @@ describe("Claude MCP under managed-mcp.json, allowedMcpServers and deniedMcpServ
       claudeMcpPolicy: [{ file: "/u/settings.json", layer: "user", denied: [{ serverCommand: "hash-local" }] }],
     });
     expect(stateOf(i, local, P, "claude:a")).toEqual(off("/u/settings.json", "deniedMcpServers"));
-    expect(stateOf(i, gh, P, "claude:a")).toEqual({ value: "on" });
-    expect(claudeMcpTaken(i, "github", P, "claude:a")?.id).toBe(gh.id);
+    expect(stateOf(i, gh, P, "claude:a")).toEqual({ value: "on", shadowedBy: local.id });
+    expect(claudeMcpTaken(i, "github", P, "claude:a")?.id).toBe(local.id);
+    // b has no local copy: its user server is the one of the name, and it starts.
+    expect(stateOf(i, ghB, P, "claude:b")).toEqual({ value: "on" });
+    // While managed-mcp.json is there, only the organization's copies are in the running.
+    const exclusive = inv([...items, local], {
+      mcpTargets: { ...targets, [local.id]: { command: "hash-local", vars: false } },
+      claudeManagedMcp: "/m/managed-mcp.json",
+    });
+    expect(stateOf(exclusive, gh, P, "claude:a")).toEqual(off("/m/managed-mcp.json", "managed-mcp.json"));
+    expect(claudeMcpTaken(exclusive, "github", P, "claude:a")).toBeUndefined();
   });
 });
 

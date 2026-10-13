@@ -27,7 +27,7 @@ import {
   stateLoads,
   type ToolName,
 } from "./scopes.js";
-import { codexTrusted, isMcpjsonServer, MANAGED_MCP_KEY, relevantIn, STASH_KEY } from "./state.js";
+import { codexTrusted, isMcpjsonServer, MANAGED_MCP_KEY, mcpBlocked, relevantIn, STASH_KEY } from "./state.js";
 
 /**
  * The words the Extensions screen and the CLI say about a row: its tags, a hook's event in plain
@@ -485,7 +485,12 @@ function stateParts(
 ): { word: string; because?: string } {
   if (state.shadowedBy) {
     const winner = inv.items.find((i) => i.id === state.shadowedBy);
-    return { word: winner ? `hidden by the ${scopeLabel(winner, project)} copy` : "hidden by another copy" };
+    if (!winner) return { word: "hidden by another copy" };
+    const word = `hidden by the ${scopeLabel(winner, project)} copy`;
+    // Claude Code picks the copy of a name before it checks the MCP lists: when they keep the
+    // winner from starting, this one does not start either.
+    const blocked = mcpBlocked(inv, winner, viewFrom(item, project))?.setBy;
+    return blocked ? { word, because: `itself off: ${setByWords(inv, winner, project, blocked)}` } : { word };
   }
   if (state.value === "pending-approval") return { word: "pending approval" };
   if (state.value !== "off") return { word: "on" };

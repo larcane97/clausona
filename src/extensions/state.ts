@@ -62,14 +62,20 @@ export function relevantIn(item: Extension, project: string | undefined): boolea
  * `managedMcpServers` delivers, then the account's local server for the project, then the
  * `.mcp.json` ones, the nearest file first, then the account's user server. With no account
  * named, no account's own server. A plugin's servers go by names of their own
- * (`plugin:<plugin>:<name>`).
+ * (`plugin:<plugin>:<name>`). Claude Code picks the copy before it checks the lists, so a copy
+ * they keep from starting is ranked too, and hides the ones below it.
  */
 function rankedMcp(inv: Inventory, name: string, project: string, profile: string | undefined): Extension[] {
-  // A stashed copy is out of its file, and one the lists block is left out before Claude Code
-  // picks: neither wins over anything.
+  // A stashed copy is out of its file: it wins over nothing. While managed-mcp.json is there,
+  // Claude Code ranks the organization's servers alone.
+  const exclusive = inv.facts.claudeManagedMcp !== undefined;
   const named = inv.items.filter(
     (i) =>
-      i.kind === "mcp" && i.location.tool === "claude" && i.name === name && !i.stashed && !mcpBlocked(inv, i, project),
+      i.kind === "mcp" &&
+      i.location.tool === "claude" &&
+      i.name === name &&
+      !i.stashed &&
+      (!exclusive || i.location.scope === "managed"),
   );
   const managed = named
     .filter((i) => i.location.scope === "managed")

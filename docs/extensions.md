@@ -196,6 +196,11 @@ because Claude Code leaves out a pending or denied one before it picks. So with 
 and a `.mcp.json` `github` that no one has approved, the user copy loads and the `.mcp.json`
 one is `pending approval`.
 
+The MCP lists come after the pick: Claude Code takes one copy per name, then checks it against
+`deniedMcpServers` and `allowedMcpServers`. So a copy the lists keep from starting still wins
+its name, and the copies below it don't start either. Their details say why, as in
+`hidden by the Project copy (itself off: deniedMcpServers in ~/.claude/settings.json)`.
+
 The copy that loses is tagged with the scope of the one that wins: `hidden by Global copy` for
 a Global skill, `hidden by Project copy` for a local server or this project's `.mcp.json`,
 `hidden by Parent folders copy` for a `.mcp.json` in a folder above, and `hidden by Managed

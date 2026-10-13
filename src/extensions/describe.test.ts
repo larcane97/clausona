@@ -363,6 +363,29 @@ describe("managed MCP servers and the MCP lists", () => {
     expect(jsonItem(unset, serverRow(unset, "global", app, "github"), app, NOW).state).toBe("on");
   });
 
+  it("says a copy hidden by one the lists keep off does not start either, naming the list", async () => {
+    const { h, inv, app } = await managedSeed((h, app) => {
+      h.claude("default", ".claude", {
+        projects: { [app]: { mcpServers: { github: { command: "gh-local" } } } },
+        mcpServers: { github: { command: "gh-mcp" } },
+      });
+      h.write(".claude/settings.json", { deniedMcpServers: [{ serverCommand: ["gh-local"] }] });
+    });
+    const settings = tilde(h.path(".claude", "settings.json"), h.home);
+    const github = serverRow(inv, "global", app, "github");
+    expect(jsonItem(inv, github, app, NOW).loadsByAccount).toEqual({ "claude:default": false, "claude:work": true });
+    const lines = detailsOf(inv, github, app, NOW);
+    const at = lines.findIndex((l) => l.label === "Accounts");
+    expect(lines.slice(at, at + 2)).toEqual([
+      { label: "Accounts", text: `default  hidden by the Project copy (itself off: deniedMcpServers in ${settings})` },
+      { label: "", text: "work     on" },
+    ]);
+    const local = serverRow(inv, "project", app, "github");
+    expect(detailsOf(inv, local, app, NOW).find((l) => l.label === "Accounts")?.text).toBe(
+      `default  off (deniedMcpServers in ${settings})`,
+    );
+  });
+
   it("says which list turns a server off, and where it is", async () => {
     const { h, inv, app } = await managedSeed((h) =>
       h.write("policy/managed-settings.json", { deniedMcpServers: [{ serverName: "github" }] }),
