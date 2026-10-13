@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import { acquireDirLock } from "../core/dir-lock.js";
 import { stripAnsi } from "../lib/cli-style.js";
@@ -28,13 +28,14 @@ const NOW = Date.now() + 200 * DAY;
 // Built from pieces, so no key-shaped string sits in the source.
 const KEY = ["sk", "ant", "api03", "Q2xhdXNvbmFUZXN0S2V5MTIzNDU2Nzg5MA"].join("-");
 
-/** The test's own git runs: not told where a repo is by a hook's environment (spawn leaves undefined out). */
-const GIT_ENV: NodeJS.ProcessEnv = {
-  ...process.env,
-  GIT_DIR: undefined,
-  GIT_WORK_TREE: undefined,
-  GIT_INDEX_FILE: undefined,
-};
+/** A home of the file's own, for the test's git runs' settings: removed after the file's cases. */
+const gitHome = new TestHome();
+afterAll(() => gitHome.dispose());
+/**
+ * The test's own git runs: not told where a repo is by a hook's environment, and reading none of
+ * the user's git config (TestHome.gitEnv).
+ */
+const GIT_ENV: NodeJS.ProcessEnv = { ...process.env, ...gitHome.gitEnv() };
 
 const hasGit = spawnSync("git", ["--version"], { env: GIT_ENV }).status === 0;
 
