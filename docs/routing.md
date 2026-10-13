@@ -566,22 +566,22 @@ $ clausona run --route solo --max-usage 30 -- -p "run the tests"
   ▸ claude:team  route solo, fallback, 22% of 7D used
 ```
 
-When every account is at the cut or over it, the one with the most left is picked, and that says
-so too:
+When no account is under the cut, the one with the most left is picked, and that says so too. The
+others may be at the cut, over it, or skipped, so the reason says "none under", not "all over":
 
 ```
 $ clausona route explain main
   …
     ACCOUNT            5H        7D       LAST PICKED
     ─────────────────────────────────────────────────
-  ▸ claude:team       85% 1h    22% 3d    never        picked: most room left (all over 80%)
+  ▸ claude:team       85% 1h    22% 3d    never        picked: most room left (none under 80%)
     claude:side       88% 1h    40% 3d                 over 80%
     claude:work       12% 3h    91% 4d                 over 80%
 ```
 
 ```
 $ clausona run --route main -- -p "run the tests"
-  ▸ claude:team  route main, most room left (all over 80%), 85% of 5H used
+  ▸ claude:team  route main, most room left (none under 80%), 85% of 5H used
 ```
 
 ## For scripts and agents
@@ -627,8 +627,8 @@ Without a terminal an unknown `--route` creates nothing.
 }
 ```
 
-`stage` is `pool`, `fallback` or `overflow`. `overflow` is the third stage: every account was at the
-cut or over it, and the one with the most left was picked. `route` is null for an unsaved route.
+`stage` is `pool`, `fallback` or `overflow`. `overflow` is the third stage: no account was under
+the cut, and the one with the most left was picked. `route` is null for an unsaved route.
 
 When nobody can be picked, the JSON is still printed on stdout, and the exit code is 75:
 

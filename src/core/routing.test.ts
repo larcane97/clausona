@@ -188,7 +188,21 @@ describe("stages", () => {
       kind: "picked",
       id: "claude:a",
       stage: "overflow",
-      reason: "most room left (all over 80%)",
+      reason: "most room left (none under 80%)",
+    });
+  });
+
+  // Not "all over": one member is signed out and one sits at the cut; none is under it.
+  it("says none is under the cut when some are skipped or at it rather than over", () => {
+    const ranking = rank(
+      { from: ["a", "b", "c"] },
+      { "claude:a": snap(85, 0), "claude:b": { state: "missing", fetchedAt: NOW }, "claude:c": snap(80, 0) },
+    );
+    expect(ranking.outcome).toEqual({
+      kind: "picked",
+      id: "claude:c",
+      stage: "overflow",
+      reason: "most room left (none under 80%)",
     });
   });
 
@@ -199,11 +213,11 @@ describe("stages", () => {
       kind: "picked",
       id: "claude:c",
       stage: "overflow",
-      reason: "most room left (all over 80%)",
+      reason: "most room left (none under 80%)",
     });
     expect(rank({ from: ["*"], maxUsage: 50 }, quotas).outcome).toMatchObject({
       id: "claude:c",
-      reason: "most room left (all over 50%)",
+      reason: "most room left (none under 50%)",
     });
   });
 

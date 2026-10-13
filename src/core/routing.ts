@@ -46,8 +46,8 @@ export type Row = {
 /**
  * The stage that found the pick, as `--json` names it (`stage`): `pool`, an account of the pool
  * under the cut, by the strategy; `fallback`, the first fallback account under the cut; and
- * `overflow`, when everyone was at the cut or over it and the one with the most left, still under
- * 100%, was taken.
+ * `overflow`, when nobody was under the cut and the one with the most left, still under 100%, was
+ * taken.
  */
 export type Stage = "pool" | "fallback" | "overflow";
 
@@ -145,8 +145,11 @@ function soonestReset(rows: Row[], limit: number): { id: string; at: string } | 
   return best;
 }
 
-/** Why the overflow stage took its account; route-render.ts shows the same words. */
-export const mostLeftReason = (route: Route) => `most room left (all over ${route.maxUsage}%)`;
+/**
+ * Why the overflow stage took its account; route-render.ts shows the same words. "None under", not
+ * "all over": some may be skipped (signed out, no reading) rather than over, or sit at the cut.
+ */
+export const mostLeftReason = (route: Route) => `most room left (none under ${route.maxUsage}%)`;
 
 function decide(route: Route, rows: Row[], now: number): Outcome {
   const pool = under(

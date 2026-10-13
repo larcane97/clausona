@@ -296,7 +296,7 @@ describe("renderRouteDetail", () => {
     );
     const text = plain(renderRouteDetail("main", r, at(120)));
     expect(text).toContain("  │  Strategy   expiring (weekly limit resetting within 24h first)");
-    expect(text).toMatch(/▸ claude:team\s+85% 1h\s+10% 2d\s+picked: most room left \(all over 80%\)$/m);
+    expect(text).toMatch(/▸ claude:team\s+85% 1h\s+10% 2d\s+picked: most room left \(none under 80%\)$/m);
     expect(text).toMatch(/^ {4}claude:work\s+90% 1h\s+10% 2d\s+over 80%$/m);
 
     // At 99% too: past the cut, only a window at 100% holds an account back.
@@ -305,7 +305,7 @@ describe("renderRouteDetail", () => {
       { "claude:team": quota(99, 10), "claude:work": quota(100, 10) },
     );
     expect(plain(renderRouteDetail("main", full, at(120)))).toMatch(
-      /▸ claude:team\s+99% 1h\s+10% 2d\s+picked: most room left \(all over 50%\)$/m,
+      /▸ claude:team\s+99% 1h\s+10% 2d\s+picked: most room left \(none under 50%\)$/m,
     );
   });
 
@@ -416,7 +416,7 @@ describe("renderRouteDetail", () => {
     const resumed = rank({ tool: "claude" }, resumedQuotas, { members: loners, resume: true });
     const long = renderRouteDetail("main", resumed, at(80));
     expect(plain(long)).toContain("keeps its own sessions, so it cannot resume a shared one");
-    expect(plain(long)).toContain("picked: most room left (all over 80%)");
+    expect(plain(long)).toContain("picked: most room left (none under 80%)");
     expect(widest(long)).toBeLessThanOrEqual(80);
 
     // Wider still with a fallback mark: the words are cut, the row still does not wrap.
@@ -444,7 +444,7 @@ describe("renderNote", () => {
   it("says the stage when the pool had nobody, and an unsaved route", () => {
     const r = ranking({ "claude:team": snap(85, 0), "claude:work": snap(90, 0), "claude:old": snap(0, 99) });
     expect(plain(renderNote(undefined, r))).toBe(
-      "  ▸ claude:team  inline route, most room left (all over 80%), 85% of 5H used",
+      "  ▸ claude:team  inline route, most room left (none under 80%), 85% of 5H used",
     );
     const fallback = rank(
       { tool: "claude", from: ["team"], fallback: ["work"] },
@@ -481,7 +481,7 @@ describe("renderNote", () => {
   it("never says 100% of an account it picked under 100", () => {
     const r = rank({ tool: "claude", from: ["team"] }, { "claude:team": quota(99.6, 40) });
     expect(plain(renderNote("main", r))).toBe(
-      "  ▸ claude:team  route main, most room left (all over 80%), 99% of 5H used",
+      "  ▸ claude:team  route main, most room left (none under 80%), 99% of 5H used",
     );
     expect(usageText({ percent: 99.6, window: "5H", stale: false })).toBe("99% 5H");
     expect(plain(renderRouteDetail("main", r, at(120)))).toMatch(/^ {2}▸ claude:team\s+99% 1h\s+40% 2d/m);
@@ -768,7 +768,7 @@ describe("JSON", () => {
     expect(pickJson("main", most)).toMatchObject({
       profile: "claude:team",
       stage: "overflow",
-      reason: "most room left (all over 80%)",
+      reason: "most room left (none under 80%)",
     });
   });
 
