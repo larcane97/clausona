@@ -17,6 +17,7 @@ import {
   codexHomeHooksFile,
   codexReadsHooksFile,
   markRefusedHooksFile,
+  markUnsupportedHooks,
 } from "./codex-hooks.js";
 import { addPluginSwitches, readCodexPlugins } from "./codex-plugins.js";
 import { readCodexSkills } from "./codex-skills.js";
@@ -202,6 +203,7 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
     }
   }
   await Promise.all(jobs);
+  markUnsupportedHooks(out);
 }
 
 /**

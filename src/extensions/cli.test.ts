@@ -990,6 +990,33 @@ describe("Codex hooks and Codex's trust", () => {
     const on = await run(h, app, "hooks", ["on", "--id", b.id, "--yes"]);
     expect(on).toContain("already in its file: Codex runs it once you trust it with /hooks");
   });
+
+  it("lists a prompt or agent hook as not supported, out of Loaded, and says Codex does not run it", async () => {
+    const { h, app } = seed();
+    h.write(".codex/hooks.json", {
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              { type: "prompt", prompt: "summarize the turn" },
+              { type: "agent", prompt: "check the diff" },
+            ],
+          },
+        ],
+      },
+    });
+    expect(await run(h, app, "hooks", ["ls", "--tool", "codex"])).not.toContain("summarize");
+    const json = JSON.parse(await run(h, app, "hooks", ["ls", "--tool", "codex", "--scope", "global", "--json"]));
+    const prompt = json.items.find((i: { summary: { type: string } }) => i.summary.type === "prompt");
+    const agent = json.items.find((i: { summary: { type: string } }) => i.summary.type === "agent");
+    expect([prompt.tags, agent.tags]).toEqual([["not supported"], ["not supported"]]);
+    expect(await run(h, app, "hooks", ["show", "--id", prompt.id])).toMatch(
+      /^Loaded\s+no, Codex does not run prompt hooks yet$/m,
+    );
+    expect(await run(h, app, "hooks", ["show", "--id", agent.id])).toMatch(
+      /^Loaded\s+no, Codex does not run agent hooks yet$/m,
+    );
+  });
 });
 
 describe("Codex skills Codex skips", () => {

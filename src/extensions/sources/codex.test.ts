@@ -477,6 +477,46 @@ describe("readCodex", () => {
     expect(states).toEqual(["on", "pending-approval", "pending-approval"]);
   });
 
+  it("marks the hooks Codex never runs: prompt and agent hooks, and an MCP tool hook when a session ends", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    // What Codex 0.159.3's hooks/list skipped, with "prompt hooks are not supported yet" and the like.
+    h.codex("personal", ".codex", '[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "prompt"\nprompt = "in toml"\n');
+    h.write(".codex/hooks.json", {
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              { type: "command", command: "echo json-a" },
+              { type: "agent", prompt: "an agent" },
+              { type: "prompt", prompt: "a json prompt" },
+              { type: "mcp_tool", server: "srv", tool: "end" },
+            ],
+          },
+        ],
+        SessionEnd: [{ hooks: [{ type: "mcp_tool", server: "srv", tool: "on-end" }] }],
+      },
+    });
+    const kit = ".codex/plugins/cache/m/kit/1.0.0";
+    h.write(`${kit}/.codex-plugin/plugin.json`, { name: "kit" });
+    h.write(`${kit}/hooks/hooks.json`, { hooks: { Stop: [{ hooks: [{ type: "prompt", prompt: "kit prompt" }] }] } });
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(ctx, [], out);
+    const hooks = out.items.filter((i) => i.kind === "hook");
+    const error = (what: string) =>
+      hooks.find((i) => i.summary?.prompt === what || i.summary?.command === what || i.id.endsWith(what))?.codexError;
+    expect(["in toml", "an agent", "a json prompt", "kit prompt"].map(error)).toEqual(Array(4).fill("not supported"));
+    // The MCP tool hook on SessionEnd; one on Stop runs.
+    const mcp = hooks.filter((i) => i.summary?.type === "mcp_tool").map((i) => [i.hook?.event, i.codexError]);
+    expect(mcp.sort()).toEqual([
+      ["SessionEnd", "not supported"],
+      ["Stop", undefined],
+    ]);
+    expect(error("echo json-a")).toBeUndefined();
+  });
+
   it("marks the hooks of a hooks file Codex cannot read: anything but hooks and a description at its top", async () => {
     const h = new TestHome();
     homes.push(h);

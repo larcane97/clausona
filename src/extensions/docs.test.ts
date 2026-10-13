@@ -65,6 +65,7 @@ const TAGS = [
   "name too long",
   "no description",
   "invalid hooks file",
+  "not supported",
 ];
 
 /** The keys `ls --json` writes, in order. */
@@ -287,7 +288,8 @@ function seed() {
     skillOverrides: { "old-one": "off" },
     hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-done" }] }] },
   });
-  h.codex("personal", ".codex");
+  // A prompt hook in Codex's config.toml, which Codex does not run.
+  h.codex("personal", ".codex", '[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "prompt"\nprompt = "p"\n');
   h.skill(".agents/skills", "eli5");
   // Four SKILL.md files and a hooks file Codex skips.
   h.write(".codex/hooks.json", {

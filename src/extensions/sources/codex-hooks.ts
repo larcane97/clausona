@@ -158,6 +158,20 @@ export function addConfigHooks(
   addCodexHookTrust(config.hooks, idBase, sources, out.facts, undefined, CONFIG_HOOKS_AT);
 }
 
+/**
+ * Marks the Codex hooks Codex 0.159.3 never runs, whatever their trust, as it skips them: a
+ * prompt or agent hook ("not supported yet"), and an MCP tool hook when a session ends. One in a
+ * file Codex refuses keeps that reason.
+ */
+export function markUnsupportedHooks(out: Collector): void {
+  for (const item of out.items) {
+    if (item.kind !== "hook" || item.location.tool !== "codex" || item.codexError) continue;
+    const type = item.summary?.type;
+    const sessionEndTool = type === "mcp_tool" && item.hook?.event === "SessionEnd";
+    if (type === "prompt" || type === "agent" || sessionEndTool) item.codexError = "not supported";
+  }
+}
+
 /** Marks the Codex hooks `out` read from `file` as in a file Codex refuses: they do not load. */
 export function markRefusedHooksFile(out: Collector, file: string): void {
   for (const item of out.items) {
