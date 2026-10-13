@@ -36,9 +36,10 @@ export type GaveUp = "past-cap" | "no-reset";
  * reads again what was read before it (a tool cooling down after a 429 keeps its cached reading,
  * and a reading another wait took since is used as it is) and ranks from the start. It gives up
  * at once, returning the last ranking, when that reset is past `capMs` from now or none is known;
- * after a sleep, an account a refused or failed read left with no usable reading keeps it waiting
- * until the cap. Nothing is recorded until it picks, and then under the pick-record lock as any
- * pick is, so waits that wake together still take different accounts.
+ * after a sleep, an account it read before that a refused or failed read has since left with no
+ * usable reading keeps it waiting until the cap. Nothing is recorded until it picks, and then
+ * under the pick-record lock as any pick is, so waits that wake together still take different
+ * accounts.
  */
 export async function rankWaiting(
   resolved: Pick<ResolvedRoute, "route" | "onlyTool">,
@@ -53,6 +54,8 @@ export async function rankWaiting(
   // any run does.
   let refreshBefore: number | undefined;
   let slept = false;
+  // The accounts this wait has had a usage for: only these can have lost it to a failed read.
+  const read = new Set<string>();
   try {
     for (;;) {
       const ranking = await rankRouteNow(resolved, deps, {
@@ -65,11 +68,13 @@ export async function rankWaiting(
       // A pick that was recorded runs, even with a Ctrl-C just after it.
       if (ranking.outcome.kind === "picked") return { ranking };
       controller.signal.throwIfAborted();
+      for (const row of ranking.rows) if (row.usage) read.add(row.id);
       const now = deps.clock();
       if (now >= deadline) return { ranking, gaveUp: "past-cap" };
 
       const { soonest } = ranking.outcome;
       const retry = Math.min(now + RETRY_MS, deadline);
+      // `window` is the one whose reset it waits for; without one, it waits for a new reading.
       let next: { wake: number; id: string; window?: string } | undefined;
       if (soonest && Date.parse(soonest.at) <= deadline) {
         const resetAt = Date.parse(soonest.at);
@@ -81,11 +86,12 @@ export async function rankWaiting(
             ? { wake: resetAt + WAKE_MARGIN_MS, id: soonest.id, window: row && resettingWindow(row, FULL, soonest.at) }
             : { wake: refreshBefore === undefined ? now : retry, id: soonest.id };
       }
-      // After a sleep, an account left without a usable reading - a read refused with a 429, or
-      // failed, while its last one aged past the hour it is trusted - may come free like any
-      // other: it is read again a while later, until the cap, rather than taken for one whose
-      // reset nobody knows.
-      const unread = slept ? ranking.rows.find((row) => row.skip === "no-reading") : undefined;
+      // After a sleep, an account this wait has read before but no longer can - a read refused
+      // with a 429, or failed, while its last reading aged past the hour it is trusted - may come
+      // free like any other: it is read again a while later, until the cap, rather than taken for
+      // one whose reset nobody knows. One it never read (its reads always fail) is skipped, as on
+      // a run, and neither keeps the wait going nor is asked every 5 minutes.
+      const unread = slept ? ranking.rows.find((row) => row.skip === "no-reading" && read.has(row.id)) : undefined;
       if (unread && (!next || retry < next.wake)) next = { wake: retry, id: unread.id };
       if (!next) return { ranking, gaveUp: soonest ? "past-cap" : "no-reset" };
       if (next.wake <= now) {
@@ -93,7 +99,9 @@ export async function rankWaiting(
         continue;
       }
 
-      const line = renderWaiting(next.id, next.window, { until: next.wake, now });
+      // A wait for a new reading says the latest it will wait, the cap's end, so that it is said
+      // once however often it reads again; a wait for a reset says when that is.
+      const line = renderWaiting(next.id, next.window, { until: next.window ? next.wake : deadline, now });
       if (line !== said) deps.progress(line);
       said = line;
       stopListening ??= deps.onInterrupt(() => controller.abort(new WaitInterrupted()));

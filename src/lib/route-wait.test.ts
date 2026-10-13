@@ -159,7 +159,8 @@ describe("rankWaiting", () => {
     expect(ranking.outcome).toMatchObject({ kind: "picked", id: "claude:a" });
     expect(s.sleeps).toEqual([10 * MINUTE + WAKE_MARGIN_MS, RETRY_MS]);
     expect(s.reads).toEqual([false, true, true]);
-    expect(s.said[1]).toMatch(/^ {2}waiting until \d\d:\d\d for claude:a \(for a new quota reading\) …$/);
+    const capEnd = clockTime(NOW + DEFAULT_WAIT_MS, NOW);
+    expect(s.said[1]).toBe(`  waiting until ${capEnd} for claude:a (for a new quota reading) …`);
   });
 
   it("gives up when the cap runs out on a reading that still shows the account full", async () => {
@@ -174,7 +175,7 @@ describe("rankWaiting", () => {
     const s = setup((now) => ({
       "claude:a": now < NOW + 10 * MINUTE ? five(100, 10 * MINUTE) : five(1, 1, { state: "missing" }),
     }));
-    const { gaveUp } = await rankWaiting(ONLY_A, s.deps, { resume: false, capMs: DEFAULT_WAIT_MS });
+    const { gaveUp } = await rankWaiting(MAIN, s.deps, { resume: false, capMs: DEFAULT_WAIT_MS });
     expect(gaveUp).toBe("no-reset");
     expect(s.sleeps).toEqual([10 * MINUTE + WAKE_MARGIN_MS]);
   });
@@ -192,7 +193,7 @@ describe("rankWaiting", () => {
       const limit = opus(now >= NOW + 3 * 60 * MINUTE ? 0 : 100);
       return { "claude:a": { ...five(10, MINUTE), scoped: limit, scopedLimits: [limit] } };
     });
-    const { ranking } = await rankWaiting(ONLY_A, s.deps, { resume: false, model: "opus", capMs: DEFAULT_WAIT_MS });
+    const { ranking } = await rankWaiting(MAIN, s.deps, { resume: false, model: "opus", capMs: DEFAULT_WAIT_MS });
     expect(ranking.outcome).toMatchObject({ kind: "picked", id: "claude:a" });
     expect(s.said[0]).toMatch(/for claude:a \(Opus resets\) …$/);
     // Six re-checks reach the reset itself, and the reading there already shows it free.
@@ -244,24 +245,28 @@ describe("rankWaiting", () => {
 
 /**
  * `setup`, but quota is read through the real collectQuotas - its cache, its freshness and its
- * 429 cooldown - from an endpoint stand-in that `answer` plays at the fake clock's time.
+ * 429 cooldown - from an endpoint stand-in that `answer` plays at the fake clock's time, for the
+ * account whose config dir it is given. `fetched` is when each request was made; `asked`, whose.
  */
-function setupReads(answer: (now: number) => QuotaWindows) {
+function setupReads(answer: (now: number, configDir: string) => QuotaWindows) {
   const s = setup(() => ({}));
   const cachePath = path.join(path.dirname(s.paths.picksPath), "quota.json");
   const fetched: number[] = [];
+  const asked: string[] = [];
   const adapter: Partial<ToolAdapter> = {
-    readCredential: async () => ({ accessToken: "stand-in" }),
-    fetchQuota: async () => {
+    // The stand-in's token is the account's config dir, so that a fetch knows whose it is.
+    readCredential: async (configDir) => ({ accessToken: configDir }),
+    fetchQuota: async (credential) => {
       fetched.push(s.state.now - NOW);
-      return answer(s.state.now);
+      asked.push(credential.accessToken);
+      return answer(s.state.now, credential.accessToken);
     },
   };
   getAdapter.mockReturnValue(adapter);
   s.deps.collectQuotas = (targets, options) => collectQuotas(targets, { ...options, now: s.state.now, cachePath });
   const writeCache = (profiles: Record<string, QuotaSnapshot>) =>
     writeFileSync(cachePath, JSON.stringify({ version: 1, cooldowns: {}, profiles }));
-  return { ...s, fetched, writeCache };
+  return { ...s, fetched, asked, writeCache };
 }
 
 describe("rankWaiting on real quota reads", () => {
@@ -280,7 +285,30 @@ describe("rankWaiting on real quota reads", () => {
     // known, yet the wait goes on, asking every 5 minutes.
     expect(s.fetched).toEqual([0, 30 * MINUTE, 90 * MINUTE]);
     expect(s.sleeps).toEqual([RECHECK_MS, RECHECK_MS, ...Array(6).fill(RETRY_MS)]);
-    expect(s.said.at(-1)).toMatch(/for claude:a \(for a new quota reading\) …$/);
+    // Said once while it reads again every 5 minutes, with the latest it waits until: the cap.
+    const until = clockTime(NOW + DEFAULT_WAIT_MS, NOW);
+    expect(s.said.filter((line) => line.includes("new quota reading"))).toEqual([
+      `  waiting until ${until} for claude:a (for a new quota reading) …`,
+    ]);
+  });
+
+  it("is not kept waiting by an account it never read, and gives up at once past the cap", async () => {
+    const s = setupReads((now, dir) => {
+      // claude:b's usage endpoint fails every time: it has never had a reading.
+      if (dir === "/home/u/.claude-b") throw new QuotaHttpError(500);
+      // claude:a's 5H resets at 20 minutes, and then its week reads full until 3 days on.
+      return now < NOW + 20 * MINUTE
+        ? { session: { usedPercent: 100, resetsAt: iso(20 * MINUTE) } }
+        : {
+            session: { usedPercent: 0, resetsAt: null },
+            weekly: { usedPercent: 100, resetsAt: iso(72 * 60 * MINUTE) },
+          };
+    });
+    const { gaveUp } = await rankWaiting(MAIN, s.deps, { resume: false, capMs: DEFAULT_WAIT_MS });
+    expect(gaveUp).toBe("past-cap");
+    expect(s.sleeps).toEqual([20 * MINUTE + WAKE_MARGIN_MS]);
+    expect(s.asked.filter((dir) => dir === "/home/u/.claude-b")).toHaveLength(2);
+    expect(s.said).toEqual([expect.stringMatching(/for claude:a \(5H resets\) …$/)]);
   });
 
   it("reuses a reading another wait took since the reset, and reads again one taken before it", async () => {

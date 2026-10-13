@@ -687,9 +687,11 @@ A quota read that is refused while the run waits (the endpoint answered 429, and
 it alone for a while, an hour unless it says otherwise) or that fails does not end the wait. The
 run ranks on the last reading while it is under an hour old. Once it is older, or when an account
 still reads as full after its reset, the account is read again every 5 minutes, with no request
-sent until the 429's pause is over. The wait goes on until an account is free or the cap runs
-out. It ends sooner only when no account could come free at all, such as when every one is
-signed out.
+sent until the 429's pause is over. The line on stderr then says `(for a new quota reading)`,
+once, with the latest the run will wait: the end of the cap. The wait goes on until an account
+is free or the cap runs out. It ends sooner only when no account could come free at all, such as
+when every one is signed out. An account whose quota this run never managed to read is skipped,
+as on any run, and keeps nothing waiting.
 
 When it wakes, the run reads again only what was read before the reset it waited for. A reading
 that another waiting run took since then is used as it is, so runs that wake one after another do
