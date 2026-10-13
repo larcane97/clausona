@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
 
 import type { Collector, StateFacts } from "../model.js";
-import { isRecord } from "../read.js";
+import { isRecord, realPath } from "../read.js";
 
 /**
  * Codex's hook trust, as Codex 0.159.3 keeps it (codex-rs/hooks, engine/discovery.rs). Codex runs
@@ -102,6 +103,22 @@ export function addCodexHookTrust(
       });
     });
   }
+}
+
+/**
+ * The hooks.json whose path keys the trust of a profile Codex runs with CODEX_HOME set: the one in
+ * that folder as Codex makes it canonical first (find_codex_home), every link followed and, on
+ * Windows, each 8.3 short name made long - as realpath does too. Undefined for a folder that is
+ * not there, where Codex does not start. `real` and `paths` stand in for realpath and node:path in
+ * a test.
+ */
+export async function codexHomeHooksFile(
+  dir: string,
+  real: (p: string) => Promise<string> = realPath,
+  paths: Pick<typeof path, "join"> = path,
+): Promise<string | undefined> {
+  const canonical = await real(dir).catch(() => undefined);
+  return canonical === undefined ? undefined : paths.join(canonical, "hooks.json");
 }
 
 /**

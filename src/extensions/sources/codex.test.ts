@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { realpathSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -8,6 +8,7 @@ import { type Collector, emptyFacts } from "../model.js";
 import { stateOf } from "../state.js";
 import { TestHome } from "../test-home.js";
 import { codexProjectRecords, loadCodexContext, readCodex } from "./codex.js";
+import { codexHomeHooksFile } from "./codex-hooks.js";
 
 const homes: TestHome[] = [];
 afterEach(() => {
@@ -307,7 +308,10 @@ describe("readCodex", () => {
     homes.push(h);
     const app = h.project("repos/app");
     const user = h.path(".codex", "hooks.json");
-    const work = h.path(".codex-work", "hooks.json");
+    // Codex runs work with CODEX_HOME set, which it makes canonical before it keys work's hooks by
+    // the hooks.json there: /var is /private/var on macOS, and a temp dir's RUNNER~1 is runneradmin
+    // on Windows.
+    const work = path.join(realpathSync.native(h.codex("work", ".codex-work")), "hooks.json");
     h.codex(
       "personal",
       ".codex",
@@ -318,7 +322,6 @@ describe("readCodex", () => {
         "enabled = false",
       ].join("\n"),
     );
-    h.codex("work", ".codex-work");
     // Every profile links the primary's hooks.json, and keys its hooks by its own path.
     h.write(".codex/hooks.json", {
       hooks: {
@@ -341,7 +344,8 @@ describe("readCodex", () => {
         SessionStart: [{ hooks: [{ type: "command", command: "echo d", statusMessage: "hi" }] }],
       },
     });
-    h.link(".codex/hooks.json", ".codex-work/hooks.json");
+    // By a file symlink, as clausona shares hooks.json on Windows too: a junction is for a folder.
+    symlinkSync(user, h.path(".codex-work", "hooks.json"), "file");
     h.write("repos/app/.codex/hooks.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "echo p" }] }] } });
     const kit = ".codex/plugins/cache/m/kit/1.0.0";
     h.write(`${kit}/.codex-plugin/plugin.json`, {
@@ -432,5 +436,23 @@ describe("readCodex", () => {
     const message = out.warnings[0]?.message ?? "";
     expect(message).toMatch(/^is not valid TOML( at line \d+, column \d+)?$/);
     expect(message).not.toContain("abc123");
+  });
+});
+
+describe("codexHomeHooksFile", () => {
+  it("names the hooks.json in a CODEX_HOME made canonical, as Codex keys it, in each platform's form", async () => {
+    // Windows: realpath, as Codex's canonicalize, makes a temp dir's 8.3 short name long.
+    const long = async (dir: string) => dir.replace("RUNNER~1", "runneradmin");
+    expect(
+      await codexHomeHooksFile("C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\h\\.codex-work", long, path.win32),
+    ).toBe("C:\\Users\\runneradmin\\AppData\\Local\\Temp\\h\\.codex-work\\hooks.json");
+    // macOS: /var is a link to /private/var.
+    const linked = async (dir: string) => `/private${dir}`;
+    expect(await codexHomeHooksFile("/var/folders/h/.codex-work", linked, path.posix)).toBe(
+      "/private/var/folders/h/.codex-work/hooks.json",
+    );
+    // A folder that is not there: Codex does not start with it, so it trusts nothing under it.
+    const gone = () => Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    expect(await codexHomeHooksFile("/gone/.codex-work", gone, path.posix)).toBeUndefined();
   });
 });

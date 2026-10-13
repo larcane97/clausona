@@ -10,7 +10,13 @@ import { isHomeProject, type ProjectRecord, recordedPaths } from "../projects.js
 import { isRecord, readJsonObject, readText, realPath, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
 import { addHooksFile } from "./claude-hooks.js";
-import { addCodexHookStates, addCodexHookTrust, codexReadsHooksFile, markRefusedHooksFile } from "./codex-hooks.js";
+import {
+  addCodexHookStates,
+  addCodexHookTrust,
+  codexHomeHooksFile,
+  codexReadsHooksFile,
+  markRefusedHooksFile,
+} from "./codex-hooks.js";
 import { addPluginSwitches, readCodexPlugins } from "./codex-plugins.js";
 import { readCodexSkills } from "./codex-skills.js";
 import type { SkillLocation } from "./skill-dirs.js";
@@ -205,7 +211,8 @@ async function hookSources(file: string): Promise<string[]> {
 /**
  * The user hooks.json under each Codex profile that shares the primary's: Codex keys a hook's
  * trust by the hooks file's path under the CODEX_HOME it runs with, so each profile trusts it on
- * its own.
+ * its own. The primary runs with none set, at its folder as it is; any other with the folder
+ * clausona sets, which Codex makes canonical first.
  */
 async function userHookSources(ctx: CodexContext, file: string): Promise<string[]> {
   const shared = await realPath(file).catch(() => undefined);
@@ -214,7 +221,9 @@ async function userHookSources(ctx: CodexContext, file: string): Promise<string[
       const own = path.join(home.dir, "hooks.json");
       if (home.isPrimary) return hookSources(own);
       const real = await realPath(own).catch(() => undefined);
-      return real !== undefined && samePath(real, shared) ? [own] : [];
+      if (real === undefined || !samePath(real, shared)) return [];
+      const keyed = await codexHomeHooksFile(home.dir);
+      return keyed === undefined ? [] : [keyed];
     }),
   );
   return [...new Set(each.flat())];
