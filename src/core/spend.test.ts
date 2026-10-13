@@ -212,6 +212,27 @@ describe("withBaselines", () => {
     expect(budgetWindow(withBaselines({ totalUsd: 5 }, after, NOW), { usd: 20, per: "month" }, NOW)?.spentUsd).toBe(11);
   });
 
+  it("keeps what the period spent across a provider reset the readings did not see as a drop", () => {
+    // A key that LiteLLM resets daily, under a $100 monthly budget.
+    const day = 24 * 60 * 60 * 1000;
+    const resetsAt = (at: number) => new Date(at + day).toISOString();
+    const first = withBaselines({ totalUsd: 0, limit: { usd: 50, resetsAt: resetsAt(NOW) } }, undefined, NOW);
+    const later = withBaselines({ totalUsd: 30, limit: { usd: 50, resetsAt: resetsAt(NOW) } }, first, NOW + 1000, NOW);
+    // The next day the count began again at 0, and has climbed to 35 by the next reading.
+    const next = withBaselines(
+      { totalUsd: 35, limit: { usd: 50, resetsAt: resetsAt(NOW + day) } },
+      later,
+      NOW + day + 2000,
+      NOW + 1000,
+    );
+    expect(budgetWindow(next, { usd: 100, per: "month" }, NOW + day + 2000)?.spentUsd).toBe(65);
+    // A reset already past when the last reading was taken is not taken for a new one.
+    const stale = { totalUsd: 10, limit: { usd: 50, resetsAt: new Date(NOW - day).toISOString() } };
+    const base = withBaselines(stale, undefined, NOW);
+    const after = withBaselines({ ...stale, totalUsd: 12 }, base, NOW + 1000, NOW);
+    expect(budgetWindow(after, { usd: 100, per: "month" }, NOW + 1000)?.spentUsd).toBe(2);
+  });
+
   it("leaves a reading that reports its periods alone", () => {
     const reading = { totalUsd: 1, periods: { day: 1 } };
     expect(withBaselines(reading, undefined, NOW)).toBe(reading);

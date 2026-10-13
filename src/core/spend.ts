@@ -187,15 +187,33 @@ export async function readSpend(
 // ─── Usage ──────────────────────────────────────────────────────────
 
 /**
+ * Whether the provider set its count back to 0 since the last reading, taken at `previousAt`
+ * (LiteLLM does at its budget_reset_at): the total fell, or the reset the last reading named has
+ * come. The second catches a reset after which the spend has already climbed past the last
+ * reading. A reset the last reading named as already past when it was taken (a proxy late with
+ * its own reset) is not one, or every reading after it would be taken for another.
+ */
+function providerReset(reading: SpendReading, previous: SpendReading, previousAt: number | undefined, now: number) {
+  if (reading.totalUsd < previous.totalUsd) return true;
+  const resetsAt = previous.limit?.resetsAt ? Date.parse(previous.limit.resetsAt) : Number.NaN;
+  return previousAt !== undefined && !Number.isNaN(resetsAt) && resetsAt > previousAt && resetsAt <= now;
+}
+
+/**
  * Notes, on a reading of a provider that reports only a running total, the total each period
  * starts from: the one at clausona's first reading in it (spend before that is not counted), and
- * carried over from the last reading while the period lasts. A total lower than the last one is a
- * provider that set its count back to 0 (LiteLLM at its budget_reset_at): what the period had
- * spent by the last reading is kept, so the spend since counts on top of it.
+ * carried over from the last reading (`previous`, taken at `previousAt`) while the period lasts.
+ * When the provider has set its count back to 0 since (providerReset), what the period had spent
+ * by the last reading is kept, so the spend since counts on top of it.
  */
-export function withBaselines(reading: SpendReading, previous: SpendReading | undefined, now: number): SpendReading {
+export function withBaselines(
+  reading: SpendReading,
+  previous: SpendReading | undefined,
+  now: number,
+  previousAt?: number,
+): SpendReading {
   if (reading.periods) return reading;
-  const reset = previous !== undefined && reading.totalUsd < previous.totalUsd;
+  const reset = previous !== undefined && providerReset(reading, previous, previousAt, now);
   const baselines: NonNullable<SpendReading["baselines"]> = {};
   for (const per of BUDGET_PERIODS) {
     const start = periodStart(now, per);

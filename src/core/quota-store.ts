@@ -211,7 +211,7 @@ async function fetchSpend(
     const reading = await readSpend(target.api, key, { fetch: fetchImpl, signal: controller.signal, now });
     // Kept like any failure, so that a run does not ask again on every launch.
     if (!reading) return { snapshot: { state: "error", fetchedAt: now, noSpendReading: true } };
-    const spend = withBaselines(reading, cached?.spend, now);
+    const spend = withBaselines(reading, cached?.spend, now, cached?.fetchedAt);
     return { snapshot: withBudget({ state: "ok", fetchedAt: now, spend }, target.api, now) };
   } catch (error) {
     if (error instanceof QuotaHttpError) {
