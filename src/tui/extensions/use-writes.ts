@@ -151,6 +151,11 @@ export function useWrites(from: WritesFrom): Writes {
     try {
       const checked = await writes.planChecked({ inv: inventory, project, now: loadedAt }, command, action);
       const { plan, tracked, ignore } = checked;
+      // The picker draws each account's line from the plan with every account chosen: a cell's
+      // plan has its own account alone.
+      const { accounts, ...every } = action;
+      const full =
+        accounts === undefined ? plan : planOf(contextFor(inventory, writes, tracked, ignore), command, every);
       const fresh = {
         type: "plan",
         action,
@@ -158,7 +163,7 @@ export function useWrites(from: WritesFrom): Writes {
         tracked,
         ...(ignore !== undefined ? { ignore } : {}),
         plan,
-        full: plan,
+        full,
         cursor: 0,
         top: 0,
         busy: false,

@@ -756,6 +756,32 @@ describe("ExtensionsScreen: writes from the MCP matrix", () => {
     expect(work()).toEqual(["github"]);
   });
 
+  it("names each account's file in a dialog opened from a cell, and changes the one picked there too", async () => {
+    const { h, app } = seed();
+    const instance = mount(h, app, 140, 40);
+    const mine = path.join("~", ".claude.json");
+    const accountLine = (frame: string, name: string) =>
+      frame.split("\n").find((line) => new RegExp(`[○◉] ${name}\\b`).test(line)) ?? "";
+    await openMatrix(instance);
+    await press(instance, DOWN);
+    await press(instance, DOWN);
+    await press(instance, RIGHT);
+    await seen(instance, (f) => f.includes("[work]"));
+    await press(instance, SPACE);
+    const dialog = await seen(instance, (f) => f.includes("Turn off figma in this project, for work?"), PLAN_STEP_MS);
+    // default is not picked, and its line says what picking it would change, as from the row.
+    expect(accountLine(dialog, "default")).toMatch(/○ default +\S+ +disabledMcpServers \+ figma/);
+    expect(accountLine(dialog, "default")).toContain(mine);
+    // The cursor is on default: space picks it, and y writes the file its line names.
+    await press(instance, SPACE);
+    const both = await seen(instance, (f) => f.includes("Turn off figma in this project, for default and work?"));
+    expect(accountLine(both, "default")).toMatch(/◉ default +\S+ +disabledMcpServers \+ figma/);
+    await press(instance, "y");
+    await seen(instance, (f) => f.includes("Turned off figma in this project, for default and work · u to undo"));
+    expect(json(h.path(".claude.json")).projects[app].disabledMcpServers).toEqual(["figma"]);
+    expect(json(h.path(".claude-work", ".claude.json")).projects[app].disabledMcpServers).toEqual(["github", "figma"]);
+  });
+
   it("says why a cell can't change, as a row's refusal does, and opens no dialog", async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);
