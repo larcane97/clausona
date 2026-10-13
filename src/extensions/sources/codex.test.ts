@@ -945,6 +945,12 @@ describe("readCodex", () => {
       ['[projects."/x"]\ntrust_level = "maybe"\n', "a projects entry"],
       ['[projects."/x"]\ntrust_level = "Trusted"\n', "a projects entry"],
       ["hooks = 5\n", "a hook"],
+      // "cannot convert float seconds to Duration: value is negative"; a negative zero is no less than 0.
+      ['[mcp_servers.x]\ncommand = "x"\nstartup_timeout_sec = -1e-12\n', "an MCP server"],
+      ['[mcp_servers.x]\ncommand = "x"\nstartup_timeout_sec = -0.0\n', undefined],
+      ['[mcp_servers.x]\ncommand = "x"\ntool_timeout_sec = -0.0\n', undefined],
+      ['[mcp_servers.x]\ncommand = "x"\nstartup_timeout_sec = -0\n', undefined],
+      ['[mcp_servers.x]\ncommand = "x"\nstartup_timeout_ms = -0\n', undefined],
       ['[mcp_servers.x]\ncommand = "x"\nfoo = 1\nstartup_timeout_sec = 5\n', undefined],
       ['[[skills.config]]\npath = "rel/SKILL.md"\nenabled = false\n', undefined],
       ['[projects."/x"]\nfoo = 1\n', undefined],

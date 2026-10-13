@@ -51,8 +51,8 @@ const strings = (value: unknown) => isList(value) && value.every(isString);
 const stringMap = (value: unknown) => isTable(value) && Object.values(value).every(isString);
 /** A u64: a TOML integer, not below 0. */
 const isU64 = (value: unknown) => value instanceof SerdeNumber && /^\d+$/.test(value.text);
-/** A number of seconds Codex makes a Duration of: an integer or a float, not below 0. */
-const isSeconds = (value: unknown) => value instanceof SerdeNumber && !value.text.startsWith("-");
+/** A number of seconds Codex makes a Duration of: an integer or a float, not below 0 - `-0.0` is not. */
+const isSeconds = (value: unknown) => value instanceof SerdeNumber && !(Number(value.text) < 0);
 
 /** What a server takes, by Codex's `RawMcpServerConfig`, for the fields of simple types. */
 const SERVER_FIELDS: Readonly<Record<string, (v: unknown) => boolean>> = {
