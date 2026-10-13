@@ -1,6 +1,6 @@
 ---
 name: routing
-description: Run Claude Code or Codex on whichever clausona account has quota left, using clausona routes, and create, change or explain those routes for the user. Use when the user says "run this on an account with room", "spread these across my accounts", "make a route of my work accounts", "why did it pick that account", when a run stops on a usage limit, or when starting several workers that should not all land on one account.
+description: Run Claude Code or Codex on whichever clausona account has quota left, using clausona routes, and create, change or explain those routes, and the dir rules and defaults that pick one for a plain `clausona run claude`, for the user. Use when the user says "run this on an account with room", "spread these across my accounts", "make a route of my work accounts", "use my work accounts in this repo", "why did it pick that account", when a run stops on a usage limit, or when starting several workers that should not all land on one account.
 ---
 
 # Routing runs across clausona accounts
@@ -38,8 +38,9 @@ the help.) A user who would rather look through routes on that screen can run it
 ## Looking before acting
 
 ```bash
-clausona route list --json                 # routes, their settings with defaults, their members
+clausona route list --json                 # routes, their settings with defaults, their members, dir rules
 clausona route explain <name> --json       # every member's usage and status; launches and records nothing
+clausona route explain --json              # what clausona run claude and codex would take in this directory
 clausona list --json                       # every profile, with its email and quota
 ```
 
@@ -57,8 +58,11 @@ clausona list --json                       # every profile, with its email and q
 
 `route list --json` gives each route's `members`, `freeNow` (`{"free", "members"}`) and `next`
 (as `outcome`), and `problems`: what is wrong with each route in `routes.json` that cannot be
-used. Such a route is left out, and only commands that use it fail; tell the user, and point
-them to `clausona route edit` rather than editing the file yourself.
+used, and with each dir rule or default that cannot be read. Such a route is left out, and only
+commands that use it fail; tell the user, and point them to `clausona route edit` rather than
+editing the file yourself. It also gives `dirs` (`{"~/work": {"claude": "work"}}`), `defaults`
+(`{"claude": "main"}`) and `ruleWarnings`: rules that name a route that is gone or is for the
+other tool, which a run skips.
 
 With `--json`, a failing `route` command prints `{"version": 1, "error", "message"}` on stdout.
 `error` is `usage`, `not-found` (no such route) or `failed`; a `routes.json`, or a route named,
@@ -108,7 +112,8 @@ clausona route remove <name>
 - `--add` and `--drop` change `from` one entry at a time. `--drop` removes only an entry written
   in `from`, so it cannot take one account out of `*` or `*@example.com`. Use `--exclude` for
   that.
-- `rename` and `remove` act at once. Ask before removing a route.
+- `rename` and `remove` act at once. Ask before removing a route. `rename` also rewrites the dir
+  rules and defaults that name it; `remove` also removes them, and says which.
 - A route name starts with a letter or a digit, and the rest is letters, digits, `.`, `_` and
   `-`. Names and patterns that look like an API key or a token are refused, and clausona does
   not print them back. Never put a key in either.
@@ -138,7 +143,10 @@ clausona run --route <name> --strategy headroom -- -p "…"   # change a field f
   `clausona run claude claude:work`. To run one account, name it alone
   (`clausona run claude:work`). If a profile is named like one of the tool's commands (`exec`,
   `mcp`), put `--` before the command: `clausona run codex -- exec …`.
-- `clausona run claude` with no routing options is not routed: it runs the active profile.
+- `clausona run claude` (or `codex`) with no routing options takes a route from the user's
+  [dir rules and defaults](#dir-rules-and-defaults): the deepest dir rule for the current
+  directory, then the tool's default, then the active profile. `clausona route explain --json`
+  with no name says which. With no tool word and no `--route` or `--from`, it is refused.
 - Naming a profile (`clausona run claude:work`) always runs it, whatever its quota.
 - A routed run names the account it picked, and why, on stderr. stdout is the tool's own.
 - Without a terminal an unknown `--route` creates nothing: it exits 1 with
@@ -146,6 +154,40 @@ clausona run --route <name> --strategy headroom -- -p "…"   # change a field f
   first, as above.
 - `clausona run --route <name>` with no tool arguments is an interactive session. Give that
   command to the user instead of starting it from your shell.
+
+## Dir rules and defaults
+
+A dir rule gives a directory a route per tool: in that directory and below, a plain
+`clausona run claude` (or `codex`) with no `--route` or `--from` runs on it. The deepest rule
+for the current directory wins. A default does the same everywhere no rule holds. With neither,
+the run takes the tool's active profile.
+
+```bash
+clausona route explain --json                    # here: what each tool's run takes, and why
+clausona route dir                               # every dir rule and default
+clausona route dir ~/work work                   # in ~/work and below, run claude takes route work
+clausona route dir ~/work any --tool codex       # an all route fills both tools unless --tool says one
+clausona route dir ~/work --clear [--tool codex]
+clausona route default main                      # elsewhere, run claude takes route main
+clausona route default --clear --tool claude     # --tool is required to clear (claude, codex or all)
+```
+
+- These change what every plain run in that directory does, the user's own included. Say what
+  will change (`route explain` from that directory shows what runs now) and wait for the user's OK
+  before you set or clear one.
+- A route fills the slot of its own tool. An `all` route fills both, or the one `--tool` names. A
+  route of the other tool is refused. The route must exist first.
+- A path may be relative, absolute or start with `~`; it is stored with `~` when it is under
+  home. A rule matches its directory through symlinks, and ignoring case on macOS and Windows.
+- `route explain --json` with no name gives `{"directory", "runs": [...]}`, one entry per tool
+  (`--tool` limits it to one). A routed entry is the `explain --json` of its route, plus `tool`
+  and `skipped`. Its `resolvedBy` is `dir:<path>` (the rule's path as stored, with `~`) or
+  `default`. An entry with no route is `{"tool", "route": null, "resolvedBy": "active",
+  "profile", "skipped"}`, `profile` null when the tool has no active profile. `skipped` lists
+  the rules passed over as `{"rule", "reason"}`, `rule` being `dir:<path>` or `default`.
+- A rule whose route is gone, cannot be used or is for the other tool is skipped: the run says so
+  on stderr and goes on to the next rule. If `routes.json` cannot be read at all, a plain run
+  says so in one line and runs the active profile; a run with `--route` fails as before.
 
 ## Several workers at once
 

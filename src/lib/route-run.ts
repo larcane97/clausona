@@ -220,7 +220,7 @@ export async function runRouted(
         "Name a route, a tool or a profile: clausona run --route <name> …, clausona run claude …, or clausona run <profile> ….",
       );
     }
-    // `run claude claude:b` would launch the active profile with `claude:b` as its prompt. Only a
+    // `run claude claude:b` would launch another account with `claude:b` as its prompt. Only a
     // word that names a registered profile exactly; any other word is the tool's.
     const [word] = run.toolArgs;
     if (word !== undefined && !run.sawSeparator && namesProfile(word, registry, run.tool)) {

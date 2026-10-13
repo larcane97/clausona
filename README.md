@@ -177,6 +177,16 @@ A route is for Claude Code unless you say otherwise. `--tool codex` makes a Code
 the Routes screen, where you can look through your routes and create or edit one in a form. It
 is also on the dashboard, under Profiles.
 
+You can also skip `--route` and let the directory decide:
+
+```bash
+clausona route dir ~/work work                   # in ~/work and below, clausona run claude takes route work
+clausona route default main                      # everywhere else, it takes route main
+clausona route explain                           # what a run here would take, and why
+```
+
+With neither, `clausona run claude` runs the active profile, as it always has.
+
 Patterns like `*@example.com`, fallbacks, the strategies, and the JSON that scripts and agents
 read: **[docs/routing.md](docs/routing.md)**.
 
@@ -259,6 +269,7 @@ Scopes, tags, every option, what each change writes, the JSON fields and recipes
 | `clausona run <profile> [-- args...]`                               | Run the tool's CLI with a specific profile (a leading `--` is dropped) |
 | `clausona run --route <name> [-- args...]`                          | Run on the account a [route](docs/routing.md) picks |
 | `clausona route add\|set\|rename\|remove\|edit\|list\|explain\|pick …` | Manage [routes](docs/routing.md) |
+| `clausona route dir\|default …`                                     | Pick a route by directory, or by default, for a plain `clausona run claude` ([dir rules](docs/routing.md#dir-rules-and-defaults)) |
 | `clausona route`                                                    | Open the [Routes screen](docs/routing.md#the-routes-screen) (in a terminal) |
 | `clausona list [--json] [--refresh] [--no-quota] [--no-renew]`      | List all profiles with plan quota and usage          |
 | `clausona usage [profile] [--period=today\|week\|month\|all]`       | View cost and token usage                            |
@@ -389,7 +400,8 @@ access token when it needs to.
 Yes. `clausona route add main` makes a route of every Claude Code account (`--tool codex` for
 Codex, `--tool all` for both), and `clausona run --route main` starts on the next one in turn
 that is under 80% of its limits.
-With `--strategy headroom` it takes the account with the most room instead. See
+With `--strategy headroom` it takes the account with the most room instead. After
+`clausona route default main`, a plain `clausona run claude` does the same. See
 [Routing](docs/routing.md).
 
 ### Can I run two accounts at the same time?
