@@ -12,23 +12,14 @@ import { codexTrustFolders } from "./codex-trust.js";
 // Most cases start git.
 vi.setConfig({ testTimeout: SPAWNING_TEST_TIMEOUT_MS });
 
-/** The test's own git runs: no repo a hook's environment points at, no user or system config. */
-const GIT_ENV: NodeJS.ProcessEnv = {
-  ...process.env,
-  GIT_DIR: undefined,
-  GIT_WORK_TREE: undefined,
-  GIT_INDEX_FILE: undefined,
-  GIT_CONFIG_GLOBAL: undefined,
-  GIT_CONFIG_NOSYSTEM: "1",
-};
+const hasGit = spawnSync("git", ["--version"]).status === 0;
 
-const hasGit = spawnSync("git", ["--version"], { env: GIT_ENV }).status === 0;
-
-function git(cwd: string, ...args: string[]): void {
+/** The test's own git run in `h`, with none of the user's git config (TestHome.gitEnv). */
+function git(h: TestHome, cwd: string, ...args: string[]): void {
   const result = spawnSync(
     "git",
     ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args],
-    { cwd, env: GIT_ENV, encoding: "utf8", timeout: SPAWN_TIMEOUT_MS },
+    { cwd, env: { ...process.env, ...h.gitEnv() }, encoding: "utf8", timeout: SPAWN_TIMEOUT_MS },
   );
   if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr}`);
 }
@@ -48,10 +39,10 @@ function home(): TestHome {
 function repo(h: TestHome, dir: string): string {
   const at = h.path(dir);
   mkdirSync(at, { recursive: true });
-  git(at, "init", "-q");
+  git(h, at, "init", "-q");
   h.write(path.join(dir, "README.md"), "x\n");
-  git(at, "add", ".");
-  git(at, "commit", "-q", "-m", "init");
+  git(h, at, "add", ".");
+  git(h, at, "commit", "-q", "-m", "init");
   return at;
 }
 
@@ -79,7 +70,7 @@ describe.skipIf(!hasGit)("codexTrustFolders", () => {
     const h = home();
     const app = repo(h, "repos/app");
     const wt = h.path("repos", "app-wt");
-    git(app, "worktree", "add", "-q", wt);
+    git(h, app, "worktree", "add", "-q", wt);
     expect(real(await codexTrustFolders(wt, [".git"]))).toEqual([realpathSync(wt), realpathSync(app)]);
     // And from a folder inside the worktree: the folder, the worktree, the main checkout.
     const sub = path.join(wt, "sub");

@@ -75,23 +75,14 @@ async function failure(promise: Promise<string>): Promise<ExitError> {
 
 const firstLine = (text: string) => text.split("\n")[0] ?? "";
 
-/** The test's own git runs: no repo a hook's environment points at, no user or system config. */
-const GIT_ENV: NodeJS.ProcessEnv = {
-  ...process.env,
-  GIT_DIR: undefined,
-  GIT_WORK_TREE: undefined,
-  GIT_INDEX_FILE: undefined,
-  GIT_CONFIG_GLOBAL: undefined,
-  GIT_CONFIG_NOSYSTEM: "1",
-};
+const hasGit = spawnSync("git", ["--version"]).status === 0;
 
-const hasGit = spawnSync("git", ["--version"], { env: GIT_ENV }).status === 0;
-
-function gitIn(cwd: string, ...args: string[]): void {
+/** The test's own git run in `h`, with none of the user's git config (TestHome.gitEnv). */
+function gitIn(h: TestHome, cwd: string, ...args: string[]): void {
   const result = spawnSync(
     "git",
     ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args],
-    { cwd, env: GIT_ENV, encoding: "utf8", timeout: SPAWN_TIMEOUT_MS },
+    { cwd, env: { ...process.env, ...h.gitEnv() }, encoding: "utf8", timeout: SPAWN_TIMEOUT_MS },
   );
   if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr}`);
 }
@@ -1075,17 +1066,17 @@ describe("Codex hooks and Codex's trust", () => {
       // main-own, which its own entry marks untrusted; pkg is a folder inside main.
       const main = h.path("repos", "main");
       mkdirSync(main, { recursive: true });
-      gitIn(main, "init", "-q");
+      gitIn(h, main, "init", "-q");
       h.write("repos/main/.codex/config.toml", '[mcp_servers.projsrv]\ncommand = "projsrv"\n');
       h.write("repos/main/.codex/hooks.json", {
         hooks: { Stop: [{ hooks: [{ type: "command", command: "main-stop" }] }] },
       });
       h.write("repos/main/pkg/.codex/config.toml", '[mcp_servers.pkgsrv]\ncommand = "pkgsrv"\n');
-      gitIn(main, "add", ".");
-      gitIn(main, "commit", "-q", "-m", "init");
+      gitIn(h, main, "add", ".");
+      gitIn(h, main, "commit", "-q", "-m", "init");
       const [wt, own] = [h.path("repos", "main-wt"), h.path("repos", "main-own")];
-      gitIn(main, "worktree", "add", "-q", wt);
-      gitIn(main, "worktree", "add", "-q", own);
+      gitIn(h, main, "worktree", "add", "-q", wt);
+      gitIn(h, main, "worktree", "add", "-q", own);
       const pkg = h.path("repos", "main", "pkg");
       // By its real path, as Codex records a trust: git names the main checkout by it too. A
       // table with no trust_level, as main-wt's, decides nothing.

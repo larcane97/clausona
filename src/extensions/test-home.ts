@@ -88,6 +88,25 @@ export class TestHome {
     return configDir;
   }
 
+  /**
+   * What a test's own git runs in this home set over the environment (`{ ...process.env,
+   * ...h.gitEnv() }`): none of the variables a git hook sets to point git at another repo, no
+   * system config, and for the global config an empty file of the home's, with the folder git's
+   * default ignore and attributes files sit in moved into the home too. So no setting of the
+   * user's - a hooksPath, a templateDir, an ignore rule - reaches those runs, on any platform.
+   * HOME stays as it is.
+   */
+  gitEnv(): NodeJS.ProcessEnv {
+    return {
+      GIT_DIR: undefined,
+      GIT_WORK_TREE: undefined,
+      GIT_INDEX_FILE: undefined,
+      GIT_CONFIG_GLOBAL: this.write(path.join(".test-git", "config"), ""),
+      GIT_CONFIG_NOSYSTEM: "1",
+      XDG_CONFIG_HOME: this.path(".test-git", "xdg"),
+    };
+  }
+
   /** A project dir with a `.git` folder, relative to the home. */
   project(dir: string): string {
     mkdirSync(this.path(dir, ".git"), { recursive: true });

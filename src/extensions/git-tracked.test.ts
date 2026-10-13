@@ -19,7 +19,7 @@ vi.setConfig({ testTimeout: SPAWNING_TEST_TIMEOUT_MS });
 
 const NOW = Date.UTC(2026, 9, 10);
 
-/** The test's own git runs: not told where a repo is by a hook's environment (spawn leaves undefined out). */
+/** git's environment, not told where a repo is by a hook's (spawn leaves undefined out). */
 const GIT_ENV: NodeJS.ProcessEnv = {
   ...process.env,
   GIT_DIR: undefined,
@@ -29,8 +29,14 @@ const GIT_ENV: NodeJS.ProcessEnv = {
 
 const hasGit = spawnSync("git", ["--version"], { env: GIT_ENV }).status === 0;
 
-function git(cwd: string, args: string[]): void {
-  const result = spawnSync("git", args, { cwd, env: GIT_ENV, encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
+/** The test's own git run in `h`, with none of the user's git config (TestHome.gitEnv). */
+function git(h: TestHome, cwd: string, args: string[]): void {
+  const result = spawnSync("git", args, {
+    cwd,
+    env: { ...process.env, ...h.gitEnv() },
+    encoding: "utf8",
+    timeout: SPAWN_TIMEOUT_MS,
+  });
   if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr}`);
 }
 
@@ -69,7 +75,7 @@ function ignoring(more?: (h: TestHome, app: string) => void, repo = true) {
   const app = repo ? h.path("repos", "app") : h.project("repos/app");
   if (repo) {
     mkdirSync(app, { recursive: true });
-    git(app, ["init", "-q"]);
+    git(h, app, ["init", "-q"]);
   }
   h.claude("default", ".claude", { projects: { [app]: {} } });
   h.skill(".claude/skills", "eli5");
@@ -103,10 +109,10 @@ function repo() {
   homes.push(h);
   const app = h.path("repos", "app");
   mkdirSync(app, { recursive: true });
-  git(app, ["init", "-q"]);
+  git(h, app, ["init", "-q"]);
   const tracked = h.skill("repos/app/.claude/skills", "tracked-one");
   const loose = h.skill("repos/app/.claude/skills", "loose");
-  git(app, ["add", path.join(".claude", "skills", "tracked-one", "SKILL.md")]);
+  git(h, app, ["add", path.join(".claude", "skills", "tracked-one", "SKILL.md")]);
   return { h, app, tracked, loose };
 }
 
@@ -137,25 +143,25 @@ describe("trackedPaths", () => {
       const { h, app } = repo();
       const projects = [app];
       const commit = (dir: string) =>
-        git(dir, ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "x"]);
+        git(h, dir, ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "x"]);
       // A skills pack cloned into the project, which the project's git does not hold: the clone's
       // files are its own, and deleting it leaves the project's repo as it was.
       const pack = h.skill("repos/app/.claude/skills", "pack");
-      git(pack, ["init", "-q"]);
-      git(pack, ["add", "SKILL.md"]);
+      git(h, pack, ["init", "-q"]);
+      git(h, pack, ["add", "SKILL.md"]);
       expect(await trackedPaths([pack], { projects })).toEqual(answered());
       // A whole skills folder cloned into place: a skill in it is the clone's too.
       const team = h.path("repos", "app", ".agents", "skills");
       const inTeam = h.skill("repos/app/.agents/skills", "team-one");
-      git(team, ["init", "-q"]);
-      git(team, ["add", "."]);
+      git(h, team, ["init", "-q"]);
+      git(h, team, ["add", "."]);
       expect(await trackedPaths([inTeam, path.join(inTeam, "SKILL.md")], { projects })).toEqual(answered());
       // One the project's repo holds, as a submodule's gitlink, is the project's, and so is what is in it.
       const held = h.skill("repos/app/.claude/skills", "held");
-      git(held, ["init", "-q"]);
-      git(held, ["add", "SKILL.md"]);
+      git(h, held, ["init", "-q"]);
+      git(h, held, ["add", "SKILL.md"]);
       commit(held);
-      git(app, ["add", path.join(".claude", "skills", "held")]);
+      git(h, app, ["add", path.join(".claude", "skills", "held")]);
       expect(await trackedPaths([pack, held, path.join(held, "SKILL.md")], { projects })).toEqual(
         answered(held, path.join(held, "SKILL.md")),
       );
@@ -170,8 +176,8 @@ describe("trackedPaths", () => {
       homes.push(h);
       const site = h.path("repos", "site");
       const pack = h.skill("repos/site/.claude/skills", "pack");
-      git(pack, ["init", "-q"]);
-      git(pack, ["add", "SKILL.md"]);
+      git(h, pack, ["init", "-q"]);
+      git(h, pack, ["add", "SKILL.md"]);
       expect(await trackedPaths([pack, path.join(pack, "SKILL.md")], { projects: [site] })).toEqual(answered());
       // Asked with no project, a path is asked of the repo it is in.
       expect(await trackedPaths([path.join(pack, "SKILL.md")])).toEqual(answered(path.join(pack, "SKILL.md")));
