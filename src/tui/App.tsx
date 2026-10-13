@@ -15,6 +15,7 @@ import {
   describeUnverifiedLogin,
   doctorSeverity,
   doctorSummary,
+  formatBudgetInline,
   formatQuotaInline,
   localTimezoneLabel,
   offersRepair,
@@ -2692,7 +2693,8 @@ export function App({
                 detail: displayName(p),
                 badge: p.isActive ? "active" : undefined,
                 badgeVariant: p.isActive ? ("active" as const) : undefined,
-                meta: formatQuotaInline(p.quota),
+                // An API profile's is its spend against its limit, as last read.
+                meta: p.kind === "api" ? formatBudgetInline(p.quota) : formatQuotaInline(p.quota),
                 metaVariant: quotaSeverity(p.quota),
               }))}
               index={cursor}

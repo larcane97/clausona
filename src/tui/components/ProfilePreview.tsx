@@ -1,5 +1,6 @@
 import { Box, type DOMElement, Text } from "ink";
 import type { RefObject } from "react";
+import { isFresh } from "../../core/quota.js";
 import { truncate } from "../../lib/cli-style.js";
 import {
   doctorSeverity,
@@ -12,6 +13,7 @@ import {
 } from "../../lib/format.js";
 import { displayName, isEnvMap } from "../../lib/profile-env.js";
 import { describeSecretSource } from "../../lib/redact.js";
+import { spendText } from "../../lib/route-render.js";
 import type { DoctorProfileResult, ProfileListItem, QuotaSnapshot, QuotaWindow } from "../../types.js";
 import { color, symbol } from "../theme.js";
 import { useWidth } from "../use-width.js";
@@ -152,6 +154,29 @@ function ApiSection({ profile, width }: { profile: ProfileListItem; width: numbe
       <Row label="Key" value={describeSecretSource(api.secret)} valueColor={color.secondary} />
       <Row label="Model" value={fitModel(model, width)} valueColor={model ? color.text : color.muted} cut="end" />
       {others > 0 && <Row label="Settings" value={`${others} set`} valueColor={color.secondary} />}
+      <BudgetRows quota={profile.quota} width={width} />
+    </>
+  );
+}
+
+/**
+ * An API profile's spend against its limit, as last read (by `route budget`, or a routed run): the
+ * dashboard reads nothing for it, since that would resolve its key. Nothing when there is no
+ * reading.
+ */
+function BudgetRows({ quota, width }: { quota?: QuotaSnapshot; width: number }) {
+  const budget = quota?.budget;
+  if (!quota || !budget) return null;
+  const live = quota.state === "ok" && isFresh(quota, Date.now());
+  return (
+    <>
+      <QuotaRow label="Budget" window={budget} live={live} width={width} />
+      <Row
+        label=""
+        value={`${spendText(budget)}${live ? "" : ` · ${formatAge(quota.fetchedAt)}`}`}
+        valueColor={color.secondary}
+        cut="end"
+      />
     </>
   );
 }

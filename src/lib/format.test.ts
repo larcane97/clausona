@@ -15,6 +15,7 @@ import {
   fitModel,
   fitQuotaValue,
   formatAge,
+  formatBudgetInline,
   formatModel,
   formatQuotaInline,
   formatQuotaPercent,
@@ -506,6 +507,31 @@ describe("renderList with API profiles", () => {
 
     expect(rowFor(out, "claude:glm")).not.toMatch(/missing|expired|error|cooldown/);
     expect(out).not.toContain("no stored credential");
+  });
+
+  it("runs an API profile's budget across the 5H and 7D columns, and says how old an old reading is", () => {
+    const budget = {
+      usedPercent: 35,
+      resetsAt: new Date(Date.now() + 18 * 24 * 3_600_000).toISOString(),
+      spentUsd: 7,
+      limitUsd: 20,
+      source: "budget" as const,
+      per: "month" as const,
+    };
+    const fresh = { ...api, quota: { state: "ok" as const, fetchedAt: Date.now(), budget } };
+    const out = render([subscription, fresh]);
+    // The columns after it start where every other row's do.
+    expect(rowFor(out, "claude:glm")).toBe(
+      "    claude:glm          gpu-box                         budget 35% 18d        —           —             —",
+    );
+    expect(out).toContain("budget: an API profile's spend against its limit, as last read (clausona route budget)");
+    expect(formatBudgetInline(fresh.quota)).toBe("budget 35%");
+    const old = { state: "ok" as const, fetchedAt: Date.now() - 3 * 3_600_000, budget };
+    expect(formatBudgetInline(old)).toBe("budget 35% (3h ago)");
+    // No reading: dashes, and no footnote.
+    expect(
+      render([subscription, { ...api, quota: { state: "error", fetchedAt: 0, noSpendReading: true } }]),
+    ).not.toContain("budget");
   });
 
   // addApiProfile and `config --label` both refuse a blank label - one rule, checkLabel,

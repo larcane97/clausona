@@ -1,4 +1,5 @@
 import { countIssues } from "../core/doctor.js";
+import { isFresh } from "../core/quota.js";
 import { symbol } from "../tui/theme.js";
 import type {
   DoctorIssue,
@@ -73,10 +74,25 @@ export function formatQuotaInline(quota: QuotaSnapshot | undefined): string {
   return `${parts.join(" | ")}${suffix}`;
 }
 
+/**
+ * An API profile's spend against its limit as a dense row says it, `budget 35%`, or nothing when
+ * there is no reading of it. The dashboard reads only what the cache holds, so a reading older
+ * than the cache keeps it fresh says how old.
+ */
+export function formatBudgetInline(quota: QuotaSnapshot | undefined, now: number = Date.now()): string {
+  if (!quota?.budget) return "";
+  const live = quota.state === "ok" && isFresh(quota, now);
+  return `budget ${formatQuotaPercent(quota.budget)}${live ? "" : ` (${formatAge(quota.fetchedAt, new Date(now))})`}`;
+}
+
 /** Severity of the most-consumed window, for colouring a whole row at a glance. */
 export function quotaSeverity(quota: QuotaSnapshot | undefined): "healthy" | "warning" | "error" | "muted" {
   if (!quota || quota.state !== "ok") return "muted";
-  const peak = Math.max(quota.session?.usedPercent ?? 0, quota.weekly?.usedPercent ?? 0);
+  const peak = Math.max(
+    quota.session?.usedPercent ?? 0,
+    quota.weekly?.usedPercent ?? 0,
+    quota.budget?.usedPercent ?? 0,
+  );
   if (peak >= QUOTA_CRITICAL) return "error";
   if (peak >= QUOTA_WARNING) return "warning";
   return "healthy";
@@ -233,14 +249,28 @@ const QUOTA_NOTES: Record<Exclude<QuotaSnapshot["state"], "ok">, string> = {
   error: "quota lookup failed",
 };
 
-/** One footnote per distinct problem, so a wide table does not need a status column. */
+/**
+ * One footnote per distinct problem, so a wide table does not need a status column. An API
+ * profile's reading is the last one `route budget` or a routed run took, so its failures are
+ * theirs to say.
+ */
 export function quotaNotes(items: ProfileListItem[]): string[] {
   const states = new Set<Exclude<QuotaSnapshot["state"], "ok">>();
   for (const item of items) {
     const state = item.quota?.state;
-    if (state && state !== "ok") states.add(state);
+    if (state && state !== "ok" && item.kind !== "api") states.add(state);
   }
   return [...states].map((state) => `${state}: ${QUOTA_NOTES[state]}`);
+}
+
+/** An API profile's spend against its limit, across the 5H and 7D columns: `budget 35% 18d`. */
+function budgetSpan(quota: QuotaSnapshot, withReset: boolean, now: Date): string | undefined {
+  const window = quota.budget;
+  if (!window) return undefined;
+  // Only the cache is read for it: a reading older than the cache keeps one fresh is dimmed.
+  const live = quota.state === "ok" && isFresh(quota, now.getTime());
+  const reset = withReset ? formatResetShort(window.resetsAt, now) : "";
+  return `${secondary("budget")} ${styledQuota(window, live ? "ok" : "error")}${reset ? ` ${dimmer(reset)}` : ""}`;
 }
 
 // ─── List ───────────────────────────────────────────────────────────
@@ -431,14 +461,27 @@ export function renderList(items: ProfileListItem[], options: { width?: number }
       }
     };
 
-    const cells = layout.keys.map((key, i) => (i === layout.keys.length - 1 ? cell(key) : pad(cell(key), widths[i])));
+    const last = layout.keys.length - 1;
+    // An API profile has no plan windows; its budget, when it has a reading, runs across both.
+    const span = item.kind === "api" && item.quota ? budgetSpan(item.quota, layout.reset, now) : undefined;
+    const cells = layout.keys.flatMap((key, i) => {
+      if (span !== undefined && key === "weekly" && layout.keys[i - 1] === "session") return [];
+      if (span !== undefined && key === "session" && layout.keys[i + 1] === "weekly") {
+        return [i + 1 === last ? span : pad(span, widths[i] + widths[i + 1])];
+      }
+      return [i === last ? cell(key) : pad(cell(key), widths[i])];
+    });
     const suffix = isCodex && spendShown ? `  ${dim("*")}` : "";
     return `  ${marker} ${cells.join("")}${suffix}`;
   });
 
+  const budgetShown = sorted.some((item) => item.kind === "api" && item.quota?.budget);
   const footnotes = [
     ...(hasCodex && spendShown ? ["* cost and token tracking are not available for codex"] : []),
     ...quotaNotes(sorted),
+    ...(budgetShown && showQuota
+      ? ["budget: an API profile's spend against its limit, as last read (clausona route budget)"]
+      : []),
   ].map((note) => `  ${dim(note)}`);
 
   return ["", `  ${dim(range)}  ${dim(localTimezoneLabel())}`, "", headerLine, sep, ...rows, ...footnotes, ""].join(

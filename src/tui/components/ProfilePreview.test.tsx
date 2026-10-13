@@ -101,6 +101,26 @@ describe("ProfilePreview for an API profile", () => {
     expect(panelFor(subscription)).toContain("loading");
   });
 
+  it("shows its budget's use and its spend as last read, and nothing without a reading", () => {
+    const budget = {
+      usedPercent: 35,
+      resetsAt: null,
+      spentUsd: 7,
+      limitUsd: 20,
+      source: "budget" as const,
+      per: "month" as const,
+    };
+    const read = render(
+      <ProfilePreview profile={{ ...endpoint, quota: { state: "ok", fetchedAt: Date.now(), budget } }} />,
+    ).lastFrame();
+    expect(read).toMatch(/Budget\s+.*35%/);
+    expect(read).toContain("$7.00 of $20/month (clausona budget)");
+    const none = render(
+      <ProfilePreview profile={{ ...endpoint, quota: { state: "error", fetchedAt: 0, noSpendReading: true } }} />,
+    ).lastFrame();
+    expect(none).not.toContain("Budget");
+  });
+
   it('draws the ellipsis of "loading…", not its escape', () => {
     // A JSX attribute string keeps `\u2026` as the six characters it is written with.
     expect(panelFor(subscription)).toContain("loading…");
