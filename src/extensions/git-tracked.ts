@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { Action, ExtensionsCommand } from "./actions.js";
 import { type Plan, type PlanContext, type PlanLine, plan, trackCandidates } from "./plan.js";
-import { entryInfo, gitRoot, pathKey } from "./read.js";
+import { entryInfo, gitRoot, pathKey, samePath } from "./read.js";
 
 /**
  * The plan as the confirm dialog and `--dry-run` show it: which of the paths it touches git
@@ -46,12 +46,22 @@ function gitForm(root: string, p: string): string {
   return process.platform === "win32" ? rel.toLowerCase() : rel;
 }
 
-/** pathKeys of the paths git tracks: one `git -C <root> ls-files -z -- <rel…>` per git root (gitRoot), 5 s timeout. A folder is tracked when any file under it is. Any failure: none from that root. */
+/**
+ * The repo a path's change would change: the one it is in (gitRoot), or for a folder that is a
+ * repo of its own - a skills pack cloned into place - the one above it. The clone's files are
+ * its own, and deleting it changes that repo only where it holds the folder, as a submodule.
+ */
+async function repoOf(p: string): Promise<string | undefined> {
+  const root = await gitRoot(p);
+  return root !== undefined && samePath(root, p) ? gitRoot(path.dirname(path.resolve(p))) : root;
+}
+
+/** pathKeys of the paths git tracks: one `git -C <root> ls-files -z -- <rel…>` per repo (repoOf), 5 s timeout. A folder is tracked when any file under it is. Any failure: none from that root. */
 export async function trackedPaths(
   paths: readonly string[],
   options: { git?: string; timeoutMs?: number } = {},
 ): Promise<Set<string>> {
-  const roots = await Promise.all(paths.map((p) => gitRoot(p)));
+  const roots = await Promise.all(paths.map((p) => repoOf(p)));
   const byRoot = new Map<string, { root: string; paths: string[] }>();
   paths.forEach((p, at) => {
     const root = roots[at];

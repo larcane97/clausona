@@ -56,6 +56,23 @@ describe("trackedPaths", () => {
     );
   });
 
+  it.skipIf(!hasGit)("asks the repo above a folder that is a clone of its own, not the clone", async () => {
+    const { h, app } = repo();
+    // A skills pack cloned into the project, which the project's git does not hold: the clone's
+    // files are its own, and deleting it leaves the project's repo as it was.
+    const pack = h.skill("repos/app/.claude/skills", "pack");
+    git(pack, ["init", "-q"]);
+    git(pack, ["add", "SKILL.md"]);
+    expect(await trackedPaths([pack])).toEqual(new Set());
+    // One the project's repo holds, as a submodule's gitlink, is the project's.
+    const held = h.skill("repos/app/.claude/skills", "held");
+    git(held, ["init", "-q"]);
+    git(held, ["add", "SKILL.md"]);
+    git(held, ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "x"]);
+    git(app, ["add", path.join(".claude", "skills", "held")]);
+    expect(await trackedPaths([pack, held])).toEqual(new Set([pathKey(held)]));
+  });
+
   it("finds nothing outside a repo, or when git cannot be run", async () => {
     const h = new TestHome();
     homes.push(h);
