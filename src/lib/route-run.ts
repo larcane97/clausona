@@ -207,8 +207,9 @@ export async function runRouted(
   }
   // `run --route main claude:b` would otherwise launch another account with `claude:b` as its
   // prompt. Checked before anything is created, ranked or recorded; the name is not echoed.
+  // `--wait` is a routing option too, though it names no route.
   if (
-    (resolved || unknown) &&
+    (resolved || unknown || run.waitMs !== undefined) &&
     !run.sawSeparator &&
     namesProfile(run.toolArgs[0], registry, resolved?.onlyTool ?? resolved?.route.tool ?? run.tool)
   ) {

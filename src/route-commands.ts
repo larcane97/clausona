@@ -826,7 +826,9 @@ function readRankingArgs(sub: "explain" | "pick", args: string[]): RankingArgs {
     );
     const at = args.indexOf("--wait");
     if (sub === "pick" && at !== -1) refuseSpacedWait(args[at + 1]);
-    if (read.flags.has("--wait") && read.values.has("--wait")) {
+    // readOptions keeps a bare flag once however often it is given, so a repeat is counted here.
+    const bare = args.filter((arg) => arg === "--wait").length;
+    if (bare > 1 || (bare === 1 && read.values.has("--wait"))) {
       throw new Error("--wait was given more than once. Pass it at most once.");
     }
     const [name, ...extra] = read.positionals;

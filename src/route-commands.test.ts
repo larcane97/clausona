@@ -1144,6 +1144,14 @@ describe("route explain and pick", () => {
     await expect(run("explain", "main", "--wait")).rejects.toThrow("Unknown option: --wait");
     await expect(run("pick", "--wait", "30m")).rejects.toThrow("Give --wait its cap after =, as in --wait=30m.");
     await expect(run("pick", "main", "--wait=2d")).rejects.toThrow("--wait takes a duration such as 30m, 2h or 1h30m");
+    for (const twice of [
+      ["--wait", "--wait"],
+      ["--wait", "--wait=1h"],
+    ]) {
+      await expect(run("pick", "main", ...twice)).rejects.toThrow(
+        "--wait was given more than once. Pass it at most once.",
+      );
+    }
   });
 
   it("stops a wait on Ctrl-C with exit code 130, as JSON when asked", async () => {

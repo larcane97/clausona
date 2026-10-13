@@ -222,6 +222,19 @@ describe("runRouted", () => {
     expect([sleeps, s.launches.length]).toEqual([[60_000], 1]);
   });
 
+  it("refuses --wait before a profile, as it does other routing options", async () => {
+    const s = setup({ routes: MAIN });
+    for (const args of [
+      ["--wait=2h", "claude:b"],
+      ["--wait", "solo", "-p", "hi"],
+    ]) {
+      await expect(runRouted(args, s.launch, s.io, s.deps)).rejects.toThrow(
+        "Routing options cannot be combined with a profile. Run it by name: clausona run <profile> …",
+      );
+    }
+    expect(s.launches).toEqual([]);
+  });
+
   it("keeps a resumed run to profiles that share sessions", async () => {
     const s = setup({ routes: MAIN });
     await runRouted(["--route", "main", "--resume", "abc"], s.launch, s.io, s.deps);
