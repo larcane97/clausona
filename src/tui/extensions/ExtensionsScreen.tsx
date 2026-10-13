@@ -22,6 +22,7 @@ import {
   type Kind,
   LIST_HEAD_ROWS,
   listRoom,
+  matchingProjects,
   maxDetailTop,
   NO_PROJECT,
   PANE_HEAD_ROWS,
@@ -51,6 +52,8 @@ type Hint = { keys: string; action: string };
 
 const OTHER_TOOL: Record<Tool, Tool> = { claude: "codex", codex: "claude" };
 const TOOL_LABEL: Record<Tool, string> = { claude: "Claude", codex: "Codex" };
+/** The project row where csn was started outside every project, until one is picked. */
+const NO_PROJECT_ROW: ProjectEntry = { key: "none", name: NO_PROJECT, here: false, current: true, count: 0 };
 
 /** Hints in the order given, the first the most needed. */
 function inOrder(hints: Hint[]): (Hint & { rank: number })[] {
@@ -101,7 +104,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   /** Where `/` was pressed: esc while typing goes back there. */
   const [searchFrom, setSearchFrom] = useState<Focus>("scopes");
   /** null until the user picks: until then the project csn was started in. */
-  const [picked, setPicked] = useState<{ project?: string } | null>(null);
+  const [picked, setPicked] = useState<{ project: string } | null>(null);
   const [view, setView] = useState<View>("main");
   /**
    * Whether the project list is open, in the scope list's place. The focus under it stays as it
@@ -109,6 +112,8 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
    */
   const [listOpen, setListOpen] = useState(false);
   const [listCursor, setListCursor] = useState(0);
+  /** What is typed while the project list is open, which narrows it. */
+  const [listQuery, setListQuery] = useState("");
   const [matrixCursor, setMatrixCursor] = useState(0);
   const [matrixOffset, setMatrixOffset] = useState(0);
   /** The details' first row. */
@@ -161,14 +166,16 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     () => (inventory ? projectList(inventory, tool, kind, project, inventory.currentProject) : []),
     [inventory, tool, kind, project],
   );
-  /** The project everything is seen from, as the row names it: No project until the files are read. */
-  const seenFrom: ProjectEntry = projects.find((entry) => entry.current) ?? {
-    key: "none",
-    name: NO_PROJECT,
-    here: false,
-    current: true,
-    count: 0,
-  };
+  /**
+   * The project everything is seen from, as the row names it: No project until the files are
+   * read, or where csn was started outside every project, until one is picked.
+   */
+  const seenFrom: ProjectEntry = projects.find((entry) => entry.current) ?? NO_PROJECT_ROW;
+  /** The project list as the search leaves it. */
+  const listed = useMemo(
+    () => (inventory ? matchingProjects(projects, listQuery, inventory.homeDir) : []),
+    [inventory, projects, listQuery],
+  );
   const scopeAt = Math.max(
     0,
     scopes.findIndex((s) => s.id === scope),
@@ -178,7 +185,13 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     columns,
     terminalRows,
     scopes,
-    projectPaneWidth(projects, NOUN[kind], scopes.find((s) => s.id === "loaded")?.count),
+    // Every project, whatever a search leaves, and No project where it can be the row: the pane
+    // keeps its width.
+    projectPaneWidth(
+      inventory?.currentProject === undefined ? [...projects, NO_PROJECT_ROW] : projects,
+      NOUN[kind],
+      scopes.find((s) => s.id === "loaded")?.count,
+    ),
   );
   const table = useMemo(
     () =>
@@ -189,30 +202,24 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   );
   /**
    * The project the list's cursor is on, while the list is open: the right pane shows its own
-   * rows, the ones the list counts - its Project table - as picking it would. No project has
-   * none of its own, so it shows what loads with none.
+   * rows, the ones the list counts - its Project table - as picking it would.
    */
-  const previewFrom = listOpen ? projects[listCursor] : undefined;
-  const previewScope: ScopeId | undefined = previewFrom
-    ? previewFrom.path === undefined
-      ? "loaded"
-      : "project"
-    : undefined;
+  const previewFrom = listOpen ? listed[listCursor] : undefined;
   const previewTable = useMemo(
     () =>
-      inventory && previewFrom && previewScope
+      inventory && previewFrom
         ? buildTable(
             inventory,
             tool,
             kind,
-            previewScope,
+            "project",
             previewFrom.path,
             loadedAt,
             layout.tableWidth - CURSOR_COLUMNS,
             "",
           )
         : null,
-    [inventory, previewFrom, previewScope, tool, kind, loadedAt, layout.tableWidth],
+    [inventory, previewFrom, tool, kind, loadedAt, layout.tableWidth],
   );
   const rows = table?.rows ?? [];
   const found = rowKey === undefined ? -1 : rows.findIndex((row) => row.key === rowKey);
@@ -241,7 +248,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   const detailPage = Math.max(1, detailRoom - 2);
   const bodyLines = useMemo(() => tableLines(rows), [rows]);
   const rowRoom = listRoom(Math.max(0, layout.height - PANE_HEAD_ROWS), bodyLines.length);
-  const projectRoom = listRoom(Math.max(0, layout.height - LIST_HEAD_ROWS), projects.length);
+  const projectRoom = listRoom(Math.max(0, layout.height - LIST_HEAD_ROWS), listed.length);
   const matrix = useMemo(() => (inventory && project ? buildMatrix(inventory, project) : null), [inventory, project]);
 
   /** Another table: the row cursor goes back to the top and a search, which was for the last one, ends. */
@@ -270,12 +277,22 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   };
   const scrollDetail = (delta: number) =>
     setDetailTop((t) => Math.max(0, Math.min(detailMax, Math.min(t, detailMax) + delta)));
-  /** The project list, its cursor on the project everything is seen from. */
+  /** The project list, its cursor on the project everything is seen from, nothing typed. */
   const openList = () => {
+    if (projects.length === 0) {
+      setStatus("No projects to pick: Claude Code and Codex have recorded none.");
+      return;
+    }
+    setListQuery("");
     setListCursor(Math.max(0, projects.indexOf(seenFrom)));
     setListOpen(true);
   };
-  const moveList = (delta: number) => setListCursor((c) => Math.max(0, Math.min(projects.length - 1, c + delta)));
+  const moveList = (delta: number) => setListCursor((c) => Math.max(0, Math.min(listed.length - 1, c + delta)));
+  /** Another search of the list: the cursor goes to the first project it leaves. */
+  const searchList = (next: string) => {
+    setListQuery(next);
+    setListCursor(0);
+  };
 
   useInput((input, key) => {
     // A status line answers the key before this one; any key moves on from it.
@@ -299,21 +316,29 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       return;
     }
     if (listOpen) {
-      // esc and ← leave everything as it was; enter sees every scope from the project picked, and
-      // keeps the table beside the list: the project's own rows, or for No project what loads.
-      if (key.escape || key.leftArrow) setListOpen(false);
+      // What is typed narrows the list; esc clears it first, then, as ←, leaves everything as it
+      // was. enter sees every scope from the project picked, and keeps the table beside the list:
+      // the project's own rows.
+      if (key.escape && listQuery !== "") searchList("");
+      else if (key.escape || key.leftArrow) setListOpen(false);
       else if (key.upArrow) moveList(-1);
       else if (key.downArrow) moveList(1);
       else if (key.pageUp) moveList(-Math.max(1, projectRoom - 1));
       else if (key.pageDown) moveList(Math.max(1, projectRoom - 1));
+      else if (key.home) moveList(-listed.length);
+      else if (key.end) moveList(listed.length);
       else if (key.return) {
-        if (previewFrom) {
-          setPicked(previewFrom.path === undefined ? {} : { project: previewFrom.path });
-          toScope(previewScope ?? "loaded");
+        // Nothing to pick where the search matches nothing: the list stays for another.
+        if (previewFrom?.path !== undefined) {
+          setPicked({ project: previewFrom.path });
+          toScope("project");
           setFocus("scopes");
+          setListOpen(false);
         }
-        setListOpen(false);
-      }
+      } else if (key.backspace || key.delete) searchList(listQuery.slice(0, -1));
+      // A / first is the table's way to start a search: here typing is enough.
+      else if (input && !key.ctrl && !key.meta && !key.tab && !(input === "/" && listQuery === ""))
+        searchList(listQuery + input);
       return;
     }
     if (view === "matrix") {
@@ -448,7 +473,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     listRoom(Math.max(0, layout.height - PROJECT_ROWS), lines.length),
     lines.length,
   );
-  listTop.current = scrolled(listTop.current, listCursor, projectRoom, projects.length);
+  listTop.current = scrolled(listTop.current, listCursor, projectRoom, listed.length);
   rowTop.current = tableTop(rowTop.current, at, bodyLines, rowRoom);
   const matrixRoom = Math.max(1, layout.height - 3);
   matrixTop.current = scrolled(matrixTop.current, matrixCursor, matrixRoom, matrix?.rows.length ?? 0);
@@ -470,11 +495,14 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
         { keys: "esc", action: "clear" },
       ])
     : listOpen
-      ? inOrder([
-          { keys: "↑↓", action: "move" },
-          { keys: "enter", action: "pick" },
-          { keys: "esc", action: "cancel" },
-        ])
+      ? // Shown in this order; a page, then the search, give way first on a narrow terminal.
+        [
+          { keys: "↑↓", action: "move", rank: 0 },
+          { keys: "pgup pgdn", action: "page", rank: 4 },
+          { keys: "type", action: "search", rank: 3 },
+          ...(previewFrom ? [{ keys: "enter", action: "pick", rank: 1 }] : []),
+          { keys: "esc", action: listQuery === "" ? "cancel" : "clear", rank: 2 },
+        ]
       : view === "matrix"
         ? inOrder([
             { keys: "↑↓", action: "move" },
@@ -519,12 +547,13 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   // The left pane: the project list while it is open, else the project row and the scopes.
   const left = listOpen ? (
     <ProjectList
-      entries={projects}
+      entries={listed}
       noun={NOUN[kind]}
       cursor={listCursor}
       width={layout.scopeWidth}
       height={layout.height}
       top={listTop.current}
+      query={listQuery}
     />
   ) : (
     <ScopeList
@@ -537,15 +566,20 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       top={scopeTop.current}
     />
   );
-  const right = previewTable ? (
-    <ItemTable
-      table={previewTable}
-      width={layout.tableWidth}
-      height={layout.height}
-      cursor={0}
-      top={0}
-      focused={false}
-    />
+  // Beside the list, the project under its cursor: nothing where the search matches none.
+  const right = listOpen ? (
+    previewTable ? (
+      <ItemTable
+        table={previewTable}
+        width={layout.tableWidth}
+        height={layout.height}
+        cursor={0}
+        top={0}
+        focused={false}
+      />
+    ) : (
+      <Box width={layout.tableWidth} />
+    )
   ) : details ? (
     <DetailsView
       title={details.title}

@@ -19,6 +19,7 @@ import {
   KIND_LABEL,
   KINDS,
   listRoom,
+  matchingProjects,
   maxDetailTop,
   NO_PROJECT,
   type ProjectEntry,
@@ -555,27 +556,24 @@ describe("tag width", () => {
 describe("projectList", () => {
   const shape = (list: ProjectEntry[]) => list.map((e) => [e.name, e.here, e.current, e.count]);
 
-  it("puts the project seen from first, then every other recorded one, then No project", async () => {
+  it("puts the project seen from first, then every other recorded one, and no No project", async () => {
     const { inv, app, web } = await seed();
     const list = projectList(inv, "claude", "skill", app, app);
     expect(shape(list)).toEqual([
       ["app", true, true, 2],
       ["web", false, false, 1],
-      [NO_PROJECT, false, false, 0],
     ]);
-    expect(list.map((e) => e.path)).toEqual([app, web, undefined]);
+    expect(list.map((e) => e.path)).toEqual([app, web]);
     expect(new Set(list.map((e) => e.key)).size).toBe(list.length);
     // Seen from web, web is first and the current one; app keeps its (here).
     expect(shape(projectList(inv, "claude", "skill", web, app))).toEqual([
       ["web", false, true, 1],
       ["app", true, false, 2],
-      [NO_PROJECT, false, false, 0],
     ]);
-    // With no project picked, No project is the current one, still last.
+    // Seen from no project, none is the current one.
     expect(shape(projectList(inv, "claude", "skill", undefined, app))).toEqual([
       ["app", true, false, 2],
       ["web", false, false, 1],
-      [NO_PROJECT, false, true, 0],
     ]);
     // Started where there is no project: no project is here.
     expect(projectList(inv, "claude", "skill", app, undefined).some((e) => e.here)).toBe(false);
@@ -595,7 +593,6 @@ describe("projectList", () => {
       "web",
       path.join("work", "site"),
       "zed",
-      NO_PROJECT,
     ]);
   });
 
@@ -614,14 +611,14 @@ describe("projectList", () => {
       h.skill(".claude/plugins/cache/m/sp/1.0.0/skills", "sp-skill");
     });
     const counts = (kind: (typeof KINDS)[number]) => projectList(inv, "claude", kind, app, app).map((e) => e.count);
-    expect(counts("skill")).toEqual([2, 1, 0]);
-    expect(counts("mcp")).toEqual([1, 1, 0]);
-    expect(counts("hook")).toEqual([0, 0, 0]);
+    expect(counts("skill")).toEqual([2, 1]);
+    expect(counts("mcp")).toEqual([1, 1]);
+    expect(counts("hook")).toEqual([0, 0]);
     for (const tool of ["claude", "codex"] as const) {
       for (const kind of KINDS) {
         // The same from wherever it is seen, and what Project counts once the project is picked.
         const fromWeb = projectList(inv, tool, kind, web, app);
-        for (const entry of fromWeb.filter((e) => e.path !== undefined)) {
+        for (const entry of fromWeb) {
           const project = scopesFor(inv, tool, kind, entry.path, NOW).find((s) => s.id === "project");
           expect(entry.count, `${tool} ${kind} ${entry.name}`).toBe(project?.count);
         }
@@ -629,6 +626,38 @@ describe("projectList", () => {
         expect(byKey(fromWeb)).toEqual(byKey(projectList(inv, tool, kind, app, app)));
       }
     }
+  });
+});
+
+describe("matchingProjects", () => {
+  const home = path.join(path.sep, "home", "alex");
+  const at = (name: string, ...dirs: string[]): ProjectEntry => ({
+    key: name,
+    path: path.join(home, ...dirs),
+    name,
+    here: false,
+    current: false,
+    count: 0,
+  });
+  const list = [
+    at("app", "repos", "app"),
+    at("acme", "clients", "acme"),
+    at("beta", "clients", "beta"),
+    at("Web", "repos", "web"),
+  ];
+  const names = (query: string) => matchingProjects(list, query, home).map((e) => e.name);
+
+  it("keeps the projects whose name or path holds what is typed, in any case, in the list's order", () => {
+    expect(names("")).toEqual(["app", "acme", "beta", "Web"]);
+    expect(names("  ")).toEqual(["app", "acme", "beta", "Web"]);
+    expect(names("a")).toEqual(["app", "acme", "beta"]);
+    expect(names("WE")).toEqual(["Web"]);
+    // The path's folders count too, as the list does not show them: the search is trimmed.
+    expect(names(" client ")).toEqual(["acme", "beta"]);
+    expect(names(path.join("clients", "b"))).toEqual(["beta"]);
+    // The home dir is ~: its own folders match nothing.
+    expect(names("alex")).toEqual([]);
+    expect(names("zzz")).toEqual([]);
   });
 });
 
@@ -641,12 +670,13 @@ describe("project list widths", () => {
     current: false,
     count,
   });
+  /** The project row's, where csn was started outside every project: never a line of the list. */
   const none: ProjectEntry = { key: "none", name: NO_PROJECT, here: false, current: true, count: 0 };
   const entries = [
     entry("agency-platform", 35, true),
     entry("a-project-with-a-very-long-name", 7),
     entry("web", 0),
-    none,
+    entry("site", 0),
   ];
   const text = (line: { name: string; here: string; count: string }) => `${line.name}${line.here}${line.count}`;
 
@@ -660,7 +690,7 @@ describe("project list widths", () => {
       "agency-pla… (here)  35",
       "a-project-with-a-…   7",
       `web${" ".repeat(18)}—`,
-      `${NO_PROJECT}${" ".repeat(11)}—`,
+      `site${" ".repeat(17)}—`,
     ]);
     expect(lines.map((l) => l.here)).toEqual([" (here)", "", "", ""]);
     expect(lines.map((l) => l.entry)).toEqual(entries);
@@ -672,7 +702,7 @@ describe("project list widths", () => {
   });
 
   it("keeps two spaces before the count at every width, cutting the name and never the gap or (here)", () => {
-    const short = [entry("app", 4, true), entry("web", 12), none];
+    const short = [entry("app", 4, true), entry("web", 12), entry("site", 0)];
     for (const list of [entries, short]) {
       for (let width = 0; width <= 44; width++) {
         for (const line of projectListLines(list, "skills", width).lines) {
@@ -687,7 +717,7 @@ describe("project list widths", () => {
     }
     // At 140 the list is as wide as it needs: "app (here)", then the gap and the count.
     const wide = projectListLines(short, "skills", projectPaneWidth(short, "skills"));
-    expect(wide.lines.map(text)).toEqual(["app (here)   4", `web${" ".repeat(9)}12`, `${NO_PROJECT}${" ".repeat(3)}—`]);
+    expect(wide.lines.map(text)).toEqual(["app (here)   4", `web${" ".repeat(9)}12`, `site${" ".repeat(9)}—`]);
   });
 
   it("takes the widest line whole, or the heading, the same whichever project is picked", () => {
@@ -718,6 +748,28 @@ describe("project list widths", () => {
       const { title, noun, lines } = projectListLines(entries, "MCP servers", width);
       expect(`${title}${noun}`.length, `at ${width}`).toBeLessThanOrEqual(Math.max(0, width - 2));
       for (const line of lines) expect(text(line).length, `at ${width}`).toBeLessThanOrEqual(Math.max(0, width - 4));
+    }
+  });
+
+  it("puts a search in PROJECT's place, its end kept where room is short, the noun where it was", () => {
+    const at26 = projectListLines(entries, "skills", 26, "agen");
+    expect(at26.search).toBe(true);
+    expect(`${at26.title}${at26.noun}`).toBe(`/agen▏${" ".repeat(12)}skills`);
+    // Longer than the 16 columns beside the noun, the noun gives way; longer than the 24 of the
+    // whole heading, the start gives way to …, and the typing stays.
+    expect(projectListLines(entries, "skills", 26, "a-project-with-a")).toMatchObject({
+      title: "/a-project-with-a▏",
+      noun: "",
+    });
+    const long = projectListLines(entries, "skills", 26, "a-project-with-a-very-long");
+    expect(long.title).toBe("…oject-with-a-very-long▏");
+    expect(long.title).toHaveLength(24);
+    expect(long.noun).toBe("");
+    expect(projectListLines(entries, "skills", 26).search).toBe(false);
+    for (const width of [0, 4, 8, 12, 16, 20, 26]) {
+      const { title, noun } = projectListLines(entries, "MCP servers", width, "a-project-with-a-very");
+      expect(`${title}${noun}`.length, `at ${width}`).toBeLessThanOrEqual(Math.max(0, width - 2));
+      if (title !== "") expect(title.trimEnd().endsWith("▏"), `at ${width}`).toBe(true);
     }
   });
 

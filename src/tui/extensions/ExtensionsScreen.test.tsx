@@ -43,6 +43,8 @@ const RIGHT = "\u001B[C";
 const LEFT = "\u001B[D";
 const PAGE_UP = "\u001B[5~";
 const PAGE_DOWN = "\u001B[6~";
+const HOME = "\u001B[H";
+const END = "\u001B[F";
 const DAY = 86_400_000;
 
 /** Waits for a frame whose text, colours aside, passes `check`, and returns that text. */
@@ -252,13 +254,14 @@ describe("ExtensionsScreen", () => {
     }
     await press(instance, "p");
     const list = await seen(instance, (f) => listOpen(f));
-    // The current project first, the cursor on it; every other recorded one; No project last.
+    // The current project first, the cursor on it; every other recorded one; no No project.
     const lines = list.split("\n");
     const head = lines.findIndex((line) => listOpen(line));
     expect(lines[head + 1]).toMatch(/▸ app \(here\) +2/);
     expect(lines[head + 2]).toMatch(/ {3}web +1/);
-    expect(lines[head + 3]).toMatch(/ {3}No project +—/);
-    expect(hintLine(list)).toMatch(/↑↓ move │ enter pick │ esc cancel/);
+    expect(lines[head + 3]).not.toMatch(/\S.*│/);
+    expect(list).not.toContain("No project");
+    expect(hintLine(list)).toMatch(/↑↓ move │ pgup pgdn page │ type search │ enter pick │ esc cancel/);
     // In place of the scope list; beside it, the own rows of the project under the cursor.
     expect(list).not.toMatch(/^ {4}Global +\d+ +│/m);
     expect(list).toMatch(/PROJECT — .*~[\\/]repos[\\/]app/);
@@ -334,13 +337,6 @@ describe("ExtensionsScreen", () => {
     expect(onWeb).not.toContain("deploy-check");
     // The title bar names the project seen from until another is picked.
     expect(onWeb).toMatch(/Extensions │ ~[\\/]repos[\\/]app/);
-    // No project has none of its own: what loads with none.
-    await press(instance, DOWN);
-    const onNone = await seen(instance, (f) => f.includes("what Claude Code loads with no project"));
-    expect(onNone).not.toContain("web-only");
-    expect(onNone).toContain("eli5");
-    await press(instance, UP);
-    await seen(instance, (f) => f.includes("web-only"));
     await press(instance, ESC);
     const back = await seen(instance, (f) => !listOpen(f));
     expect(back).toContain("LOADED — ");
@@ -356,7 +352,7 @@ describe("ExtensionsScreen", () => {
     expect(picked).toContain("web-only");
   });
 
-  it("picks a project onto its own table from any scope, and No project onto what loads with none", async () => {
+  it("picks a project onto its own table from any scope", async () => {
     const { instance } = screen(await seed(more), 140, 40);
     await seen(instance, (f) => f.includes("deploy-check"));
     await scopeTo(instance, "Global");
@@ -367,12 +363,6 @@ describe("ExtensionsScreen", () => {
     const web = await seen(instance, (f) => !listOpen(f) && /Extensions │ ~[\\/]repos[\\/]web/.test(f));
     expect(web).toContain("▸ Project");
     expect(web).toContain("web-only");
-    await press(instance, "p");
-    await seen(instance, (f) => listOpen(f));
-    await scopeTo(instance, "No project");
-    await press(instance, ENTER);
-    const none = await seen(instance, (f) => onRow(f, "No project"));
-    expect(none).toContain("what Claude Code loads with no project");
   });
 
   it("leaves no place's heading at the foot of the table without a row of its own under it", () => {
@@ -423,16 +413,24 @@ describe("ExtensionsScreen", () => {
     expect(list).toMatch(/ {3}app +—/);
   });
 
-  it("takes no key but its own while the project list is open: tab, 1, /, r, m and w change nothing", async () => {
+  it("takes no key but its own while the project list is open: tab and / change nothing, r, m and w are typed", async () => {
     const { instance, load } = screen(await seed(more), 140, 40);
     await seen(instance, (f) => f.includes("deploy-check"));
     await press(instance, "p");
     const list = await seen(instance, (f) => listOpen(f));
-    for (const key of [TAB, "1", "2", "/", "r", "m", "w"]) {
+    // A / before anything is typed is the table's way to start a search: here typing is enough.
+    for (const key of [TAB, "/"]) {
       await type(instance, key);
       expect(stripAnsi(instance.lastFrame() ?? ""), JSON.stringify(key)).toBe(list);
     }
+    // The keys of the screen are letters of a search here: nothing is read again, no matrix.
+    await typeSlowly(instance, "rmw1");
+    const typed = await seen(instance, (f) => f.includes("/rmw1▏"));
+    expect(typed).toContain("No matches.");
+    expect(typed).toContain("[Claude]  Codex");
     expect(load).toHaveBeenCalledTimes(1);
+    await press(instance, ESC);
+    await seen(instance, (f) => listOpen(f) && !f.includes("/rmw1"));
     // Still Claude's skills, seen from app, when it closes.
     await press(instance, ESC);
     const after = await seen(instance, (f) => !listOpen(f));
@@ -477,19 +475,76 @@ describe("ExtensionsScreen", () => {
     await seen(instance, (f) => onRow(f));
     await press(instance, "p");
     const top = await seen(instance, (f) => listOpen(f));
-    expect(top).toMatch(/↓ 7 more/);
+    expect(top).toMatch(/↓ 6 more/);
     expect(top).toContain("▸ app (here)");
+    // A page is the list's room less one: app, then p06, then p12, the last.
     await press(instance, PAGE_DOWN);
     await press(instance, PAGE_DOWN);
-    await press(instance, PAGE_DOWN);
-    const end = await seen(instance, (f) => f.includes("▸ No project"));
+    const end = await seen(instance, (f) => f.includes("▸ p12"));
     expect(end).not.toMatch(/↓ \d+ more/);
     expect(end).not.toContain("app (here)");
     for (const frame of instance.frames) expect(height(frame)).toBeLessThanOrEqual(22);
     await press(instance, PAGE_UP);
     await press(instance, PAGE_UP);
-    await press(instance, PAGE_UP);
-    expect(await seen(instance, (f) => f.includes("▸ app (here)"))).toMatch(/↓ 7 more/);
+    expect(await seen(instance, (f) => f.includes("▸ app (here)"))).toMatch(/↓ 6 more/);
+    // home and end: the first and the last at once.
+    await press(instance, END);
+    await seen(instance, (f) => f.includes("▸ p12"));
+    await press(instance, HOME);
+    expect(await seen(instance, (f) => f.includes("▸ app (here)"))).toMatch(/↓ 6 more/);
+  });
+
+  it("narrows the project list as it is typed, by name or path: esc clears it, then closes the list", async () => {
+    const clients = (h: TestHome) => {
+      const dirs = ["clients/acme", "clients/beta", "repos/site"].map((dir) => h.project(dir));
+      h.claude("work", ".claude-work", { projects: Object.fromEntries(dirs.map((dir) => [dir, {}])) });
+      h.skill("clients/acme/.claude/skills", "acme-only");
+    };
+    const { instance } = screen(await seed(clients), 140, 40);
+    await seen(instance, (f) => onRow(f));
+    await press(instance, "p");
+    await seen(instance, (f) => listOpen(f));
+    // In any case, the path's folders too: the cursor on the first it leaves, its rows beside.
+    await typeSlowly(instance, "CLIENT");
+    const narrowed = await seen(instance, (f) => f.includes("/CLIENT▏") && f.includes("acme-only"));
+    const lines = narrowed.split("\n");
+    const head = lines.findIndex((line) => line.includes("/CLIENT▏"));
+    expect(lines[head + 1]).toMatch(/▸ acme +1/);
+    expect(lines[head + 2]).toMatch(/ {3}beta +—/);
+    expect(narrowed).not.toContain("app (here)");
+    expect(narrowed).not.toContain("site");
+    expect(hintLine(narrowed)).toContain("esc clear");
+    // Backspace gives a letter back; a search that matches none says so, with nothing to pick.
+    await typeSlowly(instance, "zz");
+    const none = await seen(instance, (f) => f.includes("/CLIENTzz▏") && f.includes("No matches."));
+    expect(none).not.toContain("acme");
+    expect(hintLine(none)).not.toContain("enter");
+    await type(instance, ENTER);
+    expect(stripAnsi(instance.lastFrame() ?? "")).toBe(none);
+    await press(instance, "\u007F");
+    await press(instance, "\u007F");
+    await seen(instance, (f) => f.includes("/CLIENT▏") && f.includes("▸ acme"));
+    // esc clears the search: every project again, the cursor back on the first.
+    await press(instance, ESC);
+    const all = await seen(instance, (f) => listOpen(f) && !f.includes("/CLIENT"));
+    expect(all).toContain("▸ app (here)");
+    expect(all).toContain("site");
+    expect(hintLine(all)).toContain("esc cancel");
+    // Typed again, enter picks the one under the cursor.
+    await typeSlowly(instance, "bet");
+    await seen(instance, (f) => f.includes("▸ beta"));
+    await press(instance, ENTER);
+    const picked = await seen(instance, (f) => !listOpen(f) && /Extensions │ ~[\\/]clients[\\/]beta/.test(f));
+    expect(picked).toContain("▸ Project");
+    // The list opens with nothing typed.
+    await press(instance, "p");
+    const again = await seen(instance, (f) => listOpen(f));
+    expect(again).toMatch(/▸ beta +—/);
+    expect(again).not.toContain("/bet▏");
+    expect(again).toMatch(/PROJECT +skills/);
+    // With nothing typed, one esc closes it, and beta's Project is where it was.
+    await press(instance, ESC);
+    expect(await seen(instance, (f) => !listOpen(f))).toBe(picked);
   });
 
   it("searches the table: enter keeps the search, esc clears it", async () => {
@@ -660,7 +715,7 @@ describe("ExtensionsScreen", () => {
     await press(instance, "p");
     const list = await seen(instance, (f) => listOpen(f));
     expect(list).toMatch(/▸ app \(here\) +2/);
-    expect(list).toContain("No project");
+    expect(list).toMatch(/ {3}web +1/);
     expect(list).not.toMatch(/Global +\d/);
     expect(list).not.toContain("LOADED — ");
     for (const line of list.split("\n")) expect(line.length).toBeLessThanOrEqual(80);
@@ -834,13 +889,10 @@ describe("ExtensionsScreen", () => {
     }
   });
 
-  it("picks no project: the row, the subtitle and the Project table say so (Review Focus 3)", async () => {
-    const { instance } = screen(await seed(), 140, 40);
-    await seen(instance, (f) => f.includes("deploy-check"));
-    await press(instance, "p");
-    await seen(instance, (f) => listOpen(f));
-    await scopeTo(instance, "No project");
-    await press(instance, ENTER);
+  it("starts outside every project: the row, the subtitle and the Project table say so (Review Focus 3)", async () => {
+    // As at the filesystem root: no project is here.
+    const { currentProject: _, ...outside } = await seed();
+    const { instance } = screen(outside, 140, 40);
     const none = await seen(instance, (f) => f.includes("No project — pick one with p"));
     expect(none).toContain("Extensions │ No project — pick one with p");
     expect(none).toMatch(/▸ No project +\d+ +│/);
@@ -853,6 +905,22 @@ describe("ExtensionsScreen", () => {
     expect(project.split("\n").find((line) => line.includes("PROJECT — "))).toContain("pick one with p");
     // The header has said it: no second line says it again.
     expect(project.split("\n").filter((line) => line.includes("pick one with p"))).toHaveLength(2);
+    // The list has the projects only, the cursor on the first.
+    await press(instance, "p");
+    const list = (await seen(instance, (f) => listOpen(f))).split("\n");
+    const head = list.findIndex((line) => listOpen(line));
+    expect(list[head + 1]).toMatch(/▸ app +1/);
+    expect(list.slice(head).join("\n")).not.toContain("No project");
+  });
+
+  it("says so on p where no project is recorded, rather than open an empty list", async () => {
+    const { currentProject: _, ...outside } = await seed();
+    const { instance } = screen({ ...outside, projects: [] }, 140, 40);
+    await seen(instance, (f) => f.includes("No project — pick one with p"));
+    await press(instance, "p");
+    const frame = await seen(instance, (f) => f.includes("No projects to pick"));
+    expect(frame).toContain("No projects to pick: Claude Code and Codex have recorded none.");
+    expect(listOpen(frame)).toBe(false);
   });
 
   it("says a sentence for a scope with nothing in it, never a blank pane (Review Focus 1)", async () => {

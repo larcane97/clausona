@@ -730,22 +730,28 @@ details.
 
 The scope list's first line is the project row, and it is Loaded. It names the project
 everything is seen from and counts what loads there, such as `▸ app (here)  118`. `(here)`
-marks the project of the folder you started `csn` in, and with no project the row reads
-`No project`. Under it, after a rule, the scopes say where those rows come from. They also
-list what does not load: a copy another one hides, an item turned off, a plugin as one row.
+marks the project of the folder you started `csn` in. At the filesystem root, where there is no
+project, the row reads `No project`. Under it, after a rule, the scopes say where those rows
+come from. They also list what does not load: a copy another one hides, an item turned off, a
+plugin as one row.
 
 `p` opens the project list in the scope list's place. The heading reads `PROJECT` with the
 kind on the right: `skills`, `MCP servers` or `hooks`. The project you are looking from comes
 first. Every other project that Claude Code or Codex recorded follows, by name, with the count
 of its own rows of this tool and kind, the ones its Project scope lists. A project with none
-shows `—`. `No project` is last. When two projects have the same folder name, the folder above
-is shown too, as in `work/site`.
+shows `—`. When two projects have the same folder name, the folder above is shown too, as in
+`work/site`. The list has no `No project` line: Global and the other scopes under the project
+row already list what loads outside any project, whichever project is picked.
+
+Type to narrow the list. What you type matches a project's name or its path, in any case, and
+the heading shows it in `PROJECT`'s place, as `/clau▏`. `esc` clears it, and a second `esc`
+closes the list. `pgup` and `pgdn` move a page, and `home` and `end` go to the first and the
+last project. On a Mac keyboard those are `fn` with `↑`, `↓`, `←` and `→`.
 
 While the list is open, the table beside it shows the own rows of the project under the
-cursor, the ones the list counts: its Project table. No project has none, so it shows what
-loads with no project. `enter` picks that project and keeps the table: every scope is then seen
-from it, and the title bar and the table's header name it. Loaded is one `↑` away, on the
-project row. `esc` or `←` closes the list and changes nothing.
+cursor, the ones the list counts: its Project table. `enter` picks that project and keeps the
+table: every scope is then seen from it, and the title bar and the table's header name it.
+Loaded is one `↑` away, on the project row. `esc` or `←` closes the list and changes nothing.
 
 The screen's tables differ a little from the CLI's. They have no TOOL column, and Codex skills
 show their description. Loaded groups its rows by the place each comes from, in the scope
@@ -757,12 +763,12 @@ comes from or the `.mcp.json` above the project, and is left out when no row has
 |---|---|
 | `tab` | Switch between Claude and Codex, back to the project row. |
 | `1` `2` `3` | Skills, MCP, Hooks, back to the project row. |
-| `↑` `↓` `pgup` `pgdn` | Move. |
+| `↑` `↓` `pgup` `pgdn` | Move. In the project list, `home` and `end` too. |
 | `→` or `enter` | From the scope list into the table. On the project row, Loaded's table. |
 | `enter` | On a row, its details. In the project list, look from that project. |
-| `←` or `esc` | Back one step. `esc` on the scope list leaves the screen. In the project list, close it. |
+| `←` or `esc` | Back one step. `esc` on the scope list leaves the screen. In the project list, `esc` clears what you typed, then closes it; `←` closes it. |
 | `/` | Search the table. `enter` keeps the search, `esc` drops it. |
-| `p` | Open the project list, from anywhere but a search. |
+| `p` | Open the project list, from anywhere but a search. Type there to narrow it. |
 | `m` | A matrix of servers by account: which account starts which server in this project. On Claude's MCP tab, with a project picked. |
 | `r` | Read the files again. |
 | `w` | The files that could not be read, when there are any. |

@@ -406,7 +406,7 @@ export const PROJECT_ROWS = 1;
 /** The line the project list draws above the projects: its heading. */
 export const LIST_HEAD_ROWS = 1;
 
-/** The project list's last line, for looking from no project: user settings only. */
+/** The project row's name where csn was started outside every project: user settings only. */
 export const NO_PROJECT = "No project";
 /** What follows the name of the project the folder csn was started in belongs to. */
 const HERE = " (here)";
@@ -470,7 +470,7 @@ export function scopeLines(scopes: ScopeEntry[]): ScopeLine[] {
   return lines;
 }
 
-/** A line of the project list: a recorded project, or No project. */
+/** A line of the project list, a recorded project; or the project row's No project. */
 export type ProjectEntry = {
   key: string;
   /** Undefined for No project. */
@@ -507,9 +507,10 @@ function projectNames(inv: Inventory): Map<string, string> {
 
 /**
  * The project list: `project`, the one everything is seen from, first; then every other recorded
- * project, by name; then No project. `here` is the project of the folder csn was started in. Each
- * counts its own rows of the tool and kind - what its Project scope lists once it is picked -
- * read in one pass over the inventory.
+ * project, by name. `here` is the project of the folder csn was started in. Each counts its own
+ * rows of the tool and kind - what its Project scope lists once it is picked - read in one pass
+ * over the inventory. No project is not one of them: Global and the scopes under the row list
+ * what loads everywhere, from any project.
  */
 export function projectList(
   inv: Inventory,
@@ -547,8 +548,21 @@ export function projectList(
     .filter((p) => !samePath(p.path, project))
     .map((p) => entry(p.path))
     .sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
-  const none: ProjectEntry = { key: "none", name: NO_PROJECT, here: false, current: project === undefined, count: 0 };
-  return [...first, ...others, none];
+  return [...first, ...others];
+}
+
+/**
+ * The projects whose name or path holds `query`, any case, as the table's search matches: all of
+ * them, in their order, for none.
+ */
+export function matchingProjects(entries: ProjectEntry[], query: string, homeDir: string): ProjectEntry[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") return entries;
+  return entries.filter((entry) =>
+    [entry.name, entry.path === undefined ? "" : tilde(entry.path, homeDir)].some((text) =>
+      text.toLowerCase().includes(needle),
+    ),
+  );
 }
 
 /** A project's count as the list says it: — for none. */
@@ -608,13 +622,17 @@ export function projectRow(
  * columns, each line runs to two columns before the divider - the name cut with …, two spaces at
  * least, and the count, or — for none, right-aligned. Where room is short the name gives way,
  * never the gap or "(here)". The heading is PROJECT where the marker is and the kind's noun where
- * the counts end, the noun left out when there is no room for both.
+ * the counts end, the noun left out when there is no room for both. A search, `query`, takes
+ * PROJECT's place - `/` and what is typed, then the cursor - and the noun gives way to it once it
+ * needs the room; longer still, it gives up its start to `…`, as the bar's does, so the end,
+ * where the typing is, stays.
  */
 export function projectListLines(
   entries: ProjectEntry[],
   noun: string,
   width: number,
-): { title: string; noun: string; lines: ProjectLine[] } {
+  query = "",
+): { title: string; noun: string; search: boolean; lines: ProjectLine[] } {
   const inner = Math.max(0, width - 4);
   const counts = entries.map(countText);
   const room = Math.max(0, inner - Math.max(0, ...counts.map((c) => c.length)) - COUNT_GAP);
@@ -626,10 +644,17 @@ export function projectListLines(
     return { key: entry.key, ...label, count: count.length + COUNT_GAP <= left ? count.padStart(left) : "", entry };
   });
   const head = Math.max(0, width - 2);
-  const fits = PROJECT_HEADING.length + 2 + noun.length <= head;
-  return fits
-    ? { title: PROJECT_HEADING.padEnd(head - noun.length), noun, lines }
-    : { title: cell(PROJECT_HEADING, head).trimEnd(), noun: "", lines };
+  const search = query !== "";
+  const text = search ? `/${query}▏` : PROJECT_HEADING;
+  const fits = Math.max(PROJECT_HEADING.length, text.length) + 2 + noun.length <= head;
+  const titleRoom = fits ? head - noun.length - 2 : head;
+  const cut = search
+    ? titleRoom >= 2
+      ? `…${text.slice(text.length - titleRoom + 1)}`
+      : ""
+    : cell(text, titleRoom).trimEnd();
+  const title = text.length <= titleRoom ? text : cut;
+  return { title: fits ? title.padEnd(head - noun.length) : title, noun: fits ? noun : "", search, lines };
 }
 
 /**
