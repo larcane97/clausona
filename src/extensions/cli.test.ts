@@ -1193,9 +1193,38 @@ describe("Codex hooks and Codex's trust", () => {
       expect(consented.changes.map((c: { file: string; what: string }) => [c.file, c.what])).toEqual([
         [mainHooks, "Stop hook taken out, kept by clausona"],
       ]);
+      // Turned off, the copy clausona keeps is the worktree's row, off, and no hook Codex skips.
+      await run(h, wt, "hooks", ["off", "--id", byCommand("echo a"), "--tracked", "--yes"]);
+      const after: Row[] = JSON.parse(
+        await run(h, wt, "hooks", ["ls", "--tool", "codex", "--scope", "project", "--json"]),
+      ).items;
+      const keptCopy = after.find((i) => i.summary.command === "echo a");
+      expect(keptCopy && [keptCopy.state, keptCopy.tags, keptCopy.file]).toEqual(["off", ["off"], mainHooks]);
+      expect(await run(h, wt, "hooks", ["show", "--id", keptCopy?.id ?? ""])).toMatch(
+        /^Loaded\s+off everywhere — clausona keeps its settings so you can turn it back on$/m,
+      );
     },
     SPAWNING_TEST_TIMEOUT_MS,
   );
+
+  it("lists a Codex hook clausona keeps aside as off, not as one Codex skips", async () => {
+    const { h, app } = seed();
+    h.write(".codex/hooks.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "echo kept" }] }] } });
+    const global = async () =>
+      JSON.parse(await run(h, app, "hooks", ["ls", "--tool", "codex", "--scope", "global", "--json"])).items;
+    await run(h, app, "hooks", ["off", "--id", (await global())[0].id, "--yes"]);
+    const kept = await global();
+    expect(
+      kept.map((i: { summary: { command: string }; state: string; tags: string[] }) => [
+        i.summary.command,
+        i.state,
+        i.tags,
+      ]),
+    ).toEqual([["echo kept", "off", ["off"]]]);
+    expect(await run(h, app, "hooks", ["show", "--id", kept[0].id])).toMatch(
+      /^Loaded\s+off everywhere — clausona keeps its settings so you can turn it back on$/m,
+    );
+  });
 
   it("lists the hooks of a project Codex does not trust as off there, and says it is the trust", async () => {
     const { h, app, web } = seed();

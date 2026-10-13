@@ -234,12 +234,14 @@ export function addConfigHooks(
  * hook whose command is empty ("skipping empty hook command"), and an MCP tool hook whose server
  * or tool is ("server and tool must not be empty"). The last two are the command and MCP tool
  * hooks of a known event that have no trust identity: normalized() reads what Codex runs on this
- * platform, and gives none to those alone. One in a file Codex refuses keeps that reason.
+ * platform, and gives none to those alone. One in a file Codex refuses keeps that reason. A copy
+ * clausona keeps aside is in no hooks file, so has no trust identity either: it is off, and none
+ * of these.
  */
 export function markUnsupportedHooks(out: Collector): void {
   const trusted = new Set(out.facts.codexHookTrust.map((t) => t.id));
   for (const item of out.items) {
-    if (item.kind !== "hook" || item.location.tool !== "codex" || item.codexError) continue;
+    if (item.kind !== "hook" || item.location.tool !== "codex" || item.codexError || item.stashed) continue;
     const type = item.summary?.type;
     const event = item.hook?.event ?? "";
     const sessionEndTool = type === "mcp_tool" && event === "SessionEnd";
