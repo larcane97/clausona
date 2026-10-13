@@ -41,9 +41,17 @@ function dollars(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+/** A date and time with no zone: `2026-11-01T00:00:00.244000`, or with a space for the `T`. */
+const NAIVE_TIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
+
+/**
+ * A provider's time as ISO. One with no zone is UTC: LiteLLM prints its times that way, and
+ * Date.parse would take them for this machine's local time.
+ */
 function toIso(value: unknown): string | null {
   if (typeof value !== "string" || value === "") return null;
-  const ms = Date.parse(value);
+  const text = value.trim();
+  const ms = Date.parse(NAIVE_TIME.test(text) ? `${text.replace(" ", "T")}Z` : text);
   return Number.isNaN(ms) ? null : new Date(ms).toISOString();
 }
 

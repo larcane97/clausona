@@ -71,6 +71,21 @@ describe("readSpend: LiteLLM", () => {
     expect(stub.mock.calls[1][1]?.headers).toEqual({ Accept: "application/json", Authorization: `Bearer ${KEY}` });
   });
 
+  it("reads a LiteLLM time with no zone as UTC, wherever clausona runs", () => {
+    // Off UTC, as the machine running clausona may well be.
+    vi.stubEnv("TZ", "Asia/Seoul");
+    try {
+      const read = (at: string) =>
+        parseLiteLlmKeyInfo({ info: { spend: 1, max_budget: 5, budget_duration: "1d", budget_reset_at: at } })?.limit
+          ?.resetsAt;
+      expect(read("2026-11-01T00:00:00.244000")).toBe("2026-11-01T00:00:00.244Z");
+      expect(read("2026-11-01 00:00:00")).toBe("2026-11-01T00:00:00.000Z");
+      expect(read("2026-11-01T09:00:00+09:00")).toBe("2026-11-01T00:00:00.000Z");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("reads a key with no limit, and a limit that never renews", () => {
     expect(parseLiteLlmKeyInfo({ info: { spend: 3, max_budget: null } })).toEqual({ totalUsd: 3 });
     expect(parseLiteLlmKeyInfo({ info: { spend: 3, max_budget: 10, budget_reset_at: "2026-11-01" } })).toEqual({
