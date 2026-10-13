@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import {
+  type ClaudeFlag,
   type EffectiveState,
   type Extension,
   type Inventory,
@@ -107,6 +108,44 @@ function mcpWinner(
   return winner === item ? undefined : winner;
 }
 
+/**
+ * The value of `key` Claude Code takes in `project`, and the file and layer that set it: the
+ * first layer that sets it to true or false, as for any setting of one value. Undefined when none
+ * does.
+ */
+export function claudeFlag(
+  inv: Inventory,
+  key: ClaudeFlag,
+  project: string | undefined,
+): { value: boolean; file: string; layer: SettingsLayer } | undefined {
+  for (const layer of PRECEDENCE) {
+    const entry = inv.facts.claudeFlags.find((f) => f.key === key && f.layer === layer && applies(f, project));
+    if (entry) return entry;
+  }
+  return undefined;
+}
+
+/**
+ * The off that `disableAllHooks` puts Claude hook `item` in, in `project`; undefined where hooks
+ * run. Claude Code 2.1.296 reads the value left after settings precedence. Set in managed
+ * settings, it turns every hook off. Set anywhere else, it leaves the managed hooks running, and
+ * a plugin's while managed settings turn the plugin on.
+ */
+export function allHooksOff(inv: Inventory, item: Extension, project: string | undefined): EffectiveState | undefined {
+  if (item.kind !== "hook" || item.location.tool !== "claude") return undefined;
+  const flag = claudeFlag(inv, "disableAllHooks", project);
+  if (flag?.value !== true) return undefined;
+  const off: EffectiveState = { value: "off", setBy: { file: flag.file, key: "disableAllHooks" } };
+  if (flag.layer === "managed") return off;
+  if (item.location.scope === "managed") return undefined;
+  const plugin = item.location.scope === "plugin" ? item.location.plugin : undefined;
+  if (plugin !== undefined) {
+    const switched = pluginState(inv, plugin, project);
+    if (switched.value === "on" && switched.setBy && isManagedSetting(inv, switched.setBy.file)) return undefined;
+  }
+  return off;
+}
+
 /** A plugin is on only where some settings file enables it; installed and named nowhere is off. */
 export function pluginState(inv: Inventory, pluginId: string, project?: string): EffectiveState {
   for (const layer of PRECEDENCE) {
@@ -151,6 +190,11 @@ function claudeSkillState(
 ): EffectiveState {
   // Plugin skills ignore skillOverrides (Claude Code 2.1.294): only the plugin's switch applies.
   if (item.location.scope === "plugin" && item.location.plugin) return pluginState(inv, item.location.plugin, project);
+  // disableBundledSkills takes the skills that come with Claude Code out, whatever skillOverrides says.
+  if (item.location.scope === "builtin") {
+    const bundled = claudeFlag(inv, "disableBundledSkills", project);
+    if (bundled?.value === true) return { value: "off", setBy: { file: bundled.file, key: "disableBundledSkills" } };
+  }
   const state = claudeSkillOverride(inv, item.name, project) ?? { value: "on" };
   if (item.location.scope !== "project") return state;
   // A personal skill wins over a project skill of the same name (Claude Code docs): a Global one
@@ -252,7 +296,11 @@ function codexSkillState(inv: Inventory, item: Extension): EffectiveState {
 export function isManagedSetting(inv: Inventory, file: string): boolean {
   const managed = (entry: { file: string; layer: SettingsLayer }) =>
     entry.layer === "managed" && samePath(entry.file, file);
-  return inv.facts.claudeSkillOverrides.some(managed) || inv.facts.claudeEnabledPlugins.some(managed);
+  return (
+    inv.facts.claudeSkillOverrides.some(managed) ||
+    inv.facts.claudeEnabledPlugins.some(managed) ||
+    inv.facts.claudeFlags.some(managed)
+  );
 }
 
 /**
@@ -298,8 +346,11 @@ export function stateOf(inv: Inventory, item: Extension, project?: string, profi
     case "plugin":
       return pluginState(inv, item.location.plugin ?? item.name, project);
     case "hook":
-      return item.location.scope === "plugin" && item.location.plugin
-        ? pluginState(inv, item.location.plugin, project)
-        : { value: "on" };
+      return (
+        allHooksOff(inv, item, project) ??
+        (item.location.scope === "plugin" && item.location.plugin
+          ? pluginState(inv, item.location.plugin, project)
+          : { value: "on" })
+      );
   }
 }

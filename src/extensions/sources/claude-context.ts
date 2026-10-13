@@ -3,7 +3,7 @@ import path from "node:path";
 import { claudeJsonPathForConfigDir } from "../../core/paths.js";
 import { inspectSharedLink } from "../../core/shared-links.js";
 import type { Registry } from "../../types.js";
-import type { Collector, Location, Project, SettingsLayer, Warning } from "../model.js";
+import type { ClaudeFlag, Collector, Location, Project, SettingsLayer, Warning } from "../model.js";
 import { localSettingsFile, projectSettingsFile } from "../places.js";
 import { isHomeProject } from "../projects.js";
 import {
@@ -265,7 +265,12 @@ async function readPluginInstalls(
   );
 }
 
-/** Each settings file's `skillOverrides` and `enabledPlugins`, for `state.ts`. */
+const FLAGS: readonly ClaudeFlag[] = ["disableAllHooks", "disableBundledSkills"];
+
+/**
+ * Each settings file's `skillOverrides` and `enabledPlugins`, and its `disableAllHooks` and
+ * `disableBundledSkills` where one is true or false, for `state.ts`.
+ */
 export function collectClaudeSettingsFacts(ctx: ClaudeContext, out: Collector): void {
   for (const settings of ctx.settings) {
     const where = {
@@ -278,6 +283,10 @@ export function collectClaudeSettingsFacts(ctx: ClaudeContext, out: Collector): 
     }
     if (isRecord(settings.data.enabledPlugins)) {
       out.facts.claudeEnabledPlugins.push({ ...where, map: settings.data.enabledPlugins });
+    }
+    for (const key of FLAGS) {
+      const value = settings.data[key];
+      if (typeof value === "boolean") out.facts.claudeFlags.push({ ...where, key, value });
     }
   }
 }

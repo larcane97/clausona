@@ -1185,6 +1185,36 @@ describe("plan: hooks and plugins", () => {
     expect(codes(plan(ctx, "hooks", act("off", "everywhere", [kitHook])))).toEqual(["plugin-item"]);
   });
 
+  it("refuses to turn a hook on while disableAllHooks keeps every hook off, naming where it is set", async () => {
+    const user = await seed((h) => h.write(".claude/settings.json", { ...SETTINGS, disableAllHooks: true }));
+    const notifyA = hookRow(user.inv, user.app, "notify-a");
+    const on = plan(user.ctx, "hooks", act("on", "everywhere", [notifyA]));
+    expect(codes(on)).toEqual(["all-hooks-off"]);
+    expect(refusalText(on.refused[0] as Plan["refused"][number], "flags")).toBe(
+      "disableAllHooks in ~/.claude/settings.json turns every hook off. Change it there.",
+    );
+    // Off still goes ahead: the hook stays out once disableAllHooks is gone.
+    expect(plan(user.ctx, "hooks", act("off", "everywhere", [notifyA])).changes).toHaveLength(1);
+
+    const managed = await seed((h) => h.write("managed-settings.json", { disableAllHooks: true }));
+    const fromPolicy = plan(
+      managed.ctx,
+      "hooks",
+      act("on", "everywhere", [hookRow(managed.inv, managed.app, "notify-a")]),
+    );
+    expect(codes(fromPolicy)).toEqual(["managed"]);
+
+    // A project's own setting holds in that project alone: on is everywhere, so it goes ahead and says so.
+    const project = await seed((h, app) =>
+      h.write(path.join(path.relative(h.home, app), ".claude", "settings.json"), { disableAllHooks: true }),
+    );
+    const here = plan(project.ctx, "hooks", act("on", "everywhere", [hookRow(project.inv, project.app, "notify-a")]));
+    expect(codes(here)).toEqual([]);
+    expect(here.notes).toEqual([
+      `Still off in this project: disableAllHooks in ${tilde(path.join(project.app, ".claude", "settings.json"), project.h.home)}`,
+    ]);
+  });
+
   it("takes two hooks of one group out last first, so each place still holds its hook", async () => {
     const { app, inv, ctx } = await seed();
     const rows = [hookRow(inv, app, "notify-a"), hookRow(inv, app, "notify-b")];

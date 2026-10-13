@@ -181,7 +181,10 @@ hidden: `Loaded  on in personal · hidden by the Global copy in work`.
 
 `skillOverrides` and `enabledPlugins` are read the way Claude Code reads them: managed
 settings first, then the project's `.claude/settings.local.json`, then its
-`.claude/settings.json`, then the user settings. The first that sets a name wins.
+`.claude/settings.json`, then the user settings. The first that sets a name wins. So are
+`disableAllHooks` and `disableBundledSkills`: the first file that sets one to `true` or
+`false` decides, so a project's `false` turns hooks back on there over a `true` in your user
+settings.
 
 ## States and tags
 
@@ -205,7 +208,9 @@ there, which its details say. A row read per account says it for each account in
 
 The switches are read from these places:
 
-- Claude skills: `skillOverrides` in the settings files.
+- Claude skills: `skillOverrides` in the settings files. A built-in skill is off while
+  `disableBundledSkills` is `true`, whatever `skillOverrides` says, and the details name the
+  setting and its file: `off everywhere (disableBundledSkills in ~/.claude/settings.json)`.
 - Claude plugins and what they bring: `enabledPlugins` in the settings files. A plugin no
   settings file turns on is off.
 - Claude user and local MCP servers: `disabledMcpServers` in the account's `.claude.json`
@@ -216,7 +221,12 @@ The switches are read from these places:
   `enableAllProjectMcpServers`, in the settings files or the account's project entry.
 - Codex skills: `[[skills.config]]` in Codex's `config.toml`, by name or by path.
 - Codex MCP servers: `mcp_servers.<name>.enabled` in Codex's or the project's `config.toml`.
-- Hooks are on, except a plugin's hooks while the plugin is off.
+- Hooks are on, except a plugin's hooks while the plugin is off. `disableAllHooks` set to
+  `true` turns every Claude hook off. Set in managed settings, it turns off the managed hooks
+  too. Set anywhere else, it leaves the managed hooks on, and a plugin's hooks while managed
+  `enabledPlugins` turns the plugin on, as Claude Code runs those. The details name the setting
+  and its file, as in `off everywhere (disableAllHooks in ~/.claude/settings.json)`; a project's
+  own setting reads `off here`.
 
 ### Tags
 
@@ -607,6 +617,11 @@ Neither Claude Code nor Codex has a switch for one hook in one project. So `hook
 keeps it, and on puts it back. `--everywhere` is taken and changes nothing. On the screen `g`
 turns a hook off, and `space` says why it can't.
 
+While `disableAllHooks` keeps every Claude hook off, turning one on would not make it run, so
+`on` is refused and the reason names the file that sets it. When this project's own settings
+set it, it holds in this project only, so `on` goes ahead and the plan says
+`Still off in this project: disableAllHooks in …`.
+
 A server or a hook taken out and kept by clausona still has its row, in its own scope and in
 `--scope all`, with the tag `off`. It is not in Loaded, since it does not load. For a server the
 details read `off everywhere (kept by clausona)`. For a hook they read `off everywhere — clausona
@@ -834,6 +849,7 @@ the CLI's words. In the table `<tool>` is the tool's name and `<scope>` a scope'
 | `tracked` | Git tracks it in `<project>`, so this changes the repo. | Press `o` to turn it off here instead, or `y` to go ahead. | Add `--tracked` to go ahead, or turn it off: `clausona <command> off <name>`. |
 | `no-account` | No account that has it has opened this project. | | |
 | `elsewhere` | It is turned off in `<file>`, which applies here. | Change it there. | Change it there. |
+| `all-hooks-off` | `disableAllHooks` in `<file>` turns every hook off. | Change it there. | Change it there. |
 
 On the screen, `stash-gone` on one account's server, in a row other accounts share, says
 `Press d and choose only work in the dialog.` instead, since `d` on the row would delete the

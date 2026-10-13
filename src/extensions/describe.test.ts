@@ -19,7 +19,7 @@ import {
 } from "./describe.js";
 import { loadInventory } from "./inventory.js";
 import type { Extension, Inventory } from "./model.js";
-import { projectName, stateHere, viewFrom } from "./present.js";
+import { projectName, stateHere, tilde, viewFrom } from "./present.js";
 import { isAccountCopy, otherProjects, rowsIn, type ScopeRow } from "./scopes.js";
 import { TestHome } from "./test-home.js";
 
@@ -234,6 +234,54 @@ describe("tagsOf", () => {
     const { inv, app } = await seed({ more: (h) => h.link(path.join(h.home, "gone"), ".claude/skills/dangling") });
     expect(tagsOf(inv, single(claudeSkill(inv, "dangling")), app, NOW)).toEqual(["broken link"]);
     expect(tagsOf(inv, single(find(inv, (i) => i.name === "tools", "tools")), app, NOW)).toEqual(["pending approval"]);
+  });
+});
+
+describe("settings that turn a whole kind off", () => {
+  it("reads every Claude hook off under disableAllHooks, and says where it is set", async () => {
+    const { h, inv, app } = await seed({
+      more: (h) =>
+        h.write(".claude/settings.json", {
+          disableAllHooks: true,
+          hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-me" }] }] },
+        }),
+    });
+    const stop = rowsIn(inv, "claude", "hook", "global", app, NOW)[0] as ScopeRow;
+    expect(tagsOf(inv, stop, app, NOW)).toEqual(["off"]);
+    expect(jsonItem(inv, stop, app, NOW).state).toBe("off");
+    expect(detailsOf(inv, stop, app, NOW).find((l) => l.label === "Loaded")).toEqual({
+      label: "Loaded",
+      text: `off everywhere (disableAllHooks in ${tilde(h.path(".claude", "settings.json"), h.home)})`,
+      tone: "warning",
+    });
+    expect(rowsIn(inv, "claude", "hook", "loaded", app, NOW)).toEqual([]);
+  });
+
+  it("says off here for a project's own disableAllHooks", async () => {
+    const { inv, app } = await seed({
+      more: (h) => h.write("repos/app/.claude/settings.local.json", { disableAllHooks: true }),
+    });
+    const stop = rowsIn(inv, "claude", "hook", "global", app, NOW)[0] as ScopeRow;
+    expect(tagsOf(inv, stop, app, NOW)).toEqual(["off here"]);
+    expect(detailsOf(inv, stop, app, NOW).find((l) => l.label === "Loaded")?.text).toBe(
+      "off here (disableAllHooks in this project's .claude/settings.local.json)",
+    );
+  });
+
+  it("reads the built-in skills off under disableBundledSkills, and leaves the others on", async () => {
+    const { h, inv, app } = await seed({
+      more: (h) =>
+        h.write(".claude/settings.json", { disableBundledSkills: true, skillOverrides: { "claude-api": "name-only" } }),
+    });
+    const builtin = rowsIn(inv, "claude", "skill", "builtin", app, NOW);
+    expect(builtin.map((r) => r.name)).toEqual(["claude-api"]);
+    const api = builtin[0] as ScopeRow;
+    expect(tagsOf(inv, api, app, NOW)).toEqual(["off"]);
+    expect(jsonItem(inv, api, app, NOW).state).toBe("off");
+    expect(detailsOf(inv, api, app, NOW).find((l) => l.label === "Loaded")?.text).toBe(
+      `off everywhere (disableBundledSkills in ${tilde(h.path(".claude", "settings.json"), h.home)})`,
+    );
+    expect(tagsOf(inv, single(claudeSkill(inv, "eli5")), app, NOW)).toEqual([]);
   });
 });
 

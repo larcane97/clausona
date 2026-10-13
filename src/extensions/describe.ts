@@ -251,6 +251,7 @@ function isProjectSetting(inv: Inventory, file: string): boolean {
   return (
     facts.claudeSkillOverrides.some(at) ||
     facts.claudeEnabledPlugins.some(at) ||
+    facts.claudeFlags.some(at) ||
     facts.claudeMcpDisabled.some(at) ||
     facts.claudeMcpjson.some(at) ||
     facts.codexMcpEnabled.some(at)
@@ -407,6 +408,23 @@ function settingPlace(inv: Inventory, item: Extension, project: string | undefin
   return `${whose} ${inside ? path.relative(here, file) : `entry in ${tilde(file, inv.homeDir)}`}`;
 }
 
+/** The settings that turn a whole kind off, which the words name along with their file. */
+const WHOLE_KIND: ReadonlySet<string> = new Set(["disableAllHooks", "disableBundledSkills"]);
+
+/**
+ * Where a state is set, in words: the file (`settingPlace`), and for a setting that turns a whole
+ * kind off, the setting too - "disableAllHooks in ~/.claude/settings.json".
+ */
+function setByWords(
+  inv: Inventory,
+  item: Extension,
+  project: string | undefined,
+  setBy: { file: string; key: string },
+): string {
+  const place = settingPlace(inv, item, project, setBy.file);
+  return WHOLE_KIND.has(setBy.key) ? `${setBy.key} in ${place}` : place;
+}
+
 /** A state in words, and where it is set when that matters: off, and where it is turned off. */
 function stateParts(
   inv: Inventory,
@@ -422,7 +440,7 @@ function stateParts(
   if (state.value !== "off") return { word: "on" };
   // The stash file is clausona's, no setting of the tool's: no place to name.
   if (state.setBy?.key === STASH_KEY) return { word: "off everywhere", because: "kept by clausona" };
-  return state.setBy ? { word: "off", because: settingPlace(inv, item, project, state.setBy.file) } : { word: "off" };
+  return state.setBy ? { word: "off", because: setByWords(inv, item, project, state.setBy) } : { word: "off" };
 }
 
 /** A state as one account line says it: "on", "off (this project's …)", "pending approval". */
@@ -496,7 +514,7 @@ function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined)
       const text = "off everywhere — clausona keeps its settings so you can turn it back on";
       return [{ label: "Loaded", text, tone: "warning" }];
     }
-    const place = settingPlace(inv, item, project, state.setBy.file);
+    const place = setByWords(inv, item, project, state.setBy);
     const here = isProjectSetting(inv, state.setBy.file);
     return [{ label: "Loaded", text: `${here ? "off here" : "off everywhere"} (${place})`, tone: "warning" }];
   }

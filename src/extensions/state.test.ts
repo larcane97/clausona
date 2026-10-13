@@ -99,6 +99,24 @@ describe("Claude skills", () => {
     ).toBe("on");
   });
 
+  it("turns the built-in skills off under disableBundledSkills, over skillOverrides, and no other", () => {
+    const api = skill("claude-api", "builtin");
+    const local = `${P}/.claude/settings.local.json`;
+    const i = inv([api, eli5], {
+      claudeSkillOverrides: [{ file: "/u/settings.json", layer: "user", map: { "claude-api": "name-only" } }],
+      claudeFlags: [
+        { file: "/u/settings.json", layer: "user", key: "disableBundledSkills", value: true },
+        { file: local, layer: "local", project: P, key: "disableBundledSkills", value: false },
+      ],
+    });
+    const off = { value: "off", setBy: { file: "/u/settings.json", key: "disableBundledSkills" } };
+    expect(stateOf(i, api, Q)).toEqual(off);
+    expect(stateOf(i, api, undefined)).toEqual(off);
+    // P's local settings turn them back on there, where the override applies again.
+    expect(stateOf(i, api, P).value).toBe("name-only");
+    expect(stateOf(i, eli5, Q)).toEqual({ value: "on" });
+  });
+
   it("follows the plugin for a plugin skill and marks a project skill a global one shadows", () => {
     const fromPlugin = skill("sp:brainstorming", "plugin", { plugin: "sp@m" });
     const local = skill("eli5", "project", { project: P });
@@ -350,6 +368,81 @@ describe("Claude plugins and hooks", () => {
   });
 });
 
+describe("Claude hooks under disableAllHooks", () => {
+  const accounts = ["claude:a", "claude:b"];
+  const userHook = ext("hook", "Stop", { tool: "claude", scope: "global", file: "/u/settings.json" });
+  const projectHook = ext("hook", "SessionStart", {
+    tool: "claude",
+    scope: "project",
+    project: P,
+    file: `${P}/.claude/settings.json`,
+  });
+  const managedHook = ext("hook", "PreToolUse", { tool: "claude", scope: "managed", file: "/m/managed.json" });
+  const pluginHook = (plugin: string) =>
+    ext("hook", `PostToolUse ${plugin}`, {
+      tool: "claude",
+      scope: "plugin",
+      plugin,
+      file: `/p/${plugin}/hooks/hooks.json`,
+      accounts,
+    });
+  const [kit, forced] = [pluginHook("kit@m"), pluginHook("forced@m")];
+  const codexHook = ext("hook", "Stop", { tool: "codex", scope: "global", file: "/c/hooks.json" });
+  const enabled: StateFacts["claudeEnabledPlugins"] = [
+    { file: "/m/managed.json", layer: "managed", map: { "forced@m": true } },
+    { file: "/u/settings.json", layer: "user", map: { "kit@m": true } },
+  ];
+  const all = [userHook, projectHook, managedHook, kit, forced, codexHook];
+  const off = (file: string) => ({ value: "off", setBy: { file, key: "disableAllHooks" } });
+
+  it("turns off every hook but the managed ones, and a plugin's that managed settings turn on", () => {
+    const i = inv(all, {
+      claudeEnabledPlugins: enabled,
+      claudeFlags: [{ file: "/u/settings.json", layer: "user", key: "disableAllHooks", value: true }],
+    });
+    for (const project of [P, Q, undefined]) {
+      expect(stateOf(i, userHook, project)).toEqual(off("/u/settings.json"));
+      expect(stateOf(i, kit, project)).toEqual(off("/u/settings.json"));
+      expect(stateOf(i, managedHook, project)).toEqual({ value: "on" });
+      expect(stateOf(i, forced, project).value).toBe("on");
+      expect(stateOf(i, codexHook, project)).toEqual({ value: "on" });
+    }
+    expect(stateOf(i, projectHook, P)).toEqual(off("/u/settings.json"));
+  });
+
+  it("turns off the managed hooks too when managed settings set it", () => {
+    const i = inv(all, {
+      claudeEnabledPlugins: enabled,
+      claudeFlags: [{ file: "/m/managed.json", layer: "managed", key: "disableAllHooks", value: true }],
+    });
+    for (const hook of [userHook, managedHook, kit, forced])
+      expect(stateOf(i, hook, P)).toEqual(off("/m/managed.json"));
+  });
+
+  it("reads it as Claude Code does: the first layer that sets it wins, a project's in that project only", () => {
+    const local = `${P}/.claude/settings.local.json`;
+    const i = inv(all, {
+      claudeFlags: [
+        { file: "/u/settings.json", layer: "user", key: "disableAllHooks", value: true },
+        { file: local, layer: "local", project: P, key: "disableAllHooks", value: false },
+        { file: `${Q}/.claude/settings.json`, layer: "project", project: Q, key: "disableAllHooks", value: true },
+      ],
+    });
+    // P's local settings turn hooks back on there; elsewhere the user's setting holds.
+    expect(stateOf(i, userHook, P)).toEqual({ value: "on" });
+    expect(stateOf(i, userHook, Q)).toEqual(off(`${Q}/.claude/settings.json`));
+    expect(stateOf(i, userHook, undefined)).toEqual(off("/u/settings.json"));
+    // A managed false wins over the user's true.
+    const managedOn = inv(all, {
+      claudeFlags: [
+        { file: "/m/managed.json", layer: "managed", key: "disableAllHooks", value: false },
+        { file: "/u/settings.json", layer: "user", key: "disableAllHooks", value: true },
+      ],
+    });
+    expect(stateOf(managedOn, userHook, P)).toEqual({ value: "on" });
+  });
+});
+
 describe("Codex", () => {
   const repoSkill = ext("skill", "lint", {
     tool: "codex",
@@ -417,7 +510,9 @@ describe("isManagedSetting", () => {
         { file: "/u/settings.json", layer: "user", map: {} },
       ],
       claudeEnabledPlugins: [{ file: "/m/managed-settings.d/10-a.json", layer: "managed", map: {} }],
+      claudeFlags: [{ file: "/m/managed-settings.d/20-b.json", layer: "managed", key: "disableAllHooks", value: true }],
     });
+    expect(isManagedSetting(i, "/m/managed-settings.d/20-b.json")).toBe(true);
     expect(isManagedSetting(i, "/m/managed-settings.json")).toBe(true);
     expect(isManagedSetting(i, "/m/managed-settings.d/10-a.json")).toBe(true);
     expect(isManagedSetting(i, "/u/settings.json")).toBe(false);

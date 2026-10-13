@@ -145,6 +145,18 @@ describe("tables", () => {
     expect(byName(global, "bare")?.tag).toEqual({ text: "no front matter", tone: "muted" });
   });
 
+  it("tags every Claude hook off under disableAllHooks, and leaves it out of Loaded", async () => {
+    const { inv, app } = await seed((h) =>
+      h.write(".claude/settings.json", {
+        disableAllHooks: true,
+        hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-me" }] }] },
+      }),
+    );
+    const global = buildTable(inv, "claude", "hook", "global", app, NOW, 100, "");
+    expect(byName(global, "Stop")?.tag).toEqual({ text: "off", tone: "muted" });
+    expect(names(buildTable(inv, "claude", "hook", "loaded", app, NOW, 100, ""))).toEqual([]);
+  });
+
   it("groups Loaded by the place each row comes from, in the scope list's order, with a heading for each", async () => {
     const { inv, app } = await seed();
     const loaded = buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, "");

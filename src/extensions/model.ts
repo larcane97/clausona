@@ -110,9 +110,14 @@ export type SettingsLayer = "managed" | "local" | "project" | "user";
 
 type SettingsMap = { file: string; layer: SettingsLayer; project?: string; map: Record<string, unknown> };
 
+/** A Claude Code setting that turns a whole kind off: every hook, or the skills that come with it. */
+export type ClaudeFlag = "disableAllHooks" | "disableBundledSkills";
+
 export type StateFacts = {
   claudeSkillOverrides: SettingsMap[];
   claudeEnabledPlugins: SettingsMap[];
+  /** Each settings file's `disableAllHooks` and `disableBundledSkills`, where it sets one to true or false. */
+  claudeFlags: { file: string; layer: SettingsLayer; project?: string; key: ClaudeFlag; value: boolean }[];
   /** `.claude.json` → projects[P].disabledMcpServers, per account. */
   claudeMcpDisabled: { file: string; profile: string; project: string; names: string[] }[];
   /** `.mcp.json` approvals, from settings and from an account's project entry. */
@@ -143,6 +148,7 @@ export function emptyFacts(): StateFacts {
   return {
     claudeSkillOverrides: [],
     claudeEnabledPlugins: [],
+    claudeFlags: [],
     claudeMcpDisabled: [],
     claudeMcpjson: [],
     codexSkillConfig: [],
