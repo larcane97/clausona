@@ -125,14 +125,15 @@ function isLimit(value: unknown): boolean {
 
 /**
  * Whether text holds something shaped like a key, so that it is neither stored nor quoted back:
- * the whole of it, or a piece of it between spaces, commas and colons, starts like one or carries
- * one anywhere. Pieces as well as the whole: `claude:<key>` does not start with 'sk-', and a
- * shorter key behind a prefix or a space stays under the length ceiling. A key anywhere: a vendor
- * token (`hf_…`, `AIza…`, `ghp_…`) is short and does not start with 'sk-', so only
- * carriesCredentialToken sees it. Route names, patterns and the TUI's route form all ask this.
+ * it carries one anywhere, or a word of it, between spaces, commas and colons, starts like one or
+ * is longer than a name. Words, because `claude:<key>` does not start with 'sk-'. The length
+ * ceiling goes word by word, because a sentence is longer than any name without being a key. A
+ * key anywhere: a vendor token (`hf_…`, `AIza…`, `ghp_…`) is short and does not start with 'sk-',
+ * so only carriesCredentialToken sees it. Route names, patterns, the TUI's route form and the
+ * target of `clausona run` all ask this.
  */
 export function holdsKey(text: string): boolean {
-  return [text, ...text.split(/[\s,:]+/)].some((piece) => looksLikeCredential(piece) || carriesCredentialToken(piece));
+  return carriesCredentialToken(text) || text.split(/[\s,:]+/).some(looksLikeCredential);
 }
 
 export function checkRouteName(name: string): string | null {

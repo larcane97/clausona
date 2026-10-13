@@ -108,6 +108,14 @@ describe("runTarget", () => {
     expect(() => runTarget("don't stop", REGISTRY)).toThrow(/clausona run claude 'don'\\''t stop'$/);
   });
 
+  it("gives a prompt longer than a name the same hint", () => {
+    const prompt = "please fix the failing test in the routing module and run the whole suite";
+    expect(() => runTarget(prompt, REGISTRY)).toThrow(
+      `'${prompt}' is not a profile or a tool. To pass a prompt, name the tool: clausona run claude '${prompt}'`,
+    );
+    expect(() => runTarget(`todo: ${prompt}`, REGISTRY)).toThrow(/^'todo: please fix .* is not a profile or a tool\./);
+  });
+
   it("keeps saying a well-formed name is not found", () => {
     expect(() => runTarget("nobody", REGISTRY)).toThrow("Profile 'nobody' not found.");
     expect(() => runTarget("claude:nobody", REGISTRY)).toThrow("Profile 'claude:nobody' not found.");
@@ -119,6 +127,10 @@ describe("runTarget", () => {
       ["sk", "ant", "y".repeat(24)].join("-"),
       `use ${["ghp", "Ab".repeat(18)].join("_")} now`,
       `run ${["sk", "ant", "y".repeat(8)].join("-")}`,
+      // Longer than a name, as a prompt is: the key still counts, word by word and anywhere.
+      `please run the whole suite with ${["sk", "ant", "y".repeat(24)].join("-")} and report back`,
+      `please run the whole suite as ${["ghp", "Ab".repeat(18)].join("_")} and report back`,
+      "x".repeat(70),
     ]) {
       const error = (() => {
         try {

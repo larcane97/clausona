@@ -59,11 +59,20 @@ describe("holdsKey", () => {
     ["a key after a pattern", () => `me@example.com, ${keyShaped()}`],
     ["a piece that starts like a key", () => "team sk-x"],
     ["a vendor token", () => ["hf", "Ab".repeat(17)].join("_")],
+    ["a word longer than a name", () => "x".repeat(65)],
+    ["a key in a sentence longer than a name", () => `please use ${keyShaped()} for every test in the module`],
   ])("finds %s", (_what, text) => {
     expect(holdsKey(text())).toBe(true);
   });
 
-  it.each(["main", "*@work.example.com", "claude:team", ""])("finds nothing in %j", (text) => {
+  it.each([
+    "main",
+    "*@work.example.com",
+    "claude:team",
+    "",
+    // Longer than a name, and every word of it shorter than one.
+    "please fix the failing test in the routing module and run the whole suite",
+  ])("finds nothing in %j", (text) => {
     expect(holdsKey(text)).toBe(false);
   });
 });
