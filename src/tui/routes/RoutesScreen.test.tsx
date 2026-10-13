@@ -249,6 +249,14 @@ describe("RoutesScreen", () => {
     expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 
+  it("never reads the cut for a member under it", async () => {
+    const near = { ...QUOTAS, "claude:team": snap(5, 79.6), "claude:work": snap(80, 34) };
+    const { instance } = setup({ collect: async () => near });
+    const { detail } = panes(await ranked(instance));
+    expect(row(detail, "claude:team")).toMatch(/^▸ claude:team\s.*5%.*79%\s+next$/);
+    expect(row(detail, "claude:work")).toMatch(/^claude:work\s.*80%.*34%\s+over 80%$/);
+  });
+
   it("explains routes, the route n would make, and n, in one column when there are none", async () => {
     for (const columns of [80, 120]) {
       const { instance } = setup({ file: { version: 1, routes: {} }, columns });

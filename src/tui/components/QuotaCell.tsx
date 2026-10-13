@@ -20,17 +20,23 @@ export function quotaColor(window: QuotaWindow, live: boolean): string {
   return color.text;
 }
 
-/** One quota window cut to `width` by what it drops (`fitQuotaValue`), or a muted dash. */
+/**
+ * One quota window cut to `width` by what it drops (`fitQuotaValue`), or a muted dash. `cut` is a
+ * route's, on the routes screens: a reading under it never reads as it. Without one, the reading
+ * is rounded as everywhere else.
+ */
 export function QuotaCell({
   window,
   live,
   width,
   bold,
+  cut,
 }: {
   window?: QuotaWindow;
   live: boolean;
   width: number;
   bold?: boolean;
+  cut?: number;
 }) {
   if (!window) {
     return (
@@ -41,7 +47,7 @@ export function QuotaCell({
   }
   return (
     <Text color={quotaColor(window, live)} bold={bold} wrap="truncate-end">
-      {fitQuotaValue(window, width)}
+      {fitQuotaValue(window, width, new Date(), cut)}
     </Text>
   );
 }

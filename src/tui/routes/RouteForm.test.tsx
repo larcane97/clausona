@@ -740,6 +740,12 @@ describe("RouteForm", () => {
     expect(frame).toContain("Now: 2 of 3 accounts under 80% · next claude:team");
   });
 
+  it("never reads the limit for an account under it", async () => {
+    const { instance } = setup({ edit: "main", quotas: { ...QUOTAS, "claude:team": snap(5, 79.6) } });
+    await opened(instance);
+    expect(row(text(instance), "claude:team")).toMatch(/\[x\] claude:team\s+5%\s+79%$/);
+  });
+
   it("renames a route: the new key is written and the old one removed", async () => {
     const { instance, deps, onDone, disk } = setup({ edit: "solo" });
     await opened(instance);

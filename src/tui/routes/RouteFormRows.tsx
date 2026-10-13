@@ -189,6 +189,7 @@ function MoreLine({ arrow, count }: { arrow: "↑" | "↓"; count: number }) {
  * Row 0, every account, then one row per account with its quota; out of the route reads
  * `excluded`, and an account with no quota says why. `lines` is the most lines the accounts may
  * take, their counts above and below included: the rest scroll with the cursor, and row 0 stays.
+ * `cut` is the limit the form holds: a reading under it never reads as it.
  *
  * Each row is a Line of its own, row 0's carrying the field's label (`line`): every row's box
  * starts where the other fields' values do, its `▸` (`rowMark`) in the label column.
@@ -201,6 +202,7 @@ export function AccountRows({
   excluded,
   focused,
   now,
+  cut,
   lines = Number.POSITIVE_INFINITY,
 }: {
   line: { focused: boolean; label: string; error: boolean };
@@ -210,6 +212,7 @@ export function AccountRows({
   excluded: ReadonlySet<string>;
   focused: boolean;
   now: number;
+  cut: number;
   lines?: number;
 }) {
   const idWidth = Math.max(0, ...listed.map((account) => account.id.length));
@@ -242,10 +245,10 @@ export function AccountRows({
             </Box>
             {/* Right-aligned: a percentage comes padded to the width, a dash does not. */}
             <Box marginLeft={GAP} width={QUOTA} flexShrink={0} justifyContent="flex-end">
-              <QuotaCell window={snapshot?.session} live={live} width={QUOTA} />
+              <QuotaCell window={snapshot?.session} live={live} width={QUOTA} cut={cut} />
             </Box>
             <Box marginLeft={GAP} width={QUOTA} flexShrink={0} justifyContent="flex-end">
-              <QuotaCell window={snapshot?.weekly} live={live} width={QUOTA} />
+              <QuotaCell window={snapshot?.weekly} live={live} width={QUOTA} cut={cut} />
             </Box>
             {note ? (
               <Box marginLeft={GAP} flexShrink={0}>

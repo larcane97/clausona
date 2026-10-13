@@ -76,8 +76,8 @@ function lineOf(row: Row, ranking: Ranking, pending: boolean): Line {
 }
 
 /** The widest a column of cells is at `width`: fitQuotaValue drops what does not fit. */
-function quotaColumn(windows: QuotaWindow[], width: number): number {
-  return Math.max(2, ...windows.map((window) => fitQuotaValue(window, width).length));
+function quotaColumn(windows: QuotaWindow[], width: number, cut: number): number {
+  return Math.max(2, ...windows.map((window) => fitQuotaValue(window, width, new Date(), cut).length));
 }
 
 /** Text after a gap that takes the rest of the line, cut rather than wrapped. */
@@ -91,12 +91,18 @@ function Rest({ text, tone }: { text: string; tone: string }) {
   );
 }
 
-function MemberLine({ line, idWidth, quota }: { line: Line; idWidth: number; quota: number }) {
+function MemberLine({ line, idWidth, quota, cut }: { line: Line; idWidth: number; quota: number; cut: number }) {
   const { row } = line;
   // The window that sets the member's usage is bold, as in `csn route explain`.
   const cell = (window: QuotaWindow | undefined, which: "5H" | "7D") => (
     <Box marginLeft={GAP} width={quota} flexShrink={0}>
-      <QuotaCell window={window} live={!row?.usage?.stale} width={quota} bold={row?.usage?.window === which} />
+      <QuotaCell
+        window={window}
+        live={!row?.usage?.stale}
+        width={quota}
+        bold={row?.usage?.window === which}
+        cut={cut}
+      />
     </Box>
   );
   return (
@@ -146,8 +152,11 @@ function MemberTable({ ranking, pending, width }: { ranking: Ranking; pending: b
   /** A line's width but for its id: the mark, the two quota cells and the status, each after a gap. */
   const around = (quota: number) => MARK + 2 * (GAP + quota) + (status ? GAP + status : 0);
   // The most detailed cells that fit beside whole ids; failing that, percentages only and the ids cut.
-  const fitting = QUOTA_WIDTHS.map((at) => quotaColumn(windows, at)).find((quota) => around(quota) + longest <= width);
-  const quota = fitting ?? quotaColumn(windows, QUOTA_WIDTHS[QUOTA_WIDTHS.length - 1]);
+  const cut = ranking.route.maxUsage;
+  const fitting = QUOTA_WIDTHS.map((at) => quotaColumn(windows, at, cut)).find(
+    (quota) => around(quota) + longest <= width,
+  );
+  const quota = fitting ?? quotaColumn(windows, QUOTA_WIDTHS[QUOTA_WIDTHS.length - 1], cut);
   const idWidth = fitting === undefined ? Math.max("ACCOUNT".length, width - around(quota)) : longest;
 
   return (
@@ -166,7 +175,7 @@ function MemberTable({ ranking, pending, width }: { ranking: Ranking; pending: b
         </Box>
       ) : null}
       {lines.map((line) => (
-        <MemberLine key={line.key} line={line} idWidth={idWidth} quota={quota} />
+        <MemberLine key={line.key} line={line} idWidth={idWidth} quota={quota} cut={cut} />
       ))}
       {ranking.excluded.map((entry) => (
         <Box key={`excluded:${entry.id}`} paddingLeft={MARK}>

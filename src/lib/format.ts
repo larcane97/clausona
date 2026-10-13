@@ -123,21 +123,29 @@ function isLiveQuota(state: QuotaSnapshot["state"]): boolean {
 }
 
 /**
- * A usage percentage as a whole number: rounded, except that a reading under 100 never reads 100.
- * An account at 100% cannot run, and one at 99.6 (Codex reports fractions) can, and is picked.
+ * A usage percentage as a whole number: rounded, except that a reading under a limit never reads
+ * as the limit, rounded down instead. An account at 100% cannot run, and one at 99.6 (Codex
+ * reports fractions) can, and is picked. `cut` is a route's: one at 79.6 is under a cut of 80 and
+ * can be picked before anyone over it, so it reads 79%, not the 80% an account over it reads.
  */
-export function wholeQuotaPercent(percent: number): number {
-  return percent >= 99 && percent < 100 ? 99 : Math.round(percent);
+export function wholeQuotaPercent(percent: number, cut?: number): number {
+  const whole = Math.round(percent);
+  const reaches = (limit: number | undefined) => limit !== undefined && percent < limit && whole >= limit;
+  return reaches(100) || reaches(cut) ? Math.floor(percent) : whole;
 }
 
-export function formatQuotaPercent(window: QuotaWindow | undefined): string {
-  return window ? `${wholeQuotaPercent(window.usedPercent)}%` : "—";
+export function formatQuotaPercent(window: QuotaWindow | undefined, cut?: number): string {
+  return window ? `${wholeQuotaPercent(window.usedPercent, cut)}%` : "—";
 }
 
 /** Colours a percentage by severity; anything not freshly fetched is dimmed instead. */
-export function styledQuota(window: QuotaWindow | undefined, state: QuotaSnapshot["state"] | undefined): string {
+export function styledQuota(
+  window: QuotaWindow | undefined,
+  state: QuotaSnapshot["state"] | undefined,
+  cut?: number,
+): string {
   if (!window || !state) return dim("—");
-  const text = formatQuotaPercent(window);
+  const text = formatQuotaPercent(window, cut);
   if (!isLiveQuota(state)) return dimmer(text);
   if (window.usedPercent >= QUOTA_CRITICAL) return red(text);
   if (window.usedPercent >= QUOTA_WARNING) return yellow(text);
@@ -197,10 +205,10 @@ export function quotaBar(usedPercent: number): string {
 /**
  * Most detailed rendering of a window that fits `width`, shedding the gauge, then the
  * wording, then the reset time. The percentage is never dropped, so a value can still
- * exceed `width` when even that does not fit.
+ * exceed `width` when even that does not fit. `cut` is a route's, as wholeQuotaPercent takes it.
  */
-export function fitQuotaValue(window: QuotaWindow, width: number, now: Date = new Date()): string {
-  const percent = formatQuotaPercent(window).padStart(4);
+export function fitQuotaValue(window: QuotaWindow, width: number, now: Date = new Date(), cut?: number): string {
+  const percent = formatQuotaPercent(window, cut).padStart(4);
   const long = formatResetIn(window.resetsAt, now);
   const short = formatResetShort(window.resetsAt, now);
   const gauge = quotaBar(window.usedPercent);

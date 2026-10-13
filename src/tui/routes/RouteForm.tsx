@@ -568,6 +568,7 @@ export function RouteForm(props: RouteFormProps) {
           excluded={excluded}
           focused={focusOn("accounts")}
           now={now}
+          cut={limits.maxUsage}
           lines={accountLines}
         />
         <Line {...line("from", "Patterns")}>

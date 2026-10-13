@@ -35,4 +35,10 @@ describe("QuotaCell", () => {
     expect(frame(<QuotaCell window={at(42)} live width={20} />)).toMatch(/^\S+ {2}42%$/);
     expect(frame(<QuotaCell window={at(42)} live width={4} />)).toBe(" 42%");
   });
+
+  it("never reads a route's cut under it, and rounds as the dashboard does without one", () => {
+    expect(frame(<QuotaCell window={at(79.6)} live width={4} cut={80} />)).toBe(" 79%");
+    expect(frame(<QuotaCell window={at(80)} live width={4} cut={80} />)).toBe(" 80%");
+    expect(frame(<QuotaCell window={at(79.6)} live width={4} />)).toBe(" 80%");
+  });
 });

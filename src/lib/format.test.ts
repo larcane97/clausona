@@ -50,6 +50,20 @@ describe("formatQuotaPercent", () => {
     expect(formatQuotaPercent({ usedPercent: 100.4, resetsAt: null })).toBe("100%");
   });
 
+  // An account at 79.6 is under a cut of 80 and is picked before one at 80: both read 80%.
+  it("never reads a route's cut under it, and rounds as before otherwise", () => {
+    const shown = (usedPercent: number, cut?: number) => formatQuotaPercent({ usedPercent, resetsAt: null }, cut);
+    for (const usedPercent of [79.4, 79.5, 79.6, 79.99]) {
+      expect(shown(usedPercent, 80), String(usedPercent)).toBe("79%");
+    }
+    expect(shown(80, 80)).toBe("80%");
+    expect(shown(80.4, 80)).toBe("80%");
+    expect(shown(78.6, 80)).toBe("79%");
+    expect(shown(99.6, 80)).toBe("99%");
+    expect(shown(79.6, 79.7)).toBe("79%");
+    expect(shown(79.6)).toBe("80%");
+  });
+
   it("renders an em dash when the window is absent", () => {
     expect(formatQuotaPercent(undefined)).toBe("—");
   });

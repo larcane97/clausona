@@ -534,6 +534,10 @@ grey. At the bottom are the entries nothing was ranked for, such as an account t
 took out or a name that is not registered. `LAST PICKED` appears on round-robin routes, the one
 strategy that reads it.
 
+Percentages are rounded to whole numbers, except that one under the cut never reads as the cut.
+An account at 79.6% of a window can be picked under an 80% cut, so it reads 79%, here, in the
+run's note and on the Routes screen. One under 100% never reads 100% either.
+
 `explain` launches nothing and records nothing. It exits 0 even when nobody could be picked, and
 says so under the table:
 

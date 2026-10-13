@@ -486,6 +486,18 @@ describe("renderNote", () => {
     expect(usageText({ percent: 99.6, window: "5H", stale: false })).toBe("99% 5H");
     expect(plain(renderRouteDetail("main", r, at(120)))).toMatch(/^ {2}▸ claude:team\s+99% 1h\s+40% 2d/m);
   });
+
+  // 79.6 is under a cut of 80 and was picked first, reading 80% beside an account at 80 over it.
+  it("never reads the cut for an account under it, in the note, the table and the preview", () => {
+    const spec: RouteSpec = { tool: "claude", from: ["team", "work"], strategy: "headroom" };
+    const r = rank(spec, { "claude:team": quota(10, 79.6), "claude:work": quota(80, 10) });
+    expect(plain(renderNote("main", r))).toBe("  ▸ claude:team  route main, most room, 79% of 7D used");
+    const text = plain(renderRouteDetail("main", r, at(120)));
+    expect(text).toMatch(/^ {2}▸ claude:team\s+10% 1h\s+79% 2d\s+picked next$/m);
+    expect(text).toMatch(/^ {4}claude:work\s+80% 1h\s+10% 2d\s+over 80%$/m);
+    const preview = plain(renderNewRoutePreview("main", spec, r, { width: 120 }));
+    expect(preview).toContain("claude:team 79%   claude:work 80% (over)");
+  });
 });
 
 describe("renderNoAccount", () => {

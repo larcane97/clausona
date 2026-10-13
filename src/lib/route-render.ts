@@ -316,11 +316,11 @@ function fitTable(candidates: Table[], width: number): string[] {
 /**
  * How wide a table's percentages are: three columns (`99%`), or four once one reads `100%`.
  * They are right-aligned to it, so ` 5%` lines up with `12%`, and a skipped member's reason
- * starts where the two-digit ones do.
+ * starts where the two-digit ones do. `cut` is the route's, as quotaCell reads it.
  */
-function percentWidth(rows: Row[]): number {
+function percentWidth(rows: Row[], cut: number): number {
   const shown = rows.flatMap((row) => (row.skip ? [] : [row.fiveHour, row.sevenDay]));
-  return Math.max(3, ...shown.map((window) => (window ? formatQuotaPercent(window).length : 0)));
+  return Math.max(3, ...shown.map((window) => (window ? formatQuotaPercent(window, cut).length : 0)));
 }
 
 /** The 5H or 7D column: room for the widest percentage and, with `withReset`, a reset time. */
@@ -330,13 +330,21 @@ function quotaColumn(which: UsageWindow, percent: number, withReset: boolean): C
 
 /**
  * One window of a row, as `csn list` shows it: the percentage in its severity colour, then when
- * the window resets, dimmed. The window that sets the row's usage is bold.
+ * the window resets, dimmed. The window that sets the row's usage is bold. A window under the
+ * route's cut never reads as the cut (wholeQuotaPercent).
  */
-function quotaCell(row: Row, which: UsageWindow, percentAt: number, withReset: boolean, now: number): Cell {
+function quotaCell(
+  row: Row,
+  which: UsageWindow,
+  percentAt: number,
+  withReset: boolean,
+  now: number,
+  cut: number,
+): Cell {
   const window = which === "5H" ? row.fiveHour : row.sevenDay;
   if (!window || row.skip) return [["—", dim]];
-  const percent = formatQuotaPercent(window);
-  const styled = styledQuota(window, row.usage?.stale ? "error" : "ok");
+  const percent = formatQuotaPercent(window, cut);
+  const styled = styledQuota(window, row.usage?.stale ? "error" : "ok", cut);
   const shown = row.usage?.window === which ? bold(styled) : styled;
   const cell: Cell = [
     [" ".repeat(Math.max(0, percentAt - percent.length))],
@@ -594,7 +602,8 @@ function memberLines(ranking: Ranking, width: number, now: number, nobodyHint?: 
   }
 
   const roundRobin = ranking.route.strategy === "round-robin";
-  const percent = percentWidth(members);
+  const cut = ranking.route.maxUsage;
+  const percent = percentWidth(members, cut);
   // Widest first: dashes for a skipped member's quota, then its reason across those columns
   // instead, then no LAST PICKED, then no reset times.
   const layouts = [
@@ -624,8 +633,8 @@ function memberLines(ranking: Ranking, width: number, now: number, nobodyHint?: 
             mark,
             cells: [
               account,
-              quotaCell(row, "5H", percent, resets, now),
-              quotaCell(row, "7D", percent, resets, now),
+              quotaCell(row, "5H", percent, resets, now, cut),
+              quotaCell(row, "7D", percent, resets, now, cut),
               ...(lastPicked ? [lastPickedCell(row, now)] : []),
               status,
             ],
@@ -693,7 +702,8 @@ export function renderNote(name: string | undefined, ranking: Ranking): string {
   const usage = ranking.rows.find((row) => row.id === outcome.id)?.usage;
   const parts = [routeLabel(name), pickedWhy(ranking)];
   if (usage) {
-    parts.push(`${wholeQuotaPercent(usage.percent)}% of ${usage.window} used${usage.stale ? ", last reading" : ""}`);
+    const percent = wholeQuotaPercent(usage.percent, ranking.route.maxUsage);
+    parts.push(`${percent}% of ${usage.window} used${usage.stale ? ", last reading" : ""}`);
   }
   return `  ${accent("▸")} ${bold(outcome.id)}  ${dim(parts.join(", "))}`;
 }
@@ -748,7 +758,8 @@ export function renderNoAccount(
     .map((row) => ({ row, at: blockingReset(row, FULL) }))
     .sort((a, b) => resetOrder(a.at) - resetOrder(b.at));
   const skipped = rows.filter((row) => row.skip);
-  const percent = percentWidth(rows);
+  const cut = route.maxUsage;
+  const percent = percentWidth(rows, cut);
   const tables = [true, false].map(
     (resets): Table => ({
       // Nobody held back by a limit, only skipped members: their reasons, without a header.
@@ -765,8 +776,8 @@ export function renderNoAccount(
           ({ row, at }): TableRow => ({
             cells: [
               [[row.id]],
-              quotaCell(row, "5H", percent, resets, now),
-              quotaCell(row, "7D", percent, resets, now),
+              quotaCell(row, "5H", percent, resets, now, cut),
+              quotaCell(row, "7D", percent, resets, now, cut),
               freeAgainCell(row, FULL, at, now),
               row.id === soonest?.id ? [["soonest", accent]] : [],
             ],
@@ -828,8 +839,8 @@ export function renderNewRoutePreview(
     if (row.role === "fallback") cell.push([" (fallback)", dim]);
     if (row.skip || !row.usage) return [...cell, [` (${skipReason(row)})`, dim]];
     const window: QuotaWindow = { usedPercent: row.usage.percent, resetsAt: null };
-    const percent = formatQuotaPercent(window);
-    const styled = styledQuota(window, row.usage.stale ? "error" : "ok");
+    const percent = formatQuotaPercent(window, route.maxUsage);
+    const styled = styledQuota(window, row.usage.stale ? "error" : "ok", route.maxUsage);
     cell.push([" "], [percent, (text) => (text === percent ? styled : text)]);
     if (row.usage.percent >= route.maxUsage) cell.push([" (over)", yellow]);
     return cell;
