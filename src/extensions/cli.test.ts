@@ -1504,7 +1504,7 @@ describe("Codex hooks and Codex's trust", () => {
       [["eli5", "off", ["off here"]]],
     );
     expect(await run(h, app, "mcp", ["show", "exa", "--tool", "codex"])).toMatch(
-      /^Loaded\s+off here \(Codex cannot read this project's \.codex\/config\.toml\)$/m,
+      /^Loaded\s+off here \(Codex cannot read this project's \.codex[\\/]config\.toml\)$/m,
     );
     expect(await run(h, web, "skills", ["ls", "--tool", "codex"])).toMatch(/^eli5\s/m);
   });
