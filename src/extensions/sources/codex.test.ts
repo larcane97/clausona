@@ -745,6 +745,13 @@ describe("readCodex", () => {
     // A prompt hook's fields are Codex's to ignore: that file reads, and its prompt is not supported.
     expect(out.items.find((i) => i.summary?.type === "prompt")?.codexError).toBe("not supported");
     expect(out.facts.codexHookTrust.map((t) => t.id)).toEqual([expect.stringContaining("fine@m")]);
+    // Codex says nothing of the manifest; clausona names the plugin whose inline hooks it drops.
+    expect(out.warnings.map((w) => [path.relative(h.home, w.file).split(path.sep).join("/"), w.message])).toEqual([
+      [
+        `${inl}/.codex-plugin/plugin.json`,
+        "has an inline hook Codex cannot read, so Codex drops every inline hook of plugin inl@m",
+      ],
+    ]);
   });
 
   it("reads a hook's timeout and context limit as serde does: a whole number written as one", async () => {

@@ -352,7 +352,8 @@ The switches are read from these places:
   entry that is no table, or whose `enabled` is no boolean or `trusted_hash` no string. The
   hooks of any other
   file are tagged `invalid hooks file`, and so are all of a plugin manifest's inline hooks when
-  one of them is unreadable. A plugin whose `hooks` lists hook files and hooks together has
+  one of them is unreadable. Codex drops those without a word; clausona also warns, naming the
+  plugin. A plugin whose `hooks` lists hook files and hooks together has
   none. Codex runs no prompt or agent hook yet, nor an MCP tool hook when a session ends: those
   are tagged `not supported`. It skips a command hook whose command is empty, or only spaces,
   and an MCP tool hook whose server or tool is, and runs the rest of its file: those are tagged

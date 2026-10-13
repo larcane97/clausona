@@ -206,6 +206,11 @@ async function readHooks(
     const read = isRecord(exactEntries[k]) ? (exactEntries[k] as Record<string, unknown>) : e;
     return !isRecord(read) || !isRecord(read.hooks) || codexReadsHookEvents(read.hooks);
   });
+  // Codex 0.159.3 says nothing of it, and runs none: this names the plugin.
+  if (!inlineRead) {
+    const message = `has an inline hook Codex cannot read, so Codex drops every inline hook of plugin ${place.plugin}`;
+    out.warnings.push({ file: manifestFile, message });
+  }
   for (const [k, entry] of entries.entries()) {
     if (isRecord(entry)) {
       const owner = `${place.plugin}|${relative(manifestFile)}#hooks[${k}]`;
