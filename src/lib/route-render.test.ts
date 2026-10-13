@@ -178,7 +178,7 @@ describe("renderRouteTable", () => {
     expect(plain(renderRouteTable(rows, [], at(120)))).toMatch(/^ {4}solo\s+claude\s+headroom\s+80%\s+—\s+—$/m);
   });
 
-  // Review Focus 2: offline, nothing was read, so nobody is free or next: dashes, as with --no-quota.
+  // Offline, nothing was read, so nobody is free or next: dashes, as with --no-quota.
   it("shows dashes when no member's quota could be read", () => {
     const offline = rank({ tool: "claude", from: ["*", "gone"] }, {});
     expect(plain(renderRouteTable([{ name: "offline", route: offline.route, ranking: offline }], [], at(120)))).toMatch(
@@ -207,7 +207,6 @@ describe("renderRouteTable", () => {
     expect(lines[index - 1]).toBe("");
   });
 
-  // Review Focus 1: an 80-column terminal never wraps a row; TOOL goes first, then SKIP AT.
   it("drops TOOL, then SKIP AT, rather than wrap a row", () => {
     const wide = plain(renderRouteTable(rows, warnings, at(120)));
     expect(wide.split("\n")[1]).toContain("TOOL");
@@ -397,7 +396,6 @@ describe("renderRouteDetail", () => {
     expect(text).not.toContain("ACCOUNT");
   });
 
-  // Review Focus 1.
   it("never wraps a row at 80 columns", () => {
     const text = renderRouteDetail("main", main, at(80));
     expect(widest(text)).toBeLessThanOrEqual(80);
@@ -515,7 +513,7 @@ describe("renderNoAccount", () => {
     expect(text.indexOf("claude:personal")).toBeLessThan(text.indexOf("claude:old"));
   });
 
-  // Review Focus 2: offline, nothing was read, so nobody is "over" anything.
+  // Offline, nothing was read, so nobody is "over" anything.
   it("says no quota could be read when none was, even with an unregistered name", () => {
     const offline = rank({ tool: "claude", from: ["*", "gone"] }, {});
     const text = plain(renderNoAccount("main", offline, at(120)));
@@ -642,7 +640,6 @@ describe("renderNoAccount", () => {
     expect(text).not.toMatch(/Run again|later/);
   });
 
-  // Review Focus 1.
   it("never wraps a row at 80 columns", () => {
     expect(widest(renderNoAccount("main", busy, at(80)))).toBeLessThanOrEqual(80);
   });

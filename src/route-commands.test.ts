@@ -431,7 +431,7 @@ describe("route list", () => {
     expect(reads).toBe(0);
   });
 
-  // Review Focus 5 (list side): a removed profile named in a route is pointed out.
+  // A route can name a profile that has since been removed.
   it("warns about names that are not registered", async () => {
     const { run, deps } = setup();
     writeFileSync(

@@ -83,7 +83,7 @@ describe("readRoutes", () => {
     expect(await readRoutes(paths())).toEqual({ version: 1, routes: {} });
   });
 
-  // Review Focus 1: Notepad saves UTF-8 with a byte-order mark.
+  // Notepad saves UTF-8 with a byte-order mark.
   it("reads a file that starts with a byte-order mark", async () => {
     const p = paths();
     writeFileSync(p.routesPath, `\uFEFF${JSON.stringify({ version: 1, routes: { main: { tool: "claude" } } })}`);

@@ -763,8 +763,8 @@ describe("RouteForm", () => {
     expect(onDone).not.toHaveBeenCalled();
   });
 
-  // Review Focus 3: routes.json changed by another terminal while the form is open. Only the
-  // route the form edits is its business: a change to another route is kept, and so are the inputs.
+  // routes.json changed by another terminal while the form is open. Only the route the form edits
+  // is its business: a change to another route is kept, and so are the inputs.
   it("saves a new route at once when another window changed other routes, keeping their change", async () => {
     const { instance, onDone, disk } = setup();
     await opened(instance);

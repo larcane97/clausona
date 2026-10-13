@@ -309,7 +309,7 @@ describe("RoutesScreen", () => {
     expect(deps.collectQuotas).toHaveBeenCalledTimes(reads);
   });
 
-  // Review Focus 5: a hand-edited routes.json that does not check out.
+  // A hand-edited routes.json that does not check out.
   it("shows what is wrong with routes.json and where to fix it, and answers only esc", async () => {
     const error = new RoutesFileError("/home/u/.clausona/routes.json", [
       "routes.main.maxUsage: must be a number from 1 to 100",
@@ -331,8 +331,8 @@ describe("RoutesScreen", () => {
     await vi.waitFor(() => expect(onExit).toHaveBeenCalledTimes(1));
   });
 
-  // Review Focus 2: offline, or nothing readable.
-  // Nothing read says nothing about who is free: a dash, as `clausona route list` prints, not 0.
+  // Offline, or nothing readable. Nothing read says nothing about who is free: a dash, as
+  // `clausona route list` prints, not 0.
   it("shows no quota reading on every member and a dash for who is free when no quota can be read", async () => {
     const { instance } = setup({ collect: async () => ({}) });
     const frame = await until(instance, (f) => f.includes("no quota reading"));

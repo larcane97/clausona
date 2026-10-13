@@ -186,7 +186,6 @@ describe("stages", () => {
     expect(rank({}, fullOrOut).outcome).toEqual({ kind: "none", soonest: { id: "claude:a", at: inHours(5) } });
   });
 
-  // Review Focus 4: a pool member also listed as a fallback is one member, in the pool.
   it("ranks a member listed in both the pool and the fallback once, in the pool", () => {
     const ranking = rank(
       { from: ["*"], fallback: ["b"] },
@@ -212,7 +211,7 @@ describe("skips", () => {
     expect(ranking.outcome).toEqual({ kind: "none", soonest: undefined });
   });
 
-  // Review Focus 5: a removed profile named exactly does not stop the rest from being picked.
+  // A route can name a profile that has since been removed.
   it("shows a name that is not registered and picks from the rest", () => {
     const ranking = rank(
       { from: ["gone", "*"] },
@@ -296,7 +295,6 @@ describe("all routes", () => {
     expect(ranking.rows.map((row) => row.id)).toEqual(["claude:work"]);
   });
 
-  // Review Focus 4
   it("matches a bare name in whichever tool has it, and shows an unknown name once", () => {
     const ranking = rankRoute({
       route: withDefaults({ tool: "all", from: ["gone", "work"] }),

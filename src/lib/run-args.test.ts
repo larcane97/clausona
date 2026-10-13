@@ -63,7 +63,7 @@ describe("readRunArgs", () => {
     });
   });
 
-  // Review Focus 3: after `--` everything is the tool's, even what looks like ours.
+  // After `--` everything is the tool's, even what looks like ours.
   it("drops one -- and passes everything after it through", () => {
     expect(readRunArgs(["--route", "main", "--", "--route", "x"])).toEqual({
       options: { route: "main" },
