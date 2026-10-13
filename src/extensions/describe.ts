@@ -46,7 +46,7 @@ import {
 /**
  * One of the verbatim tags: off, off here, off in N of M accounts, not here, unused, broken
  * link, pending approval, hidden by … copy, no front matter, invalid front matter, name too long,
- * no description, invalid hooks file, not supported, empty command, empty tool.
+ * no description, invalid hooks file, not supported, empty command, empty tool, unknown event.
  */
 export type Tag = string;
 
@@ -117,6 +117,7 @@ const CODEX_SKIPS: Record<NonNullable<Extension["codexError"]>, string> = {
   "not supported": "Codex does not run an MCP tool hook when a session ends",
   "empty command": "Codex skips a hook whose command is empty",
   "empty tool": "Codex skips an MCP tool hook whose server or tool is empty",
+  "unknown event": "Codex knows no event of that name, and runs no hook on it",
 };
 
 /**
@@ -326,12 +327,12 @@ function scopeLabel(item: Extension, project: string | undefined): string {
  * Every tag that applies, most important first: broken link > off > off here > off in N of M
  * accounts > not here > pending approval > hidden by … > unused > no front matter > invalid
  * front matter > name too long > no description > main checkout's runs > invalid hooks file >
- * not supported > empty command > empty tool. A row that is not here has no state here, so no
- * tag of one. `no front matter` is a quiet note for a Claude skill, which Claude Code loads all
- * the same; for a Codex skill, which Codex skips, it, `invalid front matter`, `name too long` and
- * `no description` are why it is not in Loaded, and `main checkout's runs`, `invalid hooks file`,
- * `not supported`, `empty command` and `empty tool` why a Codex hook does not run, which its
- * details say.
+ * not supported > empty command > empty tool > unknown event. A row that is not here has no
+ * state here, so no tag of one. `no front matter` is a quiet note for a Claude skill, which
+ * Claude Code loads all the same; for a Codex skill, which Codex skips, it, `invalid front
+ * matter`, `name too long` and `no description` are why it is not in Loaded, and `main
+ * checkout's runs`, `invalid hooks file`, `not supported`, `empty command`, `empty tool` and
+ * `unknown event` why a Codex hook does not run, which its details say.
  */
 export function tagsOf(inv: Inventory, row: ScopeRow, project: string | undefined, now: number): Tag[] {
   const item = firstOf(row);

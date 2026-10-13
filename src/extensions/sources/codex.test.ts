@@ -598,7 +598,7 @@ describe("readCodex", () => {
             ],
           },
         ],
-        // An event Codex does not know is no empty command.
+        // An event Codex does not know: no empty command, but an unknown event.
         Unknown: [{ hooks: [{ type: "command", command: "echo who" }] }],
       },
     });
@@ -615,7 +615,7 @@ describe("readCodex", () => {
         ["Stop#0.1", "empty command"],
         ["Stop#0.2", undefined],
         ["Stop#config.toml:0.0", "empty command"],
-        ["Unknown#0.0", undefined],
+        ["Unknown#0.0", "unknown event"],
       ].sort(),
     );
   });

@@ -70,6 +70,7 @@ const TAGS = [
   "not supported",
   "empty command",
   "empty tool",
+  "unknown event",
 ];
 
 /** The keys `ls --json` writes, in order. */
@@ -308,6 +309,10 @@ function seed() {
       'type = "mcp_tool"',
       'server = "s"',
       'tool = ""',
+      "[[hooks.Unknown]]",
+      "[[hooks.Unknown.hooks]]",
+      'type = "command"',
+      'command = "who"',
     ].join("\n"),
   );
   // A linked worktree of a trusted repo, as git keeps one, with a hook in its own .codex folder,

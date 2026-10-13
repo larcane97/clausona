@@ -1304,6 +1304,39 @@ describe("Codex hooks and Codex's trust", () => {
     );
   });
 
+  it("lists a hook on an event Codex does not know as such, out of Loaded, whatever it holds", async () => {
+    const { h, app } = seed();
+    // Codex 0.159.3's hooks/list: Stop's listed; `Unknown` and `stop` not, and no warning - one
+    // with a command that is no string under them leaves the file read.
+    h.write(".codex/hooks.json", {
+      hooks: {
+        Stop: [{ hooks: [{ type: "command", command: "known" }] }],
+        Unknown: [
+          {
+            hooks: [
+              { type: "command", command: "unknown" },
+              { type: "command", command: 5 },
+            ],
+          },
+        ],
+        stop: [{ hooks: [{ type: "prompt", prompt: "lower" }] }],
+      },
+    });
+    const json = JSON.parse(await run(h, app, "hooks", ["ls", "--tool", "codex", "--scope", "global", "--json"]));
+    const rows = json.items.map((i: { name: string; tags: string[] }) => [i.name, i.tags]);
+    // The known one waits for its review, as any untrusted hook does.
+    expect(rows.sort()).toEqual([
+      ["Stop", ["pending approval"]],
+      ["Unknown", ["unknown event"]],
+      ["Unknown", ["unknown event"]],
+      ["stop", ["unknown event"]],
+    ]);
+    const unknown = json.items.find((i: { name: string }) => i.name === "Unknown");
+    expect(await run(h, app, "hooks", ["show", "--id", unknown.id])).toMatch(
+      /^Loaded\s+no, Codex knows no event of that name, and runs no hook on it$/m,
+    );
+  });
+
   it("lists an MCP tool hook with an empty server or tool as such, out of Loaded, and says why", async () => {
     const { h, app } = seed();
     h.write(".codex/hooks.json", { hooks: { Stop: [{ hooks: [{ type: "mcp_tool", server: "s", tool: "" }] }] } });

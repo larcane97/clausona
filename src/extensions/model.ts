@@ -85,7 +85,8 @@ export type Extension = {
    * `name too long` (over 64 characters) or with `no description`, a hook in an `invalid hooks
    * file` (more than `hooks` and `description` at its top), and one Codex does not run at all,
    * `not supported` (a prompt or agent hook, an MCP tool hook when a session ends), with an
-   * `empty command`, or an MCP tool hook with an `empty tool` (or server). A hook in a linked
+   * `empty command`, an MCP tool hook with an `empty tool` (or server), or a hook on an
+   * `unknown event`, one of none of Codex's twelve. A hook in a linked
    * worktree's own `.codex` folder is `main checkout's runs`: Codex runs the main checkout's
    * hooks there in its place. Unlike Claude Code, Codex lists no skill without front matter, or
    * without a description, so it does not load.
@@ -99,7 +100,8 @@ export type Extension = {
     | "invalid hooks file"
     | "not supported"
     | "empty command"
-    | "empty tool";
+    | "empty tool"
+    | "unknown event";
   /** What is shown about it, already redacted. */
   summary?: Record<string, string>;
   /** Hooks: where the command sits in its file. */
