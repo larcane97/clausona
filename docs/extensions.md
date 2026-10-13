@@ -1549,6 +1549,13 @@ again, the cursor on the same cell. On a cell with no server, `space` says so, a
 `No account that has it has opened this project.` In the Codex column, `space` works as it does
 on the server's row in Codex's MCP tab.
 
+Some cells only change everywhere, and there `space` does what `g` does on the row, for that
+account alone. A server clausona keeps aside for one account, off in every project, is put back
+in that account's `.claude.json`: `Turn on github in every project, for work?`. In the home
+folder, where Codex's project config is your user config, a Codex cell changes that file. The
+matrix takes no `g` or `d`, so a reason that names one says to press it on the server's row, as in
+`… From its row, press d to delete the copy clausona kept.`
+
 `d` on something git tracks opens the dialog with a warning,
 `Git tracks deploy-check in app, so deleting changes the repo.`, and `o` there turns it off here
 instead. `y` deletes it anyway.

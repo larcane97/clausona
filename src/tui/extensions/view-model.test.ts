@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import { ONE_ACCOUNT_KEYS, REFUSAL_CODES, refusal } from "../../extensions/actions.js";
 import { loadInventory } from "../../extensions/inventory.js";
 import { rowsIn } from "../../extensions/scopes.js";
 import { TestHome } from "../../extensions/test-home.js";
@@ -11,6 +12,7 @@ import {
   cellTarget,
   type Matrix,
   matrixLeft,
+  matrixRefusal,
   wrapText,
 } from "./view-model.js";
 
@@ -150,6 +152,51 @@ describe("cellTarget", () => {
     });
     expect(cellTarget(inv, app, "exa", column(matrix, "work"))).toEqual({ refused: "work has no exa here." });
     expect(cellTarget(inv, app, "pg-dev", column(matrix, "Codex"))).toEqual({ refused: "Codex has no pg-dev here." });
+  });
+});
+
+describe("matrixRefusal", () => {
+  const row = { key: "mcp:claude:account:-:github", name: "github" };
+  /** The keys a text names, as refusals name them: after press, with or or, space or a letter. */
+  const keysNamed = (text: string) => [...text.matchAll(/\b(?:press|with|or) (space|[a-z])\b/gi)].map((m) => m[1]);
+
+  it("sends a refusal that names a key the matrix doesn't take to the server's row", () => {
+    expect(matrixRefusal(refusal("stashed-here", row, "claude", {}))).toBe(
+      "It is off everywhere. From its row, press g to turn it back on.",
+    );
+    expect(matrixRefusal(refusal("stash-gone", row, "claude", { "~file": "~/.claude-work/.claude.json" }))).toBe(
+      "~/.claude-work/.claude.json, where it came from, is gone. From its row, press d to delete the copy clausona kept.",
+    );
+    expect(matrixRefusal(refusal("stash-gone", row, "claude", { short: "work" }, ONE_ACCOUNT_KEYS))).toMatch(
+      / From its row, press d and choose only work in the dialog\.$/,
+    );
+    expect(matrixRefusal(refusal("codex-home-here", row, "codex", {}))).toBe(
+      "In your home folder, Codex's project config is your user config. From its row, press g.",
+    );
+  });
+
+  it("keeps words that name no key, or only space, which the matrix takes", () => {
+    expect(matrixRefusal(refusal("no-account", row, "claude", {}))).toBe(
+      "No account that has it has opened this project.",
+    );
+    expect(matrixRefusal(refusal("codex-untrusted", row, "codex", {}))).toBe(
+      "Codex does not trust this project, so it ignores its .codex folder. Trust the project in Codex first.",
+    );
+    expect(matrixRefusal(refusal("mcpjson-everywhere", row, "claude", {}))).toBe(
+      "Claude Code turns a .mcp.json server on or off per project. Press space.",
+    );
+  });
+
+  it("names no key but space and u before it sends to the row, for every refusal of either tool", () => {
+    for (const code of REFUSAL_CODES) {
+      for (const tool of ["claude", "codex"] as const) {
+        const [here] = matrixRefusal(refusal(code, row, tool, {})).split(" From its row, ");
+        expect(
+          keysNamed(here ?? "").filter((key) => key !== "space" && key !== "u"),
+          `${code}, ${tool}`,
+        ).toEqual([]);
+      }
+    }
   });
 });
 
