@@ -206,11 +206,41 @@ describe("skills off", () => {
       note: null,
       tracked: false,
       rows: ["skill:claude:global:-:eli5"],
+      breaks: [],
+      runs: null,
     });
     expect(out).not.toContain("expect");
     expect(out).not.toContain("hash");
     expect(existsSync(h.path(".clausona"))).toBe(false);
   });
+
+  it.skipIf(!hasGit)(
+    "plans Claude Code's ignore line too when it makes a repo's first settings.local.json, and undo takes it out",
+    async () => {
+      const { h, app } = seed();
+      git(app, ["init", "-q"]);
+      const { run } = cli(h, app);
+      const ignore = h.path(".config", "git", "ignore");
+      const dry = stripAnsi(await run("skills", ["off", "eli5", "--tool", "claude", "--dry-run"]));
+      expect(dry).toMatch(/\.config.git.ignore +adds \*\*\/\.claude\/settings\.local\.json +as Claude Code does$/m);
+      const plan = JSON.parse(await run("skills", ["off", "eli5", "--tool", "claude", "--dry-run", "--json"]));
+      expect(plan.changes.map((c: { file: string; change: string }) => [c.file, c.change])).toEqual([
+        [path.join(app, ".claude", "settings.local.json"), "create"],
+        [ignore, "create"],
+      ]);
+      await run("skills", ["off", "eli5", "--tool", "claude", "--yes"]);
+      expect(read(ignore)).toBe("**/.claude/settings.local.json\n");
+      // The file is there now: a second change edits it, and adds nothing to the ignore file.
+      const again = JSON.parse(await run("skills", ["off", "deploy-check", "--dry-run", "--json"]));
+      expect(again.changes.map((c: { file: string }) => c.file)).toEqual([
+        path.join(app, ".claude", "settings.local.json"),
+      ]);
+      const undone = stripAnsi(await run("skills", ["undo", "--yes"]));
+      expect(undone).toMatch(/\.config.git.ignore +removed$/m);
+      expect(existsSync(ignore)).toBe(false);
+    },
+    20_000,
+  );
 
   it("refuses to change files without a terminal unless --yes, as bad usage", async () => {
     const { h, app } = seed();
@@ -434,6 +464,38 @@ describe("skills rm", () => {
     expect(existsSync(h.path(".claude", "skills", "notes"))).toBe(false);
     expect(existsSync(h.path("shared", "notes", "SKILL.md"))).toBe(true);
   });
+
+  it("says which links a folder it deletes leaves broken, in the text and as breaks in JSON", async () => {
+    const { h, app } = seed();
+    // gstack cloned into the project, a link next to it for each skill it holds.
+    h.skill("repos/app/.claude/skills", "gstack");
+    for (const name of ["canary", "careful"]) {
+      h.skill("repos/app/.claude/skills/gstack", name);
+      h.link(`repos/app/.claude/skills/gstack/${name}`, `repos/app/.claude/skills/${name}`);
+    }
+    const { run } = cli(h, app);
+    const dry = stripAnsi(await run("skills", ["rm", "gstack", "--dry-run"]));
+    expect(dry).toMatch(/gstack +breaks 2 links: canary, careful \(add them to delete them too\)$/m);
+    expect(dry).toContain("Dry run: nothing changed. Run it again with --yes to apply.");
+    const plan = JSON.parse(await run("skills", ["rm", "gstack", "--dry-run", "--json"]));
+    const listed = JSON.parse(await run("skills", ["ls", "--scope", "project", "--json"]));
+    const idOf = (name: string) => listed.items.find((i: { name: string }) => i.name === name).id;
+    expect(plan.changes).toMatchObject([
+      {
+        change: "delete",
+        note: "breaks 2 links: canary, careful (add them to delete them too)",
+        breaks: [idOf("canary"), idOf("careful")],
+      },
+    ]);
+    // With the links in the same rm, nothing is left broken: the folder's line says nothing.
+    const ids = ["gstack", "canary", "careful"].flatMap((name) => ["--id", idOf(name)]);
+    const together = JSON.parse(await run("skills", ["rm", ...ids, "--dry-run", "--json"]));
+    expect(together.changes.map((c: { note: string | null; breaks: string[] }) => [c.note, c.breaks])).toEqual([
+      [null, []],
+      ["link only, target kept", []],
+      ["link only, target kept", []],
+    ]);
+  });
 });
 
 describe("skills visibility", () => {
@@ -542,6 +604,30 @@ describe("mcp off and rm", () => {
     await run("mcp", ["rm", "--id", kept.id, "--yes"]);
     expect(json(h.path(".claude.json")).mcpServers.figma).toEqual({ command: "figma" });
     expect(readdirSync(keptDir)).toEqual([]);
+  });
+});
+
+describe("mcp on", () => {
+  it("shows what a pending .mcp.json server runs before it approves it, whole and with secrets hidden", async () => {
+    const { h, app } = seed();
+    h.write("repos/app/.mcp.json", {
+      mcpServers: { "docs-search": { command: "npx", args: ["docs-mcp", "--api-key", KEY] } },
+    });
+    const { run } = cli(h, app);
+    const runs = "runs npx docs-mcp --api-key <hidden>";
+    const dry = stripAnsi(await run("mcp", ["on", "docs-search", "--dry-run"]));
+    expect(dry).toContain("Turn on docs-search in this project?");
+    expect(dry).toMatch(/settings\.local\.json +enabledMcpjsonServers \+ docs-search\n {8}runs npx docs-mcp/);
+    // On a narrow terminal the path gives way, and what it runs is never cut.
+    const narrow = stripAnsi(await run("mcp", ["on", "docs-search", "--dry-run"], { columns: 40 }));
+    expect(narrow.split("\n")).toContain(`        ${runs}`);
+    const plan = JSON.parse(await run("mcp", ["on", "docs-search", "--dry-run", "--json"]));
+    expect(plan.changes.map((c: { what: string; runs: string | null }) => [c.what, c.runs])).toEqual([
+      ["enabledMcpjsonServers + docs-search", "npx docs-mcp --api-key <hidden>"],
+    ]);
+    // Off writes no approval, and says nothing of what it runs.
+    const off = JSON.parse(await run("mcp", ["off", "docs-search", "--dry-run", "--json"]));
+    expect(off.changes.map((c: { runs: string | null }) => c.runs)).toEqual([null]);
   });
 });
 

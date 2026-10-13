@@ -306,6 +306,46 @@ describe("apply", () => {
     expect(await lastOperation(env)).toBeNull();
   });
 
+  it("adds a line to a text file as its last, in its own line endings, once, and undoes it whole", async () => {
+    const { h } = home();
+    const env = writeEnvFor(h.home, clock());
+    const textPlan = (file: string): Plan => ({
+      command: "skills",
+      verb: "off",
+      reach: "here",
+      question: "Turn off eli5 in this project?",
+      done: "Turned off eli5 in this project",
+      changes: [
+        {
+          kind: "text",
+          file,
+          add: "**/.claude/settings.local.json",
+          create: true,
+          lines: [{ file, change: "edit", what: "adds **/.claude/settings.local.json", tracked: false, rows: ["r"] }],
+        },
+      ],
+      unchanged: [],
+      refused: [],
+      notes: [],
+      project: null,
+    });
+    const crlf = h.write("ignore-crlf", "node_modules\r\n.DS_Store");
+    expect(await apply(textPlan(crlf), env)).toMatchObject({ status: "applied", done: 1 });
+    expect(readFileSync(crlf, "utf8")).toBe("node_modules\r\n.DS_Store\r\n**/.claude/settings.local.json\r\n");
+    // There already: nothing to write, and no operation.
+    const before = opDirs(env);
+    expect(await apply(textPlan(crlf), env)).toEqual({ status: "nothing" });
+    expect(opDirs(env)).toEqual(before);
+    expect(await undo(env)).toMatchObject({ skipped: [] });
+    expect(readFileSync(crlf, "utf8")).toBe("node_modules\r\n.DS_Store");
+    // Made where it is not there, with the folders it needs; undo takes them away.
+    const made = h.path("xdg", "git", "ignore");
+    await apply(textPlan(made), env);
+    expect(readFileSync(made, "utf8")).toBe("**/.claude/settings.local.json\n");
+    await undo(env);
+    expect(existsSync(h.path("xdg"))).toBe(false);
+  });
+
   it("names an operation by its time, command and verb", () => {
     const at = Date.UTC(2026, 9, 10, 4, 36, 48, 123);
     const id = (command: ExtensionsCommand, verb: Plan["verb"], reach: Plan["reach"]) =>
@@ -509,6 +549,33 @@ describe("apply: folders and links", () => {
     expect(undone).toMatchObject({ restored: [realpathSync.native(folder)], skipped: [] });
     expect(await hashTree(folder)).toBe(before);
     expect(existsSync(backup)).toBe(false);
+  });
+
+  it("turns a Codex project skill reached through a link off by the path it is listed at", async () => {
+    // Codex 0.159.3 reports such a skill at its real path, and matches a [[skills.config]] path
+    // through links: the listed path, the real one and /tmp for /private/tmp all turn it off
+    // (checked with codex app-server's skills/list, #125). The listed one is what is written.
+    const { h, app } = home((h) => {
+      h.skill("elsewhere", "p-link");
+      h.link("elsewhere/p-link", "repos/app/.agents/skills/p-link");
+    });
+    const env = writeEnvFor(h.home, clock());
+    const config = h.path(".codex", "config.toml");
+    const before = readFileSync(config, "utf8");
+    const listed = path.join(app, ".agents", "skills", "p-link", "SKILL.md");
+    const p = await planNow(h, app, "skills", "off", "here", (inv) => [rowIn(inv, app, "project", "p-link", "codex")]);
+    expect(p.changes).toMatchObject([{ edits: [{ op: "skill-config", selector: { path: listed }, enabled: false }] }]);
+
+    await apply(p, env);
+    expect(readFileSync(config, "utf8")).toBe(
+      `${before}\n[[skills.config]]\npath = ${JSON.stringify(listed)}\nenabled = false\n`,
+    );
+    expect(readFileSync(config, "utf8")).not.toContain(realpathSync.native(h.path("elsewhere")));
+    // Read back as that skill's entry: off here, and on again by taking it out.
+    const again = await planNow(h, app, "skills", "on", "here", (inv) => [
+      rowIn(inv, app, "project", "p-link", "codex"),
+    ]);
+    expect(again.changes).toMatchObject([{ edits: [{ selector: { path: listed }, enabled: null }] }]);
   });
 
   it("removes a linked skill's link, never its folder, and makes the link again", async () => {

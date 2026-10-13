@@ -104,7 +104,17 @@ export const PLAN_JSON_KEYS: readonly string[] = [
   "backupRoot",
   "operation",
 ];
-export const CHANGE_JSON_KEYS: readonly string[] = ["file", "change", "what", "account", "note", "tracked", "rows"];
+export const CHANGE_JSON_KEYS: readonly string[] = [
+  "file",
+  "change",
+  "what",
+  "account",
+  "note",
+  "tracked",
+  "rows",
+  "breaks",
+  "runs",
+];
 export const REFUSED_JSON_KEYS: readonly string[] = ["id", "name", "code", "reason"];
 export const UNCHANGED_JSON_KEYS: readonly string[] = ["id", "name", "why"];
 export const UNDO_JSON_KEYS: readonly string[] = [
@@ -829,6 +839,8 @@ function lineJson(line: PlanLine) {
     note: line.note ?? null,
     tracked: line.tracked,
     rows: [...line.rows],
+    breaks: [...(line.breaks ?? [])],
+    runs: line.runs ?? null,
   };
 }
 
@@ -869,7 +881,8 @@ function dimPath(cell: string): string {
 
 /**
  * One line per file line: `{~file}  {what}  {account}  {note}`, a column nobody fills left out,
- * cut to fit. A copy clausona kept is named in words; the JSON names its path.
+ * cut to fit. A copy clausona kept is named in words; the JSON names its path. Under a line that
+ * approves a `.mcp.json` server, what it runs, whole: that is what the answer agrees to.
  */
 function changeLines(lines: PlanLine[], talk: Talk): string[] {
   const cells = lines.map((line) => [
@@ -886,7 +899,11 @@ function changeLines(lines: PlanLine[], talk: Talk): string[] {
     talk.columns - 6,
     giveWay,
     [0],
-  ).map(([file = "", ...rest]) => `      ${[dimPath(file), ...rest].join(" ".repeat(GAP))}`.trimEnd());
+  ).flatMap(([file = "", ...rest], at) => {
+    const text = `      ${[dimPath(file), ...rest].join(" ".repeat(GAP))}`.trimEnd();
+    const runs = lines[at]?.runs;
+    return runs === undefined ? [text] : [text, `        runs ${tildeIn(runs, talk.homeDir)}`];
+  });
 }
 
 /** `{name}  {why}` for each row already as asked, dim, at `indent`. */

@@ -39,7 +39,8 @@ import type { SkillSelector, TomlEdit } from "./writers/toml.js";
  * as asked, and what cannot change and why. Pure - it reads the inventory and nothing else -
  * and exactly what the confirm dialog and `--dry-run` show; apply.ts carries it out. It names
  * keys and server names, never a value of a server's or a hook's entry: those it only checks
- * by fingerprint.
+ * by fingerprint. The one exception is what a `.mcp.json` server it approves runs, redacted as
+ * the details show it.
  */
 
 export type PlanLine = {
@@ -55,6 +56,13 @@ export type PlanLine = {
   tracked: boolean;
   /** Row keys. */
   rows: string[];
+  /** A folder deleted: the row keys of the skill links into it, not in the action, that it leaves broken. */
+  breaks?: string[];
+  /**
+   * A `.mcp.json` server this line approves: what it runs, its command or URL as the inventory's
+   * summary has it, secrets hidden (redact.ts). The one value of a server's entry a plan holds.
+   */
+  runs?: string;
 };
 
 export type Expect =
@@ -81,7 +89,9 @@ export type FileChange =
       lines: PlanLine[];
     }
   | { kind: "toml"; file: string; edits: TomlEdit[]; expect: Expect[]; create: boolean; lines: PlanLine[] }
-  | { kind: "remove"; file: string; what: "folder" | "file" | "link"; expect: Expect[]; lines: PlanLine[] };
+  | { kind: "remove"; file: string; what: "folder" | "file" | "link"; expect: Expect[]; lines: PlanLine[] }
+  /** A line added to a text file, git's global ignore file, unless a line of it is that already. */
+  | { kind: "text"; file: string; add: string; create: boolean; lines: PlanLine[] };
 
 export type Plan = {
   command: ExtensionsCommand;
@@ -110,7 +120,19 @@ export type PlanContext = {
   tracked: ReadonlySet<string>;
   /** Where stash files go: inv.places.stashDir in the app. */
   stashDir: string;
+  /** What planChecked found of git's global ignore file, for a project's first settings.local.json. */
+  ignore?: IgnoreFacts;
 };
+
+/** The line Claude Code adds to git's global ignore file when it makes a settings.local.json. */
+export const LOCAL_SETTINGS_IGNORE = "**/.claude/settings.local.json";
+
+/**
+ * planChecked's findings for the settings.local.json files a plan makes in projects: the global
+ * ignore file git reads, whether it is there, and the pathKeys of the new files that git would
+ * not ignore. Undefined when there is none, or the file holds the line already.
+ */
+export type IgnoreFacts = { file: string; exists: boolean; unignored: ReadonlySet<string> };
 
 export type KeyName = "space" | "g" | "d" | "v";
 export type KeyChoice = { key: KeyName; label: string; action: Action } | { key: KeyName; refused: string };
@@ -518,6 +540,36 @@ function folderNote(inv: Inventory, copy: Extension, real: string): string | und
   return `the folder at ${tilde(real, inv.homeDir)}`;
 }
 
+/**
+ * The skill links that lead into a folder being deleted and are not in the action, by name: each
+ * is left broken. Undo puts the folder back, so they are said, not refused - unlike a link to the
+ * folder itself, which sameFolder refuses as the same folder in a second row.
+ */
+function linksInto(run: Run, real: string): { key: string; name: string }[] {
+  const found = new Map<string, string>();
+  for (const other of run.inv.items) {
+    if (other.kind !== "skill" || !other.link || other.link.broken || run.inAction.has(other.id)) continue;
+    if (isWithin(folderKey(other), real)) found.set(rowKey(other), other.name);
+  }
+  return [...found]
+    .map(([key, name]) => ({ key, name }))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+}
+
+/** How many names `breaksNote` shows before the `…`. */
+const BREAKS_SHOWN = 3;
+
+/** "breaks 30 links: canary, careful, freeze, … (add them to delete them too)". */
+function breaksNote(links: readonly { name: string }[]): string | undefined {
+  const names = [...new Set(links.map((link) => link.name))];
+  if (names.length === 0) return undefined;
+  const shown = names.slice(0, BREAKS_SHOWN).join(", ");
+  const list = names.length > BREAKS_SHOWN ? `${shown}, …` : shown;
+  return names.length === 1
+    ? `breaks 1 link: ${list} (add it to delete it too)`
+    : `breaks ${names.length} links: ${list} (add them to delete them too)`;
+}
+
 /** Each copy's folder by its real path, a link unlinked, a command's file; never what a link leads to. */
 function planSkillRemoval(run: Run, row: ScopeRow): Outcome {
   for (const copy of row.items) {
@@ -548,7 +600,13 @@ function planSkillRemoval(run: Run, row: ScopeRow): Outcome {
       });
     }
     const real = copy.realFolder ?? listed;
-    const line = lineFor(run, row, listed, "", { change: "delete", note: folderNote(run.inv, copy, real) });
+    const links = linksInto(run, real);
+    const notes = [folderNote(run.inv, copy, real), breaksNote(links)].filter((n) => n !== undefined);
+    const line = lineFor(run, row, listed, "", {
+      change: "delete",
+      note: notes.length > 0 ? notes.join(", ") : undefined,
+    });
+    if (links.length > 0) line.breaks = links.map((link) => link.key);
     out.changes.push(removal(real, "folder", [{ type: "entry", kind: "dir", realPath: real }], line));
   }
   return out;
@@ -831,20 +889,24 @@ function planMcpjson(run: Run, row: ScopeRow): Outcome {
       ...(denied ? [`disabledMcpjsonServers - ${name}`] : []),
       ...(approved ? [] : [`enabledMcpjsonServers + ${name}`]),
     ];
-    out.changes.push(
-      jsonChange(
-        run,
-        row,
-        local,
-        [
-          { op: "list-remove", path: ["disabledMcpjsonServers"], value: name },
-          { op: "list-add", path: ["enabledMcpjsonServers"], value: name },
-        ],
-        [],
-        what.join(", "),
-        { create: true },
-      ),
+    const change = jsonChange(
+      run,
+      row,
+      local,
+      [
+        { op: "list-remove", path: ["disabledMcpjsonServers"], value: name },
+        { op: "list-add", path: ["enabledMcpjsonServers"], value: name },
+      ],
+      [],
+      what.join(", "),
+      { create: true },
     );
+    // Approving runs a command the repo defines: the line says which, as Claude Code's own
+    // approval prompt does. One approved before has nothing new to say.
+    const runs = item.summary?.command ?? item.summary?.url;
+    const line = change.lines[0];
+    if (!approved && runs !== undefined && line) line.runs = runs;
+    out.changes.push(change);
   }
   out.changes.push(...accountChanges);
   return out;
@@ -1308,6 +1370,29 @@ function accountChoices(ctx: PlanContext, command: ExtensionsCommand, action: Ac
   return profiles.map((profile) => ({ profile, chosen: accounts === undefined || accounts.includes(profile) }));
 }
 
+/**
+ * Claude Code keeps a project's `.claude/settings.local.json` out of git by adding
+ * LOCAL_SETTINGS_IGNORE to the global ignore file when it makes that file. A plan that makes one
+ * git would not ignore does the same, as one more change, shown, backed up and undone with the
+ * rest. planChecked finds the files and the ignore file; this only words them.
+ */
+function ignoreChanges(ctx: PlanContext, changes: readonly FileChange[]): FileChange[] {
+  const facts = ctx.ignore;
+  if (!facts) return [];
+  const making = changes.filter((c) => c.kind === "json" && c.create && facts.unignored.has(pathKey(c.file)));
+  const rows = [...new Set(making.flatMap((c) => c.lines.flatMap((line) => line.rows)))];
+  if (rows.length === 0) return [];
+  const line: PlanLine = {
+    file: facts.file,
+    change: facts.exists ? "edit" : "create",
+    what: `adds ${LOCAL_SETTINGS_IGNORE}`,
+    note: "as Claude Code does",
+    tracked: false,
+    rows,
+  };
+  return [{ kind: "text", file: facts.file, add: LOCAL_SETTINGS_IGNORE, create: true, lines: [line] }];
+}
+
 /** Every file change `action` makes, what is already as asked, and what is refused and why. */
 export function plan(ctx: PlanContext, command: ExtensionsCommand, action: Action): Plan {
   const made = planned(ctx, command, action);
@@ -1320,7 +1405,7 @@ export function plan(ctx: PlanContext, command: ExtensionsCommand, action: Actio
     ...(action.verb === "visibility" ? { level: action.level ?? "on" } : {}),
     question,
     done,
-    changes: made.changes,
+    changes: [...made.changes, ...ignoreChanges(ctx, made.changes)],
     unchanged: made.unchanged,
     refused: made.refused,
     notes: made.notes,

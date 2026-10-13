@@ -311,6 +311,77 @@ describe("ExtensionsScreen: writes", () => {
     expect(existsSync(h.path(".claude", "skills", "old-one"))).toBe(false);
   });
 
+  it("says what a .mcp.json server runs in the dialog where space approves it", async () => {
+    const { h, app } = seed();
+    h.write("repos/app/.mcp.json", {
+      mcpServers: { "docs-search": { command: "npx", args: ["docs-mcp", "--api-key", KEY] } },
+    });
+    const instance = mount(h, app, 140, 40);
+    await openRow(instance, "Project", "docs-search", "2");
+    // Pending approval is not off, so space turns it off first: that approves nothing.
+    await press(instance, SPACE);
+    const off = await seen(instance, (f) => f.includes("Turn off docs-search in this project?"));
+    expect(off).not.toContain("  runs ");
+    await press(instance, "y");
+    await seen(instance, (f) => f.includes("Turned off docs-search in this project · u to undo"));
+    await press(instance, SPACE);
+    const dialog = await seen(instance, (f) => f.includes("Turn on docs-search in this project?"));
+    const lines = dialog.split("\n");
+    const at = lines.findIndex((line) => line.includes("enabledMcpjsonServers + docs-search"));
+    expect(at).toBeGreaterThan(0);
+    expect(lines[at + 1]).toContain("  runs npx docs-mcp --api-key <hidden>");
+    expect(dialog).not.toContain(KEY);
+    await press(instance, "y");
+    await seen(instance, (f) => f.includes("Turned on docs-search in this project · u to undo"));
+    expect(json(local(app)).enabledMcpjsonServers).toEqual(["docs-search"]);
+  });
+
+  it("says in the dialog which links deleting a folder leaves broken", async () => {
+    const { h, app } = seed();
+    h.skill("repos/app/.claude/skills", "gstack");
+    for (const name of ["canary", "careful"]) {
+      h.skill("repos/app/.claude/skills/gstack", name);
+      h.link(`repos/app/.claude/skills/gstack/${name}`, `repos/app/.claude/skills/${name}`);
+    }
+    const instance = mount(h, app, 140, 40);
+    await openRow(instance, "Project", "gstack");
+    await press(instance, "d");
+    const dialog = await seen(instance, (f) => f.includes("Delete gstack?"));
+    expect(dialog.split("\n").find((line) => line.includes(`skills${path.sep}gstack`))).toContain(
+      "breaks 2 links: canary, careful (add them to delete them too)",
+    );
+    expect(hintLine(dialog)).toContain("y apply");
+  });
+
+  it.skipIf(!hasGit)(
+    "adds Claude Code's ignore line with a project's first settings.local.json, and keeps it when an account is picked",
+    async () => {
+      const { h, app } = seed();
+      rmSync(path.join(app, ".git"), { recursive: true, force: true });
+      git(app, ["init", "-q"]);
+      // Both accounts turned the .mcp.json server down: on clears both, and approves it here.
+      const denied = { disabledMcpjsonServers: ["docs-search"] };
+      h.claude("default", ".claude", { projects: { [app]: denied, [h.path("repos", "web")]: {} } });
+      h.claude("work", ".claude-work", { projects: { [app]: denied } });
+      const ignore = h.path(".config", "git", "ignore");
+      const instance = mount(h, app, 140, 40);
+      await openRow(instance, "Project", "docs-search", "2");
+      await press(instance, SPACE);
+      const dialog = await seen(instance, (f) => f.includes("◉ default") && f.includes("◉ work"));
+      const ignoreLine = (frame: string) => frame.split("\n").find((line) => line.includes(`git${path.sep}ignore`));
+      expect(ignoreLine(dialog)).toContain("adds **/.claude/settings.local.json  as Claude Code does");
+      // Leaving an account out plans again: the line stays.
+      await press(instance, DOWN);
+      await press(instance, SPACE);
+      const one = await seen(instance, (f) => f.includes("○ work"));
+      expect(ignoreLine(one)).toContain("adds **/.claude/settings.local.json");
+      await press(instance, "y");
+      await seen(instance, (f) => f.includes("· u to undo"));
+      expect(readFileSync(ignore, "utf8")).toBe("**/.claude/settings.local.json\n");
+      expect(json(local(app)).enabledMcpjsonServers).toEqual(["docs-search"]);
+    },
+  );
+
   it.skipIf(!hasGit)(
     "warns that deleting a skill git tracks changes the repo, and turns it off instead on o",
     async () => {

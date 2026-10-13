@@ -14,7 +14,7 @@ import {
 import { planChecked } from "./git-tracked.js";
 import { loadInventory } from "./inventory.js";
 import type { Inventory } from "./model.js";
-import type { Plan, PlanContext } from "./plan.js";
+import type { IgnoreFacts, Plan, PlanContext } from "./plan.js";
 
 /** The inventory as the dashboard opens it: this user's registry and home, from where csn was started. */
 export async function loadInventoryHere(): Promise<Inventory> {
@@ -32,10 +32,10 @@ export type ScreenWrites = {
   backupRoot: string;
   stashDir: string;
   planChecked(
-    ctx: Omit<PlanContext, "tracked" | "stashDir">,
+    ctx: Omit<PlanContext, "tracked" | "stashDir" | "ignore">,
     command: ExtensionsCommand,
     action: Action,
-  ): Promise<{ plan: Plan; tracked: ReadonlySet<string> }>;
+  ): Promise<{ plan: Plan; tracked: ReadonlySet<string>; ignore?: IgnoreFacts }>;
   apply(plan: Plan): Promise<ApplyResult>;
   /** The newest change not undone yet, of any command. */
   lastOperation(): Promise<UndoPreview | null>;

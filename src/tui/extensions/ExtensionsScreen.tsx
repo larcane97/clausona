@@ -6,7 +6,7 @@ import { type Action, COMMAND_OF, type Reach, refusalText, toggleVerb } from "..
 import { type DetailLine, detailsOf, NOUN } from "../../extensions/describe.js";
 import type { ScreenWrites } from "../../extensions/load.js";
 import type { Inventory } from "../../extensions/model.js";
-import { actionsLine, type KeyName, keysFor, plan as planOf } from "../../extensions/plan.js";
+import { actionsLine, type IgnoreFacts, type KeyName, keysFor, plan as planOf } from "../../extensions/plan.js";
 import { isWithin } from "../../extensions/read.js";
 import { type ScopeId, type ScopeRow, scopesFor } from "../../extensions/scopes.js";
 import { Chrome } from "../components/Chrome.js";
@@ -376,13 +376,17 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
     : undefined;
   const failed = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-  /** The plan's context as the screen sees it: the project picked, the files as last read. */
-  const contextFor = (inv: Inventory, w: ScreenWrites, tracked: ReadonlySet<string>) => ({
+  /**
+   * The plan's context as the screen sees it: the project picked, the files as last read, and
+   * what planChecked found of git, so a plan made again keeps what it showed.
+   */
+  const contextFor = (inv: Inventory, w: ScreenWrites, tracked: ReadonlySet<string>, ignore?: IgnoreFacts) => ({
     inv,
     project,
     now: loadedAt,
     tracked,
     stashDir: w.stashDir,
+    ...(ignore !== undefined ? { ignore } : {}),
   });
 
   /**
@@ -394,12 +398,14 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
     if (!writes || !inventory) return;
     pending.current = true;
     try {
-      const { plan, tracked } = await writes.planChecked({ inv: inventory, project, now: loadedAt }, command, action);
+      const checked = await writes.planChecked({ inv: inventory, project, now: loadedAt }, command, action);
+      const { plan, tracked, ignore } = checked;
       const fresh = {
         type: "plan",
         action,
         command,
         tracked,
+        ...(ignore !== undefined ? { ignore } : {}),
         plan,
         full: plan,
         cursor: 0,
@@ -499,7 +505,10 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
       if (open.type === "undo") after = undoneStatus(await writes.undo(), writes.stashDir);
       else {
         const chosen = open.offerOff
-          ? planOf(contextFor(inventory, writes, open.tracked), open.command, { ...open.action, tracked: true })
+          ? planOf(contextFor(inventory, writes, open.tracked, open.ignore), open.command, {
+              ...open.action,
+              tracked: true,
+            })
           : open.plan;
         after = appliedStatus(await writes.apply(chosen), chosen, writes.homeDir, writes.stashDir);
       }
@@ -540,7 +549,8 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
       // The cursor's account in or out; the plan again, pure, with what git tracks as read.
       const chosen = accounts.flatMap((a, at) => ((at === open.cursor) !== a.chosen ? [a.profile] : []));
       const action = { ...open.action, accounts: chosen };
-      setDialog({ ...open, action, plan: planOf(contextFor(inv, w, open.tracked), open.command, action) });
+      const again = planOf(contextFor(inv, w, open.tracked, open.ignore), open.command, action);
+      setDialog({ ...open, action, plan: again });
     }
   };
 

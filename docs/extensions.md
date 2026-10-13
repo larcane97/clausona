@@ -627,9 +627,22 @@ the primary Claude Code folder, and Codex's home is `~/.codex` by default, as un
 with the repo. When a change needs a file that is not there yet, such as a project's first
 `.claude/settings.local.json`, it makes the file, and the plan says `create`.
 
+Claude Code keeps that file out of git. When it makes one, it adds
+`**/.claude/settings.local.json` to git's global ignore file, and clausona does the same. When a
+change makes a project's first `.claude/settings.local.json` in a git repository that does not
+ignore it yet, the plan has one more line:
+`~/.config/git/ignore  adds **/.claude/settings.local.json  as Claude Code does`. The file is the
+one `core.excludesFile` names in your global git config, else `$XDG_CONFIG_HOME/git/ignore`,
+else `~/.config/git/ignore`, and it is made when it is not there. It is backed up like any other
+file, and undo takes the line back out. Without git, outside a repository, or with the line in
+that file already, there is no such line.
+
 `on` writes in the same places. For a `.mcp.json` server it also takes the name out of
 `disabledMcpjsonServers` in each account's entry for the project, where an account turned it
-down. A server turned off in your user settings or in the project's shared
+down. Adding the name to `enabledMcpjsonServers` approves a command the repo defines, so that
+line of the plan says what the server runs, its command or URL with secrets hidden as the
+details hide them, as in `runs npx docs-mcp --api-key <hidden>`. A server approved before has
+nothing new to approve, and its plan says nothing of it. A server turned off in your user settings or in the project's shared
 `.claude/settings.json` stays off whatever is written here, so `on` is refused and the reason
 names that file. `visibility` writes `skillOverrides.<name>` as off does, with the level as the
 value.
@@ -675,6 +688,13 @@ skill there is a Claude row and a Codex row, and deleting one would delete the o
 too. So it is refused unless both rows are in the same `rm`, as in
 `csn skills rm --id '<id>' --id '<other id>'`, or both are marked with `x` on the screen. Then
 the folder moves once.
+
+A folder can also hold what other skill links lead to. gstack, cloned into
+`.claude/skills/gstack`, links each skill it holds in next to it, as `.claude/skills/canary`
+leading to `gstack/canary`. Deleting `gstack` alone leaves those links broken, so the plan says
+so next to the folder, `breaks 30 links: canary, careful, freeze, … (add them to delete them too)`.
+It is not refused: undo puts the folder back, and the links work again. Add the links to the
+same `rm`, or mark them too on the screen, and the note goes.
 
 A file or folder that git tracks in a project changes the repo when it changes. The CLI refuses
 such a change unless you add `--tracked`, for `off`, `on` and `visibility` as well as `rm`.
@@ -744,6 +764,14 @@ older ones.
 
 The backup folders are 0700 and their files 0600, so only you can read them. A copy of
 `.claude.json` or of a settings file can hold MCP secrets.
+
+A folder on another disk than `~/.clausona` can't be moved there in one step, so clausona copies
+it into the backup and then removes it. Meanwhile it waits in the folder above its skills folder,
+under a name that starts with `.clausona-`, where neither Claude Code nor Codex loads it as a
+skill. The manifest says where. When the change is cut short, as when the process is killed,
+the next change or `undo` puts it right: before the copy is whole, the folder goes back where it
+was, as if the change had not started; once the copy is whole, the change is finished, and
+`undo` puts the folder back from the backup.
 
 `.claude.json` is changed only under Claude Code's own lock, `.claude.json.lock` next to it, so
 clausona never writes it while Claude Code does. When the lock is not free within 15 seconds,
@@ -976,6 +1004,8 @@ Each of `changes`:
 | `note` | string or null | Such as `link only, target kept`, `changes the repo` or `the folder at ~/dotfiles/skills/eli5`. |
 | `tracked` | boolean | `true` when git tracks it and `--tracked` let the change go ahead. |
 | `rows` | string[] | The row keys this line is for, as `id` in `ls --json`. |
+| `breaks` | string[] | For a folder deleted, the row keys of the skill links that lead into it and are not in the same `rm`: the links it leaves broken. Empty otherwise. |
+| `runs` | string or null | For a line that approves a `.mcp.json` server, what the server runs: its command or URL, with secrets hidden as in an item's `summary`. `null` otherwise. |
 
 Each of `refused`:
 
@@ -1012,7 +1042,9 @@ Each of `unchanged`:
       "account": null,
       "note": null,
       "tracked": false,
-      "rows": ["skill:claude:global:-:old-one"]
+      "rows": ["skill:claude:global:-:old-one"],
+      "breaks": [],
+      "runs": null
     }
   ],
   "unchanged": [],
@@ -1030,7 +1062,7 @@ Each of `unchanged`:
 ```
 
 A plan names files, keys and server names. It never holds what a server's or a hook's entry
-holds.
+holds, but for what a `.mcp.json` server runs when the plan approves it, with secrets hidden.
 
 ### Undo
 
@@ -1390,7 +1422,8 @@ that: `Nothing to do: already off in this project.`
 
 Otherwise a dialog takes the panes' place, before anything changes. It has the question, such as
 `Turn off eli5 in this project?`, then a line per file with what changes in it, the rows that
-can't change and why, the backup folder, and `Press u afterwards to put them back.` `y` makes
+can't change and why, the backup folder, and `Press u afterwards to put them back.` Under the
+line that approves a `.mcp.json` server is what it runs, whole. `y` makes
 the change, `n` or `esc` closes it and changes nothing, and `pgup` and `pgdn` scroll its lines.
 
 For a Claude MCP server that several accounts have, the dialog lists the accounts, each `◉`

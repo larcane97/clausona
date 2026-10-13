@@ -9,8 +9,8 @@ import {
   stopText,
 } from "../../extensions/actions.js";
 import type { ApplyResult, UndoPreview, UndoResult, UndoSkip } from "../../extensions/apply.js";
-import type { Plan, PlanLine } from "../../extensions/plan.js";
-import { middleCut, shortProfile, tilde } from "../../extensions/present.js";
+import type { IgnoreFacts, Plan, PlanLine } from "../../extensions/plan.js";
+import { middleCut, shortProfile, tilde, tildeIn } from "../../extensions/present.js";
 import { isWithin } from "../../extensions/read.js";
 import { symbol } from "../theme.js";
 import { cell } from "./view-model.js";
@@ -27,6 +27,8 @@ export type Dialog =
       action: Action;
       command: ExtensionsCommand;
       tracked: ReadonlySet<string>;
+      /** What planChecked found of git's global ignore file: a plan again, pure, keeps its line. */
+      ignore?: IgnoreFacts;
       plan: Plan;
       /** The plan with every account chosen, for the picker's lines. */
       full: Plan;
@@ -90,6 +92,46 @@ function aligned(rows: string[][], width: number, path?: number): string[] {
   });
 }
 
+/** Where the words of `runs` start on its line and on the lines it wraps onto. */
+const RUNS_LEAD = "  runs ";
+
+/**
+ * `text` in lines of at most `width` columns, broken between words, and inside a word only when
+ * the word alone is wider: nothing of it is cut off.
+ */
+function wrapped(text: string, width: number): string[] {
+  const room = Math.max(1, width);
+  const out: string[] = [];
+  let current = "";
+  for (const word of text.split(" ")) {
+    const joined = current === "" ? word : `${current} ${word}`;
+    if (joined.length <= room) {
+      current = joined;
+      continue;
+    }
+    if (current !== "") out.push(current);
+    current = word;
+    while (current.length > room) {
+      out.push(current.slice(0, room));
+      current = current.slice(room);
+    }
+  }
+  out.push(current);
+  return out;
+}
+
+/**
+ * Under a line that approves a `.mcp.json` server, what the server runs, as the details write it:
+ * whole, wrapped to the width, since it is what y agrees to.
+ */
+function runsLines(line: PlanLine, key: string, opts: Opts): DialogLine[] {
+  if (line.runs === undefined) return [];
+  return wrapped(tildeIn(line.runs, opts.homeDir), opts.width - RUNS_LEAD.length).map((text, at) => ({
+    key: `${key}-runs-${at}`,
+    text: `${at === 0 ? RUNS_LEAD : " ".repeat(RUNS_LEAD.length)}${text}`,
+  }));
+}
+
 /**
  * The change lines: one per plan line - file, what, note - or with several accounts to pick from,
  * one per account. A picker line too wide for its file leaves the file out: the account says whose
@@ -104,7 +146,11 @@ function changeLines(dialog: Extract<Dialog, { type: "plan" }>, opts: Opts): Dia
       rows.map((line) => [home(line.file), line.what, line.note ?? ""]),
       opts.width,
       0,
-    ).map((text, at) => ({ key: `change-${from + at}`, text }));
+    ).flatMap((text, at) => {
+      const key = `change-${from + at}`;
+      const line = rows[at];
+      return [{ key, text }, ...(line ? runsLines(line, key, opts) : [])];
+    });
   const accounts = plan.accounts ?? [];
   if (accounts.length <= 1) return plain(lines, 0);
   const fullLines = full.changes.flatMap((change) => change.lines);

@@ -122,7 +122,7 @@ describe("who may touch the file system", () => {
     expect(lines).toEqual(['import { inspectSharedLink } from "../../core/shared-links.js";']);
   });
 
-  it("has git-tracked.ts alone start a process (git ls-files, which only reads)", () => {
+  it("has git-tracked.ts alone start a process (git ls-files, check-ignore and config, which only read)", () => {
     expect(FILES).toContain("extensions/git-tracked.ts");
     expect(importers((module) => module === "child_process")).toEqual(["extensions/git-tracked.ts"]);
   });
