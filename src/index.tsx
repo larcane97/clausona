@@ -159,7 +159,10 @@ export function reportError(
     err.write(`  ${xMark} ${message}\n`);
   }
   if (error instanceof ExitError) return error.code;
-  return typeof extra.exitCode === "number" ? extra.exitCode : 1;
+  // Only a status that says the command failed and fits in a byte: 0 and 256 both leave as
+  // success, and a fraction or NaN is not a status at all.
+  const { exitCode } = extra;
+  return typeof exitCode === "number" && Number.isInteger(exitCode) && exitCode >= 1 && exitCode <= 255 ? exitCode : 1;
 }
 
 /**

@@ -92,6 +92,13 @@ describe("reportError", () => {
     expect(err.chunks).toEqual([]);
   });
 
+  it("takes an exitCode only when it is a whole number from 1 to 255, else exits 1", () => {
+    const code = (exitCode: unknown) => reportError(Object.assign(new Error("x"), { exitCode }), sink().stream);
+    expect(code(1)).toBe(1);
+    expect(code(255)).toBe(255);
+    for (const bad of [0, -1, 256, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "75"]) expect(code(bad)).toBe(1);
+  });
+
   it("exits with an ExitError's code, its message on stderr", () => {
     const err = sink();
     const out = sink();
