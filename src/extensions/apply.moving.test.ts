@@ -84,12 +84,7 @@ async function seed() {
 }
 
 async function planFor(h: TestHome, app: string, verb: Action["verb"], name: string): Promise<Plan> {
-  const inv = await loadInventory({
-    homeDir: h.home,
-    registry: h.registry,
-    cwd: app,
-    managedSettings: h.path("managed-settings.json"),
-  });
+  const inv = await loadInventory(h.inventoryOptions(app, h.path("managed-settings.json")));
   const row = rowsIn(inv, "claude", "skill", "global", app, NOW).find((r) => r.name === name);
   if (!row) throw new Error(`no ${name} row`);
   const ctx = {

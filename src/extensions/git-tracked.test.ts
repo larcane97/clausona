@@ -75,12 +75,7 @@ function ignoring(more?: (h: TestHome, app: string) => void, repo = true) {
   h.skill(".claude/skills", "eli5");
   more?.(h, app);
   const check = async (env: NodeJS.ProcessEnv = IGNORE_ENV, gitBinary?: string) => {
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("managed.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app, h.path("managed.json")));
     const row = rowsIn(inv, "claude", "skill", "global", app, NOW).find((r) => r.name === "eli5");
     if (!row) throw new Error("no eli5 row");
     const ctx = { inv, project: app, now: NOW, stashDir: h.path(".clausona", "extensions", "stash") };

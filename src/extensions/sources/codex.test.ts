@@ -180,12 +180,7 @@ describe("readCodex", () => {
         toml(h.path("alias", ".agents", "skills", "eli5", "SKILL.md")),
       ].join("\n"),
     );
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("m.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app, h.path("m.json")));
     const state = (name: string) => {
       const item = inv.items.find((i) => i.location.tool === "codex" && i.name === name);
       if (!item) throw new Error(`no ${name}`);
