@@ -966,6 +966,7 @@ function subcommandHelpText(command: string, args: string[] = []): string | unde
         `    ${dim("A profile right after claude, codex or routing options is an error; after a -- it goes to the tool.")}`,
         `    ${dim("A routed run says on stderr which profile it picked, and why.")}`,
         `    ${dim("An unknown --route in a terminal shows the route it would create and asks once (Y/n).")}`,
+        `    ${dim("Without a terminal, an unknown --route exits 1 and creates nothing.")}`,
         `    ${dim("On a route over claude and codex, name the tool before its arguments: clausona run codex --route any …")}`,
         `    ${dim("Resumed runs (-c, --resume, --from-pr, codex resume) use only accounts that share sessions.")}`,
         "",

@@ -128,6 +128,14 @@ describe("route help", () => {
     expect(overview).toMatch(/\(no arguments\)\s+In a terminal, open the Routes screen of the dashboard/);
   });
 
+  it("says in route's and run's help what an unknown route does without a terminal", async () => {
+    const { run } = setup();
+    expect(await run("--help")).toContain("Without a terminal, run exits 1 on an unknown route and creates nothing.");
+    expect(stripAnsi(await runCommand("run", ["--help"]))).toContain(
+      "Without a terminal, an unknown --route exits 1 and creates nothing.",
+    );
+  });
+
   it("says a run's --exclude adds to the route's list, and route set's replaces it", async () => {
     const { run } = setup();
     expect(await run("set", "--help")).toMatch(/--exclude <patterns>\s+Replace the route's exclude list/);

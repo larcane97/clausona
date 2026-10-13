@@ -185,6 +185,7 @@ export function routeHelp(sub?: string): string {
     `    ${dim("clausona route pick <name> --json        take a turn; call it once per worker you start")}`,
     `    ${dim("clausona run <profile> [--] ...          launch on the picked profile")}`,
     `    ${dim("add and set never ask; run asks one Y/n only for an unknown route in a terminal.")}`,
+    `    ${dim("Without a terminal, run exits 1 on an unknown route and creates nothing.")}`,
     `    ${dim("Create and change routes with add / set / remove, not by editing routes.json.")}`,
     `    ${dim("Before creating or changing a route for the user, show them its members (explain).")}`,
     "",
