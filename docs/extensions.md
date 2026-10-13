@@ -815,6 +815,13 @@ so next to the folder, `breaks 30 links: canary, careful, freeze, … (add them 
 It is not refused: undo puts the folder back, and the links work again. Add the links to the
 same `rm`, or mark them too on the screen, and the note goes.
 
+Codex finds skills in folders below a skill too, so a Codex skill's folder can hold other Codex
+skills, as `~/.agents/skills/pack` holds `pack/inner` and `pack/inner/deeper`. Deleting `pack`
+deletes them with it, and the plan says so next to the folder,
+`also deletes 2 skills inside: deeper, inner`. Add them to the same `rm`, or mark them too on the
+screen, and the note goes: the outer folder moves once, on one line for every row it takes, and
+undo puts them all back.
+
 A file or folder that git tracks in a project changes the repo when it changes. The CLI refuses
 such a change unless you add `--tracked`, for `off`, `on` and `visibility` as well as `rm`.
 What is in your home folder and in no project counts as not tracked, even when the home folder
@@ -1141,6 +1148,7 @@ Each of `changes`:
 | `note` | string or null | Such as `link only, target kept`, `changes the repo` or `the folder at ~/dotfiles/skills/eli5`. |
 | `tracked` | boolean | `true` when git tracks it and `--tracked` let the change go ahead. |
 | `rows` | string[] | The row keys this line is for, as `id` in `ls --json`. |
+| `deletes` | string[] | For a folder deleted, the row keys of the other skills inside it that are not in the same `rm`: the skills its move takes along. Empty otherwise. |
 | `breaks` | string[] | For a folder deleted, the row keys of the skill links that lead into it and are not in the same `rm`: the links it leaves broken. Empty otherwise. |
 | `runs` | string or null | For a line that approves a `.mcp.json` server, what the server runs: its command or URL, with secrets hidden as in an item's `summary`. `null` otherwise. |
 
@@ -1180,6 +1188,7 @@ Each of `unchanged`:
       "note": null,
       "tracked": false,
       "rows": ["skill:claude:global:-:old-one"],
+      "deletes": [],
       "breaks": [],
       "runs": null
     }

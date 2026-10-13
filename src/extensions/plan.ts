@@ -70,6 +70,11 @@ export type PlanLine = {
   tracked: boolean;
   /** Row keys. */
   rows: string[];
+  /**
+   * A folder deleted: the row keys of the other skills inside it, not in the action, that go with
+   * it - Codex finds skills in folders below a skill's own.
+   */
+  deletes?: string[];
   /** A folder deleted: the row keys of the skill links into it, not in the action, that it leaves broken. */
   breaks?: string[];
   /**
@@ -610,21 +615,106 @@ function linksInto(run: Run, real: string): { key: string; name: string }[] {
     .sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
 }
 
-/** How many names `breaksNote` shows before the `…`. */
+/** Whether a skill is a folder of its own that rm moves: no link, no command's file. */
+function isSkillFolder(item: Extension): boolean {
+  return item.kind === "skill" && !item.link && item.summary?.type !== "command";
+}
+
+/**
+ * The other skills inside a folder being deleted and not in the action, by name: Codex finds
+ * skills in folders below a skill's own, and the folder's move takes them along. Not the folder
+ * itself through a link, which sameFolder refuses, nor a link, which linksInto says.
+ */
+function skillsInside(run: Run, copy: Extension, real: string): { key: string; name: string }[] {
+  const found = new Map<string, string>();
+  for (const other of run.inv.items) {
+    if (other.id === copy.id || !isSkillFolder(other) || run.inAction.has(other.id)) continue;
+    const key = folderKey(other);
+    if (key !== pathKey(real) && isWithin(key, real)) found.set(rowKey(other), other.name);
+  }
+  return [...found]
+    .map(([key, name]) => ({ key, name }))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+}
+
+/**
+ * The outermost folder of another skill in the action that holds this copy's folder: its move
+ * takes this one along, so this copy's line is that folder's.
+ */
+function outerFolder(run: Run, copy: Extension): Extension | undefined {
+  const key = folderKey(copy);
+  let outer: Extension | undefined;
+  for (const other of run.action.rows.flatMap((row) => row.items)) {
+    if (other.id === copy.id || !isSkillFolder(other)) continue;
+    const theirs = folderKey(other);
+    if (theirs === key || !isWithin(key, theirs)) continue;
+    if (!outer || theirs.length < folderKey(outer).length) outer = other;
+  }
+  return outer;
+}
+
+/** How many names `breaksNote` and `deletesNote` show before the `…`. */
 const BREAKS_SHOWN = 3;
+
+/** The first names, and `…` when there are more. */
+function shownNames(names: readonly string[]): string {
+  const shown = names.slice(0, BREAKS_SHOWN).join(", ");
+  return names.length > BREAKS_SHOWN ? `${shown}, …` : shown;
+}
 
 /** "breaks 30 links: canary, careful, freeze, … (add them to delete them too)". */
 function breaksNote(links: readonly { name: string }[]): string | undefined {
   const names = [...new Set(links.map((link) => link.name))];
   if (names.length === 0) return undefined;
-  const shown = names.slice(0, BREAKS_SHOWN).join(", ");
-  const list = names.length > BREAKS_SHOWN ? `${shown}, …` : shown;
+  const list = shownNames(names);
   return names.length === 1
     ? `breaks 1 link: ${list} (add it to delete it too)`
     : `breaks ${names.length} links: ${list} (add them to delete them too)`;
 }
 
-/** Each copy's folder by its real path, a link unlinked, a command's file; never what a link leads to. */
+/** "also deletes 2 skills inside: deeper, inner". */
+function deletesNote(inside: readonly { name: string }[]): string | undefined {
+  const names = [...new Set(inside.map((skill) => skill.name))];
+  if (names.length === 0) return undefined;
+  return `also deletes ${names.length} ${names.length === 1 ? "skill" : "skills"} inside: ${shownNames(names)}`;
+}
+
+/**
+ * `copy`'s folder moved into the backup, by its real path, on a line for `row`; or the refusal
+ * when another row, not in the action, is the same folder through a link.
+ */
+function folderRemoval(run: Run, row: ScopeRow, copy: Extension): FileChange | Outcome {
+  const other = sameFolder(run, copy);
+  if (other) {
+    return refused(run, row, "one-folder", {
+      Tool: TOOL_WORD[other.location.tool],
+      "Scope label": SCOPE_LABEL[homeScope(other, run.ctx.project)](other.location.tool),
+      name: other.name,
+      a: row.key,
+      b: rowKey(other),
+    });
+  }
+  const listed = copy.location.file;
+  const real = copy.realFolder ?? listed;
+  const inside = skillsInside(run, copy, real);
+  const links = linksInto(run, real);
+  const notes = [folderNote(run.inv, copy, real), deletesNote(inside), breaksNote(links)].filter(
+    (n) => n !== undefined,
+  );
+  const line = lineFor(run, row, listed, "", {
+    change: "delete",
+    note: notes.length > 0 ? notes.join(", ") : undefined,
+  });
+  if (inside.length > 0) line.deletes = inside.map((skill) => skill.key);
+  if (links.length > 0) line.breaks = links.map((link) => link.key);
+  return removal(real, "folder", [{ type: "entry", kind: "dir", realPath: real }], line);
+}
+
+/**
+ * Each copy's folder by its real path, a link unlinked, a command's file; never what a link leads
+ * to. A folder inside another the action deletes goes with that one: its line is the outer
+ * folder's, which merge() makes one line for both rows - unless the outer one can't go.
+ */
 function planSkillRemoval(run: Run, row: ScopeRow): Outcome {
   for (const copy of row.items) {
     if (copy.location.scope === "synced") return refused(run, row, "cloud-delete");
@@ -643,25 +733,11 @@ function planSkillRemoval(run: Run, row: ScopeRow): Outcome {
       out.changes.push(removal(listed, "file", [{ type: "entry", kind: "file" }], line));
       continue;
     }
-    const other = sameFolder(run, copy);
-    if (other) {
-      return refused(run, row, "one-folder", {
-        Tool: TOOL_WORD[other.location.tool],
-        "Scope label": SCOPE_LABEL[homeScope(other, run.ctx.project)](other.location.tool),
-        name: other.name,
-        a: row.key,
-        b: rowKey(other),
-      });
-    }
-    const real = copy.realFolder ?? listed;
-    const links = linksInto(run, real);
-    const notes = [folderNote(run.inv, copy, real), breaksNote(links)].filter((n) => n !== undefined);
-    const line = lineFor(run, row, listed, "", {
-      change: "delete",
-      note: notes.length > 0 ? notes.join(", ") : undefined,
-    });
-    if (links.length > 0) line.breaks = links.map((link) => link.key);
-    out.changes.push(removal(real, "folder", [{ type: "entry", kind: "dir", realPath: real }], line));
+    const outer = outerFolder(run, copy);
+    const along = outer ? folderRemoval(run, row, outer) : undefined;
+    const made = along && "kind" in along ? along : folderRemoval(run, row, copy);
+    if (!("kind" in made)) return made;
+    out.changes.push(made);
   }
   return out;
 }

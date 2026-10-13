@@ -212,6 +212,7 @@ describe("skills off", () => {
       note: null,
       tracked: false,
       rows: ["skill:claude:global:-:eli5"],
+      deletes: [],
       breaks: [],
       runs: null,
     });
@@ -584,6 +585,34 @@ describe("skills rm", () => {
       ["link only, target kept", []],
       ["link only, target kept", []],
     ]);
+  });
+
+  it("says which Codex skills a folder it deletes holds, deletes them with it, and undo puts all back", async () => {
+    const { h, app } = seed();
+    // Codex finds skills in folders below a skill: pack holds inner, which holds deeper.
+    h.skill(".agents/skills", "pack");
+    h.skill(".agents/skills/pack", "inner");
+    h.skill(".agents/skills/pack/inner", "deeper");
+    const skillFiles = ["pack", "pack/inner", "pack/inner/deeper"].map((dir) =>
+      h.path(".agents", "skills", ...dir.split("/"), "SKILL.md"),
+    );
+    const { run } = cli(h, app);
+    const dry = stripAnsi(await run("skills", ["rm", "pack", "--tool", "codex", "--dry-run"]));
+    expect(dry).toMatch(/skills.pack +also deletes 2 skills inside: deeper, inner$/m);
+    const listed = JSON.parse(await run("skills", ["ls", "--scope", "global", "--tool", "codex", "--json"]));
+    const idOf = (name: string) => listed.items.find((i: { name: string }) => i.name === name).id;
+    const plan = JSON.parse(await run("skills", ["rm", "pack", "--tool", "codex", "--dry-run", "--json"]));
+    expect(plan.changes).toMatchObject([
+      { change: "delete", rows: [idOf("pack")], deletes: [idOf("deeper"), idOf("inner")], breaks: [] },
+    ]);
+    // Both marked: inner goes with pack, in one move, and the change is made whole.
+    const ids = ["--id", idOf("pack"), "--id", idOf("inner")];
+    const both = JSON.parse(await run("skills", ["rm", ...ids, "--yes", "--json"]));
+    expect(both).toMatchObject({ applied: true, question: "Delete 2 skills?" });
+    expect(both.changes).toMatchObject([{ rows: [idOf("pack"), idOf("inner")], deletes: [idOf("deeper")] }]);
+    for (const file of skillFiles) expect(existsSync(file), file).toBe(false);
+    await run("skills", ["undo", "--yes"]);
+    for (const file of skillFiles) expect(existsSync(file), file).toBe(true);
   });
 });
 

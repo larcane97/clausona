@@ -451,6 +451,57 @@ describe("plan: Claude skills", () => {
     });
   });
 
+  it("says which Codex skills a folder it deletes holds, and takes those in the same rm along in one move", async () => {
+    // Codex finds skills in folders below a skill: pack holds inner, which holds deeper.
+    const { h, inv, ctx } = await seed((h) => {
+      h.skill(".agents/skills", "pack");
+      h.skill(".agents/skills/pack", "inner");
+      h.skill(".agents/skills/pack/inner", "deeper");
+    });
+    const [pack, inner, deeper] = ["pack", "inner", "deeper"].map((name) =>
+      rowIn(inv, undefined, "global", name, "codex"),
+    );
+    if (!pack || !inner || !deeper) throw new Error("no pack rows");
+    const folder = realpathSync.native(h.path(".agents/skills/pack"));
+    const removals = (p: Plan) =>
+      p.changes.map((c) => ({ kind: c.kind, file: c.file, lines: c.lines.map((l) => [l.rows, l.note, l.deletes]) }));
+
+    const alone = plan(ctx, "skills", act("rm", "here", [pack]));
+    expect(alone.refused).toEqual([]);
+    expect(removals(alone)).toEqual([
+      {
+        kind: "remove",
+        file: folder,
+        lines: [[[pack.key], "also deletes 2 skills inside: deeper, inner", [deeper.key, inner.key]]],
+      },
+    ]);
+    expect(alone.question).toBe("Delete pack?");
+
+    // inner goes with pack: one move, one line for both, and deeper still said.
+    const two = plan(ctx, "skills", act("rm", "here", [pack, inner]));
+    expect(two.refused).toEqual([]);
+    expect(removals(two)).toEqual([
+      {
+        kind: "remove",
+        file: folder,
+        lines: [[[pack.key, inner.key], "also deletes 1 skill inside: deeper", [deeper.key]]],
+      },
+    ]);
+    expect(two.question).toBe("Delete 2 skills?");
+    // In whatever order they are named, the outer folder is the one that moves.
+    expect(removals(plan(ctx, "skills", act("rm", "here", [deeper, inner, pack])))).toEqual([
+      { kind: "remove", file: folder, lines: [[[deeper.key, inner.key, pack.key], undefined, undefined]] },
+    ]);
+    // inner alone moves its own folder, and deeper with it.
+    expect(removals(plan(ctx, "skills", act("rm", "here", [inner])))).toEqual([
+      {
+        kind: "remove",
+        file: path.join(folder, "inner"),
+        lines: [[[inner.key], "also deletes 1 skill inside: deeper", [deeper.key]]],
+      },
+    ]);
+  });
+
   it("refuses to delete a Cloud skill or a plugin, and to switch a plugin's skill", async () => {
     const { app, inv, ctx } = await seed();
     const pdf = rowIn(inv, app, "cloud", "pdf");

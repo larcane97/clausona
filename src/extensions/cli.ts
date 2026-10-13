@@ -114,6 +114,7 @@ export const CHANGE_JSON_KEYS: readonly string[] = [
   "note",
   "tracked",
   "rows",
+  "deletes",
   "breaks",
   "runs",
 ];
@@ -851,6 +852,7 @@ function lineJson(line: PlanLine) {
     note: line.note ?? null,
     tracked: line.tracked,
     rows: [...line.rows],
+    deletes: [...(line.deletes ?? [])],
     breaks: [...(line.breaks ?? [])],
     runs: line.runs ?? null,
   };
