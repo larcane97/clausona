@@ -40,11 +40,38 @@ function killRunning(child: ChildProcess): void {
   }
 }
 
+/** The signals that end clausona from outside: Ctrl-C, a kill, a terminal closing. */
+const ENDING_SIGNALS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+/**
+ * Ends a detached child with clausona. Detached, it is out of the terminal's process group, which
+ * the terminal's Ctrl-C reaches, so a signal that ends clausona kills its group here, as
+ * process.exit() does (the dashboard quitting). The signal then takes its course: with no other
+ * handler for it, it is raised again, and clausona ends as it would have. Returns what removes
+ * the handlers, once the child is done with.
+ */
+function endWithClausona(child: ChildProcess): () => void {
+  const onExit = () => killRunning(child);
+  const onSignal = (signal: NodeJS.Signals) => {
+    killRunning(child);
+    remove();
+    if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+  };
+  const remove = () => {
+    for (const signal of ENDING_SIGNALS) process.off(signal, onSignal);
+    process.off("exit", onExit);
+  };
+  for (const signal of ENDING_SIGNALS) process.on(signal, onSignal);
+  process.on("exit", onExit);
+  return remove;
+}
+
 /**
  * Runs `command` and resolves to its exit code and stdout. With a `signal`, the command starts
  * in a process group of its own, with no terminal, and once the signal aborts, it and everything
  * it started is killed, if it is still running; the result is a failure at once, not when its
- * output closes, which a process it left behind could hold open.
+ * output closes, which a process it left behind could hold open. Until then, clausona ending
+ * ends it too (endWithClausona).
  */
 function run(command: string, args: string[], input?: string, signal?: AbortSignal): Promise<RunResult> {
   return new Promise((resolve) => {
@@ -52,16 +79,19 @@ function run(command: string, args: string[], input?: string, signal?: AbortSign
       resolve({ code: 1, stdout: "" });
       return;
     }
+    const detached = signal !== undefined && process.platform !== "win32";
     const child = spawnCommand(command, args, {
       stdio: [input === undefined ? "ignore" : "pipe", "pipe", "ignore"],
-      ...(signal && process.platform !== "win32" ? { detached: true } : {}),
+      ...(detached ? { detached: true } : {}),
     });
+    const release = detached ? endWithClausona(child) : () => {};
     let out = "";
     let settled = false;
     const finish = (result: RunResult) => {
       if (settled) return;
       settled = true;
       signal?.removeEventListener("abort", stop);
+      release();
       resolve(result);
     };
     const stop = () => {

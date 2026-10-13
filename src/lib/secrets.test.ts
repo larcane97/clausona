@@ -114,6 +114,58 @@ describe("resolveSecret", () => {
     },
   );
 
+  // Started in a group of its own, it is out of reach of the terminal's Ctrl-C: clausona ending
+  // ends it, and the signal goes on to end clausona as it would have.
+  it.skipIf(windows)(
+    "ends a key command it is waiting on when clausona is interrupted, and lets the signal take its course",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "clausona-key-command-"));
+      temps.push(dir);
+      const pids = path.join(dir, "pids");
+      vi.stubEnv("CLAUSONA_TEST_PIDS", pids);
+      const run = 'echo $$ > "$CLAUSONA_TEST_PIDS"; sleep 30 & echo $! >> "$CLAUSONA_TEST_PIDS"; wait';
+      const alive = (pid: number) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const others = process.listenerCount("SIGINT");
+      const controller = new AbortController();
+      // Settled when its group is killed: the key is not read.
+      const read = resolveSecret("claude:x", { source: "command", run }, undefined, { signal: controller.signal }).then(
+        () => "read",
+        () => "not read",
+      );
+      await vi.waitFor(() => expect(readFileSync(pids, "utf8").trim().split("\n")).toHaveLength(2), {
+        timeout: 20_000,
+      });
+      const [shell, sleep] = readFileSync(pids, "utf8").trim().split("\n").map(Number);
+      // The signal raised again on this process is caught here, or it would end the test run.
+      const real = process.kill.bind(process);
+      const raised: Array<string | number | undefined> = [];
+      const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid !== process.pid) return real(pid, signal);
+        raised.push(signal);
+        return true;
+      });
+      try {
+        (process.emit as (event: string, ...args: unknown[]) => boolean)("SIGINT", "SIGINT");
+        await vi.waitFor(() => expect([alive(shell), alive(sleep)]).toEqual([false, false]), { timeout: 10_000 });
+        // Its handlers are gone, and with no other handler the signal was raised again.
+        expect(process.listenerCount("SIGINT")).toBe(others);
+        expect(raised).toEqual(others === 0 ? ["SIGINT"] : []);
+        expect(await read).toBe("not read");
+      } finally {
+        kill.mockRestore();
+        controller.abort();
+      }
+    },
+  );
+
   // Its pid, once it has exited, can be another process's: nothing is signalled then, even with a
   // job it left behind holding its output open, which the abort no longer waits for.
   it.skipIf(windows)(
