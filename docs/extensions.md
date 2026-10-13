@@ -133,8 +133,11 @@ Some scopes need a word more:
     both. Shown only when there is one.
   - Codex keeps them in the `skills/.system` folder of its home, which it fills itself.
 - Managed: the administrator's managed settings, `managed-settings.json` and the files in
-  `managed-settings.d/`. In this version that means hooks: clausona reads no managed MCP file,
-  so `mcp ls --scope managed` is always empty.
+  `managed-settings.d/`, for hooks, and `managed-mcp.json` beside them for MCP servers. While
+  `managed-mcp.json` is there, Claude Code starts its servers and no other, so every other
+  Claude server reads `off`, in every account, and its details say
+  `only the servers in …/managed-mcp.json start`. clausona does not read the
+  `managedMcpServers` key of managed settings.
 - Other projects, in the CLI only: `ls --scope other` lists the rows of every other project at
   once, each with its `project`. On the screen, pick that project from the project list to see
   its rows.
@@ -219,6 +222,21 @@ The switches are read from these places:
   way.
 - `.mcp.json` servers: `enabledMcpjsonServers`, `disabledMcpjsonServers` and
   `enableAllProjectMcpServers`, in the settings files or the account's project entry.
+- Every Claude server, before its own switch: `managed-mcp.json` (see [Scopes](#scopes)), then
+  `deniedMcpServers` and `allowedMcpServers` in the settings files, a project's in that project
+  only. A server either list keeps out is `off` in every account, and its details name the list
+  and its file: `off (deniedMcpServers in …)` or `off (not in allowedMcpServers in …)`. They
+  match as Claude Code matches them:
+  - an entry is `serverName`, the server's name exactly; `serverCommand`, its command and every
+    argument in order; or `serverUrl`, a URL pattern where `*` is anything, the host in any case,
+    and a host written out in full on its scheme's default port only;
+  - a denylist entry from any file keeps a server out, a managed one too;
+  - once any file has an allowlist, a server must be on one: a stdio server by `serverCommand`
+    once the lists have such an entry, a remote one by `serverUrl` likewise, else by its name.
+    The lists of every file count together, or the managed ones alone when managed settings
+    set `allowManagedMcpServersOnly`. An empty list keeps every server out. A server of
+    `managed-mcp.json` needs no entry unless its config uses `${VAR}`.
+  - clausona compares `${VAR}` in an entry or a config as written, where Claude Code expands it.
 - Codex skills: `[[skills.config]]` in Codex's `config.toml`, by name or by path.
 - Codex MCP servers: `mcp_servers.<name>.enabled` in Codex's or the project's `config.toml`.
 - Hooks are on, except a plugin's hooks while the plugin is off. `disableAllHooks` set to

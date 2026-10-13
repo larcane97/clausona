@@ -27,7 +27,7 @@ import {
   stateLoads,
   type ToolName,
 } from "./scopes.js";
-import { codexTrusted, relevantIn, STASH_KEY } from "./state.js";
+import { codexTrusted, MANAGED_MCP_KEY, relevantIn, STASH_KEY } from "./state.js";
 
 /**
  * The words the Extensions screen and the CLI say about a row: its tags, a hook's event in plain
@@ -252,6 +252,7 @@ function isProjectSetting(inv: Inventory, file: string): boolean {
     facts.claudeSkillOverrides.some(at) ||
     facts.claudeEnabledPlugins.some(at) ||
     facts.claudeFlags.some(at) ||
+    facts.claudeMcpPolicy.some(at) ||
     facts.claudeMcpDisabled.some(at) ||
     facts.claudeMcpjson.some(at) ||
     facts.codexMcpEnabled.some(at)
@@ -408,12 +409,13 @@ function settingPlace(inv: Inventory, item: Extension, project: string | undefin
   return `${whose} ${inside ? path.relative(here, file) : `entry in ${tilde(file, inv.homeDir)}`}`;
 }
 
-/** The settings that turn a whole kind off, which the words name along with their file. */
-const WHOLE_KIND: ReadonlySet<string> = new Set(["disableAllHooks", "disableBundledSkills"]);
+/** The settings that turn a whole kind off, or a list of servers, which the words name along with their file. */
+const WHOLE_KIND: ReadonlySet<string> = new Set(["disableAllHooks", "disableBundledSkills", "deniedMcpServers"]);
 
 /**
  * Where a state is set, in words: the file (`settingPlace`), and for a setting that turns a whole
- * kind off, the setting too - "disableAllHooks in ~/.claude/settings.json".
+ * kind off, or a list of servers, the setting too - "disableAllHooks in ~/.claude/settings.json",
+ * "not in allowedMcpServers in …", "only the servers in …/managed-mcp.json start".
  */
 function setByWords(
   inv: Inventory,
@@ -422,6 +424,8 @@ function setByWords(
   setBy: { file: string; key: string },
 ): string {
   const place = settingPlace(inv, item, project, setBy.file);
+  if (setBy.key === "allowedMcpServers") return `not in allowedMcpServers in ${place}`;
+  if (setBy.key === MANAGED_MCP_KEY) return `only the servers in ${place} start`;
   return WHOLE_KIND.has(setBy.key) ? `${setBy.key} in ${place}` : place;
 }
 

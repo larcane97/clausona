@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { valueHash } from "../hash.js";
 import { type Collector, emptyFacts, type Project } from "../model.js";
 import { TestHome } from "../test-home.js";
-import { loadClaudeAccounts, loadClaudeContext } from "./claude-context.js";
+import { collectClaudeSettingsFacts, loadClaudeAccounts, loadClaudeContext } from "./claude-context.js";
 import { readClaudeMcp } from "./claude-mcp.js";
 
 const homes: TestHome[] = [];
@@ -164,6 +164,64 @@ describe("readClaudeMcp", () => {
     expect(out.warnings).toEqual([]);
   });
 
+  it("lists managed-mcp.json's servers as managed, and says the file is there even when it cannot be read", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude", { mcpServers: { mine: { command: "mine-mcp" } } });
+    const managed = h.write("policy/managed-mcp.json", {
+      mcpServers: { company: { type: "http", url: "https://mcp.example.com/api" } },
+    });
+
+    const out = await read(h, [], h.path("policy", "managed-settings.json"));
+    expect(out.items.map((i) => `${i.location.scope}|${i.name}`).sort()).toEqual(["account|mine", "managed|company"]);
+    const company = out.items.find((i) => i.name === "company");
+    expect(company?.id).toBe("mcp:claude:managed:-:company");
+    expect(company?.location).toEqual({ tool: "claude", scope: "managed", file: managed });
+    expect(out.facts.claudeManagedMcp).toBe(managed);
+    // What each server starts, for the lists to match: a remote one's URL, a stdio one's words hashed.
+    expect(out.facts.mcpTargets["mcp:claude:managed:-:company"]).toEqual({
+      url: "https://mcp.example.com/api",
+      vars: false,
+    });
+    expect(out.facts.mcpTargets["mcp:claude:account:claude:default:mine"]).toEqual({
+      command: valueHash(["mine-mcp"]),
+      vars: false,
+    });
+
+    // A file Claude Code cannot parse still takes control of the servers, as it does there.
+    h.write("policy/managed-mcp.json", "{ nope");
+    const broken = await read(h, [], h.path("policy", "managed-settings.json"));
+    expect(broken.items.map((i) => i.name)).toEqual(["mine"]);
+    expect(broken.facts.claudeManagedMcp).toBe(managed);
+    expect(broken.warnings.map((w) => w.file)).toEqual([managed]);
+    // And with no file, nothing does.
+    expect((await read(h, [])).facts.claudeManagedMcp).toBeUndefined();
+  });
+
+  it("reads every settings file's allowedMcpServers and deniedMcpServers, and the managed lock", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    const app = h.project("repos/app");
+    const managed = h.write("policy/managed-settings.json", {
+      allowManagedMcpServersOnly: true,
+      allowedMcpServers: [{ serverUrl: "https://*.example.com/*" }, { serverName: "two", serverUrl: "x" }],
+    });
+    const user = h.write(".claude/settings.json", { deniedMcpServers: [{ serverCommand: ["npx", "bad"] }] });
+    const local = h.write("repos/app/.claude/settings.local.json", {
+      allowedMcpServers: [],
+      // Only managed settings can turn the lock on.
+      allowManagedMcpServersOnly: true,
+    });
+
+    const out = await read(h, [{ path: app, tools: ["claude"], profiles: [] }], managed);
+    expect(out.facts.claudeMcpPolicy).toEqual([
+      { file: managed, layer: "managed", allowed: [{ serverUrl: "https://*.example.com/*" }], managedOnly: true },
+      { file: user, layer: "user", denied: [{ serverCommand: valueHash(["npx", "bad"]) }] },
+      { file: local, layer: "local", project: app, allowed: [] },
+    ]);
+  });
+
   it("reads a project once when two of an account's keys resolve to it", async () => {
     const h = new TestHome();
     homes.push(h);
@@ -189,7 +247,7 @@ describe("readClaudeMcp", () => {
   });
 });
 
-async function read(h: TestHome, projects: Project[]): Promise<Collector> {
+async function read(h: TestHome, projects: Project[], managedSettings = h.path("none.json")): Promise<Collector> {
   const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
   const accounts = await loadClaudeAccounts(h.registry, h.home, out.warnings);
   const ctx = await loadClaudeContext({
@@ -197,10 +255,11 @@ async function read(h: TestHome, projects: Project[]): Promise<Collector> {
     registry: h.registry,
     homeDir: h.home,
     projects,
-    managedSettings: h.path("none.json"),
+    managedSettings,
     mcpjsonStop: h.home,
     warnings: out.warnings,
   });
+  collectClaudeSettingsFacts(ctx, out);
   await readClaudeMcp(ctx, projects, out);
   return out;
 }

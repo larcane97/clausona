@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { valueHash } from "../hash.js";
+import { mcpTarget } from "../mcp-policy.js";
 import type { Collector, Location, Project } from "../model.js";
 import { isRecord, pathKey, readJsonObject, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
@@ -20,7 +21,8 @@ export function stringList(value: unknown): string[] {
 /**
  * Every MCP server Claude Code can start: each account's user-scope servers and its local ones
  * for each project that still exists (both in that account's `.claude.json`), the `.mcp.json`
- * of each project and of each dir above it (see `mcpjsonDirs`), and each plugin's. Alongside, the switches: `disabledMcpServers` per account and
+ * of each project and of each dir above it (see `mcpjsonDirs`), managed-mcp.json's, and each
+ * plugin's. Alongside, the switches: `disabledMcpServers` per account and
  * project (what `/mcp disable` writes), and the `.mcp.json` approvals from settings - a
  * project's, or the user's and managed ones for every project - and from the account's project
  * entry. A server id is kept once, the first definition winning.
@@ -60,6 +62,12 @@ export async function readClaudeMcp(ctx: ClaudeContext, projects: Project[], out
       if (json) addServers(json.mcpServers, { tool: "claude", scope: "project", project: dir, file }, dir, out, ids);
     }),
   );
+  // managed-mcp.json takes the same shape as a project's .mcp.json.
+  if (ctx.managedMcp) {
+    const { file, json } = ctx.managedMcp;
+    out.facts.claudeManagedMcp = file;
+    if (json) addServers(json.mcpServers, { tool: "claude", scope: "managed", file }, "-", out, ids);
+  }
   for (const settings of ctx.settings) {
     if (settings.project && (settings.layer === "project" || settings.layer === "local")) {
       pushApprovals(settings.data, settings.file, settings.project, undefined, out);
@@ -149,6 +157,7 @@ function addServers(
     ids.add(id);
     out.items.push({ id, kind: "mcp", name: full, location, summary: mcpSummary(config) });
     out.facts.fingerprints[id] = valueHash(config);
+    out.facts.mcpTargets[id] = mcpTarget(config);
   }
 }
 

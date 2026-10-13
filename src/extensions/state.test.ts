@@ -220,6 +220,150 @@ describe("Claude MCP", () => {
   });
 });
 
+describe("Claude MCP under managed-mcp.json, allowedMcpServers and deniedMcpServers", () => {
+  const userServer = (name: string, profile = "claude:a") =>
+    ext("mcp", `${name}@${profile}`, { tool: "claude", scope: "account", profile, file: `/u/${profile}.json` });
+  const named = (item: Extension, name: string): Extension => ({ ...item, id: `${item.id}:${name}`, name });
+  const gh = named(userServer("gh"), "github");
+  const ghB = named(userServer("gh", "claude:b"), "github");
+  const fs = named(userServer("fs"), "files");
+  const remote = named(userServer("remote"), "remote");
+  const company = ext("mcp", "company", { tool: "claude", scope: "managed", file: "/m/managed-mcp.json" });
+  const items = [gh, ghB, fs, remote, company];
+  const targets: StateFacts["mcpTargets"] = {
+    [gh.id]: { command: "hash-gh", vars: false },
+    [ghB.id]: { command: "hash-gh", vars: false },
+    [fs.id]: { command: "hash-fs", vars: false },
+    [remote.id]: { url: "https://mcp.example.com/api", vars: false },
+    [company.id]: { url: "https://company.example.com/mcp", vars: false },
+  };
+  const off = (file: string, key: string) => ({ value: "off", setBy: { file, key } });
+
+  it("starts only managed-mcp.json's servers while it is there", () => {
+    const i = inv(items, { mcpTargets: targets, claudeManagedMcp: "/m/managed-mcp.json" });
+    for (const project of [P, undefined]) {
+      expect(stateOf(i, gh, project, "claude:a")).toEqual(off("/m/managed-mcp.json", "managed-mcp.json"));
+      expect(stateOf(i, company, project, "claude:a")).toEqual({ value: "on" });
+    }
+    expect(claudeMcpTaken(i, "github", P, "claude:a")).toBeUndefined();
+  });
+
+  it("turns off in every account what a denylist entry matches, by name, command or URL", () => {
+    const i = inv(items, {
+      mcpTargets: targets,
+      claudeMcpPolicy: [
+        { file: "/m/managed.json", layer: "managed", denied: [{ serverName: "files" }] },
+        { file: "/u/settings.json", layer: "user", denied: [{ serverCommand: "hash-gh" }] },
+        {
+          file: `${P}/.claude/settings.json`,
+          layer: "project",
+          project: P,
+          denied: [{ serverUrl: "https://*.example.com/*" }],
+        },
+      ],
+    });
+    expect(stateOf(i, fs, Q, "claude:a")).toEqual(off("/m/managed.json", "deniedMcpServers"));
+    for (const copy of [gh, ghB]) {
+      expect(stateOf(i, copy, Q, copy.location.profile)).toEqual(off("/u/settings.json", "deniedMcpServers"));
+    }
+    // A project's list holds in that project; the denylist reaches managed servers too.
+    expect(stateOf(i, remote, P, "claude:a")).toEqual(off(`${P}/.claude/settings.json`, "deniedMcpServers"));
+    expect(stateOf(i, remote, Q, "claude:a")).toEqual({ value: "on" });
+    expect(stateOf(i, company, P, "claude:a")).toEqual(off(`${P}/.claude/settings.json`, "deniedMcpServers"));
+  });
+
+  it("with an allowlist, keeps on only what an entry admits, a stdio server by command once there is one", () => {
+    const names = inv(items, {
+      mcpTargets: targets,
+      claudeMcpPolicy: [
+        { file: "/m/managed.json", layer: "managed", allowed: [{ serverName: "github" }, { serverName: "remote" }] },
+      ],
+    });
+    expect(stateOf(names, gh, P, "claude:a")).toEqual({ value: "on" });
+    expect(stateOf(names, remote, P, "claude:a")).toEqual({ value: "on" });
+    expect(stateOf(names, fs, P, "claude:a")).toEqual(off("/m/managed.json", "allowedMcpServers"));
+    // managed-mcp.json's own servers need no entry.
+    expect(stateOf(names, company, P, "claude:a")).toEqual({ value: "on" });
+
+    // With a serverCommand entry, a name no longer admits a stdio server; a remote one still by name.
+    const commands = inv(items, {
+      mcpTargets: targets,
+      claudeMcpPolicy: [
+        {
+          file: "/m/managed.json",
+          layer: "managed",
+          allowed: [{ serverName: "github" }, { serverCommand: "hash-fs" }],
+        },
+        { file: "/u/settings.json", layer: "user", allowed: [{ serverName: "remote" }] },
+      ],
+    });
+    expect(stateOf(commands, gh, P, "claude:a")).toEqual(off("/m/managed.json", "allowedMcpServers"));
+    expect(stateOf(commands, fs, P, "claude:a")).toEqual({ value: "on" });
+    // Lists of every file merge: the user's admits remote.
+    expect(stateOf(commands, remote, P, "claude:a")).toEqual({ value: "on" });
+
+    const urls = inv(items, {
+      mcpTargets: targets,
+      claudeMcpPolicy: [
+        {
+          file: "/m/managed.json",
+          layer: "managed",
+          allowed: [{ serverName: "remote" }, { serverUrl: "https://other.example/*" }],
+        },
+      ],
+    });
+    expect(stateOf(urls, remote, P, "claude:a")).toEqual(off("/m/managed.json", "allowedMcpServers"));
+  });
+
+  it("blocks every server but managed-mcp.json's with an empty allowlist, and keeps the managed lists alone under the lock", () => {
+    const empty = inv(items, {
+      mcpTargets: targets,
+      claudeMcpPolicy: [{ file: `${P}/.claude/settings.local.json`, layer: "local", project: P, allowed: [] }],
+    });
+    expect(stateOf(empty, gh, P, "claude:a")).toEqual(off(`${P}/.claude/settings.local.json`, "allowedMcpServers"));
+    expect(stateOf(empty, gh, Q, "claude:a")).toEqual({ value: "on" });
+    expect(stateOf(empty, company, P, "claude:a")).toEqual({ value: "on" });
+    // A managed-mcp.json server whose config reads the user's environment is checked like any other.
+    const fromEnv = inv(items, {
+      mcpTargets: { ...targets, [company.id]: { url: "https://company.example.com/mcp", vars: true } },
+      claudeMcpPolicy: [{ file: "/u/settings.json", layer: "user", allowed: [] }],
+    });
+    expect(stateOf(fromEnv, company, P, "claude:a")).toEqual(off("/u/settings.json", "allowedMcpServers"));
+
+    const locked = inv(items, {
+      mcpTargets: targets,
+      claudeMcpPolicy: [
+        { file: "/m/managed.json", layer: "managed", allowed: [{ serverName: "github" }], managedOnly: true },
+        { file: "/u/settings.json", layer: "user", allowed: [{ serverName: "files" }] },
+      ],
+    });
+    expect(stateOf(locked, gh, P, "claude:a")).toEqual({ value: "on" });
+    expect(stateOf(locked, fs, P, "claude:a")).toEqual(off("/m/managed.json", "allowedMcpServers"));
+  });
+
+  it("lets a copy the lists block hide no other copy", () => {
+    const local = {
+      ...named(
+        ext("mcp", "gh-local", {
+          tool: "claude",
+          scope: "local",
+          profile: "claude:a",
+          project: P,
+          file: "/u/claude:a.json",
+        }),
+        "github",
+      ),
+    };
+    const i = inv([...items, local], {
+      mcpTargets: { ...targets, [local.id]: { command: "hash-local", vars: false } },
+      claudeMcpPolicy: [{ file: "/u/settings.json", layer: "user", denied: [{ serverCommand: "hash-local" }] }],
+    });
+    expect(stateOf(i, local, P, "claude:a")).toEqual(off("/u/settings.json", "deniedMcpServers"));
+    expect(stateOf(i, gh, P, "claude:a")).toEqual({ value: "on" });
+    expect(claudeMcpTaken(i, "github", P, "claude:a")?.id).toBe(gh.id);
+  });
+});
+
 describe("Claude MCP, one server per name", () => {
   // Claude Code: "local-scoped servers first, followed by project-scoped servers, and finally user-scoped servers".
   const user = (profile: string) =>
@@ -511,7 +655,11 @@ describe("isManagedSetting", () => {
       ],
       claudeEnabledPlugins: [{ file: "/m/managed-settings.d/10-a.json", layer: "managed", map: {} }],
       claudeFlags: [{ file: "/m/managed-settings.d/20-b.json", layer: "managed", key: "disableAllHooks", value: true }],
+      claudeMcpPolicy: [{ file: "/m/managed-settings.d/30-c.json", layer: "managed", denied: [] }],
+      claudeManagedMcp: "/m/managed-mcp.json",
     });
+    expect(isManagedSetting(i, "/m/managed-settings.d/30-c.json")).toBe(true);
+    expect(isManagedSetting(i, "/m/managed-mcp.json")).toBe(true);
     expect(isManagedSetting(i, "/m/managed-settings.d/20-b.json")).toBe(true);
     expect(isManagedSetting(i, "/m/managed-settings.json")).toBe(true);
     expect(isManagedSetting(i, "/m/managed-settings.d/10-a.json")).toBe(true);

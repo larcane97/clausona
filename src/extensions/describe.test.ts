@@ -285,6 +285,58 @@ describe("settings that turn a whole kind off", () => {
   });
 });
 
+describe("managed MCP servers and the MCP lists", () => {
+  /** seed()'s home with managed settings beside a managed-mcp.json, in a folder of its own. */
+  async function managedSeed(more: (h: TestHome, app: string) => void) {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", { projects: { [app]: {} }, mcpServers: { github: { command: "gh-mcp" } } });
+    h.claude("work", ".claude-work", { projects: { [app]: {} }, mcpServers: { github: { command: "gh-mcp" } } });
+    more(h, app);
+    const inv = await loadInventory(h.inventoryOptions(app, h.path("policy", "managed-settings.json")));
+    return { h, inv, app };
+  }
+
+  it("lists managed-mcp.json's servers under Managed, and every other server off while it is there", async () => {
+    const { h, inv, app } = await managedSeed((h) =>
+      h.write("policy/managed-mcp.json", { mcpServers: { company: { type: "http", url: "https://c.example/mcp" } } }),
+    );
+    const managed = rowsIn(inv, "claude", "mcp", "managed", app, NOW);
+    expect(managed.map((r) => r.name)).toEqual(["company"]);
+    expect(whereLabel(managed[0]?.items[0] as Extension, inv, app)).toBe("Managed");
+    expect(rowsIn(inv, "claude", "mcp", "loaded", app, NOW).map((r) => r.name)).toEqual(["company"]);
+    const github = serverRow(inv, "global", app, "github");
+    expect(tagsOf(inv, github, app, NOW)).toEqual(["off"]);
+    expect(detailsOf(inv, github, app, NOW).find((l) => l.label === "Accounts")?.text).toBe(
+      `off (only the servers in ${tilde(h.path("policy", "managed-mcp.json"), h.home)} start) in every account`,
+    );
+  });
+
+  it("says which list turns a server off, and where it is", async () => {
+    const { h, inv, app } = await managedSeed((h) =>
+      h.write("policy/managed-settings.json", { deniedMcpServers: [{ serverName: "github" }] }),
+    );
+    const github = serverRow(inv, "global", app, "github");
+    expect(jsonItem(inv, github, app, NOW)).toMatchObject({
+      state: "off",
+      stateByAccount: { "claude:default": "off", "claude:work": "off" },
+      tags: ["off"],
+    });
+    expect(detailsOf(inv, github, app, NOW).find((l) => l.label === "Accounts")?.text).toBe(
+      `off (deniedMcpServers in ${tilde(h.path("policy", "managed-settings.json"), h.home)}) in every account`,
+    );
+    const allow = await managedSeed((h, app) =>
+      h.write(path.join(path.relative(h.home, app), ".claude", "settings.local.json"), { allowedMcpServers: [] }),
+    );
+    const blocked = serverRow(allow.inv, "global", allow.app, "github");
+    expect(tagsOf(allow.inv, blocked, allow.app, NOW)).toEqual(["off here"]);
+    expect(detailsOf(allow.inv, blocked, allow.app, NOW).find((l) => l.label === "Accounts")?.text).toBe(
+      "off (not in allowedMcpServers in this project's .claude/settings.local.json) in every account",
+    );
+  });
+});
+
 describe("Cloud skills of an account whose skills folder is its own", () => {
   it("lists them as that account's, and the primary's stale bucket for it nowhere", async () => {
     const { inv, app } = await seed({

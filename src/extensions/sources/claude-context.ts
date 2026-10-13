@@ -3,10 +3,12 @@ import path from "node:path";
 import { claudeJsonPathForConfigDir } from "../../core/paths.js";
 import { inspectSharedLink } from "../../core/shared-links.js";
 import type { Registry } from "../../types.js";
+import { mcpRules } from "../mcp-policy.js";
 import type { ClaudeFlag, Collector, Location, Project, SettingsLayer, Warning } from "../model.js";
 import { localSettingsFile, projectSettingsFile } from "../places.js";
 import { isHomeProject } from "../projects.js";
 import {
+  entryInfo,
   IO_LIMIT,
   isRecord,
   isWithin,
@@ -101,6 +103,8 @@ export type ClaudeContext = {
   accounts: ClaudeAccount[];
   settings: SettingsFile[];
   plugins: PluginInstall[];
+  /** managed-mcp.json beside the managed settings, when it is there; `json` when it reads as JSON. */
+  managedMcp?: { file: string; json?: Record<string, unknown> };
 };
 
 /** Where Claude Code reads organisation policy on each platform. */
@@ -174,7 +178,8 @@ export async function loadClaudeContext(options: {
       { file: localSettingsFile(project.path), layer: "local" as const, project: project.path },
     ]),
   ];
-  const [read, plugins] = await Promise.all([
+  const managedMcpFile = path.join(path.dirname(options.managedSettings), "managed-mcp.json");
+  const [read, plugins, managedMcp] = await Promise.all([
     Promise.all(
       wanted.map(async (entry) => {
         const data = await readJsonObject(entry.file, warnings);
@@ -182,6 +187,7 @@ export async function loadClaudeContext(options: {
       }),
     ),
     readPluginInstalls(accounts, homeDir, warnings),
+    readManagedMcp(managedMcpFile, warnings),
   ]);
   return {
     homeDir,
@@ -190,7 +196,21 @@ export async function loadClaudeContext(options: {
     accounts,
     settings: read.filter((s): s is SettingsFile => s !== undefined),
     plugins,
+    ...(managedMcp ? { managedMcp } : {}),
   };
+}
+
+/**
+ * managed-mcp.json, while it is there. Claude Code 2.1.296 gives it control of the MCP servers
+ * as long as the file exists, one it cannot read or parse too: then no server starts.
+ */
+async function readManagedMcp(
+  file: string,
+  warnings: Warning[],
+): Promise<{ file: string; json?: Record<string, unknown> } | undefined> {
+  if ((await entryInfo(file)).kind === "missing") return undefined;
+  const json = await readJsonObject(file, warnings);
+  return { file, ...(json ? { json } : {}) };
 }
 
 /**
@@ -268,8 +288,9 @@ async function readPluginInstalls(
 const FLAGS: readonly ClaudeFlag[] = ["disableAllHooks", "disableBundledSkills"];
 
 /**
- * Each settings file's `skillOverrides` and `enabledPlugins`, and its `disableAllHooks` and
- * `disableBundledSkills` where one is true or false, for `state.ts`.
+ * Each settings file's `skillOverrides` and `enabledPlugins`, its `disableAllHooks` and
+ * `disableBundledSkills` where one is true or false, and its `allowedMcpServers` and
+ * `deniedMcpServers`, for `state.ts`.
  */
 export function collectClaudeSettingsFacts(ctx: ClaudeContext, out: Collector): void {
   for (const settings of ctx.settings) {
@@ -287,6 +308,18 @@ export function collectClaudeSettingsFacts(ctx: ClaudeContext, out: Collector): 
     for (const key of FLAGS) {
       const value = settings.data[key];
       if (typeof value === "boolean") out.facts.claudeFlags.push({ ...where, key, value });
+    }
+    const allowed = mcpRules(settings.data.allowedMcpServers);
+    const denied = mcpRules(settings.data.deniedMcpServers);
+    // The lock is a managed setting's alone; anywhere else Claude Code ignores it.
+    const managedOnly = settings.layer === "managed" && settings.data.allowManagedMcpServersOnly === true;
+    if (allowed || denied || managedOnly) {
+      out.facts.claudeMcpPolicy.push({
+        ...where,
+        ...(allowed ? { allowed } : {}),
+        ...(denied ? { denied } : {}),
+        ...(managedOnly ? { managedOnly: true as const } : {}),
+      });
     }
   }
 }

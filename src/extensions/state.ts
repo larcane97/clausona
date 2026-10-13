@@ -1,5 +1,5 @@
 import path from "node:path";
-
+import { type McpRule, type McpTarget, ruleMatches } from "./mcp-policy.js";
 import {
   type ClaudeFlag,
   type EffectiveState,
@@ -16,6 +16,9 @@ import { isWithin, pathKey, samePath } from "./read.js";
  * in the stash file `setBy.file` names.
  */
 export const STASH_KEY = "stash";
+
+/** The `setBy.key` of a server managed-mcp.json keeps from starting: the file's name, as no key holds it. */
+export const MANAGED_MCP_KEY = "managed-mcp.json";
 
 /** Claude Code reads settings in this order; the first that sets a key wins. */
 const PRECEDENCE: readonly SettingsLayer[] = ["managed", "local", "project", "user"];
@@ -59,9 +62,11 @@ export function relevantIn(item: Extension, project: string | undefined): boolea
  * own server. A plugin's servers go by names of their own (`plugin:<plugin>:<name>`).
  */
 function rankedMcp(inv: Inventory, name: string, project: string, profile: string | undefined): Extension[] {
-  // A stashed copy is out of its file: Claude Code does not see it, so it wins over nothing.
+  // A stashed copy is out of its file, and one the lists block is left out before Claude Code
+  // picks: neither wins over anything.
   const named = inv.items.filter(
-    (i) => i.kind === "mcp" && i.location.tool === "claude" && i.name === name && !i.stashed,
+    (i) =>
+      i.kind === "mcp" && i.location.tool === "claude" && i.name === name && !i.stashed && !mcpBlocked(inv, i, project),
   );
   const own = (i: Extension) => profile !== undefined && i.location.profile === profile;
   const local = named.filter((i) => own(i) && i.location.scope === "local" && samePath(i.location.project, project));
@@ -146,6 +151,50 @@ export function allHooksOff(inv: Inventory, item: Extension, project: string | u
   return off;
 }
 
+/** The settings whose MCP lists apply in `project`, managed first, as the layers rank. */
+function mcpPolicies(inv: Inventory, project: string | undefined) {
+  return PRECEDENCE.flatMap((layer) =>
+    inv.facts.claudeMcpPolicy.filter((p) => p.layer === layer && applies(p, project)),
+  );
+}
+
+/**
+ * Whether an allowlist admits a server: a stdio one by a serverCommand entry once the list has
+ * one, a remote one by a serverUrl entry likewise, and otherwise by its name.
+ */
+function admits(rules: McpRule[], name: string, target: McpTarget | undefined): boolean {
+  const kind = target?.command !== undefined ? "serverCommand" : target?.url !== undefined ? "serverUrl" : undefined;
+  const by = kind !== undefined && rules.some((rule) => kind in rule) ? kind : "serverName";
+  return rules.some((rule) => by in rule && ruleMatches(rule, name, target));
+}
+
+/**
+ * The off that Claude Code's MCP policy puts Claude MCP server `item` in, in `project`; undefined
+ * where it lets the server start. As Claude Code 2.1.296 checks a server before it starts one:
+ * - while managed-mcp.json is there, it starts that file's servers and no other;
+ * - a server that an entry of any denylist that applies matches does not start;
+ * - with an allowlist anywhere, a server must be on it (`admits`), the lists of every file
+ *   merged, or the managed ones alone when managed settings set allowManagedMcpServersOnly.
+ *   A managed-mcp.json server that reads no variable of the user's needs no entry.
+ */
+export function mcpBlocked(inv: Inventory, item: Extension, project: string | undefined): EffectiveState | undefined {
+  if (item.kind !== "mcp" || item.location.tool !== "claude") return undefined;
+  const managed = item.location.scope === "managed";
+  const exclusive = inv.facts.claudeManagedMcp;
+  if (exclusive !== undefined && !managed) return { value: "off", setBy: { file: exclusive, key: MANAGED_MCP_KEY } };
+  const target = inv.facts.mcpTargets[item.id];
+  const policies = mcpPolicies(inv, project);
+  const denied = policies.find((p) => p.denied?.some((rule) => ruleMatches(rule, item.name, target)));
+  if (denied) return { value: "off", setBy: { file: denied.file, key: "deniedMcpServers" } };
+  if (managed && target?.vars !== true) return undefined;
+  const lock = policies.some((p) => p.managedOnly);
+  const lists = policies.filter((p) => p.allowed !== undefined && (!lock || p.layer === "managed"));
+  const first = lists[0];
+  const rules = lists.flatMap((p) => p.allowed ?? []);
+  if (first === undefined || admits(rules, item.name, target)) return undefined;
+  return { value: "off", setBy: { file: first.file, key: "allowedMcpServers" } };
+}
+
 /** A plugin is on only where some settings file enables it; installed and named nowhere is off. */
 export function pluginState(inv: Inventory, pluginId: string, project?: string): EffectiveState {
   for (const layer of PRECEDENCE) {
@@ -219,6 +268,8 @@ function claudeMcpState(
   project: string | undefined,
   profile: string | undefined,
 ): EffectiveState {
+  const blocked = mcpBlocked(inv, item, project);
+  if (blocked) return blocked;
   if (item.location.scope === "plugin" && item.location.plugin) {
     const plugin = pluginState(inv, item.location.plugin, project);
     if (plugin.value === "off") return plugin;
@@ -299,7 +350,9 @@ export function isManagedSetting(inv: Inventory, file: string): boolean {
   return (
     inv.facts.claudeSkillOverrides.some(managed) ||
     inv.facts.claudeEnabledPlugins.some(managed) ||
-    inv.facts.claudeFlags.some(managed)
+    inv.facts.claudeFlags.some(managed) ||
+    inv.facts.claudeMcpPolicy.some(managed) ||
+    samePath(inv.facts.claudeManagedMcp, file)
   );
 }
 
