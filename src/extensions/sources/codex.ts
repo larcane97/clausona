@@ -19,6 +19,7 @@ import {
   codexReadsHooksFile,
   exactConfigHooks,
   exactJsonFile,
+  exactToml,
   markRefusedHooksFile,
   markUnsupportedHooks,
 } from "./codex-hooks.js";
@@ -68,7 +69,9 @@ export async function readTomlObject(file: string, warnings: Warning[]): Promise
     warnings.push({ file, message: "has an integer too large for 64 bits, so Codex refuses the whole file" });
     return undefined;
   }
-  if (isRecord(value.hooks) && !codexReadsHookEvents(value.hooks)) {
+  // Checked with its numbers as Codex reads them, which tells a timeout of 30 from 30.0.
+  const exact = exactToml(text) ?? value;
+  if (isRecord(exact.hooks) && !codexReadsHookEvents(exact.hooks)) {
     warnings.push({ file, message: "has a hook Codex cannot read, so Codex refuses the whole file" });
     return undefined;
   }
@@ -204,11 +207,10 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
       const hooks = await readJsonObject(file, out.warnings);
       if (!hooks) return;
       addHooksFile(hooks, { ...global, file }, "-", out);
-      if (!codexReadsHooksFile(hooks)) markRefusedHooksFile(out, file);
-      else {
-        const exact = (await exactJsonFile(file))?.hooks ?? hooks.hooks;
-        addCodexHookTrust(exact, "hook:codex:global:-", await userHookSources(ctx, file), out.facts);
-      }
+      // Its numbers as Codex reads them, for the check and the hashes.
+      const exact = (await exactJsonFile(file)) ?? hooks;
+      if (!codexReadsHooksFile(exact)) markRefusedHooksFile(out, file);
+      else addCodexHookTrust(exact.hooks, "hook:codex:global:-", await userHookSources(ctx, file), out.facts);
     })(),
   );
   jobs.push(readCodexPlugins(ctx.primary.dir, out));
@@ -284,11 +286,12 @@ async function addFolderHooks(
   const hooks = await readJsonObject(hooksFile, out.warnings);
   if (!hooks) return;
   addHooksFile(hooks, { ...here, file: hooksFile }, owner, out, at);
-  if (!codexReadsHooksFile(hooks)) markRefusedHooksFile(out, hooksFile);
+  // Its numbers as Codex reads them, for the check and the hashes.
+  const exact = (await exactJsonFile(hooksFile)) ?? hooks;
+  if (!codexReadsHooksFile(exact)) markRefusedHooksFile(out, hooksFile);
   else if (trusted) {
-    const exact = (await exactJsonFile(hooksFile))?.hooks ?? hooks.hooks;
     const idBase = `hook:codex:project:${owner}`;
-    addCodexHookTrust(exact, idBase, await hookSources(hooksFile), out.facts, undefined, at);
+    addCodexHookTrust(exact.hooks, idBase, await hookSources(hooksFile), out.facts, undefined, at);
   }
 }
 

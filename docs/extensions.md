@@ -342,7 +342,9 @@ The switches are read from these places:
   folder out. Their details say so, and why: `Trust  Codex does not trust this project, so it
   ignores its .codex folder.` Codex reads a hooks file only when it holds `hooks` and, at most,
   a `description` at its top, and every hook in it is one it can read: a known `type`, a string
-  `command`, `server` and `tool`, a whole-number `timeout`, and so on. The hooks of any other
+  `command`, `server` and `tool`, a `timeout` or `additionalContextLimit` written as a whole
+  number (`30`, not `30.0` or `3e1`, which Codex's JSON reading keeps as text), and so on. In a
+  `config.toml` a float there makes Codex refuse the whole file. The hooks of any other
   file are tagged `invalid hooks file`, and so are all of a plugin manifest's inline hooks when
   one of them is unreadable. A plugin whose `hooks` lists hook files and hooks together has
   none. Codex runs no prompt or agent hook yet, nor an MCP tool hook when a session ends: those

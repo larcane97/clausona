@@ -143,8 +143,19 @@ const optional = (value: unknown, is: (v: unknown) => boolean) => value === unde
 /** A field with a default, which serde reads absent or of its type, not null. */
 const defaulted = (value: unknown, is: (v: unknown) => boolean) => value === undefined || is(value);
 const isString = (value: unknown) => typeof value === "string";
-const isCount = (value: unknown) =>
-  (typeof value === "number" && Number.isInteger(value) && value >= 0) || (typeof value === "bigint" && value >= 0n);
+/** The most a hook's timeout or limit can be: Codex hashes it as a TOML integer, an i64. */
+const MAX_COUNT = 2n ** 63n - 1n;
+/**
+ * A whole number serde reads as a u64 or usize, as Codex's arbitrary-precision serde_json and
+ * the TOML parser keep it: one written as an integer - `1e3`, `30.0` or a TOML float is a number
+ * kept as text, which no u64 is read from - and not past an i64, beyond which Codex cannot hash
+ * the hook. A plain JavaScript number, read without its text, is taken as it reads.
+ */
+const isCount = (value: unknown) => {
+  if (value instanceof SerdeNumber) return /^\d+$/.test(value.text) && BigInt(value.text) <= MAX_COUNT;
+  if (typeof value === "bigint") return value >= 0n && value <= MAX_COUNT;
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+};
 /** A value TOML can hold, as Codex checks an MCP hook's input: no null anywhere in it. */
 const inToml = (value: unknown): boolean =>
   value !== null &&
@@ -456,9 +467,18 @@ export async function exactJsonFile(file: string): Promise<Record<string, unknow
  */
 export async function exactConfigHooks(file: string): Promise<unknown> {
   const text = await readText(file, []);
+  const config = text === undefined ? undefined : exactToml(text);
+  return isRecord(config) ? config.hooks : undefined;
+}
+
+/**
+ * A config.toml's text as Codex reads its numbers: each integer, and each float, a SerdeNumber of
+ * the text serde_json gives it, so a check can tell `30` from `30.0`. Undefined where it does not
+ * parse.
+ */
+export function exactToml(text: string): Record<string, unknown> | undefined {
   try {
-    const config = text === undefined ? undefined : parse(text, { integersAsBigInt: true });
-    return config === undefined ? undefined : exactTomlNumbers(config.hooks);
+    return exactTomlNumbers(parse(text, { integersAsBigInt: true })) as Record<string, unknown>;
   } catch {
     return undefined;
   }

@@ -200,8 +200,12 @@ async function readHooks(
   // The manifest again, its numbers as Codex reads them, for the hashes of the hooks it holds.
   const exact = entries.some(isRecord) ? await exactJsonFile(manifestFile) : undefined;
   const exactEntries: unknown[] = Array.isArray(exact?.hooks) ? exact.hooks : [exact?.hooks];
-  // One inline hook serde cannot read, and Codex reads none of the manifest's.
-  const inlineRead = entries.every((e) => !isRecord(e) || !isRecord(e.hooks) || codexReadsHookEvents(e.hooks));
+  // One inline hook serde cannot read, and Codex reads none of the manifest's - its numbers as
+  // Codex reads them.
+  const inlineRead = entries.every((e, k) => {
+    const read = isRecord(exactEntries[k]) ? (exactEntries[k] as Record<string, unknown>) : e;
+    return !isRecord(read) || !isRecord(read.hooks) || codexReadsHookEvents(read.hooks);
+  });
   for (const [k, entry] of entries.entries()) {
     if (isRecord(entry)) {
       const owner = `${place.plugin}|${relative(manifestFile)}#hooks[${k}]`;
@@ -224,13 +228,14 @@ async function readHooks(
       if (!json) continue;
       const owner = `${place.plugin}|${relative(file)}`;
       addHooksFile(json, { ...place, file }, owner, out);
-      if (!codexReadsHooksFile(json)) {
+      // Its numbers as Codex reads them, for the check and the hashes.
+      const exactFile = (await exactJsonFile(file)) ?? json;
+      if (!codexReadsHooksFile(exactFile)) {
         markRefusedHooksFile(out, file);
         continue;
       }
       const source = `${place.plugin}:${relative(file)}`;
-      const hooks = (await exactJsonFile(file))?.hooks ?? json.hooks;
-      addCodexHookTrust(hooks, `hook:codex:plugin:${owner}`, [source], out.facts, place.plugin);
+      addCodexHookTrust(exactFile.hooks, `hook:codex:plugin:${owner}`, [source], out.facts, place.plugin);
     }
   }
 }

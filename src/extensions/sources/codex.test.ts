@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { valueHash } from "../hash.js";
 import { loadInventory } from "../inventory.js";
-import { type Collector, emptyFacts } from "../model.js";
+import { type Collector, emptyFacts, type Warning } from "../model.js";
 import { stateOf } from "../state.js";
 import { TestHome } from "../test-home.js";
 import { codexProjectRecords, loadCodexContext, readCodex } from "./codex.js";
@@ -688,6 +688,57 @@ describe("readCodex", () => {
     // A prompt hook's fields are Codex's to ignore: that file reads, and its prompt is not supported.
     expect(out.items.find((i) => i.summary?.type === "prompt")?.codexError).toBe("not supported");
     expect(out.facts.codexHookTrust.map((t) => t.id)).toEqual([expect.stringContaining("fine@m")]);
+  });
+
+  it("reads a hook's timeout and context limit as serde does: a whole number written as one", async () => {
+    // Codex 0.159.3's hooks/list, one hooks.json each: "invalid type: map, expected u64" for a
+    // number its serde keeps as text (1e3, 1E3, 30.0, 3e1, 1e0), the same past u64; 0 and -0 read.
+    const read = async (field: string, value: string) => {
+      const h = new TestHome();
+      homes.push(h);
+      h.codex("personal", ".codex");
+      h.write(
+        ".codex/hooks.json",
+        `{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "good"}, {"type": "command", "command": "x", "${field}": ${value}}]}]}}`,
+      );
+      const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+      const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+      if (!ctx) throw new Error("no codex context");
+      await readCodex(ctx, [], out);
+      return out.items.find((i) => i.summary?.command === "good")?.codexError ?? "read";
+    };
+    const forms = ["1e3", "1E3", "30.0", "3e1", "1e0", "18446744073709551616", "0", "-0", "30"];
+    const verdicts = await Promise.all(forms.map((n) => read("timeout", n)));
+    expect(verdicts).toEqual([...Array(6).fill("invalid hooks file"), "read", "read", "read"]);
+    expect(await read("additionalContextLimit", "1e3")).toBe("invalid hooks file");
+    expect(await read("additionalContextLimit", "2500.0")).toBe("invalid hooks file");
+    expect(await read("additionalContextLimit", "2500")).toBe("read");
+  });
+
+  it("refuses a config.toml whose hook has a timeout that is no whole number, as Codex does", async () => {
+    // Codex 0.159.3's config/read: "invalid type: floating point `30.0`, expected u64", and the
+    // same for 1e3 (a float in TOML) and -1; 30 reads.
+    for (const [timeout, refused] of [
+      ["30.0", true],
+      ["1e3", true],
+      ["-1", true],
+      ["30", false],
+    ] as const) {
+      const h = new TestHome();
+      homes.push(h);
+      h.codex(
+        "personal",
+        ".codex",
+        `[mcp_servers.x]\ncommand = "x"\n\n[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "c"\ntimeout = ${timeout}\n`,
+      );
+      const warnings: Warning[] = [];
+      const ctx = await loadCodexContext(h.registry, h.home, warnings);
+      expect([timeout, ctx?.config === undefined, warnings.map((w) => w.message)]).toEqual([
+        timeout,
+        refused,
+        refused ? ["has a hook Codex cannot read, so Codex refuses the whole file"] : [],
+      ]);
+    }
   });
 
   it("refuses a config.toml with a hook Codex cannot read, as Codex refuses the whole file", async () => {
