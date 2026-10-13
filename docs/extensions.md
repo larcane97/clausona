@@ -637,6 +637,14 @@ Some rows can only be switched one way:
   switch of its own here, in each account, so `mcp off` works on one in this project.
 - Codex's plugins, and what they bring, are switched in Codex, with `/plugins`. clausona lists
   them and changes none of them.
+- Turning on what a setting elsewhere keeps off would change nothing, so `on` is refused, and
+  the reason names the setting and its file: a Claude server that `deniedMcpServers` keeps out
+  (`mcp-denied`), that `allowedMcpServers` leaves out (`mcp-not-allowed`) or that
+  `managed-mcp.json` shuts out (`managed-mcp`), and a built-in skill while
+  `disableBundledSkills` holds (`bundled-off`, for `visibility` too). A list or setting in
+  managed settings is refused as `managed`, as anything there is. One in this project's own
+  settings holds here alone, so `on --everywhere` goes ahead, with a note such as
+  `Still off in this project: deniedMcpServers in …`. `off` is never refused for it.
 
 [Refusals](#refusals) has every reason a change can't be made, in the words the CLI and the
 screen use.
@@ -926,6 +934,10 @@ the CLI's words. In the table `<tool>` is the tool's name and `<scope>` a scope'
 | `no-account` | No account that has it has opened this project. | | |
 | `elsewhere` | It is turned off in `<file>`, which applies here. | Change it there. | Change it there. |
 | `all-hooks-off` | `disableAllHooks` in `<file>` turns every hook off. | Change it there. | Change it there. |
+| `mcp-denied` | `deniedMcpServers` in `<file>` keeps it from starting. | Change it there. | Change it there. |
+| `mcp-not-allowed` | `allowedMcpServers` in `<file>` leaves it out. | Change it there. | Change it there. |
+| `managed-mcp` | `<file>` lets only its own servers start. | Only your organization can change that file. | Only your organization can change that file. |
+| `bundled-off` | `disableBundledSkills` in `<file>` turns off the skills that come with Claude Code. | Change it there. | Change it there. |
 
 On the screen, `stash-gone` on one account's server, in a row other accounts share, says
 `Press d and choose only work in the dialog.` instead, since `d` on the row would delete the
@@ -1099,7 +1111,7 @@ Each of `refused`:
 |---|---|---|
 | `id` | string | The row's key. |
 | `name` | string | The row's name. |
-| `code` | string | Why, as a code from [Refusals](#refusals). Read this one. |
+| `code` | string | Why, as a code from [Refusals](#refusals). Read this one. `all-hooks-off`, `mcp-denied`, `mcp-not-allowed`, `managed-mcp` and `bundled-off` say a setting elsewhere keeps the row off; the reason names it and its file. |
 | `reason` | string | The reason and what to do, in the CLI's words. Display text. |
 
 Each of `unchanged`:

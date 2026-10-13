@@ -1106,6 +1106,116 @@ describe("plan: Claude MCP servers", () => {
   });
 });
 
+describe("plan: a setting that keeps a Claude server or a built-in skill off", () => {
+  const text = (p: Plan, voice: "keys" | "flags" = "flags") =>
+    refusalText(p.refused[0] as Plan["refused"][number], voice);
+
+  it("refuses on for a server a deny list keeps from starting, naming the list and its file", async () => {
+    const { app, inv, ctx } = await seed((h) =>
+      h.write(".claude/settings.json", { ...SETTINGS, deniedMcpServers: [{ serverName: "figma" }] }),
+    );
+    const figma = rowIn(inv, app, "global", "figma", "claude", "mcp");
+    for (const reach of ["here", "everywhere"] as const) {
+      const on = plan(ctx, "mcp", act("on", reach, [figma]));
+      expect(codes(on)).toEqual(["mcp-denied"]);
+      expect(on.changes).toEqual([]);
+      expect(text(on)).toBe("deniedMcpServers in ~/.claude/settings.json keeps it from starting. Change it there.");
+      expect(text(on, "keys")).toBe(
+        "deniedMcpServers in ~/.claude/settings.json keeps it from starting. Change it there.",
+      );
+    }
+    // Off still goes ahead: it stays off once the list lets it go.
+    expect(codes(plan(ctx, "mcp", act("off", "here", [figma])))).toEqual([]);
+  });
+
+  it("refuses on for a server an allow list leaves out, and for one managed-mcp.json shuts out", async () => {
+    const allow = await seed((h) =>
+      h.write(".claude/settings.json", { ...SETTINGS, allowedMcpServers: [{ serverName: "github" }] }),
+    );
+    const figma = rowIn(allow.inv, allow.app, "global", "figma", "claude", "mcp");
+    const notAllowed = plan(allow.ctx, "mcp", act("on", "here", [figma]));
+    expect(codes(notAllowed)).toEqual(["mcp-not-allowed"]);
+    expect(text(notAllowed)).toBe("allowedMcpServers in ~/.claude/settings.json leaves it out. Change it there.");
+
+    const exclusive = await seed((h) => h.write("managed-mcp.json", { mcpServers: {} }));
+    const docs = rowIn(exclusive.inv, exclusive.app, "project", "docs-search", "claude", "mcp");
+    const shutOut = plan(exclusive.ctx, "mcp", act("on", "here", [docs]));
+    expect(codes(shutOut)).toEqual(["managed-mcp"]);
+    expect(text(shutOut)).toBe(
+      "~/managed-mcp.json lets only its own servers start. Only your organization can change that file.",
+    );
+
+    // A list in the managed settings is the organization's, as any managed setting is.
+    const managed = await seed((h) =>
+      h.write("managed-settings.json", { deniedMcpServers: [{ serverName: "figma" }] }),
+    );
+    const fromPolicy = plan(
+      managed.ctx,
+      "mcp",
+      act("on", "here", [rowIn(managed.inv, managed.app, "global", "figma", "claude", "mcp")]),
+    );
+    expect(codes(fromPolicy)).toEqual(["managed"]);
+  });
+
+  it("goes ahead with a note when the project's own list keeps it off and on is everywhere", async () => {
+    const { app, inv, ctx } = await seed((h, app) =>
+      h.write(path.join(path.relative(h.home, app), ".claude", "settings.json"), {
+        deniedMcpServers: [{ serverName: "docs-search" }],
+      }),
+    );
+    const docs = rowIn(inv, app, "project", "docs-search", "claude", "mcp");
+    // On here would not start it: the project's list holds here.
+    expect(codes(plan(ctx, "mcp", act("on", "here", [docs])))).toEqual(["mcp-denied"]);
+    const github = await seed((h, app) =>
+      h.write(path.join(path.relative(h.home, app), ".claude", "settings.local.json"), {
+        deniedMcpServers: [{ serverName: "github" }],
+      }),
+    );
+    const row = rowIn(github.inv, github.app, "global", "github", "claude", "mcp");
+    const everywhere = plan(github.ctx, "mcp", act("on", "everywhere", [row]));
+    expect(codes(everywhere)).toEqual([]);
+    expect(everywhere.notes).toContain(
+      `Still off in this project: deniedMcpServers in ${tilde(path.join(github.app, ".claude", "settings.local.json"), github.h.home)}`,
+    );
+  });
+
+  it("refuses on and a visibility for a built-in skill while disableBundledSkills holds", async () => {
+    const { app, inv, ctx } = await seed((h) =>
+      h.write(".claude/settings.json", {
+        ...SETTINGS,
+        disableBundledSkills: true,
+        skillOverrides: { "claude-api": "off" },
+      }),
+    );
+    const api = rowIn(inv, app, "builtin", "claude-api");
+    for (const action of [
+      act("on", "here", [api]),
+      act("on", "everywhere", [api]),
+      act("visibility", "here", [api], { level: "name-only" }),
+    ]) {
+      const p = plan(ctx, "skills", action);
+      expect(codes(p)).toEqual(["bundled-off"]);
+      expect(text(p, "keys")).toBe(
+        "disableBundledSkills in ~/.claude/settings.json turns off the skills that come with Claude Code. Change it there.",
+      );
+    }
+    expect(codes(plan(ctx, "skills", act("off", "here", [api])))).toEqual([]);
+
+    // The project's own setting holds there alone: everywhere goes ahead, and says so.
+    const local = await seed((h, app) => {
+      h.write(".claude/settings.json", { ...SETTINGS, skillOverrides: { "claude-api": "off" } });
+      h.write(path.join(path.relative(h.home, app), ".claude", "settings.local.json"), { disableBundledSkills: true });
+    });
+    const projectApi = rowIn(local.inv, local.app, "builtin", "claude-api");
+    expect(codes(plan(local.ctx, "skills", act("on", "here", [projectApi])))).toEqual(["bundled-off"]);
+    const everywhere = plan(local.ctx, "skills", act("on", "everywhere", [projectApi]));
+    expect(codes(everywhere)).toEqual([]);
+    expect(everywhere.notes).toContain(
+      `Still off in this project: disableBundledSkills in ${tilde(path.join(local.app, ".claude", "settings.local.json"), local.h.home)}`,
+    );
+  });
+});
+
 describe("plan: Codex MCP servers", () => {
   it("switches a user server off here in the project's config, where Codex trusts the project and it is not home", async () => {
     const { h, app, web, inv, ctx } = await seed();

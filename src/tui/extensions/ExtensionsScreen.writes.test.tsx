@@ -253,6 +253,36 @@ describe("ExtensionsScreen: writes", () => {
     expect(hintLine(frame)).not.toContain("y apply");
   });
 
+  it("says in keys why a server a deny list keeps off cannot go back on", async () => {
+    const { h, app } = seed();
+    h.write(".claude/settings.json", { ...SETTINGS, deniedMcpServers: [{ serverName: "figma" }] });
+    const instance = mount(h, app, 140, 40);
+    await openRow(instance, "Global", "figma", "2");
+    await press(instance, SPACE);
+    const frame = await seen(instance, (f) =>
+      f.includes("deniedMcpServers in ~/.claude/settings.json keeps it from starting. Change it there."),
+    );
+    expect(frame).not.toContain("Turn on figma");
+    expect(hintLine(frame)).not.toContain("y apply");
+  });
+
+  it("says in keys why a built-in skill cannot go back on under disableBundledSkills", async () => {
+    const { h, app } = seed();
+    h.write(".claude/settings.json", {
+      ...SETTINGS,
+      disableBundledSkills: true,
+      skillOverrides: { "claude-api": "off" },
+    });
+    const instance = mount(h, app, 140, 40);
+    await openRow(instance, "Built-in", "claude-api");
+    await press(instance, SPACE);
+    await seen(instance, (f) =>
+      f
+        .replace(/\n +/g, " ")
+        .includes("disableBundledSkills in ~/.claude/settings.json turns off the skills that come with Claude Code."),
+    );
+  });
+
   it("lets the user pick the accounts an MCP server changes in", async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);

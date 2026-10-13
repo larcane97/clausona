@@ -37,6 +37,8 @@ import {
   codexTrusted,
   isManagedSetting,
   isMcpjsonServer,
+  MANAGED_MCP_KEY,
+  mcpBlocked,
   pluginState,
   stateOf,
 } from "./state.js";
@@ -446,6 +448,19 @@ function planClaudeSkill(run: Run, row: ScopeRow): Outcome {
       ),
     );
   const target: SkillVisibility = verb === "visibility" ? (run.action.level ?? "on") : verb === "off" ? "off" : "on";
+  // disableBundledSkills takes the built-in skills out: no level would show this one.
+  const bundled =
+    target !== "off" && item.location.scope === "builtin"
+      ? claudeFlag(inv, "disableBundledSkills", run.ctx.project)
+      : undefined;
+  if (bundled?.value === true) {
+    const file = tilde(bundled.file, inv.homeDir);
+    // A project's own setting holds in that project alone; everywhere goes ahead elsewhere.
+    if (here || (bundled.layer !== "project" && bundled.layer !== "local")) {
+      return refused(run, row, "bundled-off", { "~file": file });
+    }
+    note(out, `Still off in this project: disableBundledSkills in ${file}`);
+  }
   if (target === "off") return effective === "off" ? unchanged(out, row, `already off ${where}`) : write("off");
   if (target !== "on") {
     return current === target ? unchanged(out, row, `already shows ${SHOWS[target]} ${where}`) : write(target);
@@ -627,10 +642,43 @@ function planSkillRemoval(run: Run, row: ScopeRow): Outcome {
 
 function planClaudeMcp(run: Run, row: ScopeRow): Outcome {
   const item = firstOf(row);
-  if (isMcpjsonServer(item)) return planMcpjson(run, row);
-  if (item.location.scope === "plugin") return planPluginServer(run, row);
-  if (isAccountServer(item)) return planAccountServer(run, row);
-  return refused(run, row, "managed");
+  const kept = run.action.verb === "on" ? keptOffByPolicy(run, row) : undefined;
+  if (kept && "refusal" in kept) return kept.refusal;
+  const out = isMcpjsonServer(item)
+    ? planMcpjson(run, row)
+    : item.location.scope === "plugin"
+      ? planPluginServer(run, row)
+      : isAccountServer(item)
+        ? planAccountServer(run, row)
+        : refused(run, row, "managed");
+  if (kept) note(out, kept.note);
+  return out;
+}
+
+/**
+ * For `on`: whether Claude Code's MCP policy keeps the server from starting (`mcpBlocked`) in
+ * every copy the change takes, which on would not change. managed-mcp.json is named; a list in
+ * managed settings is the organization's, as any managed setting is; a list elsewhere is named
+ * with its file. A project's own list holds in that project alone, so on everywhere goes ahead,
+ * with a note.
+ */
+function keptOffByPolicy(run: Run, row: ScopeRow): { refusal: Outcome } | { note: string } | undefined {
+  const inv = run.inv;
+  const copies = row.items.filter((copy) => chosenIn(run, copy.location.profile));
+  const blocks = copies.map((copy) => mcpBlocked(inv, copy, run.ctx.project)?.setBy);
+  const first = blocks[0];
+  if (first === undefined || blocks.some((block) => block === undefined)) return undefined;
+  const file = tilde(first.file, inv.homeDir);
+  if (first.key === MANAGED_MCP_KEY) return { refusal: refused(run, row, "managed-mcp", { "~file": file }) };
+  if (isManagedSetting(inv, first.file)) return { refusal: refused(run, row, "managed") };
+  const layer = inv.facts.claudeMcpPolicy.find((p) => samePath(p.file, first.file))?.layer;
+  const denied = first.key === "deniedMcpServers";
+  if (run.action.reach === "everywhere" && (layer === "project" || layer === "local")) {
+    return {
+      note: `Still off in this project: ${denied ? "deniedMcpServers" : "not in allowedMcpServers"} in ${file}`,
+    };
+  }
+  return { refusal: refused(run, row, denied ? "mcp-denied" : "mcp-not-allowed", { "~file": file }) };
 }
 
 /** Where an account's server sits in its `.claude.json`: a user one at the top, a local one in its project's entry. */
