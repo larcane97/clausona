@@ -510,6 +510,17 @@ describe("plan: Claude skills", () => {
     expect(p.refused.map((r) => [r.code, refusalText(r, "keys")])).toEqual([
       ["no-project", "There is no project to change it in. Pick one with p."],
     ]);
+    // With no project recorded there is none to pick: the screen says to start in one. The CLI's words stay.
+    const none = { ...inv, projects: [] };
+    const [refused] = plan(
+      contextFor(h, none, undefined),
+      "skills",
+      act("off", "here", [rowIn(none, undefined, "global", "eli5")]),
+    ).refused;
+    expect(refused && [refusalText(refused, "keys"), refusalText(refused, "flags")]).toEqual([
+      "There is no project to change it in. Run csn in a project.",
+      "There is no project to change it in. Run it in a project, or pass --project <path>.",
+    ]);
   });
 
   it("plans what it can and refuses the rest, for the caller to decide", async () => {

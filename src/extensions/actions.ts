@@ -204,6 +204,12 @@ function filled(words: Words | undefined, tool: ToolName, values: Record<string,
  */
 export const ONE_ACCOUNT_KEYS = "Press d and choose only {short} in the dialog.";
 
+/**
+ * What the TUI says instead of "Pick one with p." where Claude Code and Codex have recorded no
+ * project: p has none to pick.
+ */
+export const NO_PROJECT_KEYS = "Run csn in a project.";
+
 /** The refusal `code` for a row of `tool`, its words filled in; `keysInstead` stands in for the table's keys words. */
 export function refusal(
   code: RefusalCode,

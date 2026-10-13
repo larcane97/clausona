@@ -463,7 +463,8 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
     }
     if (input === "m") {
       if (tool !== "claude" || kind !== "mcp") setStatus("The matrix is on Claude's MCP tab.");
-      else if (!project) setStatus("Pick a project first: p");
+      else if (!project)
+        setStatus(inventory.projects.length === 0 ? "Run csn in a project first." : "Pick a project first: p");
       else {
         setMatrixCursor(0);
         setMatrixColumn(0);
@@ -545,7 +546,12 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
     );
   }
 
-  const subtitle = project ? tilde(project, inventory.homeDir) : "No project — pick one with p";
+  // With no project recorded, p has none to pick.
+  const subtitle = project
+    ? tilde(project, inventory.homeDir)
+    : inventory.projects.length === 0
+      ? NO_PROJECT
+      : `${NO_PROJECT} — pick one with p`;
   const lines = scopeLines(scopes);
   const scopeLine = Math.max(
     0,

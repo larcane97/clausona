@@ -338,7 +338,9 @@ function sentence(scope: ScopeId, tool: ToolName, kind: ItemKind, inv: Inventory
       if (here === undefined) return `what ${TOOL_NAME[tool]} ${loads} with no project`;
       return `what ${TOOL_NAME[tool]} ${loads} in ${here}${tool === "claude" ? ", in at least one account" : ""}`;
     case "project":
-      return here === undefined ? "no project · pick one with p" : PROJECT_FILES[tool][kind](here);
+      // With no project recorded, there is none to pick with p.
+      if (here === undefined) return inv.projects.length === 0 ? "no project" : "no project · pick one with p";
+      return PROJECT_FILES[tool][kind](here);
     case "parents": {
       // Nearest first, as Claude Code lets the nearest file win a name.
       const dirs = [...new Set(inScope(inv, tool, kind, "parents", project).map((i) => i.location.project ?? ""))]

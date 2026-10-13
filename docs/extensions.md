@@ -852,7 +852,8 @@ the CLI's words. In the table `<tool>` is the tool's name and `<scope>` a scope'
 
 On the screen, `stash-gone` on one account's server, in a row other accounts share, says
 `Press d and choose only work in the dialog.` instead, since `d` on the row would delete the
-other accounts' copies too.
+other accounts' copies too. Where Claude Code and Codex have recorded no project, `no-project`
+says `Run csn in a project.` instead, since `p` has none to pick.
 
 ## JSON
 
@@ -1348,10 +1349,14 @@ details.
 
 The scope list's first line is the project row, and it is Loaded. It names the project
 everything is seen from and counts what loads there, such as `▸ app (here)  118`. `(here)`
-marks the project of the folder you started `csn` in. At the filesystem root, where there is no
-project, the row reads `No project`. Under it, after a rule, the scopes say where those rows
-come from. They also list what does not load: a copy another one hides, an item turned off, a
-plugin as one row.
+marks the project of the folder you started `csn` in. Under the row, after a rule, the scopes
+say where those rows come from. They also list what does not load: a copy another one hides, an
+item turned off, a plugin as one row.
+
+At the filesystem root, where there is no project, the row reads `No project` and the title bar
+`No project — pick one with p`. Where Claude Code and Codex have recorded no project either,
+there is none to pick: the title bar reads `No project`, and what needs a project says to run
+`csn` in one.
 
 `p` opens the project list in the scope list's place. The heading reads `PROJECT` with the
 kind on the right: `skills`, `MCP servers` or `hooks`. The project you are looking from comes

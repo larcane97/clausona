@@ -11,6 +11,7 @@ import {
   layerMap,
   mcpDisabled,
   NEXT_VISIBILITY,
+  NO_PROJECT_KEYS,
   ONE_ACCOUNT_KEYS,
   ownValue,
   type Reach,
@@ -197,7 +198,9 @@ function outcome(project?: string): Outcome {
 
 function refused(run: Run, row: ScopeRow, code: RefusalCode, fill: RefusalFill = {}): Outcome {
   const out = outcome();
-  out.refused.push(refusal(code, row, firstOf(row).location.tool, { command: run.command, ...fill }));
+  // With no project recorded, the TUI has none to pick with p.
+  const keys = code === "no-project" && run.inv.projects.length === 0 ? NO_PROJECT_KEYS : undefined;
+  out.refused.push(refusal(code, row, firstOf(row).location.tool, { command: run.command, ...fill }, keys));
   return out;
 }
 
