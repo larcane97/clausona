@@ -677,6 +677,8 @@ describe("a profile whose name the key check would take for a key", () => {
       JSON.stringify({ version: 1, routes: { hand: { tool: "claude", from: [`claude:${longName}`, "a"] } } }),
     );
     expect(await run("pick", "hand")).toBe(`claude:${longName}`);
+    // And by a run's own options, unsaved.
+    expect(await run("explain", "--tool", "claude", "--from", longName)).toContain(`▸ claude:${longName}`);
     expect(JSON.parse(await run("list", "--json")).problems).toEqual([]);
   });
 

@@ -131,10 +131,10 @@ const PATTERN_FLAGS: ReadonlyArray<["from" | "exclude" | "fallback", string]> = 
  * was given: not by where it would sit in routes.json, which it never reaches, and not by an
  * index into the exclude list the route's own entries are merged into.
  */
-function runPatternProblems(overrides: RouteOverrides, tool: RouteTool): string[] {
+function runPatternProblems(overrides: RouteOverrides, tool: RouteTool, names: ProfileNames): string[] {
   return PATTERN_FLAGS.flatMap(([key, flag]) =>
     (overrides[key] ?? []).flatMap((pattern) => {
-      const problem = checkPattern(pattern, tool);
+      const problem = checkPattern(pattern, tool, names);
       return problem ? [`${flag}: ${problem}`] : [];
     }),
   );
@@ -216,7 +216,7 @@ export function resolveRoute(
     }
     return null;
   }
-  const runProblems = runPatternProblems(overrides, spec.tool);
+  const runProblems = runPatternProblems(overrides, spec.tool, names);
   if (runProblems.length) throw new Error(runProblems.join("\n"));
   // Leaving one more account out for a run must not bring back the ones the route leaves out.
   // (`route set --exclude` replaces the list: that is an edit, and goes through applyOverrides.)
