@@ -6,6 +6,7 @@ import { freeNow, nothingRead, skipReason } from "../../lib/route-render.js";
 import type { QuotaSnapshot } from "../../types.js";
 import { QuotaCell } from "../components/QuotaCell.js";
 import { color, symbol } from "../theme.js";
+import { wrappedLines } from "../use-width.js";
 import { GAP, MARK } from "./RouteDetail.js";
 import { FORM_FIELDS, type FormAccount, type FormField, type RouteFormState } from "./route-form-state.js";
 
@@ -32,6 +33,12 @@ const FIELD_LABEL: Record<FormField, string> = {
   max: "Skip at",
   fallback: "Fallback",
 };
+
+/** The columns a field's value has on its Line, in a frame `width` columns wide inside. */
+export const valueWidth = (width: number) => width - CURSOR - LABEL;
+
+/** The columns between two of a Radio's options on a line. */
+const RADIO_GAP = 3;
 
 const labelColor = (focused: boolean, error: boolean) => (error ? color.error : focused ? color.text : color.secondary);
 
@@ -86,6 +93,10 @@ export function SubLabel({
   );
 }
 
+/**
+ * The options on one line, the ones that do not fit on the next, each whole: one wider than the
+ * line is cut short, not wrapped inside itself, so that `radioLines` is the lines it takes.
+ */
 export function Radio<T extends string>({
   options,
   selected,
@@ -96,18 +107,31 @@ export function Radio<T extends string>({
   focused: boolean;
 }) {
   return (
-    <Box columnGap={3} flexWrap="wrap">
+    <Box columnGap={RADIO_GAP} flexWrap="wrap">
       {options.map(([value, label]) => {
         const on = value === selected;
         return (
           <Box key={value} flexShrink={0}>
-            <Text color={on ? (focused ? color.cursor : color.text) : color.muted} bold={on && focused}>
+            <Text
+              color={on ? (focused ? color.cursor : color.text) : color.muted}
+              bold={on && focused}
+              wrap="truncate-end"
+            >
               {`${on ? symbol.dot : symbol.circle} ${label}`}
             </Text>
           </Box>
         );
       })}
     </Box>
+  );
+}
+
+/** The lines a Radio of `options` takes `width` columns wide: each option its mark, a space and its label. */
+export function radioLines(options: Array<[string, string]>, width: number): number {
+  return wrappedLines(
+    options.map(([, label]) => `${symbol.dot} ${label}`.length),
+    RADIO_GAP,
+    width,
   );
 }
 
@@ -236,6 +260,10 @@ export function AccountRows({
   );
 }
 
+const entryText = (entry: string, index: number) => `${index + 1}. ${entry}`;
+const IN_POOL = " in the pool";
+const ADD = "(+ add)";
+
 /**
  * `1. <id>    2. <id>    (+ add)`, the entry at `cursor` marked while the field has the focus. An
  * entry the pool takes already (one written with the CLI) says so: it adds nothing.
@@ -244,6 +272,9 @@ export function AccountRows({
  * `▸` being the Line's (`rowMark`) in the label column, as the every-account row's is. Each later
  * entry, and `(+ add)` after them, has its `▸` slot before it, after the gap: the marks sit two
  * columns before the numbers, as the accounts' do, and moving the cursor moves no entry.
+ *
+ * The entries that do not fit on a line go to the next, each whole: one wider than the line is
+ * cut short, not wrapped inside itself, so that `fallbackLines` is the lines they take.
  */
 export function FallbackEntries({
   entries,
@@ -259,18 +290,26 @@ export function FallbackEntries({
       {entries.map((entry, index) => (
         <Box key={entry} flexShrink={0}>
           {index > 0 ? <RowMark on={index === cursor} /> : null}
-          <Text color={index === cursor ? color.cursor : color.text}>
-            {`${index + 1}. ${entry}`}
-            {pool.has(entry) ? <Text color={color.muted}> in the pool</Text> : null}
+          <Text color={index === cursor ? color.cursor : color.text} wrap="truncate-end">
+            {entryText(entry, index)}
+            {pool.has(entry) ? <Text color={color.muted}>{IN_POOL}</Text> : null}
           </Text>
         </Box>
       ))}
       <Box flexShrink={0}>
         {entries.length > 0 ? <RowMark on={false} /> : null}
-        <Text color={color.muted}>(+ add)</Text>
+        <Text color={color.muted}>{ADD}</Text>
       </Box>
     </Box>
   );
+}
+
+/** The lines FallbackEntries takes `width` columns wide: its entries and `(+ add)`, each wrapping whole. */
+export function fallbackLines(entries: string[], pool: ReadonlySet<string>, width: number): number {
+  const widths = entries.map(
+    (entry, index) => (index > 0 ? MARK : 0) + entryText(entry, index).length + (pool.has(entry) ? IN_POOL.length : 0),
+  );
+  return wrappedLines([...widths, (entries.length > 0 ? MARK : 0) + ADD.length], GAP, width);
 }
 
 /** Why the picker has nothing to offer: no accounts, none outside the pool, or those all added. */
@@ -333,6 +372,9 @@ export function FallbackPicker({ ids, cursor, none }: { ids: string[]; cursor: n
 /**
  * Who the route would pick now, from the quota already read: what `clausona route explain` would
  * say. Nothing read (offline) is said as such, as `route list` and the Routes screen say it.
+ *
+ * Cut short in a narrow terminal rather than wrapped, as the descriptions in the frame are: the
+ * form counts it as one line.
  */
 export function NowLine({ ranking }: { ranking: Ranking | null }) {
   if (!ranking) return <Text color={color.muted}>Now: —</Text>;
@@ -343,7 +385,7 @@ export function NowLine({ ranking }: { ranking: Ranking | null }) {
   if (outcome.kind !== "picked") return <Text color={color.warning}>Now: nobody can be picked</Text>;
   const { free, members } = freeNow(ranking);
   return (
-    <Text color={color.text}>
+    <Text color={color.text} wrap="truncate-end">
       {`Now: ${free} of ${members} accounts under ${ranking.route.maxUsage}% · next `}
       <Text color={color.accent}>{outcome.id}</Text>
     </Text>

@@ -1108,6 +1108,48 @@ describe("RouteForm", () => {
       expect(lines(text(narrow.instance)).length).toBe(ROWS - 1);
     });
 
+    // The fallback's keys wrap below 77 columns, and the radios below 60: lines the form's count
+    // took for one each, which made it as tall as the terminal again, redrawn whole on every key.
+    it.each([76, 70, 56])("stays one line short of it at %i columns, its wrapped lines counted", async (columns) => {
+      const ROWS = 34;
+      const quotas = Object.fromEntries(Object.keys(MANY.profiles).map((id) => [id, snap(5, 22)]));
+      const { instance } = setup({ registry: MANY, quotas, rows: ROWS, columns });
+      await opened(instance);
+      await tabTo(instance, "Fallback");
+      const frame = text(instance);
+
+      expect(hintLines(frame)).toHaveLength(2);
+      if (columns < 60) {
+        // Both radios take two lines: what does not fit goes under the first.
+        expect(row(frame, "Tool")).toMatch(/Tool\s+● claude\s+○ codex$/);
+        expect(row(frame, "Strategy")).toMatch(/Strategy\s+● round-robin\s+○ headroom$/);
+        expect(frame).toMatch(/^\s*│\s+○ claude \+ codex\s+│$/m);
+        expect(frame).toMatch(/^\s*│\s+○ expiring\s+│$/m);
+        // Who would be picked is cut short, as the descriptions are, rather than wrapped.
+        expect(frame).toMatch(/^\s*Now: 20 of 20 accounts under 80% · next claude:acct.*…$/m);
+      }
+      expect(lines(frame).length).toBe(ROWS - 1);
+      for (const line of lines(frame)) expect(line.length).toBeLessThanOrEqual(columns);
+    });
+
+    // `enter save it again` makes the hints longer still: they wrap below 86 columns.
+    it("stays one line short of it once the hints say enter saves a removed route again", async () => {
+      const ROWS = 34;
+      const file: RoutesFile = { version: 1, routes: { wide: { tool: "claude" } } };
+      const { instance, disk } = setup({ registry: MANY, rows: ROWS, columns: 80, file, edit: "wide" });
+      await opened(instance);
+      disk.text = toText({ version: 1, routes: {} });
+      await tabTo(instance, "Fallback");
+      await save(instance);
+
+      const frame = await until(instance, (f) => f.includes("removed in another window"));
+      expect(hintLines(frame)).toEqual([
+        "a add │ x remove │ [ ] reorder │ tab next field │ enter save it again",
+        "│ esc cancel",
+      ]);
+      expect(lines(frame).length).toBe(ROWS - 1);
+    });
+
     it("keeps three accounts on screen however short the terminal", async () => {
       const { instance } = setup({ registry: MANY, rows: 12, columns: 80 });
       await opened(instance);

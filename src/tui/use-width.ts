@@ -34,6 +34,27 @@ export function useWidth(): [RefObject<DOMElement | null>, number] {
 }
 
 /**
+ * The lines a wrapping row of boxes that do not shrink takes `width` columns wide, the boxes
+ * `widths` wide with `gap` between two on a line, as ink lays such a row out: a box goes on the
+ * line it is on when it fits there after the gap, and starts the next line when it does not.
+ *
+ * Worked out rather than measured, for a screen that fits itself to the terminal's height: a
+ * measurement comes a frame late, and that frame, as tall as the terminal, is redrawn whole.
+ */
+export function wrappedLines(widths: readonly number[], gap: number, width: number): number {
+  let lines = 0;
+  let used = 0;
+  for (const each of widths) {
+    if (lines > 0 && used + gap + each <= width) used += gap + each;
+    else {
+      lines += 1;
+      used = each;
+    }
+  }
+  return lines;
+}
+
+/**
  * The terminal's size, read again when it is resized; either is undefined when stdout does not
  * say (a test's, or a pipe). A screen that can outgrow the height fits its lists to it: once ink's
  * output reaches the terminal's height, ink 6 clears the terminal and writes the whole frame again

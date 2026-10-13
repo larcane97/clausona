@@ -5,6 +5,7 @@ import {
   holdsKey,
   ROUTE_TOOLS,
   type RouteSpec,
+  type RouteTool,
   STRATEGIES,
   type Strategy,
   storedRoute,
@@ -17,6 +18,7 @@ import { checkRouteMembers, membersOf } from "../../lib/route-service.js";
 import type { QuotaSnapshot, Registry } from "../../types.js";
 import { Chrome } from "../components/Chrome.js";
 import { FieldInput } from "../components/FieldInput.js";
+import { keyHintLines } from "../components/KeyHint.js";
 import { color } from "../theme.js";
 import { useTerminalSize } from "../use-width.js";
 import {
@@ -25,10 +27,13 @@ import {
   errorLineCount,
   FallbackEntries,
   FallbackPicker,
+  fallbackLines,
   Line,
   NowLine,
   Radio,
+  radioLines,
   SubLabel,
+  valueWidth,
 } from "./RouteFormRows.js";
 import {
   accountsFor,
@@ -79,12 +84,19 @@ export function formAccounts(registry: Registry): FormAccount[] {
 
 /**
  * The form's lines besides its accounts, when nothing wraps: the chrome's header (5 with its
- * padding) and footer (5), the frame's borders and its other fields' lines (11, the strategy's
- * and the limits' descriptions among them, cut short rather than wrapped), the every-account
- * row, the Now line, and one more, since ink redraws the whole screen once its output is as tall
- * as the terminal. A question, the saving note, the picker and each error take one or more besides.
+ * padding) and footer (5, the key hints one of them), the frame's borders and its other fields'
+ * lines (11, the strategy's and the limits' descriptions among them, cut short rather than
+ * wrapped), the every-account row, the Now line, and one more, since ink redraws the whole screen
+ * once its output is as tall as the terminal. A question, the saving note, the picker and each
+ * error take one or more besides, and so does each line past its first that a row which wraps
+ * takes in a narrow terminal: the key hints, the radios and the fallback.
  */
 const FORM_LINES = 24;
+
+/** The columns the chrome's padding takes from the terminal's width. */
+const CHROME_PADDING = 4;
+/** The columns the frame's borders and padding take from the chrome's. */
+const FRAME_PADDING = 4;
 
 /** The fewest account lines the form shows, however short the terminal. */
 const MIN_ACCOUNT_LINES = 3;
@@ -417,9 +429,28 @@ export function RouteForm(props: RouteFormProps) {
   /** Keys go to the form's question or picker, or nowhere while it saves, rather than to a field. */
   const typing = !asking && picking === null && !saving;
 
+  const hints = asking
+    ? CONFIRM_HINTS
+    : picking !== null
+      ? PICKER_HINTS
+      : [...(FIELD_HINTS[state.focus] ?? []), ...(recreate ? RECREATE_HINTS : EVERY_FIELD_HINTS)];
+  const toolOptions = ROUTE_TOOLS.map((tool): [RouteTool, string] => [tool, toolLabel(tool)]);
+  const strategyOptions = STRATEGIES.map((strategy): [Strategy, string] => [strategy, strategy]);
+
   const { columns = 80, rows } = useTerminalSize();
+  /** The chrome's width inside its padding, and a field's value's in the frame. */
+  const inside = columns - CHROME_PADDING;
+  const room = valueWidth(inside - FRAME_PADDING);
+  /** The lines the rows that wrap take past their first, at this width. */
+  const wrapped = [
+    keyHintLines(hints, inside),
+    radioLines(toolOptions, room),
+    radioLines(strategyOptions, room),
+    fallbackLines(state.fallback, pool, room),
+  ].reduce((sum, lines) => sum + lines - 1, 0);
   /** Lines in the frame and under it that come and go; the errors as they wrap inside the chrome. */
-  const extra = (asking || saving ? 1 : 0) + (picking !== null ? 1 : 0) + errorLineCount(state.errors, columns - 4);
+  const extra =
+    (asking || saving ? 1 : 0) + (picking !== null ? 1 : 0) + errorLineCount(state.errors, inside) + wrapped;
   const accountLines = rows === undefined ? undefined : Math.max(MIN_ACCOUNT_LINES, rows - FORM_LINES - extra);
   const focusOn = (field: FormField) => state.focus === field;
 
@@ -496,22 +527,12 @@ export function RouteForm(props: RouteFormProps) {
       subtitle={original === undefined ? "New route" : `Edit ${original}`}
       question={asking ? "Discard changes? (y/N)" : undefined}
       footer={saving ? "Saving…" : undefined}
-      hints={
-        asking
-          ? CONFIRM_HINTS
-          : picking !== null
-            ? PICKER_HINTS
-            : [...(FIELD_HINTS[state.focus] ?? []), ...(recreate ? RECREATE_HINTS : EVERY_FIELD_HINTS)]
-      }
+      hints={hints}
     >
       <Box flexDirection="column" borderStyle="round" borderColor={color.dim} paddingX={1}>
         <Line {...line("name", "Name")}>{textField("name")}</Line>
         <Line {...line("tool", "Tool")}>
-          <Radio
-            options={ROUTE_TOOLS.map((tool) => [tool, toolLabel(tool)])}
-            selected={state.tool}
-            focused={focusOn("tool")}
-          />
+          <Radio options={toolOptions} selected={state.tool} focused={focusOn("tool")} />
         </Line>
         <AccountRows
           line={line("accounts", "Accounts")}
@@ -532,11 +553,7 @@ export function RouteForm(props: RouteFormProps) {
           {textField("exclude")}
         </Line>
         <Line {...line("strategy", "Strategy")}>
-          <Radio
-            options={STRATEGIES.map((strategy) => [strategy, strategy])}
-            selected={state.strategy}
-            focused={focusOn("strategy")}
-          />
+          <Radio options={strategyOptions} selected={state.strategy} focused={focusOn("strategy")} />
         </Line>
         <Line label="">
           <Text color={color.muted} wrap="truncate-end">
