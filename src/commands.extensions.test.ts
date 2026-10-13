@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { runCommand } from "./commands.js";
 import { EXTENSIONS_FLAGS, SUBS } from "./extensions/cli.js";
-import { ExitError } from "./extensions/exit-error.js";
 import { stripAnsi } from "./lib/cli-style.js";
+import { ExitError } from "./lib/json-errors.js";
 
 const COMMANDS = ["skills", "mcp", "hooks"] as const;
 /** Each command's pages: the overview, then one per subcommand it takes. */

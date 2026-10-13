@@ -54,9 +54,8 @@ import {
   writeRefusal,
 } from "./core/routes-store.js";
 import type { Ranking } from "./core/routing.js";
-import { withJsonErrors } from "./extensions/cli.js";
-import { ExitError } from "./extensions/exit-error.js";
 import { accent, bold, dim, helpSection, helpUsage, stripAnsi, success, warnIcon } from "./lib/cli-style.js";
+import { ExitError, withJsonErrors } from "./lib/json-errors.js";
 import { type RouteIo, terminalIo } from "./lib/route-io.js";
 import {
   explainJson,

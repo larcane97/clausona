@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runCommand } from "../commands.js";
 import { stripAnsi } from "../lib/cli-style.js";
+import { ERROR_KINDS, ExitError, withJsonErrors } from "../lib/json-errors.js";
 import { LEFT_ALONE, REFUSAL_CODES, REFUSALS, toggleVerb } from "./actions.js";
 import { KEEP_OPERATIONS } from "./apply.js";
 import {
@@ -17,10 +18,8 @@ import {
   SUBS,
   UNCHANGED_JSON_KEYS,
   UNDO_JSON_KEYS,
-  withJsonErrors,
 } from "./cli.js";
 import { hookWhen, tagsOf } from "./describe.js";
-import { ERROR_KINDS, ExitError } from "./exit-error.js";
 import { CLEANUP_GRACE_DAYS, CLEANUP_UNUSED_DAYS, loadInventory } from "./inventory.js";
 import { rowsIn, SCOPE_LABEL, type ScopeId } from "./scopes.js";
 import { TestHome } from "./test-home.js";

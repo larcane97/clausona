@@ -34,9 +34,7 @@ import {
   extensionsHelp,
   runExtensionsCommand,
   SUBS,
-  withJsonErrors,
 } from "./extensions/cli.js";
-import { ExitError } from "./extensions/exit-error.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
 import { editInEditor, editorCommand } from "./lib/editor.js";
 import {
@@ -49,6 +47,7 @@ import {
   renderUsageSummary,
   unconfirmedCredentialHint,
 } from "./lib/format.js";
+import { ExitError, withJsonErrors } from "./lib/json-errors.js";
 import {
   buildProfileEnv,
   controlledEnvKeys,

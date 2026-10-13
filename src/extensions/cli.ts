@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { accent, bold, dim, success, truncate } from "../lib/cli-style.js";
+import { type ErrorKind, ExitError } from "../lib/json-errors.js";
 import type { Registry, ToolName } from "../types.js";
 import {
   type Action,
@@ -39,7 +40,6 @@ import {
   usageCells,
   whereLabel,
 } from "./describe.js";
-import { type ErrorKind, ExitError } from "./exit-error.js";
 import { planChecked } from "./git-tracked.js";
 import { CLEANUP_UNUSED_DAYS, loadInventory } from "./inventory.js";
 import { type Extension, type Inventory, SKILL_VISIBILITY, type SkillVisibility } from "./model.js";
@@ -1161,27 +1161,6 @@ async function undoLast(talk: Talk): Promise<string> {
 }
 
 // ─── The command ────────────────────────────────────────────────────
-
-/**
- * With --json, an ExitError without stdout and any other error become one JSON object on stdout:
- * `{ version: 1, error: <kind>, message, …extra }`, the exit code kept. An ExitError that has its
- * own stdout - the ambiguous object - goes as it is.
- */
-export async function withJsonErrors(args: string[], run: () => Promise<string>): Promise<string> {
-  if (!args.includes("--json")) return run();
-  try {
-    return await run();
-  } catch (error) {
-    if (error instanceof ExitError) {
-      if (error.stdout !== undefined) throw error;
-      const kind: ErrorKind = error.kind ?? (error.code === 2 ? "usage" : "not-found");
-      const body = { version: 1, error: kind, message: error.message, ...error.extra };
-      throw new ExitError(error.message, error.code, pretty(body), error.kind, error.extra);
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    throw new ExitError(message, 1, pretty({ version: 1, error: "failed", message }), "failed");
-  }
-}
 
 /**
  * `clausona skills|mcp|hooks <sub>`. Bad usage, an ambiguous name and a change with no terminal

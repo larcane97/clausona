@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands.js";
-import { ExitError } from "./extensions/exit-error.js";
 import { isMainModule, parseCommand, reportError, TUI_SCREENS, writeCommandResult } from "./index.js";
 import { stripAnsi } from "./lib/cli-style.js";
+import { ExitError } from "./lib/json-errors.js";
 
 describe("parseCommand", () => {
   it("defaults to interactive mode with no args", () => {

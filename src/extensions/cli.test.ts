@@ -2,10 +2,10 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { ExitError, withJsonErrors } from "../lib/json-errors.js";
 import { leakedWindows } from "../test-leaks.js";
-import { type ExtensionsCommand, runExtensionsCommand, withJsonErrors } from "./cli.js";
+import { type ExtensionsCommand, runExtensionsCommand } from "./cli.js";
 import { scopeSentence } from "./describe.js";
-import { ExitError } from "./exit-error.js";
 import { loadInventory } from "./inventory.js";
 import { scopesFor } from "./scopes.js";
 import { TestHome } from "./test-home.js";
