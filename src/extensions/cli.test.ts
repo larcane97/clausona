@@ -10,6 +10,7 @@ import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js"
 import { type ExtensionsCommand, runExtensionsCommand } from "./cli.js";
 import { scopeSentence } from "./describe.js";
 import { loadInventory } from "./inventory.js";
+import { tilde } from "./present.js";
 import { scopesFor } from "./scopes.js";
 import { TestHome } from "./test-home.js";
 
@@ -1098,7 +1099,11 @@ describe("Codex hooks and Codex's trust", () => {
         );
       // What Codex 0.159.3 gave from main-wt: its .codex layer enabled, projsrv among the servers.
       expect(await states(wt, "mcp")).toEqual([["projsrv", "on", []]]);
-      expect(await states(wt, "hooks")).toEqual([["Stop", "pending-approval", ["pending approval"]]]);
+      // Its own Stop is not what Codex runs there: main's is, waiting for its review.
+      expect(await states(wt, "hooks")).toEqual([
+        ["Stop", "on", ["main checkout's runs"]],
+        ["Stop", "pending-approval", ["pending approval"]],
+      ]);
       expect(await run(h, wt, "mcp", ["show", "projsrv"])).not.toMatch(/^Trust/m);
       const off = JSON.parse(
         await run(h, wt, "mcp", ["off", "projsrv", "--tool", "codex", "--tracked", "--dry-run", "--json"]),
@@ -1109,6 +1114,85 @@ describe("Codex hooks and Codex's trust", () => {
       expect(await states(main, "mcp", "other")).toContainEqual(["pkgsrv", "on", []]);
       // An entry of the worktree's own comes first.
       expect(await states(own, "mcp")).toEqual([["projsrv", "off", ["off"]]]);
+    },
+    SPAWNING_TEST_TIMEOUT_MS,
+  );
+
+  it.skipIf(!hasGit)(
+    "lists a worktree's main checkout's hooks as the ones that run there, and changes the worktree's own nowhere",
+    async () => {
+      const { h } = seed();
+      const stop = (command: string) => ({ hooks: { Stop: [{ hooks: [{ type: "command", command }] }] } });
+      const main = h.path("repos", "main");
+      mkdirSync(main, { recursive: true });
+      gitIn(h, main, "init", "-q");
+      h.write("repos/main/.codex/hooks.json", stop("echo a"));
+      h.write(
+        "repos/main/.codex/config.toml",
+        '[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "main-toml"\n',
+      );
+      gitIn(h, main, "add", ".");
+      gitIn(h, main, "commit", "-q", "-m", "init");
+      const wt = h.path("repos", "main-wt");
+      gitIn(h, main, "worktree", "add", "-q", wt);
+      // The worktree's own copy, changed since, and a hook of its own config.toml: Codex reads neither there.
+      h.write("repos/main-wt/.codex/hooks.json", stop("echo wt"));
+      h.write(
+        "repos/main-wt/.codex/config.toml",
+        '[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "wt-toml"\n',
+      );
+      // git names the main checkout by its real path, and Codex keys the hooks it runs there by it.
+      const real = realpathSync(main);
+      const mainHooks = path.join(real, ".codex", "hooks.json");
+      // `echo a` on Stop trusted at the hash Codex 0.159.3 gives it, under the main checkout's key.
+      h.write(
+        ".codex/config.toml",
+        [
+          `[projects.${JSON.stringify(real)}]`,
+          'trust_level = "trusted"',
+          `[hooks.state.${JSON.stringify(`${mainHooks}:stop:0:0`)}]`,
+          'trusted_hash = "sha256:f9b7a328de9c5845f5eed806f12f8f5adeba50ba82617690fd3f8ededeb12f90"',
+          "",
+        ].join("\n"),
+      );
+      h.claude("default", ".claude", { projects: { [wt]: {} } });
+      type Row = { id: string; state: string; tags: string[]; file: string; summary: { command: string } };
+      const listed: Row[] = JSON.parse(
+        await run(h, wt, "hooks", ["ls", "--tool", "codex", "--scope", "project", "--json"]),
+      ).items;
+      const rows = listed.map((i) => [i.summary.command, i.state, i.tags, i.file]);
+      expect(rows).toEqual([
+        ["echo wt", "on", ["main checkout's runs"], path.join(wt, ".codex", "hooks.json")],
+        ["wt-toml", "on", ["main checkout's runs"], path.join(wt, ".codex", "config.toml")],
+        ["echo a", "on", [], mainHooks],
+        ["main-toml", "pending-approval", ["pending approval"], path.join(real, ".codex", "config.toml")],
+      ]);
+      const loaded = JSON.parse(await run(h, wt, "hooks", ["ls", "--tool", "codex", "--json"])).items;
+      expect(loaded.map((i: Row) => i.summary.command)).toEqual(["echo a"]);
+      const byCommand = (command: string) => listed.find((i) => i.summary.command === command)?.id ?? "";
+      const shownAt = tilde(mainHooks, h.home);
+      const shown = await run(h, wt, "hooks", ["show", "--id", byCommand("echo wt")]);
+      const loadedLine = shown.split("\n").find((line) => line.startsWith("Loaded"));
+      expect(loadedLine?.replace(/^Loaded\s+/, "")).toBe(`no, Codex runs the hooks in ${shownAt} in this worktree`);
+      // The worktree's own: refused, naming the main checkout's file; what clausona kept aside it may delete.
+      for (const verb of ["off", "rm"]) {
+        const own = JSON.parse(await run(h, wt, "hooks", [verb, "--id", byCommand("echo wt"), "--dry-run", "--json"]));
+        expect(own.changes).toEqual([]);
+        expect(own.refused.map((r: { code: string; reason: string }) => [r.code, r.reason])).toEqual([
+          ["codex-worktree-hook", `Codex runs the hooks in ${shownAt} in this worktree. Change them there.`],
+        ]);
+      }
+      // The main checkout's, from the worktree: its file, which git tracks there, with consent.
+      const mainOff = (more: string[]) =>
+        run(h, wt, "hooks", ["off", "--id", byCommand("echo a"), "--dry-run", "--json", ...more]).then(JSON.parse);
+      const unconsented = (await mainOff([])).refused;
+      expect(unconsented.map((r: { code: string }) => r.code)).toEqual(["tracked"]);
+      expect(unconsented[0].reason).toMatch(/^Git tracks it in main, so this changes the repo\. /);
+      const consented = await mainOff(["--tracked"]);
+      expect(consented.refused).toEqual([]);
+      expect(consented.changes.map((c: { file: string; what: string }) => [c.file, c.what])).toEqual([
+        [mainHooks, "Stop hook taken out, kept by clausona"],
+      ]);
     },
     SPAWNING_TEST_TIMEOUT_MS,
   );

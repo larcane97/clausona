@@ -449,6 +449,21 @@ export function codexTrusted(inv: Inventory, project: string | undefined): boole
 }
 
 /**
+ * The main checkout's file whose hooks Codex runs in place of `item`'s, a Codex hook in a linked
+ * worktree's own `.codex` folder (codexWorktrees): the hooks.json, or the config.toml, of the
+ * main checkout's `.codex` folder at that place. Undefined for any other item.
+ */
+export function codexWorktreeRuns(inv: Inventory, item: Extension): string | undefined {
+  const loc = item.location;
+  if (item.kind !== "hook" || loc.tool !== "codex" || loc.scope !== "project" || loc.project === undefined) {
+    return undefined;
+  }
+  const worktree = inv.facts.codexWorktrees[pathKey(loc.project)];
+  if (worktree === undefined || !samePath(path.dirname(loc.file), path.join(loc.project, ".codex"))) return undefined;
+  return path.join(worktree.hooks, path.basename(loc.file));
+}
+
+/**
  * The off a project's own Codex hook or server is in while Codex does not trust the project:
  * Codex 0.159.3 then leaves the project's `.codex` folder out, its hooks and its config.toml's
  * servers with it. `setBy` names the project's `trust_level` in the user config.toml.

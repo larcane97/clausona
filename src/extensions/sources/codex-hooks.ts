@@ -208,7 +208,9 @@ const CONFIG_HOOKS_AT = "config.toml:";
  * The hooks a config.toml holds under `[hooks]` - `[[hooks.<Event>]]` tables, in the same shape
  * as a hooks.json's - which Codex 0.159.3 runs beside that folder's hooks.json, trusted the same
  * way, keyed by the config.toml's path. Its `[hooks.state]` tables are no event, and are skipped.
- * `exact` is the same `[hooks]` with its numbers as Codex reads them (exactConfigHooks).
+ * `exact` is the same `[hooks]` with its numbers as Codex reads them (exactConfigHooks). `at`
+ * goes before the place in their ids, as for a hooks file (`addHooks`). With no `sources`, the
+ * hooks have no trust identity: a worktree's own, which Codex never runs there.
  */
 export function addConfigHooks(
   config: Record<string, unknown>,
@@ -217,11 +219,13 @@ export function addConfigHooks(
   sources: readonly string[],
   out: Collector,
   exact?: unknown,
+  at = "",
 ): void {
   if (!isRecord(config.hooks)) return;
-  addHooks(config.hooks, location, owner, out, "hooks", CONFIG_HOOKS_AT);
+  addHooks(config.hooks, location, owner, out, "hooks", `${at}${CONFIG_HOOKS_AT}`);
   const idBase = `hook:${location.tool}:${location.scope}:${owner}`;
-  addCodexHookTrust(exact ?? config.hooks, idBase, sources, out.facts, undefined, CONFIG_HOOKS_AT);
+  if (sources.length === 0) return;
+  addCodexHookTrust(exact ?? config.hooks, idBase, sources, out.facts, undefined, `${at}${CONFIG_HOOKS_AT}`);
 }
 
 /**

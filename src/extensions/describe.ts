@@ -27,7 +27,15 @@ import {
   stateLoads,
   type ToolName,
 } from "./scopes.js";
-import { codexTrusted, isMcpjsonServer, MANAGED_MCP_KEY, mcpBlocked, relevantIn, STASH_KEY } from "./state.js";
+import {
+  codexTrusted,
+  codexWorktreeRuns,
+  isMcpjsonServer,
+  MANAGED_MCP_KEY,
+  mcpBlocked,
+  relevantIn,
+  STASH_KEY,
+} from "./state.js";
 
 /**
  * The words the Extensions screen and the CLI say about a row: its tags, a hook's event in plain
@@ -103,6 +111,7 @@ const CODEX_SKIPS: Record<NonNullable<Extension["codexError"]>, string> = {
   "invalid front matter": "Codex skips its SKILL.md: its front matter is not valid YAML",
   "name too long": "Codex skips its SKILL.md: its name is over 64 characters",
   "no description": "Codex skips its SKILL.md: its front matter has no description",
+  "main checkout's runs": "Codex runs the main checkout's hooks in this worktree",
   "invalid hooks file":
     "Codex skips its hooks file: it holds more than hooks and a description at its top, or a hook Codex cannot read",
   "not supported": "Codex does not run an MCP tool hook when a session ends",
@@ -110,12 +119,17 @@ const CODEX_SKIPS: Record<NonNullable<Extension["codexError"]>, string> = {
   "empty tool": "Codex skips an MCP tool hook whose server or tool is empty",
 };
 
-/** Why Codex does not load `item`, which has a `codexError`: for a hook it does not run, of which kind. */
-function codexSkip(item: Extension, error: NonNullable<Extension["codexError"]>): string {
+/**
+ * Why Codex does not load `item`, which has a `codexError`: for a hook it does not run, of which
+ * kind, and for a worktree's own, which file Codex runs the hooks of instead.
+ */
+function codexSkip(inv: Inventory, item: Extension, error: NonNullable<Extension["codexError"]>): string {
   const type = item.summary?.type;
   if (error === "not supported" && (type === "prompt" || type === "agent")) {
     return `Codex does not run ${type} hooks yet`;
   }
+  const runs = error === "main checkout's runs" ? codexWorktreeRuns(inv, item) : undefined;
+  if (runs !== undefined) return `Codex runs the hooks in ${tilde(runs, inv.homeDir)} in this worktree`;
   return CODEX_SKIPS[error];
 }
 
@@ -311,12 +325,13 @@ function scopeLabel(item: Extension, project: string | undefined): string {
 /**
  * Every tag that applies, most important first: broken link > off > off here > off in N of M
  * accounts > not here > pending approval > hidden by … > unused > no front matter > invalid
- * front matter > name too long > no description > invalid hooks file > not supported > empty
- * command > empty tool. A row that is not here has no state here, so no tag of one. `no front
- * matter` is a quiet note for a Claude skill, which Claude Code loads all the same; for a Codex
- * skill, which Codex skips, it, `invalid front matter`, `name too long` and `no description` are
- * why it is not in Loaded, and `invalid hooks file`, `not supported`, `empty command` and `empty
- * tool` why a Codex hook does not run, which its details say.
+ * front matter > name too long > no description > main checkout's runs > invalid hooks file >
+ * not supported > empty command > empty tool. A row that is not here has no state here, so no
+ * tag of one. `no front matter` is a quiet note for a Claude skill, which Claude Code loads all
+ * the same; for a Codex skill, which Codex skips, it, `invalid front matter`, `name too long` and
+ * `no description` are why it is not in Loaded, and `main checkout's runs`, `invalid hooks file`,
+ * `not supported`, `empty command` and `empty tool` why a Codex hook does not run, which its
+ * details say.
  */
 export function tagsOf(inv: Inventory, row: ScopeRow, project: string | undefined, now: number): Tag[] {
   const item = firstOf(row);
@@ -560,7 +575,7 @@ function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined)
   // A link to nothing has no SKILL.md to read, whatever the settings say.
   if (item.link?.broken) return [{ label: "Loaded", text: "no, its link leads nowhere", tone: "error" }];
   if (item.codexError) {
-    return [{ label: "Loaded", text: `no, ${codexSkip(item, item.codexError)}`, tone: "error" }];
+    return [{ label: "Loaded", text: `no, ${codexSkip(inv, item, item.codexError)}`, tone: "error" }];
   }
   const perAccount = statesByAccount(inv, row, project);
   const parts = perAccount?.map((a) => ({ name: shortProfile(a.profile), ...stateParts(inv, item, project, a.state) }));

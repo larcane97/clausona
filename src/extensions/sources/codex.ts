@@ -5,9 +5,9 @@ import { parse } from "smol-toml";
 import type { Registry } from "../../types.js";
 import { valueHash } from "../hash.js";
 import type { Collector, Location, Project, Warning } from "../model.js";
-import { codexProjectConfig, codexProjectHooks } from "../places.js";
+import { codexProjectConfig } from "../places.js";
 import { isHomeProject, type ProjectRecord, recordedPaths } from "../projects.js";
-import { isRecord, pathKey, readJsonObject, readText, realPath, samePath } from "../read.js";
+import { entryInfo, isRecord, pathKey, readJsonObject, readText, realPath, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
 import { addHooksFile } from "./claude-hooks.js";
 import {
@@ -24,7 +24,7 @@ import {
 } from "./codex-hooks.js";
 import { addPluginSwitches, readCodexPlugins } from "./codex-plugins.js";
 import { readCodexSkills } from "./codex-skills.js";
-import { codexTrustFolders, projectRootMarkers } from "./codex-trust.js";
+import { codexRoots, projectRootMarkers } from "./codex-trust.js";
 import type { SkillLocation } from "./skill-dirs.js";
 
 export type CodexHome = { id: string; dir: string; isPrimary: boolean };
@@ -124,7 +124,8 @@ export function codexProjectRecords(ctx: CodexContext): ProjectRecord[] {
  * `mcp_servers.<name>.enabled`, and the `[plugins."<id>"]` tables, in the user and project
  * config.toml. Beside them, the trust the user config.toml records for each project, and the
  * folders Codex looks it up in (codex-trust.ts): Codex 0.159.3 reads a project's `.codex/` only
- * when it trusts the project, so `state.ts` leaves the switches of any other out. Codex keeps no skill usage on disk that we found, so its skills
+ * when it trusts the project, so `state.ts` leaves the switches of any other out. In a linked
+ * worktree, the hooks are its main checkout's, which Codex runs there in place of its own. Codex keeps no skill usage on disk that we found, so its skills
  * carry no usage keys.
  */
 export async function readCodex(ctx: CodexContext, projects: Project[], out: Collector): Promise<void> {
@@ -168,39 +169,34 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
     jobs.push(readCodexSkills(path.join(project.path, ".agents", "skills"), here, project.path, out));
     jobs.push(
       (async () => {
+        // Where Codex looks for the project's trust, and its main checkout in a linked worktree;
+        // with no project recorded, Codex trusts none, and runs none of its hooks.
+        const roots = trustRecorded ? await codexRoots(project.path, markers) : undefined;
+        if (roots) out.facts.codexTrustFolders[pathKey(project.path)] = roots.folders;
+        const own = path.dirname(codexProjectConfig(project.path));
+        // Codex reads a worktree's main checkout's hooks only for a .codex folder there is.
+        const worktree = roots?.worktree && (await entryInfo(own)).kind === "dir" ? roots.worktree : undefined;
+        if (worktree) out.facts.codexWorktrees[pathKey(project.path)] = worktree;
         const file = codexProjectConfig(project.path);
         const config = await readTomlObject(file, out.warnings);
         if (config) {
           addServers(config, { ...here, file }, project.path, out);
           addPluginSwitches(config, file, project.path, out.facts);
-          if (isRecord(config.hooks)) {
-            const exact = await exactConfigHooks(file);
-            addConfigHooks(config, { ...here, file }, project.path, await hookSources(file), out, exact);
+        }
+        // Codex looks up no trust for a worktree's own hooks: it never reads them there.
+        await addFolderHooks(own, config, here, project.path, out, "", worktree === undefined);
+        if (!worktree) return;
+        // In a worktree Codex runs the main checkout's hooks, under their own paths, and none of these.
+        for (const item of out.items) {
+          const loc = item.location;
+          if (item.kind === "hook" && loc.tool === "codex" && loc.project === project.path && !item.stashed) {
+            if (samePath(path.dirname(loc.file), own)) item.codexError = "main checkout's runs";
           }
         }
-        const hooksFile = codexProjectHooks(project.path);
-        const hooks = await readJsonObject(hooksFile, out.warnings);
-        if (hooks) {
-          addHooksFile(hooks, { ...here, file: hooksFile }, project.path, out);
-          if (!codexReadsHooksFile(hooks)) markRefusedHooksFile(out, hooksFile);
-          else
-            addCodexHookTrust(
-              (await exactJsonFile(hooksFile))?.hooks ?? hooks.hooks,
-              `hook:codex:project:${project.path}`,
-              await hookSources(hooksFile),
-              out.facts,
-            );
-        }
+        const main = await readTomlObject(path.join(worktree.hooks, "config.toml"), out.warnings);
+        await addFolderHooks(worktree.hooks, main, here, project.path, out, MAIN_CHECKOUT_AT);
       })(),
     );
-    // Where Codex looks for the project's trust; with no project recorded there is none to find.
-    if (trustRecorded) {
-      jobs.push(
-        (async () => {
-          out.facts.codexTrustFolders[pathKey(project.path)] = await codexTrustFolders(project.path, markers);
-        })(),
-      );
-    }
   }
   jobs.push(
     (async () => {
@@ -257,6 +253,43 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
   }
   await Promise.all(jobs);
   markUnsupportedHooks(out);
+}
+
+/** What a worktree's id for one of its main checkout's hooks puts before the hook's place. */
+const MAIN_CHECKOUT_AT = "main:";
+
+/**
+ * The hooks of a project's `.codex` folder, `folder`, as Codex runs them for `here`: its
+ * config.toml's `[hooks]` (`config`, read already) and its hooks.json, each keyed by its own
+ * path. `at` goes before the place in their ids: MAIN_CHECKOUT_AT for a worktree's main
+ * checkout's, which are the worktree's rows, apart from the main checkout's own. Without
+ * `trusted`, their trust is not looked up, as Codex does not for hooks it never runs.
+ */
+async function addFolderHooks(
+  folder: string,
+  config: Record<string, unknown> | undefined,
+  here: SkillLocation,
+  owner: string,
+  out: Collector,
+  at = "",
+  trusted = true,
+): Promise<void> {
+  const file = path.join(folder, "config.toml");
+  if (config && isRecord(config.hooks)) {
+    const exact = await exactConfigHooks(file);
+    const sources = trusted ? await hookSources(file) : [];
+    addConfigHooks(config, { ...here, file }, owner, sources, out, exact, at);
+  }
+  const hooksFile = path.join(folder, "hooks.json");
+  const hooks = await readJsonObject(hooksFile, out.warnings);
+  if (!hooks) return;
+  addHooksFile(hooks, { ...here, file: hooksFile }, owner, out, at);
+  if (!codexReadsHooksFile(hooks)) markRefusedHooksFile(out, hooksFile);
+  else if (trusted) {
+    const exact = (await exactJsonFile(hooksFile))?.hooks ?? hooks.hooks;
+    const idBase = `hook:codex:project:${owner}`;
+    addCodexHookTrust(exact, idBase, await hookSources(hooksFile), out.facts, undefined, at);
+  }
 }
 
 /**

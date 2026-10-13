@@ -348,14 +348,25 @@ The switches are read from these places:
   `[[hooks.<Event>]]` tables, beside that folder's `hooks.json`: Codex's own and a trusted
   project's. Their key holds the `config.toml`'s path. clausona lists them and their trust, and
   leaves changing them to `/hooks` in Codex (`codex-config-hook`).
+- Codex hooks in a linked git worktree: Codex runs the main checkout's hooks there, not the
+  worktree's. It reads the `hooks.json` and the `config.toml` `[hooks]` of the `.codex` folder at
+  the same place in the main checkout, and keys their trust by their paths there. The rest of the
+  worktree's `.codex/config.toml`, its servers, switches and plugins, is the worktree's own. So in
+  a worktree clausona lists the main checkout's hooks as the worktree's, with their trust under
+  the main checkout's keys, and turning one off changes the main checkout's file, which git
+  tracks there. The worktree's own hooks are tagged `main checkout's runs` and are not in
+  Loaded. Their details name the main checkout's file, and clausona does not change them
+  (`codex-worktree-hook`). This is only for a worktree with a `.codex` folder of its own: Codex
+  runs no project hooks in one without.
 
 ### Tags
 
 A row can carry several tags. They are listed most important first: `broken link`, then
 `off`, `off here` or `off in N of M accounts`, then `not here`, then `pending approval`, then
 `hidden by … copy`, then `unused`, then `no front matter`, then `invalid front matter`, then
-`name too long`, then `no description`, then `invalid hooks file`, then `not supported`, then
-`empty command`, then `empty tool`. The NOTE column shows the first; JSON `tags` has them all.
+`name too long`, then `no description`, then `main checkout's runs`, then `invalid hooks file`,
+then `not supported`, then `empty command`, then `empty tool`. The NOTE column shows the first;
+JSON `tags` has them all.
 
 | Tag | When |
 |---|---|
@@ -373,6 +384,7 @@ A row can carry several tags. They are listed most important first: `broken link
 | `invalid front matter` | A Codex skill whose front matter is not YAML Codex reads: say, a quoted description with more text after its closing quote, a description line that runs on to the next line unindented, or a description written as a list. Codex skips it, so it is not in Loaded. A description with a `: ` in it is fine: Codex quotes it and reads it again, and so does clausona. |
 | `name too long` | A Codex skill whose name is over 64 characters. Codex skips it, so it is not in Loaded. |
 | `no description` | A Codex skill whose front matter has no `description`, or one that is empty or only spaces. Codex skips it, so it is not in Loaded. |
+| `main checkout's runs` | A Codex hook in a linked git worktree's own `.codex` folder. Codex runs the main checkout's hooks there instead, so it is not in Loaded. Its details name the main checkout's file. |
 | `invalid hooks file` | A Codex hook in a hooks file with more than `hooks` and a `description` at its top, such as its events, or a `$schema`, or with a hook Codex cannot read, such as a `command` that is not a string. Codex skips the whole file, so the hook does not run. |
 | `not supported` | A Codex hook of a kind Codex does not run: a prompt or an agent hook, or an MCP tool hook on `SessionEnd`. Codex skips it, whatever its trust, so it is not in Loaded. |
 | `empty command` | A Codex command hook whose command is empty or only spaces. Codex skips it, and runs the rest of its file, so it is not in Loaded. |
@@ -661,7 +673,9 @@ Ids and keys name where a thing is stored, not where it is seen from. They are t
 every project, so an agent can store one and pass it to `show --id` later. A row key stays the
 same when a plugin updates; a copy's id holds the plugin's install folder, which changes. A
 hook's id holds its place in its file (`#<group>.<index>`), which moves when hooks above it are
-added or removed.
+added or removed. In a linked worktree, the main checkout's Codex hooks are the worktree's rows:
+their id holds the worktree's path, with `main:` before the place, as in
+`hook:codex:project:<worktree>:Stop#main:0.0`.
 
 `--id`, and a name given as an id, take a row key or the id of any copy. For `show`, a copy's
 id picks its whole row. A change takes that copy alone, so `csn mcp rm --id` with one account's
@@ -1087,6 +1101,7 @@ the CLI's words. In the table `<tool>` is the tool's name and `<scope>` a scope'
 | `managed-mcp` | `<file>` lets only its own servers start. | Only your organization can change that file. | Only your organization can change that file. |
 | `bundled-off` | `disableBundledSkills` in `<file>` turns off the skills that come with Claude Code. | Change it there. | Change it there. |
 | `codex-config-hook` | It is written in `<file>`, where clausona does not change hooks. | Use `/hooks` in Codex, or edit the file. | Use `/hooks` in Codex, or edit the file. |
+| `codex-worktree-hook` | Codex runs the hooks in `<file>` in this worktree. | Change them there. | Change them there. |
 
 On the screen, `stash-gone` on one account's server, in a row other accounts share, says
 `Press d and choose only work in the dialog.` instead, since `d` on the row would delete the

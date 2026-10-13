@@ -85,14 +85,17 @@ export type Extension = {
    * `name too long` (over 64 characters) or with `no description`, a hook in an `invalid hooks
    * file` (more than `hooks` and `description` at its top), and one Codex does not run at all,
    * `not supported` (a prompt or agent hook, an MCP tool hook when a session ends), with an
-   * `empty command`, or an MCP tool hook with an `empty tool` (or server). Unlike Claude Code,
-   * Codex lists no skill without front matter, or without a description, so it does not load.
+   * `empty command`, or an MCP tool hook with an `empty tool` (or server). A hook in a linked
+   * worktree's own `.codex` folder is `main checkout's runs`: Codex runs the main checkout's
+   * hooks there in its place. Unlike Claude Code, Codex lists no skill without front matter, or
+   * without a description, so it does not load.
    */
   codexError?:
     | "no front matter"
     | "invalid front matter"
     | "name too long"
     | "no description"
+    | "main checkout's runs"
     | "invalid hooks file"
     | "not supported"
     | "empty command"
@@ -203,6 +206,13 @@ export type StateFacts = {
    */
   codexTrustFolders: Record<string, string[]>;
   /**
+   * By pathKey of each project read that is in a linked git worktree and has a `.codex` folder:
+   * the main checkout, and the `.codex` folder at the project's place in it. Codex 0.159.3 runs
+   * that folder's hooks there - its hooks.json and its config.toml's `[hooks]` - in place of the
+   * project's own; the rest of the project's config is its own (sources/codex-trust.ts).
+   */
+  codexWorktrees: Record<string, { main: string; hooks: string }>;
+  /**
    * Each `[plugins."<plugin>@<marketplace>"]` table in the user config.toml and in a project's:
    * Codex loads a plugin only where a table names it. `enabled` is absent when the table does not
    * set it, which leaves the plugin on.
@@ -247,6 +257,7 @@ export function emptyFacts(): StateFacts {
     fingerprints: {},
     codexTrust: [],
     codexTrustFolders: {},
+    codexWorktrees: {},
     codexPlugins: [],
     codexPluginServers: [],
     codexHookTrust: [],

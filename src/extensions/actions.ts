@@ -68,6 +68,7 @@ export const REFUSAL_CODES = [
   "managed-mcp",
   "bundled-off",
   "codex-config-hook",
+  "codex-worktree-hook",
 ] as const;
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
 
@@ -230,6 +231,11 @@ export const REFUSALS: Readonly<Record<RefusalCode, { reason: Words; keys?: Word
     reason: "It is written in {~file}, where clausona does not change hooks.",
     keys: "Use /hooks in Codex, or edit the file.",
     flags: "Use /hooks in Codex, or edit the file.",
+  },
+  "codex-worktree-hook": {
+    reason: "Codex runs the hooks in {~file} in this worktree.",
+    keys: "Change them there.",
+    flags: "Change them there.",
   },
 };
 

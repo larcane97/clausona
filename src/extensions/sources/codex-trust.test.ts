@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../../test-timeouts.js";
 import { isWithin } from "../read.js";
 import { TestHome } from "../test-home.js";
-import { codexTrustFolders } from "./codex-trust.js";
+import { codexRoots, codexTrustFolders } from "./codex-trust.js";
 
 // Most cases start git.
 vi.setConfig({ testTimeout: SPAWNING_TEST_TIMEOUT_MS });
@@ -80,6 +80,21 @@ describe.skipIf(!hasGit)("codexTrustFolders", () => {
       realpathSync(wt),
       realpathSync(app),
     ]);
+  });
+
+  it("gives a linked worktree's main checkout, and the .codex folder at the project's place there", async () => {
+    const h = home();
+    const app = repo(h, "repos/app");
+    const wt = h.path("repos", "app-wt");
+    git(h, app, "worktree", "add", "-q", wt);
+    const sub = path.join(wt, "sub");
+    mkdirSync(sub);
+    // As the worktree's .git file names it: by its real path, as git writes it.
+    const main = realpathSync(app);
+    expect((await codexRoots(wt, [".git"])).worktree).toEqual({ main, hooks: path.join(main, ".codex") });
+    expect((await codexRoots(sub, [".git"])).worktree).toEqual({ main, hooks: path.join(main, "sub", ".codex") });
+    // The main checkout itself is no worktree.
+    expect((await codexRoots(app, [".git"])).worktree).toBeUndefined();
   });
 
   it("takes no .git folder without a HEAD for a root, and no repository for a submodule's .git file", async () => {

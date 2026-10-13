@@ -34,6 +34,22 @@ export function projectRootMarkers(config: Record<string, unknown> | undefined):
  * spelled; each once.
  */
 export async function codexTrustFolders(project: string, markers: readonly string[]): Promise<string[]> {
+  return (await codexRoots(project, markers)).folders;
+}
+
+/** A linked worktree as Codex reads one: its main checkout, and the `.codex` folder its hooks come from. */
+export type CodexWorktree = { main: string; hooks: string };
+
+/**
+ * `codexTrustFolders`, and when `project` is in a linked worktree, which Codex tells by a
+ * repository root that is not the checkout's (`root_checkout_hooks_folder_for_dir`): the main
+ * checkout, and the `.codex` folder at the project's place in it, whose hooks Codex runs in the
+ * worktree in place of the project's own (`merge_root_checkout_project_hooks`).
+ */
+export async function codexRoots(
+  project: string,
+  markers: readonly string[],
+): Promise<{ folders: string[]; worktree?: CodexWorktree }> {
   const dir = path.resolve(project);
   const byGit = markers.length === 1 && markers[0] === ".git";
   const [checkout, other] = await Promise.all([
@@ -46,7 +62,10 @@ export async function codexTrustFolders(project: string, markers: readonly strin
   const spelled = await Promise.all(
     folders.map(async (folder) => [await realPath(folder).catch(() => folder), folder]),
   );
-  return [...new Set(spelled.flat())];
+  const unique = [...new Set(spelled.flat())];
+  if (checkout === undefined || repository === undefined || repository === checkout) return { folders: unique };
+  const hooks = path.join(repository, path.relative(checkout, dir), ".codex");
+  return { folders: unique, worktree: { main: repository, hooks } };
 }
 
 /**

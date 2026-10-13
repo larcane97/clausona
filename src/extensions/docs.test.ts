@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -64,6 +65,7 @@ const TAGS = [
   "invalid front matter",
   "name too long",
   "no description",
+  "main checkout's runs",
   "invalid hooks file",
   "not supported",
   "empty command",
@@ -307,6 +309,22 @@ function seed() {
       'server = "s"',
       'tool = ""',
     ].join("\n"),
+  );
+  // A linked worktree of a trusted repo, as git keeps one, with a hook in its own .codex folder,
+  // which Codex does not run there. Codex's projects record both.
+  const main = h.path("repos", "main");
+  const wt = h.path("repos", "main-wt");
+  h.write("repos/main/.git/HEAD", "ref: refs/heads/main\n");
+  h.write("repos/main/.git/worktrees/wt/HEAD", "ref: refs/heads/wt\n");
+  h.write("repos/main/.git/worktrees/wt/gitdir", `${path.join(wt, ".git")}\n`);
+  h.write("repos/main/.git/worktrees/wt/commondir", "../..\n");
+  h.write("repos/main-wt/.git", `gitdir: ${path.join(main, ".git", "worktrees", "wt")}\n`);
+  h.write("repos/main-wt/.codex/hooks.json", {
+    hooks: { Stop: [{ hooks: [{ type: "command", command: "wt-done" }] }] },
+  });
+  h.write(
+    ".codex/config.toml",
+    `[projects.${JSON.stringify(main)}]\ntrust_level = "trusted"\n\n[projects.${JSON.stringify(wt)}]\n\n${readFileSync(h.path(".codex", "config.toml"), "utf8")}`,
   );
   h.skill(".agents/skills", "eli5");
   // Four SKILL.md files and a hooks file Codex skips.

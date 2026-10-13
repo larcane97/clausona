@@ -39,6 +39,7 @@ import {
   claudeFlag,
   claudeSkillOverride,
   codexTrusted,
+  codexWorktreeRuns,
   isManagedSetting,
   isMcpjsonServer,
   MANAGED_MCP_KEY,
@@ -448,6 +449,12 @@ function planRow(run: Run, row: ScopeRow): Outcome {
   }
   // Codex's plugins are switched and uninstalled in Codex; the rest of this file is Claude's.
   if (item.kind === "plugin" && loc.tool === "codex") return refused(run, row, "codex-plugin");
+  // A linked worktree's own hook, which Codex never runs there: its main checkout's runs instead.
+  // Deleting what clausona kept writes nothing under the worktree's .codex folder.
+  const runs = codexWorktreeRuns(run.inv, item);
+  if (runs !== undefined && !(verb === "rm" && item.stashed)) {
+    return refused(run, row, "codex-worktree-hook", { "~file": tilde(runs, run.inv.homeDir) });
+  }
   // A hook in a config.toml: clausona keeps hooks it takes out as JSON, and changes no TOML hook.
   if (item.kind === "hook" && loc.tool === "codex" && path.basename(loc.file) === "config.toml") {
     return refused(run, row, "codex-config-hook", { "~file": tilde(loc.file, run.inv.homeDir) });
@@ -1396,13 +1403,21 @@ function unreadableIn(run: Run, row: ScopeRow, out: Outcome): Outcome {
   return out;
 }
 
-/** The innermost project, not the home dir, that holds `file`. */
+/** The innermost project, not the home dir, or main checkout of a worktree, that holds `file`. */
 function projectOf(inv: Inventory, file: string): string {
-  const holding = inv.projects
-    .map((p) => p.path)
-    .filter((dir) => !samePath(dir, inv.homeDir) && isWithin(file, dir))
+  const holding = repoFolders(inv)
+    .filter((dir) => isWithin(file, dir))
     .sort((a, b) => pathKey(b).length - pathKey(a).length);
   return holding[0] ?? path.dirname(file);
+}
+
+/**
+ * The folders whose files a change can make to a repo: each project's but the home dir's, and
+ * the main checkout of a project in a linked worktree, whose hooks a worktree's rows change.
+ */
+function repoFolders(inv: Inventory): string[] {
+  const projects = inv.projects.map((p) => p.path).filter((dir) => !samePath(dir, inv.homeDir));
+  return [...projects, ...Object.values(inv.facts.codexWorktrees).map((worktree) => worktree.main)];
 }
 
 /**
@@ -1719,9 +1734,12 @@ export function plan(ctx: PlanContext, command: ExtensionsCommand, action: Actio
   };
 }
 
-/** The files and folders the plan touches that lie inside a project that is not the home dir: what trackedPaths needs. */
+/**
+ * The files and folders the plan touches that lie inside a project that is not the home dir, or
+ * in a worktree's main checkout (`repoFolders`): what trackedPaths needs.
+ */
 export function trackCandidates(plan: Plan, inv: Inventory): string[] {
-  const projects = inv.projects.map((p) => p.path).filter((dir) => !samePath(dir, inv.homeDir));
+  const projects = repoFolders(inv);
   const found = new Map<string, string>();
   for (const change of plan.changes) {
     for (const file of [change.file, ...change.lines.map((line) => line.file)]) {
