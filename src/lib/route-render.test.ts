@@ -543,10 +543,38 @@ describe("renderNoAccount", () => {
     expect(text).toMatch(/^ {4}claude:side\s+100% 1h\s+40% 3d\s+in 1h \(5H resets\) {3}soonest$/m);
     expect(text).toMatch(/^ {4}claude:personal\s+88% 2h\s+100% 2d\s+in 2d \(7D resets\)$/m);
     expect(text).toMatch(/^ {4}claude:old\s+signed out \(clausona login claude:old\)$/m);
-    expect(text).toContain("\n\n    Run again after 1h, or see everything with: clausona route explain main\n");
+    expect(text).toContain(
+      "\n\n    Run again after 1h or with --wait, or see everything with: clausona route explain main\n",
+    );
     // Soonest first; the skipped last.
     expect(text.indexOf("claude:side")).toBeLessThan(text.indexOf("claude:personal"));
     expect(text.indexOf("claude:personal")).toBeLessThan(text.indexOf("claude:old"));
+  });
+
+  it("offers a --wait long enough to reach the soonest reset", () => {
+    const weekly = rank({ tool: "claude", from: ["personal"] }, { "claude:personal": quota(88, 100, 2, 48) });
+    expect(plain(renderNoAccount("main", weekly, at(120)))).toContain(
+      "    Run again after 2d or with --wait=48h, or see everything with: clausona route explain main\n",
+    );
+  });
+
+  it("says why a --wait gave up: past its cap, its cap run out, or no reset known", () => {
+    const wait = (capMs: number, gaveUp: "past-cap" | "no-reset") => ({ ...at(200), wait: { capMs, gaveUp } });
+    const past = plain(renderNoAccount("main", busy, wait(30 * 60_000, "past-cap")));
+    expect(past).toContain(
+      "    Nothing comes free within the 30m wait. Wait longer with --wait=1h, run again after 1h, or see everything with: clausona route explain main\n",
+    );
+    const stale = rank({ tool: "claude", from: ["side"] }, { "claude:side": quota(100, 10, -1) });
+    expect(plain(renderNoAccount("main", stale, wait(90 * 60_000, "past-cap")))).toContain(
+      "    The 1h30m wait ran out before a quota reading showed an account free. Run again later, or see everything with: clausona route explain main\n",
+    );
+    const unknown = rank({ tool: "claude", from: ["side"] }, { "claude:side": quota(100, 10, null) });
+    expect(plain(renderNoAccount("main", unknown, wait(5 * 3_600_000, "no-reset")))).toContain(
+      "    No account above has a known reset time, so there is nothing to wait for. Run again later, or see everything with: clausona route explain main\n",
+    );
+    expect(plain(renderNoAccount("main", unknown, at(200)))).toContain(
+      "    Run again later, or see everything with: clausona route explain main\n",
+    );
   });
 
   // The same reading reads the same here as in explain: 79.6 is under the cut of 80.
@@ -580,7 +608,7 @@ describe("renderNoAccount", () => {
     const text = plain(renderNoAccount("main", r, at(120)));
     expect(text).toMatch(/^ {4}claude:team\s.*\s{2}now \(5H resets\)\s+soonest$/m);
     expect(text).toMatch(/^ {4}claude:work\s.*\s{2}in 2h \(5H resets\)$/m);
-    expect(text).toContain("\n    Run again now, or see everything with: clausona route explain main\n");
+    expect(text).toContain("\n    Run again now or with --wait, or see everything with: clausona route explain main\n");
     expect(text).not.toMatch(/\bin now\b|after now/);
   });
 
@@ -650,9 +678,10 @@ describe("renderNoAccount", () => {
     // Broken between its options at 80 columns, never inside one.
     const narrow = plain(renderNoAccount("main", r, { ...at(80), overrides, resume: true }));
     expect(widest(narrow)).toBeLessThanOrEqual(80);
-    expect(narrow.split("\n").slice(-3)).toEqual([
-      "    Run again after 1h, or see everything with: clausona route explain main",
-      "    --exclude 'o'\\''neil' --strategy headroom --max-usage 50 --resume",
+    expect(narrow.split("\n").slice(-4)).toEqual([
+      "    Run again after 1h or with --wait, or see everything with:",
+      "    clausona route explain main --exclude 'o'\\''neil' --strategy headroom",
+      "    --max-usage 50 --resume",
       "",
     ]);
   });
@@ -825,7 +854,7 @@ describe("terminal width", () => {
 
     columns(50, 200);
     expect(plain(renderNoAccount("main", busy, { now: NOW }))).toContain(
-      "    Run again after 1h, or see everything with: clausona route explain main\n",
+      "    Run again after 1h or with --wait, or see everything with: clausona route explain main\n",
     );
     expect(plain(renderRouteTable(rows, [], { now: NOW })).split("\n")[1]).not.toContain("TOOL");
   });
@@ -835,7 +864,7 @@ describe("terminal width", () => {
     expect(widest(renderNoAccount("main", busy, { now: NOW }))).toBeLessThanOrEqual(50);
     columns(undefined, undefined);
     expect(plain(renderNoAccount("main", busy, { now: NOW }))).toContain(
-      "    Run again after 1h, or see everything with: clausona route explain main\n",
+      "    Run again after 1h or with --wait, or see everything with: clausona route explain main\n",
     );
   });
 });

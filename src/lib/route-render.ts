@@ -33,6 +33,7 @@ import {
   wholeQuotaPercent,
 } from "./format.js";
 import type { GaveUp } from "./route-wait.js";
+import { DEFAULT_WAIT_MS } from "./run-args.js";
 
 /**
  * Text and JSON for routing. Pure: `now` and the terminal width come in, nothing is read. The
@@ -969,6 +970,12 @@ function freeAgainCell(row: Row, limit: number, at: string | null, now: number):
   return [[`${resetsIn(at, now)} (${resettingWindow(row, limit, at)} resets)`, secondary]];
 }
 
+/** The `--wait` that reaches a reset at `at`: the bare one within its 5h, else one of whole hours. */
+function waitReaching(at: string, now: number): string {
+  const ms = Date.parse(at) - now;
+  return ms <= DEFAULT_WAIT_MS ? "--wait" : `--wait=${Math.ceil(ms / 3_600_000)}h`;
+}
+
 /** A `--wait` cap as it is given: `30m`, `2h`, `1h30m`. */
 function capText(ms: number): string {
   const minutes = Math.round(ms / 60_000);
@@ -1072,6 +1079,11 @@ export function renderNoAccount(
     const longer = `--wait=${Math.ceil((Date.parse(soonest.at) - now) / 3_600_000)}h`;
     return `Nothing comes free within the ${cap} wait. Wait longer with ${longer}, run again ${again}, or see everything with: ${explain}`;
   };
+  // Without --wait: run again when the soonest is free, or let a --wait that reaches it do so.
+  const plainAdvice = () => {
+    const wait = soonest ? ` or with ${unbroken(waitReaching(soonest.at, now))}` : "";
+    return `Run again ${again}${wait}, or see everything with: ${explain}`;
+  };
   // Nobody held back by a limit, only skipped members: no reset frees them, and their reasons say what will.
   const advice = nothingRead(rows)
     ? `No quota could be read for any member: check the network, or run ${unbroken("clausona list --refresh")}.`
@@ -1079,7 +1091,7 @@ export function renderNoAccount(
       ? `Each account above says why it is skipped. See everything with: ${explain}`
       : gaveUp
         ? waitAdvice()
-        : `Run again ${again}, or see everything with: ${explain}`;
+        : plainAdvice();
   return [headline, "", ...fitTable(tables, width), "", ...wrap(advice, width, indent), ""].join("\n");
 }
 
