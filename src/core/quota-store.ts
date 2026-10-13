@@ -8,6 +8,8 @@ import type { ToolCredential } from "../tools/types.js";
 import type { QuotaSnapshot, QuotaWindows, ToolName } from "../types.js";
 import { acquireFileLock } from "./file-lock.js";
 import { cooldownUntil, isFresh, QUOTA_TIMEOUT_MS, QuotaHttpError } from "./quota.js";
+import type { Budget } from "./route-budgets.js";
+import { budgetWindow, periodStart, readSpend, type SpendEndpoint, withBaselines } from "./spend.js";
 
 const DEFAULT_CACHE_PATH = path.join(homedir(), ".clausona", "quota.json");
 
@@ -19,8 +21,11 @@ const LOCK_STALE_MS = 60 * 1000;
 
 type QuotaCache = {
   version: 1;
-  /** ms epoch until which a tool's endpoint is left alone after a 429. */
-  cooldowns: Partial<Record<ToolName, number>>;
+  /**
+   * ms epoch until which an endpoint is left alone after a 429: a tool's usage endpoint, by the
+   * tool's name, or an API profile's provider, by the profile's id.
+   */
+  cooldowns: Record<string, number>;
   profiles: Record<string, QuotaSnapshot>;
 };
 
@@ -103,7 +108,19 @@ export type QuotaTarget = {
   id: string;
   tool: ToolName;
   configDir: string;
+  /** An API profile's: its spend is read from its provider, instead of plan quota from the tool's. */
+  api?: ApiQuotaTarget;
 };
+
+export type ApiQuotaTarget = SpendEndpoint & {
+  /** Resolves the profile's key; called only when the cache cannot answer. */
+  readKey: () => Promise<string>;
+  /** The clausona budget, which replaces the provider key's limit. */
+  budget?: Budget;
+};
+
+/** The endpoint a 429 pauses: the tool's usage endpoint, or the API profile's own provider. */
+const cooldownKey = (target: QuotaTarget) => (target.api ? target.id : target.tool);
 
 /**
  * Renews under a lock, returning null when renewal is impossible or another process
@@ -128,14 +145,75 @@ async function renewCredential(
   });
 }
 
+/**
+ * A spend read that failed: the last reading's spend kept, for the periods it counts from, and
+ * nothing a route can use, since `state` says why it is not current.
+ */
+function unread(state: QuotaSnapshot["state"], cached: QuotaSnapshot | undefined, now: number): QuotaSnapshot {
+  if (!cached?.spend) return { state, fetchedAt: now };
+  return {
+    state,
+    fetchedAt: cached.fetchedAt,
+    spend: cached.spend,
+    ...(cached.budget ? { budget: cached.budget } : {}),
+  };
+}
+
+/**
+ * An API profile's snapshot with its `budget` window worked out again for the limit that applies
+ * now: a budget set or cleared since the reading counts at once.
+ */
+function withBudget(snapshot: QuotaSnapshot, api: ApiQuotaTarget, now: number): QuotaSnapshot {
+  if (snapshot.state !== "ok" || !snapshot.spend) return snapshot;
+  const { budget: _old, ...rest } = snapshot;
+  const budget = budgetWindow(snapshot.spend, api.budget, now);
+  return budget ? { ...rest, budget } : rest;
+}
+
+/** Reads an API profile's spend, as fetchOne reads plan quota, and the same failures say the same. */
+async function fetchSpend(
+  target: QuotaTarget & { api: ApiQuotaTarget },
+  cached: QuotaSnapshot | undefined,
+  now: number,
+  fetchImpl: typeof fetch,
+): Promise<{ snapshot: QuotaSnapshot; cooldown?: number }> {
+  let key: string;
+  try {
+    key = await target.api.readKey();
+  } catch {
+    return { snapshot: unread("missing", cached, now) };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), QUOTA_TIMEOUT_MS);
+  try {
+    const reading = await readSpend(target.api, key, { fetch: fetchImpl, signal: controller.signal, now });
+    // Kept like any failure, so that a run does not ask again on every launch.
+    if (!reading) return { snapshot: { state: "error", fetchedAt: now, noSpendReading: true } };
+    const spend = withBaselines(reading, cached?.spend, now);
+    return { snapshot: withBudget({ state: "ok", fetchedAt: now, spend }, target.api, now) };
+  } catch (error) {
+    if (error instanceof QuotaHttpError) {
+      if (error.status === 401 || error.status === 403) return { snapshot: unread("expired", cached, now) };
+      if (error.status === 429) {
+        return { snapshot: unread("cooldown", cached, now), cooldown: cooldownUntil(error.retryAfter, now) };
+      }
+    }
+    return { snapshot: unread("error", cached, now) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchOne(
   target: QuotaTarget,
   cache: QuotaCache,
   now: number,
   allowRenew: boolean,
   lockDir: string,
+  fetchImpl: typeof fetch,
 ): Promise<{ snapshot: QuotaSnapshot; cooldown?: number }> {
   const cached = cache.profiles[target.id];
+  if (target.api) return fetchSpend({ ...target, api: target.api }, cached, now, fetchImpl);
   const adapter = getAdapter(target.tool);
 
   if (!adapter.readCredential || !adapter.fetchQuota) {
@@ -204,10 +282,21 @@ async function fetchOne(
  * Never throws and never rejects: a profile that cannot be resolved comes back with
  * a failure state instead. `refresh` reads every entry again; `refreshBefore` (ms epoch)
  * only those fetched before then, so a reading another process took since is reused.
+ *
+ * An API profile's target reads its spend instead (spend.ts), with `fetch` - the global one
+ * unless given - and comes back with a `budget` window for the limit that applies. A cached
+ * reading from before its budget's period began is read again.
  */
 export async function collectQuotas(
   targets: QuotaTarget[],
-  options: { refresh?: boolean; refreshBefore?: number; renew?: boolean; now?: number; cachePath?: string } = {},
+  options: {
+    refresh?: boolean;
+    refreshBefore?: number;
+    renew?: boolean;
+    now?: number;
+    cachePath?: string;
+    fetch?: typeof fetch;
+  } = {},
 ): Promise<Record<string, QuotaSnapshot>> {
   if (targets.length === 0) return {};
 
@@ -219,16 +308,19 @@ export async function collectQuotas(
   const pending: QuotaTarget[] = [];
   for (const target of targets) {
     const cached = cache.profiles[target.id];
+    const budget = target.api?.budget;
     const outdated = (snapshot: QuotaSnapshot) =>
-      options.refresh || snapshot.fetchedAt < (options.refreshBefore ?? Number.NEGATIVE_INFINITY);
+      options.refresh ||
+      snapshot.fetchedAt < (options.refreshBefore ?? Number.NEGATIVE_INFINITY) ||
+      (budget !== undefined && snapshot.fetchedAt < Date.parse(periodStart(now, budget.per)));
     if (cached && !outdated(cached) && isFresh(cached, now)) {
-      result[target.id] = cached;
+      result[target.id] = target.api ? withBudget(cached, target.api, now) : cached;
       continue;
     }
 
-    const cooldownUntilMs = cache.cooldowns[target.tool] ?? 0;
+    const cooldownUntilMs = cache.cooldowns[cooldownKey(target)] ?? 0;
     if (cooldownUntilMs > now) {
-      result[target.id] = degraded("cooldown", cached, now);
+      result[target.id] = target.api ? unread("cooldown", cached, now) : degraded("cooldown", cached, now);
       continue;
     }
 
@@ -239,7 +331,10 @@ export async function collectQuotas(
 
   const allowRenew = options.renew ?? true;
   const lockDir = path.join(path.dirname(cachePath), "locks");
-  const settled = await Promise.all(pending.map((target) => fetchOne(target, cache, now, allowRenew, lockDir)));
+  const fetchImpl = options.fetch ?? fetch;
+  const settled = await Promise.all(
+    pending.map((target) => fetchOne(target, cache, now, allowRenew, lockDir, fetchImpl)),
+  );
 
   pending.forEach((target, index) => {
     const { snapshot, cooldown } = settled[index];
@@ -247,11 +342,26 @@ export async function collectQuotas(
     cache.profiles[target.id] = snapshot;
     if (cooldown !== undefined) {
       // One 429 pauses the whole tool: the limit is per-IP, not per-account, so
-      // retrying with a different profile's token would only extend the block.
-      cache.cooldowns[target.tool] = Math.max(cache.cooldowns[target.tool] ?? 0, cooldown);
+      // retrying with a different profile's token would only extend the block. An API
+      // profile's provider is its own, and pauses only that profile.
+      const key = cooldownKey(target);
+      cache.cooldowns[key] = Math.max(cache.cooldowns[key] ?? 0, cooldown);
     }
   });
 
   await writeCache(cachePath, cache);
   return result;
+}
+
+/**
+ * What the cache holds for these profiles, with nothing fetched and no key read: how `list` and
+ * the dashboard show an API profile's last spend reading.
+ */
+export async function cachedQuotas(
+  ids: string[],
+  options: { cachePath?: string } = {},
+): Promise<Record<string, QuotaSnapshot>> {
+  if (ids.length === 0) return {};
+  const cache = await readCache(options.cachePath ?? DEFAULT_CACHE_PATH);
+  return Object.fromEntries(ids.flatMap((id) => (Object.hasOwn(cache.profiles, id) ? [[id, cache.profiles[id]]] : [])));
 }

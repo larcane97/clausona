@@ -5,12 +5,12 @@ import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 import type { ToolAdapter, ToolCredential } from "../tools/types.js";
 import type { QuotaSnapshot } from "../types.js";
-import { QuotaHttpError } from "./quota.js";
+import { QUOTA_FRESH_MS, QuotaHttpError } from "./quota.js";
 
 const getAdapter = vi.hoisted(() => vi.fn());
 vi.mock("../tools/registry.js", () => ({ getAdapter }));
 
-const { collectQuotas } = await import("./quota-store.js");
+const { cachedQuotas, collectQuotas } = await import("./quota-store.js");
 
 const NOW = 1_800_000_000_000;
 const TARGET = { id: "claude:work", tool: "claude" as const, configDir: "/tmp/.claude-work" };
@@ -341,5 +341,113 @@ describe("collectQuotas", () => {
     const result: Record<string, QuotaSnapshot> = await collectQuotas([TARGET], { now: NOW, cachePath });
 
     expect(result[TARGET.id]?.state).toBe("missing");
+  });
+});
+
+describe("collectQuotas: an API profile's spend", () => {
+  // Wednesday 2026-10-14 in UTC, so a month and a week are under way.
+  const AT = Date.parse("2026-10-14T09:30:00.000Z");
+  // Built from pieces so the source never holds a key-shaped string.
+  const KEY = ["sk", "gw", "Hd5Rk8Vn3Jc6"].join("-");
+
+  /** A stand-in fetch: no test reaches a network. */
+  function stubFetch(status: number, body: unknown, headers: Record<string, string> = {}) {
+    return vi.fn(async () => new Response(JSON.stringify(body), { status, headers }));
+  }
+
+  const apiTarget = (budget?: { usd: number; per: "day" | "week" | "month" }) => ({
+    id: "claude:gw",
+    tool: "claude" as const,
+    configDir: "/tmp/.claude-gw",
+    api: {
+      baseUrl: "https://gw.example.com",
+      authScheme: "bearer" as const,
+      readKey: vi.fn(async () => KEY),
+      ...(budget ? { budget } : {}),
+    },
+  });
+
+  const collect = (target: ReturnType<typeof apiTarget>, fetch: ReturnType<typeof stubFetch>, now = AT) =>
+    collectQuotas([target], { now, cachePath, fetch: fetch as unknown as typeof globalThis.fetch });
+
+  it("reads the spend, caches it as a budget window, and keeps the key out of the cache", async () => {
+    const fetch = stubFetch(200, { info: { spend: 12, max_budget: 40 } });
+    const result = await collect(apiTarget(), fetch);
+    expect(result["claude:gw"]).toMatchObject({
+      state: "ok",
+      budget: { usedPercent: 30, spentUsd: 12, limitUsd: 40, source: "provider" },
+    });
+    const cached = readFileSync(cachePath, "utf8");
+    expect(JSON.parse(cached).profiles["claude:gw"].budget.usedPercent).toBe(30);
+    expect(cached).not.toContain(KEY);
+    expect(getAdapter).not.toHaveBeenCalled();
+  });
+
+  it("serves a fresh reading again for the limit that applies now, without asking or reading the key", async () => {
+    const target = apiTarget();
+    await collect(target, stubFetch(200, { info: { spend: 12, max_budget: 40 } }));
+    const fetch = stubFetch(500, {});
+    const budgeted = apiTarget({ usd: 20, per: "month" });
+    const result = await collect(budgeted, fetch, AT + 60_000);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(budgeted.api.readKey).not.toHaveBeenCalled();
+    // The first reading this month is where a budget counts from.
+    expect(result["claude:gw"]?.budget).toMatchObject({ spentUsd: 0, limitUsd: 20, source: "budget" });
+  });
+
+  it("reads again a cached reading from before its budget's period began", async () => {
+    await collect(apiTarget(), stubFetch(200, { info: { spend: 12 } }), Date.parse("2026-10-13T23:58:00.000Z"));
+    const fetch = stubFetch(200, { info: { spend: 13 } });
+    await collect(apiTarget({ usd: 5, per: "day" }), fetch, Date.parse("2026-10-14T00:01:00.000Z"));
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("caches a provider that gives no spend reading, so the next run does not ask again", async () => {
+    const result = await collect(apiTarget({ usd: 20, per: "month" }), stubFetch(404, { detail: "Not Found" }));
+    expect(result["claude:gw"]).toEqual({ state: "error", fetchedAt: AT, noSpendReading: true });
+    const fetch = stubFetch(404, {});
+    await collect(apiTarget({ usd: 20, per: "month" }), fetch, AT + 60_000);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the last reading's spend through a failure, and pauses only this profile after a 429", async () => {
+    await collect(apiTarget(), stubFetch(200, { info: { spend: 12, max_budget: 40 } }));
+    const result = await collect(apiTarget(), stubFetch(429, {}, { "retry-after": "600" }), AT + QUOTA_FRESH_MS);
+    expect(result["claude:gw"]).toMatchObject({ state: "cooldown", fetchedAt: AT, spend: { totalUsd: 12 } });
+    expect(readCacheFile().cooldowns).toEqual({ "claude:gw": AT + QUOTA_FRESH_MS + 600_000 });
+    const fetch = stubFetch(200, { info: { spend: 13 } });
+    expect((await collect(apiTarget(), fetch, AT + QUOTA_FRESH_MS + 1000))["claude:gw"]?.state).toBe("cooldown");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("says a key that cannot be read is missing, and a rejected one expired, without a request for the first", async () => {
+    const fetch = stubFetch(200, { info: { spend: 1 } });
+    const target = apiTarget();
+    target.api.readKey.mockRejectedValueOnce(new Error("environment variable GW_KEY is unset or empty"));
+    expect((await collect(target, fetch))["claude:gw"]?.state).toBe("missing");
+    expect(fetch).not.toHaveBeenCalled();
+    const rejected = await collectQuotas([apiTarget()], {
+      now: AT,
+      cachePath,
+      refresh: true,
+      fetch: stubFetch(401, {}) as unknown as typeof globalThis.fetch,
+    });
+    expect(rejected["claude:gw"]?.state).toBe("expired");
+  });
+});
+
+describe("cachedQuotas", () => {
+  it("returns what the cache holds for the ids asked, and fetches nothing", async () => {
+    seedCache({
+      version: 1,
+      cooldowns: {},
+      profiles: {
+        "claude:gw": { state: "ok", fetchedAt: NOW - 3_600_000 },
+        [TARGET.id]: { state: "ok", fetchedAt: NOW },
+      },
+    });
+    expect(await cachedQuotas(["claude:gw", "claude:none", "constructor"], { cachePath })).toEqual({
+      "claude:gw": { state: "ok", fetchedAt: NOW - 3_600_000 },
+    });
   });
 });
