@@ -740,7 +740,12 @@ export function budgetRowOf(
 /** Why a row has no usage, after its budget when it has one, as a list line says it. */
 export function budgetNote(row: BudgetRow): string {
   if (row.window) return spendText(row.window);
-  return `${row.budget ? `${budgetText(row.budget)} (clausona budget); ` : ""}${budgetReason(row) ?? ""}`;
+  return reasonParts(row).join("");
+}
+
+/** Why a row has no usage, as its parts: its budget when it has one, then the reason (budgetReason's `keep`). */
+function reasonParts(row: BudgetRow, keep?: (command: string) => string): [budget: string, reason: string] {
+  return [row.budget ? `${budgetText(row.budget)} (clausona budget); ` : "", budgetReason(row, keep) ?? ""];
 }
 
 const UNREAD_WORDS: Record<Exclude<QuotaState, "ok">, string> = {
@@ -753,8 +758,12 @@ const UNREAD_WORDS: Record<Exclude<QuotaState, "ok">, string> = {
 };
 
 /** Why a row has no usage, as `route budget` says it; undefined when it has one. */
-export function budgetReason(row: Pick<BudgetRow, "id" | "spend" | "unread">): string | undefined {
-  if (row.spend === "no-limit") return `no spend limit: ${budgetCommand(row.id)}`;
+export function budgetReason(
+  row: Pick<BudgetRow, "id" | "spend" | "unread">,
+  /** How the command a reason names is put: as it is, or kept on one line (`unbroken`). */
+  keep: (command: string) => string = (command) => command,
+): string | undefined {
+  if (row.spend === "no-limit") return `no spend limit: ${keep(budgetCommand(row.id))}`;
   if (row.spend === "not-reported") return "the provider does not report spend";
   if (row.spend === "unread") return `spend could not be read: ${UNREAD_WORDS[row.unread ?? "error"]}`;
   return undefined;
@@ -787,19 +796,19 @@ function usageCell(window: BudgetWindow): Cell {
   return [[percent, (text) => (text === percent ? styled : text)]];
 }
 
+/** The reason's style: a reading that failed needs a look, the others are as they are. */
+const reasonStyle = (row: BudgetRow): Style => (row.spend === "unread" ? yellow : dim);
+
 /**
  * A row of the table: its columns when it has a usage, else its profile and, across the rest, why
  * not, after its budget when it has one.
  */
-/** Why a row has no usage, after its budget when it has one: a cell across the columns. */
-function budgetReasonCell(row: BudgetRow): Cell {
-  const before = row.budget ? `${budgetText(row.budget)} (clausona budget); ` : "";
-  return [[before], [budgetReason(row) ?? "", row.spend === "unread" ? yellow : dim]];
-}
-
 function budgetTableRow(row: BudgetRow, keys: BudgetColumn[], now: number): TableRow {
   const { window } = row;
-  if (!window) return { span: [[[row.id]], budgetReasonCell(row)] };
+  if (!window) {
+    const [budget, reason] = reasonParts(row);
+    return { span: [[[row.id]], [[budget], [reason, reasonStyle(row)]]] };
+  }
   const cells: Record<BudgetColumn, Cell> = {
     profile: [[row.id]],
     limit: [[limitText(window)]],
@@ -864,12 +873,9 @@ export function renderBudgets(
     ...chosen,
     rows: chosen.rows.map((row, i) => {
       if ("cells" in row || cellLength(row.span[1]) <= across) return row;
-      const each = rows[i];
-      const style = each.spend === "unread" ? yellow : dim;
       // The command a reason names is kept on one line while it fits on one.
-      const reason =
-        each.spend === "no-limit" ? `no spend limit: ${unbroken(budgetCommand(each.id))}` : (budgetReason(each) ?? "");
-      const text = `${each.budget ? `${budgetText(each.budget)} (clausona budget); ` : ""}${reason}`;
+      const text = reasonParts(rows[i], unbroken).join("");
+      const style = reasonStyle(rows[i]);
       under.set(
         i,
         wrap(text, room, " ".repeat(INDENT + 2)).map((line) => style(line)),
