@@ -108,6 +108,16 @@ describe("strategies", () => {
     expect(order).toEqual(["claude:b", "claude:c", "claude:a", "claude:b"]);
   });
 
+  it("round-robin puts a member never picked ahead of one picked, whatever its usage", () => {
+    // a has the highest usage of the three, and goes first as the only one never picked.
+    const lastPicked = { "claude:b": inHours(-3), "claude:c": inHours(-1) };
+    expect(rank({ strategy: "round-robin" }, quotas, { lastPicked }).outcome).toMatchObject({ id: "claude:a" });
+    // Two never picked: the lower usage of those two, not b, who was picked longest ago.
+    expect(
+      rank({ strategy: "round-robin" }, quotas, { lastPicked: { "claude:b": inHours(-3) } }).outcome,
+    ).toMatchObject({ id: "claude:c" });
+  });
+
   it("expiring picks a weekly window that resets within 24 hours", () => {
     const soon = { ...quotas, "claude:a": snap(20, 70, { weekly: { usedPercent: 70, resetsAt: inHours(10) } }) };
     expect(rank({ strategy: "expiring" }, soon).outcome).toEqual({
@@ -145,6 +155,28 @@ describe("stages", () => {
       stage: "fallback",
       reason: "first fallback under 80%",
     });
+  });
+
+  it("takes the fallback in the order it is listed, not by name or usage", () => {
+    const ranking = rank(
+      { from: ["a"], fallback: ["c", "b"] },
+      { "claude:a": snap(90, 0), "claude:b": snap(10, 10), "claude:c": snap(50, 50) },
+    );
+    expect(ranking.outcome).toMatchObject({ id: "claude:c", stage: "fallback" });
+  });
+
+  it("takes a glob fallback's matches in name order", () => {
+    const ranking = rank(
+      { from: ["a"], fallback: ["*"] },
+      { "claude:a": snap(90, 0), "claude:b": snap(50, 50), "claude:c": snap(10, 10) },
+      { members: [C, B, A] },
+    );
+    expect(ranking.rows.map((row) => [row.id, row.role])).toEqual([
+      ["claude:a", "pool"],
+      ["claude:b", "fallback"],
+      ["claude:c", "fallback"],
+    ]);
+    expect(ranking.outcome).toMatchObject({ id: "claude:b", stage: "fallback" });
   });
 
   it("uses the member with the most left when everyone is over the cut", () => {
@@ -368,5 +400,24 @@ describe("blockingReset", () => {
       { members: [A] },
     );
     expect(blockingReset(ranking.rows[0], 95)).toBe(inHours(30));
+  });
+
+  it("is null when a window at or above the limit has no reset time", () => {
+    const ranking = rank(
+      {},
+      {
+        "claude:a": snap(97, 98, {
+          session: { usedPercent: 97, resetsAt: inHours(2) },
+          weekly: { usedPercent: 98, resetsAt: null },
+        }),
+      },
+      { members: [A] },
+    );
+    expect(blockingReset(ranking.rows[0], 95)).toBeNull();
+  });
+
+  it("is null when no window is at or above the limit", () => {
+    const ranking = rank({}, { "claude:a": snap(94, 50) }, { members: [A] });
+    expect(blockingReset(ranking.rows[0], 95)).toBeNull();
   });
 });
