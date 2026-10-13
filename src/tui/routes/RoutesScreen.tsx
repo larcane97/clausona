@@ -2,18 +2,34 @@ import { Box, type Key, Text, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { QuotaTarget } from "../../core/quota-store.js";
-import { DEFAULT_MAX_USAGE, type RouteSpec, type RoutesFile, withDefaults } from "../../core/route-config.js";
+import {
+  type BrokenRoute,
+  DEFAULT_MAX_USAGE,
+  type RouteSpec,
+  type RoutesFile,
+  withDefaults,
+} from "../../core/route-config.js";
 import { expandPatterns } from "../../core/route-patterns.js";
+import {
+  clearDefaultRoute,
+  clearDirRoute,
+  readRules,
+  routeProblem,
+  ruleWarnings,
+  SLOT_TOOLS,
+  type Slots,
+} from "../../core/route-rules.js";
 import { RoutesFileError } from "../../core/routes-store.js";
 import { type Ranking, rankRoute } from "../../core/routing.js";
 import { freeNow, nothingRead } from "../../lib/route-render.js";
 import { membersOf, quotaTargets } from "../../lib/route-service.js";
-import type { QuotaSnapshot, Registry } from "../../types.js";
+import type { QuotaSnapshot, Registry, ToolName } from "../../types.js";
 import { Chrome } from "../components/Chrome.js";
 import { color, symbol } from "../theme.js";
 import { useWidth } from "../use-width.js";
 import { type Entry, GAP, MARK, RouteDetail, Setting } from "./RouteDetail.js";
 import { formAccounts, RouteForm } from "./RouteForm.js";
+import { RuleForm, type RuleTarget } from "./RuleForm.js";
 import { defaultRoutesScreenDeps, errorText, type RoutesListDeps } from "./routes-deps.js";
 
 /**
@@ -33,6 +49,7 @@ const HINTS = [
   { keys: "e", action: "edit" },
   { keys: "d", action: "delete" },
   { keys: "r", action: "refresh" },
+  { keys: "tab", action: "dir rules" },
   { keys: "esc", action: "back" },
 ];
 const CONFIRM_HINTS = [
@@ -42,15 +59,32 @@ const CONFIRM_HINTS = [
 /** With no routes there is nothing to move to, edit, delete or refresh. */
 const EMPTY_HINTS = [
   { keys: "n", action: "new" },
+  { keys: "tab", action: "dir rules" },
   { keys: "esc", action: "back" },
 ];
 const BACK_HINTS = [{ keys: "esc", action: "back" }];
+/** The dir rules view: the defaults' row is always there, so every key has something to act on. */
+const RULE_HINTS = [
+  { keys: "↑↓", action: "move" },
+  { keys: "n", action: "new" },
+  { keys: "e", action: "edit" },
+  { keys: "d", action: "clear" },
+  { keys: "tab", action: "routes" },
+  { keys: "esc", action: "back" },
+];
+const CLEAR_HINTS = [
+  { keys: "y", action: "clear" },
+  { keys: "n/esc", action: "cancel" },
+];
 
 type Loaded =
   | { kind: "loading" }
   | { kind: "broken"; error: unknown }
-  /** `broken` counts the routes routes.json holds that cannot be used, which are not listed. */
-  | { kind: "ready"; file: RoutesFile; broken: number; registry: Registry | null };
+  /** `broken` are the routes routes.json holds that cannot be used, which are not listed. */
+  | { kind: "ready"; file: RoutesFile; broken: BrokenRoute[]; registry: Registry | null };
+
+/** A row of the dir rules view: a dir rule, or the defaults (always last, and always there). */
+type RuleEntry = { target: Exclude<RuleTarget, { kind: "new" }>; label: string; slots: Slots };
 
 /** One quota read, and the pick record as it was then. */
 type Reading = { quotas: Record<string, QuotaSnapshot>; lastPicked: Record<string, string>; now: number };
@@ -94,6 +128,26 @@ function targetsOf(file: RoutesFile, registry: Registry | null): QuotaTarget[] {
   return [...targets.values()];
 }
 
+/** The dir rules, then the defaults, as the rules view lists them. */
+function ruleEntries(rules: ReturnType<typeof readRules>): RuleEntry[] {
+  return [
+    ...rules.dirs.map(
+      (rule): RuleEntry => ({ target: { kind: "dir", dir: rule.dir }, label: rule.dir, slots: rule.slots }),
+    ),
+    { target: { kind: "defaults" }, label: "default", slots: rules.defaults },
+  ];
+}
+
+/** The route each slot names, for the form to start from; a slot that cannot be read starts at none. */
+function slotRoutes(slots: Slots): Partial<Record<ToolName, string>> {
+  return Object.fromEntries(
+    SLOT_TOOLS.flatMap((tool) => {
+      const slot = slots[tool];
+      return slot && "route" in slot ? [[tool, slot.route]] : [];
+    }),
+  );
+}
+
 /** The line that says routes are left out, and where to see why: `route list` lists each problem. */
 function brokenNotice(count: number): string {
   const what = count === 1 ? "a route" : `${count} routes`;
@@ -129,6 +183,13 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   const [removing, setRemoving] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [form, setForm] = useState<FormOpen | null>(null);
+  /** Which list is on screen: the routes, or the dir rules and defaults. */
+  const [view, setView] = useState<"routes" | "rules">("routes");
+  const [ruleCursor, setRuleCursor] = useState(0);
+  const [clearing, setClearing] = useState<RuleEntry | null>(null);
+  const [ruleForm, setRuleForm] = useState<{ target: RuleTarget; slots: Partial<Record<ToolName, string>> } | null>(
+    null,
+  );
   /** Quota of the accounts no route took, read for the form: they are on its rows. */
   const [extra, setExtra] = useState<Record<string, QuotaSnapshot>>({});
   const columns = useColumns();
@@ -164,7 +225,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
           return;
         }
         // Painted at once; the quota follows.
-        setLoaded({ kind: "ready", file, broken: broken.length, registry });
+        setLoaded({ kind: "ready", file, broken, registry });
         await rank(file, registry, false);
       } catch (error) {
         if (alive.current) setLoaded({ kind: "broken", error });
@@ -183,6 +244,18 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   );
   const index = Math.min(cursor, Math.max(0, entries.length - 1));
   const selected = entries[index];
+  const rules = useMemo(
+    () => (loaded.kind === "ready" ? readRules(loaded.file, io.system.platform) : null),
+    [loaded, io],
+  );
+  const rows = useMemo(() => (rules ? ruleEntries(rules) : []), [rules]);
+  /** What is wrong with the rules, as `clausona route list` warns about it. */
+  const ruleNotes = useMemo(
+    () =>
+      rules && loaded.kind === "ready" ? [...rules.problems, ...ruleWarnings(loaded.file, loaded.broken, rules)] : [],
+    [rules, loaded],
+  );
+  const ruleIndex = Math.min(ruleCursor, Math.max(0, rows.length - 1));
 
   async function remove(name: string) {
     try {
@@ -195,7 +268,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
       });
       if (!alive.current) return;
       // A file written has nothing left that cannot be used; one left alone has what it had.
-      setLoaded((prev) => (prev.kind === "ready" ? { ...prev, file, broken: written ? 0 : prev.broken } : prev));
+      setLoaded((prev) => (prev.kind === "ready" ? { ...prev, file, broken: written ? [] : prev.broken } : prev));
       setCursor((prev) => Math.max(0, Math.min(prev, Object.keys(file.routes).length - 1)));
     } catch (error) {
       if (!alive.current) return;
@@ -235,15 +308,62 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
     try {
       const { file, broken } = await io.loadRoutes();
       if (!alive.current) return;
-      if (saved === null && JSON.stringify(file) === JSON.stringify(loaded.file) && broken.length === loaded.broken) {
+      if (
+        saved === null &&
+        JSON.stringify(file) === JSON.stringify(loaded.file) &&
+        broken.length === loaded.broken.length
+      ) {
         return;
       }
-      setLoaded({ kind: "ready", file, broken: broken.length, registry });
+      setLoaded({ kind: "ready", file, broken, registry });
       setCursor(Math.max(0, keep === undefined ? 0 : Object.keys(file.routes).sort().indexOf(keep)));
       await rank(file, registry, false);
     } catch (error) {
       if (alive.current) setLoaded({ kind: "broken", error });
     }
+  }
+
+  /** routes.json read again after the rule form, or a rule cleared, wrote it. */
+  async function reload() {
+    if (loaded.kind !== "ready") return;
+    const { registry } = loaded;
+    try {
+      const { file, broken } = await io.loadRoutes();
+      if (!alive.current) return;
+      setLoaded({ kind: "ready", file, broken, registry });
+      await rank(file, registry, false);
+    } catch (error) {
+      if (alive.current) setLoaded({ kind: "broken", error });
+    }
+  }
+
+  async function clearRule(entry: RuleEntry) {
+    try {
+      await io.updateRoutes((current) => {
+        const cleared =
+          entry.target.kind === "defaults"
+            ? clearDefaultRoute(current, SLOT_TOOLS)
+            : clearDirRoute(current, undefined, (stored) => stored === entry.label);
+        return cleared.length ? current : null;
+      });
+      if (alive.current) await reload();
+    } catch (error) {
+      if (!alive.current) return;
+      if (error instanceof RoutesFileError) setLoaded({ kind: "broken", error });
+      else setMessage(`${symbol.cross} ${errorText(error)}`);
+    }
+  }
+
+  /** The keys of the dir rules view. */
+  function handleRules(input: string, key: Key) {
+    const count = rows.length;
+    const entry = rows[ruleIndex];
+    if (key.tab) setView("routes");
+    else if (key.upArrow) setRuleCursor((ruleIndex - 1 + count) % count);
+    else if (key.downArrow) setRuleCursor((ruleIndex + 1) % count);
+    else if (input === "n") setRuleForm({ target: { kind: "new" }, slots: {} });
+    else if (input === "e" && entry) setRuleForm({ target: entry.target, slots: slotRoutes(entry.slots) });
+    else if (input === "d" && entry && Object.keys(entry.slots).length > 0) setClearing(entry);
   }
 
   const handle = (input: string, key: Key) => {
@@ -253,6 +373,11 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
       if (input === "y" || input === "Y") void remove(removing);
       return;
     }
+    if (clearing) {
+      setClearing(null);
+      if (input === "y" || input === "Y") void clearRule(clearing);
+      return;
+    }
     if (key.escape) {
       onExit();
       return;
@@ -260,6 +385,14 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
     // Loading, or a routes.json that cannot be used: esc is the only key.
     if (loaded.kind !== "ready") return;
     setMessage("");
+    if (view === "rules") {
+      handleRules(input, key);
+      return;
+    }
+    if (key.tab) {
+      setView("rules");
+      return;
+    }
     const count = entries.length;
     if (key.upArrow && count > 0) setCursor((index - 1 + count) % count);
     else if (key.downArrow && count > 0) setCursor((index + 1) % count);
@@ -278,19 +411,32 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
     handler.current = handle;
   });
   const onInput = useCallback((input: string, key: Key) => handler.current(input, key), []);
-  // The form answers its own keys.
-  useInput(onInput, { isActive: form === null });
+  // The forms answer their own keys.
+  useInput(onInput, { isActive: form === null && ruleForm === null });
 
-  const question = removing ? `Remove route ${removing}? (y/N)` : undefined;
-  const notice = loaded.kind === "ready" && loaded.broken > 0 ? brokenNotice(loaded.broken) : "";
-  const footer = [notice, refreshing ? "Reading quota again…" : message];
+  const question = removing
+    ? `Remove route ${removing}? (y/N)`
+    : clearing
+      ? clearing.target.kind === "defaults"
+        ? "Clear the defaults? (y/N)"
+        : `Clear the dir rule for ${clearing.label}? (y/N)`
+      : undefined;
+  const notice = loaded.kind === "ready" && loaded.broken.length > 0 ? brokenNotice(loaded.broken.length) : "";
+  // Said on the routes list, where the rules are out of sight.
+  const rulesNotice =
+    view === "routes" && ruleNotes.length > 0 ? "⚠ A dir rule or default needs a look: tab shows it." : "";
+  const footer = [notice, rulesNotice, refreshing ? "Reading quota again…" : message];
   const hints = removing
     ? CONFIRM_HINTS
-    : loaded.kind !== "ready"
-      ? BACK_HINTS
-      : entries.length === 0
-        ? EMPTY_HINTS
-        : HINTS;
+    : clearing
+      ? CLEAR_HINTS
+      : loaded.kind !== "ready"
+        ? BACK_HINTS
+        : view === "rules"
+          ? RULE_HINTS
+          : entries.length === 0
+            ? EMPTY_HINTS
+            : HINTS;
 
   if (loaded.kind !== "ready") {
     return (
@@ -300,6 +446,42 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
         ) : (
           <FileProblem error={loaded.error} />
         )}
+      </Chrome>
+    );
+  }
+
+  if (ruleForm) {
+    return (
+      <RuleForm
+        {...ruleForm}
+        routes={Object.keys(loaded.file.routes)
+          .sort()
+          .map((name) => ({ name, tool: loaded.file.routes[name].tool }))}
+        deps={io}
+        onDone={(saved) => {
+          setRuleForm(null);
+          if (saved) void reload();
+        }}
+      />
+    );
+  }
+
+  if (view === "rules") {
+    return (
+      <Chrome title="Routes" subtitle="Dir rules" footer={footer} question={question} hints={hints}>
+        <Box flexDirection="column" borderStyle="round" borderColor={color.dim} paddingX={1}>
+          <RuleList entries={rows} index={ruleIndex} file={loaded.file} broken={loaded.broken} />
+        </Box>
+        <Box flexDirection="column" marginTop={1}>
+          <Text color={color.muted}>
+            A run with no route takes the deepest dir rule that holds for its directory, then the default.
+          </Text>
+          {ruleNotes.map((note) => (
+            <Text key={note} color={color.warning}>
+              {`⚠ ${note}`}
+            </Text>
+          ))}
+        </Box>
       </Chrome>
     );
   }
@@ -467,6 +649,75 @@ function RouteList({ entries, index, pending }: { entries: Entry[]; index: numbe
                 {counts[i].padStart(countWidth)}
               </Text>
             </Box>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
+/**
+ * The dir rules and the defaults, a row each: the directory, and the route each tool's slot
+ * names. A slot whose route cannot be used there is in the warning colour, `?` when it cannot be
+ * read; `—` is none.
+ */
+function RuleList({
+  entries,
+  index,
+  file,
+  broken,
+}: {
+  entries: RuleEntry[];
+  index: number;
+  file: RoutesFile;
+  broken: BrokenRoute[];
+}) {
+  const [list, width] = useWidth();
+  const cell = (slots: Slots, tool: ToolName): { text: string; usable: boolean } => {
+    const slot = slots[tool];
+    if (!slot) return { text: "—", usable: true };
+    if ("problem" in slot) return { text: "?", usable: false };
+    return { text: slot.route, usable: routeProblem(file, broken, tool, slot.route) === null };
+  };
+  const cells = entries.map((entry) => SLOT_TOOLS.map((tool) => cell(entry.slots, tool)));
+  const slotWidth = Math.max("CLAUDE".length, ...cells.flat().map((each) => each.text.length));
+  const longest = Math.max("DIRECTORY".length, ...entries.map((entry) => entry.label.length));
+  const labelWidth = Math.max(1, Math.min(longest, width - MARK - 2 * (GAP + slotWidth)));
+  return (
+    <Box ref={list} flexDirection="column">
+      <Box flexDirection="row">
+        <Box width={MARK + labelWidth} flexShrink={0}>
+          <Text color={color.muted}>{" ".repeat(MARK)}DIRECTORY</Text>
+        </Box>
+        {["CLAUDE", "CODEX"].map((label) => (
+          <Box key={label} width={slotWidth} marginLeft={GAP} flexShrink={0}>
+            <Text color={color.muted}>{label}</Text>
+          </Box>
+        ))}
+      </Box>
+      {entries.map((entry, i) => {
+        const focused = i === index;
+        return (
+          <Box key={entry.label} flexDirection="row">
+            <Box width={MARK} flexShrink={0}>
+              <Text color={focused ? color.cursor : color.dim}>{focused ? "▸" : " "}</Text>
+            </Box>
+            <Box width={labelWidth} flexShrink={0}>
+              <Text
+                color={entry.target.kind === "defaults" ? color.muted : focused ? color.text : color.secondary}
+                bold={focused}
+                wrap="truncate-start"
+              >
+                {entry.label}
+              </Text>
+            </Box>
+            {cells[i].map((slot, n) => (
+              <Box key={SLOT_TOOLS[n]} width={slotWidth} marginLeft={GAP} flexShrink={0}>
+                <Text color={slot.usable ? (slot.text === "—" ? color.dim : color.text) : color.warning}>
+                  {slot.text}
+                </Text>
+              </Box>
+            ))}
           </Box>
         );
       })}

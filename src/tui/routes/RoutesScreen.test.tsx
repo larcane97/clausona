@@ -3,10 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { QuotaTarget } from "../../core/quota-store.js";
 import type { BrokenRoute, RoutesFile } from "../../core/route-config.js";
+import type { PathSystem } from "../../core/route-rules.js";
 import { RoutesFileError } from "../../core/routes-store.js";
 import { stripAnsi } from "../../lib/cli-style.js";
 import type { QuotaSnapshot, Registry } from "../../types.js";
-import { DOWN, ENTER, ESC, type Instance, press, renderAt, type, waitForFrame } from "../test-drive.js";
+import { DOWN, ENTER, ESC, type Instance, press, renderAt, type, typeSlowly, waitForFrame } from "../test-drive.js";
 import { RoutesScreen } from "./RoutesScreen.js";
 import type { RoutesListDeps, RoutesScreenDeps } from "./routes-deps.js";
 
@@ -106,6 +107,9 @@ function setup(
     collectQuotas: vi.fn<Collect>(options.collect ?? (async () => QUOTAS)),
     readPicks: vi.fn(async () => ({})),
     clock: () => NOW,
+    // Read as on Linux, every directory there and its own real path, so the paths below hold anywhere.
+    cwd: "/home/u/work/app",
+    system: { platform: "linux", home: "/home/u", realpath: (p: string) => p } satisfies PathSystem,
   } satisfies RoutesListDeps;
   const onExit = vi.fn();
   const tree = <RoutesScreen deps={deps} onExit={onExit} />;
@@ -655,5 +659,82 @@ describe("RoutesScreen", () => {
     ]);
     // Still on the route the form was opened on.
     expect(panes(frame).detail.find(Boolean)).toBe("solo");
+  });
+});
+
+describe("dir rules and defaults", () => {
+  const TAB = "\t";
+  const RIGHT = "\u001B[C";
+  const RULES: RoutesFile = {
+    ...FILE,
+    dirs: { "~/work": { claude: "main", codex: "gone" } },
+    defaults: { claude: "solo" },
+  };
+
+  it("lists them on tab, with a rule whose route is gone pointed out, and goes back on tab", async () => {
+    const { instance } = setup({ file: RULES });
+    expect(await ranked(instance)).toContain("⚠ A dir rule or default needs a look: tab shows it.");
+
+    await press(instance, TAB);
+    const frame = text(instance);
+    expect(frame).toContain("Dir rules");
+    expect(frame).toMatch(/DIRECTORY\s+CLAUDE\s+CODEX/);
+    expect(frame).toMatch(/▸ ~\/work\s+main\s+gone/);
+    expect(frame).toMatch(/default\s+solo\s+—/);
+    expect(frame).toContain("⚠ ~/work names route 'gone' for codex, which does not exist.");
+    for (const hint of ["n new", "e edit", "d clear", "tab routes", "esc back"]) expect(frame).toContain(hint);
+
+    await press(instance, TAB);
+    expect(panes(text(instance)).list).toHaveLength(3);
+  });
+
+  it("adds a dir rule from its form, the directory read from where clausona started", async () => {
+    const { instance, file } = setup();
+    await ranked(instance);
+    await press(instance, TAB);
+    await press(instance, "n");
+    await until(instance, (f) => f.includes("New dir rule"));
+
+    await typeSlowly(instance, ".");
+    expect(text(instance)).toContain("In ~/work/app and below, clausona run claude or codex takes these.");
+    await press(instance, TAB);
+    await press(instance, RIGHT);
+    await press(instance, TAB);
+    await press(instance, RIGHT);
+    await type(instance, ENTER);
+
+    await until(instance, (f) => f.includes("Dir rules") && f.includes("~/work/app"));
+    expect(file().dirs).toEqual({ "~/work/app": { claude: "main", codex: "wide" } });
+  });
+
+  it("writes no dir rule that names no route, and says so", async () => {
+    const { instance, deps } = setup();
+    await ranked(instance);
+    await press(instance, TAB);
+    await press(instance, "n");
+    await typeSlowly(instance, "~/oss");
+    await press(instance, ENTER);
+
+    expect(text(instance)).toContain("✘ Choose a route for claude or codex.");
+    expect(deps.updateRoutes).not.toHaveBeenCalled();
+  });
+
+  it("changes the defaults from their row, and clears them once asked", async () => {
+    const { instance, file } = setup({ file: { ...FILE, defaults: { claude: "solo" } } });
+    await ranked(instance);
+    await press(instance, TAB);
+    await press(instance, "e");
+    await until(instance, (f) => f.includes("Defaults"));
+
+    await press(instance, RIGHT);
+    await type(instance, ENTER);
+    await until(instance, (f) => /default\s+wide/.test(f));
+    expect(file().defaults).toEqual({ claude: "wide" });
+
+    await press(instance, "d");
+    expect(text(instance)).toContain("Clear the defaults? (y/N)");
+    await press(instance, "y");
+    await until(instance, (f) => /default\s+—\s+—/.test(f));
+    expect(file()).not.toHaveProperty("defaults");
   });
 });

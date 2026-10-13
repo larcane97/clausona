@@ -1,5 +1,6 @@
 import { collectQuotas, type QuotaTarget } from "../../core/quota-store.js";
 import type { RoutesFile } from "../../core/route-config.js";
+import { type PathSystem, pathSystem } from "../../core/route-rules.js";
 import {
   type LoadedRoutes,
   loadRoutes,
@@ -30,8 +31,15 @@ export type RoutesScreenDeps = {
   clock: () => number;
 };
 
-/** The screen's own, beyond its form's: routes.json with the routes that cannot be used set apart. */
-export type RoutesListDeps = RoutesScreenDeps & { loadRoutes: () => Promise<LoadedRoutes> };
+/**
+ * The screen's own, beyond its form's: routes.json with the routes that cannot be used set apart,
+ * and how its dir rules read a directory: from where clausona was started, `~` for home.
+ */
+export type RoutesListDeps = RoutesScreenDeps & {
+  loadRoutes: () => Promise<LoadedRoutes>;
+  cwd: string;
+  system: PathSystem;
+};
 
 export function defaultRoutesScreenDeps(): RoutesListDeps {
   const paths = routesPaths();
@@ -46,6 +54,8 @@ export function defaultRoutesScreenDeps(): RoutesListDeps {
     collectQuotas: (targets, options) => collectQuotas(targets, { refresh: options?.refresh }),
     readPicks: () => readPicks(paths),
     clock: () => Date.now(),
+    cwd: process.cwd(),
+    system: pathSystem(),
   };
 }
 
