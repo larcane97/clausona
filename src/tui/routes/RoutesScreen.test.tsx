@@ -1229,4 +1229,19 @@ describe("ranked as a run of one model", () => {
     expect(frame).not.toContain("--model");
     expect(panes(frame).detail).toContain("Model limits: Opus, Sonnet · m to rank by one");
   });
+
+  it("starts a model cell's dash where the column starts, as the others do, beside a window's kind", async () => {
+    const quotas = { ...LIMITS, "codex:personal-max": snap(5, 8) };
+    const { instance } = setup({
+      file: BOTH,
+      registry: { loads: WITH_CODEX, problem: null },
+      collect: async () => quotas,
+    });
+    await ranked(instance);
+    await press(instance, "m");
+    const all = lines(text(instance));
+    const header = all.find((line) => line.includes("ACCOUNT")) ?? "";
+    expect(all.find((line) => line.includes("codex:x"))).toMatch(/\s7D\s+5%/);
+    expect((all.find((line) => line.includes("codex:personal-max")) ?? "").indexOf("—")).toBe(header.indexOf("GPT-5"));
+  });
 });

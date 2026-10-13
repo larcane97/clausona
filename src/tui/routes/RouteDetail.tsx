@@ -201,10 +201,11 @@ function MemberLine({
       {row ? cell(row.sevenDay, "7D") : null}
       {row && model ? (
         <Box marginLeft={GAP} width={model.width} flexShrink={0}>
-          {/* Which of a Codex limit's windows is the higher, as explain says it: `7D`. */}
-          {model.kinds ? (
+          {/* Which of a Codex limit's windows is the higher, as explain says it: `7D`. Without a
+              limit, the dash starts the column as the others' do. */}
+          {model.kinds && scoped ? (
             <Box width={KIND} flexShrink={0}>
-              <Text color={color.muted}>{scoped ? (scopedWindowKind(scoped) ?? "") : ""}</Text>
+              <Text color={color.muted}>{scopedWindowKind(scoped) ?? ""}</Text>
             </Box>
           ) : null}
           <QuotaCell
