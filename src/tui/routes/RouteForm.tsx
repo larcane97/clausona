@@ -20,7 +20,7 @@ import { Chrome } from "../components/Chrome.js";
 import { FieldInput } from "../components/FieldInput.js";
 import { keyHintLines } from "../components/KeyHint.js";
 import { color } from "../theme.js";
-import { useTerminalSize } from "../use-width.js";
+import { textLines, useTerminalSize } from "../use-width.js";
 import {
   AccountRows,
   ErrorLines,
@@ -89,7 +89,8 @@ export function formAccounts(registry: Registry): FormAccount[] {
  * wrapped), the every-account row, the Now line, and one more, since ink redraws the whole screen
  * once its output is as tall as the terminal. A question, the saving note, the picker and each
  * error take one or more besides, and so does each line past its first that a row which wraps
- * takes in a narrow terminal: the key hints, the radios and the fallback.
+ * takes: the key hints, the radios and the fallback in a narrow terminal, and a text field whose
+ * text is longer than its line.
  */
 const FORM_LINES = 24;
 
@@ -97,6 +98,15 @@ const FORM_LINES = 24;
 const CHROME_PADDING = 4;
 /** The columns the frame's borders and padding take from the chrome's. */
 const FRAME_PADDING = 4;
+/** The columns a field's name under a label takes: `from` and `exclude` under Patterns, `skip at` under Limits. */
+const SUB_LABEL = 9;
+/** What a text field's text has beside it on its line: its sub-label, and the limit's brackets. */
+const BESIDE: Record<TextField, number> = {
+  name: 0,
+  from: SUB_LABEL,
+  exclude: SUB_LABEL,
+  max: SUB_LABEL + "[".length + "]%".length,
+};
 
 /** The fewest account lines the form shows, however short the terminal. */
 const MIN_ACCOUNT_LINES = 3;
@@ -437,22 +447,36 @@ export function RouteForm(props: RouteFormProps) {
   const toolOptions = ROUTE_TOOLS.map((tool): [RouteTool, string] => [tool, toolLabel(tool)]);
   const strategyOptions = STRATEGIES.map((strategy): [Strategy, string] => [strategy, strategy]);
 
+  const focusOn = (field: FormField) => state.focus === field;
+  /** Where a text field's cursor is: where it was last moved in that field, or else at its end. */
+  const cursorIn = (field: TextField) => (caret?.field === field ? caret.at : state[TEXT_KEYS[field]].length);
+
   const { columns = 80, rows } = useTerminalSize();
   /** The chrome's width inside its padding, and a field's value's in the frame. */
   const inside = columns - CHROME_PADDING;
   const room = valueWidth(inside - FRAME_PADDING);
+  /**
+   * The lines a text field takes: one for the mask, an example or the limit's default, and those
+   * its text wraps into otherwise, with the cursor's cell after it while the cursor is at its end.
+   */
+  const textFieldLines = (field: TextField) => {
+    const value = state[TEXT_KEYS[field]];
+    if (value === "" || keyShaped(field, value)) return 1;
+    const cell = focusOn(field) && typing && cursorIn(field) >= value.length ? " " : "";
+    return textLines(value + cell, room - BESIDE[field]);
+  };
   /** The lines the rows that wrap take past their first, at this width. */
   const wrapped = [
     keyHintLines(hints, inside),
     radioLines(toolOptions, room),
     radioLines(strategyOptions, room),
     fallbackLines(state.fallback, pool, room),
+    ...(Object.keys(TEXT_KEYS) as TextField[]).map(textFieldLines),
   ].reduce((sum, lines) => sum + lines - 1, 0);
   /** Lines in the frame and under it that come and go; the errors as they wrap inside the chrome. */
   const extra =
     (asking || saving ? 1 : 0) + (picking !== null ? 1 : 0) + errorLineCount(state.errors, inside) + wrapped;
   const accountLines = rows === undefined ? undefined : Math.max(MIN_ACCOUNT_LINES, rows - FORM_LINES - extra);
-  const focusOn = (field: FormField) => state.focus === field;
 
   function textField(field: TextField, placeholder?: string) {
     const value = state[TEXT_KEYS[field]];
@@ -461,7 +485,7 @@ export function RouteForm(props: RouteFormProps) {
       dispatch({ type: "text", field, value: next });
       setCaret({ field, at });
     };
-    const cursor = caret?.field === field ? caret.at : value.length;
+    const cursor = cursorIn(field);
     if (keyShaped(field, value)) {
       // The input takes the keystrokes and draws nothing, so the value can still be erased.
       return (
@@ -545,11 +569,11 @@ export function RouteForm(props: RouteFormProps) {
           lines={accountLines}
         />
         <Line {...line("from", "Patterns")}>
-          {subLabel("from", "from", 9)}
+          {subLabel("from", "from", SUB_LABEL)}
           {textField("from")}
         </Line>
         <Line {...line("exclude", "")}>
-          {subLabel("exclude", "exclude", 9)}
+          {subLabel("exclude", "exclude", SUB_LABEL)}
           {textField("exclude")}
         </Line>
         <Line {...line("strategy", "Strategy")}>
@@ -561,10 +585,15 @@ export function RouteForm(props: RouteFormProps) {
           </Text>
         </Line>
         <Line {...line("max", "Limits")}>
-          {subLabel("max", "skip at", 9)}
-          <Text color={color.muted}>[</Text>
+          {subLabel("max", "skip at", SUB_LABEL)}
+          {/* The brackets keep their columns: a text longer than its line wraps between them. */}
+          <Box flexShrink={0}>
+            <Text color={color.muted}>[</Text>
+          </Box>
           {textField("max", String(limits.maxUsage))}
-          <Text color={color.muted}>]%</Text>
+          <Box flexShrink={0}>
+            <Text color={color.muted}>]%</Text>
+          </Box>
         </Line>
         <Line label="">
           <Text color={color.muted} wrap="truncate-end">

@@ -55,6 +55,45 @@ export function wrappedLines(widths: readonly number[], gap: number, width: numb
 }
 
 /**
+ * The lines a Text that wraps, as ink's does unless told otherwise, takes for `text` `width`
+ * columns wide. This is wrap-ansi's rule as ink calls it (hard, untrimmed), step for step: a line
+ * breaks before a word that does not fit, the space before the word kept at the end of the line,
+ * and a word longer than a whole line is cut across lines, from where the line is when that takes
+ * no more lines than starting a new one. Every character is taken to be a column wide.
+ */
+export function textLines(text: string, width: number): number {
+  const columns = Math.max(1, width);
+  let lines = 1;
+  /** The columns the last line holds. */
+  let used = 0;
+  const newLine = () => {
+    lines += 1;
+    used = 0;
+  };
+  for (const [index, word] of text.split(" ").entries()) {
+    const length = [...word].length;
+    if (index > 0) {
+      if (used >= columns) newLine();
+      used += 1;
+    }
+    if (length > columns) {
+      const fromHere = 1 + Math.floor((length - (columns - used) - 1) / columns);
+      const fromNext = Math.floor((length - 1) / columns);
+      if (fromNext < fromHere) newLine();
+      for (let at = 0; at < length; at++) {
+        if (used >= columns) newLine();
+        used += 1;
+        if (used === columns && at < length - 1) newLine();
+      }
+      continue;
+    }
+    if (used + length > columns && used > 0 && length > 0) newLine();
+    used += length;
+  }
+  return lines;
+}
+
+/**
  * The terminal's size, read again when it is resized; either is undefined when stdout does not
  * say (a test's, or a pipe). A screen that can outgrow the height fits its lists to it: once ink's
  * output reaches the terminal's height, ink 6 clears the terminal and writes the whole frame again

@@ -6,7 +6,7 @@ import { freeNow, nothingRead, skipReason } from "../../lib/route-render.js";
 import type { QuotaSnapshot } from "../../types.js";
 import { QuotaCell } from "../components/QuotaCell.js";
 import { color, symbol } from "../theme.js";
-import { wrappedLines } from "../use-width.js";
+import { textLines, wrappedLines } from "../use-width.js";
 import { GAP, MARK } from "./RouteDetail.js";
 import { FORM_FIELDS, type FormAccount, type FormField, type RouteFormState } from "./route-form-state.js";
 
@@ -403,10 +403,10 @@ export function errorMessages(errors: RouteFormState["errors"]): string[] {
   ];
 }
 
-/** The lines errorMessages take at `width`, the `✘ ` before each included: each wraps on its own. */
+/** The lines errorMessages take at `width`, the `✘ ` before each included: each wraps on its own, at its spaces. */
 export function errorLineCount(errors: RouteFormState["errors"], width: number): number {
-  const room = Math.max(1, width - 2);
-  return errorMessages(errors).reduce((sum, message) => sum + Math.max(1, Math.ceil(message.length / room)), 0);
+  const room = width - 2;
+  return errorMessages(errors).reduce((sum, message) => sum + textLines(message, room), 0);
 }
 
 export function ErrorLines({ errors }: { errors: RouteFormState["errors"] }) {

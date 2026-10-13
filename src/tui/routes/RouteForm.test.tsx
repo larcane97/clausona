@@ -1150,6 +1150,37 @@ describe("RouteForm", () => {
       expect(lines(frame).length).toBe(ROWS - 1);
     });
 
+    // A field's text wraps once it is longer than its line, and the count took one line for it.
+    it("stays one line short of it with patterns longer than their line", async () => {
+      const ROWS = 34;
+      const { instance } = setup({ registry: MANY, rows: ROWS, columns: 80 });
+      await opened(instance);
+      await tabTo(instance, "from");
+
+      await press(instance, "alice@work.example.com, bob@work.example.com, carol@work.example.com");
+      const frame = text(instance);
+      expect(row(frame, "Patterns")).toMatch(/from\s+alice@work\.example\.com, bob@work\.example\.com,$/);
+      expect(frame).toMatch(/^\s*│\s+carol@work\.example\.com\s+│$/m);
+      expect(lines(frame).length).toBe(ROWS - 1);
+    });
+
+    // The other fields wrap too, in a narrow terminal: the name, and the limit between its brackets.
+    it("stays one line short of it with a name and a limit longer than their lines", async () => {
+      const ROWS = 34;
+      const { instance } = setup({ registry: MANY, rows: ROWS, columns: 50 });
+      await opened(instance);
+
+      await press(instance, "my route for the team and ops on call");
+      expect(row(text(instance), "Name")).toMatch(/Name\s+my route for the team and ops$/);
+      expect(lines(text(instance)).length).toBe(ROWS - 1);
+      await tabTo(instance, "skip at");
+      await retype(instance, 2, "12 34 56 78 90 12 34 56");
+      const frame = text(instance);
+      expect(row(frame, "skip at")).toMatch(/skip at\s+\[12 34 56 78 90 12\]%$/);
+      expect(frame).toMatch(/^\s*│\s+34 56\s+│$/m);
+      expect(lines(frame).length).toBe(ROWS - 1);
+    });
+
     it("keeps three accounts on screen however short the terminal", async () => {
       const { instance } = setup({ registry: MANY, rows: 12, columns: 80 });
       await opened(instance);
