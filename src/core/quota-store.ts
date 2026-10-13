@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import { getAdapter } from "../tools/registry.js";
 import type { ToolCredential } from "../tools/types.js";
@@ -306,6 +307,9 @@ export async function collectQuotas(
   const result: Record<string, QuotaSnapshot> = {};
 
   const pending: QuotaTarget[] = [];
+  // An API profile's window worked out again for a budget set or cleared since its reading: kept,
+  // so that `list` and the dashboard, which read only the cache, show the limit that counts now.
+  let rewound = false;
   for (const target of targets) {
     const cached = cache.profiles[target.id];
     const budget = target.api?.budget;
@@ -314,7 +318,12 @@ export async function collectQuotas(
       snapshot.fetchedAt < (options.refreshBefore ?? Number.NEGATIVE_INFINITY) ||
       (budget !== undefined && snapshot.fetchedAt < Date.parse(periodStart(now, budget.per)));
     if (cached && !outdated(cached) && isFresh(cached, now)) {
-      result[target.id] = target.api ? withBudget(cached, target.api, now) : cached;
+      const served = target.api ? withBudget(cached, target.api, now) : cached;
+      if (served !== cached && !isDeepStrictEqual(served.budget, cached.budget)) {
+        cache.profiles[target.id] = served;
+        rewound = true;
+      }
+      result[target.id] = served;
       continue;
     }
 
@@ -327,7 +336,10 @@ export async function collectQuotas(
     pending.push(target);
   }
 
-  if (pending.length === 0) return result;
+  if (pending.length === 0) {
+    if (rewound) await writeCache(cachePath, cache);
+    return result;
+  }
 
   const allowRenew = options.renew ?? true;
   const lockDir = path.join(path.dirname(cachePath), "locks");

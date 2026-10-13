@@ -393,6 +393,8 @@ describe("collectQuotas: an API profile's spend", () => {
     expect(budgeted.api.readKey).not.toHaveBeenCalled();
     // The first reading this month is where a budget counts from.
     expect(result["claude:gw"]?.budget).toMatchObject({ spentUsd: 0, limitUsd: 20, source: "budget" });
+    // Kept, for list and the dashboard, which read only the cache.
+    expect(readCacheFile().profiles["claude:gw"].budget).toMatchObject({ limitUsd: 20, source: "budget" });
   });
 
   it("reads again a cached reading from before its budget's period began", async () => {
