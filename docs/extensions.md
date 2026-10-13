@@ -110,7 +110,10 @@ Some scopes need a word more:
   it, past the home folder too, up to the filesystem root. So does clausona: a `.mcp.json` in
   `/Users` or `C:\Users` is listed here. The header names each folder, nearest first.
 - Cloud: the skills Claude Code downloaded from each account's claude.ai skills, under
-  `~/.claude/skills/synced`.
+  `skills/synced` in the skills folder that account loads: `~/.claude/skills/synced` for the
+  accounts that share the primary's, and its own for an account whose skills folder is its own.
+  What such an account left in the primary's folder before is not listed, as no account loads
+  it.
 - Plugins lists the plugins themselves (rows of kind `plugin`) that bring at least one
   thing of the kind, installed for everyone or for this project. A plugin installed only for
   another project is under Plugins seen from that project, and under Other projects in the CLI.

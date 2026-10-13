@@ -309,6 +309,8 @@ describe("ls, rows that differ only in whose they are", () => {
       oauthAccount: { organizationUuid: "org1", accountUuid: "acc1" },
     });
     h.claude("work", ".claude-work", { oauthAccount: { organizationUuid: "org1", accountUuid: "acc2" } });
+    // work finds its Cloud skills in the primary's folder through the link clausona makes.
+    h.link(".claude/skills", ".claude-work/skills");
     h.skill(".claude/skills/synced/org1_acc1", "pdf");
     h.skill(".claude/skills/synced/org1_acc2", "pdf");
     h.skill(".claude/skills", "eli5");

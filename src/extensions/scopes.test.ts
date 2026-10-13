@@ -349,7 +349,8 @@ describe("rows across accounts", () => {
     });
     h.claude("solo", ".claude-solo");
     h.skill(".claude/skills/synced/org1_acc1", "pdf");
-    h.skill(".claude/skills/synced/org1_acc2", "pdf");
+    // work's skills folder is its own, so Claude Code keeps work's Cloud skills there.
+    h.skill(".claude-work/skills/synced/org1_acc2", "pdf");
     h.skill(".claude-work/skills", "mine");
     h.skill(".claude-solo/skills", "mine");
     const kitA = h.path(".claude/plugins/cache/m/kit/1.0.0");

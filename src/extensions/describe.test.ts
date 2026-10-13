@@ -237,6 +237,32 @@ describe("tagsOf", () => {
   });
 });
 
+describe("Cloud skills of an account whose skills folder is its own", () => {
+  it("lists them as that account's, and the primary's stale bucket for it nowhere", async () => {
+    const { inv, app } = await seed({
+      defaultJson: () => ({ oauthAccount: { organizationUuid: "org1", accountUuid: "a" } }),
+      more: (h) => {
+        h.claude("solo", ".claude-solo", { oauthAccount: { organizationUuid: "org1", accountUuid: "c" } });
+        h.skill(".claude-solo/skills/synced/org1_c", "fresh");
+        h.skill(".claude/skills/synced/org1_c", "stale");
+      },
+    });
+    const cloud = rowsIn(inv, "claude", "skill", "cloud", app, NOW);
+    expect(cloud.map((r) => r.name)).toEqual(["fresh"]);
+    const fresh = cloud[0] as ScopeRow;
+    expect(rowAccounts(inv, fresh)).toEqual(["claude:solo"]);
+    expect(jsonItem(inv, fresh, app, NOW).copies).toEqual([
+      {
+        id: fresh.items[0]?.id,
+        account: "claude:solo",
+        file: inv.items.find((i) => i.name === "fresh")?.location.file,
+      },
+    ]);
+    expect(rowsIn(inv, "claude", "skill", "loaded", app, NOW).map((r) => r.name)).toContain("fresh");
+    expect(inv.items.some((i) => i.name === "stale")).toBe(false);
+  });
+});
+
 describe("hiddenHere and usageCells", () => {
   it("judges another project's copy in its own project, wherever it is seen from", async () => {
     const { inv, app, web } = await seed({ more: (h) => h.skill("repos/web/.claude/skills", "eli5") });
@@ -678,6 +704,8 @@ describe("rows across accounts", () => {
     });
     h.claude("work", ".claude-work", { oauthAccount: { organizationUuid: "org1", accountUuid: "acc2" } });
     h.claude("solo", ".claude-solo");
+    // work finds its Cloud skills in the primary's folder through the link clausona makes.
+    h.link(".claude/skills", ".claude-work/skills");
     h.skill(".claude/skills/synced/org1_acc1", "pdf", "Read PDFs");
     h.skill(".claude/skills/synced/org1_acc2", "pdf", "Read PDFs");
     h.skill(".claude/skills", "pdf", "My own pdf");

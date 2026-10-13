@@ -381,6 +381,8 @@ describe("tables", () => {
       oauthAccount: { organizationUuid: "org1", accountUuid: "acc2" },
       skillUsage: { pdf: { usageCount: 3, lastUsedAt: NOW - DAY } },
     });
+    // work finds its Cloud skills in the primary's folder through the link clausona makes.
+    h.link(".claude/skills", ".claude-work/skills");
     h.skill(".claude/skills/synced/org1_acc1", "pdf");
     h.skill(".claude/skills/synced/org1_acc2", "pdf");
     const inv = await loadInventory(h.inventoryOptions(app));

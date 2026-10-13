@@ -3,13 +3,19 @@ import path from "node:path";
 import type { Collector, Extension, Project } from "../model.js";
 import { isHomeProject } from "../projects.js";
 import { entryInfo, IO_LIMIT, isRecord, listNames, mapLimit, parseFrontmatter, readText } from "../read.js";
-import { type ClaudeContext, pluginLocation, pluginOwner, sharesPrimaryEntry } from "./claude-context.js";
+import {
+  type ClaudeAccount,
+  type ClaudeContext,
+  pluginLocation,
+  pluginOwner,
+  sharesPrimaryEntry,
+} from "./claude-context.js";
 import { readSkillFolders, type SkillLocation } from "./skill-dirs.js";
 
 /**
  * Every skill and legacy command Claude Code can load: the primary's (shared by every account
  * through clausona's links), a profile's own when its folder is not that link, the claude.ai
- * buckets under `skills/synced/`, each project's, and each installed plugin's. Then one
+ * buckets under `skills/synced/` (see `readSynced`), each project's, and each installed plugin's. Then one
  * built-in item for each `skillOverrides` key no skill found here answers to - so it must run
  * after `collectClaudeSettingsFacts`.
  *
@@ -42,7 +48,7 @@ export async function readClaudeSkills(ctx: ClaudeContext, projects: Project[], 
     }
     if (!commands) jobs.push(readCommandFiles(path.join(account.configDir, "commands"), own, account.id, out));
   }
-  jobs.push(readSynced(ctx, out));
+  jobs.push(readSynced(ctx, shares, out));
   for (const project of projects) {
     // The home dir's .claude/skills and .claude/commands are the user's own, read above.
     if (isHomeProject(project, ctx.homeDir)) continue;
@@ -108,12 +114,20 @@ async function readCommandFiles(
 }
 
 /**
- * claude.ai skills: `skills/synced/<organizationUuid>_<accountUuid>/<name>/`. A bucket belongs to
- * the account whose `oauthAccount` carries both ids; one that matches no account is listed
- * without one. The Skill tool names these `anthropic-skills:<name>`, so usage is looked up
- * under that key as well.
+ * claude.ai skills: `skills/synced/<organizationUuid>_<accountUuid>/<name>/`, in the skills folder
+ * of the account Claude Code runs as. A bucket belongs to the account whose `oauthAccount` carries
+ * both ids. Each is read where its account finds it: the primary's folder for every account that
+ * shares it, and an account's own folder for one whose skills folder is its own. So the bucket
+ * such an account left in the primary's folder, from before, is not listed - no account loads
+ * it - and neither is another account's bucket in its folder. In the primary's folder, one that
+ * matches no account is listed without one. The Skill tool names these
+ * `anthropic-skills:<name>`, so usage is looked up under that key as well.
  */
-async function readSynced(ctx: ClaudeContext, out: Collector): Promise<void> {
+async function readSynced(
+  ctx: ClaudeContext,
+  shares: { account: ClaudeAccount; skills: boolean }[],
+  out: Collector,
+): Promise<void> {
   const owners = new Map<string, string>();
   for (const account of ctx.accounts) {
     const oauth = isRecord(account.json?.oauthAccount) ? account.json.oauthAccount : undefined;
@@ -121,19 +135,39 @@ async function readSynced(ctx: ClaudeContext, out: Collector): Promise<void> {
       owners.set(`${oauth.organizationUuid}_${oauth.accountUuid}`, account.id);
     }
   }
-  const root = path.join(ctx.primaryDir, "skills", "synced");
-  await Promise.all(
-    (await listNames(root, out.warnings)).map((bucket) => {
+  const apart = shares.filter((s) => !s.skills).map((s) => s.account);
+  const usageKeys = (name: string) => [name, `anthropic-skills:${name}`];
+  /** Each bucket in `root` that `pick` gives an owner, read as that owner's. */
+  const read = async (root: string, pick: (bucket: string) => { profile?: string; owner: string } | undefined) => {
+    await Promise.all(
+      (await listNames(root, out.warnings)).map((bucket) => {
+        const picked = pick(bucket);
+        if (!picked) return undefined;
+        return readSkillFolders(
+          path.join(root, bucket),
+          { tool: "claude", scope: "synced", ...(picked.profile ? { profile: picked.profile } : {}) },
+          picked.owner,
+          out,
+          { usageKeys },
+        );
+      }),
+    );
+  };
+  await Promise.all([
+    read(path.join(ctx.primaryDir, "skills", "synced"), (bucket) => {
       const profile = owners.get(bucket);
-      return readSkillFolders(
-        path.join(root, bucket),
-        { tool: "claude", scope: "synced", ...(profile ? { profile } : {}) },
-        bucket,
-        out,
-        { usageKeys: (name) => [name, `anthropic-skills:${name}`] },
-      );
+      if (apart.some((account) => account.id === profile)) return undefined;
+      return { ...(profile ? { profile } : {}), owner: bucket };
     }),
-  );
+    ...apart.map((account) =>
+      read(path.join(account.configDir, "skills", "synced"), (bucket) => {
+        const profile = owners.get(bucket);
+        // The folder is the account's own, so a bucket that matches no account is taken as its.
+        if (profile !== undefined && profile !== account.id) return undefined;
+        return { profile: account.id, owner: `${account.id}/${bucket}` };
+      }),
+    ),
+  ]);
 }
 
 /**
