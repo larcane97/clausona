@@ -9,6 +9,7 @@ import {
   explainJson,
   pickJson,
   type RouteListRow,
+  renderBudgets,
   renderNewRoutePreview,
   renderNoAccount,
   renderNote,
@@ -1093,5 +1094,45 @@ describe("JSON", () => {
       ["claude:team", "picked"],
       ["claude:work", "eligible"],
     ]);
+  });
+});
+
+describe("renderBudgets in a narrow terminal", () => {
+  const NOW = Date.parse("2026-10-14T09:30:00.000Z");
+  const window = {
+    usedPercent: 35,
+    resetsAt: "2026-11-01T00:00:00.000Z",
+    spentUsd: 7,
+    limitUsd: 20,
+    source: "budget" as const,
+    per: "month" as const,
+  };
+  const rows = [
+    { id: "claude:gw", spend: "no-limit" as const, routes: [] },
+    { id: "claude:path", spend: "ok" as const, window, routes: [] },
+    { id: "claude:proxy", spend: "not-reported" as const, routes: [] },
+  ];
+  const at = (width: number) => stripAnsi(renderBudgets(rows, [], { width, now: NOW })).split("\n");
+
+  it.each([64, 46])("keeps every id whole, and the command a reason names, at %i columns", (width) => {
+    const lines = at(width);
+    for (const id of ["claude:gw", "claude:path", "claude:proxy"]) {
+      expect(
+        lines.some((line) => new RegExp(`^ {4}${id}( |$)`).test(line)),
+        id,
+      ).toBe(true);
+    }
+    // Too long for the line after its id, the reason goes under it, whole once its lines are joined.
+    const gw = lines.findIndex((line) => /^ {4}claude:gw$/.test(line));
+    expect(gw).toBeGreaterThan(-1);
+    const reason = lines.slice(gw + 1).filter((line) => /^ {6}\S/.test(line));
+    expect(reason.map((line) => line.trim()).join(" ")).toContain(
+      "no spend limit: clausona route budget claude:gw --usd 20 --per month",
+    );
+    for (const line of lines) expect(line.length, line).toBeLessThanOrEqual(width);
+  });
+
+  it("leaves a reason that fits beside its id", () => {
+    expect(at(120)).toContain("    claude:proxy  the provider does not report spend");
   });
 });

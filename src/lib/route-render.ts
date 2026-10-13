@@ -791,13 +791,15 @@ function usageCell(window: BudgetWindow): Cell {
  * A row of the table: its columns when it has a usage, else its profile and, across the rest, why
  * not, after its budget when it has one.
  */
+/** Why a row has no usage, after its budget when it has one: a cell across the columns. */
+function budgetReasonCell(row: BudgetRow): Cell {
+  const before = row.budget ? `${budgetText(row.budget)} (clausona budget); ` : "";
+  return [[before], [budgetReason(row) ?? "", row.spend === "unread" ? yellow : dim]];
+}
+
 function budgetTableRow(row: BudgetRow, keys: BudgetColumn[], now: number): TableRow {
-  const { window, budget } = row;
-  if (!window) {
-    const reason = budgetReason(row) ?? "";
-    const before = budget ? `${budgetText(budget)} (clausona budget); ` : "";
-    return { span: [[[row.id]], [[before], [reason, row.spend === "unread" ? yellow : dim]]] };
-  }
+  const { window } = row;
+  if (!window) return { span: [[[row.id]], budgetReasonCell(row)] };
   const cells: Record<BudgetColumn, Cell> = {
     profile: [[row.id]],
     limit: [[limitText(window)]],
@@ -846,13 +848,38 @@ export function renderBudgets(
       rows: rows.map((row) => budgetTableRow(row, keys, now)),
     }),
   );
-  // The layout is the widest whose columns fit; a reason across them is cut to the line rather
-  // than cost the others a column.
+  // The layout is the widest whose columns fit; a reason across them costs the others no column.
+  // Ids are never cut, so that two of them never read the same: with no layout that fits, the
+  // narrowest runs past the edge, as `clausona list` lets its rows.
   const columnsOnly = (table: Table): Table => ({ ...table, rows: table.rows.filter((row) => "cells" in row) });
-  const chosen =
-    layouts.find((table) => tableWidth(columnsOnly(table), measure(columnsOnly(table))) <= width) ??
-    layouts[layouts.length - 1];
-  return ["", ...fitTable([chosen], width), ...(notes.length ? ["", ...notes] : []), ""].join("\n");
+  const fits = (table: Table) => tableWidth(columnsOnly(table), measure(table)) <= width;
+  const chosen = layouts.find(fits) ?? layouts[layouts.length - 1];
+  const widths = measure(chosen);
+  const room = Math.max(width, tableWidth(columnsOnly(chosen), widths));
+  // A reason too long for the line after its id goes under it, wrapped, so that the command it
+  // names is whole.
+  const across = room - columnStarts(chosen, widths)[1];
+  const under = new Map<number, string[]>();
+  const table: Table = {
+    ...chosen,
+    rows: chosen.rows.map((row, i) => {
+      if ("cells" in row || cellLength(row.span[1]) <= across) return row;
+      const each = rows[i];
+      const style = each.spend === "unread" ? yellow : dim;
+      // The command a reason names is kept on one line while it fits on one.
+      const reason =
+        each.spend === "no-limit" ? `no spend limit: ${unbroken(budgetCommand(each.id))}` : (budgetReason(each) ?? "");
+      const text = `${each.budget ? `${budgetText(each.budget)} (clausona budget); ` : ""}${reason}`;
+      under.set(
+        i,
+        wrap(text, room, " ".repeat(INDENT + 2)).map((line) => style(line)),
+      );
+      return { span: [row.span[0], []] };
+    }),
+  };
+  const [header, rule, ...lines] = renderTable(table, widths, room);
+  const body = lines.flatMap((line, i) => [line, ...(under.get(i) ?? [])]);
+  return ["", header, rule, ...body, ...(notes.length ? ["", ...notes] : []), ""].join("\n");
 }
 
 /** One API profile of `route budget --json`. */
