@@ -36,6 +36,23 @@ describe("terminalIo", () => {
     expect(await io.ask("Again? ")).toBeNull();
   });
 
+  it("resolves null on Ctrl-C, and ends the question's line", async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    let written = "";
+    output.on("data", (chunk) => {
+      written += String(chunk);
+    });
+    // As a terminal, so readline reads Ctrl-C as a keystroke rather than as a character.
+    Object.assign(output, { isTTY: true, columns: 80 });
+    const io = terminalIo(output as unknown as NodeJS.WriteStream, input as unknown as NodeJS.ReadStream);
+    const answer = io.ask("Edit again? (Y/n) ");
+    input.write("\x03");
+    expect(await answer).toBeNull();
+    expect(written).toContain("Edit again? (Y/n) ");
+    expect(written.endsWith("\n")).toBe(true);
+  });
+
   it("confirms on Enter, y or yes, in any case", async () => {
     for (const reply of ["", "y", "YES"]) {
       const { input, io } = streams();
