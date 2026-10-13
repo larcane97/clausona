@@ -20,7 +20,14 @@ import {
   withDefaults,
 } from "../core/route-config.js";
 import { expandPatterns, type Member, splitToolPrefix } from "../core/route-patterns.js";
-import { chooseRule, type PathSystem, pathSystem, readRules, type SkippedRule } from "../core/route-rules.js";
+import {
+  chooseRule,
+  currentDir,
+  type PathSystem,
+  pathSystem,
+  readRules,
+  type SkippedRule,
+} from "../core/route-rules.js";
 import {
   type LoadedRoutes,
   loadRoutes,
@@ -59,7 +66,7 @@ export function defaultRouteDeps(): RouteDeps {
     paths: routesPaths(),
     clock: () => Date.now(),
     editText: editInEditor,
-    cwd: process.cwd(),
+    cwd: currentDir(),
     home: homedir(),
   };
 }

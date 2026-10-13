@@ -1,13 +1,14 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RoutesFile } from "./route-config.js";
 import {
   chooseRule,
   clearDefaultRoute,
   clearDirRoute,
+  currentDir,
   type PathSystem,
   pathSystem,
   readRules,
@@ -127,6 +128,21 @@ describe("readRules", () => {
       'dirs["C:\\\\work"]: must be an absolute path, or start with ~',
       'dirs["~\\\\app"]: must be an absolute path, or start with ~',
     ]);
+  });
+});
+
+describe("currentDir", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("is the shell's PWD once the directory was deleted under it, rather than a crash", () => {
+    vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT: process.cwd failed"), { code: "ENOENT" });
+    });
+    vi.stubEnv("PWD", "/home/u/gone");
+    expect(currentDir()).toBe("/home/u/gone");
   });
 });
 

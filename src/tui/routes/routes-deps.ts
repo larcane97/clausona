@@ -1,6 +1,6 @@
 import { collectQuotas, type QuotaTarget } from "../../core/quota-store.js";
 import type { RoutesFile } from "../../core/route-config.js";
-import { type PathSystem, pathSystem } from "../../core/route-rules.js";
+import { currentDir, type PathSystem, pathSystem } from "../../core/route-rules.js";
 import {
   type LoadedRoutes,
   loadRoutes,
@@ -54,7 +54,7 @@ export function defaultRoutesScreenDeps(): RoutesListDeps {
     collectQuotas: (targets, options) => collectQuotas(targets, { refresh: options?.refresh }),
     readPicks: () => readPicks(paths),
     clock: () => Date.now(),
-    cwd: process.cwd(),
+    cwd: currentDir(),
     system: pathSystem(),
   };
 }

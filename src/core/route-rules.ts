@@ -130,6 +130,18 @@ export function pathSystem(home: string = homedir()): PathSystem {
   return { platform: process.platform, home, realpath: (p) => realpathSync(p) };
 }
 
+/**
+ * The directory clausona runs in. process.cwd() throws once that directory has been deleted
+ * under the shell; the shell's PWD still names it, which is what a dir rule would match.
+ */
+export function currentDir(): string {
+  try {
+    return process.cwd();
+  } catch {
+    return process.env.PWD ?? homedir();
+  }
+}
+
 const pathsOf = (sys: PathSystem) => (sys.platform === "win32" ? path.win32 : path.posix);
 
 /** macOS and Windows compare paths without regard to case, as their file systems do by default. */
