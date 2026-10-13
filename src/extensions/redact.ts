@@ -92,8 +92,14 @@ const URL_RUN = /[a-z][a-z0-9+.-]*:\/\/[^\s"'`]+/gi;
 /** The word SQL puts before a password literal: `PASSWORD 'x'`. MySQL's `IDENTIFIED BY 'x'` is the other. */
 const SQL_PASSWORD = /^password$/i;
 
-/** A word that ends one command and starts the next, in a shell's command line. */
-const SEPARATOR = /^(&&|\|\||\||;)$|;$/;
+/** A word that ends one command and starts the next, in a shell's command line: `&&`, `|`, `&`, `cmd;`. */
+const SEPARATOR = /^(&&|\|\||\||\|&|&|;)$|;$/;
+
+/** A line break, which ends a command in a command line as `;` does. */
+const LINE_BREAK = /\r\n|\r|\n/;
+
+/** A word that goes on to the next line: a `\` at its end, or cmd's `^`, or PowerShell's backtick. */
+const CONTINUES = /[\\^`]$/;
 
 /** A word that may start a command: what a command line or a separator puts first, or runs the rest. */
 const RUNS_NEXT = /^(env|sudo|exec|command|nohup|time|xargs)$/;
@@ -106,11 +112,18 @@ const GO_OPTION = /^-[a-z][a-z\d]*(?:[-_][a-z\d]+)*$/;
 
 /**
  * A command line's words: whether each ends an argument (an MCP server's argument can hold
- * several), the quote a value that ends at a word goes on in (`openQuotes`), and the words
- * whose shown text joins the one before it with no space: a form field cut from the word a
- * hidden value ended in (`stopAtField`).
+ * several), the quote a value that ends at a word goes on in (`openQuotes`), the words whose
+ * shown text joins the one before it with no space - a form field cut from the word a hidden
+ * value ended in (`stopAtField`) - and the words a line break comes before, in a command line.
  */
-type Line = { words: string[]; ends: boolean[]; open: string[]; shown: string[]; joined: Set<number> };
+type Line = {
+  words: string[];
+  ends: boolean[];
+  open: string[];
+  shown: string[];
+  joined: Set<number>;
+  breaks: Set<number>;
+};
 
 /** A POSIX shell's option for a command line: `-c`, alone or ending a run of short options (`-lc`, `-euc`). */
 const POSIX_COMMAND = /^-[a-zA-Z]*c$/;
@@ -177,14 +190,29 @@ function isShellCommand(args: string[], at: number): boolean {
  * that argument's end. A form field's value that runs on so ends at the next field
  * (`-d "a=1&password=a b&name=c"`), as a form's reader splits it. The quotes are kept around
  * what stands in for a value.
+ *
+ * A line break ends a command where `args` is a command line: the text of a hook or a command
+ * split at its whitespace, the arguments `lineStarts` names coming after one (`commandWords`),
+ * and a shell's command line in one argument. An MCP server's other arguments are values, a line
+ * break in them too.
  */
-export function redactCommand(args: string[]): string {
-  const line: Line = { words: [], ends: [], open: [], shown: [], joined: new Set() };
+export function redactCommand(args: string[], lineStarts: ReadonlySet<number> = new Set()): string {
+  const line: Line = { words: [], ends: [], open: [], shown: [], joined: new Set(), breaks: new Set() };
   const bodies: boolean[] = [];
+  let broken = false;
   for (const [n, arg] of args.entries()) {
-    const words = arg.split(/\s+/).filter(Boolean);
     const commandLine = isShellCommand(args, n - 1);
-    for (const [k, word] of words.entries()) {
+    const lines = commandLine ? arg.split(LINE_BREAK) : [arg];
+    broken ||= lineStarts.has(n);
+    const words = lines.flatMap((text, l) =>
+      text
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((word, w) => ({ word, after: l > 0 && w === 0 })),
+    );
+    for (const [k, { word, after }] of words.entries()) {
+      if (broken || after) line.breaks.add(line.words.length);
+      broken = false;
       line.words.push(word);
       line.ends.push(commandLine || k === words.length - 1);
       bodies.push(commandLine && k === 0);
@@ -336,7 +364,8 @@ function optionOrValue(line: Line, at: number): number {
   const first = line.shown.length;
   const last = redactAt(line, at);
   const taken = last > at ? unquoted(line.words[at + 1] ?? "") : "";
-  if (taken === "" || taken.startsWith("-") || SEPARATOR.test(taken)) line.shown[first] = HIDDEN;
+  const elsewhere = SEPARATOR.test(taken) || line.breaks.has(at + 1);
+  if (taken === "" || taken.startsWith("-") || elsewhere) line.shown[first] = HIDDEN;
   return last;
 }
 
@@ -404,31 +433,45 @@ function isCookieFlag(line: Line, i: number): boolean {
 }
 
 /**
- * Whether the command `words[i]` is in is one of NO_COOKIE_B's: walking back to a separator or
- * the line's start, a word names one of them where it starts a command (`startsCommand`), and
- * no word on the way names curl. A name that starts no command is an argument (`--name tar`),
- * and the walk goes on past it.
+ * Whether the command `words[i]` is in is one of NO_COOKIE_B's: walking back to a separator, a
+ * line break or the line's start, a word names one of them where it starts a command
+ * (`startsCommand`), and no word on the way names curl. A name that starts no command is an
+ * argument (`--name tar`), and the walk goes on past it. The walk stops at any separator or line
+ * break, one in a quoted value too: the command before it is not read as `-b`'s.
  */
 function underNoCookieTool(line: Line, i: number): boolean {
   for (let k = i - 1; k >= 0; k--) {
+    if (line.breaks.has(k + 1)) return false;
     const word = unquoted(line.words[k] ?? "");
     const program = programName(word);
     if (SEPARATOR.test(word) || program === "curl") return false;
-    if (NO_COOKIE_B.has(program) && startsCommand(line.words, k)) return true;
+    if (NO_COOKIE_B.has(program) && startsCommand(line, k)) return true;
   }
   return false;
 }
 
 /**
- * Whether `words[k]` starts a command: it is the line's first word, or follows a separator, a
- * shell's command option, or a word that runs the next one where that word starts a command
- * itself - `sudo rsync`, but not `--mode time sort`, where time is an argument.
+ * Whether `words[k]` starts a command: it is the line's first word, or follows a line break, a
+ * separator or a shell's command option, or a word that runs the next one where that word starts
+ * a command itself - `sudo rsync`, but not `--mode time sort`, where time is an argument. Not in
+ * a value (`inValue`), whose `&&`, `;`, line break or `-c` is the value's, nor at a line a word
+ * goes on from (`CONTINUES`).
  */
-function startsCommand(words: string[], k: number): boolean {
+function startsCommand(line: Line, k: number): boolean {
   if (k === 0) return true;
-  const before = unquoted(words[k - 1] ?? "");
-  if (SEPARATOR.test(before) || opensShellLine(words, k - 1)) return true;
-  return RUNS_NEXT.test(before) && startsCommand(words, k - 1);
+  if (inValue(line, k)) return false;
+  const before = line.words[k - 1] ?? "";
+  if (line.breaks.has(k)) return !CONTINUES.test(before);
+  if (SEPARATOR.test(before) || opensShellLine(line.words, k - 1)) return k < 2 || !inValue(line, k - 1);
+  return RUNS_NEXT.test(unquoted(before)) && startsCommand(line, k - 1);
+}
+
+/**
+ * Whether `words[k]` is in one value with the word before it: in a quoted string that goes on
+ * past that word (`openQuotes`), or in the same argument, one that is no shell's command line.
+ */
+function inValue(line: Line, k: number): boolean {
+  return line.open[k - 1] !== "" || line.ends[k - 1] !== true;
 }
 
 /**
@@ -829,13 +872,35 @@ export function mcpSummary(config: unknown): Record<string, string> {
   if (typeof config.command === "string") {
     const args = Array.isArray(config.args) ? config.args.filter((a): a is string => typeof a === "string") : [];
     // The command is a command line when it holds spaces, so its words are its own arguments.
-    out.command = redactCommand([...config.command.split(/\s+/), ...args]);
+    const command = commandWords(config.command);
+    out.command = redactCommand([...command.words, ...args], command.lineStarts);
   }
   const env = names(config.env);
   if (env.length > 0) out.env = env.join(", ");
   const headers = [...names(config.headers), ...names(config.http_headers), ...names(config.env_http_headers)];
   if (headers.length > 0) out.headers = headers.join(", ");
   return out;
+}
+
+/**
+ * A command line's text split at whitespace, each word its own argument, and the arguments a
+ * line break comes before, where one command ends and the next starts (see `redactCommand`).
+ */
+function commandWords(text: string): { words: string[]; lineStarts: Set<number> } {
+  const words: string[] = [];
+  const lineStarts = new Set<number>();
+  for (const [n, part] of text.split(LINE_BREAK).entries()) {
+    const own = part.split(/\s+/).filter(Boolean);
+    if (n > 0 && own.length > 0) lineStarts.add(words.length);
+    words.push(...own);
+  }
+  return { words, lineStarts };
+}
+
+/** `text`, a hook's command or prompt, as the inventory shows it. */
+function redactLine(text: string): string {
+  const { words, lineStarts } = commandWords(text);
+  return redactCommand(words, lineStarts);
 }
 
 /**
@@ -847,8 +912,8 @@ export function hookSummary(event: string, matcher: string | undefined, hook: un
   if (matcher) out.matcher = matcher;
   if (isRecord(hook)) {
     if (typeof hook.type === "string") out.type = hook.type;
-    if (typeof hook.command === "string") out.command = redactCommand(hook.command.split(/\s+/).filter(Boolean));
-    if (typeof hook.prompt === "string") out.prompt = redactCommand(hook.prompt.split(/\s+/).filter(Boolean));
+    if (typeof hook.command === "string") out.command = redactLine(hook.command);
+    if (typeof hook.prompt === "string") out.prompt = redactLine(hook.prompt);
   }
   return out;
 }

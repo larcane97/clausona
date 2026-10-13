@@ -303,6 +303,57 @@ const NOT_A_TOOL_FORMS = [
 
 const SECRET_FORMS = [...FIRST_SECRET_FORMS, ...OPTION_VALUE_FORMS, ...FIELD_FORMS, ...NOT_A_TOOL_FORMS];
 
+/**
+ * The final review of #137 to #140: where a command ends. Each way a command line ends one and
+ * starts the next; a line break has no MCP arguments of its own, so its cases are text alone.
+ */
+const BOUNDARIES = [";", "&&", "||", "|", "|&", "&", "\n"];
+
+/** A command a tool whose `-b` is its own starts. */
+const TOOL_COMMANDS = [
+  t(["tar", "-xf", "{H1}.tar"], "tar -xf {H1}.tar"),
+  t(["cat", "{H1}.txt"], "cat {H1}.txt"),
+  t(["sort", "-u", "{H1}"], "sort -u {H1}"),
+  t(["git", "pull"], "git pull"),
+  t(["sudo", "rsync", "-a", "{H1}"], "sudo rsync -a {H1}"),
+];
+
+/** A command whose `-b` is curl's, or takes a secret: gh's, an unknown program's, curl's. */
+const OTHER_COMMANDS = [
+  t(["gh", "secret", "set", "{H1}"], "gh secret set {H1}"),
+  t(["{H1}"], "{H1}"),
+  t(["curl", "-s"], "curl -s"),
+];
+
+/** A secret after `-b` or `--cookie`. */
+const SECRET_B = [
+  t(["-b", "{S1}"], "-b {S1}"),
+  t(["-b", "sid={S1}"], "-b sid={S1}"),
+  t(["-b", "{S1} {S2}"], `-b "{S1} {S2}"`),
+  t(["--cookie", "{S1}"], "--cookie {S1}"),
+  t(["-b", "{S1}", "{H1}"], "-b {S1} {H1}"),
+];
+
+/** A tool's own `-b` and what it takes, which a command that tool starts shows. */
+const TOOL_B = [
+  t(["tar", "-b", "{H1}", "-xf", "{H2}.tar"], "tar -b {H1} -xf {H2}.tar"),
+  t(["sort", "-b", "{H1}"], "sort -b {H1}"),
+  t(["git", "checkout", "-b", "{H1}"], "git checkout -b {H1}"),
+];
+
+const boundary = (b: string) => t(b === "\n" ? [] : [b], b);
+
+/**
+ * A boundary that ends no command, before a tool's name: in a quoted value, in an MCP argument
+ * of several words, at a line a `\` goes on, and a shell's `-c` in a value. The `-b` after it is
+ * the first command's, `gh secret set`'s.
+ */
+const NO_BOUNDARY_FORMS = [
+  ...BOUNDARIES.map((b) => (b === "\n" ? t(["{H2}\ncat"], `"{H2}\ncat"`) : t([`{H2} ${b} cat`], `"{H2} ${b} cat"`))),
+  t([], "\\\ncat"),
+  t(["{H2} bash -c", "cat"], `"{H2} bash -c cat"`),
+];
+
 const PROGRAMS = [
   ["tool"],
   ["srv"],
@@ -431,6 +482,26 @@ function* forms(f: Filled): Generator<Case> {
   yield { mode: "hook", input: hook, run: (r) => hookCommand(r, hook), secrets, harmless };
 }
 
+/**
+ * A boundary case each way it reaches the redactor: as `forms` has it, but for a case with a line
+ * break, which is text alone - a hook, an MCP server's command - and as a shell's command line.
+ */
+function* boundaryForms(f: Filled): Generator<Case> {
+  const { hook, secrets, harmless } = f;
+  if (!/[\n\\]/.test(hook)) yield* forms(f);
+  else {
+    yield { mode: "hook", input: hook, run: (r) => hookCommand(r, hook), secrets, harmless };
+    const command = (r: Redact) => r.mcpSummary({ command: hook }).command ?? "";
+    yield { mode: "mcp command", input: hook, run: command, secrets, harmless };
+  }
+  const args = ["bash", "-c", hook];
+  yield { mode: "mcp shell body", input: JSON.stringify(args), run: (r) => r.redactCommand(args), secrets, harmless };
+  const outer = !hook.includes("'") ? `'${hook}'` : !hook.includes('"') ? `"${hook}"` : undefined;
+  if (outer === undefined) return;
+  const line = `bash -c ${outer}`;
+  yield { mode: "hook shell body", input: line, run: (r) => hookCommand(r, line), secrets, harmless };
+}
+
 /** A program, then a template, alone and with each follower before and after it. */
 function* withPrograms(templates: Template[], programs: string[][], followers: Template[]): Generator<Template[]> {
   for (const program of programs) {
@@ -484,6 +555,20 @@ function* cases(): Generator<Case> {
       yield { mode: "hook shell body", input: line, run: (r) => hookCommand(r, line), secrets, harmless };
     }
   }
+  // Where a command ends: a tool's command, then another whose -b is a secret's; another, then a
+  // tool's own -b; and a boundary in a value, which starts no command.
+  const boundaryParts = [
+    ...TOOL_COMMANDS.flatMap((tool) =>
+      BOUNDARIES.flatMap((b) =>
+        OTHER_COMMANDS.flatMap((other) => SECRET_B.map((secret) => [tool, boundary(b), other, secret])),
+      ),
+    ),
+    ...OTHER_COMMANDS.flatMap((other) => BOUNDARIES.flatMap((b) => TOOL_B.map((own) => [other, boundary(b), own]))),
+    ...NO_BOUNDARY_FORMS.flatMap((value) =>
+      SECRET_B.map((secret) => [t(["gh", "secret", "set", "{H1}"], "gh secret set {H1}"), value, secret]),
+    ),
+  ];
+  for (const parts of boundaryParts) yield* boundaryForms(fill(parts));
   // A prompt hook's prose, which names secrets without holding one.
   for (const prose of PROSE) {
     const { hook, secrets, harmless } = fill([t([], prose)]);

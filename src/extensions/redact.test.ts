@@ -590,6 +590,61 @@ describe("redactCommand on the shapes the differential left after #97", () => {
   });
 });
 
+describe("redactCommand where a line break or a lone & ends a command", () => {
+  const HEX = "0123456789abcdef".repeat(2);
+  const command = (line: string) => hookSummary("Stop", undefined, { type: "command", command: line }).command ?? "";
+  const hidden = (shown: [string, string][]) => {
+    for (const [actual, expected] of shown) {
+      expect(actual).toBe(expected);
+      expect(actual).not.toContain(HEX);
+    }
+  };
+
+  it("reads -b in the command after one a tool of its own -b starts as that command's", () => {
+    hidden([
+      [command(`cat notes.txt\ngh secret set TOKEN -b ${HEX}`), "cat notes.txt gh secret set TOKEN -b <hidden>"],
+      [command(`ls & gh secret set TOKEN -b ${HEX}`), "ls & gh secret set TOKEN -b <hidden>"],
+      [command(`ls |& gh secret set TOKEN -b ${HEX}`), "ls |& gh secret set TOKEN -b <hidden>"],
+      [command(`tar -xf a.tar\r\n\nmytool -b ${HEX}`), "tar -xf a.tar mytool -b <hidden>"],
+      [command(`git pull\nmytool -b ${HEX}`), "git pull mytool -b <hidden>"],
+      [
+        redactCommand(["bash", "-c", `ls\ngh secret set TOKEN -b ${HEX}`]),
+        "bash -c ls gh secret set TOKEN -b <hidden>",
+      ],
+      [command(`bash -c 'ls\ngh secret set TOKEN -b ${HEX}'`), "bash -c 'ls gh secret set TOKEN -b <hidden>'"],
+      [mcpSummary({ command: `cat notes.txt\nmytool -b ${HEX}` }).command ?? "", "cat notes.txt mytool -b <hidden>"],
+      // A password spelled like a secret option, which took a word of the next command.
+      [command("tool --password --mytoken\nserve"), "tool --password <hidden> <hidden>"],
+    ]);
+    // And the tool's own -b, where it starts the next command.
+    expect(command("gh secret set TOKEN x\ntar -b 20 -xf a.tar")).toBe("gh secret set TOKEN x tar -b 20 -xf a.tar");
+    expect(command("make & sort -b names.txt")).toBe("make & sort -b names.txt");
+  });
+
+  it("starts no command at a boundary in a quoted value, at a line a backslash goes on, or in one argument", () => {
+    hidden([
+      [command(`gh secret set TOKEN "x && cat" -b ${HEX}`), `gh secret set TOKEN "x && cat" -b <hidden>`],
+      [command(`gh secret set TOKEN "x & cat" -b ${HEX}`), `gh secret set TOKEN "x & cat" -b <hidden>`],
+      [command(`gh secret set TOKEN 'x\ncat' -b ${HEX}`), `gh secret set TOKEN 'x cat' -b <hidden>`],
+      [command(`gh secret set TOKEN \\\ncat -b ${HEX}`), "gh secret set TOKEN \\ cat -b <hidden>"],
+      [command(`gh secret set TOKEN "x bash -c cat" -b ${HEX}`), `gh secret set TOKEN "x bash -c cat" -b <hidden>`],
+      // An MCP server's argument is no command line, but for a shell's: what is in it is a value.
+      [
+        mcpSummary({ command: "gh", args: ["secret", "set", "x\ncat", "-b", HEX] }).command ?? "",
+        "gh secret set x cat -b <hidden>",
+      ],
+      [
+        mcpSummary({ command: "gh", args: ["secret", "set", "x && cat", "-b", HEX] }).command ?? "",
+        "gh secret set x && cat -b <hidden>",
+      ],
+      [
+        mcpSummary({ command: "gh", args: ["secret", "set", "x bash -c", "cat", "-b", HEX] }).command ?? "",
+        "gh secret set x bash -c cat -b <hidden>",
+      ],
+    ]);
+  });
+});
+
 describe("mcpSummary", () => {
   it("shows transport, command and the names - never the values - of env and headers", () => {
     const summary = mcpSummary({
