@@ -742,8 +742,14 @@ ignore it yet, the plan has one more line:
 `~/.config/git/ignore  adds **/.claude/settings.local.json  as Claude Code does`. The file is the
 one `core.excludesFile` names in your global git config, else `$XDG_CONFIG_HOME/git/ignore`,
 else `~/.config/git/ignore`, and it is made when it is not there. It is backed up like any other
-file, and undo takes the line back out. Without git, outside a repository, or with the line in
-that file already, there is no such line.
+file. Without git, outside a repository, or with the line in that file already, there is no such
+line.
+
+Undo leaves the line in, as Claude Code does. Claude Code never takes it out, and a
+`settings.local.json` it made since, in another repository, may rely on it: Claude Code adds no
+ignore rule for a file git ignores already. Undo still takes back the `settings.local.json` the
+change made, and says where it lists what it puts back that the line stays:
+`~/.config/git/ignore  keeps **/.claude/settings.local.json, as Claude Code does`.
 
 `on` writes in the same places. For a `.mcp.json` server it also takes the name out of
 `disabledMcpjsonServers` in each account's entry for the project, where an account turned it
@@ -1205,6 +1211,7 @@ holds, but for what a `.mcp.json` server runs when the plan approves it, with se
 | `files` | object[] | When set, in a dry run: `{ path, action }` for each file, `action` being `put back`, `remove` or `edit back`. |
 | `restored` | string[] | When set, once done: the paths it put back. |
 | `skipped` | object[] | When set, once done: `{ file, reason }` for each file it left alone. |
+| `kept` | object[] | When set: `{ path, line }` for each file undo leaves as the change made it, and the line that stays: git's global ignore file, with `**/.claude/settings.local.json`, as under [What each change writes](#what-each-change-writes). In a dry run and once done. |
 
 `skipped[].reason` is one of these, with the words the text output puts after the path:
 
@@ -1264,7 +1271,7 @@ Some kinds add keys after `message`:
   `{ id, backup }`; `done` and `total`, how many of its file changes were made; and `file`, the
   file it stopped at. What was made is one change, which `undo` puts back.
 - `changed` and `locked` from an undo add `operation`, which is `{ id, summary, createdAt }`,
-  and `restored` and `skipped`, as under [Undo](#undo).
+  `restored` and `skipped`, and `kept` when set, as under [Undo](#undo).
 - `ambiguous` adds `name`, the name given, and `candidates`.
 
 ### The ambiguous error

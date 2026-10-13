@@ -246,6 +246,7 @@ describe("apply", () => {
     expect(await lastOperation(env)).toEqual({
       operation,
       files: [{ path: manifest.entries[0]?.path, action: "remove" }],
+      kept: [],
     });
     const undone = await undo(env);
     expect(undone).toMatchObject({ operation: { id: operation.id }, skipped: [] });
@@ -301,7 +302,7 @@ describe("apply", () => {
     expect(await lastOperation(env)).toBeNull();
   });
 
-  it("adds a line to a text file as its last, in its own line endings, once, and undoes it whole", async () => {
+  it("adds a line to a text file as its last, in its own line endings, once, and undo leaves it in", async () => {
     const { h } = home();
     const env = writeEnvFor(h.home, clock());
     const textPlan = (file: string): Plan => ({
@@ -331,14 +332,32 @@ describe("apply", () => {
     const before = opDirs(env);
     expect(await apply(textPlan(crlf), env)).toEqual({ status: "nothing" });
     expect(opDirs(env)).toEqual(before);
-    expect(await undo(env)).toMatchObject({ skipped: [] });
-    expect(readFileSync(crlf, "utf8")).toBe("node_modules\r\n.DS_Store");
-    // Made where it is not there, with the folders it needs; undo takes them away.
+    // Claude Code never takes the line out, so undo leaves it: a change of that line alone has
+    // nothing to undo.
+    expect(await lastOperation(env)).toBeNull();
+    expect(await undo(env)).toBeNull();
+    expect(readFileSync(crlf, "utf8")).toBe("node_modules\r\n.DS_Store\r\n**/.claude/settings.local.json\r\n");
+    // Made where it is not there, with the folders it needs, and kept on undo with the change it
+    // came with, which goes back.
     const made = h.path("xdg", "git", "ignore");
-    await apply(textPlan(made), env);
+    const local = h.path("repos", "app", ".claude", "settings.local.json");
+    const withFile = textPlan(made);
+    withFile.changes.unshift({
+      kind: "json",
+      file: local,
+      edits: [{ op: "set", path: ["skillOverrides", "eli5"], value: "off" }],
+      expect: [],
+      create: true,
+      lock: false,
+      lines: [{ file: local, change: "create", what: "skillOverrides.eli5 → off", tracked: false, rows: ["r"] }],
+    });
+    await apply(withFile, env);
     expect(readFileSync(made, "utf8")).toBe("**/.claude/settings.local.json\n");
-    await undo(env);
-    expect(existsSync(h.path("xdg"))).toBe(false);
+    const kept = [{ path: made, line: "**/.claude/settings.local.json" }];
+    expect(await lastOperation(env)).toMatchObject({ files: [{ path: local, action: "remove" }], kept });
+    expect(await undo(env)).toMatchObject({ restored: [local], skipped: [], kept });
+    expect(existsSync(local)).toBe(false);
+    expect(readFileSync(made, "utf8")).toBe("**/.claude/settings.local.json\n");
   });
 
   it("names an operation by its time, command and verb", () => {
@@ -855,6 +874,7 @@ describe("undo: what clausona keeps aside goes with its edit", () => {
         { path: keptMine, action: "remove" },
         { path: mine, action: "edit back" },
       ],
+      kept: [],
     });
 
     expect(await undo(env)).toMatchObject({

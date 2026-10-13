@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
-import { apply, undo, writeEnvFor } from "./apply.js";
+import { apply, lastOperation, undo, writeEnvFor } from "./apply.js";
 import { planChecked, trackedPaths } from "./git-tracked.js";
 import { loadInventory } from "./inventory.js";
 import { localSettingsFile as local } from "./places.js";
@@ -204,7 +204,7 @@ describe("planChecked", () => {
   });
 
   it.skipIf(!hasGit)(
-    "adds Claude Code's line to git's global ignore file with a project's first settings.local.json, and undo takes it out",
+    "adds Claude Code's line to git's global ignore file with a project's first settings.local.json, and undo leaves it in",
     async () => {
       const { h, app, check, env } = ignoring();
       const ignore = h.path(".config", "git", "ignore");
@@ -229,10 +229,13 @@ describe("planChecked", () => {
       expect(await apply(plan, writes)).toMatchObject({ status: "applied", done: 2 });
       expect(readFileSync(ignore, "utf8")).toBe("**/.claude/settings.local.json\n");
       expect(checkIgnore(app, env)).toBe(0);
-      expect(await undo(writes)).toMatchObject({ skipped: [] });
-      expect(existsSync(ignore)).toBe(false);
-      expect(existsSync(h.path(".config"))).toBe(false);
+      // Claude Code never takes it out, and a settings.local.json made since may rely on it.
+      const kept = [{ path: ignore, line: "**/.claude/settings.local.json" }];
+      expect(await lastOperation(writes)).toMatchObject({ files: [{ path: local(app), action: "remove" }], kept });
+      expect(await undo(writes)).toMatchObject({ restored: [local(app)], skipped: [], kept });
+      expect(readFileSync(ignore, "utf8")).toBe("**/.claude/settings.local.json\n");
       expect(existsSync(local(app))).toBe(false);
+      expect(checkIgnore(app, env)).toBe(0);
     },
     SPAWNING_TEST_TIMEOUT_MS,
   );

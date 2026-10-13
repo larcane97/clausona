@@ -380,6 +380,7 @@ describe("dialogView: undo", () => {
       { path: at("repos", "app", ".claude", "settings.local.json"), action: "remove" },
       { path: at(".claude.json"), action: "edit back" },
     ],
+    kept: [],
   };
 
   it("asks, lists each file and what undo does to it, and says what it leaves alone", () => {
@@ -397,6 +398,21 @@ describe("dialogView: undo", () => {
     expect(view.hints).toEqual([
       { keys: "y", action: "undo" },
       { keys: "n/esc", action: "cancel" },
+    ]);
+  });
+
+  it("says the line it leaves in git's global ignore file, as Claude Code does, where it lists the files", () => {
+    const ignore = at(".config", "git", "ignore");
+    const kept = {
+      ...preview,
+      files: preview.files.slice(0, 1),
+      kept: [{ path: ignore, line: "**/.claude/settings.local.json" }],
+    };
+    const view = dialogView({ type: "undo", preview: kept, top: 0, busy: false }, { width: 100, height: 9, ...OPTS });
+    const local = tilded("repos", "app", ".claude", "settings.local.json");
+    expect(view.lines.map((l) => l.text).slice(2, 4)).toEqual([
+      `${local}  remove`,
+      `${tilded(".config", "git", "ignore").padEnd(local.length)}  keeps **/.claude/settings.local.json, as Claude Code does`,
     ]);
   });
 
@@ -452,6 +468,7 @@ describe("the status after an apply or an undo", () => {
       restored: [],
       removed: [],
       skipped: [],
+      kept: [],
       ...more,
     });
     const json = at(".claude.json");

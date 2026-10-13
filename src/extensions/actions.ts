@@ -360,6 +360,14 @@ export const LEFT_ALONE: Readonly<Record<UndoSkip["reason"], string>> = {
 /** How undo names a file of clausona's own that it left alone. */
 export const KEPT_COPY = "the copy clausona kept";
 
+/**
+ * What undo says after the path of a file it leaves as the change made it, where it lists what it
+ * puts back: the line the change added to git's global ignore file stays, as Claude Code leaves it.
+ */
+export function keptWords(line: string): string {
+  return `keeps ${line}, as Claude Code does`;
+}
+
 /** The visibility `v` goes to next: on → name-only → user-invocable-only → off → on. */
 export const NEXT_VISIBILITY: Record<SkillVisibility, SkillVisibility> = {
   on: "name-only",

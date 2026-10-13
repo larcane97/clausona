@@ -280,7 +280,7 @@ const MCP_ACCOUNT = option("--account <name>", "Only this Claude account (repeat
 function undoPage(command: ExtensionsCommand): WritePage {
   return {
     title: `Put back what the last ${command} change changed`,
-    about: `Takes the newest ${command} change not undone yet and puts back each file it changed, unless something else changed it since. Run it again to go one change further back.`,
+    about: `Takes the newest ${command} change not undone yet and puts back each file it changed, unless something else changed it since.${command === "hooks" ? "" : " The line a change added to git's global ignore file stays, as Claude Code leaves it."} Run it again to go one change further back.`,
     options: [],
     shared: { only: ["--dry-run", "--yes", "--json"] },
     examples: [

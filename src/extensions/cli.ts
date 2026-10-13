@@ -7,6 +7,7 @@ import {
   type ExtensionsCommand,
   fileWords,
   KEPT_COPY,
+  keptWords,
   LEFT_ALONE,
   type Refusal,
   refusalText,
@@ -17,6 +18,7 @@ import {
   type ApplyResult,
   apply,
   lastOperation,
+  type UndoKept,
   type UndoPreview,
   type UndoSkip,
   undo,
@@ -126,6 +128,7 @@ export const UNDO_JSON_KEYS: readonly string[] = [
   "files",
   "restored",
   "skipped",
+  "kept",
 ];
 
 const EVERY_SCOPE: readonly Scope[] = [
@@ -1054,7 +1057,7 @@ function undoJson(
   talk: Talk,
   operation: UndoPreview["operation"],
   dryRun: boolean,
-  outcome: { files?: UndoPreview["files"]; restored?: string[]; skipped?: UndoSkip[] },
+  outcome: { files?: UndoPreview["files"]; restored?: string[]; skipped?: UndoSkip[]; kept: UndoKept[] },
 ) {
   return {
     version: 1,
@@ -1065,7 +1068,13 @@ function undoJson(
     ...(outcome.files ? { files: outcome.files.map((f) => ({ path: f.path, action: f.action })) } : {}),
     ...(outcome.restored ? { restored: outcome.restored } : {}),
     ...(outcome.skipped ? { skipped: outcome.skipped.map((s) => ({ file: s.file, reason: s.reason })) } : {}),
+    ...(outcome.kept.length > 0 ? { kept: outcome.kept.map((k) => ({ path: k.path, line: k.line })) } : {}),
   };
+}
+
+/** The files undo leaves as the change made them, each with the line it keeps, as pathLines takes them. */
+function keptRows(kept: readonly UndoKept[]): [string, string][] {
+  return kept.map((k) => [k.path, keptWords(k.line)]);
 }
 
 /** `{~path}  {words}` per path, the path dim, cut to fit. */
@@ -1076,16 +1085,19 @@ function pathLines(rows: [string, string][], talk: Talk, indent: number): string
   );
 }
 
-function previewText(summary: string, files: UndoPreview["files"], talk: Talk, dryRun: boolean): string {
+function previewText(
+  summary: string,
+  files: UndoPreview["files"],
+  kept: readonly UndoKept[],
+  talk: Talk,
+  dryRun: boolean,
+): string {
+  const rows: [string, string][] = [...files.map((f): [string, string] => [f.path, f.action]), ...keptRows(kept)];
   return trimmed([
     `  ${bold(`Undo: ${summary}?`)}`,
     "",
-    ...pathLines(
-      files.map((f) => [f.path, f.action]),
-      talk,
-      6,
-    ),
-    ...(files.length > 0 ? [""] : []),
+    ...pathLines(rows, talk, 6),
+    ...(rows.length > 0 ? [""] : []),
     "  Puts back what changed, unless it changed since.",
     ...(dryRun ? ["", "  Dry run: nothing changed. Run it again with --yes to undo it."] : []),
   ]).join("\n");
@@ -1105,10 +1117,10 @@ async function undoLast(talk: Talk): Promise<string> {
   const { summary } = preview.operation;
   if (options.dryRun) {
     return options.json
-      ? pretty(undoJson(talk, preview.operation, true, { files }))
-      : previewText(summary, files, talk, true);
+      ? pretty(undoJson(talk, preview.operation, true, { files, kept: preview.kept }))
+      : previewText(summary, files, preview.kept, talk, true);
   }
-  if (!(await agreed(talk, previewText(summary, files, talk, false)))) return CANCELLED;
+  if (!(await agreed(talk, previewText(summary, files, preview.kept, talk, false)))) return CANCELLED;
   const result = await undo(env, command);
   if (!result) throw nothingToUndo(command);
   const restored = result.restored.filter((file) => !own(file));
@@ -1127,17 +1139,23 @@ async function undoLast(talk: Talk): Promise<string> {
     const { id, summary: done, createdAt } = result.operation;
     const message = [
       restored.length > 0 ? `Undid part of it: ${done}` : `Could not undo: ${done}`,
-      ...pathLines([...back, ...left], talk, 4),
+      ...pathLines([...back, ...left, ...keptRows(result.kept)], talk, 4),
       ...(result.skipped.some((skip) => skip.reason === "locked") ? ["    Try again in a moment."] : []),
     ];
     throw new ExitError(message.join("\n"), 1, undefined, locked ? "locked" : "changed", {
       operation: { id, summary: done, createdAt },
       restored,
       skipped: theirs.map((s) => ({ file: s.file, reason: s.reason })),
+      ...(result.kept.length > 0 ? { kept: result.kept.map((k) => ({ path: k.path, line: k.line })) } : {}),
     });
   }
-  if (options.json) return pretty(undoJson(talk, result.operation, false, { restored, skipped: [] }));
-  return [success(`Undid: ${result.operation.summary}`), ...pathLines(back, talk, 4)].join("\n");
+  if (options.json) {
+    return pretty(undoJson(talk, result.operation, false, { restored, skipped: [], kept: result.kept }));
+  }
+  return [
+    success(`Undid: ${result.operation.summary}`),
+    ...pathLines([...back, ...keptRows(result.kept)], talk, 4),
+  ].join("\n");
 }
 
 // ─── The command ────────────────────────────────────────────────────

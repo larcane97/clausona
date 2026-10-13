@@ -101,6 +101,12 @@ export type ManifestEntry = {
   createdDirs?: string[];
   lock?: true;
   /**
+   * The line a text change added, which undo leaves in: git's global ignore file keeps Claude
+   * Code's settings.local.json line, as Claude Code never takes it out, and a settings.local.json
+   * it made since, in another repository, may rely on it.
+   */
+  keeps?: string;
+  /**
    * A stash file: the index in `entries` of the JSON edit it goes with. Undo removes it, or puts
    * it back, only once that edit is undone or was never made, so the entry ends up in exactly one
    * place: the tool's file or the stash.
@@ -142,9 +148,13 @@ export type ApplyResult =
   | { status: "stopped"; operation: OperationRef; done: number; total: number; stop: Stop }
   | { status: "nothing" };
 
+/** A file undo leaves as the change made it, and the line the change added to it, which stays. */
+export type UndoKept = { path: string; line: string };
+
 export type UndoPreview = {
   operation: OperationRef;
   files: { path: string; action: "put back" | "remove" | "edit back" }[];
+  kept: UndoKept[];
 };
 export type UndoSkip = { file: string; reason: "changed" | "occupied" | "locked" | "missing" | "failed" };
 /** What undo did with one entry, once it is settled: anything but `locked`. */
@@ -155,6 +165,7 @@ export type UndoResult = {
   /** Of `restored`, the files undo took away again: the first change to each made it. */
   removed: string[];
   skipped: UndoSkip[];
+  kept: UndoKept[];
 };
 
 const MANIFEST = "manifest.json";
@@ -238,7 +249,7 @@ async function replaceFile(
   what: "json" | "toml" | "text",
   read: FileRead | undefined,
   next: string,
-  more: { lock?: boolean; touched?: ManifestEntry["touched"]; stash?: ManifestEntry } = {},
+  more: { lock?: boolean; touched?: ManifestEntry["touched"]; stash?: ManifestEntry; keeps?: string } = {},
 ): Promise<number> {
   const real = read?.real ?? (await realOrSelf(file));
   let backup: string | null = null;
@@ -258,6 +269,7 @@ async function replaceFile(
     hashAfter: bytesHash(next),
     ...(more.touched ? { touched: more.touched } : {}),
     ...(more.lock ? { lock: true as const } : {}),
+    ...(more.keeps !== undefined ? { keeps: more.keeps } : {}),
     done: false,
   };
   run.manifest.entries.push(entry);
@@ -458,7 +470,7 @@ async function tomlChange(run: Run, change: TomlChange): Promise<Stop | undefine
 /**
  * `change.add` as the file's last line, after a line break if the file does not end in one, in
  * the file's own line endings; nothing when a line of it is that already. A file not there yet is
- * made, with the folders it needs.
+ * made, with the folders it needs. Backed up like any other, and left in by undo (`keeps`).
  */
 async function textChange(run: Run, change: TextChange): Promise<Stop | undefined> {
   const file = change.file;
@@ -468,7 +480,7 @@ async function textChange(run: Run, change: TextChange): Promise<Stop | undefine
   if (text.split(/\r?\n/).some((line) => line.trim() === change.add)) return undefined;
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const next = `${text}${text === "" || text.endsWith("\n") ? "" : eol}${change.add}${eol}`;
-  await replaceFile(run, file, "text", read, next);
+  await replaceFile(run, file, "text", read, next, { keeps: change.add });
   return undefined;
 }
 
@@ -725,6 +737,7 @@ function isEntry(value: unknown): value is ManifestEntry {
     (touched === undefined || isTouched(touched)) &&
     (createdDirs === undefined || (Array.isArray(createdDirs) && createdDirs.every((d) => typeof d === "string"))) &&
     (value.lock === undefined || value.lock === true) &&
+    (value.keeps === undefined || typeof value.keeps === "string") &&
     (value.with === undefined || isIndex(value.with)) &&
     (value.undone === undefined || (typeof value.undone === "string" && OUTCOMES.has(value.undone))) &&
     (value.moving === undefined || isMove(value.moving)) &&
@@ -809,10 +822,13 @@ async function changeMade(entry: ManifestEntry, dir: string): Promise<boolean> {
   }
 }
 
-/** The newest operation not undone yet, and the indexes of its entries with a change made that no undo has settled. */
-type Found = { manifest: Manifest; dir: string; made: number[] };
+/**
+ * The newest operation not undone yet, the indexes of its entries with a change made that no undo
+ * has settled, and what of it undo leaves as it is: the lines it added that stay (`keeps`).
+ */
+type Found = { manifest: Manifest; dir: string; made: number[]; kept: UndoKept[] };
 
-/** The newest operation not undone yet (of `command`, when given) with a change made. */
+/** The newest operation not undone yet (of `command`, when given) with a change made that undo puts back. */
 async function newestOperation(env: WriteEnv, command?: ExtensionsCommand): Promise<Found | null> {
   for (const id of await operationIds(env)) {
     const dir = path.join(env.backupRoot, id);
@@ -820,10 +836,13 @@ async function newestOperation(env: WriteEnv, command?: ExtensionsCommand): Prom
     if (!manifest || manifest.undoneAt !== null) continue;
     if (command !== undefined && manifest.command !== command) continue;
     const made: number[] = [];
+    const kept: UndoKept[] = [];
     for (const [at, entry] of manifest.entries.entries()) {
-      if (entry.undone === undefined && (await changeMade(entry, dir))) made.push(at);
+      if (entry.undone !== undefined || !(await changeMade(entry, dir))) continue;
+      if (entry.keeps === undefined) made.push(at);
+      else if (!kept.some((k) => k.path === shown(entry))) kept.push({ path: shown(entry), line: entry.keeps });
     }
-    if (made.length > 0) return { manifest, dir, made };
+    if (made.length > 0) return { manifest, dir, made, kept };
   }
   return null;
 }
@@ -842,7 +861,7 @@ export async function lastOperation(env: WriteEnv, command?: ExtensionsCommand):
     const file = { path: shown(entry), action: actionOf(entry) };
     if (!files.some((f) => f.path === file.path && f.action === file.action)) files.push(file);
   }
-  return { operation: refOf(found.manifest, found.dir), files };
+  return { operation: refOf(found.manifest, found.dir), files, kept: found.kept };
 }
 
 type Outcome = "restored" | UndoSkip["reason"];
@@ -958,8 +977,9 @@ async function undoEntry(
  * edit: that edit is undone first, and the stash file follows only once it is undone or was never
  * made - else it is skipped for the same reason, so the entry stays in one place. A step that
  * fails is skipped as `failed`, and what went back before it is still recorded. While anything is
- * skipped `locked`, the operation stays the one the next undo takes, for the entries left. Null
- * when there is none.
+ * skipped `locked`, the operation stays the one the next undo takes, for the entries left. A line
+ * a change added to git's global ignore file stays (`keeps`), and is said in `kept`. Null when
+ * there is none.
  */
 export async function undo(env: WriteEnv, command?: ExtensionsCommand): Promise<UndoResult | null> {
   const found = await newestOperation(env, command);
@@ -1038,7 +1058,7 @@ export async function undo(env: WriteEnv, command?: ExtensionsCommand): Promise<
     skipped: [...(earlier?.skipped ?? []).filter((skip) => skip.reason !== "locked"), ...skipped],
   };
   await save({ dir, manifest });
-  return { operation: refOf(manifest, dir), restored, removed, skipped };
+  return { operation: refOf(manifest, dir), restored, removed, skipped, kept: found.kept };
 }
 
 /** Removes operation dirs beyond the newest `keep`; returns the ids removed. */

@@ -221,7 +221,7 @@ describe("skills off", () => {
   });
 
   it.skipIf(!hasGit)(
-    "plans Claude Code's ignore line too when it makes a repo's first settings.local.json, and undo takes it out",
+    "plans Claude Code's ignore line too when it makes a repo's first settings.local.json, and undo leaves it in",
     async () => {
       const { h, app } = seed();
       git(app, ["init", "-q"]);
@@ -241,9 +241,18 @@ describe("skills off", () => {
       expect(again.changes.map((c: { file: string }) => c.file)).toEqual([
         path.join(app, ".claude", "settings.local.json"),
       ]);
+      // Claude Code never takes the line out, and a settings.local.json made since may rely on it:
+      // undo leaves it, and says so where it lists what it puts back.
+      const keeps = /\.config.git.ignore +keeps \*\*\/\.claude\/settings\.local\.json, as Claude Code does$/m;
+      expect(stripAnsi(await run("skills", ["undo", "--dry-run"]))).toMatch(keeps);
+      const preview = JSON.parse(await run("skills", ["undo", "--dry-run", "--json"]));
+      expect(preview.files).toEqual([{ path: path.join(app, ".claude", "settings.local.json"), action: "remove" }]);
+      expect(preview.kept).toEqual([{ path: ignore, line: "**/.claude/settings.local.json" }]);
       const undone = stripAnsi(await run("skills", ["undo", "--yes"]));
-      expect(undone).toMatch(/\.config.git.ignore +removed$/m);
-      expect(existsSync(ignore)).toBe(false);
+      expect(undone).toMatch(/settings\.local\.json +removed$/m);
+      expect(undone).toMatch(keeps);
+      expect(read(ignore)).toBe("**/.claude/settings.local.json\n");
+      expect(existsSync(path.join(app, ".claude", "settings.local.json"))).toBe(false);
     },
     SPAWNING_TEST_TIMEOUT_MS,
   );

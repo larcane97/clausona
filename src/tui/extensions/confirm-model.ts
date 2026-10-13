@@ -5,6 +5,7 @@ import {
   type ExtensionsCommand,
   fileWords,
   KEPT_COPY,
+  keptWords,
   LEFT_ALONE,
   stopText,
 } from "../../extensions/actions.js";
@@ -208,7 +209,11 @@ function partsOf(dialog: Dialog, opts: Opts): Parts {
       firstRefusal: [],
       moreRefusals: [],
       changes: aligned(
-        dialog.preview.files.map((file) => [tilde(file.path, opts.homeDir), file.action]),
+        [
+          ...dialog.preview.files.map((file) => [tilde(file.path, opts.homeDir), file.action]),
+          // What undo leaves as the change made it, where it lists what it puts back.
+          ...dialog.preview.kept.map((kept) => [tilde(kept.path, opts.homeDir), keptWords(kept.line)]),
+        ],
         width,
         0,
       ).map((text, at) => ({ key: `file-${at}`, text })),

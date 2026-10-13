@@ -148,7 +148,7 @@ describe("useWrites", () => {
       "an undo",
       "u",
       {
-        lastOperation: async () => ({ operation: { ...OPERATION, summary: "Turned off eli5" }, files: [] }),
+        lastOperation: async () => ({ operation: { ...OPERATION, summary: "Turned off eli5" }, files: [], kept: [] }),
         undo: async () => Promise.reject(new Error("disk full")),
       },
       "Could not undo it: disk full",
