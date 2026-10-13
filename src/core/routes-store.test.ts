@@ -235,6 +235,25 @@ describe("picks", () => {
     expect(readJson(p.picksPath)).toEqual({ version: 1, lastPicked: { "claude:a": "2026-10-09T01:02:03.000Z" } });
   });
 
+  // As a newer routes.json is never rewritten: an older clausona must not replace a newer record.
+  it("leaves a record of another version as it is, and picks from no record", async () => {
+    const p = paths();
+    const record = `${JSON.stringify({ version: 2, lastPicked: { "claude:a": "2026-10-08T00:00:00.000Z" } })}\n`;
+    writeFileSync(p.picksPath, record);
+    const seen: Array<Record<string, string>> = [];
+    const result = await pickWithRecord(
+      (lastPicked) => {
+        seen.push(lastPicked);
+        return { result: "claude:a", picked: "claude:a" };
+      },
+      () => Date.parse("2026-10-09T00:00:00.000Z"),
+      p,
+    );
+    expect(result).toBe("claude:a");
+    expect(seen).toEqual([{}]);
+    expect(readFileSync(p.picksPath, "utf8")).toBe(record);
+  });
+
   it("records nothing when nothing was picked", async () => {
     const p = paths();
     expect(await pickWithRecord(() => ({ result: null }), Date.now, p)).toBeNull();

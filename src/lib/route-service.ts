@@ -267,6 +267,7 @@ export async function rankRouteNow(
     },
     deps.clock,
     deps.paths,
+    new Set(Object.keys(registry.profiles)),
   );
 }
 

@@ -71,7 +71,9 @@ account too, since its week is over, and the run's note says `weekly limit has r
 
 Round-robin keeps one record, `~/.clausona/route-picks.json`, with the time each account was
 last picked. The time belongs to the account, not to a route. A pick on one route counts as that
-account's turn on every route it is in.
+account's turn on every route it is in. A profile you remove drops out of the record at the next
+pick. A record written by a newer clausona is left alone: picks go on, but are not recorded until
+you update.
 
 Picks are made under a lock, and each one sees the picks before it. Start
 `clausona run --route main` in four terminals at the same moment and they land on four

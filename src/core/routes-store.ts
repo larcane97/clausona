@@ -163,41 +163,64 @@ export async function replaceRoutesText(
   });
 }
 
-export async function readPicks(paths: RoutesPaths = routesPaths()): Promise<Record<string, string>> {
+const PICKS_VERSION = 1;
+
+/** The pick record, and whether a pick may write over it. */
+type PickRecord = { lastPicked: Record<string, string>; writable: boolean };
+
+async function readPickRecord(paths: RoutesPaths): Promise<PickRecord> {
   const text = await readText(paths.picksPath).catch(() => null);
-  if (text === null) return {};
+  if (text === null) return { lastPicked: {}, writable: true };
   try {
-    const raw = JSON.parse(text) as { version?: unknown; lastPicked?: unknown };
-    if (raw.version !== 1 || typeof raw.lastPicked !== "object" || raw.lastPicked === null) return {};
-    return Object.fromEntries(
+    const raw = JSON.parse(text) as { version?: unknown; lastPicked?: unknown } | null;
+    // Another version's record is that version's, as a newer routes.json is: picks are made from
+    // nothing and go unrecorded rather than write over it.
+    if (typeof raw?.version === "number" && raw.version !== PICKS_VERSION) return { lastPicked: {}, writable: false };
+    if (raw?.version !== PICKS_VERSION || typeof raw.lastPicked !== "object" || raw.lastPicked === null) {
+      return { lastPicked: {}, writable: true };
+    }
+    const lastPicked = Object.fromEntries(
       Object.entries(raw.lastPicked as Record<string, unknown>).filter(
         (entry): entry is [string, string] => typeof entry[1] === "string",
       ),
     );
+    return { lastPicked, writable: true };
   } catch {
     // A broken record costs one round-robin turn, never a launch.
-    return {};
+    return { lastPicked: {}, writable: true };
   }
+}
+
+export async function readPicks(paths: RoutesPaths = routesPaths()): Promise<Record<string, string>> {
+  return (await readPickRecord(paths)).lastPicked;
 }
 
 /**
  * Picks under the pick-record lock and records the choice, so picks made at the same moment
  * see each other. A lock that cannot be had within 2 s picks from the record as it is and
- * records nothing.
+ * records nothing; so does a record of another version, which is left as it is.
+ *
+ * `registered` are the profiles there are now: a removed one's pick time is dropped as the record
+ * is written. Round-robin compares pick times only among a route's members, which are registered.
  */
 export async function pickWithRecord<T>(
   choose: (lastPicked: Record<string, string>) => { result: T; picked?: string },
   clock: () => number,
   paths: RoutesPaths = routesPaths(),
+  registered?: ReadonlySet<string>,
 ): Promise<T> {
   const release = await acquireFileLock(paths.picksLock, { staleMs: LOCK_STALE_MS, waitMs: PICKS_LOCK_WAIT_MS }).catch(
     () => null,
   );
   try {
-    const lastPicked = await readPicks(paths);
+    const { lastPicked, writable } = await readPickRecord(paths);
     const { result, picked } = choose(lastPicked);
-    if (release && picked) {
-      const next = { version: 1, lastPicked: { ...lastPicked, [picked]: new Date(clock()).toISOString() } };
+    if (release && picked && writable) {
+      const kept = Object.entries(lastPicked).filter(([id]) => !registered || registered.has(id));
+      const next = {
+        version: PICKS_VERSION,
+        lastPicked: { ...Object.fromEntries(kept), [picked]: new Date(clock()).toISOString() },
+      };
       await writeAtomic(paths.picksPath, toText(next)).catch(() => {});
     }
     return result;

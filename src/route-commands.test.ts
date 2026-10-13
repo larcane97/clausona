@@ -584,6 +584,18 @@ describe("route explain and pick", () => {
     expect(JSON.parse(await run("pick", "main", "--json"))).toMatchObject({ profile: "claude:a", stage: "pool" });
   });
 
+  it("drops a removed profile's pick time when it records the next pick", async () => {
+    const { run, deps } = setup();
+    await run("add", "main");
+    const gone = { "claude:gone": "2026-10-01T00:00:00.000Z", "claude:c": "2026-10-02T00:00:00.000Z" };
+    writeFileSync(deps.paths.picksPath, JSON.stringify({ version: 1, lastPicked: gone }));
+    expect(await run("pick", "main")).toBe("claude:a");
+    expect(JSON.parse(readFileSync(deps.paths.picksPath, "utf8")).lastPicked).toEqual({
+      "claude:a": new Date(NOW).toISOString(),
+      "claude:c": "2026-10-02T00:00:00.000Z",
+    });
+  });
+
   it("fails with exit code 75 when nobody can be picked, as JSON when asked", async () => {
     const { run } = setup({ "claude:a": snap(100, 0), "claude:b": snap(100, 0), "claude:c": snap(0, 100) });
     await run("add", "main");
