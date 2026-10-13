@@ -8,9 +8,10 @@ import {
   DEFAULT_MAX_USAGE,
   type RouteSpec,
   type RoutesFile,
+  toolsOf,
   withDefaults,
 } from "../../core/route-config.js";
-import { compareIds, expandPatterns } from "../../core/route-patterns.js";
+import { compareIds, expandPatterns, splitToolPrefix } from "../../core/route-patterns.js";
 import {
   clearDefaultRoute,
   clearDirRoute,
@@ -119,7 +120,7 @@ type FormOpen = { mode: "new" } | { mode: "edit"; name: string; spec: RouteSpec 
 const NO_PROFILES: Registry = { version: 2, primarySources: {}, activeProfiles: {}, profiles: {} };
 
 /**
- * The route `name` ranked on `reading`, as a run of `model` would rank it when one is given; with
+ * The route `name` ranked on `reading`, as a run of a model would rank it when `as` names one; with
  * no reading yet, on nothing, which lists the members only.
  */
 function rankEntry(
@@ -128,7 +129,7 @@ function rankEntry(
   registry: Registry | null,
   reading: Reading | null,
   now: number,
-  model?: string,
+  as?: Pick<ModelChoice, "model" | "tool">,
 ): Entry {
   const route = withDefaults(file.routes[name]);
   const ranking = rankRoute({
@@ -138,9 +139,10 @@ function rankEntry(
     lastPicked: reading?.lastPicked ?? {},
     now: reading?.now ?? now,
     resume: false,
-    ...(model ? { model } : {}),
+    ...(as?.tool ? { onlyTool: as.tool } : {}),
+    ...(as ? { model: as.model } : {}),
   });
-  return { name, route, ranking };
+  return { name, route, ranking, ...(as?.tool ? { onlyTool: as.tool } : {}) };
 }
 
 /** Every route, by name, ranked as a run that names no model. */
@@ -150,25 +152,43 @@ function rankAll(file: RoutesFile, registry: Registry | null, reading: Reading |
     .map((name) => rankEntry(name, file, registry, reading, now));
 }
 
-/** A model `m` ranks by: the limit's name, and the model `--model` would be given for it. */
-type ModelChoice = { label: string; model: string };
+/**
+ * A model `m` ranks by: the limit's name, the model `--model` would be given for it and, on an
+ * `all` route, the one tool whose accounts report the limit.
+ */
+type ModelChoice = { label: string; model: string; tool?: ToolName };
 
 /**
  * The models a route's accounts report a limit on, each once, in alphabetical order. The model is
  * the limit's name in lower case (`opus`, `gpt-5.3-codex-spark`), which routing matches to that
  * limit as it matches a run's. Only an account that can be ranked counts: a skipped one's limit
  * counts for nothing.
+ *
+ * A run on an `all` route that names a model names its tool too, and only that tool's accounts are
+ * ranked for it (`clausona run claude --route any --model opus`). So a limit only one tool's
+ * accounts report ranks those accounts alone, as `route explain --tool` does.
  */
 function modelChoices(ranking: Ranking, quotas: Record<string, QuotaSnapshot>): ModelChoice[] {
-  const choices = new Map<string, string>();
+  const choices = new Map<string, { label: string; tools: Set<ToolName> }>();
   for (const row of ranking.rows) {
     if (row.skip) continue;
+    const tool = toolsOf(ranking.route.tool).find((each) => each === splitToolPrefix(row.id).prefix);
     for (const { label } of modelLimitsOf(quotas[row.id])) {
       const model = asModel(label);
-      if (model !== undefined && !choices.has(model)) choices.set(model, label);
+      if (model === undefined) continue;
+      const choice = choices.get(model) ?? { label, tools: new Set() };
+      if (tool) choice.tools.add(tool);
+      choices.set(model, choice);
     }
   }
-  return [...choices].sort(([a], [b]) => (a < b ? -1 : 1)).map(([model, label]) => ({ label, model }));
+  const narrows = ranking.route.tool === "all";
+  return [...choices]
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([model, { label, tools }]) => ({
+      label,
+      model,
+      ...(narrows && tools.size === 1 ? { tool: [...tools][0] } : {}),
+    }));
 }
 
 /** A limit's name as `--model` takes it, or undefined for one it would refuse. */
@@ -352,15 +372,12 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
     () => (plain[index] ? modelChoices(plain[index].ranking, shown?.quotas ?? {}) : []),
     [plain, index, shown],
   );
-  // A model no account reports a limit on any more, after a refresh, is no choice.
   const model =
-    chosen && chosen.route === plain[index]?.name && models.some((each) => each.model === chosen.model)
-      ? chosen.model
-      : undefined;
+    chosen && chosen.route === plain[index]?.name ? models.find((each) => each.model === chosen.model) : undefined;
   /** Every route as the screen shows it: the selected one ranked as a run of the chosen model. */
   const entries = useMemo(
     () =>
-      loaded.kind === "ready" && model !== undefined
+      loaded.kind === "ready" && model
         ? plain.map((entry, i) =>
             i === index ? rankEntry(entry.name, loaded.file, loaded.registry, shown, io.clock(), model) : entry,
           )
@@ -624,7 +641,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
       setChosen(null);
     } else if (input === "m" && selected && models.length > 0) {
       // No model, then each in turn, then no model again.
-      const next = models[models.findIndex((each) => each.model === model) + 1];
+      const next = models[models.findIndex((each) => each.model === model?.model) + 1];
       setChosen(next ? { route: selected.name, model: next.model } : null);
     } else if (input === "r" && count > 0) {
       setRefreshing(true);

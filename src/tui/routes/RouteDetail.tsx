@@ -12,7 +12,7 @@ import {
   spendText,
   toolLabel,
 } from "../../lib/route-render.js";
-import type { QuotaWindow } from "../../types.js";
+import type { QuotaWindow, ToolName } from "../../types.js";
 import { QuotaCell } from "../components/QuotaCell.js";
 import { color } from "../theme.js";
 import { useWidth } from "../use-width.js";
@@ -23,8 +23,11 @@ import { useWidth } from "../use-width.js";
  * be, it shows each member's limit on that model too, as `csn route explain --model` does.
  */
 
-/** A route as the screen lists it: its name, the route with its defaults, and its ranking. */
-export type Entry = { name: string; route: Route; ranking: Ranking };
+/**
+ * A route as the screen lists it: its name, the route with its defaults, and its ranking.
+ * `onlyTool` is the tool an `all` route is ranked for, as a run naming it would be.
+ */
+export type Entry = { name: string; route: Route; ranking: Ranking; onlyTool?: ToolName };
 
 /** A row's mark (`▸`) and the space after it. */
 export const MARK = 2;
@@ -51,7 +54,7 @@ export function Setting({ label, value }: { label: string; value: string }) {
  * ranks by in turn. Until one is chosen, a line under the table names them.
  */
 export function RouteDetail({ entry, pending, models }: { entry: Entry; pending: boolean; models: string[] }) {
-  const { name, route, ranking } = entry;
+  const { name, route, ranking, onlyTool } = entry;
   const [detail, width] = useWidth();
   return (
     <Box ref={detail} flexDirection="column">
@@ -64,8 +67,13 @@ export function RouteDetail({ entry, pending, models }: { entry: Entry; pending:
         value={`${route.from.join(", ")}${route.exclude.length ? ` except ${route.exclude.join(", ")}` : ""}`}
       />
       <Setting label="Fallback" value={route.fallback.length ? route.fallback.join(", ") : "none"} />
-      {/* The option that ranks the same on the command line. */}
-      {ranking.model ? <Setting label="Model" value={`ranked as --model ${modelWord(ranking.model)}`} /> : null}
+      {/* The options that rank the same on the command line. */}
+      {ranking.model ? (
+        <Setting
+          label="Model"
+          value={`ranked as ${onlyTool ? `--tool ${onlyTool} ` : ""}--model ${modelWord(ranking.model)}`}
+        />
+      ) : null}
       <MemberTable ranking={ranking} pending={pending} width={width} />
       {ranking.model || models.length === 0 ? null : <ModelLimits models={models} />}
     </Box>

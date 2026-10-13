@@ -441,6 +441,11 @@ accounts free for that run. The settings say `ranked as --model opus`. Press `m`
 next model, and after the last one the route is ranked as a run that names no model. Moving to
 another route does that too.
 
+On an `all` route, a run that names a model names its tool too, so only the accounts of the tool
+that reports the limit are ranked: for Opus, the Claude Code accounts, as
+`clausona run claude --route <route> -- --model opus` ranks them. The settings then say
+`ranked as --tool claude --model opus`, the options that rank the same with `route explain`.
+
 | Key | Does |
 |---|---|
 | `↑` `↓` | Move between routes |

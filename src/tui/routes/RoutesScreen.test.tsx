@@ -1145,4 +1145,28 @@ describe("ranked as a run of one model", () => {
     expect(line(claude, "claude:work")).toMatch(/▸ claude:work\s.*\b10%\s+next$/);
     expect(line(claude, "claude:team")).toMatch(/claude:team\s.*\b95%\s+over 80%$/);
   });
+
+  // A run on an all route that names a model names its tool, and only that tool's accounts are ranked.
+  it("ranks an all route's accounts of the tool that reports the limit, and says so", async () => {
+    const { instance } = setup({ registry: { loads: WITH_CODEX, problem: null }, collect: async () => LIMITS });
+    await ranked(instance);
+    await press(instance, DOWN);
+    await press(instance, DOWN);
+    expect(panes(text(instance)).list[2]).toMatch(/^▸ wide\s+all\s+5\/7$/);
+
+    await press(instance, "m");
+    const spark = panes(text(instance));
+    expect(spark.detail).toContain("Model     ranked as --tool codex --model gpt-5.3-codex-spark");
+    expect(row(spark.detail, "codex:x")).toMatch(/^▸ codex:x\s.*next$/);
+    expect(row(spark.detail, "codex:personal-max")).toMatch(/over 80%$/);
+    expect(spark.detail.some((line) => line.includes("claude:"))).toBe(false);
+    expect(spark.list[2]).toMatch(/^▸ wide\s+all\s+1\/2$/);
+
+    await press(instance, "m");
+    const opus = panes(text(instance));
+    expect(opus.detail).toContain("Model     ranked as --tool claude --model opus");
+    expect(row(opus.detail, "claude:work")).toMatch(/^▸ claude:work\s.*10%\s+next$/);
+    expect(opus.detail.some((line) => line.includes("codex:"))).toBe(false);
+    expect(opus.list[2]).toMatch(/^▸ wide\s+all\s+2\/5$/);
+  });
 });
