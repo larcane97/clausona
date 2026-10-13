@@ -20,6 +20,10 @@ describe("canonical", () => {
     );
   });
 
+  it("writes a bigint, as smol-toml reads an integer past 2^53, as its digits", () => {
+    expect(canonical({ big: 9007199254740993n, small: 5 })).toBe('{"big":9007199254740993,"small":5}');
+  });
+
   it("keeps a __proto__ key that JSON.parse read as a key", () => {
     expect(canonical(JSON.parse('{"a":1,"__proto__":{"x":1}}'))).toBe('{"__proto__":{"x":1},"a":1}');
   });

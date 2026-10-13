@@ -81,7 +81,7 @@ Project and Global are these files. The header names the folders it found.
 | Claude hooks | `.claude/settings.json` and `.claude/settings.local.json` | `~/.claude/settings.json` |
 | Codex skills | `.agents/skills` | `~/.agents/skills` and the `skills` folder of Codex's home |
 | Codex MCP | `.codex/config.toml` | `config.toml` in Codex's home |
-| Codex hooks | `.codex/hooks.json` | `hooks.json` in Codex's home |
+| Codex hooks | `.codex/hooks.json`, and `[hooks]` in `.codex/config.toml` | `hooks.json` in Codex's home, and `[hooks]` in its `config.toml` |
 
 `~/.claude` stands for the primary Claude Code folder, which every account's `settings.json`
 and `skills` link to. Codex's home is the primary Codex folder, `~/.codex` by default.
@@ -201,6 +201,11 @@ The MCP lists come after the pick: Claude Code takes one copy per name, then che
 its name, and the copies below it don't start either. Their details say why, as in
 `hidden by the Project copy (itself off: deniedMcpServers in ~/.claude/settings.json)`.
 
+Codex takes a server a trusted project's `.codex/config.toml` defines over your own of the same
+name: it merges the project's table over yours, and starts that one. So there your copy is
+`hidden by Project copy`, and Loaded has the project's. A project Codex does not trust leaves
+yours in place.
+
 The copy that loses is tagged with the scope of the one that wins: `hidden by Global copy` for
 a Global skill, `hidden by Project copy` for a local server or this project's `.mcp.json`,
 `hidden by Parent folders copy` for a `.mcp.json` in a folder above, and `hidden by Managed
@@ -222,7 +227,7 @@ The `state` of an item in JSON is one of these:
 
 | State | Meaning |
 |---|---|
-| `on` | The switch is on. It loads unless a tag says `hidden by …` or `broken link`, or, for a Codex skill, `no front matter` or `name too long`, or, for a Codex hook, `invalid hooks file`. |
+| `on` | The switch is on. It loads unless a tag says `hidden by …` or `broken link`, or, for a Codex skill, `no front matter`, `invalid front matter`, `name too long` or `no description`, or, for a Codex hook, `invalid hooks file`, `not supported`, `empty command` or `empty tool`. |
 | `off` | It is turned off. |
 | `name-only` | A Claude skill set to `name-only` in `skillOverrides`. The details say "Shows as name only". |
 | `user-invocable-only` | A Claude skill set to `user-invocable-only` in `skillOverrides`. The details say "Shows as only when you call it". |
@@ -232,7 +237,8 @@ The `state` of an item in JSON is one of these:
 
 `state` is the switch's value and nothing more. A row loads here when its state is `on`,
 `name-only` or `user-invocable-only` and no tag says `hidden by …` or `broken link`, or, for a
-Codex skill, `no front matter` or `name too long`, or, for a Codex hook, `invalid hooks file`.
+Codex skill, `no front matter`, `invalid front matter`, `name too long` or `no description`, or,
+for a Codex hook, `invalid hooks file`, `not supported`, `empty command` or `empty tool`.
 A hidden copy, a broken link and a file Codex skips keep their own `state`; only the tags say
 they do not load. A `mixed` row loads in the accounts whose `stateByAccount` value is `on`,
 except where another copy wins there, which its details say. A row read per account says it
@@ -298,7 +304,10 @@ The switches are read from these places:
     unless the environment sets them.
 - Codex skills: `[[skills.config]]` in Codex's `config.toml`, by name or by path. A path names
   the skill whether it goes through a link or not, as Codex reads it.
-- Codex MCP servers: `mcp_servers.<name>.enabled` in Codex's or the project's `config.toml`.
+- Codex MCP servers: `mcp_servers.<name>.enabled` in Codex's or the project's `config.toml`. A
+  server a project's `config.toml` defines is `off` while Codex does not trust the project, as
+  Codex leaves that file out: a same-name server of your own loads there instead. Its details
+  say so, with the `Trust` line a switch there gets.
 - Codex plugins and what they bring: a `[plugins."<plugin>@<marketplace>"]` table in Codex's or
   the project's `config.toml` turns a plugin on, and `enabled = false` in it turns it off. A
   plugin no table names is off. A plugin's skill is switched by its full name in
@@ -316,16 +325,29 @@ The switches are read from these places:
   profile trusts a hook on its own. A hook trusted in at least one profile is `on`. One trusted
   in none, or changed since it was, is `pending-approval`, and `enabled = false` under every
   profile's key turns it `off`. A bundled plugin's cleanup hook runs without a review. A
-  plugin's hooks are off while the plugin is off. Codex reads a hooks file only when it holds
-  `hooks` and, at most, a `description` at its top, so the hooks of any other are tagged
-  `invalid hooks file`. A plugin whose `hooks` lists hook files and hooks together has none.
+  plugin's hooks are off while the plugin is off. A project's hooks are `off` while Codex does
+  not trust the project, trusted themselves or not: Codex then leaves the project's `.codex`
+  folder out. Their details say so, and why: `Trust  Codex does not trust this project, so it
+  ignores its .codex folder.` Codex reads a hooks file only when it holds `hooks` and, at most,
+  a `description` at its top, and every hook in it is one it can read: a known `type`, a string
+  `command`, `server` and `tool`, a whole-number `timeout`, and so on. The hooks of any other
+  file are tagged `invalid hooks file`, and so are all of a plugin manifest's inline hooks when
+  one of them is unreadable. A plugin whose `hooks` lists hook files and hooks together has none. Codex runs no prompt or
+  agent hook yet, nor an MCP tool hook when a session ends: those are tagged `not supported`. It
+  skips a command hook whose command is empty, or only spaces, and an MCP tool hook whose server
+  or tool is, and runs the rest of its file: those are tagged `empty command` and `empty tool`.
+  Codex also runs the hooks a `config.toml` holds, as
+  `[[hooks.<Event>]]` tables, beside that folder's `hooks.json`: Codex's own and a trusted
+  project's. Their key holds the `config.toml`'s path. clausona lists them and their trust, and
+  leaves changing them to `/hooks` in Codex (`codex-config-hook`).
 
 ### Tags
 
 A row can carry several tags. They are listed most important first: `broken link`, then
 `off`, `off here` or `off in N of M accounts`, then `not here`, then `pending approval`, then
-`hidden by … copy`, then `unused`, then `no front matter`, then `name too long`, then
-`invalid hooks file`. The NOTE column shows the first; JSON `tags` has them all.
+`hidden by … copy`, then `unused`, then `no front matter`, then `invalid front matter`, then
+`name too long`, then `no description`, then `invalid hooks file`, then `not supported`, then
+`empty command`, then `empty tool`. The NOTE column shows the first; JSON `tags` has them all.
 
 | Tag | When |
 |---|---|
@@ -335,13 +357,18 @@ A row can carry several tags. They are listed most important first: `broken link
 | `off in N of M accounts` | Off in N accounts and on in the others. M counts the accounts that have the row; for a server every account sees, the accounts that have opened this project. |
 | `not here` | A `.mcp.json` server of a folder that is no project, seen from a project outside it: the state `not-here`. |
 | `pending approval` | A `.mcp.json` server that no account has approved in this project, or a Codex hook not trusted yet with `/hooks`, or changed since it was. |
-| `hidden by Project copy` | In every account that has it, a same-name copy in Project wins: the account's local server, or this project's `.mcp.json`. |
+| `hidden by Project copy` | In every account that has it, a same-name copy in Project wins: the account's local server, or this project's `.mcp.json`. For Codex, a server this project's `.codex/config.toml` defines, where Codex trusts the project. |
 | `hidden by Global copy` | In every account that has it, a same-name skill in Global wins: the primary's, or the account's own. |
 | `hidden by Parent folders copy` | In every account that has it, a same-name `.mcp.json` copy in a parent folder wins. |
 | `unused` | A Claude skill the rule below calls unused. |
-| `no front matter` | A skill whose `SKILL.md` has no front matter. Claude Code loads it under its folder's name, with no description, so it has only the skill's first non-empty line to tell when to use it: a quiet note, the skill still loads. Codex skips it, with no front matter between `---` lines, so a Codex one is not in Loaded. |
+| `no front matter` | A skill whose `SKILL.md` has no front matter. Claude Code loads it under its folder's name, with no description, so it has only the skill's first non-empty line to tell when to use it: a quiet note, the skill still loads. Codex skips it, with no front matter between `---` lines, so a Codex one is not in Loaded. For Codex, a `SKILL.md` that starts with a byte order mark has none either. |
+| `invalid front matter` | A Codex skill whose front matter is not YAML Codex reads: say, a quoted description with more text after its closing quote, a description line that runs on to the next line unindented, or a description written as a list. Codex skips it, so it is not in Loaded. A description with a `: ` in it is fine: Codex quotes it and reads it again, and so does clausona. |
 | `name too long` | A Codex skill whose name is over 64 characters. Codex skips it, so it is not in Loaded. |
-| `invalid hooks file` | A Codex hook in a hooks file with more than `hooks` and a `description` at its top, such as its events, or a `$schema`. Codex skips the whole file, so the hook does not run. |
+| `no description` | A Codex skill whose front matter has no `description`, or one that is empty or only spaces. Codex skips it, so it is not in Loaded. |
+| `invalid hooks file` | A Codex hook in a hooks file with more than `hooks` and a `description` at its top, such as its events, or a `$schema`, or with a hook Codex cannot read, such as a `command` that is not a string. Codex skips the whole file, so the hook does not run. |
+| `not supported` | A Codex hook of a kind Codex does not run: a prompt or an agent hook, or an MCP tool hook on `SessionEnd`. Codex skips it, whatever its trust, so it is not in Loaded. |
+| `empty command` | A Codex command hook whose command is empty or only spaces. Codex skips it, and runs the rest of its file, so it is not in Loaded. |
+| `empty tool` | A Codex MCP tool hook whose server or tool is empty or only spaces. Codex skips it, and runs the rest of its file, so it is not in Loaded. |
 
 The three `hidden by` tags are the forms of `hidden by <scope> copy`, which names the scope of
 the copy that wins. [Which copy wins](#which-copy-wins) says which copy that is.
@@ -653,7 +680,10 @@ further."
 
 When a file cannot be read, the text output ends with "Could not read every file, so this
 list may miss what they hold:" and each file, with a position or a reason and never what it
-holds. JSON lists them in `warnings`. The exit code stays 0.
+holds. JSON lists them in `warnings`. The exit code stays 0. A Codex `config.toml` with an
+integer too large for 64 bits is one of them, and so is one with a hook under `[hooks]` Codex
+cannot read: Codex refuses the whole file, and so clausona reads none of it. A larger integer
+that fits in 64 bits reads as Codex reads it.
 
 ## Changing things
 
@@ -774,7 +804,7 @@ the primary Claude Code folder, and Codex's home is `~/.codex` by default, as un
 | Claude hooks | Refused: hooks are switched everywhere | Taken out of its settings file and kept by clausona | Deleted from its settings file |
 | Codex skills | A project skill: a `[[skills.config]]` entry with the `path` of its `SKILL.md` and `enabled = false`, in Codex's `config.toml`. A user skill: refused | A `[[skills.config]]` entry with its `name` and `enabled = false`, in Codex's `config.toml` | As for Claude skills. A built-in skill is refused. |
 | Codex MCP | `mcp_servers.<name>.enabled = false` in the project's `.codex/config.toml` | A user server: `mcp_servers.<name>.enabled = false` in Codex's `config.toml`. A project server: refused | `[mcp_servers.<name>]` deleted from the `config.toml` that defines it |
-| Codex hooks | Refused: hooks are switched everywhere | Taken out of its `hooks.json` and kept by clausona | Deleted from its `hooks.json` |
+| Codex hooks | Refused: hooks are switched everywhere | Taken out of its `hooks.json` and kept by clausona. One in a `config.toml`: refused | Deleted from its `hooks.json`. One in a `config.toml`: refused |
 | Codex plugins, and what they bring | Refused: `/plugins` in Codex switches a plugin | Refused | Refused: `/plugins` in Codex uninstalls a plugin |
 
 `.claude/settings.local.json` is the project's own Claude Code settings, the ones not shared
@@ -1046,6 +1076,7 @@ the CLI's words. In the table `<tool>` is the tool's name and `<scope>` a scope'
 | `mcp-not-allowed` | `allowedMcpServers` in `<file>` leaves it out. | Change it there. | Change it there. |
 | `managed-mcp` | `<file>` lets only its own servers start. | Only your organization can change that file. | Only your organization can change that file. |
 | `bundled-off` | `disableBundledSkills` in `<file>` turns off the skills that come with Claude Code. | Change it there. | Change it there. |
+| `codex-config-hook` | It is written in `<file>`, where clausona does not change hooks. | Use `/hooks` in Codex, or edit the file. | Use `/hooks` in Codex, or edit the file. |
 
 On the screen, `stash-gone` on one account's server, in a row other accounts share, says
 `Press d and choose only work in the dialog.` instead, since `d` on the row would delete the

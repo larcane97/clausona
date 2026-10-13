@@ -81,11 +81,22 @@ export type Extension = {
   noFrontMatter?: true;
   /**
    * Why Codex does not load this, in its tag's words: a skill whose SKILL.md has `no front
-   * matter` (no block delimited by `---`) or whose `name too long` (over 64 characters), and a
-   * hook in an `invalid hooks file` (more than `hooks` and `description` at its top). Unlike
-   * Claude Code, Codex lists no skill without front matter, so it does not load.
+   * matter` (no block delimited by `---`), `invalid front matter` (not YAML Codex reads), whose
+   * `name too long` (over 64 characters) or with `no description`, a hook in an `invalid hooks
+   * file` (more than `hooks` and `description` at its top), and one Codex does not run at all,
+   * `not supported` (a prompt or agent hook, an MCP tool hook when a session ends), with an
+   * `empty command`, or an MCP tool hook with an `empty tool` (or server). Unlike Claude Code,
+   * Codex lists no skill without front matter, or without a description, so it does not load.
    */
-  codexError?: "no front matter" | "name too long" | "invalid hooks file";
+  codexError?:
+    | "no front matter"
+    | "invalid front matter"
+    | "name too long"
+    | "no description"
+    | "invalid hooks file"
+    | "not supported"
+    | "empty command"
+    | "empty tool";
   /** What is shown about it, already redacted. */
   summary?: Record<string, string>;
   /** Hooks: where the command sits in its file. */

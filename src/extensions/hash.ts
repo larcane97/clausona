@@ -17,12 +17,14 @@ function isDateLike(value: unknown): value is { toISOString(): string } {
 
 /**
  * JSON with object keys sorted at every depth; a Date-like value (has toISOString) as its ISO
- * string; undefined in an array as null. A Date-like value is how smol-toml reads a TOML date or
- * time. Like JSON.stringify, a key whose value is undefined is left out.
+ * string; a bigint as its digits; undefined in an array as null. A Date-like value is how
+ * smol-toml reads a TOML date or time, and a bigint how it reads an integer past 2^53. Like
+ * JSON.stringify, a key whose value is undefined is left out.
  */
 export function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map((v) => (v === undefined ? "null" : canonical(v))).join(",")}]`;
   if (isDateLike(value)) return JSON.stringify(value.toISOString());
+  if (typeof value === "bigint") return value.toString();
   if (typeof value === "object" && value !== null) {
     const record = value as Record<string, unknown>;
     // Written out by hand rather than rebuilt as an object: a "__proto__" key stays a key.

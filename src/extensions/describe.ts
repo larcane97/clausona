@@ -37,7 +37,8 @@ import { codexTrusted, isMcpjsonServer, MANAGED_MCP_KEY, mcpBlocked, relevantIn,
 
 /**
  * One of the verbatim tags: off, off here, off in N of M accounts, not here, unused, broken
- * link, pending approval, hidden by … copy, no front matter, name too long, invalid hooks file.
+ * link, pending approval, hidden by … copy, no front matter, invalid front matter, name too long,
+ * no description, invalid hooks file, not supported, empty command, empty tool.
  */
 export type Tag = string;
 
@@ -99,9 +100,24 @@ export function hookWhen(item: Extension): string {
 /** Why Codex does not load something, by its `codexError`, for its details. */
 const CODEX_SKIPS: Record<NonNullable<Extension["codexError"]>, string> = {
   "no front matter": "Codex skips its SKILL.md: it has no front matter",
+  "invalid front matter": "Codex skips its SKILL.md: its front matter is not valid YAML",
   "name too long": "Codex skips its SKILL.md: its name is over 64 characters",
-  "invalid hooks file": "Codex skips its hooks file: it holds more than hooks and a description at its top",
+  "no description": "Codex skips its SKILL.md: its front matter has no description",
+  "invalid hooks file":
+    "Codex skips its hooks file: it holds more than hooks and a description at its top, or a hook Codex cannot read",
+  "not supported": "Codex does not run an MCP tool hook when a session ends",
+  "empty command": "Codex skips a hook whose command is empty",
+  "empty tool": "Codex skips an MCP tool hook whose server or tool is empty",
 };
+
+/** Why Codex does not load `item`, which has a `codexError`: for a hook it does not run, of which kind. */
+function codexSkip(item: Extension, error: NonNullable<Extension["codexError"]>): string {
+  const type = item.summary?.type;
+  if (error === "not supported" && (type === "prompt" || type === "agent")) {
+    return `Codex does not run ${type} hooks yet`;
+  }
+  return CODEX_SKIPS[error];
+}
 
 /** A plugin's name without its marketplace: `superpowers@official` is `superpowers`. */
 function pluginName(item: Extension): string {
@@ -294,11 +310,13 @@ function scopeLabel(item: Extension, project: string | undefined): string {
 
 /**
  * Every tag that applies, most important first: broken link > off > off here > off in N of M
- * accounts > not here > pending approval > hidden by … > unused > no front matter > name too
- * long > invalid hooks file. A row that is not here has no state here, so no tag of one. `no
- * front matter` is a quiet note for a Claude skill, which Claude Code loads all the same; for a
- * Codex skill, which Codex skips, it and `name too long` are why it is not in Loaded, and
- * `invalid hooks file` is why a Codex hook does not run, which its details say.
+ * accounts > not here > pending approval > hidden by … > unused > no front matter > invalid
+ * front matter > name too long > no description > invalid hooks file > not supported > empty
+ * command > empty tool. A row that is not here has no state here, so no tag of one. `no front
+ * matter` is a quiet note for a Claude skill, which Claude Code loads all the same; for a Codex
+ * skill, which Codex skips, it, `invalid front matter`, `name too long` and `no description` are
+ * why it is not in Loaded, and `invalid hooks file`, `not supported`, `empty command` and `empty
+ * tool` why a Codex hook does not run, which its details say.
  */
 export function tagsOf(inv: Inventory, row: ScopeRow, project: string | undefined, now: number): Tag[] {
   const item = firstOf(row);
@@ -345,7 +363,7 @@ const PROJECT_FILES: Record<ToolName, Record<ItemKind, (here: string) => string>
   codex: {
     skill: (here) => `.agents/skills in ${here}`,
     mcp: (here) => `.codex/config.toml in ${here}`,
-    hook: (here) => `.codex/hooks.json in ${here}`,
+    hook: (here) => `.codex/hooks.json and .codex/config.toml in ${here}`,
   },
 };
 
@@ -354,7 +372,7 @@ const GLOBAL_FALLBACK: Record<ToolName, Record<ItemKind, string>> = {
   codex: {
     skill: "~/.agents/skills and Codex's skills folder",
     mcp: "Codex's config.toml",
-    hook: "Codex's hooks.json",
+    hook: "Codex's hooks.json and config.toml",
   },
 };
 
@@ -541,7 +559,9 @@ function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined)
   const item = firstOf(row);
   // A link to nothing has no SKILL.md to read, whatever the settings say.
   if (item.link?.broken) return [{ label: "Loaded", text: "no, its link leads nowhere", tone: "error" }];
-  if (item.codexError) return [{ label: "Loaded", text: `no, ${CODEX_SKIPS[item.codexError]}`, tone: "error" }];
+  if (item.codexError) {
+    return [{ label: "Loaded", text: `no, ${codexSkip(item, item.codexError)}`, tone: "error" }];
+  }
   const perAccount = statesByAccount(inv, row, project);
   const parts = perAccount?.map((a) => ({ name: shortProfile(a.profile), ...stateParts(inv, item, project, a.state) }));
   const groups = new Map<string, { word: string; because?: string; names: string[] }>();
@@ -566,6 +586,10 @@ function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined)
     return [{ label: "Loaded", text, tone: "muted" }];
   }
   if (state.value === "off") {
+    const untrusted = UNTRUSTED_OFF[item.kind];
+    if (state.setBy?.key !== STASH_KEY && untrusted !== undefined && untrustedOwn(inv, item)) {
+      return [{ label: "Loaded", text: untrusted, tone: "warning" }];
+    }
     if (!state.setBy) return [{ label: "Loaded", text: "off: no settings file turns it on", tone: "warning" }];
     if (state.setBy.key === STASH_KEY) {
       const text = "off everywhere — clausona keeps its settings so you can turn it back on";
@@ -790,19 +814,41 @@ function mcpLines(inv: Inventory, row: ScopeRow, project: string | undefined): D
 }
 
 /**
- * Why a Codex server's switch in the project it is read in does not count: Codex reads a
- * project's `.codex/` only once it trusts the project. Said only where that folder names the
- * server, so the state shown would differ if Codex read it.
+ * Why a Codex server, or its switch, in the project it is read in does not count: Codex reads a
+ * project's `.codex/` only once it trusts the project. Said only where that folder defines the
+ * server or names it, so the state shown would differ if Codex read it.
  */
 function trustLines(inv: Inventory, row: ScopeRow, project: string | undefined): DetailLine[] {
   const here = viewFrom(firstOf(row), project);
   if (here === undefined || codexTrusted(inv, here)) return [];
-  const ignored = inv.facts.codexMcpEnabled.some(
-    (entry) => entry.project !== undefined && samePath(entry.project, here) && entry.name === row.name,
+  const ignored =
+    untrustedOwn(inv, firstOf(row)) ||
+    inv.facts.codexMcpEnabled.some(
+      (entry) => entry.project !== undefined && samePath(entry.project, here) && entry.name === row.name,
+    );
+  return ignored ? [{ label: "Trust", text: CODEX_UNTRUSTED, tone: "warning" }] : [];
+}
+
+const CODEX_UNTRUSTED = "Codex does not trust this project, so it ignores its .codex folder.";
+
+/** Why an untrusted project's own hook or server does not load, by its kind. */
+const UNTRUSTED_OFF: Partial<Record<Extension["kind"], string>> = {
+  hook: "off: Codex runs a project's hooks only once it trusts the project",
+  mcp: "off: Codex starts a project's servers only once it trusts the project",
+};
+
+/**
+ * Whether an item is a Codex project's own hook or server, in a project Codex does not trust, so
+ * does not load.
+ */
+function untrustedOwn(inv: Inventory, item: Extension): boolean {
+  const loc = item.location;
+  return (
+    (item.kind === "hook" || item.kind === "mcp") &&
+    loc.tool === "codex" &&
+    loc.scope === "project" &&
+    !codexTrusted(inv, loc.project)
   );
-  return ignored
-    ? [{ label: "Trust", text: "Codex does not trust this project, so it ignores its .codex folder.", tone: "warning" }]
-    : [];
 }
 
 function hookLines(inv: Inventory, row: ScopeRow, project: string | undefined): DetailLine[] {
@@ -813,6 +859,7 @@ function hookLines(inv: Inventory, row: ScopeRow, project: string | undefined): 
   lines.push({ label: "File", text: tilde(item.location.file, inv.homeDir) });
   // A plugin's hook is off with its plugin: say where, as for any item that is off.
   if (stateHere(inv, item, project).value !== "on" || item.codexError) lines.push(...loadedLines(inv, row, project));
+  if (untrustedOwn(inv, item)) lines.push({ label: "Trust", text: CODEX_UNTRUSTED, tone: "warning" });
   return lines;
 }
 

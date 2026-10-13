@@ -13,9 +13,14 @@ import { addHooksFile } from "./claude-hooks.js";
 import {
   addCodexHookStates,
   addCodexHookTrust,
+  addConfigHooks,
   codexHomeHooksFile,
+  codexReadsHookEvents,
   codexReadsHooksFile,
+  exactConfigHooks,
+  exactJsonFile,
   markRefusedHooksFile,
+  markUnsupportedHooks,
 } from "./codex-hooks.js";
 import { addPluginSwitches, readCodexPlugins } from "./codex-plugins.js";
 import { readCodexSkills } from "./codex-skills.js";
@@ -42,16 +47,41 @@ function invalidToml(error: unknown): string {
     : "is not valid TOML";
 }
 
-/** A TOML file as an object, or undefined when missing; one that does not parse is a warning. */
+/**
+ * A Codex config.toml as an object, or undefined when missing; one that does not parse is a
+ * warning. An integer past 2^53 is a bigint, as Codex reads it as the i64 it is. Two things make
+ * Codex 0.159.3 refuse the whole file, and are warnings too: an integer past 64 bits ("u64 value
+ * was too large"), and a hook under `[hooks]` it cannot read ("invalid configuration").
+ */
 export async function readTomlObject(file: string, warnings: Warning[]): Promise<Record<string, unknown> | undefined> {
   const text = await readText(file, warnings);
   if (text === undefined) return undefined;
+  let value: Record<string, unknown>;
   try {
-    return parse(text) as Record<string, unknown>;
+    value = parse(text, { integersAsBigInt: "asNeeded" }) as Record<string, unknown>;
   } catch (error) {
     warnings.push({ file, message: invalidToml(error) });
     return undefined;
   }
+  if (pastI64(value)) {
+    warnings.push({ file, message: "has an integer too large for 64 bits, so Codex refuses the whole file" });
+    return undefined;
+  }
+  if (isRecord(value.hooks) && !codexReadsHookEvents(value.hooks)) {
+    warnings.push({ file, message: "has a hook Codex cannot read, so Codex refuses the whole file" });
+    return undefined;
+  }
+  return value;
+}
+
+const I64_MIN = -(2n ** 63n);
+const I64_MAX = 2n ** 63n - 1n;
+
+/** Whether a TOML value holds an integer Codex's i64 cannot. */
+function pastI64(value: unknown): boolean {
+  if (typeof value === "bigint") return value < I64_MIN || value > I64_MAX;
+  if (Array.isArray(value)) return value.some(pastI64);
+  return isRecord(value) && Object.values(value).some(pastI64);
 }
 
 /**
@@ -86,7 +116,8 @@ export function codexProjectRecords(ctx: CodexContext): ProjectRecord[] {
 }
 
 /**
- * Codex's skills, MCP servers, hooks and plugins, and the switches for them: `[[skills.config]]`
+ * Codex's skills, MCP servers, hooks - a hooks.json's, and a config.toml's `[hooks]` beside it -
+ * and plugins, and the switches for them: `[[skills.config]]`
  * in the user config.toml (by name, or by the SKILL.md path - the only per-project skill switch,
  * since Codex ignores `[[skills.config]]` in a project's config; spec, Spike 1),
  * `mcp_servers.<name>.enabled`, and the `[plugins."<id>"]` tables, in the user and project
@@ -139,6 +170,10 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
         if (config) {
           addServers(config, { ...here, file }, project.path, out);
           addPluginSwitches(config, file, project.path, out.facts);
+          if (isRecord(config.hooks)) {
+            const exact = await exactConfigHooks(file);
+            addConfigHooks(config, { ...here, file }, project.path, await hookSources(file), out, exact);
+          }
         }
         const hooksFile = codexProjectHooks(project.path);
         const hooks = await readJsonObject(hooksFile, out.warnings);
@@ -147,7 +182,7 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
           if (!codexReadsHooksFile(hooks)) markRefusedHooksFile(out, hooksFile);
           else
             addCodexHookTrust(
-              hooks.hooks,
+              (await exactJsonFile(hooksFile))?.hooks ?? hooks.hooks,
               `hook:codex:project:${project.path}`,
               await hookSources(hooksFile),
               out.facts,
@@ -163,7 +198,10 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
       if (!hooks) return;
       addHooksFile(hooks, { ...global, file }, "-", out);
       if (!codexReadsHooksFile(hooks)) markRefusedHooksFile(out, file);
-      else addCodexHookTrust(hooks.hooks, "hook:codex:global:-", await userHookSources(ctx, file), out.facts);
+      else {
+        const exact = (await exactJsonFile(file))?.hooks ?? hooks.hooks;
+        addCodexHookTrust(exact, "hook:codex:global:-", await userHookSources(ctx, file), out.facts);
+      }
     })(),
   );
   jobs.push(readCodexPlugins(ctx.primary.dir, out));
@@ -171,6 +209,13 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
     addServers(ctx.config, { ...global, file: ctx.configFile }, "-", out);
     addPluginSwitches(ctx.config, ctx.configFile, undefined, out.facts);
     addCodexHookStates(ctx.config, ctx.configFile, out.facts);
+    if (isRecord(ctx.config.hooks)) {
+      const [sources, exact] = await Promise.all([
+        userHookSources(ctx, ctx.configFile),
+        exactConfigHooks(ctx.configFile),
+      ]);
+      addConfigHooks(ctx.config, { ...global, file: ctx.configFile }, "-", sources, out, exact);
+    }
     for (const [project, table] of Object.entries(isRecord(ctx.config.projects) ? ctx.config.projects : {})) {
       if (isRecord(table)) out.facts.codexTrust.push({ project, trusted: table.trust_level === "trusted" });
     }
@@ -197,6 +242,7 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
     }
   }
   await Promise.all(jobs);
+  markUnsupportedHooks(out);
 }
 
 /**
@@ -209,21 +255,22 @@ async function hookSources(file: string): Promise<string[]> {
 }
 
 /**
- * The user hooks.json under each Codex profile that shares the primary's: Codex keys a hook's
- * trust by the hooks file's path under the CODEX_HOME it runs with, so each profile trusts it on
- * its own. The primary runs with none set, at its folder as it is; any other with the folder
- * clausona sets, which Codex makes canonical first.
+ * The user hooks.json, or config.toml, under each Codex profile that shares the primary's: Codex
+ * keys a hook's trust by its file's path under the CODEX_HOME it runs with, so each profile
+ * trusts it on its own. The primary runs with none set, at its folder as it is; any other with
+ * the folder clausona sets, which Codex makes canonical first.
  */
 async function userHookSources(ctx: CodexContext, file: string): Promise<string[]> {
+  const name = path.basename(file);
   const shared = await realPath(file).catch(() => undefined);
   const each = await Promise.all(
     ctx.homes.map(async (home) => {
-      const own = path.join(home.dir, "hooks.json");
+      const own = path.join(home.dir, name);
       if (home.isPrimary) return hookSources(own);
       const real = await realPath(own).catch(() => undefined);
       if (real === undefined || !samePath(real, shared)) return [];
       const keyed = await codexHomeHooksFile(home.dir);
-      return keyed === undefined ? [] : [keyed];
+      return keyed === undefined ? [] : [path.join(path.dirname(keyed), name)];
     }),
   );
   return [...new Set(each.flat())];

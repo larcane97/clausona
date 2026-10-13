@@ -441,10 +441,26 @@ export function codexTrusted(inv: Inventory, project: string | undefined): boole
 }
 
 /**
+ * The off a project's own Codex hook or server is in while Codex does not trust the project:
+ * Codex 0.159.3 then leaves the project's `.codex` folder out, its hooks and its config.toml's
+ * servers with it. `setBy` names the project's `trust_level` in the user config.toml.
+ */
+function codexUntrustedOff(inv: Inventory, item: Extension): EffectiveState | undefined {
+  const own = item.location.scope === "project" ? item.location.project : undefined;
+  if (own === undefined || codexTrusted(inv, own)) return undefined;
+  const config = inv.places.codexConfig;
+  const key = `projects.${JSON.stringify(own)}.trust_level`;
+  return config === undefined ? { value: "off" } : { value: "off", setBy: { file: config, key } };
+}
+
+/**
  * The user's `mcp_servers.<name>.enabled`, or the project's when Codex trusts the project; for a
- * plugin's server, its plugin's state, then `plugins."<id>".mcp_servers.<name>.enabled`.
+ * plugin's server, its plugin's state, then `plugins."<id>".mcp_servers.<name>.enabled`. A server
+ * a project defines is off while Codex does not trust the project (codexUntrustedOff).
  */
 function codexMcpState(inv: Inventory, item: Extension, project: string | undefined): EffectiveState {
+  const untrusted = codexUntrustedOff(inv, item);
+  if (untrusted) return untrusted;
   const plugin = item.location.scope === "plugin" ? item.location.plugin : undefined;
   if (plugin !== undefined) {
     // A plugin's server is switched under the plugin's table, never by a user server's name.
@@ -470,8 +486,27 @@ function codexMcpState(inv: Inventory, item: Extension, project: string | undefi
     inv.facts.codexMcpEnabled.filter((e) => e.name === item.name),
     project,
   );
-  if (!hit) return { value: "on" };
-  return { value: hit.enabled ? "on" : "off", setBy: { file: hit.file, key: `mcp_servers.${item.name}.enabled` } };
+  const state: EffectiveState = hit
+    ? { value: hit.enabled ? "on" : "off", setBy: { file: hit.file, key: `mcp_servers.${item.name}.enabled` } }
+    : { value: "on" };
+  const winner = projectCopy(inv, item, project);
+  return winner ? { ...state, shadowedBy: winner.id } : state;
+}
+
+/**
+ * The server of a user server's name that `project` defines, where Codex trusts the project: Codex
+ * 0.159.3 merges the project's table over the user's, so the project's copy is the one it starts.
+ */
+function projectCopy(inv: Inventory, item: Extension, project: string | undefined): Extension | undefined {
+  if (item.location.scope !== "global" || project === undefined || !codexTrusted(inv, project)) return undefined;
+  return inv.items.find(
+    (other) =>
+      other.kind === "mcp" &&
+      other.location.tool === "codex" &&
+      other.location.scope === "project" &&
+      other.name === item.name &&
+      samePath(other.location.project, project),
+  );
 }
 
 /** Of one switch's entries, the one Codex takes in `project`: that project's where it trusts it, else the user's. */
@@ -541,15 +576,17 @@ export function stateOf(inv: Inventory, item: Extension, project?: string, profi
 }
 
 /**
- * A Codex hook's state, as Codex 0.159.3 runs it: off with its plugin; else on where, in at least
- * one Codex profile, the hook as it is now is the one trusted under its key and the key does not
+ * A Codex hook's state, as Codex 0.159.3 runs it: off with its plugin, and a project's off while
+ * Codex does not trust the project, as it then leaves the project's `.codex` folder out - `setBy`
+ * naming the project's `trust_level` in the user config.toml; else on where, in at least one
+ * Codex profile, the hook as it is now is the one trusted under its key and the key does not
  * turn it off (`[hooks.state."<key>"]`) - a bundled plugin's cleanup hook always, and one with
  * no trust identity as before; off where every profile's key turns it off; else pending
  * approval, Codex waiting for the user to review it with /hooks - `setBy` naming the trust that
  * no longer matches when the hook changed since.
  */
 function codexHookState(inv: Inventory, item: Extension, project: string | undefined): EffectiveState {
-  const off = codexPluginOff(inv, item, project);
+  const off = codexPluginOff(inv, item, project) ?? codexUntrustedOff(inv, item);
   if (off) return off;
   const trust = inv.facts.codexHookTrust.find((t) => t.id === item.id);
   if (!trust || trust.builtin) return { value: "on" };

@@ -990,6 +990,129 @@ describe("Codex hooks and Codex's trust", () => {
     const on = await run(h, app, "hooks", ["on", "--id", b.id, "--yes"]);
     expect(on).toContain("already in its file: Codex runs it once you trust it with /hooks");
   });
+
+  it("lists the servers a project Codex does not trust defines as off there, out of Loaded", async () => {
+    const { h, app, web } = seed();
+    h.write(
+      ".codex/config.toml",
+      `[projects.${JSON.stringify(app)}]\ntrust_level = "trusted"\n\n[projects.${JSON.stringify(web)}]\ntrust_level = "untrusted"\n\n[mcp_servers.shared]\ncommand = "user-shared"\n`,
+    );
+    const servers = (d: string) =>
+      `[mcp_servers.${d}-srv]\ncommand = "${d}-srv"\n\n[mcp_servers.shared]\ncommand = "${d}-shared"\n`;
+    h.write("repos/app/.codex/config.toml", servers("app"));
+    h.write("repos/web/.codex/config.toml", servers("web"));
+    // What Codex 0.159.3's config/read gave in web: the user's shared alone.
+    const project = JSON.parse(await run(h, web, "mcp", ["ls", "--tool", "codex", "--scope", "project", "--json"]));
+    expect(
+      project.items.map((i: { name: string; state: string; tags: string[] }) => [i.name, i.state, i.tags]),
+    ).toEqual([
+      ["shared", "off", ["off"]],
+      ["web-srv", "off", ["off"]],
+    ]);
+    const loaded = JSON.parse(await run(h, web, "mcp", ["ls", "--tool", "codex", "--json"]));
+    expect(loaded.items.map((i: { name: string; scope: string }) => [i.name, i.scope])).toEqual([["shared", "global"]]);
+    const shown = await run(h, web, "mcp", ["show", "web-srv"]);
+    expect(shown).toMatch(/^Loaded\s+off: Codex starts a project's servers only once it trusts the project$/m);
+    expect(shown).toMatch(/^Trust\s+Codex does not trust this project, so it ignores its \.codex folder\.$/m);
+    // In app, which Codex trusts, app's own load.
+    const own = JSON.parse(await run(h, app, "mcp", ["ls", "--tool", "codex", "--scope", "project", "--json"]));
+    expect(own.items.map((i: { state: string }) => i.state)).toEqual(["on", "on"]);
+  });
+
+  it("hides the user's server under a same-name one a trusted project defines, as Codex takes the project's", async () => {
+    const { h, app, web } = seed();
+    h.write(
+      ".codex/config.toml",
+      `[projects.${JSON.stringify(app)}]\ntrust_level = "trusted"\n\n[mcp_servers.shared]\ncommand = "user-shared"\n`,
+    );
+    h.write("repos/app/.codex/config.toml", '[mcp_servers.shared]\ncommand = "app-shared"\n');
+    h.write("repos/web/.codex/config.toml", '[mcp_servers.shared]\ncommand = "web-shared"\n');
+    // Codex 0.159.3's config/read in app: shared runs app-shared.
+    const loaded = JSON.parse(await run(h, app, "mcp", ["ls", "--tool", "codex", "--json"]));
+    expect(loaded.items.map((i: { name: string; scope: string }) => [i.name, i.scope])).toEqual([
+      ["shared", "project"],
+    ]);
+    const global = JSON.parse(await run(h, app, "mcp", ["ls", "--tool", "codex", "--scope", "global", "--json"]));
+    expect(global.items.map((i: { name: string; tags: string[] }) => [i.name, i.tags])).toEqual([
+      ["shared", ["hidden by Project copy"]],
+    ]);
+    const shown = await run(h, app, "mcp", ["show", "--id", global.items[0].id]);
+    expect(shown).toMatch(/^Loaded\s+no, the Project copy wins \(~\/repos\/app\/\.codex\/config\.toml\)$/m);
+    // In web, which Codex does not trust, the user's runs.
+    const there = JSON.parse(await run(h, web, "mcp", ["ls", "--tool", "codex", "--json"]));
+    expect(there.items.map((i: { name: string; scope: string }) => [i.name, i.scope])).toEqual([["shared", "global"]]);
+  });
+
+  it("lists the hooks of a project Codex does not trust as off there, and says it is the trust", async () => {
+    const { h, app, web } = seed();
+    const stop = (command: string) => ({ hooks: { Stop: [{ hooks: [{ type: "command", command }] }] } });
+    h.write(
+      ".codex/config.toml",
+      `[projects.${JSON.stringify(app)}]\ntrust_level = "trusted"\n\n[projects.${JSON.stringify(web)}]\ntrust_level = "untrusted"\n`,
+    );
+    h.write("repos/app/.codex/hooks.json", stop("app-stop"));
+    h.write("repos/web/.codex/hooks.json", stop("web-stop"));
+    const json = JSON.parse(await run(h, web, "hooks", ["ls", "--tool", "codex", "--scope", "project", "--json"]));
+    expect(json.items.map((i: { state: string; tags: string[] }) => [i.state, i.tags])).toEqual([["off", ["off"]]]);
+    expect(await run(h, web, "hooks", ["ls", "--tool", "codex"])).not.toContain("web-stop");
+    const shown = await run(h, web, "hooks", ["show", "--id", json.items[0].id]);
+    expect(shown).toMatch(/^Loaded\s+off: Codex runs a project's hooks only once it trusts the project$/m);
+    expect(shown).toMatch(/^Trust\s+Codex does not trust this project, so it ignores its \.codex folder\.$/m);
+    // A trusted project's hook waits for its own review, as before.
+    const own = JSON.parse(await run(h, app, "hooks", ["ls", "--tool", "codex", "--scope", "project", "--json"]));
+    expect(own.items.map((i: { state: string }) => i.state)).toEqual(["pending-approval"]);
+  });
+
+  it("lists a command hook with an empty command as such, out of Loaded, and says Codex skips it", async () => {
+    const { h, app } = seed();
+    h.write(".codex/hooks.json", {
+      hooks: { Stop: [{ hooks: [{ type: "command", command: " " }] }] },
+    });
+    const json = JSON.parse(await run(h, app, "hooks", ["ls", "--tool", "codex", "--scope", "global", "--json"]));
+    expect(json.items.map((i: { tags: string[] }) => i.tags)).toEqual([["empty command"]]);
+    expect(JSON.parse(await run(h, app, "hooks", ["ls", "--tool", "codex", "--json"])).items).toEqual([]);
+    expect(await run(h, app, "hooks", ["show", "--id", json.items[0].id])).toMatch(
+      /^Loaded\s+no, Codex skips a hook whose command is empty$/m,
+    );
+  });
+
+  it("lists an MCP tool hook with an empty server or tool as such, out of Loaded, and says why", async () => {
+    const { h, app } = seed();
+    h.write(".codex/hooks.json", { hooks: { Stop: [{ hooks: [{ type: "mcp_tool", server: "s", tool: "" }] }] } });
+    const json = JSON.parse(await run(h, app, "hooks", ["ls", "--tool", "codex", "--scope", "global", "--json"]));
+    expect(json.items.map((i: { tags: string[] }) => i.tags)).toEqual([["empty tool"]]);
+    expect(JSON.parse(await run(h, app, "hooks", ["ls", "--tool", "codex", "--json"])).items).toEqual([]);
+    expect(await run(h, app, "hooks", ["show", "--id", json.items[0].id])).toMatch(
+      /^Loaded\s+no, Codex skips an MCP tool hook whose server or tool is empty$/m,
+    );
+  });
+
+  it("lists a prompt or agent hook as not supported, out of Loaded, and says Codex does not run it", async () => {
+    const { h, app } = seed();
+    h.write(".codex/hooks.json", {
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              { type: "prompt", prompt: "summarize the turn" },
+              { type: "agent", prompt: "check the diff" },
+            ],
+          },
+        ],
+      },
+    });
+    expect(await run(h, app, "hooks", ["ls", "--tool", "codex"])).not.toContain("summarize");
+    const json = JSON.parse(await run(h, app, "hooks", ["ls", "--tool", "codex", "--scope", "global", "--json"]));
+    const prompt = json.items.find((i: { summary: { type: string } }) => i.summary.type === "prompt");
+    const agent = json.items.find((i: { summary: { type: string } }) => i.summary.type === "agent");
+    expect([prompt.tags, agent.tags]).toEqual([["not supported"], ["not supported"]]);
+    expect(await run(h, app, "hooks", ["show", "--id", prompt.id])).toMatch(
+      /^Loaded\s+no, Codex does not run prompt hooks yet$/m,
+    );
+    expect(await run(h, app, "hooks", ["show", "--id", agent.id])).toMatch(
+      /^Loaded\s+no, Codex does not run agent hooks yet$/m,
+    );
+  });
 });
 
 describe("Codex skills Codex skips", () => {

@@ -67,6 +67,7 @@ export const REFUSAL_CODES = [
   "mcp-not-allowed",
   "managed-mcp",
   "bundled-off",
+  "codex-config-hook",
 ] as const;
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
 
@@ -224,6 +225,11 @@ export const REFUSALS: Readonly<Record<RefusalCode, { reason: Words; keys?: Word
     reason: "disableBundledSkills in {~file} turns off the skills that come with Claude Code.",
     keys: "Change it there.",
     flags: "Change it there.",
+  },
+  "codex-config-hook": {
+    reason: "It is written in {~file}, where clausona does not change hooks.",
+    keys: "Use /hooks in Codex, or edit the file.",
+    flags: "Use /hooks in Codex, or edit the file.",
   },
 };
 

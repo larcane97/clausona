@@ -1547,6 +1547,28 @@ describe("plan: Codex MCP servers", () => {
 });
 
 describe("plan: Codex project servers and hooks", () => {
+  it("leaves a hook written in a config.toml to /hooks in Codex: clausona keeps no copy of one", async () => {
+    const { app, inv, ctx } = await seed((h) => {
+      h.write(
+        "repos/app/.codex/config.toml",
+        '[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "app-stop"\n',
+      );
+    });
+    const stop = rowIn(inv, app, "project", "Stop", "codex", "hook");
+    for (const verb of ["off", "on", "rm"] as const) {
+      for (const reach of ["here", "everywhere"] as const) {
+        const p = plan(ctx, "hooks", act(verb, reach, [stop]));
+        expect(p.changes).toEqual([]);
+        expect(p.refused.map((r) => [r.code, refusalText(r, "flags")])).toEqual([
+          [
+            "codex-config-hook",
+            "It is written in ~/repos/app/.codex/config.toml, where clausona does not change hooks. Use /hooks in Codex, or edit the file.",
+          ],
+        ]);
+      }
+    }
+  });
+
   const projectFiles: More = (h) => {
     h.write("repos/app/.codex/config.toml", '[mcp_servers.local-db]\ncommand = "db"\n');
     h.write("repos/web/.codex/config.toml", '[mcp_servers.web-db]\ncommand = "wdb"\n');
