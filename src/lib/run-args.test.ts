@@ -79,6 +79,9 @@ describe("readRunArgs", () => {
   it("refuses a missing value, a repeat and a bad value without echoing it", () => {
     expect(() => readRunArgs(["--route"])).toThrow("--route needs a value.");
     expect(() => readRunArgs(["--route", "-p"])).toThrow("--route needs a value.");
+    expect(() => readRunArgs(["--route="])).toThrow("--route needs a value.");
+    expect(() => readRunArgs(["--route", ""])).toThrow("--route needs a value.");
+    expect(() => readRunArgs(["claude", "--route", " "])).toThrow("--route needs a value.");
     expect(() => readRunArgs(["--route", "a", "--route", "b"])).toThrow("--route was given more than once.");
     expect(() => readRunArgs(["--max-usage", "0"])).toThrow("--max-usage must be a number from 1 to 100.");
     expect(() => readRunArgs(["--strategy", "secret-thing"])).toThrow(

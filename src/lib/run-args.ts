@@ -62,6 +62,8 @@ export function toRoutingOptions(values: Map<string, string>): RoutingOptions {
     if (!isRoutingFlag(flag)) continue;
     switch (flag) {
       case "--route":
+        // `--route=` and `--route ""` give no name, as a missing value does.
+        if (value.trim() === "") throw new Error(`${flag} needs a value.`);
         options.route = value;
         break;
       case "--from":
