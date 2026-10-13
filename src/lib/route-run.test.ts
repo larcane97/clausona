@@ -413,7 +413,12 @@ describe("runRouted", () => {
   it("passes the word after the tool word to the tool when it names no profile exactly, or follows --", async () => {
     const s = setup({ registry: BOTH, quotas: BOTH_QUOTAS });
     // `y` is only a codex profile; `Solo` differs from `solo` in case.
-    for (const args of [["claude", "--", "claude:b"], ["claude", "y"], ["claude", "Solo"], ["claude", "hello"]]) {
+    for (const args of [
+      ["claude", "--", "claude:b"],
+      ["claude", "y"],
+      ["claude", "Solo"],
+      ["claude", "hello"],
+    ]) {
       await runRouted(args, s.launch, s.io, s.deps);
     }
     expect(s.launches).toEqual([
