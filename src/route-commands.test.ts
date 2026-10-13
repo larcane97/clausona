@@ -1296,6 +1296,7 @@ describe("failures with --json", () => {
 });
 
 describe("route budget", () => {
+  const BUDGET_ENTRY_KEYS = ["budget", "limit", "profile", "reason", "routes", "spend", "spentUsd", "usage"];
   const api = (name: string, baseUrl: string) => ({
     tool: "claude" as const,
     kind: "api" as const,
@@ -1382,6 +1383,9 @@ describe("route budget", () => {
     // Only API profiles' spend is read.
     expect(asked).toEqual([["claude:bare", "claude:gw", "claude:or", "claude:proxy"]]);
     const json = JSON.parse(await run("budget", "--json"));
+    // Pinned: fields are only ever added, and an added one is added here on purpose.
+    expect(Object.keys(json).sort()).toEqual(["problems", "profiles", "warnings"]);
+    for (const entry of json.profiles) expect(Object.keys(entry).sort()).toEqual(BUDGET_ENTRY_KEYS);
     expect(json.problems).toEqual([]);
     expect(json.warnings).toEqual([]);
     expect(json.profiles.find((row: { profile: string }) => row.profile === "claude:gw")).toEqual({
@@ -1431,11 +1435,15 @@ describe("route budget", () => {
     // Set again, it is changed in place.
     await run("budget", "claude:bare", "--usd", "30", "--per", "month");
     expect(file().budgets).toEqual({ "claude:bare": { usd: 30, per: "month" } });
-    expect(JSON.parse(await run("budget", "bare", "--usd", "30", "--per", "month", "--json"))).toMatchObject({
-      profile: "claude:bare",
-      changed: true,
-      limit: { source: "budget", usd: 30 },
-    });
+    const set = JSON.parse(await run("budget", "bare", "--usd", "30", "--per", "month", "--json"));
+    expect(set).toMatchObject({ profile: "claude:bare", changed: true, limit: { source: "budget", usd: 30 } });
+    expect(Object.keys(set).sort()).toEqual([...BUDGET_ENTRY_KEYS, "changed"].sort());
+    // One profile's, with nothing to set or clear, is its entry alone.
+    expect(Object.keys(JSON.parse(await run("budget", "bare", "--json"))).sort()).toEqual(BUDGET_ENTRY_KEYS);
+    const cleared = JSON.parse(await run("budget", "bare", "--clear", "--json"));
+    expect(cleared).toMatchObject({ changed: true, budget: null });
+    expect(Object.keys(cleared).sort()).toEqual([...BUDGET_ENTRY_KEYS, "changed"].sort());
+    expect(JSON.parse(await run("budget", "bare", "--clear", "--json"))).toMatchObject({ changed: false });
   });
 
   it("says a budget on a provider that reports no spend cannot be checked", async () => {
