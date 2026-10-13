@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+
+import { carriesCredentialToken } from "./core/credential-token.js";
 import { foldProfileName } from "./core/profile-name.js";
 import type { QuotaTarget } from "./core/quota-store.js";
 import {
@@ -10,15 +13,37 @@ import {
   emptyRoutesFile,
   holdsKey,
   newRouteSpec,
+  type ProfileNames,
   type Route,
   type RouteOverrides,
   type RouteSpec,
   type RoutesFile,
   type RouteTool,
+  storedRoute,
   withDefaults,
 } from "./core/route-config.js";
 import {
+  clearDefaultRoute,
+  clearDirRoute,
+  expandDir,
+  type RouteRules,
+  type RuleRef,
+  readRules,
+  removeReferences,
+  renameReferences,
+  routeProblem,
+  ruleText,
+  ruleWarnings,
+  SLOT_TOOLS,
+  type Slots,
+  sameDir,
+  setDefaultRoute,
+  setDirRoute,
+  storedDir,
+} from "./core/route-rules.js";
+import {
   brokenRoutesHint,
+  type LoadedRoutes,
   loadRoutes,
   parseRoutesText,
   RoutesFileError,
@@ -31,17 +56,23 @@ import {
 import type { Ranking } from "./core/routing.js";
 import { withJsonErrors } from "./extensions/cli.js";
 import { ExitError } from "./extensions/exit-error.js";
-import { accent, bold, dim, helpSection, helpUsage, stripAnsi, success } from "./lib/cli-style.js";
+import { accent, bold, dim, helpSection, helpUsage, stripAnsi, success, warnIcon } from "./lib/cli-style.js";
 import { type RouteIo, terminalIo } from "./lib/route-io.js";
 import {
   explainJson,
   nobodyAdvice,
   pickJson,
+  type RuleRow,
+  type RunHere,
   renderNoAccount,
   renderRouteDetail,
-  renderRoutesEmpty,
   renderRouteTable,
+  renderRules,
+  renderRunsHere,
   routeListJson,
+  rulesJson,
+  runHereJson,
+  skippedText,
   takesNobody,
 } from "./lib/route-render.js";
 import {
@@ -52,16 +83,18 @@ import {
   NoAccountError,
   namesOf,
   otherToolTaking,
+  pathsFor,
   quotaTargets,
   type RouteDeps,
   rankRouteNow,
   resolveRoute,
+  routeByRules,
   routesFor,
   UnknownRouteError,
 } from "./lib/route-service.js";
 import { parsePatterns, parseRouteTool, ROUTE_FIELD_OPTIONS, readOptions, toRoutingOptions } from "./lib/run-args.js";
 import { noRegistryError } from "./lib/service.js";
-import type { Registry } from "./types.js";
+import type { Registry, ToolName } from "./types.js";
 
 // ─── Help ──────────────────────────────────────────────────────────
 //
@@ -124,11 +157,33 @@ const SUB_HELP: Record<string, string[]> = {
   explain: [
     helpUsage("clausona route explain <name> [--tool claude|codex] [options] [--resume] [--json]"),
     helpUsage("clausona route explain --tool claude|codex|all --from <patterns> [--json]"),
+    helpUsage("clausona route explain [--tool claude|codex] [--resume] [--json]"),
     "",
     `    ${dim("Every member with its 5H and 7D use, its usage (the higher of the two), when it was")}`,
     `    ${dim("last picked, and why it would or would not be picked now. Launches nothing and")}`,
     `    ${dim("records nothing. --resume ranks as a resumed run would (shared sessions only).")}`,
     `    ${dim("On an all route, --tool ranks only that tool's accounts, as a run naming it would.")}`,
+    `    ${dim("With no name: what clausona run claude and clausona run codex would take in this")}`,
+    `    ${dim("directory, which dir rule or default says so, and the explain of each route.")}`,
+  ],
+  dir: [
+    helpUsage("clausona route dir <path> <route> [--tool claude|codex]"),
+    helpUsage("clausona route dir <path> --clear [--tool claude|codex]"),
+    helpUsage("clausona route dir"),
+    "",
+    `    ${dim("In <path> and below, clausona run claude (or codex) with no route takes <route>; the")}`,
+    `    ${dim("deepest rule wins. A claude or codex route fills its own tool's slot, an all route both,")}`,
+    `    ${dim("or the one --tool names. --clear removes the rule, or one tool's slot of it. With")}`,
+    `    ${dim("nothing after it, lists every dir rule and default.")}`,
+  ],
+  default: [
+    helpUsage("clausona route default <route> [--tool claude|codex]"),
+    helpUsage("clausona route default --clear --tool claude|codex|all"),
+    helpUsage("clausona route default"),
+    "",
+    `    ${dim("Where no dir rule holds, clausona run claude (or codex) with no route takes <route>.")}`,
+    `    ${dim("Without a rule or a default, it runs the tool's active profile. With nothing after it,")}`,
+    `    ${dim("lists every dir rule and default.")}`,
   ],
   pick: [
     helpUsage("clausona route pick <name> [--tool claude|codex] [options] [--resume] [--json]"),
@@ -162,8 +217,10 @@ export function routeHelp(sub?: string): string {
       ["rename <old> <new>", "Rename a route"],
       ["remove <name>", "Remove a route"],
       ["edit", "Edit routes.json in $EDITOR, checked before it is saved"],
-      ["explain <name>", "Show the ranking without launching anything"],
+      ["explain [name]", "Show the ranking without launching anything; no name: what a run here takes"],
       ["pick <name>", "Take a turn: print the picked profile and record it"],
+      ["dir <path> <route>", "In <path> and below, run claude|codex with no route takes <route>"],
+      ["default <route>", "Elsewhere, run claude|codex with no route takes <route>"],
     ]),
     "",
     `  ${bold("RUN ON A ROUTE")}`,
@@ -398,6 +455,7 @@ async function renameRoute(args: string[], deps: RouteDeps): Promise<string> {
     }
     return success(dim(`Route ${from} already has that name. Nothing was changed.`));
   }
+  let rules: RuleRef[] = [];
   await changeRoutes(deps, (file) => {
     if (!Object.hasOwn(file.routes, from)) throw new UnknownRouteError(from, Object.keys(file.routes).sort());
     if (Object.hasOwn(file.routes, to)) throw new Error(`Route '${to}' already exists.`);
@@ -410,9 +468,13 @@ async function renameRoute(args: string[], deps: RouteDeps): Promise<string> {
     const spec = file.routes[from];
     delete file.routes[from];
     file.routes[to] = spec;
+    rules = renameReferences(file, from, to);
     return file;
   });
-  return success(`Renamed route ${bold(from)} to ${bold(to)}`);
+  return [
+    success(`Renamed route ${bold(from)} to ${bold(to)}`),
+    ...(rules.length ? [dim(`    Also renamed in ${andList(rules.map(ruleText))}.`)] : []),
+  ].join("\n");
 }
 
 async function removeRoute(args: string[], deps: RouteDeps): Promise<string> {
@@ -420,12 +482,157 @@ async function removeRoute(args: string[], deps: RouteDeps): Promise<string> {
   const [nameArg, ...extra] = read.positionals;
   if (extra.length) throw new Error(`${usage("remove")}\nRun \`clausona route remove --help\` for usage.`);
   const name = routeNameArg(nameArg, "remove");
+  let rules: RuleRef[] = [];
   await changeRoutes(deps, (file) => {
     if (!Object.hasOwn(file.routes, name)) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
     delete file.routes[name];
+    // A rule that names it would only be skipped from now on.
+    rules = removeReferences(file, name);
     return file;
   });
-  return success(`Removed route ${bold(name)}`);
+  return [
+    success(`Removed route ${bold(name)}`),
+    ...(rules.length ? [dim(`    Also removed ${andList(rules.map(ruleText))}.`)] : []),
+  ].join("\n");
+}
+
+/** `a`, `a and b`, `a, b and c`. */
+function andList(items: string[]): string {
+  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+// ─── Dir rules and defaults ────────────────────────────────────────
+
+/** The rules as the tables show them: each slot's route, and whether it can be used there. */
+function ruleRows({ file, broken }: LoadedRoutes, rules: RouteRules): RuleRow[] {
+  const slots = (read: Slots): RuleRow["slots"] =>
+    Object.fromEntries(
+      SLOT_TOOLS.flatMap((tool) => {
+        const slot = read[tool];
+        if (!slot) return [];
+        if ("problem" in slot) return [[tool, { route: "?", usable: false }]];
+        return [[tool, { route: slot.route, usable: routeProblem(file, broken, tool, slot.route) === null }]];
+      }),
+    );
+  const rows: RuleRow[] = rules.dirs.map((rule) => ({ label: rule.dir, slots: slots(rule.slots) }));
+  if (Object.keys(rules.defaults).length)
+    rows.push({ label: "default", isDefault: true, slots: slots(rules.defaults) });
+  return rows;
+}
+
+/** What is wrong with the rules: entries that cannot be read, then slots whose route cannot be used. */
+const ruleNotes = ({ file, broken }: LoadedRoutes, rules: RouteRules) => [
+  ...rules.problems,
+  ...ruleWarnings(file, broken, rules),
+];
+
+/** `route dir` and `route default` with nothing after them: every rule. */
+async function listRules(deps: RouteDeps): Promise<string> {
+  const loaded = await loadRoutes(deps.paths, namesOf(await deps.loadRegistry()));
+  const rules = readRules(loaded.file);
+  return renderRules(ruleRows(loaded, rules), ruleNotes(loaded, rules));
+}
+
+/**
+ * The tools a rule for the route `name` fills: a one-tool route's own, or on an `all` route the one
+ * `--tool` names, both without it.
+ */
+function slotTools(name: string, routeTool: RouteTool, tool: RouteTool | undefined): ToolName[] {
+  if (routeTool === "all") return tool === undefined || tool === "all" ? [...SLOT_TOOLS] : [tool];
+  if (tool === "all") throw new Error(`Route '${name}' is for ${routeTool} only, so it cannot fill both tools.`);
+  if (tool !== undefined && tool !== routeTool) throw new Error(`Route '${name}' is for ${routeTool}, not ${tool}.`);
+  return [routeTool];
+}
+
+/** The route a rule is about to name: there, and usable. */
+async function routeForRule(name: string, deps: RouteDeps, names: ProfileNames): Promise<RouteSpec> {
+  const { file } = await routesFor(name, deps.paths, names);
+  const spec = storedRoute(file, name);
+  if (!spec) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
+  return spec;
+}
+
+/** `clausona run claude uses`, or both runs for an `all` route that fills both slots. */
+const runsUse = (tools: readonly ToolName[]) =>
+  tools.length === 1
+    ? `clausona run ${tools[0]} uses`
+    : `${tools.map((tool) => `clausona run ${tool}`).join(" and ")} use`;
+
+async function dirRule(args: string[], deps: RouteDeps): Promise<string> {
+  const read = readArgs(args, { values: ["--tool"], flags: ["--clear"] }, "route dir");
+  const tool = asUsage(() => parseRouteTool(read.values.get("--tool")));
+  const clear = read.flags.has("--clear");
+  const [dirArg, routeArg, ...extra] = read.positionals;
+  if (dirArg === undefined && !clear && tool === undefined) return listRules(deps);
+  if (dirArg === undefined || extra.length || (clear ? routeArg !== undefined : routeArg === undefined)) {
+    throw new RouteUsageError(`${usage("dir")}\nRun \`clausona route dir --help\` for usage.`);
+  }
+  // A key typed where the directory goes is neither written to routes.json nor said back.
+  if (carriesCredentialToken(dirArg)) throw new RouteUsageError("That looks like an API key, not a directory.");
+  const sys = pathsFor(deps);
+  const dir = storedDir(dirArg, deps.cwd, sys);
+  // However routes.json spells the directory: `~/work`, the same path in full, or through a link.
+  const isDir = (stored: string) => sameDir(stored, dir, deps.cwd, sys);
+  if (clear) {
+    const tools = tool === undefined || tool === "all" ? undefined : [tool];
+    const what = tools ? `${tools[0]} rule` : "dir rule";
+    let cleared: string[] = [];
+    await changeRoutes(deps, (file) => {
+      cleared = clearDirRoute(file, tools, isDir);
+      return cleared.length ? file : null;
+    });
+    if (cleared.length === 0) return success(dim(`No ${what} for ${dir}. Nothing was changed.`));
+    return success(`Cleared the ${what} for ${bold(dir)}`);
+  }
+  const name = routeNameArg(routeArg, "dir");
+  const spec = await routeForRule(name, deps, namesOf(await deps.loadRegistry()));
+  const tools = asUsage(() => slotTools(name, spec.tool, tool));
+  await changeRoutes(deps, (file) => {
+    if (!Object.hasOwn(file.routes, name)) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
+    setDirRoute(file, dir, tools, name, isDir);
+    return file;
+  });
+  const lines = [success(`In ${bold(dir)} and below, ${runsUse(tools)} route ${bold(name)}`)];
+  // Kept all the same: the directory may be made later, or be a mount that is not there now.
+  if (!existsSync(expandDir(dir, deps.cwd, sys))) {
+    lines.push(`  ${warnIcon} ${dir} does not exist yet. The rule holds once it does.`);
+  }
+  return lines.join("\n");
+}
+
+async function defaultRule(args: string[], deps: RouteDeps): Promise<string> {
+  const read = readArgs(args, { values: ["--tool"], flags: ["--clear"] }, "route default");
+  const tool = asUsage(() => parseRouteTool(read.values.get("--tool")));
+  const clear = read.flags.has("--clear");
+  const [routeArg, ...extra] = read.positionals;
+  if (routeArg === undefined && !clear && tool === undefined) return listRules(deps);
+  if (extra.length || (clear ? routeArg !== undefined : routeArg === undefined)) {
+    throw new RouteUsageError(`${usage("default")}\nRun \`clausona route default --help\` for usage.`);
+  }
+  if (clear) {
+    if (tool === undefined) {
+      throw new RouteUsageError(
+        "Name the tool whose default to clear: clausona route default --clear --tool claude (or codex, or all).",
+      );
+    }
+    const tools = tool === "all" ? [...SLOT_TOOLS] : [tool];
+    let cleared: ToolName[] = [];
+    await changeRoutes(deps, (file) => {
+      cleared = clearDefaultRoute(file, tools);
+      return cleared.length ? file : null;
+    });
+    if (cleared.length === 0) return success(dim(`No ${tools.join(" or ")} default. Nothing was changed.`));
+    return success(`Cleared the ${cleared.join(" and ")} default`);
+  }
+  const name = routeNameArg(routeArg, "default");
+  const spec = await routeForRule(name, deps, namesOf(await deps.loadRegistry()));
+  const tools = asUsage(() => slotTools(name, spec.tool, tool));
+  await changeRoutes(deps, (file) => {
+    if (!Object.hasOwn(file.routes, name)) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
+    setDefaultRoute(file, tools, name);
+    return file;
+  });
+  return success(`Outside every dir rule, ${runsUse(tools)} route ${bold(name)}`);
 }
 
 /**
@@ -495,7 +702,9 @@ async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
     throw new RouteUsageError(`${usage("list")}\nRun \`clausona route list --help\` for usage.`);
   }
   const registry = await deps.loadRegistry();
-  const { file, broken } = await loadRoutes(deps.paths, namesOf(registry));
+  const loaded = await loadRoutes(deps.paths, namesOf(registry));
+  const { file, broken } = loaded;
+  const rules = readRules(file);
   const names = Object.keys(file.routes).sort();
   const routes = names.map((name) => withDefaults(file.routes[name]));
   const readQuota = !read.flags.has("--no-quota");
@@ -506,23 +715,40 @@ async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
   const problems = broken.flatMap((route) => route.problems);
   if (read.flags.has("--json")) {
     const entries = names.map((name, i) => routeListJson(name, routes[i], rankings?.[i], readQuota));
-    return JSON.stringify({ routes: entries, problems }, null, 2);
+    return JSON.stringify(
+      {
+        routes: entries,
+        problems: [...problems, ...rules.problems],
+        ...rulesJson(rules),
+        ruleWarnings: ruleWarnings(file, broken, rules),
+      },
+      null,
+      2,
+    );
   }
-  if (names.length === 0 && broken.length === 0) return renderRoutesEmpty();
   const warnings = [
     ...brokenWarnings(broken),
     ...(rankings ? names.flatMap((name, i) => routeWarnings(name, rankings[i])) : []),
+    ...ruleNotes(loaded, rules),
   ];
   // With --no-quota nothing was read, and the table says so with a dash.
   return renderRouteTable(
     names.map((name, i) => ({ name, route: routes[i], ...(rankings && readQuota ? { ranking: rankings[i] } : {}) })),
     warnings,
-    { now: deps.clock() },
+    { now: deps.clock(), rules: ruleRows(loaded, rules) },
   );
 }
 
-async function resolveForRanking(sub: "explain" | "pick", args: string[], deps: RouteDeps) {
-  const { read, name, overrides, tool } = asUsage(() => {
+type RankingArgs = {
+  name?: string;
+  overrides: RouteOverrides;
+  tool?: RouteTool;
+  json: boolean;
+  resume: boolean;
+};
+
+function readRankingArgs(sub: "explain" | "pick", args: string[]): RankingArgs {
+  return asUsage(() => {
     const read = readOptions(
       args,
       { values: ["--tool", ...ROUTE_FIELD_OPTIONS], flags: ["--json", "--resume"] },
@@ -530,36 +756,108 @@ async function resolveForRanking(sub: "explain" | "pick", args: string[], deps: 
     );
     const [name, ...extra] = read.positionals;
     if (extra.length) throw new Error(`${usage(sub)}\nRun \`clausona route ${sub} --help\` for usage.`);
-    return { read, name, overrides: toRoutingOptions(read.values), tool: parseRouteTool(read.values.get("--tool")) };
+    return {
+      name,
+      overrides: toRoutingOptions(read.values),
+      tool: parseRouteTool(read.values.get("--tool")),
+      json: read.flags.has("--json"),
+      resume: read.flags.has("--resume"),
+    };
   });
+}
+
+async function resolveForRanking(sub: "explain" | "pick", ranking: RankingArgs, deps: RouteDeps) {
+  const { name, overrides, tool } = ranking;
   const names = namesOf(await deps.loadRegistry());
-  const { file, broken } = await routesFor(name, deps.paths, names);
+  const loaded = await routesFor(name, deps.paths, names);
   // A bad name or option value is bad usage; a route that does not exist is not.
   const resolved = asUsage(() =>
-    resolveRoute(file, { tool, options: { ...overrides, ...(name ? { route: name } : {}) } }, names),
+    resolveRoute(loaded.file, { tool, options: { ...overrides, ...(name ? { route: name } : {}) } }, names),
   );
   if (!resolved) {
     throw new RouteUsageError(
       `Name a route: clausona route ${sub} <name>, or an unsaved one: clausona route ${sub} --tool claude --from '<patterns>'.`,
     );
   }
-  return { resolved, overrides, broken, json: read.flags.has("--json"), resume: read.flags.has("--resume") };
+  return { resolved, loaded };
 }
 
 async function explainRoute(args: string[], deps: RouteDeps): Promise<string> {
-  const { resolved, overrides, broken, json, resume } = await resolveForRanking("explain", args, deps);
+  const parsed = readRankingArgs("explain", args);
+  // Neither a route nor an unsaved one: what a run would take here, by the dir rules and defaults.
+  if (parsed.name === undefined && Object.keys(parsed.overrides).length === 0) return explainHere(parsed, deps);
+  const { overrides, json, resume } = parsed;
+  const { resolved, loaded } = await resolveForRanking("explain", parsed, deps);
   const ranking = await rankRouteNow(resolved, deps, { resume, record: false });
   if (json) return JSON.stringify(explainJson(resolved.name, resolved.resolvedBy, ranking), null, 2);
+  const rules = readRules(loaded.file);
   return renderRouteDetail(resolved.name, ranking, {
     now: deps.clock(),
     onlyTool: resolved.onlyTool,
     overrides,
-    warnings: brokenWarnings(broken),
+    warnings: [...brokenWarnings(loaded.broken), ...ruleNotes(loaded, rules)],
+  });
+}
+
+/**
+ * `route explain` with no name: what `clausona run claude` and `clausona run codex` would each do
+ * in the current directory (one of them with --tool), which rule says so, and the explain of each
+ * route a run would take. Nothing is recorded.
+ */
+async function explainHere({ tool, json, resume }: RankingArgs, deps: RouteDeps): Promise<string> {
+  const registry = await registryOrThrow(deps);
+  const names = namesOf(registry);
+  const loaded = await loadRoutes(deps.paths, names);
+  const sys = pathsFor(deps);
+  const tools: ToolName[] = tool === undefined || tool === "all" ? [...SLOT_TOOLS] : [tool];
+  const found = [];
+  for (const each of tools) {
+    const { resolved, skipped } = routeByRules(loaded, each, deps.cwd, sys, names);
+    const ranking = resolved ? await rankRouteNow(resolved, deps, { resume, record: false }) : undefined;
+    found.push({ tool: each, resolved, ranking, skipped });
+  }
+  const active = (each: ToolName) => {
+    const id = registry.activeProfiles[each];
+    return id && registry.profiles[id] ? id : null;
+  };
+  if (json) {
+    const runs = found.map(({ tool: each, resolved, ranking, skipped }) =>
+      runHereJson(
+        each,
+        resolved && ranking
+          ? { name: resolved.name, resolvedBy: resolved.resolvedBy, ranking }
+          : { active: active(each) },
+        skipped,
+      ),
+    );
+    return JSON.stringify({ directory: deps.cwd, runs }, null, 2);
+  }
+  const runs = found.map(({ tool: each, resolved }): RunHere => {
+    if (!resolved) {
+      const id = active(each);
+      return id
+        ? { tool: each, uses: id, because: "active profile (no route)", routed: false }
+        : { tool: each, uses: "nothing", because: "no active profile (clausona use)", routed: false };
+    }
+    const because = resolved.resolvedBy.startsWith("dir:")
+      ? `dir rule ${resolved.resolvedBy.slice("dir:".length)}`
+      : `the ${each} default`;
+    return { tool: each, uses: `route ${resolved.name}`, because, routed: true };
+  });
+  const details = found.flatMap(({ resolved, ranking }) =>
+    resolved && ranking
+      ? [renderRouteDetail(resolved.name, ranking, { now: deps.clock(), onlyTool: resolved.onlyTool })]
+      : [],
+  );
+  return renderRunsHere(storedDir(deps.cwd, deps.cwd, sys), runs, details, {
+    warnings: [...found.flatMap(({ skipped }) => skipped.map(skippedText)), ...brokenWarnings(loaded.broken)],
   });
 }
 
 async function pickRoute(args: string[], deps: RouteDeps): Promise<string> {
-  const { resolved, overrides, json, resume } = await resolveForRanking("pick", args, deps);
+  const parsed = readRankingArgs("pick", args);
+  const { overrides, json, resume } = parsed;
+  const { resolved } = await resolveForRanking("pick", parsed, deps);
   const ranking = await rankRouteNow(resolved, deps, { resume, record: true });
   if (ranking.outcome.kind === "none") {
     throw new NoAccountError(
@@ -626,6 +924,10 @@ async function routeCommand(args: string[], io: RouteIo, deps: RouteDeps): Promi
       return explainRoute(rest, deps);
     case "pick":
       return pickRoute(rest, deps);
+    case "dir":
+      return dirRule(rest, deps);
+    case "default":
+      return defaultRule(rest, deps);
     default:
       // Not quoted back when it holds something key-shaped, as a route name or a pattern is not.
       if (holdsKey(sub)) throw new RouteUsageError("Unknown route command. Run `clausona route --help` for the list.");

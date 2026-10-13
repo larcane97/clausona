@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -593,7 +593,7 @@ describe("a route in routes.json that cannot be used", () => {
     expect(out).toContain(`  ⚠ ${PROBLEM}`);
     expect(out).toContain("  ⚠ Fix it with clausona route edit, or remove the route: clausona route remove bad.");
     const json = JSON.parse(await run("list", "--json"));
-    expect(Object.keys(json).sort()).toEqual(["problems", "routes"]);
+    expect(Object.keys(json).sort()).toEqual(["defaults", "dirs", "problems", "routes", "ruleWarnings"]);
     expect(json.routes.map((route: { name: string }) => route.name)).toEqual(["main"]);
     expect(json.problems).toEqual([PROBLEM]);
     expect(await run("explain", "main")).toContain(`  ⚠ ${PROBLEM}`);
@@ -748,6 +748,169 @@ describe("a profile whose name the key check would take for a key", () => {
   });
 });
 
+describe("dir rules and defaults", () => {
+  /** `~/work` as this platform writes it. */
+  const WORK = path.join("~", "work");
+
+  /** Routes for each kind of slot, and ~/work/app under the scratch home. */
+  async function withRoutes() {
+    const s = setup();
+    await s.run("add", "main");
+    await s.run("add", "cx", "--tool", "codex");
+    await s.run("add", "any", "--tool", "all");
+    mkdirSync(path.join(s.deps.home, "work", "app"), { recursive: true });
+    return s;
+  }
+
+  it("sets a dir rule however the directory is typed, lists it, and clears it a slot at a time", async () => {
+    const { run, file, deps } = await withRoutes();
+    deps.cwd = path.join(deps.home, "work");
+    expect(await run("dir", ".", "main")).toBe(`  ✔ In ${WORK} and below, clausona run claude uses route main`);
+    deps.cwd = deps.home;
+    await run("dir", "~/work", "cx");
+    expect(file().dirs).toEqual({ [WORK]: { claude: "main", codex: "cx" } });
+    expect(await run("dir")).toMatch(new RegExp(`^ {4}${WORK.replaceAll("\\", "\\\\")}\\s+main\\s+cx$`, "m"));
+    expect(await run("dir", "work", "--clear", "--tool", "codex")).toBe(`  ✔ Cleared the codex rule for ${WORK}`);
+    expect(file().dirs).toEqual({ [WORK]: { claude: "main" } });
+    expect(await run("dir", path.join(deps.home, "work"), "--clear")).toBe(`  ✔ Cleared the dir rule for ${WORK}`);
+    expect(file()).not.toHaveProperty("dirs");
+    expect(await run("dir", "~/work", "--clear")).toBe(`  ✔ No dir rule for ${WORK}. Nothing was changed.`);
+  });
+
+  it("fills both slots with an all route unless --tool names one, and refuses a route that cannot fill it", async () => {
+    const { run, file } = await withRoutes();
+    expect(await run("dir", "~/work", "any")).toBe(
+      `  ✔ In ${WORK} and below, clausona run claude and clausona run codex use route any`,
+    );
+    const other = path.join("~", "other");
+    expect(await run("dir", "~/other", "any", "--tool", "codex")).toBe(
+      [
+        `  ✔ In ${other} and below, clausona run codex uses route any`,
+        `  ⚠ ${other} does not exist yet. The rule holds once it does.`,
+      ].join("\n"),
+    );
+    expect(file().dirs).toEqual({ [WORK]: { claude: "any", codex: "any" }, [other]: { codex: "any" } });
+    await expect(run("dir", "~/work", "main", "--tool", "codex")).rejects.toThrow(
+      "Route 'main' is for claude, not codex.",
+    );
+    await expect(run("dir", "~/work", "main", "--tool", "all")).rejects.toThrow(
+      "Route 'main' is for claude only, so it cannot fill both tools.",
+    );
+    await expect(run("dir", "~/work", "gone")).rejects.toThrow(/^Route 'gone' does not exist\./);
+    await expect(run("dir", "~/work")).rejects.toThrow(/^Usage: clausona route dir/);
+  });
+
+  it("sets each tool's default, lists it, and clears it only for a tool named", async () => {
+    const { run, file } = await withRoutes();
+    expect(await run("default", "main")).toBe("  ✔ Outside every dir rule, clausona run claude uses route main");
+    await run("default", "any", "--tool", "codex");
+    expect(file().defaults).toEqual({ claude: "main", codex: "any" });
+    expect(await run("default")).toMatch(/^ {4}default\s+main\s+any$/m);
+    await expect(run("default", "--clear")).rejects.toThrow(
+      "Name the tool whose default to clear: clausona route default --clear --tool claude (or codex, or all).",
+    );
+    expect(await run("default", "--clear", "--tool", "all")).toBe("  ✔ Cleared the claude and codex default");
+    expect(file()).not.toHaveProperty("defaults");
+    expect(await run("default")).toContain("No dir rules or defaults yet.");
+  });
+
+  it("rewrites the rules that name a renamed route, and removes those that name a removed one", async () => {
+    const { run, file } = await withRoutes();
+    await run("dir", "~/work", "main");
+    await run("dir", "~/work", "cx");
+    await run("default", "main");
+    expect(await run("rename", "main", "office")).toBe(
+      [
+        "  ✔ Renamed route main to office",
+        `    Also renamed in the dir rule for ${WORK} (claude) and the claude default.`,
+      ].join("\n"),
+    );
+    expect(file()).toMatchObject({
+      dirs: { [WORK]: { claude: "office", codex: "cx" } },
+      defaults: { claude: "office" },
+    });
+    expect(await run("remove", "office")).toBe(
+      ["  ✔ Removed route office", `    Also removed the dir rule for ${WORK} (claude) and the claude default.`].join(
+        "\n",
+      ),
+    );
+    expect(file().dirs).toEqual({ [WORK]: { codex: "cx" } });
+    expect(file()).not.toHaveProperty("defaults");
+  });
+
+  it("lists the rules under the routes, and warns about one that names a route it cannot use", async () => {
+    const { run, deps } = await withRoutes();
+    const raw = JSON.parse(readFileSync(deps.paths.routesPath, "utf8"));
+    writeFileSync(
+      deps.paths.routesPath,
+      JSON.stringify({ ...raw, dirs: { "~/work": { claude: "gone", codex: "cx" } }, defaults: { claude: "cx" } }),
+    );
+    const out = await run("list", "--no-quota");
+    expect(out).toMatch(/^ {4}DIRECTORY\s+CLAUDE\s+CODEX$/m);
+    expect(out).toMatch(/^ {4}~\/work\s+gone\s+cx$/m);
+    expect(out).toMatch(/^ {4}default\s+cx\s+—$/m);
+    expect(out).toContain("  ⚠ ~/work names route 'gone' for claude, which does not exist.");
+    expect(out).toContain("  ⚠ The claude default names route 'cx', which is for codex.");
+    const json = JSON.parse(await run("list", "--json", "--no-quota"));
+    expect(json).toMatchObject({
+      dirs: { "~/work": { claude: "gone", codex: "cx" } },
+      defaults: { claude: "cx" },
+      ruleWarnings: [
+        "~/work names route 'gone' for claude, which does not exist.",
+        "The claude default names route 'cx', which is for codex.",
+      ],
+      problems: [],
+    });
+  });
+
+  describe("explain with no name", () => {
+    async function inApp() {
+      const s = await withRoutes();
+      await s.run("dir", "~/work", "main");
+      const raw = JSON.parse(readFileSync(s.deps.paths.routesPath, "utf8"));
+      writeFileSync(s.deps.paths.routesPath, JSON.stringify({ ...raw, defaults: { codex: "gone" } }));
+      s.deps.cwd = path.join(s.deps.home, "work", "app");
+      return s;
+    }
+
+    it("says what each tool's run would take here and why, then explains each route", async () => {
+      const { run } = await inApp();
+      const out = await run("explain");
+      expect(out).toContain(`  In ${path.join("~", "work", "app")}\n`);
+      expect(out).toMatch(
+        new RegExp(`^ {4}clausona run claude\\s+route main\\s+dir rule ${WORK.replaceAll("\\", "\\\\")}$`, "m"),
+      );
+      expect(out).toMatch(/^ {4}clausona run codex\s+nothing\s+no active profile \(clausona use\)$/m);
+      expect(out).toContain("  ⚠ Skipped the codex default: route 'gone' does not exist.");
+      expect(out).toContain("╭─ main ─");
+      expect(await run("explain", "--tool", "codex")).not.toContain("clausona run claude");
+    });
+
+    it("gives each run's resolvedBy and the rules it skipped in --json", async () => {
+      const { run, deps } = await inApp();
+      const json = JSON.parse(await run("explain", "--json"));
+      expect(json.directory).toBe(deps.cwd);
+      expect(json.runs).toHaveLength(2);
+      expect(json.runs[0]).toMatchObject({
+        tool: "claude",
+        route: "main",
+        resolvedBy: `dir:${WORK}`,
+        outcome: { kind: "picked", id: "claude:a" },
+        skipped: [],
+      });
+      expect(json.runs[1]).toEqual({
+        tool: "codex",
+        route: null,
+        resolvedBy: "active",
+        profile: null,
+        skipped: [{ rule: "default", reason: "route 'gone' does not exist" }],
+      });
+      const one = JSON.parse(await run("explain", "--tool", "claude", "--json"));
+      expect(one.runs.map((entry: { tool: string }) => entry.tool)).toEqual(["claude"]);
+    });
+  });
+});
+
 describe("route explain and pick", () => {
   it("explains without recording", async () => {
     const { run, deps } = setup();
@@ -891,7 +1054,9 @@ describe("failures with --json", () => {
     await run("add", "main");
     for (const args of [
       ["list", "main", "--json"],
-      ["explain", "--json"],
+      // With no name, explain says what a run here would take; field options need a route.
+      ["explain", "--exclude", "x", "--json"],
+      ["pick", "--json"],
       ["pick", "main", "--bogus", "--json"],
       ["explain", "main", "--max-usage", "0", "--json"],
       ["add", "work", "--json"],
