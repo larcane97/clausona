@@ -349,6 +349,36 @@ describe("route set, rename, remove", () => {
     expect(file().routes.main.from).toEqual(["*"]);
   });
 
+  it("never quotes or stores a key given to --exclude or --fallback", async () => {
+    const { run, file, deps } = setup();
+    await run("add", "main");
+    for (const key of [["sk", "ant", "y".repeat(24)].join("-"), ["hf", "Ab".repeat(17)].join("_")]) {
+      for (const flag of ["--exclude", "--fallback"]) {
+        for (const args of [
+          ["add", "other", flag, key],
+          ["set", "main", flag, key],
+          ["explain", "main", flag, key],
+          ["explain", "--tool", "claude", "--from", "*", flag, key],
+        ]) {
+          const error = (await run(...args).catch((e: unknown) => e)) as Error;
+          expect(error).toBeInstanceOf(Error);
+          expect(error.message).not.toContain(key);
+        }
+      }
+      expect(readFileSync(deps.paths.routesPath, "utf8")).not.toContain(key);
+    }
+    expect(file().routes).toEqual({ main: { tool: "claude", from: ["*"], strategy: "round-robin", maxUsage: 80 } });
+  });
+
+  it("refuses --fallback with --no-fallback, and changes nothing", async () => {
+    const { run, file } = setup();
+    await run("add", "main", "--fallback", "c");
+    await expect(run("set", "main", "--fallback", "b", "--no-fallback")).rejects.toThrow(
+      /^--fallback and --no-fallback cannot be used together\.$/,
+    );
+    expect(file().routes.main.fallback).toEqual(["c"]);
+  });
+
   it("refuses to change nothing, and an unknown route", async () => {
     const { run } = setup();
     await run("add", "main");
@@ -366,6 +396,15 @@ describe("route set, rename, remove", () => {
     expect(Object.keys(file().routes)).toEqual(["all"]);
     expect(await run("remove", "all")).toContain("Removed route all");
     expect(file().routes).toEqual({});
+  });
+
+  it("refuses to rename onto a name a route already has, and changes neither", async () => {
+    const { run, file } = setup();
+    await run("add", "main");
+    await run("add", "other", "--strategy", "headroom");
+    const before = file().routes;
+    await expect(run("rename", "main", "other")).rejects.toThrow(/^Route 'other' already exists\.$/);
+    expect(file().routes).toEqual(before);
   });
 
   // Every object has these, so a lookup that is not of own keys finds one in every routes.json.
@@ -616,6 +655,58 @@ describe("route edit", () => {
     await runRouteCommand(["edit"], io, deps);
     expect(said.join("\n")).toContain('routes.main.tool: must be "claude", "codex" or "all"');
     expect(JSON.parse(readFileSync(deps.paths.routesPath, "utf8")).routes.main).toEqual({ tool: "claude" });
+  });
+
+  it("saves nothing and opens no editor again when the answer to Edit again? is no", async () => {
+    for (const answer of ["n", null]) {
+      const { deps } = setup();
+      writeFileSync(deps.paths.routesPath, '{ "version": 1, "routes": {} }\n');
+      let opened = 0;
+      deps.editText = async () => {
+        opened++;
+        return JSON.stringify({ version: 1, routes: { main: { tool: "x" } } });
+      };
+      const asked: string[] = [];
+      const io: RouteIo = {
+        interactive: true,
+        ask: async (question) => {
+          asked.push(question);
+          return answer;
+        },
+        say: () => {},
+        confirm: async () => true,
+      };
+      expect(stripAnsi(await runRouteCommand(["edit"], io, deps))).toBe("Nothing was changed.");
+      expect(asked).toEqual(["Edit again? (Y/n) "]);
+      expect(opened).toBe(1);
+      expect(readFileSync(deps.paths.routesPath, "utf8")).toBe('{ "version": 1, "routes": {} }\n');
+    }
+  });
+
+  it("saves nothing and offers no second edit when the editor fails", async () => {
+    const { deps } = setup();
+    writeFileSync(deps.paths.routesPath, '{ "version": 1, "routes": {} }\n');
+    // What editInEditor throws for an editor that exits non-zero.
+    deps.editText = async () => {
+      throw new Error("vi exited with 1, so nothing was changed.");
+    };
+    await expect(runRouteCommand(["edit"], NEVER_ASKS, deps)).rejects.toThrow(
+      "vi exited with 1, so nothing was changed.",
+    );
+    expect(readFileSync(deps.paths.routesPath, "utf8")).toBe('{ "version": 1, "routes": {} }\n');
+  });
+
+  it("keeps another terminal's change to routes.json made while the editor was open", async () => {
+    const { deps, io, file } = setup();
+    writeFileSync(deps.paths.routesPath, '{ "version": 1, "routes": {} }\n');
+    deps.editText = async () => {
+      await runRouteCommand(["add", "theirs"], io, { ...deps, editText: async () => "" });
+      return JSON.stringify({ version: 1, routes: { mine: { tool: "claude" } } });
+    };
+    await expect(runRouteCommand(["edit"], io, deps)).rejects.toThrow(
+      `${deps.paths.routesPath} changed while you were editing, so your edit was not saved. Run \`clausona route edit\` again.`,
+    );
+    expect(Object.keys(file().routes)).toEqual(["theirs"]);
   });
 
   it("opens an invalid file as it is, so it can be fixed", async () => {
