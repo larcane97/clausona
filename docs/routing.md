@@ -110,8 +110,8 @@ says so, as in `62% of the Opus limit used`.
 A Codex limit on a model can have two windows, like the account's own: 5 hours and a week.
 Either can run out first, so the higher of the two counts, as with the account's 5H and 7D. The
 note names the window, as in `62% of the GPT-5.3-Codex-Spark 7D limit used`, and so does the
-model's column in `route explain`. Claude's model limits are all weekly and are named without
-one.
+model's column in `route explain` and on the Routes screen. Claude's model limits are all weekly
+and are named without one.
 
 clausona reads the model from `--model` for Claude Code, and from `-m` or `--model` for Codex,
 also after a subcommand such as `exec`. It stops reading at a `--`, and hands the arguments to
@@ -133,7 +133,7 @@ model. It does not read Codex's `-c model=…` or a Codex config profile (`-p`) 
 model that has its own limit, name it in the run.
 
 `route explain --model <name>` and `route pick --model <name>` rank the way a run of that model
-does.
+does. So does the [Routes screen](#the-routes-screen), once `m` picks the model.
 
 ### Resumed sessions
 
@@ -433,6 +433,14 @@ settings, then every account with gauges for its 5H and 7D windows, the one a ru
 next, and why any other is held back. On a terminal under 100 columns the detail sits under the
 list instead.
 
+When the route's accounts report a limit on one model, a line under the table names those models,
+as in `Model limits: Opus, Sonnet`. `m` ranks the route as a run of the first of them would, the
+way `clausona route explain <route> --model opus` does. The model's limit gets a column beside 5H
+and 7D, the account an Opus run would get is marked next, and the count in the list is of the
+accounts free for that run. The settings say `ranked as --model opus`. Press `m` again for the
+next model, and after the last one the route is ranked as a run that names no model. Moving to
+another route does that too.
+
 | Key | Does |
 |---|---|
 | `↑` `↓` | Move between routes |
@@ -440,6 +448,7 @@ list instead.
 | `e` | Open the form on the selected route |
 | `d` | Remove the selected route, once you answer `y` |
 | `r` | Read the quota again |
+| `m` | Rank the selected route as a run of one model would, then the next model, then none; only when its accounts report a limit on a model |
 | `tab` | Switch to the [dir rules and defaults](#dir-rules-and-defaults), and back |
 | `b` | Switch to the [budgets](#budgets-on-the-screen) of your API profiles; `tab` comes back |
 | `esc` | Back to the dashboard, or out if you came in with `clausona route` |
