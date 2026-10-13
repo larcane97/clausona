@@ -21,6 +21,12 @@ export const STASH_KEY = "stash";
 /** The `setBy.key` of a server managed-mcp.json keeps from starting: the file's name, as no key holds it. */
 export const MANAGED_MCP_KEY = "managed-mcp.json";
 
+/**
+ * The `setBy.key` of a Codex item in a place where Codex refuses a config.toml - the user's, or
+ * a trusted project's - and so loads none of its config: the file `setBy.file` names.
+ */
+export const CODEX_REFUSED_KEY = "config refused";
+
 /** Claude Code reads settings in this order; the first that sets a key wins. */
 const PRECEDENCE: readonly SettingsLayer[] = ["managed", "local", "project", "user"];
 
@@ -596,10 +602,16 @@ export function codexPluginState(inv: Inventory, plugin: string, project: string
  * skill's (an account's own same-name skill). For what any account can see (a `.mcp.json` or
  * plugin server, a project skill), callers pass `profile`: without one, every account's
  * approvals are merged and no account's own switch or copy applies. A stashed item is off
- * everywhere, whatever the switches say.
+ * everywhere, whatever the switches say, and a Codex item where Codex refuses a config.toml.
  */
 export function stateOf(inv: Inventory, item: Extension, project?: string, profile?: string): EffectiveState {
   if (item.stashed) return { value: "off", setBy: { file: item.stashed.file, key: STASH_KEY } };
+  if (item.location.tool === "codex") {
+    const refused = inv.facts.codexConfigRefused.find(
+      (r) => r.project === undefined || (project !== undefined && samePath(r.project, project)),
+    );
+    if (refused) return { value: "off", setBy: { file: refused.file, key: CODEX_REFUSED_KEY } };
+  }
   switch (item.kind) {
     case "skill":
       return item.location.tool === "claude"

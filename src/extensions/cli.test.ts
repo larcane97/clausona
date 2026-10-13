@@ -1304,6 +1304,30 @@ describe("Codex hooks and Codex's trust", () => {
     );
   });
 
+  it("loads nothing of Codex in a trusted project whose config.toml Codex refuses, and says so", async () => {
+    const { h, app, web } = seed();
+    h.write(
+      ".codex/config.toml",
+      `[projects.${JSON.stringify(app)}]\ntrust_level = "trusted"\n\n[projects.${JSON.stringify(web)}]\ntrust_level = "trusted"\n\n[mcp_servers.exa]\ncommand = "npx"\n`,
+    );
+    // Codex 0.159.3 from app: config/read and skills/list fail ("invalid configuration"), and
+    // hooks/list too; from web, all reads.
+    h.write("repos/app/.codex/config.toml", "[mcp_servers.p]\ncommand = 5\n");
+    const ls = await run(h, app, "skills", ["ls", "--tool", "codex"]);
+    expect(ls).not.toMatch(/^eli5\s/m);
+    expect(ls).toContain(
+      `${tilde(path.join(app, ".codex", "config.toml"), h.home)}: has an MCP server Codex cannot read`,
+    );
+    const global = JSON.parse(await run(h, app, "skills", ["ls", "--tool", "codex", "--scope", "global", "--json"]));
+    expect(global.items.map((i: { name: string; state: string; tags: string[] }) => [i.name, i.state, i.tags])).toEqual(
+      [["eli5", "off", ["off here"]]],
+    );
+    expect(await run(h, app, "mcp", ["show", "exa", "--tool", "codex"])).toMatch(
+      /^Loaded\s+off here \(Codex cannot read this project's \.codex\/config\.toml\)$/m,
+    );
+    expect(await run(h, web, "skills", ["ls", "--tool", "codex"])).toMatch(/^eli5\s/m);
+  });
+
   it("lists a hook on an event Codex does not know as such, out of Loaded, whatever it holds", async () => {
     const { h, app } = seed();
     // Codex 0.159.3's hooks/list: Stop's listed; `Unknown` and `stop` not, and no warning - one

@@ -28,6 +28,7 @@ import {
   type ToolName,
 } from "./scopes.js";
 import {
+  CODEX_REFUSED_KEY,
   codexTrusted,
   codexWorktreeRuns,
   isMcpjsonServer,
@@ -298,7 +299,7 @@ export function usageCells(
 
 /**
  * Whether a setting was read from a project's own place: its `.claude/settings*.json`, an
- * account's `.claude.json` entry for it, or its `.codex/config.toml`. Told from the facts the
+ * account's `.claude.json` entry for it, or its `.codex/config.toml` - one Codex refuses too. Told from the facts the
  * sources recorded with a project, not from where the file is: in the home dir every file is
  * under the project, `~/.claude/settings.json` too, and that one is the user's.
  */
@@ -315,7 +316,8 @@ function isProjectSetting(inv: Inventory, file: string): boolean {
     facts.claudeMcpjson.some(at) ||
     facts.codexMcpEnabled.some(at) ||
     facts.codexPlugins.some(at) ||
-    facts.codexPluginServers.some(at)
+    facts.codexPluginServers.some(at) ||
+    facts.codexConfigRefused.some(at)
   );
 }
 
@@ -486,7 +488,8 @@ const WHOLE_KIND: ReadonlySet<string> = new Set(["disableAllHooks", "disableBund
 /**
  * Where a state is set, in words: the file (`settingPlace`), and for a setting that turns a whole
  * kind off, or a list of servers, the setting too - "disableAllHooks in ~/.claude/settings.json",
- * "not in allowedMcpServers in …", "only the servers in …/managed-mcp.json start". A list's
+ * "not in allowedMcpServers in …", "only the servers in …/managed-mcp.json start", "Codex
+ * cannot read this project's .codex/config.toml". A list's
  * match that read a variable says so, since Claude Code reads it in its own environment:
  * "deniedMcpServers in …, with ${TOOLS} as your shell and settings set it".
  */
@@ -499,6 +502,7 @@ function setByWords(
   const place = settingPlace(inv, item, project, setBy.file);
   if (setBy.key === "allowedMcpServers") return `not in allowedMcpServers in ${place}${readWords(setBy.reads)}`;
   if (setBy.key === MANAGED_MCP_KEY) return `only the servers in ${place} start`;
+  if (setBy.key === CODEX_REFUSED_KEY) return `Codex cannot read ${place}`;
   return WHOLE_KIND.has(setBy.key) ? `${setBy.key} in ${place}${readWords(setBy.reads)}` : place;
 }
 
@@ -607,7 +611,9 @@ function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined)
   }
   if (state.value === "off") {
     const untrusted = UNTRUSTED_OFF[item.kind];
-    if (state.setBy?.key !== STASH_KEY && untrusted !== undefined && untrustedOwn(inv, item)) {
+    // A config.toml Codex refuses keeps all of it out, whatever it trusts.
+    const kept = state.setBy?.key === STASH_KEY || state.setBy?.key === CODEX_REFUSED_KEY;
+    if (!kept && untrusted !== undefined && untrustedOwn(inv, item)) {
       return [{ label: "Loaded", text: untrusted, tone: "warning" }];
     }
     if (!state.setBy) return [{ label: "Loaded", text: "off: no settings file turns it on", tone: "warning" }];

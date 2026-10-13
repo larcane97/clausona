@@ -717,9 +717,11 @@ list may miss what they hold:" and each file, with a position or a reason and ne
 holds. JSON lists them in `warnings`. The exit code stays 0.
 
 A Codex `config.toml` that Codex refuses is one of them, and clausona reads none of it. Codex
-refuses one with an integer too large for 64 bits (a larger one that fits reads as Codex reads
-it), and one with a value of the wrong type in its typed config. clausona checks the sections it
-reads, against Codex's types:
+refuses one that is not valid TOML, one with an integer too large for 64 bits (a larger one that
+fits reads as Codex reads it), and one with a value of the wrong type in its typed config. Then
+Codex loads none of its config, and no skill, server, hook or plugin either, so every Codex row
+is off: Loaded says "off everywhere (Codex cannot read ~/.codex/config.toml)". clausona checks
+the sections it reads, against Codex's types:
 
 - `mcp_servers`: a server's fields, and its transport (a `command` or else a `url`, with nothing
   the other takes);
@@ -729,8 +731,11 @@ reads, against Codex's types:
 - `projects` and each `trust_level` (`trusted` or `untrusted`, as written).
 
 A trusted project's `config.toml` is checked merged over yours, as Codex merges them. So a
-switch for a server you do not define is a server with no transport, which Codex refuses too:
-the warning says Codex then loads no config in that project. clausona does not check the
+switch for a server you do not define is a server with no transport, which Codex refuses too.
+When Codex refuses a trusted project's file, it loads no config in that project, yours
+included: the warning says so, and every Codex row is off in that project ("off here (Codex
+cannot read this project's .codex/config.toml)"). An untrusted project's file Codex leaves alone,
+one that is not valid TOML too. clausona does not check the
 sections it does not read. A wrong type there makes Codex refuse the file all the same, and
 clausona reads the file as fine.
 

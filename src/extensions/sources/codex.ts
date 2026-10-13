@@ -39,6 +39,8 @@ export type CodexContext = {
   config?: Record<string, unknown>;
   /** The user's config.toml with its numbers as Codex reads them, which a project's is checked merged over. */
   exact?: Record<string, unknown>;
+  /** Set when Codex refuses the user's config.toml, and so loads none of its config anywhere. */
+  refused?: true;
 };
 
 /**
@@ -56,28 +58,36 @@ function invalidToml(error: unknown): string {
 export type CodexConfigFile = { value: Record<string, unknown>; exact: Record<string, unknown> };
 
 /**
- * A Codex config.toml, or undefined when missing; one that does not parse is a warning. An
- * integer past 2^53 is a bigint, as Codex reads it as the i64 it is; one past 64 bits Codex 0.159.3
- * refuses ("u64 value was too large"), the whole file with it, so that is a warning too. Whether
- * Codex reads its typed config is the caller's to check (codexConfigProblem): a project's is
- * checked merged over the user's.
+ * A Codex config.toml, undefined when missing, or `"refused"` where Codex refuses it whole: one
+ * that does not parse, and one with an integer past 64 bits ("u64 value was too large" in Codex
+ * 0.159.3), each a warning, which ends with `consequence` where given. An integer past 2^53 is a
+ * bigint, as Codex reads it as the i64 it is. Whether Codex reads its typed config is the
+ * caller's to check (codexConfigProblem): a project's is checked merged over the user's.
  */
-export async function readCodexConfig(file: string, warnings: Warning[]): Promise<CodexConfigFile | undefined> {
+export async function readCodexConfig(
+  file: string,
+  warnings: Warning[],
+  consequence?: string,
+): Promise<CodexConfigFile | "refused" | undefined> {
   const text = await readText(file, warnings);
   if (text === undefined) return undefined;
   let value: Record<string, unknown>;
   try {
     value = parse(text, { integersAsBigInt: "asNeeded" }) as Record<string, unknown>;
   } catch (error) {
-    warnings.push({ file, message: invalidToml(error) });
-    return undefined;
+    warnings.push({ file, message: consequence ? `${invalidToml(error)}, ${consequence}` : invalidToml(error) });
+    return "refused";
   }
   if (pastI64(value)) {
-    warnings.push({ file, message: "has an integer too large for 64 bits, so Codex refuses the whole file" });
-    return undefined;
+    warnings.push({ file, message: `has an integer too large for 64 bits, ${consequence ?? REFUSES_FILE}` });
+    return "refused";
   }
   return { value, exact: exactToml(text) ?? value };
 }
+
+const REFUSES_FILE = "so Codex refuses the whole file";
+/** What a trusted project's config.toml Codex refuses means: Codex loads none of its config there. */
+const LOADS_NONE_HERE = "so Codex loads no config in this project";
 
 /**
  * The user's config.toml as an object, or undefined when missing or refused: one that does not
@@ -86,10 +96,10 @@ export async function readCodexConfig(file: string, warnings: Warning[]): Promis
  */
 export async function readTomlObject(file: string, warnings: Warning[]): Promise<Record<string, unknown> | undefined> {
   const read = await readCodexConfig(file, warnings);
-  if (read === undefined) return undefined;
+  if (read === undefined || read === "refused") return undefined;
   const problem = codexConfigProblem(read.exact);
   if (problem === undefined) return read.value;
-  warnings.push({ file, message: `has ${problem} Codex cannot read, so Codex refuses the whole file` });
+  warnings.push({ file, message: `has ${problem} Codex cannot read, ${REFUSES_FILE}` });
   return undefined;
 }
 
@@ -126,11 +136,12 @@ export async function loadCodexContext(
   if (!primary) return undefined;
   const configFile = path.join(primary.dir, "config.toml");
   const read = await readCodexConfig(configFile, warnings);
-  const problem = read && codexConfigProblem(read.exact);
-  if (problem)
-    warnings.push({ file: configFile, message: `has ${problem} Codex cannot read, so Codex refuses the whole file` });
-  const config = read && !problem ? read : undefined;
-  return { homeDir, primary, homes, configFile, ...(config ? { config: config.value, exact: config.exact } : {}) };
+  const problem = read && read !== "refused" ? codexConfigProblem(read.exact) : undefined;
+  if (problem) warnings.push({ file: configFile, message: `has ${problem} Codex cannot read, ${REFUSES_FILE}` });
+  const ctx: CodexContext = { homeDir, primary, homes, configFile };
+  // Codex then loads no config: config/read, skills/list and hooks/list fail.
+  if (read === "refused" || problem) return { ...ctx, refused: true };
+  return read ? { ...ctx, config: read.value, exact: read.exact } : ctx;
 }
 
 /** The projects Codex has recorded trust for, as one record under the primary. */
@@ -152,6 +163,7 @@ export function codexProjectRecords(ctx: CodexContext): ProjectRecord[] {
  */
 export async function readCodex(ctx: CodexContext, projects: Project[], out: Collector): Promise<void> {
   const global: SkillLocation = { tool: "codex", scope: "global" };
+  if (ctx.refused) out.facts.codexConfigRefused.push({ file: ctx.configFile });
   // The trust first: whether Codex reads a project's config.toml, and checks it, turns on it.
   for (const [project, table] of Object.entries(isRecord(ctx.config?.projects) ? ctx.config.projects : {})) {
     // A table with no trust_level decides nothing, so Codex looks further (codexTrustFolders).
@@ -207,7 +219,7 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
         const worktree = roots?.worktree && (await entryInfo(own)).kind === "dir" ? roots.worktree : undefined;
         if (worktree) out.facts.codexWorktrees[pathKey(project.path)] = worktree;
         const file = codexProjectConfig(project.path);
-        const config = projectConfig(ctx, project.path, file, await readCodexConfig(file, out.warnings), out);
+        const config = await projectConfig(ctx, project.path, file, out);
         if (config) {
           addServers(config, { ...here, file }, project.path, out);
           addPluginSwitches(config, file, project.path, out.facts);
@@ -278,23 +290,28 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
 }
 
 /**
- * A project's config.toml, as read, where Codex reads it: where Codex trusts the project, it
- * checks the file merged over the user's (mergeCodexConfig), and refuses its config there when
- * that has a value of the wrong type - a switch for a server the user does not define too - which
- * is a warning, and the file is read no further. Codex leaves an untrusted project's alone.
+ * A project's config.toml, where Codex reads it. Where Codex trusts the project, it refuses the
+ * file - one that does not parse, and one that, merged over the user's (mergeCodexConfig), has a
+ * value of the wrong type, a switch for a server the user does not define too - and then loads
+ * none of its config in the project, the user's included (codexConfigRefused): a warning, and the
+ * file is read no further. Codex leaves an untrusted project's alone, one that does not parse too.
  */
-function projectConfig(
+async function projectConfig(
   ctx: CodexContext,
   project: string,
   file: string,
-  read: CodexConfigFile | undefined,
   out: Collector,
-): Record<string, unknown> | undefined {
-  if (read === undefined) return undefined;
-  if (!codexTrustedIn(out.facts, project)) return read.value;
-  const problem = codexConfigProblem(mergeCodexConfig(ctx.exact ?? {}, read.exact) as Record<string, unknown>);
-  if (problem === undefined) return read.value;
-  out.warnings.push({ file, message: `has ${problem} Codex cannot read, so Codex loads no config in this project` });
+): Promise<Record<string, unknown> | undefined> {
+  const trusted = codexTrustedIn(out.facts, project);
+  const read = await readCodexConfig(file, out.warnings, trusted ? LOADS_NONE_HERE : undefined);
+  if (read === undefined || (read === "refused" && !trusted)) return undefined;
+  if (read !== "refused") {
+    if (!trusted) return read.value;
+    const problem = codexConfigProblem(mergeCodexConfig(ctx.exact ?? {}, read.exact) as Record<string, unknown>);
+    if (problem === undefined) return read.value;
+    out.warnings.push({ file, message: `has ${problem} Codex cannot read, ${LOADS_NONE_HERE}` });
+  }
+  out.facts.codexConfigRefused.push({ file, project });
   return undefined;
 }
 

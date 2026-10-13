@@ -242,6 +242,13 @@ export type StateFacts = {
   codexHookTrust: { id: string; keys: string[]; hash: string; builtin?: true }[];
   /** `[hooks.state."<key>"]` in the user config.toml: one hook's `enabled`, and the hash it was trusted at. */
   codexHookStates: { file: string; key: string; enabled?: boolean; trustedHash?: string }[];
+  /**
+   * Each config.toml Codex refuses whole - one it cannot parse, or with a value of the wrong type
+   * in a section clausona reads: then Codex loads no config at all, and so no skill, server or
+   * hook. The user config.toml has no `project`, and its refusal holds in every project; a trusted
+   * project's holds in that project, where Codex checks it merged over the user's.
+   */
+  codexConfigRefused: { file: string; project?: string }[];
 };
 
 export function emptyFacts(): StateFacts {
@@ -264,6 +271,7 @@ export function emptyFacts(): StateFacts {
     codexPluginServers: [],
     codexHookTrust: [],
     codexHookStates: [],
+    codexConfigRefused: [],
   };
 }
 

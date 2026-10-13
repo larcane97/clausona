@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { type Extension, emptyFacts, type Inventory, type StateFacts } from "./model.js";
 import { pathKey } from "./read.js";
 import {
+  CODEX_REFUSED_KEY,
   claudeMcpTaken,
   claudeSkillOverride,
   codexTrusted,
@@ -801,6 +802,31 @@ describe("Codex", () => {
     expect(stateOf(i, app, P)).toEqual({ value: "on" });
     expect(stateOf(i, user, Q)).toEqual({ value: "on" });
     expect(stateOf(i, user)).toEqual({ value: "on" });
+  });
+
+  it("loads nothing of Codex where Codex refuses its config: everywhere for the user's, there for a project's", () => {
+    const skill = ext("skill", "eli5", { tool: "codex", scope: "global", file: "/a/eli5" });
+    const server = ext("mcp", "exa", { tool: "codex", scope: "global", file: "/c/config.toml" });
+    const hook = ext("hook", "Stop", { tool: "codex", scope: "global", file: "/c/hooks.json" });
+    const claude = ext("skill", "eli5", { tool: "claude", scope: "global", file: "/h/.claude/skills/eli5" });
+    const items = [skill, server, hook, claude];
+    const project = inv(items, { codexConfigRefused: [{ file: `${P}/.codex/config.toml`, project: P }] });
+    for (const item of [skill, server, hook]) {
+      expect(stateOf(project, item, P)).toEqual({
+        value: "off",
+        setBy: { file: `${P}/.codex/config.toml`, key: CODEX_REFUSED_KEY },
+      });
+      expect(stateOf(project, item, Q).value).not.toBe("off");
+      expect(stateOf(project, item).value).not.toBe("off");
+    }
+    expect(stateOf(project, claude, P).value).toBe("on");
+    const user = inv(items, { codexConfigRefused: [{ file: "/c/config.toml" }] });
+    for (const where of [P, Q, undefined]) {
+      expect(stateOf(user, skill, where)).toEqual({
+        value: "off",
+        setBy: { file: "/c/config.toml", key: CODEX_REFUSED_KEY },
+      });
+    }
   });
 
   it("trusts a project whose recorded key is its path exactly, as Codex compares the key", () => {

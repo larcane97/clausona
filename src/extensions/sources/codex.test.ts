@@ -931,6 +931,63 @@ describe("readCodex", () => {
     expect(out.facts.codexMcpEnabled.map((e) => [e.name, e.enabled])).toEqual([["good", false]]);
   });
 
+  it("records where Codex refuses a config.toml: the user's everywhere, a trusted project's there", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const projects = ["repos/types", "repos/syntax", "repos/big", "repos/fine", "repos/untrusted"].map((p) =>
+      h.project(p),
+    );
+    const trusted = projects
+      .slice(0, 4)
+      .map((p) => `[projects."${p.replaceAll("\\", "\\\\")}"]\ntrust_level = "trusted"\n`);
+    h.codex("personal", ".codex", trusted.join("\n"));
+    // Codex 0.159.3 from each: config/read and skills/list fail for the first three ("invalid
+    // type", "Error parsing project config file", "u64 value was too large"); the last two read.
+    h.write("repos/types/.codex/config.toml", "[mcp_servers.p]\ncommand = 5\n");
+    h.write("repos/syntax/.codex/config.toml", "[mcp_servers.p\n");
+    h.write(
+      "repos/big/.codex/config.toml",
+      '[mcp_servers.p]\ncommand = "p"\nstartup_timeout_ms = 9223372036854775808\n',
+    );
+    h.write("repos/fine/.codex/config.toml", '[mcp_servers.p]\ncommand = "p"\n');
+    h.write("repos/untrusted/.codex/config.toml", "[mcp_servers.p\n");
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(
+      ctx,
+      projects.map((p) => ({ path: p, tools: ["codex"], profiles: [] })),
+      out,
+    );
+    const name = (file: string) => path.basename(path.dirname(path.dirname(file)));
+    expect(
+      out.facts.codexConfigRefused.map((r) => [name(r.file), r.project && path.basename(r.project)]).sort(),
+    ).toEqual([
+      ["big", "big"],
+      ["syntax", "syntax"],
+      ["types", "types"],
+    ]);
+    const says = Object.fromEntries(out.warnings.map((w) => [name(w.file), w.message]));
+    expect(says.types).toBe("has an MCP server Codex cannot read, so Codex loads no config in this project");
+    expect(says.syntax).toMatch(
+      /^is not valid TOML( at line \d+, column \d+)?, so Codex loads no config in this project$/,
+    );
+    expect(says.big).toBe("has an integer too large for 64 bits, so Codex loads no config in this project");
+    expect(says.untrusted).toMatch(/^is not valid TOML( at line \d+, column \d+)?$/);
+    expect(
+      out.items.filter((i) => i.kind === "mcp").map((i) => i.location.project && path.basename(i.location.project)),
+    ).toEqual(["fine"]);
+    // A user config.toml Codex refuses keeps all of its config out, in every project.
+    const user = new TestHome();
+    homes.push(user);
+    user.codex("personal", ".codex", "[mcp_servers.x\n");
+    const userOut: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const userCtx = await loadCodexContext(user.registry, user.home, userOut.warnings);
+    if (!userCtx) throw new Error("no codex context");
+    await readCodex(userCtx, [], userOut);
+    expect(userOut.facts.codexConfigRefused).toEqual([{ file: userCtx.configFile }]);
+  });
+
   it("warns for a config.toml that does not parse and reads the rest", async () => {
     const h = new TestHome();
     homes.push(h);
