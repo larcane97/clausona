@@ -684,13 +684,16 @@ function mcpLines(inv: Inventory, row: ScopeRow, project: string | undefined): D
   const codex = firstOf(row).location.tool === "codex";
   lines.push(...(codex ? loadedLines(inv, row, project) : accountLines(inv, row, project)));
   if (codex) lines.push(...trustLines(inv, row, project));
+  // Copies from several accounts' .claude.json: each line names its account, as Also in does.
+  const owners = new Set(row.items.flatMap((copy) => (copy.location.profile ? [copy.location.profile] : [])));
   row.items.forEach((copy, i) => {
     const loc = copy.location;
+    const whose = owners.size > 1 && loc.profile ? ` · ${shortProfile(loc.profile)}` : "";
     const entry =
       loc.scope === "local" && loc.project !== undefined
         ? ` (${samePath(loc.project, project) ? "this project's" : `${projectName(loc.project, inv)}'s`} entry)`
         : "";
-    lines.push({ label: i === 0 ? "File" : "", text: `${tilde(loc.file, inv.homeDir)}${entry}` });
+    lines.push({ label: i === 0 ? "File" : "", text: `${tilde(loc.file, inv.homeDir)}${whose}${entry}` });
   });
   return lines;
 }

@@ -279,6 +279,10 @@ The columns:
   parent folder's `.mcp.json` such as `~/repos/.mcp.json`, `Built-in`, `Managed`, or another
   project's name. It adds ` · work` for one account's own skill, ` · 2 accounts` for Cloud
   copies, and ` · command` for a legacy command file.
+
+  A project goes by its folder's name. When two recorded projects have the same folder name,
+  both go by the folder above it too, as in `work/app` and `personal/app`, here, in JSON's
+  `from` and on the screen.
 - USES and LAST USED (skills): the uses summed over accounts, and how long ago the
   last one was (`38m ago`, `5d ago`, `4mo ago`). A skill never used reads `0` and `never`. A
   hidden copy, a Codex skill and a plugin row read `—` in both.
@@ -469,9 +473,11 @@ Runs      npx -y @modelcontextprotocol/server-github
 Secrets   GITHUB_TOKEN (value hidden)
 Accounts  personal  on
           work      off (this project's entry in ~/.claude-work/.claude.json)
-File      ~/.claude.json
-          ~/.claude-work/.claude.json
+File      ~/.claude.json · personal
+          ~/.claude-work/.claude.json · work
 ```
+
+A server in several accounts' `.claude.json` has a `File` line for each copy, with its account.
 
 ### Ids and row keys
 

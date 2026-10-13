@@ -1,5 +1,3 @@
-import path from "node:path";
-
 import {
   accountsWord,
   containsWords,
@@ -502,27 +500,6 @@ export type ProjectEntry = {
   count: number;
 };
 
-/** How many of each name there are. */
-function counted(names: string[]): (name: string) => number {
-  const counts = new Map<string, number>();
-  for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
-  return (name) => counts.get(name) ?? 0;
-}
-
-/**
- * Each recorded project's name, by path key: `projectName`, and the folder above it too where two
- * projects share a folder name - `work/site`, `mine/site` - or the path where even that is one.
- */
-function projectNames(inv: Inventory): Map<string, string> {
-  const named = inv.projects.map((p) => ({ dir: p.path, name: projectName(p.path, inv) }));
-  const shared = counted(named.map((p) => p.name));
-  const longer = named.map((p) =>
-    shared(p.name) > 1 ? { ...p, name: path.join(path.basename(path.dirname(p.dir)), p.name) } : p,
-  );
-  const still = counted(longer.map((p) => p.name));
-  return new Map(longer.map((p) => [pathKey(p.dir), still(p.name) > 1 ? tilde(p.dir, inv.homeDir) : p.name]));
-}
-
 /**
  * The project list: `project`, the one everything is seen from, first; then every other recorded
  * project, by name. `here` is the project of the folder csn was started in. Each counts its own
@@ -549,13 +526,13 @@ export function projectList(
     rows.add(rowKey(item));
     own.set(key, rows);
   }
-  const names = projectNames(inv);
   const entry = (dir: string): ProjectEntry => {
     const key = pathKey(dir);
     return {
       key,
       path: dir,
-      name: names.get(key) ?? projectName(dir, inv),
+      // With the folder above where two projects share a folder name, as everywhere a project is named.
+      name: projectName(dir, inv),
       here: samePath(dir, here),
       current: samePath(dir, project),
       count: own.get(key)?.size ?? 0,

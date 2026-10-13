@@ -139,6 +139,24 @@ describe("skills ls", () => {
     expect(fromWeb).not.toContain("deploy-check");
   });
 
+  it("tells two other projects of one folder name apart in WHERE, by the folder above", async () => {
+    const { h, app, web } = seed();
+    const [work, mine] = ["work/site", "personal/site"].map((dir) => h.project(dir));
+    h.claude("default", ".claude", { projects: { [app]: {}, [web]: {}, [work as string]: {}, [mine as string]: {} } });
+    h.skill("work/site/.claude/skills", "ship");
+    h.skill("personal/site/.claude/skills", "ship");
+    const other = await run(h, app, "skills", ["ls", "--scope", "other"]);
+    const where = (text: string) => text.match(/^ship\s+claude\s+(\S+)\s/gm)?.map((line) => line.split(/\s+/)[2]);
+    expect(where(other)).toEqual([path.join("personal", "site"), path.join("work", "site")]);
+    // A name no other project has stays short.
+    expect(other).toMatch(/^web-only\s+claude\s+web\s/m);
+    const json = JSON.parse(await run(h, app, "skills", ["ls", "--scope", "other", "--json"]));
+    expect(json.items.filter((i: { name: string }) => i.name === "ship").map((i: { from: string }) => i.from)).toEqual([
+      path.join("personal", "site"),
+      path.join("work", "site"),
+    ]);
+  });
+
   it("lists every place but Loaded once with --scope all", async () => {
     const { h, app } = seed();
     const json = JSON.parse(await run(h, app, "skills", ["ls", "--scope", "all", "--json"]));

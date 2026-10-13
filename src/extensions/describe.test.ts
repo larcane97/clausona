@@ -19,8 +19,8 @@ import {
 } from "./describe.js";
 import { loadInventory } from "./inventory.js";
 import type { Extension, Inventory } from "./model.js";
-import { stateHere, viewFrom } from "./present.js";
-import { isAccountCopy, rowsIn, type ScopeRow } from "./scopes.js";
+import { projectName, stateHere, viewFrom } from "./present.js";
+import { isAccountCopy, otherProjects, rowsIn, type ScopeRow } from "./scopes.js";
 import { TestHome } from "./test-home.js";
 
 const DAY = 86_400_000;
@@ -368,9 +368,32 @@ describe("detailsOf", () => {
     expect(lines[accountsAt + 1]?.text).toMatch(
       /^work {5}off \(this project's entry in ~[\\/]\.claude-work[\\/]\.claude\.json\)$/,
     );
+    // Each copy's file, with the account it is in, as Also in names one.
     const fileAt = lines.findIndex((l) => l.label === "File");
     expect(lines.slice(fileAt, fileAt + 2).map((l) => l.text)).toEqual([
-      `~${path.sep}.claude.json`,
+      `~${path.sep}.claude.json · default`,
+      `~${path.sep}${path.join(".claude-work", ".claude.json")} · work`,
+    ]);
+  });
+
+  it("names the account of each local copy's file, before whose entry it is, and none for one account's", async () => {
+    const pg = { "pg-dev": { command: "pg" } };
+    const { inv, app } = await seed({
+      defaultJson: (app) => ({ projects: { [app]: { mcpServers: pg } } }),
+      workJson: (app) => ({ projects: { [app]: { mcpServers: pg } }, mcpServers: { solo: { command: "solo" } } }),
+    });
+    // The File lines come last in a Claude server's details.
+    const files = (row: ScopeRow) => {
+      const lines = detailsOf(inv, row, app, NOW);
+      const at = lines.findIndex((l) => l.label === "File");
+      return at < 0 ? [] : lines.slice(at);
+    };
+    expect(files(serverRow(inv, "project", app, "pg-dev")).map((l) => l.text)).toEqual([
+      `~${path.sep}.claude.json · default (this project's entry)`,
+      `~${path.sep}${path.join(".claude-work", ".claude.json")} · work (this project's entry)`,
+    ]);
+    // One account's server: its file says whose it is already.
+    expect(files(serverRow(inv, "global", app, "solo")).map((l) => l.text)).toEqual([
       `~${path.sep}${path.join(".claude-work", ".claude.json")}`,
     ]);
   });
@@ -812,5 +835,45 @@ describe("an account whose skills folder is not the primary's", () => {
       "claude:solo": true,
       "claude:bare": true,
     });
+  });
+});
+
+describe("two projects of one folder name", () => {
+  /** work/app and personal/app, each with a skill and a local server, and tool, seen from tool. */
+  async function twins() {
+    const h = new TestHome();
+    homes.push(h);
+    const [work, mine, tool] = ["work/app", "personal/app", "repos/tool"].map((dir) => h.project(dir));
+    const pg = { mcpServers: { pg: { command: "pg" } } };
+    h.claude("default", ".claude", { projects: { [work as string]: pg, [mine as string]: pg, [tool as string]: {} } });
+    h.skill("work/app/.claude/skills", "deploy");
+    h.skill("personal/app/.claude/skills", "deploy");
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: tool as string,
+      managedSettings: h.path("none.json"),
+    });
+    return { inv, work: work as string, mine: mine as string, tool: tool as string };
+  }
+
+  it("names each by the folder above it, everywhere a project is named, and one of its own name short", async () => {
+    const { inv, work, mine, tool } = await twins();
+    const [workApp, mineApp] = [path.join("work", "app"), path.join("personal", "app")];
+    expect([projectName(work, inv), projectName(mine, inv), projectName(tool, inv)]).toEqual([
+      workApp,
+      mineApp,
+      "tool",
+    ]);
+    expect(otherProjects(inv, "claude", "skill", tool).map((p) => p.name)).toEqual([mineApp, workApp]);
+    const deploy = claudeSkill(inv, "deploy", work);
+    expect([whereLabel(deploy, inv, tool), fromLabel(deploy, inv, tool)]).toEqual([workApp, workApp]);
+    expect(jsonItem(inv, single(deploy), tool, NOW).from).toBe(workApp);
+    // A local server of one of them says whose entry its file is by that name too.
+    const pg = rowsIn(inv, "claude", "mcp", "other", tool, NOW, mine).find((r) => r.name === "pg");
+    if (!pg) throw new Error("no pg row");
+    expect(detailsOf(inv, pg, tool, NOW).find((l) => l.label === "File")?.text).toBe(
+      `~${path.sep}.claude.json (${mineApp}'s entry)`,
+    );
   });
 });
