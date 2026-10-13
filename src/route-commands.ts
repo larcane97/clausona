@@ -792,37 +792,46 @@ const PERIOD_WORDS: Record<BudgetPeriod, string> = { day: "today", week: "this w
 
 /**
  * What `route budget` says under a budget it set: a provider that reports only a running total
- * counts from clausona's first reading in the period, and one that reports no spend cannot have
- * its budget checked.
+ * counts from clausona's first reading in the period (`notes`), and one that reports no spend
+ * cannot have its budget checked (`warnings`).
  */
-function setNotes(row: BudgetRow, registry: Registry, budget: Budget): string[] {
+function setNotes(row: BudgetRow, registry: Registry, budget: Budget): { notes: string[]; warnings: string[] } {
   if (row.spend === "not-reported") {
-    return [
-      `${row.id}'s provider does not report spend, so the budget cannot be checked and ${row.id} cannot join a route.`,
-    ];
+    return {
+      notes: [],
+      warnings: [
+        `${row.id}'s provider does not report spend, so the budget cannot be checked and ${row.id} cannot join a route.`,
+      ],
+    };
   }
   const baseUrl = registry.profiles[row.id]?.api?.baseUrl;
   if (row.spend === "ok" && typeof baseUrl === "string" && spendProvider(baseUrl) === "litellm") {
-    return [
-      `Spend counts from clausona's first reading ${PERIOD_WORDS[budget.per]}; what was spent before it is not counted.`,
-    ];
+    const counted = `Spend counts from clausona's first reading ${PERIOD_WORDS[budget.per]}; what was spent before it is not counted.`;
+    return { notes: [counted], warnings: [] };
   }
-  return [];
+  return { notes: [], warnings: [] };
 }
 
-/** What `route budget --clear` says after: the key's own limit that applies now, or that there is none. */
-function clearNotes(row: BudgetRow): string[] {
-  if (row.spend === "ok" && row.window)
-    return [`Routes now count it against its key's own limit, ${limitText(row.window)}.`];
-  if (row.spend !== "no-limit" || row.routes.length === 0) return [];
+/**
+ * What `route budget --clear` says after: the key's own limit, which counts now (`notes`), or that
+ * the routes that name the profile skip it, with no limit (`warnings`).
+ */
+function clearNotes(row: BudgetRow): { notes: string[]; warnings: string[] } {
+  if (row.spend === "ok" && row.window) {
+    return { notes: [`Routes now count it against its key's own limit, ${limitText(row.window)}.`], warnings: [] };
+  }
+  if (row.spend !== "no-limit" || row.routes.length === 0) return { notes: [], warnings: [] };
   const routes = row.routes.map((name) => `route ${name}`);
   const which =
     routes.length === 1
       ? `${routes[0]} skips`
       : `${routes.slice(0, -1).join(", ")} and ${routes[routes.length - 1]} skip`;
-  return [
-    `${row.id} has no spend limit now, so ${which} it. Set a limit on the provider key, or a budget again: ${budgetCommand(row.id)}`,
-  ];
+  return {
+    notes: [],
+    warnings: [
+      `${row.id} has no spend limit now, so ${which} it. Set a limit on the provider key, or a budget again: ${budgetCommand(row.id)}`,
+    ],
+  };
 }
 
 /**
@@ -888,12 +897,14 @@ async function budgetCommandRun(args: string[], deps: RouteDeps): Promise<string
   if (json) return JSON.stringify({ ...budgetRowJson(row), ...(budget || clear ? { changed } : {}) }, null, 2);
   const now = deps.clock();
   if (budget) {
-    const shown = renderBudgets([row], setNotes(row, registry, budget), { now });
+    const { notes, warnings } = setNotes(row, registry, budget);
+    const shown = renderBudgets([row], warnings, { now, notes });
     return [success(`Budget for ${bold(id)}: ${budgetText(budget)}`), shown].join("\n");
   }
   if (clear) {
     if (!changed) return success(dim(`No budget for ${id}. Nothing was changed.`));
-    return [success(`Cleared the budget for ${bold(id)}`), renderBudgets([row], clearNotes(row), { now })].join("\n");
+    const { notes, warnings } = clearNotes(row);
+    return [success(`Cleared the budget for ${bold(id)}`), renderBudgets([row], warnings, { now, notes })].join("\n");
   }
   return renderBudgets([row], [], { now });
 }

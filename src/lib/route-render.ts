@@ -809,13 +809,21 @@ function budgetTableRow(row: BudgetRow, keys: BudgetColumn[], now: number): Tabl
 
 /**
  * `route budget` with nothing after it: every API profile with its limit, where the limit comes
- * from, what it has spent against it and its usage, then the warnings. None at all says how to
- * give one a limit.
+ * from, what it has spent against it and its usage, then `notes` and the warnings. None at all
+ * says how to give one a limit.
  */
-export function renderBudgets(rows: BudgetRow[], warnings: string[], options: { width?: number; now?: number } = {}) {
+export function renderBudgets(
+  rows: BudgetRow[],
+  warnings: string[],
+  options: { width?: number; now?: number; notes?: string[] } = {},
+) {
   const width = options.width ?? terminalWidth();
   const now = options.now ?? Date.now();
-  const notes = warningLines(warnings, width);
+  // What is said for information, dimmed, then what needs a look.
+  const notes = [
+    ...(options.notes ?? []).flatMap((note) => wrap(note, width, " ".repeat(INDENT)).map((line) => dim(line))),
+    ...warningLines(warnings, width),
+  ];
   if (rows.length === 0) {
     return [
       "",
