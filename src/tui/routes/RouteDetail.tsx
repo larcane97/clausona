@@ -34,6 +34,20 @@ export const MARK = 2;
 export const GAP = 2;
 /** The widths a quota cell is tried at, widest first: gauge and reset, percentage and reset, percentage. */
 const QUOTA_WIDTHS = [19, 8, 4];
+const NARROWEST = QUOTA_WIDTHS[QUOTA_WIDTHS.length - 1];
+
+/**
+ * The layouts a member table is tried at, the most detailed first. The gauges go first, the model's
+ * name kept whole; then the name is cut to its cells before the reset times go, as the Model
+ * setting spells it out.
+ */
+const LAYOUTS = [
+  { at: QUOTA_WIDTHS[0], whole: true },
+  ...QUOTA_WIDTHS.slice(1).flatMap((at) => [
+    { at, whole: true },
+    { at, whole: false },
+  ]),
+];
 
 /** A muted label and its value, the label column 10 wide. */
 export function Setting({ label, value }: { label: string; value: string }) {
@@ -51,9 +65,21 @@ export function Setting({ label, value }: { label: string; value: string }) {
 
 /**
  * `models` are the names of the limits the route's accounts report on one model (`Opus`), which `m`
- * ranks by in turn. Until one is chosen, a line under the table names them.
+ * ranks by in turn. Until one is chosen, a line under the table names them. `views` are the
+ * rankings `m` moves between: the cells take the most detailed form every one of them fits, so
+ * moving between them never trades gauges for percentages.
  */
-export function RouteDetail({ entry, pending, models }: { entry: Entry; pending: boolean; models: string[] }) {
+export function RouteDetail({
+  entry,
+  pending,
+  models,
+  views = [],
+}: {
+  entry: Entry;
+  pending: boolean;
+  models: string[];
+  views?: Ranking[];
+}) {
   const { name, route, ranking, onlyTool } = entry;
   const [detail, width] = useWidth();
   return (
@@ -74,7 +100,7 @@ export function RouteDetail({ entry, pending, models }: { entry: Entry; pending:
           value={`ranked as ${onlyTool ? `--tool ${onlyTool} ` : ""}--model ${modelWord(ranking.model)}`}
         />
       ) : null}
-      <MemberTable ranking={ranking} pending={pending} width={width} />
+      <MemberTable ranking={ranking} views={views} pending={pending} width={width} />
       {ranking.model || models.length === 0 ? null : <ModelLimits models={models} />}
     </Box>
   );
@@ -226,7 +252,24 @@ function MemberLine({
 const FALLBACK_TAG = " (fallback)".length;
 const BUDGET = "BUDGET";
 
-function MemberTable({ ranking, pending, width }: { ranking: Ranking; pending: boolean; width: number }) {
+/** A member table's lines, and what sets the widths of its columns but for the quota cells. */
+type Table = {
+  lines: Line[];
+  /** Every window a quota cell shows. */
+  windows: QuotaWindow[];
+  /** The model column's header; none when no account reports a limit on the model. */
+  header?: string;
+  /** Whether the model column's cells start with a window's kind. */
+  kinds: boolean;
+  hasBudget: boolean;
+  /** The status column's width: the longest status of a ranked line. */
+  status: number;
+  /** The longest id, with its fallback tag. */
+  longest: number;
+  cut: number;
+};
+
+function tableOf(ranking: Ranking, pending: boolean): Table {
   const members = detailOrder(ranking.rows.filter((row) => row.skip !== "not-registered"));
   const unknown = ranking.rows.filter((row) => row.skip === "not-registered");
   const lines: Line[] = [
@@ -253,52 +296,80 @@ function MemberTable({ ranking, pending, width }: { ranking: Ranking; pending: b
     ),
   ];
   const ranked = lines.flatMap(({ row }) => (row ? [row] : []));
-  const windows = ranked.flatMap((row) =>
-    [row.fiveHour, row.sevenDay, row.scoped, row.budget].filter(
-      (window): window is QuotaWindow => window !== undefined,
-    ),
-  );
-  const hasBudget = lines.some(({ row }) => row?.budget !== undefined);
   // The limit on the model the route is ranked as, named as explain names it; none when no
   // account reports one.
   const header = modelHeader(ranked);
-  const kinds = ranked.some((row) => row.scoped && scopedWindowKind(row.scoped));
-  /** The model column is as wide as its header, `whole`, or else as its cells, with the header cut to them. */
-  const modelOf = (quota: number, whole: boolean) =>
-    Math.max(quota + (kinds ? KIND : 0), whole && header ? header.length : 0);
-  const status = Math.max(0, ...lines.filter((line) => line.row).map((line) => line.status.length));
-  const longest = Math.max(
-    "ACCOUNT".length,
-    ...lines.map((line) => line.id.length + (line.fallback ? FALLBACK_TAG : 0)),
+  return {
+    lines,
+    windows: ranked.flatMap((row) =>
+      [row.fiveHour, row.sevenDay, row.scoped, row.budget].filter(
+        (window): window is QuotaWindow => window !== undefined,
+      ),
+    ),
+    ...(header ? { header } : {}),
+    kinds: ranked.some((row) => row.scoped && scopedWindowKind(row.scoped)),
+    hasBudget: lines.some(({ row }) => row?.budget !== undefined),
+    status: Math.max(0, ...lines.filter((line) => line.row).map((line) => line.status.length)),
+    longest: Math.max("ACCOUNT".length, ...lines.map((line) => line.id.length + (line.fallback ? FALLBACK_TAG : 0))),
+    cut: ranking.route.maxUsage,
+  };
+}
+
+/** The model column is as wide as its header, `whole`, or else as its cells, with the header cut to them. */
+const modelWidth = (table: Table, quota: number, whole: boolean) =>
+  Math.max(quota + (table.kinds ? KIND : 0), whole && table.header ? table.header.length : 0);
+
+/** The budget column is as wide as its header at least. */
+const budgetWidth = (quota: number) => Math.max(quota, BUDGET.length);
+
+/** A line's width but for its id: the mark, the quota cells and the status, each after a gap. */
+const around = (table: Table, quota: number, whole: boolean) =>
+  MARK +
+  2 * (GAP + quota) +
+  (table.header ? GAP + modelWidth(table, quota, whole) : 0) +
+  (table.hasBudget ? GAP + budgetWidth(quota) : 0) +
+  (table.status ? GAP + table.status : 0);
+
+/** The first of `layouts` whose cells fit beside whole ids at `width`, with its quota column's width. */
+function firstFit(table: Table, width: number, layouts: typeof LAYOUTS) {
+  return layouts
+    .map(({ at, whole }) => ({ at, quota: quotaColumn(table.windows, at, table.cut), whole }))
+    .find(({ quota, whole }) => around(table, quota, whole) + table.longest <= width);
+}
+
+/**
+ * `views` are the route's rankings that `m` moves between. The cells take the most detailed form
+ * that this table and every one of those fit beside whole ids, so that `m` never trades gauges for
+ * percentages; the model's name is then kept whole where it fits. Failing that, percentages only
+ * and the ids cut.
+ */
+function MemberTable({
+  ranking,
+  views,
+  pending,
+  width,
+}: {
+  ranking: Ranking;
+  views: Ranking[];
+  pending: boolean;
+  width: number;
+}) {
+  const table = tableOf(ranking, pending);
+  const { lines, header, kinds, hasBudget, cut } = table;
+  const at = Math.min(
+    ...[table, ...views.map((view) => tableOf(view, pending))].map(
+      (each) => firstFit(each, width, LAYOUTS)?.at ?? NARROWEST,
+    ),
   );
-  /** The budget column is as wide as its header at least. */
-  const budgetOf = (quota: number) => Math.max(quota, BUDGET.length);
-  /** A line's width but for its id: the mark, the quota cells and the status, each after a gap. */
-  const around = (quota: number, whole: boolean) =>
-    MARK +
-    2 * (GAP + quota) +
-    (header ? GAP + modelOf(quota, whole) : 0) +
-    (hasBudget ? GAP + budgetOf(quota) : 0) +
-    (status ? GAP + status : 0);
-  // The most detailed cells that fit beside whole ids. The gauges go first, the model's name kept
-  // whole; then the name is cut to its cells before the reset times go, as the Model setting
-  // spells it out. Failing that, percentages only and the ids cut.
-  const cut = ranking.route.maxUsage;
-  const [widest, ...narrower] = QUOTA_WIDTHS;
-  const narrowest = QUOTA_WIDTHS[QUOTA_WIDTHS.length - 1];
-  const layouts = [
-    { at: widest, whole: true },
-    ...narrower.flatMap((at) => [
-      { at, whole: true },
-      { at, whole: false },
-    ]),
-  ];
-  const fitting = layouts
-    .map(({ at, whole }) => ({ quota: quotaColumn(windows, at, cut), whole }))
-    .find(({ quota, whole }) => around(quota, whole) + longest <= width);
-  const { quota, whole } = fitting ?? { quota: quotaColumn(windows, narrowest, cut), whole: false };
-  const idWidth = fitting === undefined ? Math.max("ACCOUNT".length, width - around(quota, whole)) : longest;
-  const model = header ? { width: modelOf(quota, whole), kinds } : undefined;
+  const fitting = firstFit(
+    table,
+    width,
+    LAYOUTS.filter((layout) => layout.at === at),
+  );
+  const { quota, whole } = fitting ?? { quota: quotaColumn(table.windows, at, cut), whole: false };
+  const idWidth =
+    fitting === undefined ? Math.max("ACCOUNT".length, width - around(table, quota, whole)) : table.longest;
+  const model = header ? { width: modelWidth(table, quota, whole), kinds } : undefined;
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -321,7 +392,7 @@ function MemberTable({ ranking, pending, width }: { ranking: Ranking; pending: b
             </Box>
           ) : null}
           {hasBudget ? (
-            <Box marginLeft={GAP} width={budgetOf(quota)} flexShrink={0}>
+            <Box marginLeft={GAP} width={budgetWidth(quota)} flexShrink={0}>
               <Text color={color.muted}>{BUDGET}</Text>
             </Box>
           ) : null}
@@ -335,7 +406,7 @@ function MemberTable({ ranking, pending, width }: { ranking: Ranking; pending: b
           quota={quota}
           cut={cut}
           {...(model ? { model } : {})}
-          {...(hasBudget ? { budget: budgetOf(quota) } : {})}
+          {...(hasBudget ? { budget: budgetWidth(quota) } : {})}
         />
       ))}
       {ranking.excluded.map((entry) => (

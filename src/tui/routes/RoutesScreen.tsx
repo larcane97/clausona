@@ -380,15 +380,23 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   useEffect(() => {
     if (chosen && !model) setChosen(null);
   }, [chosen, model]);
-  /** Every route as the screen shows it: the selected one ranked as a run of the chosen model. */
-  const entries = useMemo(
+  /** The selected route ranked as a run of each model `m` offers, in the same order. */
+  const modelEntries = useMemo(
     () =>
-      loaded.kind === "ready" && model
-        ? plain.map((entry, i) =>
-            i === index ? rankEntry(entry.name, loaded.file, loaded.registry, shown, io.clock(), model) : entry,
-          )
-        : plain,
-    [plain, index, model, loaded, shown, io],
+      loaded.kind === "ready" && plain[index]
+        ? models.map((each) => rankEntry(plain[index].name, loaded.file, loaded.registry, shown, io.clock(), each))
+        : [],
+    [plain, index, models, loaded, shown, io],
+  );
+  /** Every route as the screen shows it: the selected one ranked as a run of the chosen model. */
+  const entries = useMemo(() => {
+    const ranked = model ? modelEntries[models.indexOf(model)] : undefined;
+    return ranked ? plain.map((entry, i) => (i === index ? ranked : entry)) : plain;
+  }, [plain, index, model, models, modelEntries]);
+  /** Every ranking `m` moves between on the selected route: its table is fitted to all of them. */
+  const views = useMemo(
+    () => (plain[index] ? [plain[index].ranking, ...modelEntries.map((entry) => entry.ranking)] : []),
+    [plain, index, modelEntries],
   );
   const selected = entries[index];
   const rules = useMemo(
@@ -835,6 +843,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
               pending={reading === null}
               // A limit both tools report is one name, however many choices it is.
               models={[...new Set(models.map((each) => each.label))]}
+              views={views}
             />
           ) : null}
         </Box>

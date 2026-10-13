@@ -439,7 +439,8 @@ way `clausona route explain <route> --model opus` does. The model's limit gets a
 and 7D, the account an Opus run would get is marked next, and the count in the list is of the
 accounts free for that run. The settings say `ranked as --model opus`. Press `m` again for the
 next model, and after the last one the route is ranked as a run that names no model. Moving to
-another route does that too.
+another route does that too. The cells keep their form as `m` moves: if the table for any model is
+too wide for gauges, the route shows percentages for every model and for none.
 
 On an `all` route, a run that names a model names its tool too, so only the accounts of the tool
 that reports the limit are ranked: for Opus, the Claude Code accounts, as
