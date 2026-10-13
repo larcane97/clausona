@@ -35,12 +35,7 @@ async function seed(): Promise<{ h: TestHome; app: string; inv: Inventory }> {
   const app = h.project("repos/app");
   h.claude("default", ".claude", { projects: { [app]: {} } });
   h.skill(".claude/skills", "eli5");
-  const inv = await loadInventory({
-    homeDir: h.home,
-    registry: h.registry,
-    cwd: app,
-    managedSettings: h.path("none.json"),
-  });
+  const inv = await loadInventory(h.inventoryOptions(app));
   return { h, app, inv };
 }
 
