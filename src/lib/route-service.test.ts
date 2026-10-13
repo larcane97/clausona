@@ -149,7 +149,7 @@ describe("resolveRoute", () => {
   it("checks the run's overrides, without quoting a key-shaped one", () => {
     const key = ["sk", "ant", "x".repeat(24)].join("-");
     const run = () => resolveRoute(file, { options: { route: "main", exclude: [key] } });
-    expect(run).toThrow("--exclude: looks like an API key, not a profile name or email pattern");
+    expect(run).toThrow("--exclude: looks like an API key, or names a profile that is no longer registered");
     expect(run).not.toThrow(key);
   });
 

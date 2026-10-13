@@ -167,19 +167,35 @@ describe("checkPattern", () => {
 
   it("lets a registered profile's exact name through the key check, and nothing else", () => {
     const names = profileNames([`claude:${longName}`, "claude:work"]);
-    expect(checkPattern(longName, "claude")).toBe("looks like an API key, not a profile name or email pattern");
+    expect(checkPattern(longName, "claude")).toBe(
+      "looks like an API key, or names a profile that is no longer registered",
+    );
     for (const pattern of [longName, longName.toLowerCase(), `claude:${longName}`]) {
       expect(checkPattern(pattern, "claude", names), pattern).toBeNull();
     }
     // Not the name itself: one character more, or the name of another tool's profile.
     expect(checkPattern(`${longName}x`, "claude", names)).toBe(
-      "looks like an API key, not a profile name or email pattern",
+      "looks like an API key, or names a profile that is no longer registered",
     );
     expect(checkPattern(`codex:${longName}`, "all", names)).toBe(
-      "looks like an API key, not a profile name or email pattern",
+      "looks like an API key, or names a profile that is no longer registered",
     );
     expect(checkPattern(keyShaped(), "claude", names)).toBe(
-      "looks like an API key, not a profile name or email pattern",
+      "looks like an API key, or names a profile that is no longer registered",
+    );
+  });
+
+  // profiles.json is read without the profile-name rule: a hand edit can register a key as a name.
+  it("lets no registered name through that the profile-name rule would refuse", () => {
+    const key = keyShaped();
+    const long = "a".repeat(65);
+    const names = profileNames([`claude:${key}`, `claude:${long}`, "claude:has space"]);
+    expect(names.size).toBe(0);
+    expect(checkPattern(key, "claude", names)).toBe(
+      "looks like an API key, or names a profile that is no longer registered",
+    );
+    expect(checkPattern(long, "claude", names)).toBe(
+      "looks like an API key, or names a profile that is no longer registered",
     );
   });
 
@@ -276,7 +292,7 @@ describe("checkPattern", () => {
   ])("refuses a vendor token %s, and never quotes it", (_, wrap) => {
     const token = ["hf", "Ab".repeat(17)].join("_");
     const problem = checkPattern(wrap(token), "claude") ?? "";
-    expect(problem).toBe("looks like an API key, not a profile name or email pattern");
+    expect(problem).toBe("looks like an API key, or names a profile that is no longer registered");
   });
 });
 
@@ -362,7 +378,9 @@ describe("all routes", () => {
 
   it("still refuses a key behind a prefix on an all route, without quoting it", () => {
     for (const pattern of [`codex:${keyShaped()}`, `gpt:${keyShaped()}`]) {
-      expect(checkPattern(pattern, "all")).toBe("looks like an API key, not a profile name or email pattern");
+      expect(checkPattern(pattern, "all")).toBe(
+        "looks like an API key, or names a profile that is no longer registered",
+      );
     }
   });
 

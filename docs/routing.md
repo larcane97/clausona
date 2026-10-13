@@ -124,6 +124,11 @@ Route names get the same check. The one exception is the exact name of a profile
 with or without its tool prefix. A long name can look like a key to that check, such as a
 CamelCase name with digits through it, and a profile of that name can still be put in a route.
 
+The exception lasts only while the profile does. Remove that profile, and its name is checked as
+a key again: every route that names it cannot be used, and says it "looks like an API key, or
+names a profile that is no longer registered". Take the name out of the route with
+`clausona route edit` or `clausona route set <route> --from …`, or remove the route.
+
 ## Managing routes
 
 ```bash
@@ -303,7 +308,9 @@ routes stop and ask you to fix it first. `route remove old` works, and so does a
 that fixes the problem, such as `route set old --strategy headroom`.
 
 Removing a profile leaves its routes alone. A name that is no longer registered is skipped, and
-both `route list` and `route explain` point it out. They point out patterns that match nobody
+both `route list` and `route explain` point it out. The one exception is a name the key check
+would refuse, which a route can hold only while the profile is registered (see
+[Patterns](#patterns)): once it is removed, that route cannot be used until the name is taken out. They point out patterns that match nobody
 too, each one once, and an `exclude` entry that matches nobody. That one matters most: a typo
 there leaves in the account it was meant to leave out. `route list` puts them under its table:
 

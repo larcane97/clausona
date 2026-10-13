@@ -101,6 +101,8 @@ export function applyOverrides(spec: RouteSpec, overrides: RouteOverrides): Rout
 }
 
 const ROUTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** A profile's name, as the profile-name rule spells it: the same characters as a route's. */
+const PROFILE_NAME = ROUTE_NAME;
 const NAME_PATTERN = /^[A-Za-z0-9._*?-]+$/;
 const ROUTE_KEYS = new Set(["tool", "from", "exclude", "strategy", "maxUsage", "fallback"]);
 /**
@@ -158,20 +160,28 @@ export function holdsKey(text: string): boolean {
 
 /**
  * The registered profiles' names as a pattern is compared with them: folded, bare and with their
- * tool (`work`, `claude:work`). The registry took each one under the profile-name rule, which is
- * narrower than the key check: a long CamelCase name with digits through it passes the one and
- * not the other. A pattern that is exactly one of them is not held to the key check.
+ * tool (`work`, `claude:work`). Each one passes the profile-name rule, which is narrower than the
+ * key check: a long CamelCase name with digits through it passes the one and not the other. A
+ * pattern that is exactly one of them is not held to the key check.
  */
 export type ProfileNames = ReadonlySet<string>;
 
 export const NO_PROFILE_NAMES: ProfileNames = new Set();
 
-/** The names of the profiles with these ids (`tool:name`). */
+/**
+ * The profile-name rule (validateProfileName in lib/profile-ref.ts). profiles.json is read without
+ * it, and a hand edit or a name from before the rule can be anything, a key too.
+ */
+const passesNameRule = (name: string) => !looksLikeCredential(name) && PROFILE_NAME.test(name);
+
+/** The names of the profiles with these ids (`tool:name`) that pass the profile-name rule. */
 export function profileNames(ids: Iterable<string>): ProfileNames {
   const names = new Set<string>();
   for (const id of ids) {
+    const name = id.slice(id.indexOf(":") + 1);
+    if (!passesNameRule(name)) continue;
     names.add(foldProfileName(id));
-    names.add(foldProfileName(id.slice(id.indexOf(":") + 1)));
+    names.add(foldProfileName(name));
   }
   return names;
 }
@@ -190,9 +200,10 @@ export function checkRouteName(name: string): string | null {
  */
 export function checkPattern(pattern: unknown, tool: RouteTool, names: ProfileNames = NO_PROFILE_NAMES): string | null {
   if (typeof pattern !== "string" || pattern.trim() === "") return "must be a non-empty string";
-  // Before anything below would store it in routes.json or quote it back.
+  // Before anything below would store it in routes.json or quote it back. A registered profile's
+  // name is let through, so one that is removed is held to the check again: the problem says so.
   if (!names.has(foldProfileName(pattern)) && holdsKey(pattern)) {
-    return "looks like an API key, not a profile name or email pattern";
+    return "looks like an API key, or names a profile that is no longer registered";
   }
   // Split as the matcher splits it, so a name and an email pattern read a prefix the same way.
   const { prefix, body } = splitToolPrefix(pattern);

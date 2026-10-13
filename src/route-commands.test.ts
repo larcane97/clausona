@@ -682,10 +682,24 @@ describe("a profile whose name the key check would take for a key", () => {
     expect(JSON.parse(await run("list", "--json")).problems).toEqual([]);
   });
 
+  // The name passed only because a profile had it; once that profile is gone, it is checked again.
+  it("makes a route that names it unusable once the profile is removed, and says why", async () => {
+    const { run, deps } = withLong();
+    await run("add", "solo", "--from", longName);
+    deps.loadRegistry = async () => REGISTRY;
+    const out = await run("list", "--no-quota");
+    expect(out).toContain(
+      "  ⚠ routes.solo.from[0]: looks like an API key, or names a profile that is no longer registered",
+    );
+    expect(out).not.toContain(longName);
+  });
+
   it("is a key to every route command while no profile has that name", async () => {
     const { run } = setup();
     const error = (await run("add", "solo", "--from", longName).catch((e: unknown) => e)) as Error;
-    expect(error.message).toBe("routes.solo.from[0]: looks like an API key, not a profile name or email pattern");
+    expect(error.message).toBe(
+      "routes.solo.from[0]: looks like an API key, or names a profile that is no longer registered",
+    );
   });
 });
 
