@@ -65,9 +65,9 @@ export function Setting({ label, value }: { label: string; value: string }) {
 
 /**
  * `models` are the names of the limits the route's accounts report on one model (`Opus`), which `m`
- * ranks by in turn. Until one is chosen, a line under the table names them. `views` are the
- * rankings `m` moves between: the cells take the most detailed form every one of them fits, so
- * moving between them never trades gauges for percentages.
+ * ranks by in turn. Until one is chosen, a line under the table names them. Once one is, `views`
+ * are the route ranked as each of them: the cells take the most detailed form every one of those
+ * fits, so moving from one model to another never trades gauges for percentages.
  */
 export function RouteDetail({
   entry,
@@ -338,10 +338,11 @@ function firstFit(table: Table, width: number, layouts: typeof LAYOUTS) {
 }
 
 /**
- * `views` are the route's rankings that `m` moves between. The cells take the most detailed form
- * that this table and every one of those fit beside whole ids, so that `m` never trades gauges for
- * percentages; the model's name is then kept whole where it fits. Failing that, percentages only
- * and the ids cut.
+ * `views` are the route ranked as each model `m` offers, when it is ranked as one: the cells take
+ * the most detailed form that this table and every one of those fit beside whole ids, so that `m`
+ * never trades gauges for percentages from one model to the next; the model's name is then kept
+ * whole where it fits. Failing that, percentages only and the ids cut. With no `views`, as for a
+ * route ranked as a run that names no model, the table is fitted on its own.
  */
 function MemberTable({
   ranking,

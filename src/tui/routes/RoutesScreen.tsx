@@ -380,24 +380,24 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   useEffect(() => {
     if (chosen && !model) setChosen(null);
   }, [chosen, model]);
-  /** The selected route ranked as a run of each model `m` offers, in the same order. */
+  const byModel = model !== undefined;
+  /**
+   * Once a model is chosen, the selected route ranked as a run of each model `m` offers, in the same
+   * order: the model views, whose tables are fitted to one another.
+   */
   const modelEntries = useMemo(
     () =>
-      loaded.kind === "ready" && plain[index]
+      loaded.kind === "ready" && plain[index] && byModel
         ? models.map((each) => rankEntry(plain[index].name, loaded.file, loaded.registry, shown, io.clock(), each))
         : [],
-    [plain, index, models, loaded, shown, io],
+    [plain, index, models, loaded, shown, io, byModel],
   );
   /** Every route as the screen shows it: the selected one ranked as a run of the chosen model. */
   const entries = useMemo(() => {
     const ranked = model ? modelEntries[models.indexOf(model)] : undefined;
     return ranked ? plain.map((entry, i) => (i === index ? ranked : entry)) : plain;
   }, [plain, index, model, models, modelEntries]);
-  /** Every ranking `m` moves between on the selected route: its table is fitted to all of them. */
-  const views = useMemo(
-    () => (plain[index] ? [plain[index].ranking, ...modelEntries.map((entry) => entry.ranking)] : []),
-    [plain, index, modelEntries],
-  );
+  const views = useMemo(() => modelEntries.map((entry) => entry.ranking), [modelEntries]);
   const selected = entries[index];
   const rules = useMemo(
     () => (loaded.kind === "ready" ? readRules(loaded.file, io.system.platform) : null),

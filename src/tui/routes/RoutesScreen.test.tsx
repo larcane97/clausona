@@ -1201,32 +1201,32 @@ describe("ranked as a run of one model", () => {
     expect(text(instance)).not.toContain("--model");
   });
 
-  // Ranked by Opus, the table has a column more, and `over 80%` needs more room than `next`.
-  it("keeps the cells' form as m moves between the model views, at the most detailed all of them fit", async () => {
+  // Ranked by Opus, `over 80%` needs more room than Sonnet's `next`; a model's view has a column
+  // more than the one with no model, which is fitted on its own.
+  it("keeps the cells' form as m moves from one model to another, and the view with no model's own", async () => {
     const quotas = {
       ...QUOTAS,
       "claude:side": snap(40, 40),
-      "claude:team": limited(snap(5, 22), limit("Opus", 95)),
-      "claude:work": limited(snap(12, 34), limit("Opus", 10)),
+      "claude:team": limited(snap(5, 22), limit("Opus", 95), limit("Sonnet", 10)),
+      "claude:work": limited(snap(12, 34), limit("Opus", 10), limit("Sonnet", 20)),
     };
-    const gauges = (frame: string) => /[█░]/.test(frame);
-    const views = async (columns: number) => {
-      const { instance } = setup({ collect: async () => quotas, columns });
-      const none = await ranked(instance);
-      await press(instance, "m");
-      const opus = text(instance);
-      expect(opus).toContain("ranked as --model opus");
-      expect(row(lines(opus), "claude:team")).toMatch(/95%\s+over 80%$/);
-      expect(row(lines(none), "claude:side")).not.toContain("over");
-      await press(instance, "m");
-      expect(text(instance)).toBe(none);
-      instance.unmount();
-      return [gauges(none), gauges(opus)];
-    };
-    // The Opus view fits only percentages, so the view that names no model shows them too.
-    expect(await views(100)).toEqual([false, false]);
-    // Wide enough for gauges in every view.
-    expect(await views(140)).toEqual([true, true]);
+    const gauges = (frame: string) => /[\u2588\u2591]/.test(frame);
+    const { instance } = setup({ collect: async () => quotas, columns: 108 });
+    const none = await ranked(instance);
+    await press(instance, "m");
+    const opus = text(instance);
+    expect(opus).toContain("ranked as --model opus");
+    expect(row(lines(opus), "claude:team")).toMatch(/95%\s+over 80%$/);
+    await press(instance, "m");
+    const sonnet = text(instance);
+    expect(sonnet).toContain("ranked as --model sonnet");
+    expect(sonnet).not.toContain("over 80%");
+    // Opus's table fits only percentages here, so Sonnet's shows them too.
+    expect([gauges(opus), gauges(sonnet)]).toEqual([false, false]);
+    // The view with no model keeps its gauges, and is as it was once m has gone round.
+    expect(gauges(none)).toBe(true);
+    await press(instance, "m");
+    expect(text(instance)).toBe(none);
   });
 
   it("cuts the model's name before the cells lose their reset times", async () => {
