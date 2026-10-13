@@ -83,6 +83,12 @@ describe("parseRoutesText", () => {
     expect(error.problems).toEqual(["not valid JSON (line 4, column 1)"]);
   });
 
+  // Two objects pasted one after the other: V8 says "after JSON", not "in JSON".
+  it("says where text after the closing brace starts", () => {
+    const error = parseError('{ "version": 1 }\n{ "version": 1 }\n');
+    expect(error.problems).toEqual(["not valid JSON (line 2, column 1)"]);
+  });
+
   // JSON.parse's own message quotes the text around the error.
   it("never quotes the file, so a key pasted into it stays out of the message", () => {
     const key = `${["sk", "ant", "api03"].join("-")}-${"Ab1".repeat(16)}`;

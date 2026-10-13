@@ -78,7 +78,8 @@ const toText = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
  * line and column are counted here.
  */
 function jsonProblem(error: unknown, body: string): string {
-  const position = /in JSON at position (\d+)/.exec(error instanceof Error ? error.message : "");
+  // "… in JSON at position N", and "… after JSON at position N" for text after the closing brace.
+  const position = /JSON at position (\d+)/.exec(error instanceof Error ? error.message : "");
   if (!position) return "not valid JSON";
   const before = body.slice(0, Number(position[1]));
   const line = before.split("\n").length;
