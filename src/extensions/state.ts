@@ -57,9 +57,12 @@ export function relevantIn(item: Extension, project: string | undefined): boolea
 /**
  * The copies of a Claude MCP server name that `profile` sees in `project`, as Claude Code ranks
  * them - "local-scoped servers first, followed by project-scoped servers, and finally
- * user-scoped servers": the account's local server for the project, then the `.mcp.json` ones,
- * the nearest file first, then the account's user server. With no account named, no account's
- * own server. A plugin's servers go by names of their own (`plugin:<plugin>:<name>`).
+ * user-scoped servers" - with the organization's above them all, as Claude Code 2.1.296 lays
+ * them over the rest: managed-mcp.json's server, then the one managed settings'
+ * `managedMcpServers` delivers, then the account's local server for the project, then the
+ * `.mcp.json` ones, the nearest file first, then the account's user server. With no account
+ * named, no account's own server. A plugin's servers go by names of their own
+ * (`plugin:<plugin>:<name>`).
  */
 function rankedMcp(inv: Inventory, name: string, project: string, profile: string | undefined): Extension[] {
   // A stashed copy is out of its file, and one the lists block is left out before Claude Code
@@ -68,13 +71,21 @@ function rankedMcp(inv: Inventory, name: string, project: string, profile: strin
     (i) =>
       i.kind === "mcp" && i.location.tool === "claude" && i.name === name && !i.stashed && !mcpBlocked(inv, i, project),
   );
+  const managed = named
+    .filter((i) => i.location.scope === "managed")
+    .sort((a, b) => Number(isManagedMcpFile(inv, b)) - Number(isManagedMcpFile(inv, a)));
   const own = (i: Extension) => profile !== undefined && i.location.profile === profile;
   const local = named.filter((i) => own(i) && i.location.scope === "local" && samePath(i.location.project, project));
   const mcpjson = named
     .filter((i) => isMcpjsonServer(i) && isWithin(project, i.location.project))
     .sort((a, b) => pathKey(b.location.project ?? "").length - pathKey(a.location.project ?? "").length);
   const user = named.filter((i) => own(i) && i.location.scope === "account");
-  return [...local, ...mcpjson, ...user];
+  return [...managed, ...local, ...mcpjson, ...user];
+}
+
+/** Whether a managed server is managed-mcp.json's, not one of managed settings' `managedMcpServers`. */
+function isManagedMcpFile(inv: Inventory, item: Extension): boolean {
+  return samePath(item.location.file, inv.facts.claudeManagedMcp);
 }
 
 /**

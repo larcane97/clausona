@@ -314,6 +314,29 @@ describe("managed MCP servers and the MCP lists", () => {
     );
   });
 
+  it("lists managed settings' managedMcpServers under Managed, and the accounts' copies of a name as hidden by it", async () => {
+    const { h, inv, app } = await managedSeed((h) =>
+      h.write("policy/managed-settings.json", {
+        managedMcpServers: { github: { type: "http", url: "https://gh.example.com/mcp" } },
+      }),
+    );
+    const managed = rowsIn(inv, "claude", "mcp", "managed", app, NOW);
+    expect(managed.map((r) => r.name)).toEqual(["github"]);
+    const delivered = managed[0] as ScopeRow;
+    expect(whereLabel(delivered.items[0] as Extension, inv, app)).toBe("Managed");
+    expect(jsonItem(inv, delivered, app, NOW)).toMatchObject({
+      id: "mcp:claude:managed:settings:github",
+      scope: "managed",
+      state: "on",
+      file: h.path("policy", "managed-settings.json"),
+    });
+    expect(rowsIn(inv, "claude", "mcp", "loaded", app, NOW).map((r) => r.items[0]?.id)).toEqual([
+      "mcp:claude:managed:settings:github",
+    ]);
+    const github = serverRow(inv, "global", app, "github");
+    expect(tagsOf(inv, github, app, NOW)).toEqual(["hidden by Managed copy"]);
+  });
+
   it("says which list turns a server off, and where it is", async () => {
     const { h, inv, app } = await managedSeed((h) =>
       h.write("policy/managed-settings.json", { deniedMcpServers: [{ serverName: "github" }] }),

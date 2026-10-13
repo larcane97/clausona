@@ -214,6 +214,56 @@ describe("readClaudeMcp", () => {
     expect((await read(h, [])).facts.claudeManagedMcp).toBeUndefined();
   });
 
+  it("lists the managedMcpServers of managed settings that Claude Code accepts, a drop-in's over the base file's", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    const ref = (name: string) => ["$", "{", name, "}"].join("");
+    const remote = (url: string, more: Record<string, unknown> = {}) => ({ type: "http", url, ...more });
+    const base = h.write("policy/managed-settings.json", {
+      managedMcpServers: {
+        docs: remote("https://docs.example.com/mcp", { headers: { "X-Team": "core" } }),
+        wiki: { type: "sse", url: "https://wiki.example.com/sse" },
+        stream: { type: "streamable-http", url: "https://stream.example.com/mcp" },
+        shared: remote("https://base.example.com/mcp"),
+        // Each of these Claude Code drops: a program to run, no type, plain http, a variable,
+        // a control character, a name it does not take.
+        local: { type: "stdio", command: "srv" },
+        runs: remote("https://runs.example.com/mcp", { command: "srv" }),
+        untyped: { url: "https://untyped.example.com/mcp" },
+        plain: remote("http://plain.example.com/mcp"),
+        fromEnv: remote(`https://${ref("HOST")}/mcp`),
+        bell: remote("https://bell.example.com/mcp", { headers: { "X-Note": "a\u0007b" } }),
+        "bad name": remote("https://bad.example.com/mcp"),
+        constructor: remote("https://proto.example.com/mcp"),
+      },
+    });
+    const dropIn = h.write("policy/managed-settings.d/10-team.json", {
+      managedMcpServers: { shared: remote("https://team.example.com/mcp") },
+    });
+    // Claude Code honors the key from managed settings alone.
+    h.write(".claude/settings.json", { managedMcpServers: { mine: remote("https://mine.example.com/mcp") } });
+
+    const out = await read(h, [], base);
+    const managed = out.items.filter((i) => i.location.scope === "managed");
+    expect(managed.map((i) => i.name).sort()).toEqual(["docs", "shared", "stream", "wiki"]);
+    const docs = managed.find((i) => i.name === "docs");
+    expect(docs?.id).toBe("mcp:claude:managed:settings:docs");
+    expect(docs?.location).toEqual({ tool: "claude", scope: "managed", file: base });
+    expect(docs?.summary).toMatchObject({ url: "https://docs.example.com/mcp" });
+    expect(out.facts.mcpTargets[docs?.id ?? ""]).toEqual({ url: "https://docs.example.com/mcp", vars: false });
+    // A name in two managed files is the higher one's, the drop-in's, whole.
+    const shared = managed.find((i) => i.name === "shared");
+    expect(shared?.location.file).toBe(dropIn);
+    expect(out.facts.mcpTargets[shared?.id ?? ""]).toMatchObject({ url: "https://team.example.com/mcp" });
+    expect(out.items.some((i) => i.name === "mine")).toBe(false);
+
+    // Not an object of servers: none of it.
+    h.write("policy/managed-settings.json", { managedMcpServers: [remote("https://docs.example.com/mcp")] });
+    h.write("policy/managed-settings.d/10-team.json", {});
+    expect((await read(h, [], base)).items.filter((i) => i.location.scope === "managed")).toEqual([]);
+  });
+
   it("reads every settings file's allowedMcpServers and deniedMcpServers, and the managed lock", async () => {
     const h = new TestHome();
     homes.push(h);

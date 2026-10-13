@@ -151,8 +151,13 @@ Some scopes need a word more:
   `managed-settings.d/`, for hooks, and `managed-mcp.json` beside them for MCP servers. While
   `managed-mcp.json` is there, Claude Code starts its servers and no other, so every other
   Claude server reads `off`, in every account, and its details say
-  `only the servers in …/managed-mcp.json start`. clausona does not read the
-  `managedMcpServers` key of managed settings.
+  `only the servers in …/managed-mcp.json start`. The `managedMcpServers` key of managed
+  settings lists servers too, and Claude Code starts them beside `managed-mcp.json`'s. It
+  takes only a remote server there: an `http`, `streamable-http` or `sse` type on an `https://`
+  URL, with no command, no `${VAR}` in it, and a name of letters, digits, `-` and `_`. It drops
+  any other entry, and so does clausona. A name in two managed files is the one that ranks
+  higher's, a file in `managed-settings.d/` over `managed-settings.json`. The key does nothing in
+  any other settings file.
 - Other projects, in the CLI only: `ls --scope other` lists the rows of every other project at
   once, each with its `project`. On the screen, pick that project from the project list to see
   its rows.
@@ -183,16 +188,18 @@ link. A skill in one account's own skills folder wins in that account only. An a
 skills folder is its own, or missing, does not load the primary's skills, so there a Global
 skill hides no Project skill.
 
-For MCP servers, Claude Code takes one server per name: the account's local server first, then
-the `.mcp.json` ones, then the account's user server. Of two `.mcp.json` files, the nearest
+For MCP servers, Claude Code takes one server per name: your organization's first, the one in
+`managed-mcp.json` and then the one in `managedMcpServers`, then the account's local server,
+then the `.mcp.json` ones, then the account's user server. Of two `.mcp.json` files, the nearest
 wins. A `.mcp.json` copy wins over a user server only once it is approved for that account,
 because Claude Code leaves out a pending or denied one before it picks. So with a user `github`
 and a `.mcp.json` `github` that no one has approved, the user copy loads and the `.mcp.json`
 one is `pending approval`.
 
 The copy that loses is tagged with the scope of the one that wins: `hidden by Global copy` for
-a Global skill, `hidden by Project copy` for a local server or this project's `.mcp.json`, and
-`hidden by Parent folders copy` for a `.mcp.json` in a folder above. It gets the tag only when
+a Global skill, `hidden by Project copy` for a local server or this project's `.mcp.json`,
+`hidden by Parent folders copy` for a `.mcp.json` in a folder above, and `hidden by Managed
+copy` for a server your organization's settings bring. It gets the tag only when
 it loses in every account that has it, and is then not in Loaded. When it loses in some
 accounts only, it still loads here, with no `hidden by` tag, and its details say where it is
 hidden: `Loaded  on in personal · hidden by the Global copy in work`.
@@ -256,7 +263,8 @@ The switches are read from these places:
     once the lists have such an entry, a remote one by `serverUrl` likewise, else by its name.
     The lists of every file count together, or the managed ones alone when managed settings
     set `allowManagedMcpServersOnly`. An empty list keeps every server out. A server of
-    `managed-mcp.json` needs no entry unless its config uses `${VAR}`.
+    `managedMcpServers` needs no entry, nor does one of `managed-mcp.json` unless its config
+    uses `${VAR}`.
   - clausona compares `${VAR}` in an entry or a config as written, where Claude Code expands it.
 - Codex skills: `[[skills.config]]` in Codex's `config.toml`, by name or by path. A path names
   the skill whether it goes through a link or not, as Codex reads it.
