@@ -21,18 +21,28 @@ export type QuotaWindow = {
   resetsAt: string | null;
 };
 
+/** A window of a limit on one model, labelled by the limit's name: `Opus`, `GPT-5.3-Codex-Spark`. */
+export type ScopedQuotaWindow = QuotaWindow & {
+  label: string;
+  /**
+   * How long the window is, where the tool says: Codex does, and one Codex model limit can have a
+   * 5-hour and a weekly window. Claude's are all weekly and do not say.
+   */
+  windowSeconds?: number;
+};
+
 export type QuotaWindows = {
   /** Short rolling window: Claude's 5-hour session, Codex's sub-day window. */
   session?: QuotaWindow;
   /** Seven-day window. */
   weekly?: QuotaWindow;
-  /** Most-consumed model-scoped weekly limit, when the tool reports one. */
-  scoped?: QuotaWindow & { label: string };
+  /** Most-consumed window of the model-scoped limits, when the tool reports one. */
+  scoped?: ScopedQuotaWindow;
   /**
-   * Every model-scoped limit the tool reports, `scoped` among them: routing counts the one a
-   * run's model falls under. Absent from a reading an older clausona cached.
+   * Every window of every model-scoped limit the tool reports, `scoped` among them: routing counts
+   * the most used one a run's model falls under. Absent from a reading an older clausona cached.
    */
-  scopedLimits?: Array<QuotaWindow & { label: string }>;
+  scopedLimits?: ScopedQuotaWindow[];
 };
 
 /**
