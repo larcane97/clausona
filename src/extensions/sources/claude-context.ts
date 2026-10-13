@@ -6,7 +6,17 @@ import type { Registry } from "../../types.js";
 import type { Collector, Location, Project, SettingsLayer, Warning } from "../model.js";
 import { localSettingsFile, projectSettingsFile } from "../places.js";
 import { isHomeProject } from "../projects.js";
-import { IO_LIMIT, isRecord, listNames, mapLimit, pathKey, readJsonObject, realPath, samePath } from "../read.js";
+import {
+  IO_LIMIT,
+  isRecord,
+  isWithin,
+  listNames,
+  mapLimit,
+  pathKey,
+  readJsonObject,
+  realPath,
+  samePath,
+} from "../read.js";
 
 export type ClaudeAccount = {
   id: string;
@@ -52,6 +62,35 @@ export function pluginLocation(plugin: PluginInstall): Omit<Location, "file"> {
     accounts: plugin.profiles,
     installScope: plugin.scope,
   };
+}
+
+/** A plugin's manifest, `.claude-plugin/plugin.json` in its install folder. */
+export function pluginManifestFile(plugin: PluginInstall): string {
+  return path.join(plugin.installPath, ".claude-plugin", "plugin.json");
+}
+
+/**
+ * What a plugin's manifest declares under `key` - `mcpServers` or `hooks` - as a list: the
+ * manifest takes one path, one inline object, or a list of either.
+ */
+export function declared(manifest: Record<string, unknown> | undefined, key: string): unknown[] {
+  const value = manifest?.[key];
+  return Array.isArray(value) ? value : value === undefined ? [] : [value];
+}
+
+/**
+ * A path a plugin's manifest names, as Claude Code 2.1.296 resolves one: from the plugin's
+ * install folder, and only while it stays in it - not up through `..`, not an absolute path
+ * elsewhere, not through a link that leads out. Undefined for one that leaves it, which Claude
+ * Code does not load either.
+ */
+export async function insidePlugin(plugin: PluginInstall, named: string): Promise<string | undefined> {
+  const root = plugin.installPath;
+  const file = path.resolve(root, named);
+  if (!isWithin(file, root)) return undefined;
+  // A file that is not there has nothing to read; one that is must lead into the plugin too.
+  const [real, realRoot] = await Promise.all([realPath(file).catch(() => undefined), realPath(root).catch(() => root)]);
+  return real === undefined || isWithin(real, realRoot) ? file : undefined;
 }
 
 export type ClaudeContext = {

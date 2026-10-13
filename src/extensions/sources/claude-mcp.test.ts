@@ -1,3 +1,6 @@
+import { realpathSync } from "node:fs";
+import path from "node:path";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { valueHash } from "../hash.js";
@@ -89,6 +92,76 @@ describe("readClaudeMcp", () => {
     const out = await read(h, []);
 
     expect(out.items.map((i) => [i.name, i.summary?.command])).toEqual([["plugin:context7:context7", "from-mcp-json"]]);
+  });
+
+  it("reads the servers a plugin's manifest names by path, in a list too, with the plugin's place", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    h.claude("work", ".claude-work");
+    const root = ".claude/plugins/cache/m/kit/1.0.0";
+    const kit = h.path(root);
+    const installs = { "kit@m": [{ installPath: kit }] };
+    h.write(".claude-work/plugins/installed_plugins.json", { plugins: installs });
+    h.write(`${root}/.mcp.json`, { mcpServers: { base: { command: "base-mcp" } } });
+    h.write(`${root}/mcp/servers.json`, { mcpServers: { files: { command: "files-mcp" } } });
+    // A file of servers may be the map itself, as a plugin's .mcp.json may.
+    h.write(`${root}/mcp/more.json`, { more: { command: "more-mcp" } });
+    h.write(`${root}/.claude-plugin/plugin.json`, {
+      name: "kit",
+      mcpServers: ["./mcp/servers.json", { inline: { command: "inline-mcp" } }, "mcp/more.json"],
+    });
+    // A second plugin whose manifest names one path, the string form.
+    const solo = ".claude/plugins/cache/m/solo/1.0.0";
+    h.write(".claude/plugins/installed_plugins.json", {
+      plugins: { ...installs, "solo@m": [{ installPath: h.path(solo) }] },
+    });
+    h.write(`${solo}/servers.json`, { mcpServers: { only: { type: "http", url: "https://only.example/mcp" } } });
+    h.write(`${solo}/.claude-plugin/plugin.json`, { mcpServers: "./servers.json" });
+
+    const out = await read(h, []);
+
+    const home = realpathSync.native(h.home);
+    const servers = out.items.map((i) => `${i.name}|${path.relative(home, i.location.file)}`);
+    expect(servers.sort()).toEqual(
+      [
+        `plugin:kit:base|${path.join(root, ".mcp.json")}`,
+        `plugin:kit:files|${path.join(root, "mcp", "servers.json")}`,
+        `plugin:kit:inline|${path.join(root, ".claude-plugin", "plugin.json")}`,
+        `plugin:kit:more|${path.join(root, "mcp", "more.json")}`,
+        `plugin:solo:only|${path.join(solo, "servers.json")}`,
+      ].sort(),
+    );
+    // Each read as the plugin's .mcp.json server is: the plugin, its accounts, its install, its owner.
+    const files = out.items.find((i) => i.name === "plugin:kit:files");
+    const base = out.items.find((i) => i.name === "plugin:kit:base");
+    expect(files?.location).toEqual({ ...base?.location, file: files?.location.file });
+    expect(files?.location.accounts).toEqual(["claude:default", "claude:work"]);
+    expect(files?.id).toBe(base?.id.replace(/:base$/, ":files"));
+    expect(out.facts.fingerprints[files?.id ?? ""]).toBe(valueHash({ command: "files-mcp" }));
+    expect(out.items.find((i) => i.name === "plugin:solo:only")?.summary?.url).toBe("https://only.example/mcp");
+    expect(out.warnings).toEqual([]);
+  });
+
+  it("reads no server file a plugin's manifest names outside the plugin, or that is no .json file", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    const root = ".claude/plugins/cache/m/kit/1.0.0";
+    h.write(".claude/plugins/installed_plugins.json", { plugins: { "kit@m": [{ installPath: h.path(root) }] } });
+    const outside = h.write("elsewhere/servers.json", { mcpServers: { away: { command: "away-mcp" } } });
+    h.write(".claude/plugins/cache/m/kit/servers.json", { mcpServers: { up: { command: "up-mcp" } } });
+    h.write(`${root}/bundle.mcpb`, { mcpServers: { bundled: { command: "bundled-mcp" } } });
+    // A link inside the plugin that leads out of it.
+    h.link("elsewhere", `${root}/linked`);
+    h.write(`${root}/.claude-plugin/plugin.json`, {
+      mcpServers: ["../servers.json", outside, "./linked/servers.json", "./missing.json", "./bundle.mcpb"],
+    });
+
+    const out = await read(h, []);
+
+    expect(out.items).toEqual([]);
+    expect(out.warnings).toEqual([]);
   });
 
   it("reads a project once when two of an account's keys resolve to it", async () => {

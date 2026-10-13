@@ -116,6 +116,12 @@ Some scopes need a word more:
   another project is under Plugins seen from that project, and under Other projects in the CLI.
   In JSON a plugin row has `contains`, the names of what it brings. What a plugin brings is in
   Loaded while the plugin is on, and in `all`, with the plugin's name as WHERE.
+
+  A plugin's servers come from its `.mcp.json` and from what its `.claude-plugin/plugin.json`
+  declares under `mcpServers`: servers inline, or the `.json` files of servers it names. Its
+  hooks come from `hooks/hooks.json` and from `plugin.json`'s `hooks` the same way. A path that
+  leads out of the plugin's folder, through `..` or a link, is not read, as Claude Code does not
+  load it. Nor is an MCP bundle (`.mcpb` or `.dxt`), which Claude Code unpacks itself.
 - Built-in: skills that come with the tool itself. You can turn them off, but not delete
   them.
   - Claude Code keeps its built-in skills (such as `claude-api`) inside the program, not
@@ -499,7 +505,8 @@ The first part after `mcp:claude:` is `account` for a user server and `local` fo
 `<project>` is the project's absolute path, lower-cased on Windows, and `-` when there is none.
 The install scope is `user`, `project` or `local`. A plugin's hook adds its place in its file,
 as in `hook:claude:plugin:user:-:kit@demo:SessionStart#0.0`, so two hooks on one event are two
-rows.
+rows. A hook in `plugin.json`, or in a file it names, adds that file too:
+`SessionStart#plugin.json:0.0`, `SessionStart#config/extra.json:0.0`.
 
 Ids and keys name where a thing is stored, not where it is seen from. They are the same from
 every project, so an agent can store one and pass it to `show --id` later. A row key stays the

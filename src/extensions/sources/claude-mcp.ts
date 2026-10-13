@@ -4,7 +4,14 @@ import { valueHash } from "../hash.js";
 import type { Collector, Location, Project } from "../model.js";
 import { isRecord, pathKey, readJsonObject, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
-import { type ClaudeContext, pluginLocation, pluginOwner } from "./claude-context.js";
+import {
+  type ClaudeContext,
+  declared,
+  insidePlugin,
+  pluginLocation,
+  pluginManifestFile,
+  pluginOwner,
+} from "./claude-context.js";
 
 export function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
@@ -68,21 +75,29 @@ export async function readClaudeMcp(ctx: ClaudeContext, projects: Project[], out
       const owner = pluginOwner(plugin);
       const mcpFile = path.join(plugin.installPath, ".mcp.json");
       const mcp = await readJsonObject(mcpFile, out.warnings);
-      // The manifest is read second, so a server it defines again keeps the .mcp.json one.
-      if (mcp)
-        addServers(
-          isRecord(mcp.mcpServers) ? mcp.mcpServers : mcp,
-          { ...from, file: mcpFile },
-          owner,
-          out,
-          ids,
-          prefix,
-        );
-      const manifestFile = path.join(plugin.installPath, ".claude-plugin", "plugin.json");
+      if (mcp) addServers(serversIn(mcp), { ...from, file: mcpFile }, owner, out, ids, prefix);
+      // Then what the manifest declares, in its order, so a server it defines again keeps the
+      // .mcp.json one: inline servers, and the .json files of servers it names.
+      const manifestFile = pluginManifestFile(plugin);
       const manifest = await readJsonObject(manifestFile, out.warnings);
-      if (manifest) addServers(manifest.mcpServers, { ...from, file: manifestFile }, owner, out, ids, prefix);
+      for (const entry of declared(manifest, "mcpServers")) {
+        if (typeof entry !== "string") {
+          addServers(entry, { ...from, file: manifestFile }, owner, out, ids, prefix);
+          continue;
+        }
+        // An MCP bundle (.mcpb, .dxt) or its URL is unpacked by Claude Code: nothing to read here.
+        if (!entry.toLowerCase().endsWith(".json") || /^[a-z][a-z0-9+.-]*:\/\//i.test(entry)) continue;
+        const file = await insidePlugin(plugin, entry);
+        const json = file === undefined ? undefined : await readJsonObject(file, out.warnings);
+        if (file !== undefined && json) addServers(serversIn(json), { ...from, file }, owner, out, ids, prefix);
+      }
     }),
   );
+}
+
+/** A plugin's file of servers: an `mcpServers` map, as `.mcp.json` has, or the map itself. */
+function serversIn(json: Record<string, unknown>): unknown {
+  return isRecord(json.mcpServers) ? json.mcpServers : json;
 }
 
 /**
