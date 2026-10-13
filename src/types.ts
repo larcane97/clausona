@@ -71,6 +71,8 @@ export type SpendReading = {
    * reading in each current period, which a budget for that period counts from.
    */
   baselines?: Partial<Record<BudgetPeriod, { start: string; totalUsd: number }>>;
+  /** ms epoch the provider reported it: a snapshot that keeps it through a failed read is newer. */
+  takenAt?: number;
 };
 
 export type QuotaWindows = {

@@ -412,6 +412,16 @@ describe("collectQuotas: an API profile's spend", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("keeps the period's baselines through an answer with no spend reading", async () => {
+    // A month counted from its first reading at $100.
+    await collect(apiTarget({ usd: 20, per: "month" }), stubFetch(200, { info: { spend: 100 } }));
+    const blip = await collect(apiTarget({ usd: 20, per: "month" }), stubFetch(404, {}), AT + QUOTA_FRESH_MS);
+    expect(blip["claude:gw"]).toMatchObject({ state: "error", noSpendReading: true });
+    const later = AT + 2 * QUOTA_FRESH_MS;
+    const result = await collect(apiTarget({ usd: 20, per: "month" }), stubFetch(200, { info: { spend: 107 } }), later);
+    expect(result["claude:gw"]?.budget).toMatchObject({ spentUsd: 7, usedPercent: 35 });
+  });
+
   it("keeps the last reading's spend through a failure, and pauses only this profile after a 429", async () => {
     await collect(apiTarget(), stubFetch(200, { info: { spend: 12, max_budget: 40 } }));
     const result = await collect(apiTarget(), stubFetch(429, {}, { "retry-after": "600" }), AT + QUOTA_FRESH_MS);

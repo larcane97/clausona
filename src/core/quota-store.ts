@@ -209,9 +209,22 @@ async function fetchSpend(
   }
   try {
     const reading = await readSpend(target.api, key, { fetch: fetchImpl, signal: controller.signal, now });
-    // Kept like any failure, so that a run does not ask again on every launch.
-    if (!reading) return { snapshot: { state: "error", fetchedAt: now, noSpendReading: true } };
-    const spend = withBaselines(reading, cached?.spend, now, cached?.fetchedAt);
+    // Kept like any failure, so that a run does not ask again on every launch, and with the last
+    // spend reported, whose periods' baselines a later reading counts from.
+    if (!reading) {
+      return {
+        snapshot: {
+          state: "error",
+          fetchedAt: now,
+          noSpendReading: true,
+          ...(cached?.spend ? { spend: cached.spend } : {}),
+        },
+      };
+    }
+    const spend = {
+      ...withBaselines(reading, cached?.spend, now, cached?.spend?.takenAt ?? cached?.fetchedAt),
+      takenAt: now,
+    };
     return { snapshot: withBudget({ state: "ok", fetchedAt: now, spend }, target.api, now) };
   } catch (error) {
     if (error instanceof QuotaHttpError) {
