@@ -1,5 +1,5 @@
 import type { ToolName } from "../types.js";
-import { carriesCredentialToken, looksLikeCredential } from "./credential-token.js";
+import { carriesCredentialToken, looksLikeCredential, MAX_NAME_LENGTH } from "./credential-token.js";
 import { splitToolPrefix } from "./route-patterns.js";
 
 /**
@@ -124,11 +124,20 @@ function isLimit(value: unknown): boolean {
 }
 
 /**
- * 'sk-' where a token starts: at the start, or after anything that cannot be part of a key or a
- * name - a space, `=`, a quote, a bracket, `;`. A short key, such as a gateway's `sk-1234`, is
- * caught by nothing else once it is glued to what comes before it (`KEY=sk-…`, `"sk-…"`).
+ * 'sk-' where a token starts: at the start, or after anything that cannot be part of a key, a
+ * name, an email or a glob - a space, `=`, a quote, a bracket, `;`, `/`. A short key, such as a
+ * gateway's `sk-1234`, is caught by nothing else once it is glued to what comes before it
+ * (`KEY=sk-…`, `"sk-…"`). Not after `.`, `@`, `*` or `?`: `team.sk-dev` is a profile name,
+ * `*@sk-gaming.com` an email pattern and `*sk-*` a glob, and a routes.json holding one must read.
  */
-const SK_TOKEN = /(?:^|[^A-Za-z0-9_-])sk-/i;
+const SK_TOKEN = /(?:^|[^A-Za-z0-9_\-.@*?])sk-/i;
+
+/**
+ * The same after those four too, for text longer than a name. No name, email or glob a route holds
+ * is that long, and the rule before the length ceiling went word by word refused all such text:
+ * `KEY.sk-1234` in a long prompt stays refused.
+ */
+const SK_TOKEN_IN_LONG_TEXT = /(?:^|[^A-Za-z0-9_-])sk-/i;
 
 /**
  * Whether text holds something shaped like a key, so that it is neither stored nor quoted back:
@@ -141,7 +150,8 @@ const SK_TOKEN = /(?:^|[^A-Za-z0-9_-])sk-/i;
  * `clausona run` all ask this.
  */
 export function holdsKey(text: string): boolean {
-  return carriesCredentialToken(text) || SK_TOKEN.test(text) || text.split(/[\s,:]+/).some(looksLikeCredential);
+  const skToken = text.length > MAX_NAME_LENGTH ? SK_TOKEN_IN_LONG_TEXT : SK_TOKEN;
+  return carriesCredentialToken(text) || skToken.test(text) || text.split(/[\s,:]+/).some(looksLikeCredential);
 }
 
 export function checkRouteName(name: string): string | null {

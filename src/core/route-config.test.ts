@@ -102,6 +102,17 @@ describe("holdsKey", () => {
     }
   });
 
+  // Names, emails and globs hold these, and none of them is longer than a name: past that, the key
+  // after one is refused, as all such text was before the ceiling went word by word.
+  it.each([".", "@", "*", "?"])("finds a short key right after %j in text longer than a name", (before) => {
+    for (const text of [
+      `please read the config, set KEY${before}${shortKey()} and run the whole suite before you report back`,
+      `please read the config, set KEY${before}${shortKey().toUpperCase()} and run the whole suite before you report`,
+    ]) {
+      expect(holdsKey(text)).toBe(true);
+    }
+  });
+
   it.each([
     "main",
     "*@work.example.com",
@@ -111,6 +122,12 @@ describe("holdsKey", () => {
     "please fix the failing test in the routing module and run the whole suite",
     // 'sk-' inside a word does not start a key.
     "run the task-queue tests, then the risk-free and desk-lamp ones",
+    // Nor inside a name, an email or a glob.
+    "*@sk-gaming.com",
+    "claude:*@mail.sk-telecom.co.kr",
+    "team.sk-dev",
+    "*sk-*",
+    "eu.sk-team",
   ])("finds nothing in %j", (text) => {
     expect(holdsKey(text)).toBe(false);
   });
@@ -153,6 +170,11 @@ describe("checkPattern", () => {
     "claude:*@example.com",
     "jiyoung_lee",
     "*@corp.example.com",
+    // A domain, a name and a glob with 'sk-' inside them are not keys.
+    "*@sk-gaming.com",
+    "team.sk-dev",
+    "claude:team.sk-dev",
+    "*sk-*",
   ])("accepts %s on a claude route", (pattern) => {
     expect(checkPattern(pattern, "claude")).toBeNull();
   });
@@ -349,6 +371,17 @@ describe("checkRoutesFile", () => {
       ok: true,
       file: { version: 1, routes: { main: { tool: "claude", maxUsage: 80 }, odd: { tool: "codex", maxUsage: 90 } } },
     });
+  });
+
+  // A company domain that starts with 'sk-' is an email pattern like any other, and a file that
+  // holds one keeps reading.
+  it("reads a route named and matching with 'sk-' inside a name or a domain", () => {
+    const raw = {
+      version: 1,
+      routes: { "eu.sk-team": { tool: "claude", from: ["*@sk-gaming.com", "team.sk-dev"], exclude: ["*sk-*"] } },
+    };
+    expect(checkRouteName("eu.sk-team")).toBeNull();
+    expect(checkRoutesFile(raw)).toEqual({ ok: true, file: raw });
   });
 
   it("reads a missing routes object as none", () => {

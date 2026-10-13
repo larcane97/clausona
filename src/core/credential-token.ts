@@ -80,7 +80,8 @@ export function looksLikeCredential(value: string): boolean {
   return typeof value === "string" && (value.toLowerCase().startsWith("sk-") || value.length > MAX_NAME_LENGTH);
 }
 
-const MAX_NAME_LENGTH = 64;
+/** The longest a name is: a key is around a hundred characters. */
+export const MAX_NAME_LENGTH = 64;
 
 const VENDOR_KEY = /sk-(?:ant|or|proj)-[A-Za-z0-9_-]{16}/;
 
