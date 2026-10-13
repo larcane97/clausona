@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 import type { ToolAdapter, ToolCredential } from "../tools/types.js";
 import type { QuotaSnapshot } from "../types.js";
-import { QUOTA_FRESH_MS, QuotaHttpError } from "./quota.js";
+import { QUOTA_FRESH_MS, QUOTA_TIMEOUT_MS, QuotaHttpError } from "./quota.js";
 
 const getAdapter = vi.hoisted(() => vi.fn());
 vi.mock("../tools/registry.js", () => ({ getAdapter }));
@@ -362,7 +362,7 @@ describe("collectQuotas: an API profile's spend", () => {
     api: {
       baseUrl: "https://gw.example.com",
       authScheme: "bearer" as const,
-      readKey: vi.fn(async () => KEY),
+      readKey: vi.fn(async (_signal: AbortSignal) => KEY),
       ...(budget ? { budget } : {}),
     },
   });
@@ -419,6 +419,46 @@ describe("collectQuotas: an API profile's spend", () => {
     expect(readCacheFile().cooldowns).toEqual({ "claude:gw": AT + QUOTA_FRESH_MS + 600_000 });
     const fetch = stubFetch(200, { info: { spend: 13 } });
     expect((await collect(apiTarget(), fetch, AT + QUOTA_FRESH_MS + 1000))["claude:gw"]?.state).toBe("cooldown");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting for a key that never comes once the reading's time is up, and reads the others", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const hung = apiTarget();
+      let asked: AbortSignal | undefined;
+      hung.api.readKey.mockImplementation((signal: AbortSignal) => {
+        asked = signal;
+        return new Promise<string>(() => {});
+      });
+      const other = { ...apiTarget(), id: "claude:other" };
+      stubAdapter();
+      const fetch = stubFetch(200, { info: { spend: 1, max_budget: 10 } });
+      const reading = collectQuotas([hung, other, TARGET], {
+        now: AT,
+        cachePath,
+        fetch: fetch as unknown as typeof globalThis.fetch,
+      });
+      // The cache is read first, from disk: the clock moves once the key is being read.
+      while (!asked) await new Promise((resolve) => setImmediate(resolve));
+      await vi.advanceTimersByTimeAsync(QUOTA_TIMEOUT_MS);
+      const result = await reading;
+      // Left out of this run as a spend that could not be read; the command it started is told to stop.
+      expect(result["claude:gw"]).toEqual({ state: "missing", fetchedAt: AT });
+      expect(asked?.aborted).toBe(true);
+      expect(result["claude:other"]?.state).toBe("ok");
+      expect(result[TARGET.id]?.state).toBe("ok");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks for no key for a base URL that could never be read", async () => {
+    const target = apiTarget();
+    target.api.baseUrl = "https://admin:pw@gw.example.com";
+    const fetch = stubFetch(200, { info: { spend: 1 } });
+    expect((await collect(target, fetch))["claude:gw"]?.state).toBe("error");
+    expect(target.api.readKey).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });
 

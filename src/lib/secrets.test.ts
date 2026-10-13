@@ -78,6 +78,41 @@ describe("resolveSecret", () => {
     const run = windows ? "exit 3" : 'node -e "process.exit(3)"';
     await expect(resolveSecret("claude:x", { source: "command", run })).rejects.toThrow(/exited with 3/);
   });
+
+  // A vault waiting to be unlocked, or a CLI on a dead network: the command never answers. Once
+  // the signal aborts, the shell and what it started are killed, and nothing waits on them.
+  it.skipIf(windows)(
+    "stops a command that never answers once its signal aborts, and kills what it started",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "clausona-key-command-"));
+      temps.push(dir);
+      const pids = path.join(dir, "pids");
+      vi.stubEnv("CLAUSONA_TEST_PIDS", pids);
+      // The shell's pid, then the pid of the sleep it starts, which outlives it unless killed.
+      const run = 'echo $$ > "$CLAUSONA_TEST_PIDS"; sleep 30 & echo $! >> "$CLAUSONA_TEST_PIDS"; wait';
+      const controller = new AbortController();
+      const started = Date.now();
+      const read = resolveSecret("claude:x", { source: "command", run }, undefined, { signal: controller.signal });
+      // Aborted once the command is under way, both pids written.
+      await vi.waitFor(() => expect(readFileSync(pids, "utf8").trim().split("\n")).toHaveLength(2), {
+        timeout: 20_000,
+      });
+      controller.abort();
+      await expect(read).rejects.toThrow("the key was not read in time");
+      expect(Date.now() - started).toBeLessThan(25_000);
+      const alive = (pid: number) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const [shell, sleep] = readFileSync(pids, "utf8").trim().split("\n").map(Number);
+      await vi.waitFor(() => expect([alive(shell), alive(sleep)]).toEqual([false, false]), { timeout: 10_000 });
+    },
+  );
 });
 
 /**

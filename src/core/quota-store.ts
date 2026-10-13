@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import { getAdapter } from "../tools/registry.js";
 import type { ToolCredential } from "../tools/types.js";
 import type { QuotaSnapshot, QuotaWindows, ToolName } from "../types.js";
+import { checkBaseUrl } from "./api-url.js";
 import { acquireFileLock } from "./file-lock.js";
 import { cooldownUntil, isFresh, QUOTA_TIMEOUT_MS, QuotaHttpError } from "./quota.js";
 import type { Budget } from "./route-budgets.js";
@@ -114,8 +115,11 @@ export type QuotaTarget = {
 };
 
 export type ApiQuotaTarget = SpendEndpoint & {
-  /** Resolves the profile's key; called only when the cache cannot answer. */
-  readKey: () => Promise<string>;
+  /**
+   * Resolves the profile's key; called only when the cache cannot answer. `signal` aborts when
+   * the reading's time is up, and whatever it started for the key is then to be stopped.
+   */
+  readKey: (signal: AbortSignal) => Promise<string>;
   /** The clausona budget, which replaces the provider key's limit. */
   budget?: Budget;
 };
@@ -171,21 +175,38 @@ function withBudget(snapshot: QuotaSnapshot, api: ApiQuotaTarget, now: number): 
   return budget ? { ...rest, budget } : rest;
 }
 
-/** Reads an API profile's spend, as fetchOne reads plan quota, and the same failures say the same. */
+/** Settles as `promise` does, or rejects once `signal` aborts, whichever comes first. */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const stop = () => reject(new Error("aborted"));
+    if (signal.aborted) stop();
+    signal.addEventListener("abort", stop, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", stop));
+  });
+}
+
+/**
+ * Reads an API profile's spend, as fetchOne reads plan quota, and the same failures say the same.
+ * The key is read within the reading's time: a key command that hangs (a vault waiting to be
+ * unlocked) is stopped with it, and the profile is left out of that run rather than holding up
+ * the others. A base URL that could never be asked is refused before any key is read.
+ */
 async function fetchSpend(
   target: QuotaTarget & { api: ApiQuotaTarget },
   cached: QuotaSnapshot | undefined,
   now: number,
   fetchImpl: typeof fetch,
 ): Promise<{ snapshot: QuotaSnapshot; cooldown?: number }> {
-  let key: string;
-  try {
-    key = await target.api.readKey();
-  } catch {
-    return { snapshot: unread("missing", cached, now) };
-  }
+  if (!checkBaseUrl(target.api.baseUrl).ok) return { snapshot: unread("error", cached, now) };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), QUOTA_TIMEOUT_MS);
+  let key: string;
+  try {
+    key = await untilAborted(target.api.readKey(controller.signal), controller.signal);
+  } catch {
+    clearTimeout(timer);
+    return { snapshot: unread("missing", cached, now) };
+  }
   try {
     const reading = await readSpend(target.api, key, { fetch: fetchImpl, signal: controller.signal, now });
     // Kept like any failure, so that a run does not ask again on every launch.

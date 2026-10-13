@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -20,17 +21,63 @@ export function keychainItemFor(profileId: string): string {
 
 type RunResult = { code: number; stdout: string };
 
-function run(command: string, args: string[], input?: string): Promise<RunResult> {
+/**
+ * Kills a child and every process under it. A `sh -c` command's own children outlive the shell
+ * otherwise, and hold its output open. They are found by parent, from the child down, before
+ * any is killed: a process whose parent has died is no longer found under it.
+ */
+function killTree(pid: number): void {
+  if (process.platform === "win32") {
+    spawnCommand("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" }).on("error", () => {});
+    return;
+  }
+  const under = (parent: number): number[] => {
+    const found = spawnSync("pgrep", ["-P", String(parent)], { encoding: "utf8" });
+    const children = (found.stdout ?? "").split(/\s+/).filter(Boolean).map(Number);
+    return children.flatMap((child) => [child, ...under(child)]);
+  };
+  for (const each of [pid, ...under(pid)]) {
+    try {
+      process.kill(each, "SIGKILL");
+    } catch {
+      // Gone already.
+    }
+  }
+}
+
+/**
+ * Runs `command` and resolves to its exit code and stdout. Once `signal` aborts, the command and
+ * everything it started is killed, and the result is a failure at once, not when its output
+ * closes, which a process it left behind could hold open.
+ */
+function run(command: string, args: string[], input?: string, signal?: AbortSignal): Promise<RunResult> {
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve({ code: 1, stdout: "" });
+      return;
+    }
     const child = spawnCommand(command, args, {
       stdio: [input === undefined ? "ignore" : "pipe", "pipe", "ignore"],
     });
     let out = "";
+    let settled = false;
+    const finish = (result: RunResult) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", stop);
+      resolve(result);
+    };
+    const stop = () => {
+      if (child.pid !== undefined) killTree(child.pid);
+      child.stdout?.destroy();
+      finish({ code: 1, stdout: "" });
+    };
+    signal?.addEventListener("abort", stop, { once: true });
     child.stdout?.on("data", (chunk) => {
       out += chunk;
     });
-    child.on("close", (code) => resolve({ code: code ?? 1, stdout: out }));
-    child.on("error", () => resolve({ code: 1, stdout: "" }));
+    child.on("close", (code) => finish({ code: code ?? 1, stdout: out }));
+    child.on("error", () => finish({ code: 1, stdout: "" }));
     if (input !== undefined) child.stdin?.end(input);
   });
 }
@@ -206,9 +253,18 @@ export async function deleteSecret(profileId: string, backend?: SecretBackend): 
   return true;
 }
 
-async function readStoredSecret(profileId: string, backend?: SecretBackend): Promise<string | null> {
+async function readStoredSecret(
+  profileId: string,
+  backend?: SecretBackend,
+  signal?: AbortSignal,
+): Promise<string | null> {
   if ((backend ?? detectBackend()) === "keychain") {
-    const { code, stdout } = await run("security", ["find-generic-password", "-s", keychainItemFor(profileId), "-w"]);
+    const { code, stdout } = await run(
+      "security",
+      ["find-generic-password", "-s", keychainItemFor(profileId), "-w"],
+      undefined,
+      signal,
+    );
     return code === 0 && stdout.trim() !== "" ? stdout.trim() : null;
   }
   const values = await readSecretsFile();
@@ -225,8 +281,17 @@ async function readStoredSecret(profileId: string, backend?: SecretBackend): Pro
  * path, a token argument or the key itself - see src/lib/redact.ts, which hides it on
  * every path. A variable's name is quoted only when it is a name: a hand edit can put a
  * key in that slot.
+ *
+ * `signal` bounds a key that a command or the Keychain gives: once it aborts, what was started
+ * for it is killed, and the key is not read.
  */
-export async function resolveSecret(profileId: string, source: SecretSource, backend?: SecretBackend): Promise<string> {
+export async function resolveSecret(
+  profileId: string,
+  source: SecretSource,
+  backend?: SecretBackend,
+  options: { signal?: AbortSignal } = {},
+): Promise<string> {
+  const { signal } = options;
   // A hand edit can leave anything in the slot, or nothing. Doctor calls such a source unknown
   // and never resolves it, so launch does not read the store for it either: a profile would
   // otherwise work while doctor reported it broken. Not quoted, since it can hold anything.
@@ -257,7 +322,8 @@ export async function resolveSecret(profileId: string, source: SecretSource, bac
   if (source.source === "command") {
     const shell = process.platform === "win32" ? "powershell" : "/bin/sh";
     const args = process.platform === "win32" ? ["-NoProfile", "-Command", source.run] : ["-c", source.run];
-    const { code, stdout } = await run(shell, args);
+    const { code, stdout } = await run(shell, args, undefined, signal);
+    if (signal?.aborted) throw new Error("the key was not read in time");
     // The command line is not quoted, so the message says where it is instead - profiles.json,
     // the one place it is shown - and what replaces it. Not `config --edit`: that opens the
     // env map, and the command lives in the endpoint block.
@@ -268,7 +334,8 @@ export async function resolveSecret(profileId: string, source: SecretSource, bac
     return first;
   }
 
-  const stored = await readStoredSecret(profileId, backend);
+  const stored = await readStoredSecret(profileId, backend, signal);
+  if (signal?.aborted) throw new Error("the key was not read in time");
   if (!stored) throw new Error(`no stored secret for '${profileId}' - run 'clausona config ${profileId} --key'`);
   return stored;
 }

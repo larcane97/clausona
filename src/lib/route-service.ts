@@ -329,7 +329,7 @@ export function routeByRules(
 
 /**
  * An API profile's quota target: its spend, read with its key, which is resolved only when the
- * cache cannot answer. None for a hand-edited profile with no endpoint, whose spend cannot be read.
+ * cache cannot answer, and within the reading's time. None for a hand-edited profile with no endpoint, whose spend cannot be read.
  */
 export function spendTarget(member: Member, budget?: Budget): QuotaTarget | undefined {
   const { api } = member;
@@ -341,7 +341,7 @@ export function spendTarget(member: Member, budget?: Budget): QuotaTarget | unde
     api: {
       baseUrl: api.baseUrl,
       authScheme: api.authScheme === "api-key" ? "api-key" : "bearer",
-      readKey: () => resolveSecret(member.id, api.secret),
+      readKey: (signal) => resolveSecret(member.id, api.secret, undefined, { signal }),
       ...(budget ? { budget } : {}),
     },
   };

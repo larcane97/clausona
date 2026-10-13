@@ -876,7 +876,9 @@ Anthropic's prices, and it is only written once a session ends.
 
 Readings go into the same 5-minute cache as plan quota, so a run does not ask on every launch, and
 a 429 pauses the reads of that one profile. A reading that fails leaves the profile out of that
-run as `spend could not be read`, and never holds up the others. Unlike an account's, its last
+run as `spend could not be read`, and never holds up the others. That includes the key: a
+`command:` key source that has not answered within the reading's 5 seconds, such as a vault
+waiting to be unlocked, is stopped, with everything it started. Unlike an account's, its last
 numbers are not used in its place.
 
 ### Periods
