@@ -74,7 +74,11 @@ function ignoring(more?: (h: TestHome, app: string) => void, repo = true) {
   h.claude("default", ".claude", { projects: { [app]: {} } });
   h.skill(".claude/skills", "eli5");
   more?.(h, app);
-  const check = async (env: NodeJS.ProcessEnv = IGNORE_ENV, gitBinary?: string) => {
+  const check = async (
+    env: NodeJS.ProcessEnv = IGNORE_ENV,
+    gitBinary?: string,
+    more: { tracked?: true; timeoutMs?: number } = {},
+  ) => {
     const inv = await loadInventory(h.inventoryOptions(app, h.path("managed.json")));
     const row = rowsIn(inv, "claude", "skill", "global", app, NOW).find((r) => r.name === "eli5");
     if (!row) throw new Error("no eli5 row");
@@ -82,10 +86,11 @@ function ignoring(more?: (h: TestHome, app: string) => void, repo = true) {
     return planChecked(
       ctx,
       "skills",
-      { verb: "off", reach: "here", rows: [row] },
+      { verb: "off", reach: "here", rows: [row], ...(more.tracked ? { tracked: true } : {}) },
       {
         env,
         ...(gitBinary !== undefined ? { git: gitBinary } : {}),
+        ...(more.timeoutMs !== undefined ? { timeoutMs: more.timeoutMs } : {}),
       },
     );
   };
@@ -321,6 +326,28 @@ describe("planChecked", () => {
       // A folder with a .git folder that holds no repo: git says it is none.
       const notRepo = ignoring(undefined, false);
       expect(await kinds(notRepo.check)).toEqual(["json"]);
+    },
+    SPAWNING_TEST_TIMEOUT_MS,
+  );
+
+  it.skipIf(!hasGit || process.platform === "win32")(
+    "adds the ignore line when git says it would not ignore the new file, though it did not say in time what it tracks",
+    async () => {
+      const { h, app, check, env } = ignoring();
+      // A git that stalls on ls-files alone, and answers the rest as git does.
+      const stalls = h.write(
+        "bin/git-ls-files-stalls",
+        '#!/bin/sh\nfor a in "$@"; do [ "$a" = ls-files ] && exec sleep 30; done\nexec git "$@"\n',
+      );
+      chmodSync(stalls, 0o755);
+      const ignore = h.path(".config", "git", "ignore");
+      const checked = await check(env, stalls, { tracked: true, timeoutMs: 8_000 });
+      expect(checked.unchecked?.has(pathKey(local(app)))).toBe(true);
+      // The global line does nothing to a file git does track, so it goes in all the same.
+      expect(checked.plan.changes.map((c) => [c.kind, c.file])).toEqual([
+        ["json", local(app)],
+        ["text", ignore],
+      ]);
     },
     SPAWNING_TEST_TIMEOUT_MS,
   );

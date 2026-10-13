@@ -916,6 +916,8 @@ When git does not answer within 10 seconds, as on a very busy machine, the file 
 tracked, since it may be: the change needs `--tracked`, or the dialog's consent, all the same.
 The refusal and the warning say that git did not answer in time, and a line it goes ahead with
 says `may change the repo (git did not answer in time)`. Run it again to ask git once more.
+A project's first `settings.local.json` still gets its ignore line when git did say in time that
+it would not ignore the file.
 
 Some things can't be deleted here:
 

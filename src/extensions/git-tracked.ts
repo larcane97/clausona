@@ -285,7 +285,9 @@ export async function planChecked(
   // A file git did not answer for counts as tracked: the change asks first, as for one it tracks.
   const tracked = new Set([...asked.tracked, ...asked.unchecked]);
   const unchecked = asked.unchecked.size > 0 ? { unchecked: asked.unchecked } : {};
-  for (const key of tracked) unignored.delete(key);
+  // Only what git said it tracks: the line does nothing to a tracked file, so one git did not
+  // answer for in time keeps it, where check-ignore said git would not ignore the file.
+  for (const key of asked.tracked) unignored.delete(key);
   const ignore = unignored.size === 0 ? undefined : await ignoreFacts(unignored, ctx.inv.homeDir, git, env, timeoutMs);
   const checked =
     tracked.size === 0 && ignore === undefined
