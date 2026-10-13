@@ -29,14 +29,16 @@ If you would rather see it all on one screen, run `clausona route` with nothing 
 opens the [Routes screen](#the-routes-screen), where you can look through your routes and create
 or change one in a form.
 
-Routes are made of subscription accounts. In this version an API profile cannot be part of one.
+Routes are made of subscription accounts. An API profile can join one too, by its exact name,
+once it has a spend limit: see [API profiles in routes](#api-profiles-in-routes).
 
 ## How an account is picked
 
 Each account gets one number, its usage: the higher of its 5-hour and 7-day windows. An account
 at 0% of its 5-hour window and 99% of its week has a usage of 99%. Every rule below looks at that
 number and nothing else. A run's note gives it, as in `34% of 7D used`, and so does
-`clausona route explain --json`, as `usage`.
+`clausona route explain --json`, as `usage`. An API profile's usage is its spend as a share of
+its limit, and goes through the same stages.
 
 clausona then goes through four stages and stops at the first one that finds someone.
 
@@ -163,10 +165,9 @@ it has to name the route's own tool: `codex:work` in a Claude Code route is refu
 route either prefix is fine, and a name without one matches in both tools, so `personal` there
 means `claude:personal` and `codex:personal`.
 
-A glob or an email pattern never matches an API profile. Naming one exactly is refused by
-`route add` and `route set`, with the command to run it by name instead
-(`clausona run claude:gw`), and a run skips one written into `routes.json` by hand. API profiles
-are billed per use, and this version keeps them out of routes.
+A glob or an email pattern never matches an API profile, so `*` is never one. An API profile is
+billed per use, and joins a route only by its exact name, once it has a spend limit. See
+[API profiles in routes](#api-profiles-in-routes).
 
 `exclude` applies to `from` and `fallback` alike. An account listed in both `from` and
 `fallback` counts as a pool member. So a fallback only helps for accounts the pool leaves out,
@@ -276,8 +277,9 @@ $ clausona route list
 ```
 
 `SKIP AT` is the cut. `FREE NOW` counts the accounts under the cut right now, out of every
-account in the route. One that is signed out still counts as a member, just not as free. An API
-profile does not count at all, since no run takes one. `NEXT` is the account a run would get now.
+account in the route. One that is signed out still counts as a member, just not as free, and so
+does an API profile with no spend limit, or whose spend could not be read. `NEXT` is the account
+a run would get now.
 When nobody can be picked it says `none`, and when the first account frees up.
 
 `route list` records nothing. With `--no-quota` it reads no quota at all, and `FREE NOW` and
@@ -336,13 +338,16 @@ Routes live in `~/.clausona/routes.json`:
     }
   },
   "dirs": { "~/work": { "claude": "main" } },
-  "defaults": { "claude": "main" }
+  "defaults": { "claude": "main" },
+  "budgets": { "claude:gateway": { "usd": 20, "per": "month" } }
 }
 ```
 
 `dirs` and `defaults` are the [dir rules and defaults](#dir-rules-and-defaults). Each maps
 `claude` and `codex` to a route's name, and `dirs` keys each such map by its directory: `~` for
-your home, or an absolute path. Both can be left out.
+your home, or an absolute path. `budgets` are the API profiles' spend limits, by profile id:
+`usd` is a number of dollars above 0, and `per` is `day`, `week` or `month` (see
+[API profiles in routes](#api-profiles-in-routes)). All three can be left out.
 
 | Field | Default | Allowed |
 |---|---|---|
@@ -392,6 +397,12 @@ path, works the same way. Runs pass over it, `route list` warns about it, and a 
 until it is fixed with `route edit` or cleared with `route dir <path> --clear`. `route edit` itself
 refuses to save one.
 
+So does a budget that cannot be read, such as `"usd": "20"` or a `per` of `year`. The others still
+apply, and the profile it was for counts against its key's own limit. `route list` and
+`route budget` warn about it, and a change is refused until it is fixed with `route edit`, or set
+again with `route budget <profile> --usd … --per …`. A budget for a profile that is not registered,
+or is not an API profile, is only a warning.
+
 Removing a profile leaves its routes alone. A name that is no longer registered is skipped, and
 both `route list` and `route explain` point it out. The one exception is a name the key check
 would refuse, which a route can hold only while the profile is registered (see
@@ -430,10 +441,11 @@ list instead.
 | `d` | Remove the selected route, once you answer `y` |
 | `r` | Read the quota again |
 | `tab` | Switch to the [dir rules and defaults](#dir-rules-and-defaults), and back |
+| `b` | Switch to the [budgets](#budgets-on-the-screen) of your API profiles; `tab` comes back |
 | `esc` | Back to the dashboard, or out if you came in with `clausona route` |
 
 The screen never records a pick. It writes `routes.json` only when you remove a route, save one
-from the form, or change a dir rule or default. If the file cannot be used, the screen says what is wrong with it and points you
+from the form, change a dir rule or default, or set or clear a budget. If the file cannot be used, the screen says what is wrong with it and points you
 to `clausona route edit`. A route with a problem is left off the list, and one line under it
 says so and points you to `clausona route list`, which shows the problem.
 
@@ -455,6 +467,16 @@ tool, is shown in yellow as one more choice, and stays as it is while you leave 
 
 `d` clears the selected rule, once you answer `y`. `tab` goes back to the routes.
 
+### Budgets on the screen
+
+`b` swaps the list of routes for your API profiles, one row each, with its usage and its spend
+against its limit, and whose limit that is. One with no limit, or whose provider does not report
+spend, says so instead.
+
+`e` opens a small editor for the selected profile's budget: the dollars, and `day`, `week` or
+`month`, chosen with `←` `→`. It saves as `route budget <profile> --usd … --per …` does. `d` clears
+the budget, once you answer `y`. `tab` goes back to the routes.
+
 ### The form
 
 `n` and `e` open the same form. It holds everything `route add` and `route set` can set.
@@ -463,7 +485,7 @@ tool, is shown in yellow as one more choice, and stays as it is while you leave 
 |---|---|
 | Name | The route's name. Changing it on an existing route renames the route |
 | Tool | `claude`, `codex` or `claude + codex`, chosen with `←` `→` |
-| Accounts | A row for every account (`*`), then a row per subscription account of the tool (of both, for `claude + codex`) with its 5H and 7D usage. `space` ticks and unticks |
+| Accounts | A row for every account (`*`), then a row per subscription account of the tool (of both, for `claude + codex`) with its 5H and 7D usage, and per API profile that has a spend limit, marked `API`, with its budget's use. `space` ticks and unticks |
 | Patterns | More `from` and `exclude` patterns, such as `team-*` or `*@example.com` |
 | Strategy | `round-robin`, `headroom` or `expiring`, chosen with `←` `→` |
 | Limits | `skip at` is the cut. Left blank, the default applies. The line under it says what is picked when every account is at the cut |
@@ -472,7 +494,8 @@ tool, is shown in yellow as one more choice, and stays as it is while you leave 
 The ticks become the route's lists. With the `every account (*)` row ticked, `from` is `*`, and
 each account you untick goes into the exclude list. An account you add later joins the route.
 With that row unticked, `from` is the accounts you ticked, in the order you ticked them, and an
-account you add later stays out.
+account you add later stays out. An API profile is never among every account: ticked, it goes
+into `from` by its name either way, and unticked it is simply not in the route.
 
 Under the form, a `Now:` line says how many accounts are under the cut and who would be picked
 next, for the route as the form holds it. The hints along the bottom change with the field you
@@ -789,6 +812,96 @@ $ cd ~/work/app && clausona route explain
 
 `--tool claude` (or `codex`) limits it to one tool.
 
+## API profiles in routes
+
+An API profile is billed per use, so a route takes one only when you name it, and only once it
+has a spend limit. Its usage is then its spend as a share of that limit, and it goes through the
+same cut, strategies, fallback and overflow as an account does. Setting the limit is the consent.
+There is no prompt and no extra flag.
+
+```bash
+clausona route budget claude:gateway --usd 20 --per month   # a clausona budget
+clausona route set main --add claude:gateway                # it joins by its exact name
+clausona route explain main                                 # its spend, and whose limit counts it
+```
+
+```
+  ▸ claude:gateway  route main, next in turn, API, billed per use · usage 35% of $20/month
+```
+
+The limit is the clausona budget when you set one. It replaces the limit set on the provider key,
+and the two are not compared. Without a budget, the key's own limit counts, when the provider
+reports one. With neither, the profile has no spend limit, and `route add`, `route set` and the
+form refuse it:
+
+```
+✘ claude:gateway has no spend limit, so it cannot join a route.
+  Set a limit on the provider key, or: clausona route budget claude:gateway --usd 20 --per month
+```
+
+A route that already names it, written by hand, skips it on every run as `no spend limit`.
+Running it by name, `clausona run claude:gateway`, works as it always has, whatever it has spent.
+
+A budget stops new routed sessions. It does not stop one that is already running, and it does not
+block requests: the limit on the provider key is what does that. Set one there too if spending
+past it would hurt.
+
+### Where the spend comes from
+
+Spend is always read from the provider, with the profile's own key, sent in one request header to
+the provider and to nothing else. Two kinds of provider report it:
+
+| Provider | Asked | Told apart by |
+|---|---|---|
+| OpenRouter | `GET https://openrouter.ai/api/v1/key` | a base URL on `openrouter.ai` |
+| A LiteLLM proxy | `GET <base URL>/key/info` | any other base URL |
+
+A provider that answers `/key/info` with a 404, or with anything but LiteLLM's JSON, gives no
+spend reading. Such a profile cannot join a route, budget or not, and `route budget` and
+`route explain` say "the provider does not report spend". A LiteLLM proxy behind another gateway
+often does not pass `/key/info` on, and reads this way. It stops nothing else.
+
+clausona's own record of what a profile cost is not used. That is Claude Code's estimate at
+Anthropic's prices, and it is only written once a session ends.
+
+Readings go into the same 5-minute cache as plan quota, so a run does not ask on every launch, and
+a 429 pauses the reads of that one profile. A reading that fails leaves the profile out of that
+run as `spend could not be read`, and never holds up the others. Unlike an account's, its last
+numbers are not used in its place.
+
+### Periods
+
+A budget is per `day`, `week` or `month`, in UTC: a day from midnight, a week from Monday, a month
+from the 1st. It renews when its period does, which is the reset `--wait` waits for.
+
+OpenRouter reports the spend of the current day, week and month. A LiteLLM proxy reports one
+running total, so a budget counts from the total at clausona's first reading in the period. What
+was spent before that reading is not counted. If the proxy sets its own count back to 0 (a key
+with a `budget_duration`), what the period had spent by the last reading is kept.
+
+### `route budget`
+
+```
+$ clausona route budget
+
+    PROFILE         LIMIT      SOURCE           SPENT   USAGE  RENEWS
+    ─────────────────────────────────────────────────────────────────
+    claude:bare     no spend limit: clausona route budget claude:bare --usd 20 --per month
+    claude:gateway  $20/month  clausona budget  $7.00   35%    23d
+    claude:or       $50/month  provider limit   $12.50  25%    23d
+    claude:proxy    the provider does not report spend
+```
+
+With no profile it lists every API profile, with its spend read now (through the cache).
+`route budget <profile>` shows one. `--usd <n> --per day|week|month` sets a budget, and `--clear`
+removes it and says which limit counts after. Each takes `--json`. Setting a budget is not checked
+against the routes: whether a route can take the profile is checked by `route add` and
+`route set`, and on every run.
+
+`clausona list` and the dashboard show each API profile's last reading, as `budget 35%`, across the
+5H and 7D columns. They read nothing for it, since that would send its key to its provider each
+time; a reading older than five minutes is dimmed.
+
 ## Seeing the ranking
 
 ```
@@ -1024,10 +1137,11 @@ Each entry in `members`:
 | `role` | `"pool"` or `"fallback"` |
 | `matchedBy` | The pattern that brought it in |
 | `status` | `"picked"`, `"eligible"` (under the cut, not picked), `"over-limit"` (at or above `maxUsage`, not picked) or `"skipped"` |
-| `skipReason` | null, or one of `"signed-out"`, `"expired"`, `"no-reading"`, `"not-registered"`, `"keeps-own-sessions"` (a resumed run), `"api-not-supported"` |
-| `usage` | `{ "percent", "window", "stale" }` with `window` `"5H"`, `"7D"`, or the name of the limit on the model (`"Opus"`, `"GPT-5.3-Codex-Spark 7D"`) when that is the highest, or null |
+| `skipReason` | null, or one of `"signed-out"`, `"expired"`, `"no-reading"`, `"not-registered"`, `"keeps-own-sessions"` (a resumed run), and for an API profile `"no-spend-limit"`, `"spend-not-reported"` or `"spend-unread"` |
+| `usage` | `{ "percent", "window", "stale" }` with `window` `"5H"`, `"7D"`, the name of the limit on the model (`"Opus"`, `"GPT-5.3-Codex-Spark 7D"`) when that is the highest, or `"budget"` for an API profile, or null |
 | `fiveHour`, `sevenDay` | `{ "usedPercent", "resetsAt" }` with `resetsAt` an ISO time or null, or null |
 | `scoped` | The account's limit on the model `--model` named, as `{ "label", "usedPercent", "resetsAt" }` (of a Codex limit with two windows, the higher), or null without `--model` or such a limit |
+| `budget` | An API profile's spend against its limit, as `{ "usedPercent", "resetsAt", "spentUsd", "limitUsd", "source", "per" }`, or null. `source` is `"budget"` (a clausona budget) or `"provider"` (the key's own limit); `per` is `"day"`, `"week"`, `"month"` or null |
 | `lastPickedAt` | The ISO time of the last pick, or null |
 
 An account picked at the `overflow` stage has the status `picked`, even though its usage is at or
@@ -1068,7 +1182,7 @@ profile.
 |---|---|
 | `name` | The route's name |
 | `route` | The route with every default filled in, as `settings` in `explain --json` |
-| `members`, `fallbackMembers` | Profile ids of the pool and of the fallback, after the exclude list. An API profile is in neither, since no run takes one |
+| `members`, `fallbackMembers` | Profile ids of the pool and of the fallback, after the exclude list, API profiles among them |
 | `excluded` | Profile ids the exclude list took out of `from` or `fallback` |
 | `unknownNames` | Names in `from` or `fallback` that are not registered profiles, as written |
 | `emptyPatterns`, `emptyExcludes` | As in `explain --json` |
@@ -1080,8 +1194,10 @@ of the route. Before `clausona init` there is nobody to rank: the lists are empt
 null. `list --json` reads quota as the table does; add `--no-quota` when you only need the
 members.
 
-`problems` lists, as text, what is wrong with each route that cannot be used, and with each dir
-rule or default that cannot be read. Those routes are not in `routes`.
+`problems` lists, as text, what is wrong with each route that cannot be used, with each dir
+rule or default that cannot be read, and with each budget that cannot be read. Those routes are
+not in `routes`. `budgetWarnings` lists the budgets for a profile that is not registered, or is
+not an API profile.
 
 It also has the [dir rules and defaults](#dir-rules-and-defaults):
 
@@ -1090,6 +1206,25 @@ It also has the [dir rules and defaults](#dir-rules-and-defaults):
 | `dirs` | Each dir rule's directory, as stored, with the route each tool's slot names: `{ "~/work": { "claude": "work" } }` |
 | `defaults` | The route each tool's default names: `{ "claude": "main" }` |
 | `ruleWarnings` | As text, each rule that names a route that is gone, cannot be used or is for the other tool |
+
+### `budget --json`
+
+`route budget --json` gives `{ "profiles": [...], "problems": [...], "warnings": [...] }`, and
+`route budget <profile> --json` one entry, with `changed` when it set or cleared a budget. Each
+entry:
+
+| Field | Value |
+|---|---|
+| `profile` | The API profile's id |
+| `budget` | The clausona budget, `{ "usd", "per" }`, or null |
+| `limit` | The limit that counts, `{ "source", "usd", "per", "resetsAt" }`, or null when there is no reading or no limit. `source` is `"budget"` or `"provider"` |
+| `spentUsd` | The spend that counts against it, or null |
+| `usage` | The spend as a percent of the limit, or null |
+| `spend` | `"ok"`, `"no-limit"`, `"not-reported"` or `"unread"` |
+| `reason` | Why there is no usage, as the table says it, or null |
+| `routes` | The routes that name it |
+
+`problems` and `warnings` are what is wrong with `budgets`, as in `list --json`.
 
 ### Exit codes
 
@@ -1118,7 +1253,7 @@ same as without `--json`:
 | `error` | Exit code | When |
 |---|---|---|
 | `usage` | 1 | Bad usage: an unknown option or subcommand, a bad option value, or no route named |
-| `not-found` | 1 | No route has that name |
+| `not-found` | 1 | No route has that name, or no profile, for `route budget` |
 | `failed` | 1 | Anything else, such as clausona not set up yet. When `routes.json`, or the route named, cannot be used, it adds `file`, the file's path, and `problems`, what is wrong, as `route list` words it |
 | `failed` | 130 | `pick --wait` stopped by Ctrl-C |
 

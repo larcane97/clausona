@@ -195,8 +195,20 @@ clausona route explain                           # what a run here would take, a
 
 With neither, `clausona run claude` runs the active profile, as it always has.
 
-Patterns like `*@example.com`, fallbacks, the strategies, waiting in scripts, and the JSON that
-scripts and agents read: **[docs/routing.md](docs/routing.md)**.
+An API profile can join a route too, once it has a spend limit. It is billed per use, so a route
+takes it only by its exact name, never through `*`. Its usage is its spend against the limit, read
+from the provider (OpenRouter, or a LiteLLM proxy):
+
+```bash
+clausona route budget claude:gw --usd 20 --per month   # or use the limit set on the key itself
+clausona route set main --add claude:gw
+```
+
+A budget stops new routed sessions, not one already running; the limit on the provider key is
+what blocks requests.
+
+Patterns like `*@example.com`, fallbacks, the strategies, waiting in scripts, budgets, and the
+JSON that scripts and agents read: **[docs/routing.md](docs/routing.md)**.
 
 ## API profiles
 
@@ -278,6 +290,7 @@ Scopes, tags, every option, what each change writes, the JSON fields and recipes
 | `clausona run --route <name> [-- args...]`                          | Run on the account a [route](docs/routing.md) picks |
 | `clausona route add\|set\|rename\|remove\|edit\|list\|explain\|pick …` | Manage [routes](docs/routing.md) |
 | `clausona route dir\|default …`                                     | Pick a route by directory, or by default, for a plain `clausona run claude` ([dir rules](docs/routing.md#dir-rules-and-defaults)) |
+| `clausona route budget [<profile>] …`                               | List or set API profiles' spend limits, so they can join routes ([budgets](docs/routing.md#api-profiles-in-routes)) |
 | `clausona route`                                                    | Open the [Routes screen](docs/routing.md#the-routes-screen) (in a terminal) |
 | `clausona list [--json] [--refresh] [--no-quota] [--no-renew]`      | List all profiles with plan quota and usage          |
 | `clausona usage [profile] [--period=today\|week\|month\|all]`       | View cost and token usage                            |

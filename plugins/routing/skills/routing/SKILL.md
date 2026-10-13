@@ -42,6 +42,10 @@ the help.) A user who would rather look through routes on that screen can run it
   first), `headroom` (lowest usage), `expiring` (lowest usage among accounts whose weekly limit
   resets within 24 hours; with none, as `headroom`).
 - Signed-out, expired and unreadable accounts are skipped at every stage.
+- An API profile in a route (named exactly; no pattern matches one) is ranked by its spend as a
+  share of its limit: a clausona budget (`clausona route budget`), else the limit set on its
+  provider key. One with no limit, whose provider reports no spend, or whose spend could not be
+  read is skipped. It is billed per use.
 - Resumed runs (`-c`/`--continue`, `-r`/`--resume`, `--from-pr`, `codex resume` or `fork`) use
   only accounts that share sessions: the primary account and profiles with merged sessions. If
   none of them can take it, the account that holds the session has to be run by name.
@@ -54,6 +58,7 @@ clausona route explain <name> --json       # every member's usage and status; la
 clausona route explain <name> --model opus --json   # as a run of that model would rank it
 clausona route explain --json              # what clausona run claude and codex would take in this directory
 clausona list --json                       # every profile, with its email and quota
+clausona route budget --json               # every API profile: its limit, whose limit, spend and usage
 ```
 
 `explain --json` gives:
@@ -65,12 +70,14 @@ clausona list --json                       # every profile, with its email and q
   be picked, so read `outcome.kind`.
 - `members`, one per account: `status` is `picked`, `eligible` (under the cut, not picked),
   `over-limit` (at or above `maxUsage`) or `skipped`. A skipped one has `skipReason`:
-  `signed-out`, `expired`, `no-reading`, `not-registered`, `keeps-own-sessions` or
-  `api-not-supported`. Each also has `usage`, `fiveHour`, `sevenDay` and `lastPickedAt`, and
-  `scoped` (`{"label", "usedPercent", "resetsAt"}`, its limit on the `--model` model, of a Codex
-  limit with two windows the higher, or null). `usage.window` is `5H`, `7D` or the name of that
-  limit: its label for Claude (`Opus`), its label and window for Codex
-  (`GPT-5.3-Codex-Spark 7D`). The top level has `model`.
+  `signed-out`, `expired`, `no-reading`, `not-registered`, `keeps-own-sessions`, or for an API
+  profile `no-spend-limit`, `spend-not-reported` or `spend-unread`. Each also has `usage`,
+  `fiveHour`, `sevenDay` and `lastPickedAt`, `scoped` (`{"label", "usedPercent", "resetsAt"}`,
+  its limit on the `--model` model, of a Codex limit with two windows the higher, or null) and
+  `budget` (an API profile's `{"usedPercent", "spentUsd", "limitUsd", "source", "per",
+  "resetsAt"}`, or null). `usage.window` is `5H`, `7D`, the name of that limit (its label for
+  Claude, `Opus`; its label and window for Codex, `GPT-5.3-Codex-Spark 7D`), or `budget`. The top
+  level has `model`.
 
 `route list --json` gives each route's `members`, `freeNow` (`{"free", "members"}`) and `next`
 (as `outcome`), and `problems`: what is wrong with each route in `routes.json` that cannot be
@@ -101,9 +108,12 @@ then prints the route it made. So the asking is yours to do, before you write:
 3. `*` takes every subscription account of the tool, including ones added later. When the user
    described a subset ("my work accounts"), use names (`work,work2`) or an email pattern
    (`*@example.com`) instead.
-4. Never put an API profile in a route; `route add` and `route set` refuse one. A pattern never
-   matches one, so `*` is safe. Run an API profile by name (`clausona run claude:glm`) only when
-   the user asks for it: it is billed per use.
+4. Never put an API profile in a route unless the user names it: it is billed per use. A
+   pattern never matches one, so `*` is safe; it joins only by its exact name (`claude:glm`).
+   It also needs a spend limit: `route add` and `route set` refuse one without, naming
+   `clausona route budget <profile> --usd 20 --per month`. Set a budget only with the amount and
+   period the user gives. A budget stops new routed sessions, not a running one. Run an API
+   profile by name (`clausona run claude:glm`) only when the user asks for it.
 5. Wait for the user's OK, then write with the CLI. Never edit `~/.clausona/routes.json`
    yourself, and do not use `route edit`: it opens an editor for a person.
 
