@@ -113,6 +113,11 @@ model's name, in any case. `opus`, `claude-opus-4-5` and `opus[1m]` fall under O
 `gpt-5.3-codex` does not fall under GPT-5.3-Codex-Spark, and nor does a short name the limit
 does not spell out, such as `codex-spark`.
 
+A hyphen ends a word, though, so a limit whose name is the start of a longer model name counts
+for that model too. A limit named GPT-5.3-Codex would also count for `gpt-5.3-codex-spark` runs,
+which in Codex's naming is another model. No such limit is reported today, and the extra match
+errs on the side of caution: it can only make an account look fuller than it is.
+
 A run that names no model counts no model's limit, even when the account's default model is
 the one with the tight limit. clausona does not read a profile's settings to find its default
 model. It does not read Codex's `-c model=…` or a Codex config profile (`-p`) either, and
@@ -1076,7 +1081,8 @@ It also has the [dir rules and defaults](#dir-rules-and-defaults):
 
 ### Errors
 
-With `--json`, a `route` command that fails prints one object on stdout, and nothing on stderr.
+With `--json`, a `route` command that fails prints one object on stdout, and nothing else on
+stderr (`pick --wait` still says there what it waits for).
 It is the shape the [Extensions commands](extensions.md#errors) use, and the exit code is the
 same as without `--json`:
 

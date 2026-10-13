@@ -114,6 +114,9 @@ describe("model limits", () => {
     ["gpt-5.3-codex", "GPT-5.3-Codex-Spark", false],
     ["codex-spark", "GPT-5.3-Codex-Spark", false],
     ["gpt-5-codex", "GPT-5.3-Codex-Spark", false],
+    // A label that begins a longer name takes it too: Codex's Spark is another model than a
+    // GPT-5.3-Codex limit would be on (docs/routing.md says so).
+    ["gpt-5.3-codex-spark", "GPT-5.3-Codex", true],
     // A version is one word: a limit labelled GPT-5 would not take gpt-5.3's runs.
     ["gpt-5.3-codex", "GPT-5", false],
     ["gpt-5", "GPT-5", true],

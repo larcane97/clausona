@@ -107,6 +107,11 @@ const WORD_CHAR = /[a-z0-9.]/;
  * under `Opus`, and `gpt-5.3-codex-spark` under `GPT-5.3-Codex-Spark`; `gpt-5.3-codex` does not,
  * nor does `opusplan`, which runs Opus only while planning. Nothing is guessed: a model whose
  * name does not hold the label counts no limit.
+ *
+ * A hyphen ends a word, so a label that begins a longer model's name takes that model too: a
+ * limit labelled `GPT-5.3-Codex` would count for `gpt-5.3-codex-spark`, which Codex names as
+ * another model (in Claude's names, what follows is a version or a date). No such label is
+ * reported today, and the extra match only makes an account look fuller than it is.
  */
 export function modelFallsUnder(model: string, label: string): boolean {
   const name = model.toLowerCase();
