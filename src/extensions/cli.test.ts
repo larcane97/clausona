@@ -1039,6 +1039,19 @@ describe("Codex hooks and Codex's trust", () => {
     expect(own.items.map((i: { state: string }) => i.state)).toEqual(["pending-approval"]);
   });
 
+  it("lists a command hook with an empty command as such, out of Loaded, and says Codex skips it", async () => {
+    const { h, app } = seed();
+    h.write(".codex/hooks.json", {
+      hooks: { Stop: [{ hooks: [{ type: "command", command: " " }] }] },
+    });
+    const json = JSON.parse(await run(h, app, "hooks", ["ls", "--tool", "codex", "--scope", "global", "--json"]));
+    expect(json.items.map((i: { tags: string[] }) => i.tags)).toEqual([["empty command"]]);
+    expect(JSON.parse(await run(h, app, "hooks", ["ls", "--tool", "codex", "--json"])).items).toEqual([]);
+    expect(await run(h, app, "hooks", ["show", "--id", json.items[0].id])).toMatch(
+      /^Loaded\s+no, Codex skips a hook whose command is empty$/m,
+    );
+  });
+
   it("lists a prompt or agent hook as not supported, out of Loaded, and says Codex does not run it", async () => {
     const { h, app } = seed();
     h.write(".codex/hooks.json", {

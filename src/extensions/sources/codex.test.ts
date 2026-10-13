@@ -582,6 +582,44 @@ describe("readCodex", () => {
     expect(error("echo json-a")).toBeUndefined();
   });
 
+  it("marks a command hook whose command is empty, which Codex skips, and runs the rest of its file", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.codex("personal", ".codex", '[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = ""\n');
+    // Codex 0.159.3's hooks/list: "skipping empty hook command" twice, and echo ok listed.
+    h.write(".codex/hooks.json", {
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              { type: "command", command: "" },
+              { type: "command", command: "   " },
+              { type: "command", command: "echo ok" },
+            ],
+          },
+        ],
+        // An event Codex does not know is no empty command.
+        Unknown: [{ hooks: [{ type: "command", command: "echo who" }] }],
+      },
+    });
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(ctx, [], out);
+    const hooks = out.items.filter((i) => i.kind === "hook");
+    // Each by its place: `<event>#<group>.<index>`, after its file's owner.
+    const place = (id: string) => id.slice(id.indexOf(":-:") + 3);
+    expect(hooks.map((i) => [place(i.id), i.codexError]).sort()).toEqual(
+      [
+        ["Stop#0.0", "empty command"],
+        ["Stop#0.1", "empty command"],
+        ["Stop#0.2", undefined],
+        ["Stop#config.toml:0.0", "empty command"],
+        ["Unknown#0.0", undefined],
+      ].sort(),
+    );
+  });
+
   it("marks the hooks of a hooks file Codex cannot read: anything but hooks and a description at its top", async () => {
     const h = new TestHome();
     homes.push(h);
