@@ -8,6 +8,7 @@ import {
   toolsOf,
   withDefaults,
 } from "../core/route-config.js";
+import type { SkippedRule } from "../core/route-rules.js";
 import {
   blockingReset,
   FULL,
@@ -37,8 +38,11 @@ import {
  * two-column indent, tables that shed columns rather than wrap a row, and settings in a box.
  */
 
-/** How the route a run used was found. PR 2 adds `dir:<path>`, `default` and `active`. */
-export type ResolvedBy = "flag" | "inline";
+/**
+ * How the route a run used was found: named (`--route`), unsaved (`--from`), a dir rule (with its
+ * directory as stored), the tool's default, or none, so the tool's active profile ran.
+ */
+export type ResolvedBy = "flag" | "inline" | `dir:${string}` | "default" | "active";
 
 export function usageText(usage?: Usage): string {
   if (!usage) return "—";
@@ -726,17 +730,39 @@ function pickedWhy(ranking: Ranking): string {
   return "most room";
 }
 
+/** The rule a run took its route from, after the route's name: `(dir rule ~/work)`, `(default)`. */
+function ruleNote(resolvedBy: ResolvedBy | undefined): string {
+  if (resolvedBy === "default") return " (default)";
+  if (resolvedBy?.startsWith("dir:")) return ` (dir rule ${resolvedBy.slice("dir:".length)})`;
+  return "";
+}
+
 /** The one line a routed run says on stderr before it launches. */
-export function renderNote(name: string | undefined, ranking: Ranking): string {
+export function renderNote(name: string | undefined, ranking: Ranking, resolvedBy?: ResolvedBy): string {
   const { outcome } = ranking;
   if (outcome.kind !== "picked") return "";
   const usage = ranking.rows.find((row) => row.id === outcome.id)?.usage;
-  const parts = [routeLabel(name), pickedWhy(ranking)];
+  const parts = [`${routeLabel(name)}${ruleNote(resolvedBy)}`, pickedWhy(ranking)];
   if (usage) {
     const percent = wholeQuotaPercent(usage.percent, ranking.route.maxUsage);
     parts.push(`${percent}% of ${usage.window} used${usage.stale ? ", last reading" : ""}`);
   }
   return `  ${accent("▸")} ${bold(outcome.id)}  ${dim(parts.join(", "))}`;
+}
+
+/** A rule a run passed over, on stderr before the note: which rule, and why. */
+export function renderSkippedRule(skip: SkippedRule): string {
+  const rule = skip.dir === undefined ? `the ${skip.tool} default` : `the dir rule for ${skip.dir}`;
+  return `  ${warnIcon} Skipped ${rule}: ${skip.why}.`;
+}
+
+/**
+ * routes.json could not be read for a run that names no route, which then runs the active
+ * profile: one line, with the problem and the way out.
+ */
+export function renderRulesUnread(filePath: string, problem: string, newer: boolean): string {
+  const fix = newer ? "" : " Fix it with clausona route edit.";
+  return `  ${warnIcon} ${filePath} cannot be used, so no dir rule or default applies: ${problem}.${fix}`;
 }
 
 /** A reset nobody knows sorts after every known one. */

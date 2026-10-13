@@ -56,6 +56,8 @@ function setup(quotas: Record<string, QuotaSnapshot> = QUOTAS) {
     editText: async () => {
       throw new Error("no editor");
     },
+    cwd: dir,
+    home: dir,
   };
   const io: RouteIo = { interactive: false, ask: async () => null, say: () => {}, confirm: async () => false };
   const run = async (...args: string[]) => stripAnsi(await runRouteCommand(args, io, deps));

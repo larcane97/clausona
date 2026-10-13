@@ -69,6 +69,8 @@ function deps(quotas: Record<string, QuotaSnapshot>): RouteDeps & { asked: strin
     editText: async () => {
       throw new Error("no editor in tests");
     },
+    cwd: dir,
+    home: dir,
   };
 }
 

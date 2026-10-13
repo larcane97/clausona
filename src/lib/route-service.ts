@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
 import {
   applyOverrides,
@@ -18,6 +20,7 @@ import {
   withDefaults,
 } from "../core/route-config.js";
 import { expandPatterns, type Member, splitToolPrefix } from "../core/route-patterns.js";
+import { chooseRule, type PathSystem, pathSystem, readRules, type SkippedRule } from "../core/route-rules.js";
 import {
   type LoadedRoutes,
   loadRoutes,
@@ -43,6 +46,10 @@ export type RouteDeps = {
   clock: () => number;
   /** Opens text in the user's editor and resolves to what was saved (route edit). */
   editText: (initial: string, fileName: string) => Promise<string>;
+  /** The directory a run starts in, which picks its dir rule. */
+  cwd: string;
+  /** The home directory, which dir rules write as `~`. */
+  home: string;
 };
 
 export function defaultRouteDeps(): RouteDeps {
@@ -52,8 +59,13 @@ export function defaultRouteDeps(): RouteDeps {
     paths: routesPaths(),
     clock: () => Date.now(),
     editText: editInEditor,
+    cwd: process.cwd(),
+    home: homedir(),
   };
 }
+
+/** How dir rules read paths, for these deps. */
+export const pathsFor = (deps: Pick<RouteDeps, "home">): PathSystem => pathSystem(deps.home);
 
 /** Exit code 75 (EX_TEMPFAIL): no account can be used now; trying later may work. */
 export class NoAccountError extends Error {
@@ -251,6 +263,33 @@ export async function routesFor(
   const broken = checkRouteName(name) === null ? loaded.broken.find((route) => route.name === name) : undefined;
   if (broken) throw new RoutesFileError(loaded.filePath, broken.problems, false, name);
   return loaded;
+}
+
+/**
+ * What a run of `tool` that names no route takes in `cwd`: the route of the deepest dir rule that
+ * holds there, else the tool's default, else none (the active profile). `skipped` are the rules
+ * passed over on the way, which cannot be used.
+ */
+export function routeByRules(
+  loaded: LoadedRoutes,
+  tool: ToolName,
+  cwd: string,
+  sys: PathSystem,
+  names: ProfileNames = NO_PROFILE_NAMES,
+): { resolved: ResolvedRoute | null; skipped: SkippedRule[] } {
+  const { chosen, skipped } = chooseRule(
+    loaded.file,
+    loaded.broken,
+    readRules(loaded.file, sys.platform),
+    tool,
+    cwd,
+    sys,
+  );
+  if (!chosen) return { resolved: null, skipped };
+  // The rule's route is one of this tool's, or an `all` route that the tool narrows.
+  const resolved = resolveRoute(loaded.file, { tool, options: { route: chosen.route } }, names);
+  if (!resolved) return { resolved: null, skipped };
+  return { resolved: { ...resolved, resolvedBy: chosen.dir === undefined ? "default" : `dir:${chosen.dir}` }, skipped };
 }
 
 /**

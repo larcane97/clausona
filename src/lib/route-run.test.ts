@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -40,18 +40,24 @@ function setup(
     routes?: object;
     answers?: Array<string | null>;
     interactive?: boolean;
+    /** Where the run starts, under the scratch home; made if it is not there. */
+    cwd?: string;
   } = {},
 ) {
   const dir = mkdtempSync(path.join(tmpdir(), "clausona-route-run-"));
   temps.push(dir);
   const paths = routesPaths(dir);
   if (options.routes) writeFileSync(paths.routesPath, JSON.stringify(options.routes));
+  const cwd = path.join(dir, options.cwd ?? "");
+  mkdirSync(cwd, { recursive: true });
   const deps: RouteDeps = {
     loadRegistry: async () => options.registry ?? REGISTRY,
     collectQuotas: async () => options.quotas ?? { "claude:a": snap(30), "claude:b": snap(10), "claude:solo": snap(5) },
     paths,
     clock: () => NOW,
     editText: async () => "",
+    cwd,
+    home: dir,
   };
   const answers = [...(options.answers ?? [])];
   const notes: string[] = [];
@@ -456,12 +462,79 @@ describe("runRouted", () => {
     ]);
   });
 
-  // No route is named, so nothing in routes.json is needed: a broken hand edit stops no plain run.
-  it("runs the active profile whatever routes.json holds, unparseable too", async () => {
+  // No route is named, so a broken hand edit stops no plain run: it only loses its dir rules.
+  it("runs the active profile when routes.json cannot be read, and says why in one line", async () => {
     const s = setup();
     writeFileSync(s.paths.routesPath, "{ not json");
     await runRouted(["claude", "-p", "hi"], s.launch, s.io, s.deps);
     expect(s.launches).toEqual([["claude:a", ["-p", "hi"]]]);
+    expect(s.notes).toEqual([
+      `  ⚠ ${s.paths.routesPath} cannot be used, so no dir rule or default applies: not valid JSON (line 1, column 3). Fix it with clausona route edit.`,
+      "  ▸ claude:a  active profile (no route)",
+    ]);
+  });
+
+  describe("with dir rules and defaults", () => {
+    const RULES = {
+      version: 1,
+      routes: {
+        main: { tool: "claude", strategy: "headroom" },
+        work: { tool: "claude", from: ["b"] },
+        any: { tool: "all", strategy: "headroom" },
+      },
+      dirs: { "~/work": { claude: "work", codex: "any" } },
+      defaults: { claude: "main" },
+    };
+
+    it("runs on the dir rule's route in that directory and below, and names the rule", async () => {
+      const s = setup({ routes: RULES, cwd: path.join("work", "app") });
+      await runRouted(["claude", "-p", "hi"], s.launch, s.io, s.deps);
+      expect(s.launches).toEqual([["claude:b", ["-p", "hi"]]]);
+      expect(s.notes).toEqual(["  ▸ claude:b  route work (dir rule ~/work), next in turn, 10% of 5H used"]);
+    });
+
+    it("runs on the default outside every dir rule", async () => {
+      const s = setup({ routes: RULES, cwd: "elsewhere" });
+      await runRouted(["claude"], s.launch, s.io, s.deps);
+      expect(s.launches).toEqual([["claude:solo", []]]);
+      expect(s.notes).toEqual(["  ▸ claude:solo  route main (default), most room, 5% of 5H used"]);
+    });
+
+    it("narrows an all route to the tool the run names", async () => {
+      const s = setup({ routes: RULES, cwd: "work", registry: BOTH, quotas: BOTH_QUOTAS });
+      await runRouted(["codex", "exec", "hi"], s.launch, s.io, s.deps);
+      expect(s.launches).toEqual([["codex:x", ["exec", "hi"]]]);
+      expect(s.notes).toEqual(["  ▸ codex:x  route any (dir rule ~/work), most room, 1% of 5H used"]);
+    });
+
+    it("skips a rule whose route is gone for the next one, saying so, down to the active profile", async () => {
+      const routes = { ...RULES, dirs: { "~/work": { claude: "gone" } } };
+      const s = setup({ routes, cwd: "work" });
+      await runRouted(["claude"], s.launch, s.io, s.deps);
+      const none = setup({ routes: { ...routes, defaults: { claude: "old" } }, cwd: "work" });
+      await runRouted(["claude"], none.launch, none.io, none.deps);
+      expect([...s.launches, ...none.launches]).toEqual([
+        ["claude:solo", []],
+        ["claude:a", []],
+      ]);
+      expect(s.notes).toEqual([
+        "  ⚠ Skipped the dir rule for ~/work: route 'gone' does not exist.",
+        "  ▸ claude:solo  route main (default), most room, 5% of 5H used",
+      ]);
+      expect(none.notes).toEqual([
+        "  ⚠ Skipped the dir rule for ~/work: route 'gone' does not exist.",
+        "  ⚠ Skipped the claude default: route 'old' does not exist.",
+        "  ▸ claude:a  active profile (no route)",
+      ]);
+    });
+
+    it("still asks for the tool when none is named", async () => {
+      const s = setup({ routes: RULES, cwd: "work" });
+      await expect(runRouted(["-p", "hi"], s.launch, s.io, s.deps)).rejects.toThrow(
+        /^Name a route, a tool or a profile/,
+      );
+      expect(s.launches).toEqual([]);
+    });
   });
 
   it("runs on a route while another route has a problem, and refuses only that one by its problems", async () => {
