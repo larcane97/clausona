@@ -541,6 +541,12 @@ describe("renderNoAccount", () => {
     expect(text.indexOf("claude:personal")).toBeLessThan(text.indexOf("claude:old"));
   });
 
+  // The same reading reads the same here as in explain: 79.6 is under the cut of 80.
+  it("never reads the cut for a window under it", () => {
+    const held = rank({ tool: "claude", from: ["side"] }, { "claude:side": quota(100, 79.6, 1, 72) });
+    expect(plain(renderNoAccount("main", held, at(120)))).toMatch(/^ {4}claude:side\s+100% 1h\s+79% 3d\s+in 1h/m);
+  });
+
   // Offline, nothing was read, so nobody is "over" anything.
   it("says no quota could be read when none was, even with an unregistered name", () => {
     const offline = rank({ tool: "claude", from: ["*", "gone"] }, {});
