@@ -23,6 +23,7 @@ import {
   toggleVerb,
   type Verb,
 } from "./actions.js";
+import { notHere } from "./describe.js";
 import { valueHash } from "./hash.js";
 import { folderKey } from "./inventory.js";
 import type { Extension, HookPlace, Inventory, SkillVisibility } from "./model.js";
@@ -916,6 +917,11 @@ function planMcpjson(run: Run, row: ScopeRow): Outcome {
     );
   }
   if (reach === "everywhere") return refused(run, row, "mcpjson-everywhere");
+  // Of a folder that is no project, seen from outside it: each project below the folder has its
+  // own approvals, and no session reads the folder's own settings.
+  if (notHere(inv, row, run.ctx.project)) {
+    return refused(run, row, "not-here", { "~folder": tilde(item.location.project ?? "", inv.homeDir) });
+  }
   const seen = viewFrom(item, run.ctx.project) ?? inv.homeDir;
   const local = localSettingsFile(seen);
   const unreadable = unreadableAt(run, row, local);

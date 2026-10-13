@@ -49,6 +49,7 @@ export const REFUSAL_CODES = [
   "codex-project-everywhere",
   "codex-home-here",
   "mcpjson-everywhere",
+  "not-here",
   "broken-link",
   "no-visibility",
   "no-project",
@@ -148,6 +149,11 @@ export const REFUSALS: Readonly<Record<RefusalCode, { reason: Words; keys?: Word
     keys: "Press space.",
     flags: "Leave out --everywhere.",
   },
+  "not-here": {
+    reason: "It loads in the projects in {~folder}, each with its own approvals.",
+    keys: "Pick one of them with p.",
+    flags: "Run it in one of them, or pass --project <path>.",
+  },
   "broken-link": {
     reason: "Its link leads nowhere.",
     keys: "Press d to remove the link.",
@@ -221,11 +227,22 @@ const TOOL_NAME: Record<ToolName, string> = { claude: "Claude Code", codex: "Cod
 
 /**
  * What a refusal's words name. `name` is the row's unless given (one-folder names the other
- * row's item); `~file` is already tilded; `a` and `b` are row ids.
+ * row's item); `~file` and `~folder` are already tilded; `a` and `b` are row ids.
  */
 export type RefusalFill = Partial<
   Record<
-    "name" | "plugin" | "command" | "~file" | "id" | "Tool" | "Scope label" | "a" | "b" | "project name" | "short",
+    | "name"
+    | "plugin"
+    | "command"
+    | "~file"
+    | "~folder"
+    | "id"
+    | "Tool"
+    | "Scope label"
+    | "a"
+    | "b"
+    | "project name"
+    | "short",
     string
   >
 >;

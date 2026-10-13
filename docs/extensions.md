@@ -650,6 +650,9 @@ Some rows can only be switched one way:
 
 - Codex turns a user skill off everywhere or nowhere, so off here is refused for it.
 - Claude Code turns a `.mcp.json` server on or off per project, so everywhere is refused for it.
+  One of a folder that is no project, seen from a project outside that folder, is `not here`:
+  it loads in each project below the folder, with that project's approvals, so off and on are
+  refused for it too. Run them in one of those projects, or pass `--project`.
 - A plugin installed for one project can't be switched everywhere.
 - Codex reads a project's `.codex` folder only in a project it trusts, so a change there, such
   as a Codex MCP server off here, is refused in any other project. In the home folder that
@@ -946,6 +949,7 @@ the CLI's words. In the table `<tool>` is the tool's name and `<scope>` a scope'
 | `codex-project-everywhere` | It is defined in this project only. | Press `space`. | Leave out `--everywhere`. |
 | `codex-home-here` | In your home folder, Codex's project config is your user config. | Press `g`. | Add `--everywhere`. |
 | `mcpjson-everywhere` | Claude Code turns a `.mcp.json` server on or off per project. | Press `space`. | Leave out `--everywhere`. |
+| `not-here` | It loads in the projects in `<folder>`, each with its own approvals. | Pick one of them with `p`. | Run it in one of them, or pass `--project <path>`. |
 | `broken-link` | Its link leads nowhere. | Press `d` to remove the link. | Remove the link: `clausona skills rm <name>`. |
 | `no-visibility` | Only a Claude skill has visibility levels. | | |
 | `no-project` | There is no project to change it in. | Pick one with `p`. | Run it in a project, or pass `--project <path>`. |

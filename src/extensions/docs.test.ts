@@ -172,6 +172,7 @@ const anchors = (doc: string) =>
  */
 const PLACEHOLDER: Record<string, string> = {
   "~file": "file",
+  "~folder": "folder",
   "project name": "project",
   "Claude Code|Codex": "tool",
   Tool: "tool",

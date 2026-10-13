@@ -713,6 +713,28 @@ describe("mcp on", () => {
     const off = JSON.parse(await run("mcp", ["off", "docs-search", "--dry-run", "--json"]));
     expect(off.changes.map((c: { runs: string | null }) => c.runs)).toEqual([null]);
   });
+
+  it("refuses a .mcp.json server not here, and writes no settings file in its folder", async () => {
+    // labs is no project, labs/lab is one: seen from app, labs' lab loads in labs/lab alone.
+    const { h, app } = seed();
+    const lab = h.project("labs/lab");
+    h.claude("default", ".claude", { projects: { [app]: {}, [lab]: {} } });
+    h.write("labs/.mcp.json", { mcpServers: { lab: { command: "lab-mcp" } } });
+    const { run } = cli(h, app);
+    const reason = `It loads in the projects in ${tilde(h.path("labs"), h.home)}, each with its own approvals. Run it in one of them, or pass --project <path>.`;
+    for (const verb of ["on", "off"]) {
+      const error = await failure(run("mcp", [verb, "lab", "--yes"]));
+      expect(error.code).toBe(1);
+      expect(stripAnsi(error.message)).toContain(`lab  ${reason}`);
+      const body = JSON.parse((await failure(run("mcp", [verb, "lab", "--yes", "--json"]))).stdout ?? "");
+      expect(body.refused).toEqual([{ id: expect.any(String), name: "lab", code: "not-here", reason }]);
+    }
+    expect(existsSync(h.path("labs", ".claude"))).toBe(false);
+    expect(existsSync(h.path(".config", "git", "ignore"))).toBe(false);
+    // From the project below it, on approves it there.
+    await cli(h, lab).run("mcp", ["on", "lab", "--yes"]);
+    expect(json(path.join(lab, ".claude", "settings.local.json"))).toEqual({ enabledMcpjsonServers: ["lab"] });
+  });
 });
 
 describe("an apply that stops", () => {

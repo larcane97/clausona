@@ -814,6 +814,46 @@ describe("plan: Claude MCP servers", () => {
     ]);
   });
 
+  it("refuses off and on for a .mcp.json server not here, which loads in the projects below its folder", async () => {
+    // labs is no project; labs/lab and app are. Seen from app, labs' lab has no state of its own.
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    const lab = h.project("labs/lab");
+    h.claude("default", ".claude", { projects: { [app]: {}, [lab]: {} } });
+    h.write("labs/.mcp.json", { mcpServers: { lab: { command: "lab-mcp" } } });
+    const inv = await load(h, app);
+    const ctx = contextFor(h, inv, app);
+    const [row] = rowsIn(inv, "claude", "mcp", "other", app, NOW, h.path("labs"));
+    if (!row) throw new Error("no lab row");
+    const folder = tilde(h.path("labs"), inv.homeDir);
+    for (const verb of ["off", "on"] as const) {
+      const p = plan(ctx, "mcp", act(verb, "here", [row]));
+      expect(p.changes, verb).toEqual([]);
+      expect(p.refused.map((r) => [r.code, refusalText(r, "flags"), refusalText(r, "keys")])).toEqual([
+        [
+          "not-here",
+          `It loads in the projects in ${folder}, each with its own approvals. Run it in one of them, or pass --project <path>.`,
+          `It loads in the projects in ${folder}, each with its own approvals. Pick one of them with p.`,
+        ],
+      ]);
+    }
+    expect(actionsLine(keysFor(ctx, "mcp", row))).toBe("d delete");
+    // Deleting it from its file is the same from anywhere.
+    expect(plan(ctx, "mcp", act("rm", "here", [row])).changes.map((c) => c.file)).toEqual([
+      h.path("labs", ".mcp.json"),
+    ]);
+    // From the project below it, it is that project's to approve.
+    const below = await load(h, lab);
+    const there = plan(
+      contextFor(h, below, lab),
+      "mcp",
+      act("on", "here", [rowIn(below, lab, "parents", "lab", "claude", "mcp")]),
+    );
+    expect(there.refused).toEqual([]);
+    expect(there.changes.map((c) => c.file)).toEqual([path.join(lab, ".claude", "settings.local.json")]);
+  });
+
   it("says what a .mcp.json server runs, secrets hidden, on the line that approves it", async () => {
     const { h, app, inv, ctx } = await seed((h) =>
       h.write("repos/app/.mcp.json", {
