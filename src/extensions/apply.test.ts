@@ -551,6 +551,33 @@ describe("apply: folders and links", () => {
     expect(existsSync(backup)).toBe(false);
   });
 
+  it("turns a Codex project skill reached through a link off by the path it is listed at", async () => {
+    // Codex 0.159.3 reports such a skill at its real path, and matches a [[skills.config]] path
+    // through links: the listed path, the real one and /tmp for /private/tmp all turn it off
+    // (checked with codex app-server's skills/list, #125). The listed one is what is written.
+    const { h, app } = home((h) => {
+      h.skill("elsewhere", "p-link");
+      h.link("elsewhere/p-link", "repos/app/.agents/skills/p-link");
+    });
+    const env = writeEnvFor(h.home, clock());
+    const config = h.path(".codex", "config.toml");
+    const before = readFileSync(config, "utf8");
+    const listed = path.join(app, ".agents", "skills", "p-link", "SKILL.md");
+    const p = await planNow(h, app, "skills", "off", "here", (inv) => [rowIn(inv, app, "project", "p-link", "codex")]);
+    expect(p.changes).toMatchObject([{ edits: [{ op: "skill-config", selector: { path: listed }, enabled: false }] }]);
+
+    await apply(p, env);
+    expect(readFileSync(config, "utf8")).toBe(
+      `${before}\n[[skills.config]]\npath = ${JSON.stringify(listed)}\nenabled = false\n`,
+    );
+    expect(readFileSync(config, "utf8")).not.toContain(realpathSync.native(h.path("elsewhere")));
+    // Read back as that skill's entry: off here, and on again by taking it out.
+    const again = await planNow(h, app, "skills", "on", "here", (inv) => [
+      rowIn(inv, app, "project", "p-link", "codex"),
+    ]);
+    expect(again.changes).toMatchObject([{ edits: [{ selector: { path: listed }, enabled: null }] }]);
+  });
+
   it("removes a linked skill's link, never its folder, and makes the link again", async () => {
     const { h, app } = home();
     const env = writeEnvFor(h.home, clock());
