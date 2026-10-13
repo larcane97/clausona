@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { carriesCredentialToken } from "./core/credential-token.js";
 import { foldProfileName } from "./core/profile-name.js";
 import type { QuotaTarget } from "./core/quota-store.js";
+import { type Budgets, readBudgets } from "./core/route-budgets.js";
 import {
   applyOverrides,
   type BrokenRoute,
@@ -47,7 +48,6 @@ import {
   loadRoutes,
   parseRoutesText,
   RoutesFileError,
-  readRoutes,
   readRoutesText,
   replaceRoutesText,
   updateRoutes,
@@ -76,6 +76,7 @@ import {
 } from "./lib/route-render.js";
 import {
   checkRouteMembers,
+  checkRouteMembersNow,
   defaultRouteDeps,
   inferRouteTool,
   membersOf,
@@ -86,6 +87,7 @@ import {
   quotaTargets,
   type RouteDeps,
   rankRouteNow,
+  readLimitProblems,
   resolveRoute,
   routeByRules,
   routesFor,
@@ -389,9 +391,14 @@ async function addRoute(args: string[], deps: RouteDeps): Promise<string> {
   const options = toRoutingOptions(read.values);
   const tool = parseRouteTool(read.values.get("--tool")) ?? inferRouteTool(options.from ?? []) ?? "claude";
   const registry = await registryOrThrow(deps);
-  refuseTakenName(await readRoutes(deps.paths, namesOf(registry)), name);
+  const names = namesOf(registry);
+  const { file } = await loadRoutes(deps.paths, names);
+  refuseTakenName(file, name);
   const spec = newRouteFrom(tool, options);
-  checkRouteMembers(name, spec, registry);
+  await checkRouteMembersNow(name, spec, registry, {
+    budgets: readBudgets(file, names).budgets,
+    collect: deps.collectQuotas,
+  });
   await createRoute(name, spec, deps);
   // A Codex-only user's `route add main` makes a claude route: it is said how to make it codex's.
   const advise = () => nobodyAdvice(name, otherToolTaking(spec, registry), options);
@@ -424,7 +431,8 @@ async function setRoute(args: string[], deps: RouteDeps): Promise<string> {
   }
   const registry = await registryOrThrow(deps);
   const names = namesOf(registry);
-  const written = await changeRoutes(deps, (file) => {
+  /** The route as the change makes it of routes.json as it is, `file`; throws what is wrong with it. */
+  const change = (file: RoutesFile): RouteSpec => {
     if (!Object.hasOwn(file.routes, name)) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
     const current: unknown = file.routes[name];
     // A route routes.json holds as something other than an object has no fields to change.
@@ -462,7 +470,21 @@ async function setRoute(args: string[], deps: RouteDeps): Promise<string> {
       }
     }
     if (noFallback) delete next.fallback;
-    checkRouteMembers(name, next, registry);
+    return next;
+  };
+  // The API profiles the changed route takes are read first, outside the lock: a spend read can
+  // take seconds. The change is made again under the lock, and checked against what was read.
+  let planned: RouteSpec | undefined;
+  let budgets: Budgets = {};
+  await changeRoutes(deps, (file) => {
+    planned = change(file);
+    budgets = readBudgets(file, names).budgets;
+    return null;
+  });
+  const limits = planned ? await readLimitProblems(planned, registry, budgets, deps.collectQuotas) : new Map();
+  const written = await changeRoutes(deps, (file) => {
+    const next = change(file);
+    checkRouteMembers(name, next, registry, limits);
     file.routes[name] = next;
     return file;
   });
@@ -700,10 +722,18 @@ function brokenWarnings(broken: BrokenRoute[]): string[] {
  * members of all of them: a route that shares accounts with another does not read them twice.
  * Without `readQuota` nothing is read, and the rankings say only who the members are.
  */
-async function rankEvery(routes: Route[], registry: Registry, deps: RouteDeps, readQuota: boolean): Promise<Ranking[]> {
+async function rankEvery(
+  routes: Route[],
+  registry: Registry,
+  deps: RouteDeps,
+  readQuota: boolean,
+  budgets: Budgets,
+): Promise<Ranking[]> {
   const targets = new Map<string, QuotaTarget>();
   for (const route of routes) {
-    for (const target of quotaTargets(route, membersOf(registry, route.tool), false)) targets.set(target.id, target);
+    for (const target of quotaTargets(route, membersOf(registry, route.tool), false, undefined, budgets)) {
+      targets.set(target.id, target);
+    }
   }
   const quotas = readQuota ? await deps.collectQuotas([...targets.values()]) : {};
   const read: RouteDeps = { ...deps, loadRegistry: async () => registry, collectQuotas: async () => quotas };
@@ -742,7 +772,9 @@ export async function routeDoctor(
   }
   const names = Object.keys(loaded.file.routes).sort();
   const routes = names.map((name) => withDefaults(loaded.file.routes[name]));
-  const rankings = registry ? await rankEvery(routes, registry, deps, false) : undefined;
+  const rankings = registry
+    ? await rankEvery(routes, registry, deps, false, readBudgets(loaded.file, namesOf(registry)).budgets)
+    : undefined;
   return { shown, warnings: listWarnings(loaded, names, rankings, readRules(loaded.file)) };
 }
 
@@ -778,7 +810,9 @@ async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
   const readQuota = !read.flags.has("--no-quota");
   // Ranked as a run ranks, so a route's members are the accounts a run would consider. Without a
   // registry nobody is registered yet, so nothing is ranked and no name is called unknown.
-  const rankings = registry ? await rankEvery(routes, registry, deps, readQuota) : undefined;
+  const rankings = registry
+    ? await rankEvery(routes, registry, deps, readQuota, readBudgets(file, namesOf(registry)).budgets)
+    : undefined;
   // Each problem as it is worded, for the routes left out: their names can be anything.
   const problems = broken.flatMap((route) => route.problems);
   if (read.flags.has("--json")) {

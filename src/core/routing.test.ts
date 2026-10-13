@@ -437,10 +437,68 @@ describe("skips", () => {
     expect(ranking.rows.map((row) => [row.id, row.skip ?? row.status])).toEqual([
       ["claude:a", "signed-out"],
       ["claude:b", "expired"],
-      ["claude:glm", "api-not-supported"],
+      ["claude:glm", "spend-unread"],
       ["claude:c", "no-reading"],
     ]);
     expect(ranking.outcome).toEqual({ kind: "none", soonest: undefined });
+  });
+
+  it("ranks an API profile by its spend against its limit, through the same stages", () => {
+    const budget = (usedPercent: number) => ({
+      usedPercent,
+      resetsAt: "2026-11-01T00:00:00.000Z",
+      spentUsd: usedPercent / 5,
+      limitUsd: 20,
+      source: "budget" as const,
+      per: "month" as const,
+    });
+    const quotas = {
+      "claude:a": snap(50, 50),
+      "claude:glm": { state: "ok" as const, fetchedAt: NOW, budget: budget(35) },
+    };
+    const ranking = rank({ from: ["a", "glm"], strategy: "headroom" }, quotas, { members: [A, GLM] });
+    expect(ranking.outcome).toMatchObject({ kind: "picked", id: "claude:glm", stage: "pool" });
+    expect(ranking.rows.find((row) => row.id === "claude:glm")).toMatchObject({
+      budget: budget(35),
+      usage: { percent: 35, window: "budget", stale: false },
+    });
+    // Over the cut, it waits for its budget's reset like any account for its window's.
+    const full = rank(
+      { from: ["glm"] },
+      { "claude:glm": { state: "ok", fetchedAt: NOW, budget: budget(100) } },
+      {
+        members: [GLM],
+      },
+    );
+    expect(full.outcome).toEqual({ kind: "none", soonest: { id: "claude:glm", at: "2026-11-01T00:00:00.000Z" } });
+  });
+
+  it("leaves out an API profile with no limit, a provider that reports no spend, or a failed reading", () => {
+    const glm = (id: string) => member(id, { kind: "api", email: "" });
+    const [none, unreported, failed, stale] = ["claude:none", "claude:unrep", "claude:fail", "claude:stale"].map(glm);
+    const ranking = rank(
+      { from: ["none", "unrep", "fail", "stale", "a"] },
+      {
+        "claude:a": snap(10, 10),
+        "claude:none": { state: "ok", fetchedAt: NOW, spend: { totalUsd: 3 } },
+        "claude:unrep": { state: "error", fetchedAt: NOW, noSpendReading: true },
+        "claude:fail": { state: "error", fetchedAt: NOW },
+        // A plan's last numbers are trusted for an hour after a failed read; spend's are not.
+        "claude:stale": {
+          state: "error",
+          fetchedAt: NOW - 60_000,
+          budget: { usedPercent: 1, resetsAt: null, spentUsd: 1, limitUsd: 100, source: "provider" },
+        },
+      },
+      { members: [A, none, unreported, failed, stale] },
+    );
+    expect(ranking.rows.map((row) => [row.id, row.skip ?? row.status])).toEqual([
+      ["claude:none", "no-spend-limit"],
+      ["claude:unrep", "spend-not-reported"],
+      ["claude:fail", "spend-unread"],
+      ["claude:stale", "spend-unread"],
+      ["claude:a", "picked"],
+    ]);
   });
 
   // A route can name a profile that has since been removed.

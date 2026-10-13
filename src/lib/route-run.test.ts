@@ -89,6 +89,21 @@ function setup(
 
 const MAIN = { version: 1, routes: { main: { tool: "claude", from: ["*"], strategy: "headroom" } } };
 
+/** REGISTRY with an API profile whose key comes from a variable. */
+const WITH_API: Registry = {
+  ...REGISTRY,
+  profiles: {
+    ...REGISTRY.profiles,
+    "claude:glm": {
+      tool: "claude",
+      kind: "api",
+      configDir: "/home/u/.claude-glm",
+      email: "",
+      api: { baseUrl: "https://gw.example.com", authScheme: "bearer", secret: { source: "env", name: "GW_KEY" } },
+    },
+  },
+};
+
 /** Both tools registered, with an `all` route over them. */
 const BOTH: Registry = {
   ...REGISTRY,
@@ -458,16 +473,39 @@ describe("runRouted", () => {
     }
   });
 
-  it("refuses to create a route of an API profile, as route add does", async () => {
-    const registry: Registry = {
-      ...REGISTRY,
-      profiles: { ...REGISTRY.profiles, "claude:glm": { tool: "claude", kind: "api", configDir: "/x", email: "" } },
-    };
-    const s = setup({ registry, interactive: true, answers: ["y"] });
+  it("refuses to create a route of an API profile with no spend limit, as route add does", async () => {
+    const s = setup({
+      registry: WITH_API,
+      quotas: { "claude:glm": { state: "ok", fetchedAt: NOW, spend: { totalUsd: 3 } } },
+      interactive: true,
+      answers: ["y"],
+    });
     await expect(runRouted(["--route", "work", "--from", "glm"], s.launch, s.io, s.deps)).rejects.toThrow(
-      /claude:glm is an API profile/,
+      "claude:glm has no spend limit, so it cannot join a route.\n  Set a limit on the provider key, or: clausona route budget claude:glm --usd 20 --per month",
     );
     expect(() => readFileSync(s.paths.routesPath)).toThrow();
+  });
+
+  it("runs an API profile with a limit, and says it is billed per use", async () => {
+    const s = setup({
+      registry: WITH_API,
+      quotas: {
+        "claude:a": snap(90),
+        "claude:glm": {
+          state: "ok",
+          fetchedAt: NOW,
+          budget: { usedPercent: 35, resetsAt: null, spentUsd: 7, limitUsd: 20, source: "budget", per: "month" },
+        },
+      },
+      routes: {
+        version: 1,
+        routes: { main: { tool: "claude", from: ["a", "glm"] } },
+        budgets: { "claude:glm": { usd: 20, per: "month" } },
+      },
+    });
+    expect(await runRouted(["--route", "main", "--", "-p", "hi"], s.launch, s.io, s.deps)).toBe(0);
+    expect(s.launches).toEqual([["claude:glm", ["-p", "hi"]]]);
+    expect(s.notes).toEqual(["  ▸ claude:glm  route main, next in turn, API, billed per use · usage 35% of $20/month"]);
   });
 
   it("creates and runs nothing when the answer is no, or the input closes", async () => {

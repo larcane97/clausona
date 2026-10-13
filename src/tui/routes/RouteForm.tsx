@@ -1,6 +1,6 @@
 import { Box, type Key, Text, useInput } from "ink";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-
+import type { Budgets } from "../../core/route-budgets.js";
 import {
   holdsKey,
   ROUTE_TOOLS,
@@ -15,7 +15,7 @@ import { matchesMember } from "../../core/route-patterns.js";
 import { type RuleRef, removeUnfillable, renameReferences, rulesText } from "../../core/route-rules.js";
 import { type Ranking, rankRoute } from "../../core/routing.js";
 import { toolLabel } from "../../lib/route-render.js";
-import { checkRouteMembers, membersOf } from "../../lib/route-service.js";
+import { checkRouteMembersNow, membersOf } from "../../lib/route-service.js";
 import type { QuotaSnapshot, Registry } from "../../types.js";
 import { Chrome } from "../components/Chrome.js";
 import { FieldInput } from "../components/FieldInput.js";
@@ -71,6 +71,8 @@ export type RouteFormProps = {
   quotas: Record<string, QuotaSnapshot>;
   lastPicked: Record<string, string>;
   registry: Registry;
+  /** The budgets routes.json holds, which let an API profile join a route; none when not given. */
+  budgets?: Budgets;
   deps: RoutesScreenDeps;
   now: number;
   /**
@@ -115,6 +117,8 @@ const BESIDE: Record<TextField, number> = {
 
 /** The fewest account lines the form shows, however short the terminal. */
 const MIN_ACCOUNT_LINES = 3;
+
+const NO_BUDGETS: Budgets = {};
 
 /** What a field holding something key-shaped shows instead: a constant, as the API form's key field. */
 const MASK = "•".repeat(8);
@@ -219,7 +223,7 @@ const sameSpec = (a: RouteSpec | undefined, b: RouteSpec | undefined) => JSON.st
 type Outcome = "saved" | "changed" | "removed" | Errors;
 
 export function RouteForm(props: RouteFormProps) {
-  const { accounts, quotas, lastPicked, registry, deps, now, onDone } = props;
+  const { accounts, quotas, lastPicked, registry, budgets = NO_BUDGETS, deps, now, onDone } = props;
   const original = props.mode === "edit" ? props.name : undefined;
   const [state, setState] = useState(() =>
     initialFormState(
@@ -362,13 +366,21 @@ export function RouteForm(props: RouteFormProps) {
       showErrors(errors);
       return;
     }
+    setSaving(true);
     try {
-      checkRouteMembers(name, spec, registry);
+      // As `route add` checks it: each API profile the route takes needs a limit, read now.
+      await checkRouteMembersNow(name, spec, registry, {
+        budgets,
+        collect: (targets) => deps.collectQuotas(targets),
+      });
     } catch (error) {
-      showErrors({ form: errorText(error) });
+      if (alive.current) {
+        showErrors({ form: errorText(error) });
+        setSaving(false);
+      }
       return;
     }
-    setSaving(true);
+    if (!alive.current) return;
     try {
       const { outcome, dropped } = await write(name, spec);
       if (!alive.current) return;

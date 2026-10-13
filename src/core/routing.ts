@@ -1,4 +1,4 @@
-import type { QuotaSnapshot, QuotaWindow, ScopedQuotaWindow, ToolName } from "../types.js";
+import type { BudgetWindow, QuotaSnapshot, QuotaWindow, ScopedQuotaWindow, ToolName } from "../types.js";
 import { foldProfileName } from "./profile-name.js";
 import { isSessionLength, mostUsedWindow } from "./quota.js";
 import { type Route, type RouteTool, toolsOf } from "./route-config.js";
@@ -7,9 +7,9 @@ import { compareIds, type Expansion, expandPatterns, type Member, splitToolPrefi
 /**
  * Picks a profile for a route. Pure: the caller brings the members, their quota and the pick
  * record. One number drives everything - an account's usage, the highest of its 5H and 7D
- * windows and, when the run names a model, of that model's own windows - through the stages: pool
- * under maxUsage by strategy, fallback under maxUsage in listed order, anyone under 100% by lowest
- * usage, else nobody.
+ * windows and, when the run names a model, of that model's own windows; an API profile's, its
+ * spend against its limit - through the stages: pool under maxUsage by strategy, fallback under
+ * maxUsage in listed order, anyone under 100% by lowest usage, else nobody.
  */
 
 /** Past the cut, any account under this can run: one at 100% of a window cannot. */
@@ -27,18 +27,32 @@ export type UsageWindow = "5H" | "7D";
 export type ScopedWindow = ScopedQuotaWindow;
 
 /**
- * `window` is where the percent came from: `5H`, `7D`, or the model limit the run's model falls
- * under, by scopedWindowName (`Opus`, `GPT-5.3-Codex-Spark 7D`).
+ * `window` is where the percent came from: `5H`, `7D`, the model limit the run's model falls
+ * under, by scopedWindowName (`Opus`, `GPT-5.3-Codex-Spark 7D`), or `budget`, an API profile's
+ * spend against its limit.
  */
 export type Usage = { percent: number; window: string; stale: boolean };
 
+/** An API profile's usage window, as Usage names it. */
+export const BUDGET_WINDOW = "budget";
+
+/**
+ * Why a member cannot be picked now. The last three are an API profile's: no limit clausona can
+ * read (no budget, and none set on the provider key), a provider that answers with no spend
+ * reading, and a spend reading that failed, which leaves it out of the run.
+ */
 export type SkipReason =
   | "signed-out"
   | "expired"
   | "no-reading"
   | "not-registered"
   | "keeps-own-sessions"
-  | "api-not-supported";
+  | "no-spend-limit"
+  | "spend-not-reported"
+  | "spend-unread";
+
+/** A member with nothing read for it: nothing to go on, rather than a reading that rules it out. */
+export const isUnread = (skip: SkipReason | undefined) => skip === "no-reading" || skip === "spend-unread";
 
 export type Row = {
   id: string;
@@ -54,6 +68,8 @@ export type Row = {
    * one (a Codex limit's 5H and 7D): the account is free again once each that is full has reset.
    */
   scopedWindows?: ScopedWindow[];
+  /** An API profile's spend against its limit. */
+  budget?: BudgetWindow;
   usage?: Usage;
   lastPickedAt?: string;
   skip?: SkipReason;
@@ -189,6 +205,17 @@ export function usageOf(
   return { usage: { percent: top.usedPercent, window, stale } };
 }
 
+/**
+ * An API profile's usage: its `budget` window, from a reading taken now. It is billed per use, so a
+ * failed reading's last numbers are not trusted as a plan's are: it is left out until one works.
+ */
+export function spendUsageOf(snapshot: QuotaSnapshot | undefined): { usage?: Usage; skip?: SkipReason } {
+  if (snapshot?.noSpendReading) return { skip: "spend-not-reported" };
+  if (!snapshot || snapshot.state !== "ok") return { skip: "spend-unread" };
+  if (!snapshot.budget) return { skip: "no-spend-limit" };
+  return { usage: { percent: snapshot.budget.usedPercent, window: BUDGET_WINDOW, stale: false } };
+}
+
 const percentOf = (row: Row) => row.usage?.percent ?? Number.POSITIVE_INFINITY;
 const byUsage = (a: Row, b: Row) => percentOf(a) - percentOf(b) || compareIds(a, b);
 
@@ -231,7 +258,7 @@ function byStrategy(route: Route, candidates: Row[], now: number): { row: Row; r
 
 /** When every window at or above `limit` will have reset; null when one has no known reset. */
 export function blockingReset(row: Row, limit: number): string | null {
-  const blocking = [row.fiveHour, row.sevenDay, ...(row.scopedWindows ?? [row.scoped])].filter(
+  const blocking = [row.fiveHour, row.sevenDay, ...(row.scopedWindows ?? [row.scoped]), row.budget].filter(
     (window): window is QuotaWindow => window !== undefined && window.usedPercent >= limit,
   );
   if (blocking.length === 0 || blocking.some((window) => !window.resetsAt)) return null;
@@ -287,10 +314,17 @@ function qualified(name: string, tool: RouteTool): string {
 function rowFor(member: Member, role: Row["role"], pattern: string, input: RankInput): Row {
   const lastPickedAt = input.lastPicked[member.id];
   const base: Row = { id: member.id, role, pattern, status: "eligible", ...(lastPickedAt ? { lastPickedAt } : {}) };
-  // In this version a route takes subscription profiles only; PR 4 gives API profiles a usage.
-  if (member.kind === "api") return { ...base, skip: "api-not-supported", status: "skipped" };
   if (input.resume && !member.sharesSessions) return { ...base, skip: "keeps-own-sessions", status: "skipped" };
   const snapshot = input.quotas[member.id];
+  if (member.kind === "api") {
+    // No model's limit counts: a provider reports spend, not limits per model.
+    const { usage, skip } = spendUsageOf(snapshot);
+    return {
+      ...base,
+      ...(usage && snapshot?.budget ? { budget: snapshot.budget, usage } : {}),
+      ...(skip ? { skip, status: "skipped" as const } : {}),
+    };
+  }
   const { usage, skip } = usageOf(snapshot, input.now, input.model);
   const scoped = scopedLimitFor(snapshot, input.model);
   const scopedWindows = scopedWindowsFor(snapshot, input.model);

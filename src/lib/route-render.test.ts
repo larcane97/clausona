@@ -114,7 +114,11 @@ describe("skipText", () => {
     expect(skipText(row("no-reading"))).toBe("no quota reading (clausona list --refresh)");
     expect(skipText(row("not-registered"))).toBe("not registered");
     expect(skipText(row("keeps-own-sessions"))).toBe("keeps its own sessions, so it cannot resume a shared one");
-    expect(skipText(row("api-not-supported"))).toBe("API profile: routes take subscription profiles only for now");
+    expect(skipText(row("no-spend-limit"))).toBe(
+      "no spend limit (clausona route budget claude:old --usd 20 --per month)",
+    );
+    expect(skipText(row("spend-not-reported"))).toBe("the provider does not report spend");
+    expect(skipText(row("spend-unread"))).toBe("spend could not be read (clausona route budget says why)");
   });
 });
 
@@ -1007,6 +1011,7 @@ describe("JSON", () => {
     expect(keys(json.outcome)).toEqual(["id", "kind", "reason", "stage"]);
     for (const entry of json.members) {
       expect(keys(entry)).toEqual([
+        "budget",
         "fiveHour",
         "lastPickedAt",
         "matchedBy",

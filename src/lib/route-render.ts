@@ -1,3 +1,4 @@
+import { budgetCommand, usdText } from "../core/route-budgets.js";
 import {
   DEFAULT_MAX_USAGE,
   type Route,
@@ -10,8 +11,10 @@ import {
 } from "../core/route-config.js";
 import type { RouteRules, SkippedRule, Slots } from "../core/route-rules.js";
 import {
+  BUDGET_WINDOW,
   blockingReset,
   FULL,
+  isUnread,
   mostLeftReason,
   type Outcome,
   type Ranking,
@@ -24,7 +27,7 @@ import {
   type UsageWindow,
 } from "../core/routing.js";
 import { posixQuote } from "../core/shell.js";
-import type { QuotaWindow, ToolName } from "../types.js";
+import type { BudgetWindow, QuotaWindow, ToolName } from "../types.js";
 import { accent, bold, box, dim, dimmer, padEnd, secondary, truncate, warnIcon, yellow } from "./cli-style.js";
 import {
   formatAge,
@@ -69,11 +72,26 @@ export function skipText(row: Pick<Row, "id" | "skip">): string {
       return "not registered";
     case "keeps-own-sessions":
       return "keeps its own sessions, so it cannot resume a shared one";
-    case "api-not-supported":
-      return "API profile: routes take subscription profiles only for now";
+    case "no-spend-limit":
+      return `no spend limit (${budgetCommand(row.id)})`;
+    case "spend-not-reported":
+      return "the provider does not report spend";
+    case "spend-unread":
+      return "spend could not be read (clausona route budget says why)";
     default:
       return "";
   }
+}
+
+/** An API profile's limit as a sentence says it: `$20/month`, or `$50` for one that never renews. */
+export function limitText(budget: Pick<BudgetWindow, "limitUsd" | "per">): string {
+  return `${usdText(budget.limitUsd)}${budget.per ? `/${budget.per}` : ""}`;
+}
+
+/** What an API profile has spent against its limit, and whose limit it is: `$7.00 of $20/month (clausona budget)`. */
+export function spendText(budget: BudgetWindow): string {
+  const source = budget.source === "budget" ? "clausona budget" : "provider limit";
+  return `$${budget.spentUsd.toFixed(2)} of ${limitText(budget)} (${source})`;
 }
 
 /** skipText without the command that fixes it, for a line that lists accounts side by side. */
@@ -335,15 +353,16 @@ function fitTable(candidates: Table[], width: number): string[] {
  * starts where the two-digit ones do. `cut` is the route's, as quotaCell reads it.
  */
 function percentWidth(rows: Row[], cut: number): number {
-  const shown = rows.flatMap((row) => (row.skip ? [] : [row.fiveHour, row.sevenDay, row.scoped]));
+  const shown = rows.flatMap((row) => (row.skip ? [] : [row.fiveHour, row.sevenDay, row.scoped, row.budget]));
   return Math.max(3, ...shown.map((window) => (window ? formatQuotaPercent(window, cut).length : 0)));
 }
 
-/** A column of windows: 5H, 7D, or the limit on the model a run names (`model`). */
-type WindowColumn = UsageWindow | "model";
+/** A column of windows: 5H, 7D, the limit on the model a run names (`model`), or an API profile's budget. */
+type WindowColumn = UsageWindow | "model" | "budget";
 
 function windowOf(row: Row, which: WindowColumn): QuotaWindow | undefined {
   if (which === "model") return row.scoped;
+  if (which === "budget") return row.budget;
   return which === "5H" ? row.fiveHour : row.sevenDay;
 }
 
@@ -362,10 +381,19 @@ function quotaColumn(label: string, percent: number, withReset: boolean): Column
   return { label: label.padStart(percent), minWidth: withReset ? percent + 5 : percent };
 }
 
-/** The 5H and 7D columns, then the model column when a row has a limit on the run's model. */
+/**
+ * The 5H and 7D columns, then the model column when a row has a limit on the run's model, and the
+ * budget column when an API profile has a spend reading.
+ */
 function windowColumns(rows: Row[]): Array<[WindowColumn, string]> {
   const model = modelHeader(rows);
-  return [["5H", "5H"], ["7D", "7D"], ...(model ? [["model", model] as [WindowColumn, string]] : [])];
+  const budget = rows.some((row) => row.budget && !row.skip);
+  return [
+    ["5H", "5H"],
+    ["7D", "7D"],
+    ...(model ? [["model", model] as [WindowColumn, string]] : []),
+    ...(budget ? [["budget", "BUDGET"] as [WindowColumn, string]] : []),
+  ];
 }
 
 /**
@@ -386,7 +414,8 @@ function quotaCell(
   if (!window || row.skip) return [["—", dim]];
   const percent = formatQuotaPercent(window, cut);
   const styled = styledQuota(window, row.usage?.stale ? "error" : "ok", cut);
-  const name = which === "model" ? row.scoped && scopedWindowName(row.scoped) : which;
+  const name =
+    which === "model" ? row.scoped && scopedWindowName(row.scoped) : which === "budget" ? BUDGET_WINDOW : which;
   const shown = row.usage?.window === name ? bold(styled) : styled;
   const cell: Cell = [
     [" ".repeat(Math.max(0, percentAt - percent.length))],
@@ -502,22 +531,22 @@ const ROUTE_LAYOUTS: RouteColumn[][] = [
 ];
 
 /** Skips decided without a quota reading: quotaTargets leaves these members out (route-service.ts). */
-const NOT_LOOKED_UP: ReadonlySet<SkipReason> = new Set(["not-registered", "api-not-supported", "keeps-own-sessions"]);
+const NOT_LOOKED_UP: ReadonlySet<SkipReason> = new Set(["not-registered", "keeps-own-sessions"]);
 
 /**
  * Whether no quota could be read for any member (offline, say). Only rows whose quota was looked
- * up count: an unregistered name or an API profile has none to read.
+ * up count: an unregistered name has none to read. An API profile's spend counts as its quota.
  */
 export function nothingRead(rows: Row[]): boolean {
   const looked = rows.filter((row) => !row.skip || !NOT_LOOKED_UP.has(row.skip));
-  return looked.length > 0 && looked.every((row) => row.skip === "no-reading");
+  return looked.length > 0 && looked.every((row) => isUnread(row.skip));
 }
 
 /**
  * The rows a route counts as its members: a skipped one is (it is in the route, just unusable
- * now), but neither a name that is not registered nor an API profile, which no run ever takes.
+ * now), but not a name that is not registered.
  */
-const isMember = (row: Row) => row.skip !== "not-registered" && row.skip !== "api-not-supported";
+const isMember = (row: Row) => row.skip !== "not-registered";
 
 /** Members free now - not skipped, and under the cut - out of every member (isMember). */
 export function freeNow(ranking: Ranking): { free: number; members: number } {
@@ -726,7 +755,7 @@ export function overLimitText(row: Row, route: Route): string {
   return (row.usage?.percent ?? 0) >= FULL ? `at ${FULL}%` : `over ${route.maxUsage}%`;
 }
 
-function statusCell(row: Row, ranking: Ranking): Cell {
+function pickedCell(row: Row, ranking: Ranking): Cell {
   const { outcome, route } = ranking;
   if (row.status === "picked" && outcome.kind === "picked") {
     if (outcome.stage === "pool") return [["picked next", accent]];
@@ -736,6 +765,13 @@ function statusCell(row: Row, ranking: Ranking): Cell {
   if (row.status === "over-limit") return [[overLimitText(row, route), yellow]];
   if (row.skip) return [[skipText(row), dim]];
   return [];
+}
+
+/** Why a member is or is not picked, then, for an API profile, its spend and whose limit counts it. */
+function statusCell(row: Row, ranking: Ranking): Cell {
+  const cell = pickedCell(row, ranking);
+  if (!row.budget) return cell;
+  return [...cell, ...(cell.length ? [[" · ", dim] as Segment] : []), [spendText(row.budget), secondary]];
 }
 
 /** When a member was last picked; a time that cannot be read is "never", as ranking treats it. */
@@ -883,15 +919,23 @@ function ruleNote(resolvedBy: ResolvedBy | undefined): string {
   return "";
 }
 
-/** The one line a routed run says on stderr before it launches. */
+/**
+ * The one line a routed run says on stderr before it launches. An API profile's ends saying it is
+ * billed per use, and its spend against its limit: `API, billed per use · usage 35% of $20/month`.
+ */
 export function renderNote(name: string | undefined, ranking: Ranking, resolvedBy?: ResolvedBy): string {
   const { outcome } = ranking;
   if (outcome.kind !== "picked") return "";
-  const usage = ranking.rows.find((row) => row.id === outcome.id)?.usage;
+  const row = ranking.rows.find((each) => each.id === outcome.id);
+  const usage = row?.usage;
   const parts = [`${routeLabel(name)}${ruleNote(resolvedBy)}`, pickedWhy(ranking)];
   if (usage) {
     const percent = wholeQuotaPercent(usage.percent, ranking.route.maxUsage);
-    parts.push(`${percent}% of ${windowWords(usage.window)} used${usage.stale ? ", last reading" : ""}`);
+    parts.push(
+      row?.budget
+        ? `API, billed per use · usage ${percent}% of ${limitText(row.budget)}`
+        : `${percent}% of ${windowWords(usage.window)} used${usage.stale ? ", last reading" : ""}`,
+    );
   }
   return `  ${accent("▸")} ${bold(outcome.id)}  ${dim(parts.join(", "))}`;
 }
@@ -967,6 +1011,7 @@ export function resettingWindow(row: Row, limit: number, at: string): string {
   if (resetsThen(row.sevenDay)) return "7D";
   const scoped = (row.scopedWindows ?? [row.scoped]).find(resetsThen);
   if (scoped) return scopedWindowName(scoped);
+  if (resetsThen(row.budget)) return BUDGET_WINDOW;
   return "5H";
 }
 
@@ -1186,6 +1231,19 @@ const windowJson = (window: QuotaWindow | undefined) =>
 const scopedJson = (window: ScopedWindow | undefined) =>
   window ? { label: window.label, usedPercent: window.usedPercent, resetsAt: window.resetsAt ?? null } : null;
 
+/** An API profile's spend against its limit; `per` is null for a limit that is not a day, week or month. */
+export const budgetJson = (window: BudgetWindow | undefined) =>
+  window
+    ? {
+        usedPercent: window.usedPercent,
+        resetsAt: window.resetsAt ?? null,
+        spentUsd: window.spentUsd,
+        limitUsd: window.limitUsd,
+        source: window.source,
+        per: window.per ?? null,
+      }
+    : null;
+
 const soonestJson = (soonest: { id: string; at: string } | undefined) =>
   soonest ? { id: soonest.id, at: soonest.at } : null;
 
@@ -1238,6 +1296,7 @@ export function explainJson(name: string | undefined, resolvedBy: ResolvedBy, ra
       fiveHour: windowJson(row.fiveHour),
       sevenDay: windowJson(row.sevenDay),
       scoped: scopedJson(row.scoped),
+      budget: budgetJson(row.budget),
       lastPickedAt: row.lastPickedAt ?? null,
     })),
     excluded: ranking.excluded.map((entry) => ({ profile: entry.id, matchedBy: entry.pattern })),

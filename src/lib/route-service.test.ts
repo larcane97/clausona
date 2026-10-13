@@ -9,6 +9,7 @@ import type { QuotaSnapshot, Registry } from "../types.js";
 import { editInEditor } from "./editor.js";
 import {
   checkRouteMembers,
+  checkRouteMembersNow,
   defaultRouteDeps,
   inferRouteTool,
   membersOf,
@@ -43,6 +44,18 @@ const REGISTRY: Registry = {
     "claude:c": profile("claude", "c"),
     "claude:glm": { tool: "claude", kind: "api", configDir: "/home/u/.claude-glm", email: "" },
     "codex:x": profile("codex", "x"),
+  },
+};
+
+/** REGISTRY with an endpoint on its API profile, whose spend can then be read. */
+const API_REGISTRY: Registry = {
+  ...REGISTRY,
+  profiles: {
+    ...REGISTRY.profiles,
+    "claude:glm": {
+      ...REGISTRY.profiles["claude:glm"],
+      api: { baseUrl: "https://gw.example.com", authScheme: "bearer", secret: { source: "env", name: "GW_KEY" } },
+    },
   },
 };
 
@@ -221,10 +234,23 @@ describe("errors", () => {
 });
 
 describe("quotaTargets", () => {
-  it("asks only for listed subscription members that are not excluded", () => {
+  it("asks only for listed members that are not excluded", () => {
     const members = membersOf(REGISTRY, "claude");
-    const route = withDefaults({ tool: "claude", from: ["*", "glm"], exclude: ["c"] });
+    const route = withDefaults({ tool: "claude", from: ["*"], exclude: ["c"] });
     expect(quotaTargets(route, members, false).map((target) => target.id)).toEqual(["claude:a", "claude:b"]);
+  });
+
+  it("asks for an API profile's spend, against its budget, and reads no key to say so", () => {
+    const budgets = { "claude:glm": { usd: 20, per: "month" as const } };
+    const route = withDefaults({ tool: "claude", from: ["glm", "a"] });
+    const [glm, a] = quotaTargets(route, membersOf(API_REGISTRY, "claude"), false, undefined, budgets);
+    expect(glm).toMatchObject({
+      id: "claude:glm",
+      api: { baseUrl: "https://gw.example.com", authScheme: "bearer", budget: { usd: 20, per: "month" } },
+    });
+    expect(a).toEqual({ id: "claude:a", tool: "claude", configDir: "/home/u/.claude-a" });
+    // A hand-edited API profile with no endpoint has no spend to read.
+    expect(quotaTargets(route, membersOf(REGISTRY, "claude"), false).map((target) => target.id)).toEqual(["claude:a"]);
   });
 
   it("leaves out, on a resumed run, the members that keep their own sessions", () => {
@@ -361,16 +387,63 @@ describe("inferRouteTool", () => {
   });
 });
 
-describe("checkRouteMembers", () => {
-  it("refuses an API profile, naming how to run it", () => {
-    expect(() => checkRouteMembers("main", { tool: "claude", from: ["*", "glm"] }, REGISTRY)).toThrow(
-      "claude:glm is an API profile. Routes take subscription profiles only in this version; run it by name: clausona run claude:glm",
+describe("checkRouteMembersNow", () => {
+  const withLimit: QuotaSnapshot = {
+    state: "ok",
+    fetchedAt: NOW,
+    budget: { usedPercent: 10, resetsAt: null, spentUsd: 5, limitUsd: 50, source: "provider" },
+  };
+  const check = (snapshot: QuotaSnapshot | undefined, budgets = {}) => {
+    const collect = vi.fn<RouteDeps["collectQuotas"]>(
+      async (): Promise<Record<string, QuotaSnapshot>> => (snapshot ? { "claude:glm": snapshot } : {}),
+    );
+    return {
+      collect,
+      done: checkRouteMembersNow("main", { tool: "claude", from: ["*", "glm"] }, API_REGISTRY, { budgets, collect }),
+    };
+  };
+
+  it("lets in an API profile whose key has a limit, reading only its spend", async () => {
+    const { collect, done } = check(withLimit);
+    await done;
+    expect(collect.mock.calls[0][0].map((target) => [target.id, target.api?.baseUrl])).toEqual([
+      ["claude:glm", "https://gw.example.com"],
+    ]);
+  });
+
+  it("refuses one with no limit, naming the command that sets a budget", async () => {
+    await expect(check({ state: "ok", fetchedAt: NOW, spend: { totalUsd: 1 } }).done).rejects.toThrow(
+      "claude:glm has no spend limit, so it cannot join a route.\n  Set a limit on the provider key, or: clausona route budget claude:glm --usd 20 --per month",
     );
   });
 
-  it("throws the route's own problems", () => {
-    expect(() => checkRouteMembers("main", { tool: "claude", maxUsage: 0 }, REGISTRY)).toThrow(
-      "routes.main.maxUsage: must be a number from 1 to 100",
+  it("refuses one whose provider reports no spend, budget or not", async () => {
+    const unreported: QuotaSnapshot = { state: "error", fetchedAt: NOW, noSpendReading: true };
+    const budgets = { "claude:glm": { usd: 20, per: "month" as const } };
+    await expect(check(unreported, budgets).done).rejects.toThrow(
+      "claude:glm cannot join a route: its provider does not report spend, so its usage cannot be read. Run it by name: clausona run claude:glm",
+    );
+  });
+
+  it("lets in one with a budget whose reading failed, and not one without", async () => {
+    const failed: QuotaSnapshot = { state: "error", fetchedAt: NOW };
+    await check(failed, { "claude:glm": { usd: 20, per: "month" } }).done;
+    await expect(check(failed).done).rejects.toThrow(
+      "claude:glm's spend could not be read just now, so whether its key has a limit is not known. Try again, or set a budget: clausona route budget claude:glm --usd 20 --per month",
+    );
+  });
+
+  it("throws the route's own problems before reading anything", async () => {
+    const collect = vi.fn<RouteDeps["collectQuotas"]>(async () => ({}));
+    await expect(
+      checkRouteMembersNow("main", { tool: "claude", maxUsage: 0 }, REGISTRY, { budgets: {}, collect }),
+    ).rejects.toThrow("routes.main.maxUsage: must be a number from 1 to 100");
+    expect(collect).not.toHaveBeenCalled();
+  });
+
+  it("refuses an API profile the check did not read, which came in meanwhile", () => {
+    expect(() => checkRouteMembers("main", { tool: "claude", from: ["glm"] }, API_REGISTRY, new Map())).toThrow(
+      "routes.json changed while claude:glm's spend was read. Run the command again.",
     );
   });
 });

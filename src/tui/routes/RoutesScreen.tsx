@@ -2,6 +2,7 @@ import { Box, type Key, Text, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { QuotaTarget } from "../../core/quota-store.js";
+import { readBudgets } from "../../core/route-budgets.js";
 import {
   type BrokenRoute,
   DEFAULT_MAX_USAGE,
@@ -24,7 +25,7 @@ import {
 import { RoutesFileError } from "../../core/routes-store.js";
 import { type Ranking, rankRoute } from "../../core/routing.js";
 import { freeNow, nothingRead } from "../../lib/route-render.js";
-import { membersOf, quotaTargets } from "../../lib/route-service.js";
+import { membersOf, namesOf, quotaTargets } from "../../lib/route-service.js";
 import type { QuotaSnapshot, Registry, ToolName } from "../../types.js";
 import { Chrome } from "../components/Chrome.js";
 import { color, symbol } from "../theme.js";
@@ -119,13 +120,17 @@ function rankAll(file: RoutesFile, registry: Registry | null, reading: Reading |
 const everyTarget = (registry: Registry) =>
   quotaTargets(withDefaults({ tool: "all" }), membersOf(registry, "all"), false);
 
-/** The members of every route, once each: one quota read serves them all, as in `csn route list`. */
+/**
+ * The members of every route, once each: one quota read serves them all, as in `csn route list`.
+ * An API profile's is its spend, against its budget when it has one.
+ */
 function targetsOf(file: RoutesFile, registry: Registry | null): QuotaTarget[] {
   const targets = new Map<string, QuotaTarget>();
+  const { budgets } = readBudgets(file, namesOf(registry));
   for (const spec of Object.values(file.routes)) {
     const route = withDefaults(spec);
     const members = registry ? membersOf(registry, route.tool) : [];
-    for (const target of quotaTargets(route, members, false)) targets.set(target.id, target);
+    for (const target of quotaTargets(route, members, false, undefined, budgets)) targets.set(target.id, target);
   }
   return [...targets.values()];
 }
@@ -505,6 +510,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
         quotas={shown?.quotas ?? extra}
         lastPicked={reading?.lastPicked ?? {}}
         registry={loaded.registry ?? NO_PROFILES}
+        budgets={readBudgets(loaded.file).budgets}
         deps={io}
         now={reading?.now ?? io.clock()}
         onDone={(saved, note) => void closeForm(saved, note)}

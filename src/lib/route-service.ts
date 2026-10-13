@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
+import { type Budget, type Budgets, budgetCommand, readBudgets } from "../core/route-budgets.js";
 import {
   applyOverrides,
   checkPattern,
@@ -44,6 +45,7 @@ import { editInEditor } from "./editor.js";
 import { foldProfileName } from "./profile-ref.js";
 import type { ResolvedBy } from "./route-render.js";
 import type { RoutingOptions } from "./run-args.js";
+import { resolveSecret } from "./secrets.js";
 import { loadRegistry, noRegistryError } from "./service.js";
 
 /** What routing reaches outside itself, injectable for tests. */
@@ -51,12 +53,9 @@ export type RouteDeps = {
   loadRegistry: () => Promise<Registry | null>;
   /**
    * With `refreshBefore`, a cached reading fetched before then is fetched again, unless the tool's
-   * endpoint is cooling down.
+   * endpoint is cooling down. An API profile's target reads its spend.
    */
-  collectQuotas: (
-    targets: QuotaTarget[],
-    options?: { refreshBefore?: number },
-  ) => Promise<Record<string, QuotaSnapshot>>;
+  collectQuotas: CollectQuotas;
   paths: RoutesPaths;
   clock: () => number;
   /** Resolves after `ms`, or as soon as `signal` aborts (`--wait`). */
@@ -72,6 +71,11 @@ export type RouteDeps = {
   /** The home directory, which dir rules write as `~`. */
   home: string;
 };
+
+export type CollectQuotas = (
+  targets: QuotaTarget[],
+  options?: { refreshBefore?: number },
+) => Promise<Record<string, QuotaSnapshot>>;
 
 export function defaultRouteDeps(): RouteDeps {
   return {
@@ -144,6 +148,7 @@ export function membersOf(registry: Registry, tool: RouteTool): Member[] {
       kind: profile.kind === "api" ? "api" : "subscription",
       sharesSessions: Boolean(profile.isPrimary || profile.mergeSessions),
       configDir: profile.configDir,
+      ...(profile.kind === "api" && profile.api ? { api: profile.api } : {}),
     }));
 }
 
@@ -323,26 +328,76 @@ export function routeByRules(
 }
 
 /**
- * The members whose quota a route needs: listed, not excluded, and subscription profiles; on a
- * resumed run, only those that share sessions, since ranking skips the others whatever they read;
- * on a run narrowed to one tool of an `all` route, only that tool's.
+ * An API profile's quota target: its spend, read with its key, which is resolved only when the
+ * cache cannot answer. None for a hand-edited profile with no endpoint, whose spend cannot be read.
  */
-export function quotaTargets(route: Route, members: Member[], resume: boolean, onlyTool?: ToolName): QuotaTarget[] {
+export function spendTarget(member: Member, budget?: Budget): QuotaTarget | undefined {
+  const { api } = member;
+  if (!api || typeof api.baseUrl !== "string") return undefined;
+  return {
+    id: member.id,
+    tool: member.tool,
+    configDir: member.configDir,
+    api: {
+      baseUrl: api.baseUrl,
+      authScheme: api.authScheme === "api-key" ? "api-key" : "bearer",
+      readKey: () => resolveSecret(member.id, api.secret),
+      ...(budget ? { budget } : {}),
+    },
+  };
+}
+
+/** The members a route takes: listed in from or fallback, and not excluded; each once. */
+function takenBy(route: Route, members: Member[]): Member[] {
   const excluded = new Set(expandPatterns(route.exclude, members).members.map((entry) => entry.member.id));
   const seen = new Set<string>();
+  return [...expandPatterns(route.from, members).members, ...expandPatterns(route.fallback, members).members]
+    .map((entry) => entry.member)
+    .filter((member) => {
+      if (excluded.has(member.id) || seen.has(member.id)) return false;
+      seen.add(member.id);
+      return true;
+    });
+}
+
+/**
+ * The members whose quota a route needs: listed and not excluded, an API profile's being its
+ * spend against its budget (`budgets`) or its key's limit; on a resumed run, only those that share
+ * sessions, since ranking skips the others whatever they read; on a run narrowed to one tool of an
+ * `all` route, only that tool's.
+ */
+export function quotaTargets(
+  route: Route,
+  members: Member[],
+  resume: boolean,
+  onlyTool?: ToolName,
+  budgets: Budgets = {},
+): QuotaTarget[] {
   const targets: QuotaTarget[] = [];
-  for (const { member } of [
-    ...expandPatterns(route.from, members).members,
-    ...expandPatterns(route.fallback, members).members,
-  ]) {
-    // An excluded or skipped account is not touched at all: no quota read, so no token renewal either.
-    if (member.kind !== "subscription" || excluded.has(member.id) || seen.has(member.id)) continue;
+  // An excluded or skipped account is not touched at all: no quota read, so no token renewal either.
+  for (const member of takenBy(route, members)) {
     if (resume && !member.sharesSessions) continue;
     if (onlyTool && member.tool !== onlyTool) continue;
-    seen.add(member.id);
+    if (member.kind === "api") {
+      const target = spendTarget(member, Object.hasOwn(budgets, member.id) ? budgets[member.id] : undefined);
+      if (target) targets.push(target);
+      continue;
+    }
     targets.push({ id: member.id, tool: member.tool, configDir: member.configDir });
   }
   return targets;
+}
+
+/**
+ * The budgets routes.json holds. None when it cannot be read: that stops no run, which then counts
+ * each API profile against its key's own limit.
+ */
+async function budgetsNow(paths: RoutesPaths, names: ProfileNames): Promise<Budgets> {
+  try {
+    return readBudgets((await loadRoutes(paths, names)).file, names).budgets;
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -360,9 +415,13 @@ export async function rankRouteNow(
   if (!registry) throw await noRegistryError();
   const { route, onlyTool } = resolved;
   const members = membersOf(registry, route.tool);
+  // Whether an API profile can be picked is checked on every run, against the budgets as they are.
+  const budgets = takenBy(route, members).some((member) => member.kind === "api")
+    ? await budgetsNow(deps.paths, namesOf(registry))
+    : {};
   // Read first: it can take seconds, and the pick-record lock is held only for the pick itself.
   const quotas = await deps.collectQuotas(
-    quotaTargets(route, members, options.resume, onlyTool),
+    quotaTargets(route, members, options.resume, onlyTool, budgets),
     options.refreshBefore === undefined ? undefined : { refreshBefore: options.refreshBefore },
   );
   const rank = (lastPicked: Record<string, string>) =>
@@ -405,18 +464,82 @@ export function otherToolTaking(spec: RouteSpec, registry: Registry): ToolName |
   return taken.some((entry) => !excluded.has(entry.member.id)) ? other : undefined;
 }
 
-/** For add and set: the route's own problems, then the API profiles this version refuses. */
-export function checkRouteMembers(name: string, spec: RouteSpec, registry: Registry): void {
+/** The API profiles a route takes, which need a limit to join it. */
+export function apiMembers(spec: RouteSpec, registry: Registry): Member[] {
+  const route = withDefaults(spec);
+  return takenBy(route, membersOf(registry, route.tool)).filter((member) => member.kind === "api");
+}
+
+/**
+ * Why an API profile cannot join a route, or null when it can. It needs a limit clausona can read
+ * - a budget, or one set on the provider key - from a provider that reports spend. A reading that
+ * failed lets in one with a budget, whose runs skip it until a reading works, and not one without,
+ * since whether its key has a limit is not known.
+ */
+export function limitProblem(
+  id: string,
+  snapshot: QuotaSnapshot | undefined,
+  budget: Budget | undefined,
+): string | null {
+  if (snapshot?.noSpendReading) {
+    return `${id} cannot join a route: its provider does not report spend, so its usage cannot be read. Run it by name: clausona run ${id}`;
+  }
+  if (budget) return null;
+  if (!snapshot || snapshot.state !== "ok") {
+    return `${id}'s spend could not be read just now, so whether its key has a limit is not known. Try again, or set a budget: ${budgetCommand(id)}`;
+  }
+  if (!snapshot.budget) {
+    return `${id} has no spend limit, so it cannot join a route.\n  Set a limit on the provider key, or: ${budgetCommand(id)}`;
+  }
+  return null;
+}
+
+/** By profile id: why each API profile a route takes cannot join it, or null. */
+export type LimitProblems = ReadonlyMap<string, string | null>;
+
+/**
+ * Reads the spend of each API profile the route takes, through the quota cache, and says which
+ * cannot join it. What add, set, the unknown-route prompt and the form check, and so every run.
+ */
+export async function readLimitProblems(
+  spec: RouteSpec,
+  registry: Registry,
+  budgets: Budgets,
+  collect: CollectQuotas,
+): Promise<LimitProblems> {
+  const api = apiMembers(spec, registry);
+  if (api.length === 0) return new Map();
+  const budgetOf = (id: string) => (Object.hasOwn(budgets, id) ? budgets[id] : undefined);
+  const targets = api.flatMap((member) => spendTarget(member, budgetOf(member.id)) ?? []);
+  const quotas = await collect(targets);
+  return new Map(api.map((member) => [member.id, limitProblem(member.id, quotas[member.id], budgetOf(member.id))]));
+}
+
+/**
+ * For add and set: the route's own problems, then the first API profile it takes that cannot join
+ * it, by `limits` (readLimitProblems' answer). One the answer does not cover came into the route
+ * after it was read: routes.json changed meanwhile.
+ */
+export function checkRouteMembers(name: string, spec: RouteSpec, registry: Registry, limits: LimitProblems): void {
   const problems = checkRoute(name, spec, undefined, namesOf(registry));
   if (problems.length) throw new Error(problems.join("\n"));
-  const route = withDefaults(spec);
-  const members = membersOf(registry, route.tool);
-  const api = [...expandPatterns(route.from, members).members, ...expandPatterns(route.fallback, members).members].find(
-    (entry) => entry.member.kind === "api",
-  );
-  if (api) {
-    throw new Error(
-      `${api.member.id} is an API profile. Routes take subscription profiles only in this version; run it by name: clausona run ${api.member.id}`,
-    );
+  for (const member of apiMembers(spec, registry)) {
+    const problem = limits.get(member.id);
+    if (problem === undefined) {
+      throw new Error(`routes.json changed while ${member.id}'s spend was read. Run the command again.`);
+    }
+    if (problem) throw new Error(problem);
   }
+}
+
+/** checkRouteMembers, the route's own problems first and then each API profile's spend, read now. */
+export async function checkRouteMembersNow(
+  name: string,
+  spec: RouteSpec,
+  registry: Registry,
+  read: { budgets: Budgets; collect: CollectQuotas },
+): Promise<void> {
+  const problems = checkRoute(name, spec, undefined, namesOf(registry));
+  if (problems.length) throw new Error(problems.join("\n"));
+  checkRouteMembers(name, spec, registry, await readLimitProblems(spec, registry, read.budgets, read.collect));
 }

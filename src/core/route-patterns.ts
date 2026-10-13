@@ -1,4 +1,4 @@
-import type { ToolName } from "../types.js";
+import type { ApiEndpoint, ToolName } from "../types.js";
 import { foldProfileName } from "./profile-name.js";
 
 /** A registered profile as routing sees it. */
@@ -13,6 +13,8 @@ export type Member = {
   /** The primary, or a profile with merged sessions: it sees the shared session history. */
   sharesSessions: boolean;
   configDir: string;
+  /** An API profile's endpoint, which its spend is read from. */
+  api?: ApiEndpoint;
 };
 
 const hasGlob = (pattern: string) => /[*?]/.test(pattern);

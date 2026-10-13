@@ -1,4 +1,4 @@
-import { FULL, type Ranking } from "../core/routing.js";
+import { FULL, isUnread, type Ranking } from "../core/routing.js";
 import { renderWaiting, resettingWindow } from "./route-render.js";
 import { type ResolvedRoute, type RouteDeps, rankRouteNow } from "./route-service.js";
 
@@ -91,7 +91,7 @@ export async function rankWaiting(
       // free like any other: it is read again a while later, until the cap, rather than taken for
       // one whose reset nobody knows. One it never read (its reads always fail) is skipped, as on
       // a run, and neither keeps the wait going nor is asked every 5 minutes.
-      const unread = slept ? ranking.rows.find((row) => row.skip === "no-reading" && read.has(row.id)) : undefined;
+      const unread = slept ? ranking.rows.find((row) => isUnread(row.skip) && read.has(row.id)) : undefined;
       if (unread && (!next || retry < next.wake)) next = { wake: retry, id: unread.id };
       if (!next) return { ranking, gaveUp: soonest ? "past-cap" : "no-reset" };
       if (next.wake <= now) {

@@ -982,7 +982,7 @@ describe("RouteForm", () => {
     expect(text(instance)).not.toContain("Discard changes?");
   });
 
-  it("refuses an API profile named by a pattern", async () => {
+  it("refuses an API profile without a limit it can read, as route add does", async () => {
     const { instance, deps, onDone, disk } = setup();
     await opened(instance);
     await press(instance, "paid");
@@ -990,8 +990,9 @@ describe("RouteForm", () => {
     await press(instance, "gateway");
 
     await save(instance);
-    const frame = await until(instance, (f) => f.includes("API profile"));
-    expect(frame).toContain("claude:gateway is an API profile.");
+    // QUOTAS has no spend reading for it, and it has no budget.
+    await until(instance, (f) => f.includes("spend could not be read"));
+    expect(deps.collectQuotas.mock.calls.at(-1)?.[0].map((target) => target.id)).toEqual(["claude:gateway"]);
     expect(deps.updateRoutes).not.toHaveBeenCalled();
     expect(routes(disk).paid).toBeUndefined();
     expect(onDone).not.toHaveBeenCalled();

@@ -1,3 +1,4 @@
+import { readBudgets } from "../core/route-budgets.js";
 import { holdsKey, type ProfileNames, type RouteTool, toolsOf, withDefaults } from "../core/route-config.js";
 import { type LoadedRoutes, loadRoutes, RoutesFileError, refusalOf } from "../core/routes-store.js";
 import { posixQuote } from "../core/shell.js";
@@ -22,7 +23,7 @@ import {
   takesNobody,
 } from "./route-render.js";
 import {
-  checkRouteMembers,
+  checkRouteMembersNow,
   defaultRouteDeps,
   inferRouteTool,
   NoAccountError,
@@ -112,17 +113,22 @@ async function offerToCreate(
   loaded: LoadedRoutes,
 ): Promise<ResolvedRoute> {
   if (!io.interactive) throw error;
-  // Writing it would be refused while another route, a dir rule or a default cannot be used:
-  // said now, before any quota is read or a question asked that a yes could not make good.
-  const refusal = refusalOf(loaded.filePath, loaded.file, loaded.broken);
+  // Writing it would be refused while another route, a dir rule, a default or a budget cannot be
+  // used: said now, before any quota is read or a question asked that a yes could not make good.
+  const names = namesOf(registry);
+  const refusal = refusalOf(loaded.filePath, loaded.file, loaded.broken, names);
   if (refusal) throw refusal;
   const { route: _name, ...overrides } = run.options;
   const tool = run.tool ?? inferRouteTool(overrides.from ?? []) ?? "claude";
   checkArgsHaveTool(error.routeName, tool, run);
   const spec = newRouteFrom(tool, overrides);
   // Checked before the preview, as `route add` does: the preview quotes the patterns, and a key
-  // given to --from must be refused without being shown or written to routes.json.
-  checkRouteMembers(error.routeName, spec, registry);
+  // given to --from must be refused without being shown or written to routes.json. An API profile
+  // it names needs a limit.
+  await checkRouteMembersNow(error.routeName, spec, registry, {
+    budgets: readBudgets(loaded.file, names).budgets,
+    collect: deps.collectQuotas,
+  });
   const ranking = await rankRouteNow({ route: withDefaults(spec) }, deps, { resume: false, record: false });
   // A route that takes nobody could only exit 75: not proposed, so not asked about or written.
   if (takesNobody(ranking)) {
@@ -135,7 +141,6 @@ async function offerToCreate(
     throw new Error("Nothing was created, and nothing was run.");
   }
   await createRoute(error.routeName, spec, deps);
-  const names = namesOf(registry);
   const resolved = resolveRoute((await routesFor(error.routeName, deps.paths, names)).file, run, names);
   if (!resolved) throw error;
   return resolved;

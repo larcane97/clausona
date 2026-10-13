@@ -1,7 +1,7 @@
 import { Box, Text } from "ink";
 
 import type { Route } from "../../core/route-config.js";
-import type { Ranking, Row } from "../../core/routing.js";
+import { isUnread, type Ranking, type Row } from "../../core/routing.js";
 import { fitQuotaValue } from "../../lib/format.js";
 import { detailOrder, overLimitText, skipReason, toolLabel } from "../../lib/route-render.js";
 import type { QuotaWindow } from "../../types.js";
@@ -70,7 +70,7 @@ function statusOf(row: Row, ranking: Ranking): string {
 function lineOf(row: Row, ranking: Ranking, pending: boolean): Line {
   const base = { key: `row:${row.id}`, id: row.id, picked: row.status === "picked", fallback: row.role === "fallback" };
   // Before the quota is read every member reads as unread; those are the ones still loading.
-  if (pending && row.skip === "no-reading") return { ...base, status: "loading…", tone: color.muted };
+  if (pending && isUnread(row.skip)) return { ...base, status: "loading…", tone: color.muted };
   if (row.skip) return { ...base, status: skipReason(row), tone: color.muted };
   return { ...base, row, status: statusOf(row, ranking), tone: base.picked ? color.accent : color.warning };
 }

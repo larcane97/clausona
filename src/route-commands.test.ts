@@ -269,7 +269,8 @@ describe("route add", () => {
     await expect(run("add", "main")).rejects.toThrow(
       "Route 'main' already exists. Change it with clausona route set main …",
     );
-    await expect(run("add", "api", "--from", "glm")).rejects.toThrow(/claude:glm is an API profile/);
+    // claude:glm has no spend reading in QUOTAS, and no budget: whether its key has a limit is not known.
+    await expect(run("add", "api", "--from", "glm")).rejects.toThrow(/claude:glm's spend could not be read just now/);
     await expect(run("add", "a b")).rejects.toThrow(/Invalid route name/);
   });
 
@@ -516,7 +517,7 @@ describe("route list", () => {
 
   it("lists in --json the members a run would rank, who is free now and who is next", async () => {
     const { run, deps } = setup({ ...QUOTAS, "claude:b": snap(90, 0) });
-    // claude:glm is an API profile, which every run skips: not a member, though named exactly.
+    // claude:glm is an API profile with no spend reading: a member, skipped by every run until it has one.
     writeFileSync(
       deps.paths.routesPath,
       JSON.stringify({ version: 1, routes: { main: { tool: "claude", from: ["glm", "a", "b"], fallback: ["c"] } } }),
@@ -532,16 +533,16 @@ describe("route list", () => {
         maxUsage: 80,
         fallback: ["c"],
       },
-      members: ["claude:a", "claude:b"],
+      members: ["claude:glm", "claude:a", "claude:b"],
       fallbackMembers: ["claude:c"],
       excluded: [],
       unknownNames: [],
       emptyPatterns: [],
       emptyExcludes: [],
-      freeNow: { free: 2, members: 3 },
+      freeNow: { free: 2, members: 4 },
       next: { kind: "picked", id: "claude:a", stage: "pool", reason: "next in turn" },
     });
-    expect(await run("list")).toMatch(/^ {4}main\s+claude\s+round-robin\s+80%\s+2 of 3\s+claude:a$/m);
+    expect(await run("list")).toMatch(/^ {4}main\s+claude\s+round-robin\s+80%\s+2 of 4\s+claude:a$/m);
   });
 
   it("names nobody unknown before clausona init, when no profile is registered yet", async () => {
