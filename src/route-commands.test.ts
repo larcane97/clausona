@@ -663,7 +663,9 @@ describe("route edit", () => {
       writeFileSync(deps.paths.routesPath, '{ "version": 1, "routes": {} }\n');
       let opened = 0;
       deps.editText = async () => {
-        opened++;
+        // A second open fails at once. An edit loop that ignored the answer would otherwise spin
+        // on promises that are already resolved, and the test's timeout would never fire.
+        if (++opened > 1) throw new Error("opened the editor again");
         return JSON.stringify({ version: 1, routes: { main: { tool: "x" } } });
       };
       const asked: string[] = [];

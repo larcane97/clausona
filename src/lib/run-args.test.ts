@@ -88,24 +88,26 @@ describe("readRunArgs", () => {
 
     // A key typed into an option's slot, or after an option missing its value, is not repeated.
     const key = ["sk", "ant", "y".repeat(24)].join("-");
-    const refusal = (args: string[]) => {
+    // Each case is named, never shown: its arguments hold the key.
+    const refusal = (name: string, args: string[]) => {
       try {
         readRunArgs(args);
       } catch (error) {
         return (error as Error).message;
       }
-      throw new Error("read");
+      throw new Error(`${name} was read, not refused`);
     };
-    for (const args of [
-      ["--route", "--from", key],
-      ["--route", key, "--route", key],
-      [`--route=${key}`, `--route=${key}`],
-      ["--max-usage", key],
-      [`--max-usage=${key}`],
-      ["--strategy", key],
-      ["--max-usage", "70", "--max-usage", key],
-    ]) {
-      const message = refusal(args);
+    const cases: Array<[string, string[]]> = [
+      ["the next option after one missing its value", ["--route", "--from", key]],
+      ["a repeated option", ["--route", key, "--route", key]],
+      ["a repeated inline option", [`--route=${key}`, `--route=${key}`]],
+      ["--max-usage", ["--max-usage", key]],
+      ["an inline --max-usage", [`--max-usage=${key}`]],
+      ["--strategy", ["--strategy", key]],
+      ["a repeated --max-usage", ["--max-usage", "70", "--max-usage", key]],
+    ];
+    for (const [name, args] of cases) {
+      const message = refusal(name, args);
       expect(message).toMatch(/^--[a-z-]+ /);
       expect(message).not.toContain(key);
       expect(message).not.toContain("sk-");
