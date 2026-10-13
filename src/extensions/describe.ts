@@ -250,7 +250,9 @@ function isProjectSetting(inv: Inventory, file: string): boolean {
     facts.claudeEnabledPlugins.some(at) ||
     facts.claudeMcpDisabled.some(at) ||
     facts.claudeMcpjson.some(at) ||
-    facts.codexMcpEnabled.some(at)
+    facts.codexMcpEnabled.some(at) ||
+    facts.codexPlugins.some(at) ||
+    facts.codexPluginServers.some(at)
   );
 }
 

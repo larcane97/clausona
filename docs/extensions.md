@@ -62,7 +62,7 @@ worked out from the others.
 | Parent folders | `parents` | Claude MCP | `.mcp.json in ~/repos · loads here too` |
 | Global | `global` | every tool and kind | the user's own files, listed below, then `· loads in every project` |
 | Cloud | `cloud` | Claude skills | `skills on your claude.ai accounts, different per account` |
-| Plugins | `plugins` | Claude skills, MCP and hooks | `plugins that bring skills, installed for you or for this project` |
+| Plugins | `plugins` | every tool and kind | `plugins that bring skills, installed for you or for this project` |
 | Built-in | `builtin` | Claude and Codex skills | Claude: `skills that come with Claude Code · only the ones your settings name`; Codex: `skills that come with Codex · in its skills/.system folder` |
 | Managed | `managed` | Claude MCP and hooks | `your organization's managed settings · apply in every project` |
 | Other projects | `other` | every tool and kind, in the CLI | none: the screen has the project list instead |
@@ -93,9 +93,9 @@ The screen lists the scopes of each tool and kind in this order:
 | Claude skills | Loaded, Project, Global, Cloud, Plugins, Built-in, Not used in 90 days |
 | Claude MCP | Loaded, Project, Parent folders, Global, Plugins, Managed |
 | Claude hooks | Loaded, Project, Global, Plugins, Managed |
-| Codex skills | Loaded, Project, Global, Built-in |
-| Codex MCP | Loaded, Project, Global |
-| Codex hooks | Loaded, Project, Global |
+| Codex skills | Loaded, Project, Global, Plugins, Built-in |
+| Codex MCP | Loaded, Project, Global, Plugins |
+| Codex hooks | Loaded, Project, Global, Plugins |
 
 The screen always shows Loaded and Project, and the others only when they hold something.
 Loaded has no line of its own there: it is the project row, the list's first line.
@@ -115,6 +115,12 @@ Some scopes need a word more:
   another project is under Plugins seen from that project, and under Other projects in the CLI.
   In JSON a plugin row has `contains`, the names of what it brings. What a plugin brings is in
   Loaded while the plugin is on, and in `all`, with the plugin's name as WHERE.
+  - Codex's plugins are the ones in the `plugins/cache` folder of its home, read from the
+    version Codex loads. Each is `<plugin>@<marketplace>`, as `config.toml` names it. It brings
+    what its `.codex-plugin/plugin.json`, or else `.claude-plugin/plugin.json`, names, or the
+    contents of its `skills` folder, `.mcp.json` and `hooks/hooks.json`. A plugin installed from
+    ChatGPT's catalog is left out: your ChatGPT account says whether it is on, not
+    `config.toml`.
 - Built-in: skills that come with the tool itself. You can turn them off, but not delete
   them.
   - Claude Code keeps its built-in skills (such as `claude-api`) inside the program, not
@@ -204,8 +210,14 @@ The switches are read from these places:
   way.
 - `.mcp.json` servers: `enabledMcpjsonServers`, `disabledMcpjsonServers` and
   `enableAllProjectMcpServers`, in the settings files or the account's project entry.
-- Codex skills: `[[skills.config]]` in Codex's `config.toml`, by name or by path.
+- Codex skills: `[[skills.config]]` in Codex's `config.toml`, by name or by path. A path names
+  the skill whether it goes through a link or not, as Codex reads it.
 - Codex MCP servers: `mcp_servers.<name>.enabled` in Codex's or the project's `config.toml`.
+- Codex plugins and what they bring: a `[plugins."<plugin>@<marketplace>"]` table in Codex's or
+  the project's `config.toml` turns a plugin on, and `enabled = false` in it turns it off. A
+  plugin no table names is off. A plugin's skill is switched by its full name in
+  `[[skills.config]]`, and its server by `plugins."<id>".mcp_servers.<name>.enabled`. A server
+  the plugin ships with `"enabled": false` is off until that switch turns it on.
 - Hooks are on, except a plugin's hooks while the plugin is off.
 
 ### Tags
@@ -272,8 +284,8 @@ skill-creator  codex   Built-in            —     —
 The columns:
 
 - NAME is what `show` takes. A plugin's skill is `<plugin>:<name>`, a plugin's server
-  `plugin:<plugin>:<name>`, a plugin `<plugin>@<marketplace>`, and a hook `<Event>` or
-  `<Event> <matcher>`.
+  `plugin:<plugin>:<name>` (in Codex, its own name), a plugin `<plugin>@<marketplace>`, and a
+  hook `<Event>` or `<Event> <matcher>`.
 - TOOL appears only when both tools are listed.
 - WHERE is where the row comes from: `Project`, `Global`, `Cloud`, the plugin's name, a
   parent folder's `.mcp.json` such as `~/repos/.mcp.json`, `Built-in`, `Managed`, or another
@@ -415,7 +427,9 @@ lists nothing.
 `show` takes one name, or an id in its place, or `--id <id>`. A name is matched exactly, case
 included. It is the NAME column: `eli5`, `kit:plan`, `kit@demo`, `Stop`,
 `"PreToolUse Bash"`. A plugin also goes by its name before the `@`: `kit` finds `kit@demo`. Two
-plugins of one name from two marketplaces make that short name ambiguous.
+plugins of one name from two marketplaces make that short name ambiguous. A row of that very
+name comes first, so in Codex `code-review` is the server even beside its plugin
+`code-review@openai-bundled`.
 
 Without `--scope`, `show` looks in tiers. The first tier that has a match decides:
 
@@ -569,6 +583,8 @@ Some rows can only be switched one way:
 - What a plugin brings is turned on and off with the plugin. Switch the plugin itself, with
   `--scope plugins`: `csn skills off kit@demo --scope plugins`. A plugin's MCP server has a
   switch of its own here, in each account, so `mcp off` works on one in this project.
+- Codex's plugins, and what they bring, are switched in Codex, with `/plugins`. clausona lists
+  them and changes none of them.
 
 [Refusals](#refusals) has every reason a change can't be made, in the words the CLI and the
 screen use.
@@ -622,6 +638,7 @@ the primary Claude Code folder, and Codex's home is `~/.codex` by default, as un
 | Codex skills | A project skill: a `[[skills.config]]` entry with the `path` of its `SKILL.md` and `enabled = false`, in Codex's `config.toml`. A user skill: refused | A `[[skills.config]]` entry with its `name` and `enabled = false`, in Codex's `config.toml` | As for Claude skills. A built-in skill is refused. |
 | Codex MCP | `mcp_servers.<name>.enabled = false` in the project's `.codex/config.toml` | A user server: `mcp_servers.<name>.enabled = false` in Codex's `config.toml`. A project server: refused | `[mcp_servers.<name>]` deleted from the `config.toml` that defines it |
 | Codex hooks | Refused: hooks are switched everywhere | Taken out of its `hooks.json` and kept by clausona | Deleted from its `hooks.json` |
+| Codex plugins, and what they bring | Refused: `/plugins` in Codex switches a plugin | Refused | Refused: `/plugins` in Codex uninstalls a plugin |
 
 `.claude/settings.local.json` is the project's own Claude Code settings, the ones not shared
 with the repo. When a change needs a file that is not there yet, such as a project's first
@@ -714,7 +731,8 @@ Some things can't be deleted here:
 
 - A Cloud skill comes back from claude.ai. Turn it off instead.
 - A built-in skill comes with the tool. Turn it off instead.
-- A plugin is uninstalled with `/plugin` in Claude Code, and what it brings goes with it.
+- A plugin is uninstalled with `/plugin` in Claude Code, or `/plugins` in Codex, and what it
+  brings goes with it.
 - What your organization's managed settings set stays as they set it. clausona changes nothing
   managed.
 
@@ -827,10 +845,11 @@ the CLI's words. In the table `<tool>` is the tool's name and `<scope>` a scope'
 
 | Code | Says | On the screen | In the CLI |
 |---|---|---|---|
-| `plugin-item` | It comes with the plugin `<plugin>`. | Turn the plugin on or off in Plugins. | Turn the plugin on or off: `clausona <command> off <plugin> --scope plugins`. |
+| `plugin-item` | It comes with the plugin `<plugin>`. | Claude: Turn the plugin on or off in Plugins. Codex: Turn the plugin on or off with `/plugins` in Codex. | Claude: Turn the plugin on or off: `clausona <command> off <plugin> --scope plugins`. Codex: Turn the plugin on or off with `/plugins` in Codex. |
 | `cloud-delete` | It comes back from claude.ai. | Press `space` to turn it off instead. | Turn it off instead: `clausona skills off <name>`. |
 | `builtin-delete` | It comes with `<tool>`. | Claude: Press `space` to turn it off instead. Codex: Press `g` to turn it off instead. | Claude: Turn it off instead: `clausona skills off <name>`. Codex: Turn it off instead: `clausona skills off <name> --everywhere`. |
 | `plugin-delete` | Use `/plugin` in Claude Code to uninstall a plugin. | | |
+| `codex-plugin` | Use `/plugins` in Codex to turn a plugin on or off, or to uninstall it. | | |
 | `plugin-project-everywhere` | It is installed for this project only. | Press `space`. | Leave out `--everywhere`. |
 | `hook-here` | `<tool>` has no per-project switch for hooks. | Press `g` to turn it off everywhere. | |
 | `managed` | It is set by your organization's policy. | | |

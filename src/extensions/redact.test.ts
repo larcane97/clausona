@@ -378,6 +378,133 @@ describe("redactCommand after a flag that takes no value, or a bare auth scheme"
   });
 });
 
+describe("redactCommand on the shapes a differential against the first version found open", () => {
+  const HEX = "0123456789abcdef".repeat(2);
+  const command = (line: string) => hookSummary("Stop", undefined, { type: "command", command: line }).command ?? "";
+  const mcp = (args: string[]) => mcpSummary({ command: "tool", args }).command ?? "";
+  const hidden = (shown: [string, string][], secrets: string[] = [HEX]) => {
+    for (const [actual, expected] of shown) {
+      expect(actual).toBe(expected);
+      for (const secret of secrets) expect(actual).not.toContain(secret);
+    }
+  };
+
+  it("hides SQL's password literal, after PASSWORD or IDENTIFIED BY", () => {
+    hidden([
+      [redactCommand(["psql", "-c", `ALTER ROLE r PASSWORD '${HEX}'`]), "psql -c ALTER ROLE r PASSWORD '<hidden>'"],
+      [command(`psql -c "ALTER ROLE r PASSWORD '${HEX}'"`), `psql -c "ALTER ROLE r PASSWORD '<hidden>'"`],
+      [
+        command(`psql -c "CREATE USER u WITH ENCRYPTED PASSWORD 'a ${HEX}'"`),
+        `psql -c "CREATE USER u WITH ENCRYPTED PASSWORD '<hidden>'"`,
+      ],
+      [
+        redactCommand(["mysql", "-e", `CREATE USER u IDENTIFIED BY '${HEX}'`]),
+        "mysql -e CREATE USER u IDENTIFIED BY '<hidden>'",
+      ],
+      // What follows the literal is shown.
+      [
+        command(`psql -c "alter user u password '${HEX}' valid until 'infinity'"`),
+        `psql -c "alter user u password '<hidden>' valid until 'infinity'"`,
+      ],
+    ]);
+  });
+
+  it("hides a secret key's spaced value in a form body, to the end of its argument or quoted string", () => {
+    hidden([
+      [mcp(["-d", `user=bob&password=a ${HEX}`]), "tool -d user=bob&password=<hidden>"],
+      [
+        command(`curl -d "user=bob&password=a ${HEX}" https://h.example`),
+        `curl -d "user=bob&password=<hidden>" https://h.example`,
+      ],
+      [
+        command(`curl -d "a=1 password=a ${HEX}" https://h.example`),
+        `curl -d "a=1 password=<hidden>" https://h.example`,
+      ],
+      // In a shell's command line: one argument there, for the program the shell runs.
+      [
+        redactCommand(["bash", "-c", `curl -d 'user=bob&password=a ${HEX}' https://h.example`]),
+        "bash -c curl -d 'user=bob&password=<hidden>' https://h.example",
+      ],
+      [
+        command(`bash -c "curl --data 'x=1&token=a ${HEX}&y=2' https://h.example"`),
+        `bash -c "curl --data 'x=1&token=<hidden>' https://h.example"`,
+      ],
+    ]);
+  });
+
+  it("hides a Go-style secret flag's value after -b, --cookie or --auth, the flag too", () => {
+    hidden([
+      [mcp(["-b", "-token", HEX]), "tool -b <hidden> <hidden>"],
+      [command(`tool -b -token ${HEX}`), "tool -b <hidden> <hidden>"],
+      [mcp(["--auth", "-api-key", HEX, "--verbose"]), "tool --auth <hidden> <hidden> --verbose"],
+      [command(`tool --cookie -password "a ${HEX}"`), `tool --cookie <hidden> "<hidden>"`],
+    ]);
+  });
+
+  it("hides a value that starts with -- and reads like a secret flag, and the word after it", () => {
+    // Built from pieces: what a generated password or token can look like.
+    const NAMED = ["--Tk9q2", "Secret"].join("");
+    const RANDOM = ["--x9f3k2", "token"].join("-");
+    hidden(
+      [
+        [mcp(["--password", NAMED]), "tool --password <hidden>"],
+        [mcp(["--token", RANDOM, HEX]), "tool --token <hidden> <hidden>"],
+        [command(`tool --api-key ${NAMED} ${HEX}`), "tool --api-key <hidden> <hidden>"],
+        // An option spelled as option names are is still read as one.
+        [mcp(["--auth", "--api-key", HEX]), "tool --auth --api-key <hidden>"],
+      ],
+      [HEX, NAMED, RANDOM],
+    );
+  });
+
+  it("hides all of a secret flag's quoted value, or one argument of several words, whatever it starts with", () => {
+    hidden([
+      [command(`tool --token "-u ${HEX}"`), `tool --token "<hidden>"`],
+      [command(`tool --password '-b ${HEX}'`), "tool --password '<hidden>'"],
+      [command(`tool --secret "-H ${HEX}"`), `tool --secret "<hidden>"`],
+      [command(`tool --token "Bearer ${HEX}"`), `tool --token "<hidden>"`],
+      [mcp(["--token", `-u ${HEX}`]), "tool --token <hidden>"],
+      [mcp(["-api-key", `-H ${HEX}`]), "tool -api-key <hidden>"],
+    ]);
+  });
+
+  it("hides a cookie or a password whose quote opens after = or :, to its closing quote", () => {
+    hidden([
+      [command(`curl -b TOKEN='a ${HEX}' https://h.example`), "curl -b <hidden> https://h.example"],
+      [command(`curl --cookie sid="a ${HEX}" https://h.example`), "curl --cookie <hidden> https://h.example"],
+      [command(`curl --cookie=sid='a ${HEX}' https://h.example`), "curl --cookie=<hidden> https://h.example"],
+      [command(`curl -u alice:'a ${HEX}' https://h.example`), "curl -u alice:<hidden> https://h.example"],
+    ]);
+  });
+
+  it("hides the word after a quoted header value that ends in a bare scheme", () => {
+    hidden([
+      [command(`curl --header "Authorization: Bearer" ${HEX}`), `curl --header "Authorization: <hidden>" <hidden>`],
+      [command(`curl -H "X-Upstream: Basic" ${HEX} -s`), `curl -H "X-Upstream: Basic" <hidden> -s`],
+      [command(`curl --header 'X-Upstream:Bearer' ${HEX}`), "curl --header 'X-Upstream:Bearer' <hidden>"],
+    ]);
+  });
+
+  it("shows the branch after git's -b, and still reads -b as curl's cookie everywhere else", () => {
+    expect(redactCommand(["git", "checkout", "-b", "feature"])).toBe("git checkout -b feature");
+    expect(command("git -C /srv/repo checkout -b fix/login origin/main")).toBe(
+      "git -C /srv/repo checkout -b fix/login origin/main",
+    );
+    expect(redactCommand(["bash", "-c", "cd /srv && git checkout -b feature"])).toBe(
+      "bash -c cd /srv && git checkout -b feature",
+    );
+    hidden([
+      [
+        command(`git checkout -b feature && curl -b sid=${HEX} https://h.example`),
+        "git checkout -b feature && curl -b <hidden> https://h.example",
+      ],
+      [command(`git pull | tool -b ${HEX}`), "git pull | tool -b <hidden>"],
+      [mcp(["--name", "git", "-b", HEX]), "tool --name git -b <hidden>"],
+      [mcp(["-b", HEX]), "tool -b <hidden>"],
+    ]);
+  });
+});
+
 describe("mcpSummary", () => {
   it("shows transport, command and the names - never the values - of env and headers", () => {
     const summary = mcpSummary({

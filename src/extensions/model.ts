@@ -120,7 +120,12 @@ export type StateFacts = {
     disabled: string[];
     enableAll: boolean;
   }[];
-  codexSkillConfig: { file: string; name?: string; path?: string; enabled: boolean }[];
+  /**
+   * `[[skills.config]]` in the user config.toml. `realPath` is `path` with its folder resolved
+   * through every link, when that folder exists: Codex takes the link's path and the real one
+   * alike.
+   */
+  codexSkillConfig: { file: string; name?: string; path?: string; realPath?: string; enabled: boolean }[];
   codexMcpEnabled: { file: string; project?: string; name: string; enabled: boolean }[];
   /**
    * Item id -> valueHash of its raw entry, for MCP servers and hooks: a write checks the entry is
@@ -132,6 +137,25 @@ export type StateFacts = {
    * .codex folder only when it trusts the project.
    */
   codexTrust: { project: string; trusted: boolean }[];
+  /**
+   * Each `[plugins."<plugin>@<marketplace>"]` table in the user config.toml and in a project's:
+   * Codex loads a plugin only where a table names it. `enabled` is absent when the table does not
+   * set it, which leaves the plugin on.
+   */
+  codexPlugins: { file: string; project?: string; plugin: string; enabled?: boolean }[];
+  /**
+   * `plugins."<id>".mcp_servers.<name>.enabled`: a plugin's server switch, in the same files.
+   * With `default`, the server's own `enabled` in the plugin's file, which Codex starts from
+   * and a switch in config.toml overrides.
+   */
+  codexPluginServers: {
+    file: string;
+    project?: string;
+    plugin: string;
+    name: string;
+    enabled: boolean;
+    default?: true;
+  }[];
 };
 
 export function emptyFacts(): StateFacts {
@@ -144,6 +168,8 @@ export function emptyFacts(): StateFacts {
     codexMcpEnabled: [],
     fingerprints: {},
     codexTrust: [],
+    codexPlugins: [],
+    codexPluginServers: [],
   };
 }
 

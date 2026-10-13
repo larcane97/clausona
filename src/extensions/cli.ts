@@ -704,8 +704,17 @@ function rowsPicked(
             loaded: false,
           })),
         ];
+  // A row of that very name comes before a plugin that only goes by it before its `@`: Codex's
+  // `code-review` server before its plugin `code-review@openai-bundled`.
+  const named = (rows: ScopeRow[]) => {
+    const name = pick.name;
+    const exact = name === undefined ? rows : rows.filter((row) => row.name === name || isId(row, name));
+    return exact.length > 0 ? exact : rows;
+  };
   return (
-    pools.map(({ rows, loaded }) => rows.filter((row) => matches(row, loaded))).find((rows) => rows.length > 0) ?? []
+    pools
+      .map(({ rows, loaded }) => named(rows.filter((row) => matches(row, loaded))))
+      .find((rows) => rows.length > 0) ?? []
   );
 }
 

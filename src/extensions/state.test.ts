@@ -409,6 +409,103 @@ describe("Codex", () => {
   });
 });
 
+describe("Codex plugins", () => {
+  const root = "/c/plugins/cache/m/kit/1.0.0";
+  const at = (file: string) => ({ tool: "codex" as const, scope: "plugin" as const, plugin: "kit@m", file });
+  const kit = ext("plugin", "kit@m", at(root));
+  const plan = ext("skill", "kit:plan", at(`${root}/skills/plan`));
+  const kitdb = ext("mcp", "kitdb", at(`${root}/.mcp.json`));
+  const stop = ext("hook", "Stop", at(`${root}/hooks/hooks.json`));
+  const user = "/c/config.toml";
+  const own = `${P}/.codex/config.toml`;
+
+  it("is off where no [plugins] table names it, on where one does, and off with enabled = false", () => {
+    expect(stateOf(inv([kit]), kit, P)).toEqual({ value: "off" });
+    expect(stateOf(inv([kit], { codexPlugins: [{ file: user, plugin: "kit@m" }] }), kit, P)).toEqual({ value: "on" });
+    const off = inv([kit], { codexPlugins: [{ file: user, plugin: "kit@m", enabled: false }] });
+    expect(stateOf(off, kit, P)).toEqual({ value: "off", setBy: { file: user, key: "plugins.kit@m.enabled" } });
+    expect(stateOf(off, kit, undefined).value).toBe("off");
+  });
+
+  it("takes a trusted project's enabled over the user's, and ignores an untrusted one's", () => {
+    const codexPlugins: StateFacts["codexPlugins"] = [
+      { file: user, plugin: "kit@m", enabled: true },
+      { file: own, project: P, plugin: "kit@m", enabled: false },
+      // A project table that sets no enabled leaves the user's.
+      { file: `${Q}/.codex/config.toml`, project: Q, plugin: "kit@m" },
+    ];
+    const trusted = inv([kit], { codexPlugins, codexTrust: [{ project: P, trusted: true }] });
+    expect(stateOf(trusted, kit, P)).toEqual({ value: "off", setBy: { file: own, key: "plugins.kit@m.enabled" } });
+    expect(stateOf(trusted, kit, Q).value).toBe("on");
+    expect(stateOf(trusted, kit, undefined).value).toBe("on");
+    const untrusted = inv([kit], { codexPlugins, codexTrust: [{ project: P, trusted: false }] });
+    expect(stateOf(untrusted, kit, P)).toEqual({ value: "on", setBy: { file: user, key: "plugins.kit@m.enabled" } });
+  });
+
+  it("gives what a plugin brings its plugin's state, then each thing's own switch", () => {
+    const off = inv([kit, plan, kitdb, stop]);
+    for (const item of [plan, kitdb, stop]) expect(stateOf(off, item, P).value).toBe("off");
+    const on = inv([kit, plan, kitdb, stop], {
+      codexPlugins: [{ file: user, plugin: "kit@m" }],
+      // Codex switches a plugin's skill by its full name, and its server under the plugin's table.
+      codexSkillConfig: [{ file: user, name: "kit:plan", enabled: false }],
+      codexPluginServers: [{ file: user, plugin: "kit@m", name: "kitdb", enabled: false }],
+    });
+    expect(stateOf(on, plan, P)).toEqual({ value: "off", setBy: { file: user, key: "skills.config (name kit:plan)" } });
+    expect(stateOf(on, kitdb, P)).toEqual({
+      value: "off",
+      setBy: { file: user, key: "plugins.kit@m.mcp_servers.kitdb.enabled" },
+    });
+    expect(stateOf(on, stop, P).value).toBe("on");
+  });
+
+  it("reads a plugin server's switch from a trusted project, and never the user server switch of its name", () => {
+    const facts: Partial<StateFacts> = {
+      codexPlugins: [{ file: user, plugin: "kit@m" }],
+      codexPluginServers: [
+        { file: user, plugin: "kit@m", name: "kitdb", enabled: true },
+        { file: own, project: P, plugin: "kit@m", name: "kitdb", enabled: false },
+      ],
+      codexMcpEnabled: [{ file: user, name: "kitdb", enabled: false }],
+      codexTrust: [{ project: P, trusted: true }],
+    };
+    expect(stateOf(inv([kitdb], facts), kitdb, P).value).toBe("off");
+    expect(stateOf(inv([kitdb], facts), kitdb, Q).value).toBe("on");
+  });
+
+  it("starts from a plugin server's own enabled in its file, which a config.toml switch overrides", () => {
+    const file = `${root}/.mcp.json`;
+    const facts: Partial<StateFacts> = {
+      codexPlugins: [{ file: user, plugin: "kit@m" }],
+      codexPluginServers: [{ file, plugin: "kit@m", name: "kitdb", enabled: false, default: true }],
+    };
+    expect(stateOf(inv([kitdb], facts), kitdb, P)).toEqual({
+      value: "off",
+      setBy: { file, key: "mcpServers.kitdb.enabled" },
+    });
+    const back = {
+      ...facts,
+      codexPluginServers: [
+        ...(facts.codexPluginServers ?? []),
+        { file: user, plugin: "kit@m", name: "kitdb", enabled: true },
+      ],
+    };
+    expect(stateOf(inv([kitdb], back), kitdb, P)).toEqual({
+      value: "on",
+      setBy: { file: user, key: "plugins.kit@m.mcp_servers.kitdb.enabled" },
+    });
+  });
+
+  it("keeps a Claude plugin of the same id to Claude's switches, and a Codex one to Codex's", () => {
+    const claudeKit = ext("plugin", "kit@m", { tool: "claude", scope: "plugin", plugin: "kit@m", file: "/k" });
+    const i = inv([kit, claudeKit], {
+      claudeEnabledPlugins: [{ file: "/u/settings.json", layer: "user", map: { "kit@m": true } }],
+    });
+    expect(stateOf(i, claudeKit, P).value).toBe("on");
+    expect(stateOf(i, kit, P).value).toBe("off");
+  });
+});
+
 describe("isManagedSetting", () => {
   it("is true for a managed settings file the inventory read, and for no other", () => {
     const i = inv([], {

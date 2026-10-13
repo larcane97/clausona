@@ -157,6 +157,48 @@ describe("scopes", () => {
     expect(itemsIn(inv, "codex", "skill", "unused", app, NOW)).toEqual([]);
   });
 
+  it("lists Codex's plugins in its Plugins scope, and what an enabled one brings in Loaded", async () => {
+    const { inv, app } = await seed((h) => {
+      h.write(".codex/config.toml", '[plugins."kit@m"]\nenabled = true\n\n[plugins."off@m"]\nenabled = false\n');
+      for (const name of ["kit", "off"]) {
+        h.write(`.codex/plugins/cache/m/${name}/1.0.0/.codex-plugin/plugin.json`, { name });
+        h.skill(`.codex/plugins/cache/m/${name}/1.0.0/skills`, `${name}-skill`);
+        h.write(`.codex/plugins/cache/m/${name}/1.0.0/.mcp.json`, { mcpServers: { [`${name}db`]: { command: "db" } } });
+      }
+    });
+    const scopes = scopesFor(inv, "codex", "skill", app, NOW);
+    expect(scopes.map((s) => [s.id, s.count])).toEqual([
+      ["loaded", 2],
+      ["project", 0],
+      ["global", 1],
+      ["plugins", 2],
+    ]);
+    expect(scopesFor(inv, "codex", "mcp", app, NOW).map((s) => s.id)).toEqual(["loaded", "project", "plugins"]);
+    expect(scopesFor(inv, "codex", "hook", app, NOW).map((s) => s.id)).toEqual(["loaded", "project"]);
+    expect(rowsIn(inv, "codex", "skill", "plugins", app, NOW).map((r) => r.name)).toEqual(["kit@m", "off@m"]);
+    expect(rowsIn(inv, "codex", "skill", "loaded", app, NOW).map((r) => r.name)).toEqual(["eli5", "kit:kit-skill"]);
+    expect(rowsIn(inv, "codex", "mcp", "loaded", app, NOW).map((r) => r.name)).toEqual(["kitdb"]);
+    const kit = rowsIn(inv, "codex", "skill", "plugins", app, NOW)[0];
+    if (!kit) throw new Error("no kit row");
+    expect(pluginContents(inv, kit).skill.map((r) => r.name)).toEqual(["kit:kit-skill"]);
+    expect(pluginContents(inv, kit).mcp.map((r) => r.name)).toEqual(["kitdb"]);
+    // Claude's Plugins scope has none of them.
+    expect(rowsIn(inv, "claude", "skill", "plugins", app, NOW)).toEqual([]);
+  });
+
+  it("tags a Codex plugin a trusted project turns off as off here, and leaves it on elsewhere", async () => {
+    const { inv, app, web } = await seed((h, app) => {
+      h.write(".codex/config.toml", `[projects.'${app}']\ntrust_level = "trusted"\n\n[plugins."kit@m"]\n`);
+      h.write("repos/app/.codex/config.toml", '[plugins."kit@m"]\nenabled = false\n');
+      h.write(".codex/plugins/cache/m/kit/1.0.0/.codex-plugin/plugin.json", { name: "kit" });
+      h.skill(".codex/plugins/cache/m/kit/1.0.0/skills", "kit-skill");
+    });
+    const kit = (project: string) => rowsIn(inv, "codex", "skill", "plugins", project, NOW)[0] as ScopeRow;
+    expect(tagsOf(inv, kit(app), app, NOW)).toEqual(["off here"]);
+    expect(tagsOf(inv, kit(web), web, NOW)).toEqual([]);
+    expect(rowsIn(inv, "codex", "skill", "loaded", web, NOW).map((r) => r.name)).toContain("kit:kit-skill");
+  });
+
   it("shows Loaded and Project at 0 when the project has nothing of a kind (Review Focus 1)", async () => {
     const h = new TestHome();
     homes.push(h);
