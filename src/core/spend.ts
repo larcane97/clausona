@@ -207,17 +207,19 @@ function countResetsAt(reading: SpendReading): number {
 }
 
 /**
- * Whether the provider set its count back to 0 since the last reading: the total fell, or the
- * reset time it reports has moved on (LiteLLM moves budget_reset_at in the job that zeroes the
- * spend). The second catches a reset after which the spend has already climbed past the last
- * reading. A reset time that has merely passed is not one: LiteLLM's job runs every ten minutes
- * or so, and a reading in between still holds the old total.
+ * Whether the provider set its count back to 0 since the last reading, taken at `now`: the total
+ * fell, or the reset time it reports has moved on from one that has passed (LiteLLM moves
+ * budget_reset_at in the job that zeroes the spend). The second catches a reset after which the
+ * spend has already climbed past the last reading. A reset time that has merely passed is not one:
+ * LiteLLM's job runs every ten minutes or so, and a reading in between still holds the old total.
+ * Nor is one moved before it passed: LiteLLM moves it without zeroing the spend when the key's
+ * budget_duration is sent again, as its admin UI does when a key is edited.
  */
-function providerReset(reading: SpendReading, previous: SpendReading): boolean {
+function providerReset(reading: SpendReading, previous: SpendReading, now: number): boolean {
   if (reading.totalUsd < previous.totalUsd) return true;
   const was = countResetsAt(previous);
   const is = countResetsAt(reading);
-  return !Number.isNaN(was) && !Number.isNaN(is) && is > was;
+  return !Number.isNaN(was) && !Number.isNaN(is) && is > was && was <= now;
 }
 
 /**
@@ -229,7 +231,7 @@ function providerReset(reading: SpendReading, previous: SpendReading): boolean {
  */
 export function withBaselines(reading: SpendReading, previous: SpendReading | undefined, now: number): SpendReading {
   if (reading.periods) return reading;
-  const reset = previous !== undefined && providerReset(reading, previous);
+  const reset = previous !== undefined && providerReset(reading, previous, now);
   const baselines: NonNullable<SpendReading["baselines"]> = {};
   for (const per of BUDGET_PERIODS) {
     const start = periodStart(now, per);

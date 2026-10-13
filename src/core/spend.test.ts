@@ -286,6 +286,22 @@ describe("withBaselines", () => {
     expect(budgetWindow(moved, month, NOW + day + 2000)?.spentUsd).toBe(65);
   });
 
+  // LiteLLM moves budget_reset_at without zeroing the spend when the key's budget_duration is sent
+  // again (`/key/update`, the admin UI's Edit Key). Its reset job only resets a key once that time
+  // has passed.
+  it("counts no reset when the reset time moves before it has passed and the total did not fall", () => {
+    const info = (spend: number, resetsAt: string) =>
+      parseLiteLlmKeyInfo({
+        info: { spend, max_budget: null, budget_duration: "30d", budget_reset_at: resetsAt },
+      }) as SpendReading;
+    const month = { usd: 100, per: "month" as const };
+    const first = withBaselines(info(0, "2026-11-01T00:00:00"), undefined, NOW);
+    const later = withBaselines(info(30, "2026-11-01T00:00:00"), first, NOW + 1000);
+    // The key edited: its reset time is 30 days on from the edit, and its spend still 30.
+    const edited = withBaselines(info(32, "2026-11-13T09:31:00"), later, NOW + 60_000);
+    expect(budgetWindow(edited, month, NOW + 60_000)?.spentUsd).toBe(32);
+  });
+
   it("counts a late provider reset once, and not while its reset time has only passed", () => {
     // A key LiteLLM resets daily, under a $100 monthly budget. LiteLLM's job resets a key some
     // minutes after its budget_reset_at, and moves that time on as it does.
