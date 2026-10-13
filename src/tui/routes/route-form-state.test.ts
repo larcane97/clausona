@@ -601,6 +601,14 @@ describe("an API profile among the accounts", () => {
     expect(spec(every)).toEqual({ tool: "claude", from: ["*"], strategy: "round-robin" });
   });
 
+  it("leaves a subscription account that from names beside * as the pattern it is", () => {
+    const edit = initialFormState(
+      { mode: "edit", name: "main", spec: { tool: "claude", from: ["*", "work", "gw"] } },
+      WITH_API,
+    );
+    expect(spec(edit)).toEqual({ tool: "claude", from: ["*", "gw", "work"], strategy: "round-robin" });
+  });
+
   it("is not ticked when its tool joins an all route under every account", () => {
     const codex = { ...initialFormState({ mode: "new" }, WITH_API), tool: "codex" as const, ticked: ["codex:x"] };
     const all = act(codex, { type: "tool", tool: "all" });

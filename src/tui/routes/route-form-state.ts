@@ -145,7 +145,8 @@ export function initialFormState(
     // pattern, since only `every` writes unticked accounts back as excludes. An API profile is
     // ticked when from names it.
     const excluded = new Set(exclude.filter((entry) => byName.has(entry)));
-    const apiNamed = new Set(from.flatMap((entry) => fromAccount.get(entry) ?? []));
+    const api = new Set(listed.filter((account) => account.kind === "api").map((account) => account.id));
+    const apiNamed = new Set(from.flatMap((entry) => fromAccount.get(entry) ?? []).filter((id) => api.has(id)));
     ticked = listed
       .filter((account) =>
         account.kind === "api" ? apiNamed.has(account.id) : !excluded.has(nameIn(spec.tool, account)),
