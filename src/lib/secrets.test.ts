@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import type { SecretSource } from "../types.js";
 import { detectBackend, keychainItemFor, resolveSecret, secretStoreName, storeSecret } from "./secrets.js";
 import { keychainStandIn, splitSecurityLine } from "./test-keychain.js";
@@ -66,14 +67,14 @@ describe("resolveSecret", () => {
   // never report 3.
   const windows = process.platform === "win32";
 
-  it("reads the first line of a command source", async () => {
+  it("reads the first line of a command source", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const run = windows
       ? "Write-Output 'S3CRET'; Write-Output 'ignored'"
       : "node -e \"console.log('S3CRET'); console.log('ignored')\"";
     await expect(resolveSecret("claude:x", { source: "command", run })).resolves.toBe("S3CRET");
   });
 
-  it("throws when the command fails", async () => {
+  it("throws when the command fails", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const run = windows ? "exit 3" : 'node -e "process.exit(3)"';
     await expect(resolveSecret("claude:x", { source: "command", run })).rejects.toThrow(/exited with 3/);
   });
@@ -96,14 +97,16 @@ describe.skipIf(process.platform === "win32")("storeSecret on the Keychain backe
   const KEY = `sk-fixture-13b a"b'c\\d$HOME-end`;
 
   // `ps` shows every process's arguments to every user on the machine.
-  it("never puts the key in security's arguments", async () => {
+  it("never puts the key in security's arguments", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const keychain = security();
     await storeSecret("claude:x", KEY, "keychain");
     expect(keychain.calls().length).toBeGreaterThan(0);
     for (const { argv } of keychain.calls()) for (const arg of argv) expect(arg).not.toContain(KEY);
   });
 
-  it("hands security the key intact, as one add-generic-password line on stdin", async () => {
+  it("hands security the key intact, as one add-generic-password line on stdin", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const keychain = security();
     await storeSecret("claude:x", KEY, "keychain");
     const [write] = keychain.calls();
@@ -125,7 +128,9 @@ describe.skipIf(process.platform === "win32")("storeSecret on the Keychain backe
     expect(keychain.stored("clausona-claude:x", "claude:x")).toBe(KEY);
   });
 
-  it("quotes a profile id the line splitter would otherwise break apart", async () => {
+  it("quotes a profile id the line splitter would otherwise break apart", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const keychain = security();
     const id = `claude:we"ird\\ 'id`;
     await storeSecret(id, KEY, "keychain");
@@ -134,14 +139,16 @@ describe.skipIf(process.platform === "win32")("storeSecret on the Keychain backe
     expect(keychain.stored(`clausona-${id}`, id)).toBe(KEY);
   });
 
-  it("throws when security reports the write failed", async () => {
+  it("throws when security reports the write failed", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     security("fail");
     await expect(storeSecret("claude:x", KEY, "keychain")).rejects.toThrow(/could not write Keychain item/);
   });
 
   // security's exit status is the OSStatus cut to 8 bits, and `-i` reports a result of -1 as
   // 0: a write can fail and still exit 0. Reading the item back is what catches it.
-  it("throws when the write did not land although security exited 0", async () => {
+  it("throws when the write did not land although security exited 0", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const keychain = security("drop");
     const outcome = await storeSecret("claude:x", KEY, "keychain").catch((error: Error) => error);
     expect(outcome).toBeInstanceOf(Error);
@@ -155,7 +162,9 @@ describe.skipIf(process.platform === "win32")("storeSecret on the Keychain backe
 
   // find-generic-password -w prints the whole value as hex when any byte is not printable
   // ASCII, so the read-back compares against that, not against the key as typed.
-  it("accepts the hex security prints back for a key with a non-ASCII character", async () => {
+  it("accepts the hex security prints back for a key with a non-ASCII character", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const keychain = security();
     const key = ["sk", "fixture", "\u00e9t\u00e9"].join("-");
     await expect(storeSecret("claude:x", key, "keychain")).resolves.toBeUndefined();

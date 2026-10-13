@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import type { DoctorIssue, DoctorProfileResult, Registry } from "../types.js";
 
 /**
@@ -585,29 +586,36 @@ describe("a codex profile's .env", () => {
 });
 
 describe.skipIf(process.platform === "win32")("repair while Codex runs in the profile", () => {
-  let child: ChildProcess | undefined;
+  // Every codex a case starts is stopped after it, or it runs its whole minute into the next
+  // cases: by afterEach once the case is over, and by the case's signal when it times out - a
+  // case that timed out runs on, and can start one after afterEach is done.
+  const started: ChildProcess[] = [];
   afterEach(() => {
-    child?.kill();
-    child = undefined;
+    for (const codex of started.splice(0)) codex.kill();
   });
 
   /** Starts a process named codex - node under that name - with `codexHome` as its CODEX_HOME. */
-  function startCodex(binDir: string, codexHome: string): ChildProcess {
+  function startCodex(binDir: string, codexHome: string, signal: AbortSignal): ChildProcess {
     const codex = path.join(binDir, "codex");
     if (!existsSync(codex)) symlinkSync(process.execPath, codex);
-    return spawn(codex, ["-e", "setTimeout(() => {}, 60000)"], {
+    const child = spawn(codex, ["-e", "setTimeout(() => {}, 60000)"], {
       env: { PATH: process.env.PATH ?? "", CODEX_HOME: codexHome },
       stdio: "ignore",
+      signal,
     });
+    // How the signal's kill reports itself; the case it belonged to is over by then.
+    child.on("error", () => {});
+    started.push(child);
+    return child;
   }
 
   /** Starts one codex with the profile's CODEX_HOME, spelled with a trailing separator, and one with the primary's. */
-  async function codexRunning(h: Awaited<ReturnType<typeof harness>>) {
+  async function codexRunning(h: Awaited<ReturnType<typeof harness>>, signal: AbortSignal) {
     const bin = path.join(path.dirname(h.dirs.work), "bin");
     mkdirSync(bin);
     const { codexProcessesFor } = await import("../core/running-codex.js");
-    const other = startCodex(bin, h.dirs.codex);
-    child = startCodex(bin, `${h.dirs.work}${path.sep}`);
+    const other = startCodex(bin, h.dirs.codex, signal);
+    const child = startCodex(bin, `${h.dirs.work}${path.sep}`, signal);
     const pid = child.pid ?? -1;
     let found: number[] = [];
     for (let tries = 0; tries < 50 && !found.includes(pid); tries++) {
@@ -618,9 +626,11 @@ describe.skipIf(process.platform === "win32")("repair while Codex runs in the pr
     return { pid, found, other: other.pid };
   }
 
-  it("is found by its CODEX_HOME however it is spelled, and repair refuses until --force", async () => {
+  it("is found by its CODEX_HOME however it is spelled, and repair refuses until --force", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async ({ signal }) => {
     const h = await harness(linkedByOlderClausona, { realProcessCheck: true });
-    const { pid, found, other } = await codexRunning(h);
+    const { pid, found, other } = await codexRunning(h, signal);
     expect(found).toContain(pid);
     expect(found).not.toContain(other);
     const before = snapshot(h.dirs.work);
@@ -635,9 +645,11 @@ describe.skipIf(process.platform === "win32")("repair while Codex runs in the pr
     expect(lstatOrNull(path.join(h.dirs.work, "app-server-control"))).toBeNull();
   });
 
-  it("refuses the session-mode toggle too, which leaves the mode as it was", async () => {
+  it("refuses the session-mode toggle too, which leaves the mode as it was", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async ({ signal }) => {
     const h = await harness(linkedByOlderClausona, { realProcessCheck: true });
-    await codexRunning(h);
+    await codexRunning(h, signal);
     const before = snapshot(h.dirs.work);
 
     await expect(h.service.updateProfileConfig("codex:work", { mergeSessions: true })).rejects.toThrow(
@@ -651,9 +663,11 @@ describe.skipIf(process.platform === "win32")("repair while Codex runs in the pr
     expect(registry.profiles["codex:work"].mergeSessions).toBe(false);
   });
 
-  it("refuses init on a profile it would unlink, before writing anything", async () => {
+  it("refuses init on a profile it would unlink, before writing anything", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async ({ signal }) => {
     const h = await harness(linkedByOlderClausona, { realProcessCheck: true });
-    await codexRunning(h);
+    await codexRunning(h, signal);
     const registryPath = path.join(path.dirname(h.dirs.work), ".clausona", "profiles.json");
     const registryBefore = readFileSync(registryPath, "utf8");
     const before = snapshot(h.dirs.work);

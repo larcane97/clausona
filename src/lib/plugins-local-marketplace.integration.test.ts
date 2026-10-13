@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import type { DoctorProfileResult, Registry } from "../types.js";
 
 // doctorProfiles resolves ~/.clausona/profiles.json at module load, so the module graph
@@ -89,7 +90,7 @@ function kinds(results: DoctorProfileResult[], name: string): string[] {
 }
 
 describe("doctor and a marketplace registered by local path", () => {
-  it("does not report a path-registered marketplace as drift", async () => {
+  it("does not report a path-registered marketplace as drift", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     seed([managed("official"), pathRegistered("internal-wiki", "repos/internal/wiki")]);
 
     const results = await runDoctor();
@@ -99,7 +100,9 @@ describe("doctor and a marketplace registered by local path", () => {
     expect(kinds(results, "claude:work")).not.toContain("plugins_out_of_sync");
   });
 
-  it("still reports a managed marketplace whose installLocation points elsewhere", async () => {
+  it("still reports a managed marketplace whose installLocation points elsewhere", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { work } = seed([managed("official")]);
     // Claims a path inside the managed directory, but the wrong one — real drift.
     const knownPath = path.join(work, "plugins", "known_marketplaces.json");
@@ -112,7 +115,9 @@ describe("doctor and a marketplace registered by local path", () => {
     expect(kinds(results, "claude:work")).toContain("plugins_out_of_sync");
   });
 
-  it("still reports a marketplace directory that is missing from the JSON", async () => {
+  it("still reports a marketplace directory that is missing from the JSON", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { work } = seed([managed("official")]);
     writeFileSync(path.join(work, "plugins", "known_marketplaces.json"), JSON.stringify({}));
 

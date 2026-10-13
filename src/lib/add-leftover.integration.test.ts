@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import type { Registry, ToolName } from "../types.js";
 
 // service.ts resolves ~/.clausona at module load, so the whole module graph has to see a
@@ -106,7 +107,9 @@ async function rejection(promise: Promise<unknown>): Promise<string> {
 }
 
 describe("addProfile marks the directory it creates", () => {
-  it("keeps the marker through the login and drops it once the profile is registered", async () => {
+  it("keeps the marker through the login and drops it once the profile is registered", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const home = seedHome();
     const configDir = path.join(home, ".claude-work");
     let markedDuringLogin = false;
@@ -124,7 +127,7 @@ describe("addProfile marks the directory it creates", () => {
     expect(existsSync(path.join(configDir, MARKER))).toBe(false);
   });
 
-  it("removes the directory when the login fails", async () => {
+  it("removes the directory when the login fails", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const home = seedHome();
     const { addProfile } = await loadService(home, async () => false);
 
@@ -132,7 +135,7 @@ describe("addProfile marks the directory it creates", () => {
     expect(existsSync(path.join(home, ".claude-work"))).toBe(false);
   });
 
-  it("takes its signal handlers down once the login returns", async () => {
+  it("takes its signal handlers down once the login returns", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const home = seedHome();
     const before = { hup: process.listenerCount("SIGHUP"), term: process.listenerCount("SIGTERM") };
     let during = { hup: 0, term: 0 };
@@ -161,7 +164,7 @@ describe("addProfile marks the directory it creates", () => {
 });
 
 describe("addProfile with the directory already there", () => {
-  it("reuses a directory an interrupted add left behind", async () => {
+  it("reuses a directory an interrupted add left behind", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const home = seedHome();
     const configDir = path.join(home, ".claude-hup");
     mkdirSync(configDir);
@@ -302,7 +305,9 @@ describe("addProfile with the directory already there", () => {
 });
 
 describe("the marker stays out of shared state", () => {
-  it.each(["claude", "codex"] as const)("is never linked, backed up, or reported for %s", async (tool) => {
+  it.each(["claude", "codex"] as const)("is never linked, backed up, or reported for %s", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async (tool) => {
     const home = seedHome();
     const { addProfile, doctorProfiles } = await loadService(home, signingIn(tool, `${tool}@example.com`));
     // Only a directory that add created carries the marker, so a primary never should —
@@ -321,7 +326,9 @@ describe("the marker stays out of shared state", () => {
     expect(issues.filter((message) => message.includes(MARKER))).toEqual([]);
   });
 
-  it("leaves a removed profile's directory to --from rather than to a new add", async () => {
+  it("leaves a removed profile's directory to --from rather than to a new add", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const home = seedHome();
     const { addProfile, removeProfile, spies } = await loadService(home, signingIn("claude", "work@example.com"));
     const added = await addProfile({ tool: "claude", name: "work" });

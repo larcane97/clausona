@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import {
   checkLatestTag,
   compareVersions,
@@ -363,7 +364,7 @@ describe("performUpdate", () => {
     expect(leftovers()).toEqual([]);
   }
 
-  it("replaces the installed bundle with the release's", async () => {
+  it("replaces the installed bundle with the release's", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const bundle = bundleReporting("0.3.1-beta");
     const { fetch, urls } = release({
       "clausona.js": bundle,
@@ -385,15 +386,21 @@ describe("performUpdate", () => {
   it.each([
     ["v0.3.1+build.1", "0.3.1+build.1"],
     ["v0.3.1-beta+exp.sha.5114f85", "0.3.1-beta+exp.sha.5114f85"],
-  ])("installs %s, whose version carries build metadata", async (tag, version) => {
-    const bundle = bundleReporting(version);
-    const { fetch } = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
+  ])(
+    "installs %s, whose version carries build metadata",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    async (tag, version) => {
+      const bundle = bundleReporting(version);
+      const { fetch } = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
 
-    await performUpdate({ tag, target, fetch });
-    expect(readFileSync(target, "utf8")).toBe(bundle);
-  });
+      await performUpdate({ tag, target, fetch });
+      expect(readFileSync(target, "utf8")).toBe(bundle);
+    },
+  );
 
-  it("accepts a checksum in upper case with CRLF and a binary marker", async () => {
+  it("accepts a checksum in upper case with CRLF and a binary marker", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const bundle = bundleReporting("0.3.1-beta");
     const { fetch } = release({
       "clausona.js": bundle,
@@ -437,13 +444,13 @@ describe("performUpdate", () => {
     );
   });
 
-  it("refuses a bundle that reports another version", async () => {
+  it("refuses a bundle that reports another version", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const bundle = bundleReporting("0.3.0-beta");
     const { fetch } = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
     await expectUntouched(performUpdate({ tag: TAG, target, fetch }), /reports v0\.3\.0-beta, not v0\.3\.1-beta/);
   });
 
-  it("refuses a bundle that does not run", async () => {
+  it("refuses a bundle that does not run", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const bundle = "process.exit(3);\n";
     const { fetch } = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
     await expectUntouched(performUpdate({ tag: TAG, target, fetch }), /exited with 3/);
@@ -476,13 +483,15 @@ describe("performUpdate", () => {
 
   // The `--version` run held the event loop while it ran, so a Ctrl+C typed then was read only
   // after it, and the swap it should have stopped was already under way.
-  it("stops the --version run at once when the caller gives up during it", async () => {
+  it("stops the --version run at once when the caller gives up during it", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const markers = mkdtempSync(path.join(tmpdir(), "clausona-verify-"));
     const started = path.join(markers, "started");
+    const controller = new AbortController();
     try {
       // Says that it is running, then never answers.
       const bundle = `require("node:fs").writeFileSync(${JSON.stringify(started)}, "");\nsetInterval(() => {}, 1000);\n`;
-      const controller = new AbortController();
       const { fetch } = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
 
       const update = performUpdate({ tag: TAG, target, fetch, signal: controller.signal }).catch((e) => e);
@@ -497,6 +506,9 @@ describe("performUpdate", () => {
       expect(readFileSync(target, "utf8")).toBe(OLD);
       expect(leftovers()).toEqual([]);
     } finally {
+      // The bundle never exits on its own: a case that failed before its abort stops it here,
+      // rather than leave it running into the next cases until performUpdate's own limit.
+      controller.abort();
       rmSync(markers, { recursive: true, force: true });
     }
   });
@@ -526,7 +538,9 @@ describe("performUpdate", () => {
 
   // An update killed between its write and its rename - Ctrl+C in the CLI, SIGKILL, a power cut -
   // leaves its candidate behind, and nothing else would ever remove it.
-  it("removes candidates left by updates no longer running, and nothing else", async () => {
+  it("removes candidates left by updates no longer running, and nothing else", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const bundle = bundleReporting("0.3.1-beta");
     const { fetch } = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
     // The process that started this test runs for as long as it does: an update still in progress.
@@ -547,7 +561,7 @@ describe("performUpdate", () => {
     expect(leftovers().sort()).toEqual([running, ...unrelated].sort());
   });
 
-  it("still updates when a stale candidate cannot be removed", async () => {
+  it("still updates when a stale candidate cannot be removed", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const bundle = bundleReporting("0.3.1-beta");
     const { fetch } = release({ "clausona.js": bundle, "clausona.js.sha256": `${sha256(bundle)}  clausona.js\n` });
     // A directory by a candidate's name: removing a file there fails, on every platform.

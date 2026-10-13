@@ -30,6 +30,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 import type { BuiltEnv } from "../lib/profile-env.js";
+import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import type { Profile } from "../types.js";
 import {
   invalidateLaunchCache,
@@ -313,6 +314,7 @@ describe("the plugin sync check", () => {
 
   it.skipIf(process.platform === "win32" || spawnSync("which", ["bash"]).status !== 0)(
     "runs in bash, and checks the very stamp that syncWithStamp writes",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
     async () => {
       const configDir = path.join(tempDir(), "it's");
       const check = () =>
@@ -324,7 +326,7 @@ describe("the plugin sync check", () => {
             "-c",
             `clausona() { echo "SYNC $1"; }\n${renderPosixSyncCheck(configDir, configDir)}`,
           ],
-          { encoding: "utf8" },
+          { encoding: "utf8", timeout: SPAWN_TIMEOUT_MS },
         );
 
       expect(check().stdout).toBe("SYNC _sync-plugins\n");

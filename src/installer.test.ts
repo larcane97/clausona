@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { dropLauncherCompileCache, renderLauncher, renderWindowsLauncher, resolveInstallDir } from "./installer.js";
+import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "./test-timeouts.js";
 
 describe("installer helpers", () => {
   const homeDir = path.join(path.parse(process.cwd()).root, "Users", "test");
@@ -96,6 +97,7 @@ describe("installer helpers", () => {
       const result = spawnSync("bash", [path.join(dir, "clausona"), ...args], {
         env: { PATH: process.env.PATH, ...env },
         encoding: "utf8",
+        timeout: SPAWN_TIMEOUT_MS,
       });
       expect(result.stderr).toBe("");
       expect(result.status).toBe(0);
@@ -103,7 +105,9 @@ describe("installer helpers", () => {
       return { cache, entry, argv };
     }
 
-    it("defaults the cache to ~/.clausona/cache/node and passes arguments through unchanged", () => {
+    it("defaults the cache to ~/.clausona/cache/node and passes arguments through unchanged", {
+      timeout: SPAWNING_TEST_TIMEOUT_MS,
+    }, () => {
       const args = ["use", "a b", "", "$HOME", "*", "--flag=it's"];
       expect(run({ HOME: dir }, args)).toEqual({
         cache: `${dir}/.clausona/cache/node`,
@@ -112,7 +116,7 @@ describe("installer helpers", () => {
       });
     });
 
-    it("keeps a cache directory the caller already chose", () => {
+    it("keeps a cache directory the caller already chose", { timeout: SPAWNING_TEST_TIMEOUT_MS }, () => {
       const chosen = path.join(dir, "elsewhere");
       expect(run({ HOME: dir, NODE_COMPILE_CACHE: chosen }).cache).toBe(chosen);
     });
@@ -120,7 +124,7 @@ describe("installer helpers", () => {
     // Under `set -u` a bare `$HOME` is fatal when HOME is unset, and clausona never needed
     // HOME to start. Some bash builds fill HOME in from the password database; either way
     // the cache must not land at `/.clausona`.
-    it("still starts without HOME", () => {
+    it("still starts without HOME", { timeout: SPAWNING_TEST_TIMEOUT_MS }, () => {
       const { cache, argv } = run({}, ["--version"]);
       expect(argv).toEqual(["--version"]);
       expect(cache === "<unset>" || /^\/.+\/\.clausona\/cache\/node$/.test(cache ?? "")).toBe(true);

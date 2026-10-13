@@ -14,8 +14,9 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import {
   launchCachePath,
   launchRefPath,
@@ -33,6 +34,9 @@ import {
   renderShellInit,
   type ShellInitPaths,
 } from "./shell.js";
+
+// Every POSIX case starts a real shell, which on a loaded machine takes seconds to return.
+vi.setConfig({ testTimeout: SPAWNING_TEST_TIMEOUT_MS });
 
 const ZSH_AVAILABLE = spawnSync("which", ["zsh"]).status === 0;
 const BASH_AVAILABLE = spawnSync("which", ["bash"]).status === 0;
@@ -279,7 +283,7 @@ function runShell(
   const script = `${renderShellInit(process.platform, harness.paths)}\n${body}\n`;
   const result = spawnSync(shell, [...NO_RC_ARGS[shell], ...extraArgs, "-c", script], {
     encoding: "utf8",
-    timeout: 15_000,
+    timeout: SPAWN_TIMEOUT_MS,
     stdio: awaitBackground ? [...STDIO_AWAITING_BACKGROUND] : "pipe",
     env: {
       PATH: `${harness.binDir}${path.delimiter}${process.env.PATH ?? ""}`,
@@ -486,7 +490,7 @@ for (const shell of ["zsh", "bash"] as const) {
         `sync-plugins CLAUDE_CONFIG_DIR=${workDir}`,
         TRACKED,
       ]);
-    }, 30_000);
+    });
 
     it("steps aside entirely when the user set CLAUDE_CONFIG_DIR", () => {
       const userDir = "/tmp/clausona-test-user-dir";
@@ -825,7 +829,7 @@ for (const shell of ["zsh", "bash"] as const) {
 
       const result = spawnSync(file, args, {
         encoding: "utf8",
-        timeout: 20_000,
+        timeout: SPAWN_TIMEOUT_MS,
         // Not a pipe: macOS's `script` cannot read terminal settings from a socket, and exits.
         // The spare pipe on fd 3 is STDIO_AWAITING_BACKGROUND's, where `script` passes it on.
         stdio: ["ignore", "pipe", "pipe", "pipe"],
@@ -842,7 +846,7 @@ for (const shell of ["zsh", "bash"] as const) {
       expect(output).not.toMatch(/\[\d+\]/);
       expect(output).not.toMatch(/\bdone\b/i);
       expect(await harness.logTracked()).toContain(TRACKED);
-    }, 30_000);
+    });
   });
 }
 

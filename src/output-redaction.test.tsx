@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { stripAnsi } from "./lib/cli-style.js";
 import { leakedWindows } from "./test-leaks.js";
+import { SPAWNING_TEST_TIMEOUT_MS } from "./test-timeouts.js";
 import type { DoctorProfileResult, SecretSource } from "./types.js";
 
 /**
@@ -372,9 +373,20 @@ const PATHS: Record<string, (h: Harness) => Promise<string>> = {
     each(API_IDS, async (id) => [await h.run("config", id, "--label", "Renamed"), h.takeStderr()].join("\n")),
 };
 
+/** The paths that resolve each profile's key, and so start the shell a `command:` key runs in. */
+const RUNS_THE_KEY_COMMAND = new Set([
+  "doctor",
+  "doctor --json",
+  "_shell-env's warnings",
+  "clausona run's warnings",
+  "the TUI's doctor data",
+  "the TUI's preview panel",
+]);
+
 describe("every output path, every secret shape", () => {
   for (const [name, produce] of Object.entries(PATHS)) {
-    it(`${name} prints none of them`, async () => {
+    const timeout = RUNS_THE_KEY_COMMAND.has(name) ? SPAWNING_TEST_TIMEOUT_MS : undefined;
+    it(`${name} prints none of them`, { timeout }, async () => {
       const h = await harness();
 
       // The temp HOME's random suffix is the one thing in the output that could match a
@@ -462,7 +474,9 @@ describe("what every path still says", () => {
     expect(claude.env.ANTHROPIC_AUTH_TOKEN).toBe("<hidden>");
   });
 
-  it("doctor still names the endpoint a helper's key can reach, and says what failed", async () => {
+  it("doctor still names the endpoint a helper's key can reach, and says what failed", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const h = await harness();
 
     const report = stripAnsi(await h.run("doctor"));
@@ -473,7 +487,9 @@ describe("what every path still says", () => {
     if (realPlatform !== "win32") expect(report).toContain("secret command exited with 3");
   });
 
-  it("doctor tells a profile whose key variable is not a name how to fix it, and the command runs", async () => {
+  it("doctor tells a profile whose key variable is not a name how to fix it, and the command runs", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const h = await harness();
     const results = JSON.parse(await h.run("doctor", "--json")) as DoctorProfileResult[];
     const message = results.find((result) => result.name === "claude:envsrc")?.issues[0]?.message ?? "";
@@ -514,7 +530,7 @@ describe.skipIf(process.platform === "win32")("_shell-env's stdout, the one path
     return (await h.run("_shell-env", "claude")).split(h.home).join("~");
   };
 
-  it("exports the leaky profile's values exactly as stored", async () => {
+  it("exports the leaky profile's values exactly as stored", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const out = await exportsFor("claude:leaky");
 
     // The values themselves, which every other path hides.
@@ -539,7 +555,7 @@ describe.skipIf(process.platform === "win32")("_shell-env's stdout, the one path
     `);
   });
 
-  it("exports the key a command prints", async () => {
+  it("exports the key a command prints", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const out = await exportsFor("claude:cmdok");
 
     expect(out).toContain(PLANTED["the key a command prints"]);

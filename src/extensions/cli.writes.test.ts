@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { acquireDirLock } from "../core/dir-lock.js";
 import { stripAnsi } from "../lib/cli-style.js";
 import { leakedWindows } from "../test-leaks.js";
+import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import { type WriteEnv, writeEnvFor } from "./apply.js";
 import {
   CHANGE_JSON_KEYS,
@@ -39,7 +40,7 @@ const GIT_ENV: NodeJS.ProcessEnv = {
 const hasGit = spawnSync("git", ["--version"], { env: GIT_ENV }).status === 0;
 
 function git(cwd: string, args: string[]): void {
-  const result = spawnSync("git", args, { cwd, env: GIT_ENV, encoding: "utf8" });
+  const result = spawnSync("git", args, { cwd, env: GIT_ENV, encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
   if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr}`);
 }
 
@@ -160,7 +161,9 @@ const RULE_M =
   "This changes files, and there is no terminal to confirm on. Add --yes to go ahead, or --dry-run to see the plan.";
 
 describe("skills off", () => {
-  it("prints the plan with --dry-run, and writes nothing, not even ~/.clausona", async () => {
+  it("prints the plan with --dry-run, and writes nothing, not even ~/.clausona", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);
     const local = path.join(app, ".claude", "settings.local.json");
@@ -174,7 +177,9 @@ describe("skills off", () => {
     expect(existsSync(h.path(".clausona"))).toBe(false);
   });
 
-  it("prints the plan as JSON with --dry-run --json, its keys in order and no fingerprint", async () => {
+  it("prints the plan as JSON with --dry-run --json, its keys in order and no fingerprint", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);
     const out = await run("skills", ["off", "eli5", "--tool", "claude", "--dry-run", "--json"]);
@@ -210,7 +215,9 @@ describe("skills off", () => {
     expect(existsSync(h.path(".clausona"))).toBe(false);
   });
 
-  it("refuses to change files without a terminal unless --yes, as bad usage", async () => {
+  it("refuses to change files without a terminal unless --yes, as bad usage", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);
     const error = await failure(run("skills", ["off", "eli5", "--tool", "claude"]));
@@ -221,7 +228,7 @@ describe("skills off", () => {
     expect(existsSync(h.path(".clausona"))).toBe(false);
   });
 
-  it("applies with --yes, naming the backup and the undo", async () => {
+  it("applies with --yes, naming the backup and the undo", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);
     const text = stripAnsi(await run("skills", ["off", "eli5", "--tool", "claude", "--yes"]));
@@ -231,7 +238,9 @@ describe("skills off", () => {
     expect(json(path.join(app, ".claude", "settings.local.json")).skillOverrides).toEqual({ eli5: "off" });
   });
 
-  it("says what it did as JSON with --yes --json, with the operation", async () => {
+  it("says what it did as JSON with --yes --json, with the operation", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);
     const out = JSON.parse(await run("skills", ["off", "eli5", "--tool", "claude", "-y", "--json"]));
@@ -241,7 +250,7 @@ describe("skills off", () => {
     expect(out.operation.backup).toBe(path.join(h.path(".clausona", "backups", "extensions"), out.operation.id));
   });
 
-  it("asks on a terminal, and does nothing when the answer is no", async () => {
+  it("asks on a terminal, and does nothing when the answer is no", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const { h, app } = seed();
     const { run, printed } = cli(h, app);
     const local = path.join(app, ".claude", "settings.local.json");
@@ -265,7 +274,9 @@ describe("skills off", () => {
     expect(json(local).skillOverrides).toEqual({ eli5: "off" });
   });
 
-  it("takes --yes or --dry-run with --json, even on a terminal, rather than mix text and JSON", async () => {
+  it("takes --yes or --dry-run with --json, even on a terminal, rather than mix text and JSON", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);
     const asked: string[] = [];
@@ -287,7 +298,9 @@ describe("skills off", () => {
     expect(existsSync(path.join(app, ".claude", "settings.local.json"))).toBe(true);
   });
 
-  it("cuts a long path from its middle to fit, and keeps what changes whole", async () => {
+  it("cuts a long path from its middle to fit, and keeps what changes whole", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);
     const sep = path.sep;
@@ -299,7 +312,7 @@ describe("skills off", () => {
     }
   });
 
-  it("says nothing is to do when it is off already, and exits 0", async () => {
+  it("says nothing is to do when it is off already, and exits 0", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);
     await run("skills", ["off", "eli5", "--tool", "claude", "--yes"]);
@@ -404,7 +417,7 @@ describe("skills rm", () => {
     expect(existsSync(h.path(".clausona"))).toBe(false);
   });
 
-  it.skipIf(!hasGit)("refuses a skill git tracks unless --tracked", async () => {
+  it.skipIf(!hasGit)("refuses a skill git tracks unless --tracked", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const { h, app } = seed();
     git(app, ["init", "-q"]);
     git(app, ["add", path.join(".claude", "skills", "deploy-check", "SKILL.md")]);
@@ -435,7 +448,9 @@ describe("skills rm", () => {
 });
 
 describe("skills visibility", () => {
-  it("sets the level here, and takes one of the four levels as the last word", async () => {
+  it("sets the level here, and takes one of the four levels as the last word", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);
     const text = stripAnsi(await run("skills", ["visibility", "eli5", "name-only", "--yes"]));
@@ -462,7 +477,9 @@ describe("skills visibility", () => {
 });
 
 describe("skills visibility, a Claude skill's alone", () => {
-  it("plans the Claude copy of a name both tools load, and takes no --tool", async () => {
+  it("plans the Claude copy of a name both tools load, and takes no --tool", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);
     // Claude's and Codex's eli5 both load here: off calls it ambiguous, visibility does not.
@@ -650,7 +667,7 @@ describe("hooks off and on", () => {
 });
 
 describe("undo", () => {
-  it("puts back the last change, then has nothing left to undo", async () => {
+  it("puts back the last change, then has nothing left to undo", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);
     const local = path.join(app, ".claude", "settings.local.json");
@@ -704,7 +721,7 @@ describe("undo", () => {
     expect(read(h.path(".claude", "settings.json"))).toContain("notify-a");
   });
 
-  it("leaves a file that changed since alone, and says so", async () => {
+  it("leaves a file that changed since alone, and says so", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);
     const local = path.join(app, ".claude", "settings.local.json");

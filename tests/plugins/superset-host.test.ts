@@ -1,4 +1,4 @@
-import { type ExecFileException, execFile, spawnSync } from "node:child_process";
+import { type ChildProcess, type ExecFileException, execFile, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -15,7 +15,12 @@ import {
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../../src/test-timeouts.js";
+
+// Every case starts the helper below as a process of its own, and a delete case a dozen git runs.
+vi.setConfig({ testTimeout: SPAWNING_TEST_TIMEOUT_MS });
 
 // The helper ships inside the plugin and runs straight from Node, so it is tested the way the
 // skill runs it: as a child process, against a fake Superset host.
@@ -79,12 +84,15 @@ function writeManifest(dirName: string, content: string) {
   writeFileSync(path.join(dir, "manifest.json"), content);
 }
 
+/** The helpers `run` started that have not exited, which afterEach stops: a case that timed out leaves its own. */
+const running = new Set<ChildProcess>();
+
 function run(
   args: string[],
   env: Record<string, string> = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       process.execPath,
       [SCRIPT, ...args],
       {
@@ -95,11 +103,15 @@ function run(
           SUPERSET_HOME_DIR: path.join(home, ".superset"),
           ...env,
         },
+        // A `terminals wait` whose event never comes would poll on after the case gave up.
+        timeout: SPAWN_TIMEOUT_MS,
       },
       (err: ExecFileException | null, stdout, stderr) => {
+        running.delete(child);
         resolve({ code: err ? (typeof err.code === "number" ? err.code : 1) : 0, stdout, stderr });
       },
     );
+    running.add(child);
   });
 }
 
@@ -113,6 +125,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  for (const child of running) child.kill();
+  running.clear();
   server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
   rmSync(home, { recursive: true, force: true });
@@ -129,7 +143,7 @@ describe("host discovery and calls", () => {
   });
 
   it("skips a manifest whose process is gone and one that does not parse", async () => {
-    const gone = spawnSync(process.execPath, ["-e", ""]).pid;
+    const gone = spawnSync(process.execPath, ["-e", ""], { timeout: SPAWN_TIMEOUT_MS }).pid;
     // Both sort before org-1, so the helper meets them first.
     writeManifest("a-gone", JSON.stringify({ pid: gone, endpoint: "http://127.0.0.1:9", authToken: "other" }));
     writeManifest("b-broken", "{not json");
@@ -231,8 +245,7 @@ describe("workspaces and terminals", () => {
     expect(seen).toEqual([]);
   });
 
-  // Each case runs a dozen git processes, which can take several seconds together.
-  describe("deleting a workspace", { timeout: 30_000 }, () => {
+  describe("deleting a workspace", () => {
     // The host deletes with force, so the helper is the only thing between a delete and a worker's
     // unsaved work. These run real git in a temporary repo with a temporary remote.
     function git(cwd: string, ...args: string[]) {
@@ -249,7 +262,12 @@ describe("workspaces and terminals", () => {
           "user.email=test@example.com",
           ...args,
         ],
-        { cwd, encoding: "utf8", env: { ...process.env, HOME: home, GIT_CONFIG_NOSYSTEM: "1" } },
+        {
+          cwd,
+          encoding: "utf8",
+          env: { ...process.env, HOME: home, GIT_CONFIG_NOSYSTEM: "1" },
+          timeout: SPAWN_TIMEOUT_MS,
+        },
       );
       if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
       return r.stdout;

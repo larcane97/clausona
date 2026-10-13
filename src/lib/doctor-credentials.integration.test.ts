@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import type { DoctorProfileResult, Registry } from "../types.js";
 
 // doctorProfiles resolves ~/.clausona/profiles.json at module load, so the whole module
@@ -119,14 +120,18 @@ describe("doctorProfiles credential check off macOS", () => {
 // PATH, which answers that no item exists, and on Windows there is no `security` at all.
 // Either way the Keychain comes up empty and the credential file decides.
 describe("doctorProfiles credential check on macOS", () => {
-  it("accepts the plaintext file Claude Code falls back to when the Keychain has no item", async () => {
+  it("accepts the plaintext file Claude Code falls back to when the Keychain has no item", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const results = await runDoctor({ platform: "darwin", credential: WITH_TOKEN });
 
     expect(kinds(results, "claude:work")).not.toContain("missing_keychain");
     expect(kinds(results, "claude:work")).not.toContain("missing_oauth");
   });
 
-  it("reports the profile when neither the Keychain nor the file holds a credential", async () => {
+  it("reports the profile when neither the Keychain nor the file holds a credential", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const results = await runDoctor({ platform: "darwin", credential: null });
 
     expect(kinds(results, "claude:work")).toContain("missing_keychain");
@@ -134,7 +139,7 @@ describe("doctorProfiles credential check on macOS", () => {
     expect(kinds(results, "claude:work")).not.toContain("missing_oauth");
   });
 
-  it("reports a fallback file that carries no access token", async () => {
+  it("reports a fallback file that carries no access token", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const results = await runDoctor({ platform: "darwin", credential: JSON.stringify({ claudeAiOauth: {} }) });
 
     expect(kinds(results, "claude:work")).toContain("missing_keychain");
