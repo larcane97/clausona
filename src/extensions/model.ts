@@ -123,6 +123,14 @@ export type StateFacts = {
    * .codex folder only when it trusts the project.
    */
   codexTrust: { project: string; trusted: boolean }[];
+  /**
+   * Each `[plugins."<plugin>@<marketplace>"]` table in the user config.toml and in a project's:
+   * Codex loads a plugin only where a table names it. `enabled` is absent when the table does not
+   * set it, which leaves the plugin on.
+   */
+  codexPlugins: { file: string; project?: string; plugin: string; enabled?: boolean }[];
+  /** `plugins."<id>".mcp_servers.<name>.enabled`: a plugin's server switch, in the same files. */
+  codexPluginServers: { file: string; project?: string; plugin: string; name: string; enabled: boolean }[];
 };
 
 export function emptyFacts(): StateFacts {
@@ -135,6 +143,8 @@ export function emptyFacts(): StateFacts {
     codexMcpEnabled: [],
     fingerprints: {},
     codexTrust: [],
+    codexPlugins: [],
+    codexPluginServers: [],
   };
 }
 

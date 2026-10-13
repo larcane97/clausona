@@ -75,6 +75,8 @@ const inventory: Inventory = {
     codexMcpEnabled: [],
     fingerprints: {},
     codexTrust: [],
+    codexPlugins: [],
+    codexPluginServers: [],
   },
   usage: {},
   hashes: {},

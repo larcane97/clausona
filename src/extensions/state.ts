@@ -107,7 +107,10 @@ function mcpWinner(
   return winner === item ? undefined : winner;
 }
 
-/** A plugin is on only where some settings file enables it; installed and named nowhere is off. */
+/**
+ * A Claude plugin is on only where some settings file enables it; installed and named nowhere is
+ * off. A Codex plugin's is `codexPluginState`: an id can be both tools'.
+ */
 export function pluginState(inv: Inventory, pluginId: string, project?: string): EffectiveState {
   for (const layer of PRECEDENCE) {
     for (const entry of inv.facts.claudeEnabledPlugins) {
@@ -228,7 +231,17 @@ function mcpjsonApproval(
   return { value: "pending-approval" };
 }
 
-function codexSkillState(inv: Inventory, item: Extension): EffectiveState {
+/** A plugin's skill, server or hook is off while the plugin is: Codex does not load it. */
+function codexPluginOff(inv: Inventory, item: Extension, project: string | undefined): EffectiveState | undefined {
+  if (item.location.scope !== "plugin" || item.location.plugin === undefined) return undefined;
+  const plugin = codexPluginState(inv, item.location.plugin, project);
+  return plugin.value === "off" ? plugin : undefined;
+}
+
+/** By name - a plugin's skill by its full `<plugin>:<name>` - or by path, the path winning. */
+function codexSkillState(inv: Inventory, item: Extension, project: string | undefined): EffectiveState {
+  const off = codexPluginOff(inv, item, project);
+  if (off) return off;
   const skillFile = path.join(item.location.file, "SKILL.md");
   let byPath: (typeof inv.facts.codexSkillConfig)[number] | undefined;
   let byName: (typeof inv.facts.codexSkillConfig)[number] | undefined;
@@ -261,15 +274,61 @@ export function codexTrusted(inv: Inventory, project: string | undefined): boole
   return project !== undefined && inv.facts.codexTrust.some((t) => t.trusted && samePath(t.project, project));
 }
 
-/** The user's `mcp_servers.<name>.enabled`, or the project's when Codex trusts the project. */
+/**
+ * The user's `mcp_servers.<name>.enabled`, or the project's when Codex trusts the project; for a
+ * plugin's server, its plugin's state, then `plugins."<id>".mcp_servers.<name>.enabled`.
+ */
 function codexMcpState(inv: Inventory, item: Extension, project: string | undefined): EffectiveState {
-  const entries = inv.facts.codexMcpEnabled.filter(
-    (e) => e.name === item.name && (e.project === undefined || codexTrusted(inv, e.project)),
+  const plugin = item.location.scope === "plugin" ? item.location.plugin : undefined;
+  if (plugin !== undefined) {
+    // A plugin's server is switched under the plugin's table, never by a user server's name.
+    const off = codexPluginOff(inv, item, project);
+    if (off) return off;
+    const hit = codexLayered(
+      inv,
+      inv.facts.codexPluginServers.filter((e) => e.plugin === plugin && e.name === item.name),
+      project,
+    );
+    const key = `plugins.${plugin}.mcp_servers.${item.name}.enabled`;
+    return hit ? { value: hit.enabled ? "on" : "off", setBy: { file: hit.file, key } } : { value: "on" };
+  }
+  const hit = codexLayered(
+    inv,
+    inv.facts.codexMcpEnabled.filter((e) => e.name === item.name),
+    project,
   );
-  const here = project === undefined ? undefined : entries.find((e) => samePath(e.project, project));
-  const hit = here ?? entries.find((e) => e.project === undefined);
   if (!hit) return { value: "on" };
   return { value: hit.enabled ? "on" : "off", setBy: { file: hit.file, key: `mcp_servers.${item.name}.enabled` } };
+}
+
+/** Of one switch's entries, the one Codex takes in `project`: that project's where it trusts it, else the user's. */
+function codexLayered<T extends { project?: string }>(
+  inv: Inventory,
+  entries: T[],
+  project: string | undefined,
+): T | undefined {
+  const here =
+    project === undefined
+      ? undefined
+      : entries.find((e) => e.project !== undefined && samePath(e.project, project) && codexTrusted(inv, e.project));
+  return here ?? entries.find((e) => e.project === undefined);
+}
+
+/**
+ * A Codex plugin's state in `project`: on where a `[plugins."<id>"]` table names it, unless the
+ * table sets `enabled = false`; the project's table over the user's where Codex trusts the
+ * project, an `enabled` there over the user's, as Codex merges the two. A plugin no table names
+ * is off: Codex loads only what its config names (Codex 0.159.3).
+ */
+export function codexPluginState(inv: Inventory, plugin: string, project: string | undefined): EffectiveState {
+  const tables = inv.facts.codexPlugins.filter((t) => t.plugin === plugin);
+  const set = codexLayered(
+    inv,
+    tables.filter((t) => t.enabled !== undefined),
+    project,
+  );
+  if (set) return { value: set.enabled ? "on" : "off", setBy: { file: set.file, key: `plugins.${plugin}.enabled` } };
+  return codexLayered(inv, tables, project) ? { value: "on" } : { value: "off" };
 }
 
 /**
@@ -287,16 +346,19 @@ export function stateOf(inv: Inventory, item: Extension, project?: string, profi
     case "skill":
       return item.location.tool === "claude"
         ? claudeSkillState(inv, item, project, profile)
-        : codexSkillState(inv, item);
+        : codexSkillState(inv, item, project);
     case "mcp":
       return item.location.tool === "claude"
         ? claudeMcpState(inv, item, project, profile)
         : codexMcpState(inv, item, project);
     case "plugin":
-      return pluginState(inv, item.location.plugin ?? item.name, project);
+      return item.location.tool === "codex"
+        ? codexPluginState(inv, item.location.plugin ?? item.name, project)
+        : pluginState(inv, item.location.plugin ?? item.name, project);
     case "hook":
-      return item.location.scope === "plugin" && item.location.plugin
-        ? pluginState(inv, item.location.plugin, project)
-        : { value: "on" };
+      if (item.location.scope !== "plugin" || !item.location.plugin) return { value: "on" };
+      return item.location.tool === "codex"
+        ? codexPluginState(inv, item.location.plugin, project)
+        : pluginState(inv, item.location.plugin, project);
   }
 }

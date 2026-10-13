@@ -10,6 +10,7 @@ import { isHomeProject, type ProjectRecord, recordedPaths } from "../projects.js
 import { isRecord, readJsonObject, readText, realPath, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
 import { addHooksFile } from "./claude-hooks.js";
+import { addPluginSwitches, readCodexPlugins } from "./codex-plugins.js";
 import { readSkillFolders, type SkillLocation } from "./skill-dirs.js";
 
 export type CodexHome = { id: string; dir: string; isPrimary: boolean };
@@ -77,13 +78,14 @@ export function codexProjectRecords(ctx: CodexContext): ProjectRecord[] {
 }
 
 /**
- * Codex's skills, MCP servers and hooks, and the switches for them: `[[skills.config]]` in the
- * user config.toml (by name, or by the SKILL.md path - the only per-project skill switch, since
- * Codex ignores `[[skills.config]]` in a project's config; spec, Spike 1), and
- * `mcp_servers.<name>.enabled` in the user and project config.toml. Beside them, the trust the
- * user config.toml records for each project: Codex 0.159.3 reads a project's `.codex/` only
- * when it trusts the project, so `state.ts` leaves the switches of any other out. Codex keeps
- * no skill usage on disk that we found, so its skills carry no usage keys.
+ * Codex's skills, MCP servers, hooks and plugins, and the switches for them: `[[skills.config]]`
+ * in the user config.toml (by name, or by the SKILL.md path - the only per-project skill switch,
+ * since Codex ignores `[[skills.config]]` in a project's config; spec, Spike 1),
+ * `mcp_servers.<name>.enabled`, and the `[plugins."<id>"]` tables, in the user and project
+ * config.toml. Beside them, the trust the user config.toml records for each project: Codex
+ * 0.159.3 reads a project's `.codex/` only when it trusts the project, so `state.ts` leaves the
+ * switches of any other out. Codex keeps no skill usage on disk that we found, so its skills
+ * carry no usage keys.
  */
 export async function readCodex(ctx: CodexContext, projects: Project[], out: Collector): Promise<void> {
   const noUsage = { usageKeys: () => [] };
@@ -127,7 +129,10 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
       (async () => {
         const file = codexProjectConfig(project.path);
         const config = await readTomlObject(file, out.warnings);
-        if (config) addServers(config, { ...here, file }, project.path, out);
+        if (config) {
+          addServers(config, { ...here, file }, project.path, out);
+          addPluginSwitches(config, file, project.path, out.facts);
+        }
         const hooksFile = codexProjectHooks(project.path);
         const hooks = await readJsonObject(hooksFile, out.warnings);
         if (hooks) addHooksFile(hooks, { ...here, file: hooksFile }, project.path, out);
@@ -141,8 +146,10 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
       if (hooks) addHooksFile(hooks, { ...global, file }, "-", out);
     })(),
   );
+  jobs.push(readCodexPlugins(ctx.primary.dir, out));
   if (ctx.config) {
     addServers(ctx.config, { ...global, file: ctx.configFile }, "-", out);
+    addPluginSwitches(ctx.config, ctx.configFile, undefined, out.facts);
     for (const [project, table] of Object.entries(isRecord(ctx.config.projects) ? ctx.config.projects : {})) {
       if (isRecord(table)) out.facts.codexTrust.push({ project, trusted: table.trust_level === "trusted" });
     }

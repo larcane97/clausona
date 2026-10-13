@@ -362,6 +362,8 @@ function planRow(run: Run, row: ScopeRow): Outcome {
   if (loc.scope === "plugin" && item.kind !== "plugin" && !serverHere) {
     return refused(run, row, "plugin-item", { plugin: loc.plugin ?? "" });
   }
+  // Codex's plugins are switched and uninstalled in Codex; the rest of this file is Claude's.
+  if (item.kind === "plugin" && loc.tool === "codex") return refused(run, row, "codex-plugin");
   if (verb !== "rm" && setByPolicy(run, item)) return refused(run, row, "managed");
   switch (item.kind) {
     case "skill":

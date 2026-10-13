@@ -40,6 +40,7 @@ export const REFUSAL_CODES = [
   "cloud-delete",
   "builtin-delete",
   "plugin-delete",
+  "codex-plugin",
   "plugin-project-everywhere",
   "hook-here",
   "managed",
@@ -83,8 +84,14 @@ type Words = string | Readonly<Record<ToolName, string>>;
 export const REFUSALS: Readonly<Record<RefusalCode, { reason: Words; keys?: Words; flags?: Words }>> = {
   "plugin-item": {
     reason: "It comes with the plugin {plugin}.",
-    keys: "Turn the plugin on or off in Plugins.",
-    flags: "Turn the plugin on or off: clausona {command} off {plugin} --scope plugins.",
+    keys: {
+      claude: "Turn the plugin on or off in Plugins.",
+      codex: "Turn the plugin on or off with /plugins in Codex.",
+    },
+    flags: {
+      claude: "Turn the plugin on or off: clausona {command} off {plugin} --scope plugins.",
+      codex: "Turn the plugin on or off with /plugins in Codex.",
+    },
   },
   "cloud-delete": {
     reason: "It comes back from claude.ai.",
@@ -100,6 +107,7 @@ export const REFUSALS: Readonly<Record<RefusalCode, { reason: Words; keys?: Word
     },
   },
   "plugin-delete": { reason: "Use /plugin in Claude Code to uninstall a plugin." },
+  "codex-plugin": { reason: "Use /plugins in Codex to turn a plugin on or off, or to uninstall it." },
   "plugin-project-everywhere": {
     reason: "It is installed for this project only.",
     keys: "Press space.",

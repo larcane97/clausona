@@ -872,6 +872,52 @@ describe("hooks ls", () => {
   });
 });
 
+describe("Codex plugins", () => {
+  /** The seed, with Codex's plugin kit@m on, bringing a skill, a server and a hook. */
+  function withKit() {
+    const { h, app } = seed();
+    h.write(".codex/config.toml", '[mcp_servers.exa]\ncommand = "npx"\n\n[plugins."kit@m"]\nenabled = true\n');
+    const kit = ".codex/plugins/cache/m/kit/1.0.0";
+    h.write(`${kit}/.codex-plugin/plugin.json`, { name: "kit", description: "Kit tools" });
+    h.skill(`${kit}/skills`, "plan");
+    h.write(`${kit}/.mcp.json`, { mcpServers: { kitdb: { command: "kitdb-mcp", args: ["--token", KEY] } } });
+    h.write(`${kit}/hooks/hooks.json`, { hooks: { Stop: [{ hooks: [{ type: "command", command: "kit-notify" }] }] } });
+    return { h, app };
+  }
+
+  it("lists them under --scope plugins, and what they bring in Loaded", async () => {
+    const { h, app } = withKit();
+    const plugins = await run(h, app, "skills", ["ls", "--tool", "codex", "--scope", "plugins"]);
+    expect(firstLine(plugins)).toMatch(/^1 plugin · Plugins · /);
+    expect(plugins).toMatch(/^kit@m\s+1 skill · 1 MCP server · 1 hook$/m);
+    const loaded = await run(h, app, "skills", ["ls", "--tool", "codex"]);
+    expect(loaded).toMatch(/^kit:plan\s+kit\s+—\s+—$/m);
+    const mcp = await run(h, app, "mcp", ["ls", "--tool", "codex"]);
+    expect(mcp).toMatch(/^kitdb\s+kit\s+—$/m);
+    const server = await run(h, app, "mcp", ["show", "kitdb"]);
+    expect(firstLine(server)).toBe("PLUGINS › kitdb");
+    expect(server).toMatch(/^Runs\s+kitdb-mcp --token <hidden>$/m);
+    expect(await run(h, app, "hooks", ["ls", "--tool", "codex", "--scope", "plugins"])).toMatch(/^kit@m\s/m);
+    const shown = await run(h, app, "skills", ["show", "kit@m", "--tool", "codex"]);
+    expect(firstLine(shown)).toBe("PLUGINS › kit");
+    expect(shown).toContain("Kit tools");
+    expect(leakedWindows([plugins, loaded, mcp, server, shown], KEY)).toEqual([]);
+  });
+
+  it("refuses to change one, and points to Codex's /plugins", async () => {
+    const { h, app } = withKit();
+    const error = await failure(
+      run(h, app, "skills", ["off", "kit@m", "--tool", "codex", "--scope", "plugins", "--yes"]),
+    );
+    expect(error.code).toBe(1);
+    expect(error.message).toContain("Use /plugins in Codex to turn a plugin on or off, or to uninstall it.");
+    const skill = await failure(run(h, app, "skills", ["off", "kit:plan", "--tool", "codex", "--everywhere", "--yes"]));
+    expect(skill.message).toContain(
+      "It comes with the plugin kit@m. Turn the plugin on or off with /plugins in Codex.",
+    );
+  });
+});
+
 describe("ls from the home dir", () => {
   function homeSeed() {
     const h = new TestHome();

@@ -1305,6 +1305,30 @@ describe("plan: hooks and plugins", () => {
       { rowKey: kit.key, name: "kit@m", why: "already on in every project" },
     ]);
   });
+
+  it("leaves a Codex plugin, of the same id as a Claude one too, and what it brings to Codex's /plugins", async () => {
+    const { app, inv, ctx } = await seed((h) => {
+      h.write(".codex/plugins/cache/m/kit/1.0.0/.codex-plugin/plugin.json", { name: "kit" });
+      h.skill(".codex/plugins/cache/m/kit/1.0.0/skills", "codex-plan");
+    });
+    const kit = rowIn(inv, app, "plugins", "kit@m", "codex");
+    for (const verb of ["off", "on", "rm"] as const) {
+      for (const reach of ["here", "everywhere"] as const) {
+        const p = plan(ctx, "skills", act(verb, reach, [kit]));
+        expect(p.changes).toEqual([]);
+        expect(p.refused.map((r) => [r.code, refusalText(r, "flags")])).toEqual([
+          ["codex-plugin", "Use /plugins in Codex to turn a plugin on or off, or to uninstall it."],
+        ]);
+      }
+    }
+    const skill = pluginContents(inv, kit).skill[0] as ScopeRow;
+    expect(skill.name).toBe("kit:codex-plan");
+    const off = plan(ctx, "skills", act("off", "everywhere", [skill])).refused[0] as Plan["refused"][number];
+    expect([refusalText(off, "keys"), refusalText(off, "flags")]).toEqual([
+      "It comes with the plugin kit@m. Turn the plugin on or off with /plugins in Codex.",
+      "It comes with the plugin kit@m. Turn the plugin on or off with /plugins in Codex.",
+    ]);
+  });
 });
 
 describe("keys and toggles", () => {
