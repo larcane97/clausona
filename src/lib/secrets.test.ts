@@ -210,9 +210,13 @@ describe("resolveSecret", () => {
       const pids = path.join(dir, "pids");
       vi.stubEnv("CLAUSONA_TEST_PIDS", pids);
       // The leader of the command's process group, which clausona started, then a job that ignores
-      // the TERM its group gets once the command exits, and so outlives the command.
+      // the TERM its group gets once the command exits, and so outlives the command. The job writes
+      // its pid once it ignores TERM, and the command exits only after that: exiting sooner, it could
+      // have its group sent the TERM before the job ignored it.
       const run =
-        'ps -o pgid= -p $$ > "$CLAUSONA_TEST_PIDS"; (trap "" TERM; exec sleep 30) & echo $! >> "$CLAUSONA_TEST_PIDS"; exit 0';
+        'ps -o pgid= -p $$ > "$CLAUSONA_TEST_PIDS"; ' +
+        'sh -c \'trap "" TERM; echo $$ >> "$CLAUSONA_TEST_PIDS"; exec sleep 30\' & ' +
+        'while [ "$(wc -l < "$CLAUSONA_TEST_PIDS")" -lt 2 ]; do sleep 0.1; done; exit 0';
       const alive = (pid: number) => {
         try {
           process.kill(pid, 0);
