@@ -5,7 +5,18 @@ import { checkRoutesFile, emptyRoutesFile, type RouteSpec, type RoutesFile } fro
 import { parseRoutesText } from "../../core/routes-store.js";
 import { stripAnsi } from "../../lib/cli-style.js";
 import type { QuotaSnapshot, Registry } from "../../types.js";
-import { DOWN, ENTER, ESC, focusedOn, type Instance, press, renderAt, type, waitForFrame } from "../test-drive.js";
+import {
+  DOWN,
+  ENTER,
+  ESC,
+  focusedOn,
+  type Instance,
+  press,
+  renderAt,
+  type,
+  typeQuickly,
+  waitForFrame,
+} from "../test-drive.js";
 import { windowsOnScreen } from "../test-frames.js";
 import { formAccounts, RouteForm } from "./RouteForm.js";
 import type { RoutesScreenDeps } from "./routes-deps.js";
@@ -235,6 +246,30 @@ describe("RouteForm", () => {
       maxUsage: 80,
     });
     expect(Object.keys(routes(disk))).toEqual(["main", "solo", "daily"]);
+  });
+
+  // Each key a read of its own, a millisecond apart: a field answered the next key from the value
+  // it was drawn with before the last one, and the last one was lost.
+  it("keeps every key typed quickly into its text fields", async () => {
+    const { instance, onDone, disk } = setup();
+    await opened(instance);
+
+    await typeQuickly(instance, "daily");
+    // The first key into an empty pattern field draws a new input in place of its example.
+    await tabTo(instance, "exclude ");
+    await typeQuickly(instance, "side, ops-share");
+    await tabTo(instance, "skip at");
+    await typeQuickly(instance, `${ERASE}${ERASE}65`);
+    await save(instance);
+
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith("daily"));
+    expect(routes(disk).daily).toEqual({
+      tool: "claude",
+      from: ["*"],
+      exclude: ["side", "ops-share"],
+      strategy: "round-robin",
+      maxUsage: 65,
+    });
   });
 
   it("lays out every field, with the subscription accounts of the tool and their quota", async () => {

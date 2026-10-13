@@ -208,6 +208,25 @@ export async function typeSlowly(instance: Instance, text: string) {
   for (const char of text) await type(instance, char);
 }
 
+/**
+ * Sends `text` one character at a time, each a read of its own, without waiting for a frame:
+ * keys typed about a millisecond apart.
+ *
+ * React draws each key's frame before the next key arrives, but subscribes that frame's input
+ * handlers a turn of the event loop later, and the next key comes first: it reaches the
+ * handlers of the frame before. A field that worked out its edit from the value it was drawn
+ * with made it from the value before the last key, and the last key was lost.
+ *
+ * The first key waits the turn `press` does, for the handlers of the frame already drawn.
+ */
+export async function typeQuickly(instance: Instance, text: string) {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  for (const char of text) {
+    instance.stdin.write(char);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
 /** Whether the cursor is on the row carrying `label`. */
 export function focusedOn(frame: string, label: string): boolean {
   return frame.split("\n").some((line) => line.includes(label) && line.includes(CURSOR));

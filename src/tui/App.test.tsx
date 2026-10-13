@@ -111,6 +111,7 @@ import {
   renderAt,
   sendBeforeEffects,
   type,
+  typeQuickly,
   typeSlowly,
   type WatchedInstance,
   waitForFrame,
@@ -522,6 +523,29 @@ describe("App add-profile: API endpoint", () => {
     // Not just the last frame: every frame ink drew, which is what a person and their
     // scrollback actually saw.
     expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
+    instance.unmount();
+  });
+
+  // Each key a read of its own, a millisecond apart: a text field answered the next key from the
+  // value it was drawn with before the last one, and the last one was lost.
+  it("keeps every key typed quickly into its text fields", async () => {
+    const { addApiProfile } = await import("../lib/service.js");
+    vi.mocked(addApiProfile).mockClear();
+    const instance = await openApiForm();
+
+    await typeQuickly(instance, "gateway");
+    await moveTo(instance, "Endpoint");
+    await typeQuickly(instance, "https://gateway.example.com");
+    await moveTo(instance, "API key");
+    await press(instance, KEY);
+    await waitForFrame(instance.lastFrame, (frame) => frame.includes(MASK));
+    await moveTo(instance, "Create profile");
+    await press(instance, ENTER);
+    await waitForFrame(instance.lastFrame, (frame) => frame.includes("Added claude:gateway"));
+
+    expect(vi.mocked(addApiProfile)).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "gateway", baseUrl: "https://gateway.example.com" }),
+    );
     instance.unmount();
   });
 

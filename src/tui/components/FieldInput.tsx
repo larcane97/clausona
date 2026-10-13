@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import { Text, useInput } from "ink";
+import { useLayoutEffect, useRef } from "react";
 
 /**
  * Input without its control characters, C0 (U+0000-U+001F) and DEL. Fast typing or a paste
@@ -28,6 +29,13 @@ function printable(input: string): string {
  * `conceal` keeps the editing and draws nothing at all: the caller draws a mask instead. The
  * value was hidden by drawing it in a box of no width, and ink's screen-reader output, which
  * ignores width and overflow, printed it whole - a key pasted into the wrong row included.
+ *
+ * Each edit is worked out from the one before it, not from the value this was drawn with. A key
+ * can come before React has drawn the key before it (one read can hold both, an arrow and a
+ * letter), or once it has drawn it but before it has subscribed that frame's handler (keys typed
+ * about a millisecond apart are reads of their own, and come that fast): either way it reaches a
+ * handler holding the value from before the last key. An edit made from that value replaced the
+ * last key's, which was lost.
  */
 export function FieldInput({
   value,
@@ -50,10 +58,21 @@ export function FieldInput({
   onChange: (value: string, cursor: number) => void;
 }) {
   const at = Math.max(0, Math.min(cursor, value.length));
+  /**
+   * What the next key edits: the value and cursor of the last frame drawn, and every edit made
+   * since. Each commit sets it to what the caller drew, so what the caller made of an edit, or a
+   * change of its own, is what the next key builds on.
+   */
+  const latest = useRef({ value, at });
+  useLayoutEffect(() => {
+    latest.current = { value, at };
+  });
 
   useInput(
     (input, key) => {
       if (key.upArrow || key.downArrow || (key.ctrl && input === "c") || key.tab || key.return) return;
+      // Named as the drawn ones are, so that nothing below can edit those.
+      const { value, at } = latest.current;
       let next = value;
       let nextAt = at;
       if (key.leftArrow) {
@@ -71,7 +90,9 @@ export function FieldInput({
         nextAt += text.length;
       }
       nextAt = Math.max(0, Math.min(nextAt, next.length));
-      if (next !== value || nextAt !== at) onChange(next, nextAt);
+      if (next === value && nextAt === at) return;
+      latest.current = { value: next, at: nextAt };
+      onChange(next, nextAt);
     },
     { isActive: focus },
   );
