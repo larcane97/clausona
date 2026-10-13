@@ -903,7 +903,9 @@ run as `spend could not be read`, and never holds up the others. That includes t
 `command:` key source that has not answered within the reading's 5 seconds, such as a vault
 waiting to be unlocked, is stopped, with everything it started. So is one that clausona is
 waiting on when you press Ctrl-C, and clausona then exits as it always has. Unlike an account's, its last
-numbers are not used in its place.
+numbers are not used in its place. A job a key command leaves running in the background is stopped
+when the command exits; an agent that runs in a session of its own, as gpg-agent and ssh-agent do,
+is left running.
 
 ### Periods
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
+import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import type { SecretSource } from "../types.js";
 import { detectBackend, keychainItemFor, resolveSecret, secretStoreName, storeSecret } from "./secrets.js";
 import { keychainStandIn, splitSecurityLine } from "./test-keychain.js";
@@ -209,7 +209,10 @@ describe("resolveSecret", () => {
       temps.push(dir);
       const pids = path.join(dir, "pids");
       vi.stubEnv("CLAUSONA_TEST_PIDS", pids);
-      const run = 'echo $$ > "$CLAUSONA_TEST_PIDS"; sleep 30 & echo $! >> "$CLAUSONA_TEST_PIDS"; exit 0';
+      // The leader of the command's process group, which clausona started, then a job that ignores
+      // the TERM its group gets once the command exits, and so outlives the command.
+      const run =
+        'ps -o pgid= -p $$ > "$CLAUSONA_TEST_PIDS"; (trap "" TERM; exec sleep 30) & echo $! >> "$CLAUSONA_TEST_PIDS"; exit 0';
       const alive = (pid: number) => {
         try {
           process.kill(pid, 0);
@@ -223,9 +226,9 @@ describe("resolveSecret", () => {
       await vi.waitFor(() => expect(readFileSync(pids, "utf8").trim().split("\n")).toHaveLength(2), {
         timeout: 20_000,
       });
-      const [shell, job] = readFileSync(pids, "utf8").trim().split("\n").map(Number);
+      const [leader, job] = readFileSync(pids, "utf8").trim().split("\n").map(Number);
       try {
-        await vi.waitFor(() => expect(alive(shell)).toBe(false), { timeout: 20_000 });
+        await vi.waitFor(() => expect(alive(leader)).toBe(false), { timeout: 20_000 });
         const kill = vi.spyOn(process, "kill");
         controller.abort();
         await expect(read).rejects.toThrow("the key was not read in time");
@@ -236,6 +239,94 @@ describe("resolveSecret", () => {
       } finally {
         // The job is this test's own, by the pid it wrote.
         if (alive(job)) process.kill(job, "SIGKILL");
+      }
+    },
+  );
+
+  // A job left in the command's group holds its output open: it is ended once the command exits,
+  // and the key is read then, not when the reading's time is up.
+  it.skipIf(windows)(
+    "ends a job the command left running once it exits, and reads the key without waiting for it",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "clausona-key-command-"));
+      temps.push(dir);
+      const pids = path.join(dir, "pids");
+      vi.stubEnv("CLAUSONA_TEST_PIDS", pids);
+      const run = 'sleep 120 & echo $! > "$CLAUSONA_TEST_PIDS"; echo S3CRET';
+      const alive = (pid: number) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      // The job's pid, as the command wrote it; 0 until then, which is never signalled.
+      const written = () => {
+        try {
+          return Number(readFileSync(pids, "utf8").trim());
+        } catch {
+          return 0;
+        }
+      };
+      // Longer than a reading allows, for a machine under load; the job outlasts it.
+      const signal = AbortSignal.timeout(SPAWN_TIMEOUT_MS);
+      try {
+        await expect(resolveSecret("claude:x", { source: "command", run }, undefined, { signal })).resolves.toBe(
+          "S3CRET",
+        );
+        expect(written()).toBeGreaterThan(0);
+        await vi.waitFor(() => expect(alive(written())).toBe(false), { timeout: 10_000 });
+      } finally {
+        // The job is this test's own, by the pid it wrote.
+        const job = written();
+        if (job > 0 && alive(job)) process.kill(job, "SIGKILL");
+      }
+    },
+  );
+
+  // A key tool's agent (gpg-agent, ssh-agent) puts itself in a session of its own, and outlives
+  // the command that started it, as it must.
+  it.skipIf(windows)(
+    "leaves running a helper the command started in a session of its own",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "clausona-key-command-"));
+      temps.push(dir);
+      const pids = path.join(dir, "pids");
+      vi.stubEnv("CLAUSONA_TEST_PIDS", pids);
+      // Node's detached spawn calls setsid, as an agent does when it starts.
+      const helper =
+        "const c = require('child_process').spawn('sleep', ['120'], { detached: true, stdio: 'ignore' });" +
+        " require('fs').writeFileSync(process.env.CLAUSONA_TEST_PIDS, String(c.pid)); c.unref();";
+      const run = `node -e "${helper}"; echo S3CRET`;
+      const alive = (pid: number) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const written = () => {
+        try {
+          return Number(readFileSync(pids, "utf8").trim());
+        } catch {
+          return 0;
+        }
+      };
+      const signal = AbortSignal.timeout(SPAWN_TIMEOUT_MS);
+      try {
+        await expect(resolveSecret("claude:x", { source: "command", run }, undefined, { signal })).resolves.toBe(
+          "S3CRET",
+        );
+        expect(written()).toBeGreaterThan(0);
+        expect(alive(written())).toBe(true);
+      } finally {
+        // The helper is this test's own, by the pid it wrote.
+        const helperPid = written();
+        if (helperPid > 0 && alive(helperPid)) process.kill(helperPid, "SIGKILL");
       }
     },
   );

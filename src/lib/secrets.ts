@@ -22,10 +22,12 @@ export function keychainItemFor(profileId: string): string {
 type RunResult = { code: number; stdout: string };
 
 /**
- * Kills a running child and everything it started. On POSIX the child leads a process group of
- * its own (run() starts it so), and the whole group is killed: a `sh -c` command's own children,
- * which would outlive the shell, among them. Windows kills the tree under its pid. Only while the
- * child is still running: once it has exited, its pid can be another process's.
+ * Kills a running child and everything it started. On POSIX the child is the sh that leads the
+ * command's process group (run() starts it so, ENDS_ITS_GROUP), and the whole group is killed: the
+ * command, and a `sh -c` command's own children, which would outlive the shell, among them.
+ * Windows kills the tree under its pid. Only while the child is still running: once it has exited,
+ * its pid can be another process's. By then the sh has sent what the command left in the group a
+ * TERM.
  */
 function killRunning(child: ChildProcess): void {
   if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
@@ -115,11 +117,24 @@ function onAbort(signal: AbortSignal, stop: () => void): () => void {
 }
 
 /**
+ * The sh a detached command runs under, as `sh -c ENDS_ITS_GROUP sh <command> <args...>`: it leads
+ * the command's process group, runs the command, and once the command exits, sends TERM to the
+ * group, which it ignores itself, and exits with the command's status. A job the command left
+ * running in the group (`cmd &`) is ended so, and with it what held the output open. The TERM goes
+ * from inside the group while its leader is alive, so the group id cannot be another's: a pid is
+ * not reused while a group of that id has members. A helper that puts itself in a session of its
+ * own (setsid, as gpg-agent and ssh-agent do) is not in the group, and keeps running.
+ */
+const ENDS_ITS_GROUP = '"$@"; s=$?; trap "" TERM; kill -TERM 0 2>/dev/null; exit $s';
+
+/**
  * Runs `command` and resolves to its exit code and stdout. With a `signal`, the command starts
- * in a process group of its own, with no terminal, and once the signal aborts, it and everything
- * it started is killed, if it is still running; the result is a failure at once, not when its
- * output closes, which a process it left behind could hold open. Until then, clausona ending
- * ends it too (endWithClausona).
+ * in a process group of its own, with no terminal, under an sh that ends what the command left
+ * running in the group once it exits (ENDS_ITS_GROUP). Once the signal aborts, the group is
+ * killed, if the sh is still running; the result is a failure at once, not when the output
+ * closes, which a process left behind could still hold open: one that ignores TERM, or one outside
+ * the group. Until then, clausona ending ends it too (endWithClausona). On Windows the command
+ * starts in no group of its own, and what it leaves running when it exits keeps running.
  */
 function run(command: string, args: string[], input?: string, signal?: AbortSignal): Promise<RunResult> {
   return new Promise((resolve) => {
@@ -128,10 +143,10 @@ function run(command: string, args: string[], input?: string, signal?: AbortSign
       return;
     }
     const detached = signal !== undefined && process.platform !== "win32";
-    const child = spawnCommand(command, args, {
-      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "ignore"],
-      ...(detached ? { detached: true } : {}),
-    });
+    const stdio: ["ignore" | "pipe", "pipe", "ignore"] = [input === undefined ? "ignore" : "pipe", "pipe", "ignore"];
+    const child = detached
+      ? spawnCommand("/bin/sh", ["-c", ENDS_ITS_GROUP, "sh", command, ...args], { stdio, detached: true })
+      : spawnCommand(command, args, { stdio });
     const release = detached ? endWithClausona(child) : () => {};
     let out = "";
     let settled = false;
