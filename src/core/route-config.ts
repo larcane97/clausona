@@ -127,13 +127,14 @@ function isLimit(value: unknown): boolean {
  * 'sk-' where a token starts: at the start, or after anything that cannot be part of a key, a
  * name, an email or a glob - a space, `=`, a quote, a bracket, `;`, `/`. A short key, such as a
  * gateway's `sk-1234`, is caught by nothing else once it is glued to what comes before it
- * (`KEY=sk-…`, `"sk-…"`). Not after `.`, `@`, `*` or `?`: `team.sk-dev` is a profile name,
- * `*@sk-gaming.com` an email pattern and `*sk-*` a glob, and a routes.json holding one must read.
+ * (`KEY=sk-…`, `"sk-…"`). Not after `.`, `@`, `+`, `*` or `?`: `team.sk-dev` is a profile name,
+ * `*@sk-gaming.com` and `me+sk-team@corp.com` email patterns and `*sk-*` a glob, and a routes.json
+ * holding one must read.
  */
-const SK_TOKEN = /(?:^|[^A-Za-z0-9_\-.@*?])sk-/i;
+const SK_TOKEN = /(?:^|[^A-Za-z0-9_\-.@+*?])sk-/i;
 
 /**
- * The same after those four too, for text longer than a name. No name, email or glob a route holds
+ * The same after those five too, for text longer than a name. No name, email or glob a route holds
  * is that long, and the rule before the length ceiling went word by word refused all such text:
  * `KEY.sk-1234` in a long prompt stays refused.
  */

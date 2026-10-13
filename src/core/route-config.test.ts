@@ -104,7 +104,7 @@ describe("holdsKey", () => {
 
   // Names, emails and globs hold these, and none of them is longer than a name: past that, the key
   // after one is refused, as all such text was before the ceiling went word by word.
-  it.each([".", "@", "*", "?"])("finds a short key right after %j in text longer than a name", (before) => {
+  it.each([".", "@", "+", "*", "?"])("finds a short key right after %j in text longer than a name", (before) => {
     for (const text of [
       `please read the config, set KEY${before}${shortKey()} and run the whole suite before you report back`,
       `please read the config, set KEY${before}${shortKey().toUpperCase()} and run the whole suite before you report`,
@@ -128,6 +128,7 @@ describe("holdsKey", () => {
     "team.sk-dev",
     "*sk-*",
     "eu.sk-team",
+    "me+sk-team@corp.com",
   ])("finds nothing in %j", (text) => {
     expect(holdsKey(text)).toBe(false);
   });
@@ -170,8 +171,9 @@ describe("checkPattern", () => {
     "claude:*@example.com",
     "jiyoung_lee",
     "*@corp.example.com",
-    // A domain, a name and a glob with 'sk-' inside them are not keys.
+    // A domain, a plus tag, a name and a glob with 'sk-' inside them are not keys.
     "*@sk-gaming.com",
+    "me+sk-team@corp.com",
     "team.sk-dev",
     "claude:team.sk-dev",
     "*sk-*",
