@@ -745,7 +745,9 @@ export function budgetNote(row: BudgetRow): string {
 
 const UNREAD_WORDS: Record<Exclude<QuotaState, "ok">, string> = {
   missing: "its key could not be read (clausona doctor says why)",
-  expired: "the provider refused the key",
+  // The request, not the key: a gateway can refuse a path it does not let through, such as /key/info,
+  // for a key that works for everything else.
+  expired: "the provider refused the spend request (401/403)",
   cooldown: "the provider is rate limiting; clausona asks again later",
   error: "the request failed",
 };

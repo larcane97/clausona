@@ -1405,14 +1405,14 @@ describe("route budget", () => {
   it("says why spend could not be read", async () => {
     const { run, deps } = budgetSetup({ ...SPEND, "claude:gw": { state: "expired", fetchedAt: NOW } });
     expect(await run("budget", "gw")).toMatch(
-      /^ {4}claude:gw {2}spend could not be read: the provider refused the key$/m,
+      /^ {4}claude:gw {2}spend could not be read: the provider refused the spend request \(401\/403\)$/m,
     );
     writeFileSync(
       deps.paths.routesPath,
       JSON.stringify({ version: 1, routes: {}, budgets: { "claude:gw": { usd: 20, per: "month" } } }),
     );
     expect(await run("budget", "gw")).toMatch(
-      /^ {4}claude:gw {2}\$20\/month \(clausona budget\); spend could not be read: the provider refused the key$/m,
+      /^ {4}claude:gw {2}\$20\/month \(clausona budget\); spend could not be read: the provider refused the spend request \(401\/403\)$/m,
     );
   });
 

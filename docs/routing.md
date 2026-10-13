@@ -866,6 +866,10 @@ the provider and to nothing else. Two kinds of provider report it:
 | OpenRouter | `GET https://openrouter.ai/api/v1/key` | a base URL on `openrouter.ai` |
 | A LiteLLM proxy | `GET <base URL>/key/info` | any other base URL |
 
+A 401 or 403 from the spend request reads as "the provider refused the spend request (401/403)".
+That is the request, not necessarily the key: a gateway can refuse `/key/info` alone for a key
+that works for everything else.
+
 A provider that answers `/key/info` with a 404, or with anything but LiteLLM's JSON, gives no
 spend reading. Such a profile cannot join a route, budget or not, and `route budget` and
 `route explain` say "the provider does not report spend". A LiteLLM proxy behind another gateway
