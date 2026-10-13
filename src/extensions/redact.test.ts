@@ -505,6 +505,40 @@ describe("redactCommand on the shapes a differential against the first version f
   });
 });
 
+describe("redactCommand on the shapes the differential left after #97", () => {
+  const HEX = "0123456789abcdef".repeat(2);
+  const command = (line: string) => hookSummary("Stop", undefined, { type: "command", command: line }).command ?? "";
+  const mcp = (args: string[]) => mcpSummary({ command: "tool", args }).command ?? "";
+  const hidden = (shown: [string, string][], secrets: string[] = [HEX]) => {
+    for (const [actual, expected] of shown) {
+      expect(actual).toBe(expected);
+      for (const secret of secrets) expect(actual).not.toContain(secret);
+    }
+  };
+
+  it("reads a secret-named option after a secret flag as the flag's value, unless it takes a plain value", () => {
+    // A password spelled like an option named for a secret. Built from pieces.
+    const SPELLED = ["--my", "token"].join("");
+    hidden(
+      [
+        [mcp(["--password", SPELLED]), "tool --password <hidden>"],
+        [command(`tool --token ${SPELLED}`), "tool --token <hidden>"],
+        // What it would take starts with a dash or ends the command: hidden as before, and it too.
+        [command(`tool --api-key ${SPELLED} --verbose`), "tool --api-key <hidden> <hidden>"],
+        [command(`tool --secret ${SPELLED} && notify`), "tool --secret <hidden> <hidden> notify"],
+        [mcp(["--password", SPELLED, "-H", `X-Api-Key: ${HEX}`]), "tool --password <hidden> -H X-Api-Key: <hidden>"],
+        [mcp(["--auth", "--api-key", SPELLED]), "tool --auth <hidden> <hidden>"],
+      ],
+      [HEX, SPELLED],
+    );
+    // An option with a plain value is still an option, as before.
+    hidden([
+      [mcp(["--auth", "--api-key", HEX]), "tool --auth --api-key <hidden>"],
+      [command(`tool -b --api-key ${HEX} --verbose`), "tool -b --api-key <hidden> --verbose"],
+    ]);
+  });
+});
+
 describe("mcpSummary", () => {
   it("shows transport, command and the names - never the values - of env and headers", () => {
     const summary = mcpSummary({

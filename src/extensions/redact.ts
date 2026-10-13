@@ -293,17 +293,42 @@ function redactAt(line: Line, i: number): number {
  * they start with (`--token "-u x"`). And a word that may be either - an option named for a
  * secret in Go's single-dash style (`-b -token x`), or a double-dash one not spelled the way
  * option names are (`--Tk9Secret`) - is hidden as a value, and so is the word after it, its
- * value if it is an option: whichever it is, the secret is hidden.
+ * value if it is an option: whichever it is, the secret is hidden. One spelled as option names
+ * are is read as `optionOrValue` says.
  */
 function hideFlagValue(line: Line, i: number): number {
   const at = i + 1;
   const next = line.words[at] ?? "";
   if (leadingQuote(next) !== "" || !line.ends[at]) return hideWord(line, at);
+  if (isSpelledSecretOption(next)) return optionOrValue(line, at);
   const either = mayBeSecretFlag(next);
   if (!either && hidesOwnValue(line, at)) return i;
   const last = hideWord(line, at);
   if (!either || last !== at || at + 1 >= line.words.length || hidesOwnValue(line, at + 1)) return last;
   return hideWord(line, at + 1);
+}
+
+/** A double-dash option spelled the way option names are, and named for a secret: `--api-key`. */
+function isSpelledSecretOption(word: string): boolean {
+  const option = /^--([\w.-]+)$/.exec(word)?.[1];
+  return option !== undefined && isSecretName(option) && SPELLED_OPTION.test(option);
+}
+
+/**
+ * Shows `words[at]`, a word spelled like an option named for a secret right after a secret's
+ * option, and what it takes; returns the index of the last word. It is read by its own rule
+ * first. When that takes a plain value, it is an option, as in `--auth --api-key K`. Otherwise it
+ * is the value of the option before it, a password such as `--mytoken`, and is hidden: nothing
+ * follows it in its command, or what follows has a rule of its own (`-H …`), or what it took
+ * starts with a dash or ends the command, which stays hidden too. So the secret is hidden
+ * whichever it is; only a password of that spelling with a plain word after it still shows.
+ */
+function optionOrValue(line: Line, at: number): number {
+  const first = line.shown.length;
+  const last = redactAt(line, at);
+  const taken = last > at ? unquoted(line.words[at + 1] ?? "") : "";
+  if (taken === "" || taken.startsWith("-") || SEPARATOR.test(taken)) line.shown[first] = HIDDEN;
+  return last;
 }
 
 /** See hideFlagValue: a word after a secret's option that may be its value or an option of its own. */
