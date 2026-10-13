@@ -4,16 +4,19 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 /**
- * Seams into `rename`, `cp` and `rm`, as a backup on another volume and a process cut short
- * would leave things: `exdev` names the renames that fail as one across file systems does,
+ * Seams into `rename`, `cp`, `rm` and `access`, as a backup on another volume and a process cut
+ * short would leave things: `exdev` names the renames that fail as one across file systems does,
  * `failRename` the ones that fail as a killed process never makes them, `cpFails` a copy that
- * runs, then fails as a disk that filled up would, and `failRm` the removals that fail.
+ * runs, then fails as a disk that filled up would, `failRm` the removals that fail, and
+ * `failAccess` the folders that cannot be written. `copies` records each copy's two ends.
  */
 const fsHooks = vi.hoisted(() => ({
   exdev: undefined as ((from: string, to: string) => boolean) | undefined,
   failRename: undefined as ((from: string, to: string) => boolean) | undefined,
   cpFails: false,
   failRm: undefined as ((p: string) => boolean) | undefined,
+  failAccess: undefined as ((p: string) => boolean) | undefined,
+  copies: [] as { from: string; to: string }[],
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -24,6 +27,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     return actual.rename(from, to);
   };
   const cp: typeof actual.cp = async (from, to, options) => {
+    fsHooks.copies.push({ from: String(from), to: String(to) });
     await actual.cp(from, to, options);
     if (!fsHooks.cpFails) return;
     fsHooks.cpFails = false;
@@ -33,7 +37,11 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     if (fsHooks.failRm?.(String(p))) throw fail("EACCES");
     return actual.rm(p, options);
   };
-  return { ...actual, default: { ...actual, rename, cp, rm }, rename, cp, rm };
+  const access: typeof actual.access = async (p, mode) => {
+    if (fsHooks.failAccess?.(String(p))) throw fail("EACCES");
+    return actual.access(p, mode);
+  };
+  return { ...actual, default: { ...actual, rename, cp, rm, access }, rename, cp, rm, access };
 });
 
 import type { Action } from "./actions.js";
@@ -41,7 +49,7 @@ import { apply, lastOperation, type Manifest, undo, type WriteEnv, writeEnvFor }
 import { loadInventory } from "./inventory.js";
 import { type Plan, plan } from "./plan.js";
 import { hashTree } from "./read.js";
-import { rowsIn } from "./scopes.js";
+import { rowsIn, type ToolName } from "./scopes.js";
 import { TestHome } from "./test-home.js";
 
 const NOW = Date.UTC(2026, 9, 10, 4, 36, 48);
@@ -51,6 +59,8 @@ afterEach(() => {
   fsHooks.failRename = undefined;
   fsHooks.cpFails = false;
   fsHooks.failRm = undefined;
+  fsHooks.failAccess = undefined;
+  fsHooks.copies = [];
   for (const home of homes.splice(0)) home.dispose();
 });
 
@@ -83,9 +93,15 @@ async function seed() {
   };
 }
 
-async function planFor(h: TestHome, app: string, verb: Action["verb"], name: string): Promise<Plan> {
+async function planFor(
+  h: TestHome,
+  app: string,
+  verb: Action["verb"],
+  name: string,
+  tool: ToolName = "claude",
+): Promise<Plan> {
   const inv = await loadInventory(h.inventoryOptions(app, h.path("managed-settings.json")));
-  const row = rowsIn(inv, "claude", "skill", "global", app, NOW).find((r) => r.name === name);
+  const row = rowsIn(inv, tool, "skill", "global", app, NOW).find((r) => r.name === name);
   if (!row) throw new Error(`no ${name} row`);
   const ctx = {
     inv,
@@ -100,8 +116,9 @@ async function planFor(h: TestHome, app: string, verb: Action["verb"], name: str
 const manifestOf = (env: WriteEnv, id: string): Manifest =>
   JSON.parse(readFileSync(path.join(env.backupRoot, id, "manifest.json"), "utf8"));
 
-/** What clausona set aside under ~/.claude, the folder above the skills folder. */
-const asides = (h: TestHome) => readdirSync(h.path(".claude")).filter((name) => name.startsWith(".clausona-"));
+/** What clausona set aside in a folder of the home, ~/.claude by default: the folder above the skills folder. */
+const asides = (h: TestHome, dir = ".claude") =>
+  readdirSync(h.path(...dir.split("/"))).filter((name) => name.startsWith(".clausona-"));
 
 /**
  * `rm old-one`, its backup on another volume, cut short between the set-aside and the copy: the
@@ -205,5 +222,100 @@ describe("a move across volumes cut short", () => {
     expect(await hashTree(folder)).toBe(before);
     expect(readdirSync(result.operation.dir).filter((name) => name.startsWith(".clausona-"))).toEqual([]);
     expect(asides(h)).toEqual([]);
+  });
+});
+
+describe("a move across volumes, where the skill is set aside", () => {
+  /** A Codex skill a folder below the top of its skills folder: ~/.agents/skills/group/foo. */
+  async function nested() {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", { projects: { [app]: {} } });
+    h.codex("personal", ".codex", "");
+    h.skill(".agents/skills/group", "foo");
+    h.write(".agents/skills/group/foo/notes/a.txt", "a");
+    const folder = realpathSync.native(h.path(".agents", "skills", "group", "foo"));
+    return { h, app, env: writeEnvFor(h.home, clock()), folder, before: await hashTree(folder) };
+  }
+
+  it("keeps a nested Codex skill beside the skills folder it was read from, not the one its folder is in", async () => {
+    const { h, app, env, folder, before } = await nested();
+    const p = await planFor(h, app, "rm", "foo", "codex");
+    // Cut short between the set-aside and the copy, as when the process is killed there.
+    fsHooks.exdev = (from, to) => from === folder && to.startsWith(env.backupRoot);
+    fsHooks.cpFails = true;
+    fsHooks.failRename = (from, to) => to === folder && path.basename(from).endsWith(".moving");
+    const result = await apply(p, env);
+    expect(result).toMatchObject({ status: "stopped", stop: { reason: "failed", detail: "ENOSPC" } });
+    fsHooks.exdev = undefined;
+    fsHooks.failRename = undefined;
+    if (result.status !== "stopped") throw new Error(result.status);
+    // Neither in group nor in the skills folder, both of which Codex looks through.
+    expect(readdirSync(h.path(".agents", "skills"))).toEqual(["group"]);
+    expect(readdirSync(h.path(".agents", "skills", "group"))).toEqual([]);
+    const [aside] = asides(h, ".agents");
+    expect(aside).toMatch(/^\.clausona-foo-\d+-[0-9a-f]{12}\.moving$/);
+    expect(manifestOf(env, result.operation.id).entries[0]?.moving).toMatchObject({
+      aside: path.join(realpathSync.native(h.path(".agents")), aside ?? ""),
+    });
+    expect(await undo(env)).toMatchObject({ restored: [folder], skipped: [] });
+    expect(await hashTree(folder)).toBe(before);
+    expect(asides(h, ".agents")).toEqual([]);
+  });
+
+  it("makes undo's copy of a nested Codex skill beside its skills folder too", async () => {
+    const { h, app, env, folder, before } = await nested();
+    const result = await apply(await planFor(h, app, "rm", "foo", "codex"), env);
+    if (result.status !== "applied") throw new Error(result.status);
+    const backup = path.join(result.operation.dir, "files", "1");
+    fsHooks.exdev = (from, to) => from === backup && to === folder;
+    expect(await undo(env)).toMatchObject({ restored: [folder], skipped: [] });
+    expect(fsHooks.copies.map((c) => path.dirname(c.to))).toEqual([realpathSync.native(h.path(".agents"))]);
+    expect(await hashTree(folder)).toBe(before);
+    expect(asides(h, ".agents")).toEqual([]);
+  });
+
+  it("copies a folder from its place when nothing outside the skills folders can be written, and keeps it there till then", async () => {
+    const { h, app, env, folder, before } = await seed();
+    const p = await planFor(h, app, "rm", "old-one");
+    // ~/.claude, above the skills folder, cannot be written: there is no place out of it.
+    fsHooks.failAccess = (p) => p === realpathSync.native(h.path(".claude"));
+    fsHooks.exdev = (from, to) => from === folder && to.startsWith(env.backupRoot);
+    fsHooks.cpFails = true;
+    const result = await apply(p, env);
+    expect(result).toMatchObject({ status: "stopped", stop: { reason: "failed", detail: "ENOSPC" } });
+    if (result.status !== "stopped") throw new Error(result.status);
+    // Copied from where it is, which it never left: no second copy anywhere Claude Code looks.
+    expect(fsHooks.copies.map((c) => c.from)).toEqual([folder]);
+    expect(await hashTree(folder)).toBe(before);
+    expect(readdirSync(h.path(".claude", "skills")).sort()).toEqual(["eli5", "old-one"]);
+    expect(asides(h)).toEqual([]);
+    expect(manifestOf(env, result.operation.id).entries[0]?.moving).toBeUndefined();
+    expect(await lastOperation(env)).toBeNull();
+  });
+
+  it("sets a folder copied from its place aside only once the copy landed, and finishes it as any other", async () => {
+    const { h, app, env, folder, before } = await seed();
+    const p = await planFor(h, app, "rm", "old-one");
+    fsHooks.failAccess = (p) => p === realpathSync.native(h.path(".claude"));
+    fsHooks.exdev = (from, to) => from === folder && to.startsWith(env.backupRoot);
+    // The copy landed; removing what was set aside, beside it, fails.
+    fsHooks.failRm = (p) => path.basename(p).endsWith(".moving");
+    const result = await apply(p, env);
+    expect(result).toMatchObject({ status: "stopped", stop: { reason: "failed", detail: "EACCES" } });
+    if (result.status !== "stopped") throw new Error(result.status);
+    expect(fsHooks.copies.map((c) => c.from)).toEqual([folder]);
+    const moving = manifestOf(env, result.operation.id).entries[0]?.moving;
+    expect(moving).toMatchObject({ landed: true });
+    expect(path.dirname(moving?.aside ?? "")).toBe(path.dirname(folder));
+    fsHooks.exdev = undefined;
+    fsHooks.failRm = undefined;
+
+    await apply(await planFor(h, app, "off", "eli5"), env);
+    expect(readdirSync(h.path(".claude", "skills")).sort()).toEqual(["eli5"]);
+    await undo(env);
+    expect(await undo(env)).toMatchObject({ restored: [folder], skipped: [] });
+    expect(await hashTree(folder)).toBe(before);
   });
 });

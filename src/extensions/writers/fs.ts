@@ -184,10 +184,9 @@ export const ASIDE_NAME = /^\.clausona-.+-\d+-[0-9a-f]{12}\.(moving|copying)$/;
 const underWay = new Set<string>();
 
 /**
- * Where a move across file systems keeps `p` aside, or makes its copy: the folder above `p`'s
- * own, when that is on the same volume and can be written, else `p`'s own folder. Claude Code
- * loads every folder in a skills folder, a dot-folder too, as a skill; the folder above is no
- * skills folder.
+ * Where a move across file systems keeps `p` aside, or makes its copy, for an end in no skills
+ * folder - a backup, a kept copy: the folder above `p`'s own, when that is on the same volume and
+ * can be written, else `p`'s own folder.
  */
 async function asideDir(p: string): Promise<string> {
   const own = path.dirname(p);
@@ -203,26 +202,60 @@ async function asideDir(p: string): Promise<string> {
   }
 }
 
-/** `.clausona-<name>-<pid>-<random>.<tag>` in asideDir(p): a dot-entry, which Codex does not list. */
-async function asideName(p: string, tag: "moving" | "copying"): Promise<string> {
-  const name = `.clausona-${path.basename(p)}-${process.pid}-${randomBytes(6).toString("hex")}.${tag}`;
-  return path.join(await asideDir(p), name);
+/**
+ * Where a move across file systems keeps a skill's folder `p` aside, or makes its copy, out of
+ * every skills folder: the folder above `root`, the skills folder it was read from, by its real
+ * path - when `p` is inside that folder, and the folder above is on `p`'s volume and can be
+ * written. Claude Code loads every folder in a skills folder, a dot-folder too, as a skill, and
+ * Codex looks for skills in the folders below one; the folder above it is in neither. Undefined
+ * when there is no such place.
+ */
+async function outsideDir(p: string, root: string): Promise<string | undefined> {
+  try {
+    const real = await realpath(root);
+    const above = path.dirname(real);
+    if (above === real || !isWithin(p, real)) return undefined;
+    const [here, there] = await Promise.all([stat(path.dirname(p)), stat(above)]);
+    if (here.dev !== there.dev) return undefined;
+    await access(above, constants.W_OK);
+    return above;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `.clausona-<name>-<pid>-<random>.<tag>` in `dir`: a dot-entry, which Codex does not list. */
+function asideName(dir: string, p: string, tag: "moving" | "copying"): string {
+  return path.join(dir, `.clausona-${path.basename(p)}-${process.pid}-${randomBytes(6).toString("hex")}.${tag}`);
 }
 
 /**
+ * For an end of a move that is a skill's folder: the skills folder it was read from, so that
+ * what the move sets aside or copies there waits out of every skills folder (outsideDir).
+ */
+export type MoveRoots = { from?: string; to?: string };
+
+/**
  * rename; on EXDEV, across file systems, in steps, each recorded first through `record`: `from` is
- * renamed aside on its own volume, out of its folder (asideDir); cp(aside, a copy on the other
- * volume, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true }) and the copy
- * renamed to `to`; recorded landed; then rm(aside, { recursive: true }); recorded done
- * (`undefined`). Neither follows a link inside. So `from` is empty from before a copy can exist,
- * and `to` holds the whole copy or nothing: a move cut short is never taken for one made. A copy
- * that fails is removed and `from` put back. One stopped part way - killed, or the last removal
- * failing - leaves its record, and settleMove finishes or rolls it back.
+ * renamed aside on its own volume, out of its folder (asideDir, or outsideDir for a skill's);
+ * cp(aside, a copy on the other volume, { recursive: true, verbatimSymlinks: true,
+ * preserveTimestamps: true }) and the copy renamed to `to`; recorded landed; then rm(aside,
+ * { recursive: true }); recorded done (`undefined`). Neither follows a link inside. So `from` is
+ * empty from before a copy can exist, and `to` holds the whole copy or nothing: a move cut short
+ * is never taken for one made. A copy that fails is removed and `from` put back. One stopped part
+ * way - killed, or the last removal failing - leaves its record, and settleMove finishes or rolls
+ * it back.
+ *
+ * A skill's folder with no place out of every skills folder on its volume stays where it is, in
+ * use as it was, while it is copied from there, and is renamed aside next to itself only once the
+ * copy has landed, to be removed: settleMove puts it right the same way. A skill's folder that a
+ * move ends at with no such place gets its copy next to it.
  */
 export async function moveTo(
   from: string,
   to: string,
   record: (move: CrossMove | undefined) => Promise<void> = async () => {},
+  roots: MoveRoots = {},
 ): Promise<void> {
   try {
     await rename(from, to);
@@ -230,22 +263,28 @@ export async function moveTo(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
   }
+  const outside = roots.from === undefined ? await asideDir(from) : await outsideDir(from, roots.from);
+  const copyDir = roots.to === undefined ? await asideDir(to) : ((await outsideDir(to, roots.to)) ?? path.dirname(to));
+  // No place out of the skills folders: copied from where it is, set aside only once copied.
+  const inPlace = outside === undefined;
   const move: CrossMove = {
-    aside: await asideName(from, "moving"),
-    copy: await asideName(to, "copying"),
+    aside: asideName(outside ?? path.dirname(from), from, "moving"),
+    copy: asideName(copyDir, to, "copying"),
     landed: false,
   };
   underWay.add(move.aside);
   try {
     await record(move);
-    try {
-      await rename(from, move.aside);
-    } catch (error) {
-      await record(undefined).catch(() => {});
-      throw error;
+    if (!inPlace) {
+      try {
+        await rename(from, move.aside);
+      } catch (error) {
+        await record(undefined).catch(() => {});
+        throw error;
+      }
     }
     try {
-      await cp(move.aside, move.copy, {
+      await cp(inPlace ? from : move.aside, move.copy, {
         recursive: true,
         verbatimSymlinks: true,
         preserveTimestamps: true,
@@ -253,13 +292,17 @@ export async function moveTo(
         errorOnExist: true,
       });
       await rename(move.copy, to);
+      if (inPlace) await rename(from, move.aside);
     } catch (error) {
       await rm(move.copy, { recursive: true, force: true }).catch(() => {});
       // Put back: the move never happened. Should that fail too, its record stays, for settleMove.
-      const back = await rename(move.aside, from).then(
-        () => true,
-        () => false,
-      );
+      // In place, the folder never left: a step that failed came before it was set aside.
+      const back =
+        inPlace ||
+        (await rename(move.aside, from).then(
+          () => true,
+          () => false,
+        ));
       if (back) await record(undefined).catch(() => {});
       throw error;
     }

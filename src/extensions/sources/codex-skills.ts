@@ -66,6 +66,7 @@ export async function readCodexSkills(
       location: { ...location, file: folder.path },
       ...(folder.info.link ? { link: folder.info.link } : {}),
       realFolder: folder.real,
+      skillsDir: dir,
       ...(folder.info.createdAt !== undefined ? { createdAt: folder.info.createdAt } : {}),
       // Codex keeps no record of use that we found.
       usageKeys: [],

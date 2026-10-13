@@ -893,12 +893,24 @@ The backup folders are 0700 and their files 0600, so only you can read them. A c
 `.claude.json` or of a settings file can hold MCP secrets.
 
 A folder on another disk than `~/.clausona` can't be moved there in one step, so clausona copies
-it into the backup and then removes it. Meanwhile it waits in the folder above its skills folder,
+it into the backup and then removes it. Meanwhile it waits in the folder above the skills folder
+it was read from, by that folder's real path, such as `~/.agents` for `~/.agents/skills/group/foo`,
 under a name that starts with `.clausona-`, where neither Claude Code nor Codex loads it as a
-skill. The manifest says where. When the change is cut short, as when the process is killed,
-the next change or `undo` puts it right: before the copy is whole, the folder goes back where it
-was, as if the change had not started; once the copy is whole, the change is finished, and
-`undo` puts the folder back from the backup.
+skill. The manifest says where. `undo` moving a folder back across disks makes its copy there
+too, and renames it into place once it is whole.
+
+That folder can be on another disk than the skill, as when the skills folder is a disk of its
+own, or it can't be written. Then there is no such place. The folder stays where it is, loading
+as it did, while it is copied into the backup, and only once the copy is whole is it renamed
+next to itself, under a `.clausona-` name, and removed. Should that removal be cut short, what is
+left of it waits there, where Claude Code can see it, until the next change or `undo` removes it.
+`undo` in that case makes its copy next to where the folder goes, under such a name, where Claude
+Code can see it until it is renamed into place.
+
+When the change is cut short, as when the process is killed, the next change or `undo` puts it
+right: before the copy is whole, the folder goes back where it was, as if the change had not
+started; once the copy is whole, the change is finished, and `undo` puts the folder back from
+the backup.
 
 `.claude.json` is changed only under Claude Code's own lock, `.claude.json.lock` next to it, so
 clausona never writes it while Claude Code does. When the lock is not free within 15 seconds,

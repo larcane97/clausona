@@ -4,7 +4,7 @@ import type { ExtensionsCommand, Reach, Stop, Verb } from "./actions.js";
 import { bytesHash, canonical, valueHash } from "./hash.js";
 import { backupRoot, stashDir } from "./places.js";
 import type { Expect, FileChange, Plan } from "./plan.js";
-import { hashTree, isRecord, samePath } from "./read.js";
+import { hashTree, isRecord, isWithin, samePath } from "./read.js";
 import { parseStash, type StashFile, stashItem, stashText } from "./stash.js";
 import {
   ASIDE_NAME,
@@ -121,6 +121,11 @@ export type ManifestEntry = {
    * move was cut short: settleMoves, or undo, finishes or rolls it back (writers/fs.ts settleMove).
    */
   moving?: { from: string; to: string; pid: number } & CrossMove;
+  /**
+   * A skill's folder or a command's file moved: the skills folder it was read from, so that a
+   * move across file systems, either way, keeps it out of every skills folder meanwhile.
+   */
+  root?: string;
   done: boolean;
 };
 
@@ -537,6 +542,7 @@ async function removeChange(run: Run, change: RemoveChange): Promise<Stop | unde
     backup: into.rel,
     hashBefore,
     hashAfter: null,
+    ...(change.root !== undefined ? { root: change.root } : {}),
     done: false,
   };
   run.manifest.entries.push(entry);
@@ -546,6 +552,7 @@ async function removeChange(run: Run, change: RemoveChange): Promise<Stop | unde
     file,
     into.abs,
     recordMove(entry, file, into.abs, () => save(run)),
+    change.root !== undefined ? { from: change.root } : {},
   );
   entry.done = true;
   await save(run);
@@ -644,17 +651,16 @@ function runningElsewhere(pid: number): boolean {
 
 /**
  * Whether an entry's record of a move is one clausona made for it: between its path and its
- * backup in `dir`, the aside and the copy under asideName's names, each beside or one folder
- * above an end of the move. A damaged or foreign record moves nothing.
+ * backup in `dir`, the aside and the copy under asideName's names, each in a folder that holds
+ * an end of the move - beside it, or above its skills folder. A damaged or foreign record moves
+ * nothing.
  */
 function soundMove(entry: ManifestEntry, move: NonNullable<ManifestEntry["moving"]>, dir: string): boolean {
   const backup = backupPath(dir, entry.backup);
   if (backup === undefined) return false;
   const ends = [entry.path, backup];
   const between = ends.some((end) => samePath(end, move.from)) && ends.some((end) => samePath(end, move.to));
-  const near = (p: string, end: string) =>
-    ASIDE_NAME.test(path.basename(p)) &&
-    (samePath(path.dirname(p), path.dirname(end)) || samePath(path.dirname(p), path.dirname(path.dirname(end))));
+  const near = (p: string, end: string) => ASIDE_NAME.test(path.basename(p)) && isWithin(end, path.dirname(p));
   return between && !samePath(move.from, move.to) && near(move.aside, move.from) && near(move.copy, move.to);
 }
 
@@ -741,6 +747,7 @@ function isEntry(value: unknown): value is ManifestEntry {
     (value.with === undefined || isIndex(value.with)) &&
     (value.undone === undefined || (typeof value.undone === "string" && OUTCOMES.has(value.undone))) &&
     (value.moving === undefined || isMove(value.moving)) &&
+    (value.root === undefined || typeof value.root === "string") &&
     typeof value.done === "boolean"
   );
 }
@@ -931,7 +938,12 @@ async function moveBack(entry: ManifestEntry, dir: string, persist: () => Promis
   if ((await entryKind(entry.path)) !== "missing") return "occupied";
   if (entry.what === "stash") await privateDir(path.dirname(entry.path));
   else await ensureDir(path.dirname(entry.path));
-  await moveTo(backup, entry.path, recordMove(entry, backup, entry.path, persist));
+  await moveTo(
+    backup,
+    entry.path,
+    recordMove(entry, backup, entry.path, persist),
+    entry.root !== undefined ? { to: entry.root } : {},
+  );
   return "restored";
 }
 

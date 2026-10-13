@@ -283,6 +283,8 @@ describe("plan: Claude skills", () => {
         lines: [
           { file: h.path(".claude/skills/old-one"), change: "delete", what: "", tracked: false, rows: [oldOne.key] },
         ],
+        // The skills folder it was read from, which a move across volumes keeps it out of.
+        root: h.path(".claude/skills"),
       },
     ]);
     expect(p.question).toBe("Delete old-one?");

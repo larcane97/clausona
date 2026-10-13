@@ -65,6 +65,11 @@ export type Extension = {
    * dir's - so two entries that lead to one folder are one copy. Absent for a broken link.
    */
   realFolder?: string;
+  /**
+   * Codex skills: the skills folder the walk that found it started from, which a skill can sit
+   * folders below. A Claude skill's is the folder its own is in.
+   */
+  skillsDir?: string;
   /** Skills: when the folder appeared (birthtime, else mtime), for the cleanup grace period. */
   createdAt?: number;
   /** Skills: the keys Claude Code may record its use under in `skillUsage`. */

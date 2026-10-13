@@ -108,7 +108,18 @@ export type FileChange =
       lines: PlanLine[];
     }
   | { kind: "toml"; file: string; edits: TomlEdit[]; expect: Expect[]; create: boolean; lines: PlanLine[] }
-  | { kind: "remove"; file: string; what: "folder" | "file" | "link"; expect: Expect[]; lines: PlanLine[] }
+  | {
+      kind: "remove";
+      file: string;
+      what: "folder" | "file" | "link";
+      expect: Expect[];
+      lines: PlanLine[];
+      /**
+       * A skill's folder or a command's file: the skills folder it was read from, which a move
+       * across file systems keeps it out of meanwhile (writers/fs.ts moveTo).
+       */
+      root?: string;
+    }
   /** A line added to a text file, git's global ignore file, unless a line of it is that already. */
   | { kind: "text"; file: string; add: string; create: boolean; lines: PlanLine[] };
 
@@ -357,8 +368,19 @@ function tomlChange(
   return { kind: "toml", file, edits, expect, create, lines: [lineFor(run, row, file, what, { create })] };
 }
 
-function removal(file: string, what: "folder" | "file" | "link", expect: Expect[], line: PlanLine): FileChange {
-  return { kind: "remove", file, what, expect, lines: [line] };
+function removal(
+  file: string,
+  what: "folder" | "file" | "link",
+  expect: Expect[],
+  line: PlanLine,
+  root?: string,
+): FileChange {
+  return { kind: "remove", file, what, expect, lines: [line], ...(root !== undefined ? { root } : {}) };
+}
+
+/** The skills folder a skill was read from: a Codex skill can sit folders below its top. */
+function skillsRoot(item: Extension): string {
+  return item.skillsDir ?? path.dirname(item.location.file);
 }
 
 /** The fingerprint of an item's raw entry as read, at `at`. */
@@ -707,7 +729,7 @@ function folderRemoval(run: Run, row: ScopeRow, copy: Extension): FileChange | O
   });
   if (inside.length > 0) line.deletes = inside.map((skill) => skill.key);
   if (links.length > 0) line.breaks = links.map((link) => link.key);
-  return removal(real, "folder", [{ type: "entry", kind: "dir", realPath: real }], line);
+  return removal(real, "folder", [{ type: "entry", kind: "dir", realPath: real }], line, skillsRoot(copy));
 }
 
 /**
@@ -730,7 +752,7 @@ function planSkillRemoval(run: Run, row: ScopeRow): Outcome {
     }
     if (copy.summary?.type === "command") {
       const line = lineFor(run, row, listed, "", { change: "delete" });
-      out.changes.push(removal(listed, "file", [{ type: "entry", kind: "file" }], line));
+      out.changes.push(removal(listed, "file", [{ type: "entry", kind: "file" }], line, skillsRoot(copy)));
       continue;
     }
     const outer = outerFolder(run, copy);
