@@ -620,6 +620,39 @@ describe("readCodex", () => {
     );
   });
 
+  it("marks an MCP tool hook whose server or tool is empty, which Codex skips, and runs the rest", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    // Codex 0.159.3's hooks/list: "server and tool must not be empty" for the first two.
+    h.write(".codex/hooks.json", {
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              { type: "mcp_tool", server: "", tool: "t" },
+              { type: "mcp_tool", server: "s", tool: " " },
+              { type: "mcp_tool", server: "s", tool: "t" },
+            ],
+          },
+        ],
+        // When a session ends Codex runs no MCP tool hook at all: that reason stands.
+        SessionEnd: [{ hooks: [{ type: "mcp_tool", server: "", tool: "t" }] }],
+      },
+    });
+    h.codex("personal", ".codex");
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(ctx, [], out);
+    const place = (id: string) => id.slice(id.indexOf(":-:") + 3);
+    expect(out.items.filter((i) => i.kind === "hook").map((i) => [place(i.id), i.codexError])).toEqual([
+      ["Stop#0.0", "empty tool"],
+      ["Stop#0.1", "empty tool"],
+      ["Stop#0.2", undefined],
+      ["SessionEnd#0.0", "not supported"],
+    ]);
+  });
+
   it("marks the hooks of a hooks file Codex cannot read: anything but hooks and a description at its top", async () => {
     const h = new TestHome();
     homes.push(h);

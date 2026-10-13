@@ -67,6 +67,7 @@ const TAGS = [
   "invalid hooks file",
   "not supported",
   "empty command",
+  "empty tool",
 ];
 
 /** The keys `ls --json` writes, in order. */
@@ -289,11 +290,23 @@ function seed() {
     skillOverrides: { "old-one": "off" },
     hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-done" }] }] },
   });
-  // A prompt hook and an empty command in Codex's config.toml, which Codex does not run.
+  // A prompt hook, an empty command and an empty tool in Codex's config.toml, which Codex does not run.
   h.codex(
     "personal",
     ".codex",
-    '[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "prompt"\nprompt = "p"\n\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = ""\n',
+    [
+      "[[hooks.Stop]]",
+      "[[hooks.Stop.hooks]]",
+      'type = "prompt"',
+      'prompt = "p"',
+      "[[hooks.Stop.hooks]]",
+      'type = "command"',
+      'command = ""',
+      "[[hooks.Stop.hooks]]",
+      'type = "mcp_tool"',
+      'server = "s"',
+      'tool = ""',
+    ].join("\n"),
   );
   h.skill(".agents/skills", "eli5");
   // Four SKILL.md files and a hooks file Codex skips.

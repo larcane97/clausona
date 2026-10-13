@@ -164,10 +164,11 @@ export function addConfigHooks(
 
 /**
  * Marks the Codex hooks Codex 0.159.3 never runs, whatever their trust, as it skips them: a
- * prompt or agent hook ("not supported yet"), an MCP tool hook when a session ends, and a command
- * hook whose command is empty ("skipping empty hook command") - the one command hook of a known
- * event that has no trust identity, as the command it runs on this platform is the one
- * normalized() reads. One in a file Codex refuses keeps that reason.
+ * prompt or agent hook ("not supported yet"), an MCP tool hook when a session ends, a command
+ * hook whose command is empty ("skipping empty hook command"), and an MCP tool hook whose server
+ * or tool is ("server and tool must not be empty"). The last two are the command and MCP tool
+ * hooks of a known event that have no trust identity: normalized() reads what Codex runs on this
+ * platform, and gives none to those alone. One in a file Codex refuses keeps that reason.
  */
 export function markUnsupportedHooks(out: Collector): void {
   const trusted = new Set(out.facts.codexHookTrust.map((t) => t.id));
@@ -177,8 +178,9 @@ export function markUnsupportedHooks(out: Collector): void {
     const event = item.hook?.event ?? "";
     const sessionEndTool = type === "mcp_tool" && event === "SessionEnd";
     if (type === "prompt" || type === "agent" || sessionEndTool) item.codexError = "not supported";
-    else if (type === "command" && Object.hasOwn(EVENTS, event) && !trusted.has(item.id)) {
-      item.codexError = "empty command";
+    else if (Object.hasOwn(EVENTS, event) && !trusted.has(item.id)) {
+      if (type === "command") item.codexError = "empty command";
+      if (type === "mcp_tool") item.codexError = "empty tool";
     }
   }
 }

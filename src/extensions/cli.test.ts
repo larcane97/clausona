@@ -1052,6 +1052,17 @@ describe("Codex hooks and Codex's trust", () => {
     );
   });
 
+  it("lists an MCP tool hook with an empty server or tool as such, out of Loaded, and says why", async () => {
+    const { h, app } = seed();
+    h.write(".codex/hooks.json", { hooks: { Stop: [{ hooks: [{ type: "mcp_tool", server: "s", tool: "" }] }] } });
+    const json = JSON.parse(await run(h, app, "hooks", ["ls", "--tool", "codex", "--scope", "global", "--json"]));
+    expect(json.items.map((i: { tags: string[] }) => i.tags)).toEqual([["empty tool"]]);
+    expect(JSON.parse(await run(h, app, "hooks", ["ls", "--tool", "codex", "--json"])).items).toEqual([]);
+    expect(await run(h, app, "hooks", ["show", "--id", json.items[0].id])).toMatch(
+      /^Loaded\s+no, Codex skips an MCP tool hook whose server or tool is empty$/m,
+    );
+  });
+
   it("lists a prompt or agent hook as not supported, out of Loaded, and says Codex does not run it", async () => {
     const { h, app } = seed();
     h.write(".codex/hooks.json", {

@@ -38,7 +38,7 @@ import { codexTrusted, isMcpjsonServer, MANAGED_MCP_KEY, relevantIn, STASH_KEY }
 /**
  * One of the verbatim tags: off, off here, off in N of M accounts, not here, unused, broken
  * link, pending approval, hidden by … copy, no front matter, invalid front matter, name too long,
- * no description, invalid hooks file, not supported, empty command.
+ * no description, invalid hooks file, not supported, empty command, empty tool.
  */
 export type Tag = string;
 
@@ -106,6 +106,7 @@ const CODEX_SKIPS: Record<NonNullable<Extension["codexError"]>, string> = {
   "invalid hooks file": "Codex skips its hooks file: it holds more than hooks and a description at its top",
   "not supported": "Codex does not run an MCP tool hook when a session ends",
   "empty command": "Codex skips a hook whose command is empty",
+  "empty tool": "Codex skips an MCP tool hook whose server or tool is empty",
 };
 
 /** Why Codex does not load `item`, which has a `codexError`: for a hook it does not run, of which kind. */
@@ -310,11 +311,11 @@ function scopeLabel(item: Extension, project: string | undefined): string {
  * Every tag that applies, most important first: broken link > off > off here > off in N of M
  * accounts > not here > pending approval > hidden by … > unused > no front matter > invalid
  * front matter > name too long > no description > invalid hooks file > not supported > empty
- * command. A row that is not here has no state here, so no tag of one. `no front matter` is a
- * quiet note for a Claude skill, which Claude Code loads all the same; for a Codex skill, which
- * Codex skips, it, `invalid front matter`, `name too long` and `no description` are why it is not
- * in Loaded, and `invalid hooks file`, `not supported` and `empty command` why a Codex hook does
- * not run, which its details say.
+ * command > empty tool. A row that is not here has no state here, so no tag of one. `no front
+ * matter` is a quiet note for a Claude skill, which Claude Code loads all the same; for a Codex
+ * skill, which Codex skips, it, `invalid front matter`, `name too long` and `no description` are
+ * why it is not in Loaded, and `invalid hooks file`, `not supported`, `empty command` and `empty
+ * tool` why a Codex hook does not run, which its details say.
  */
 export function tagsOf(inv: Inventory, row: ScopeRow, project: string | undefined, now: number): Tag[] {
   const item = firstOf(row);
