@@ -301,7 +301,8 @@ describe("readClaudeMcp", () => {
     });
     const plugin = out.items.find((i) => i.name === "plugin:kit:kit");
     expect(out.facts.mcpTargets[plugin?.id ?? ""]).toEqual({
-      command: valueHash([`${realpathSync(kit)}/kit-mcp`]),
+      // The plugin's folder by its real path, as realpath gives it: long names on Windows.
+      command: valueHash([`${realpathSync.native(kit)}/kit-mcp`]),
       vars: true,
     });
   });

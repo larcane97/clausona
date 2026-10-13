@@ -1562,7 +1562,7 @@ describe("plan: Codex project servers and hooks", () => {
         expect(p.refused.map((r) => [r.code, refusalText(r, "flags")])).toEqual([
           [
             "codex-config-hook",
-            "It is written in ~/repos/app/.codex/config.toml, where clausona does not change hooks. Use /hooks in Codex, or edit the file.",
+            `It is written in ${tilde(path.join(app, ".codex", "config.toml"), inv.homeDir)}, where clausona does not change hooks. Use /hooks in Codex, or edit the file.`,
           ],
         ]);
       }

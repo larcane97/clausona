@@ -12,6 +12,7 @@ import { scopeSentence } from "./describe.js";
 import { loadInventory } from "./inventory.js";
 import { tilde } from "./present.js";
 import { scopesFor } from "./scopes.js";
+import { codexCanonical } from "./sources/codex-trust.js";
 import { TestHome } from "./test-home.js";
 
 const DAY = 86_400_000;
@@ -86,6 +87,15 @@ function gitIn(h: TestHome, cwd: string, ...args: string[]): void {
     { cwd, env: { ...process.env, ...h.gitEnv() }, encoding: "utf8", timeout: SPAWN_TIMEOUT_MS },
   );
   if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr}`);
+}
+
+/**
+ * A `[projects]` key as Codex 0.159.3 writes one (project_trust_key): the folder's real path as
+ * Codex spells it, long names and all, and on Windows in lower case.
+ */
+function codexTrustKey(folder: string): string {
+  const real = codexCanonical(realpathSync.native(folder));
+  return process.platform === "win32" ? real.replace(/[A-Z]/g, (c) => c.toLowerCase()) : real;
 }
 
 describe("skills ls", () => {
@@ -1053,7 +1063,7 @@ describe("Codex hooks and Codex's trust", () => {
       ["shared", ["hidden by Project copy"]],
     ]);
     const shown = await run(h, app, "mcp", ["show", "--id", global.items[0].id]);
-    expect(shown).toMatch(/^Loaded\s+no, the Project copy wins \(~\/repos\/app\/\.codex\/config\.toml\)$/m);
+    expect(shown).toMatch(/^Loaded\s+no, the Project copy wins \(~[\\/]repos[\\/]app[\\/]\.codex[\\/]config\.toml\)$/m);
     // In web, which Codex does not trust, the user's runs.
     const there = JSON.parse(await run(h, web, "mcp", ["ls", "--tool", "codex", "--json"]));
     expect(there.items.map((i: { name: string; scope: string }) => [i.name, i.scope])).toEqual([["shared", "global"]]);
@@ -1084,7 +1094,7 @@ describe("Codex hooks and Codex's trust", () => {
       h.write(
         ".codex/config.toml",
         [
-          `[projects.${JSON.stringify(realpathSync(main))}]`,
+          `[projects.${JSON.stringify(codexTrustKey(main))}]`,
           'trust_level = "trusted"',
           `[projects.${JSON.stringify(wt)}]`,
           `[projects.${JSON.stringify(own)}]`,
@@ -1142,13 +1152,13 @@ describe("Codex hooks and Codex's trust", () => {
         '[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "wt-toml"\n',
       );
       // git names the main checkout by its real path, and Codex keys the hooks it runs there by it.
-      const real = realpathSync(main);
+      const real = realpathSync.native(main);
       const mainHooks = path.join(real, ".codex", "hooks.json");
       // `echo a` on Stop trusted at the hash Codex 0.159.3 gives it, under the main checkout's key.
       h.write(
         ".codex/config.toml",
         [
-          `[projects.${JSON.stringify(real)}]`,
+          `[projects.${JSON.stringify(codexTrustKey(main))}]`,
           'trust_level = "trusted"',
           `[hooks.state.${JSON.stringify(`${mainHooks}:stop:0:0`)}]`,
           'trusted_hash = "sha256:f9b7a328de9c5845f5eed806f12f8f5adeba50ba82617690fd3f8ededeb12f90"',
@@ -1224,7 +1234,7 @@ describe("Codex hooks and Codex's trust", () => {
       // main is trusted, and the worktree's own entry says untrusted: Codex lists no hooks there.
       h.write(
         ".codex/config.toml",
-        `[projects.${JSON.stringify(realpathSync(main))}]\ntrust_level = "trusted"\n\n[projects.${JSON.stringify(own)}]\ntrust_level = "untrusted"\n`,
+        `[projects.${JSON.stringify(codexTrustKey(main))}]\ntrust_level = "trusted"\n\n[projects.${JSON.stringify(own)}]\ntrust_level = "untrusted"\n`,
       );
       h.claude("default", ".claude", { projects: { [own]: {} } });
       type Row = { id: string; state: string; tags: string[]; file: string };

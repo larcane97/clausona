@@ -824,14 +824,18 @@ describe("Codex", () => {
         { project: pkg },
         { project: own, trusted: false },
       ],
-      codexTrustFolders: { [wt]: [wt, wt, P], [pkg]: [pkg, P, P], [own]: [own, own, P] },
+      // By pathKey, as readCodex keys it: on Windows, resolved onto a drive and in lower case.
+      codexTrustFolders: { [pathKey(wt)]: [wt, wt, P], [pathKey(pkg)]: [pkg, P, P], [pathKey(own)]: [own, own, P] },
     });
     expect(codexTrusted(i, wt)).toBe(true);
     expect(codexTrusted(i, pkg)).toBe(true);
     expect(codexTrusted(i, own)).toBe(false);
     // With no folders read for it, a project is looked up by its own path alone.
     expect(codexTrusted(i, "/wt/unread")).toBe(false);
-    const viaRoot = inv([], { codexTrust: [{ project: P, trusted: false }], codexTrustFolders: { [wt]: [wt, P] } });
+    const viaRoot = inv([], {
+      codexTrust: [{ project: P, trusted: false }],
+      codexTrustFolders: { [pathKey(wt)]: [wt, P] },
+    });
     expect(codexTrusted(viaRoot, wt)).toBe(false);
   });
 
