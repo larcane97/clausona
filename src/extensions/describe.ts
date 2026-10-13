@@ -127,7 +127,7 @@ const CODEX_SKIPS: Record<NonNullable<Extension["codexError"]>, string> = {
  * Why Codex does not load `item`, which has a `codexError`: for a hook it does not run, of which
  * kind, and for a worktree's own, which file Codex runs the hooks of instead.
  */
-function codexSkip(inv: Inventory, item: Extension, error: NonNullable<Extension["codexError"]>): string {
+export function codexSkip(inv: Inventory, item: Extension, error: NonNullable<Extension["codexError"]>): string {
   const type = item.summary?.type;
   if (error === "not supported" && (type === "prompt" || type === "agent")) {
     return `Codex does not run ${type} hooks yet`;

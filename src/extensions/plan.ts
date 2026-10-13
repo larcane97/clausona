@@ -25,7 +25,7 @@ import {
   uncheckedRefusal,
   type Verb,
 } from "./actions.js";
-import { notHere } from "./describe.js";
+import { codexSkip, notHere } from "./describe.js";
 import { valueHash } from "./hash.js";
 import { folderKey } from "./inventory.js";
 import type { Extension, HookPlace, Inventory, SkillVisibility } from "./model.js";
@@ -1329,6 +1329,11 @@ function planHook(run: Run, row: ScopeRow): Outcome {
     );
   }
   if (!item.stashed) {
+    // A hook Codex skips does not run, whatever its switch: on cannot change that.
+    if (item.codexError) {
+      const why = codexSkip(inv, item, item.codexError);
+      return refused(run, row, "codex-skips-hook", { why, "~file": tilde(loc.file, inv.homeDir) });
+    }
     // In its file already: what keeps a Codex hook from running is Codex's to change.
     const now = loc.tool === "codex" ? stateHere(inv, item, run.ctx.project).value : "on";
     const why =

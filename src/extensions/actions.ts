@@ -69,6 +69,7 @@ export const REFUSAL_CODES = [
   "bundled-off",
   "codex-config-hook",
   "codex-worktree-hook",
+  "codex-skips-hook",
 ] as const;
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
 
@@ -237,6 +238,11 @@ export const REFUSALS: Readonly<Record<RefusalCode, { reason: Words; keys?: Word
     keys: "Change them there.",
     flags: "Change them there.",
   },
+  "codex-skips-hook": {
+    reason: "{why}.",
+    keys: "Change it in {~file}.",
+    flags: "Change it in {~file}.",
+  },
 };
 
 const TOOL_NAME: Record<ToolName, string> = { claude: "Claude Code", codex: "Codex" };
@@ -258,7 +264,8 @@ export type RefusalFill = Partial<
     | "a"
     | "b"
     | "project name"
-    | "short",
+    | "short"
+    | "why",
     string
   >
 >;

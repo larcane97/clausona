@@ -1148,6 +1148,12 @@ the CLI's words. In the table `<tool>` is the tool's name and `<scope>` a scope'
 | `bundled-off` | `disableBundledSkills` in `<file>` turns off the skills that come with Claude Code. | Change it there. | Change it there. |
 | `codex-config-hook` | It is written in `<file>`, where clausona does not change hooks. | Use `/hooks` in Codex, or edit the file. | Use `/hooks` in Codex, or edit the file. |
 | `codex-worktree-hook` | Codex runs the hooks in `<file>` in this worktree. | Change them there. | Change them there. |
+| `codex-skips-hook` | `<why>`. | Change it in `<file>`. | Change it in `<file>`. |
+
+`codex-skips-hook` is `on` for a Codex hook tagged `invalid hooks file`, `not supported`,
+`empty command`, `empty tool`, `unknown event` or `invalid matcher`. Codex skips it whatever
+its switch, so `<why>` says why, as its details do: say, `Codex skips a hook whose command is
+empty`.
 
 On the screen, `stash-gone` on one account's server, in a row other accounts share, says
 `Press d and choose only work in the dialog.` instead, since `d` on the row would delete the

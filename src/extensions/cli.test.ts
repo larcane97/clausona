@@ -983,6 +983,55 @@ describe("hooks ls", () => {
 });
 
 describe("Codex hooks and Codex's trust", () => {
+  it("refuses on for a Codex hook Codex skips, with the reason it does not run", async () => {
+    const { h, app } = seed();
+    h.write(".codex/hooks.json", {
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              { type: "prompt", prompt: "p" },
+              { type: "command", command: "  " },
+              { type: "mcp_tool", server: "s", tool: "" },
+            ],
+          },
+        ],
+        PreToolUse: [{ matcher: "(?=Bash)", hooks: [{ type: "command", command: "ahead" }] }],
+        Unknown: [{ hooks: [{ type: "command", command: "who" }] }],
+      },
+    });
+    // A trusted project's hooks.json with more than hooks at its top, which Codex skips whole.
+    h.write(".codex/config.toml", `[projects.${JSON.stringify(app)}]\ntrust_level = "trusted"\n`);
+    h.write("repos/app/.codex/hooks.json", {
+      hooks: { Stop: [{ hooks: [{ type: "command", command: "app" }] }] },
+      extra: 1,
+    });
+    const json = JSON.parse(await run(h, app, "hooks", ["ls", "--tool", "codex", "--scope", "all", "--json"]));
+    const ids = json.items.map((i: { id: string }) => i.id);
+    expect(ids).toHaveLength(6);
+    const plan = JSON.parse(
+      await run(h, app, "hooks", ["on", ...ids.flatMap((id: string) => ["--id", id]), "--dry-run", "--json"]),
+    );
+    const why = (reason: string, at = ".codex/hooks.json") => [
+      "codex-skips-hook",
+      `${reason} Change it in ${tilde(h.path(...at.split("/")), h.home)}.`,
+    ];
+    expect(plan.refused.map((r: { code: string; reason: string }) => [r.code, r.reason]).sort()).toEqual(
+      [
+        why("Codex does not run prompt hooks yet."),
+        why("Codex skips a hook whose command is empty."),
+        why("Codex skips the hooks of a matcher that is not a regex it can compile."),
+        why("Codex knows no event of that name, and runs no hook on it."),
+        why("Codex skips an MCP tool hook whose server or tool is empty."),
+        why(
+          "Codex skips its hooks file: it holds more than hooks and a description at its top, or a hook Codex cannot read.",
+          "repos/app/.codex/hooks.json",
+        ),
+      ].sort(),
+    );
+    expect(plan.unchanged).toEqual([]);
+  });
+
   it("lists a hook Codex has not trusted as pending approval, out of Loaded, and one it trusts as on", async () => {
     const { h, app } = seed();
     const file = h.path(".codex", "hooks.json");
