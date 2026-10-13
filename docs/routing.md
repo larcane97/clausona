@@ -829,6 +829,16 @@ clausona route explain main                                 # its spend, and who
   ▸ claude:gateway  route main, next in turn, API, billed per use · usage 35% of $20/month
 ```
 
+`route explain` shows its usage in a `BUDGET` column, and after its status what it has spent and
+whose limit that is:
+
+```
+    ACCOUNT           5H        7D       BUDGET
+    ─────────────────────────────────────────────
+  ▸ claude:gateway   —         —         35% 18d   picked next · $7.00 of $20/month (clausona budget)
+    claude:personal  85% 1h    60% 2d    —         over 80%
+```
+
 The limit is the clausona budget when you set one. It replaces the limit set on the provider key,
 and the two are not compared. Without a budget, the key's own limit counts, when the provider
 reports one. With neither, the profile has no spend limit, and `route add`, `route set` and the
