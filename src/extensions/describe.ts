@@ -190,11 +190,30 @@ export function hiddenHere(inv: Inventory, row: ScopeRow, project: string | unde
  */
 export function loadsFor(inv: Inventory, row: ScopeRow, project: string | undefined, profiles: string[]): boolean {
   const item = firstOf(row);
-  if (!relevantIn(item, project) || item.link?.broken === true) return false;
+  if (!canLoad(item, project)) return false;
   const perAccount = statesByAccount(inv, row, project);
   if (perAccount) return perAccount.some((a) => profiles.includes(a.profile) && stateLoads(a.state));
   const who = rowAccounts(inv, row);
   return (who === undefined || who.some((p) => profiles.includes(p))) && stateLoads(stateHere(inv, item, project));
+}
+
+/** Whether an item can load here at all: relevant here, and not a link to nothing, which has no SKILL.md to read. */
+function canLoad(item: Extension, project: string | undefined): boolean {
+  return relevantIn(item, project) && item.link?.broken !== true;
+}
+
+/**
+ * For a row read per account, whether it loads here for each account, by the rule Loaded uses:
+ * the row can load here, and that account's state loads (`stateLoads`: its switch, and no copy
+ * that wins over it there). JSON's `loadsByAccount`.
+ */
+function loadsByAccount(
+  row: ScopeRow,
+  project: string | undefined,
+  perAccount: AccountState[],
+): Record<string, boolean> {
+  const can = canLoad(firstOf(row), project);
+  return Object.fromEntries(perAccount.map((a) => [a.profile, can && stateLoads(a.state)]));
 }
 
 /**
@@ -808,7 +827,12 @@ export function jsonItem(
     ...(loc.plugin ? { plugin: loc.plugin } : {}),
     ...(accounts ? { accounts } : {}),
     state: values.length === 1 ? values[0] : "mixed",
-    ...(perAccount ? { stateByAccount: Object.fromEntries(perAccount.map((a) => [a.profile, a.state.value])) } : {}),
+    ...(perAccount
+      ? {
+          stateByAccount: Object.fromEntries(perAccount.map((a) => [a.profile, a.state.value])),
+          loadsByAccount: loadsByAccount(row, project, perAccount),
+        }
+      : {}),
     usage: counted
       ? {
           total: usage?.total ?? 0,

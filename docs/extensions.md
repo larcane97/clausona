@@ -186,7 +186,8 @@ The `state` of an item in JSON is one of these:
 `name-only` or `user-invocable-only` and no tag says `hidden by …` or `broken link`. A hidden
 copy and a broken link keep their own `state`; only the tags say they do not load. A `mixed`
 row loads in the accounts whose `stateByAccount` value is `on`, except where another copy wins
-there, which its details say.
+there, which its details say. A row read per account says it for each account in
+`loadsByAccount`.
 
 The switches are read from these places:
 
@@ -852,6 +853,7 @@ apply; the others are always there, `null` when empty.
 | `accounts` | string[] | When set: the profile ids of the accounts that have the row, primary first. Set when the row is held, switched or hidden per account. |
 | `state` | string | One of the states above, or `mixed` when the accounts differ. |
 | `stateByAccount` | object | When set: profile id to state, for a row read per account. |
+| `loadsByAccount` | object | When set, with `stateByAccount`: profile id to `true` when the row loads here for that account, else `false`. |
 | `usage` | object or null | Claude skills only: `{ total, lastUsedAt, byAccount }`. `null` otherwise. |
 | `tags` | string[] | Every tag that applies, most important first. |
 | `file` | string | The file or folder that defines the row. For a row of copies, the first copy's. |
@@ -864,6 +866,11 @@ apply; the others are always there, `null` when empty.
 
 The parts of the larger fields:
 
+- `loadsByAccount` is worked out as Loaded is. It is `true` where that account's state is `on`,
+  `name-only` or `user-invocable-only`, no other copy of the name wins in that account, and the
+  row is no broken link. So it is `false` where the row is off, pending approval or hidden in
+  that account, and for every account when the row is another project's. A row is in Loaded
+  when it is `true` for one account.
 - `usage.total` is the uses summed over accounts; `usage.lastUsedAt` an ISO 8601 time, or
   `null` when never used; `usage.byAccount` the count per profile id. A hidden copy reports
   the count of the copy that wins over it, since Claude Code counts by name.
@@ -896,6 +903,7 @@ A row of copies, as `csn mcp ls --json` prints it:
   "accounts": ["claude:personal", "claude:work"],
   "state": "mixed",
   "stateByAccount": { "claude:personal": "on", "claude:work": "off" },
+  "loadsByAccount": { "claude:personal": true, "claude:work": false },
   "usage": null,
   "tags": ["off in 1 of 2 accounts"],
   "file": "/home/you/.claude.json",
@@ -1168,7 +1176,7 @@ csn hooks ls --json
 ```
 
 Each item loads here in at least one account. `tool` says which tool, `from` where it comes
-from. For a Claude MCP server, `stateByAccount` says which accounts load it, and the tag
+from. For a Claude MCP server, `loadsByAccount` says which accounts load it, and the tag
 `off in N of M accounts` marks a split. Add `--project <path>` to ask about another project.
 
 ### Which skills does this project define?
@@ -1197,7 +1205,7 @@ nothing. Cloud and plugin skills are never in this list.
 
 ```bash
 csn mcp show github --tool claude --json
-csn mcp show github --tool claude --json | jq '{accounts, state, stateByAccount}'
+csn mcp show github --tool claude --json | jq '{accounts, state, stateByAccount, loadsByAccount}'
 ```
 
 `--tool claude` is there because accounts are Claude's. Without it, a Codex server with the
@@ -1207,7 +1215,8 @@ same name makes `show` find two servers, exit 2 and ask which one.
 `stateByAccount` gives each one's state in this project: `on`, `off` or `pending-approval`.
 It is each account's switch: where another copy of the name wins in an account, it still reads
 that account's switch, and that account's line in `details` says the copy is hidden, as in
-`hidden by the Project copy`.
+`hidden by the Project copy`. `loadsByAccount` answers "does it load for `work` here?" for
+each account, `true` or `false`, with the switch and the copy that wins both counted.
 
 A Codex server has no `accounts`, because Codex has no accounts here; its `state` is the one
 state. A `.mcp.json` server in a project no account has opened has none either, and its `state`

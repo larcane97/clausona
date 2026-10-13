@@ -78,6 +78,7 @@ const ITEM_KEYS = [
   "accounts",
   "state",
   "stateByAccount",
+  "loadsByAccount",
   "usage",
   "tags",
   "file",

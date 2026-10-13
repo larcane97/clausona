@@ -563,6 +563,7 @@ describe("jsonItem", () => {
       "accounts",
       "state",
       "stateByAccount",
+      "loadsByAccount",
       "usage",
       "tags",
       "file",
@@ -589,6 +590,45 @@ describe("jsonItem", () => {
     });
     expect(JSON.stringify(item)).not.toContain(KEY);
     expect(item.summary).toMatchObject({ env: "GITHUB_TOKEN" });
+  });
+
+  it("says per account whether a row loads here: not where a local copy wins, nor where it is off", async () => {
+    // default's local github wins over its user one; work turned figma off in app.
+    const { inv, app, web } = await seed({
+      defaultJson: (app) => ({
+        projects: { [app]: { mcpServers: { github: { command: "gh-local" } } } },
+        mcpServers: { github: { command: "gh-mcp" }, figma: { command: "figma-mcp" } },
+      }),
+      workJson: (app) => ({
+        projects: { [app]: { disabledMcpServers: ["figma"] } },
+        mcpServers: { github: { command: "gh-mcp" }, figma: { command: "figma-mcp" } },
+      }),
+    });
+    const loads = (row: ScopeRow, from = app) => {
+      const item = jsonItem(inv, row, from, NOW);
+      return { state: item.stateByAccount, loads: item.loadsByAccount };
+    };
+    // Both accounts' switches are on, but in default its local copy is the one that loads.
+    expect(loads(serverRow(inv, "global", app, "github"))).toEqual({
+      state: { "claude:default": "on", "claude:work": "on" },
+      loads: { "claude:default": false, "claude:work": true },
+    });
+    expect(loads(serverRow(inv, "project", app, "github"))).toEqual({
+      state: { "claude:default": "on" },
+      loads: { "claude:default": true },
+    });
+    expect(loads(serverRow(inv, "global", app, "figma"))).toEqual({
+      state: { "claude:default": "on", "claude:work": "off" },
+      loads: { "claude:default": true, "claude:work": false },
+    });
+    // Seen from web, app's local server loads for no one: it is not in web's Loaded.
+    const local = rowsIn(inv, "claude", "mcp", "other", web, NOW, app).find((r) => r.name === "github");
+    if (!local) throw new Error("no local github seen from web");
+    expect(loads(local, web)).toEqual({ state: { "claude:default": "on" }, loads: { "claude:default": false } });
+    // A row read in one state has neither.
+    const skill = jsonItem(inv, single(claudeSkill(inv, "eli5")), app, NOW);
+    expect(skill).not.toHaveProperty("stateByAccount");
+    expect(skill).not.toHaveProperty("loadsByAccount");
   });
 });
 
@@ -665,6 +705,7 @@ describe("rows across accounts", () => {
       "accounts",
       "state",
       "stateByAccount",
+      "loadsByAccount",
       "usage",
       "tags",
       "file",
@@ -677,6 +718,7 @@ describe("rows across accounts", () => {
       scope: "cloud",
       accounts: ["claude:default", "claude:work"],
       stateByAccount: { "claude:default": "on", "claude:work": "on" },
+      loadsByAccount: { "claude:default": true, "claude:work": true },
       copies: pdf.items.map((i) => ({ id: i.id, account: i.location.profile, file: i.location.file })),
       file: pdf.items[0]?.location.file,
     });
