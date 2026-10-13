@@ -1,7 +1,15 @@
 import type { Key } from "ink";
 import { useRef, useState } from "react";
 
-import { type Action, COMMAND_OF, type Reach, refusalText, toggleVerb } from "../../extensions/actions.js";
+import {
+  type Action,
+  COMMAND_OF,
+  type Reach,
+  type Refusal,
+  type RefusalCode,
+  refusalText,
+  toggleVerb,
+} from "../../extensions/actions.js";
 import type { ScreenWrites } from "../../extensions/load.js";
 import type { Inventory } from "../../extensions/model.js";
 import { type IgnoreFacts, type KeyName, keysFor, plan as planOf } from "../../extensions/plan.js";
@@ -17,7 +25,7 @@ import {
   undoneStatus,
 } from "./confirm-model.js";
 import type { Kind, TableRow } from "./screen-model.js";
-import type { CellTarget } from "./view-model.js";
+import { type CellTarget, matrixRefusal } from "./view-model.js";
 
 /**
  * The Extensions screen's write flow: the rows marked with x, the action keys and the plan each
@@ -86,6 +94,13 @@ const NOTHING_CHANGED = "Nothing changed.";
 const PICK_ONE = "Pick at least one account.";
 
 /**
+ * Why a cell can't change here that everywhere answers: an account's server clausona keeps aside,
+ * off in every project, comes back only into its file; and in the home folder Codex's project
+ * config is the user's own.
+ */
+const EVERYWHERE_ONLY: ReadonlySet<RefusalCode> = new Set(["stashed-here", "codex-home-here"]);
+
+/**
  * The write flow, for the screen's current render. Its handlers are made again on every render,
  * as the screen's are, so the one ink calls reads what that render shows; what a key must see of
  * a key before it, the dialog and the marks, goes through state updaters or a ref.
@@ -127,10 +142,10 @@ export function useWrites(from: WritesFrom): Writes {
 
   /**
    * The plan for `action`, checked against what git tracks, then: a delete of what git tracks
-   * asks with off on offer (rule A); nothing it can change says why on the status line; else the
-   * dialog asks.
+   * asks with off on offer (rule A); nothing it can change says why on the status line, in
+   * `words`; else the dialog asks.
    */
-  const openPlan = async (action: Action) => {
+  const openPlan = async (action: Action, words = (r: Refusal) => refusalText(r, "keys")) => {
     if (!writes || !inventory) return;
     pending.current = true;
     try {
@@ -161,8 +176,8 @@ export function useWrites(from: WritesFrom): Writes {
       const [first] = refused;
       const why = plan.unchanged[0]?.why;
       if (!first) setStatus(why === undefined ? "Nothing to do." : `Nothing to do: ${why}.`);
-      else if (action.rows.length === 1) setStatus(refusalText(first, "keys"));
-      else setStatus(`${new Set(refused.map((r) => r.rowKey)).size} can't: ${refusalText(first, "keys")}`);
+      else if (action.rows.length === 1) setStatus(words(first));
+      else setStatus(`${new Set(refused.map((r) => r.rowKey)).size} can't: ${words(first)}`);
     } catch (e) {
       setDialog(null);
       setStatus(`Could not plan the change: ${failed(e)}`);
@@ -198,19 +213,32 @@ export function useWrites(from: WritesFrom): Writes {
 
   /**
    * space on a matrix cell: its row off or on here, as space on the row, for the cell's account
-   * alone - the account picker's choice, preset. A cell that can't change says why, as a row does.
+   * alone - the account picker's choice, preset. Where only everywhere can change it
+   * (EVERYWHERE_ONLY), everywhere, as g on the row would, for that account alone: the matrix has no
+   * g. A cell that can't change says why, as a row does, sending to the row for a key the matrix
+   * does not take.
    */
   const startCell = (row: ScopeRow, accounts: readonly string[] | undefined) => {
     if (!writes || !inventory) return;
-    const verb = toggleVerb(inventory, row, project, "here", accounts);
-    const action: Action = { verb, reach: "here", rows: [row], ...(accounts !== undefined ? { accounts } : {}) };
-    const first = planOf(contextFor(inventory, writes, new Set()), command, action);
+    const ctx = contextFor(inventory, writes, new Set());
+    const toggle = (reach: Reach): Action => ({
+      verb: toggleVerb(inventory, row, project, reach, accounts),
+      reach,
+      rows: [row],
+      ...(accounts !== undefined ? { accounts } : {}),
+    });
+    let action = toggle("here");
+    let first = planOf(ctx, command, action);
+    if (first.changes.length === 0 && first.refused.some((r) => EVERYWHERE_ONLY.has(r.code))) {
+      action = toggle("everywhere");
+      first = planOf(ctx, command, action);
+    }
     const [refused] = first.refused;
     if (first.changes.length === 0 && refused) {
-      setStatus(refusalText(refused, "keys"));
+      setStatus(matrixRefusal(refused));
       return;
     }
-    void openPlan({ ...action, tracked: true });
+    void openPlan({ ...action, tracked: true }, matrixRefusal);
   };
 
   /** The newest change not undone yet, of any kind (rule F), in a dialog; clausona's own kept copies left out. */

@@ -758,6 +758,58 @@ describe("ExtensionsScreen: writes from the MCP matrix", () => {
     expect(existsSync(local(h.path("repos", "web")))).toBe(false);
   });
 
+  it("turns a server clausona keeps aside for one account back on from its cell, in every project", async () => {
+    const { h, app } = seed();
+    const instance = mount(h, app, 140, 40);
+    const work = () => json(h.path(".claude-work", ".claude.json")).mcpServers;
+    // work's github off everywhere, from its row: clausona keeps its entry.
+    await openRow(instance, "Global", "github", "2");
+    await press(instance, "g");
+    await seen(instance, (f) => f.includes("◉ default") && f.includes("◉ work"));
+    await press(instance, SPACE);
+    await seen(instance, (f) => f.includes("Turn off github in every project, for work?"));
+    await press(instance, "y");
+    await seen(instance, (f) => f.includes("Turned off github in every project, for work · u to undo"));
+    expect(work().github).toBeUndefined();
+    await press(instance, "m");
+    await seen(instance, (f) => f.includes("SERVER"));
+    for (const key of [DOWN, DOWN, DOWN, RIGHT]) await press(instance, key);
+    await seen(instance, (f) => f.includes("[work]") && /✦ github +● +\[○\]/.test(f));
+    // Off here is no way back for it: space puts it back, for work alone, as g on its row would.
+    await press(instance, SPACE);
+    const dialog = await seen(instance, (f) => f.includes("Turn on github in every project, for work?"));
+    expect(dialog).toContain("mcpServers.github put back");
+    await press(instance, "y");
+    const back = await seen(instance, (f) => f.includes("Turned on github in every project, for work · u to undo"));
+    expect(work().github).toEqual({ command: "gh" });
+    // work had turned it off in this project too, which stays; back in its file, space switches it here.
+    expect(serverLine(back, "github")).toMatch(/✦ github +● +\[○\]/);
+    await press(instance, SPACE);
+    await seen(instance, (f) => f.includes("Turn on github in this project, for work?"));
+    await press(instance, "y");
+    const on = await seen(instance, (f) => f.includes("Turned on github in this project, for work · u to undo"));
+    expect(serverLine(on, "github")).toMatch(/✦ github +● +\[●\]/);
+    for (const frame of instance.frames) expect(stripAnsi(frame)).not.toContain("Press g");
+  });
+
+  it("switches Codex's server in the home folder from its cell, where this project's config is the user's", async () => {
+    const { h } = seed();
+    const instance = mount(h, h.home, 140, 40);
+    await openMatrix(instance);
+    await press(instance, RIGHT);
+    await press(instance, RIGHT);
+    await seen(instance, (f) => f.includes("[Codex]") && /✦ docs +· +· +\[●\]/.test(f));
+    await press(instance, SPACE);
+    await seen(instance, (f) => f.includes("Turn off docs in every project?"));
+    await press(instance, "y");
+    const off = await seen(instance, (f) => f.includes("Turned off docs in every project · u to undo"));
+    expect(serverLine(off, "docs")).toMatch(/✦ docs +· +· +\[○\]/);
+    expect(readFileSync(h.path(".codex", "config.toml"), "utf8")).toMatch(
+      /\[mcp_servers\.docs\]\n[^[]*enabled = false/,
+    );
+    for (const frame of instance.frames) expect(stripAnsi(frame)).not.toMatch(/Press g/);
+  });
+
   it("scrolls the accounts to keep the cursor's in sight", async () => {
     const { h, app } = seed();
     for (const n of [1, 2, 3, 4, 5, 6, 7]) h.claude(`a${n}`, `.claude-a${n}`, { projects: { [app]: {} } });

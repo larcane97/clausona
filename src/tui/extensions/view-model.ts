@@ -1,3 +1,4 @@
+import { type Refusal, refusalText } from "../../extensions/actions.js";
 import type { Extension, Inventory } from "../../extensions/model.js";
 import { shortProfile } from "../../extensions/present.js";
 import { samePath } from "../../extensions/read.js";
@@ -165,6 +166,20 @@ export function cellTarget(
   const item = cellItem(inv, serversIn(inv, project), name, column.key, project);
   if (!item) return { refused: `${column.label} has no ${name} here.` };
   return { row: rowOf(inv, item), ...(column.key === "codex" ? {} : { accounts: [column.key] }) };
+}
+
+/** The keys the matrix takes of those a refusal's words can name: space on a cell, and u. */
+const MATRIX_KEYS = new Set(["space", "u"]);
+
+/**
+ * A refusal as the matrix says it, in the keys' voice. Words that name a key the matrix does not
+ * take - `Press g …`, `Press d …` - say to press it on the server's row instead.
+ */
+export function matrixRefusal(refused: Refusal): string {
+  const keys = refused.keys;
+  const named = [...(keys ?? "").matchAll(/\b(?:press|with|or) (space|[a-z])\b/gi)].map((m) => m[1] ?? "");
+  if (keys === undefined || named.every((key) => MATRIX_KEYS.has(key))) return refusalText(refused, "keys");
+  return `${refused.reason} From its row, ${keys.charAt(0).toLowerCase()}${keys.slice(1)}`;
 }
 
 /** Room kept at the matrix header's end for ` ← → 99 more`, so a scrolled matrix says so in full. */
