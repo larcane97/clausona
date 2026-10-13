@@ -111,6 +111,33 @@ describe("buildMatrix, one server per name", () => {
       "pg-dev": ["on", "on", "absent"],
     });
   });
+
+  it("takes in Codex's column the copy Codex starts: a trusted project's, else the user's", async () => {
+    // A user's shared and a same-name one in each project; Codex trusts app, not web.
+    const { app, web, inv } = await seed((h, a) => {
+      h.codex(
+        "personal",
+        ".codex",
+        `[mcp_servers.shared]\ncommand = "user"\n\n[projects.'${a}']\ntrust_level = "trusted"\n`,
+      );
+      h.write("repos/app/.codex/config.toml", '[mcp_servers.shared]\ncommand = "app"\nenabled = false\n');
+      h.write("repos/web/.codex/config.toml", '[mcp_servers.shared]\ncommand = "web"\n');
+    });
+    const codexCell = (project: string) => {
+      const matrix = buildMatrix(inv, project);
+      const at = matrix.columns.findIndex((c) => c.key === "codex");
+      return matrix.rows.find((r) => r.name === "shared")?.cells[at];
+    };
+    const target = (project: string) => {
+      const found = cellTarget(inv, project, "shared", { key: "codex", label: "Codex" });
+      return "row" in found ? found.row.items.map((i) => [i.location.scope, i.location.project]) : found;
+    };
+    // In app, app's copy, whose own switch is off; in web, which Codex ignores, the user's, on.
+    expect(codexCell(app)).toBe("off");
+    expect(target(app)).toEqual([["project", app]]);
+    expect(codexCell(web)).toBe("on");
+    expect(target(web)).toEqual([["global", undefined]]);
+  });
 });
 
 describe("cellTarget", () => {

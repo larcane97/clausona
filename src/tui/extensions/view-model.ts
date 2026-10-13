@@ -3,7 +3,7 @@ import type { Extension, Inventory } from "../../extensions/model.js";
 import { shortProfile } from "../../extensions/present.js";
 import { samePath } from "../../extensions/read.js";
 import { isAccountCopy, rowKey, type ScopeRow } from "../../extensions/scopes.js";
-import { claudeMcpTaken, relevantIn, stateOf } from "../../extensions/state.js";
+import { claudeMcpTaken, codexTrusted, relevantIn, stateOf } from "../../extensions/state.js";
 
 export { shortProfile, tilde } from "../../extensions/present.js";
 
@@ -94,7 +94,11 @@ function serversIn(inv: Inventory, project: string): Extension[] {
   return inv.items.filter((i) => i.kind === "mcp" && relevantIn(i, project));
 }
 
-/** The copy of `name` a column shows: the one its Claude account takes, or Codex's most specific. */
+/**
+ * The copy of `name` a column shows: the one its Claude account takes, or the one Codex starts -
+ * its most specific, leaving out a project's copy where Codex does not trust the project, and one
+ * another copy hides. With none left, Codex's most specific, which is off.
+ */
 function cellItem(
   inv: Inventory,
   servers: readonly Extension[],
@@ -106,7 +110,11 @@ function cellItem(
   const candidates = servers
     .filter((i) => i.name === name && (codex ? i.location.tool === "codex" : inClaudeColumn(i, column)))
     .sort((a, b) => SCOPE_RANK.indexOf(a.location.scope) - SCOPE_RANK.indexOf(b.location.scope));
-  return (codex ? undefined : claudeMcpTaken(inv, name, project, column)) ?? candidates[0];
+  if (!codex) return claudeMcpTaken(inv, name, project, column) ?? candidates[0];
+  const starts = (i: Extension) =>
+    (i.location.scope !== "project" || codexTrusted(inv, i.location.project)) &&
+    stateOf(inv, i, project).shadowedBy === undefined;
+  return candidates.find(starts) ?? candidates[0];
 }
 
 /** The MCP servers a project can start, by account: Claude's per-account switches side by side. */

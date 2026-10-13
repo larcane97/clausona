@@ -1702,7 +1702,8 @@ project, and the dialog's question names no account: `Turn on docs-search in thi
 again, the cursor on the same cell. On a cell with no server, `space` says so, as in
 `work has no docs here.`, and on a cell that can't change it says why, as on a row:
 `No account that has it has opened this project.` In the Codex column, `space` works as it does
-on the server's row in Codex's MCP tab.
+on the server's row in Codex's MCP tab. A Codex cell shows the copy Codex starts: the project's
+own where Codex trusts the project, else yours of that name.
 
 Some cells only change everywhere, and there `space` does what `g` does on the row, for that
 account alone. A server clausona keeps aside for one account, off in every project, is put back
