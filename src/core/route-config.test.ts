@@ -141,6 +141,17 @@ describe("checkPattern", () => {
     expect(checkPattern("a b", "claude")).toMatch(/is not a profile name pattern/);
   });
 
+  // The CLI trims each pattern, so spaces around one come only from a hand edit of routes.json.
+  it("refuses spaces around a pattern and a tool prefix in another case", () => {
+    expect(checkPattern(" team-*", "claude")).toBe(
+      "' team-*' is not a profile name pattern (letters, digits, '.', '_', '-', '*' and '?')",
+    );
+    expect(checkPattern("team-* ", "claude")).toMatch(/is not a profile name pattern/);
+    expect(checkPattern("Claude:work", "claude")).toBe(
+      "'Claude:work' names unknown tool 'Claude', but this route is for claude",
+    );
+  });
+
   it("refuses an empty pattern and a non-string", () => {
     expect(checkPattern(" ", "claude")).toBe("must be a non-empty string");
     expect(checkPattern(3, "claude")).toBe("must be a non-empty string");
