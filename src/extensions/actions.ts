@@ -515,8 +515,8 @@ function offAt(
 }
 
 /**
- * The verb a toggle key means for this row: "on" when it does not run at that reach - off, or a
- * `.mcp.json` server pending approval, which on approves - else "off".
+ * The verb a toggle key means for this row: "on" when its switch is off at that reach, or it is a
+ * `.mcp.json` server pending approval, which on approves - else "off", whether it loads or not.
  */
 export function toggleVerb(
   inv: Inventory,

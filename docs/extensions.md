@@ -697,7 +697,8 @@ keeps it, and on puts it back. `--everywhere` is taken and changes nothing. On t
 turns a hook off, and `space` says why it can't.
 
 While `disableAllHooks` keeps every Claude hook off, turning one on would not make it run, so
-`on` is refused and the reason names the file that sets it. When this project's own settings
+`on` is refused, as `all-hooks-off`, and the reason names the file that sets it. Set in managed
+settings, it is refused as `managed`, as anything there is. When this project's own settings
 set it, it holds in this project only, so `on` goes ahead and the plan says
 `Still off in this project: disableAllHooks in …`.
 
@@ -1579,8 +1580,10 @@ A row's details end with what the keys would do to it, such as
 `space off here · g off everywhere · d delete · v name only`. A key that would be refused is
 left out.
 
-`space` turns a row on when it does not run here, and off when it does. A `.mcp.json` server
-pending approval does not run, so `space` turns it on, which approves it, and its details say
+`space` turns a row on when it is off here, or is a `.mcp.json` server pending approval, and off
+otherwise. It reads the row's switch, not whether the row loads: a copy another one hides, or a
+Codex skill Codex skips for `no front matter`, is turned off. A `.mcp.json` server pending
+approval does not run, so `space` turns it on, which approves it, and its details say
 `space on here`. To turn one down instead, use `csn mcp off <name>`.
 
 When the row can't change, nothing opens, and the status line says why, in keys:
@@ -1599,11 +1602,14 @@ when it is picked and `○` when not. `↑` and `↓` move, and `space` picks an
 out. The question follows, as in `Turn off figma in this project, for personal?`. `y` with no
 account picked says `Pick at least one account.` and the dialog stays.
 
-The matrix (`m`) changes one account at a time. Its cursor is on one cell, a server in one
-account, and the account's label and the cell are in brackets, as in `[work]` and `[●]`. `←` and
-`→` move it from account to account, and the accounts scroll to keep it in sight. `space` turns
-that account's server off or on in this project, through the same dialog, with only that account
-picked. `u` undoes the newest change. Once a change is made, the matrix shows the files read
+The matrix (`m`) changes one account at a time, but for a `.mcp.json` server. Its cursor is on
+one cell, a server in one account, and the account's label and the cell are in brackets, as in
+`[work]` and `[●]`. `←` and `→` move it from account to account, and the accounts scroll to keep
+it in sight. `space` turns that account's server off or on in this project, through the same
+dialog, with only that account picked. A `.mcp.json` server is turned on or off in the project's
+`.claude/settings.local.json`, which every account reads, so its cell changes it for the whole
+project, and the dialog's question names no account: `Turn on docs-search in this project?`.
+`u` undoes the newest change. Once a change is made, the matrix shows the files read
 again, the cursor on the same cell. On a cell with no server, `space` says so, as in
 `work has no docs here.`, and on a cell that can't change it says why, as on a row:
 `No account that has it has opened this project.` In the Codex column, `space` works as it does

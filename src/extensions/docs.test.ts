@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runCommand } from "../commands.js";
 import { stripAnsi } from "../lib/cli-style.js";
-import { LEFT_ALONE, REFUSAL_CODES, REFUSALS } from "./actions.js";
+import { LEFT_ALONE, REFUSAL_CODES, REFUSALS, toggleVerb } from "./actions.js";
 import { KEEP_OPERATIONS } from "./apply.js";
 import {
   CHANGE_JSON_KEYS,
@@ -19,10 +19,10 @@ import {
   UNDO_JSON_KEYS,
   withJsonErrors,
 } from "./cli.js";
-import { hookWhen } from "./describe.js";
+import { hookWhen, tagsOf } from "./describe.js";
 import { ERROR_KINDS, ExitError } from "./exit-error.js";
-import { CLEANUP_GRACE_DAYS, CLEANUP_UNUSED_DAYS } from "./inventory.js";
-import { SCOPE_LABEL, type ScopeId } from "./scopes.js";
+import { CLEANUP_GRACE_DAYS, CLEANUP_UNUSED_DAYS, loadInventory } from "./inventory.js";
+import { rowsIn, SCOPE_LABEL, type ScopeId } from "./scopes.js";
 import { TestHome } from "./test-home.js";
 
 /**
@@ -585,6 +585,59 @@ describe("docs/extensions.md", () => {
     );
     expect(linked).toContain("changing-things");
     expect(anchors(DOC)).toEqual(expect.arrayContaining([...linked]));
+  });
+
+  it("says how on is refused under disableAllHooks, what space toggles, and what a .mcp.json cell changes", async () => {
+    // The prose, its line breaks as spaces.
+    const said = (title: string) => section(DOC, title).join(" ").replace(/\s+/g, " ");
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("app");
+    h.claude("personal", ".claude", { projects: { [app]: {} } });
+    h.claude("work", ".claude-work", { projects: { [app]: {} } });
+    h.write("app/.mcp.json", { mcpServers: { docs: { command: "docs-mcp" } } });
+    h.skill(".claude/skills", "eli5");
+    h.link(".claude/skills", ".claude-work/skills");
+    h.skill("app/.claude/skills", "eli5");
+    const hooks = { Stop: [{ hooks: [{ type: "command", command: "notify-done" }] }] };
+    const run = (command: ExtensionsCommand, args: string[]) =>
+      runExtensionsCommand(command, args, {
+        homeDir: h.home,
+        cwd: app,
+        registry: h.registry,
+        now: NOW,
+        managedSettings: h.path("managed-settings.json"),
+        mcpjsonStop: h.home,
+      });
+    const refusedOn = async () =>
+      JSON.parse(await run("hooks", ["on", "Stop", "--dry-run", "--json"])).refused.map(
+        (r: { code: string }) => r.code,
+      );
+    // In your user settings, all-hooks-off; in managed settings, managed, as anything there is.
+    h.write(".claude/settings.json", { disableAllHooks: true, hooks });
+    expect(await refusedOn()).toEqual(["all-hooks-off"]);
+    h.write(".claude/settings.json", { hooks });
+    h.write("managed-settings.json", { disableAllHooks: true });
+    expect(await refusedOn()).toEqual(["managed"]);
+    expect(said("Off and on")).toContain(
+      "`on` is refused, as `all-hooks-off`, and the reason names the file that sets it. Set in managed settings, it is refused as `managed`",
+    );
+
+    // space reads the switch: a project copy the Global one hides is on, so it turns off.
+    const inv = await loadInventory(h.inventoryOptions(app, h.path("managed-settings.json")));
+    const hidden = rowsIn(inv, "claude", "skill", "project", app, NOW).find((row) => row.name === "eli5");
+    if (!hidden) throw new Error("no project eli5");
+    expect(tagsOf(inv, hidden, app, NOW)).toContain("hidden by Global copy");
+    expect(toggleVerb(inv, hidden, app, "here")).toBe("off");
+    expect(said("Changing things from the screen")).toContain("It reads the row's switch, not whether the row loads");
+
+    // A .mcp.json server's cell, one account chosen, changes the project's settings: no account named.
+    const cell = JSON.parse(await run("mcp", ["on", "docs", "--account", "work", "--dry-run", "--json"]));
+    expect(cell.question).toBe("Turn on docs in this project?");
+    expect(cell.changes.map((c: { file: string; account: string | null }) => c.account)).toEqual([null]);
+    expect(said("Changing things from the screen")).toContain(
+      "so its cell changes it for the whole project, and the dialog's question names no account: `Turn on docs-search in this project?`",
+    );
   });
 
   it("says each hook event in the words the CLI and the screen use", () => {
