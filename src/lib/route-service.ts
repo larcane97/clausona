@@ -320,10 +320,14 @@ export function quotaTargets(route: Route, members: Member[], resume: boolean, o
   return targets;
 }
 
+/**
+ * Ranks a route on quota read now. `record` makes it a pick, under the pick-record lock; `model`
+ * is the model the run names, whose own limit then counts.
+ */
 export async function rankRouteNow(
   resolved: Pick<ResolvedRoute, "route" | "onlyTool">,
   deps: RouteDeps,
-  options: { resume: boolean; record: boolean },
+  options: { resume: boolean; record: boolean; model?: string },
 ): Promise<Ranking> {
   const registry = await deps.loadRegistry();
   if (!registry) throw await noRegistryError();
@@ -340,6 +344,7 @@ export async function rankRouteNow(
       now: deps.clock(),
       resume: options.resume,
       ...(onlyTool ? { onlyTool } : {}),
+      ...(options.model ? { model: options.model } : {}),
     });
   if (!options.record) return rank(await readPicks(deps.paths));
   return pickWithRecord(

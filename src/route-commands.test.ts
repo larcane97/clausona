@@ -1065,6 +1065,25 @@ describe("route explain and pick", () => {
     });
   });
 
+  it("ranks with the limit on the model --model names, and says which window that is", async () => {
+    const opus = (percent: number) => ({ label: "Opus", usedPercent: percent, resetsAt: null });
+    const { run } = setup({
+      ...QUOTAS,
+      "claude:a": { ...snap(10, 10), scoped: opus(95), scopedLimits: [opus(95)] },
+    });
+    await run("add", "main", "--strategy", "headroom");
+    const text = await run("explain", "main", "--model", "opus");
+    expect(text).toContain("Model      opus: the Opus limit counts too");
+    expect(text).toMatch(/^ {4}ACCOUNT\s+5H\s+7D\s+OPUS$/m);
+    expect(text).toMatch(/^ {4}claude:a\s+10% 1h\s+10%\s+95%\s+over 80%$/m);
+    const json = JSON.parse(await run("explain", "main", "--model", "opus", "--json"));
+    expect(json.model).toBe("opus");
+    expect(json.members[0]).toMatchObject({ profile: "claude:a", usage: { percent: 95, window: "Opus" } });
+    expect(await run("pick", "main", "--model", "opus")).toBe("claude:b");
+    expect(await run("pick", "main")).toBe("claude:a");
+    await expect(run("pick", "main", "--model=")).rejects.toThrow("--model needs a value.");
+  });
+
   it("fails with exit code 75 when nobody can be picked, as JSON when asked", async () => {
     const { run } = setup({ "claude:a": snap(100, 0), "claude:b": snap(100, 0), "claude:c": snap(0, 100) });
     await run("add", "main");

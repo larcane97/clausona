@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   isResumeRun,
+  modelOf,
+  parseModel,
   parseRouteTool,
   ROUTE_FIELD_OPTIONS,
   readOptions,
@@ -184,5 +186,49 @@ describe("isResumeRun", () => {
 
   it("codex exec with a prompt does not", () => {
     expect(isResumeRun("codex", ["exec", "fix the tests"])).toBe(false);
+  });
+});
+
+describe("modelOf", () => {
+  it.each([
+    ["claude", ["--model", "opus", "-p", "hi"], "opus"],
+    ["claude", ["-p", "hi", "--model=claude-opus-4-5"], "claude-opus-4-5"],
+    ["claude", ["--model", "sonnet", "--model", "opus"], "opus"],
+    ["claude", ["--model", "opus[1m]"], "opus[1m]"],
+    // Claude Code has no -m, and its --fallback-model is not the session's model.
+    ["claude", ["-m", "opus"], undefined],
+    ["claude", ["--fallback-model", "opus"], undefined],
+    ["claude", ["-p", "--model opus"], undefined],
+    ["claude", ["-p", "--", "--model", "opus"], undefined],
+    ["claude", ["--model"], undefined],
+    ["claude", ["--model", "-p", "hi"], undefined],
+    ["claude", [], undefined],
+    ["codex", ["-m", "gpt-5.3-codex-spark"], "gpt-5.3-codex-spark"],
+    ["codex", ["--model", "gpt-5.3-codex"], "gpt-5.3-codex"],
+    ["codex", ["--model=gpt-5.3-codex"], "gpt-5.3-codex"],
+    ["codex", ["-m=gpt-5.3-codex"], "gpt-5.3-codex"],
+    ["codex", ["-mgpt-5.3-codex-spark"], "gpt-5.3-codex-spark"],
+    ["codex", ["exec", "-m", "gpt-5.3-codex-spark", "fix the tests"], "gpt-5.3-codex-spark"],
+    // A config override and a config profile may name a model too; neither is read.
+    ["codex", ["-c", "model=gpt-5.3-codex-spark"], undefined],
+    ["codex", ["-p", "fast", "exec", "hi"], undefined],
+  ] as const)("%s %j names %s", (tool, args, expected) => {
+    expect(modelOf(tool, [...args])).toBe(expected);
+  });
+
+  it("does not read a value shaped like a key, and changes nothing", () => {
+    const key = ["sk", "ant", "api03", "x".repeat(40)].join("-");
+    const args = ["--model", key];
+    expect(modelOf("claude", args)).toBeUndefined();
+    expect(args).toEqual(["--model", key]);
+  });
+});
+
+describe("parseModel", () => {
+  it("takes a model name, trimmed, and refuses a blank one or a key without echoing it", () => {
+    expect(parseModel(" opus ")).toBe("opus");
+    expect(() => parseModel(" ")).toThrow("--model needs a value.");
+    const key = ["sk", "ant", "api03", "x".repeat(40)].join("-");
+    expect(() => parseModel(key)).toThrow("That looks like an API key, not a model name.");
   });
 });

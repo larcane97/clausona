@@ -162,6 +162,23 @@ describe("runRouted", () => {
     expect(s.notes).toEqual(["  ▸ claude:solo  route main, most room, 5% of 5H used"]);
   });
 
+  it("counts the limit on the model the tool is told to use, and hands the arguments on as given", async () => {
+    const opus = (percent: number) => ({ label: "Opus", usedPercent: percent, resetsAt: null });
+    const quotas = {
+      "claude:a": snap(30),
+      "claude:b": { ...snap(10), scoped: opus(95), scopedLimits: [opus(95)] },
+      "claude:solo": { ...snap(5), scoped: opus(90), scopedLimits: [opus(90)] },
+    };
+    const s = setup({ routes: MAIN, quotas });
+    await runRouted(["--route", "main", "--model", "opus", "-p", "hi"], s.launch, s.io, s.deps);
+    expect(s.launches).toEqual([["claude:a", ["--model", "opus", "-p", "hi"]]]);
+    expect(s.notes).toEqual(["  ▸ claude:a  route main, most room, 30% of 5H used"]);
+    // Another model, or none: the Opus limit does not count.
+    await runRouted(["--route", "main", "--model", "sonnet"], s.launch, s.io, s.deps);
+    await runRouted(["--route", "main", "-p", "hi"], s.launch, s.io, s.deps);
+    expect(s.launches.slice(1).map(([id]) => id)).toEqual(["claude:solo", "claude:solo"]);
+  });
+
   it("keeps a resumed run to profiles that share sessions", async () => {
     const s = setup({ routes: MAIN });
     await runRouted(["--route", "main", "--resume", "abc"], s.launch, s.io, s.deps);

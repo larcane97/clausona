@@ -1,4 +1,11 @@
-import { ROUTE_TOOLS, type RouteOverrides, type RouteTool, STRATEGIES, type Strategy } from "../core/route-config.js";
+import {
+  holdsKey,
+  ROUTE_TOOLS,
+  type RouteOverrides,
+  type RouteTool,
+  STRATEGIES,
+  type Strategy,
+} from "../core/route-config.js";
 import type { ToolName } from "../types.js";
 
 /**
@@ -53,6 +60,17 @@ export function parseRouteTool(value: string | undefined): RouteTool | undefined
   if (value === undefined) return undefined;
   if (!ROUTE_TOOLS.includes(value as RouteTool)) throw new Error("--tool must be claude, codex or all.");
   return value as RouteTool;
+}
+
+/**
+ * `--model` of `route explain` and `route pick`: the model a run would name, whose own limit then
+ * counts. A blank one is refused, as is one shaped like a key, which explain would print.
+ */
+export function parseModel(value: string): string {
+  const model = value.trim();
+  if (model === "") throw new Error("--model needs a value.");
+  if (holdsKey(model)) throw new Error("That looks like an API key, not a model name.");
+  return model;
 }
 
 /** The routing options among `values`. The rest - `--tool`, `--add` and the like - are the caller's. */
@@ -178,4 +196,31 @@ const CLAUDE_RESUME_FLAGS = new Set(["-c", "--continue", "-r", "--resume", "--fr
 export function isResumeRun(tool: ToolName, toolArgs: string[]): boolean {
   if (tool === "claude") return toolArgs.some((arg) => CLAUDE_RESUME_FLAGS.has(splitOption(arg)[0]));
   return toolArgs.some((arg) => arg === "resume" || arg === "fork");
+}
+
+/**
+ * The model the tool's arguments name, read without changing them: Claude Code's `--model`, and
+ * Codex's `-m` or `--model`, at the top level or after a subcommand such as `exec`. The last one
+ * given counts, as it does for the tool. Nothing after a `--` is read: that is the prompt. Codex's
+ * `-c model=…`, a Codex config profile and a profile's pinned model are not read, so such a run
+ * counts no model's limit; nor is a value shaped like a key, which would be echoed.
+ */
+export function modelOf(tool: ToolName, toolArgs: string[]): string | undefined {
+  let model: string | undefined;
+  for (let i = 0; i < toolArgs.length; i++) {
+    const arg = toolArgs[i];
+    if (arg === "--") break;
+    const [flag, inline] = splitOption(arg);
+    let value: string | undefined;
+    if (flag === "--model" || (tool === "codex" && flag === "-m")) {
+      value = inline ?? toolArgs[++i];
+    } else if (tool === "codex" && /^-m[^=]/.test(arg)) {
+      // Codex reads `-mgpt-5.3-codex` as `-m gpt-5.3-codex`.
+      value = arg.slice(2);
+    } else {
+      continue;
+    }
+    if (value !== undefined && value.trim() !== "" && !value.startsWith("-") && !holdsKey(value)) model = value.trim();
+  }
+  return model;
 }

@@ -37,7 +37,7 @@ import {
   routesFor,
   UnknownRouteError,
 } from "./route-service.js";
-import { isResumeRun, type RunArgs, readRunArgs } from "./run-args.js";
+import { isResumeRun, modelOf, type RunArgs, readRunArgs } from "./run-args.js";
 import { noRegistryError } from "./service.js";
 
 /**
@@ -248,7 +248,9 @@ export async function runRouted(
   // there are no arguments (checked above), so there is nothing to resume.
   const runTool = resolved.onlyTool ?? (resolved.route.tool === "all" ? undefined : resolved.route.tool);
   const resume = runTool ? isResumeRun(runTool, run.toolArgs) : false;
-  const ranking = await rankRouteNow(resolved, deps, { resume, record: true });
+  // The model the tool is told to use; without one, no model's own limit counts.
+  const model = runTool ? modelOf(runTool, run.toolArgs) : undefined;
+  const ranking = await rankRouteNow(resolved, deps, { resume, record: true, model });
   if (ranking.outcome.kind === "none") {
     // The explain it points to ranks with the run's own options, as the run did.
     const { route: _name, ...overrides } = run.options;

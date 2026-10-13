@@ -71,7 +71,7 @@ const EVERYONE = ["claude:team", "claude:work", "claude:side", "claude:personal"
 function rank(
   spec: RouteSpec,
   quotas: Record<string, QuotaSnapshot>,
-  options: { members?: Member[]; lastPicked?: Record<string, string>; resume?: boolean } = {},
+  options: { members?: Member[]; lastPicked?: Record<string, string>; resume?: boolean; model?: string } = {},
 ) {
   return rankRoute({
     route: withDefaults(spec),
@@ -80,8 +80,15 @@ function rank(
     lastPicked: options.lastPicked ?? {},
     now: NOW,
     resume: options.resume ?? false,
+    ...(options.model ? { model: options.model } : {}),
   });
 }
+
+/** `quota` with a weekly limit on Opus, as quota.ts stores one, resetting in `opusIn` hours. */
+const withOpus = (base: QuotaSnapshot, opus: number, opusIn = 30): QuotaSnapshot => {
+  const limit = { label: "Opus", usedPercent: opus, resetsAt: inHours(opusIn) };
+  return { ...base, scoped: limit, scopedLimits: [limit] };
+};
 
 const widest = (text: string) =>
   Math.max(
@@ -680,6 +687,62 @@ describe("renderNoAccount", () => {
   });
 });
 
+describe("a run's model limit", () => {
+  const quotas = {
+    "claude:team": withOpus(quota(5, 22), 90),
+    "claude:work": withOpus(quota(12, 34), 20),
+    "claude:old": quota(3, 3),
+  };
+  const spec: RouteSpec = { tool: "claude", from: ["team", "work", "old"], strategy: "headroom" };
+
+  it("explain shows the limit as a column, bold where it sets the usage, and says it counts", () => {
+    const r = rank(spec, quotas, { model: "opus" });
+    const text = plain(renderRouteDetail("main", r, at(120)));
+    expect(text).toContain("  │  Model      opus: the Opus limit counts too");
+    expect(text).toMatch(/^ {4}ACCOUNT\s+5H\s+7D\s+OPUS$/m);
+    expect(text).toMatch(/^ {2}▸ claude:old\s+3% 1h\s+3% 2d\s+—\s+picked next$/m);
+    expect(text).toMatch(/^ {4}claude:team\s+5% 1h\s+22% 2d\s+90% 1d\s+over 80%$/m);
+    expect(r.rows.find((row) => row.id === "claude:team")?.usage?.window).toBe("Opus");
+  });
+
+  it("explain says so when no account has a limit on the model, and shows no column", () => {
+    const r = rank(spec, quotas, { model: "sonnet" });
+    const text = plain(renderRouteDetail("main", r, at(120)));
+    expect(text).toContain("  │  Model      sonnet: no account reports a limit on it");
+    expect(text).toMatch(/^ {4}ACCOUNT\s+5H\s+7D$/m);
+    expect(plain(renderRouteDetail("main", rank(spec, quotas), at(120)))).not.toContain("Model");
+  });
+
+  it("the note names the limit the usage came from", () => {
+    const r = rank({ ...spec, from: ["team", "work"] }, quotas, { model: "claude-opus-4-5" });
+    expect(plain(renderNote("main", r))).toBe("  ▸ claude:work  route main, most room, 34% of 7D used");
+    const opus = rank({ ...spec, from: ["team"] }, { "claude:team": withOpus(quota(5, 22), 70) }, { model: "opus" });
+    expect(plain(renderNote("main", opus))).toBe("  ▸ claude:team  route main, most room, 70% of the Opus limit used");
+  });
+
+  it("exit 75 shows the limit, says it is the one that resets, and explains with the model", () => {
+    const full = { "claude:team": withOpus(quota(5, 22), 100, 30), "claude:work": withOpus(quota(12, 34), 100, 40) };
+    const r = rank({ ...spec, from: ["team", "work"] }, full, { model: "opus" });
+    const text = plain(renderNoAccount("main", r, at(120)));
+    expect(text).toMatch(/^ {4}ACCOUNT\s+5H\s+7D\s+OPUS\s+FREE AGAIN$/m);
+    expect(text).toMatch(/^ {4}claude:team\s+5% 1h\s+22% 2d\s+100% 1d\s+in 1d 6h \(Opus resets\)\s+soonest$/m);
+    expect(text).toContain("clausona route explain main --model opus\n");
+    const bracketed = rank({ ...spec, from: ["team", "work"] }, full, { model: "opus[1m]" });
+    expect(plain(renderNoAccount("main", bracketed, at(120)))).toContain("explain main --model 'opus[1m]'\n");
+  });
+
+  it("explain's JSON names the window by the limit's label, and gives the limit and the model", () => {
+    const r = rank({ ...spec, from: ["team"] }, { "claude:team": withOpus(quota(5, 22), 70) }, { model: "opus" });
+    const json = explainJson("main", "flag", r) as { model: string; members: Array<Record<string, unknown>> };
+    expect(json.model).toBe("opus");
+    expect(json.members[0].usage).toEqual({ percent: 70, window: "Opus", stale: false });
+    expect(json.members[0].scoped).toEqual({ label: "Opus", usedPercent: 70, resetsAt: inHours(30) });
+    expect(pickJson("main", r)).toMatchObject({ usage: { percent: 70, window: "Opus" } });
+    const plainRun = explainJson("main", "flag", rank({ ...spec, from: ["team"] }, quotas)) as typeof json;
+    expect([plainRun.model, plainRun.members[0].scoped]).toEqual([null, null]);
+  });
+});
+
 describe("renderNewRoutePreview", () => {
   const four = ["claude:team", "claude:work", "claude:side", "claude:personal", "claude:old"].map(member);
   const quotas = {
@@ -846,6 +909,7 @@ describe("JSON", () => {
       "emptyPatterns",
       "excluded",
       "members",
+      "model",
       "outcome",
       "resolvedBy",
       "route",
@@ -860,6 +924,7 @@ describe("JSON", () => {
         "matchedBy",
         "profile",
         "role",
+        "scoped",
         "sevenDay",
         "skipReason",
         "status",

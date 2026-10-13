@@ -92,7 +92,14 @@ import {
   routesFor,
   UnknownRouteError,
 } from "./lib/route-service.js";
-import { parsePatterns, parseRouteTool, ROUTE_FIELD_OPTIONS, readOptions, toRoutingOptions } from "./lib/run-args.js";
+import {
+  parseModel,
+  parsePatterns,
+  parseRouteTool,
+  ROUTE_FIELD_OPTIONS,
+  readOptions,
+  toRoutingOptions,
+} from "./lib/run-args.js";
 import { noRegistryError } from "./lib/service.js";
 import type { Registry, ToolName } from "./types.js";
 
@@ -786,23 +793,27 @@ type RankingArgs = {
   tool?: RouteTool;
   json: boolean;
   resume: boolean;
+  /** The model a run would name: its own limit counts, as in that run. */
+  model?: string;
 };
 
 function readRankingArgs(sub: "explain" | "pick", args: string[]): RankingArgs {
   return asUsage(() => {
     const read = readOptions(
       args,
-      { values: ["--tool", ...ROUTE_FIELD_OPTIONS], flags: ["--json", "--resume"] },
+      { values: ["--tool", "--model", ...ROUTE_FIELD_OPTIONS], flags: ["--json", "--resume"] },
       `route ${sub}`,
     );
     const [name, ...extra] = read.positionals;
     if (extra.length) throw new Error(`${usage(sub)}\nRun \`clausona route ${sub} --help\` for usage.`);
+    const model = read.values.get("--model");
     return {
       name,
       overrides: toRoutingOptions(read.values),
       tool: parseRouteTool(read.values.get("--tool")),
       json: read.flags.has("--json"),
       resume: read.flags.has("--resume"),
+      ...(model === undefined ? {} : { model: parseModel(model) }),
     };
   });
 }
@@ -827,9 +838,9 @@ async function explainRoute(args: string[], deps: RouteDeps): Promise<string> {
   const parsed = readRankingArgs("explain", args);
   // Neither a route nor an unsaved one: what a run would take here, by the dir rules and defaults.
   if (parsed.name === undefined && Object.keys(parsed.overrides).length === 0) return explainHere(parsed, deps);
-  const { overrides, json, resume } = parsed;
+  const { overrides, json, resume, model } = parsed;
   const { resolved, loaded } = await resolveForRanking("explain", parsed, deps);
-  const ranking = await rankRouteNow(resolved, deps, { resume, record: false });
+  const ranking = await rankRouteNow(resolved, deps, { resume, record: false, model });
   if (json) return JSON.stringify(explainJson(resolved.name, resolved.resolvedBy, ranking), null, 2);
   const rules = readRules(loaded.file);
   return renderRouteDetail(resolved.name, ranking, {
@@ -845,7 +856,7 @@ async function explainRoute(args: string[], deps: RouteDeps): Promise<string> {
  * in the current directory (one of them with --tool), which rule says so, and the explain of each
  * route a run would take. Nothing is recorded.
  */
-async function explainHere({ tool, json, resume }: RankingArgs, deps: RouteDeps): Promise<string> {
+async function explainHere({ tool, json, resume, model }: RankingArgs, deps: RouteDeps): Promise<string> {
   const registry = await registryOrThrow(deps);
   const names = namesOf(registry);
   const loaded = await loadRoutes(deps.paths, names);
@@ -854,7 +865,7 @@ async function explainHere({ tool, json, resume }: RankingArgs, deps: RouteDeps)
   const found = [];
   for (const each of tools) {
     const { resolved, skipped } = routeByRules(loaded, each, deps.cwd, sys, names);
-    const ranking = resolved ? await rankRouteNow(resolved, deps, { resume, record: false }) : undefined;
+    const ranking = resolved ? await rankRouteNow(resolved, deps, { resume, record: false, model }) : undefined;
     found.push({ tool: each, resolved, ranking, skipped });
   }
   const active = (each: ToolName) => {
@@ -902,9 +913,9 @@ async function explainHere({ tool, json, resume }: RankingArgs, deps: RouteDeps)
 
 async function pickRoute(args: string[], deps: RouteDeps): Promise<string> {
   const parsed = readRankingArgs("pick", args);
-  const { overrides, json, resume } = parsed;
+  const { overrides, json, resume, model } = parsed;
   const { resolved } = await resolveForRanking("pick", parsed, deps);
-  const ranking = await rankRouteNow(resolved, deps, { resume, record: true });
+  const ranking = await rankRouteNow(resolved, deps, { resume, record: true, model });
   if (ranking.outcome.kind === "none") {
     throw new NoAccountError(
       renderNoAccount(resolved.name, ranking, { now: deps.clock(), onlyTool: resolved.onlyTool, overrides, resume }),
