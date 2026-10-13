@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -22,33 +22,29 @@ export function keychainItemFor(profileId: string): string {
 type RunResult = { code: number; stdout: string };
 
 /**
- * Kills a child and every process under it. A `sh -c` command's own children outlive the shell
- * otherwise, and hold its output open. They are found by parent, from the child down, before
- * any is killed: a process whose parent has died is no longer found under it.
+ * Kills a running child and everything it started. On POSIX the child leads a process group of
+ * its own (run() starts it so), and the whole group is killed: a `sh -c` command's own children,
+ * which would outlive the shell, among them. Windows kills the tree under its pid. Only while the
+ * child is still running: once it has exited, its pid can be another process's.
  */
-function killTree(pid: number): void {
+function killRunning(child: ChildProcess): void {
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === "win32") {
-    spawnCommand("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" }).on("error", () => {});
+    spawnCommand("taskkill", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore" }).on("error", () => {});
     return;
   }
-  const under = (parent: number): number[] => {
-    const found = spawnSync("pgrep", ["-P", String(parent)], { encoding: "utf8" });
-    const children = (found.stdout ?? "").split(/\s+/).filter(Boolean).map(Number);
-    return children.flatMap((child) => [child, ...under(child)]);
-  };
-  for (const each of [pid, ...under(pid)]) {
-    try {
-      process.kill(each, "SIGKILL");
-    } catch {
-      // Gone already.
-    }
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    // Gone already.
   }
 }
 
 /**
- * Runs `command` and resolves to its exit code and stdout. Once `signal` aborts, the command and
- * everything it started is killed, and the result is a failure at once, not when its output
- * closes, which a process it left behind could hold open.
+ * Runs `command` and resolves to its exit code and stdout. With a `signal`, the command starts
+ * in a process group of its own, with no terminal, and once the signal aborts, it and everything
+ * it started is killed, if it is still running; the result is a failure at once, not when its
+ * output closes, which a process it left behind could hold open.
  */
 function run(command: string, args: string[], input?: string, signal?: AbortSignal): Promise<RunResult> {
   return new Promise((resolve) => {
@@ -58,6 +54,7 @@ function run(command: string, args: string[], input?: string, signal?: AbortSign
     }
     const child = spawnCommand(command, args, {
       stdio: [input === undefined ? "ignore" : "pipe", "pipe", "ignore"],
+      ...(signal && process.platform !== "win32" ? { detached: true } : {}),
     });
     let out = "";
     let settled = false;
@@ -68,7 +65,7 @@ function run(command: string, args: string[], input?: string, signal?: AbortSign
       resolve(result);
     };
     const stop = () => {
-      if (child.pid !== undefined) killTree(child.pid);
+      killRunning(child);
       child.stdout?.destroy();
       finish({ code: 1, stdout: "" });
     };

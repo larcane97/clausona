@@ -113,6 +113,47 @@ describe("resolveSecret", () => {
       await vi.waitFor(() => expect([alive(shell), alive(sleep)]).toEqual([false, false]), { timeout: 10_000 });
     },
   );
+
+  // Its pid, once it has exited, can be another process's: nothing is signalled then, even with a
+  // job it left behind holding its output open, which the abort no longer waits for.
+  it.skipIf(windows)(
+    "signals nothing once the command has exited, though a job it left keeps its output open",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "clausona-key-command-"));
+      temps.push(dir);
+      const pids = path.join(dir, "pids");
+      vi.stubEnv("CLAUSONA_TEST_PIDS", pids);
+      const run = 'echo $$ > "$CLAUSONA_TEST_PIDS"; sleep 30 & echo $! >> "$CLAUSONA_TEST_PIDS"; exit 0';
+      const alive = (pid: number) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const controller = new AbortController();
+      const read = resolveSecret("claude:x", { source: "command", run }, undefined, { signal: controller.signal });
+      await vi.waitFor(() => expect(readFileSync(pids, "utf8").trim().split("\n")).toHaveLength(2), {
+        timeout: 20_000,
+      });
+      const [shell, job] = readFileSync(pids, "utf8").trim().split("\n").map(Number);
+      try {
+        await vi.waitFor(() => expect(alive(shell)).toBe(false), { timeout: 20_000 });
+        const kill = vi.spyOn(process, "kill");
+        controller.abort();
+        await expect(read).rejects.toThrow("the key was not read in time");
+        // Only the checks above and below: no signal went to any pid.
+        expect(kill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([]);
+        kill.mockRestore();
+        expect(alive(job)).toBe(true);
+      } finally {
+        // The job is this test's own, by the pid it wrote.
+        if (alive(job)) process.kill(job, "SIGKILL");
+      }
+    },
+  );
 });
 
 /**
