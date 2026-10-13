@@ -33,6 +33,8 @@ jobs:
       - run: cd dist && sha256sum clausona.js > clausona.js.sha256
 
       # Installed updaters download the assets named clausona.js and clausona.js.sha256; keep both names.
+      # The notes written for this version (a test requires them) open the release, and GitHub's
+      # list of merged PRs follows them.
       - name: Create or update Release
         run: |
           gh release create ${{ github.ref_name }} \
@@ -41,6 +43,7 @@ jobs:
             install.sh \
             install.ps1 \
             --title "${{ github.ref_name }}" \
+            --notes-file "docs/releases/${{ github.ref_name }}.md" \
             --generate-notes || \
           gh release upload ${{ github.ref_name }} \
             dist/clausona.js \
