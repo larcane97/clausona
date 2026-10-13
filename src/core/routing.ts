@@ -164,13 +164,18 @@ export function scopedWindowName(limit: ScopedWindow): string {
   return kind ? `${limit.label} ${kind}` : limit.label;
 }
 
-/** Every window of every limit a run of `model` falls under: a Codex limit can have a 5H and a 7D. */
-function scopedWindowsFor(snapshot: QuotaSnapshot | undefined, model: string | undefined): ScopedWindow[] {
-  if (!snapshot || !model) return [];
+/** Every window of every model limit a reading reports, as a run's model is matched against them. */
+export function modelLimitsOf(snapshot: QuotaSnapshot | undefined): ScopedWindow[] {
+  if (!snapshot) return [];
   // A reading an older clausona cached keeps only the most used limit: still the right one when
   // the model falls under it.
-  const limits = snapshot.scopedLimits ?? (snapshot.scoped ? [snapshot.scoped] : []);
-  return limits.filter((limit) => modelFallsUnder(model, limit.label));
+  return snapshot.scopedLimits ?? (snapshot.scoped ? [snapshot.scoped] : []);
+}
+
+/** Every window of every limit a run of `model` falls under: a Codex limit can have a 5H and a 7D. */
+function scopedWindowsFor(snapshot: QuotaSnapshot | undefined, model: string | undefined): ScopedWindow[] {
+  if (!model) return [];
+  return modelLimitsOf(snapshot).filter((limit) => modelFallsUnder(model, limit.label));
 }
 
 /**

@@ -116,8 +116,11 @@ const STRATEGY_PHRASES: Record<Strategy, string> = {
 
 const routeLabel = (name: string | undefined) => (name ? `route ${name}` : "inline route");
 
-/** A model's name as a shell word: as it is, unless the shell would read something in it (`opus[1m]`). */
-const modelWord = (model: string) => (/^[\w.:/-]+$/.test(model) ? model : posixQuote(model));
+/**
+ * A model's name as a shell word, here and on the Routes screen: as it is, unless the shell would
+ * read something in it (`opus[1m]`).
+ */
+export const modelWord = (model: string) => (/^[\w.:/-]+$/.test(model) ? model : posixQuote(model));
 
 /**
  * The width of the terminal the text goes to. The exit-75 message and the new-route preview go to
@@ -367,10 +370,11 @@ function windowOf(row: Row, which: WindowColumn): QuotaWindow | undefined {
 }
 
 /**
- * The model column's header: the limit's name when every account calls it the same, else MODEL.
- * Undefined when no account has a limit on the run's model, and so no column.
+ * The model column's header, here and on the Routes screen: the limit's name when every account
+ * calls it the same, else MODEL. Undefined when no account has a limit on the run's model, and so
+ * no column.
  */
-function modelHeader(rows: Row[]): string | undefined {
+export function modelHeader(rows: Row[]): string | undefined {
   const labels = new Set(rows.flatMap((row) => (row.scoped && !row.skip ? [row.scoped.label.toUpperCase()] : [])));
   if (labels.size === 0) return undefined;
   return labels.size === 1 ? [...labels][0] : "MODEL";
