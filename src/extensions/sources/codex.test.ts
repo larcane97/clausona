@@ -653,6 +653,62 @@ describe("readCodex", () => {
     ]);
   });
 
+  it("marks every hook of a file with a hook Codex cannot read, as Codex refuses the whole file", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    const good = (command: string) => ({ type: "command", command });
+    const stop = (...hooks: unknown[]) => ({ hooks: { Stop: [{ hooks }] } });
+    // What Codex 0.159.3's hooks/list refused, each with "failed to parse hooks config …".
+    h.codex("personal", ".codex", `[projects."${app.replaceAll("\\", "\\\\")}"]\ntrust_level = "trusted"\n`);
+    h.write(".codex/hooks.json", stop(good("json-ok"), { type: "command", command: 5 }));
+    h.write("repos/app/.codex/hooks.json", stop(good("app-ok"), { type: "command", command: "x", timeout: 1.5 }));
+    const srv = ".codex/plugins/cache/m/srv/1.0.0";
+    h.write(`${srv}/.codex-plugin/plugin.json`, { name: "srv" });
+    h.write(`${srv}/hooks/hooks.json`, stop(good("srv-ok"), { type: "mcp_tool", server: 5, tool: "t" }));
+    // One bad inline entry, and Codex reads none of the manifest's hooks.
+    const inl = ".codex/plugins/cache/m/inl/1.0.0";
+    h.write(`${inl}/.codex-plugin/plugin.json`, {
+      name: "inl",
+      hooks: [stop(good("inl-a-ok")), stop(good("inl-b-ok"), { type: "http", url: "x" })],
+    });
+    const fine = ".codex/plugins/cache/m/fine/1.0.0";
+    h.write(`${fine}/.codex-plugin/plugin.json`, { name: "fine" });
+    h.write(`${fine}/hooks/hooks.json`, stop(good("fine-ok"), { type: "prompt", prompt: 5 }));
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(ctx, [{ path: app, tools: ["codex"], profiles: [] }], out);
+    const error = (command: string) =>
+      out.items.find((i) => i.kind === "hook" && i.summary?.command === command)?.codexError;
+    expect(["json-ok", "app-ok", "srv-ok", "inl-a-ok", "inl-b-ok", "fine-ok"].map(error)).toEqual([
+      ...Array(5).fill("invalid hooks file"),
+      undefined,
+    ]);
+    // A prompt hook's fields are Codex's to ignore: that file reads, and its prompt is not supported.
+    expect(out.items.find((i) => i.summary?.type === "prompt")?.codexError).toBe("not supported");
+    expect(out.facts.codexHookTrust.map((t) => t.id)).toEqual([expect.stringContaining("fine@m")]);
+  });
+
+  it("refuses a config.toml with a hook Codex cannot read, as Codex refuses the whole file", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    // Codex 0.159.3's config/read: "invalid configuration: invalid type: integer `5`, expected a string".
+    h.codex(
+      "personal",
+      ".codex",
+      '[mcp_servers.x]\ncommand = "x"\n\n[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = 5\n',
+    );
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(ctx, [], out);
+    expect(out.items).toEqual([]);
+    expect(out.warnings.map((w) => w.message)).toEqual([
+      "has a hook Codex cannot read, so Codex refuses the whole file",
+    ]);
+  });
+
   it("marks the hooks of a hooks file Codex cannot read: anything but hooks and a description at its top", async () => {
     const h = new TestHome();
     homes.push(h);

@@ -103,7 +103,8 @@ const CODEX_SKIPS: Record<NonNullable<Extension["codexError"]>, string> = {
   "invalid front matter": "Codex skips its SKILL.md: its front matter is not valid YAML",
   "name too long": "Codex skips its SKILL.md: its name is over 64 characters",
   "no description": "Codex skips its SKILL.md: its front matter has no description",
-  "invalid hooks file": "Codex skips its hooks file: it holds more than hooks and a description at its top",
+  "invalid hooks file":
+    "Codex skips its hooks file: it holds more than hooks and a description at its top, or a hook Codex cannot read",
   "not supported": "Codex does not run an MCP tool hook when a session ends",
   "empty command": "Codex skips a hook whose command is empty",
   "empty tool": "Codex skips an MCP tool hook whose server or tool is empty",

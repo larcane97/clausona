@@ -15,6 +15,7 @@ import {
   addCodexHookTrust,
   addConfigHooks,
   codexHomeHooksFile,
+  codexReadsHookEvents,
   codexReadsHooksFile,
   exactConfigHooks,
   exactJsonFile,
@@ -47,9 +48,10 @@ function invalidToml(error: unknown): string {
 }
 
 /**
- * A TOML file as an object, or undefined when missing; one that does not parse is a warning. An
- * integer past 2^53 is a bigint, as Codex reads it as the i64 it is; one past 64 bits Codex
- * refuses ("u64 value was too large"), the whole file with it, so that is a warning too.
+ * A Codex config.toml as an object, or undefined when missing; one that does not parse is a
+ * warning. An integer past 2^53 is a bigint, as Codex reads it as the i64 it is. Two things make
+ * Codex 0.159.3 refuse the whole file, and are warnings too: an integer past 64 bits ("u64 value
+ * was too large"), and a hook under `[hooks]` it cannot read ("invalid configuration").
  */
 export async function readTomlObject(file: string, warnings: Warning[]): Promise<Record<string, unknown> | undefined> {
   const text = await readText(file, warnings);
@@ -63,6 +65,10 @@ export async function readTomlObject(file: string, warnings: Warning[]): Promise
   }
   if (pastI64(value)) {
     warnings.push({ file, message: "has an integer too large for 64 bits, so Codex refuses the whole file" });
+    return undefined;
+  }
+  if (isRecord(value.hooks) && !codexReadsHookEvents(value.hooks)) {
+    warnings.push({ file, message: "has a hook Codex cannot read, so Codex refuses the whole file" });
     return undefined;
   }
   return value;

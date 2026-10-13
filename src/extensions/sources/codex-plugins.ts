@@ -5,7 +5,13 @@ import type { Collector, Extension, Location, StateFacts } from "../model.js";
 import { entryInfo, IO_LIMIT, isRecord, isWithin, listNames, mapLimit, readJsonObject } from "../read.js";
 import { mcpSummary } from "../redact.js";
 import { addHooks, addHooksFile } from "./claude-hooks.js";
-import { addCodexHookTrust, codexReadsHooksFile, exactJsonFile, markRefusedHooksFile } from "./codex-hooks.js";
+import {
+  addCodexHookTrust,
+  codexReadsHookEvents,
+  codexReadsHooksFile,
+  exactJsonFile,
+  markRefusedHooksFile,
+} from "./codex-hooks.js";
 import { readCodexSkills } from "./codex-skills.js";
 
 /**
@@ -194,11 +200,17 @@ async function readHooks(
   // The manifest again, its numbers as Codex reads them, for the hashes of the hooks it holds.
   const exact = entries.some(isRecord) ? await exactJsonFile(manifestFile) : undefined;
   const exactEntries: unknown[] = Array.isArray(exact?.hooks) ? exact.hooks : [exact?.hooks];
+  // One inline hook serde cannot read, and Codex reads none of the manifest's.
+  const inlineRead = entries.every((e) => !isRecord(e) || !isRecord(e.hooks) || codexReadsHookEvents(e.hooks));
   for (const [k, entry] of entries.entries()) {
     if (isRecord(entry)) {
       const owner = `${place.plugin}|${relative(manifestFile)}#hooks[${k}]`;
       if (!isRecord(entry.hooks)) continue;
       addHooks(entry.hooks, { ...place, file: manifestFile }, owner, out, "hooks");
+      if (!inlineRead) {
+        markRefusedHooksFile(out, manifestFile);
+        continue;
+      }
       // Codex keys an inline entry by the manifest's name alone, whichever folder holds it.
       const source = `${place.plugin}:plugin.json#hooks[${k}]`;
       const exactEntry = exactEntries[k];

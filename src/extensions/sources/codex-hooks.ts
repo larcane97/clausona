@@ -128,12 +128,74 @@ export async function codexHomeHooksFile(
 
 /**
  * Whether Codex reads `json` as a hooks file: `hooks` and an optional `description`, and nothing
- * else at its top. Codex refuses any other file whole - one with its events at the top, as a
- * Claude plugin's may be written, or with a key such as `$schema` - and runs none of its hooks.
+ * else at its top, and every hook of a known event one serde reads (codexReadsHookEvents). Codex
+ * refuses any other file whole - one with its events at the top, as a Claude plugin's may be
+ * written, with a key such as `$schema`, or with one hook it cannot read - and runs none of its
+ * hooks.
  */
 export function codexReadsHooksFile(json: Record<string, unknown>): boolean {
   const known = Object.keys(json).every((key) => key === "hooks" || key === "description");
-  return known && (json.hooks === undefined || isRecord(json.hooks));
+  return known && (json.hooks === undefined || (isRecord(json.hooks) && codexReadsHookEvents(json.hooks)));
+}
+
+/** An `Option` serde reads: absent, null, or of its type. */
+const optional = (value: unknown, is: (v: unknown) => boolean) => value === undefined || value === null || is(value);
+/** A field with a default, which serde reads absent or of its type, not null. */
+const defaulted = (value: unknown, is: (v: unknown) => boolean) => value === undefined || is(value);
+const isString = (value: unknown) => typeof value === "string";
+const isCount = (value: unknown) =>
+  (typeof value === "number" && Number.isInteger(value) && value >= 0) || (typeof value === "bigint" && value >= 0n);
+/** A value TOML can hold, as Codex checks an MCP hook's input: no null anywhere in it. */
+const inToml = (value: unknown): boolean =>
+  value !== null &&
+  (Array.isArray(value) ? value.every(inToml) : !isRecord(value) || Object.values(value).every(inToml));
+
+/**
+ * Whether serde reads every group and hook of the known events in `events` into Codex 0.159.3's
+ * `MatcherGroup` and `HookHandlerConfig`, as hooks/list showed one that does not leaves the whole
+ * file unread ("failed to parse hooks config"): a group an object with a string `matcher`, if
+ * any, and a list of hooks; a hook an object whose `type` is `command` (a string `command`),
+ * `mcp_tool` (string `server` and `tool`, an object `input` with no null in it), `prompt` or
+ * `agent`, a timeout a whole number, `async` a boolean, `statusMessage` a string. An event Codex
+ * does not know it leaves alone.
+ */
+export function codexReadsHookEvents(events: Record<string, unknown>): boolean {
+  return Object.entries(events).every(
+    ([event, groups]) =>
+      !Object.hasOwn(EVENTS, event) || defaulted(groups, (g) => Array.isArray(g) && g.every(readsGroup)),
+  );
+}
+
+function readsGroup(group: unknown): boolean {
+  if (!isRecord(group) || !optional(group.matcher, isString)) return false;
+  return defaulted(group.hooks, (hooks) => Array.isArray(hooks) && hooks.every(readsHook));
+}
+
+function readsHook(hook: unknown): boolean {
+  if (!isRecord(hook)) return false;
+  const common = optional(hook.timeout, isCount) && optional(hook.statusMessage, isString);
+  switch (hook.type) {
+    case "command":
+      return (
+        common &&
+        isString(hook.command) &&
+        optional(hook.commandWindows ?? hook.command_windows, isString) &&
+        defaulted(hook.async, (v) => typeof v === "boolean") &&
+        optional(hook.additionalContextLimit, isCount)
+      );
+    case "mcp_tool":
+      return (
+        common &&
+        isString(hook.server) &&
+        isString(hook.tool) &&
+        defaulted(hook.input, (input) => isRecord(input) && inToml(input))
+      );
+    case "prompt":
+    case "agent":
+      return true;
+    default:
+      return false;
+  }
 }
 
 /**

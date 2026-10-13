@@ -291,8 +291,10 @@ The switches are read from these places:
   not trust the project, trusted themselves or not: Codex then leaves the project's `.codex`
   folder out. Their details say so, and why: `Trust  Codex does not trust this project, so it
   ignores its .codex folder.` Codex reads a hooks file only when it holds `hooks` and, at most,
-  a `description` at its top, so the hooks of any other are tagged `invalid hooks file`. A
-  plugin whose `hooks` lists hook files and hooks together has none. Codex runs no prompt or
+  a `description` at its top, and every hook in it is one it can read: a known `type`, a string
+  `command`, `server` and `tool`, a whole-number `timeout`, and so on. The hooks of any other
+  file are tagged `invalid hooks file`, and so are all of a plugin manifest's inline hooks when
+  one of them is unreadable. A plugin whose `hooks` lists hook files and hooks together has none. Codex runs no prompt or
   agent hook yet, nor an MCP tool hook when a session ends: those are tagged `not supported`. It
   skips a command hook whose command is empty, or only spaces, and an MCP tool hook whose server
   or tool is, and runs the rest of its file: those are tagged `empty command` and `empty tool`.
@@ -325,7 +327,7 @@ A row can carry several tags. They are listed most important first: `broken link
 | `invalid front matter` | A Codex skill whose front matter is not YAML Codex reads: say, a quoted description with more text after its closing quote, a description line that runs on to the next line unindented, or a description written as a list. Codex skips it, so it is not in Loaded. A description with a `: ` in it is fine: Codex quotes it and reads it again, and so does clausona. |
 | `name too long` | A Codex skill whose name is over 64 characters. Codex skips it, so it is not in Loaded. |
 | `no description` | A Codex skill whose front matter has no `description`, or one that is empty or only spaces. Codex skips it, so it is not in Loaded. |
-| `invalid hooks file` | A Codex hook in a hooks file with more than `hooks` and a `description` at its top, such as its events, or a `$schema`. Codex skips the whole file, so the hook does not run. |
+| `invalid hooks file` | A Codex hook in a hooks file with more than `hooks` and a `description` at its top, such as its events, or a `$schema`, or with a hook Codex cannot read, such as a `command` that is not a string. Codex skips the whole file, so the hook does not run. |
 | `not supported` | A Codex hook of a kind Codex does not run: a prompt or an agent hook, or an MCP tool hook on `SessionEnd`. Codex skips it, whatever its trust, so it is not in Loaded. |
 | `empty command` | A Codex command hook whose command is empty or only spaces. Codex skips it, and runs the rest of its file, so it is not in Loaded. |
 | `empty tool` | A Codex MCP tool hook whose server or tool is empty or only spaces. Codex skips it, and runs the rest of its file, so it is not in Loaded. |
@@ -641,8 +643,9 @@ further."
 When a file cannot be read, the text output ends with "Could not read every file, so this
 list may miss what they hold:" and each file, with a position or a reason and never what it
 holds. JSON lists them in `warnings`. The exit code stays 0. A Codex `config.toml` with an
-integer too large for 64 bits is one of them: Codex refuses the whole file, and so clausona
-reads none of it. A larger integer that fits in 64 bits reads as Codex reads it.
+integer too large for 64 bits is one of them, and so is one with a hook under `[hooks]` Codex
+cannot read: Codex refuses the whole file, and so clausona reads none of it. A larger integer
+that fits in 64 bits reads as Codex reads it.
 
 ## Changing things
 
