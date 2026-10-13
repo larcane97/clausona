@@ -272,16 +272,19 @@ describe("resolveSecret", () => {
       };
       // Longer than a reading allows, for a machine under load; the job outlasts it.
       const signal = AbortSignal.timeout(SPAWN_TIMEOUT_MS);
+      // Once the job is seen gone, its pid can be another process's, and is not signalled.
+      let ended = false;
       try {
         await expect(resolveSecret("claude:x", { source: "command", run }, undefined, { signal })).resolves.toBe(
           "S3CRET",
         );
         expect(written()).toBeGreaterThan(0);
         await vi.waitFor(() => expect(alive(written())).toBe(false), { timeout: 10_000 });
+        ended = true;
       } finally {
         // The job is this test's own, by the pid it wrote.
         const job = written();
-        if (job > 0 && alive(job)) process.kill(job, "SIGKILL");
+        if (!ended && job > 0 && alive(job)) process.kill(job, "SIGKILL");
       }
     },
   );
