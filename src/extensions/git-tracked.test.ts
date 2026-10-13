@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -105,14 +105,25 @@ function repo() {
   return { h, app, tracked, loose };
 }
 
+/** trackedPaths' answer: the paths git tracks, of `tracked`, and none it did not answer for. */
+const answered = (...tracked: string[]) => ({ tracked: new Set(tracked.map(pathKey)), unchecked: new Set() });
+
+/**
+ * A git in `h`'s bin that never answers, as git can stall on a busy machine; exec, so the kill
+ * at the time limit stops the sleep itself and leaves nothing running.
+ */
+function stalledGit(h: TestHome): string {
+  const file = h.write("bin/git", "#!/bin/sh\nexec sleep 30\n");
+  chmodSync(file, 0o755);
+  return file;
+}
+
 describe("trackedPaths", () => {
   it.skipIf(!hasGit)("finds the folders git tracks a file in, and nothing else", async () => {
     const { h, tracked, loose } = repo();
     h.write("outside.txt", "x");
-    expect(await trackedPaths([tracked, loose, h.path("outside.txt")])).toEqual(new Set([pathKey(tracked)]));
-    expect(await trackedPaths([path.join(tracked, "SKILL.md")])).toEqual(
-      new Set([pathKey(path.join(tracked, "SKILL.md"))]),
-    );
+    expect(await trackedPaths([tracked, loose, h.path("outside.txt")])).toEqual(answered(tracked));
+    expect(await trackedPaths([path.join(tracked, "SKILL.md")])).toEqual(answered(path.join(tracked, "SKILL.md")));
   });
 
   it.skipIf(!hasGit)(
@@ -127,13 +138,13 @@ describe("trackedPaths", () => {
       const pack = h.skill("repos/app/.claude/skills", "pack");
       git(pack, ["init", "-q"]);
       git(pack, ["add", "SKILL.md"]);
-      expect(await trackedPaths([pack], { projects })).toEqual(new Set());
+      expect(await trackedPaths([pack], { projects })).toEqual(answered());
       // A whole skills folder cloned into place: a skill in it is the clone's too.
       const team = h.path("repos", "app", ".agents", "skills");
       const inTeam = h.skill("repos/app/.agents/skills", "team-one");
       git(team, ["init", "-q"]);
       git(team, ["add", "."]);
-      expect(await trackedPaths([inTeam, path.join(inTeam, "SKILL.md")], { projects })).toEqual(new Set());
+      expect(await trackedPaths([inTeam, path.join(inTeam, "SKILL.md")], { projects })).toEqual(answered());
       // One the project's repo holds, as a submodule's gitlink, is the project's, and so is what is in it.
       const held = h.skill("repos/app/.claude/skills", "held");
       git(held, ["init", "-q"]);
@@ -141,7 +152,7 @@ describe("trackedPaths", () => {
       commit(held);
       git(app, ["add", path.join(".claude", "skills", "held")]);
       expect(await trackedPaths([pack, held, path.join(held, "SKILL.md")], { projects })).toEqual(
-        new Set([pathKey(held), pathKey(path.join(held, "SKILL.md"))]),
+        answered(held, path.join(held, "SKILL.md")),
       );
     },
     SPAWNING_TEST_TIMEOUT_MS,
@@ -156,11 +167,9 @@ describe("trackedPaths", () => {
       const pack = h.skill("repos/site/.claude/skills", "pack");
       git(pack, ["init", "-q"]);
       git(pack, ["add", "SKILL.md"]);
-      expect(await trackedPaths([pack, path.join(pack, "SKILL.md")], { projects: [site] })).toEqual(new Set());
+      expect(await trackedPaths([pack, path.join(pack, "SKILL.md")], { projects: [site] })).toEqual(answered());
       // Asked with no project, a path is asked of the repo it is in.
-      expect(await trackedPaths([path.join(pack, "SKILL.md")])).toEqual(
-        new Set([pathKey(path.join(pack, "SKILL.md"))]),
-      );
+      expect(await trackedPaths([path.join(pack, "SKILL.md")])).toEqual(answered(path.join(pack, "SKILL.md")));
     },
     SPAWNING_TEST_TIMEOUT_MS,
   );
@@ -169,13 +178,37 @@ describe("trackedPaths", () => {
     const h = new TestHome();
     homes.push(h);
     h.skill("plain", "skill-one");
-    expect(await trackedPaths([h.path("plain", "skill-one")])).toEqual(new Set());
-    expect(await trackedPaths([])).toEqual(new Set());
+    expect(await trackedPaths([h.path("plain", "skill-one")])).toEqual(answered());
+    expect(await trackedPaths([])).toEqual(answered());
     if (hasGit) {
       const { tracked } = repo();
-      expect(await trackedPaths([tracked], { git: h.path("no-such-git") })).toEqual(new Set());
+      expect(await trackedPaths([tracked], { git: h.path("no-such-git") })).toEqual(answered());
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "has no answer, not an untracked one, for what it asked a git that ran out of time",
+    async () => {
+      const h = new TestHome();
+      homes.push(h);
+      const app = h.project("repos/app");
+      const skill = h.skill("repos/app/.claude/skills", "deploy-check");
+      const outside = h.skill("plain", "skill-one");
+      const asked = await trackedPaths([skill, path.join(skill, "SKILL.md"), outside], {
+        git: stalledGit(h),
+        timeoutMs: 500,
+        projects: [app],
+      });
+      expect(asked).toEqual({
+        tracked: new Set(),
+        unchecked: new Set([pathKey(skill), pathKey(path.join(skill, "SKILL.md"))]),
+      });
+      // A git that answers with a failure has answered: nothing it lists is tracked.
+      const failing = h.write("bin/failing-git", "#!/bin/sh\necho 'fatal: index file corrupt' >&2\nexit 128\n");
+      chmodSync(failing, 0o755);
+      expect(await trackedPaths([skill], { git: failing, projects: [app] })).toEqual(answered());
+    },
+  );
 });
 
 describe("planChecked", () => {
@@ -308,4 +341,36 @@ describe("planChecked", () => {
     const allowed = await planChecked(ctx, "skills", { verb: "rm", reach: "here", rows: [row], tracked: true });
     expect(allowed.plan.changes).toMatchObject([{ kind: "remove", lines: [{ tracked: true }] }]);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "counts what git did not answer for in time as tracked, and says git did not answer",
+    async () => {
+      const h = new TestHome();
+      homes.push(h);
+      const app = h.project("repos/app");
+      const skill = h.skill("repos/app/.claude/skills", "deploy-check");
+      h.claude("default", ".claude", { projects: { [app]: {} } });
+      const inv = await loadInventory(h.inventoryOptions(app, h.path("managed-settings.json")));
+      const row = rowsIn(inv, "claude", "skill", "project", app, NOW).find((r) => r.name === "deploy-check");
+      if (!row) throw new Error("no deploy-check row");
+      const ctx = { inv, project: app, now: NOW, stashDir: h.path(".clausona", "extensions", "stash") };
+      const slow = { git: stalledGit(h), timeoutMs: 500 };
+
+      const checked = await planChecked(ctx, "skills", { verb: "rm", reach: "here", rows: [row] }, slow);
+      expect(checked.plan.changes).toEqual([]);
+      expect(checked.plan.refused.map((r) => [r.code, r.reason, r.flags])).toEqual([
+        [
+          "tracked",
+          "Git did not answer in time whether it tracks it in app, so this may change the repo.",
+          "Add --tracked to go ahead, or turn it off: clausona skills off deploy-check.",
+        ],
+      ]);
+      expect(checked.tracked.has(pathKey(skill))).toBe(true);
+      expect(checked.unchecked?.has(pathKey(skill))).toBe(true);
+      const allowed = await planChecked(ctx, "skills", { verb: "rm", reach: "here", rows: [row], tracked: true }, slow);
+      expect(allowed.plan.changes).toMatchObject([
+        { kind: "remove", lines: [{ tracked: true, note: "may change the repo (git did not answer in time)" }] },
+      ]);
+    },
+  );
 });

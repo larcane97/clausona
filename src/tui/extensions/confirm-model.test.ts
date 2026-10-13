@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { refusal } from "../../extensions/actions.js";
+import { refusal, uncheckedRefusal } from "../../extensions/actions.js";
 import type { ApplyResult, UndoPreview, UndoResult } from "../../extensions/apply.js";
 import type { FileChange, Plan, PlanLine } from "../../extensions/plan.js";
 import { appliedStatus, type Dialog, dialogView, scrollDialog, undoneStatus } from "./confirm-model.js";
@@ -213,6 +213,27 @@ describe("dialogView: a plan", () => {
     expect(texts(dialogOf(two, { offerOff: true }), 80, 12)[1]).toBe(
       "Git tracks 2 of these in app, so deleting changes the repo.",
     );
+  });
+
+  it("says where git did not answer in time whether it tracks what a delete takes", () => {
+    const row = { key: "skill:claude:project:app:deploy-check", name: "deploy-check" };
+    const unsure = uncheckedRefusal(row, "claude", { "project name": "app" });
+    const one = planOf({ question: "Delete deploy-check?", refused: [unsure] });
+    const view = dialogView(dialogOf(one, { offerOff: true }), { width: 120, height: 12, ...OPTS });
+    expect(view.lines.slice(0, 2).map((l) => [l.text, l.tone])).toEqual([
+      ["Delete deploy-check?", "text"],
+      ["Git did not answer in time whether it tracks deploy-check in app, so deleting may change the repo.", "warning"],
+    ]);
+    expect(view.hints.map((hint) => hint.keys)).toEqual(["y", "n/esc", "o"]);
+    // Beside one git does track: a line for each, the rows counted apart.
+    const sure = refusal("tracked", { key: "b", name: "lint" }, "claude", { "project name": "app" });
+    const both = planOf({ question: "Delete 2 skills?", refused: [sure, unsure] });
+    expect(texts(dialogOf(both, { offerOff: true }), 120, 12).slice(0, 4)).toEqual([
+      "Delete 2 skills?",
+      "Git tracks lint in app, so deleting changes the repo.",
+      "Git did not answer in time whether it tracks deploy-check in app, so deleting may change the repo.",
+      "",
+    ]);
   });
 
   it("lets the user pick accounts: one line each from the full plan, the cursor on one", () => {

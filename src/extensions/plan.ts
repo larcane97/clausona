@@ -22,6 +22,7 @@ import {
   refusal,
   refusalText,
   toggleVerb,
+  uncheckedRefusal,
   type Verb,
 } from "./actions.js";
 import { notHere } from "./describe.js";
@@ -146,8 +147,13 @@ export type PlanContext = {
   /** The project everything is seen from (the TUI's picked one, the CLI's --project or cwd). */
   project: string | undefined;
   now: number;
-  /** pathKeys of files and folders git tracks (trackedPaths); empty for a first plan. */
+  /**
+   * pathKeys of files and folders git tracks (trackedPaths), and of those git did not answer for
+   * in time, which count as tracked; empty for a first plan.
+   */
   tracked: ReadonlySet<string>;
+  /** The ones of `tracked` git did not answer for in time: their refusal and their lines say so. */
+  unchecked?: ReadonlySet<string>;
   /** Where stash files go: inv.places.stashDir in the app. */
   stashDir: string;
   /** What planChecked found of git's global ignore file, for a project's first settings.local.json. */
@@ -1343,23 +1349,42 @@ function projectOf(inv: Inventory, file: string): string {
   return holding[0] ?? path.dirname(file);
 }
 
-function isTracked(run: Run, change: FileChange): boolean {
-  return [change.file, ...change.lines.map((line) => line.file)].some((file) => run.ctx.tracked.has(pathKey(file)));
+/**
+ * Whether git tracks a file of `change`: "tracked", or "unchecked" where it did not answer in
+ * time for every one of them it may track; undefined for none.
+ */
+function trackedHow(run: Run, change: FileChange): "tracked" | "unchecked" | undefined {
+  const hits = [change.file, ...change.lines.map((line) => line.file)]
+    .map(pathKey)
+    .filter((key) => run.ctx.tracked.has(key));
+  if (hits.length === 0) return undefined;
+  return hits.every((key) => run.ctx.unchecked?.has(key)) ? "unchecked" : "tracked";
 }
 
-/** Rule A: a change to what git tracks needs the action's consent; with it, the line says so. */
+/**
+ * Rule A: a change to what git tracks needs the action's consent; with it, the line says so.
+ * What git did not answer for in time counts as tracked, and the words say git did not answer.
+ */
 function trackedIn(run: Run, row: ScopeRow, out: Outcome): Outcome {
-  const hit = out.changes.find((change) => isTracked(run, change));
+  const hows = out.changes.map((change) => trackedHow(run, change));
+  const at = hows.includes("tracked") ? hows.indexOf("tracked") : hows.indexOf("unchecked");
+  const hit = out.changes[at];
   if (!hit) return out;
   if (run.action.tracked !== true) {
     const file = hit.lines[0]?.file ?? hit.file;
-    return refused(run, row, "tracked", { "project name": projectName(projectOf(run.inv, file), run.inv) });
+    const fill = { command: run.command, "project name": projectName(projectOf(run.inv, file), run.inv) };
+    if (hows[at] === "tracked") return refused(run, row, "tracked", fill);
+    const unsure = outcome();
+    unsure.refused.push(uncheckedRefusal(row, firstOf(row).location.tool, fill));
+    return unsure;
   }
-  for (const change of out.changes) {
-    if (!isTracked(run, change)) continue;
+  for (const [index, change] of out.changes.entries()) {
+    const how = hows[index];
+    if (how === undefined) continue;
+    const says = how === "tracked" ? "changes the repo" : "may change the repo (git did not answer in time)";
     for (const line of change.lines) {
       line.tracked = true;
-      line.note = line.note === undefined ? "changes the repo" : `${line.note}, changes the repo`;
+      line.note = line.note === undefined ? says : `${line.note}, ${says}`;
     }
   }
   return out;

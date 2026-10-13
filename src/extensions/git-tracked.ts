@@ -20,11 +20,17 @@ import { entryInfo, gitRoot, isWithin, pathKey, readText, samePath } from "./rea
  * tracks, so a change to the repo asks first (rule A); which of its files are there yet; and
  * whether a project's first settings.local.json it makes is one git would not ignore. The one
  * module that starts a process: `git ls-files`, `git check-ignore` and `git config --get`, which
- * only read. No git, a dir that is no repo, git failing or running out of time: nothing there is
- * tracked, nothing is to be ignored, and the change is still backed up.
+ * only read. No git, a dir that is no repo, git failing: nothing there is tracked, nothing is to
+ * be ignored, and the change is still backed up. A `git ls-files` that runs out of time has not
+ * answered: what it was asked counts as tracked, so the change asks first all the same.
  */
 
-const TIMEOUT_MS = 5_000;
+/**
+ * How long each git run gets. On a busy machine (a load average of 13 to 68) `git ls-files` took
+ * up to 4.2 s, one run in a hundred over 3.8 s, against the 5 s this was before, where an idle
+ * machine answers in milliseconds. Over twice the slowest, for a machine busier still.
+ */
+const TIMEOUT_MS = 10_000;
 const MAX_OUTPUT = 32 * 1024 * 1024;
 
 /** The environment, without what would point git at another repo than the one `-C` names (a git hook sets these). */
@@ -54,8 +60,11 @@ function runGit(
   });
 }
 
-/** The files git's index holds at or under `rels` in `root`, `/`-separated; [] on any failure. */
-function lsFiles(git: string, root: string, rels: string[], timeoutMs: number): Promise<string[]> {
+/**
+ * The files git's index holds at or under `rels` in `root`, `/`-separated; [] on any failure.
+ * Null when git ran out of time, or was stopped, before it finished: no answer.
+ */
+function lsFiles(git: string, root: string, rels: string[], timeoutMs: number): Promise<string[] | null> {
   return new Promise((resolve) => {
     try {
       execFile(
@@ -63,7 +72,10 @@ function lsFiles(git: string, root: string, rels: string[], timeoutMs: number): 
         // Literal pathspecs: a folder named with * or [ is that folder, not a pattern.
         ["--literal-pathspecs", "-C", root, "ls-files", "-z", "--", ...rels],
         { timeout: timeoutMs, maxBuffer: MAX_OUTPUT, env: gitEnv(), windowsHide: true, encoding: "utf8" },
-        (error, stdout) => resolve(error ? [] : stdout.split("\0").filter(Boolean)),
+        (error, stdout) => {
+          if (error?.killed || error?.signal) return resolve(null);
+          resolve(error ? [] : stdout.split("\0").filter(Boolean));
+        },
       );
     } catch {
       resolve([]);
@@ -100,15 +112,19 @@ async function askAt(p: string, project: string | undefined): Promise<{ root: st
   return outer === undefined ? undefined : { root: outer, path: own };
 }
 
+/** What git said of some paths: the pathKeys it tracks, and those it did not answer for in time. */
+export type GitTracked = { tracked: Set<string>; unchecked: Set<string> };
+
 /**
- * pathKeys of the paths git tracks: one `git -C <root> ls-files -z -- <rel…>` per repo, 5 s
- * timeout, where each path is asked as askAt says, in the deepest of `projects` holding it. A
- * folder is tracked when any file under it is. Any failure: none from that root.
+ * pathKeys of the paths git tracks: one `git -C <root> ls-files -z -- <rel…>` per repo, with
+ * TIMEOUT_MS, where each path is asked as askAt says, in the deepest of `projects` holding it. A
+ * folder is tracked when any file under it is. Any failure: none from that root. Running out of
+ * time: every path asked of that root unchecked.
  */
 export async function trackedPaths(
   paths: readonly string[],
   options: { git?: string; timeoutMs?: number; projects?: readonly string[] } = {},
-): Promise<Set<string>> {
+): Promise<GitTracked> {
   const asks = await Promise.all(paths.map((p) => askAt(p, projectOf(p, options.projects ?? []))));
   const byRoot = new Map<string, { root: string; asks: { path: string; asked: string }[] }>();
   paths.forEach((p, at) => {
@@ -119,10 +135,15 @@ export async function trackedPaths(
     byRoot.set(pathKey(ask.root), group);
   });
   const tracked = new Set<string>();
+  const unchecked = new Set<string>();
   await Promise.all(
     [...byRoot.values()].map(async ({ root, asks: inRoot }) => {
       const rels = inRoot.map((ask) => path.relative(root, ask.asked) || ".");
       const listed = await lsFiles(options.git ?? "git", root, rels, options.timeoutMs ?? TIMEOUT_MS);
+      if (listed === null) {
+        for (const ask of inRoot) unchecked.add(pathKey(ask.path));
+        return;
+      }
       const files = process.platform === "win32" ? listed.map((f) => f.toLowerCase()) : listed;
       for (const ask of inRoot) {
         const rel = gitForm(root, ask.asked);
@@ -132,7 +153,7 @@ export async function trackedPaths(
       }
     }),
   );
-  return tracked;
+  return { tracked, unchecked };
 }
 
 /**
@@ -157,8 +178,13 @@ async function filesLookedAt(plan: Plan): Promise<Plan> {
  * global config when it is absolute or starts with `~/`, else `$XDG_CONFIG_HOME/git/ignore` when
  * that is absolute, else `~/.config/git/ignore`.
  */
-async function globalIgnoreFile(git: string, homeDir: string, env: NodeJS.ProcessEnv): Promise<string> {
-  const read = await runGit(git, ["config", "--global", "--get", "core.excludesFile"], env, TIMEOUT_MS);
+async function globalIgnoreFile(
+  git: string,
+  homeDir: string,
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number,
+): Promise<string> {
+  const read = await runGit(git, ["config", "--global", "--get", "core.excludesFile"], env, timeoutMs);
   const named = read?.code === 0 ? read.stdout.trim() : "";
   if (named.startsWith("~/")) return path.join(homeDir, named.slice(2));
   if (named !== "" && path.isAbsolute(named)) return named;
@@ -182,7 +208,12 @@ function homeGitEnv(homeDir: string, from: NodeJS.ProcessEnv | undefined): NodeJ
  * would not ignore: `git -C <project> check-ignore -q`, whose exit 1 says so. Any other answer,
  * no repo or no git among them, is none.
  */
-async function unignoredFiles(made: Plan, git: string, env: NodeJS.ProcessEnv): Promise<Set<string>> {
+async function unignoredFiles(
+  made: Plan,
+  git: string,
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number,
+): Promise<Set<string>> {
   const files = made.changes.flatMap((change) =>
     change.kind === "json" &&
     change.create &&
@@ -199,7 +230,7 @@ async function unignoredFiles(made: Plan, git: string, env: NodeJS.ProcessEnv): 
         git,
         ["-C", project, "check-ignore", "-q", "--", path.relative(project, file)],
         env,
-        TIMEOUT_MS,
+        timeoutMs,
       );
       if (asked?.code === 1) unignored.add(pathKey(file));
     }),
@@ -216,8 +247,9 @@ async function ignoreFacts(
   homeDir: string,
   git: string,
   env: NodeJS.ProcessEnv,
+  timeoutMs: number,
 ): Promise<IgnoreFacts | undefined> {
-  const file = await globalIgnoreFile(git, homeDir, env);
+  const file = await globalIgnoreFile(git, homeDir, env, timeoutMs);
   const info = await entryInfo(file);
   if (info.kind === "missing") return { file, exists: false, unignored };
   const warnings: Warning[] = [];
@@ -228,34 +260,36 @@ async function ignoreFacts(
 
 /**
  * plan with an empty tracked set, trackedPaths of its trackCandidates, then plan again with them
- * and with what git's global ignore file needs; each file looked at. `env` is where git's comes
- * from, process.env by default; tests hand in one without this machine's git settings.
+ * and with what git's global ignore file needs; each file looked at. What git did not answer for
+ * in time is in `tracked` too, and in `unchecked`. `env` is where git's comes from, process.env by
+ * default; tests hand in one without this machine's git settings, and a `timeoutMs` of their own.
  */
 export async function planChecked(
-  ctx: Omit<PlanContext, "tracked" | "ignore">,
+  ctx: Omit<PlanContext, "tracked" | "unchecked" | "ignore">,
   command: ExtensionsCommand,
   action: Action,
-  options: { git?: string; env?: NodeJS.ProcessEnv } = {},
-): Promise<{ plan: Plan; tracked: ReadonlySet<string>; ignore?: IgnoreFacts }> {
+  options: { git?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+): Promise<{ plan: Plan; tracked: ReadonlySet<string>; unchecked?: ReadonlySet<string>; ignore?: IgnoreFacts }> {
   const first = plan({ ...ctx, tracked: new Set() }, command, action);
   const candidates = trackCandidates(first, ctx.inv);
   const git = options.git ?? "git";
   const env = homeGitEnv(ctx.inv.homeDir, options.env);
+  const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
   // Both asked at once: a git run is the slow part. A file git tracks is no file it ignores.
-  const [tracked, unignored] = await Promise.all([
+  const [asked, unignored] = await Promise.all([
     candidates.length === 0
-      ? new Set<string>()
-      : trackedPaths(candidates, {
-          projects: ctx.inv.projects.map((p) => p.path),
-          ...(options.git !== undefined ? { git: options.git } : {}),
-        }),
-    unignoredFiles(first, git, env),
+      ? { tracked: new Set<string>(), unchecked: new Set<string>() }
+      : trackedPaths(candidates, { projects: ctx.inv.projects.map((p) => p.path), git, timeoutMs }),
+    unignoredFiles(first, git, env, timeoutMs),
   ]);
+  // A file git did not answer for counts as tracked: the change asks first, as for one it tracks.
+  const tracked = new Set([...asked.tracked, ...asked.unchecked]);
+  const unchecked = asked.unchecked.size > 0 ? { unchecked: asked.unchecked } : {};
   for (const key of tracked) unignored.delete(key);
-  const ignore = unignored.size === 0 ? undefined : await ignoreFacts(unignored, ctx.inv.homeDir, git, env);
+  const ignore = unignored.size === 0 ? undefined : await ignoreFacts(unignored, ctx.inv.homeDir, git, env, timeoutMs);
   const checked =
     tracked.size === 0 && ignore === undefined
       ? first
-      : plan({ ...ctx, tracked, ...(ignore !== undefined ? { ignore } : {}) }, command, action);
-  return { plan: await filesLookedAt(checked), tracked, ...(ignore !== undefined ? { ignore } : {}) };
+      : plan({ ...ctx, tracked, ...unchecked, ...(ignore !== undefined ? { ignore } : {}) }, command, action);
+  return { plan: await filesLookedAt(checked), tracked, ...unchecked, ...(ignore !== undefined ? { ignore } : {}) };
 }

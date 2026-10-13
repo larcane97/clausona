@@ -131,12 +131,18 @@ export function useWrites(from: WritesFrom): Writes {
    * The plan's context as the screen sees it: the project picked, the files as last read, and
    * what planChecked found of git, so a plan made again keeps what it showed.
    */
-  const contextFor = (inv: Inventory, w: ScreenWrites, tracked: ReadonlySet<string>, ignore?: IgnoreFacts) => ({
+  const contextFor = (
+    inv: Inventory,
+    w: ScreenWrites,
+    tracked: ReadonlySet<string>,
+    { unchecked, ignore }: { unchecked?: ReadonlySet<string>; ignore?: IgnoreFacts } = {},
+  ) => ({
     inv,
     project,
     now: loadedAt,
     tracked,
     stashDir: w.stashDir,
+    ...(unchecked !== undefined ? { unchecked } : {}),
     ...(ignore !== undefined ? { ignore } : {}),
   });
 
@@ -150,17 +156,18 @@ export function useWrites(from: WritesFrom): Writes {
     pending.current = true;
     try {
       const checked = await writes.planChecked({ inv: inventory, project, now: loadedAt }, command, action);
-      const { plan, tracked, ignore } = checked;
+      const { plan, tracked, unchecked, ignore } = checked;
       // The picker draws each account's line from the plan with every account chosen: a cell's
       // plan has its own account alone.
       const { accounts, ...every } = action;
       const full =
-        accounts === undefined ? plan : planOf(contextFor(inventory, writes, tracked, ignore), command, every);
+        accounts === undefined ? plan : planOf(contextFor(inventory, writes, tracked, checked), command, every);
       const fresh = {
         type: "plan",
         action,
         command,
         tracked,
+        ...(unchecked !== undefined ? { unchecked } : {}),
         ...(ignore !== undefined ? { ignore } : {}),
         plan,
         full,
@@ -291,7 +298,7 @@ export function useWrites(from: WritesFrom): Writes {
       if (open.type === "undo") after = undoneStatus(await writes.undo(), writes.stashDir);
       else {
         const chosen = open.offerOff
-          ? planOf(contextFor(inventory, writes, open.tracked, open.ignore), open.command, {
+          ? planOf(contextFor(inventory, writes, open.tracked, open), open.command, {
               ...open.action,
               tracked: true,
             })
@@ -335,7 +342,7 @@ export function useWrites(from: WritesFrom): Writes {
       // The cursor's account in or out; the plan again, pure, with what git tracks as read.
       const chosen = accounts.flatMap((a, at) => ((at === open.cursor) !== a.chosen ? [a.profile] : []));
       const action = { ...open.action, accounts: chosen };
-      const again = planOf(contextFor(inv, w, open.tracked, open.ignore), open.command, action);
+      const again = planOf(contextFor(inv, w, open.tracked, open), open.command, action);
       setDialog({ ...open, action, plan: again });
     }
   };

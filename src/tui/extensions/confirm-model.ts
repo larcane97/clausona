@@ -28,6 +28,8 @@ export type Dialog =
       action: Action;
       command: ExtensionsCommand;
       tracked: ReadonlySet<string>;
+      /** The ones of `tracked` git did not answer for in time: a plan again keeps saying so. */
+      unchecked?: ReadonlySet<string>;
       /** What planChecked found of git's global ignore file: a plan again, pure, keeps its line. */
       ignore?: IgnoreFacts;
       plan: Plan;
@@ -228,17 +230,30 @@ function partsOf(dialog: Dialog, opts: Opts): Parts {
   const tracked = plan.refused.filter((r) => r.code === "tracked");
   // With off on offer the warning speaks for the rows git tracks; their refusal would say it again.
   const told = dialog.offerOff ? plan.refused.filter((r) => r.code !== "tracked") : plan.refused;
-  if (dialog.offerOff && tracked.length > 0) {
-    const rows = new Set(tracked.map((r) => r.rowKey));
-    const which = rows.size === 1 ? (tracked[0]?.name ?? "it") : `${rows.size} of these`;
-    // The project the refusal itself names.
-    const project = tracked[0]?.project;
-    const where = project !== undefined ? ` in ${project}` : "";
-    head.push({
-      key: "warning",
-      text: cell(`Git tracks ${which}${where}, so deleting changes the repo.`, width).trimEnd(),
-      tone: "warning",
-    });
+  if (dialog.offerOff) {
+    // What git tracks, then what it did not answer for in time, which counts the same: a line each.
+    const warnings = [
+      {
+        key: "warning",
+        these: tracked.filter((r) => r.unchecked !== true),
+        says: (what: string) => `Git tracks ${what}, so deleting changes the repo.`,
+      },
+      {
+        key: "warning-unchecked",
+        these: tracked.filter((r) => r.unchecked === true),
+        says: (what: string) =>
+          `Git did not answer in time whether it tracks ${what}, so deleting may change the repo.`,
+      },
+    ];
+    for (const { key, these, says } of warnings) {
+      if (these.length === 0) continue;
+      const rows = new Set(these.map((r) => r.rowKey));
+      const which = rows.size === 1 ? (these[0]?.name ?? "it") : `${rows.size} of these`;
+      // The project the refusal itself names.
+      const project = these[0]?.project;
+      const where = project !== undefined ? ` in ${project}` : "";
+      head.push({ key, text: cell(says(`${which}${where}`), width).trimEnd(), tone: "warning" });
+    }
   }
   const refusals = told
     .slice(0, REFUSALS_SHOWN)

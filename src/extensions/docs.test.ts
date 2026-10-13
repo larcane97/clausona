@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runCommand } from "../commands.js";
 import { stripAnsi } from "../lib/cli-style.js";
 import { ERROR_KINDS, ExitError, withJsonErrors } from "../lib/json-errors.js";
-import { LEFT_ALONE, REFUSAL_CODES, REFUSALS, toggleVerb } from "./actions.js";
+import { LEFT_ALONE, REFUSAL_CODES, REFUSALS, toggleVerb, UNCHECKED_REASON } from "./actions.js";
 import { KEEP_OPERATIONS } from "./apply.js";
 import {
   CHANGE_JSON_KEYS,
@@ -486,6 +486,8 @@ describe("docs/extensions.md", () => {
         for (const one of texts) expect(text, code).toContain(placeheld(one));
       }
     }
+    // What `tracked` says instead where git did not answer in time, in the words under the table.
+    expect(plain([DOC.replace(/\s+/g, " ")])).toContain(placeheld(UNCHECKED_REASON));
   });
 
   it("lists the keys a plan, a change, a refusal, an unchanged row and an undo write, in order", async () => {

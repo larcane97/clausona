@@ -30,8 +30,9 @@ vi.setConfig({ testTimeout: 20_000 });
 /**
  * How long a key that plans a change in a project may take to draw what it led to. The plan asks
  * git what it tracks and what it ignores (planChecked), which on a busy machine takes seconds
- * where every other step here takes milliseconds: up to git-tracked.ts's 5 s for each of its two
- * git runs in a row, then the redraw. A case with such a step takes SPAWNING_TEST_TIMEOUT_MS.
+ * where every other step here takes milliseconds: up to 4 s seen for each of its two git runs in
+ * a row, then the redraw. A git that runs out of git-tracked.ts's own limit changes the plan,
+ * which the case would see anyway. A case with such a step takes SPAWNING_TEST_TIMEOUT_MS.
  */
 const PLAN_STEP_MS = 15_000;
 

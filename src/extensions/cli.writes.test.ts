@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -100,7 +100,13 @@ function seed() {
   return { h, app, web };
 }
 
-type RunOptions = { interactive?: boolean; confirm?: (question: string) => Promise<boolean>; columns?: number };
+type RunOptions = {
+  interactive?: boolean;
+  confirm?: (question: string) => Promise<boolean>;
+  columns?: number;
+  /** The git it asks what git tracks, and how long that git gets. */
+  git?: { binary: string; timeoutMs: number };
+};
 
 /** Runs in `cwd` of `h`, as commands.ts does - JSON errors with --json - on a clock of its own. */
 function cli(h: TestHome, cwd: string, more: Pick<WriteEnv, "lockWaitMs"> = {}) {
@@ -126,6 +132,7 @@ function cli(h: TestHome, cwd: string, more: Pick<WriteEnv, "lockWaitMs"> = {}) 
           mcpjsonStop: h.home,
           interactive: options.interactive ?? false,
           ...(options.confirm ? { confirm: options.confirm } : {}),
+          ...(options.git ? { git: options.git.binary, gitTimeoutMs: options.git.timeoutMs } : {}),
           writeEnv,
           print: (text) => {
             printed.push(text);
@@ -537,6 +544,33 @@ describe("skills rm", () => {
     expect(text).toContain("✔ Deleted deploy-check");
     expect(existsSync(path.join(app, ".claude", "skills", "deploy-check"))).toBe(false);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a skill git did not answer for in time unless --tracked, and says git did not answer",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    async () => {
+      const { h, app } = seed();
+      // A git that never answers, as git can stall on a busy machine: exec, so the kill at the
+      // time limit stops the sleep itself and leaves nothing running.
+      const binary = h.write("bin/git", "#!/bin/sh\nexec sleep 30\n");
+      chmodSync(binary, 0o755);
+      const slow = { git: { binary, timeoutMs: 500 } };
+      const { run } = cli(h, app);
+      const skill = path.join(app, ".claude", "skills", "deploy-check");
+
+      const error = await failure(run("skills", ["rm", "deploy-check", "--yes"], slow));
+      expect(error).toMatchObject({ code: 1, kind: "refused" });
+      expect(error.message).toMatch(
+        /deploy-check +Git did not answer in time whether it tracks it in app, so this may change the repo\. Add --tracked to go ahead/,
+      );
+      expect(existsSync(skill)).toBe(true);
+      const dry = stripAnsi(await run("skills", ["rm", "deploy-check", "--tracked", "--dry-run"], slow));
+      expect(dry).toMatch(/deploy-check +may change the repo \(git did not answer in time\)$/m);
+      const text = stripAnsi(await run("skills", ["rm", "deploy-check", "--tracked", "--yes"], slow));
+      expect(text).toContain("✔ Deleted deploy-check");
+      expect(existsSync(skill)).toBe(false);
+    },
+  );
 
   it("deletes the rows several --ids name; a link goes and its target stays", async () => {
     const { h, app } = seed();

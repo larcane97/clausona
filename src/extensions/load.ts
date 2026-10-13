@@ -32,10 +32,10 @@ export type ScreenWrites = {
   backupRoot: string;
   stashDir: string;
   planChecked(
-    ctx: Omit<PlanContext, "tracked" | "stashDir" | "ignore">,
+    ctx: Omit<PlanContext, "tracked" | "unchecked" | "stashDir" | "ignore">,
     command: ExtensionsCommand,
     action: Action,
-  ): Promise<{ plan: Plan; tracked: ReadonlySet<string>; ignore?: IgnoreFacts }>;
+  ): Promise<{ plan: Plan; tracked: ReadonlySet<string>; unchecked?: ReadonlySet<string>; ignore?: IgnoreFacts }>;
   apply(plan: Plan): Promise<ApplyResult>;
   /** The newest change not undone yet, of any command. */
   lastOperation(): Promise<UndoPreview | null>;

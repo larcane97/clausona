@@ -448,7 +448,7 @@ this page online, at its JSON, [Ids and row keys](#ids-and-row-keys) and
 | `--account <name>` | MCP only. In Loaded, the default scope, keep the rows that load for this Claude account; in any other scope, the rows it has, on or off. With `off`, `on` and `rm`, change this account only. Give it more than once for several accounts. It takes `work` or `claude:work`, lists Claude rows only, and cannot be used with `--tool codex`. |
 | `--id <id>` | `show`, `off`, `on`, `visibility` and `rm`. A row key or a copy's id, from `ls --json`. `off`, `on` and `rm` take it more than once, for several rows; `show` and `visibility` take one. |
 | `--everywhere` | `off`, `on` and `visibility`: in every project, not only this one. Hooks always change everywhere, so for them it changes nothing. See [Off and on](#off-and-on). |
-| `--tracked` | `off`, `on`, `visibility` and `rm`: go ahead with a change to a file or folder git tracks, which changes the repo. See [Delete](#delete). |
+| `--tracked` | `off`, `on`, `visibility` and `rm`: go ahead with a change to a file or folder git tracks, which changes the repo, or one git did not answer for in time. See [Delete](#delete). |
 | `--dry-run` | `off`, `on`, `visibility`, `rm` and `undo`: print the plan and change nothing. |
 | `--yes`, `-y` | `off`, `on`, `visibility`, `rm` and `undo`: do not ask first. Needed when there is no terminal, and with `--json`. |
 | `--json` | Print JSON version 1, described under [JSON](#json). |
@@ -837,6 +837,11 @@ here instead, `y` to delete it anyway, and `n`. The other keys mark such a line
 `changes the repo`, and the dialog is your consent. When git is not there or fails, the file
 counts as not tracked, and the change is backed up all the same.
 
+When git does not answer within 10 seconds, as on a very busy machine, the file counts as
+tracked, since it may be: the change needs `--tracked`, or the dialog's consent, all the same.
+The refusal and the warning say that git did not answer in time, and a line it goes ahead with
+says `may change the repo (git did not answer in time)`. Run it again to ask git once more.
+
 Some things can't be deleted here:
 
 - A Cloud skill comes back from claude.ai. Turn it off instead.
@@ -1000,7 +1005,10 @@ the CLI's words. In the table `<tool>` is the tool's name and `<scope>` a scope'
 On the screen, `stash-gone` on one account's server, in a row other accounts share, says
 `Press d and choose only work in the dialog.` instead, since `d` on the row would delete the
 other accounts' copies too. Where Claude Code and Codex have recorded no project, `no-project`
-says `Run csn in a project.` instead, since `p` has none to pick.
+says `Run csn in a project.` instead, since `p` has none to pick. Where git did not answer in
+time, `tracked` says
+`Git did not answer in time whether it tracks it in <project>, so this may change the repo.`
+instead, with the same hints: it counts as tracked.
 
 ## JSON
 
@@ -1158,8 +1166,8 @@ Each of `changes`:
 | `change` | string | `edit`, `create` for a file not there yet, `delete` for a folder or file moved into the backup, or `unlink` for a link removed. |
 | `what` | string | What changes in it, such as `skillOverrides.eli5 → off`, `disabledMcpServers + github` or `mcpServers.github taken out, kept by clausona`. Empty for a folder or file deleted. Display text. |
 | `account` | string or null | The profile id when the file is that account's `.claude.json`, else `null`. |
-| `note` | string or null | Such as `link only, target kept`, `changes the repo` or `the folder at ~/dotfiles/skills/eli5`. |
-| `tracked` | boolean | `true` when git tracks it and `--tracked` let the change go ahead. |
+| `note` | string or null | Such as `link only, target kept`, `changes the repo`, `may change the repo (git did not answer in time)` or `the folder at ~/dotfiles/skills/eli5`. |
+| `tracked` | boolean | `true` when git tracks it, or did not answer in time whether it does, and `--tracked` let the change go ahead. |
 | `rows` | string[] | The row keys this line is for, as `id` in `ls --json`. |
 | `deletes` | string[] | For a folder deleted, the row keys of the other skills inside it that are not in the same `rm`: the skills its move takes along. Empty otherwise. |
 | `breaks` | string[] | For a folder deleted, the row keys of the skill links that lead into it and are not in the same `rm`: the links it leaves broken. Empty otherwise. |

@@ -1009,7 +1009,12 @@ async function agreed(talk: Talk, text: string): Promise<boolean> {
 }
 
 /** off, on, visibility or rm: the plan, then a dry run, a refusal, nothing to do, or - once agreed - the apply. */
-async function change(inv: Inventory, talk: Talk, now: number, git: string | undefined): Promise<string> {
+async function change(
+  inv: Inventory,
+  talk: Talk,
+  now: number,
+  git: { git?: string; timeoutMs?: number },
+): Promise<string> {
   const { command, options } = talk;
   const project = inv.currentProject;
   const rows = matchRows(inv, command, options, project, now);
@@ -1024,7 +1029,7 @@ async function change(inv: Inventory, talk: Talk, now: number, git: string | und
     ...(options.tracked ? { tracked: true } : {}),
   };
   const ctx = { inv, project, now, stashDir: inv.places.stashDir };
-  const { plan } = await planChecked(ctx, command, action, git !== undefined ? { git } : {});
+  const { plan } = await planChecked(ctx, command, action, git);
   const nothing = plan.changes.length === 0 && plan.refused.length === 0;
   if (options.dryRun) {
     if (options.json) return pretty(planJson(plan, talk, { dryRun: true }));
@@ -1188,6 +1193,8 @@ export async function runExtensionsCommand(
     writeEnv?: WriteEnv;
     /** The git binary, for tests. */
     git?: string;
+    /** How long each git run gets, for tests; git-tracked.ts's own limit by default. */
+    gitTimeoutMs?: number;
     /** Where a change's plan goes before the question; default stdout. */
     print?: (text: string) => void;
   },
@@ -1228,7 +1235,12 @@ export async function runExtensionsCommand(
   const project = inv.currentProject;
   const now = deps.now ?? Date.now();
   if (options.sub === "show") return show(inv, command, options, project, now);
-  if (options.sub !== "ls") return change(inv, talk, now, deps.git);
+  if (options.sub !== "ls") {
+    return change(inv, talk, now, {
+      ...(deps.git !== undefined ? { git: deps.git } : {}),
+      ...(deps.gitTimeoutMs !== undefined ? { timeoutMs: deps.gitTimeoutMs } : {}),
+    });
+  }
 
   const accounts = accountIds(inv, options.accounts);
   const scope = options.scope ?? "loaded";
