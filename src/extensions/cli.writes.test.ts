@@ -212,6 +212,34 @@ describe("skills off", () => {
     expect(existsSync(h.path(".clausona"))).toBe(false);
   });
 
+  it.skipIf(!hasGit)(
+    "plans Claude Code's ignore line too when it makes a repo's first settings.local.json, and undo takes it out",
+    async () => {
+      const { h, app } = seed();
+      git(app, ["init", "-q"]);
+      const { run } = cli(h, app);
+      const ignore = h.path(".config", "git", "ignore");
+      const dry = stripAnsi(await run("skills", ["off", "eli5", "--tool", "claude", "--dry-run"]));
+      expect(dry).toMatch(/\.config.git.ignore +adds \*\*\/\.claude\/settings\.local\.json +as Claude Code does$/m);
+      const plan = JSON.parse(await run("skills", ["off", "eli5", "--tool", "claude", "--dry-run", "--json"]));
+      expect(plan.changes.map((c: { file: string; change: string }) => [c.file, c.change])).toEqual([
+        [path.join(app, ".claude", "settings.local.json"), "create"],
+        [ignore, "create"],
+      ]);
+      await run("skills", ["off", "eli5", "--tool", "claude", "--yes"]);
+      expect(read(ignore)).toBe("**/.claude/settings.local.json\n");
+      // The file is there now: a second change edits it, and adds nothing to the ignore file.
+      const again = JSON.parse(await run("skills", ["off", "deploy-check", "--dry-run", "--json"]));
+      expect(again.changes.map((c: { file: string }) => c.file)).toEqual([
+        path.join(app, ".claude", "settings.local.json"),
+      ]);
+      const undone = stripAnsi(await run("skills", ["undo", "--yes"]));
+      expect(undone).toMatch(/\.config.git.ignore +removed$/m);
+      expect(existsSync(ignore)).toBe(false);
+    },
+    20_000,
+  );
+
   it("refuses to change files without a terminal unless --yes, as bad usage", async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);

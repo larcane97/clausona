@@ -84,7 +84,7 @@ export type ManifestEntry = {
    * Code takes it.
    */
   named?: string;
-  what: "json" | "toml" | "folder" | "file" | "link" | "stash";
+  what: "json" | "toml" | "text" | "folder" | "file" | "link" | "stash";
   change: "edited" | "created" | "removed";
   /** The copy of what was there, relative to the operation dir ("files/3"); null for a new file or a link. */
   backup: string | null;
@@ -149,7 +149,7 @@ export type UndoResult = {
 
 const MANIFEST = "manifest.json";
 const COMMANDS: ReadonlySet<string> = new Set(["skills", "mcp", "hooks"] satisfies ExtensionsCommand[]);
-const WHATS: ReadonlySet<string> = new Set(["json", "toml", "folder", "file", "link", "stash"]);
+const WHATS: ReadonlySet<string> = new Set(["json", "toml", "text", "folder", "file", "link", "stash"]);
 const CHANGES: ReadonlySet<string> = new Set(["edited", "created", "removed"]);
 const LINK_TYPES: ReadonlySet<string> = new Set(["dir", "file", "junction"]);
 const OUTCOMES: ReadonlySet<string> = new Set(["restored", "changed", "occupied", "missing", "failed"]);
@@ -216,7 +216,7 @@ function detailOf(error: unknown): string {
 async function replaceFile(
   run: Run,
   file: string,
-  what: "json" | "toml",
+  what: "json" | "toml" | "text",
   read: FileRead | undefined,
   next: string,
   more: { lock?: boolean; touched?: ManifestEntry["touched"]; stash?: ManifestEntry } = {},
@@ -286,6 +286,7 @@ function touchedIn(next: string, edits: readonly JsonEdit[]): NonNullable<Manife
 type JsonChange = Extract<FileChange, { kind: "json" }>;
 type TomlChange = Extract<FileChange, { kind: "toml" }>;
 type RemoveChange = Extract<FileChange, { kind: "remove" }>;
+type TextChange = Extract<FileChange, { kind: "text" }>;
 
 /**
  * A JSON file's change, run whole inside the lock when it takes one. First, with nothing written
@@ -431,6 +432,23 @@ async function tomlChange(run: Run, change: TomlChange): Promise<Stop | undefine
   return undefined;
 }
 
+/**
+ * `change.add` as the file's last line, after a line break if the file does not end in one, in
+ * the file's own line endings; nothing when a line of it is that already. A file not there yet is
+ * made, with the folders it needs.
+ */
+async function textChange(run: Run, change: TextChange): Promise<Stop | undefined> {
+  const file = change.file;
+  const read = await readMaybe(file);
+  if (!read && !change.create) return changed(file);
+  const text = read?.text ?? "";
+  if (text.split(/\r?\n/).some((line) => line.trim() === change.add)) return undefined;
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const next = `${text}${text === "" || text.endsWith("\n") ? "" : eol}${change.add}${eol}`;
+  await replaceFile(run, file, "text", read, next);
+  return undefined;
+}
+
 const KIND_OF: Record<RemoveChange["what"], "dir" | "file" | "link"> = { folder: "dir", file: "file", link: "link" };
 
 /** Whether what is at `file` is still what the plan saw: its kind, its real path, a link's target. */
@@ -505,6 +523,8 @@ async function applyChange(run: Run, change: FileChange): Promise<Stop | undefin
       }
       case "toml":
         return await tomlChange(run, change);
+      case "text":
+        return await textChange(run, change);
       case "remove":
         return await removeChange(run, change);
     }
@@ -671,7 +691,7 @@ async function hashNow(file: string): Promise<string | null> {
 async function changeMade(entry: ManifestEntry, dir: string): Promise<boolean> {
   if (entry.done) return true;
   try {
-    if (entry.what === "json" || entry.what === "toml") {
+    if (entry.what === "json" || entry.what === "toml" || entry.what === "text") {
       return entry.hashAfter !== null && (await hashNow(entry.path)) === entry.hashAfter;
     }
     const moved =
@@ -784,7 +804,8 @@ async function moveBack(entry: ManifestEntry, dir: string): Promise<Outcome> {
 async function undoEntry(entry: ManifestEntry, dir: string, env: WriteEnv): Promise<Outcome> {
   switch (entry.what) {
     case "json":
-    case "toml": {
+    case "toml":
+    case "text": {
       if (!entry.lock) return undoFile(entry, dir);
       const result = await withLock(`${shown(entry)}.lock`, lockOptions(env), () => undoFile(entry, dir));
       return result === "locked" ? "locked" : result;

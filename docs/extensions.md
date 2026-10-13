@@ -616,6 +616,16 @@ the primary Claude Code folder, and Codex's home is `~/.codex` by default, as un
 with the repo. When a change needs a file that is not there yet, such as a project's first
 `.claude/settings.local.json`, it makes the file, and the plan says `create`.
 
+Claude Code keeps that file out of git. When it makes one, it adds
+`**/.claude/settings.local.json` to git's global ignore file, and clausona does the same. When a
+change makes a project's first `.claude/settings.local.json` in a git repository that does not
+ignore it yet, the plan has one more line:
+`~/.config/git/ignore  adds **/.claude/settings.local.json  as Claude Code does`. The file is the
+one `core.excludesFile` names in your global git config, else `$XDG_CONFIG_HOME/git/ignore`,
+else `~/.config/git/ignore`, and it is made when it is not there. It is backed up like any other
+file, and undo takes the line back out. Without git, outside a repository, or with the line in
+that file already, there is no such line.
+
 `on` writes in the same places. For a `.mcp.json` server it also takes the name out of
 `disabledMcpjsonServers` in each account's entry for the project, where an account turned it
 down. Adding the name to `enabledMcpjsonServers` approves a command the repo defines, so that

@@ -9,7 +9,7 @@ import {
   stopText,
 } from "../../extensions/actions.js";
 import type { ApplyResult, UndoPreview, UndoResult, UndoSkip } from "../../extensions/apply.js";
-import type { Plan, PlanLine } from "../../extensions/plan.js";
+import type { IgnoreFacts, Plan, PlanLine } from "../../extensions/plan.js";
 import { middleCut, shortProfile, tilde, tildeIn } from "../../extensions/present.js";
 import { isWithin } from "../../extensions/read.js";
 import { symbol } from "../theme.js";
@@ -27,6 +27,8 @@ export type Dialog =
       action: Action;
       command: ExtensionsCommand;
       tracked: ReadonlySet<string>;
+      /** What planChecked found of git's global ignore file: a plan again, pure, keeps its line. */
+      ignore?: IgnoreFacts;
       plan: Plan;
       /** The plan with every account chosen, for the picker's lines. */
       full: Plan;

@@ -34,9 +34,13 @@ function writeStandIn(bin: string, name: string, log: string, answer: string[]):
  * these on PATH still gets its own. The teardown prints one line counting this run's calls
  * by command, so a run that reached a stand-in says so even when the log goes with the dir.
  *
- * Windows uses neither binary (secrets go to a file there), so nothing is changed on it.
+ * Windows uses neither binary (secrets go to a file there), so its PATH is left as it is.
  */
 export default function setup(): (() => void) | undefined {
+  // The extension writes run git with the test's home as HOME, and find git's global ignore
+  // file there (git-tracked.ts). These two would point git, and a write, at the user's own.
+  delete process.env.XDG_CONFIG_HOME;
+  delete process.env.GIT_CONFIG_GLOBAL;
   if (process.platform === "win32") return undefined;
   const dir = mkdtempSync(path.join(tmpdir(), "clausona-test-shims-"));
   const bin = path.join(dir, "bin");

@@ -89,7 +89,9 @@ export type FileChange =
       lines: PlanLine[];
     }
   | { kind: "toml"; file: string; edits: TomlEdit[]; expect: Expect[]; create: boolean; lines: PlanLine[] }
-  | { kind: "remove"; file: string; what: "folder" | "file" | "link"; expect: Expect[]; lines: PlanLine[] };
+  | { kind: "remove"; file: string; what: "folder" | "file" | "link"; expect: Expect[]; lines: PlanLine[] }
+  /** A line added to a text file, git's global ignore file, unless a line of it is that already. */
+  | { kind: "text"; file: string; add: string; create: boolean; lines: PlanLine[] };
 
 export type Plan = {
   command: ExtensionsCommand;
@@ -118,7 +120,19 @@ export type PlanContext = {
   tracked: ReadonlySet<string>;
   /** Where stash files go: inv.places.stashDir in the app. */
   stashDir: string;
+  /** What planChecked found of git's global ignore file, for a project's first settings.local.json. */
+  ignore?: IgnoreFacts;
 };
+
+/** The line Claude Code adds to git's global ignore file when it makes a settings.local.json. */
+export const LOCAL_SETTINGS_IGNORE = "**/.claude/settings.local.json";
+
+/**
+ * planChecked's findings for the settings.local.json files a plan makes in projects: the global
+ * ignore file git reads, whether it is there, and the pathKeys of the new files that git would
+ * not ignore. Undefined when there is none, or the file holds the line already.
+ */
+export type IgnoreFacts = { file: string; exists: boolean; unignored: ReadonlySet<string> };
 
 export type KeyName = "space" | "g" | "d" | "v";
 export type KeyChoice = { key: KeyName; label: string; action: Action } | { key: KeyName; refused: string };
@@ -1356,6 +1370,29 @@ function accountChoices(ctx: PlanContext, command: ExtensionsCommand, action: Ac
   return profiles.map((profile) => ({ profile, chosen: accounts === undefined || accounts.includes(profile) }));
 }
 
+/**
+ * Claude Code keeps a project's `.claude/settings.local.json` out of git by adding
+ * LOCAL_SETTINGS_IGNORE to the global ignore file when it makes that file. A plan that makes one
+ * git would not ignore does the same, as one more change, shown, backed up and undone with the
+ * rest. planChecked finds the files and the ignore file; this only words them.
+ */
+function ignoreChanges(ctx: PlanContext, changes: readonly FileChange[]): FileChange[] {
+  const facts = ctx.ignore;
+  if (!facts) return [];
+  const making = changes.filter((c) => c.kind === "json" && c.create && facts.unignored.has(pathKey(c.file)));
+  const rows = [...new Set(making.flatMap((c) => c.lines.flatMap((line) => line.rows)))];
+  if (rows.length === 0) return [];
+  const line: PlanLine = {
+    file: facts.file,
+    change: facts.exists ? "edit" : "create",
+    what: `adds ${LOCAL_SETTINGS_IGNORE}`,
+    note: "as Claude Code does",
+    tracked: false,
+    rows,
+  };
+  return [{ kind: "text", file: facts.file, add: LOCAL_SETTINGS_IGNORE, create: true, lines: [line] }];
+}
+
 /** Every file change `action` makes, what is already as asked, and what is refused and why. */
 export function plan(ctx: PlanContext, command: ExtensionsCommand, action: Action): Plan {
   const made = planned(ctx, command, action);
@@ -1368,7 +1405,7 @@ export function plan(ctx: PlanContext, command: ExtensionsCommand, action: Actio
     ...(action.verb === "visibility" ? { level: action.level ?? "on" } : {}),
     question,
     done,
-    changes: made.changes,
+    changes: [...made.changes, ...ignoreChanges(ctx, made.changes)],
     unchanged: made.unchanged,
     refused: made.refused,
     notes: made.notes,

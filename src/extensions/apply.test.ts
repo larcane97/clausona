@@ -306,6 +306,46 @@ describe("apply", () => {
     expect(await lastOperation(env)).toBeNull();
   });
 
+  it("adds a line to a text file as its last, in its own line endings, once, and undoes it whole", async () => {
+    const { h } = home();
+    const env = writeEnvFor(h.home, clock());
+    const textPlan = (file: string): Plan => ({
+      command: "skills",
+      verb: "off",
+      reach: "here",
+      question: "Turn off eli5 in this project?",
+      done: "Turned off eli5 in this project",
+      changes: [
+        {
+          kind: "text",
+          file,
+          add: "**/.claude/settings.local.json",
+          create: true,
+          lines: [{ file, change: "edit", what: "adds **/.claude/settings.local.json", tracked: false, rows: ["r"] }],
+        },
+      ],
+      unchanged: [],
+      refused: [],
+      notes: [],
+      project: null,
+    });
+    const crlf = h.write("ignore-crlf", "node_modules\r\n.DS_Store");
+    expect(await apply(textPlan(crlf), env)).toMatchObject({ status: "applied", done: 1 });
+    expect(readFileSync(crlf, "utf8")).toBe("node_modules\r\n.DS_Store\r\n**/.claude/settings.local.json\r\n");
+    // There already: nothing to write, and no operation.
+    const before = opDirs(env);
+    expect(await apply(textPlan(crlf), env)).toEqual({ status: "nothing" });
+    expect(opDirs(env)).toEqual(before);
+    expect(await undo(env)).toMatchObject({ skipped: [] });
+    expect(readFileSync(crlf, "utf8")).toBe("node_modules\r\n.DS_Store");
+    // Made where it is not there, with the folders it needs; undo takes them away.
+    const made = h.path("xdg", "git", "ignore");
+    await apply(textPlan(made), env);
+    expect(readFileSync(made, "utf8")).toBe("**/.claude/settings.local.json\n");
+    await undo(env);
+    expect(existsSync(h.path("xdg"))).toBe(false);
+  });
+
   it("names an operation by its time, command and verb", () => {
     const at = Date.UTC(2026, 9, 10, 4, 36, 48, 123);
     const id = (command: ExtensionsCommand, verb: Plan["verb"], reach: Plan["reach"]) =>
