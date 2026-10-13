@@ -279,11 +279,20 @@ function MemberTable({ ranking, pending, width }: { ranking: Ranking; pending: b
     (header ? GAP + modelOf(quota, whole) : 0) +
     (hasBudget ? GAP + budgetOf(quota) : 0) +
     (status ? GAP + status : 0);
-  // The most detailed cells that fit beside whole ids and the model's whole name; then that name
-  // cut to the cells; failing that, percentages only and the ids cut.
+  // The most detailed cells that fit beside whole ids. The gauges go first, the model's name kept
+  // whole; then the name is cut to its cells before the reset times go, as the Model setting
+  // spells it out. Failing that, percentages only and the ids cut.
   const cut = ranking.route.maxUsage;
+  const [widest, ...narrower] = QUOTA_WIDTHS;
   const narrowest = QUOTA_WIDTHS[QUOTA_WIDTHS.length - 1];
-  const fitting = [...QUOTA_WIDTHS.map((at) => ({ at, whole: true })), { at: narrowest, whole: false }]
+  const layouts = [
+    { at: widest, whole: true },
+    ...narrower.flatMap((at) => [
+      { at, whole: true },
+      { at, whole: false },
+    ]),
+  ];
+  const fitting = layouts
     .map(({ at, whole }) => ({ quota: quotaColumn(windows, at, cut), whole }))
     .find(({ quota, whole }) => around(quota, whole) + longest <= width);
   const { quota, whole } = fitting ?? { quota: quotaColumn(windows, narrowest, cut), whole: false };

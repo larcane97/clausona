@@ -1170,6 +1170,32 @@ describe("ranked as a run of one model", () => {
     expect(opus.list[2]).toMatch(/^▸ wide\s+all\s+2\/5$/);
   });
 
+  it("cuts the model's name before the cells lose their reset times", async () => {
+    // Reset times from the real clock, which the cells count from: each reads a whole number of hours.
+    const inHours = (hours: number) => new Date(Date.now() + (hours + 0.5) * 3_600_000).toISOString();
+    const timed = (five: number, seven: number, ...limits: ScopedQuotaWindow[]): QuotaSnapshot => ({
+      state: "ok",
+      fetchedAt: NOW,
+      session: { usedPercent: five, resetsAt: inHours(1) },
+      weekly: { usedPercent: seven, resetsAt: inHours(50) },
+      scopedLimits: limits.map((each) => ({ ...each, resetsAt: inHours(3) })),
+    });
+    const quotas = {
+      "codex:x": timed(30, 10, limit("GPT-5.3-Codex-Spark", 5, WEEK)),
+      "codex:personal-max": timed(5, 8, limit("GPT-5.3-Codex-Spark", 90, FIVE_HOURS)),
+    };
+    const { instance } = setup({
+      file: BOTH,
+      registry: { loads: WITH_CODEX, problem: null },
+      collect: async () => quotas,
+    });
+    await ranked(instance);
+    await press(instance, "m");
+    const { detail } = panes(text(instance));
+    expect(row(detail, "ACCOUNT")).toMatch(/ACCOUNT\s+5H\s+7D\s+GPT-5\.3-C…$/);
+    expect(row(detail, "codex:x")).toMatch(/^▸ codex:x\s+30% 1h\s+10% 2d\s+7D\s+5% 3h\s+next$/);
+  });
+
   it("drops the model it ranked by once its route is removed", async () => {
     const removed = setup({ collect: async () => OPUS });
     await ranked(removed.instance);
