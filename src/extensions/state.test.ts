@@ -843,7 +843,8 @@ describe("Codex", () => {
     expect(codexTrusted(i, P)).toBe(true);
     expect(codexTrusted(i, Q)).toBe(false);
     expect(codexTrusted(i, "/repos/lab")).toBe(false);
-    expect(codexTrusted(i, "/repos/web2")).toBe(false);
+    // On Windows Codex folds ASCII case, so there the key matches ("on Windows" below).
+    expect(codexTrusted(i, "/repos/web2")).toBe(process.platform === "win32");
     expect(codexTrusted(i, "/repos/elsewhere")).toBe(false);
     expect(codexTrusted(i, undefined)).toBe(false);
   });
