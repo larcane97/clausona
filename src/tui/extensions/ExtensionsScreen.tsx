@@ -47,7 +47,7 @@ import {
 import { ToolKindBar } from "./ToolKindBar.js";
 import { useTerminalSize } from "./use-terminal-size.js";
 import { useWrites } from "./use-writes.js";
-import { buildMatrix, tilde, took } from "./view-model.js";
+import { buildMatrix, cellTarget, matrixLeft, tilde, took } from "./view-model.js";
 
 type View = "main" | "matrix" | "warnings";
 /**
@@ -129,8 +129,9 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
   const [listCursor, setListCursor] = useState(0);
   /** What is typed while the project list is open, which narrows it. */
   const [listQuery, setListQuery] = useState("");
+  /** The matrix's cursor: its server, down, and its account, across. */
   const [matrixCursor, setMatrixCursor] = useState(0);
-  const [matrixOffset, setMatrixOffset] = useState(0);
+  const [matrixColumn, setMatrixColumn] = useState(0);
   /** The details' first row. */
   const [detailTop, setDetailTop] = useState(0);
   /** One line about the last thing done, shown until the next key. */
@@ -144,6 +145,8 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
   const listTop = useRef(0);
   const rowTop = useRef(0);
   const matrixTop = useRef(0);
+  /** The matrix's first account column shown, which scrolls to keep the cursor's in sight. */
+  const matrixOffset = useRef(0);
   /** The selected row's key as last drawn, kept by a reload for the cursor to follow. */
   const selectedKey = useRef<string | undefined>(undefined);
   const { columns, rows: terminalRows } = useTerminalSize();
@@ -307,6 +310,15 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
   const rowRoom = listRoom(Math.max(0, layout.height - PANE_HEAD_ROWS), bodyLines.length);
   const projectRoom = listRoom(Math.max(0, layout.height - LIST_HEAD_ROWS), listed.length);
   const matrix = useMemo(() => (inventory && project ? buildMatrix(inventory, project) : null), [inventory, project]);
+  // The matrix's cursor, kept inside it however many servers and accounts the files read again have.
+  const matrixAt = Math.min(matrixCursor, Math.max(0, (matrix?.rows.length ?? 0) - 1));
+  const matrixAcross = Math.min(matrixColumn, Math.max(0, (matrix?.columns.length ?? 0) - 1));
+  /** What space changes in the matrix: the cell under the cursor, where there is one. */
+  const matrixCell = () => {
+    const server = matrix?.rows[matrixAt];
+    const account = matrix?.columns[matrixAcross];
+    return inventory && project && server && account ? cellTarget(inventory, project, server.name, account) : undefined;
+  };
 
   /** Another table: the row cursor goes back to the top and a search, which was for the last one, ends. */
   const freshTable = () => {
@@ -407,12 +419,15 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
       return;
     }
     if (view === "matrix") {
+      // ↑↓ move from server to server, ←→ from account to account; space and u change things.
       const count = matrix?.rows.length ?? 0;
+      const across = matrix?.columns.length ?? 0;
       if (key.escape || input === "m") setView("main");
-      else if (key.upArrow) setMatrixCursor((c) => Math.max(0, c - 1));
+      else if (key.upArrow) setMatrixCursor((c) => Math.max(0, Math.min(c, count - 1) - 1));
       else if (key.downArrow) setMatrixCursor((c) => Math.min(Math.max(0, count - 1), c + 1));
-      else if (key.leftArrow) setMatrixOffset((o) => Math.max(0, o - 1));
-      else if (key.rightArrow) setMatrixOffset((o) => Math.min(Math.max(0, (matrix?.columns.length ?? 1) - 1), o + 1));
+      else if (key.leftArrow) setMatrixColumn((c) => Math.max(0, Math.min(c, across - 1) - 1));
+      else if (key.rightArrow) setMatrixColumn((c) => Math.min(Math.max(0, across - 1), c + 1));
+      else changes.matrixKey(input, key, matrixCell());
       return;
     }
     if (view === "warnings") {
@@ -451,7 +466,8 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
       else if (!project) setStatus("Pick a project first: p");
       else {
         setMatrixCursor(0);
-        setMatrixOffset(0);
+        setMatrixColumn(0);
+        matrixOffset.current = 0;
         setView("matrix");
       }
       return;
@@ -544,7 +560,8 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
   listTop.current = scrolled(listTop.current, listAt, projectRoom, listed.length);
   rowTop.current = tableTop(rowTop.current, at, bodyLines, rowRoom);
   const matrixRoom = Math.max(1, layout.height - 3);
-  matrixTop.current = scrolled(matrixTop.current, matrixCursor, matrixRoom, matrix?.rows.length ?? 0);
+  matrixTop.current = scrolled(matrixTop.current, matrixAt, matrixRoom, matrix?.rows.length ?? 0);
+  if (matrix) matrixOffset.current = matrixLeft(matrixOffset.current, matrixAcross, matrix, innerWidth);
   // The warnings below their heading; when they do not all fit, the last line says how many more.
   const warningRoom = Math.max(1, layout.height - 1);
   const warnings =
@@ -579,8 +596,13 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
         ]
       : view === "matrix"
         ? inOrder([
-            { keys: "↑↓", action: "move" },
-            { keys: "←→", action: "scroll" },
+            { keys: "↑↓←→", action: "move" },
+            ...(canWrite
+              ? [
+                  { keys: "space", action: "on/off" },
+                  { keys: "u", action: "undo" },
+                ]
+              : []),
             { keys: "m", action: "list" },
             { keys: "esc", action: "back" },
           ])
@@ -728,14 +750,20 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
       <Box marginBottom={1}>
         <ToolKindBar tool={tool} kind={kind} query={query} typing={typing} width={innerWidth} />
       </Box>
-      {view === "matrix" && matrix ? (
+      {shownDialog ? (
+        // In the panes' place, or the matrix's, where space opened it there.
+        <Box flexDirection="column" height={layout.height} overflow="hidden">
+          <ConfirmDialog lines={shownDialog.lines} width={innerWidth} />
+        </Box>
+      ) : view === "matrix" && matrix ? (
         <McpMatrix
           matrix={matrix}
-          cursor={matrixCursor}
+          cursor={matrixAt}
+          column={matrixAcross}
           top={matrixTop.current}
           height={layout.height}
           width={innerWidth}
-          offset={matrixOffset}
+          offset={matrixOffset.current}
         />
       ) : view === "warnings" ? (
         <Box flexDirection="column">
@@ -753,10 +781,6 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
               +{inventory.warnings.length - warnings.length} more
             </Text>
           ) : null}
-        </Box>
-      ) : shownDialog ? (
-        <Box flexDirection="column" height={layout.height} overflow="hidden">
-          <ConfirmDialog lines={shownDialog.lines} width={innerWidth} />
         </Box>
       ) : (
         <Box flexDirection="row" height={layout.height} overflow="hidden">

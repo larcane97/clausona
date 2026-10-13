@@ -17,6 +17,7 @@ import {
   undoneStatus,
 } from "./confirm-model.js";
 import type { Kind, TableRow } from "./screen-model.js";
+import type { CellTarget } from "./view-model.js";
 
 /**
  * The Extensions screen's write flow: the rows marked with x, the action keys and the plan each
@@ -65,6 +66,11 @@ export type Writes = {
   dialogKey(input: string, key: Key): boolean;
   /** space g d v u x outside the dialog; false for any other key, which is the screen's. */
   actionKey(input: string, key: Key): boolean;
+  /**
+   * space and u in the account × server matrix: `cell`, the one under the cursor, off or on
+   * here, or the newest change undone. False for any other key.
+   */
+  matrixKey(input: string, key: Key, cell: CellTarget | undefined): boolean;
 };
 
 type PlanDialog = Extract<Dialog, { type: "plan" }>;
@@ -188,6 +194,23 @@ export function useWrites(from: WritesFrom): Writes {
     } else action = { verb: "rm", reach: "here", rows: targets };
     // The dialog is the consent to change what git tracks, but for a delete (rule A).
     void openPlan(action.verb === "rm" ? action : { ...action, tracked: true });
+  };
+
+  /**
+   * space on a matrix cell: its row off or on here, as space on the row, for the cell's account
+   * alone - the account picker's choice, preset. A cell that can't change says why, as a row does.
+   */
+  const startCell = (row: ScopeRow, accounts: readonly string[] | undefined) => {
+    if (!writes || !inventory) return;
+    const verb = toggleVerb(inventory, row, project, "here", accounts);
+    const action: Action = { verb, reach: "here", rows: [row], ...(accounts !== undefined ? { accounts } : {}) };
+    const first = planOf(contextFor(inventory, writes, new Set()), command, action);
+    const [refused] = first.refused;
+    if (first.changes.length === 0 && refused) {
+      setStatus(refusalText(refused, "keys"));
+      return;
+    }
+    void openPlan({ ...action, tracked: true });
   };
 
   /** The newest change not undone yet, of any kind (rule F), in a dialog; clausona's own kept copies left out. */
@@ -333,6 +356,14 @@ export function useWrites(from: WritesFrom): Writes {
     actionKey(input, key) {
       if (key.ctrl || key.meta || !(Object.hasOwn(ACTION_KEYS, input) || input === "u" || input === "x")) return false;
       actionKeyFor(input);
+      return true;
+    },
+    matrixKey(input, key, cell) {
+      if (key.ctrl || key.meta || (input !== " " && input !== "u")) return false;
+      if (!writes) setStatus(NOT_AVAILABLE);
+      else if (input === "u") void startUndo();
+      else if (cell && "refused" in cell) setStatus(cell.refused);
+      else if (cell) startCell(cell.row, cell.accounts);
       return true;
     },
   };

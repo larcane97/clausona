@@ -1390,14 +1390,14 @@ comes from or the `.mcp.json` above the project, and is left out when no row has
 | `←` or `esc` | Back one step. `esc` on the scope list leaves the screen. In the project list, `esc` clears what you typed, then closes it; `←` closes it. |
 | `/` | Search the table. `enter` keeps the search, `esc` drops it. |
 | `p` | Open the project list, from anywhere but a search. Type there to narrow it. |
-| `m` | A matrix of servers by account: which account starts which server in this project. On Claude's MCP tab, with a project picked. |
+| `m` | A matrix of servers by account: which account starts which server in this project. On Claude's MCP tab, with a project picked. In it, `↑` `↓` move from server to server and `←` `→` from account to account. |
 | `r` | Read the files again. |
 | `w` | The files that could not be read, when there are any. |
-| `space` | Turn the marked rows, or the row under the cursor, off or on here. In the details, the row shown. |
+| `space` | Turn the marked rows, or the row under the cursor, off or on here. In the details, the row shown. In the matrix, the server under the cursor, for its account only. |
 | `g` | Turn the same rows off or on everywhere. |
 | `d` | Delete the same rows. |
 | `x` | In the table, mark the row, or unmark it. `esc` in the table clears the marks before it goes back. |
-| `u` | Undo the newest change, of any kind. From the scopes, the table or the details. |
+| `u` | Undo the newest change, of any kind. From the scopes, the table, the details or the matrix. |
 | `v` | In a Claude skill's details, move it to its next visibility, in this project. |
 
 Search matches a row's name, description, file, summary values, and the text cells the table
@@ -1434,6 +1434,16 @@ For a Claude MCP server that several accounts have, the dialog lists the account
 when it is picked and `○` when not. `↑` and `↓` move, and `space` picks an account or leaves it
 out. The question follows, as in `Turn off figma in this project, for personal?`. `y` with no
 account picked says `Pick at least one account.` and the dialog stays.
+
+The matrix (`m`) changes one account at a time. Its cursor is on one cell, a server in one
+account, and the account's label and the cell are in brackets, as in `[work]` and `[●]`. `←` and
+`→` move it from account to account, and the accounts scroll to keep it in sight. `space` turns
+that account's server off or on in this project, through the same dialog, with only that account
+picked. `u` undoes the newest change. Once a change is made, the matrix shows the files read
+again, the cursor on the same cell. On a cell with no server, `space` says so, as in
+`work has no docs here.`, and on a cell that can't change it says why, as on a row:
+`No account that has it has opened this project.` In the Codex column, `space` works as it does
+on the server's row in Codex's MCP tab.
 
 `d` on something git tracks opens the dialog with a warning,
 `Git tracks deploy-check in app, so deleting changes the repo.`, and `o` there turns it off here

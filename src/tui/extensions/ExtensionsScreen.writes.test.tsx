@@ -682,6 +682,115 @@ describe("ExtensionsScreen: writes", () => {
   });
 });
 
+describe("ExtensionsScreen: writes from the MCP matrix", () => {
+  /** The screen read, Claude's MCP tab, its matrix open: docs, docs-search, figma, github by default, work, Codex. */
+  async function openMatrix(instance: Instance): Promise<string> {
+    await seen(instance, (f) => f.includes("Read "));
+    await press(instance, "2");
+    await seen(instance, (f) => /▸ [^\n]*\(here\)/.test(f));
+    await press(instance, "m");
+    return seen(instance, (f) => f.includes("SERVER"));
+  }
+
+  /** The matrix's line for a server. */
+  const serverLine = (frame: string, name: string) =>
+    frame.split("\n").find((line) => new RegExp(`[✦ ] ${name} `).test(line)) ?? "";
+
+  it("turns one account's server off in this project from its cell, and back on u", async () => {
+    const { h, app } = seed();
+    const instance = mount(h, app, 140, 40);
+    const defaultBefore = readFileSync(h.path(".claude.json"), "utf8");
+    const work = () => json(h.path(".claude-work", ".claude.json")).projects[app].disabledMcpServers;
+    const matrix = await openMatrix(instance);
+    expect(hintLine(matrix)).toContain("space on/off");
+    expect(hintLine(matrix)).toContain("u undo");
+    // The cursor starts on the first cell; ↓ and → move it to work's figma.
+    expect(matrix).toContain("[default]");
+    await press(instance, DOWN);
+    await press(instance, DOWN);
+    await press(instance, RIGHT);
+    const onWork = await seen(instance, (f) => f.includes("[work]"));
+    expect(serverLine(onWork, "figma")).toMatch(/✦ figma +● +\[●\] +·/);
+    await press(instance, SPACE);
+    const dialog = await seen(instance, (f) => f.includes("Turn off figma in this project, for work?"));
+    // The picker has the cell's account, and only it, chosen.
+    expect(dialog).toContain("○ default");
+    expect(dialog).toContain("◉ work");
+    expect(dialog).toContain("disabledMcpServers + figma");
+    await press(instance, "y");
+    // The matrix again, from the files read again, the cursor on the same cell.
+    const off = await seen(instance, (f) => f.includes("Turned off figma in this project, for work · u to undo"));
+    expect(off).toContain("[work]");
+    expect(serverLine(off, "figma")).toMatch(/✦ figma +● +\[○\] +·/);
+    expect(work()).toEqual(["github", "figma"]);
+    expect(readFileSync(h.path(".claude.json"), "utf8")).toBe(defaultBefore);
+    await press(instance, "u");
+    await seen(instance, (f) => f.includes("Undo: Turned off figma in this project, for work?"));
+    await press(instance, "y");
+    const undone = await seen(instance, (f) => f.includes("Undid: Turned off figma in this project, for work"));
+    expect(serverLine(undone, "figma")).toMatch(/✦ figma +● +\[●\] +·/);
+    expect(work()).toEqual(["github"]);
+  });
+
+  it("says why a cell can't change, as a row's refusal does, and opens no dialog", async () => {
+    const { h, app } = seed();
+    const instance = mount(h, app, 140, 40);
+    await seen(instance, (f) => f.includes("Read "));
+    // From web, which work has not opened and Codex does not trust.
+    for (const key of ["p", DOWN, ENTER]) await press(instance, key);
+    await seen(instance, (f) => f.includes(`Extensions │ ${path.join("~", "repos", "web")}`));
+    await press(instance, "2");
+    await press(instance, "m");
+    await seen(instance, (f) => f.includes("SERVER"));
+    await press(instance, DOWN);
+    await press(instance, RIGHT);
+    await seen(instance, (f) => f.includes("[work]") && /✦ figma/.test(f));
+    await press(instance, SPACE);
+    const opened = await seen(instance, (f) => f.includes("No account that has it has opened this project."));
+    expect(opened).not.toContain("Turn off figma");
+    await press(instance, RIGHT);
+    await press(instance, UP);
+    await seen(instance, (f) => f.includes("[Codex]") && /✦ docs/.test(f));
+    await press(instance, SPACE);
+    await seen(instance, (f) =>
+      f.includes(
+        "Codex does not trust this project, so it ignores its .codex folder. Trust the project in Codex first.",
+      ),
+    );
+    // A cell with no server in it.
+    await press(instance, LEFT);
+    await press(instance, SPACE);
+    await seen(instance, (f) => f.includes("work has no docs here."));
+    expect(existsSync(local(h.path("repos", "web")))).toBe(false);
+  });
+
+  it("scrolls the accounts to keep the cursor's in sight", async () => {
+    const { h, app } = seed();
+    for (const n of [1, 2, 3, 4, 5, 6, 7]) h.claude(`a${n}`, `.claude-a${n}`, { projects: { [app]: {} } });
+    const instance = mount(h, app, 60, 24);
+    const matrix = await openMatrix(instance);
+    expect(matrix).toContain("→ ");
+    for (let step = 0; step < 9; step++) await press(instance, RIGHT);
+    const last = await seen(instance, (f) => f.includes("[Codex]"));
+    const header = last.split("\n").find((line) => line.includes("SERVER")) ?? "";
+    expect(header).toContain("←");
+    expect(header).not.toContain("default");
+    for (let step = 0; step < 9; step++) await press(instance, LEFT);
+    const first = await seen(instance, (f) => f.includes("[default]"));
+    expect(first.split("\n").find((line) => line.includes("SERVER"))).not.toContain("←");
+  });
+
+  it("offers no changes in the matrix without the writes", async () => {
+    const { h, app } = seed();
+    const instance = mount(h, app, 140, 40, { writes: false });
+    const matrix = await openMatrix(instance);
+    expect(hintLine(matrix)).not.toContain("space on/off");
+    expect(hintLine(matrix)).not.toContain("u undo");
+    await press(instance, SPACE);
+    await seen(instance, (f) => f.includes("Changes are not available here."));
+  });
+});
+
 /**
  * The details pane's last line: the right pane's lines from the details title on, up to the
  * last one that holds anything before the pane ends, which a blank row comes before.

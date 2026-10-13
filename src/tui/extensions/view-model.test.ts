@@ -1,8 +1,18 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadInventory } from "../../extensions/inventory.js";
+import { rowsIn } from "../../extensions/scopes.js";
 import { TestHome } from "../../extensions/test-home.js";
-import { ago, buildMatrix, cell, wrapText } from "./view-model.js";
+import {
+  ago,
+  buildMatrix,
+  type CellTarget,
+  cell,
+  cellTarget,
+  type Matrix,
+  matrixLeft,
+  wrapText,
+} from "./view-model.js";
 
 const homes: TestHome[] = [];
 afterEach(() => {
@@ -103,6 +113,72 @@ describe("buildMatrix, one server per name", () => {
       stitch: ["on", "on", "absent"],
       "pg-dev": ["on", "on", "absent"],
     });
+  });
+});
+
+describe("cellTarget", () => {
+  const column = (matrix: Matrix, label: string) => {
+    const found = matrix.columns.find((c) => c.label === label);
+    if (!found) throw new Error(`no column ${label}`);
+    return found;
+  };
+  const rowOf = (target: CellTarget) => ("row" in target ? target.row : undefined);
+
+  it("is the table's row of the copy a cell shows, for that account alone, and for Codex's column no account", async () => {
+    const { app, inv } = await seed();
+    const matrix = buildMatrix(inv, app);
+    const stitch = cellTarget(inv, app, "stitch", column(matrix, "work"));
+    expect(stitch).toMatchObject({ accounts: ["claude:work"] });
+    expect(rowOf(stitch)).toEqual(rowsIn(inv, "claude", "mcp", "global", app, 0).find((r) => r.name === "stitch"));
+    const pg = cellTarget(inv, app, "pg-dev", column(matrix, "default"));
+    expect(rowOf(pg)).toEqual(rowsIn(inv, "claude", "mcp", "project", app, 0).find((r) => r.name === "pg-dev"));
+    const exa = cellTarget(inv, app, "exa", column(matrix, "Codex"));
+    expect(exa).not.toHaveProperty("accounts");
+    expect(rowOf(exa)?.items.map((i) => i.id)).toEqual([inv.items.find((i) => i.name === "exa")?.id]);
+  });
+
+  it("holds every account's copy of a server, primary first, as the table's row does", async () => {
+    const { app, inv } = await seed((h, a) =>
+      h.claude("default", ".claude", { projects: { [a]: {} }, mcpServers: { stitch: { command: "s" } } }),
+    );
+    const matrix = buildMatrix(inv, app);
+    const stitch = rowOf(cellTarget(inv, app, "stitch", column(matrix, "work")));
+    expect(stitch?.items.map((i) => i.location.profile)).toEqual(["claude:default", "claude:work"]);
+    expect(stitch).toEqual(rowsIn(inv, "claude", "mcp", "global", app, 0).find((r) => r.name === "stitch"));
+  });
+
+  it("says why a cell with no server in it can't change", async () => {
+    const { app, inv } = await seed();
+    const matrix = buildMatrix(inv, app);
+    expect(cellTarget(inv, app, "stitch", column(matrix, "default"))).toEqual({
+      refused: "default has no stitch here.",
+    });
+    expect(cellTarget(inv, app, "exa", column(matrix, "work"))).toEqual({ refused: "work has no exa here." });
+    expect(cellTarget(inv, app, "pg-dev", column(matrix, "Codex"))).toEqual({ refused: "Codex has no pg-dev here." });
+  });
+});
+
+describe("matrixLeft", () => {
+  /** Ten accounts acct0 to acct9: each column 9 wide, brackets and gap in it, after a SERVER column 10 wide. */
+  const ten: Matrix = {
+    columns: Array.from({ length: 10 }, (_, i) => ({ key: `claude:acct${i}`, label: `acct${i}` })),
+    rows: [{ name: "s", cells: [] }],
+  };
+
+  it("never scrolls where every column fits", () => {
+    for (const column of [0, 5, 9]) expect(matrixLeft(0, column, ten, 120)).toBe(0);
+    expect(matrixLeft(4, 9, ten, 120)).toBe(0);
+  });
+
+  it("scrolls as little as keeps the cursor's column in sight, either way", () => {
+    // 60 columns wide: four accounts fit beside the note that says how many more there are.
+    expect(matrixLeft(0, 3, ten, 60)).toBe(0);
+    expect(matrixLeft(0, 4, ten, 60)).toBe(1);
+    expect(matrixLeft(1, 9, ten, 60)).toBe(6);
+    expect(matrixLeft(6, 7, ten, 60)).toBe(6);
+    expect(matrixLeft(6, 2, ten, 60)).toBe(2);
+    // A cursor past the last column, as a matrix with fewer columns can leave it, stays in sight.
+    expect(matrixLeft(0, 15, ten, 60)).toBe(6);
   });
 });
 
