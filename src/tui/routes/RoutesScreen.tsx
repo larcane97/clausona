@@ -246,6 +246,8 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   const [budgetForm, setBudgetForm] = useState<{ id: string; budget?: Budget } | null>(null);
   /** The API profile whose budget `d` asks to clear. */
   const [clearingBudget, setClearingBudget] = useState<string | null>(null);
+  /** The ids `extra` was asked for that have not been answered yet: loading, not unreadable. */
+  const [asked, setAsked] = useState<ReadonlySet<string>>(new Set());
   const columns = useColumns();
   const alive = useRef(true);
   /** Only the latest read is shown: an `r` pressed twice must not end on the older answer. */
@@ -335,6 +337,11 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
     [budgets, loaded],
   );
   const budgetIndex = Math.min(budgetCursor, Math.max(0, budgetRows.length - 1));
+  /** The rows whose spend is still being read, and so says nothing yet about why it has none. */
+  const budgetsLoading = useMemo(() => {
+    const quotas = shown?.quotas ?? extra;
+    return new Set(budgetRows.filter((row) => asked.has(row.id) && !quotas[row.id]).map((row) => row.id));
+  }, [budgetRows, asked, shown, extra]);
 
   async function remove(name: string) {
     try {
@@ -361,8 +368,12 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   /** Reads `targets` into `extra`, through the cache: rows the routes' own read did not cover. */
   function readExtra(targets: QuotaTarget[]) {
     if (targets.length === 0) return;
+    const ids = targets.map((target) => target.id);
+    setAsked((prev) => new Set([...prev, ...ids]));
     void settle(() => io.collectQuotas(targets), {}).then((quotas) => {
-      if (alive.current) setExtra((prev) => ({ ...prev, ...quotas }));
+      if (!alive.current) return;
+      setExtra((prev) => ({ ...prev, ...quotas }));
+      setAsked((prev) => new Set([...prev].filter((id) => !ids.includes(id))));
     });
   }
 
@@ -636,7 +647,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
           <Text color={color.muted}>No API profiles. Add one with clausona add {"<name>"} --api ….</Text>
         ) : (
           <Box flexDirection="column" borderStyle="round" borderColor={color.dim} paddingX={1}>
-            <BudgetList rows={budgetRows} index={budgetIndex} />
+            <BudgetList rows={budgetRows} index={budgetIndex} loading={budgetsLoading} />
           </Box>
         )}
         <Box flexDirection="column" marginTop={1}>
@@ -854,9 +865,10 @@ const USAGE = 4;
 
 /**
  * Every API profile, a row each: its usage, then its spend against its limit and whose limit it
- * is, or why it has none - as `clausona route budget` lists them.
+ * is, or why it has none - as `clausona route budget` lists them. One whose spend is still being
+ * read (`loading`) says so.
  */
-function BudgetList({ rows, index }: { rows: BudgetRow[]; index: number }) {
+function BudgetList({ rows, index, loading }: { rows: BudgetRow[]; index: number; loading: ReadonlySet<string> }) {
   const [list, width] = useWidth();
   const longest = Math.max("PROFILE".length, ...rows.map((row) => row.id.length));
   const idWidth = Math.max(1, Math.min(longest, width - MARK - GAP - USAGE - GAP - 8));
@@ -888,13 +900,17 @@ function BudgetList({ rows, index }: { rows: BudgetRow[]; index: number }) {
               <QuotaCell window={row.window} live width={USAGE} />
             </Box>
             <Box marginLeft={GAP} flexGrow={1} flexShrink={1} minWidth={0}>
-              <Text
-                color={row.window ? color.secondary : row.spend === "unread" ? color.warning : color.muted}
-                wrap="truncate-end"
-              >
-                {/* Here, `e` is how one is set. */}
-                {row.spend === "no-limit" ? "no spend limit; e sets a budget" : budgetNote(row)}
-              </Text>
+              {loading.has(row.id) ? (
+                <Text color={color.muted}>loading…</Text>
+              ) : (
+                <Text
+                  color={row.window ? color.secondary : row.spend === "unread" ? color.warning : color.muted}
+                  wrap="truncate-end"
+                >
+                  {/* Here, `e` is how one is set. */}
+                  {row.spend === "no-limit" ? "no spend limit; e sets a budget" : budgetNote(row)}
+                </Text>
+              )}
             </Box>
           </Box>
         );

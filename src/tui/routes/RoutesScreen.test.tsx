@@ -931,6 +931,25 @@ describe("API profiles and their budgets", () => {
     expect(row(detail, "claude:gw")).toMatch(/^▸ claude:gw\s+—\s+—\s+10%\s+next · \$5\.00 of \$50\/month/);
   });
 
+  it("says loading, not that a key cannot be read, while the budgets view reads the spend", async () => {
+    let release: () => void = () => {};
+    const answered = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const deferred: Collect = async (targets) => {
+      if (targets.some((target) => target.api)) await answered;
+      return collect(targets);
+    };
+    const { instance } = setup({ collect: deferred, registry: { loads: WITH_API, problem: null }, columns: 100 });
+    await ranked(instance);
+    await press(instance, "b");
+    const loading = await until(instance, (f) => f.includes("Budgets") && f.includes("claude:gw"));
+    expect(loading).toMatch(/claude:gw\s+—\s+loading…/);
+    expect(loading).not.toContain("could not be read");
+    release();
+    await until(instance, (f) => f.includes("$5.00 of $50/month (provider limit)"));
+  });
+
   it("sets a budget from its editor, and clears it once asked", async () => {
     const { instance, file } = withApi();
     await ranked(instance);
