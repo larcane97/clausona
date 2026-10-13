@@ -749,7 +749,17 @@ switch for a server you do not define is a server with no transport, which Codex
 When Codex refuses a trusted project's file, it loads no config in that project, yours
 included: the warning says so, and every Codex row is off in that project ("off here (Codex
 cannot read this project's .codex/config.toml)"). An untrusted project's file Codex leaves alone,
-one that is not valid TOML too. clausona does not check the
+one that is not valid TOML too.
+
+In a linked worktree Codex checks the worktree's own `config.toml` with the main checkout's
+`[hooks]` (and `[hooks.state]`) in place of the worktree's, and nothing else of the main
+checkout's file, so clausona checks that. A wrong type in the worktree's own `[hooks]` refuses
+nothing, since Codex drops those hooks there. One in the main checkout's `[hooks]`, or a main
+checkout's file that is not valid TOML, refuses the worktree's config, and the warning and
+Loaded name the main checkout's file. The rest of that file, such as a server switch clausona
+wrote there, counts in the main checkout alone, and is checked from there.
+
+clausona does not check the
 sections it does not read. A wrong type there makes Codex refuse the file all the same, and
 clausona reads the file as fine.
 

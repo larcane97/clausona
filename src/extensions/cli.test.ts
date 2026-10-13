@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, realpathSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -1282,6 +1282,117 @@ describe("Codex hooks and Codex's trust", () => {
       expect(keptCopy && [keptCopy.state, keptCopy.tags, keptCopy.file]).toEqual(["off", ["off"], mainHooks]);
       expect(await run(h, wt, "hooks", ["show", "--id", keptCopy?.id ?? ""])).toMatch(
         /^Loaded\s+off everywhere — clausona keeps its settings so you can turn it back on$/m,
+      );
+    },
+    SPAWNING_TEST_TIMEOUT_MS,
+  );
+
+  /**
+   * A git repo at repos/main with a linked worktree at repos/main-wt, each with an untracked
+   * .codex folder, and the user config.toml `user`, which trusts main.
+   */
+  function worktreeHome(h: TestHome, user: string): { main: string; wt: string } {
+    const main = h.path("repos", "main");
+    mkdirSync(main, { recursive: true });
+    gitIn(h, main, "init", "-q");
+    h.write("repos/main/a", "x\n");
+    gitIn(h, main, "add", "a");
+    gitIn(h, main, "commit", "-q", "-m", "init");
+    const wt = h.path("repos", "main-wt");
+    gitIn(h, main, "worktree", "add", "-q", wt);
+    mkdirSync(path.join(main, ".codex"), { recursive: true });
+    mkdirSync(path.join(wt, ".codex"), { recursive: true });
+    h.write(
+      ".codex/config.toml",
+      `[projects.${JSON.stringify(codexTrustKey(main))}]\ntrust_level = "trusted"\n\n${user}`,
+    );
+    return { main, wt };
+  }
+
+  const mainHook =
+    '[[hooks.PreToolUse]]\nmatcher = "Bash"\n[[hooks.PreToolUse.hooks]]\ntype = "command"\ncommand = "echo main-hook"\n';
+
+  it.skipIf(!hasGit)(
+    "checks only the main checkout's [hooks] from a worktree, so its own switch there neither warns nor blocks a write",
+    async () => {
+      const { h } = seed();
+      const { main, wt } = worktreeHome(h, '[mcp_servers.github]\ncommand = "gh-mcp"\n');
+      h.write("repos/main/.codex/config.toml", mainHook);
+      // clausona's own switch in the main checkout: a table with `enabled` alone.
+      await run(h, main, "mcp", ["off", "github", "--tool", "codex", "--yes"]);
+      const mainFile = path.join(main, ".codex", "config.toml");
+      expect(readFileSync(mainFile, "utf8")).toContain("[mcp_servers.github]\nenabled = false");
+      // Codex 0.159.3's hooks/list from main-wt lists the main checkout's hook, under its key there.
+      const listed = JSON.parse(await run(h, wt, "hooks", ["ls", "--tool", "codex", "--scope", "project", "--json"]));
+      const rows = listed.items.map((i: { summary: { command: string }; state: string; file: string }) => [
+        i.summary.command,
+        i.state,
+        i.file,
+      ]);
+      expect(rows).toEqual([["echo main-hook", "pending-approval", realpathSync.native(mainFile)]]);
+      expect(listed.warnings).toEqual([]);
+      // With the worktree recorded, every run reads it; clausona can still turn its switch back on.
+      const user = readFileSync(h.path(".codex", "config.toml"), "utf8");
+      h.write(".codex/config.toml", `${user}\n[projects.${JSON.stringify(codexTrustKey(wt))}]\n`);
+      const plan = JSON.parse(await run(h, main, "mcp", ["on", "github", "--tool", "codex", "--dry-run", "--json"]));
+      expect(plan.refused).toEqual([]);
+      expect(plan.changes.map((c: { what: string }) => c.what)).toEqual(["mcp_servers.github.enabled removed"]);
+    },
+    SPAWNING_TEST_TIMEOUT_MS,
+  );
+
+  it.skipIf(!hasGit)(
+    "leaves a worktree's own [hooks] out of its check, as Codex runs the main checkout's in their place",
+    async () => {
+      const { h } = seed();
+      const { wt } = worktreeHome(h, '[mcp_servers.github]\ncommand = "gh-mcp"\n');
+      h.write("repos/main/.codex/config.toml", mainHook);
+      h.write(
+        "repos/main-wt/.codex/config.toml",
+        '[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "echo wt-own"\ntimeout = 30.0\n',
+      );
+      // Codex 0.159.3 from main-wt: skills/list gives eli5, config/read github, hooks/list the main checkout's hook.
+      const skills = JSON.parse(await run(h, wt, "skills", ["ls", "--tool", "codex", "--json"]));
+      expect(skills.items.map((i: { name: string }) => i.name)).toContain("eli5");
+      expect(skills.warnings).toEqual([]);
+      const servers = JSON.parse(await run(h, wt, "mcp", ["ls", "--tool", "codex", "--json"]));
+      expect(servers.items.map((i: { name: string }) => i.name)).toEqual(["github"]);
+      const hooks = JSON.parse(await run(h, wt, "hooks", ["ls", "--tool", "codex", "--scope", "project", "--json"]));
+      expect(
+        hooks.items.map((i: { summary: { command: string }; tags: string[] }) => [i.summary.command, i.tags]),
+      ).toEqual([
+        ["echo main-hook", ["pending approval"]],
+        ["echo wt-own", ["main checkout's runs"]],
+      ]);
+    },
+    SPAWNING_TEST_TIMEOUT_MS,
+  );
+
+  it.skipIf(!hasGit)(
+    "loads nothing of Codex in a trusted worktree whose main checkout's [hooks] Codex cannot read, and says which file",
+    async () => {
+      const { h } = seed();
+      const { main, wt } = worktreeHome(h, "");
+      // A wrong type outside [hooks] too, which Codex does not read from the worktree.
+      h.write(
+        "repos/main/.codex/config.toml",
+        '[mcp_servers.x]\ncommand = 5\n\n[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "echo main"\ntimeout = 30.0\n',
+      );
+      // Codex 0.159.3's config/read from main-wt: "invalid type: floating point `30.0`, expected u64 in `hooks`".
+      const listed = JSON.parse(await run(h, wt, "skills", ["ls", "--tool", "codex", "--scope", "global", "--json"]));
+      expect(listed.items.map((i: { name: string; tags: string[] }) => [i.name, i.tags])).toContainEqual([
+        "eli5",
+        ["off here"],
+      ]);
+      // git names the main checkout by its real path, and Codex reads its hooks there.
+      const mainFile = realpathSync.native(path.join(main, ".codex", "config.toml"));
+      const fromWorktree = listed.warnings.filter((w: { message: string }) => w.message.includes("worktree"));
+      expect(fromWorktree.map((w: { file: string; message: string }) => [w.file, w.message])).toEqual([
+        [mainFile, `has a hook Codex cannot read, so Codex loads no config in the worktree ${tilde(wt, h.home)}`],
+      ]);
+      const id = listed.items.find((i: { name: string }) => i.name === "eli5").id;
+      expect(await run(h, wt, "skills", ["show", "--id", id])).toContain(
+        `off here (Codex cannot read ${tilde(mainFile, h.home)})`,
       );
     },
     SPAWNING_TEST_TIMEOUT_MS,

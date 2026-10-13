@@ -504,7 +504,12 @@ function setByWords(
   const place = settingPlace(inv, item, project, setBy.file);
   if (setBy.key === "allowedMcpServers") return `not in allowedMcpServers in ${place}${readWords(setBy.reads)}`;
   if (setBy.key === MANAGED_MCP_KEY) return `only the servers in ${place} start`;
-  if (setBy.key === CODEX_REFUSED_KEY) return `Codex cannot read ${place}`;
+  if (setBy.key === CODEX_REFUSED_KEY) {
+    // A linked worktree's can be its main checkout's file, which is no file of this project.
+    const here = viewFrom(item, project);
+    const inside = here !== undefined && isWithin(setBy.file, here);
+    return `Codex cannot read ${inside ? place : tilde(setBy.file, inv.homeDir)}`;
+  }
   return WHOLE_KIND.has(setBy.key) ? `${setBy.key} in ${place}${readWords(setBy.reads)}` : place;
 }
 

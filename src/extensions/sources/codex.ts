@@ -6,6 +6,7 @@ import type { Registry } from "../../types.js";
 import { valueHash } from "../hash.js";
 import type { Collector, Location, Project, Warning } from "../model.js";
 import { codexProjectConfig } from "../places.js";
+import { tilde } from "../present.js";
 import { isHomeProject, type ProjectRecord, recordedPaths } from "../projects.js";
 import { entryInfo, isRecord, pathKey, readJsonObject, readText, realPath, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
@@ -88,20 +89,6 @@ export async function readCodexConfig(
 const REFUSES_FILE = "so Codex refuses the whole file";
 /** What a trusted project's config.toml Codex refuses means: Codex loads none of its config there. */
 const LOADS_NONE_HERE = "so Codex loads no config in this project";
-
-/**
- * The user's config.toml as an object, or undefined when missing or refused: one that does not
- * parse, holds an integer past 64 bits, or a value of a section clausona reads that Codex cannot
- * read (codexConfigProblem), Codex refuses whole, and this warns.
- */
-export async function readTomlObject(file: string, warnings: Warning[]): Promise<Record<string, unknown> | undefined> {
-  const read = await readCodexConfig(file, warnings);
-  if (read === undefined || read === "refused") return undefined;
-  const problem = codexConfigProblem(read.exact);
-  if (problem === undefined) return read.value;
-  warnings.push({ file, message: `has ${problem} Codex cannot read, ${REFUSES_FILE}` });
-  return undefined;
-}
 
 const I64_MIN = -(2n ** 63n);
 const I64_MAX = 2n ** 63n - 1n;
@@ -219,7 +206,8 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
         const worktree = roots?.worktree && (await entryInfo(own)).kind === "dir" ? roots.worktree : undefined;
         if (worktree) out.facts.codexWorktrees[pathKey(project.path)] = worktree;
         const file = codexProjectConfig(project.path);
-        const config = await projectConfig(ctx, project.path, file, out);
+        const mainFile = worktree ? path.join(worktree.hooks, "config.toml") : undefined;
+        const { config, main } = await projectConfig(ctx, project.path, file, out, mainFile);
         if (config) {
           // Where Codex trusts the project, it merges each server over the user's of its name.
           const user = codexTrustedIn(out.facts, project.path) ? ctx.config?.mcp_servers : undefined;
@@ -236,7 +224,6 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
             if (samePath(path.dirname(loc.file), own)) item.codexError = "main checkout's runs";
           }
         }
-        const main = await readTomlObject(path.join(worktree.hooks, "config.toml"), out.warnings);
         await addFolderHooks(worktree.hooks, main, here, project.path, out, MAIN_CHECKOUT_AT);
       })(),
     );
@@ -292,29 +279,55 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
 }
 
 /**
- * A project's config.toml, where Codex reads it. Where Codex trusts the project, it refuses the
- * file - one that does not parse, and one that, merged over the user's (mergeCodexConfig), has a
- * value of the wrong type, a switch for a server the user does not define too - and then loads
- * none of its config in the project, the user's included (codexConfigRefused): a warning, and the
- * file is read no further. Codex leaves an untrusted project's alone, one that does not parse too.
+ * A project's config.toml, and in a linked worktree its main checkout's (`mainFile`), where Codex
+ * reads them. Codex checks the project's config merged over the user's (mergeCodexConfig) - in a
+ * worktree with the main checkout's `[hooks]` (and `[hooks.state]`) in place of its own, and
+ * nothing else of that file. Where it trusts the project, it refuses one that does not parse, or
+ * that check failing - a switch for a server the user does not define too - and then loads none
+ * of its config there, the user's included (codexConfigRefused): a warning on the file at fault,
+ * and the files read no further. Codex leaves an untrusted project's alone, one that does not
+ * parse too.
  */
 async function projectConfig(
   ctx: CodexContext,
   project: string,
   file: string,
   out: Collector,
-): Promise<Record<string, unknown> | undefined> {
+  mainFile?: string,
+): Promise<{ config?: Record<string, unknown>; main?: Record<string, unknown> }> {
   const trusted = codexTrustedIn(out.facts, project);
+  const inWorktree = `so Codex loads no config in the worktree ${tilde(project, ctx.homeDir)}`;
   const read = await readCodexConfig(file, out.warnings, trusted ? LOADS_NONE_HERE : undefined);
-  if (read === undefined || (read === "refused" && !trusted)) return undefined;
-  if (read !== "refused") {
-    if (!trusted) return read.value;
-    const problem = codexConfigProblem(mergeCodexConfig(ctx.exact ?? {}, read.exact) as Record<string, unknown>);
-    if (problem === undefined) return read.value;
-    out.warnings.push({ file, message: `has ${problem} Codex cannot read, ${LOADS_NONE_HERE}` });
+  const main =
+    mainFile === undefined
+      ? undefined
+      : await readCodexConfig(mainFile, out.warnings, trusted ? inWorktree : undefined);
+  const value = (r: CodexConfigFile | "refused" | undefined) =>
+    r === undefined || r === "refused" ? undefined : r.value;
+  const refuse = (at: string) => {
+    out.facts.codexConfigRefused.push({ file: at, project });
+    return {};
+  };
+  if (!trusted) return { config: value(read), main: value(main) };
+  if (read === "refused") return refuse(file);
+  if (mainFile !== undefined && main === "refused") return refuse(mainFile);
+  if (read === undefined && main === undefined) return {};
+  const own = read?.exact ?? {};
+  let checked = own;
+  if (mainFile !== undefined) {
+    const { hooks: _dropped, ...rest } = own;
+    const hooks = main === undefined || main === "refused" ? undefined : main.exact.hooks;
+    checked = hooks === undefined ? rest : { ...rest, hooks };
   }
-  out.facts.codexConfigRefused.push({ file, project });
-  return undefined;
+  const problem = codexConfigProblem(mergeCodexConfig(ctx.exact ?? {}, checked) as Record<string, unknown>);
+  if (problem === undefined) return { config: value(read), main: value(main) };
+  // In a worktree, a hook is the main checkout's.
+  const at = mainFile !== undefined && problem === "a hook" ? mainFile : file;
+  out.warnings.push({
+    file: at,
+    message: `has ${problem} Codex cannot read, ${at === file ? LOADS_NONE_HERE : inWorktree}`,
+  });
+  return refuse(at);
 }
 
 /** What a worktree's id for one of its main checkout's hooks puts before the hook's place. */
