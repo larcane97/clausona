@@ -62,6 +62,11 @@ export function FieldInput({
    * What the next key edits: the value and cursor of the last frame drawn, and every edit made
    * since. Each commit sets it to what the caller drew, so what the caller made of an edit, or a
    * change of its own, is what the next key builds on.
+   *
+   * So the caller owes every edit a render of this field. An edit it replaces is gone once the
+   * field is drawn with the caller's value. An edit it drops stays here until the field is next
+   * drawn, and a caller that drops one and draws nothing has the next key it takes build on the
+   * dropped text.
    */
   const latest = useRef({ value, at });
   useLayoutEffect(() => {
