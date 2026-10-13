@@ -60,6 +60,7 @@ const TAGS = [
   "hidden by Global copy",
   "hidden by Parent folders copy",
   "unused",
+  "no front matter",
 ];
 
 /** The keys `ls --json` writes, in order. */
@@ -235,7 +236,8 @@ afterEach(() => {
  * - a working link and a broken one, a skill off in user settings and one off in the project's;
  * - a Project eli5 a Global one hides; a `.mcp.json` server pending approval, hidden by the
  *   project's copy in the folder above, and one hidden by a nearer parent folder's;
- * - a plugin and its skill, a hook, and an eli5 that Claude and Codex both load here.
+ * - a plugin and its skill, a hook, and an eli5 that Claude and Codex both load here;
+ * - a skill whose SKILL.md has no front matter.
  */
 function seed() {
   const h = new TestHome();
@@ -256,6 +258,7 @@ function seed() {
   h.skill(".claude/skills/synced/org_two", "pdf");
   h.skill(".claude/skills", "eli5");
   h.skill(".claude/skills", "old-one");
+  h.write(".claude/skills/bare/SKILL.md", "Do the thing, step by step.\n");
   // work loads the primary's skills through the link clausona makes for every account.
   h.link(".claude/skills", ".claude-work/skills");
   h.skill("shared", "notes");

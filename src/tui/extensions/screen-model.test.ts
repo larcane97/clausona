@@ -132,6 +132,19 @@ describe("tables", () => {
     expect(byName(project, "eli5")?.row.items[0]?.location.project).toBe(app);
   });
 
+  it("tags a skill with no front matter in muted words, as the other quiet tags are", async () => {
+    const { inv, app } = await seed((h, here) => {
+      h.write(".claude/skills/bare/SKILL.md", "Do the thing.\n");
+      // Used yesterday, so no unused tag comes first.
+      h.write(".claude.json", {
+        projects: { [here]: {} },
+        skillUsage: { bare: { usageCount: 1, lastUsedAt: NOW - DAY } },
+      });
+    });
+    const global = buildTable(inv, "claude", "skill", "global", app, NOW, 100, "");
+    expect(byName(global, "bare")?.tag).toEqual({ text: "no front matter", tone: "muted" });
+  });
+
   it("groups Loaded by the place each row comes from, in the scope list's order, with a heading for each", async () => {
     const { inv, app } = await seed();
     const loaded = buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, "");

@@ -9,6 +9,7 @@ import type { Warning } from "./model.js";
 import {
   entryInfo,
   gitRoot,
+  hasFrontMatter,
   hashTree,
   listNames,
   mapLimit,
@@ -49,6 +50,22 @@ describe("parseFrontmatter", () => {
 
   it("is empty without front matter", () => {
     expect(parseFrontmatter("# Title\n")).toEqual({});
+  });
+});
+
+describe("hasFrontMatter", () => {
+  it("is true for a block between --- lines at the very start, empty or not, and false otherwise", () => {
+    expect(hasFrontMatter("---\nname: eli5\n---\nbody")).toBe(true);
+    expect(hasFrontMatter("---\r\ndescription: d\r\n---\r\n")).toBe(true);
+    // A block with no keys is front matter too: Claude Code reads it, and finds nothing set.
+    expect(hasFrontMatter("---\n---\nbody")).toBe(true);
+    expect(hasFrontMatter("---\nname: x\n---")).toBe(true);
+    expect(hasFrontMatter("# Title\n\nDo the thing.\n")).toBe(false);
+    expect(hasFrontMatter("")).toBe(false);
+    // Claude Code reads front matter only where its opening --- is the file's first line.
+    expect(hasFrontMatter("\n---\nname: x\n---\n")).toBe(false);
+    // An opening line and no closing one is no block.
+    expect(hasFrontMatter("---\nname: x\nbody\n")).toBe(false);
   });
 });
 

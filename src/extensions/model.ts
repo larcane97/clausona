@@ -68,6 +68,11 @@ export type Extension = {
   createdAt?: number;
   /** Skills: the keys Claude Code may record its use under in `skillUsage`. */
   usageKeys?: string[];
+  /**
+   * Claude skills: set when the SKILL.md has no front matter. Claude Code loads it under its
+   * folder's name, with no description of when to use it.
+   */
+  noFrontMatter?: true;
   /** What is shown about it, already redacted. */
   summary?: Record<string, string>;
   /** Hooks: where the command sits in its file. */

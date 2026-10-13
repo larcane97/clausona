@@ -35,7 +35,10 @@ import { codexTrusted, relevantIn, STASH_KEY } from "./state.js";
  * reads the inventory, and what it shows of an MCP server or a hook is the redacted summary.
  */
 
-/** One of the verbatim tags: off, off here, off in N of M accounts, unused, broken link, pending approval, hidden by … copy. */
+/**
+ * One of the verbatim tags: off, off here, off in N of M accounts, unused, broken link, pending
+ * approval, hidden by … copy, no front matter.
+ */
 export type Tag = string;
 
 export type DetailLine = { label?: string; text: string; tone?: "muted" | "warning" | "error" | "healthy" };
@@ -258,7 +261,10 @@ function scopeLabel(item: Extension, project: string | undefined): string {
   return SCOPE_LABEL[homeScope(item, project)](item.location.tool);
 }
 
-/** Every tag that applies, most important first: broken link > off > off here > off in N of M accounts > pending approval > hidden by … > unused. */
+/**
+ * Every tag that applies, most important first: broken link > off > off here > off in N of M
+ * accounts > pending approval > hidden by … > unused > no front matter, a quiet note last.
+ */
 export function tagsOf(inv: Inventory, row: ScopeRow, project: string | undefined, now: number): Tag[] {
   const item = firstOf(row);
   const tags: Tag[] = [];
@@ -278,6 +284,7 @@ export function tagsOf(inv: Inventory, row: ScopeRow, project: string | undefine
   const winner = winnerOf(inv, row, project);
   if (winner) tags.push(`hidden by ${scopeLabel(winner, project)} copy`);
   if (!broken && marksOf(inv, item, now).includes("cleanup")) tags.push("unused");
+  if (item.noFrontMatter) tags.push("no front matter");
   return tags;
 }
 

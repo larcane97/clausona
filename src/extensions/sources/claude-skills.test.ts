@@ -87,6 +87,24 @@ describe("readClaudeSkills", () => {
     expect(new Set(out.items.map((i) => i.id)).size).toBe(out.items.length);
   });
 
+  it("marks a Claude SKILL.md that has no front matter, and nothing else", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    h.skill(".claude/skills", "eli5");
+    h.write(".claude/skills/bare/SKILL.md", "Do the thing, step by step.\n");
+    h.write(".claude/commands/plain.md", "Review the diff.");
+    const sp = h.path(".claude/plugins/cache/m/kit/1.0.0");
+    h.write(".claude/plugins/installed_plugins.json", { plugins: { "kit@m": [{ installPath: sp }] } });
+    h.write(".claude/plugins/cache/m/kit/1.0.0/skills/plain/SKILL.md", "# Plain\n");
+
+    const out = await inventoryOf(h, []);
+    const marked = out.items.filter((i) => i.noFrontMatter).map((i) => i.name);
+    // A command file needs none: Claude Code takes its first line for its description.
+    expect(marked.sort()).toEqual(["bare", "kit:plain"]);
+    expect(out.items.find((i) => i.name === "bare")?.description).toBeUndefined();
+  });
+
   it("lists a command file whose link leads nowhere, and keys a namespaced command's use two ways", async () => {
     const h = new TestHome();
     homes.push(h);

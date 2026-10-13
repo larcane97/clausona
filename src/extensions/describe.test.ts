@@ -211,6 +211,25 @@ describe("tagsOf", () => {
     expect(tagsOf(inv, { key: row.key, name: "github", items: [work] }, app, NOW)).toEqual(["off here"]);
   });
 
+  it("says no front matter last, for a Claude SKILL.md without it, and for no Codex one", async () => {
+    const { inv, app } = await seed({
+      more: (h) => {
+        h.write(".claude/skills/bare/SKILL.md", "Do the thing.\n");
+        h.write("repos/app/.claude/skills/plain/SKILL.md", "Deploy it.\n");
+        h.write(".agents/skills/bare/SKILL.md", "Do the thing.\n");
+      },
+    });
+    // Never used, 200 days on: unused comes first.
+    expect(tagsOf(inv, single(claudeSkill(inv, "bare")), app, NOW)).toEqual(["unused", "no front matter"]);
+    const plain = single(claudeSkill(inv, "plain", app));
+    expect(tagsOf(inv, plain, app, NOW)).toEqual(["unused", "no front matter"]);
+    expect(jsonItem(inv, plain, app, NOW).tags).toEqual(["unused", "no front matter"]);
+    const codex = find(inv, (i) => i.location.tool === "codex" && i.name === "bare", "codex bare");
+    expect(tagsOf(inv, single(codex), app, NOW)).toEqual([]);
+    // Its row still lists, and loads, under its folder's name.
+    expect(rowsIn(inv, "claude", "skill", "loaded", app, NOW).map((r) => r.name)).toContain("bare");
+  });
+
   it("puts broken link first and leaves unused out after it; a .mcp.json server waits for approval", async () => {
     const { inv, app } = await seed({ more: (h) => h.link(path.join(h.home, "gone"), ".claude/skills/dangling") });
     expect(tagsOf(inv, single(claudeSkill(inv, "dangling")), app, NOW)).toEqual(["broken link"]);

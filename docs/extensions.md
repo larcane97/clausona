@@ -219,7 +219,8 @@ The switches are read from these places:
 
 A row can carry several tags. They are listed most important first: `broken link`, then
 `off`, `off here` or `off in N of M accounts`, then `pending approval`, then
-`hidden by … copy`, then `unused`. The NOTE column shows the first; JSON `tags` has them all.
+`hidden by … copy`, then `unused`, then `no front matter`. The NOTE column shows the first; JSON
+`tags` has them all.
 
 | Tag | When |
 |---|---|
@@ -232,6 +233,7 @@ A row can carry several tags. They are listed most important first: `broken link
 | `hidden by Global copy` | In every account that has it, a same-name skill in Global wins: the primary's, or the account's own. |
 | `hidden by Parent folders copy` | In every account that has it, a same-name `.mcp.json` copy in a parent folder wins. |
 | `unused` | A Claude skill the rule below calls unused. |
+| `no front matter` | A Claude skill whose `SKILL.md` has no front matter. Claude Code loads it under its folder's name, with no description, so it has only the skill's first non-empty line to tell when to use it. A quiet note: the skill still loads. |
 
 The three `hidden by` tags are the forms of `hidden by <scope> copy`, which names the scope of
 the copy that wins. [Which copy wins](#which-copy-wins) says which copy that is.

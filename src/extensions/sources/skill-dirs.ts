@@ -1,7 +1,16 @@
 import path from "node:path";
 
 import type { Collector, Extension, Location } from "../model.js";
-import { entryInfo, IO_LIMIT, listNames, mapLimit, parseFrontmatter, readText, realPath } from "../read.js";
+import {
+  entryInfo,
+  hasFrontMatter,
+  IO_LIMIT,
+  listNames,
+  mapLimit,
+  parseFrontmatter,
+  readText,
+  realPath,
+} from "../read.js";
 
 export type SkillLocation = Omit<Location, "file">;
 
@@ -42,6 +51,8 @@ export async function readSkillFolders(
       ...(realFolder !== undefined ? { realFolder } : {}),
       ...(info.createdAt !== undefined ? { createdAt: info.createdAt } : {}),
       usageKeys: options.usageKeys ? options.usageKeys(name) : [name],
+      // Said of Claude's alone: what Codex makes of such a file is not modelled.
+      ...(location.tool === "claude" && text !== undefined && !hasFrontMatter(text) ? { noFrontMatter: true } : {}),
     };
     return item;
   });

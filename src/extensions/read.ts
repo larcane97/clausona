@@ -162,6 +162,15 @@ export function parseFrontmatter(text: string): { name?: string; description?: s
 }
 
 /**
+ * Whether a SKILL.md has front matter: a block between `---` lines, its opening one the file's
+ * first line, which is where Claude Code reads it from. One without is loaded all the same, under
+ * its folder's name, with no description set.
+ */
+export function hasFrontMatter(text: string): boolean {
+  return /^---\r?\n(?:[\s\S]*?\r?\n)?---(?:\r?\n|$)/.test(text);
+}
+
+/**
  * How many items one `mapLimit` call - one listing, or one step of a walk - works on at once. It
  * bounds that call alone: many listings side by side each keep this many going, and FS_SLOTS is
  * what bounds the file-system calls of them all together. A walk keeps enough queued to use its
