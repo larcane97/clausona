@@ -63,6 +63,7 @@ const TAGS = [
   "no front matter",
   "invalid front matter",
   "name too long",
+  "no description",
   "invalid hooks file",
 ];
 
@@ -288,7 +289,7 @@ function seed() {
   });
   h.codex("personal", ".codex");
   h.skill(".agents/skills", "eli5");
-  // Three SKILL.md files and a hooks file Codex skips.
+  // Four SKILL.md files and a hooks file Codex skips.
   h.write(".codex/hooks.json", {
     $schema: "x",
     hooks: { Stop: [{ hooks: [{ type: "command", command: "codex-done" }] }] },
@@ -296,6 +297,7 @@ function seed() {
   h.write(".agents/skills/plain/SKILL.md", "just text\n");
   h.write(".agents/skills/long/SKILL.md", `---\nname: ${"x".repeat(65)}\ndescription: d\n---\n`);
   h.write(".agents/skills/bad-yaml/SKILL.md", '---\nname: bad-yaml\ndescription: "x" y\n---\n');
+  h.write(".agents/skills/no-desc/SKILL.md", "---\nname: no-desc\n---\nbody\n");
   // The managed settings are the home's own, so the test never reads this machine's. `terminal`
   // runs it as if on one, answering yes.
   const run = (command: ExtensionsCommand, args: string[], terminal = false) =>

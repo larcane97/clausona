@@ -74,6 +74,20 @@ describe("codexFrontMatterError", () => {
     expect(codexFrontMatterError('description: "x" y')).toBe("invalid front matter");
   });
 
+  it("refuses a front matter with no description, a null one or a blank one, as Codex does", () => {
+    // Codex 0.159.3: "missing field `description`" for each but the last, which it lists.
+    const fronts = [
+      "name: none",
+      'name: empty\ndescription: ""',
+      "name: blank\ndescription: |\n",
+      "name: null\ndescription: ~",
+      "name: comment\ndescription: # none",
+      "# only a comment",
+      "name: below\ndescription:\n  on the next line",
+    ];
+    expect(fronts.map(codexFrontMatterError)).toEqual([...Array(6).fill("no description"), undefined]);
+  });
+
   it("says nothing of what it does not follow, though Codex refuses some of it", () => {
     // Codex refuses the second (a document end, then nothing), and reads the first.
     expect(codexFrontMatterError("description: !t x")).toBeUndefined();

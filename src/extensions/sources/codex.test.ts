@@ -247,6 +247,27 @@ describe("readCodex", () => {
     expect(out.items.find((i) => i.location.file.endsWith("plain"))?.name).toBe("plain");
   });
 
+  it("marks a SKILL.md with no description, after a name too long, as Codex 0.159.3 checks them", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.codex("personal", ".codex");
+    h.write(".agents/skills/none/SKILL.md", "---\nname: none\n---\n");
+    h.write(".agents/skills/empty/SKILL.md", '---\nname: empty\ndescription: ""\n---\n');
+    h.write(".agents/skills/below/SKILL.md", "---\nname: below\ndescription:\n  on the next line\n---\n");
+    h.write(".agents/skills/long/SKILL.md", `---\nname: ${"z".repeat(65)}\n---\n`);
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(ctx, [], out);
+    const error = (folder: string) => out.items.find((i) => i.location.file.endsWith(folder))?.codexError;
+    expect(["none", "empty", "below", "long"].map(error)).toEqual([
+      "no description",
+      "no description",
+      undefined,
+      "name too long",
+    ]);
+  });
+
   it("marks a SKILL.md whose front matter Codex cannot read as YAML, and one with a byte order mark", async () => {
     const h = new TestHome();
     homes.push(h);

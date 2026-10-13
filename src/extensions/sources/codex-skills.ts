@@ -37,8 +37,8 @@ type Folder = { path: string; rel: string; depth: number; real: string; info: En
  * A skill is named by the `name` in its front matter, whitespace collapsed, or, with none, by its
  * folder. Its id ends in its folder's path below the skills folder, so a skill at the top keeps
  * the id it always had, whatever its front matter names it. A SKILL.md Codex refuses - one with
- * no front matter, front matter that is not valid YAML, or a name over 64 characters - is listed
- * with `codexError`, and does not load.
+ * no front matter, front matter that is not valid YAML, a name over 64 characters, or no
+ * description - is listed with `codexError`, and does not load.
  * A link at the top whose target is gone is listed too, to be cleaned up. `prefix` is a plugin's
  * `<name>:`.
  */
@@ -151,14 +151,15 @@ function frontMatterOf(text: string): string | undefined {
 
 /**
  * Why Codex lists no skill for a SKILL.md, if it does not, in the order it checks: no front
- * matter, front matter that is not YAML it reads (codexFrontMatterError), or a name over Codex's
- * 64 characters. Such a folder is listed all the same, so it can be found and fixed.
+ * matter, front matter that is not YAML it reads (codexFrontMatterError), a name over Codex's 64
+ * characters, or no description. Such a folder is listed all the same, so it can be found and
+ * fixed.
  */
 function refusal(block: string | undefined, name: string): Extension["codexError"] {
   if (block === undefined) return "no front matter";
-  const invalid = codexFrontMatterError(block);
-  if (invalid) return invalid;
-  return [...name].length > 64 ? "name too long" : undefined;
+  const problem = codexFrontMatterError(block);
+  if (problem === "invalid front matter") return problem;
+  return [...name].length > 64 ? "name too long" : problem;
 }
 
 /** Whitespace collapsed to single spaces, as Codex's `sanitize_single_line` does. */

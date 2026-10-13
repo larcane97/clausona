@@ -3,7 +3,8 @@
  * (codex-rs/skills, parser.rs) reads it: serde_yaml, a libyaml port, into `name` and
  * `description`, strings, and `metadata`, a mapping whose `short-description` is a string. When
  * that fails Codex quotes, line by line, an unquoted value that holds `: ` or starts like a flow
- * collection that does not parse, and tries once more.
+ * collection that does not parse, and tries once more. A description it then finds empty, or
+ * none, it refuses too.
  *
  * Not a YAML parser: a check of the block mappings, sequences and scalars front matter is written
  * in, and of flow collections on one line. It says a front matter does not read only where
@@ -26,15 +27,22 @@ class Invalid extends Error {}
 /** Something this check does not follow: it says nothing. */
 class Unknown extends Error {}
 
-/** Why Codex does not load a SKILL.md whose front matter is `block`, if it does not. */
-export function codexFrontMatterError(block: string): "invalid front matter" | undefined {
+/**
+ * Why Codex does not load a SKILL.md whose front matter is `block`, if it does not: the front
+ * matter is not valid YAML, or it has no description - none, a null one, or one of whitespace
+ * alone - which Codex checks after the name's length.
+ */
+export function codexFrontMatterError(block: string): "invalid front matter" | "no description" | undefined {
   try {
     let root = read(block);
     if (root === undefined) {
       const repaired = repairedFields(block);
       if (repaired !== undefined) root = read(repaired);
     }
-    return root === undefined ? "invalid front matter" : undefined;
+    if (root === undefined) return "invalid front matter";
+    const description = root === "empty" ? undefined : fieldOf(root, "description");
+    if (description === undefined || description.kind === "empty") return "no description";
+    return description.kind === "scalar" && (description.null || description.blank) ? "no description" : undefined;
   } catch (error) {
     if (error instanceof Unknown) return undefined;
     throw error;

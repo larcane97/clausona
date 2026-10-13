@@ -210,7 +210,7 @@ The `state` of an item in JSON is one of these:
 
 | State | Meaning |
 |---|---|
-| `on` | The switch is on. It loads unless a tag says `hidden by …` or `broken link`, or, for a Codex skill, `no front matter`, `invalid front matter` or `name too long`, or, for a Codex hook, `invalid hooks file`. |
+| `on` | The switch is on. It loads unless a tag says `hidden by …` or `broken link`, or, for a Codex skill, `no front matter`, `invalid front matter`, `name too long` or `no description`, or, for a Codex hook, `invalid hooks file`. |
 | `off` | It is turned off. |
 | `name-only` | A Claude skill set to `name-only` in `skillOverrides`. The details say "Shows as name only". |
 | `user-invocable-only` | A Claude skill set to `user-invocable-only` in `skillOverrides`. The details say "Shows as only when you call it". |
@@ -220,8 +220,8 @@ The `state` of an item in JSON is one of these:
 
 `state` is the switch's value and nothing more. A row loads here when its state is `on`,
 `name-only` or `user-invocable-only` and no tag says `hidden by …` or `broken link`, or, for a
-Codex skill, `no front matter`, `invalid front matter` or `name too long`, or, for a Codex hook,
-`invalid hooks file`.
+Codex skill, `no front matter`, `invalid front matter`, `name too long` or `no description`, or,
+for a Codex hook, `invalid hooks file`.
 A hidden copy, a broken link and a file Codex skips keep their own `state`; only the tags say
 they do not load. A `mixed` row loads in the accounts whose `stateByAccount` value is `on`,
 except where another copy wins there, which its details say. A row read per account says it
@@ -288,8 +288,8 @@ The switches are read from these places:
 A row can carry several tags. They are listed most important first: `broken link`, then
 `off`, `off here` or `off in N of M accounts`, then `not here`, then `pending approval`, then
 `hidden by … copy`, then `unused`, then `no front matter`, then `invalid front matter`, then
-`name too long`, then `invalid hooks file`. The NOTE column shows the first; JSON `tags` has
-them all.
+`name too long`, then `no description`, then `invalid hooks file`. The NOTE column shows the
+first; JSON `tags` has them all.
 
 | Tag | When |
 |---|---|
@@ -306,6 +306,7 @@ them all.
 | `no front matter` | A skill whose `SKILL.md` has no front matter. Claude Code loads it under its folder's name, with no description, so it has only the skill's first non-empty line to tell when to use it: a quiet note, the skill still loads. Codex skips it, with no front matter between `---` lines, so a Codex one is not in Loaded. For Codex, a `SKILL.md` that starts with a byte order mark has none either. |
 | `invalid front matter` | A Codex skill whose front matter is not YAML Codex reads: say, a quoted description with more text after its closing quote, a description line that runs on to the next line unindented, or a description written as a list. Codex skips it, so it is not in Loaded. A description with a `: ` in it is fine: Codex quotes it and reads it again, and so does clausona. |
 | `name too long` | A Codex skill whose name is over 64 characters. Codex skips it, so it is not in Loaded. |
+| `no description` | A Codex skill whose front matter has no `description`, or one that is empty or only spaces. Codex skips it, so it is not in Loaded. |
 | `invalid hooks file` | A Codex hook in a hooks file with more than `hooks` and a `description` at its top, such as its events, or a `$schema`. Codex skips the whole file, so the hook does not run. |
 
 The three `hidden by` tags are the forms of `hidden by <scope> copy`, which names the scope of
