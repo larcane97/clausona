@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -174,6 +175,7 @@ describe("resolveSecret", () => {
       const counts = () => ["SIGINT", "SIGTERM", "SIGHUP", "exit"].map((event) => process.listenerCount(event));
       const before = counts();
       const warning = vi.spyOn(process, "emitWarning");
+      // One signal given to every read, as a caller may: it gets one listener, not twelve.
       const controller = new AbortController();
       try {
         const reads = Array.from({ length: 12 }, () =>
@@ -183,9 +185,12 @@ describe("resolveSecret", () => {
         );
         // Each started as it was asked for: one handler more for each event, not twelve.
         expect(counts()).toEqual(before.map((count) => count + 1));
+        expect(getEventListeners(controller.signal, "abort")).toHaveLength(1);
         controller.abort();
         expect(await Promise.all(reads)).toEqual(Array(12).fill("not read"));
         expect(counts()).toEqual(before);
+        expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+        // Not a MaxListenersExceededWarning, on process or on the signal, nor any other.
         expect(warning).not.toHaveBeenCalled();
       } finally {
         warning.mockRestore();

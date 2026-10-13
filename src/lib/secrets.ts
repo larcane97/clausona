@@ -85,6 +85,36 @@ function endWithClausona(child: ChildProcess): () => void {
 }
 
 /**
+ * The runs waiting on each signal, and the one listener that stops them all when it aborts: one
+ * listener on a signal however many runs wait on it. An AbortSignal warns past ten, and one signal
+ * given to every key read at once would pass that.
+ */
+type Waiting = { stops: Set<() => void>; listener: () => void };
+const waitingOn = new WeakMap<AbortSignal, Waiting>();
+
+/** Calls `stop` once `signal` aborts. Returns what forgets it; the last to go takes the listener off. */
+function onAbort(signal: AbortSignal, stop: () => void): () => void {
+  let waiting = waitingOn.get(signal);
+  if (!waiting) {
+    const stops = new Set<() => void>();
+    const listener = () => {
+      waitingOn.delete(signal);
+      for (const each of [...stops]) each();
+    };
+    waiting = { stops, listener };
+    waitingOn.set(signal, waiting);
+    signal.addEventListener("abort", listener, { once: true });
+  }
+  const mine = waiting;
+  mine.stops.add(stop);
+  return () => {
+    if (!mine.stops.delete(stop) || mine.stops.size > 0) return;
+    if (waitingOn.get(signal) === mine) waitingOn.delete(signal);
+    signal.removeEventListener("abort", mine.listener);
+  };
+}
+
+/**
  * Runs `command` and resolves to its exit code and stdout. With a `signal`, the command starts
  * in a process group of its own, with no terminal, and once the signal aborts, it and everything
  * it started is killed, if it is still running; the result is a failure at once, not when its
@@ -108,7 +138,7 @@ function run(command: string, args: string[], input?: string, signal?: AbortSign
     const finish = (result: RunResult) => {
       if (settled) return;
       settled = true;
-      signal?.removeEventListener("abort", stop);
+      forget();
       release();
       resolve(result);
     };
@@ -117,7 +147,7 @@ function run(command: string, args: string[], input?: string, signal?: AbortSign
       child.stdout?.destroy();
       finish({ code: 1, stdout: "" });
     };
-    signal?.addEventListener("abort", stop, { once: true });
+    const forget = signal ? onAbort(signal, stop) : () => {};
     child.stdout?.on("data", (chunk) => {
       out += chunk;
     });

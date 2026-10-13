@@ -479,6 +479,30 @@ describe("collectQuotas: an API profile's spend", () => {
     }
   });
 
+  it("gives each profile's reading a signal of its own, so many read at once share none", async () => {
+    const signals: AbortSignal[] = [];
+    const targets = Array.from({ length: 12 }, (_, n) => {
+      const target = { ...apiTarget(), id: `claude:gw${n}` };
+      target.api.readKey.mockImplementation(async (signal: AbortSignal) => {
+        signals.push(signal);
+        return KEY;
+      });
+      return target;
+    });
+    const warning = vi.spyOn(process, "emitWarning");
+    try {
+      await collectQuotas(targets, {
+        now: AT,
+        cachePath,
+        fetch: stubFetch(200, { info: { spend: 1 } }) as unknown as typeof globalThis.fetch,
+      });
+      expect(new Set(signals).size).toBe(12);
+      expect(warning).not.toHaveBeenCalled();
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it("asks for no key for a base URL that could never be read", async () => {
     const target = apiTarget();
     target.api.baseUrl = "https://admin:pw@gw.example.com";
