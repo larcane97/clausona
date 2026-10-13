@@ -14,6 +14,8 @@ import {
 
 // Built from pieces so the source never holds a key-shaped string.
 const keyShaped = () => ["sk", "ant", "x".repeat(24)].join("-");
+/** A short key, as a self-hosted gateway or a LiteLLM master key can be. */
+const shortKey = () => ["sk", "1234"].join("-");
 
 describe("withDefaults", () => {
   it("fills every field a spec leaves out", () => {
@@ -61,8 +63,43 @@ describe("holdsKey", () => {
     ["a vendor token", () => ["hf", "Ab".repeat(17)].join("_")],
     ["a word longer than a name", () => "x".repeat(65)],
     ["a key in a sentence longer than a name", () => `please use ${keyShaped()} for every test in the module`],
+    [
+      "a short key after KEY= in a sentence longer than a name",
+      () => `set ANTHROPIC_AUTH_TOKEN=${shortKey()} in .env, then restart the gateway and run the tests`,
+    ],
+    [
+      "a short key in quotes in a sentence longer than a name",
+      () => `put "${shortKey()}" into the gateway config, then restart it and run the whole suite`,
+    ],
   ])("finds %s", (_what, text) => {
     expect(holdsKey(text())).toBe(true);
+  });
+
+  // A short key, such as a gateway's, glued to what comes before it: nothing but where 'sk-' starts
+  // gives it away, in a sentence of any length.
+  it.each([
+    "=",
+    '"',
+    "'",
+    "`",
+    "(",
+    "[",
+    "<",
+    "{",
+    ";",
+    ",",
+    ":",
+    "/",
+    "|",
+    "\n",
+  ])("finds a short key right after %j, in short and long sentences", (before) => {
+    for (const text of [
+      `set KEY${before}${shortKey()} ok`,
+      `please read the config, set KEY${before}${shortKey()} and run the whole suite before you report back`,
+      `please read the config, set KEY${before}${shortKey().toUpperCase()} and run the whole suite before you report`,
+    ]) {
+      expect(holdsKey(text)).toBe(true);
+    }
   });
 
   it.each([
@@ -72,6 +109,8 @@ describe("holdsKey", () => {
     "",
     // Longer than a name, and every word of it shorter than one.
     "please fix the failing test in the routing module and run the whole suite",
+    // 'sk-' inside a word does not start a key.
+    "run the task-queue tests, then the risk-free and desk-lamp ones",
   ])("finds nothing in %j", (text) => {
     expect(holdsKey(text)).toBe(false);
   });

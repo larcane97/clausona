@@ -124,16 +124,24 @@ function isLimit(value: unknown): boolean {
 }
 
 /**
+ * 'sk-' where a token starts: at the start, or after anything that cannot be part of a key or a
+ * name - a space, `=`, a quote, a bracket, `;`. A short key, such as a gateway's `sk-1234`, is
+ * caught by nothing else once it is glued to what comes before it (`KEY=sk-…`, `"sk-…"`).
+ */
+const SK_TOKEN = /(?:^|[^A-Za-z0-9_-])sk-/i;
+
+/**
  * Whether text holds something shaped like a key, so that it is neither stored nor quoted back:
- * it carries one anywhere, or a word of it, between spaces, commas and colons, starts like one or
- * is longer than a name. Words, because `claude:<key>` does not start with 'sk-'. The length
- * ceiling goes word by word, because a sentence is longer than any name without being a key. A
- * key anywhere: a vendor token (`hf_…`, `AIza…`, `ghp_…`) is short and does not start with 'sk-',
- * so only carriesCredentialToken sees it. Route names, patterns, the TUI's route form and the
- * target of `clausona run` all ask this.
+ * it carries one anywhere, 'sk-' starts a token of it, or a word of it, between spaces, commas
+ * and colons, is longer than a name. The length ceiling goes word by word, because a sentence is
+ * longer than any name without being a key; a word is not cut more finely, since a long base64
+ * key cut at its `/` or `+` would fall under the ceiling piece by piece. A key anywhere: a vendor
+ * token (`hf_…`, `AIza…`, `ghp_…`) is short and does not start with 'sk-', so only
+ * carriesCredentialToken sees it. Route names, patterns, the TUI's route form and the target of
+ * `clausona run` all ask this.
  */
 export function holdsKey(text: string): boolean {
-  return carriesCredentialToken(text) || text.split(/[\s,:]+/).some(looksLikeCredential);
+  return carriesCredentialToken(text) || SK_TOKEN.test(text) || text.split(/[\s,:]+/).some(looksLikeCredential);
 }
 
 export function checkRouteName(name: string): string | null {

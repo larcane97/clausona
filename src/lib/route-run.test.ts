@@ -131,6 +131,9 @@ describe("runTarget", () => {
       `please run the whole suite with ${["sk", "ant", "y".repeat(24)].join("-")} and report back`,
       `please run the whole suite as ${["ghp", "Ab".repeat(18)].join("_")} and report back`,
       "x".repeat(70),
+      // A short key glued to what comes before it, as a gateway's master key can be.
+      `set ANTHROPIC_AUTH_TOKEN=${["sk", "1234"].join("-")} in .env, then restart the gateway and run the tests`,
+      `put "${["sk", "1234"].join("-")}" into the gateway config, then restart it and run the whole suite`,
     ]) {
       const error = (() => {
         try {
