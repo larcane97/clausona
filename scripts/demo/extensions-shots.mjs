@@ -47,8 +47,8 @@ const steps = (onePane) => {
   const back = onePane ? ["Left"] : [];
   const intoTable = onePane ? [] : ["Right"];
   return [
-    // The project row on top names the project everything is seen from.
-    ["01-loaded", [], "▾ app \\(here\\)[\\s\\S]*Loaded\\s+\\d+"],
+    // The project row on top names the project everything is seen from, and is Loaded.
+    ["01-loaded", [], "▸ app \\(here\\)\\s+\\d+"],
     // The project's own skills: its eli5 is hidden by the Global one.
     ["02a-project", ["Down", ...open], "hidden by Global copy"],
     ["02-global", [...back, "Down", ...open], "GLOBAL — "],
@@ -64,9 +64,9 @@ const steps = (onePane) => {
     ["09-hooks", ["Escape", "Type 3", ...open], "LOADED — what Claude Code runs"],
     // The project list, in the scope list's place: app first, then web, then No project.
     ["10-projects", [...back, "Type p"], "PROJECT\\s+hooks"],
-    // web picked: every scope is seen from it - the subtitle and the row say so - back on Loaded.
+    // web picked: every scope is seen from it - the subtitle and the row say so - back on the row.
     // \x2F for the slash, which would end the tape's /regexp/.
-    ["10b-web", ["Down", "Enter"], "~\\x2Fweb[\\s\\S]*▾ web[\\s\\S]*▸ Loaded"],
+    ["10b-web", ["Down", "Enter"], "~\\x2Fweb[\\s\\S]*▸ web\\s+\\d+"],
     // 1 for Skills: the search is in the table on screen, and Hooks has no eli.
     ["11-search", ["Type 1", "Type /", "Type eli", "Enter"], "(?m)\\Weli *$"],
     // The list again, seen from web: web first, and app still (here).
@@ -110,7 +110,7 @@ for (const { columns, rows } of SIZES) {
     "Down",
     "Down",
     "Enter",
-    "Wait+Screen@60s /Loaded\\s+\\d+/",
+    "Wait+Screen@60s /\\(here\\)\\s+\\d+/",
     "Sleep 500ms",
     "Show",
   ];

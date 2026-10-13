@@ -96,6 +96,7 @@ The screen lists the scopes of each tool and kind in this order:
 | Codex hooks | Loaded, Project, Global |
 
 The screen always shows Loaded and Project, and the others only when they hold something.
+Loaded has no line of its own there: it is the project row, the list's first line.
 The CLI takes every scope its command has, for either tool, and says so when one is empty. It
 also has Other projects, `--scope other`. [Scope values](#scope-values) lists them all.
 
@@ -727,31 +728,33 @@ second level. The scope list is on the left and the chosen scope's table on the 
 columns or more both show; below that, one at a time: scopes, then the table, then the
 details.
 
-The project row sits right above the scopes. It names the project everything is seen from,
-such as `▾ app (here)`. `(here)` marks the project of the folder you started `csn` in, and
-with no project the row reads `▾ No project`.
+The scope list's first line is the project row, and it is Loaded. It names the project
+everything is seen from and counts what loads there, such as `▸ app (here)  118`. `(here)`
+marks the project of the folder you started `csn` in, and with no project the row reads
+`No project`. Under it, after a rule, the scopes say where those rows come from. They also
+list what does not load: a copy another one hides, an item turned off, a plugin as one row.
 
-`p`, or `↑` from Loaded to the row and then `enter`, opens the project list in the scope
-list's place. The heading reads `PROJECT` with the kind on the right: `skills`, `MCP servers`
-or `hooks`. The project you are looking from comes first. Every other project that Claude Code
-or Codex recorded follows, by name, with the count of its own rows of this tool and kind, the
-ones its Project scope lists. A project with none shows `—`. `No project` is last. When two
-projects have the same folder name, the folder above is shown too, as in `work/site`.
+`p` opens the project list in the scope list's place. The heading reads `PROJECT` with the
+kind on the right: `skills`, `MCP servers` or `hooks`. The project you are looking from comes
+first. Every other project that Claude Code or Codex recorded follows, by name, with the count
+of its own rows of this tool and kind, the ones its Project scope lists. A project with none
+shows `—`. `No project` is last. When two projects have the same folder name, the folder above
+is shown too, as in `work/site`.
 
-Picking a project shows every scope as seen from it, and goes back to Loaded. The title bar
-and the table's header name it. `esc` or `←` closes the list and changes nothing.
+Picking a project shows every scope as seen from it, and goes back to the project row. The
+title bar and the table's header name it. `esc` or `←` closes the list and changes nothing.
 
 The screen's tables differ a little from the CLI's. They have no TOOL column, Loaded adds
 FROM, and Codex skills show their description.
 
 | Key | What it does |
 |---|---|
-| `tab` | Switch between Claude and Codex, back to Loaded. |
-| `1` `2` `3` | Skills, MCP, Hooks, back to Loaded. |
-| `↑` `↓` `pgup` `pgdn` | Move. `↑` from the first scope goes to the project row, `↓` comes back. |
-| `→` or `enter` | From the scope list into the table. On the project row, the project list. |
+| `tab` | Switch between Claude and Codex, back to the project row. |
+| `1` `2` `3` | Skills, MCP, Hooks, back to the project row. |
+| `↑` `↓` `pgup` `pgdn` | Move. |
+| `→` or `enter` | From the scope list into the table. On the project row, Loaded's table. |
 | `enter` | On a row, its details. In the project list, look from that project. |
-| `←` or `esc` | Back one step. `esc` on the scope list or the project row leaves the screen. In the project list, close it. |
+| `←` or `esc` | Back one step. `esc` on the scope list leaves the screen. In the project list, close it. |
 | `/` | Search the table. `enter` keeps the search, `esc` drops it. |
 | `p` | Open the project list, from anywhere but a search. |
 | `m` | A matrix of servers by account: which account starts which server in this project. On Claude's MCP tab, with a project picked. |

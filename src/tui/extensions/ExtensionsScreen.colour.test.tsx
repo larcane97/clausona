@@ -41,7 +41,7 @@ it("lights the current tool and kind: the tool in brackets, the kind in the acce
   expect(painted(frame, color.muted, "Hooks")).toBe(true);
 });
 
-it("marks the selected scope, and the project row, in the accent colour while it has the focus, muted when not", async () => {
+it("marks the selected line, the project row or a scope, in the accent colour while the list has the focus, muted when not", async () => {
   const { render } = await import("ink-testing-library");
   const { ScopeList } = await import("./ScopeList.js");
   const { color } = await import("../theme.js");
@@ -50,13 +50,12 @@ it("marks the selected scope, and the project row, in the accent colour while it
     { id: "project" as const, label: "Project", count: 1 },
   ];
   const project = { key: "app", path: "app", name: "app", here: true, current: true, count: 1 };
-  const draw = (focused: boolean, projectFocused = false) =>
+  const draw = (focused: boolean, selected: "loaded" | "project" = "project") =>
     render(
       <ScopeList
         project={project}
-        projectFocused={projectFocused}
         scopes={scopes}
-        selected="project"
+        selected={selected}
         focused={focused}
         width={20}
         height={6}
@@ -65,10 +64,14 @@ it("marks the selected scope, and the project row, in the accent colour while it
     ).lastFrame() ?? "";
   expect(painted(draw(true), color.accent, "▸")).toBe(true);
   expect(painted(draw(false), color.muted, "▸")).toBe(true);
-  expect(painted(draw(true), color.muted, "▾")).toBe(true);
-  expect(painted(draw(false, true), color.accent, "▾")).toBe(true);
-  // The name is the text's colour, its (here) muted.
-  expect(painted(draw(true), color.text, "app")).toBe(true);
+  // On the row, the marker is before the project's name: the row is Loaded.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the colour codes are taken out to read the text.
+  expect(draw(true, "loaded").replace(/\u001b\[[0-9;]*m/g, "")).toMatch(/▸ app \(here\) +3/);
+  expect(painted(draw(true, "loaded"), color.accent, "▸")).toBe(true);
+  // The selected line's name is the text's colour, another's the secondary; (here) and the counts muted.
+  expect(painted(draw(true, "loaded"), color.text, "app")).toBe(true);
+  expect(painted(draw(true), color.secondary, "app")).toBe(true);
+  expect(painted(draw(true), color.text, "Project")).toBe(true);
   expect(painted(draw(true), color.muted, "(here)")).toBe(true);
 });
 

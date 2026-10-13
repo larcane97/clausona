@@ -40,10 +40,10 @@ import { buildMatrix, tilde, took } from "./view-model.js";
 
 type View = "main" | "matrix" | "warnings";
 /**
- * Which pane the keys move: the project row above the scopes, the scope list, the table, or a
- * row's details in its place.
+ * Which pane the keys move: the scope list - the project row, which is Loaded, and the scopes
+ * under it - the table, or a row's details in its place.
  */
-type Focus = "project" | "scopes" | "table" | "details";
+type Focus = "scopes" | "table" | "details";
 type Props = { load: () => Promise<Inventory>; onExit: () => void; now?: () => number };
 type Hint = { keys: string; action: string };
 
@@ -172,7 +172,12 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     scopes.findIndex((s) => s.id === scope),
   );
   const current = scopes[scopeAt]?.id ?? "loaded";
-  const layout = paneLayout(columns, terminalRows, scopes, projectPaneWidth(projects, NOUN[kind]));
+  const layout = paneLayout(
+    columns,
+    terminalRows,
+    scopes,
+    projectPaneWidth(projects, NOUN[kind], scopes.find((s) => s.id === "loaded")?.count),
+  );
   const table = useMemo(
     () =>
       inventory
@@ -360,20 +365,15 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       }
       return;
     }
-    // The left pane: esc leaves the screen from the project row as from the scopes.
+    // The left pane: esc leaves the screen.
     if (key.escape) {
       if (query !== "") setQuery("");
       else onExit();
-    } else if (shown === "project") {
-      if (key.downArrow) setFocus("scopes");
-      else if (key.return || key.rightArrow) openList();
-    } else if (key.upArrow) {
-      // Up from the first scope is the project row.
-      if (scopeAt === 0) setFocus("project");
-      else moveScope(-1);
-    } else if (key.downArrow) moveScope(1);
+    } else if (key.upArrow) moveScope(-1);
+    else if (key.downArrow) moveScope(1);
     else if (key.pageUp) moveScope(-Math.max(1, layout.height - 1));
     else if (key.pageDown) moveScope(Math.max(1, layout.height - 1));
+    // The project row is Loaded: → and enter open its table, as a scope's. p opens the project list.
     else if (key.rightArrow || key.return) setFocus("table");
   });
 
@@ -472,13 +472,10 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
                   ...unreadable.map((hint) => ({ ...hint, rank: 3 })),
                   { keys: "esc", action: "back", rank: 2 },
                 ]
-              : // The kinds come before search and the tools: the bar names them, but no key. On
-                // the project row, enter opens the project list where → opens a scope's table.
+              : // The kinds come before search and the tools: the bar names them, but no key.
                 [
                   { keys: "↑↓", action: "move", rank: 0 },
-                  shown === "project"
-                    ? { keys: "enter", action: "projects", rank: 1 }
-                    : { keys: "→", action: "open", rank: 1 },
+                  { keys: "→", action: "open", rank: 1 },
                   { keys: "tab", action: TOOL_LABEL[OTHER_TOOL[tool]], rank: 6 },
                   { keys: "1 2 3", action: "kind", rank: 4 },
                   { keys: "/", action: "search", rank: 5 },
@@ -500,7 +497,6 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   ) : (
     <ScopeList
       project={seenFrom}
-      projectFocused={shown === "project"}
       scopes={scopes}
       selected={current}
       focused={shown === "scopes"}
@@ -532,7 +528,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   // so the footer stays put.
   const panes =
     layout.mode === "one" ? (
-      listOpen || shown === "scopes" || shown === "project" ? (
+      listOpen || shown === "scopes" ? (
         left
       ) : (
         right

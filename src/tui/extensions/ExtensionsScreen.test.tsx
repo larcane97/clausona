@@ -124,13 +124,21 @@ function listOpen(frame: string, noun = "skills"): boolean {
   return new RegExp(`PROJECT +${noun}`).test(frame);
 }
 
+/**
+ * Whether the scope list is on its project row - Loaded, for the project named `name` - with the
+ * project list closed: the list has a line for the project too.
+ */
+function onRow(frame: string, name = "app (here)"): boolean {
+  return !/PROJECT +(skills|MCP servers|hooks)/.test(frame) && frame.includes(`▸ ${name}`);
+}
+
 /** What a frame shows right of the panes' divider, line by line: the table or the details. */
 function rightPane(frame: string): string[] {
   return frame.split("\n").map((line) => line.slice(line.lastIndexOf("│ ") + 2));
 }
 
 describe("ExtensionsScreen", () => {
-  it("opens on Claude's skills with Loaded selected and its table beside it, under the project row", async () => {
+  it("opens on Claude's skills with the project row selected - Loaded - and its table beside it", async () => {
     const { instance } = screen(await seed(), 140, 40);
     const frame = await seen(instance, (f) => f.includes("deploy-check"));
     expect(frame).toContain("Extensions");
@@ -138,13 +146,14 @@ describe("ExtensionsScreen", () => {
     expect(frame).toMatch(/Extensions │ ~[\\/]repos[\\/]app/);
     expect(frame).toContain("[Claude]  Codex");
     expect(frame).toContain("Skills · MCP · Hooks");
-    // The project everything is seen from, the folder's own, right above the scopes: no rule
-    // between them, the ▾ sets it apart.
+    // The project everything is seen from, the folder's own, is the first line and Loaded: what
+    // loads there, counted. A rule sets the scopes under it apart; no line of its own says Loaded.
     const lines = frame.split("\n");
-    const row = lines.findIndex((line) => line.includes("▾ app (here)"));
+    const row = lines.findIndex((line) => /▸ app \(here\) +3 +│/.test(line));
     expect(row).toBeGreaterThan(0);
-    expect(lines[row + 1]).toContain("▸ Loaded");
-    expect(lines[row + 2]).toMatch(/^ +─{4,} +│/);
+    expect(lines[row + 1]).toMatch(/^ +─{4,} +│/);
+    expect(lines[row + 2]).toMatch(/^ {4}Project +\d+ +│/);
+    expect(frame).not.toMatch(/Loaded +\d/);
     expect(frame).toContain("LOADED — ");
     expect(frame).toContain("eli5");
     // The scope list has the focus, so no row has the cursor yet.
@@ -205,7 +214,7 @@ describe("ExtensionsScreen", () => {
     await press(instance, ENTER);
     const details = await seen(instance, (f) => f.includes("PROJECT › deploy-check"));
     // The scope list stays beside the details, so it is clear where they are from.
-    expect(details).toContain("▸ Loaded");
+    expect(details).toContain("▸ app (here)");
     expect(details).toContain("File");
     expect(hintLine(details)).toContain("esc back");
     expect(hintLine(details)).not.toContain("enter");
@@ -221,22 +230,23 @@ describe("ExtensionsScreen", () => {
     expect(onExit).toHaveBeenCalledTimes(1);
   });
 
-  it("goes up from Loaded onto the project row, and opens the project list there on enter", async () => {
+  it("stays on the project row on ↑, opens its table on → or enter, and the project list on p", async () => {
     const { instance } = screen(await seed(more), 140, 40);
-    await seen(instance, (f) => f.includes("deploy-check"));
+    const first = await seen(instance, (f) => f.includes("deploy-check"));
+    expect(hintLine(first)).toContain("→ open");
+    expect(hintLine(first)).toContain("p project");
+    // Nothing is above the row.
     await press(instance, UP);
-    const onRow = await seen(instance, (f) => hintLine(f).includes("enter projects"));
-    expect(hintLine(onRow)).not.toContain("→ open");
-    expect(hintLine(onRow)).toContain("tab Codex");
-    // The scope stays chosen, and its table beside it.
-    expect(onRow).toContain("▸ Loaded");
-    expect(onRow).toContain("deploy-check");
-    // ↓ goes back to the scopes.
-    await press(instance, DOWN);
-    expect(hintLine(await seen(instance, (f) => hintLine(f).includes("→ open")))).not.toContain("enter projects");
-    await press(instance, UP);
-    await seen(instance, (f) => hintLine(f).includes("enter projects"));
-    await press(instance, ENTER);
+    expect(onRow(stripAnsi(instance.lastFrame() ?? ""))).toBe(true);
+    for (const open of [RIGHT, ENTER]) {
+      await press(instance, open);
+      const table = await seen(instance, (f) => f.includes("← scopes"));
+      expect(focusedOn(table, "a-very-long")).toBe(true);
+      expect(table).toContain("LOADED — ");
+      await press(instance, LEFT);
+      await seen(instance, (f) => !f.includes(symbol.cursor));
+    }
+    await press(instance, "p");
     const list = await seen(instance, (f) => listOpen(f));
     // The current project first, the cursor on it; every other recorded one; No project last.
     const lines = list.split("\n");
@@ -246,14 +256,9 @@ describe("ExtensionsScreen", () => {
     expect(lines[head + 3]).toMatch(/ {3}No project +—/);
     expect(hintLine(list)).toMatch(/↑↓ move │ enter pick │ esc cancel/);
     // In place of the scope list: the table is still beside it.
-    expect(list).not.toContain("▸ Loaded");
+    expect(list).not.toMatch(/^ {4}Global +\d+ +│/m);
     expect(list).toContain("LOADED — ");
     expect(list).not.toContain(symbol.cursor);
-    // → on the row opens it too.
-    await press(instance, ESC);
-    await seen(instance, (f) => hintLine(f).includes("enter projects"));
-    await press(instance, RIGHT);
-    await seen(instance, (f) => listOpen(f));
   });
 
   it("opens the project list on p from every focus, and leaves everything as it was on esc or ←", async () => {
@@ -291,11 +296,11 @@ describe("ExtensionsScreen", () => {
     await seen(instance, (f) => listOpen(f));
     await scopeTo(instance, "web");
     await press(instance, ENTER);
-    const picked = await seen(instance, (f) => f.includes("▾ web"));
+    const picked = await seen(instance, (f) => onRow(f, "web"));
     expect(picked).not.toContain("(here)");
     expect(picked).toMatch(/Extensions │ ~[\\/]repos[\\/]web/);
     expect(picked).toMatch(/LOADED — what Claude Code loads in ~[\\/]repos[\\/]web/);
-    expect(picked).toContain("▸ Loaded");
+    expect(picked).toMatch(/▸ web +\d+ +│/);
     expect(picked).toContain("web-only");
     expect(picked).not.toContain("deploy-check");
     // The scope list has the focus.
@@ -323,7 +328,7 @@ describe("ExtensionsScreen", () => {
       managedSettings: h.path("none.json"),
     });
     const { instance } = screen(inv, 140);
-    expect(await seen(instance, (f) => f.includes("Extensions │ ~"))).toContain("▾ ~ (here)");
+    expect(await seen(instance, (f) => f.includes("Extensions │ ~"))).toContain("▸ ~ (here)");
     await press(instance, "2");
     await press(instance, "p");
     const list = await seen(instance, (f) => listOpen(f, "MCP servers"));
@@ -345,8 +350,7 @@ describe("ExtensionsScreen", () => {
     await press(instance, ESC);
     const after = await seen(instance, (f) => !listOpen(f));
     expect(after).toContain("[Claude]  Codex");
-    expect(after).toContain("▾ app (here)");
-    expect(after).toContain("▸ Loaded");
+    expect(onRow(after)).toBe(true);
     expect(after).toContain("deploy-check");
     expect(after).not.toContain("/▏");
   });
@@ -368,8 +372,8 @@ describe("ExtensionsScreen", () => {
     const inv = await seed(everyScope);
     const later = () => Date.now() + 200 * DAY;
     const instance = mount(<ExtensionsScreen load={async () => inv} onExit={vi.fn()} now={later} />, 80, 24);
-    const frame = await seen(instance, (f) => f.includes("▸ Loaded"));
-    for (const label of ["▾ app (here)", "Project", "Global", "Cloud", "Plugins", "Not used in 90 days"]) {
+    const frame = await seen(instance, (f) => onRow(f));
+    for (const label of ["▸ app (here)", "Project", "Global", "Cloud", "Plugins", "Not used in 90 days"]) {
       expect(frame, label).toContain(label);
     }
     expect(frame).not.toMatch(/↓ \d+ more/);
@@ -383,7 +387,7 @@ describe("ExtensionsScreen", () => {
     };
     // Nine rows for the panes at 80 by 24: the heading, seven projects and the line that says the rest.
     const { instance } = screen(await seed(many), 80, 24);
-    await seen(instance, (f) => f.includes("▸ Loaded"));
+    await seen(instance, (f) => onRow(f));
     await press(instance, "p");
     const top = await seen(instance, (f) => listOpen(f));
     expect(top).toMatch(/↓ 7 more/);
@@ -491,7 +495,7 @@ describe("ExtensionsScreen", () => {
 
   it("shows no secret in the details at 60 columns either", async () => {
     const { instance } = screen(await seed(), 60, 30);
-    await seen(instance, (f) => f.includes("▸ Loaded"));
+    await seen(instance, (f) => onRow(f));
     await press(instance, "2");
     await press(instance, ENTER);
     await moveTo(instance, "github");
@@ -529,15 +533,13 @@ describe("ExtensionsScreen", () => {
 
   it("shows one pane at a time at 80 by 24: the scopes, enter for the table, esc back", async () => {
     const { instance, onExit } = screen(await seed(), 80, 24);
-    const first = await seen(instance, (f) => f.includes("▸ Loaded"));
-    expect(first).toContain("▾ app (here)");
+    const first = await seen(instance, (f) => onRow(f));
     expect(first).not.toContain("LOADED — ");
     expect(first).not.toContain("deploy-check");
     await press(instance, ENTER);
     const table = await seen(instance, (f) => f.includes("LOADED — "));
     expect(table).toContain("deploy-check");
-    expect(table).not.toContain("▸ Loaded");
-    expect(table).not.toContain("▾ app");
+    expect(table).not.toContain("app (here)");
     expect(hintLine(table)).toContain("← scopes");
     await press(instance, ENTER);
     const details = await seen(instance, (f) => f.includes("GLOBAL › a-very-long"));
@@ -545,7 +547,7 @@ describe("ExtensionsScreen", () => {
     await press(instance, ESC);
     await seen(instance, (f) => f.includes("LOADED — "));
     await press(instance, ESC);
-    const back = await seen(instance, (f) => f.includes("▸ Loaded"));
+    const back = await seen(instance, (f) => onRow(f));
     expect(back).not.toContain("LOADED — ");
     expect(onExit).not.toHaveBeenCalled();
     // Leaving draws nothing here: the App would unmount the screen, and onExit is a stand-in.
@@ -555,8 +557,8 @@ describe("ExtensionsScreen", () => {
 
   it("keeps the scope list narrow on a narrow terminal, each count next to its label", async () => {
     const { instance } = screen(await seed(), 80, 24);
-    const frame = await seen(instance, (f) => f.includes("▸ Loaded"));
-    const line = frame.split("\n").find((l) => l.includes("▸ Loaded")) ?? "";
+    const frame = await seen(instance, (f) => onRow(f));
+    const line = frame.split("\n").find((l) => l.includes("▸ app (here)")) ?? "";
     const start = line.indexOf("▸");
     const count = line.search(/\d+ *$/);
     expect(count).toBeGreaterThan(start);
@@ -565,18 +567,17 @@ describe("ExtensionsScreen", () => {
 
   it("shows the project list as the one pane at 80 by 24, and the scope list once one is picked", async () => {
     const { instance } = screen(await seed(more), 80, 24);
-    await seen(instance, (f) => f.includes("▸ Loaded"));
+    await seen(instance, (f) => onRow(f));
     await press(instance, "p");
     const list = await seen(instance, (f) => listOpen(f));
     expect(list).toMatch(/▸ app \(here\) +2/);
     expect(list).toContain("No project");
-    expect(list).not.toContain("▸ Loaded");
+    expect(list).not.toMatch(/Global +\d/);
     expect(list).not.toContain("LOADED — ");
     for (const line of list.split("\n")) expect(line.length).toBeLessThanOrEqual(80);
     await press(instance, DOWN);
     await press(instance, ENTER);
-    const picked = await seen(instance, (f) => f.includes("▾ web"));
-    expect(picked).toContain("▸ Loaded");
+    const picked = await seen(instance, (f) => onRow(f, "web"));
     expect(picked).not.toContain("LOADED — ");
     expect(listOpen(picked)).toBe(false);
   });
@@ -645,7 +646,7 @@ describe("ExtensionsScreen", () => {
       const inTable = await seen(instance, (f) => f.includes("▸ Project") && f.includes("← scopes"));
       expect(hintLine(inTable)).not.toContain("→ open");
       await press(instance, keys);
-      const back = await seen(instance, (f) => f.includes("▸ Loaded"));
+      const back = await seen(instance, (f) => onRow(f));
       expect(back, `after ${JSON.stringify(keys)}`).not.toContain(symbol.cursor);
       expect(hintLine(back), `after ${JSON.stringify(keys)}`).toContain("→ open");
     }
@@ -667,7 +668,7 @@ describe("ExtensionsScreen", () => {
       for (let n = 1; n <= 12; n++) h.skill(".claude/skills", `s${String(n).padStart(2, "0")}`);
     };
     const { instance } = screen(await seed(many), 80, 24);
-    await seen(instance, (f) => f.includes("▸ Loaded"));
+    await seen(instance, (f) => onRow(f));
     await press(instance, ENTER);
     await seen(instance, (f) => focusedOn(f, "a-very-long"));
     // Fifteen rows; six show at 80 by 24, over the line that says how many more. A page moves
@@ -732,7 +733,7 @@ describe("ExtensionsScreen", () => {
     await seen(instance, (f) => listOpen(f));
     await scopeTo(instance, "web");
     await press(instance, ENTER);
-    await seen(instance, (f) => f.includes("▾ web"));
+    await seen(instance, (f) => onRow(f, "web"));
     await press(instance, ENTER);
     await seen(instance, (f) => f.includes("web-only"));
     await press(instance, "/");
@@ -753,7 +754,7 @@ describe("ExtensionsScreen", () => {
     await press(instance, ENTER);
     const none = await seen(instance, (f) => f.includes("No project — pick one with p"));
     expect(none).toContain("Extensions │ No project — pick one with p");
-    expect(none).toContain("▾ No project");
+    expect(none).toMatch(/▸ No project +\d+ +│/);
     expect(none).not.toContain("(here)");
     // Loaded lists only what loads with no project.
     expect(none).not.toContain("deploy-check");
@@ -779,7 +780,7 @@ describe("ExtensionsScreen", () => {
     const frame = await seen(instance, (f) => f.includes("Nothing is loaded here."));
     // Started in the home dir, which is a project for what Claude Code keys by it.
     expect(frame).toMatch(/Extensions │ ~\n/);
-    expect(frame).toMatch(/Loaded +0/);
+    expect(frame).toMatch(/▸ ~ \(here\) +0/);
     expect(frame).toMatch(/Project +0/);
     // The empty table has the focus: there is no row to open, so enter is not offered.
     await press(instance, RIGHT);
@@ -795,7 +796,7 @@ describe("ExtensionsScreen", () => {
     const inv = await seed();
     expect(inv.warnings).toHaveLength(1);
     const { instance } = screen(inv, 80, 24);
-    const scopes = hintLine(await seen(instance, (f) => f.includes("▸ Loaded")));
+    const scopes = hintLine(await seen(instance, (f) => onRow(f)));
     expect(scopes).toContain("↑↓ move");
     expect(scopes).toContain("→ open");
     expect(scopes).toContain("1 2 3 kind");
@@ -811,7 +812,7 @@ describe("ExtensionsScreen", () => {
     expect(table).toContain("w 1 unreadable");
     expect(table).not.toContain("→ open");
     const narrow = screen(inv, 60, 20).instance;
-    const narrowHints = hintLine(await seen(narrow, (f) => f.includes("▸ Loaded")));
+    const narrowHints = hintLine(await seen(narrow, (f) => onRow(f)));
     expect(narrowHints).toContain("→ open");
     expect(narrowHints).toContain("/ search");
     expect(narrowHints.length).toBeLessThanOrEqual(60);
@@ -819,9 +820,9 @@ describe("ExtensionsScreen", () => {
 
   it("lays the screen out again when the terminal is resized", async () => {
     const { instance } = screen(await seed(), 140);
-    await seen(instance, (f) => f.includes("LOADED — ") && f.includes("▸ Loaded"));
+    await seen(instance, (f) => f.includes("LOADED — ") && onRow(f));
     instance.resize(60);
-    const narrow = await seen(instance, (f) => f.includes("▸ Loaded") && !f.includes("LOADED — "));
+    const narrow = await seen(instance, (f) => onRow(f) && !f.includes("LOADED — "));
     for (const line of narrow.split("\n")) expect(line.length).toBeLessThanOrEqual(60);
   });
 
@@ -863,7 +864,7 @@ describe("ExtensionsScreen", () => {
   it("scrolls a detail with ↑↓ and says how many lines are hidden either way", async () => {
     // Five rows for the panes: the title, a blank line, and three of github's seven.
     const { instance } = screen(await seed(), 80, 20);
-    await seen(instance, (f) => f.includes("▸ Loaded"));
+    await seen(instance, (f) => onRow(f));
     await press(instance, "2");
     await press(instance, ENTER);
     await moveTo(instance, "github");
@@ -886,7 +887,7 @@ describe("ExtensionsScreen", () => {
 
   it("hints no scrolling for a detail that fits", async () => {
     const { instance } = screen(await seed(), 60, 30);
-    await seen(instance, (f) => f.includes("▸ Loaded"));
+    await seen(instance, (f) => onRow(f));
     await press(instance, ENTER);
     await moveTo(instance, "deploy-check");
     await press(instance, ENTER);
@@ -912,7 +913,7 @@ describe("ExtensionsScreen", () => {
     };
     /** Opens long-cmd's details: a .mcp.json server not yet approved is in Project, not Loaded. */
     const openLongCmd = async (instance: Instance, twoPanes: boolean) => {
-      await seen(instance, (f) => f.includes("▸ Loaded"));
+      await seen(instance, (f) => onRow(f));
       await press(instance, "2");
       await scopeTo(instance, "Project");
       await press(instance, twoPanes ? RIGHT : ENTER);

@@ -27,6 +27,7 @@ import {
   projectList,
   projectListLines,
   projectPaneWidth,
+  projectRow,
   scopeLines,
   scrolled,
   type Table,
@@ -653,6 +654,11 @@ describe("project list widths", () => {
     );
     // From where the marker is to two columns before the divider.
     expect(projectPaneWidth([entry("app", 4), none], "MCP servers")).toBe("PROJECT  MCP servers".length + 2);
+    // The row's own count, Loaded's, when it is wider than the list's.
+    expect(projectPaneWidth([entry("app", 4, true), none], "skills", 118)).toBe(2 + "app (here)".length + 2 + 3 + 2);
+    expect(projectPaneWidth([entry("app", 4, true), none], "skills", 9)).toBe(
+      projectPaneWidth([entry("app", 4, true), none], "skills"),
+    );
     // At that width, every line whole: nothing cut.
     const width = projectPaneWidth(entries, "skills");
     const { lines } = projectListLines(entries, "skills", width);
@@ -668,6 +674,27 @@ describe("project list widths", () => {
       const { title, noun, lines } = projectListLines(entries, "MCP servers", width);
       expect(`${title}${noun}`.length, `at ${width}`).toBeLessThanOrEqual(Math.max(0, width - 2));
       for (const line of lines) expect(text(line).length, `at ${width}`).toBeLessThanOrEqual(Math.max(0, width - 4));
+    }
+  });
+
+  it("lays the project row out as a list line, with Loaded's count: right-aligned, two spaces before it", () => {
+    const row = projectRow(entry("agency-platform", 35, true), 118, 24);
+    expect(text(row)).toBe("agency-… (here)  118");
+    expect(text(row).length).toBe(24 - 4);
+    expect(text(projectRow(entry("agency-platform", 35, true), 118, 34))).toBe(
+      `agency-platform (here)${" ".repeat(5)}118`,
+    );
+    expect(text(projectRow(none, 0, 20))).toBe(`${NO_PROJECT}${" ".repeat(5)}0`);
+    // At the width the pane takes for it, nothing is cut.
+    const width = projectPaneWidth([entry("agency-platform", 35, true), none], "skills", 118);
+    expect(projectRow(entry("agency-platform", 35, true), 118, width)).toMatchObject({
+      name: "agency-platform",
+      here: " (here)",
+    });
+    for (let width = 0; width <= 30; width++) {
+      const cut = projectRow(entry("agency-platform", 35, true), 118, width);
+      expect(text(cut).length, `at ${width}`).toBeLessThanOrEqual(Math.max(0, width - 4));
+      if (cut.count !== "") expect(cut.count.startsWith("  "), `at ${width}`).toBe(true);
     }
   });
 
@@ -702,7 +729,7 @@ describe("paneLayout", () => {
   });
 
   it("keeps the scope pane to 32 columns", () => {
-    const wide: ScopeEntry[] = [{ id: "loaded", label: "x".repeat(40), count: 12345 }];
+    const wide: ScopeEntry[] = [{ id: "global", label: "x".repeat(40), count: 12345 }];
     expect(paneLayout(140, 40, wide).scopeWidth).toBe(32);
   });
 
@@ -714,12 +741,12 @@ describe("paneLayout", () => {
     const one = paneLayout(99, 40, scopes);
     expect(one.mode).toBe("one");
     expect(one.tableWidth).toBe(99 - CHROME_COLUMNS);
-    // Each count stays next to its label: "Loaded  162" and 4 for the marker and the edge.
-    expect(one.scopeWidth).toBe("Loaded  162".length + 4);
+    // Each count stays next to its label: "Project  35" and 4 for the marker and the edge.
+    expect(one.scopeWidth).toBe("Project  35".length + 4);
     expect(one.scopeWidth).toBe(paneLayout(140, 40, scopes).scopeWidth);
-    expect(paneLayout(80, 24, [{ id: "loaded", label: "x".repeat(40), count: 1 }]).scopeWidth).toBe(32);
+    expect(paneLayout(80, 24, [{ id: "global", label: "x".repeat(40), count: 1 }]).scopeWidth).toBe(32);
     // Never wider than the terminal leaves.
-    expect(paneLayout(20, 24, [{ id: "loaded", label: "x".repeat(40), count: 1 }]).scopeWidth).toBe(
+    expect(paneLayout(20, 24, [{ id: "global", label: "x".repeat(40), count: 1 }]).scopeWidth).toBe(
       20 - CHROME_COLUMNS,
     );
   });
@@ -732,6 +759,10 @@ describe("paneLayout", () => {
     // "Project  1", and 4 for the marker and the edge.
     expect(paneLayout(140, 40, scopes).scopeWidth).toBe("Project  1".length + 4);
     expect(paneLayout(140, 40, scopes, 10).scopeWidth).toBe("Project  1".length + 4);
+    // Loaded is the project row, with no label of its own: the row's width comes in `projects`.
+    expect(paneLayout(140, 40, [{ id: "loaded", label: "Loaded", count: 123456789 }, ...scopes]).scopeWidth).toBe(
+      "Project  1".length + 4,
+    );
     expect(paneLayout(140, 40, scopes, 26).scopeWidth).toBe(26);
     expect(paneLayout(140, 40, scopes, 40).scopeWidth).toBe(32);
     expect(paneLayout(20, 24, scopes, 26).scopeWidth).toBe(20 - CHROME_COLUMNS);
@@ -753,22 +784,15 @@ describe("paneLayout", () => {
 describe("scopeLines", () => {
   const entry = (id: ScopeEntry["id"], count = 1): ScopeEntry => ({ id, label: id, count });
 
-  it("puts a rule after Loaded and another before Not used in 90 days", () => {
+  it("lists the scopes under the project row, which is Loaded: a rule first, another before Not used in 90 days", () => {
     const lines = scopeLines([entry("loaded"), entry("project"), entry("global"), entry("unused")]);
-    expect(lines.map((l) => (l.type === "rule" ? "─" : l.entry.id))).toEqual([
-      "loaded",
-      "─",
-      "project",
-      "global",
-      "─",
-      "unused",
-    ]);
+    expect(lines.map((l) => (l.type === "rule" ? "─" : l.entry.id))).toEqual(["─", "project", "global", "─", "unused"]);
     // Each rule has a key of its own.
     expect(new Set(lines.map((l) => l.key)).size).toBe(lines.length);
   });
 
   it("draws no rule before an unused scope that is not there", () => {
-    expect(scopeLines([entry("loaded"), entry("project")]).map((l) => l.type)).toEqual(["scope", "rule", "scope"]);
+    expect(scopeLines([entry("loaded"), entry("project")]).map((l) => l.type)).toEqual(["rule", "scope"]);
   });
 });
 

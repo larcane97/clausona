@@ -330,8 +330,8 @@ export const DIVIDER_COLUMNS = 2;
  */
 export const PANE_HEAD_ROWS = 2;
 /**
- * The lines the scope list draws above the scopes: the project row. No rule under it - its ▾ and
- * bold name set it apart - so a 24-row terminal still shows every Claude skill scope.
+ * The lines the scope list draws above the scopes: the project row, which is Loaded - what loads
+ * in the project it names. It stays put while the scopes under it scroll.
  */
 export const PROJECT_ROWS = 1;
 /** The line the project list draws above the projects: its heading. */
@@ -355,8 +355,9 @@ const SCOPE_PANE_MAX = 32;
 export type PaneLayout = { mode: "two" | "one"; scopeWidth: number; tableWidth: number; height: number };
 
 /**
- * Two panes at >= 100 columns; scope pane = widest "label  count" + 4, or what the project row
- * and the project list take (`projects`, from projectPaneWidth) when that is more, at most 32.
+ * Two panes at >= 100 columns; scope pane = widest "label  count" + 4 of the scopes under the
+ * project row, or what the row and the project list take (`projects`, from projectPaneWidth) when
+ * that is more, at most 32.
  * Under 100, one pane at a time: the table and the details at the full width, the scope list and
  * the project list as wide as beside the table, left-aligned. Widths are inside Chrome's padding;
  * `height` is the panes' rows, so the frame is `rows - 2` at most (ink clears the scrollback for a
@@ -370,25 +371,32 @@ export function paneLayout(columns: number, rows: number, scopes: ScopeEntry[], 
   const height = Math.max(1, down - 2 - CHROME_ROWS);
   // The marker before a label ("▸ ") and two spaces before the divider. One pane alone keeps this
   // width too, so a count sits next to its label rather than across the terminal from it.
-  const widest = Math.max(0, ...scopes.map((s) => `${s.label}  ${s.count}`.length));
+  const widest = Math.max(0, ...scopes.filter((s) => s.id !== "loaded").map((s) => `${s.label}  ${s.count}`.length));
   const scopeWidth = Math.min(SCOPE_PANE_MAX, Math.max(widest + 4, projects), width);
   if (across < TWO_PANES_FROM) return { mode: "one", scopeWidth, tableWidth: width, height };
   return { mode: "two", scopeWidth, tableWidth: Math.max(1, width - scopeWidth - DIVIDER_COLUMNS), height };
 }
 
-/** A line of the scope list: a scope, or the rule that sets Loaded and Not used in 90 days apart. */
+/**
+ * A line under the project row: a scope, or the rule that sets the places apart from the row
+ * above them and from Not used in 90 days.
+ */
 export type ScopeLine = { type: "scope"; key: string; entry: ScopeEntry } | { type: "rule"; key: string };
 
-/** The scope list's lines: a rule after Loaded and another before Not used in 90 days, when there. */
+/**
+ * The lines under the project row: Loaded is the row itself, so a rule comes first, then the
+ * places, then another rule before Not used in 90 days, when there.
+ */
 export function scopeLines(scopes: ScopeEntry[]): ScopeLine[] {
   const lines: ScopeLine[] = [];
+  let after: ScopeEntry | undefined;
   for (const entry of scopes) {
-    const prev = lines.at(-1);
-    // One rule where the two stand together: Loaded, then Not used in 90 days.
-    if (prev?.type === "scope" && (prev.entry.id === "loaded" || entry.id === "unused")) {
+    // One rule after Loaded, the row, and one before Not used in 90 days.
+    if (after !== undefined && (after.id === "loaded" || entry.id === "unused")) {
       lines.push({ type: "rule", key: `rule-${entry.id}` });
     }
-    lines.push({ type: "scope", key: entry.id, entry });
+    if (entry.id !== "loaded") lines.push({ type: "scope", key: entry.id, entry });
+    after = entry;
   }
   return lines;
 }
@@ -483,10 +491,11 @@ function countText(entry: ProjectEntry): string {
  * The columns the project row and the project list take whole: the widest line - "▸ ", the name,
  * its " (here)", the two spaces, the count, and the two columns before the divider - or the
  * heading, PROJECT and the kind's noun two apart, from where the marker is. The row is one of the
- * lines, shorter by its count. The same whichever project is picked, so the pane keeps its width.
+ * lines, with `loaded`, Loaded's count, for its count. The same whichever project is picked, but
+ * for a Loaded count wider than every other, so the pane keeps its width.
  */
-export function projectPaneWidth(entries: ProjectEntry[], noun: string): number {
-  const countWidth = Math.max(0, ...entries.map((e) => countText(e).length));
+export function projectPaneWidth(entries: ProjectEntry[], noun: string, loaded = 0): number {
+  const countWidth = Math.max(String(loaded).length, ...entries.map((e) => countText(e).length));
   const widest = Math.max(
     0,
     ...entries.map((e) => e.name.length + (e.here ? HERE.length : 0) + COUNT_GAP + countWidth),
@@ -507,6 +516,23 @@ export function projectLabel(name: string, here: boolean, room: number): { name:
 
 /** A line of the project list as drawn after the marker: the name, its (here), the count right-aligned. */
 export type ProjectLine = { key: string; name: string; here: string; count: string; entry: ProjectEntry };
+
+/**
+ * The project row in a pane `width` wide, as the scopes under it are laid out: the name cut with …,
+ * its (here), and `count` - Loaded's - right-aligned two columns before the divider, with two
+ * spaces before it at least. A count with no room for them is left out.
+ */
+export function projectRow(
+  entry: ProjectEntry,
+  count: number,
+  width: number,
+): { name: string; here: string; count: string } {
+  const inner = Math.max(0, width - 4);
+  const text = String(count);
+  const label = projectLabel(entry.name, entry.here, Math.max(0, inner - text.length - COUNT_GAP));
+  const left = inner - label.name.length - label.here.length;
+  return { ...label, count: text.length + COUNT_GAP <= left ? text.padStart(left) : "" };
+}
 
 /**
  * The project list in a pane `width` wide, laid out as the scope list is: after the marker's two

@@ -2,19 +2,16 @@ import { Box, Text } from "ink";
 
 import type { ScopeEntry, ScopeId } from "../../extensions/scopes.js";
 import { color } from "../theme.js";
-import { listRoom, PROJECT_ROWS, type ProjectEntry, projectLabel, scopeLines } from "./screen-model.js";
+import { listRoom, PROJECT_ROWS, type ProjectEntry, projectRow, scopeLines } from "./screen-model.js";
 import { cell } from "./view-model.js";
 
-/** The marker before a label, the project row's, and the two columns kept before the divider. */
+/** The marker before the selected line, and the two columns kept before the divider. */
 const MARKER = "▸";
-const ROW_MARKER = "▾";
 const EDGES = 4;
 
 type Props = {
-  /** The project everything is seen from, or No project: the row on top. */
+  /** The project everything is seen from, or No project: the row on top, which is Loaded. */
   project: ProjectEntry;
-  /** Whether the project row has the focus: its marker is lit then. */
-  projectFocused: boolean;
   scopes: ScopeEntry[];
   selected: ScopeId;
   /** Whether the list has the focus: its marker is lit then, and muted when the table has it. */
@@ -27,26 +24,28 @@ type Props = {
 
 /**
  * The left pane: the project row - the project everything is seen from, "(here)" for the
- * folder's own - then one line per scope, its label on the left and its count on the right, the
- * selected one marked. The row's ▾ and bold name set it apart, with no rule under it. A rule sets
- * Loaded apart from the places, and the places from Not used in 90 days. Scopes that do not fit
+ * folder's own, and the count of what loads there, for the row is Loaded - then one line per
+ * scope under it, its label on the left and its count on the right, the selected line marked. A
+ * rule sets the places apart from the row, and from Not used in 90 days. Scopes that do not fit
  * end in a line that says how many more are below.
  */
-export function ScopeList({ project, projectFocused, scopes, selected, focused, width, height, top }: Props) {
+export function ScopeList({ project, scopes, selected, focused, width, height, top }: Props) {
   const lines = scopeLines(scopes);
   const room = listRoom(Math.max(0, height - PROJECT_ROWS), lines.length);
   const visible = lines.slice(top, top + room);
   const below = lines.slice(top + room).filter((line) => line.type === "scope").length;
   const inner = Math.max(0, width - EDGES);
-  const row = projectLabel(project.name, project.here, inner);
+  const row = projectRow(project, scopes.find((s) => s.id === "loaded")?.count ?? 0, width);
+  const onRow = selected === "loaded";
   return (
     <Box flexDirection="column" width={width} flexShrink={0}>
       <Text wrap="truncate-end">
-        <Text color={projectFocused ? color.accent : color.muted}>{ROW_MARKER}</Text>{" "}
-        <Text color={color.text} bold={projectFocused}>
+        <Text color={focused ? color.accent : color.muted}>{onRow ? MARKER : " "}</Text>{" "}
+        <Text color={onRow ? color.text : color.secondary} bold={onRow}>
           {row.name}
         </Text>
         <Text color={color.muted}>{row.here}</Text>
+        <Text color={color.muted}>{row.count}</Text>
       </Text>
       {visible.map((line) => {
         if (line.type === "rule") {
