@@ -342,6 +342,12 @@ async function renameRoute(args: string[], deps: RouteDeps): Promise<string> {
     throw new Error(`${usage("rename")}\nRun \`clausona route rename --help\` for usage.`);
   const from = routeNameArg(oldArg, "rename");
   const to = routeNameArg(newArg, "rename");
+  if (from === to) {
+    // Not "already exists": the name it is taken by is its own, and there is nothing to write.
+    const file = await readRoutes(deps.paths);
+    if (!storedRoute(file, from)) throw new UnknownRouteError(from, Object.keys(file.routes).sort());
+    return `Route ${bold(from)} already has that name. Nothing was changed.`;
+  }
   await updateRoutes((file) => {
     const spec = storedRoute(file, from);
     if (!spec) throw new UnknownRouteError(from, Object.keys(file.routes).sort());

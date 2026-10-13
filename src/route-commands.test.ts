@@ -407,6 +407,16 @@ describe("route set, rename, remove", () => {
     expect(file().routes).toEqual(before);
   });
 
+  it("says a rename to the route's own name changes nothing, and writes nothing", async () => {
+    const { run, file, deps } = setup();
+    await run("add", "main");
+    const before = readFileSync(deps.paths.routesPath, "utf8");
+    expect(await run("rename", "main", "main")).toBe("Route main already has that name. Nothing was changed.");
+    expect(readFileSync(deps.paths.routesPath, "utf8")).toBe(before);
+    expect(Object.keys(file().routes)).toEqual(["main"]);
+    await expect(run("rename", "gone", "gone")).rejects.toThrow(/^Route 'gone' does not exist\./);
+  });
+
   // Every object has these, so a lookup that is not of own keys finds one in every routes.json.
   it("takes names every object has as route names like any other", async () => {
     const { run, file } = setup();
