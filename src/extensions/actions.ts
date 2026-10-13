@@ -218,6 +218,12 @@ function filled(words: Words | undefined, tool: ToolName, values: Record<string,
  */
 export const ONE_ACCOUNT_KEYS = "Press d and choose only {short} in the dialog.";
 
+/**
+ * What the TUI says instead of "Pick one with p." where Claude Code and Codex have recorded no
+ * project: p has none to pick.
+ */
+export const NO_PROJECT_KEYS = "Run csn in a project.";
+
 /** The refusal `code` for a row of `tool`, its words filled in; `keysInstead` stands in for the table's keys words. */
 export function refusal(
   code: RefusalCode,
@@ -380,7 +386,10 @@ export function chosenAccount(accounts: readonly string[] | undefined, profile: 
   return accounts === undefined || profile === undefined || accounts.includes(profile);
 }
 
-/** Whether a row is off at that reach, as plan() reads "already off". */
+/**
+ * Whether a row is off at that reach, as plan() reads "already off" - or, for a `.mcp.json`
+ * server, pending approval, which does not run either.
+ */
 function offAt(
   inv: Inventory,
   row: ScopeRow,
@@ -415,7 +424,8 @@ function offAt(
         const states = statesByAccount(inv, row, project)
           ?.filter((a) => chosenAccount(accounts, a.profile))
           .map((a) => a.state);
-        return isOff(states ?? [stateHere(inv, first, project)]);
+        const read = states ?? [stateHere(inv, first, project)];
+        return read.length > 0 && read.every((s) => s.value === "off" || s.value === "pending-approval");
       }
       const copies = row.items.filter((copy) => chosenAccount(accounts, copy.location.profile));
       if (!here) return copies.length > 0 && copies.every((copy) => copy.stashed);
@@ -431,7 +441,10 @@ function offAt(
   }
 }
 
-/** The verb a toggle key means for this row: "on" when it is off at that reach, else "off". */
+/**
+ * The verb a toggle key means for this row: "on" when it does not run at that reach - off, or a
+ * `.mcp.json` server pending approval, which on approves - else "off".
+ */
 export function toggleVerb(
   inv: Inventory,
   row: ScopeRow,

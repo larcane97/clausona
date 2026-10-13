@@ -432,6 +432,10 @@ describe("fromLabel and scopeSentence", () => {
       "CLOUD — skills on your claude.ai accounts, different per account",
     );
     expect(scopeSentence("project", "claude", "skill", inv, undefined)).toBe("PROJECT — no project · pick one with p");
+    // With no project recorded there is none to pick.
+    expect(scopeSentence("project", "claude", "skill", { ...inv, projects: [] }, undefined)).toBe(
+      "PROJECT — no project",
+    );
     expect(scopeSentence("loaded", "claude", "skill", inv, web)).toMatch(
       /^LOADED — what Claude Code loads in ~[\\/]repos[\\/]web, in at least one account$/,
     );

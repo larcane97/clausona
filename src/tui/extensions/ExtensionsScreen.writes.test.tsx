@@ -8,6 +8,7 @@ import { loadInventory } from "../../extensions/inventory.js";
 import { writesFor } from "../../extensions/load.js";
 import { TestHome } from "../../extensions/test-home.js";
 import { stripAnsi } from "../../lib/cli-style.js";
+import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../../test-timeouts.js";
 import {
   DOWN,
   ENTER,
@@ -24,6 +25,14 @@ import { windowsOnScreen } from "../test-frames.js";
 import { ExtensionsScreen } from "./ExtensionsScreen.js";
 
 vi.setConfig({ testTimeout: 20_000 });
+
+/**
+ * How long a key that plans a change in a project may take to draw what it led to. The plan asks
+ * git what it tracks and what it ignores (planChecked), which on a busy machine takes seconds
+ * where every other step here takes milliseconds: up to git-tracked.ts's 5 s for each of its two
+ * git runs in a row, then the redraw. A case with such a step takes SPAWNING_TEST_TIMEOUT_MS.
+ */
+const PLAN_STEP_MS = 15_000;
 
 const DAY = 86_400_000;
 // Built from pieces, so no key-shaped string sits in the source.
@@ -58,7 +67,7 @@ const GIT_ENV: NodeJS.ProcessEnv = {
 const hasGit = spawnSync("git", ["--version"], { env: GIT_ENV }).status === 0;
 
 function git(cwd: string, args: string[]): void {
-  const result = spawnSync("git", args, { cwd, env: GIT_ENV, encoding: "utf8" });
+  const result = spawnSync("git", args, { cwd, env: GIT_ENV, encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
   if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr}`);
 }
 
@@ -135,8 +144,8 @@ function mount(h: TestHome, app: string, columns: number, rows: number, options:
 }
 
 /** Waits for a frame whose text, colours aside, passes `check`, and returns that text. */
-async function seen(instance: Instance, check: (text: string) => boolean): Promise<string> {
-  return stripAnsi(await waitForFrame(instance.lastFrame, (frame) => check(stripAnsi(frame))));
+async function seen(instance: Instance, check: (text: string) => boolean, timeout?: number): Promise<string> {
+  return stripAnsi(await waitForFrame(instance.lastFrame, (frame) => check(stripAnsi(frame)), timeout));
 }
 
 /** The key hints: the line that offers esc. */
@@ -191,12 +200,12 @@ const json = (file: string) => JSON.parse(readFileSync(file, "utf8"));
 const local = (app: string) => path.join(app, ".claude", "settings.local.json");
 
 describe("ExtensionsScreen: writes", () => {
-  it("turns a Global skill off here after a confirm, and says so", async () => {
+  it("turns a Global skill off here after a confirm, and says so", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);
     await openRow(instance, "Global", "eli5");
-    await press(instance, SPACE);
-    const dialog = await seen(instance, (f) => f.includes("Turn off eli5 in this project?"));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    const dialog = await seen(instance, (f) => f.includes("Turn off eli5 in this project?"), PLAN_STEP_MS);
     expect(dialog).toContain("skillOverrides.eli5 → off");
     expect(hintLine(dialog)).toContain("y apply");
     await press(instance, "y");
@@ -205,13 +214,13 @@ describe("ExtensionsScreen: writes", () => {
     expect(json(local(app)).skillOverrides).toEqual({ eli5: "off" });
   });
 
-  it("changes nothing on n or esc", async () => {
+  it("changes nothing on n or esc", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);
     await openRow(instance, "Global", "eli5");
     for (const key of ["n", ESC]) {
-      await press(instance, SPACE);
-      await seen(instance, (f) => f.includes("Turn off eli5 in this project?"));
+      await press(instance, SPACE, PLAN_STEP_MS);
+      await seen(instance, (f) => f.includes("Turn off eli5 in this project?"), PLAN_STEP_MS);
       // ctrl+y and ctrl+n are not y and n.
       await type(instance, "\u0019");
       await type(instance, "\u000e");
@@ -223,12 +232,12 @@ describe("ExtensionsScreen: writes", () => {
     }
   });
 
-  it("undoes the newest change on u, after a confirm", async () => {
+  it("undoes the newest change on u, after a confirm", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);
     await openRow(instance, "Global", "eli5");
-    await press(instance, SPACE);
-    await seen(instance, (f) => f.includes("Turn off eli5 in this project?"));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    await seen(instance, (f) => f.includes("Turn off eli5 in this project?"), PLAN_STEP_MS);
     await press(instance, "y");
     await seen(instance, (f) => f.includes("Turned off eli5 in this project · u to undo"));
     await press(instance, "u");
@@ -305,21 +314,23 @@ describe("ExtensionsScreen: writes", () => {
     expect(existsSync(h.path(".claude", "skills", "old-one"))).toBe(false);
   });
 
-  it("says what a .mcp.json server runs in the dialog where space approves it", async () => {
+  it("says what a .mcp.json server runs in the dialog where space approves it", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     h.write("repos/app/.mcp.json", {
       mcpServers: { "docs-search": { command: "npx", args: ["docs-mcp", "--api-key", KEY] } },
     });
     const instance = mount(h, app, 140, 40);
     await openRow(instance, "Project", "docs-search", "2");
-    // Pending approval is not off, so space turns it off first: that approves nothing.
-    await press(instance, SPACE);
-    const off = await seen(instance, (f) => f.includes("Turn off docs-search in this project?"));
-    expect(off).not.toContain("  runs ");
-    await press(instance, "y");
-    await seen(instance, (f) => f.includes("Turned off docs-search in this project · u to undo"));
-    await press(instance, SPACE);
-    const dialog = await seen(instance, (f) => f.includes("Turn on docs-search in this project?"));
+    // Pending approval, it does not run: its details offer on, and space in the table approves it.
+    await press(instance, ENTER);
+    const details = await seen(instance, (f) => f.includes("PROJECT › docs-search"));
+    expect(lastPaneLine(details)).toBe("space on here · d delete");
+    await press(instance, ESC);
+    await seen(instance, (f) => focusedOn(f, "docs-search"));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    const dialog = await seen(instance, (f) => f.includes("Turn on docs-search in this project?"), PLAN_STEP_MS);
     const lines = dialog.split("\n");
     const at = lines.findIndex((line) => line.includes("enabledMcpjsonServers + docs-search"));
     expect(at).toBeGreaterThan(0);
@@ -330,7 +341,9 @@ describe("ExtensionsScreen: writes", () => {
     expect(json(local(app)).enabledMcpjsonServers).toEqual(["docs-search"]);
   });
 
-  it("says in the dialog which links deleting a folder leaves broken", async () => {
+  it("says in the dialog which links deleting a folder leaves broken", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     h.skill("repos/app/.claude/skills", "gstack");
     for (const name of ["canary", "careful"]) {
@@ -339,8 +352,8 @@ describe("ExtensionsScreen: writes", () => {
     }
     const instance = mount(h, app, 140, 40);
     await openRow(instance, "Project", "gstack");
-    await press(instance, "d");
-    const dialog = await seen(instance, (f) => f.includes("Delete gstack?"));
+    await press(instance, "d", PLAN_STEP_MS);
+    const dialog = await seen(instance, (f) => f.includes("Delete gstack?"), PLAN_STEP_MS);
     expect(dialog.split("\n").find((line) => line.includes(`skills${path.sep}gstack`))).toContain(
       "breaks 2 links: canary, careful (add them to delete them too)",
     );
@@ -349,6 +362,7 @@ describe("ExtensionsScreen: writes", () => {
 
   it.skipIf(!hasGit)(
     "adds Claude Code's ignore line with a project's first settings.local.json, and keeps it when an account is picked",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
     async () => {
       const { h, app } = seed();
       rmSync(path.join(app, ".git"), { recursive: true, force: true });
@@ -360,8 +374,8 @@ describe("ExtensionsScreen: writes", () => {
       const ignore = h.path(".config", "git", "ignore");
       const instance = mount(h, app, 140, 40);
       await openRow(instance, "Project", "docs-search", "2");
-      await press(instance, SPACE);
-      const dialog = await seen(instance, (f) => f.includes("◉ default") && f.includes("◉ work"));
+      await press(instance, SPACE, PLAN_STEP_MS);
+      const dialog = await seen(instance, (f) => f.includes("◉ default") && f.includes("◉ work"), PLAN_STEP_MS);
       const ignoreLine = (frame: string) => frame.split("\n").find((line) => line.includes(`git${path.sep}ignore`));
       expect(ignoreLine(dialog)).toContain("adds **/.claude/settings.local.json  as Claude Code does");
       // Leaving an account out plans again: the line stays.
@@ -378,6 +392,7 @@ describe("ExtensionsScreen: writes", () => {
 
   it.skipIf(!hasGit)(
     "warns that deleting a skill git tracks changes the repo, and turns it off instead on o",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
     async () => {
       const { h, app } = seed();
       rmSync(path.join(app, ".git"), { recursive: true, force: true });
@@ -385,21 +400,21 @@ describe("ExtensionsScreen: writes", () => {
       git(app, ["add", path.join(".claude", "skills", "deploy-check", "SKILL.md")]);
       const instance = mount(h, app, 140, 40);
       await openRow(instance, "Project", "deploy-check");
-      await press(instance, "d");
-      const dialog = await seen(instance, (f) => f.includes("Git tracks deploy-check in app"));
+      await press(instance, "d", PLAN_STEP_MS);
+      const dialog = await seen(instance, (f) => f.includes("Git tracks deploy-check in app"), PLAN_STEP_MS);
       expect(dialog).toContain("Git tracks deploy-check in app, so deleting changes the repo.");
       expect(hintLine(dialog)).toContain("o off instead");
-      await press(instance, "o");
-      await seen(instance, (f) => f.includes("Turn off deploy-check in this project?"));
+      await press(instance, "o", PLAN_STEP_MS);
+      await seen(instance, (f) => f.includes("Turn off deploy-check in this project?"), PLAN_STEP_MS);
       await press(instance, "y");
       await seen(instance, (f) => f.includes("Turned off deploy-check in this project · u to undo"));
       expect(json(local(app)).skillOverrides).toEqual({ "deploy-check": "off" });
       expect(existsSync(path.join(app, ".claude", "skills", "deploy-check"))).toBe(true);
       // Off instead, once it is off: nothing to do, and the status says why.
-      await press(instance, "d");
-      await seen(instance, (f) => f.includes("Git tracks deploy-check in app"));
-      await press(instance, "o");
-      await seen(instance, (f) => f.includes("Nothing to do: already off in this project."));
+      await press(instance, "d", PLAN_STEP_MS);
+      await seen(instance, (f) => f.includes("Git tracks deploy-check in app"), PLAN_STEP_MS);
+      await press(instance, "o", PLAN_STEP_MS);
+      await seen(instance, (f) => f.includes("Nothing to do: already off in this project."), PLAN_STEP_MS);
     },
   );
 
@@ -421,14 +436,14 @@ describe("ExtensionsScreen: writes", () => {
     expect(lastPaneLine(pdf)).toBe("space off here · g off everywhere · v name only");
   });
 
-  it("sets a skill's visibility here with v in its details", async () => {
+  it("sets a skill's visibility here with v in its details", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);
     await openRow(instance, "Global", "eli5");
     await press(instance, ENTER);
     await seen(instance, (f) => f.includes("GLOBAL › eli5"));
-    await press(instance, "v");
-    await seen(instance, (f) => f.includes("Show eli5 as name only in this project?"));
+    await press(instance, "v", PLAN_STEP_MS);
+    await seen(instance, (f) => f.includes("Show eli5 as name only in this project?"), PLAN_STEP_MS);
     await press(instance, "y");
     const details = await seen(instance, (f) => f.includes("eli5 shows as name only in this project · u to undo"));
     expect(details).toContain(`Shows as  name only (this project's ${path.join(".claude", "settings.local.json")})`);
@@ -641,12 +656,14 @@ describe("ExtensionsScreen: writes", () => {
     expect(back).toContain("· 1 marked");
   });
 
-  it("says how many marked rows cannot change when none of them would", async () => {
+  it("says how many marked rows cannot change when none of them would", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);
     await openRow(instance, "Global", "old-one");
-    await press(instance, SPACE);
-    await seen(instance, (f) => f.includes("Turn off old-one in this project?"));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    await seen(instance, (f) => f.includes("Turn off old-one in this project?"), PLAN_STEP_MS);
     await press(instance, "y");
     await seen(instance, (f) => f.includes("Turned off old-one in this project · u to undo"));
     // old-one is off already, and lost's link leads nowhere.
@@ -656,6 +673,115 @@ describe("ExtensionsScreen: writes", () => {
     await seen(instance, (f) => f.includes("· 2 marked"));
     await press(instance, SPACE);
     await seen(instance, (f) => f.includes("1 can't: Its link leads nowhere. Press d to remove the link."));
+  });
+});
+
+describe("ExtensionsScreen: writes from the MCP matrix", () => {
+  /** The screen read, Claude's MCP tab, its matrix open: docs, docs-search, figma, github by default, work, Codex. */
+  async function openMatrix(instance: Instance): Promise<string> {
+    await seen(instance, (f) => f.includes("Read "));
+    await press(instance, "2");
+    await seen(instance, (f) => /▸ [^\n]*\(here\)/.test(f));
+    await press(instance, "m");
+    return seen(instance, (f) => f.includes("SERVER"));
+  }
+
+  /** The matrix's line for a server. */
+  const serverLine = (frame: string, name: string) =>
+    frame.split("\n").find((line) => new RegExp(`[✦ ] ${name} `).test(line)) ?? "";
+
+  it("turns one account's server off in this project from its cell, and back on u", async () => {
+    const { h, app } = seed();
+    const instance = mount(h, app, 140, 40);
+    const defaultBefore = readFileSync(h.path(".claude.json"), "utf8");
+    const work = () => json(h.path(".claude-work", ".claude.json")).projects[app].disabledMcpServers;
+    const matrix = await openMatrix(instance);
+    expect(hintLine(matrix)).toContain("space on/off");
+    expect(hintLine(matrix)).toContain("u undo");
+    // The cursor starts on the first cell; ↓ and → move it to work's figma.
+    expect(matrix).toContain("[default]");
+    await press(instance, DOWN);
+    await press(instance, DOWN);
+    await press(instance, RIGHT);
+    const onWork = await seen(instance, (f) => f.includes("[work]"));
+    expect(serverLine(onWork, "figma")).toMatch(/✦ figma +● +\[●\] +·/);
+    await press(instance, SPACE);
+    const dialog = await seen(instance, (f) => f.includes("Turn off figma in this project, for work?"));
+    // The picker has the cell's account, and only it, chosen.
+    expect(dialog).toContain("○ default");
+    expect(dialog).toContain("◉ work");
+    expect(dialog).toContain("disabledMcpServers + figma");
+    await press(instance, "y");
+    // The matrix again, from the files read again, the cursor on the same cell.
+    const off = await seen(instance, (f) => f.includes("Turned off figma in this project, for work · u to undo"));
+    expect(off).toContain("[work]");
+    expect(serverLine(off, "figma")).toMatch(/✦ figma +● +\[○\] +·/);
+    expect(work()).toEqual(["github", "figma"]);
+    expect(readFileSync(h.path(".claude.json"), "utf8")).toBe(defaultBefore);
+    await press(instance, "u");
+    await seen(instance, (f) => f.includes("Undo: Turned off figma in this project, for work?"));
+    await press(instance, "y");
+    const undone = await seen(instance, (f) => f.includes("Undid: Turned off figma in this project, for work"));
+    expect(serverLine(undone, "figma")).toMatch(/✦ figma +● +\[●\] +·/);
+    expect(work()).toEqual(["github"]);
+  });
+
+  it("says why a cell can't change, as a row's refusal does, and opens no dialog", async () => {
+    const { h, app } = seed();
+    const instance = mount(h, app, 140, 40);
+    await seen(instance, (f) => f.includes("Read "));
+    // From web, which work has not opened and Codex does not trust.
+    for (const key of ["p", DOWN, ENTER]) await press(instance, key);
+    await seen(instance, (f) => f.includes(`Extensions │ ${path.join("~", "repos", "web")}`));
+    await press(instance, "2");
+    await press(instance, "m");
+    await seen(instance, (f) => f.includes("SERVER"));
+    await press(instance, DOWN);
+    await press(instance, RIGHT);
+    await seen(instance, (f) => f.includes("[work]") && /✦ figma/.test(f));
+    await press(instance, SPACE);
+    const opened = await seen(instance, (f) => f.includes("No account that has it has opened this project."));
+    expect(opened).not.toContain("Turn off figma");
+    await press(instance, RIGHT);
+    await press(instance, UP);
+    await seen(instance, (f) => f.includes("[Codex]") && /✦ docs/.test(f));
+    await press(instance, SPACE);
+    await seen(instance, (f) =>
+      f.includes(
+        "Codex does not trust this project, so it ignores its .codex folder. Trust the project in Codex first.",
+      ),
+    );
+    // A cell with no server in it.
+    await press(instance, LEFT);
+    await press(instance, SPACE);
+    await seen(instance, (f) => f.includes("work has no docs here."));
+    expect(existsSync(local(h.path("repos", "web")))).toBe(false);
+  });
+
+  it("scrolls the accounts to keep the cursor's in sight", async () => {
+    const { h, app } = seed();
+    for (const n of [1, 2, 3, 4, 5, 6, 7]) h.claude(`a${n}`, `.claude-a${n}`, { projects: { [app]: {} } });
+    const instance = mount(h, app, 60, 24);
+    const matrix = await openMatrix(instance);
+    expect(matrix).toContain("→ ");
+    for (let step = 0; step < 9; step++) await press(instance, RIGHT);
+    const last = await seen(instance, (f) => f.includes("[Codex]"));
+    const header = last.split("\n").find((line) => line.includes("SERVER")) ?? "";
+    expect(header).toContain("←");
+    expect(header).not.toContain("default");
+    for (let step = 0; step < 9; step++) await press(instance, LEFT);
+    const first = await seen(instance, (f) => f.includes("[default]"));
+    expect(first.split("\n").find((line) => line.includes("SERVER"))).not.toContain("←");
+  });
+
+  it("offers no changes in the matrix without the writes", async () => {
+    const { h, app } = seed();
+    const instance = mount(h, app, 140, 40, { writes: false });
+    const matrix = await openMatrix(instance);
+    expect(hintLine(matrix)).not.toContain("space on/off");
+    expect(hintLine(matrix)).not.toContain("u undo");
+    await press(instance, SPACE);
+    await seen(instance, (f) => f.includes("Changes are not available here."));
   });
 });
 

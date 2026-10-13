@@ -1,7 +1,7 @@
 import { Box, Text } from "ink";
 
 import { color, symbol } from "../theme.js";
-import { COLUMN_GAP, column, type Matrix, type MatrixCell } from "./view-model.js";
+import { COLUMN_GAP, cell, column, type Matrix, type MatrixCell, matrixFit, matrixWidths } from "./view-model.js";
 
 const MARK: Record<MatrixCell, string> = { on: symbol.dot, off: symbol.circle, pending: "?", absent: "·" };
 /** Not here is muted, as the legend says it: the border's dim grey all but vanishes on the ground. */
@@ -11,13 +11,32 @@ export const MARK_COLOR: Record<MatrixCell, string> = {
   pending: color.warning,
   absent: color.muted,
 };
-/** Room kept at the header's end for ` ← → 99 more`, so a scrolled matrix says so in full. */
-const SCROLL_NOTE = 12;
 
-type Props = { matrix: Matrix; cursor: number; top: number; height: number; width: number; offset: number };
+type Props = {
+  matrix: Matrix;
+  cursor: number;
+  /** The account column the cursor is in, where it moves across cells. */
+  column?: number;
+  top: number;
+  height: number;
+  width: number;
+  offset: number;
+};
 
-/** Servers down, accounts across: which account starts which server in this project. */
-export function McpMatrix({ matrix, cursor, top, height, width, offset }: Props) {
+/**
+ * `text` in brackets where the cursor is, as the tool bar brackets the tool it is on, cut so the
+ * brackets keep the column's gap: the cursor stays plain to read without colour.
+ */
+function bracketed(text: string, width: number): string {
+  return column(`[${cell(text, Math.max(1, width - COLUMN_GAP - 2)).trimEnd()}]`, width);
+}
+
+/**
+ * Servers down, accounts across: which account starts which server in this project. The ✦ is
+ * on the cursor's server; with `column`, its account's label and the cell where they meet are
+ * in brackets.
+ */
+export function McpMatrix({ matrix, cursor, column: at, top, height, width, offset }: Props) {
   if (matrix.rows.length === 0) {
     return (
       <Text color={color.muted} wrap="truncate-end">
@@ -32,14 +51,8 @@ export function McpMatrix({ matrix, cursor, top, height, width, offset }: Props)
       </Text>
     );
   }
-  // Each column's width counts the gap after it, so a name or label that is cut keeps it.
-  const nameWidth = Math.min(24, Math.max(8, ...matrix.rows.map((r) => r.name.length), 6)) + COLUMN_GAP;
-  const colWidth = Math.max(6, Math.min(12, Math.max(0, ...matrix.columns.map((c) => c.label.length)) + COLUMN_GAP));
-  const across = width - 2 - nameWidth;
-  const all = Math.floor(across / colWidth);
-  const fit =
-    offset === 0 && all >= matrix.columns.length ? all : Math.max(1, Math.floor((across - SCROLL_NOTE) / colWidth));
-  const columns = matrix.columns.slice(offset, offset + fit);
+  const { nameWidth, colWidth } = matrixWidths(matrix, width);
+  const columns = matrix.columns.slice(offset, offset + matrixFit(matrix, width, offset));
   const hidden = matrix.columns.length - offset - columns.length;
   const room = Math.max(1, height - 3);
   const rows = matrix.rows.slice(top, top + room);
@@ -48,7 +61,7 @@ export function McpMatrix({ matrix, cursor, top, height, width, offset }: Props)
       <Text color={color.muted} wrap="truncate-end">
         {"  "}
         {column("SERVER", nameWidth)}
-        {columns.map((c) => column(c.label, colWidth)).join("")}
+        {columns.map((c, i) => (offset + i === at ? bracketed(c.label, colWidth) : column(c.label, colWidth))).join("")}
         {offset > 0 ? " ←" : ""}
         {hidden > 0 ? ` → ${hidden} more` : ""}
       </Text>
@@ -62,9 +75,10 @@ export function McpMatrix({ matrix, cursor, top, height, width, offset }: Props)
             </Text>
             {columns.map((account, c) => {
               const value = row.cells[offset + c] ?? "absent";
+              const here = active && offset + c === at;
               return (
-                <Text key={`${row.name}|${account.key}`} color={MARK_COLOR[value]}>
-                  {column(MARK[value], colWidth)}
+                <Text key={`${row.name}|${account.key}`} color={MARK_COLOR[value]} bold={here}>
+                  {here ? bracketed(MARK[value], colWidth) : column(MARK[value], colWidth)}
                 </Text>
               );
             })}

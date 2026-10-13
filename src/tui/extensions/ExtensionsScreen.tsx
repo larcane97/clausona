@@ -1,25 +1,16 @@
 import { Spinner } from "@inkjs/ui";
-import { Box, type Key, Text, useInput } from "ink";
+import { Box, Text, useInput } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { type Action, COMMAND_OF, type Reach, refusalText, toggleVerb } from "../../extensions/actions.js";
+import { COMMAND_OF } from "../../extensions/actions.js";
 import { type DetailLine, detailsOf, NOUN } from "../../extensions/describe.js";
 import type { ScreenWrites } from "../../extensions/load.js";
 import type { Inventory } from "../../extensions/model.js";
-import { actionsLine, type IgnoreFacts, type KeyName, keysFor, plan as planOf } from "../../extensions/plan.js";
-import { isWithin } from "../../extensions/read.js";
-import { type ScopeId, type ScopeRow, scopesFor } from "../../extensions/scopes.js";
+import { actionsLine, keysFor } from "../../extensions/plan.js";
+import { type ScopeId, scopesFor } from "../../extensions/scopes.js";
 import { Chrome } from "../components/Chrome.js";
 import { color } from "../theme.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
-import {
-  appliedStatus,
-  type Dialog,
-  dialogView,
-  NOTHING_TO_UNDO,
-  scrollDialog,
-  undoneStatus,
-} from "./confirm-model.js";
 import { DetailsView } from "./DetailsView.js";
 import { ItemTable } from "./ItemTable.js";
 import { McpMatrix } from "./McpMatrix.js";
@@ -55,7 +46,8 @@ import {
 } from "./screen-model.js";
 import { ToolKindBar } from "./ToolKindBar.js";
 import { useTerminalSize } from "./use-terminal-size.js";
-import { buildMatrix, tilde, took } from "./view-model.js";
+import { useWrites } from "./use-writes.js";
+import { buildMatrix, cellTarget, matrixLeft, tilde, took } from "./view-model.js";
 
 type View = "main" | "matrix" | "warnings";
 /**
@@ -71,21 +63,11 @@ type Props = {
   writes?: ScreenWrites;
 };
 type Hint = { keys: string; action: string };
-type PlanDialog = Extract<Dialog, { type: "plan" }>;
 
 const OTHER_TOOL: Record<Tool, Tool> = { claude: "codex", codex: "claude" };
 const TOOL_LABEL: Record<Tool, string> = { claude: "Claude", codex: "Codex" };
 /** The project row where csn was started outside every project, until one is picked. */
 const NO_PROJECT_ROW: ProjectEntry = { key: "none", name: NO_PROJECT, here: false, current: true, count: 0 };
-/** The action keys, by what they type. */
-const ACTION_KEYS: Record<string, KeyName> = { " ": "space", g: "g", d: "d", v: "v" };
-const REACH: Record<Exclude<KeyName, "d" | "v">, Reach> = { space: "here", g: "everywhere" };
-
-const NOT_AVAILABLE = "Changes are not available here.";
-const TABLE_FIRST = "Open the table first: →";
-const VISIBILITY_WHERE = "v changes a Claude skill's visibility, in its details.";
-const NOTHING_CHANGED = "Nothing changed.";
-const PICK_ONE = "Pick at least one account.";
 
 /** Hints in the order given, the first the most needed. */
 function inOrder(hints: Hint[]): (Hint & { rank: number })[] {
@@ -147,27 +129,24 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
   const [listCursor, setListCursor] = useState(0);
   /** What is typed while the project list is open, which narrows it. */
   const [listQuery, setListQuery] = useState("");
+  /** The matrix's cursor: its server, down, and its account, across. */
   const [matrixCursor, setMatrixCursor] = useState(0);
-  const [matrixOffset, setMatrixOffset] = useState(0);
+  const [matrixColumn, setMatrixColumn] = useState(0);
   /** The details' first row. */
   const [detailTop, setDetailTop] = useState(0);
   /** One line about the last thing done, shown until the next key. */
   const [status, setStatus] = useState("");
-  /** The keys of the rows marked with x, which the next action changes. */
-  const [marked, setMarked] = useState<ReadonlySet<string>>(new Set());
-  /** The confirm dialog, in the panes' place while it is open. */
-  const [dialog, setDialog] = useState<Dialog | null>(null);
   /**
    * Whether the status was set by a reload after a change: kept over "That item is gone." for
    * the row the change took, until the next key.
    */
   const keepStatus = useRef(false);
-  /** A plan or the newest change being read: keys wait for it. */
-  const pending = useRef(false);
   const scopeTop = useRef(0);
   const listTop = useRef(0);
   const rowTop = useRef(0);
   const matrixTop = useRef(0);
+  /** The matrix's first account column shown, which scrolls to keep the cursor's in sight. */
+  const matrixOffset = useRef(0);
   /** The selected row's key as last drawn, kept by a reload for the cursor to follow. */
   const selectedKey = useRef<string | undefined>(undefined);
   const { columns, rows: terminalRows } = useTerminalSize();
@@ -273,7 +252,6 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
     [inventory, previewFrom, tool, kind, loadedAt, layout.tableWidth],
   );
   const rows = table?.rows ?? [];
-  const markedRows = rows.filter((row) => marked.has(row.key)).map((row) => row.row);
   const found = rowKey === undefined ? -1 : rows.findIndex((row) => row.key === rowKey);
   const at = found >= 0 ? found : Math.min(rowCursor, Math.max(0, rows.length - 1));
   const selected = rows[at];
@@ -290,6 +268,24 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
   }
   // Details only for a row there is: an empty table keeps the focus on itself.
   const shown = focus === "details" && !selected ? "table" : focus;
+  const innerWidth = Math.max(1, columns - CHROME_COLUMNS);
+  // The changes: the action keys, the confirm dialog, undo.
+  const changes = useWrites({
+    writes,
+    inventory,
+    kind,
+    project,
+    loadedAt,
+    rows,
+    selected,
+    focus: shown,
+    reload,
+    setStatus,
+    width: innerWidth,
+    height: layout.height,
+  });
+  const { marked, markedRows } = changes;
+
   const stashDir = writes?.stashDir;
   const details = useMemo(() => {
     if (!inventory || shown !== "details" || !selected) return null;
@@ -314,6 +310,15 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
   const rowRoom = listRoom(Math.max(0, layout.height - PANE_HEAD_ROWS), bodyLines.length);
   const projectRoom = listRoom(Math.max(0, layout.height - LIST_HEAD_ROWS), listed.length);
   const matrix = useMemo(() => (inventory && project ? buildMatrix(inventory, project) : null), [inventory, project]);
+  // The matrix's cursor, kept inside it however many servers and accounts the files read again have.
+  const matrixAt = Math.min(matrixCursor, Math.max(0, (matrix?.rows.length ?? 0) - 1));
+  const matrixAcross = Math.min(matrixColumn, Math.max(0, (matrix?.columns.length ?? 0) - 1));
+  /** What space changes in the matrix: the cell under the cursor, where there is one. */
+  const matrixCell = () => {
+    const server = matrix?.rows[matrixAt];
+    const account = matrix?.columns[matrixAcross];
+    return inventory && project && server && account ? cellTarget(inventory, project, server.name, account) : undefined;
+  };
 
   /** Another table: the row cursor goes back to the top and a search, which was for the last one, ends. */
   const freshTable = () => {
@@ -321,7 +326,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
     setQuery("");
     setTyping(false);
     setDetailTop(0);
-    setMarked(new Set());
+    changes.clearMarks();
   };
   const toScope = (id: ScopeId) => {
     setScope(id);
@@ -361,237 +366,9 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
     setListCursor(0);
   };
 
-  // ─── Changes: the action keys, the confirm dialog, undo ───
-
-  const command = COMMAND_OF[kind];
-  const innerWidth = Math.max(1, columns - CHROME_COLUMNS);
-  const dialogOpts = writes
-    ? {
-        width: innerWidth,
-        height: layout.height,
-        homeDir: writes.homeDir,
-        backupRoot: writes.backupRoot,
-        stashDir: writes.stashDir,
-      }
-    : undefined;
-  const failed = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
-  /**
-   * The plan's context as the screen sees it: the project picked, the files as last read, and
-   * what planChecked found of git, so a plan made again keeps what it showed.
-   */
-  const contextFor = (inv: Inventory, w: ScreenWrites, tracked: ReadonlySet<string>, ignore?: IgnoreFacts) => ({
-    inv,
-    project,
-    now: loadedAt,
-    tracked,
-    stashDir: w.stashDir,
-    ...(ignore !== undefined ? { ignore } : {}),
-  });
-
-  /**
-   * The plan for `action`, checked against what git tracks, then: a delete of what git tracks
-   * asks with off on offer (rule A); nothing it can change says why on the status line; else the
-   * dialog asks.
-   */
-  const openPlan = async (action: Action) => {
-    if (!writes || !inventory) return;
-    pending.current = true;
-    try {
-      const checked = await writes.planChecked({ inv: inventory, project, now: loadedAt }, command, action);
-      const { plan, tracked, ignore } = checked;
-      const fresh = {
-        type: "plan",
-        action,
-        command,
-        tracked,
-        ...(ignore !== undefined ? { ignore } : {}),
-        plan,
-        full: plan,
-        cursor: 0,
-        top: 0,
-        busy: false,
-      } as const;
-      const refused = plan.refused;
-      if (action.verb === "rm" && refused.length > 0 && refused.every((r) => r.code === "tracked")) {
-        setDialog({ ...fresh, offerOff: true });
-        return;
-      }
-      if (plan.changes.length > 0) {
-        setDialog({ ...fresh, offerOff: false });
-        return;
-      }
-      setDialog(null);
-      const [first] = refused;
-      const why = plan.unchanged[0]?.why;
-      if (!first) setStatus(why === undefined ? "Nothing to do." : `Nothing to do: ${why}.`);
-      else if (action.rows.length === 1) setStatus(refusalText(first, "keys"));
-      else setStatus(`${new Set(refused.map((r) => r.rowKey)).size} can't: ${refusalText(first, "keys")}`);
-    } catch (e) {
-      setDialog(null);
-      setStatus(`Could not plan the change: ${failed(e)}`);
-    } finally {
-      pending.current = false;
-    }
-  };
-
-  /**
-   * space, g, d or v on `targets`. One row's refusal for the key says itself, as its details'
-   * actions line leaves the key out; marked rows go to the plan, which lists theirs.
-   */
-  const startAction = (keyName: KeyName, targets: ScopeRow[]) => {
-    const [only] = targets;
-    if (!writes || !inventory || !only) return;
-    let action: Action;
-    if (targets.length === 1) {
-      const choice = keysFor(contextFor(inventory, writes, new Set()), command, only).find((c) => c.key === keyName);
-      if (!choice) return;
-      if ("refused" in choice) {
-        setStatus(choice.refused);
-        return;
-      }
-      action = choice.action;
-    } else if (keyName === "space" || keyName === "g") {
-      const reach = REACH[keyName];
-      const allOff = targets.every((row) => toggleVerb(inventory, row, project, reach) === "on");
-      action = { verb: allOff ? "on" : "off", reach, rows: targets };
-    } else action = { verb: "rm", reach: "here", rows: targets };
-    // The dialog is the consent to change what git tracks, but for a delete (rule A).
-    void openPlan(action.verb === "rm" ? action : { ...action, tracked: true });
-  };
-
-  /** The newest change not undone yet, of any kind (rule F), in a dialog; clausona's own kept copies left out. */
-  const startUndo = async () => {
-    if (!writes) return;
-    pending.current = true;
-    try {
-      const preview = await writes.lastOperation();
-      if (!preview) setStatus(NOTHING_TO_UNDO);
-      else {
-        const files = preview.files.filter((file) => !isWithin(file.path, writes.stashDir));
-        setDialog({ type: "undo", preview: { ...preview, files }, top: 0, busy: false });
-      }
-    } catch (e) {
-      setStatus(`Could not read the last change: ${failed(e)}`);
-    } finally {
-      pending.current = false;
-    }
-  };
-
-  /** The dialog answered: closed, the marks gone, the files read again under the status it left. */
-  const finish = (after: string) => {
-    setDialog(null);
-    setMarked(new Set());
-    reload(after);
-  };
-
-  /**
-   * y: the plan applied - deleted anyway, with off on offer - or the change undone. Keys wait
-   * meanwhile, so a second y, however the terminal delivers it, never applies or undoes twice.
-   */
-  const confirm = async (open: Dialog) => {
-    if (!writes || !inventory) return;
-    if (open.type === "plan") {
-      const accounts = open.plan.accounts ?? [];
-      if (accounts.length > 1 && !accounts.some((a) => a.chosen)) {
-        setStatus(PICK_ONE);
-        return;
-      }
-    }
-    pending.current = true;
-    setDialog({ ...open, busy: true });
-    let after: string;
-    try {
-      if (open.type === "undo") after = undoneStatus(await writes.undo(), writes.stashDir);
-      else {
-        const chosen = open.offerOff
-          ? planOf(contextFor(inventory, writes, open.tracked, open.ignore), open.command, {
-              ...open.action,
-              tracked: true,
-            })
-          : open.plan;
-        after = appliedStatus(await writes.apply(chosen), chosen, writes.homeDir, writes.stashDir);
-      }
-    } catch (e) {
-      after = `${open.type === "undo" ? "Could not undo it" : "Could not apply it"}: ${failed(e)}`;
-    } finally {
-      pending.current = false;
-    }
-    finish(after);
-  };
-
-  /**
-   * The dialog's keys: y, n or esc, a page of lines, o for off instead, and the account picker's.
-   * A letter or space with ctrl or meta is none of them.
-   */
-  const dialogKeys = (open: Dialog, input: string, key: Key) => {
-    if (open.busy || !writes || !inventory || !dialogOpts) return;
-    const typed = key.ctrl || key.meta ? "" : input;
-    if (key.escape || typed === "n") {
-      setDialog(null);
-      setStatus(NOTHING_CHANGED);
-    } else if (typed === "y") void confirm(open);
-    else if (key.pageUp || key.pageDown) setDialog(scrollDialog(open, key.pageDown ? 1 : -1, dialogOpts));
-    else if (open.type === "plan") pickerKeys(open, typed, key, writes, inventory);
-  };
-
-  const pickerKeys = (open: PlanDialog, input: string, key: Key, w: ScreenWrites, inv: Inventory) => {
-    if (input === "o" && open.offerOff) {
-      setDialog({ ...open, busy: true });
-      void openPlan({ verb: "off", reach: "here", rows: open.action.rows, tracked: true });
-      return;
-    }
-    const accounts = open.plan.accounts ?? [];
-    if (accounts.length <= 1) return;
-    if (key.upArrow) setDialog({ ...open, cursor: Math.max(0, open.cursor - 1) });
-    else if (key.downArrow) setDialog({ ...open, cursor: Math.min(accounts.length - 1, open.cursor + 1) });
-    else if (input === " ") {
-      // The cursor's account in or out; the plan again, pure, with what git tracks as read.
-      const chosen = accounts.flatMap((a, at) => ((at === open.cursor) !== a.chosen ? [a.profile] : []));
-      const action = { ...open.action, accounts: chosen };
-      const again = planOf(contextFor(inv, w, open.tracked, open.ignore), open.command, action);
-      setDialog({ ...open, action, plan: again });
-    }
-  };
-
-  const toggleMark = (rowKeyToMark: string) =>
-    setMarked((was) => {
-      const next = new Set(was);
-      if (!next.delete(rowKeyToMark)) next.add(rowKeyToMark);
-      return next;
-    });
-
-  /** space g d v u x outside the dialog. */
-  const actionKey = (input: string) => {
-    const left = shown === "scopes";
-    if (!writes) {
-      setStatus(NOT_AVAILABLE);
-      return;
-    }
-    if (input === "x") {
-      if (left) setStatus(TABLE_FIRST);
-      else if (shown === "table" && selected) toggleMark(selected.key);
-      return;
-    }
-    if (input === "u") {
-      void startUndo();
-      return;
-    }
-    const keyName = ACTION_KEYS[input] as KeyName;
-    const item = selected?.row.items[0];
-    if (keyName === "v") {
-      const claudeSkill = item?.kind === "skill" && item.location.tool === "claude";
-      if (shown === "details" && selected && claudeSkill) startAction("v", [selected.row]);
-      else setStatus(VISIBILITY_WHERE);
-      return;
-    }
-    if (left) setStatus(TABLE_FIRST);
-    else if (selected) startAction(keyName, shown === "table" && markedRows.length > 0 ? markedRows : [selected.row]);
-  };
-
   useInput((input, key) => {
     // A plan or the newest change is being read: what it says comes before the next key.
-    if (pending.current) return;
+    if (changes.waiting()) return;
     // A status line answers the key before this one; any key moves on from it.
     setStatus("");
     if (!inventory) {
@@ -601,10 +378,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
     }
     // Once the files are read again, that is: a change's status stays over the read it starts.
     keepStatus.current = false;
-    if (dialog) {
-      dialogKeys(dialog, input, key);
-      return;
-    }
+    if (changes.dialogKey(input, key)) return;
     if (typing) {
       if (key.escape) {
         // A search given up: nothing of it stays, and the keys go back to where it began.
@@ -645,12 +419,15 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
       return;
     }
     if (view === "matrix") {
+      // ↑↓ move from server to server, ←→ from account to account; space and u change things.
       const count = matrix?.rows.length ?? 0;
+      const across = matrix?.columns.length ?? 0;
       if (key.escape || input === "m") setView("main");
-      else if (key.upArrow) setMatrixCursor((c) => Math.max(0, c - 1));
+      else if (key.upArrow) setMatrixCursor((c) => Math.max(0, Math.min(c, count - 1) - 1));
       else if (key.downArrow) setMatrixCursor((c) => Math.min(Math.max(0, count - 1), c + 1));
-      else if (key.leftArrow) setMatrixOffset((o) => Math.max(0, o - 1));
-      else if (key.rightArrow) setMatrixOffset((o) => Math.min(Math.max(0, (matrix?.columns.length ?? 1) - 1), o + 1));
+      else if (key.leftArrow) setMatrixColumn((c) => Math.max(0, Math.min(c, across - 1) - 1));
+      else if (key.rightArrow) setMatrixColumn((c) => Math.min(Math.max(0, across - 1), c + 1));
+      else changes.matrixKey(input, key, matrixCell());
       return;
     }
     if (view === "warnings") {
@@ -686,18 +463,17 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
     }
     if (input === "m") {
       if (tool !== "claude" || kind !== "mcp") setStatus("The matrix is on Claude's MCP tab.");
-      else if (!project) setStatus("Pick a project first: p");
+      else if (!project)
+        setStatus(inventory.projects.length === 0 ? "Run csn in a project first." : "Pick a project first: p");
       else {
         setMatrixCursor(0);
-        setMatrixOffset(0);
+        setMatrixColumn(0);
+        matrixOffset.current = 0;
         setView("matrix");
       }
       return;
     }
-    if (!key.ctrl && !key.meta && (Object.hasOwn(ACTION_KEYS, input) || input === "u" || input === "x")) {
-      actionKey(input);
-      return;
-    }
+    if (changes.actionKey(input, key)) return;
 
     if (shown === "details") {
       if (key.escape || key.leftArrow) setFocus("table");
@@ -716,7 +492,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
     if (shown === "table") {
       // esc clears the marks first while it shows any, then a search, then goes back to the
       // scopes: marks only a search hides do not take the esc that ends it.
-      if (key.escape && markedRows.length > 0) setMarked(new Set());
+      if (key.escape && markedRows.length > 0) changes.clearMarks();
       else if (key.escape && query !== "") {
         setQuery("");
         pointAt(0);
@@ -770,7 +546,12 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
     );
   }
 
-  const subtitle = project ? tilde(project, inventory.homeDir) : "No project — pick one with p";
+  // With no project recorded, p has none to pick.
+  const subtitle = project
+    ? tilde(project, inventory.homeDir)
+    : inventory.projects.length === 0
+      ? NO_PROJECT
+      : `${NO_PROJECT} — pick one with p`;
   const lines = scopeLines(scopes);
   const scopeLine = Math.max(
     0,
@@ -785,7 +566,8 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
   listTop.current = scrolled(listTop.current, listAt, projectRoom, listed.length);
   rowTop.current = tableTop(rowTop.current, at, bodyLines, rowRoom);
   const matrixRoom = Math.max(1, layout.height - 3);
-  matrixTop.current = scrolled(matrixTop.current, matrixCursor, matrixRoom, matrix?.rows.length ?? 0);
+  matrixTop.current = scrolled(matrixTop.current, matrixAt, matrixRoom, matrix?.rows.length ?? 0);
+  if (matrix) matrixOffset.current = matrixLeft(matrixOffset.current, matrixAcross, matrix, innerWidth);
   // The warnings below their heading; when they do not all fit, the last line says how many more.
   const warningRoom = Math.max(1, layout.height - 1);
   const warnings =
@@ -797,7 +579,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
   // right after esc in every focus.
   const unreadable =
     inventory.warnings.length > 0 ? [{ keys: "w", action: `${inventory.warnings.length} unreadable` }] : [];
-  const shownDialog = dialog && dialogOpts ? dialogView(dialog, dialogOpts) : null;
+  const shownDialog = changes.dialog;
   // The action keys, where there is something to write with; those on a row, where there is one.
   const canWrite = writes !== undefined;
   const onRows = canWrite && rows.length > 0;
@@ -820,8 +602,13 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
         ]
       : view === "matrix"
         ? inOrder([
-            { keys: "↑↓", action: "move" },
-            { keys: "←→", action: "scroll" },
+            { keys: "↑↓←→", action: "move" },
+            ...(canWrite
+              ? [
+                  { keys: "space", action: "on/off" },
+                  { keys: "u", action: "undo" },
+                ]
+              : []),
             { keys: "m", action: "list" },
             { keys: "esc", action: "back" },
           ])
@@ -969,14 +756,20 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
       <Box marginBottom={1}>
         <ToolKindBar tool={tool} kind={kind} query={query} typing={typing} width={innerWidth} />
       </Box>
-      {view === "matrix" && matrix ? (
+      {shownDialog ? (
+        // In the panes' place, or the matrix's, where space opened it there.
+        <Box flexDirection="column" height={layout.height} overflow="hidden">
+          <ConfirmDialog lines={shownDialog.lines} width={innerWidth} />
+        </Box>
+      ) : view === "matrix" && matrix ? (
         <McpMatrix
           matrix={matrix}
-          cursor={matrixCursor}
+          cursor={matrixAt}
+          column={matrixAcross}
           top={matrixTop.current}
           height={layout.height}
           width={innerWidth}
-          offset={matrixOffset}
+          offset={matrixOffset.current}
         />
       ) : view === "warnings" ? (
         <Box flexDirection="column">
@@ -994,10 +787,6 @@ export function ExtensionsScreen({ load, onExit, now = Date.now, writes }: Props
               +{inventory.warnings.length - warnings.length} more
             </Text>
           ) : null}
-        </Box>
-      ) : shownDialog ? (
-        <Box flexDirection="column" height={layout.height} overflow="hidden">
-          <ConfirmDialog lines={shownDialog.lines} width={innerWidth} />
         </Box>
       ) : (
         <Box flexDirection="row" height={layout.height} overflow="hidden">

@@ -2,6 +2,7 @@ import { type ReactElement, useEffect, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { loadInventory } from "../../extensions/inventory.js";
+import { writesFor } from "../../extensions/load.js";
 import type { Inventory } from "../../extensions/model.js";
 import { TestHome } from "../../extensions/test-home.js";
 import { stripAnsi } from "../../lib/cli-style.js";
@@ -930,12 +931,29 @@ describe("ExtensionsScreen", () => {
 
   it("says so on p where no project is recorded, rather than open an empty list", async () => {
     const { currentProject: _, ...outside } = await seed();
-    const { instance } = screen({ ...outside, projects: [] }, 140, 40);
-    await seen(instance, (f) => f.includes("No project — pick one with p"));
+    const none = { ...outside, projects: [] };
+    // With the writes, for what a change that needs a project says.
+    const tree = <ExtensionsScreen load={async () => none} onExit={vi.fn()} writes={writesFor(none.homeDir)} />;
+    const instance = mount(tree, 140, 40);
+    const title = await seen(instance, (f) => f.includes("Read "));
+    expect(title).toContain("Extensions │ No project\n");
     await press(instance, "p");
     const frame = await seen(instance, (f) => f.includes("No projects to pick"));
     expect(frame).toContain("No projects to pick: Claude Code and Codex have recorded none.");
     expect(listOpen(frame)).toBe(false);
+    // With none to pick, nothing says to pick one with p: the Project table, a change, the matrix.
+    await scopeTo(instance, "Project");
+    const project = await seen(instance, (f) => f.includes("PROJECT — "));
+    expect(project.split("\n").find((line) => line.includes("PROJECT — "))).toMatch(/PROJECT — no project +0$/);
+    await scopeTo(instance, "Global");
+    await press(instance, RIGHT);
+    await moveTo(instance, "eli5");
+    await press(instance, " ");
+    await seen(instance, (f) => f.includes("There is no project to change it in. Run csn in a project."));
+    await press(instance, "2");
+    await press(instance, "m");
+    await seen(instance, (f) => f.includes("Run csn in a project first."));
+    for (const shown of instance.frames) expect(stripAnsi(shown)).not.toMatch(/pick one with p|first: p/i);
   });
 
   it("says a sentence for a scope with nothing in it, never a blank pane (Review Focus 1)", async () => {
