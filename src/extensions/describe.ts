@@ -37,7 +37,7 @@ import { codexTrusted, isMcpjsonServer, MANAGED_MCP_KEY, relevantIn, STASH_KEY }
 
 /**
  * One of the verbatim tags: off, off here, off in N of M accounts, not here, unused, broken
- * link, pending approval, hidden by … copy, no front matter, name too long.
+ * link, pending approval, hidden by … copy, no front matter, name too long, invalid hooks file.
  */
 export type Tag = string;
 
@@ -95,6 +95,13 @@ export function hookWhen(item: Extension): string {
   const words = EVENTS.get(event)?.(TOOL_WORD[item.location.tool]) ?? event;
   return matcher === undefined ? words : `${words} (${matcher})`;
 }
+
+/** Why Codex does not load something, by its `codexError`, for its details. */
+const CODEX_SKIPS: Record<NonNullable<Extension["codexError"]>, string> = {
+  "no front matter": "Codex skips its SKILL.md: it has no front matter",
+  "name too long": "Codex skips its SKILL.md: its name is over 64 characters",
+  "invalid hooks file": "Codex skips its hooks file: it holds more than hooks and a description at its top",
+};
 
 /** A plugin's name without its marketplace: `superpowers@official` is `superpowers`. */
 function pluginName(item: Extension): string {
@@ -288,9 +295,10 @@ function scopeLabel(item: Extension, project: string | undefined): string {
 /**
  * Every tag that applies, most important first: broken link > off > off here > off in N of M
  * accounts > not here > pending approval > hidden by … > unused > no front matter > name too
- * long. A row that is not here has no state here, so no tag of one. `no front matter` is a quiet
- * note for a Claude skill, which Claude Code loads all the same; for a Codex skill, which Codex
- * skips, it and `name too long` are why it is not in Loaded, which its details say.
+ * long > invalid hooks file. A row that is not here has no state here, so no tag of one. `no
+ * front matter` is a quiet note for a Claude skill, which Claude Code loads all the same; for a
+ * Codex skill, which Codex skips, it and `name too long` are why it is not in Loaded, and
+ * `invalid hooks file` is why a Codex hook does not run, which its details say.
  */
 export function tagsOf(inv: Inventory, row: ScopeRow, project: string | undefined, now: number): Tag[] {
   const item = firstOf(row);
@@ -518,10 +526,7 @@ function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined)
   const item = firstOf(row);
   // A link to nothing has no SKILL.md to read, whatever the settings say.
   if (item.link?.broken) return [{ label: "Loaded", text: "no, its link leads nowhere", tone: "error" }];
-  if (item.codexError) {
-    const why = item.codexError === "no front matter" ? "it has no front matter" : "its name is over 64 characters";
-    return [{ label: "Loaded", text: `no, Codex skips its SKILL.md: ${why}`, tone: "error" }];
-  }
+  if (item.codexError) return [{ label: "Loaded", text: `no, ${CODEX_SKIPS[item.codexError]}`, tone: "error" }];
   const perAccount = statesByAccount(inv, row, project);
   const parts = perAccount?.map((a) => ({ name: shortProfile(a.profile), ...stateParts(inv, item, project, a.state) }));
   const groups = new Map<string, { word: string; because?: string; names: string[] }>();
@@ -792,7 +797,7 @@ function hookLines(inv: Inventory, row: ScopeRow, project: string | undefined): 
   if (runs) lines.push({ label: "Runs", text: tildeIn(runs, inv.homeDir) });
   lines.push({ label: "File", text: tilde(item.location.file, inv.homeDir) });
   // A plugin's hook is off with its plugin: say where, as for any item that is off.
-  if (stateHere(inv, item, project).value !== "on") lines.push(...loadedLines(inv, row, project));
+  if (stateHere(inv, item, project).value !== "on" || item.codexError) lines.push(...loadedLines(inv, row, project));
   return lines;
 }
 

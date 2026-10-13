@@ -59,7 +59,8 @@ export function addHooks(
 
 /**
  * A Codex hooks.json's hooks, whose events sit under a "hooks" key, or at the root of a file
- * written without one. A Claude plugin's hooks file goes through `addPluginHooksFile`.
+ * written without one, which Codex refuses and `markRefusedHooksFile` tags. A Claude plugin's
+ * hooks file goes through `addPluginHooksFile`.
  */
 export function addHooksFile(
   json: Record<string, unknown>,

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { StateFacts } from "../model.js";
+import type { Collector, StateFacts } from "../model.js";
 import { isRecord } from "../read.js";
 
 /**
@@ -101,6 +101,25 @@ export function addCodexHookTrust(
         });
       });
     });
+  }
+}
+
+/**
+ * Whether Codex reads `json` as a hooks file: `hooks` and an optional `description`, and nothing
+ * else at its top. Codex refuses any other file whole - one with its events at the top, as a
+ * Claude plugin's may be written, or with a key such as `$schema` - and runs none of its hooks.
+ */
+export function codexReadsHooksFile(json: Record<string, unknown>): boolean {
+  const known = Object.keys(json).every((key) => key === "hooks" || key === "description");
+  return known && (json.hooks === undefined || isRecord(json.hooks));
+}
+
+/** Marks the Codex hooks `out` read from `file` as in a file Codex refuses: they do not load. */
+export function markRefusedHooksFile(out: Collector, file: string): void {
+  for (const item of out.items) {
+    if (item.kind === "hook" && item.location.tool === "codex" && item.location.file === file) {
+      item.codexError = "invalid hooks file";
+    }
   }
 }
 

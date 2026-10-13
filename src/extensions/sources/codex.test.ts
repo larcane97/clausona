@@ -385,6 +385,42 @@ describe("readCodex", () => {
     ]);
   });
 
+  it("marks the hooks of a hooks file Codex cannot read: anything but hooks and a description at its top", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.codex("personal", ".codex");
+    const stop = (command: string) => ({ Stop: [{ hooks: [{ type: "command", command }] }] });
+    h.write(".codex/hooks.json", { $schema: "https://example.com/hooks.json", hooks: stop("with-schema") });
+    // Events at the top, as a Claude plugin's hooks.json may have them.
+    h.write("repos/app/.codex/hooks.json", stop("at-root"));
+    const kit = ".codex/plugins/cache/m/kit/1.0.0";
+    h.write(`${kit}/.codex-plugin/plugin.json`, { name: "kit" });
+    h.write(`${kit}/hooks/hooks.json`, stop("plugin-root"));
+    const good = ".codex/plugins/cache/m/good/1.0.0";
+    h.write(`${good}/.codex-plugin/plugin.json`, { name: "good" });
+    h.write(`${good}/hooks/hooks.json`, { description: "fine", hooks: stop("fine") });
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(ctx, [{ path: app, tools: ["codex"], profiles: [] }], out);
+    const hook = (command: string) => out.items.find((i) => i.kind === "hook" && i.summary?.command === command);
+    expect(["with-schema", "at-root", "plugin-root", "fine"].map((c) => hook(c)?.codexError)).toEqual([
+      "invalid hooks file",
+      "invalid hooks file",
+      "invalid hooks file",
+      undefined,
+    ]);
+    // No trust to read for a hook Codex never gets to.
+    const trusted = new Set(out.facts.codexHookTrust.map((t) => t.id));
+    expect(["with-schema", "at-root", "plugin-root", "fine"].map((c) => trusted.has(hook(c)?.id ?? ""))).toEqual([
+      false,
+      false,
+      false,
+      true,
+    ]);
+  });
+
   it("warns for a config.toml that does not parse and reads the rest", async () => {
     const h = new TestHome();
     homes.push(h);

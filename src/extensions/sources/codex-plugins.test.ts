@@ -137,19 +137,30 @@ describe("readCodex: plugins", () => {
     h.write(`${CACHE}/m/paths/1.0.0/hooks/hooks.json`, {
       hooks: { Stop: [{ hooks: [{ type: "command", command: "unread" }] }] },
     });
-    // Inline servers and hooks, a .mcp.json written without the mcpServers key, an array of hooks.
+    // Inline servers and hooks, a .mcp.json written without the mcpServers key, lists of hooks.
     const inline = plugin(h, "m/inline/1.0.0", {
       name: "inline",
       mcpServers: { inl: { url: "https://inline.example/mcp" } },
       hooks: [
-        "./h/one.json",
         { hooks: { SessionStart: [{ hooks: [{ type: "command", command: "inline-start" }] }] } },
         // Events at the top of an inline object are not what Codex reads.
         { PreToolUse: [{ hooks: [{ type: "command", command: "unread" }] }] },
       ],
     });
-    h.write(`${CACHE}/m/inline/1.0.0/h/one.json`, {
+    plugin(h, "m/listed/1.0.0", { name: "listed", hooks: ["./h/one.json"] });
+    h.write(`${CACHE}/m/listed/1.0.0/h/one.json`, {
       hooks: { Stop: [{ hooks: [{ type: "command", command: "one" }] }] },
+    });
+    // A list of paths and inline hooks together: Codex ignores it, and reads no hooks of the plugin.
+    const mixed = plugin(h, "m/mixed/1.0.0", {
+      name: "mixed",
+      hooks: ["./h/one.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "unread" }] }] } }],
+    });
+    h.write(`${CACHE}/m/mixed/1.0.0/h/one.json`, {
+      hooks: { Stop: [{ hooks: [{ type: "command", command: "unread" }] }] },
+    });
+    h.write(`${CACHE}/m/mixed/1.0.0/hooks/hooks.json`, {
+      hooks: { Stop: [{ hooks: [{ type: "command", command: "unread" }] }] },
     });
     plugin(h, "m/flat/1.0.0", { name: "flat" });
     h.write(`${CACHE}/m/flat/1.0.0/.mcp.json`, { flatdb: { command: "flat-mcp", enabled: false } });
@@ -165,7 +176,7 @@ describe("readCodex: plugins", () => {
         "mcp|plugin|paths@m|pathsdb",
         "hook|plugin|paths@m|Stop",
         "mcp|plugin|inline@m|inl",
-        "hook|plugin|inline@m|Stop",
+        "hook|plugin|listed@m|Stop",
         "hook|plugin|inline@m|SessionStart",
         "mcp|plugin|flat@m|flatdb",
         "skill|plugin|noname@m|1.0.0:nn",
@@ -173,6 +184,12 @@ describe("readCodex: plugins", () => {
     );
     const commands = out.items.filter((i) => i.kind === "hook").map((i) => i.summary?.command);
     expect(commands.sort()).toEqual(["c", "inline-start", "one"]);
+    expect(out.warnings).toEqual([
+      {
+        file: path.join(mixed, ".codex-plugin", "plugin.json"),
+        message: "lists hook files and hooks together under hooks, which Codex ignores",
+      },
+    ]);
     // A server the plugin ships off is that server's starting state.
     expect(out.facts.codexPluginServers).toEqual([
       {

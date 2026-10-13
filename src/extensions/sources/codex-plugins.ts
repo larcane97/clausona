@@ -5,7 +5,7 @@ import type { Collector, Extension, Location, StateFacts } from "../model.js";
 import { entryInfo, IO_LIMIT, isRecord, isWithin, listNames, mapLimit, readJsonObject } from "../read.js";
 import { mcpSummary } from "../redact.js";
 import { addHooks, addHooksFile } from "./claude-hooks.js";
-import { addCodexHookTrust } from "./codex-hooks.js";
+import { addCodexHookTrust, codexReadsHooksFile, markRefusedHooksFile } from "./codex-hooks.js";
 import { readCodexSkills } from "./codex-skills.js";
 
 /**
@@ -183,6 +183,14 @@ async function readHooks(
   const field = manifest.hooks === undefined ? "./hooks/hooks.json" : manifest.hooks;
   const relative = (file: string) => path.relative(root, file).split(path.sep).join("/");
   const entries = Array.isArray(field) ? field : [field];
+  // A list holds hook files or hooks, not both; Codex ignores any other, and reads no hooks of the plugin.
+  if (!entries.every((e) => typeof e === "string") && !entries.every(isRecord)) {
+    out.warnings.push({
+      file: manifestFile,
+      message: "lists hook files and hooks together under hooks, which Codex ignores",
+    });
+    return;
+  }
   for (const [k, entry] of entries.entries()) {
     if (isRecord(entry)) {
       const owner = `${place.plugin}|${relative(manifestFile)}#hooks[${k}]`;
@@ -199,6 +207,10 @@ async function readHooks(
       if (!json) continue;
       const owner = `${place.plugin}|${relative(file)}`;
       addHooksFile(json, { ...place, file }, owner, out);
+      if (!codexReadsHooksFile(json)) {
+        markRefusedHooksFile(out, file);
+        continue;
+      }
       const source = `${place.plugin}:${relative(file)}`;
       addCodexHookTrust(json.hooks, `hook:codex:plugin:${owner}`, [source], out.facts, place.plugin);
     }

@@ -210,7 +210,7 @@ The `state` of an item in JSON is one of these:
 
 | State | Meaning |
 |---|---|
-| `on` | The switch is on. It loads unless a tag says `hidden by …` or `broken link`, or, for a Codex skill, `no front matter` or `name too long`. |
+| `on` | The switch is on. It loads unless a tag says `hidden by …` or `broken link`, or, for a Codex skill, `no front matter` or `name too long`, or, for a Codex hook, `invalid hooks file`. |
 | `off` | It is turned off. |
 | `name-only` | A Claude skill set to `name-only` in `skillOverrides`. The details say "Shows as name only". |
 | `user-invocable-only` | A Claude skill set to `user-invocable-only` in `skillOverrides`. The details say "Shows as only when you call it". |
@@ -220,10 +220,11 @@ The `state` of an item in JSON is one of these:
 
 `state` is the switch's value and nothing more. A row loads here when its state is `on`,
 `name-only` or `user-invocable-only` and no tag says `hidden by …` or `broken link`, or, for a
-Codex skill, `no front matter` or `name too long`. A hidden copy, a broken link and a SKILL.md
-Codex skips keep their own `state`; only the tags say they do not load. A `mixed` row loads
-in the accounts whose `stateByAccount` value is `on`, except where another copy wins there,
-which its details say. A row read per account says it for each account in `loadsByAccount`.
+Codex skill, `no front matter` or `name too long`, or, for a Codex hook, `invalid hooks file`.
+A hidden copy, a broken link and a file Codex skips keep their own `state`; only the tags say
+they do not load. A `mixed` row loads in the accounts whose `stateByAccount` value is `on`,
+except where another copy wins there, which its details say. A row read per account says it
+for each account in `loadsByAccount`.
 
 A row is read in the project it loads in: this project for what loads here, and its own
 project for another project's row, as `--scope other` lists them. So an Other projects row's
@@ -277,14 +278,16 @@ The switches are read from these places:
   profile trusts a hook on its own. A hook trusted in at least one profile is `on`. One trusted
   in none, or changed since it was, is `pending-approval`, and `enabled = false` under every
   profile's key turns it `off`. A bundled plugin's cleanup hook runs without a review. A
-  plugin's hooks are off while the plugin is off.
+  plugin's hooks are off while the plugin is off. Codex reads a hooks file only when it holds
+  `hooks` and, at most, a `description` at its top, so the hooks of any other are tagged
+  `invalid hooks file`. A plugin whose `hooks` lists hook files and hooks together has none.
 
 ### Tags
 
 A row can carry several tags. They are listed most important first: `broken link`, then
 `off`, `off here` or `off in N of M accounts`, then `not here`, then `pending approval`, then
-`hidden by … copy`, then `unused`, then `no front matter`, then `name too long`. The NOTE
-column shows the first; JSON `tags` has them all.
+`hidden by … copy`, then `unused`, then `no front matter`, then `name too long`, then
+`invalid hooks file`. The NOTE column shows the first; JSON `tags` has them all.
 
 | Tag | When |
 |---|---|
@@ -300,6 +303,7 @@ column shows the first; JSON `tags` has them all.
 | `unused` | A Claude skill the rule below calls unused. |
 | `no front matter` | A skill whose `SKILL.md` has no front matter. Claude Code loads it under its folder's name, with no description, so it has only the skill's first non-empty line to tell when to use it: a quiet note, the skill still loads. Codex skips it, with no front matter between `---` lines, so a Codex one is not in Loaded. |
 | `name too long` | A Codex skill whose name is over 64 characters. Codex skips it, so it is not in Loaded. |
+| `invalid hooks file` | A Codex hook in a hooks file with more than `hooks` and a `description` at its top, such as its events, or a `$schema`. Codex skips the whole file, so the hook does not run. |
 
 The three `hidden by` tags are the forms of `hidden by <scope> copy`, which names the scope of
 the copy that wins. [Which copy wins](#which-copy-wins) says which copy that is.
