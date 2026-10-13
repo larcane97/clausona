@@ -88,10 +88,75 @@ describe("codexFrontMatterError", () => {
     expect(fronts.map(codexFrontMatterError)).toEqual([...Array(6).fill("no description"), undefined]);
   });
 
+  it("reads tags, anchors and aliases, explicit keys, flow collections over lines and document markers as Codex does", () => {
+    // Codex 0.159.3's skills/list for each: listed, "invalid YAML", or "missing field `description`".
+    const fronts: [string, "ok" | "invalid front matter" | "no description"][] = [
+      ["description: !t x", "ok"],
+      ["description: !!int x", "ok"],
+      ["description: !!str ~", "ok"],
+      ["description: !", "no description"],
+      ["description: !x #c", "no description"],
+      ["description: !!str ''", "no description"],
+      ["description: !!null ~", "no description"],
+      ["description: !!null", "invalid front matter"],
+      ["description: !!null x", "invalid front matter"],
+      ['description: !!null "~"', "ok"],
+      ["description: !!str [a]", "invalid front matter"],
+      ["description: !<x", "invalid front matter"],
+      ["description: !e!x y", "invalid front matter"],
+      ["description: !a,b x", "invalid front matter"],
+      ["description: !%FF x", "invalid front matter"],
+      ["description: !a !b x", "invalid front matter"],
+      ["!foo\ndescription: d", "ok"],
+      ["!!str x", "invalid front matter"],
+      ["description: d\nmetadata: !!null", "ok"],
+      ["description: d\nmetadata: !!null ~", "invalid front matter"],
+      ["description: &a d", "ok"],
+      ["description: &a", "no description"],
+      ["description: &é d", "invalid front matter"],
+      ["name: &a n\ndescription: *a", "ok"],
+      ["description: *a\nname: &a n", "invalid front matter"],
+      ["description: d\nother: *a", "invalid front matter"],
+      ["description: d\nother: [*a]", "ok"],
+      ["description: d\nother: &m [s]\nmetadata: *m", "invalid front matter"],
+      ["&k description: d\nname: *k", "ok"],
+      ["? description\n: d", "ok"],
+      ["? description", "no description"],
+      ["? description: d", "invalid front matter"],
+      ["?description: d", "no description"],
+      ["? description\n: d\n: e", "invalid front matter"],
+      ["description: d\n? [a]\n: x", "invalid front matter"],
+      ["description: d\nother:\n  ? [a]\n  : b", "ok"],
+      ["?\tdescription\n:\td", "invalid front matter"],
+      ["description: [a,\n  b]", "invalid front matter"],
+      ["description: d\nother: [a,\nb]", "ok"],
+      ["description: d\nother: [a,#c\n  b]", "ok"],
+      ["description: d\nother: [a\n  b]", "ok"],
+      ["description: d\nother: {a\n  : b}", "invalid front matter"],
+      ["description: d\nother: [a,\n  b", "invalid front matter"],
+      ["description: d\nother: [a,\n  b]: c", "invalid front matter"],
+      ["{description: d,\n  name: n}", "ok"],
+      ["...", "invalid front matter"],
+      ["name: n\ndescription: d\n...", "ok"],
+      ["description: d\n...\n... # c\n", "ok"],
+      ["name: n\n... # c\n# c2", "no description"],
+      ["description: d\n...\nname: n", "invalid front matter"],
+      ["description: d\n--- # c", "invalid front matter"],
+      ["--- # c\ndescription: d", "ok"],
+      ["--- {description: d}", "ok"],
+      ["--- description: d", "invalid front matter"],
+      ["%YAML 1.1\n--- # c\ndescription: d", "ok"],
+      ["%YAML 1.1\ndescription: d", "invalid front matter"],
+    ];
+    expect(fronts.map(([front]) => [front, codexFrontMatterError(front) ?? "ok"])).toEqual(fronts);
+  });
+
   it("says nothing of what it does not follow, though Codex refuses some of it", () => {
-    // Codex refuses the second (a document end, then nothing), and reads the first.
-    expect(codexFrontMatterError("description: !t x")).toBeUndefined();
-    expect(codexFrontMatterError("...")).toBeUndefined();
+    // Codex refuses each: an anchor's name with an indicator after it, a document end in a flow
+    // collection, an explicit key that is a mapping of an empty key.
+    for (const front of ["description: &a, d", "description: d\nother: [a,\n...\n]", "? :\n: d\ndescription: d"]) {
+      expect(codexFrontMatterError(front)).toBeUndefined();
+    }
   });
 });
 
