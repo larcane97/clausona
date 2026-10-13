@@ -259,7 +259,10 @@ Like `add`, `route set` prints the route as it stands after the change.
 
 A [dir rule or default](#dir-rules-and-defaults) that names the route follows it. `route rename`
 points each one at the new name, and `route remove` removes them and says which. The Routes
-screen does the same when you remove a route there, or rename one in its form.
+screen does the same when you remove a route there, and its question says what goes with it:
+`Remove route work and the dir rule that names it? (y/N)`. Renaming a route in its form renames
+the rules too. Changing its tool there removes the rules the new tool cannot take, and says
+which.
 
 ```
 $ clausona route remove office
@@ -394,8 +397,14 @@ needs a look, the routes list says so in one line.
 
 `n` adds a dir rule and `e` changes the selected one, or the defaults on their row. The form has
 the directory and a choice of route for each tool, where `none` leaves that tool to the next rule.
-A directory you type is read from where you started clausona, so `.` is that directory. `d` clears
-the selected rule, once you answer `y`. `tab` goes back to the routes.
+A directory you type is read from where you started clausona, so `.` is that directory. With many
+routes, each choice shows the ones around the selected route, and `←` `→` move through the rest.
+
+The form saves only what you changed, as `route dir` does. A new rule for a directory that already
+has one adds to it, and keeps the other tool's route there. A route that is gone, or for the other
+tool, is shown in yellow as one more choice, and stays as it is while you leave it alone.
+
+`d` clears the selected rule, once you answer `y`. `tab` goes back to the routes.
 
 ### The form
 
@@ -645,6 +654,14 @@ next rule up, then the default, then the active profile:
 
 `route list`, `route explain`, `clausona doctor` and the Routes screen point these out too.
 `route rename` and `route remove` keep them from happening on their own.
+
+A rule that cannot be read at all, such as one whose directory is not a path, applies nowhere.
+So a run cannot say it skipped it. Instead, every run that names no route says in one line that
+`routes.json` has one, until it is fixed:
+
+```
+  ⚠ /home/you/.clausona/routes.json has a dir rule or default that cannot be read: clausona route list says why.
+```
 
 ### What a run here would take
 

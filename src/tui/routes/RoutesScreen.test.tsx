@@ -817,15 +817,25 @@ describe("dir rules and defaults", () => {
     expect(deps.updateRoutes).not.toHaveBeenCalled();
   });
 
-  it("removes the rules that name a route removed from the routes list", async () => {
-    const { instance, file } = setup({ file: RULES });
+  it("names the rules that go with a route it asks to remove, and removes them on y", async () => {
+    const { instance, file } = setup({
+      file: {
+        ...RULES,
+        dirs: { ...(RULES.dirs as object), "~/oss": { claude: "main" } },
+        defaults: { claude: "main" },
+      },
+    });
     await ranked(instance);
 
     await press(instance, "d");
+    expect(text(instance)).toContain("Remove route main, the 2 dir rules and the claude default that name it? (y/N)");
     await press(instance, "y");
     await until(instance, (f) => panes(f).list.length === 2 && !f.includes("(y/N)"));
     expect(file().dirs).toEqual({ "~/work": { codex: "gone" } });
-    expect(file().defaults).toEqual({ claude: "solo" });
+    expect(file()).not.toHaveProperty("defaults");
+
+    await press(instance, "d");
+    expect(text(instance)).toContain("Remove route solo? (y/N)");
   });
 
   it("changes the defaults from their row, and clears them once asked", async () => {

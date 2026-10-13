@@ -16,6 +16,7 @@ import {
   readRules,
   removeReferences,
   routeProblem,
+  rulesNaming,
   ruleWarnings,
   SLOT_TOOLS,
   type Slots,
@@ -137,6 +138,24 @@ function ruleEntries(rules: ReturnType<typeof readRules>): RuleEntry[] {
     ),
     { target: { kind: "defaults" }, label: "default", slots: rules.defaults },
   ];
+}
+
+/**
+ * What `d` asks, naming the dir rules and defaults that go with the route, as `clausona route
+ * remove` says what it removed: `Remove route work and the 2 dir rules that name it? (y/N)`.
+ */
+function removeQuestion(name: string, file: RoutesFile | undefined): string {
+  const refs = file ? rulesNaming(file, name) : [];
+  const dirs = new Set(refs.flatMap((ref) => (ref.dir === undefined ? [] : [ref.dir]))).size;
+  const defaults = SLOT_TOOLS.filter((tool) => refs.some((ref) => ref.dir === undefined && ref.tool === tool));
+  const parts = [
+    ...(dirs ? [dirs === 1 ? "the dir rule" : `the ${dirs} dir rules`] : []),
+    ...(defaults.length ? [`the ${defaults.join(" and ")} default${defaults.length > 1 ? "s" : ""}`] : []),
+  ];
+  if (parts.length === 0) return `Remove route ${name}? (y/N)`;
+  const verb = dirs + defaults.length > 1 ? "name" : "names";
+  const rules = parts.length === 1 ? ` and ${parts[0]}` : `, ${parts[0]} and ${parts[1]}`;
+  return `Remove route ${name}${rules} that ${verb} it? (y/N)`;
 }
 
 /** The line that says routes are left out, and where to see why: `route list` lists each problem. */
@@ -289,10 +308,11 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   /**
    * Back to the list, with routes.json read again whichever way the form was left: it may have
    * saved, or found the file changed by another terminal and reloaded. The saved route is
-   * selected, else the one that was.
+   * selected, else the one that was. `note` is what the save also changed.
    */
-  async function closeForm(saved: string | null) {
+  async function closeForm(saved: string | null, note?: string) {
     setForm(null);
+    if (note) setMessage(note);
     if (loaded.kind !== "ready") return;
     const { registry } = loaded;
     const keep = saved ?? selected?.name;
@@ -406,7 +426,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   useInput(onInput, { isActive: form === null && ruleForm === null });
 
   const question = removing
-    ? `Remove route ${removing}? (y/N)`
+    ? removeQuestion(removing, loaded.kind === "ready" ? loaded.file : undefined)
     : clearing
       ? clearing.target.kind === "defaults"
         ? "Clear the defaults? (y/N)"
@@ -487,7 +507,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
         registry={loaded.registry ?? NO_PROFILES}
         deps={io}
         now={reading?.now ?? io.clock()}
-        onDone={(saved) => void closeForm(saved)}
+        onDone={(saved, note) => void closeForm(saved, note)}
       />
     );
   }

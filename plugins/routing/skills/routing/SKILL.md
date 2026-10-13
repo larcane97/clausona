@@ -186,7 +186,8 @@ clausona route default --clear --tool claude     # --tool is required to clear (
   "profile", "skipped"}`, `profile` null when the tool has no active profile. `skipped` lists
   the rules passed over as `{"rule", "reason"}`, `rule` being `dir:<path>` or `default`.
 - A rule whose route is gone, cannot be used or is for the other tool is skipped: the run says so
-  on stderr and goes on to the next rule. If `routes.json` cannot be read at all, a plain run
+  on stderr and goes on to the next rule. A rule that cannot be read at all is named by
+  `route list` (in `problems`); a run only says that there is one. If `routes.json` cannot be read at all, a plain run
   says so in one line and runs the active profile; a run with `--route` fails as before.
 
 ## Several workers at once

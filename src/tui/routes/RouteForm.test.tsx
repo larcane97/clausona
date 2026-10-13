@@ -775,6 +775,31 @@ describe("RouteForm", () => {
     expect(disk.file()).toMatchObject({ dirs: { "~/work": { claude: "solo-2" } }, defaults: { claude: "solo-2" } });
   });
 
+  it("removes the rules a route's new tool cannot fill, and says so", async () => {
+    const { instance, onDone, disk } = setup({
+      edit: "main",
+      file: {
+        ...FILE,
+        dirs: { "~/work": { claude: "main" }, "/srv": { claude: "solo" } },
+        defaults: { claude: "main" },
+      },
+    });
+    await opened(instance);
+
+    await tabTo(instance, "Tool");
+    await press(instance, RIGHT);
+    await save(instance);
+
+    await vi.waitFor(() =>
+      expect(onDone).toHaveBeenCalledWith(
+        "main",
+        "Also removed the dir rule for ~/work (claude) and the claude default, since route main is for codex now.",
+      ),
+    );
+    expect(disk.file().dirs).toEqual({ "/srv": { claude: "solo" } });
+    expect(disk.file()).not.toHaveProperty("defaults");
+  });
+
   it("says why a write failed, keeps the inputs, and saves the next time", async () => {
     const { instance, deps, onDone, disk } = setup();
     await opened(instance);

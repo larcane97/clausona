@@ -12,7 +12,7 @@ import {
   withDefaults,
 } from "../../core/route-config.js";
 import { matchesMember } from "../../core/route-patterns.js";
-import { renameReferences } from "../../core/route-rules.js";
+import { type RuleRef, removeUnfillable, renameReferences, rulesText } from "../../core/route-rules.js";
 import { type Ranking, rankRoute } from "../../core/routing.js";
 import { toolLabel } from "../../lib/route-render.js";
 import { checkRouteMembers, membersOf } from "../../lib/route-service.js";
@@ -73,8 +73,11 @@ export type RouteFormProps = {
   registry: Registry;
   deps: RoutesScreenDeps;
   now: number;
-  /** The name the route was saved under, or null when the form was left without saving. */
-  onDone: (saved: string | null) => void;
+  /**
+   * The name the route was saved under, or null when the form was left without saving; with
+   * `note`, what the save also changed, for the screen to say.
+   */
+  onDone: (saved: string | null, note?: string) => void;
 };
 
 /** The accounts a route can take in this version: the subscription profiles of both tools. */
@@ -304,8 +307,9 @@ export function RouteForm(props: RouteFormProps) {
    * meanwhile is not written over, and one removed meanwhile is written again only once the
    * user, told so, saves again.
    */
-  async function write(name: string, spec: RouteSpec): Promise<Outcome> {
+  async function write(name: string, spec: RouteSpec): Promise<{ outcome: Outcome; dropped: RuleRef[] }> {
     let outcome: Outcome = "saved";
+    let dropped: RuleRef[] = [];
     await deps.updateRoutes((file) => {
       if (original !== undefined) {
         const onDisk = storedRoute(file, original);
@@ -323,10 +327,13 @@ export function RouteForm(props: RouteFormProps) {
         // As `clausona route rename` does: the dir rules and defaults that named it follow it.
         renameReferences(file, original, name);
       }
+      // A rule of a tool the route no longer takes would only be skipped from now on.
+      dropped =
+        original !== undefined && startSpec.current?.tool !== spec.tool ? removeUnfillable(file, name, spec.tool) : [];
       file.routes[name] = spec;
       return file;
     });
-    return outcome;
+    return { outcome, dropped };
   }
 
   /** Starts the edit again from its route as it is on disk now, which another window changed. */
@@ -363,11 +370,13 @@ export function RouteForm(props: RouteFormProps) {
     }
     setSaving(true);
     try {
-      const outcome = await write(name, spec);
+      const { outcome, dropped } = await write(name, spec);
       if (!alive.current) return;
       if (outcome === "saved") {
-        // Keys stay off: the screen takes over.
-        onDone(name);
+        // Keys stay off: the screen takes over, and says what else the save changed.
+        if (dropped.length)
+          onDone(name, `Also removed ${rulesText(dropped)}, since route ${name} is for ${spec.tool} now.`);
+        else onDone(name);
         return;
       }
       if (outcome === "changed" && original !== undefined) await reload(original);
