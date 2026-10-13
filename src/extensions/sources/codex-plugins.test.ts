@@ -76,6 +76,8 @@ describe("readCodex: plugins", () => {
     expect(plan?.location.file).toBe(path.join(kit, "skills", "plan"));
     expect(plan?.usageKeys).toEqual([]);
     expect(out.items.find((i) => i.name === "kitdb")?.summary).toEqual({ transport: "stdio", command: "kitdb-mcp" });
+    // A server's own enabled is its starting state; kitdb sets none.
+    expect(out.facts.codexPluginServers).toEqual([]);
     expect(out.items.find((i) => i.kind === "hook")?.location.file).toBe(path.join(kit, "hooks", "hooks.json"));
     expect(out.warnings).toEqual([]);
   });
@@ -150,7 +152,7 @@ describe("readCodex: plugins", () => {
       hooks: { Stop: [{ hooks: [{ type: "command", command: "one" }] }] },
     });
     plugin(h, "m/flat/1.0.0", { name: "flat" });
-    h.write(`${CACHE}/m/flat/1.0.0/.mcp.json`, { flatdb: { command: "flat-mcp" } });
+    h.write(`${CACHE}/m/flat/1.0.0/.mcp.json`, { flatdb: { command: "flat-mcp", enabled: false } });
     // With no name, Codex names the skills after the version folder.
     plugin(h, "m/noname/1.0.0", { version: "1.0.0" });
     h.skill(`${CACHE}/m/noname/1.0.0/skills`, "nn");
@@ -171,6 +173,16 @@ describe("readCodex: plugins", () => {
     );
     const commands = out.items.filter((i) => i.kind === "hook").map((i) => i.summary?.command);
     expect(commands.sort()).toEqual(["c", "inline-start", "one"]);
+    // A server the plugin ships off is that server's starting state.
+    expect(out.facts.codexPluginServers).toEqual([
+      {
+        file: h.path(CACHE, "m", "flat", "1.0.0", ".mcp.json"),
+        plugin: "flat@m",
+        name: "flatdb",
+        enabled: false,
+        default: true,
+      },
+    ]);
     expect(out.items.find((i) => i.name === "pathsdb")?.location.file).toBe(path.join(paths, "servers", "x.json"));
     const manifest = path.join(inline, ".codex-plugin", "plugin.json");
     expect(out.items.find((i) => i.name === "inl")?.location.file).toBe(manifest);

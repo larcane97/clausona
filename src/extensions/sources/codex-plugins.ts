@@ -160,6 +160,10 @@ async function readServers(
     const id = `mcp:codex:plugin:${place.plugin}:${name}`;
     out.items.push({ id, kind: "mcp", name, location: { ...place, file }, summary: mcpSummary(server) });
     out.facts.fingerprints[id] = valueHash(server);
+    // A server the plugin ships off - `"enabled": false` - stays off until config.toml turns it on.
+    if (typeof server.enabled === "boolean") {
+      out.facts.codexPluginServers.push({ file, plugin: place.plugin, name, enabled: server.enabled, default: true });
+    }
   }
 }
 

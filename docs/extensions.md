@@ -211,7 +211,8 @@ The switches are read from these places:
 - Codex plugins and what they bring: a `[plugins."<plugin>@<marketplace>"]` table in Codex's or
   the project's `config.toml` turns a plugin on, and `enabled = false` in it turns it off. A
   plugin no table names is off. A plugin's skill is switched by its full name in
-  `[[skills.config]]`, and its server by `plugins."<id>".mcp_servers.<name>.enabled`.
+  `[[skills.config]]`, and its server by `plugins."<id>".mcp_servers.<name>.enabled`. A server
+  the plugin ships with `"enabled": false` is off until that switch turns it on.
 - Hooks are on, except a plugin's hooks while the plugin is off.
 
 ### Tags

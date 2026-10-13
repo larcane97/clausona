@@ -134,8 +134,19 @@ export type StateFacts = {
    * set it, which leaves the plugin on.
    */
   codexPlugins: { file: string; project?: string; plugin: string; enabled?: boolean }[];
-  /** `plugins."<id>".mcp_servers.<name>.enabled`: a plugin's server switch, in the same files. */
-  codexPluginServers: { file: string; project?: string; plugin: string; name: string; enabled: boolean }[];
+  /**
+   * `plugins."<id>".mcp_servers.<name>.enabled`: a plugin's server switch, in the same files.
+   * With `default`, the server's own `enabled` in the plugin's file, which Codex starts from
+   * and a switch in config.toml overrides.
+   */
+  codexPluginServers: {
+    file: string;
+    project?: string;
+    plugin: string;
+    name: string;
+    enabled: boolean;
+    default?: true;
+  }[];
 };
 
 export function emptyFacts(): StateFacts {

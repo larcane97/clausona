@@ -292,13 +292,20 @@ function codexMcpState(inv: Inventory, item: Extension, project: string | undefi
     // A plugin's server is switched under the plugin's table, never by a user server's name.
     const off = codexPluginOff(inv, item, project);
     if (off) return off;
+    const entries = inv.facts.codexPluginServers.filter((e) => e.plugin === plugin && e.name === item.name);
     const hit = codexLayered(
       inv,
-      inv.facts.codexPluginServers.filter((e) => e.plugin === plugin && e.name === item.name),
+      entries.filter((e) => !e.default),
       project,
     );
-    const key = `plugins.${plugin}.mcp_servers.${item.name}.enabled`;
-    return hit ? { value: hit.enabled ? "on" : "off", setBy: { file: hit.file, key } } : { value: "on" };
+    if (hit) {
+      const key = `plugins.${plugin}.mcp_servers.${item.name}.enabled`;
+      return { value: hit.enabled ? "on" : "off", setBy: { file: hit.file, key } };
+    }
+    // Else what the plugin's own file says, or on.
+    const own = entries.find((e) => e.default);
+    const key = `mcpServers.${item.name}.enabled`;
+    return own ? { value: own.enabled ? "on" : "off", setBy: { file: own.file, key } } : { value: "on" };
   }
   const hit = codexLayered(
     inv,

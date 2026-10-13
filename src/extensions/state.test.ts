@@ -473,6 +473,29 @@ describe("Codex plugins", () => {
     expect(stateOf(inv([kitdb], facts), kitdb, Q).value).toBe("on");
   });
 
+  it("starts from a plugin server's own enabled in its file, which a config.toml switch overrides", () => {
+    const file = `${root}/.mcp.json`;
+    const facts: Partial<StateFacts> = {
+      codexPlugins: [{ file: user, plugin: "kit@m" }],
+      codexPluginServers: [{ file, plugin: "kit@m", name: "kitdb", enabled: false, default: true }],
+    };
+    expect(stateOf(inv([kitdb], facts), kitdb, P)).toEqual({
+      value: "off",
+      setBy: { file, key: "mcpServers.kitdb.enabled" },
+    });
+    const back = {
+      ...facts,
+      codexPluginServers: [
+        ...(facts.codexPluginServers ?? []),
+        { file: user, plugin: "kit@m", name: "kitdb", enabled: true },
+      ],
+    };
+    expect(stateOf(inv([kitdb], back), kitdb, P)).toEqual({
+      value: "on",
+      setBy: { file: user, key: "plugins.kit@m.mcp_servers.kitdb.enabled" },
+    });
+  });
+
   it("keeps a Claude plugin of the same id to Claude's switches, and a Codex one to Codex's", () => {
     const claudeKit = ext("plugin", "kit@m", { tool: "claude", scope: "plugin", plugin: "kit@m", file: "/k" });
     const i = inv([kit, claudeKit], {
