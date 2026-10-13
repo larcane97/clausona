@@ -16,6 +16,8 @@ import {
   addConfigHooks,
   codexHomeHooksFile,
   codexReadsHooksFile,
+  exactConfigHooks,
+  exactJsonFile,
   markRefusedHooksFile,
   markUnsupportedHooks,
 } from "./codex-hooks.js";
@@ -142,7 +144,10 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
         if (config) {
           addServers(config, { ...here, file }, project.path, out);
           addPluginSwitches(config, file, project.path, out.facts);
-          addConfigHooks(config, { ...here, file }, project.path, await hookSources(file), out);
+          if (isRecord(config.hooks)) {
+            const exact = await exactConfigHooks(file);
+            addConfigHooks(config, { ...here, file }, project.path, await hookSources(file), out, exact);
+          }
         }
         const hooksFile = codexProjectHooks(project.path);
         const hooks = await readJsonObject(hooksFile, out.warnings);
@@ -151,7 +156,7 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
           if (!codexReadsHooksFile(hooks)) markRefusedHooksFile(out, hooksFile);
           else
             addCodexHookTrust(
-              hooks.hooks,
+              (await exactJsonFile(hooksFile))?.hooks ?? hooks.hooks,
               `hook:codex:project:${project.path}`,
               await hookSources(hooksFile),
               out.facts,
@@ -167,7 +172,10 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
       if (!hooks) return;
       addHooksFile(hooks, { ...global, file }, "-", out);
       if (!codexReadsHooksFile(hooks)) markRefusedHooksFile(out, file);
-      else addCodexHookTrust(hooks.hooks, "hook:codex:global:-", await userHookSources(ctx, file), out.facts);
+      else {
+        const exact = (await exactJsonFile(file))?.hooks ?? hooks.hooks;
+        addCodexHookTrust(exact, "hook:codex:global:-", await userHookSources(ctx, file), out.facts);
+      }
     })(),
   );
   jobs.push(readCodexPlugins(ctx.primary.dir, out));
@@ -175,8 +183,13 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
     addServers(ctx.config, { ...global, file: ctx.configFile }, "-", out);
     addPluginSwitches(ctx.config, ctx.configFile, undefined, out.facts);
     addCodexHookStates(ctx.config, ctx.configFile, out.facts);
-    const sources = await userHookSources(ctx, ctx.configFile);
-    addConfigHooks(ctx.config, { ...global, file: ctx.configFile }, "-", sources, out);
+    if (isRecord(ctx.config.hooks)) {
+      const [sources, exact] = await Promise.all([
+        userHookSources(ctx, ctx.configFile),
+        exactConfigHooks(ctx.configFile),
+      ]);
+      addConfigHooks(ctx.config, { ...global, file: ctx.configFile }, "-", sources, out, exact);
+    }
     for (const [project, table] of Object.entries(isRecord(ctx.config.projects) ? ctx.config.projects : {})) {
       if (isRecord(table)) out.facts.codexTrust.push({ project, trusted: table.trust_level === "trusted" });
     }

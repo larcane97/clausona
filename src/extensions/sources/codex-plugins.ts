@@ -5,7 +5,7 @@ import type { Collector, Extension, Location, StateFacts } from "../model.js";
 import { entryInfo, IO_LIMIT, isRecord, isWithin, listNames, mapLimit, readJsonObject } from "../read.js";
 import { mcpSummary } from "../redact.js";
 import { addHooks, addHooksFile } from "./claude-hooks.js";
-import { addCodexHookTrust, codexReadsHooksFile, markRefusedHooksFile } from "./codex-hooks.js";
+import { addCodexHookTrust, codexReadsHooksFile, exactJsonFile, markRefusedHooksFile } from "./codex-hooks.js";
 import { readCodexSkills } from "./codex-skills.js";
 
 /**
@@ -191,6 +191,9 @@ async function readHooks(
     });
     return;
   }
+  // The manifest again, its numbers as Codex reads them, for the hashes of the hooks it holds.
+  const exact = entries.some(isRecord) ? await exactJsonFile(manifestFile) : undefined;
+  const exactEntries: unknown[] = Array.isArray(exact?.hooks) ? exact.hooks : [exact?.hooks];
   for (const [k, entry] of entries.entries()) {
     if (isRecord(entry)) {
       const owner = `${place.plugin}|${relative(manifestFile)}#hooks[${k}]`;
@@ -198,7 +201,9 @@ async function readHooks(
       addHooks(entry.hooks, { ...place, file: manifestFile }, owner, out, "hooks");
       // Codex keys an inline entry by the manifest's name alone, whichever folder holds it.
       const source = `${place.plugin}:plugin.json#hooks[${k}]`;
-      addCodexHookTrust(entry.hooks, `hook:codex:plugin:${owner}`, [source], out.facts, place.plugin);
+      const exactEntry = exactEntries[k];
+      const hooks = isRecord(exactEntry) && isRecord(exactEntry.hooks) ? exactEntry.hooks : entry.hooks;
+      addCodexHookTrust(hooks, `hook:codex:plugin:${owner}`, [source], out.facts, place.plugin);
       continue;
     }
     if (typeof entry !== "string") continue;
@@ -212,7 +217,8 @@ async function readHooks(
         continue;
       }
       const source = `${place.plugin}:${relative(file)}`;
-      addCodexHookTrust(json.hooks, `hook:codex:plugin:${owner}`, [source], out.facts, place.plugin);
+      const hooks = (await exactJsonFile(file))?.hooks ?? json.hooks;
+      addCodexHookTrust(hooks, `hook:codex:plugin:${owner}`, [source], out.facts, place.plugin);
     }
   }
 }

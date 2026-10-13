@@ -477,6 +477,71 @@ describe("readCodex", () => {
     expect(states).toEqual(["on", "pending-approval", "pending-approval"]);
   });
 
+  it("hashes the numbers in an MCP tool hook's input as Codex's serde_json holds them, from JSON and TOML", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    // Each number as written, the tool it is the input of, and the hash Codex 0.159.3's hooks/list
+    // gave that hook. JSON keeps a number's text, but for an integer's sign and its exponent's form.
+    const json: [string, string, string][] = [
+      ["1.0", "j1", "d87f35ed0be41896ac422349050fa7b924cf38f7fba78f4bd4d944703d0f43fa"],
+      ["1e3", "j2", "6473a6709957327a2814a367eb8902d7834b91b7b0ca12c81e61f1418aa073fa"],
+      ["1E+3", "j3", "618dd49e0344798e851373e4cfec77468799750b80fd7f8455d142e8f930d658"],
+      ["-0", "j4", "dfc886550c6e4cab2237ecb63adda23ff582a1103f1f6ef310d683cbdaea35c0"],
+      ["12345678901234567890", "j5", "073c7e22d2047ad16444b64df724f33f1a51975b1da14d2af453b1131879cea4"],
+      ["1.50", "j6", "4da926ed7a99cdeeaaff5c6d7ec3a23eb7e33399d3d95e885c48c2a22b71746e"],
+      ["-0.0", "j10", "a843b7ad9e66d25e5682c152a355e32d3a3f1c015a932aeb7c2852946f2fa877"],
+      ["1e400", "j11", "887d25e6831d8e18e35da5df36dec9c18102be63880eb7e86f8a6a74cbf2e9be"],
+      ["9007199254740993", "j16", "efb78d12f9fe067601569a6820bbd31068c74d32a1be9bb176fc9941007bf265"],
+      ["2.5E-3", "j18", "4ad6742fd1da843bded4493e65a031a5cebb863a9c6de0bb30eeb7ef83005ede"],
+      ["10E2", "j22", "451981aff766b78eb8b7f255e567d28f8d6ea8f0c128ca2c1777c15bfa5b364c"],
+    ];
+    // TOML has an integer, or a float, which serde_json writes as ryu does, with a sign on its exponent.
+    const toml: [string, string, string][] = [
+      ["1.0", "t1", "a12d545cf305b543a4957b450f365882e3161cad17006e4e3bf314384ffd6136"],
+      ["1e3", "t2", "819d5600da0b2fe75c9d280c7f291ca2aef69c80a726e73ededae8ddd9a27e43"],
+      ["1_000", "t3", "35b493bc534221c7d78930ab23d7e09b0c6fdc04f66add872c067b7f148a366a"],
+      ["100", "t5", "d5739220114d8f9845428f0de9c5414e04c7ad4d837a32850686b97511d16fdd"],
+      ["1.5e300", "t7", "69755851880abb954f0d068d5d7850bc87eac767df8e92d5ab38aa22ae45bd4e"],
+      ["1e16", "t10", "940284e746ac5ea1bf63223764d52a4c2537a1f01e4744394dac7d7218d0fd74"],
+      ["0.000001", "t12", "9d2739f465b242c8432d124cb2458c9aab17bb0c051f85ba3e88bfca009d3e9a"],
+      ["2.50", "t13", "e61a6fb9982c5a4c7145fb16515eec73edffd1812825aae2bda60fda08471314"],
+      ["0x10", "t15", "2ec80f2cc68a44f930cd6476d5e0265bc56a6b2087e864528ec7ae01bc1551ab"],
+      ["123456789.123456789", "t19", "bee368052b0a42c4805db22fe9115731b1ef07f608d8313a38c0bdad6ad83d09"],
+    ];
+    const groups = json.map(
+      ([n, tool]) => `{"hooks": [{"type": "mcp_tool", "server": "srv", "tool": "${tool}", "input": {"x": ${n}}}]}`,
+    );
+    h.write(".codex/hooks.json", `{"hooks": {"PostToolUse": [${groups.join(", ")}]}}`);
+    const tables = toml.map(
+      ([n, tool]) =>
+        `[[hooks.PreToolUse]]\n[[hooks.PreToolUse.hooks]]\ntype = "mcp_tool"\nserver = "srv"\ntool = "${tool}"\ninput = { x = ${n} }\n`,
+    );
+    h.codex("personal", ".codex", tables.join("\n"));
+    // A plugin's manifest holds hooks too: its numbers are read the same way.
+    const kit = ".codex/plugins/cache/m/kit/1.0.0";
+    h.write(
+      `${kit}/.codex-plugin/plugin.json`,
+      `{"name": "kit", "hooks": [{"hooks": {"PostToolUse": [${groups[0]}]}}]}`,
+    );
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(ctx, [], out);
+    // Each hook's trust, by the id its place gives it: group `index` of its event.
+    const hashOf = (tool: string) => {
+      const index = (tool.startsWith("j") ? json : toml).findIndex(([, t]) => t === tool);
+      const id = tool.startsWith("j")
+        ? `hook:codex:global:-:PostToolUse#${index}.0`
+        : `hook:codex:global:-:PreToolUse#config.toml:${index}.0`;
+      return out.facts.codexHookTrust.find((t) => t.id === id)?.hash;
+    };
+    expect([...json, ...toml].map(([n, tool]) => [n, hashOf(tool)])).toEqual(
+      [...json, ...toml].map(([n, , hash]) => [n, `sha256:${hash}`]),
+    );
+    const inPlugin = out.facts.codexHookTrust.find((t) => t.keys[0]?.startsWith("kit@m:plugin.json#hooks[0]"));
+    expect(inPlugin?.hash).toBe(`sha256:${json[0]?.[2]}`);
+  });
+
   it("marks the hooks Codex never runs: prompt and agent hooks, and an MCP tool hook when a session ends", async () => {
     const h = new TestHome();
     homes.push(h);
