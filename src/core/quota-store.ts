@@ -202,11 +202,12 @@ async function fetchOne(
  * Resolves quota for every target, preferring the on-disk cache and touching the
  * network only for entries that are stale and whose endpoint is not cooling down.
  * Never throws and never rejects: a profile that cannot be resolved comes back with
- * a failure state instead.
+ * a failure state instead. `refresh` reads every entry again; `refreshBefore` (ms epoch)
+ * only those fetched before then, so a reading another process took since is reused.
  */
 export async function collectQuotas(
   targets: QuotaTarget[],
-  options: { refresh?: boolean; renew?: boolean; now?: number; cachePath?: string } = {},
+  options: { refresh?: boolean; refreshBefore?: number; renew?: boolean; now?: number; cachePath?: string } = {},
 ): Promise<Record<string, QuotaSnapshot>> {
   if (targets.length === 0) return {};
 
@@ -218,7 +219,9 @@ export async function collectQuotas(
   const pending: QuotaTarget[] = [];
   for (const target of targets) {
     const cached = cache.profiles[target.id];
-    if (cached && !options.refresh && isFresh(cached, now)) {
+    const outdated = (snapshot: QuotaSnapshot) =>
+      options.refresh || snapshot.fetchedAt < (options.refreshBefore ?? Number.NEGATIVE_INFINITY);
+    if (cached && !outdated(cached) && isFresh(cached, now)) {
       result[target.id] = cached;
       continue;
     }

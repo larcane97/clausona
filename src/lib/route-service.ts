@@ -49,8 +49,14 @@ import { loadRegistry, noRegistryError } from "./service.js";
 /** What routing reaches outside itself, injectable for tests. */
 export type RouteDeps = {
   loadRegistry: () => Promise<Registry | null>;
-  /** With `refresh`, a cached reading is fetched again, unless the tool's endpoint is cooling down. */
-  collectQuotas: (targets: QuotaTarget[], options?: { refresh?: boolean }) => Promise<Record<string, QuotaSnapshot>>;
+  /**
+   * With `refreshBefore`, a cached reading fetched before then is fetched again, unless the tool's
+   * endpoint is cooling down.
+   */
+  collectQuotas: (
+    targets: QuotaTarget[],
+    options?: { refreshBefore?: number },
+  ) => Promise<Record<string, QuotaSnapshot>>;
   paths: RoutesPaths;
   clock: () => number;
   /** Resolves after `ms`, or as soon as `signal` aborts (`--wait`). */
@@ -70,7 +76,7 @@ export type RouteDeps = {
 export function defaultRouteDeps(): RouteDeps {
   return {
     loadRegistry,
-    collectQuotas: (targets, options) => collectQuotas(targets, { refresh: options?.refresh }),
+    collectQuotas: (targets, options) => collectQuotas(targets, { refreshBefore: options?.refreshBefore }),
     paths: routesPaths(),
     clock: () => Date.now(),
     // Aborted, the timer rejects; a wait checks the signal itself, so that is not an error here.
@@ -341,13 +347,14 @@ export function quotaTargets(route: Route, members: Member[], resume: boolean, o
 
 /**
  * Ranks a route on quota read now. `record` makes it a pick, under the pick-record lock; `model`
- * is the model the run names, whose own limit then counts. `refresh` reads quota again however
- * fresh the cache is. Once `signal` has aborted, the pick throws its reason and records nothing.
+ * is the model the run names, whose own limit then counts. `refreshBefore` reads again quota
+ * fetched before then, however fresh the cache is. Once `signal` has aborted, the pick throws
+ * its reason and records nothing.
  */
 export async function rankRouteNow(
   resolved: Pick<ResolvedRoute, "route" | "onlyTool">,
   deps: RouteDeps,
-  options: { resume: boolean; record: boolean; model?: string; refresh?: boolean; signal?: AbortSignal },
+  options: { resume: boolean; record: boolean; model?: string; refreshBefore?: number; signal?: AbortSignal },
 ): Promise<Ranking> {
   const registry = await deps.loadRegistry();
   if (!registry) throw await noRegistryError();
@@ -356,7 +363,7 @@ export async function rankRouteNow(
   // Read first: it can take seconds, and the pick-record lock is held only for the pick itself.
   const quotas = await deps.collectQuotas(
     quotaTargets(route, members, options.resume, onlyTool),
-    options.refresh ? { refresh: true } : undefined,
+    options.refreshBefore === undefined ? undefined : { refreshBefore: options.refreshBefore },
   );
   const rank = (lastPicked: Record<string, string>) =>
     rankRoute({

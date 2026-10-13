@@ -1,16 +1,26 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { QuotaHttpError } from "../core/quota.js";
+import { collectQuotas } from "../core/quota-store.js";
 import { withDefaults } from "../core/route-config.js";
 import { routesPaths } from "../core/routes-store.js";
-import type { QuotaSnapshot, QuotaWindow, Registry } from "../types.js";
+import type { ToolAdapter } from "../tools/types.js";
+import type { QuotaSnapshot, QuotaWindow, QuotaWindows, Registry } from "../types.js";
 import { stripAnsi } from "./cli-style.js";
 import { clockTime } from "./route-render.js";
 import type { RouteDeps } from "./route-service.js";
 import { RECHECK_MS, RETRY_MS, rankWaiting, WAKE_MARGIN_MS, WaitInterrupted } from "./route-wait.js";
 import { DEFAULT_WAIT_MS } from "./run-args.js";
+
+// The real quota cache is read in a few cases below, against a stand-in for the usage endpoint.
+const getAdapter = vi.hoisted(() => vi.fn());
+vi.mock("../tools/registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tools/registry.js")>()),
+  getAdapter,
+}));
 
 const NOW = Date.parse("2026-10-09T00:00:00.000Z");
 const MINUTE = 60_000;
@@ -30,6 +40,8 @@ const REGISTRY: Registry = {
 };
 
 const MAIN = { route: withDefaults({ tool: "claude", from: ["*"] }) };
+/** A route of claude:a alone, for readings that leave claude:b out. */
+const ONLY_A = { route: withDefaults({ tool: "claude", from: ["a"] }) };
 
 /** A reading whose 5H window is at `percent`, resetting `resetIn` ms after NOW (null: unknown). */
 function five(percent: number, resetIn: number | null, extra: Partial<QuotaSnapshot> = {}): QuotaSnapshot {
@@ -53,8 +65,9 @@ function setup(readings: (now: number, refresh: boolean) => Record<string, Quota
   const deps: RouteDeps = {
     loadRegistry: async () => REGISTRY,
     collectQuotas: async (_targets, options) => {
-      reads.push(Boolean(options?.refresh));
-      return readings(state.now, Boolean(options?.refresh));
+      const refresh = options?.refreshBefore !== undefined;
+      reads.push(refresh);
+      return readings(state.now, refresh);
     },
     paths,
     clock: () => state.now,
@@ -157,6 +170,15 @@ describe("rankWaiting", () => {
     expect(s.sleeps).toEqual([10 * MINUTE + WAKE_MARGIN_MS, 90_000]);
   });
 
+  it("after a sleep, still gives up at once when no account could come free", async () => {
+    const s = setup((now) => ({
+      "claude:a": now < NOW + 10 * MINUTE ? five(100, 10 * MINUTE) : five(1, 1, { state: "missing" }),
+    }));
+    const { gaveUp } = await rankWaiting(ONLY_A, s.deps, { resume: false, capMs: DEFAULT_WAIT_MS });
+    expect(gaveUp).toBe("no-reset");
+    expect(s.sleeps).toEqual([10 * MINUTE + WAKE_MARGIN_MS]);
+  });
+
   it("reads a reset that has already passed again at once, before sleeping on it", async () => {
     const s = setup((_now, refresh) => ({ "claude:a": refresh ? five(0, null) : five(100, -MINUTE) }));
     const { ranking } = await rankWaiting(MAIN, s.deps, { resume: false, capMs: DEFAULT_WAIT_MS });
@@ -170,7 +192,7 @@ describe("rankWaiting", () => {
       const limit = opus(now >= NOW + 3 * 60 * MINUTE ? 0 : 100);
       return { "claude:a": { ...five(10, MINUTE), scoped: limit, scopedLimits: [limit] } };
     });
-    const { ranking } = await rankWaiting(MAIN, s.deps, { resume: false, model: "opus", capMs: DEFAULT_WAIT_MS });
+    const { ranking } = await rankWaiting(ONLY_A, s.deps, { resume: false, model: "opus", capMs: DEFAULT_WAIT_MS });
     expect(ranking.outcome).toMatchObject({ kind: "picked", id: "claude:a" });
     expect(s.said[0]).toMatch(/for claude:a \(Opus resets\) …$/);
     // Six re-checks reach the reset itself, and the reading there already shows it free.
@@ -217,6 +239,69 @@ describe("rankWaiting", () => {
       false,
       false,
     ]);
+  });
+});
+
+/**
+ * `setup`, but quota is read through the real collectQuotas - its cache, its freshness and its
+ * 429 cooldown - from an endpoint stand-in that `answer` plays at the fake clock's time.
+ */
+function setupReads(answer: (now: number) => QuotaWindows) {
+  const s = setup(() => ({}));
+  const cachePath = path.join(path.dirname(s.paths.picksPath), "quota.json");
+  const fetched: number[] = [];
+  const adapter: Partial<ToolAdapter> = {
+    readCredential: async () => ({ accessToken: "stand-in" }),
+    fetchQuota: async () => {
+      fetched.push(s.state.now - NOW);
+      return answer(s.state.now);
+    },
+  };
+  getAdapter.mockReturnValue(adapter);
+  s.deps.collectQuotas = (targets, options) => collectQuotas(targets, { ...options, now: s.state.now, cachePath });
+  const writeCache = (profiles: Record<string, QuotaSnapshot>) =>
+    writeFileSync(cachePath, JSON.stringify({ version: 1, cooldowns: {}, profiles }));
+  return { ...s, fetched, writeCache };
+}
+
+describe("rankWaiting on real quota reads", () => {
+  it("keeps waiting through a 429 at the 30-minute re-check, and runs once the account frees", async () => {
+    const s = setupReads((now) => {
+      // Refused once, at the re-check: a 429 with no Retry-After pauses reads for an hour.
+      if (now === NOW + 30 * MINUTE) throw new QuotaHttpError(429);
+      const free = now >= NOW + 60 * MINUTE;
+      return { session: { usedPercent: free ? 0 : 100, resetsAt: free ? null : iso(60 * MINUTE) } };
+    });
+    const { ranking, gaveUp } = await rankWaiting(ONLY_A, s.deps, { resume: false, capMs: DEFAULT_WAIT_MS });
+    expect(gaveUp).toBeUndefined();
+    expect(ranking.outcome).toMatchObject({ kind: "picked", id: "claude:a" });
+    // Read at the start, refused at the re-check, then nothing asked until the cooldown lifts. At
+    // 60 minutes the reading kept from the start is an hour old and no longer used: no reset is
+    // known, yet the wait goes on, asking every 5 minutes.
+    expect(s.fetched).toEqual([0, 30 * MINUTE, 90 * MINUTE]);
+    expect(s.sleeps).toEqual([RECHECK_MS, RECHECK_MS, ...Array(6).fill(RETRY_MS)]);
+    expect(s.said.at(-1)).toMatch(/for claude:a \(for a new quota reading\) …$/);
+  });
+
+  it("reuses a reading another wait took since the reset, and reads again one taken before it", async () => {
+    for (const [siblingAt, reads] of [
+      [10 * MINUTE + 15_000, [0]],
+      [5 * MINUTE, [0, 10 * MINUTE + WAKE_MARGIN_MS]],
+    ] as const) {
+      const s = setupReads((now) => ({
+        session: { usedPercent: now >= NOW + 10 * MINUTE ? 0 : 100, resetsAt: iso(10 * MINUTE) },
+      }));
+      const sleep = s.deps.sleep;
+      // While this wait sleeps, another one reads the account and caches what it got.
+      s.deps.sleep = async (ms, signal) => {
+        const free = siblingAt >= 10 * MINUTE;
+        s.writeCache({ "claude:a": five(free ? 0 : 100, 10 * MINUTE, { fetchedAt: NOW + siblingAt }) });
+        await sleep(ms, signal);
+      };
+      const { ranking } = await rankWaiting(ONLY_A, s.deps, { resume: false, capMs: DEFAULT_WAIT_MS });
+      expect(ranking.outcome).toMatchObject({ kind: "picked", id: "claude:a" });
+      expect(s.fetched).toEqual(reads);
+    }
   });
 });
 

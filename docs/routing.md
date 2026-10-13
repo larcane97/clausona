@@ -678,9 +678,17 @@ A waiting run records nothing until it picks, and then picks under the same lock
 run. Several runs that wake together still land on different accounts, as long as enough have
 come free.
 
-If a quota read is refused while it waits (the endpoint answered 429, and clausona leaves it
-alone for a while), the run ranks on the last reading. An account that still reads as full after
-its reset is read again every 5 minutes, until the cap runs out.
+A quota read that is refused while the run waits (the endpoint answered 429, and clausona leaves
+it alone for a while, an hour unless it says otherwise) or that fails does not end the wait. The
+run ranks on the last reading while it is under an hour old. Once it is older, or when an account
+still reads as full after its reset, the account is read again every 5 minutes, with no request
+sent until the 429's pause is over. The wait goes on until an account is free or the cap runs
+out. It ends sooner only when no account could come free at all, such as when every one is
+signed out.
+
+When it wakes, the run reads again only what was read before the reset it waited for. A reading
+that another waiting run took since then is used as it is, so runs that wake one after another do
+not each ask for every account again.
 
 Ctrl-C while waiting stops the run with exit code 130. Nothing is launched or recorded.
 
