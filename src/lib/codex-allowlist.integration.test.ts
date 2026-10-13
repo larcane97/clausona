@@ -43,7 +43,8 @@ afterEach(async () => {
   // The graph's dir-lock exit listener goes with it, as in add-leftover.integration.test.ts.
   process.off("exit", (await import("../core/dir-lock.js")).removeHeldDirLocks);
   vi.resetModules();
-  for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
+  // Retried: on Windows a process that has just exited can hold a file here a moment longer.
+  for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 /** An auth.json the codex adapter reads an account from. */
@@ -598,8 +599,18 @@ describe.skipIf(process.platform === "win32")("repair while Codex runs in the pr
   // cases: by afterEach once the case is over, and by the case's signal when it times out - a
   // case that timed out runs on, and can start one after afterEach is done.
   const started: ChildProcess[] = [];
-  afterEach(() => {
-    for (const codex of started.splice(0)) codex.kill();
+  afterEach(async () => {
+    // Gone, not only told to go, before the file's afterEach removes the home they run from.
+    await Promise.all(
+      started.splice(0).map(
+        (codex) =>
+          new Promise<void>((resolve) => {
+            if (codex.exitCode !== null || codex.signalCode !== null) return resolve();
+            codex.once("exit", () => resolve());
+            codex.kill();
+          }),
+      ),
+    );
   });
 
   /** Starts a process named codex - node under that name - with `codexHome` as its CODEX_HOME. */

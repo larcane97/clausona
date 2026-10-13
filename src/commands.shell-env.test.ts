@@ -25,7 +25,9 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.resetModules();
-  for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
+  // Retried: on Windows a process that has just exited can hold a file here a moment longer, and
+  // the folder it is in is not empty until it lets go.
+  for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 type Harness = {
@@ -922,6 +924,16 @@ const HOOK_SHELLS = (["zsh", "bash"] as const).map((shell) => ({
   available: spawnSync("which", [shell]).status === 0,
 }));
 
+/** How long a run waits for the hook's `_track-usage`, which a loaded runner can take seconds to start. */
+const TRACK_WAIT_MS = 10_000;
+
+/**
+ * The hook's runner: `run(shell, body, env)` runs `body` after the real hook and resolves to what
+ * the shell printed, once the hook's background `_track-usage` is done too. Every body here calls
+ * `claude` once, after which the hook starts it, refused or not, and the shell can exit before it
+ * has run: run from the case's own bin folder, it would still be there as afterEach removes it,
+ * and on Windows that removal then fails.
+ */
 function hookRunner(h: Harness, out: string) {
   const bin = path.join(h.home, "bin");
   mkdirSync(bin, { recursive: true });
@@ -929,9 +941,24 @@ function hookRunner(h: Harness, out: string) {
   // is never cached, so every one of its runs goes through here.
   const outPath = path.join(h.home, "launch.sh");
   writeFileSync(outPath, `${LAUNCH_MARKER}\n${out}`);
+  // `_track-usage` says it is done, its last act, with a line of its own here.
+  const trackedPath = path.join(h.home, "tracked");
+  const tracked = () => (existsSync(trackedPath) ? readFileSync(trackedPath, "utf8").split("\n").length - 1 : 0);
   writeFileSync(
     path.join(bin, "clausona"),
-    ["#!/bin/sh", 'case "$1" in', "  _launch)", `    cat '${outPath}'`, "    ;;", "esac", "exit 0", ""].join("\n"),
+    [
+      "#!/bin/sh",
+      'case "$1" in',
+      "  _launch)",
+      `    cat '${outPath}'`,
+      "    ;;",
+      "  _track-usage)",
+      `    printf 'done\\n' >> '${trackedPath}'`,
+      "    ;;",
+      "esac",
+      "exit 0",
+      "",
+    ].join("\n"),
     { mode: 0o755 },
   );
   const paths: ShellInitPaths = {
@@ -952,13 +979,18 @@ function hookRunner(h: Harness, out: string) {
     ].join("\n"),
     { mode: 0o755 },
   );
-  return (shell: "zsh" | "bash", body: string, env: Record<string, string>) => {
+  return async (shell: "zsh" | "bash", body: string, env: Record<string, string>) => {
     const args = shell === "zsh" ? ["-f"] : ["--noprofile", "--norc"];
-    return spawnSync(shell, [...args, "-c", `${renderPosixShellInit(paths)}\n${body}\n`], {
+    const before = tracked();
+    const result = spawnSync(shell, [...args, "-c", `${renderPosixShellInit(paths)}\n${body}\n`], {
       encoding: "utf8",
       timeout: SPAWN_TIMEOUT_MS,
       env: { PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, HOME: h.home, ...env },
     });
+    // Its line, then only its exit is left, which the retried removal in afterEach waits out.
+    const deadline = Date.now() + TRACK_WAIT_MS;
+    while (tracked() === before && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
+    return result;
   };
 }
 
@@ -1007,7 +1039,7 @@ describe.skipIf(HOOK_SHELLS.every(({ available }) => !available))(
           const run = hookRunner(h, await h.run("claude"));
           const parentEnv = Object.fromEntries(readonly.map((name) => [name, PARENT]));
 
-          const result = run(
+          const result = await run(
             shell,
             [
               ...readonly.map((name) => `readonly ${name}`),
@@ -1059,7 +1091,7 @@ describe.skipIf(HOOK_SHELLS.every(({ available }) => !available))(
         vi.stubEnv("CLAUSONA_TEST_SECRET", PROFILE_TOKEN);
         const run = hookRunner(h, await h.run("claude"));
 
-        const result = run(
+        const result = await run(
           shell,
           ["readonly MY_FLAG", "claude", 'printf "rc=%s\n" "$?"', `printf "parent MY_FLAG=[%s]\n" "$MY_FLAG"`].join(
             "\n",
@@ -1078,7 +1110,7 @@ describe.skipIf(HOOK_SHELLS.every(({ available }) => !available))(
         vi.stubEnv("CLAUSONA_TEST_SECRET", PROFILE_TOKEN);
         const run = hookRunner(h, await h.run("claude"));
 
-        const result = run(
+        const result = await run(
           shell,
           ["claude", 'printf "rc=%s\\n" "$?"', `printf "parent ANTHROPIC_API_KEY=[%s]\\n" "$ANTHROPIC_API_KEY"`].join(
             "\n",

@@ -125,11 +125,23 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  for (const child of running) child.kill();
+  // Stopped, and gone, before the home they run in is removed: on Windows a helper still
+  // running there keeps the removal from finishing.
+  await Promise.all(
+    [...running].map(
+      (child) =>
+        new Promise<void>((resolve) => {
+          if (child.exitCode !== null || child.signalCode !== null) return resolve();
+          child.once("exit", () => resolve());
+          child.kill();
+        }),
+    ),
+  );
   running.clear();
   server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
-  rmSync(home, { recursive: true, force: true });
+  // Retried: on Windows a process that has just exited can hold a file here a moment longer.
+  rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 describe("host discovery and calls", () => {
