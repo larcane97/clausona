@@ -154,21 +154,39 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
       if (isRecord(table)) out.facts.codexTrust.push({ project, trusted: table.trust_level === "trusted" });
     }
     const skills = isRecord(ctx.config.skills) ? ctx.config.skills : undefined;
-    for (const entry of Array.isArray(skills?.config) ? skills.config : []) {
-      if (!isRecord(entry) || typeof entry.enabled !== "boolean") continue;
+    const entries = (Array.isArray(skills?.config) ? skills.config : []).flatMap((entry) => {
+      if (!isRecord(entry) || typeof entry.enabled !== "boolean") return [];
       const name = typeof entry.name === "string" ? entry.name : undefined;
       const skillPath = typeof entry.path === "string" ? entry.path : undefined;
       // Codex ignores an entry with neither selector or with both.
-      if ((name === undefined) === (skillPath === undefined)) continue;
+      if ((name === undefined) === (skillPath === undefined)) return [];
+      return [{ name, skillPath, enabled: entry.enabled }];
+    });
+    // In their order, which decides between two that name one skill.
+    const real = await Promise.all(entries.map(({ skillPath }) => resolvedSkillPath(skillPath)));
+    for (const [k, { name, skillPath, enabled }] of entries.entries()) {
+      const realPath = real[k];
       out.facts.codexSkillConfig.push({
         file: ctx.configFile,
         ...(name ? { name } : {}),
         ...(skillPath ? { path: skillPath } : {}),
-        enabled: entry.enabled,
+        ...(realPath !== undefined ? { realPath } : {}),
+        enabled,
       });
     }
   }
   await Promise.all(jobs);
+}
+
+/**
+ * A `[[skills.config]]` path with its folder resolved through every link - a linked skills
+ * folder, a skill folder that is a link, `/tmp` on macOS - for matching the skill as Codex
+ * does. Undefined for no path, a relative one, or a folder that is not there.
+ */
+async function resolvedSkillPath(skillPath: string | undefined): Promise<string | undefined> {
+  if (skillPath === undefined || !path.isAbsolute(skillPath)) return undefined;
+  const folder = await realPath(path.dirname(skillPath)).catch(() => undefined);
+  return folder === undefined ? undefined : path.join(folder, path.basename(skillPath));
 }
 
 /**

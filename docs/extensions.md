@@ -205,7 +205,8 @@ The switches are read from these places:
   way.
 - `.mcp.json` servers: `enabledMcpjsonServers`, `disabledMcpjsonServers` and
   `enableAllProjectMcpServers`, in the settings files or the account's project entry.
-- Codex skills: `[[skills.config]]` in Codex's `config.toml`, by name or by path.
+- Codex skills: `[[skills.config]]` in Codex's `config.toml`, by name or by path. A path names
+  the skill whether it goes through a link or not, as Codex reads it.
 - Codex MCP servers: `mcp_servers.<name>.enabled` in Codex's or the project's `config.toml`.
 - Codex plugins and what they bring: a `[plugins."<plugin>@<marketplace>"]` table in Codex's or
   the project's `config.toml` turns a plugin on, and `enabled = false` in it turns it off. A

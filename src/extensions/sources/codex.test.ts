@@ -1,8 +1,11 @@
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { valueHash } from "../hash.js";
+import { loadInventory } from "../inventory.js";
 import { type Collector, emptyFacts } from "../model.js";
+import { stateOf } from "../state.js";
 import { TestHome } from "../test-home.js";
 import { codexProjectRecords, loadCodexContext, readCodex } from "./codex.js";
 
@@ -151,6 +154,44 @@ describe("readCodex", () => {
     expect(hook("guard")?.hook).toEqual({ base: "root", event: "PreToolUse", matcher: "Bash", group: 0, index: 0 });
     const guard = hook("guard");
     expect(guard && out.facts.fingerprints[guard.id]).toBe(valueHash({ type: "command", command: "guard" }));
+  });
+
+  it("matches a [[skills.config]] path to a skill through links, either way round, as Codex does", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    // Codex's skills folder is a link, and the entry holds the real path.
+    h.skill("shared/codex-skills", "lint");
+    h.link("shared/codex-skills", ".codex/skills");
+    // A project skill folder is a link, and the entry holds the link's path.
+    h.skill("elsewhere", "deploy");
+    h.link("elsewhere/deploy", "repos/app/.agents/skills/deploy");
+    // The entry holds a path through a link to the home, and the skill is listed by its own.
+    h.skill(".agents/skills", "eli5");
+    h.link(".", "alias");
+    const toml = (p: string) => `[[skills.config]]\npath = '${p}'\nenabled = false\n`;
+    h.codex(
+      "personal",
+      ".codex",
+      [
+        `[projects.'${app}']\ntrust_level = "trusted"\n`,
+        toml(realpathSync(h.path("shared", "codex-skills", "lint", "SKILL.md"))),
+        toml(h.path("repos", "app", ".agents", "skills", "deploy", "SKILL.md")),
+        toml(h.path("alias", ".agents", "skills", "eli5", "SKILL.md")),
+      ].join("\n"),
+    );
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: app,
+      managedSettings: h.path("m.json"),
+    });
+    const state = (name: string) => {
+      const item = inv.items.find((i) => i.location.tool === "codex" && i.name === name);
+      if (!item) throw new Error(`no ${name}`);
+      return stateOf(inv, item, app).value;
+    };
+    expect([state("lint"), state("deploy"), state("eli5")]).toEqual(["off", "off", "off"]);
   });
 
   it("warns for a config.toml that does not parse and reads the rest", async () => {

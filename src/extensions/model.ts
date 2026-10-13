@@ -111,7 +111,12 @@ export type StateFacts = {
     disabled: string[];
     enableAll: boolean;
   }[];
-  codexSkillConfig: { file: string; name?: string; path?: string; enabled: boolean }[];
+  /**
+   * `[[skills.config]]` in the user config.toml. `realPath` is `path` with its folder resolved
+   * through every link, when that folder exists: Codex takes the link's path and the real one
+   * alike.
+   */
+  codexSkillConfig: { file: string; name?: string; path?: string; realPath?: string; enabled: boolean }[];
   codexMcpEnabled: { file: string; project?: string; name: string; enabled: boolean }[];
   /**
    * Item id -> valueHash of its raw entry, for MCP servers and hooks: a write checks the entry is
