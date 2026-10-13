@@ -512,7 +512,8 @@ describe("renderList with API profiles", () => {
   it("runs an API profile's budget across the 5H and 7D columns, and says how old an old reading is", () => {
     const budget = {
       usedPercent: 35,
-      resetsAt: new Date(Date.now() + 18 * 24 * 3_600_000).toISOString(),
+      // Half a day past 18 days: on the dot, the moment before the row is drawn makes it 17d.
+      resetsAt: new Date(Date.now() + 18.5 * 24 * 3_600_000).toISOString(),
       spentUsd: 7,
       limitUsd: 20,
       source: "budget" as const,
