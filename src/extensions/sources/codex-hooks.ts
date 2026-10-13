@@ -6,6 +6,7 @@ import { parse, TomlDate } from "smol-toml";
 import type { Collector, Location, StateFacts } from "../model.js";
 import { isRecord, readText, realPath } from "../read.js";
 import { addHooks } from "./claude-hooks.js";
+import { codexSkipsMatcher } from "./codex-matcher.js";
 
 /**
  * Codex's hook trust, as Codex 0.159.3 keeps it (codex-rs/hooks, engine/discovery.rs). Codex runs
@@ -95,6 +96,8 @@ export function addCodexHookTrust(
       if (!isRecord(group) || !Array.isArray(group.hooks)) return;
       const raw = typeof group.matcher === "string" ? group.matcher : undefined;
       const matcher = WITH_MATCHER.has(event) ? raw : undefined;
+      // Codex skips a group whose matcher it cannot compile, and lists none of its hooks.
+      if (matcher !== undefined && codexSkipsMatcher(matcher)) return;
       group.hooks.forEach((hook, h) => {
         const handler = normalized(event, hook);
         if (handler === undefined) return;
@@ -262,7 +265,9 @@ export function addConfigHooks(
  * or tool is ("server and tool must not be empty"). The last two are the command and MCP tool
  * hooks of a known event that have no trust identity: normalized() reads what Codex runs on this
  * platform, and gives none to those alone. A hook on an event Codex does not know - its twelve,
- * by their exact names - is none of these but an `unknown event`. One in a file Codex refuses
+ * by their exact names - is none of these but an `unknown event`; one in a group whose matcher
+ * Codex cannot compile (codexSkipsMatcher), on an event that reads it, has an `invalid
+ * matcher`, as Codex skips the group before it looks at a hook. One in a file Codex refuses
  * keeps that reason. A copy clausona keeps aside is in no hooks file, so has no trust identity
  * either: it is off, and none of these.
  */
@@ -274,8 +279,11 @@ export function markUnsupportedHooks(out: Collector): void {
     const event = item.hook?.event ?? "";
     const sessionEndTool = type === "mcp_tool" && event === "SessionEnd";
     // Codex reads the twelve events it knows, by their exact names, and leaves any other alone.
+    const matcher = item.hook?.matcher;
     if (!Object.hasOwn(EVENTS, event)) item.codexError = "unknown event";
-    else if (type === "prompt" || type === "agent" || sessionEndTool) item.codexError = "not supported";
+    else if (WITH_MATCHER.has(event) && matcher !== undefined && codexSkipsMatcher(matcher)) {
+      item.codexError = "invalid matcher";
+    } else if (type === "prompt" || type === "agent" || sessionEndTool) item.codexError = "not supported";
     else if (Object.hasOwn(EVENTS, event) && !trusted.has(item.id)) {
       if (type === "command") item.codexError = "empty command";
       if (type === "mcp_tool") item.codexError = "empty tool";

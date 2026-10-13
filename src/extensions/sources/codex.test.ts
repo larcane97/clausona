@@ -620,6 +620,63 @@ describe("readCodex", () => {
     );
   });
 
+  it("marks the hooks of a group whose matcher Codex cannot compile, on an event that reads it", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    // Codex 0.159.3's hooks/list: "invalid matcher" for (?=Bash), Bash( and [, and fine, names
+    // and stop listed, under the keys pre_tool_use:2:0, pre_tool_use:3:0 and stop:0:0.
+    h.write(".codex/hooks.json", {
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "(?=Bash)",
+            hooks: [
+              { type: "command", command: "ahead" },
+              { type: "prompt", prompt: "p" },
+            ],
+          },
+          { matcher: "Bash(", hooks: [{ type: "command", command: "open" }] },
+          { matcher: "(?i)bash|^Read$", hooks: [{ type: "command", command: "fine" }] },
+          { matcher: "Bash|Read", hooks: [{ type: "command", command: "names" }] },
+        ],
+        // Stop reads no matcher; SessionStart does.
+        Stop: [{ matcher: "(", hooks: [{ type: "command", command: "stop" }] }],
+        SessionStart: [{ matcher: "[", hooks: [{ type: "command", command: "start" }] }],
+      },
+    });
+    h.codex(
+      "personal",
+      ".codex",
+      '[[hooks.PreToolUse]]\nmatcher = "(?=Bash)"\n[[hooks.PreToolUse.hooks]]\ntype = "command"\ncommand = "toml"\n',
+    );
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(ctx, [], out);
+    const place = (id: string) => id.slice(id.indexOf(":-:") + 3);
+    expect(
+      out.items
+        .filter((i) => i.kind === "hook")
+        .map((i) => [place(i.id), i.codexError])
+        .sort(),
+    ).toEqual(
+      [
+        ["PreToolUse#0.0", "invalid matcher"],
+        ["PreToolUse#0.1", "invalid matcher"],
+        ["PreToolUse#1.0", "invalid matcher"],
+        ["PreToolUse#2.0", undefined],
+        ["PreToolUse#3.0", undefined],
+        ["PreToolUse#config.toml:0.0", "invalid matcher"],
+        ["SessionStart#0.0", "invalid matcher"],
+        ["Stop#0.0", undefined],
+      ].sort(),
+    );
+    // Codex lists none of a skipped group's hooks, so they have no trust to look up.
+    expect(out.facts.codexHookTrust.map((t) => place(t.id)).sort()).toEqual(
+      ["PreToolUse#2.0", "PreToolUse#3.0", "Stop#0.0"].sort(),
+    );
+  });
+
   it("marks an MCP tool hook whose server or tool is empty, which Codex skips, and runs the rest", async () => {
     const h = new TestHome();
     homes.push(h);

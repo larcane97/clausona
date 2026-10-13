@@ -71,6 +71,7 @@ const TAGS = [
   "empty command",
   "empty tool",
   "unknown event",
+  "invalid matcher",
 ];
 
 /** The keys `ls --json` writes, in order. */
@@ -293,7 +294,8 @@ function seed() {
     skillOverrides: { "old-one": "off" },
     hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-done" }] }] },
   });
-  // A prompt hook, an empty command and an empty tool in Codex's config.toml, which Codex does not run.
+  // A prompt hook, an empty command, an empty tool, a hook on an unknown event and one with a
+  // lookahead matcher in Codex's config.toml, which Codex does not run.
   h.codex(
     "personal",
     ".codex",
@@ -313,6 +315,11 @@ function seed() {
       "[[hooks.Unknown.hooks]]",
       'type = "command"',
       'command = "who"',
+      "[[hooks.PreToolUse]]",
+      'matcher = "(?=Bash)"',
+      "[[hooks.PreToolUse.hooks]]",
+      'type = "command"',
+      'command = "ahead"',
     ].join("\n"),
   );
   // A linked worktree of a trusted repo, as git keeps one, with a hook in its own .codex folder,

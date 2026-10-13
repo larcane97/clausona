@@ -227,7 +227,7 @@ The `state` of an item in JSON is one of these:
 
 | State | Meaning |
 |---|---|
-| `on` | The switch is on. It loads unless a tag says `hidden by …` or `broken link`, or, for a Codex skill, `no front matter`, `invalid front matter`, `name too long` or `no description`, or, for a Codex hook, `invalid hooks file`, `not supported`, `empty command`, `empty tool` or `unknown event`. |
+| `on` | The switch is on. It loads unless a tag says `hidden by …` or `broken link`, or, for a Codex skill, `no front matter`, `invalid front matter`, `name too long` or `no description`, or, for a Codex hook, `invalid hooks file`, `not supported`, `empty command`, `empty tool`, `unknown event` or `invalid matcher`. |
 | `off` | It is turned off. |
 | `name-only` | A Claude skill set to `name-only` in `skillOverrides`. The details say "Shows as name only". |
 | `user-invocable-only` | A Claude skill set to `user-invocable-only` in `skillOverrides`. The details say "Shows as only when you call it". |
@@ -238,8 +238,8 @@ The `state` of an item in JSON is one of these:
 `state` is the switch's value and nothing more. A row loads here when its state is `on`,
 `name-only` or `user-invocable-only` and no tag says `hidden by …` or `broken link`, or, for a
 Codex skill, `no front matter`, `invalid front matter`, `name too long` or `no description`, or,
-for a Codex hook, `invalid hooks file`, `not supported`, `empty command`, `empty tool` or
-`unknown event`.
+for a Codex hook, `invalid hooks file`, `not supported`, `empty command`, `empty tool`,
+`unknown event` or `invalid matcher`.
 A hidden copy, a broken link and a file Codex skips keep their own `state`; only the tags say
 they do not load. A `mixed` row loads in the accounts whose `stateByAccount` value is `on`,
 except where another copy wins there, which its details say. A row read per account says it
@@ -353,7 +353,14 @@ The switches are read from these places:
   are tagged `not supported`. It skips a command hook whose command is empty, or only spaces,
   and an MCP tool hook whose server or tool is, and runs the rest of its file: those are tagged
   `empty command` and `empty tool`. It reads its twelve events by their exact names and leaves
-  any other alone, its hooks unread, so a hook on such an event is tagged `unknown event`. Codex
+  any other alone, its hooks unread, so a hook on such an event is tagged `unknown event`. On
+  the events that take a matcher, Codex compiles one that is not `*`, empty or plain names
+  (letters, digits, `_` and `|`) as a Rust regex, and skips the whole group when it cannot:
+  its hooks are tagged `invalid matcher`. Rust's regex is not JavaScript's: it has no
+  lookaround (`(?=…)`) or backreferences, and takes `(?i)` and `\pL`. clausona checks the
+  matcher as Rust's parser does, so it tags only what Codex skips for sure; a matcher Rust
+  parses and then cannot compile, such as an unknown `\p{…}` name or one past its size limit,
+  is not tagged. Codex
   also runs the hooks a `config.toml` holds, as `[[hooks.<Event>]]` tables, beside that folder's
   `hooks.json`: Codex's own and a trusted project's. Their key holds the `config.toml`'s path.
   clausona lists them and their trust, and leaves changing them to `/hooks` in Codex
@@ -376,7 +383,8 @@ A row can carry several tags. They are listed most important first: `broken link
 `off`, `off here` or `off in N of M accounts`, then `not here`, then `pending approval`, then
 `hidden by … copy`, then `unused`, then `no front matter`, then `invalid front matter`, then
 `name too long`, then `no description`, then `main checkout's runs`, then `invalid hooks file`,
-then `not supported`, then `empty command`, then `empty tool`, then `unknown event`. The NOTE
+then `not supported`, then `empty command`, then `empty tool`, then `unknown event`, then
+`invalid matcher`. The NOTE
 column shows the first; JSON `tags` has them all.
 
 | Tag | When |
@@ -401,6 +409,7 @@ column shows the first; JSON `tags` has them all.
 | `empty command` | A Codex command hook whose command is empty or only spaces. Codex skips it, and runs the rest of its file, so it is not in Loaded. |
 | `empty tool` | A Codex MCP tool hook whose server or tool is empty or only spaces. Codex skips it, and runs the rest of its file, so it is not in Loaded. |
 | `unknown event` | A Codex hook on an event that is none of Codex's twelve, such as `Notification` or a `stop` in lower case. Codex leaves the event alone, so the hook is not in Loaded. |
+| `invalid matcher` | A Codex hook whose group's matcher is not a regex Codex can compile, such as `(?=Bash)` or `Bash(`, on an event that takes a matcher. Codex skips the group, so the hook is not in Loaded. |
 
 The three `hidden by` tags are the forms of `hidden by <scope> copy`, which names the scope of
 the copy that wins. [Which copy wins](#which-copy-wins) says which copy that is.
