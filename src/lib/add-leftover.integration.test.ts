@@ -1,5 +1,14 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -504,6 +513,15 @@ describe.skipIf(process.platform === "win32")("add interrupted mid-login", () =>
     }
   }
 
+  /** Once the login is gone too, what the add left is final. */
+  async function loginGone(group: number) {
+    const deadline = Date.now() + 30_000;
+    while (groupAlive(group)) {
+      if (Date.now() > deadline) throw new Error("the login never exited");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
   async function startLogin(home: string, env: Record<string, string> = {}) {
     const started = path.join(home, "login-started");
     const run = runAdd(home, { ...env, FAKE_LOGIN_STARTED: started });
@@ -540,16 +558,29 @@ describe.skipIf(process.platform === "win32")("add interrupted mid-login", () =>
   );
 
   it(
-    "removes the directory when the terminal hangs up on the add and its login",
+    "removes the directory when the terminal hangs up on the add and its login, or leaves it marked",
     async () => {
       const home = seedHome();
+      const before = readdirSync(home);
       const configDir = path.join(home, ".claude-hup");
       const { child, ended } = await startLogin(home);
+      const group = child.pid as number;
 
-      process.kill(-(child.pid as number), "SIGHUP");
+      process.kill(-group, "SIGHUP");
 
       expect(howItEnded(await ended)).toMatch(HUNG_UP);
-      expect(existsSync(configDir)).toBe(false);
+      await loginGone(group);
+      // Either ending is right. The hangup ends the login too, and the add removes the
+      // directory once the login has returned. On a loaded machine the login's exit can come
+      // after the add's grace period, and the add then ends by the signal and leaves the
+      // directory with its marker, which the next add takes back - the fallback the marker is
+      // there for. Never right: a directory without the marker, or anything else the add made.
+      expect(!existsSync(configDir) || existsSync(path.join(configDir, MARKER))).toBe(true);
+      // The login stand-in's own note is the one other thing new in the home.
+      expect(readdirSync(home).filter((name) => !before.includes(name) && name !== ".claude-hup")).toEqual([
+        "login-started",
+      ]);
+      expect(readRegistry(home).profiles["claude:hup"]).toBeUndefined();
       expect(existsSync(addLockPath(home))).toBe(false);
     },
     CHILD_TEST_TIMEOUT_MS,
@@ -567,11 +598,7 @@ describe.skipIf(process.platform === "win32")("add interrupted mid-login", () =>
       expect(howItEnded(await ended)).toMatch(HUNG_UP);
       // Judge only once the login is gone too: removing the directory while it was still
       // exiting would have let it recreate one, without the marker.
-      const deadline = Date.now() + 30_000;
-      while (groupAlive(group)) {
-        if (Date.now() > deadline) throw new Error("the login never exited");
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
+      await loginGone(group);
 
       // Removed once the login returned - or, when a loaded machine kept it from exiting within
       // the grace period, left for the next add with its marker. Never there without one.

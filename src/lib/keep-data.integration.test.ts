@@ -15,7 +15,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import type { Registry } from "../types.js";
 
 /**
@@ -43,6 +42,11 @@ vi.mock("../core/socket-path.js", async (importOriginal) => {
 beforeEach(() => {
   vi.stubEnv("CODEX_SQLITE_HOME", "");
 });
+
+// Repair asks whether Codex runs in the profile, and the real check reads every codex process
+// on the machine, the user's own among them. Nothing here is about a running Codex; the check
+// has tests of its own (codex-allowlist.integration.test.ts, running-codex.test.ts).
+vi.mock("../core/running-codex.js", () => ({ codexProcessesFor: async () => [] }));
 
 const temps: string[] = [];
 afterEach(() => {
@@ -199,9 +203,7 @@ describe("repair over the profile's own data", () => {
     expect(h.stderr()).toContain("still in");
   });
 
-  it("the session-mode toggle brings a private directory back from its newest backup", {
-    timeout: SPAWNING_TEST_TIMEOUT_MS,
-  }, async () => {
+  it("the session-mode toggle brings a private directory back from its newest backup", async () => {
     const h = await workHarness();
     mkdirSync(path.join(h.dirs.codex, "sessions"));
     writeFileSync(path.join(h.dirs.codex, "sessions", "primary.jsonl"), "primary");
@@ -275,9 +277,7 @@ describe("repair over the profile's own data", () => {
     expect(h.stderr()).toContain(path.join("plugins", "known_marketplaces.json"));
   });
 
-  it("takes out a second name of the primary's credential even when the primary reaches it by a link", {
-    timeout: SPAWNING_TEST_TIMEOUT_MS,
-  }, async () => {
+  it("takes out a second name of the primary's credential even when the primary reaches it by a link", async () => {
     const h = await workHarness();
     const shared = path.join(h.home, "shared-auth.json");
     writeFileSync(shared, codexAuth("primary@example.com"));
@@ -311,9 +311,7 @@ describe("repair over the profile's own data", () => {
     expect(lstatSync(own).isFile() && readFileSync(own, "utf8"), "remove deleted it").toBe(before);
   });
 
-  it("remove puts no backup over what the profile has written since, and keeps that backup", {
-    timeout: SPAWNING_TEST_TIMEOUT_MS,
-  }, async () => {
+  it("remove puts no backup over what the profile has written since, and keeps that backup", async () => {
     const h = await workHarness();
     mkdirSync(path.join(h.dirs.codex, "sessions"));
     mkdirSync(path.join(h.dirs.codexWork, "sessions"));
@@ -339,7 +337,7 @@ describe("repair over the profile's own data", () => {
     expect(h.stderr()).toContain("history.jsonl, sessions");
   });
 
-  it("puts a relative link back exactly as it was written", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
+  it("puts a relative link back exactly as it was written", async () => {
     const h = await workHarness();
     mkdirSync(path.join(h.home, "dotfiles"));
     writeFileSync(path.join(h.home, "dotfiles", "foo.md"), "from dotfiles");
