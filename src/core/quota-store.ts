@@ -221,10 +221,7 @@ async function fetchSpend(
         },
       };
     }
-    const spend = {
-      ...withBaselines(reading, cached?.spend, now, cached?.spend?.takenAt ?? cached?.fetchedAt),
-      takenAt: now,
-    };
+    const spend = withBaselines(reading, cached?.spend, now);
     return { snapshot: withBudget({ state: "ok", fetchedAt: now, spend }, target.api, now) };
   } catch (error) {
     if (error instanceof QuotaHttpError) {

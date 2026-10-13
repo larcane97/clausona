@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { SpendReading } from "../types.js";
 import { QuotaHttpError } from "./quota.js";
 import {
   budgetWindow,
@@ -232,20 +233,43 @@ describe("withBaselines", () => {
     const day = 24 * 60 * 60 * 1000;
     const resetsAt = (at: number) => new Date(at + day).toISOString();
     const first = withBaselines({ totalUsd: 0, limit: { usd: 50, resetsAt: resetsAt(NOW) } }, undefined, NOW);
-    const later = withBaselines({ totalUsd: 30, limit: { usd: 50, resetsAt: resetsAt(NOW) } }, first, NOW + 1000, NOW);
-    // The next day the count began again at 0, and has climbed to 35 by the next reading.
+    const later = withBaselines({ totalUsd: 30, limit: { usd: 50, resetsAt: resetsAt(NOW) } }, first, NOW + 1000);
+    // The next day the count began again at 0, and its reset time moved on; it has climbed to 35.
     const next = withBaselines(
       { totalUsd: 35, limit: { usd: 50, resetsAt: resetsAt(NOW + day) } },
       later,
       NOW + day + 2000,
-      NOW + 1000,
     );
     expect(budgetWindow(next, { usd: 100, per: "month" }, NOW + day + 2000)?.spentUsd).toBe(65);
-    // A reset already past when the last reading was taken is not taken for a new one.
-    const stale = { totalUsd: 10, limit: { usd: 50, resetsAt: new Date(NOW - day).toISOString() } };
-    const base = withBaselines(stale, undefined, NOW);
-    const after = withBaselines({ ...stale, totalUsd: 12 }, base, NOW + 1000, NOW);
-    expect(budgetWindow(after, { usd: 100, per: "month" }, NOW + 1000)?.spentUsd).toBe(2);
+  });
+
+  it("counts a late provider reset once, and not while its reset time has only passed", () => {
+    // A key LiteLLM resets daily, under a $100 monthly budget. LiteLLM's job resets a key some
+    // minutes after its budget_reset_at, and moves that time on as it does.
+    const at = (iso: string) => Date.parse(iso);
+    const month = { usd: 100, per: "month" as const };
+    const read = (previous: SpendReading | undefined, when: string, total: number, resets: string) => {
+      const reading = withBaselines(
+        { totalUsd: total, limit: { usd: 50, resetsAt: resets, per: "day" } },
+        previous,
+        at(when),
+      );
+      return { reading, spent: budgetWindow(reading, month, at(when))?.spentUsd };
+    };
+    const one = read(undefined, "2026-10-14T08:00:00Z", 0, "2026-10-15T00:00:00.000Z");
+    const two = read(one.reading, "2026-10-14T20:00:00Z", 30, "2026-10-15T00:00:00.000Z");
+    expect(two.spent).toBe(30);
+    // Past the reset time, before the job has run: the old total, no reset yet.
+    const late = read(two.reading, "2026-10-15T00:05:00Z", 31, "2026-10-15T00:00:00.000Z");
+    expect(late.spent).toBe(31);
+    // The job has run: the total fell and the time moved on, one reset.
+    const reset = read(late.reading, "2026-10-15T00:20:00Z", 0.5, "2026-10-16T00:00:00.000Z");
+    expect(reset.spent).toBe(31.5);
+    const evening = read(reset.reading, "2026-10-15T18:00:00Z", 10, "2026-10-16T00:00:00.000Z");
+    expect(evening.spent).toBe(41);
+    // A reset time already past and never moved (a proxy late with its own reset) is no reset either.
+    const stale = read(undefined, "2026-10-14T08:00:00Z", 10, "2026-10-13T00:00:00.000Z");
+    expect(read(stale.reading, "2026-10-14T09:00:00Z", 12, "2026-10-13T00:00:00.000Z").spent).toBe(2);
   });
 
   it("leaves a reading that reports its periods alone", () => {
