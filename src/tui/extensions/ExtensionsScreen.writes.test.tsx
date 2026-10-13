@@ -8,6 +8,7 @@ import { loadInventory } from "../../extensions/inventory.js";
 import { writesFor } from "../../extensions/load.js";
 import { TestHome } from "../../extensions/test-home.js";
 import { stripAnsi } from "../../lib/cli-style.js";
+import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../../test-timeouts.js";
 import {
   DOWN,
   ENTER,
@@ -24,6 +25,14 @@ import { windowsOnScreen } from "../test-frames.js";
 import { ExtensionsScreen } from "./ExtensionsScreen.js";
 
 vi.setConfig({ testTimeout: 20_000 });
+
+/**
+ * How long a key that plans a change in a project may take to draw what it led to. The plan asks
+ * git what it tracks and what it ignores (planChecked), which on a busy machine takes seconds
+ * where every other step here takes milliseconds: up to git-tracked.ts's 5 s for each of its two
+ * git runs in a row, then the redraw. A case with such a step takes SPAWNING_TEST_TIMEOUT_MS.
+ */
+const PLAN_STEP_MS = 15_000;
 
 const DAY = 86_400_000;
 // Built from pieces, so no key-shaped string sits in the source.
@@ -58,7 +67,7 @@ const GIT_ENV: NodeJS.ProcessEnv = {
 const hasGit = spawnSync("git", ["--version"], { env: GIT_ENV }).status === 0;
 
 function git(cwd: string, args: string[]): void {
-  const result = spawnSync("git", args, { cwd, env: GIT_ENV, encoding: "utf8" });
+  const result = spawnSync("git", args, { cwd, env: GIT_ENV, encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
   if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr}`);
 }
 
@@ -141,8 +150,8 @@ function mount(h: TestHome, app: string, columns: number, rows: number, options:
 }
 
 /** Waits for a frame whose text, colours aside, passes `check`, and returns that text. */
-async function seen(instance: Instance, check: (text: string) => boolean): Promise<string> {
-  return stripAnsi(await waitForFrame(instance.lastFrame, (frame) => check(stripAnsi(frame))));
+async function seen(instance: Instance, check: (text: string) => boolean, timeout?: number): Promise<string> {
+  return stripAnsi(await waitForFrame(instance.lastFrame, (frame) => check(stripAnsi(frame)), timeout));
 }
 
 /** The key hints: the line that offers esc. */
@@ -197,12 +206,12 @@ const json = (file: string) => JSON.parse(readFileSync(file, "utf8"));
 const local = (app: string) => path.join(app, ".claude", "settings.local.json");
 
 describe("ExtensionsScreen: writes", () => {
-  it("turns a Global skill off here after a confirm, and says so", async () => {
+  it("turns a Global skill off here after a confirm, and says so", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);
     await openRow(instance, "Global", "eli5");
-    await press(instance, SPACE);
-    const dialog = await seen(instance, (f) => f.includes("Turn off eli5 in this project?"));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    const dialog = await seen(instance, (f) => f.includes("Turn off eli5 in this project?"), PLAN_STEP_MS);
     expect(dialog).toContain("skillOverrides.eli5 → off");
     expect(hintLine(dialog)).toContain("y apply");
     await press(instance, "y");
@@ -211,13 +220,13 @@ describe("ExtensionsScreen: writes", () => {
     expect(json(local(app)).skillOverrides).toEqual({ eli5: "off" });
   });
 
-  it("changes nothing on n or esc", async () => {
+  it("changes nothing on n or esc", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);
     await openRow(instance, "Global", "eli5");
     for (const key of ["n", ESC]) {
-      await press(instance, SPACE);
-      await seen(instance, (f) => f.includes("Turn off eli5 in this project?"));
+      await press(instance, SPACE, PLAN_STEP_MS);
+      await seen(instance, (f) => f.includes("Turn off eli5 in this project?"), PLAN_STEP_MS);
       // ctrl+y and ctrl+n are not y and n.
       await type(instance, "\u0019");
       await type(instance, "\u000e");
@@ -229,12 +238,12 @@ describe("ExtensionsScreen: writes", () => {
     }
   });
 
-  it("undoes the newest change on u, after a confirm", async () => {
+  it("undoes the newest change on u, after a confirm", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);
     await openRow(instance, "Global", "eli5");
-    await press(instance, SPACE);
-    await seen(instance, (f) => f.includes("Turn off eli5 in this project?"));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    await seen(instance, (f) => f.includes("Turn off eli5 in this project?"), PLAN_STEP_MS);
     await press(instance, "y");
     await seen(instance, (f) => f.includes("Turned off eli5 in this project · u to undo"));
     await press(instance, "u");
@@ -311,7 +320,9 @@ describe("ExtensionsScreen: writes", () => {
     expect(existsSync(h.path(".claude", "skills", "old-one"))).toBe(false);
   });
 
-  it("says what a .mcp.json server runs in the dialog where space approves it", async () => {
+  it("says what a .mcp.json server runs in the dialog where space approves it", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     h.write("repos/app/.mcp.json", {
       mcpServers: { "docs-search": { command: "npx", args: ["docs-mcp", "--api-key", KEY] } },
@@ -324,8 +335,8 @@ describe("ExtensionsScreen: writes", () => {
     expect(lastPaneLine(details)).toBe("space on here · d delete");
     await press(instance, ESC);
     await seen(instance, (f) => focusedOn(f, "docs-search"));
-    await press(instance, SPACE);
-    const dialog = await seen(instance, (f) => f.includes("Turn on docs-search in this project?"));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    const dialog = await seen(instance, (f) => f.includes("Turn on docs-search in this project?"), PLAN_STEP_MS);
     const lines = dialog.split("\n");
     const at = lines.findIndex((line) => line.includes("enabledMcpjsonServers + docs-search"));
     expect(at).toBeGreaterThan(0);
@@ -336,7 +347,9 @@ describe("ExtensionsScreen: writes", () => {
     expect(json(local(app)).enabledMcpjsonServers).toEqual(["docs-search"]);
   });
 
-  it("says in the dialog which links deleting a folder leaves broken", async () => {
+  it("says in the dialog which links deleting a folder leaves broken", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     h.skill("repos/app/.claude/skills", "gstack");
     for (const name of ["canary", "careful"]) {
@@ -345,8 +358,8 @@ describe("ExtensionsScreen: writes", () => {
     }
     const instance = mount(h, app, 140, 40);
     await openRow(instance, "Project", "gstack");
-    await press(instance, "d");
-    const dialog = await seen(instance, (f) => f.includes("Delete gstack?"));
+    await press(instance, "d", PLAN_STEP_MS);
+    const dialog = await seen(instance, (f) => f.includes("Delete gstack?"), PLAN_STEP_MS);
     expect(dialog.split("\n").find((line) => line.includes(`skills${path.sep}gstack`))).toContain(
       "breaks 2 links: canary, careful (add them to delete them too)",
     );
@@ -355,6 +368,7 @@ describe("ExtensionsScreen: writes", () => {
 
   it.skipIf(!hasGit)(
     "adds Claude Code's ignore line with a project's first settings.local.json, and keeps it when an account is picked",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
     async () => {
       const { h, app } = seed();
       rmSync(path.join(app, ".git"), { recursive: true, force: true });
@@ -366,8 +380,8 @@ describe("ExtensionsScreen: writes", () => {
       const ignore = h.path(".config", "git", "ignore");
       const instance = mount(h, app, 140, 40);
       await openRow(instance, "Project", "docs-search", "2");
-      await press(instance, SPACE);
-      const dialog = await seen(instance, (f) => f.includes("◉ default") && f.includes("◉ work"));
+      await press(instance, SPACE, PLAN_STEP_MS);
+      const dialog = await seen(instance, (f) => f.includes("◉ default") && f.includes("◉ work"), PLAN_STEP_MS);
       const ignoreLine = (frame: string) => frame.split("\n").find((line) => line.includes(`git${path.sep}ignore`));
       expect(ignoreLine(dialog)).toContain("adds **/.claude/settings.local.json  as Claude Code does");
       // Leaving an account out plans again: the line stays.
@@ -384,6 +398,7 @@ describe("ExtensionsScreen: writes", () => {
 
   it.skipIf(!hasGit)(
     "warns that deleting a skill git tracks changes the repo, and turns it off instead on o",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
     async () => {
       const { h, app } = seed();
       rmSync(path.join(app, ".git"), { recursive: true, force: true });
@@ -391,21 +406,21 @@ describe("ExtensionsScreen: writes", () => {
       git(app, ["add", path.join(".claude", "skills", "deploy-check", "SKILL.md")]);
       const instance = mount(h, app, 140, 40);
       await openRow(instance, "Project", "deploy-check");
-      await press(instance, "d");
-      const dialog = await seen(instance, (f) => f.includes("Git tracks deploy-check in app"));
+      await press(instance, "d", PLAN_STEP_MS);
+      const dialog = await seen(instance, (f) => f.includes("Git tracks deploy-check in app"), PLAN_STEP_MS);
       expect(dialog).toContain("Git tracks deploy-check in app, so deleting changes the repo.");
       expect(hintLine(dialog)).toContain("o off instead");
-      await press(instance, "o");
-      await seen(instance, (f) => f.includes("Turn off deploy-check in this project?"));
+      await press(instance, "o", PLAN_STEP_MS);
+      await seen(instance, (f) => f.includes("Turn off deploy-check in this project?"), PLAN_STEP_MS);
       await press(instance, "y");
       await seen(instance, (f) => f.includes("Turned off deploy-check in this project · u to undo"));
       expect(json(local(app)).skillOverrides).toEqual({ "deploy-check": "off" });
       expect(existsSync(path.join(app, ".claude", "skills", "deploy-check"))).toBe(true);
       // Off instead, once it is off: nothing to do, and the status says why.
-      await press(instance, "d");
-      await seen(instance, (f) => f.includes("Git tracks deploy-check in app"));
-      await press(instance, "o");
-      await seen(instance, (f) => f.includes("Nothing to do: already off in this project."));
+      await press(instance, "d", PLAN_STEP_MS);
+      await seen(instance, (f) => f.includes("Git tracks deploy-check in app"), PLAN_STEP_MS);
+      await press(instance, "o", PLAN_STEP_MS);
+      await seen(instance, (f) => f.includes("Nothing to do: already off in this project."), PLAN_STEP_MS);
     },
   );
 
@@ -427,14 +442,14 @@ describe("ExtensionsScreen: writes", () => {
     expect(lastPaneLine(pdf)).toBe("space off here · g off everywhere · v name only");
   });
 
-  it("sets a skill's visibility here with v in its details", async () => {
+  it("sets a skill's visibility here with v in its details", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);
     await openRow(instance, "Global", "eli5");
     await press(instance, ENTER);
     await seen(instance, (f) => f.includes("GLOBAL › eli5"));
-    await press(instance, "v");
-    await seen(instance, (f) => f.includes("Show eli5 as name only in this project?"));
+    await press(instance, "v", PLAN_STEP_MS);
+    await seen(instance, (f) => f.includes("Show eli5 as name only in this project?"), PLAN_STEP_MS);
     await press(instance, "y");
     const details = await seen(instance, (f) => f.includes("eli5 shows as name only in this project · u to undo"));
     expect(details).toContain(`Shows as  name only (this project's ${path.join(".claude", "settings.local.json")})`);
@@ -647,12 +662,14 @@ describe("ExtensionsScreen: writes", () => {
     expect(back).toContain("· 1 marked");
   });
 
-  it("says how many marked rows cannot change when none of them would", async () => {
+  it("says how many marked rows cannot change when none of them would", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);
     await openRow(instance, "Global", "old-one");
-    await press(instance, SPACE);
-    await seen(instance, (f) => f.includes("Turn off old-one in this project?"));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    await seen(instance, (f) => f.includes("Turn off old-one in this project?"), PLAN_STEP_MS);
     await press(instance, "y");
     await seen(instance, (f) => f.includes("Turned off old-one in this project · u to undo"));
     // old-one is off already, and lost's link leads nowhere.
