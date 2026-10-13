@@ -224,9 +224,8 @@ $ clausona route list
 
 `SKIP AT` is the cut. `FREE NOW` counts the accounts under the cut right now, out of every
 account in the route. One that is signed out still counts as a member, just not as free. An API
-profile does not count at all, since no run takes one. `NEXT`
-is the account a run would get now. When nobody can be picked it says `none`, and when the first
-account frees up.
+profile does not count at all, since no run takes one. `NEXT` is the account a run would get now.
+When nobody can be picked it says `none`, and when the first account frees up.
 
 `route list` records nothing. With `--no-quota` it reads no quota at all, and `FREE NOW` and
 `NEXT` show `—`. They show the same dash when no reading could be had for any account of a route,

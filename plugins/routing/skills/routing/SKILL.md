@@ -61,8 +61,8 @@ used. Such a route is left out, and only commands that use it fail; tell the use
 them to `clausona route edit` rather than editing the file yourself.
 
 With `--json`, a failing `route` command prints `{"version": 1, "error", "message"}` on stdout.
-`error` is `usage`, `not-found` (no such route) or `failed`; a `routes.json` that cannot be used
-adds `problems`.
+`error` is `usage`, `not-found` (no such route) or `failed`; a `routes.json`, or a route named,
+that cannot be used adds `file` (its path) and `problems`.
 
 Answer "why did it pick X" from `explain`: `outcome.stage` and `outcome.reason` for the pick, and
 each other member's `status`, `skipReason` and usage. `explain` takes the same field options as a

@@ -591,6 +591,7 @@ describe("a route in routes.json that cannot be used", () => {
     expect(out).toContain(`  ⚠ ${PROBLEM}`);
     expect(out).toContain("  ⚠ Fix it with clausona route edit, or remove the route: clausona route remove bad.");
     const json = JSON.parse(await run("list", "--json"));
+    expect(Object.keys(json).sort()).toEqual(["problems", "routes"]);
     expect(json.routes.map((route: { name: string }) => route.name)).toEqual(["main"]);
     expect(json.problems).toEqual([PROBLEM]);
     expect(await run("explain", "main")).toContain(`  ⚠ ${PROBLEM}`);
@@ -897,8 +898,10 @@ describe("failures with --json", () => {
       file: deps.paths.routesPath,
       problems: [expect.stringMatching(/^not valid JSON/)],
     });
+    expect(Object.keys(unusable.json).sort()).toEqual(["error", "file", "message", "problems", "version"]);
     writeFileSync(deps.paths.routesPath, JSON.stringify({ version: 1, routes: { bad: { tool: "x" } } }));
     const broken = await fails(run("pick", "bad", "--json"));
+    expect(Object.keys(broken.json).sort()).toEqual(["error", "file", "message", "problems", "version"]);
     expect(broken.json).toMatchObject({
       error: "failed",
       problems: ['routes.bad.tool: must be "claude", "codex" or "all"'],
