@@ -249,8 +249,9 @@ export function resolveRoute(
 
 /**
  * routes.json as a command that names the route `name` needs it. It is not read at all when no
- * route is named: an unsaved route, or a tool's active profile, needs nothing from it. The other
- * routes' problems do not stop the command; the named route's own do, as a RoutesFileError.
+ * route is named: an unsaved route needs nothing from it, and a run that takes its route from the
+ * dir rules reads it for them itself (route-run.ts). The other routes' problems do not stop the
+ * command; the named route's own do, as a RoutesFileError.
  */
 export async function routesFor(
   name: string | undefined,

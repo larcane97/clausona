@@ -723,24 +723,28 @@ export async function routeDoctor(
     const fix = error.newer ? "" : " Fix it with clausona route edit.";
     return { shown, warnings: [`It cannot be used: ${error.problems.join("; ")}.${fix}`] };
   }
-  const { file, broken } = loaded;
-  const names = Object.keys(file.routes).sort();
-  const rankings = registry
-    ? await rankEvery(
-        names.map((name) => withDefaults(file.routes[name])),
-        registry,
-        deps,
-        false,
-      )
-    : undefined;
-  return {
-    shown,
-    warnings: [
-      ...brokenWarnings(broken),
-      ...(rankings ? names.flatMap((name, i) => routeWarnings(name, rankings[i])) : []),
-      ...ruleNotes(loaded, readRules(file)),
-    ],
-  };
+  const names = Object.keys(loaded.file.routes).sort();
+  const routes = names.map((name) => withDefaults(loaded.file.routes[name]));
+  const rankings = registry ? await rankEvery(routes, registry, deps, false) : undefined;
+  return { shown, warnings: listWarnings(loaded, names, rankings, readRules(loaded.file)) };
+}
+
+/**
+ * What `route list` warns about under its tables: routes that cannot be used, names and patterns
+ * of the others that take nobody (`rankings`, theirs in `names` order; none before init), then
+ * the rules.
+ */
+function listWarnings(
+  loaded: LoadedRoutes,
+  names: string[],
+  rankings: Ranking[] | undefined,
+  rules: RouteRules,
+): string[] {
+  return [
+    ...brokenWarnings(loaded.broken),
+    ...(rankings ? names.flatMap((name, i) => routeWarnings(name, rankings[i])) : []),
+    ...ruleNotes(loaded, rules),
+  ];
 }
 
 async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
@@ -773,15 +777,10 @@ async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
       2,
     );
   }
-  const warnings = [
-    ...brokenWarnings(broken),
-    ...(rankings ? names.flatMap((name, i) => routeWarnings(name, rankings[i])) : []),
-    ...ruleNotes(loaded, rules),
-  ];
   // With --no-quota nothing was read, and the table says so with a dash.
   return renderRouteTable(
     names.map((name, i) => ({ name, route: routes[i], ...(rankings && readQuota ? { ranking: rankings[i] } : {}) })),
-    warnings,
+    listWarnings(loaded, names, rankings, rules),
     { now: deps.clock(), rules: ruleRows(loaded, rules) },
   );
 }
