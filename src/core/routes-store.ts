@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import { acquireFileLock } from "./file-lock.js";
 import { checkRoutesFile, emptyRoutesFile, type RoutesFile } from "./route-config.js";
@@ -12,13 +13,21 @@ import { checkRoutesFile, emptyRoutesFile, type RoutesFile } from "./route-confi
  * the launch cache.
  */
 
-export type RoutesPaths = { routesPath: string; picksPath: string; routesLock: string; picksLock: string };
+export type RoutesPaths = {
+  routesPath: string;
+  picksPath: string;
+  /** Where `route edit` keeps an edit it could not save because routes.json changed meanwhile. */
+  editPath: string;
+  routesLock: string;
+  picksLock: string;
+};
 
 /** Evaluated per call, so a test that points HOME elsewhere gets its own files. */
 export function routesPaths(clausonaDir: string = path.join(homedir(), ".clausona")): RoutesPaths {
   return {
     routesPath: path.join(clausonaDir, "routes.json"),
     picksPath: path.join(clausonaDir, "route-picks.json"),
+    editPath: path.join(clausonaDir, "routes.edit.json"),
     routesLock: path.join(clausonaDir, "locks", "routes.lock"),
     picksLock: path.join(clausonaDir, "locks", "route-picks.lock"),
   };
@@ -56,12 +65,15 @@ async function readText(filePath: string): Promise<string | null> {
   }
 }
 
-/** Written aside and renamed into place, so a reader never sees half a file. */
-async function writeAtomic(filePath: string, text: string): Promise<void> {
+/**
+ * Written aside and renamed into place, so a reader never sees half a file. `mode` is the new
+ * file's, so it holds over a file already there too.
+ */
+async function writeAtomic(filePath: string, text: string, mode?: number): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.tmp.${process.pid}`;
   try {
-    await writeFile(tmp, text, "utf8");
+    await writeFile(tmp, text, { encoding: "utf8", ...(mode === undefined ? {} : { mode }) });
     await rename(tmp, filePath);
   } catch (error) {
     await rm(tmp, { force: true }).catch(() => {});
@@ -144,22 +156,44 @@ export async function updateRoutes(
   });
 }
 
+/** Whether two texts hold the same JSON, however they are spaced; false when either is not JSON. */
+function sameJson(a: string, b: string): boolean {
+  try {
+    return isDeepStrictEqual(JSON.parse(a.replace(/^\uFEFF/, "")), JSON.parse(b.replace(/^\uFEFF/, "")));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Writes an edited routes.json as the user saved it, if the file is still what the edit
  * started from (`expected`, null for no file). The caller has already checked `text`.
+ *
+ * When the file changed meanwhile, the edit is kept in routes.edit.json, 0600 as the editor's own
+ * scratch file is (it can hold whatever was typed), for the user to paste into the next edit.
+ * That copy goes once an edit saves what it holds, and stays through any other save.
  */
 export async function replaceRoutesText(
   expected: string | null,
   text: string,
   paths: RoutesPaths = routesPaths(),
 ): Promise<void> {
+  const body = text.endsWith("\n") ? text : `${text}\n`;
   await withRoutesLock(paths, async () => {
     if ((await readText(paths.routesPath)) !== expected) {
+      const kept = await writeAtomic(paths.editPath, body, 0o600).then(
+        () => true,
+        () => false,
+      );
       throw new Error(
-        `${paths.routesPath} changed while you were editing, so your edit was not saved. Run \`clausona route edit\` again.`,
+        kept
+          ? `${paths.routesPath} changed while you were editing, so your edit was not saved. It is kept in ${paths.editPath}: run \`clausona route edit\` and paste it in.`
+          : `${paths.routesPath} changed while you were editing, so your edit was not saved. Run \`clausona route edit\` again.`,
       );
     }
-    await writeAtomic(paths.routesPath, text.endsWith("\n") ? text : `${text}\n`);
+    await writeAtomic(paths.routesPath, body);
+    const kept = await readText(paths.editPath).catch(() => null);
+    if (kept !== null && sameJson(kept, text)) await rm(paths.editPath, { force: true }).catch(() => {});
   });
 }
 

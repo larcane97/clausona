@@ -276,8 +276,9 @@ Any other key in a route is refused.
 `route edit` opens the file in `$VISUAL` or `$EDITOR`, or an empty one when there is no file yet.
 It checks the file when you save. A file with a problem is not written, and in a terminal you are
 asked whether to edit again. If you save without changing anything, it says "Nothing was
-changed." If `routes.json` changed while you were editing, your edit is not saved and you are
-told to run `route edit` again.
+changed." If `routes.json` changed while you were editing, your edit is not saved over it.
+It is kept in `~/.clausona/routes.edit.json`, which only you can read. Run `route edit` again
+and paste it in. Once an edit saves what that file holds, the file is deleted.
 
 When `routes.json` cannot be used, every command that reads it stops with exit code 1 and lists
 what is wrong. That includes `clausona run claude` with no route named. `clausona run <profile>`

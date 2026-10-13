@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -728,17 +728,34 @@ describe("route edit", () => {
     expect(readFileSync(deps.paths.routesPath, "utf8")).toBe('{ "version": 1, "routes": {} }\n');
   });
 
-  it("keeps another terminal's change to routes.json made while the editor was open", async () => {
+  it("keeps another terminal's change to routes.json made while the editor was open, and the edit beside it", async () => {
     const { deps, io, file } = setup();
     writeFileSync(deps.paths.routesPath, '{ "version": 1, "routes": {} }\n');
+    const mine = JSON.stringify({ version: 1, routes: { mine: { tool: "claude" } } });
     deps.editText = async () => {
       await runRouteCommand(["add", "theirs"], io, { ...deps, editText: async () => "" });
-      return JSON.stringify({ version: 1, routes: { mine: { tool: "claude" } } });
+      return mine;
     };
     await expect(runRouteCommand(["edit"], io, deps)).rejects.toThrow(
-      `${deps.paths.routesPath} changed while you were editing, so your edit was not saved. Run \`clausona route edit\` again.`,
+      `${deps.paths.routesPath} changed while you were editing, so your edit was not saved. It is kept in ${deps.paths.editPath}: run \`clausona route edit\` and paste it in.`,
     );
     expect(Object.keys(file().routes)).toEqual(["theirs"]);
+    expect(readFileSync(deps.paths.editPath, "utf8")).toBe(`${mine}\n`);
+    // Only its owner can read it, as the editor's scratch file: it holds whatever was typed.
+    if (process.platform !== "win32") expect(statSync(deps.paths.editPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("deletes the kept edit once an edit saves it, and leaves it through any other save", async () => {
+    const { deps, io } = setup();
+    const kept = JSON.stringify({ version: 1, routes: { mine: { tool: "claude" } } }, null, 2);
+    writeFileSync(deps.paths.editPath, `${kept}\n`);
+    deps.editText = async () => JSON.stringify({ version: 1, routes: { other: { tool: "claude" } } });
+    await runRouteCommand(["edit"], io, deps);
+    expect(existsSync(deps.paths.editPath)).toBe(true);
+    // Pasted in and saved, spaced as the editor left it.
+    deps.editText = async () => JSON.stringify({ version: 1, routes: { mine: { tool: "claude" } } });
+    await runRouteCommand(["edit"], io, deps);
+    expect(existsSync(deps.paths.editPath)).toBe(false);
   });
 
   it("opens an invalid file as it is, so it can be fixed", async () => {

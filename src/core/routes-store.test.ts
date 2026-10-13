@@ -50,6 +50,7 @@ describe("routesPaths", () => {
     expect(routesPaths(dir)).toEqual({
       routesPath: path.join(dir, "routes.json"),
       picksPath: path.join(dir, "route-picks.json"),
+      editPath: path.join(dir, "routes.edit.json"),
       routesLock: path.join(dir, "locks", "routes.lock"),
       picksLock: path.join(dir, "locks", "route-picks.lock"),
     });
