@@ -427,7 +427,7 @@ describe("redactCommand on the shapes a differential against the first version f
       ],
       [
         command(`bash -c "curl --data 'x=1&token=a ${HEX}&y=2' https://h.example"`),
-        `bash -c "curl --data 'x=1&token=<hidden>' https://h.example"`,
+        `bash -c "curl --data 'x=1&token=<hidden>&y=2' https://h.example"`,
       ],
     ]);
   });
@@ -566,6 +566,26 @@ describe("redactCommand on the shapes the differential left after #97", () => {
       // Nor one whose later words are another program's: a script's, a remote command's.
       [command(`python3 fetch.py -b ${HEX}`), "python3 fetch.py -b <hidden>"],
       [command(`ssh host fetch -b ${HEX}`), "ssh host fetch -b <hidden>"],
+    ]);
+  });
+
+  it("ends a spaced secret in a form body at the next field, and hides that field's own secret", () => {
+    hidden([
+      [mcp(["-d", `a=1&password=a ${HEX}&name=bob`]), "tool -d a=1&password=<hidden>&name=bob"],
+      [
+        command(`curl -d "a=1&password=a ${HEX}&name=bob" https://h.example`),
+        `curl -d "a=1&password=<hidden>&name=bob" https://h.example`,
+      ],
+      [
+        mcp(["-d", `a=1&password=a ${HEX}&token=b ${HEX}&name=bob more`]),
+        "tool -d a=1&password=<hidden>&token=<hidden>&name=bob more",
+      ],
+      [mcp(["-d", `a=1&password=a ${HEX} &name=bob`]), "tool -d a=1&password=<hidden> &name=bob"],
+      // An & with no field after it is the secret's.
+      [mcp(["-d", `a=1&password=a ${HEX}&b ${HEX}`]), "tool -d a=1&password=<hidden>"],
+      // Outside a form, a value with &x= in it is all secret: an assignment, an option's value.
+      [mcp(["-e", `TOKEN=a ${HEX}&x=${HEX}`]), "tool -e TOKEN=<hidden>"],
+      [command(`tool --api-key "a ${HEX}&x=${HEX}"`), `tool --api-key "<hidden>"`],
     ]);
   });
 });

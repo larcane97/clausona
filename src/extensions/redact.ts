@@ -106,9 +106,11 @@ const GO_OPTION = /^-[a-z][a-z\d]*(?:[-_][a-z\d]+)*$/;
 
 /**
  * A command line's words: whether each ends an argument (an MCP server's argument can hold
- * several), and the quote a value that ends at a word goes on in (`openQuotes`).
+ * several), the quote a value that ends at a word goes on in (`openQuotes`), and the words
+ * whose shown text joins the one before it with no space: a form field cut from the word a
+ * hidden value ended in (`stopAtField`).
  */
-type Line = { words: string[]; ends: boolean[]; open: string[]; shown: string[] };
+type Line = { words: string[]; ends: boolean[]; open: string[]; shown: string[]; joined: Set<number> };
 
 /** A POSIX shell's option for a command line: `-c`, alone or ending a run of short options (`-lc`, `-euc`). */
 const POSIX_COMMAND = /^-[a-zA-Z]*c$/;
@@ -172,10 +174,12 @@ function isShellCommand(args: string[], at: number): boolean {
  * still on its first and last. So a value that opens a quote runs on through the word that
  * closes it, the way the shell would read it, and so does one that ends at a word inside a
  * quoted string (`-d "user=bob&password=a b"`); one in an argument of several words runs to
- * that argument's end. The quotes are kept around what stands in for a value.
+ * that argument's end. A form field's value that runs on so ends at the next field
+ * (`-d "a=1&password=a b&name=c"`), as a form's reader splits it. The quotes are kept around
+ * what stands in for a value.
  */
 export function redactCommand(args: string[]): string {
-  const line: Line = { words: [], ends: [], open: [], shown: [] };
+  const line: Line = { words: [], ends: [], open: [], shown: [], joined: new Set() };
   const bodies: boolean[] = [];
   for (const [n, arg] of args.entries()) {
     const words = arg.split(/\s+/).filter(Boolean);
@@ -187,7 +191,12 @@ export function redactCommand(args: string[]): string {
     }
   }
   line.open = openQuotes(line.words, bodies);
-  for (let i = 0; i < line.words.length; i++) i = redactAt(line, i);
+  for (let i = 0; i < line.words.length; i++) {
+    const from = line.shown.length;
+    const joins = line.joined.has(i) && from > 0;
+    i = redactAt(line, i);
+    if (joins) line.shown.splice(from - 1, 2, `${line.shown[from - 1]}${line.shown[from] ?? ""}`);
+  }
   return line.shown.join(" ");
 }
 
@@ -261,7 +270,7 @@ function redactAt(line: Line, i: number): number {
   // or in the quoted string the word is in: `-d "user=bob&password=a b"`.
   const tail = valueAtEnd(word);
   if (tail !== undefined && (!line.ends[i] || line.open[i] !== "")) {
-    return hideValue(line, i, redactWord(word.slice(0, tail)), "", word.slice(tail));
+    return hideValue(line, i, redactWord(word.slice(0, tail.at)), "", word.slice(tail.at), tail.field);
   }
   line.shown.push(redactWord(word));
   if (i + 1 >= line.words.length) return i;
@@ -514,14 +523,17 @@ function valueEnd(line: Line, i: number): number {
  * or the end - and what follows that is shown, redacted. An unquoted value is the rest of the
  * word, with any closing quotes or brackets after it shown - or, when the word is not the last
  * of its argument, the rest of that argument; or, when the word is in a quoted string that goes
- * on past it (`openQuotes`), the rest of that string.
+ * on past it (`openQuotes`), the rest of that string. When the value is a form's `field`, either
+ * ends at the next field (`nextField`).
  */
-function hideValue(line: Line, at: number, prefix: string, quote: string, rest: string): number {
+function hideValue(line: Line, at: number, prefix: string, quote: string, rest: string, field = false): number {
   if (quote === "") {
     // An argument that goes on past the value's word is value to its end: `API_KEY=a b`,
     // `alice:a b`, and `--api-key a b` as one argument. It is one value to the program, whatever
     // its spaces; a shell's command line, whose words are the shell's own, ends at each word.
     if (!line.ends[at]) {
+      const next = field ? nextField(line, at, argEnd(line, at), "") : undefined;
+      if (next) return stopAtField(line, prefix, next);
       line.shown.push(`${prefix}${HIDDEN}`);
       return valueEnd(line, at);
     }
@@ -530,6 +542,8 @@ function hideValue(line: Line, at: number, prefix: string, quote: string, rest: 
     const open = line.open[at] ?? "";
     if (open !== "" && at + 1 < line.words.length) {
       const { last, after } = closing(line, at + 1, open, line.words[at + 1] ?? "");
+      const next = field ? nextField(line, at, last, open) : undefined;
+      if (next) return stopAtField(line, prefix, next);
       line.shown.push(`${prefix}${HIDDEN}${rest.includes(open) ? "" : open}${after}`);
       return last;
     }
@@ -542,6 +556,39 @@ function hideValue(line: Line, at: number, prefix: string, quote: string, rest: 
   // the credential from the word after it.
   const scheme = closed && after === "" && AUTH_SCHEME.test(inside.trim().split(/\s+/).pop() ?? "");
   return scheme && last + 1 < line.words.length ? hideWord(line, last + 1) : last;
+}
+
+/**
+ * Where the next field of a form starts after a value that runs on from `words[at]` to `last`:
+ * the word, and the place in it of the first `&` that a field's name and `=` follow
+ * (`b&name=c`). `quote` is the quote the value is in, if any; a field after it closes is not
+ * the value's. None when a quote comes first, since what it opens or closes is not known here.
+ */
+function nextField(line: Line, at: number, last: number, quote: string): { word: number; at: number } | undefined {
+  for (let w = at + 1; w <= last; w++) {
+    const word = line.words[w] ?? "";
+    const close = quote === "" ? -1 : word.indexOf(quote);
+    const text = close < 0 ? word : word.slice(0, close);
+    const field = /&[\w.-]+=/.exec(text);
+    if (/["'`]/.test(text.slice(0, field?.index ?? text.length))) return undefined;
+    if (field) return { word: w, at: field.index };
+    if (close >= 0) return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Shows `prefix` and HIDDEN for a value that ends where `field` starts, and returns the index of
+ * the value's last word. The field's word is left to be read on its own, from its `&`, and its
+ * shown text joins the hidden value's, as the two were one word: `password=<hidden>&name=c`.
+ */
+function stopAtField(line: Line, prefix: string, field: { word: number; at: number }): number {
+  line.shown.push(`${prefix}${HIDDEN}`);
+  if (field.at > 0) {
+    line.words[field.word] = (line.words[field.word] ?? "").slice(field.at);
+    line.joined.add(field.word);
+  }
+  return field.word - 1;
 }
 
 /**
@@ -691,9 +738,10 @@ function openKeyValue(word: string): { at: number; quote: string } | undefined {
 
 /**
  * Where a secret-named key's unquoted value starts in `word` when it runs to the word's end, as
- * `hideKeyValues` reads it: `user=bob&password=x`. Not a key in a URL, whose rules hide its query.
+ * `hideKeyValues` reads it: `user=bob&password=x`; and whether the key is a form's field, after
+ * an `&`. Not a key in a URL, whose rules hide its query.
  */
-function valueAtEnd(word: string): number | undefined {
+function valueAtEnd(word: string): { at: number; field: boolean } | undefined {
   const urls = [...word.matchAll(URL_RUN)].map((m) => ({ from: m.index ?? 0, to: (m.index ?? 0) + m[0].length }));
   const keys = new RegExp(KEY_AT.source, "g");
   for (let key = keys.exec(word); key !== null; key = keys.exec(word)) {
@@ -702,7 +750,7 @@ function valueAtEnd(word: string): number | undefined {
     if (key[3] !== "" || !isSecretName(key[2] ?? "") || urls.some((url) => start >= url.from && start < url.to))
       continue;
     const value = /^[^\s"'&,;}]+/.exec(word.slice(at))?.[0];
-    if (value !== undefined && at + value.length === word.length) return at;
+    if (value !== undefined && at + value.length === word.length) return { at, field: word[start - 1] === "&" };
   }
   return undefined;
 }
