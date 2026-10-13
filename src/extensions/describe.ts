@@ -567,6 +567,10 @@ function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined)
     return [{ label: "Loaded", text, tone: "muted" }];
   }
   if (state.value === "off") {
+    if (state.setBy?.key !== STASH_KEY && untrustedHook(inv, item)) {
+      const text = "off: Codex runs a project's hooks only once it trusts the project";
+      return [{ label: "Loaded", text, tone: "warning" }];
+    }
     if (!state.setBy) return [{ label: "Loaded", text: "off: no settings file turns it on", tone: "warning" }];
     if (state.setBy.key === STASH_KEY) {
       const text = "off everywhere — clausona keeps its settings so you can turn it back on";
@@ -801,9 +805,15 @@ function trustLines(inv: Inventory, row: ScopeRow, project: string | undefined):
   const ignored = inv.facts.codexMcpEnabled.some(
     (entry) => entry.project !== undefined && samePath(entry.project, here) && entry.name === row.name,
   );
-  return ignored
-    ? [{ label: "Trust", text: "Codex does not trust this project, so it ignores its .codex folder.", tone: "warning" }]
-    : [];
+  return ignored ? [{ label: "Trust", text: CODEX_UNTRUSTED, tone: "warning" }] : [];
+}
+
+const CODEX_UNTRUSTED = "Codex does not trust this project, so it ignores its .codex folder.";
+
+/** Whether an item is a Codex project's own hook, in a project Codex does not trust, so does not run. */
+function untrustedHook(inv: Inventory, item: Extension): boolean {
+  const loc = item.location;
+  return item.kind === "hook" && loc.tool === "codex" && loc.scope === "project" && !codexTrusted(inv, loc.project);
 }
 
 function hookLines(inv: Inventory, row: ScopeRow, project: string | undefined): DetailLine[] {
@@ -814,6 +824,7 @@ function hookLines(inv: Inventory, row: ScopeRow, project: string | undefined): 
   lines.push({ label: "File", text: tilde(item.location.file, inv.homeDir) });
   // A plugin's hook is off with its plugin: say where, as for any item that is off.
   if (stateHere(inv, item, project).value !== "on" || item.codexError) lines.push(...loadedLines(inv, row, project));
+  if (untrustedHook(inv, item)) lines.push({ label: "Trust", text: CODEX_UNTRUSTED, tone: "warning" });
   return lines;
 }
 

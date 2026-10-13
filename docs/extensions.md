@@ -279,7 +279,10 @@ The switches are read from these places:
   profile trusts a hook on its own. A hook trusted in at least one profile is `on`. One trusted
   in none, or changed since it was, is `pending-approval`, and `enabled = false` under every
   profile's key turns it `off`. A bundled plugin's cleanup hook runs without a review. A
-  plugin's hooks are off while the plugin is off. Codex reads a hooks file only when it holds
+  plugin's hooks are off while the plugin is off. A project's hooks are `off` while Codex does
+  not trust the project, trusted themselves or not: Codex then leaves the project's `.codex`
+  folder out. Their details say so, and why: `Trust  Codex does not trust this project, so it
+  ignores its .codex folder.` Codex reads a hooks file only when it holds
   `hooks` and, at most, a `description` at its top, so the hooks of any other are tagged
   `invalid hooks file`. A plugin whose `hooks` lists hook files and hooks together has none.
   Codex runs no prompt or agent hook yet, nor an MCP tool hook when a session ends: those are

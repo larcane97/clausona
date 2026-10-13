@@ -493,8 +493,10 @@ export function stateOf(inv: Inventory, item: Extension, project?: string, profi
 }
 
 /**
- * A Codex hook's state, as Codex 0.159.3 runs it: off with its plugin; else on where, in at least
- * one Codex profile, the hook as it is now is the one trusted under its key and the key does not
+ * A Codex hook's state, as Codex 0.159.3 runs it: off with its plugin, and a project's off while
+ * Codex does not trust the project, as it then leaves the project's `.codex` folder out - `setBy`
+ * naming the project's `trust_level` in the user config.toml; else on where, in at least one
+ * Codex profile, the hook as it is now is the one trusted under its key and the key does not
  * turn it off (`[hooks.state."<key>"]`) - a bundled plugin's cleanup hook always, and one with
  * no trust identity as before; off where every profile's key turns it off; else pending
  * approval, Codex waiting for the user to review it with /hooks - `setBy` naming the trust that
@@ -503,6 +505,12 @@ export function stateOf(inv: Inventory, item: Extension, project?: string, profi
 function codexHookState(inv: Inventory, item: Extension, project: string | undefined): EffectiveState {
   const off = codexPluginOff(inv, item, project);
   if (off) return off;
+  const own = item.location.scope === "project" ? item.location.project : undefined;
+  if (own !== undefined && !codexTrusted(inv, own)) {
+    const config = inv.places.codexConfig;
+    const key = `projects.${JSON.stringify(own)}.trust_level`;
+    return config === undefined ? { value: "off" } : { value: "off", setBy: { file: config, key } };
+  }
   const trust = inv.facts.codexHookTrust.find((t) => t.id === item.id);
   if (!trust || trust.builtin) return { value: "on" };
   const keyed = trust.keys.map((key) => ({ key, state: inv.facts.codexHookStates.find((s) => s.key === key) }));

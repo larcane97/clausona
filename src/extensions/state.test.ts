@@ -779,6 +779,33 @@ describe("Codex hooks", () => {
     expect(stateOf(one, stop, P).value).toBe("on");
   });
 
+  it("is off in a project Codex does not trust, trusted or not, as Codex leaves out the project's .codex", () => {
+    const at = (project: string): Extension => ({
+      ...ext("hook", "Stop", { tool: "codex", scope: "project", project, file: `${project}/.codex/hooks.json` }),
+      id: `hook:codex:project:${project}:Stop#0.0`,
+    });
+    const [app, web, lab] = [P, Q, "/repos/lab"].map(at) as [Extension, Extension, Extension];
+    const key = (h: Extension) => `${h.location.file}:stop:0:0`;
+    const i: Inventory = {
+      ...inv([app, web, lab], {
+        // web is marked untrusted; lab has no record at all.
+        codexTrust: [
+          { project: P, trusted: true },
+          { project: Q, trusted: false },
+        ],
+        codexHookTrust: [app, web, lab].map((h) => ({ id: h.id, keys: [key(h)], hash: "sha256:now" })),
+        codexHookStates: [app, web, lab].map((h) => ({ file: config, key: key(h), trustedHash: "sha256:now" })),
+      }),
+      places: { claudeJson: {}, stashDir: "/s", codexConfig: config },
+    };
+    expect(stateOf(i, app, P)).toEqual({ value: "on" });
+    expect(stateOf(i, web, Q)).toEqual({ value: "off", setBy: { file: config, key: `projects."${Q}".trust_level` } });
+    expect(stateOf(i, lab, "/repos/lab")).toEqual({
+      value: "off",
+      setBy: { file: config, key: `projects."/repos/lab".trust_level` },
+    });
+  });
+
   it("runs a bundled cleanup hook and a hook with no trust identity, and none of a plugin that is off", () => {
     const builtin = inv([stop], {
       codexHookTrust: [{ ...trust[0], id: stop.id, keys, hash: "sha256:now", builtin: true }],

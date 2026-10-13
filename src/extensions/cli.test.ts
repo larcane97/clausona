@@ -991,6 +991,26 @@ describe("Codex hooks and Codex's trust", () => {
     expect(on).toContain("already in its file: Codex runs it once you trust it with /hooks");
   });
 
+  it("lists the hooks of a project Codex does not trust as off there, and says it is the trust", async () => {
+    const { h, app, web } = seed();
+    const stop = (command: string) => ({ hooks: { Stop: [{ hooks: [{ type: "command", command }] }] } });
+    h.write(
+      ".codex/config.toml",
+      `[projects.${JSON.stringify(app)}]\ntrust_level = "trusted"\n\n[projects.${JSON.stringify(web)}]\ntrust_level = "untrusted"\n`,
+    );
+    h.write("repos/app/.codex/hooks.json", stop("app-stop"));
+    h.write("repos/web/.codex/hooks.json", stop("web-stop"));
+    const json = JSON.parse(await run(h, web, "hooks", ["ls", "--tool", "codex", "--scope", "project", "--json"]));
+    expect(json.items.map((i: { state: string; tags: string[] }) => [i.state, i.tags])).toEqual([["off", ["off"]]]);
+    expect(await run(h, web, "hooks", ["ls", "--tool", "codex"])).not.toContain("web-stop");
+    const shown = await run(h, web, "hooks", ["show", "--id", json.items[0].id]);
+    expect(shown).toMatch(/^Loaded\s+off: Codex runs a project's hooks only once it trusts the project$/m);
+    expect(shown).toMatch(/^Trust\s+Codex does not trust this project, so it ignores its \.codex folder\.$/m);
+    // A trusted project's hook waits for its own review, as before.
+    const own = JSON.parse(await run(h, app, "hooks", ["ls", "--tool", "codex", "--scope", "project", "--json"]));
+    expect(own.items.map((i: { state: string }) => i.state)).toEqual(["pending-approval"]);
+  });
+
   it("lists a prompt or agent hook as not supported, out of Loaded, and says Codex does not run it", async () => {
     const { h, app } = seed();
     h.write(".codex/hooks.json", {
