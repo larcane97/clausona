@@ -432,6 +432,51 @@ describe("readCodex", () => {
     ]);
   });
 
+  it("reads the hooks a config.toml holds, the user's and a trusted project's, keyed as Codex keys them", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    const user = h.path(".codex", "config.toml");
+    // A `[[hooks.<event>]]` group of one command hook; `group` and `hook` add lines to each.
+    const toml = (event: string, command: string, group = "", hook = "") =>
+      `[[hooks.${event}]]\n${group}[[hooks.${event}.hooks]]\ntype = "command"\ncommand = "${command}"\n${hook}`;
+    h.codex(
+      "personal",
+      ".codex",
+      [
+        `[projects."${app.replaceAll("\\", "\\\\")}"]`,
+        'trust_level = "trusted"',
+        toml("Stop", "echo toml-a"),
+        toml("PreToolUse", "echo toml-b", 'matcher = "Bash"\n', "timeout = 30\n"),
+        // Codex trusts the first as it is now.
+        `[hooks.state.${JSON.stringify(`${user}:stop:0:0`)}]`,
+        'trusted_hash = "sha256:0ba7626e463001be6e8ede70f8f378c158f6587b414aafdc02e0d25c6ff57ecb"',
+      ].join("\n"),
+    );
+    // A hooks.json beside it: Codex runs both, each keyed by its own file.
+    h.write(".codex/hooks.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "echo json-a" }] }] } });
+    h.write("repos/app/.codex/config.toml", toml("Stop", "echo repo-toml"));
+    const inv = await loadInventory(h.inventoryOptions(app, h.path("m.json")));
+    const hook = (command: string) => inv.items.find((i) => i.kind === "hook" && i.summary?.command === command);
+    const trust = (command: string) => inv.facts.codexHookTrust.find((t) => t.id === hook(command)?.id);
+    // The hashes Codex 0.159.3's hooks/list reported for these hooks.
+    expect(trust("echo toml-a")).toMatchObject({
+      keys: expect.arrayContaining([`${user}:stop:0:0`]),
+      hash: "sha256:0ba7626e463001be6e8ede70f8f378c158f6587b414aafdc02e0d25c6ff57ecb",
+    });
+    expect(trust("echo toml-b")?.hash).toBe("sha256:8e266741fcd93362d7c441ae1c9ac542468b353c73c490429099a869888a2ef9");
+    expect(trust("echo repo-toml")?.keys).toContain(path.join(app, ".codex", "config.toml:stop:0:0"));
+    expect(hook("echo toml-a")?.location).toMatchObject({ scope: "global", file: user });
+    expect(hook("echo repo-toml")?.location).toMatchObject({ scope: "project", project: app });
+    // Two Stop hooks at group 0, index 0, one in each file of the user's: two rows.
+    expect(new Set([hook("echo toml-a")?.id, hook("echo json-a")?.id]).size).toBe(2);
+    const states = ["echo toml-a", "echo toml-b", "echo json-a"].map((c) => {
+      const item = hook(c);
+      return item && stateOf(inv, item, app).value;
+    });
+    expect(states).toEqual(["on", "pending-approval", "pending-approval"]);
+  });
+
   it("marks the hooks of a hooks file Codex cannot read: anything but hooks and a description at its top", async () => {
     const h = new TestHome();
     homes.push(h);

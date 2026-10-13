@@ -81,7 +81,7 @@ Project and Global are these files. The header names the folders it found.
 | Claude hooks | `.claude/settings.json` and `.claude/settings.local.json` | `~/.claude/settings.json` |
 | Codex skills | `.agents/skills` | `~/.agents/skills` and the `skills` folder of Codex's home |
 | Codex MCP | `.codex/config.toml` | `config.toml` in Codex's home |
-| Codex hooks | `.codex/hooks.json` | `hooks.json` in Codex's home |
+| Codex hooks | `.codex/hooks.json`, and `[hooks]` in `.codex/config.toml` | `hooks.json` in Codex's home, and `[hooks]` in its `config.toml` |
 
 `~/.claude` stands for the primary Claude Code folder, which every account's `settings.json`
 and `skills` link to. Codex's home is the primary Codex folder, `~/.codex` by default.
@@ -282,6 +282,10 @@ The switches are read from these places:
   plugin's hooks are off while the plugin is off. Codex reads a hooks file only when it holds
   `hooks` and, at most, a `description` at its top, so the hooks of any other are tagged
   `invalid hooks file`. A plugin whose `hooks` lists hook files and hooks together has none.
+  Codex also runs the hooks a `config.toml` holds, as `[[hooks.<Event>]]` tables, beside that
+  folder's `hooks.json`: Codex's own and a trusted project's. Their key holds the `config.toml`'s
+  path. clausona lists them and their trust, and leaves changing them to `/hooks` in Codex
+  (`codex-config-hook`).
 
 ### Tags
 
@@ -733,7 +737,7 @@ the primary Claude Code folder, and Codex's home is `~/.codex` by default, as un
 | Claude hooks | Refused: hooks are switched everywhere | Taken out of its settings file and kept by clausona | Deleted from its settings file |
 | Codex skills | A project skill: a `[[skills.config]]` entry with the `path` of its `SKILL.md` and `enabled = false`, in Codex's `config.toml`. A user skill: refused | A `[[skills.config]]` entry with its `name` and `enabled = false`, in Codex's `config.toml` | As for Claude skills. A built-in skill is refused. |
 | Codex MCP | `mcp_servers.<name>.enabled = false` in the project's `.codex/config.toml` | A user server: `mcp_servers.<name>.enabled = false` in Codex's `config.toml`. A project server: refused | `[mcp_servers.<name>]` deleted from the `config.toml` that defines it |
-| Codex hooks | Refused: hooks are switched everywhere | Taken out of its `hooks.json` and kept by clausona | Deleted from its `hooks.json` |
+| Codex hooks | Refused: hooks are switched everywhere | Taken out of its `hooks.json` and kept by clausona. One in a `config.toml`: refused | Deleted from its `hooks.json`. One in a `config.toml`: refused |
 | Codex plugins, and what they bring | Refused: `/plugins` in Codex switches a plugin | Refused | Refused: `/plugins` in Codex uninstalls a plugin |
 
 `.claude/settings.local.json` is the project's own Claude Code settings, the ones not shared
@@ -1000,6 +1004,7 @@ the CLI's words. In the table `<tool>` is the tool's name and `<scope>` a scope'
 | `mcp-not-allowed` | `allowedMcpServers` in `<file>` leaves it out. | Change it there. | Change it there. |
 | `managed-mcp` | `<file>` lets only its own servers start. | Only your organization can change that file. | Only your organization can change that file. |
 | `bundled-off` | `disableBundledSkills` in `<file>` turns off the skills that come with Claude Code. | Change it there. | Change it there. |
+| `codex-config-hook` | It is written in `<file>`, where clausona does not change hooks. | Use `/hooks` in Codex, or edit the file. | Use `/hooks` in Codex, or edit the file. |
 
 On the screen, `stash-gone` on one account's server, in a row other accounts share, says
 `Press d and choose only work in the dialog.` instead, since `d` on the row would delete the

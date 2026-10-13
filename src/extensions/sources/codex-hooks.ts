@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 
-import type { Collector, StateFacts } from "../model.js";
+import type { Collector, Location, StateFacts } from "../model.js";
 import { isRecord, realPath } from "../read.js";
+import { addHooks } from "./claude-hooks.js";
 
 /**
  * Codex's hook trust, as Codex 0.159.3 keeps it (codex-rs/hooks, engine/discovery.rs). Codex runs
@@ -10,7 +11,8 @@ import { isRecord, realPath } from "../read.js";
  * user config.toml then holds `trusted_hash`, the hash of the hook's definition at the time, and
  * a hook whose definition changed since is to be reviewed again. `enabled = false` there turns
  * one hook off. The key is where the hook is - `<source>:<event>:<group>:<index>` - and the
- * source is the hooks file's path, or for a plugin `<plugin id>:<path in the plugin>`.
+ * source is the path of the hooks file, or of the config.toml that holds it, or for a plugin
+ * `<plugin id>:<path in the plugin>`.
  */
 
 /** Codex's hook events, by the name a hooks file gives them, with the label its keys and hashes use. */
@@ -70,7 +72,7 @@ const BUNDLED_EVENTS = new Set(["Stop", "Interrupt", "SubagentStop"]);
 
 /**
  * The trust identity of each hook in one hooks file's events - `hooks[event][group].hooks[index]`,
- * as addHooks reads them, under the same ids (`<idBase>:<event>#<group>.<index>`) - into the
+ * as addHooks reads them, under the same ids (`<idBase>:<event>#<at><group>.<index>`) - into the
  * facts: the key under each of `sources`, and the hash Codex trusts it at. A hook Codex does not
  * run whatever its trust - a prompt or agent hook, an empty command - has none. `plugin` is the
  * plugin's id, for the cleanup hooks Codex runs without a review.
@@ -81,6 +83,7 @@ export function addCodexHookTrust(
   sources: readonly string[],
   facts: StateFacts,
   plugin?: string,
+  at = "",
 ): void {
   if (!isRecord(events)) return;
   for (const [event, groups] of Object.entries(events)) {
@@ -95,7 +98,7 @@ export function addCodexHookTrust(
         if (handler === undefined) return;
         const identity = { event_name: label, ...(matcher !== undefined ? { matcher } : {}), hooks: [handler] };
         facts.codexHookTrust.push({
-          id: `${idBase}:${event}#${g}.${h}`,
+          id: `${idBase}:${event}#${at}${g}.${h}`,
           keys: sources.map((source) => `${source}:${label}:${g}:${h}`),
           hash: hashOf(identity),
           ...(plugin !== undefined && raw === undefined && bundled(plugin, event, handler) ? { builtin: true } : {}),
@@ -129,6 +132,30 @@ export async function codexHomeHooksFile(
 export function codexReadsHooksFile(json: Record<string, unknown>): boolean {
   const known = Object.keys(json).every((key) => key === "hooks" || key === "description");
   return known && (json.hooks === undefined || isRecord(json.hooks));
+}
+
+/**
+ * What the ids of a config.toml's hooks hold before their place, so that they are not those of
+ * the hooks.json beside it.
+ */
+const CONFIG_HOOKS_AT = "config.toml:";
+
+/**
+ * The hooks a config.toml holds under `[hooks]` - `[[hooks.<Event>]]` tables, in the same shape
+ * as a hooks.json's - which Codex 0.159.3 runs beside that folder's hooks.json, trusted the same
+ * way, keyed by the config.toml's path. Its `[hooks.state]` tables are no event, and are skipped.
+ */
+export function addConfigHooks(
+  config: Record<string, unknown>,
+  location: Location,
+  owner: string,
+  sources: readonly string[],
+  out: Collector,
+): void {
+  if (!isRecord(config.hooks)) return;
+  addHooks(config.hooks, location, owner, out, "hooks", CONFIG_HOOKS_AT);
+  const idBase = `hook:${location.tool}:${location.scope}:${owner}`;
+  addCodexHookTrust(config.hooks, idBase, sources, out.facts, undefined, CONFIG_HOOKS_AT);
 }
 
 /** Marks the Codex hooks `out` read from `file` as in a file Codex refuses: they do not load. */

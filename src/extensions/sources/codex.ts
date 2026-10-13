@@ -13,6 +13,7 @@ import { addHooksFile } from "./claude-hooks.js";
 import {
   addCodexHookStates,
   addCodexHookTrust,
+  addConfigHooks,
   codexHomeHooksFile,
   codexReadsHooksFile,
   markRefusedHooksFile,
@@ -86,7 +87,8 @@ export function codexProjectRecords(ctx: CodexContext): ProjectRecord[] {
 }
 
 /**
- * Codex's skills, MCP servers, hooks and plugins, and the switches for them: `[[skills.config]]`
+ * Codex's skills, MCP servers, hooks - a hooks.json's, and a config.toml's `[hooks]` beside it -
+ * and plugins, and the switches for them: `[[skills.config]]`
  * in the user config.toml (by name, or by the SKILL.md path - the only per-project skill switch,
  * since Codex ignores `[[skills.config]]` in a project's config; spec, Spike 1),
  * `mcp_servers.<name>.enabled`, and the `[plugins."<id>"]` tables, in the user and project
@@ -139,6 +141,7 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
         if (config) {
           addServers(config, { ...here, file }, project.path, out);
           addPluginSwitches(config, file, project.path, out.facts);
+          addConfigHooks(config, { ...here, file }, project.path, await hookSources(file), out);
         }
         const hooksFile = codexProjectHooks(project.path);
         const hooks = await readJsonObject(hooksFile, out.warnings);
@@ -171,6 +174,8 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
     addServers(ctx.config, { ...global, file: ctx.configFile }, "-", out);
     addPluginSwitches(ctx.config, ctx.configFile, undefined, out.facts);
     addCodexHookStates(ctx.config, ctx.configFile, out.facts);
+    const sources = await userHookSources(ctx, ctx.configFile);
+    addConfigHooks(ctx.config, { ...global, file: ctx.configFile }, "-", sources, out);
     for (const [project, table] of Object.entries(isRecord(ctx.config.projects) ? ctx.config.projects : {})) {
       if (isRecord(table)) out.facts.codexTrust.push({ project, trusted: table.trust_level === "trusted" });
     }
@@ -209,21 +214,22 @@ async function hookSources(file: string): Promise<string[]> {
 }
 
 /**
- * The user hooks.json under each Codex profile that shares the primary's: Codex keys a hook's
- * trust by the hooks file's path under the CODEX_HOME it runs with, so each profile trusts it on
- * its own. The primary runs with none set, at its folder as it is; any other with the folder
- * clausona sets, which Codex makes canonical first.
+ * The user hooks.json, or config.toml, under each Codex profile that shares the primary's: Codex
+ * keys a hook's trust by its file's path under the CODEX_HOME it runs with, so each profile
+ * trusts it on its own. The primary runs with none set, at its folder as it is; any other with
+ * the folder clausona sets, which Codex makes canonical first.
  */
 async function userHookSources(ctx: CodexContext, file: string): Promise<string[]> {
+  const name = path.basename(file);
   const shared = await realPath(file).catch(() => undefined);
   const each = await Promise.all(
     ctx.homes.map(async (home) => {
-      const own = path.join(home.dir, "hooks.json");
+      const own = path.join(home.dir, name);
       if (home.isPrimary) return hookSources(own);
       const real = await realPath(own).catch(() => undefined);
       if (real === undefined || !samePath(real, shared)) return [];
       const keyed = await codexHomeHooksFile(home.dir);
-      return keyed === undefined ? [] : [keyed];
+      return keyed === undefined ? [] : [path.join(path.dirname(keyed), name)];
     }),
   );
   return [...new Set(each.flat())];

@@ -349,7 +349,7 @@ const PROJECT_FILES: Record<ToolName, Record<ItemKind, (here: string) => string>
   codex: {
     skill: (here) => `.agents/skills in ${here}`,
     mcp: (here) => `.codex/config.toml in ${here}`,
-    hook: (here) => `.codex/hooks.json in ${here}`,
+    hook: (here) => `.codex/hooks.json and .codex/config.toml in ${here}`,
   },
 };
 
@@ -358,7 +358,7 @@ const GLOBAL_FALLBACK: Record<ToolName, Record<ItemKind, string>> = {
   codex: {
     skill: "~/.agents/skills and Codex's skills folder",
     mcp: "Codex's config.toml",
-    hook: "Codex's hooks.json",
+    hook: "Codex's hooks.json and config.toml",
   },
 };
 

@@ -442,6 +442,10 @@ function planRow(run: Run, row: ScopeRow): Outcome {
   }
   // Codex's plugins are switched and uninstalled in Codex; the rest of this file is Claude's.
   if (item.kind === "plugin" && loc.tool === "codex") return refused(run, row, "codex-plugin");
+  // A hook in a config.toml: clausona keeps hooks it takes out as JSON, and changes no TOML hook.
+  if (item.kind === "hook" && loc.tool === "codex" && path.basename(loc.file) === "config.toml") {
+    return refused(run, row, "codex-config-hook", { "~file": tilde(loc.file, run.inv.homeDir) });
+  }
   if (verb !== "rm" && setByPolicy(run, item)) return refused(run, row, "managed");
   switch (item.kind) {
     case "skill":
