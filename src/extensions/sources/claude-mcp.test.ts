@@ -43,6 +43,7 @@ describe("readClaudeMcp", () => {
       homeDir: h.home,
       projects,
       managedSettings: h.path("none.json"),
+      mcpjsonStop: h.home,
       warnings: out.warnings,
     });
     await readClaudeMcp(ctx, projects, out);
@@ -124,6 +125,7 @@ async function read(h: TestHome, projects: Project[]): Promise<Collector> {
     homeDir: h.home,
     projects,
     managedSettings: h.path("none.json"),
+    mcpjsonStop: h.home,
     warnings: out.warnings,
   });
   await readClaudeMcp(ctx, projects, out);

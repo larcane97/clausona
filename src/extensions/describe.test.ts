@@ -67,12 +67,7 @@ async function seed(extra: Extra = {}): Promise<Seeded> {
   h.write(".mcp.json", { mcpServers: { tools: { command: "tools-mcp" } } });
   h.write(".claude/settings.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-me" }] }] } });
   extra.more?.(h, app, web);
-  const inv = await loadInventory({
-    homeDir: h.home,
-    registry: h.registry,
-    cwd: app,
-    managedSettings: h.path("none.json"),
-  });
+  const inv = await loadInventory(h.inventoryOptions(app));
   return { h, inv, app, web };
 }
 
@@ -194,12 +189,7 @@ describe("tagsOf", () => {
       h.skill(".claude/skills", "x");
       h.write(file, { skillOverrides: { x: "off" } });
       // Started in the home dir, which is then the project: every file is under it.
-      const inv = await loadInventory({
-        homeDir: h.home,
-        registry: h.registry,
-        cwd: h.home,
-        managedSettings: h.path("none.json"),
-      });
+      const inv = await loadInventory(h.inventoryOptions(h.home));
       expect(inv.currentProject).toBe(h.home);
       return tagsOf(inv, single(claudeSkill(inv, "x")), h.home, NOW);
     };
@@ -679,12 +669,7 @@ describe("rows across accounts", () => {
     h.write(".claude/settings.json", { enabledPlugins: { "kit@m": true } });
     h.skill(".claude/plugins/cache/m/kit/1.0.0/skills", "plan");
     h.skill(".claude-work/plugins/cache/m/kit/1.0.0/skills", "plan");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     const row = (scope: "cloud" | "plugins" | "loaded", name: string): ScopeRow => {
       const found = rowsIn(inv, "claude", "skill", scope, app, NOW).find((r) => r.name === name);
       if (!found) throw new Error(`no ${name} row`);
@@ -794,12 +779,7 @@ describe("an account whose skills folder is not the primary's", () => {
     h.link(".claude/skills", ".claude-work/skills");
     h.skill(".claude-solo/skills", "mine");
     h.skill("repos/app/.claude/skills", "eli5");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     return { inv, app };
   }
 
@@ -848,12 +828,7 @@ describe("two projects of one folder name", () => {
     h.claude("default", ".claude", { projects: { [work as string]: pg, [mine as string]: pg, [tool as string]: {} } });
     h.skill("work/app/.claude/skills", "deploy");
     h.skill("personal/app/.claude/skills", "deploy");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: tool as string,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(tool as string));
     return { inv, work: work as string, mine: mine as string, tool: tool as string };
   }
 

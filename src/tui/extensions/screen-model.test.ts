@@ -83,12 +83,7 @@ async function seed(more?: (h: TestHome, app: string, web: string) => void): Pro
   h.write(".mcp.json", { mcpServers: { tools: { command: "tools-mcp" } } });
   h.write(".claude/settings.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-me" }] }] } });
   more?.(h, app, web);
-  const inv = await loadInventory({
-    homeDir: h.home,
-    registry: h.registry,
-    cwd: app,
-    managedSettings: h.path("none.json"),
-  });
+  const inv = await loadInventory(h.inventoryOptions(app));
   return { h, inv, app, web };
 }
 
@@ -98,12 +93,7 @@ async function bare(): Promise<Seeded> {
   homes.push(h);
   const app = h.project("repos/app");
   h.claude("default", ".claude", { projects: { [app]: {} } });
-  const inv = await loadInventory({
-    homeDir: h.home,
-    registry: h.registry,
-    cwd: app,
-    managedSettings: h.path("none.json"),
-  });
+  const inv = await loadInventory(h.inventoryOptions(app));
   return { h, inv, app, web: "" };
 }
 
@@ -380,12 +370,7 @@ describe("tables", () => {
     });
     h.skill(".claude/skills/synced/org1_acc1", "pdf");
     h.skill(".claude/skills/synced/org1_acc2", "pdf");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     const cloud = buildTable(inv, "claude", "skill", "cloud", app, NOW, 100, "");
     expect(cloud.rows).toHaveLength(1);
     expect(cloud.rows[0]?.row.items).toHaveLength(2);

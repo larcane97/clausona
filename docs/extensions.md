@@ -107,7 +107,8 @@ Some scopes need a word more:
 - Project for Claude MCP includes local servers: the ones an account added for this
   project with `claude mcp add`, kept in that account's `.claude.json`.
 - Parent folders: Claude Code reads `.mcp.json` in the project and in every folder above
-  it. The header names each folder, nearest first.
+  it, past the home folder too, up to the filesystem root. So does clausona: a `.mcp.json` in
+  `/Users` or `C:\Users` is listed here. The header names each folder, nearest first.
 - Cloud: the skills Claude Code downloaded from each account's claude.ai skills, under
   `~/.claude/skills/synced`.
 - Plugins lists the plugins themselves (rows of kind `plugin`) that bring at least one

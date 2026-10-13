@@ -56,6 +56,8 @@ export function pluginLocation(plugin: PluginInstall): Omit<Location, "file"> {
 
 export type ClaudeContext = {
   homeDir: string;
+  /** The last dir the parent `.mcp.json` walk reads; undefined walks to the filesystem root. */
+  mcpjsonStop?: string;
   primaryDir: string;
   accounts: ClaudeAccount[];
   settings: SettingsFile[];
@@ -115,6 +117,8 @@ export async function loadClaudeContext(options: {
   homeDir: string;
   projects: Project[];
   managedSettings: string;
+  /** See LoadOptions.mcpjsonStop. */
+  mcpjsonStop?: string;
   warnings: Warning[];
 }): Promise<ClaudeContext> {
   const { accounts, registry, homeDir, projects, warnings } = options;
@@ -142,6 +146,7 @@ export async function loadClaudeContext(options: {
   ]);
   return {
     homeDir,
+    ...(options.mcpjsonStop !== undefined ? { mcpjsonStop: options.mcpjsonStop } : {}),
     primaryDir,
     accounts,
     settings: read.filter((s): s is SettingsFile => s !== undefined),

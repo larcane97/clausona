@@ -38,6 +38,12 @@ export type LoadOptions = {
   managedSettings?: string;
   /** Where clausona keeps what it took out to turn off everywhere; default stashDir(homeDir). */
   stashDir?: string;
+  /**
+   * The last dir the parent `.mcp.json` walk reads, itself included. Claude Code walks to the
+   * filesystem root, and so does this without it; tests set their home, so they never read a
+   * real `.mcp.json` above it.
+   */
+  mcpjsonStop?: string;
 };
 
 const DAY = 86_400_000;
@@ -75,6 +81,7 @@ export async function loadInventory(options: LoadOptions): Promise<Inventory> {
       homeDir,
       projects,
       managedSettings: options.managedSettings ?? managedSettingsPath(process.platform),
+      ...(options.mcpjsonStop !== undefined ? { mcpjsonStop: options.mcpjsonStop } : {}),
       warnings,
     });
     collectClaudeSettingsFacts(ctx, out);

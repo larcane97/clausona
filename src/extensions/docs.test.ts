@@ -286,6 +286,7 @@ function seed() {
       registry: h.registry,
       now: NOW,
       managedSettings: h.path("managed-settings.json"),
+      mcpjsonStop: h.home,
       ...(terminal ? { interactive: true, confirm: async () => true, print: () => {} } : {}),
     });
   /** Every item `ls --json` writes: `all` has every place's rows but the plugins, which `plugins` lists. */

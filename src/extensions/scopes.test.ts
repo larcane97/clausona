@@ -62,12 +62,7 @@ async function seed(more?: (h: TestHome, app: string, web: string) => void): Pro
   h.write(".mcp.json", { mcpServers: { tools: { command: "tools-mcp" } } });
   h.write(".claude/settings.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-me" }] }] } });
   more?.(h, app, web);
-  const inv = await loadInventory({
-    homeDir: h.home,
-    registry: h.registry,
-    cwd: app,
-    managedSettings: h.path("none.json"),
-  });
+  const inv = await loadInventory(h.inventoryOptions(app));
   return { h, inv, app, web };
 }
 
@@ -162,12 +157,7 @@ describe("scopes", () => {
     homes.push(h);
     const app = h.project("repos/app");
     h.claude("default", ".claude", { projects: { [app]: {} } });
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     const scopes = scopesFor(inv, "claude", "hook", app, NOW);
     expect(scopes).toEqual([
       { id: "loaded", label: "Loaded", count: 0 },
@@ -280,12 +270,7 @@ describe("rows", () => {
       mcpServers: { github: { command: "gh-mcp" } },
     });
     h.skill(".claude/skills", "eli5");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     return { h, inv, app, web };
   }
 
@@ -403,12 +388,7 @@ describe("rows across accounts", () => {
     }
     h.skill(".claude/plugins/cache/m/sp/1.0.0/skills", "search");
     h.skill(".claude/plugins/cache/m/lp/1.0.0/skills", "lint");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     return { h, inv, app, web };
   }
 
@@ -526,12 +506,7 @@ describe("one copy per name, account by account", () => {
     h.claude("personal", ".claude", { projects: { [app]: entries.personal ?? {}, [web]: {} }, mcpServers: user });
     h.claude("work", ".claude-work", { projects: { [app]: entries.work ?? {} }, mcpServers: user });
     more?.(h);
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     return { h, inv, app, web };
   }
 

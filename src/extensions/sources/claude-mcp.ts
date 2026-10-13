@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { valueHash } from "../hash.js";
 import type { Collector, Location, Project } from "../model.js";
-import { isRecord, isWithin, pathKey, readJsonObject, samePath } from "../read.js";
+import { isRecord, pathKey, readJsonObject, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
 import { type ClaudeContext, pluginLocation, pluginOwner } from "./claude-context.js";
 
@@ -47,7 +47,7 @@ export async function readClaudeMcp(ctx: ClaudeContext, projects: Project[], out
     }
   }
   await Promise.all(
-    mcpjsonDirs(projects, ctx.homeDir).map(async (dir) => {
+    mcpjsonDirs(projects, ctx.mcpjsonStop).map(async (dir) => {
       const file = path.join(dir, ".mcp.json");
       const json = await readJsonObject(file, out.warnings);
       if (json) addServers(json.mcpServers, { tool: "claude", scope: "project", project: dir, file }, dir, out, ids);
@@ -86,19 +86,17 @@ export async function readClaudeMcp(ctx: ClaudeContext, projects: Project[], out
 }
 
 /**
- * The dirs whose `.mcp.json` a project's sessions read, each once: Claude Code 2.1.294 reads the
- * file in the dir it starts in and in each parent dir up to the filesystem root, the nearest
- * winning a name. For a project inside the home dir the walk here stops at the home dir: a
- * .mcp.json above it - in /Users or C:\Users, shared by every user - is not read, which also
- * keeps a test home in the temp dir, under the real home on Windows, from reading the real one.
+ * The dirs whose `.mcp.json` a project's sessions read, each once: Claude Code 2.1.296 reads the
+ * file in the dir it starts in and in each parent dir up to the filesystem root, the root left
+ * out, the nearest winning a name. So a `.mcp.json` in /Users or C:\Users, above the home dir,
+ * counts too. `stop`, which only tests set, ends the walk at their home.
  */
-function mcpjsonDirs(projects: Project[], homeDir: string): string[] {
+function mcpjsonDirs(projects: Project[], stop: string | undefined): string[] {
   const dirs = new Map<string, string>();
   for (const project of projects) {
-    const inHome = isWithin(project.path, homeDir);
     for (let dir = path.resolve(project.path); path.dirname(dir) !== dir; dir = path.dirname(dir)) {
       if (!dirs.has(pathKey(dir))) dirs.set(pathKey(dir), dir === path.resolve(project.path) ? project.path : dir);
-      if (inHome && samePath(dir, homeDir)) break;
+      if (samePath(dir, stop)) break;
     }
   }
   return [...dirs.values()];

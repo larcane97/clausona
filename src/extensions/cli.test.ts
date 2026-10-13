@@ -56,6 +56,7 @@ const run = (h: TestHome, cwd: string, command: ExtensionsCommand, args: string[
       now: NOW,
       columns,
       managedSettings: h.path("managed-settings.json"),
+      mcpjsonStop: h.home,
     }),
   );
 
@@ -272,7 +273,7 @@ describe("skills ls", () => {
     const text = await run(h, app, "skills", ["ls", "--scope", "builtin", "--tool", "claude"]);
     expect(firstLine(text)).toMatch(/^1 skill · Built-in · project ~/);
     expect(text).toMatch(/^claude-api\s+Built-in\s+0\s+never\s+off$/m);
-    const inv = await loadInventory({ homeDir: h.home, registry: h.registry, cwd: app });
+    const inv = await loadInventory(h.inventoryOptions(app));
     // In the screen's scope list, after Plugins' place and before Not used in 90 days.
     expect(scopesFor(inv, "claude", "skill", app, NOW).map((s) => s.id)).toEqual([
       "loaded",
@@ -541,6 +542,8 @@ describe("what an agent tripped on", () => {
       cwd: app,
       registry: h.registry,
       now: Date.now() + 3 * DAY,
+      managedSettings: h.path("managed-settings.json"),
+      mcpjsonStop: h.home,
     });
     expect(fresh).toMatch(/^Used {6}never, in any account · added 3d ago$/m);
   });

@@ -101,12 +101,7 @@ function home(more?: More): { h: TestHome; app: string; web: string } {
 
 // The managed settings are the home's own, so no test reads this machine's.
 function load(h: TestHome, cwd: string): Promise<Inventory> {
-  return loadInventory({
-    homeDir: h.home,
-    registry: h.registry,
-    cwd,
-    managedSettings: h.path("managed-settings.json"),
-  });
+  return loadInventory(h.inventoryOptions(cwd, h.path("managed-settings.json")));
 }
 
 function contextFor(h: TestHome, inv: Inventory, project: string | undefined): PlanContext {

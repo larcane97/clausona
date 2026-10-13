@@ -126,8 +126,7 @@ describe("planChecked", () => {
     const app = h.project("repos/app");
     h.claude("default", ".claude", { projects: { [app]: {} } });
     h.skill(".claude/skills", "eli5");
-    const load = () =>
-      loadInventory({ homeDir: h.home, registry: h.registry, cwd: app, managedSettings: h.path("managed.json") });
+    const load = () => loadInventory(h.inventoryOptions(app, h.path("managed.json")));
     const checkedChange = async () => {
       const inv = await load();
       const row = rowsIn(inv, "claude", "skill", "global", app, NOW).find((r) => r.name === "eli5");
@@ -148,12 +147,7 @@ describe("planChecked", () => {
   it.skipIf(!hasGit)("plans again with what git tracks, so a tracked folder is refused", async () => {
     const { h, app, tracked } = repo();
     h.claude("default", ".claude", { projects: { [app]: {} } });
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("managed-settings.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app, h.path("managed-settings.json")));
     const row = rowsIn(inv, "claude", "skill", "project", app, NOW).find((r) => r.name === "tracked-one");
     if (!row) throw new Error("no tracked-one row");
     const ctx = { inv, project: app, now: NOW, stashDir: h.path(".clausona", "extensions", "stash") };
