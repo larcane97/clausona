@@ -376,6 +376,19 @@ describe("runRouted", () => {
     expect(s.notes).toEqual(["  ▸ claude:a  active profile (no route)"]);
   });
 
+  it("says so when the tool has no active profile, and launches nothing", async () => {
+    // codex has no active profile at all; claude's names a profile that has since been removed.
+    const s = setup({ registry: { ...BOTH, activeProfiles: { claude: "claude:gone" } } });
+    await expect(runRouted(["codex", "exec", "hi"], s.launch, s.io, s.deps)).rejects.toThrow(
+      "No active codex profile. Run `clausona use`, or name one: clausona run <profile>.",
+    );
+    await expect(runRouted(["claude", "-p", "hi"], s.launch, s.io, s.deps)).rejects.toThrow(
+      "No active claude profile. Run `clausona use`, or name one: clausona run <profile>.",
+    );
+    expect(s.launches).toEqual([]);
+    expect(s.notes).toEqual([]);
+  });
+
   it("refuses routing options that name no route, rather than running the active profile", async () => {
     const s = setup();
     await expect(runRouted(["claude", "--exclude", "x", "-p", "hi"], s.launch, s.io, s.deps)).rejects.toThrow(
@@ -392,6 +405,16 @@ describe("runRouted", () => {
     const s = setup({ registry });
     await runRouted(["claude", "--", "-p", "hi"], s.launch, s.io, s.deps);
     expect(s.launches).toEqual([["claude", ["-p", "hi"]]]);
+  });
+
+  it("treats a registered profile named codex as that profile", async () => {
+    const registry: Registry = {
+      ...REGISTRY,
+      profiles: { ...REGISTRY.profiles, "claude:codex": { tool: "claude", configDir: "/x", email: "x@example.com" } },
+    };
+    const s = setup({ registry });
+    await runRouted(["codex", "exec", "hi"], s.launch, s.io, s.deps);
+    expect(s.launches).toEqual([["codex", ["exec", "hi"]]]);
   });
 
   it("asks for a route, a tool or a profile when given none", async () => {
