@@ -9,15 +9,14 @@ import type { ToolName } from "../types.js";
 
 export type RoutingOptions = RouteOverrides & { route?: string };
 
-export const ROUTE_FIELD_OPTIONS: readonly string[] = [
-  "--from",
-  "--exclude",
-  "--strategy",
-  "--max-usage",
-  "--fallback",
-];
+export const ROUTE_FIELD_OPTIONS = ["--from", "--exclude", "--strategy", "--max-usage", "--fallback"] as const;
 
-export const ROUTING_VALUE_OPTIONS: readonly string[] = ["--route", ...ROUTE_FIELD_OPTIONS];
+export const ROUTING_VALUE_OPTIONS = ["--route", ...ROUTE_FIELD_OPTIONS] as const;
+
+type RoutingFlag = (typeof ROUTING_VALUE_OPTIONS)[number];
+
+const isRoutingFlag = (flag: string): flag is RoutingFlag =>
+  (ROUTING_VALUE_OPTIONS as readonly string[]).includes(flag);
 
 export type RunArgs = {
   tool?: ToolName;
@@ -56,9 +55,11 @@ export function parseRouteTool(value: string | undefined): RouteTool | undefined
   return value as RouteTool;
 }
 
+/** The routing options among `values`. The rest - `--tool`, `--add` and the like - are the caller's. */
 export function toRoutingOptions(values: Map<string, string>): RoutingOptions {
   const options: RoutingOptions = {};
   for (const [flag, value] of values) {
+    if (!isRoutingFlag(flag)) continue;
     switch (flag) {
       case "--route":
         options.route = value;
@@ -78,6 +79,12 @@ export function toRoutingOptions(values: Map<string, string>): RoutingOptions {
       case "--max-usage":
         options.maxUsage = parsePercent(flag, value);
         break;
+      default: {
+        // An option added to the lists above without a case here fails to compile, rather than
+        // being read and then dropped.
+        const unhandled: never = flag;
+        throw new Error(`unhandled routing option: ${unhandled}`);
+      }
     }
   }
   return options;
@@ -86,6 +93,24 @@ export function toRoutingOptions(values: Map<string, string>): RoutingOptions {
 function splitOption(arg: string): [string, string | undefined] {
   const eq = arg.indexOf("=");
   return eq === -1 ? [arg, undefined] : [arg.slice(0, eq), arg.slice(eq + 1)];
+}
+
+/**
+ * Stores the value of the option at `args[i]`, given after `=` or as the next argument, and
+ * returns the index of the last argument it used. An option given twice and one with no value
+ * after it are refused; neither message says what the value was.
+ */
+function readValue(values: Map<string, string>, args: string[], i: number): number {
+  const [flag, inline] = splitOption(args[i]);
+  if (values.has(flag)) throw new Error(`${flag} was given more than once. Pass it at most once.`);
+  if (inline !== undefined) {
+    values.set(flag, inline);
+    return i;
+  }
+  const next = args[i + 1];
+  if (next === undefined || next.startsWith("-")) throw new Error(`${flag} needs a value.`);
+  values.set(flag, next);
+  return i + 1;
 }
 
 /**
@@ -109,16 +134,8 @@ export function readRunArgs(args: string[]): RunArgs {
       tool = arg;
       continue;
     }
-    const [flag, inline] = splitOption(arg);
-    if (!ROUTING_VALUE_OPTIONS.includes(flag)) break;
-    if (values.has(flag)) throw new Error(`${flag} was given more than once. Pass it at most once.`);
-    let value = inline;
-    if (value === undefined) {
-      value = args[i + 1];
-      if (value === undefined || value.startsWith("-")) throw new Error(`${flag} needs a value.`);
-      i++;
-    }
-    values.set(flag, value);
+    if (!isRoutingFlag(splitOption(arg)[0])) break;
+    i = readValue(values, args, i);
   }
   return { ...(tool ? { tool } : {}), options: toRoutingOptions(values), toolArgs: args.slice(i), sawSeparator };
 }
@@ -144,14 +161,7 @@ export function readOptions(args: string[], spec: OptionSpec, command: string): 
     if (!spec.values.includes(flag)) {
       throw new Error(`Unknown option: ${flag}\nRun \`clausona ${command} --help\` for usage.`);
     }
-    if (out.values.has(flag)) throw new Error(`${flag} was given more than once. Pass it at most once.`);
-    let value = inline;
-    if (value === undefined) {
-      value = args[i + 1];
-      if (value === undefined || value.startsWith("-")) throw new Error(`${flag} needs a value.`);
-      i++;
-    }
-    out.values.set(flag, value);
+    i = readValue(out.values, args, i);
   }
   return out;
 }
