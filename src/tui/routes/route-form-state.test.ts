@@ -564,3 +564,47 @@ describe("a round trip through the form", () => {
     expect(withDefaults(saved ?? spec)).toEqual(withDefaults(spec));
   });
 });
+
+describe("an API profile among the accounts", () => {
+  const WITH_API: FormAccount[] = [
+    ...ACCOUNTS,
+    { id: "claude:gw", tool: "claude", name: "gw", email: "", kind: "api" },
+  ];
+  const act = (state: RouteFormState, ...actions: FormAction[]) =>
+    actions.reduce((next, action) => reduceForm(next, action, WITH_API), state);
+  const toggleIn = (state: RouteFormState, id: string) => {
+    const row = accountsFor(state.tool, WITH_API).findIndex((account) => account.id === id) + 1;
+    const focused = { ...state, focus: "accounts" as const, cursor: row };
+    return act(focused, { type: "toggle" });
+  };
+  const spec = (state: RouteFormState) => formToSpec(named(state), WITH_API).spec;
+
+  it("is not among every account: unticked it needs no exclude, and ticked it is in from by name", () => {
+    const fresh = initialFormState({ mode: "new" }, WITH_API);
+    expect(fresh.ticked).not.toContain("claude:gw");
+    expect(spec(fresh)).toMatchObject({ from: ["*"] });
+    expect(spec(fresh)).not.toHaveProperty("exclude");
+    const ticked = toggleIn(fresh, "claude:gw");
+    expect(spec(ticked)).toMatchObject({ from: ["*", "gw"] });
+  });
+
+  it("is read back ticked from a route that names it, and stays as it was when every account is ticked again", () => {
+    const edit = initialFormState(
+      { mode: "edit", name: "main", spec: { tool: "claude", from: ["*", "gw"], exclude: ["side"] } },
+      WITH_API,
+    );
+    expect(edit.ticked).toContain("claude:gw");
+    expect(edit.fromText).toBe("");
+    const off = toggleIn(edit, "claude:gw");
+    const every = act({ ...off, focus: "accounts", cursor: 0 }, { type: "toggle" }, { type: "toggle" });
+    expect(every.ticked).not.toContain("claude:gw");
+    expect(spec(every)).toEqual({ tool: "claude", from: ["*"], strategy: "round-robin" });
+  });
+
+  it("is not ticked when its tool joins an all route under every account", () => {
+    const codex = { ...initialFormState({ mode: "new" }, WITH_API), tool: "codex" as const, ticked: ["codex:x"] };
+    const all = act(codex, { type: "tool", tool: "all" });
+    expect(all.ticked).toContain("claude:team");
+    expect(all.ticked).not.toContain("claude:gw");
+  });
+});

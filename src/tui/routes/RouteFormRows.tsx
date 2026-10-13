@@ -1,8 +1,8 @@
 import { Box, Text } from "ink";
 import { type PropsWithChildren, useRef } from "react";
 
-import { type Ranking, usageOf } from "../../core/routing.js";
-import { freeNow, nothingRead, skipReason } from "../../lib/route-render.js";
+import { type Ranking, spendUsageOf, usageOf } from "../../core/routing.js";
+import { freeNow, nothingRead, skipReason, spendText } from "../../lib/route-render.js";
 import type { QuotaSnapshot } from "../../types.js";
 import { QuotaCell } from "../components/QuotaCell.js";
 import { color, symbol } from "../theme.js";
@@ -185,6 +185,16 @@ function noQuotaReason(id: string, snapshot: QuotaSnapshot | undefined, now: num
 }
 
 /**
+ * An API profile's note: its spend against its limit, or why it has none to show. Not a missing
+ * reading, as above.
+ */
+function spendNote(snapshot: QuotaSnapshot | undefined): string {
+  if (snapshot?.budget && snapshot.state === "ok") return spendText(snapshot.budget);
+  const { skip } = spendUsageOf(snapshot);
+  return snapshot && skip ? skipReason({ id: "", skip }) : "";
+}
+
+/**
  * The accounts `lines` lines show of `total`, the cursor's among them: from `start` (where the
  * last window began, so that it moves only when the cursor leaves it), less a line for the count
  * above when there are accounts above, and one for the count below when there are some below.
@@ -275,7 +285,8 @@ export function AccountRows({
         const ticked = state.ticked.includes(account.id) && !out;
         const snapshot = quotas[account.id];
         const live = snapshot?.state === "ok";
-        const note = out ? "excluded" : noQuotaReason(account.id, snapshot, now);
+        const api = account.kind === "api";
+        const note = out ? "excluded" : api ? spendNote(snapshot) : noQuotaReason(account.id, snapshot, now);
         return (
           <Line key={account.id} label="" rowMark={focused && state.cursor === index + 1}>
             <Box width={4 + idWidth} flexShrink={1} minWidth={0}>
@@ -283,12 +294,18 @@ export function AccountRows({
                 {`[${ticked ? "x" : " "}] ${account.id}`}
               </Text>
             </Box>
-            {/* Right-aligned: a percentage comes padded to the width, a dash does not. */}
+            {/* Right-aligned: a percentage comes padded to the width, a dash does not. An API
+                profile, billed per use, says so where the 5H column is, and its budget's use where
+                the 7D one is. */}
             <Box marginLeft={GAP} width={QUOTA} flexShrink={0} justifyContent="flex-end">
-              <QuotaCell window={snapshot?.session} live={live} width={QUOTA} cut={cut} />
+              {api ? (
+                <Text color={color.muted}>API</Text>
+              ) : (
+                <QuotaCell window={snapshot?.session} live={live} width={QUOTA} cut={cut} />
+              )}
             </Box>
             <Box marginLeft={GAP} width={QUOTA} flexShrink={0} justifyContent="flex-end">
-              <QuotaCell window={snapshot?.weekly} live={live} width={QUOTA} cut={cut} />
+              <QuotaCell window={api ? snapshot?.budget : snapshot?.weekly} live={live} width={QUOTA} cut={cut} />
             </Box>
             {note ? (
               <Box marginLeft={GAP} flexShrink={0}>

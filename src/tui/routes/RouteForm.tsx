@@ -82,11 +82,15 @@ export type RouteFormProps = {
   onDone: (saved: string | null, note?: string) => void;
 };
 
-/** The accounts a route can take in this version: the subscription profiles of both tools. */
-export function formAccounts(registry: Registry): FormAccount[] {
+/**
+ * The accounts the form offers: the subscription profiles of both tools, and the API profiles
+ * `offer` lets in - the ones with a limit, and any the route already names, which saving then
+ * checks as `route set` does.
+ */
+export function formAccounts(registry: Registry, offer: (id: string) => boolean = () => false): FormAccount[] {
   return membersOf(registry, "all")
-    .filter((member) => member.kind === "subscription")
-    .map(({ id, tool, name, email }) => ({ id, tool, name, email }));
+    .filter((member) => member.kind === "subscription" || offer(member.id))
+    .map(({ id, tool, name, email, kind }) => ({ id, tool, name, email, ...(kind === "api" ? { kind } : {}) }));
 }
 
 /**
@@ -271,7 +275,8 @@ export function RouteForm(props: RouteFormProps) {
     return new Set(
       listed
         .filter((account) => {
-          if (state.every && !state.ticked.includes(account.id)) return true;
+          // Unticked, an API profile is not in the route at all: `*` never takes one.
+          if (state.every && account.kind !== "api" && !state.ticked.includes(account.id)) return true;
           const member = members.get(account.id);
           return member !== undefined && patterns.some((pattern) => matchesMember(pattern, member));
         })
@@ -289,7 +294,9 @@ export function RouteForm(props: RouteFormProps) {
         preview
           ? preview.rows.filter((row) => row.role === "pool").map((row) => row.id)
           : state.every
-            ? listed.map((account) => account.id)
+            ? listed
+                .filter((account) => account.kind !== "api" || state.ticked.includes(account.id))
+                .map((account) => account.id)
             : state.ticked,
       ),
     [preview, listed, state.every, state.ticked],

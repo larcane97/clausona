@@ -76,6 +76,7 @@ import { type RouteIo, terminalIo } from "./lib/route-io.js";
 import {
   type BudgetRow,
   budgetRowJson,
+  budgetRowOf,
   explainJson,
   limitText,
   nobodyAdvice,
@@ -782,17 +783,9 @@ async function budgetRows(registry: Registry, file: RoutesFile, deps: RouteDeps,
     .sort(compareIds);
   const targets = members.flatMap((member) => spendTarget(member, budgetOf(member.id)) ?? []);
   const quotas = targets.length ? await deps.collectQuotas(targets) : {};
-  return members.map((member): BudgetRow => {
-    const snapshot = quotas[member.id];
-    const budget = budgetOf(member.id);
-    const base = { id: member.id, ...(budget ? { budget } : {}), routes: routesTaking(file, registry, member.id) };
-    if (snapshot?.noSpendReading) return { ...base, spend: "not-reported" };
-    // No endpoint to read from is a profile doctor reports, as it does a key it cannot read.
-    if (!snapshot) return { ...base, spend: "unread", unread: "missing" };
-    if (snapshot.state !== "ok") return { ...base, spend: "unread", unread: snapshot.state };
-    if (!snapshot.budget) return { ...base, spend: "no-limit" };
-    return { ...base, spend: "ok", window: snapshot.budget };
-  });
+  return members.map((member) =>
+    budgetRowOf(member.id, quotas[member.id], budgetOf(member.id), routesTaking(file, registry, member.id)),
+  );
 }
 
 const PERIOD_WORDS: Record<BudgetPeriod, string> = { day: "today", week: "this week", month: "this month" };

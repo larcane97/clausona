@@ -857,3 +857,135 @@ describe("dir rules and defaults", () => {
     expect(file()).not.toHaveProperty("defaults");
   });
 });
+
+describe("API profiles and their budgets", () => {
+  const TAB = "\t";
+  const SPACE = " ";
+  const api = (name: string) =>
+    profile("claude", name, {
+      kind: "api",
+      email: "",
+      api: { baseUrl: `https://${name}.example.com`, authScheme: "bearer", secret: { source: "env", name: "GW_KEY" } },
+    });
+  const WITH_API: Registry = {
+    ...REGISTRY,
+    profiles: {
+      ...REGISTRY.profiles,
+      "claude:gw": api("gw"),
+      "claude:bare": api("bare"),
+      "claude:proxy": api("proxy"),
+    },
+  };
+  const window = (usedPercent: number, limitUsd: number, source: "budget" | "provider") => ({
+    usedPercent,
+    resetsAt: null,
+    spentUsd: (usedPercent * limitUsd) / 100,
+    limitUsd,
+    source,
+    per: "month" as const,
+  });
+  /** Each API profile's spend as the cache serves it: against the budget its target carries, if any. */
+  const collect: Collect = async (targets) =>
+    Object.fromEntries(
+      targets.map((target): [string, QuotaSnapshot] => {
+        if (target.id === "claude:gw") {
+          const budget = target.api?.budget;
+          return [
+            target.id,
+            {
+              state: "ok",
+              fetchedAt: NOW,
+              budget: budget ? window(35, budget.usd, "budget") : window(10, 50, "provider"),
+            },
+          ];
+        }
+        if (target.id === "claude:bare") return [target.id, { state: "ok", fetchedAt: NOW }];
+        if (target.id === "claude:proxy") return [target.id, { state: "error", fetchedAt: NOW, noSpendReading: true }];
+        return [target.id, QUOTAS[target.id] ?? { state: "error", fetchedAt: NOW }];
+      }),
+    );
+  const withApi = (file: RoutesFile = FILE) =>
+    setup({ file, collect, registry: { loads: WITH_API, problem: null }, columns: 100 });
+
+  it("lists every API profile on b, with its usage and whose limit counts it, or why it has none", async () => {
+    const { instance, deps } = withApi();
+    await ranked(instance);
+    await press(instance, "b");
+    const frame = await until(instance, (f) => f.includes("Budgets") && f.includes("$5.00 of $50/month"));
+    expect(frame).toMatch(/▸ claude:bare\s+—\s+no spend limit; e sets a budget/);
+    expect(frame).toMatch(/ {3}claude:gw\s+10%\s+\$5\.00 of \$50\/month \(provider limit\)/);
+    expect(frame).toMatch(/claude:proxy\s+—\s+the provider does not report spend/);
+    for (const hint of ["e set budget", "d clear", "tab routes", "esc back"]) expect(frame).toContain(hint);
+    // Only the API profiles' spend was read for it, and no key was asked for here.
+    expect(ids(deps.collectQuotas.mock.calls.at(-1)?.[0] ?? [])).toEqual(["claude:bare", "claude:gw", "claude:proxy"]);
+    await press(instance, TAB);
+    await ranked(instance);
+  });
+
+  it("shows an API member's budget in the route's detail, with its spend", async () => {
+    const { instance } = withApi({ version: 1, routes: { paid: { tool: "claude", from: ["gw", "team"] } } });
+    const frame = await ranked(instance);
+    const { detail } = panes(frame);
+    expect(detail.find((line) => line.includes("ACCOUNT"))).toMatch(/ACCOUNT\s+5H\s+7D\s+BUDGET/);
+    // The spend is cut to the pane, not the account's id.
+    expect(row(detail, "claude:gw")).toMatch(/^▸ claude:gw\s+—\s+—\s+10%\s+next · \$5\.00 of \$50\/month/);
+  });
+
+  it("sets a budget from its editor, and clears it once asked", async () => {
+    const { instance, file } = withApi();
+    await ranked(instance);
+    await press(instance, "b");
+    await until(instance, (f) => f.includes("Budgets"));
+    await press(instance, DOWN);
+    await press(instance, "e");
+    await until(instance, (f) => f.includes("Budget for claude:gw"));
+    await typeSlowly(instance, "20");
+    await press(instance, TAB);
+    expect(text(instance)).toContain("Its usage is its spend in a month as a share of $20.");
+    await type(instance, ENTER);
+
+    await until(instance, (f) => f.includes("Budgets") && f.includes("$7.00 of $20/month (clausona budget)"));
+    expect(file().budgets).toEqual({ "claude:gw": { usd: 20, per: "month" } });
+
+    await press(instance, "d");
+    expect(text(instance)).toContain("Clear the budget for claude:gw? (y/N)");
+    await press(instance, "y");
+    await until(instance, (f) => f.includes("$5.00 of $50/month (provider limit)"));
+    expect(file()).not.toHaveProperty("budgets");
+  });
+
+  it("refuses a budget that is not dollars above 0", async () => {
+    const { instance, deps } = withApi();
+    await ranked(instance);
+    await press(instance, "b");
+    await press(instance, "e");
+    await until(instance, (f) => f.includes("Budget for claude:bare"));
+    await typeSlowly(instance, "0");
+    await type(instance, ENTER);
+    await until(instance, (f) => f.includes("Type a number of dollars above 0, such as 20 or 12.50."));
+    expect(deps.updateRoutes).not.toHaveBeenCalled();
+  });
+
+  it("offers in the form the API profiles that have a limit, and saves one ticked by its name", async () => {
+    const { instance, file } = withApi();
+    await ranked(instance);
+    await press(instance, "n");
+    const form = await until(instance, (f) => f.includes("New route") && f.includes("claude:gw"));
+    expect(form).toMatch(/\[ \] claude:gw\s+API\s+10%\s+\$5\.00 of \$50\/month \(provider limit\)/);
+    // No limit, or no spend reading: not offered.
+    expect(form).not.toContain("claude:bare");
+    expect(form).not.toContain("claude:proxy");
+
+    await typeSlowly(instance, "paid");
+    await press(instance, TAB);
+    await press(instance, TAB);
+    const row = lines(text(instance)).findIndex((line) => line.includes("claude:gw"));
+    const first = lines(text(instance)).findIndex((line) => line.includes("every account (*)"));
+    for (let step = 0; step < row - first; step++) await press(instance, DOWN);
+    await press(instance, SPACE);
+    await type(instance, ENTER);
+
+    await until(instance, (f) => !f.includes("New route"));
+    expect(file().routes.paid).toMatchObject({ tool: "claude", from: ["*", "gw"] });
+  });
+});

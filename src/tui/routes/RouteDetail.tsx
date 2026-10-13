@@ -3,7 +3,7 @@ import { Box, Text } from "ink";
 import type { Route } from "../../core/route-config.js";
 import { isUnread, type Ranking, type Row } from "../../core/routing.js";
 import { fitQuotaValue } from "../../lib/format.js";
-import { detailOrder, overLimitText, skipReason, toolLabel } from "../../lib/route-render.js";
+import { detailOrder, overLimitText, skipReason, spendText, toolLabel } from "../../lib/route-render.js";
 import type { QuotaWindow } from "../../types.js";
 import { QuotaCell } from "../components/QuotaCell.js";
 import { color } from "../theme.js";
@@ -56,8 +56,20 @@ export function RouteDetail({ entry, pending }: { entry: Entry; pending: boolean
   );
 }
 
-/** A member table line: a ranked row with its two quota cells, or a name whose status runs across them. */
-type Line = { key: string; id: string; picked: boolean; fallback: boolean; row?: Row; status: string; tone: string };
+/**
+ * A member table line: a ranked row with its quota cells, or a name whose status runs across them.
+ * `spend` is an API profile's, after its status: cut to the line rather than given room of its own.
+ */
+type Line = {
+  key: string;
+  id: string;
+  picked: boolean;
+  fallback: boolean;
+  row?: Row;
+  status: string;
+  spend?: string;
+  tone: string;
+};
 
 function statusOf(row: Row, ranking: Ranking): string {
   const { outcome, route } = ranking;
@@ -72,7 +84,15 @@ function lineOf(row: Row, ranking: Ranking, pending: boolean): Line {
   // Before the quota is read every member reads as unread; those are the ones still loading.
   if (pending && isUnread(row.skip)) return { ...base, status: "loading…", tone: color.muted };
   if (row.skip) return { ...base, status: skipReason(row), tone: color.muted };
-  return { ...base, row, status: statusOf(row, ranking), tone: base.picked ? color.accent : color.warning };
+  const status = statusOf(row, ranking);
+  return {
+    ...base,
+    row,
+    status,
+    // An API profile's spend, and whose limit counts it, as `csn route explain` says them.
+    ...(row.budget ? { spend: spendText(row.budget) } : {}),
+    tone: base.picked ? color.accent : color.warning,
+  };
 }
 
 /** The widest a column of cells is at `width`: fitQuotaValue drops what does not fit. */
@@ -80,26 +100,40 @@ function quotaColumn(windows: QuotaWindow[], width: number, cut: number): number
   return Math.max(2, ...windows.map((window) => fitQuotaValue(window, width, new Date(), cut).length));
 }
 
-/** Text after a gap that takes the rest of the line, cut rather than wrapped. */
-function Rest({ text, tone }: { text: string; tone: string }) {
+/** Text after a gap that takes the rest of the line, cut rather than wrapped; `after` follows it, muted. */
+function Rest({ text, tone, after }: { text: string; tone: string; after?: string }) {
   return (
     <Box marginLeft={GAP} flexGrow={1} flexShrink={1} minWidth={0}>
       <Text color={tone} wrap="truncate-end">
         {text}
+        {after ? <Text color={color.secondary}>{`${text ? " · " : ""}${after}`}</Text> : null}
       </Text>
     </Box>
   );
 }
 
-function MemberLine({ line, idWidth, quota, cut }: { line: Line; idWidth: number; quota: number; cut: number }) {
+function MemberLine({
+  line,
+  idWidth,
+  quota,
+  cut,
+  budget,
+}: {
+  line: Line;
+  idWidth: number;
+  quota: number;
+  cut: number;
+  /** The budget column's width, when the table has one: an API profile's spend against its limit. */
+  budget?: number;
+}) {
   const { row } = line;
   // The window that sets the member's usage is bold, as in `csn route explain`.
-  const cell = (window: QuotaWindow | undefined, which: "5H" | "7D") => (
-    <Box marginLeft={GAP} width={quota} flexShrink={0}>
+  const cell = (window: QuotaWindow | undefined, which: "5H" | "7D" | "budget") => (
+    <Box marginLeft={GAP} width={which === "budget" ? budget : quota} flexShrink={0}>
       <QuotaCell
         window={window}
         live={!row?.usage?.stale}
-        width={quota}
+        width={which === "budget" ? (budget ?? quota) : quota}
         bold={row?.usage?.window === which}
         cut={cut}
       />
@@ -118,12 +152,14 @@ function MemberLine({ line, idWidth, quota, cut }: { line: Line; idWidth: number
       </Box>
       {row ? cell(row.fiveHour, "5H") : null}
       {row ? cell(row.sevenDay, "7D") : null}
-      {line.status ? <Rest text={line.status} tone={line.tone} /> : null}
+      {row && budget !== undefined ? cell(row.budget, "budget") : null}
+      {line.status || line.spend ? <Rest text={line.status} tone={line.tone} after={line.spend} /> : null}
     </Box>
   );
 }
 
 const FALLBACK_TAG = " (fallback)".length;
+const BUDGET = "BUDGET";
 
 function MemberTable({ ranking, pending, width }: { ranking: Ranking; pending: boolean; width: number }) {
   const members = detailOrder(ranking.rows.filter((row) => row.skip !== "not-registered"));
@@ -152,15 +188,19 @@ function MemberTable({ ranking, pending, width }: { ranking: Ranking; pending: b
     ),
   ];
   const windows = lines.flatMap(({ row }) =>
-    [row?.fiveHour, row?.sevenDay].filter((window): window is QuotaWindow => window !== undefined),
+    [row?.fiveHour, row?.sevenDay, row?.budget].filter((window): window is QuotaWindow => window !== undefined),
   );
+  const hasBudget = lines.some(({ row }) => row?.budget !== undefined);
   const status = Math.max(0, ...lines.filter((line) => line.row).map((line) => line.status.length));
   const longest = Math.max(
     "ACCOUNT".length,
     ...lines.map((line) => line.id.length + (line.fallback ? FALLBACK_TAG : 0)),
   );
-  /** A line's width but for its id: the mark, the two quota cells and the status, each after a gap. */
-  const around = (quota: number) => MARK + 2 * (GAP + quota) + (status ? GAP + status : 0);
+  /** The budget column is as wide as its header at least. */
+  const budgetOf = (quota: number) => Math.max(quota, BUDGET.length);
+  /** A line's width but for its id: the mark, the quota cells and the status, each after a gap. */
+  const around = (quota: number) =>
+    MARK + 2 * (GAP + quota) + (hasBudget ? GAP + budgetOf(quota) : 0) + (status ? GAP + status : 0);
   // The most detailed cells that fit beside whole ids; failing that, percentages only and the ids cut.
   const cut = ranking.route.maxUsage;
   const fitting = QUOTA_WIDTHS.map((at) => quotaColumn(windows, at, cut)).find(
@@ -182,10 +222,22 @@ function MemberTable({ ranking, pending, width }: { ranking: Ranking; pending: b
           <Box marginLeft={GAP} width={quota} flexShrink={0}>
             <Text color={color.muted}>7D</Text>
           </Box>
+          {hasBudget ? (
+            <Box marginLeft={GAP} width={budgetOf(quota)} flexShrink={0}>
+              <Text color={color.muted}>{BUDGET}</Text>
+            </Box>
+          ) : null}
         </Box>
       ) : null}
       {lines.map((line) => (
-        <MemberLine key={line.key} line={line} idWidth={idWidth} quota={quota} cut={cut} />
+        <MemberLine
+          key={line.key}
+          line={line}
+          idWidth={idWidth}
+          quota={quota}
+          cut={cut}
+          {...(hasBudget ? { budget: budgetOf(quota) } : {})}
+        />
       ))}
       {ranking.excluded.map((entry) => (
         <Box key={`excluded:${entry.id}`} paddingLeft={MARK}>

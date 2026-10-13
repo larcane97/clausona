@@ -2,7 +2,7 @@ import { Box, type Key, Text, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { QuotaTarget } from "../../core/quota-store.js";
-import { readBudgets } from "../../core/route-budgets.js";
+import { type Budget, type Budgets, budgetWarnings, clearBudget, readBudgets } from "../../core/route-budgets.js";
 import {
   type BrokenRoute,
   DEFAULT_MAX_USAGE,
@@ -10,7 +10,7 @@ import {
   type RoutesFile,
   withDefaults,
 } from "../../core/route-config.js";
-import { expandPatterns } from "../../core/route-patterns.js";
+import { compareIds, expandPatterns } from "../../core/route-patterns.js";
 import {
   clearDefaultRoute,
   clearDirRoute,
@@ -24,12 +24,14 @@ import {
 } from "../../core/route-rules.js";
 import { RoutesFileError } from "../../core/routes-store.js";
 import { type Ranking, rankRoute } from "../../core/routing.js";
-import { freeNow, nothingRead } from "../../lib/route-render.js";
-import { membersOf, namesOf, quotaTargets } from "../../lib/route-service.js";
+import { type BudgetRow, budgetNote, budgetRowOf, freeNow, nothingRead } from "../../lib/route-render.js";
+import { apiMembers, limitProblem, membersOf, namesOf, quotaTargets, spendTarget } from "../../lib/route-service.js";
 import type { QuotaSnapshot, Registry, ToolName } from "../../types.js";
 import { Chrome } from "../components/Chrome.js";
+import { QuotaCell } from "../components/QuotaCell.js";
 import { color, symbol } from "../theme.js";
 import { useWidth } from "../use-width.js";
+import { BudgetForm } from "./BudgetForm.js";
 import { type Entry, GAP, MARK, RouteDetail, Setting } from "./RouteDetail.js";
 import { formAccounts, RouteForm } from "./RouteForm.js";
 import { RuleForm, type RuleTarget } from "./RuleForm.js";
@@ -38,8 +40,9 @@ import { defaultRoutesScreenDeps, errorText, type RoutesListDeps } from "./route
 /**
  * The dashboard's Routes screen: every route, and the one selected with its members ranked as
  * `csn route explain` ranks them. It reads routes.json, the registry, quota and the pick record,
- * and writes only when a route is removed, or saved from its form (RouteForm.tsx); a pick is
- * never recorded here.
+ * and writes only when a route is removed or saved from its form (RouteForm.tsx), a dir rule or
+ * default changed (RuleForm.tsx), or a budget set (BudgetForm.tsx) or cleared; a pick is never
+ * recorded here.
  */
 
 /** From this many terminal columns the detail sits beside the list; below, under it. */
@@ -53,6 +56,7 @@ const HINTS = [
   { keys: "d", action: "delete" },
   { keys: "r", action: "refresh" },
   { keys: "tab", action: "dir rules" },
+  { keys: "b", action: "budgets" },
   { keys: "esc", action: "back" },
 ];
 const CONFIRM_HINTS = [
@@ -63,6 +67,7 @@ const CONFIRM_HINTS = [
 const EMPTY_HINTS = [
   { keys: "n", action: "new" },
   { keys: "tab", action: "dir rules" },
+  { keys: "b", action: "budgets" },
   { keys: "esc", action: "back" },
 ];
 const BACK_HINTS = [{ keys: "esc", action: "back" }];
@@ -78,6 +83,18 @@ const RULE_HINTS = [
 const CLEAR_HINTS = [
   { keys: "y", action: "clear" },
   { keys: "n/esc", action: "cancel" },
+];
+/** The budgets view: every API profile, each with a budget to set; one with none has nothing to clear. */
+const BUDGET_HINTS = [
+  { keys: "↑↓", action: "move" },
+  { keys: "e", action: "set budget" },
+  { keys: "d", action: "clear" },
+  { keys: "tab", action: "routes" },
+  { keys: "esc", action: "back" },
+];
+const NO_API_HINTS = [
+  { keys: "tab", action: "routes" },
+  { keys: "esc", action: "back" },
 ];
 
 type Loaded =
@@ -116,9 +133,28 @@ function rankAll(file: RoutesFile, registry: Registry | null, reading: Reading |
     });
 }
 
-/** Every subscription account: what the form offers, whether or not a route takes it yet. */
-const everyTarget = (registry: Registry) =>
-  quotaTargets(withDefaults({ tool: "all" }), membersOf(registry, "all"), false);
+/** Every API profile, by id. */
+const apiProfiles = (registry: Registry | null) =>
+  registry
+    ? membersOf(registry, "all")
+        .filter((member) => member.kind === "api")
+        .sort(compareIds)
+    : [];
+
+/** The spend of every API profile, against its budget: what the budgets view and the form show. */
+const spendTargets = (registry: Registry | null, budgets: Budgets) =>
+  apiProfiles(registry).flatMap(
+    (member) => spendTarget(member, Object.hasOwn(budgets, member.id) ? budgets[member.id] : undefined) ?? [],
+  );
+
+/**
+ * Every subscription account and every API profile's spend: what the form offers, whether or not
+ * a route takes it yet. An API profile is offered once it has a limit, which takes its reading.
+ */
+const everyTarget = (registry: Registry, budgets: Budgets) => [
+  ...quotaTargets(withDefaults({ tool: "all" }), membersOf(registry, "all"), false),
+  ...spendTargets(registry, budgets),
+];
 
 /**
  * The members of every route, once each: one quota read serves them all, as in `csn route list`.
@@ -198,13 +234,18 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   const [removing, setRemoving] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [form, setForm] = useState<FormOpen | null>(null);
-  /** Which list is on screen: the routes, or the dir rules and defaults. */
-  const [view, setView] = useState<"routes" | "rules">("routes");
+  /** Which list is on screen: the routes, the dir rules and defaults, or the API profiles' budgets. */
+  const [view, setView] = useState<"routes" | "rules" | "budgets">("routes");
   const [ruleCursor, setRuleCursor] = useState(0);
   const [clearing, setClearing] = useState<RuleEntry | null>(null);
   const [ruleForm, setRuleForm] = useState<{ target: RuleTarget; slots: Slots } | null>(null);
-  /** Quota of the accounts no route took, read for the form: they are on its rows. */
+  /** Quota of the accounts no route took, read for the form and the budgets view: they are on their rows. */
   const [extra, setExtra] = useState<Record<string, QuotaSnapshot>>({});
+  const [budgetCursor, setBudgetCursor] = useState(0);
+  /** The budget editor, on an API profile with its budget as stored. */
+  const [budgetForm, setBudgetForm] = useState<{ id: string; budget?: Budget } | null>(null);
+  /** The API profile whose budget `d` asks to clear. */
+  const [clearingBudget, setClearingBudget] = useState<string | null>(null);
   const columns = useColumns();
   const alive = useRef(true);
   /** Only the latest read is shown: an `r` pressed twice must not end on the older answer. */
@@ -269,6 +310,31 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
     [rules, loaded],
   );
   const ruleIndex = Math.min(ruleCursor, Math.max(0, rows.length - 1));
+  const budgets = useMemo(
+    () => (loaded.kind === "ready" ? readBudgets(loaded.file, namesOf(loaded.registry)) : null),
+    [loaded],
+  );
+  /** Every API profile as the budgets view lists it, from what has been read of its spend. */
+  const budgetRows = useMemo((): BudgetRow[] => {
+    if (loaded.kind !== "ready" || !budgets) return [];
+    const quotas = shown?.quotas ?? extra;
+    return apiProfiles(loaded.registry).map((member) => {
+      const budget = Object.hasOwn(budgets.budgets, member.id) ? budgets.budgets[member.id] : undefined;
+      const routes = Object.keys(loaded.file.routes).filter((name) =>
+        apiMembers(loaded.file.routes[name], loaded.registry ?? NO_PROFILES).some((each) => each.id === member.id),
+      );
+      return budgetRowOf(member.id, quotas[member.id], budget, routes);
+    });
+  }, [loaded, budgets, shown, extra]);
+  /** What is wrong with the budgets, as `clausona route budget` warns about it. */
+  const budgetNotes = useMemo(
+    () =>
+      budgets && loaded.kind === "ready"
+        ? [...budgets.problems, ...(loaded.registry ? budgetWarnings(budgets.budgets, loaded.registry.profiles) : [])]
+        : [],
+    [budgets, loaded],
+  );
+  const budgetIndex = Math.min(budgetCursor, Math.max(0, budgetRows.length - 1));
 
   async function remove(name: string) {
     try {
@@ -292,22 +358,70 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
     }
   }
 
+  /** Reads `targets` into `extra`, through the cache: rows the routes' own read did not cover. */
+  function readExtra(targets: QuotaTarget[]) {
+    if (targets.length === 0) return;
+    void settle(() => io.collectQuotas(targets), {}).then((quotas) => {
+      if (alive.current) setExtra((prev) => ({ ...prev, ...quotas }));
+    });
+  }
+
   function openForm(open: FormOpen) {
     if (loaded.kind !== "ready") return;
     setForm(open);
     if (!loaded.registry) return;
     // The form offers every subscription account, so the ones no route takes are read too: from
     // the quota cache while it is fresh, else fetched, which may renew a lapsed sign-in as the
-    // dashboard's own read does (collectQuotas' rules, never a forced refresh).
+    // dashboard's own read does (collectQuotas' rules, never a forced refresh). So is each API
+    // profile's spend, which says whether it has a limit to be offered with.
     const read = new Set([
       ...targetsOf(loaded.file, loaded.registry).map((target) => target.id),
       ...Object.keys(extra),
     ]);
-    const missing = everyTarget(loaded.registry).filter((target) => !read.has(target.id));
-    if (missing.length === 0) return;
-    void settle(() => io.collectQuotas(missing), {}).then((quotas) => {
-      if (alive.current) setExtra((prev) => ({ ...prev, ...quotas }));
-    });
+    readExtra(everyTarget(loaded.registry, budgets?.budgets ?? {}).filter((target) => !read.has(target.id)));
+  }
+
+  /** The budgets view, with every API profile's spend read for it: a budget set since counts at once. */
+  function openBudgets(file: RoutesFile, registry: Registry | null) {
+    setView("budgets");
+    readExtra(spendTargets(registry, readBudgets(file, namesOf(registry)).budgets));
+  }
+
+  /** routes.json read again after a budget was set or cleared, and the spend with it. */
+  async function budgetChanged() {
+    if (loaded.kind !== "ready") return;
+    const { registry } = loaded;
+    try {
+      const { file, broken } = await io.loadRoutes();
+      if (!alive.current) return;
+      setLoaded({ kind: "ready", file, broken, registry });
+      openBudgets(file, registry);
+      await rank(file, registry, false);
+    } catch (error) {
+      if (alive.current) setLoaded({ kind: "broken", error });
+    }
+  }
+
+  async function clearBudgetOf(id: string) {
+    try {
+      await io.updateRoutes((current) => (clearBudget(current, id) ? current : null));
+      if (alive.current) await budgetChanged();
+    } catch (error) {
+      if (!alive.current) return;
+      if (error instanceof RoutesFileError) setLoaded({ kind: "broken", error });
+      else setMessage(`${symbol.cross} ${errorText(error)}`);
+    }
+  }
+
+  /** The keys of the budgets view. */
+  function handleBudgets(input: string, key: Key) {
+    const count = budgetRows.length;
+    const row = budgetRows[budgetIndex];
+    if (key.tab) setView("routes");
+    else if (key.upArrow && count > 0) setBudgetCursor((budgetIndex - 1 + count) % count);
+    else if (key.downArrow && count > 0) setBudgetCursor((budgetIndex + 1) % count);
+    else if (input === "e" && row) setBudgetForm({ id: row.id, ...(row.budget ? { budget: row.budget } : {}) });
+    else if (input === "d" && row?.budget) setClearingBudget(row.id);
   }
 
   /**
@@ -394,6 +508,11 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
       if (input === "y" || input === "Y") void clearRule(clearing);
       return;
     }
+    if (clearingBudget) {
+      setClearingBudget(null);
+      if (input === "y" || input === "Y") void clearBudgetOf(clearingBudget);
+      return;
+    }
     if (key.escape) {
       onExit();
       return;
@@ -405,8 +524,16 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
       handleRules(input, key);
       return;
     }
+    if (view === "budgets") {
+      handleBudgets(input, key);
+      return;
+    }
     if (key.tab) {
       setView("rules");
+      return;
+    }
+    if (input === "b") {
+      openBudgets(loaded.file, loaded.registry);
       return;
     }
     const count = entries.length;
@@ -428,7 +555,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   });
   const onInput = useCallback((input: string, key: Key) => handler.current(input, key), []);
   // The forms answer their own keys.
-  useInput(onInput, { isActive: form === null && ruleForm === null });
+  useInput(onInput, { isActive: form === null && ruleForm === null && budgetForm === null });
 
   const question = removing
     ? removeQuestion(removing, loaded.kind === "ready" ? loaded.file : undefined)
@@ -436,7 +563,9 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
       ? clearing.target.kind === "defaults"
         ? "Clear the defaults? (y/N)"
         : `Clear the dir rule for ${clearing.label}? (y/N)`
-      : undefined;
+      : clearingBudget
+        ? `Clear the budget for ${clearingBudget}? (y/N)`
+        : undefined;
   const notice = loaded.kind === "ready" && loaded.broken.length > 0 ? brokenNotice(loaded.broken.length) : "";
   // Said on the routes list, where the rules are out of sight.
   const rulesNotice =
@@ -444,15 +573,19 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   const footer = [notice, rulesNotice, refreshing ? "Reading quota again…" : message];
   const hints = removing
     ? CONFIRM_HINTS
-    : clearing
+    : clearing || clearingBudget
       ? CLEAR_HINTS
       : loaded.kind !== "ready"
         ? BACK_HINTS
         : view === "rules"
           ? RULE_HINTS
-          : entries.length === 0
-            ? EMPTY_HINTS
-            : HINTS;
+          : view === "budgets"
+            ? budgetRows.length === 0
+              ? NO_API_HINTS
+              : BUDGET_HINTS
+            : entries.length === 0
+              ? EMPTY_HINTS
+              : HINTS;
 
   if (loaded.kind !== "ready") {
     return (
@@ -483,6 +616,42 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
     );
   }
 
+  if (budgetForm) {
+    return (
+      <BudgetForm
+        {...budgetForm}
+        deps={io}
+        onDone={(saved) => {
+          setBudgetForm(null);
+          if (saved) void budgetChanged();
+        }}
+      />
+    );
+  }
+
+  if (view === "budgets") {
+    return (
+      <Chrome title="Routes" subtitle="Budgets" footer={footer} question={question} hints={hints}>
+        {budgetRows.length === 0 ? (
+          <Text color={color.muted}>No API profiles. Add one with clausona add {"<name>"} --api ….</Text>
+        ) : (
+          <Box flexDirection="column" borderStyle="round" borderColor={color.dim} paddingX={1}>
+            <BudgetList rows={budgetRows} index={budgetIndex} />
+          </Box>
+        )}
+        <Box flexDirection="column" marginTop={1}>
+          <Text color={color.muted}>An API profile joins a route only with a spend limit:</Text>
+          <Text color={color.muted}>a budget set here, which replaces its key's own, or that one.</Text>
+          {budgetNotes.map((note) => (
+            <Text key={note} color={color.warning}>
+              {`⚠ ${note}`}
+            </Text>
+          ))}
+        </Box>
+      </Chrome>
+    );
+  }
+
   if (view === "rules") {
     return (
       <Chrome title="Routes" subtitle="Dir rules" footer={footer} question={question} hints={hints}>
@@ -503,14 +672,21 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   }
 
   if (form) {
+    const registry = loaded.registry ?? NO_PROFILES;
+    const quotas = shown?.quotas ?? extra;
+    const held = budgets?.budgets ?? {};
+    // An API profile is offered with a limit it can be read to have, and when the route names it.
+    const named = new Set(form.mode === "edit" ? apiMembers(form.spec, registry).map((member) => member.id) : []);
+    const offer = (id: string) =>
+      named.has(id) || limitProblem(id, quotas[id], Object.hasOwn(held, id) ? held[id] : undefined) === null;
     return (
       <RouteForm
         {...form}
-        accounts={formAccounts(loaded.registry ?? NO_PROFILES)}
-        quotas={shown?.quotas ?? extra}
+        accounts={formAccounts(registry, offer)}
+        quotas={quotas}
         lastPicked={reading?.lastPicked ?? {}}
-        registry={loaded.registry ?? NO_PROFILES}
-        budgets={readBudgets(loaded.file).budgets}
+        registry={registry}
+        budgets={held}
         deps={io}
         now={reading?.now ?? io.clock()}
         onDone={(saved, note) => void closeForm(saved, note)}
@@ -664,6 +840,60 @@ function RouteList({ entries, index, pending }: { entries: Entry[]; index: numbe
             <Box marginLeft={GAP} flexShrink={0}>
               <Text color={unread ? color.muted : nobody ? color.warning : color.text}>
                 {counts[i].padStart(countWidth)}
+              </Text>
+            </Box>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
+/** The usage column's width: `100%`, or a dash. */
+const USAGE = 4;
+
+/**
+ * Every API profile, a row each: its usage, then its spend against its limit and whose limit it
+ * is, or why it has none - as `clausona route budget` lists them.
+ */
+function BudgetList({ rows, index }: { rows: BudgetRow[]; index: number }) {
+  const [list, width] = useWidth();
+  const longest = Math.max("PROFILE".length, ...rows.map((row) => row.id.length));
+  const idWidth = Math.max(1, Math.min(longest, width - MARK - GAP - USAGE - GAP - 8));
+  return (
+    <Box ref={list} flexDirection="column">
+      <Box flexDirection="row">
+        <Box width={MARK + idWidth} flexShrink={0}>
+          <Text color={color.muted} wrap="truncate-end">
+            {" ".repeat(MARK)}PROFILE
+          </Text>
+        </Box>
+        <Box marginLeft={GAP} width={USAGE + 1} flexShrink={0}>
+          <Text color={color.muted}>USAGE</Text>
+        </Box>
+      </Box>
+      {rows.map((row, i) => {
+        const focused = i === index;
+        return (
+          <Box key={row.id} flexDirection="row">
+            <Box width={MARK} flexShrink={0}>
+              <Text color={focused ? color.cursor : color.dim}>{focused ? "▸" : " "}</Text>
+            </Box>
+            <Box width={idWidth} flexShrink={0}>
+              <Text color={focused ? color.text : color.secondary} bold={focused} wrap="truncate-end">
+                {row.id}
+              </Text>
+            </Box>
+            <Box marginLeft={GAP} width={USAGE + 1} flexShrink={0} justifyContent="flex-end">
+              <QuotaCell window={row.window} live width={USAGE} />
+            </Box>
+            <Box marginLeft={GAP} flexGrow={1} flexShrink={1} minWidth={0}>
+              <Text
+                color={row.window ? color.secondary : row.spend === "unread" ? color.warning : color.muted}
+                wrap="truncate-end"
+              >
+                {/* Here, `e` is how one is set. */}
+                {row.spend === "no-limit" ? "no spend limit; e sets a budget" : budgetNote(row)}
               </Text>
             </Box>
           </Box>

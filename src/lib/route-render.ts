@@ -27,7 +27,7 @@ import {
   type UsageWindow,
 } from "../core/routing.js";
 import { posixQuote } from "../core/shell.js";
-import type { BudgetWindow, QuotaState, QuotaWindow, ToolName } from "../types.js";
+import type { BudgetWindow, QuotaSnapshot, QuotaState, QuotaWindow, ToolName } from "../types.js";
 import { accent, bold, box, dim, dimmer, padEnd, secondary, truncate, warnIcon, yellow } from "./cli-style.js";
 import {
   formatAge,
@@ -717,6 +717,31 @@ export type BudgetRow = {
   unread?: Exclude<QuotaState, "ok">;
   routes: string[];
 };
+
+/**
+ * An API profile's row from its reading (`snapshot`, none when nothing could be read), its budget
+ * and the routes that name it.
+ */
+export function budgetRowOf(
+  id: string,
+  snapshot: QuotaSnapshot | undefined,
+  budget: Budget | undefined,
+  routes: string[],
+): BudgetRow {
+  const base = { id, ...(budget ? { budget } : {}), routes };
+  if (snapshot?.noSpendReading) return { ...base, spend: "not-reported" };
+  // No endpoint to read from is a profile doctor reports, as it does a key it cannot read.
+  if (!snapshot) return { ...base, spend: "unread", unread: "missing" };
+  if (snapshot.state !== "ok") return { ...base, spend: "unread", unread: snapshot.state };
+  if (!snapshot.budget) return { ...base, spend: "no-limit" };
+  return { ...base, spend: "ok", window: snapshot.budget };
+}
+
+/** Why a row has no usage, after its budget when it has one, as a list line says it. */
+export function budgetNote(row: BudgetRow): string {
+  if (row.window) return spendText(row.window);
+  return `${row.budget ? `${budgetText(row.budget)} (clausona budget); ` : ""}${budgetReason(row) ?? ""}`;
+}
 
 const UNREAD_WORDS: Record<Exclude<QuotaState, "ok">, string> = {
   missing: "its key could not be read (clausona doctor says why)",

@@ -19,6 +19,9 @@ import type { ToolName } from "../../types.js";
  * Accounts are held by id. A route names them its own way - the bare name on a claude or codex
  * route, the id on an `all` route, where a bare name matches both tools - and only formToSpec
  * writes that form, so changing the tool changes how every ticked account is saved.
+ *
+ * An API profile is never among `*`, which takes subscription accounts only: ticked, it is in
+ * from by its name, with every account or without; unticked, it is not in the route at all.
  */
 
 export type FormField = "name" | "tool" | "accounts" | "from" | "exclude" | "strategy" | "max" | "fallback";
@@ -33,7 +36,14 @@ export const FORM_FIELDS: readonly FormField[] = [
   "fallback",
 ];
 
-export type FormAccount = { id: string; tool: ToolName; name: string; email: string };
+export type FormAccount = {
+  id: string;
+  tool: ToolName;
+  name: string;
+  email: string;
+  /** An API profile, billed per use: offered only with a limit (RouteForm's formAccounts). */
+  kind?: "api";
+};
 
 export type RouteFormState = {
   mode: "new" | "edit";
@@ -89,7 +99,7 @@ export const TEXT_KEYS = {
   max: "maxText",
 } as const;
 
-/** The subscription accounts a route of `tool` takes, by id. The caller leaves API profiles out. */
+/** The accounts a route of `tool` can take, by id: its subscription accounts, and the API profiles offered. */
 export function accountsFor(tool: RouteTool, all: FormAccount[]): FormAccount[] {
   const tools = toolsOf(tool);
   return all.filter((account) => tools.includes(account.tool)).sort(compareIds);
@@ -132,10 +142,16 @@ export function initialFormState(
   let excludeText: string[];
   if (every) {
     // An exclude naming an account is that account unticked; under a from list it stays a
-    // pattern, since only `every` writes unticked accounts back as excludes.
+    // pattern, since only `every` writes unticked accounts back as excludes. An API profile is
+    // ticked when from names it.
     const excluded = new Set(exclude.filter((entry) => byName.has(entry)));
-    ticked = listed.filter((account) => !excluded.has(nameIn(spec.tool, account))).map((account) => account.id);
-    fromText = from.filter((entry) => entry !== "*");
+    const apiNamed = new Set(from.flatMap((entry) => fromAccount.get(entry) ?? []));
+    ticked = listed
+      .filter((account) =>
+        account.kind === "api" ? apiNamed.has(account.id) : !excluded.has(nameIn(spec.tool, account)),
+      )
+      .map((account) => account.id);
+    fromText = from.filter((entry) => entry !== "*" && !apiNamed.has(fromAccount.get(entry) ?? ""));
     excludeText = exclude.filter((entry) => !excluded.has(entry));
   } else {
     ticked = unique(from.flatMap((entry) => fromAccount.get(entry) ?? []));
@@ -193,7 +209,10 @@ function toggle(state: RouteFormState, accounts: FormAccount[]): RouteFormState 
       state,
       {
         every: true,
-        ticked: listed.map((account) => account.id),
+        // Every subscription account; an API profile stays as it was, since `*` never takes one.
+        ticked: listed
+          .filter((account) => account.kind !== "api" || state.ticked.includes(account.id))
+          .map((account) => account.id),
         excludeText: joinList(splitList(state.excludeText).filter((entry) => !names.has(entry))),
       },
       ["accounts", "exclude"],
@@ -217,9 +236,12 @@ function changeTool(state: RouteFormState, tool: RouteTool, accounts: FormAccoun
   const kept = toolsOf(tool);
   const listed = accountsFor(tool, accounts);
   const ticked = state.every
-    ? // Everyone not excluded: the accounts of a tool just added have no exclude yet.
+    ? // Everyone not excluded: the accounts of a tool just added have no exclude yet. Its API
+      // profiles are not among everyone.
       listed
-        .filter((account) => !before.includes(account.tool) || state.ticked.includes(account.id))
+        .filter(
+          (account) => (account.kind !== "api" && !before.includes(account.tool)) || state.ticked.includes(account.id),
+        )
         .map((account) => account.id)
     : state.ticked.filter((id) => listed.some((account) => account.id === id));
   const fallback = state.fallback.filter((entry) => {
@@ -310,12 +332,17 @@ export function formToSpec(
     const account = byId.get(id);
     return account ? [nameIn(state.tool, account)] : [];
   });
+  // An unticked API profile is simply not in the route: `*` never takes one, so it needs no exclude.
   const untickedNames = listed
-    .filter((account) => !state.ticked.includes(account.id))
+    .filter((account) => account.kind !== "api" && !state.ticked.includes(account.id))
     .map((account) => nameIn(state.tool, account));
+  const tickedApi = state.ticked.flatMap((id) => {
+    const account = byId.get(id);
+    return account?.kind === "api" ? [nameIn(state.tool, account)] : [];
+  });
   const fromExtra = splitList(state.fromText);
 
-  const from = unique(state.every ? ["*", ...fromExtra] : [...tickedNames, ...fromExtra]);
+  const from = unique(state.every ? ["*", ...tickedApi, ...fromExtra] : [...tickedNames, ...fromExtra]);
   const exclude = unique([...splitList(state.excludeText), ...(state.every ? untickedNames : [])]);
   const fallback = unique(
     state.fallback.map((entry) => {
