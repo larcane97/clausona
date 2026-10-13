@@ -388,6 +388,42 @@ describe("runRouted", () => {
     expect(s.notes).toEqual(["  ▸ claude:a  active profile (no route)"]);
   });
 
+  it("refuses a profile right after the tool word, naming both ways on", async () => {
+    for (const [args, message] of [
+      [
+        ["claude", "claude:b"],
+        "claude:b is a profile. Run it by name: clausona run claude:b …, or put it after -- to pass it to claude: clausona run claude -- claude:b",
+      ],
+      [
+        ["claude", "solo", "-p", "hi"],
+        "claude:solo is a profile. Run it by name: clausona run claude:solo …, or put it after -- to pass it to claude: clausona run claude -- solo",
+      ],
+      [
+        ["claude", "codex:x"],
+        "codex:x is a profile. Run it by name: clausona run codex:x …, or put it after -- to pass it to claude: clausona run claude -- codex:x",
+      ],
+    ] as const) {
+      const s = setup({ registry: BOTH, quotas: BOTH_QUOTAS });
+      await expect(runRouted([...args], s.launch, s.io, s.deps)).rejects.toThrow(message);
+      expect(s.launches).toEqual([]);
+      expect(s.notes).toEqual([]);
+    }
+  });
+
+  it("passes the word after the tool word to the tool when it names no profile exactly, or follows --", async () => {
+    const s = setup({ registry: BOTH, quotas: BOTH_QUOTAS });
+    // `y` is only a codex profile; `Solo` differs from `solo` in case.
+    for (const args of [["claude", "--", "claude:b"], ["claude", "y"], ["claude", "Solo"], ["claude", "hello"]]) {
+      await runRouted(args, s.launch, s.io, s.deps);
+    }
+    expect(s.launches).toEqual([
+      ["claude:a", ["claude:b"]],
+      ["claude:a", ["y"]],
+      ["claude:a", ["Solo"]],
+      ["claude:a", ["hello"]],
+    ]);
+  });
+
   it("says so when the tool has no active profile, and launches nothing", async () => {
     // codex has no active profile at all; claude's names a profile that has since been removed.
     const s = setup({ registry: { ...BOTH, activeProfiles: { claude: "claude:gone" } } });

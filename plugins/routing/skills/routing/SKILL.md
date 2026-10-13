@@ -124,9 +124,9 @@ clausona run --route <name> --strategy headroom -- -p "…"   # change a field f
   take different ones. `route explain` and `route pick` narrow the same way with `--tool`.
 - Next to `--route`, `--exclude x` leaves `x` out for this run on top of the route's own
   excludes. The other field options replace their field for this run. Nothing is saved.
-- Never put a profile right after routing options: `clausona run --route main claude:work` is
-  refused, because the tool would get the name as its prompt. To run one account, name it alone
-  (`clausona run claude:work`).
+- Never put a profile right after routing options or a tool word: `clausona run --route main
+  claude:work` and `clausona run claude claude:work` are refused, because the tool would get the
+  name as its prompt. To run one account, name it alone (`clausona run claude:work`).
 - `clausona run claude` with no routing options is not routed: it runs the active profile.
 - Naming a profile (`clausona run claude:work`) always runs it, whatever its quota.
 - A routed run names the account it picked, and why, on stderr. stdout is the tool's own.

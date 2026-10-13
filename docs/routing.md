@@ -403,6 +403,17 @@ instead:
 To run that account, name it alone: `clausona run claude:work`. After a `--` the name is the
 tool's, like any other argument.
 
+The same goes for a profile right after the tool word. `clausona run claude claude:work` would
+start the active profile with `claude:work` as its prompt, so clausona stops and names both ways
+on:
+
+```
+  ✘ claude:work is a profile. Run it by name: clausona run claude:work …, or put it after -- to pass it to claude: clausona run claude -- claude:work
+```
+
+Only a word that is exactly a registered profile's name stops the run. Any other word is the
+tool's first argument.
+
 A first argument that is neither a profile nor a tool, such as a prompt typed without the tool,
 is refused with the fix:
 

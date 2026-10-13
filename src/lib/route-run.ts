@@ -174,6 +174,15 @@ export async function runRouted(
         "Name a route, a tool or a profile: clausona run --route <name> …, clausona run claude …, or clausona run <profile> ….",
       );
     }
+    // `run claude claude:b` would launch the active profile with `claude:b` as its prompt. Only a
+    // word that names a registered profile exactly; any other word is the tool's.
+    const [word] = run.toolArgs;
+    if (word !== undefined && !run.sawSeparator && namesProfile(word, registry, run.tool)) {
+      const id = Object.hasOwn(registry.profiles, word) ? word : `${run.tool}:${word}`;
+      throw new Error(
+        `${id} is a profile. Run it by name: clausona run ${id} …, or put it after -- to pass it to ${run.tool}: clausona run ${run.tool} -- ${word}`,
+      );
+    }
     const active = registry.activeProfiles[run.tool];
     if (!active || !registry.profiles[active]) {
       throw new Error(`No active ${run.tool} profile. Run \`clausona use\`, or name one: clausona run <profile>.`);

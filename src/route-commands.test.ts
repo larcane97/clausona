@@ -136,9 +136,9 @@ describe("route help", () => {
     );
   });
 
-  it("says in run's help that a profile does not go with routing options", async () => {
+  it("says in run's help that a profile does not go after a tool word or routing options", async () => {
     expect(stripAnsi(await runCommand("run", ["--help"]))).toContain(
-      "A profile after routing options is an error; after a -- it goes to the tool.",
+      "A profile right after claude, codex or routing options is an error; after a -- it goes to the tool.",
     );
   });
 });
