@@ -308,6 +308,14 @@ The switches are read from these places:
   server a project's `config.toml` defines is `off` while Codex does not trust the project, as
   Codex leaves that file out: a same-name server of your own loads there instead. Its details
   say so, with the `Trust` line a switch there gets.
+- Codex's trust: Codex looks for a `[projects."<folder>"]` with a `trust_level` in its
+  `config.toml` in three places, and the first it finds decides. First the project's folder,
+  then its project root: the nearest folder at or above it with a `.git`, or with one of the
+  `project_root_markers` your `config.toml` sets. Then the repository's root, which for a linked
+  worktree is the main checkout. So a worktree of a trusted repository, and a folder inside one,
+  are trusted, unless their own entry says `untrusted`. Each folder matches by its real path or
+  as you reached it; git names a worktree's main checkout by its real path, as Codex records a
+  trust.
 - Codex plugins and what they bring: a `[plugins."<plugin>@<marketplace>"]` table in Codex's or
   the project's `config.toml` turns a plugin on, and `enabled = false` in it turns it off. A
   plugin no table names is off. A plugin's skill is switched by its full name in

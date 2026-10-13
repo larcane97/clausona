@@ -1,9 +1,12 @@
+import { spawnSync } from "node:child_process";
+import { mkdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ExitError, withJsonErrors } from "../lib/json-errors.js";
 import { leakedWindows } from "../test-leaks.js";
+import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import { type ExtensionsCommand, runExtensionsCommand } from "./cli.js";
 import { scopeSentence } from "./describe.js";
 import { loadInventory } from "./inventory.js";
@@ -71,6 +74,27 @@ async function failure(promise: Promise<string>): Promise<ExitError> {
 }
 
 const firstLine = (text: string) => text.split("\n")[0] ?? "";
+
+/** The test's own git runs: no repo a hook's environment points at, no user or system config. */
+const GIT_ENV: NodeJS.ProcessEnv = {
+  ...process.env,
+  GIT_DIR: undefined,
+  GIT_WORK_TREE: undefined,
+  GIT_INDEX_FILE: undefined,
+  GIT_CONFIG_GLOBAL: undefined,
+  GIT_CONFIG_NOSYSTEM: "1",
+};
+
+const hasGit = spawnSync("git", ["--version"], { env: GIT_ENV }).status === 0;
+
+function gitIn(cwd: string, ...args: string[]): void {
+  const result = spawnSync(
+    "git",
+    ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args],
+    { cwd, env: GIT_ENV, encoding: "utf8", timeout: SPAWN_TIMEOUT_MS },
+  );
+  if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr}`);
+}
 
 describe("skills ls", () => {
   it("lists what loads here by default, titled with the scope and the project", async () => {
@@ -1042,6 +1066,61 @@ describe("Codex hooks and Codex's trust", () => {
     const there = JSON.parse(await run(h, web, "mcp", ["ls", "--tool", "codex", "--json"]));
     expect(there.items.map((i: { name: string; scope: string }) => [i.name, i.scope])).toEqual([["shared", "global"]]);
   });
+
+  it.skipIf(!hasGit)(
+    "trusts a linked worktree of a trusted repo, and a folder inside one, by the repo's entry, as Codex does",
+    async () => {
+      const { h } = seed();
+      // main is trusted and commits its .codex folder; main-wt is a worktree of it, and so is
+      // main-own, which its own entry marks untrusted; pkg is a folder inside main.
+      const main = h.path("repos", "main");
+      mkdirSync(main, { recursive: true });
+      gitIn(main, "init", "-q");
+      h.write("repos/main/.codex/config.toml", '[mcp_servers.projsrv]\ncommand = "projsrv"\n');
+      h.write("repos/main/.codex/hooks.json", {
+        hooks: { Stop: [{ hooks: [{ type: "command", command: "main-stop" }] }] },
+      });
+      h.write("repos/main/pkg/.codex/config.toml", '[mcp_servers.pkgsrv]\ncommand = "pkgsrv"\n');
+      gitIn(main, "add", ".");
+      gitIn(main, "commit", "-q", "-m", "init");
+      const [wt, own] = [h.path("repos", "main-wt"), h.path("repos", "main-own")];
+      gitIn(main, "worktree", "add", "-q", wt);
+      gitIn(main, "worktree", "add", "-q", own);
+      const pkg = h.path("repos", "main", "pkg");
+      // By its real path, as Codex records a trust: git names the main checkout by it too. A
+      // table with no trust_level, as main-wt's, decides nothing.
+      h.write(
+        ".codex/config.toml",
+        [
+          `[projects.${JSON.stringify(realpathSync(main))}]`,
+          'trust_level = "trusted"',
+          `[projects.${JSON.stringify(wt)}]`,
+          `[projects.${JSON.stringify(own)}]`,
+          'trust_level = "untrusted"',
+          "",
+        ].join("\n"),
+      );
+      h.claude("default", ".claude", { projects: { [wt]: {}, [own]: {}, [pkg]: {} } });
+      const states = async (cwd: string, command: ExtensionsCommand, scope = "project") =>
+        JSON.parse(await run(h, cwd, command, ["ls", "--tool", "codex", "--scope", scope, "--json"])).items.map(
+          (i: { name: string; state: string; tags: string[] }) => [i.name, i.state, i.tags],
+        );
+      // What Codex 0.159.3 gave from main-wt: its .codex layer enabled, projsrv among the servers.
+      expect(await states(wt, "mcp")).toEqual([["projsrv", "on", []]]);
+      expect(await states(wt, "hooks")).toEqual([["Stop", "pending-approval", ["pending approval"]]]);
+      expect(await run(h, wt, "mcp", ["show", "projsrv"])).not.toMatch(/^Trust/m);
+      const off = JSON.parse(
+        await run(h, wt, "mcp", ["off", "projsrv", "--tool", "codex", "--tracked", "--dry-run", "--json"]),
+      );
+      expect(off.refused).toEqual([]);
+      expect(off.changes.map((c: { file: string }) => c.file)).toEqual([path.join(wt, ".codex", "config.toml")]);
+      // pkg is in main's repo, so main is here there; its server is among the other projects'.
+      expect(await states(main, "mcp", "other")).toContainEqual(["pkgsrv", "on", []]);
+      // An entry of the worktree's own comes first.
+      expect(await states(own, "mcp")).toEqual([["projsrv", "off", ["off"]]]);
+    },
+    SPAWNING_TEST_TIMEOUT_MS,
+  );
 
   it("lists the hooks of a project Codex does not trust as off there, and says it is the trust", async () => {
     const { h, app, web } = seed();

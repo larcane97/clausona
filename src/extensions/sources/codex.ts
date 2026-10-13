@@ -7,7 +7,7 @@ import { valueHash } from "../hash.js";
 import type { Collector, Location, Project, Warning } from "../model.js";
 import { codexProjectConfig, codexProjectHooks } from "../places.js";
 import { isHomeProject, type ProjectRecord, recordedPaths } from "../projects.js";
-import { isRecord, readJsonObject, readText, realPath, samePath } from "../read.js";
+import { isRecord, pathKey, readJsonObject, readText, realPath, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
 import { addHooksFile } from "./claude-hooks.js";
 import {
@@ -24,6 +24,7 @@ import {
 } from "./codex-hooks.js";
 import { addPluginSwitches, readCodexPlugins } from "./codex-plugins.js";
 import { readCodexSkills } from "./codex-skills.js";
+import { codexTrustFolders, projectRootMarkers } from "./codex-trust.js";
 import type { SkillLocation } from "./skill-dirs.js";
 
 export type CodexHome = { id: string; dir: string; isPrimary: boolean };
@@ -121,9 +122,9 @@ export function codexProjectRecords(ctx: CodexContext): ProjectRecord[] {
  * in the user config.toml (by name, or by the SKILL.md path - the only per-project skill switch,
  * since Codex ignores `[[skills.config]]` in a project's config; spec, Spike 1),
  * `mcp_servers.<name>.enabled`, and the `[plugins."<id>"]` tables, in the user and project
- * config.toml. Beside them, the trust the user config.toml records for each project: Codex
- * 0.159.3 reads a project's `.codex/` only when it trusts the project, so `state.ts` leaves the
- * switches of any other out. Codex keeps no skill usage on disk that we found, so its skills
+ * config.toml. Beside them, the trust the user config.toml records for each project, and the
+ * folders Codex looks it up in (codex-trust.ts): Codex 0.159.3 reads a project's `.codex/` only
+ * when it trusts the project, so `state.ts` leaves the switches of any other out. Codex keeps no skill usage on disk that we found, so its skills
  * carry no usage keys.
  */
 export async function readCodex(ctx: CodexContext, projects: Project[], out: Collector): Promise<void> {
@@ -158,6 +159,8 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
       })(),
     );
   }
+  const trustRecorded = isRecord(ctx.config?.projects) && Object.keys(ctx.config.projects).length > 0;
+  const markers = projectRootMarkers(ctx.config);
   for (const project of projects) {
     // The home dir's .agents/skills and .codex/ are the user's own, read above.
     if (isHomeProject(project, ctx.homeDir)) continue;
@@ -190,6 +193,14 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
         }
       })(),
     );
+    // Where Codex looks for the project's trust; with no project recorded there is none to find.
+    if (trustRecorded) {
+      jobs.push(
+        (async () => {
+          out.facts.codexTrustFolders[pathKey(project.path)] = await codexTrustFolders(project.path, markers);
+        })(),
+      );
+    }
   }
   jobs.push(
     (async () => {
@@ -217,7 +228,10 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
       addConfigHooks(ctx.config, { ...global, file: ctx.configFile }, "-", sources, out, exact);
     }
     for (const [project, table] of Object.entries(isRecord(ctx.config.projects) ? ctx.config.projects : {})) {
-      if (isRecord(table)) out.facts.codexTrust.push({ project, trusted: table.trust_level === "trusted" });
+      // A table with no trust_level decides nothing, so Codex looks further (codexTrustFolders).
+      if (!isRecord(table)) continue;
+      const level = table.trust_level === undefined ? {} : { trusted: table.trust_level === "trusted" };
+      out.facts.codexTrust.push({ project, ...level });
     }
     const skills = isRecord(ctx.config.skills) ? ctx.config.skills : undefined;
     const entries = (Array.isArray(skills?.config) ? skills.config : []).flatMap((entry) => {

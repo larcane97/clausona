@@ -812,6 +812,27 @@ describe("Codex", () => {
     expect(codexTrusted(i, "/repos/elsewhere")).toBe(false);
     expect(codexTrusted(i, undefined)).toBe(false);
   });
+
+  it("takes a project's trust from the first of its folders with a trust_level, as Codex looks them up", () => {
+    // A linked worktree of P, a folder inside P, and a worktree of P marked untrusted itself.
+    const [wt, pkg, own] = ["/wt/app-feature", `${P}/pkg`, "/wt/app-own"];
+    const i = inv([], {
+      codexTrust: [
+        { project: P, trusted: true },
+        // A table with no trust_level decides nothing: Codex looks at the next folder.
+        { project: pkg },
+        { project: own, trusted: false },
+      ],
+      codexTrustFolders: { [wt]: [wt, wt, P], [pkg]: [pkg, P, P], [own]: [own, own, P] },
+    });
+    expect(codexTrusted(i, wt)).toBe(true);
+    expect(codexTrusted(i, pkg)).toBe(true);
+    expect(codexTrusted(i, own)).toBe(false);
+    // With no folders read for it, a project is looked up by its own path alone.
+    expect(codexTrusted(i, "/wt/unread")).toBe(false);
+    const viaRoot = inv([], { codexTrust: [{ project: P, trusted: false }], codexTrustFolders: { [wt]: [wt, P] } });
+    expect(codexTrusted(viaRoot, wt)).toBe(false);
+  });
 });
 
 describe("Codex plugins", () => {

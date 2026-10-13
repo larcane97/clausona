@@ -432,12 +432,20 @@ export function isManagedSetting(inv: Inventory, file: string): boolean {
 }
 
 /**
- * Whether Codex trusts `project`: a [projects."<key>"] table with trust_level = "trusted" whose
- * key samePaths it. Codex 0.159.3 ignores the `.codex/` folder of any other project, one it has
- * no record of too.
+ * Whether Codex trusts `project`, as Codex 0.159.3 decides it (`decision_for_dir`): the first of
+ * the project's folders (codexTrustFolders) - its own, its project root, its repository's root -
+ * that a [projects."<key>"] table with a trust_level samePaths decides, trusted only with
+ * trust_level = "trusted". So a linked worktree of a trusted repo, and a folder inside one, are
+ * trusted, unless a nearer table says otherwise. Codex ignores the `.codex/` folder of any other
+ * project, one it has no record of too.
  */
 export function codexTrusted(inv: Inventory, project: string | undefined): boolean {
-  return project !== undefined && inv.facts.codexTrust.some((t) => t.trusted && samePath(t.project, project));
+  if (project === undefined) return false;
+  for (const folder of inv.facts.codexTrustFolders[pathKey(project)] ?? [project]) {
+    const set = inv.facts.codexTrust.filter((t) => t.trusted !== undefined && samePath(t.project, folder));
+    if (set.length > 0) return set.some((t) => t.trusted === true);
+  }
+  return false;
 }
 
 /**

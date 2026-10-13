@@ -192,9 +192,16 @@ export type StateFacts = {
   fingerprints: Record<string, string>;
   /**
    * Each `[projects."<P>"]` table in the user config.toml, in key order: Codex reads a project's
-   * .codex folder only when it trusts the project.
+   * .codex folder only when it trusts the project. `trusted` is absent when the table sets no
+   * `trust_level`, which decides nothing: Codex then looks at the next folder (codexTrustFolders).
    */
-  codexTrust: { project: string; trusted: boolean }[];
+  codexTrust: { project: string; trusted?: boolean }[];
+  /**
+   * By pathKey of each project read, the folders whose trust Codex takes for it, in the order
+   * it looks (sources/codex-trust.ts): the project's own, its project root, its repository's -
+   * a linked worktree's main checkout. A project not here is looked up by its own path alone.
+   */
+  codexTrustFolders: Record<string, string[]>;
   /**
    * Each `[plugins."<plugin>@<marketplace>"]` table in the user config.toml and in a project's:
    * Codex loads a plugin only where a table names it. `enabled` is absent when the table does not
@@ -239,6 +246,7 @@ export function emptyFacts(): StateFacts {
     codexMcpEnabled: [],
     fingerprints: {},
     codexTrust: [],
+    codexTrustFolders: {},
     codexPlugins: [],
     codexPluginServers: [],
     codexHookTrust: [],
