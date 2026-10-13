@@ -1163,7 +1163,10 @@ the CLI's words. In the table `<tool>` is the tool's name and `<scope>` a scope'
 `codex-skips-hook` is `on` for a Codex hook tagged `invalid hooks file`, `not supported`,
 `empty command`, `empty tool`, `unknown event` or `invalid matcher`. Codex skips it whatever
 its switch, so `<why>` says why, as its details do: say, `Codex skips a hook whose command is
-empty`.
+empty`. It is also `on` for a Codex hook that a `config.toml` Codex cannot read keeps off. Codex
+then loads no config at all, so `/hooks` cannot help: `<why>` says
+`Codex cannot read <file>, so it loads no config here` (`anywhere`, for yours), and `<file>` is
+that `config.toml`.
 
 On the screen, `stash-gone` on one account's server, in a row other accounts share, says
 `Press d and choose only work in the dialog.` instead, since `d` on the row would delete the

@@ -36,6 +36,7 @@ import { homeScope, isAccountServer, rowKey, SCOPE_LABEL, type ScopeRow } from "
 import { type StashMeta, stashFileName, stashIdFor } from "./stash.js";
 import {
   allHooksOff,
+  CODEX_REFUSED_KEY,
   claudeFlag,
   claudeSkillOverride,
   codexTrusted,
@@ -1329,13 +1330,22 @@ function planHook(run: Run, row: ScopeRow): Outcome {
     );
   }
   if (!item.stashed) {
+    const state = loc.tool === "codex" ? stateHere(inv, item, run.ctx.project) : undefined;
+    // Where Codex cannot read a config.toml it loads no config, so runs no hook, whatever its switch or trust.
+    const refusedBy = state?.setBy?.key === CODEX_REFUSED_KEY ? state.setBy.file : undefined;
+    if (refusedBy !== undefined) {
+      const user = inv.facts.codexConfigRefused.some((r) => r.project === undefined && samePath(r.file, refusedBy));
+      const file = tilde(refusedBy, inv.homeDir);
+      const why = `Codex cannot read ${file}, so it loads no config ${user ? "anywhere" : "here"}`;
+      return refused(run, row, "codex-skips-hook", { why, "~file": file });
+    }
     // A hook Codex skips does not run, whatever its switch: on cannot change that.
     if (item.codexError) {
       const why = codexSkip(inv, item, item.codexError);
       return refused(run, row, "codex-skips-hook", { why, "~file": tilde(loc.file, inv.homeDir) });
     }
     // In its file already: what keeps a Codex hook from running is Codex's to change.
-    const now = loc.tool === "codex" ? stateHere(inv, item, run.ctx.project).value : "on";
+    const now = state?.value ?? "on";
     const why =
       now === "pending-approval"
         ? "already in its file: Codex runs it once you trust it with /hooks"

@@ -983,6 +983,29 @@ describe("hooks ls", () => {
 });
 
 describe("Codex hooks and Codex's trust", () => {
+  it("refuses on for a Codex hook a config.toml Codex cannot read keeps off, naming that file", async () => {
+    const { h, app } = seed();
+    const stop = { hooks: { Stop: [{ hooks: [{ type: "command", command: "echo z" }] }] } };
+    h.write(".codex/hooks.json", stop);
+    const user = tilde(h.path(".codex", "config.toml"), h.home);
+    // Codex 0.159.3 loads no config with a user config.toml it refuses, so runs no hook at all.
+    h.write(".codex/config.toml", "[mcp_servers.x]\ncommand = 5\n");
+    const reasons = async (cwd: string) =>
+      JSON.parse(await run(h, cwd, "hooks", ["on", "Stop", "--tool", "codex", "--dry-run", "--json"])).refused.map(
+        (r: { code: string; reason: string }) => [r.code, r.reason],
+      );
+    expect(await reasons(app)).toEqual([
+      ["codex-skips-hook", `Codex cannot read ${user}, so it loads no config anywhere. Change it in ${user}.`],
+    ]);
+    // A trusted project's that Codex refuses: none in that project, the user's hooks.json too.
+    h.write(".codex/config.toml", `[projects.${JSON.stringify(app)}]\ntrust_level = "trusted"\n`);
+    h.write("repos/app/.codex/config.toml", "[mcp_servers.p]\ncommand = 5\n");
+    const own = tilde(path.join(app, ".codex", "config.toml"), h.home);
+    expect(await reasons(app)).toEqual([
+      ["codex-skips-hook", `Codex cannot read ${own}, so it loads no config here. Change it in ${own}.`],
+    ]);
+  });
+
   it("refuses on for a Codex hook Codex skips, with the reason it does not run", async () => {
     const { h, app } = seed();
     h.write(".codex/hooks.json", {
