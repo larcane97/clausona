@@ -35,10 +35,14 @@ export class TomlEditError extends Error {
 const UNUSUAL_FORM = "is written in a form clausona does not edit";
 const NOT_AS_INTENDED = "would not read back as intended after the edit";
 
-/** smol-toml's parse; a failure is TomlEditError("is not valid TOML at line L, column C") or ("is not valid TOML"), never its code block. */
+/**
+ * smol-toml's parse, an integer past 2^53 a bigint, as the inventory reads it; a failure is
+ * TomlEditError("is not valid TOML at line L, column C") or ("is not valid TOML"), never its code
+ * block.
+ */
 export function parseTomlText(text: string): Record<string, unknown> {
   try {
-    return parse(text) as Record<string, unknown>;
+    return parse(text, { integersAsBigInt: "asNeeded" }) as Record<string, unknown>;
   } catch (error) {
     // smol-toml's message carries a code block of the text around the error: a key or a token, maybe.
     throw new TomlEditError(

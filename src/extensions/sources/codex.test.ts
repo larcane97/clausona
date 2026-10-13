@@ -618,6 +618,47 @@ describe("readCodex", () => {
     ]);
   });
 
+  it("reads a config.toml with an integer past 2^53 as Codex does, and refuses one past 64 bits", async () => {
+    const config = (big: string) =>
+      [
+        `x_big = ${big}`,
+        "[mcp_servers.a]",
+        'command = "true"',
+        "[[hooks.PostToolUse]]",
+        "[[hooks.PostToolUse.hooks]]",
+        'type = "mcp_tool"',
+        'server = "srv"',
+        'tool = "t"',
+        `input = { x = ${big} }`,
+      ].join("\n");
+    const read = async (big: string) => {
+      const h = new TestHome();
+      homes.push(h);
+      h.codex("personal", ".codex", config(big));
+      const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+      const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+      if (!ctx) throw new Error("no codex context");
+      await readCodex(ctx, [], out);
+      return out;
+    };
+    // Codex 0.159.3 reads 2^53 + 1 and -2^63 as the i64 they are, the hashes its hooks/list gave.
+    for (const [big, hash] of [
+      ["9007199254740993", "9fc64986a169ae5caaebab35603b28e3c49be153a9dbc06543d8f1062fde552d"],
+      ["-9223372036854775808", "4efb0a81d5d3195241a94492cb19a74de3e1d76902e46bf5648a5ad927c10a73"],
+    ] as const) {
+      const out = await read(big);
+      expect(out.warnings).toEqual([]);
+      expect(out.items.filter((i) => i.kind === "mcp").map((i) => i.name)).toEqual(["a"]);
+      expect(out.facts.codexHookTrust.map((t) => t.hash)).toEqual([`sha256:${hash}`]);
+    }
+    // Past 64 bits it refuses the file: "u64 value was too large", and loads nothing.
+    const past = await read("9223372036854775808");
+    expect(past.items.filter((i) => i.location.file.endsWith("config.toml"))).toEqual([]);
+    expect(past.warnings.map((w) => w.message)).toEqual([
+      "has an integer too large for 64 bits, so Codex refuses the whole file",
+    ]);
+  });
+
   it("warns for a config.toml that does not parse and reads the rest", async () => {
     const h = new TestHome();
     homes.push(h);

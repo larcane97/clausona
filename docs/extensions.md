@@ -628,7 +628,9 @@ further."
 
 When a file cannot be read, the text output ends with "Could not read every file, so this
 list may miss what they hold:" and each file, with a position or a reason and never what it
-holds. JSON lists them in `warnings`. The exit code stays 0.
+holds. JSON lists them in `warnings`. The exit code stays 0. A Codex `config.toml` with an
+integer too large for 64 bits is one of them: Codex refuses the whole file, and so clausona
+reads none of it. A larger integer that fits in 64 bits reads as Codex reads it.
 
 ## Changing things
 

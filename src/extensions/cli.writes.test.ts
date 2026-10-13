@@ -669,6 +669,19 @@ describe("skills visibility, a Claude skill's alone", () => {
 });
 
 describe("mcp off and rm", () => {
+  it("turns off a Codex server in a config.toml with an integer past 2^53, and keeps that integer", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
+    const { h, app } = seed();
+    const file = h.path(".codex", "config.toml");
+    h.write(".codex/config.toml", 'x_big = 9007199254740993\n\n[mcp_servers.exa]\ncommand = "npx"\n');
+    const { run } = cli(h, app);
+    const text = stripAnsi(await run("mcp", ["off", "exa", "--tool", "codex", "--everywhere", "--yes"]));
+    expect(text).toContain("✔");
+    expect(read(file)).toContain("x_big = 9007199254740993");
+    expect(read(file)).toMatch(/\[mcp_servers\.exa\][^[]*enabled = false/);
+  });
+
   it("changes one account's file with --account, and refuses an account nobody has", async () => {
     const { h, app } = seed();
     const { run } = cli(h, app);

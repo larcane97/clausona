@@ -46,16 +46,36 @@ function invalidToml(error: unknown): string {
     : "is not valid TOML";
 }
 
-/** A TOML file as an object, or undefined when missing; one that does not parse is a warning. */
+/**
+ * A TOML file as an object, or undefined when missing; one that does not parse is a warning. An
+ * integer past 2^53 is a bigint, as Codex reads it as the i64 it is; one past 64 bits Codex
+ * refuses ("u64 value was too large"), the whole file with it, so that is a warning too.
+ */
 export async function readTomlObject(file: string, warnings: Warning[]): Promise<Record<string, unknown> | undefined> {
   const text = await readText(file, warnings);
   if (text === undefined) return undefined;
+  let value: Record<string, unknown>;
   try {
-    return parse(text) as Record<string, unknown>;
+    value = parse(text, { integersAsBigInt: "asNeeded" }) as Record<string, unknown>;
   } catch (error) {
     warnings.push({ file, message: invalidToml(error) });
     return undefined;
   }
+  if (pastI64(value)) {
+    warnings.push({ file, message: "has an integer too large for 64 bits, so Codex refuses the whole file" });
+    return undefined;
+  }
+  return value;
+}
+
+const I64_MIN = -(2n ** 63n);
+const I64_MAX = 2n ** 63n - 1n;
+
+/** Whether a TOML value holds an integer Codex's i64 cannot. */
+function pastI64(value: unknown): boolean {
+  if (typeof value === "bigint") return value < I64_MIN || value > I64_MAX;
+  if (Array.isArray(value)) return value.some(pastI64);
+  return isRecord(value) && Object.values(value).some(pastI64);
 }
 
 /**
