@@ -761,6 +761,20 @@ describe("RouteForm", () => {
     expect(routes(disk)["solo-2"]).toEqual(FILE.routes.solo);
   });
 
+  it("points the dir rules and defaults that named a renamed route at its new name", async () => {
+    const { instance, onDone, disk } = setup({
+      edit: "solo",
+      file: { ...FILE, dirs: { "~/work": { claude: "solo" } }, defaults: { claude: "solo" } },
+    });
+    await opened(instance);
+
+    await press(instance, "-2");
+    await save(instance);
+
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith("solo-2"));
+    expect(disk.file()).toMatchObject({ dirs: { "~/work": { claude: "solo-2" } }, defaults: { claude: "solo-2" } });
+  });
+
   it("says why a write failed, keeps the inputs, and saves the next time", async () => {
     const { instance, deps, onDone, disk } = setup();
     await opened(instance);

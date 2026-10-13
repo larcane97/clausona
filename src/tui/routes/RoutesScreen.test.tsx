@@ -719,6 +719,17 @@ describe("dir rules and defaults", () => {
     expect(deps.updateRoutes).not.toHaveBeenCalled();
   });
 
+  it("removes the rules that name a route removed from the routes list", async () => {
+    const { instance, file } = setup({ file: RULES });
+    await ranked(instance);
+
+    await press(instance, "d");
+    await press(instance, "y");
+    await until(instance, (f) => panes(f).list.length === 2 && !f.includes("(y/N)"));
+    expect(file().dirs).toEqual({ "~/work": { codex: "gone" } });
+    expect(file().defaults).toEqual({ claude: "solo" });
+  });
+
   it("changes the defaults from their row, and clears them once asked", async () => {
     const { instance, file } = setup({ file: { ...FILE, defaults: { claude: "solo" } } });
     await ranked(instance);

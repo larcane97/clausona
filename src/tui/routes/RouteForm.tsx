@@ -12,6 +12,7 @@ import {
   withDefaults,
 } from "../../core/route-config.js";
 import { matchesMember } from "../../core/route-patterns.js";
+import { renameReferences } from "../../core/route-rules.js";
 import { type Ranking, rankRoute } from "../../core/routing.js";
 import { toolLabel } from "../../lib/route-render.js";
 import { checkRouteMembers, membersOf } from "../../lib/route-service.js";
@@ -317,7 +318,11 @@ export function RouteForm(props: RouteFormProps) {
         outcome = { name: `Route '${name}' already exists.` };
         return null;
       }
-      if (original !== undefined && name !== original) delete file.routes[original];
+      if (original !== undefined && name !== original) {
+        delete file.routes[original];
+        // As `clausona route rename` does: the dir rules and defaults that named it follow it.
+        renameReferences(file, original, name);
+      }
       file.routes[name] = spec;
       return file;
     });

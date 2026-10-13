@@ -258,7 +258,8 @@ Like `add`, `route set` prints the route as it stands after the change.
 `route rename` and `route remove` act straight away. Neither one asks first.
 
 A [dir rule or default](#dir-rules-and-defaults) that names the route follows it. `route rename`
-points each one at the new name, and `route remove` removes them and says which:
+points each one at the new name, and `route remove` removes them and says which. The Routes
+screen does the same when you remove a route there, or rename one in its form.
 
 ```
 $ clausona route remove office

@@ -14,6 +14,7 @@ import {
   clearDefaultRoute,
   clearDirRoute,
   readRules,
+  removeReferences,
   routeProblem,
   ruleWarnings,
   SLOT_TOOLS,
@@ -263,6 +264,8 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
       const file = await io.updateRoutes((current) => {
         if (!Object.hasOwn(current.routes, name)) return null;
         delete current.routes[name];
+        // As `clausona route remove` does: a rule that names it would only be skipped from now on.
+        removeReferences(current, name);
         written = true;
         return current;
       });
