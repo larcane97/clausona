@@ -1679,6 +1679,39 @@ describe("listProfiles with an API profile", () => {
     expect(items.find((item) => item.name === "claude:glm")?.quota).toBeUndefined();
   });
 
+  it("shows an API profile's last spend reading as its state, time and budget window only", async () => {
+    recordQuotaTargets();
+    const h = await harness();
+    await h.service.addApiProfile(apiOptions());
+    const budget = {
+      usedPercent: 35,
+      resetsAt: "2026-11-01T00:00:00.000Z",
+      spentUsd: 7,
+      limitUsd: 20,
+      source: "budget",
+      per: "month",
+    };
+    const cached = {
+      state: "ok",
+      fetchedAt: 1_800_000_000_000,
+      budget,
+      spend: { totalUsd: 107, baselines: { month: { start: "2026-10-01T00:00:00.000Z", totalUsd: 100 } } },
+    };
+    writeFileSync(
+      path.join(h.home, ".clausona", "quota.json"),
+      JSON.stringify({ version: 1, cooldowns: {}, profiles: { "claude:glm": cached } }),
+    );
+
+    const items = await h.service.listProfiles({ quota: true });
+
+    // `list --json` is JSON.stringify of this: the cache's bookkeeping does not reach it.
+    expect(items.find((item) => item.name === "claude:glm")?.quota).toEqual({
+      state: "ok",
+      fetchedAt: 1_800_000_000_000,
+      budget,
+    });
+  });
+
   it("carries kind and label, and no key, into the listing", async () => {
     const h = await harness();
     await h.service.addApiProfile(apiOptions());

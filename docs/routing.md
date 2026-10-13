@@ -912,7 +912,9 @@ against the routes: whether a route can take the profile is checked by `route ad
 
 `clausona list` and the dashboard show each API profile's last reading, as `budget 35%`, across the
 5H and 7D columns. They read nothing for it, since that would send its key to its provider each
-time; a reading older than five minutes is dimmed.
+time; a reading older than five minutes is dimmed. In `clausona list --json`, an API profile's
+`quota` is `{ "state", "fetchedAt", "budget" }`, `budget` being the window `explain --json` gives,
+when there is a reading.
 
 ## Seeing the ranking
 

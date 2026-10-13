@@ -1877,7 +1877,7 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
       collectQuotas(targets, { refresh: options.refresh, renew: options.renew }),
       cachedQuotas(api),
     ]);
-    quotas = { ...spend, ...plans };
+    quotas = { ...shownSpend(spend), ...plans };
   }
 
   return entries.map(([id, profile]) => {
@@ -1930,7 +1930,21 @@ export async function fetchProfileQuotas(
     // Its spend as last read, as listProfiles shows it: the dashboard resolves no key.
     cachedQuotas(items.filter((item) => item.kind === "api").map((item) => item.name)),
   ]);
-  return { ...spend, ...plans };
+  return { ...shownSpend(spend), ...plans };
+}
+
+/**
+ * API profiles' cached readings as a listing shows them: the state, when, and the `budget`
+ * window. Not the spend behind it - totals and the periods' baselines - which is the cache's own
+ * bookkeeping, and would reach `list --json` as if it were something to rely on.
+ */
+function shownSpend(snapshots: Record<string, QuotaSnapshot>): Record<string, QuotaSnapshot> {
+  return Object.fromEntries(
+    Object.entries(snapshots).map(([id, snapshot]): [string, QuotaSnapshot] => [
+      id,
+      { state: snapshot.state, fetchedAt: snapshot.fetchedAt, ...(snapshot.budget ? { budget: snapshot.budget } : {}) },
+    ]),
+  );
 }
 
 export async function setActiveProfileByName(id: string) {
