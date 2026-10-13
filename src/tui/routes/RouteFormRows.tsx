@@ -101,22 +101,22 @@ export function Radio<T extends string>({
   options,
   selected,
   focused,
+  warn = [],
 }: {
   options: Array<[T, string]>;
   selected: T;
   focused: boolean;
+  /** Options drawn in the warning colour: a value kept that is not one of the usual choices. */
+  warn?: readonly T[];
 }) {
   return (
     <Box columnGap={RADIO_GAP} flexWrap="wrap">
       {options.map(([value, label]) => {
         const on = value === selected;
+        const tone = warn.includes(value) ? color.warning : on ? (focused ? color.cursor : color.text) : color.muted;
         return (
           <Box key={value} flexShrink={0}>
-            <Text
-              color={on ? (focused ? color.cursor : color.text) : color.muted}
-              bold={on && focused}
-              wrap="truncate-end"
-            >
+            <Text color={tone} bold={on && focused} wrap="truncate-end">
               {`${on ? symbol.dot : symbol.circle} ${label}`}
             </Text>
           </Box>
@@ -124,6 +124,46 @@ export function Radio<T extends string>({
       })}
     </Box>
   );
+}
+
+/**
+ * The options around `selected` that fit on one line `width` columns wide, each label cut to fit,
+ * and whether options were left out before or after them: a list of routes can be longer than any
+ * line, and a form that wrapped it could grow past the terminal. A `…` marks each side left out,
+ * and takes two columns with its space.
+ */
+export function radioWindow<T extends string>(
+  options: Array<[T, string]>,
+  selected: T,
+  width: number,
+): { shown: Array<[T, string]>; before: boolean; after: boolean } {
+  const cost = (label: string) => `${symbol.dot} ${label}`.length;
+  const all = options.reduce((sum, [, label], i) => sum + cost(label) + (i ? RADIO_GAP : 0), 0);
+  if (all <= width) return { shown: options, before: false, after: false };
+  const room = Math.max(4, width - 4);
+  const cut = (label: string) => (cost(label) > room ? `${label.slice(0, Math.max(1, room - 3))}…` : label);
+  const fitted = options.map(([value, label]): [T, string] => [value, cut(label)]);
+  const at = Math.max(
+    0,
+    fitted.findIndex(([value]) => value === selected),
+  );
+  let first = at;
+  let last = at;
+  let used = cost(fitted[at][1]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    if (last + 1 < fitted.length && used + RADIO_GAP + cost(fitted[last + 1][1]) <= room) {
+      last++;
+      used += RADIO_GAP + cost(fitted[last][1]);
+      grew = true;
+    }
+    if (first > 0 && used + RADIO_GAP + cost(fitted[first - 1][1]) <= room) {
+      first--;
+      used += RADIO_GAP + cost(fitted[first][1]);
+      grew = true;
+    }
+  }
+  return { shown: fitted.slice(first, last + 1), before: first > 0, after: last < fitted.length - 1 };
 }
 
 /** The lines a Radio of `options` takes `width` columns wide: each option its mark, a space and its label. */

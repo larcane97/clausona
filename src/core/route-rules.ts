@@ -486,9 +486,9 @@ export function rulesNaming(file: RoutesFile, name: string): RuleRef[] {
 
 /**
  * Rules as a sentence lists them, a directory's slots together: `the dir rule for ~/work (claude,
- * codex)`, `the claude default`, `the claude and codex defaults`. Join them with an `and`.
+ * codex), the dir rule for /srv (claude) and the claude default`.
  */
-export function rulesText(refs: readonly RuleRef[]): string[] {
+export function rulesText(refs: readonly RuleRef[]): string {
   const dirs = new Map<string, ToolName[]>();
   let defaults: ToolName[] = [];
   for (const ref of refs) {
@@ -499,8 +499,9 @@ export function rulesText(refs: readonly RuleRef[]): string[] {
   const ordered = (tools: ToolName[]) => SLOT_TOOLS.filter((tool) => tools.includes(tool));
   defaults = ordered(defaults);
   for (const [dir, tools] of dirs) dirs.set(dir, ordered(tools));
-  return [
+  const items = [
     ...[...dirs].map(([dir, tools]) => `the dir rule for ${dir} (${tools.join(", ")})`),
     ...(defaults.length ? [`the ${defaults.join(" and ")} default${defaults.length > 1 ? "s" : ""}`] : []),
   ];
+  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }

@@ -481,7 +481,7 @@ async function renameRoute(args: string[], deps: RouteDeps): Promise<string> {
   });
   return [
     success(`Renamed route ${bold(from)} to ${bold(to)}`),
-    ...(rules.length ? [dim(`    Also renamed in ${andList(rulesText(rules))}.`)] : []),
+    ...(rules.length ? [dim(`    Also renamed in ${rulesText(rules)}.`)] : []),
   ].join("\n");
 }
 
@@ -500,13 +500,8 @@ async function removeRoute(args: string[], deps: RouteDeps): Promise<string> {
   });
   return [
     success(`Removed route ${bold(name)}`),
-    ...(rules.length ? [dim(`    Also removed ${andList(rulesText(rules))}.`)] : []),
+    ...(rules.length ? [dim(`    Also removed ${rulesText(rules)}.`)] : []),
   ].join("\n");
-}
-
-/** `a`, `a and b`, `a, b and c`. */
-function andList(items: string[]): string {
-  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
 // ─── Dir rules and defaults ────────────────────────────────────────

@@ -7,6 +7,7 @@ import {
   clearDefaultRoute,
   clearDirRoute,
   SLOT_TOOLS,
+  type Slots,
   sameDir,
   setDefaultRoute,
   setDirRoute,
@@ -16,7 +17,8 @@ import type { ToolName } from "../../types.js";
 import { Chrome } from "../components/Chrome.js";
 import { FieldInput } from "../components/FieldInput.js";
 import { color } from "../theme.js";
-import { ErrorLines, Line, Radio } from "./RouteFormRows.js";
+import { useTerminalSize } from "../use-width.js";
+import { ErrorLines, Line, Radio, radioWindow, valueWidth } from "./RouteFormRows.js";
 import { errorText, type RoutesListDeps } from "./routes-deps.js";
 
 /**
@@ -30,10 +32,12 @@ export type RuleTarget = { kind: "new" } | { kind: "dir"; dir: string } | { kind
 
 export type RuleFormProps = {
   target: RuleTarget;
-  /** The route each tool's slot names now; none for a new rule. */
-  slots: Partial<Record<ToolName, string>>;
-  /** Every route there is, by name, with its tool. */
+  /** The rule's slots as read; none for a new rule. */
+  slots: Slots;
+  /** Every route there is that can be used, by name, with its tool. */
   routes: Array<{ name: string; tool: RouteTool }>;
+  /** The routes routes.json holds that cannot be used, by name. */
+  broken: string[];
   deps: RoutesListDeps;
   /** Whether the form saved. */
   onDone: (saved: boolean) => void;
@@ -42,6 +46,12 @@ export type RuleFormProps = {
 type Field = "dir" | ToolName;
 
 const NONE = "";
+/** A slot routes.json holds that cannot be read: no route's name can be this. */
+const UNREADABLE = "\u0000";
+
+/** The columns the chrome's padding, and the frame's borders and padding, take from the terminal's width. */
+const CHROME_PADDING = 4;
+const FRAME_PADDING = 4;
 
 const HINTS = [
   { keys: "tab", action: "next field" },
@@ -57,27 +67,53 @@ const CONFIRM_HINTS = [
 /** What a directory holding something key-shaped shows instead, as the route form masks a key. */
 const MASK = "•".repeat(8);
 
-/** The routes a tool's slot can take: its own tool's, and the ones over both. */
-const choicesFor = (routes: RuleFormProps["routes"], tool: ToolName): Array<[string, string]> => [
-  [NONE, "none"],
-  ...routes
-    .filter((route) => route.tool === tool || route.tool === "all")
-    .map((route): [string, string] => [route.name, route.name]),
-];
+/** What a slot holds as the form starts: its route, none, or one that cannot be read. */
+const heldIn = (slots: Slots, tool: ToolName) => {
+  const slot = slots[tool];
+  return slot === undefined ? NONE : "route" in slot ? slot.route : UNREADABLE;
+};
+
+/**
+ * The routes a tool's slot can take: its own tool's, and the ones over both. A slot that holds
+ * something else - a route gone, broken or for the other tool, or what cannot be read - keeps it
+ * as one more choice, said as what it is, so that leaving the slot alone keeps it.
+ */
+function choicesFor(props: Pick<RuleFormProps, "routes" | "broken" | "slots">, tool: ToolName) {
+  const { routes, broken, slots } = props;
+  const options: Array<[string, string]> = [
+    [NONE, "none"],
+    ...routes
+      .filter((route) => route.tool === tool || route.tool === "all")
+      .map((route): [string, string] => [route.name, route.name]),
+  ];
+  const held = heldIn(slots, tool);
+  if (options.some(([value]) => value === held)) return { options, odd: [] };
+  const other = routes.find((route) => route.name === held);
+  const label =
+    held === UNREADABLE
+      ? "? (cannot be read)"
+      : other
+        ? `${held} (for ${other.tool})`
+        : broken.includes(held)
+          ? `${held} (cannot be used)`
+          : `${held} (missing)`;
+  return { options: [...options, [held, label] as [string, string]], odd: [held] };
+}
 
 function step(options: Array<[string, string]>, current: string, delta: 1 | -1): string {
   const at = options.findIndex(([value]) => value === current);
   return options[(at + delta + options.length) % options.length]?.[0] ?? current;
 }
 
-export function RuleForm({ target, slots: initial, routes, deps, onDone }: RuleFormProps) {
+export function RuleForm(props: RuleFormProps) {
+  const { target, slots: initial, deps, onDone } = props;
   const fields: Field[] = target.kind === "defaults" ? ["claude", "codex"] : ["dir", "claude", "codex"];
   const [focus, setFocus] = useState<Field>(fields[0]);
   const [dirText, setDirText] = useState(target.kind === "dir" ? target.dir : "");
   const [caret, setCaret] = useState(dirText.length);
   const [slots, setSlots] = useState<Record<ToolName, string>>({
-    claude: initial.claude ?? NONE,
-    codex: initial.codex ?? NONE,
+    claude: heldIn(initial, "claude"),
+    codex: heldIn(initial, "codex"),
   });
   const [error, setError] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
@@ -90,13 +126,15 @@ export function RuleForm({ target, slots: initial, routes, deps, onDone }: RuleF
     };
   }, []);
 
-  const dirty =
-    (target.kind === "dir" ? dirText !== target.dir : dirText !== "") ||
-    SLOT_TOOLS.some((tool) => slots[tool] !== (initial[tool] ?? NONE));
+  /** The slots the user changed: only those are written, and only those need their route to be there. */
+  const changed = SLOT_TOOLS.filter((tool) => slots[tool] !== heldIn(initial, tool));
+  const dirty = (target.kind === "dir" ? dirText !== target.dir : dirText !== "") || changed.length > 0;
 
   /**
-   * Writes the rule into routes.json as it is under the lock. A rule moved to another directory
-   * leaves the one it was for; a tool set to none is cleared.
+   * Writes the rule into routes.json as it is under the lock, slot by slot as `clausona route dir`
+   * does: a slot left alone stays as it is, and so does the other tool's slot of a rule the
+   * directory already has. A new rule sets only the tools given a route. A rule moved to another
+   * directory leaves the one it was for and is set there with the routes it has.
    */
   async function save() {
     const typed = dirText.trim();
@@ -115,28 +153,35 @@ export function RuleForm({ target, slots: initial, routes, deps, onDone }: RuleF
       return;
     }
     const dir = target.kind === "defaults" ? undefined : storedDir(typed, deps.cwd, deps.system);
+    const isDir = (stored: string) => dir !== undefined && sameDir(stored, dir, deps.cwd, deps.system);
+    const moved = target.kind === "dir" && !isDir(target.dir);
+    if (!moved && changed.length === 0) {
+      onDone(false);
+      return;
+    }
     setSaving(true);
     try {
       await deps.updateRoutes((file) => {
-        for (const tool of SLOT_TOOLS) {
+        for (const tool of changed) {
           const route = slots[tool];
           if (route !== NONE && !Object.hasOwn(file.routes, route)) {
             throw new Error(`Route ${route} was removed in another window.`);
           }
         }
-        if (dir === undefined) {
-          for (const tool of SLOT_TOOLS) {
-            if (slots[tool] === NONE) clearDefaultRoute(file, [tool]);
-            else setDefaultRoute(file, [tool], slots[tool]);
-          }
-          return file;
-        }
-        const isDir = (stored: string) => sameDir(stored, dir, deps.cwd, deps.system);
-        if (target.kind === "dir" && !isDir(target.dir))
+        const set = (tool: ToolName) => {
+          const route = slots[tool];
+          if (dir === undefined) {
+            if (route === NONE) clearDefaultRoute(file, [tool]);
+            else setDefaultRoute(file, [tool], route);
+          } else if (route === NONE) clearDirRoute(file, [tool], isDir);
+          else setDirRoute(file, dir, [tool], route, isDir);
+        };
+        if (moved) {
+          // A slot that cannot be read is not carried over: it leaves with the old directory.
           clearDirRoute(file, undefined, (stored) => stored === target.dir);
-        for (const tool of SLOT_TOOLS) {
-          if (slots[tool] === NONE) clearDirRoute(file, [tool], isDir);
-          else setDirRoute(file, dir, [tool], slots[tool], isDir);
+          for (const tool of SLOT_TOOLS) if (slots[tool] !== NONE && slots[tool] !== UNREADABLE) set(tool);
+        } else {
+          for (const tool of changed) set(tool);
         }
         return file;
       });
@@ -174,7 +219,8 @@ export function RuleForm({ target, slots: initial, routes, deps, onDone }: RuleF
     const across = key.leftArrow ? -1 : key.rightArrow ? 1 : 0;
     if (across && focus !== "dir") {
       const tool = focus;
-      setSlots((current) => ({ ...current, [tool]: step(choicesFor(routes, tool), current[tool], across) }));
+      const { options } = choicesFor(props, tool);
+      setSlots((current) => ({ ...current, [tool]: step(options, current[tool], across) }));
       setError(null);
     }
   };
@@ -187,6 +233,9 @@ export function RuleForm({ target, slots: initial, routes, deps, onDone }: RuleF
   useInput(onInput);
 
   const typing = !asking && !saving;
+  const { columns = 80 } = useTerminalSize();
+  /** A Radio's line, which shows the routes around the chosen one rather than wrap: the form keeps its height. */
+  const room = valueWidth(columns - CHROME_PADDING - FRAME_PADDING);
   const masked = carriesCredentialToken(dirText);
   const shown = target.kind === "defaults" ? "" : storedDir(dirText.trim() || ".", deps.cwd, deps.system);
   const explain =
@@ -227,11 +276,17 @@ export function RuleForm({ target, slots: initial, routes, deps, onDone }: RuleF
             />
           </Line>
         )}
-        {SLOT_TOOLS.map((tool) => (
-          <Line key={tool} focused={focus === tool} label={tool === "claude" ? "Claude" : "Codex"}>
-            <Radio options={choicesFor(routes, tool)} selected={slots[tool]} focused={focus === tool} />
-          </Line>
-        ))}
+        {SLOT_TOOLS.map((tool) => {
+          const { options, odd } = choicesFor(props, tool);
+          const { shown, before, after } = radioWindow(options, slots[tool], room);
+          return (
+            <Line key={tool} focused={focus === tool} label={tool === "claude" ? "Claude" : "Codex"}>
+              {before ? <Text color={color.muted}>… </Text> : null}
+              <Radio options={shown} selected={slots[tool]} focused={focus === tool} warn={odd} />
+              {after ? <Text color={color.muted}> …</Text> : null}
+            </Line>
+          );
+        })}
       </Box>
       <Text color={color.muted}>{explain}</Text>
       <ErrorLines errors={error ? { form: error } : {}} />

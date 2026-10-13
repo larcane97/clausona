@@ -412,11 +412,7 @@ describe("editing rules", () => {
         { dir: "/srv", tool: "claude" },
         { tool: "claude" },
       ]),
-    ).toEqual([
-      "the dir rule for ~/work (claude, codex)",
-      "the dir rule for /srv (claude)",
-      "the claude and codex defaults",
-    ]);
+    ).toBe("the dir rule for ~/work (claude, codex), the dir rule for /srv (claude) and the claude and codex defaults");
     expect(rulesNaming(file({ defaults: { claude: "main" } }), "main")).toEqual([{ tool: "claude" }]);
   });
 

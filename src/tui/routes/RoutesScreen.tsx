@@ -139,16 +139,6 @@ function ruleEntries(rules: ReturnType<typeof readRules>): RuleEntry[] {
   ];
 }
 
-/** The route each slot names, for the form to start from; a slot that cannot be read starts at none. */
-function slotRoutes(slots: Slots): Partial<Record<ToolName, string>> {
-  return Object.fromEntries(
-    SLOT_TOOLS.flatMap((tool) => {
-      const slot = slots[tool];
-      return slot && "route" in slot ? [[tool, slot.route]] : [];
-    }),
-  );
-}
-
 /** The line that says routes are left out, and where to see why: `route list` lists each problem. */
 function brokenNotice(count: number): string {
   const what = count === 1 ? "a route" : `${count} routes`;
@@ -188,9 +178,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   const [view, setView] = useState<"routes" | "rules">("routes");
   const [ruleCursor, setRuleCursor] = useState(0);
   const [clearing, setClearing] = useState<RuleEntry | null>(null);
-  const [ruleForm, setRuleForm] = useState<{ target: RuleTarget; slots: Partial<Record<ToolName, string>> } | null>(
-    null,
-  );
+  const [ruleForm, setRuleForm] = useState<{ target: RuleTarget; slots: Slots } | null>(null);
   /** Quota of the accounts no route took, read for the form: they are on its rows. */
   const [extra, setExtra] = useState<Record<string, QuotaSnapshot>>({});
   const columns = useColumns();
@@ -365,7 +353,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
     else if (key.upArrow) setRuleCursor((ruleIndex - 1 + count) % count);
     else if (key.downArrow) setRuleCursor((ruleIndex + 1) % count);
     else if (input === "n") setRuleForm({ target: { kind: "new" }, slots: {} });
-    else if (input === "e" && entry) setRuleForm({ target: entry.target, slots: slotRoutes(entry.slots) });
+    else if (input === "e" && entry) setRuleForm({ target: entry.target, slots: entry.slots });
     else if (input === "d" && entry && Object.keys(entry.slots).length > 0) setClearing(entry);
   }
 
@@ -460,6 +448,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
         routes={Object.keys(loaded.file.routes)
           .sort()
           .map((name) => ({ name, tool: loaded.file.routes[name].tool }))}
+        broken={loaded.broken.map((route) => route.name)}
         deps={io}
         onDone={(saved) => {
           setRuleForm(null);
@@ -476,9 +465,8 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
           <RuleList entries={rows} index={ruleIndex} file={loaded.file} broken={loaded.broken} />
         </Box>
         <Box flexDirection="column" marginTop={1}>
-          <Text color={color.muted}>
-            A run with no route takes the deepest dir rule that holds for its directory, then the default.
-          </Text>
+          {/* Short enough for one line in a narrow pane: wrapped, ink starts the next line with a space. */}
+          <Text color={color.muted}>The deepest dir rule wins; then the default.</Text>
           {ruleNotes.map((note) => (
             <Text key={note} color={color.warning}>
               {`⚠ ${note}`}
@@ -659,6 +647,9 @@ function RouteList({ entries, index, pending }: { entries: Entry[]; index: numbe
   );
 }
 
+/** The directory column's header, which is also the narrowest that column gets. */
+const DIRECTORY = "DIRECTORY";
+
 /**
  * The dir rules and the defaults, a row each: the directory, and the route each tool's slot
  * names. A slot whose route cannot be used there is in the warning colour, `?` when it cannot be
@@ -683,18 +674,26 @@ function RuleList({
     return { text: slot.route, usable: routeProblem(file, broken, tool, slot.route) === null };
   };
   const cells = entries.map((entry) => SLOT_TOOLS.map((tool) => cell(entry.slots, tool)));
-  const slotWidth = Math.max("CLAUDE".length, ...cells.flat().map((each) => each.text.length));
-  const longest = Math.max("DIRECTORY".length, ...entries.map((entry) => entry.label.length));
+  const longest = Math.max(DIRECTORY.length, ...entries.map((entry) => entry.label.length));
+  const longestSlot = Math.max("CLAUDE".length, ...cells.flat().map((each) => each.text.length));
+  // The two route columns share what the directory's header leaves them: a long route name is cut
+  // rather than pushing the row past the frame, or squeezing every directory down to a `…`.
+  const slotWidth = Math.max(1, Math.min(longestSlot, Math.floor((width - MARK - DIRECTORY.length - 2 * GAP) / 2)));
   const labelWidth = Math.max(1, Math.min(longest, width - MARK - 2 * (GAP + slotWidth)));
   return (
     <Box ref={list} flexDirection="column">
       <Box flexDirection="row">
         <Box width={MARK + labelWidth} flexShrink={0}>
-          <Text color={color.muted}>{" ".repeat(MARK)}DIRECTORY</Text>
+          <Text color={color.muted} wrap="truncate-end">
+            {" ".repeat(MARK)}
+            {DIRECTORY}
+          </Text>
         </Box>
         {["CLAUDE", "CODEX"].map((label) => (
           <Box key={label} width={slotWidth} marginLeft={GAP} flexShrink={0}>
-            <Text color={color.muted}>{label}</Text>
+            <Text color={color.muted} wrap="truncate-end">
+              {label}
+            </Text>
           </Box>
         ))}
       </Box>
@@ -716,7 +715,10 @@ function RuleList({
             </Box>
             {cells[i].map((slot, n) => (
               <Box key={SLOT_TOOLS[n]} width={slotWidth} marginLeft={GAP} flexShrink={0}>
-                <Text color={slot.usable ? (slot.text === "—" ? color.dim : color.text) : color.warning}>
+                <Text
+                  color={slot.usable ? (slot.text === "—" ? color.dim : color.text) : color.warning}
+                  wrap="truncate-end"
+                >
                   {slot.text}
                 </Text>
               </Box>
