@@ -341,9 +341,9 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
           setListOpen(false);
         }
       } else if (key.backspace || key.delete) searchList((q) => q.slice(0, -1));
-      // A / first is the table's way to start a search: here typing is enough.
-      else if (input && !key.ctrl && !key.meta && !key.tab)
-        searchList((q) => (q === "" && input === "/" ? q : q + input));
+      // A / first is the table's way to start a search: here typing is enough, and it does nothing.
+      else if (input === "/" && listQuery === "") return;
+      else if (input && !key.ctrl && !key.meta && !key.tab) searchList((q) => q + input);
       return;
     }
     if (view === "matrix") {

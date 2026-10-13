@@ -423,6 +423,13 @@ describe("ExtensionsScreen", () => {
       await type(instance, key);
       expect(stripAnsi(instance.lastFrame() ?? ""), JSON.stringify(key)).toBe(list);
     }
+    // Nor does it move the cursor from where it is.
+    await press(instance, DOWN);
+    const onWeb = await seen(instance, (f) => f.includes("▸ web"));
+    await type(instance, "/");
+    expect(stripAnsi(instance.lastFrame() ?? "")).toBe(onWeb);
+    await press(instance, UP);
+    await seen(instance, (f) => f.includes("▸ app (here)"));
     // The keys of the screen are letters of a search here: nothing is read again, no matrix.
     await typeSlowly(instance, "rmw1");
     const typed = await seen(instance, (f) => f.includes("/rmw1▏"));
