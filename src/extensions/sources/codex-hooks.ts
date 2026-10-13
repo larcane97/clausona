@@ -353,7 +353,7 @@ function count(value: unknown): number | undefined {
  * hash writes as `{"$serde_json::private::Number": text}`. Codex 0.159.3's hooks/list gave the
  * hashes this text matches.
  */
-class SerdeNumber {
+export class SerdeNumber {
   readonly text: string;
   constructor(text: string) {
     this.text = text;

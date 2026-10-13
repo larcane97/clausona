@@ -441,9 +441,14 @@ export function isManagedSetting(inv: Inventory, file: string): boolean {
  * project, one it has no record of too.
  */
 export function codexTrusted(inv: Inventory, project: string | undefined): boolean {
+  return codexTrustedIn(inv.facts, project);
+}
+
+/** `codexTrusted` from the facts alone, for a source that reads on what Codex trusts. */
+export function codexTrustedIn(facts: StateFacts, project: string | undefined): boolean {
   if (project === undefined) return false;
-  for (const folder of inv.facts.codexTrustFolders[pathKey(project)] ?? [project]) {
-    const trusted = codexTrustLevel(inv.facts.codexTrust, folder);
+  for (const folder of facts.codexTrustFolders[pathKey(project)] ?? [project]) {
+    const trusted = codexTrustLevel(facts.codexTrust, folder);
     if (trusted !== undefined) return trusted;
   }
   return false;

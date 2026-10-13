@@ -714,10 +714,25 @@ further."
 
 When a file cannot be read, the text output ends with "Could not read every file, so this
 list may miss what they hold:" and each file, with a position or a reason and never what it
-holds. JSON lists them in `warnings`. The exit code stays 0. A Codex `config.toml` with an
-integer too large for 64 bits is one of them, and so is one with a hook under `[hooks]` Codex
-cannot read: Codex refuses the whole file, and so clausona reads none of it. A larger integer
-that fits in 64 bits reads as Codex reads it.
+holds. JSON lists them in `warnings`. The exit code stays 0.
+
+A Codex `config.toml` that Codex refuses is one of them, and clausona reads none of it. Codex
+refuses one with an integer too large for 64 bits (a larger one that fits reads as Codex reads
+it), and one with a value of the wrong type in its typed config. clausona checks the sections it
+reads, against Codex's types:
+
+- `mcp_servers`: a server's fields, and its transport (a `command` or else a `url`, with nothing
+  the other takes);
+- `[[skills.config]]`: each entry's `enabled`, `name` and `path`;
+- `hooks` and `[hooks.state]`;
+- `plugins` and their servers' `enabled`;
+- `projects` and each `trust_level` (`trusted` or `untrusted`, as written).
+
+A trusted project's `config.toml` is checked merged over yours, as Codex merges them. So a
+switch for a server you do not define is a server with no transport, which Codex refuses too:
+the warning says Codex then loads no config in that project. clausona does not check the
+sections it does not read. A wrong type there makes Codex refuse the file all the same, and
+clausona reads the file as fine.
 
 ## Changing things
 

@@ -9,14 +9,14 @@ import { codexProjectConfig } from "../places.js";
 import { isHomeProject, type ProjectRecord, recordedPaths } from "../projects.js";
 import { entryInfo, isRecord, pathKey, readJsonObject, readText, realPath, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
+import { codexTrustedIn } from "../state.js";
 import { addHooksFile } from "./claude-hooks.js";
+import { codexConfigProblem, mergeCodexConfig } from "./codex-config-check.js";
 import {
   addCodexHookStates,
   addCodexHookTrust,
   addConfigHooks,
   codexHomeHooksFile,
-  codexReadsHookEvents,
-  codexReadsHookStates,
   codexReadsHooksFile,
   exactConfigHooks,
   exactJsonFile,
@@ -37,6 +37,8 @@ export type CodexContext = {
   homes: CodexHome[];
   configFile: string;
   config?: Record<string, unknown>;
+  /** The user's config.toml with its numbers as Codex reads them, which a project's is checked merged over. */
+  exact?: Record<string, unknown>;
 };
 
 /**
@@ -50,13 +52,17 @@ function invalidToml(error: unknown): string {
     : "is not valid TOML";
 }
 
+/** A config.toml as clausona reads it, and as Codex reads its numbers (`exactToml`), for the checks. */
+export type CodexConfigFile = { value: Record<string, unknown>; exact: Record<string, unknown> };
+
 /**
- * A Codex config.toml as an object, or undefined when missing; one that does not parse is a
- * warning. An integer past 2^53 is a bigint, as Codex reads it as the i64 it is. Two things make
- * Codex 0.159.3 refuse the whole file, and are warnings too: an integer past 64 bits ("u64 value
- * was too large"), and a hook under `[hooks]` it cannot read ("invalid configuration").
+ * A Codex config.toml, or undefined when missing; one that does not parse is a warning. An
+ * integer past 2^53 is a bigint, as Codex reads it as the i64 it is; one past 64 bits Codex 0.159.3
+ * refuses ("u64 value was too large"), the whole file with it, so that is a warning too. Whether
+ * Codex reads its typed config is the caller's to check (codexConfigProblem): a project's is
+ * checked merged over the user's.
  */
-export async function readTomlObject(file: string, warnings: Warning[]): Promise<Record<string, unknown> | undefined> {
+export async function readCodexConfig(file: string, warnings: Warning[]): Promise<CodexConfigFile | undefined> {
   const text = await readText(file, warnings);
   if (text === undefined) return undefined;
   let value: Record<string, unknown>;
@@ -70,13 +76,21 @@ export async function readTomlObject(file: string, warnings: Warning[]): Promise
     warnings.push({ file, message: "has an integer too large for 64 bits, so Codex refuses the whole file" });
     return undefined;
   }
-  // Checked with its numbers as Codex reads them, which tells a timeout of 30 from 30.0.
-  const exact = exactToml(text) ?? value;
-  if (isRecord(exact.hooks) && !(codexReadsHookEvents(exact.hooks) && codexReadsHookStates(exact.hooks.state))) {
-    warnings.push({ file, message: "has a hook Codex cannot read, so Codex refuses the whole file" });
-    return undefined;
-  }
-  return value;
+  return { value, exact: exactToml(text) ?? value };
+}
+
+/**
+ * The user's config.toml as an object, or undefined when missing or refused: one that does not
+ * parse, holds an integer past 64 bits, or a value of a section clausona reads that Codex cannot
+ * read (codexConfigProblem), Codex refuses whole, and this warns.
+ */
+export async function readTomlObject(file: string, warnings: Warning[]): Promise<Record<string, unknown> | undefined> {
+  const read = await readCodexConfig(file, warnings);
+  if (read === undefined) return undefined;
+  const problem = codexConfigProblem(read.exact);
+  if (problem === undefined) return read.value;
+  warnings.push({ file, message: `has ${problem} Codex cannot read, so Codex refuses the whole file` });
+  return undefined;
 }
 
 const I64_MIN = -(2n ** 63n);
@@ -111,8 +125,12 @@ export async function loadCodexContext(
   const primary = homes[0];
   if (!primary) return undefined;
   const configFile = path.join(primary.dir, "config.toml");
-  const config = await readTomlObject(configFile, warnings);
-  return { homeDir, primary, homes, configFile, ...(config ? { config } : {}) };
+  const read = await readCodexConfig(configFile, warnings);
+  const problem = read && codexConfigProblem(read.exact);
+  if (problem)
+    warnings.push({ file: configFile, message: `has ${problem} Codex cannot read, so Codex refuses the whole file` });
+  const config = read && !problem ? read : undefined;
+  return { homeDir, primary, homes, configFile, ...(config ? { config: config.value, exact: config.exact } : {}) };
 }
 
 /** The projects Codex has recorded trust for, as one record under the primary. */
@@ -134,6 +152,13 @@ export function codexProjectRecords(ctx: CodexContext): ProjectRecord[] {
  */
 export async function readCodex(ctx: CodexContext, projects: Project[], out: Collector): Promise<void> {
   const global: SkillLocation = { tool: "codex", scope: "global" };
+  // The trust first: whether Codex reads a project's config.toml, and checks it, turns on it.
+  for (const [project, table] of Object.entries(isRecord(ctx.config?.projects) ? ctx.config.projects : {})) {
+    // A table with no trust_level decides nothing, so Codex looks further (codexTrustFolders).
+    if (!isRecord(table)) continue;
+    const level = table.trust_level === undefined ? {} : { trusted: table.trust_level === "trusted" };
+    out.facts.codexTrust.push({ project, ...level });
+  }
   const jobs: Promise<void>[] = [
     readCodexSkills(path.join(ctx.homeDir, ".agents", "skills"), global, "agents", out),
     readCodexSkills(path.join(ctx.primary.dir, "skills"), global, "home", out),
@@ -182,7 +207,7 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
         const worktree = roots?.worktree && (await entryInfo(own)).kind === "dir" ? roots.worktree : undefined;
         if (worktree) out.facts.codexWorktrees[pathKey(project.path)] = worktree;
         const file = codexProjectConfig(project.path);
-        const config = await readTomlObject(file, out.warnings);
+        const config = projectConfig(ctx, project.path, file, await readCodexConfig(file, out.warnings), out);
         if (config) {
           addServers(config, { ...here, file }, project.path, out);
           addPluginSwitches(config, file, project.path, out.facts);
@@ -226,12 +251,6 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
       ]);
       addConfigHooks(ctx.config, { ...global, file: ctx.configFile }, "-", sources, out, exact);
     }
-    for (const [project, table] of Object.entries(isRecord(ctx.config.projects) ? ctx.config.projects : {})) {
-      // A table with no trust_level decides nothing, so Codex looks further (codexTrustFolders).
-      if (!isRecord(table)) continue;
-      const level = table.trust_level === undefined ? {} : { trusted: table.trust_level === "trusted" };
-      out.facts.codexTrust.push({ project, ...level });
-    }
     const skills = isRecord(ctx.config.skills) ? ctx.config.skills : undefined;
     const entries = (Array.isArray(skills?.config) ? skills.config : []).flatMap((entry) => {
       if (!isRecord(entry) || typeof entry.enabled !== "boolean") return [];
@@ -256,6 +275,27 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
   }
   await Promise.all(jobs);
   markUnsupportedHooks(out);
+}
+
+/**
+ * A project's config.toml, as read, where Codex reads it: where Codex trusts the project, it
+ * checks the file merged over the user's (mergeCodexConfig), and refuses its config there when
+ * that has a value of the wrong type - a switch for a server the user does not define too - which
+ * is a warning, and the file is read no further. Codex leaves an untrusted project's alone.
+ */
+function projectConfig(
+  ctx: CodexContext,
+  project: string,
+  file: string,
+  read: CodexConfigFile | undefined,
+  out: Collector,
+): Record<string, unknown> | undefined {
+  if (read === undefined) return undefined;
+  if (!codexTrustedIn(out.facts, project)) return read.value;
+  const problem = codexConfigProblem(mergeCodexConfig(ctx.exact ?? {}, read.exact) as Record<string, unknown>);
+  if (problem === undefined) return read.value;
+  out.warnings.push({ file, message: `has ${problem} Codex cannot read, so Codex loads no config in this project` });
+  return undefined;
 }
 
 /** What a worktree's id for one of its main checkout's hooks puts before the hook's place. */

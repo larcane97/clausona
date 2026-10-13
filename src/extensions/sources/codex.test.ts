@@ -860,6 +860,77 @@ describe("readCodex", () => {
     ]);
   });
 
+  it("refuses a config.toml with a value of the wrong type in a section clausona reads, as Codex does", async () => {
+    // Codex 0.159.3's config/read, one config.toml each: "invalid configuration" for the first
+    // ones, read for the last.
+    const cases: [string, string | undefined][] = [
+      ["[mcp_servers.x]\ncommand = 5\n", "an MCP server"],
+      ['[mcp_servers.x]\ncommand = "x"\nargs = "x"\n', "an MCP server"],
+      ['[mcp_servers.x]\ncommand = "x"\nenv = { A = 5 }\n', "an MCP server"],
+      ['[mcp_servers.x]\ncommand = "x"\nurl = "http://x"\n', "an MCP server"],
+      ["[mcp_servers.x]\nenabled = false\n", "an MCP server"],
+      ['[mcp_servers.x]\nurl = "http://x"\nargs = ["a"]\n', "an MCP server"],
+      ['[mcp_servers.x]\ncommand = "x"\ntool_timeout_sec = -1.0\n', "an MCP server"],
+      ['[mcp_servers.x]\ncommand = "x"\nstartup_timeout_ms = 1.5\n', "an MCP server"],
+      ["mcp_servers = 5\n", "an MCP server"],
+      ['[[skills.config]]\nname = "a"\nenabled = "yes"\n', "a skills.config entry"],
+      ['[[skills.config]]\nname = "a"\n', "a skills.config entry"],
+      ["skills = 5\n", "a skills.config entry"],
+      ['[plugins."a@b"]\nenabled = "yes"\n', "a plugin"],
+      ['[plugins."a@b".mcp_servers.s]\nenabled = "no"\n', "a plugin"],
+      ['[projects."/x"]\ntrust_level = "maybe"\n', "a projects entry"],
+      ['[projects."/x"]\ntrust_level = "Trusted"\n', "a projects entry"],
+      ["hooks = 5\n", "a hook"],
+      ['[mcp_servers.x]\ncommand = "x"\nfoo = 1\nstartup_timeout_sec = 5\n', undefined],
+      ['[[skills.config]]\npath = "rel/SKILL.md"\nenabled = false\n', undefined],
+      ['[projects."/x"]\nfoo = 1\n', undefined],
+    ];
+    for (const [text, problem] of cases) {
+      const h = new TestHome();
+      homes.push(h);
+      h.codex("personal", ".codex", text);
+      const warnings: Warning[] = [];
+      const ctx = await loadCodexContext(h.registry, h.home, warnings);
+      const message = problem && `has ${problem} Codex cannot read, so Codex refuses the whole file`;
+      expect([text, ctx?.config === undefined, warnings.map((w) => w.message)]).toEqual([
+        text,
+        problem !== undefined,
+        message ? [message] : [],
+      ]);
+    }
+  });
+
+  it("checks a trusted project's config.toml merged over the user's, as Codex does, and an untrusted one's not", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const projects = ["repos/bad", "repos/orphan", "repos/switch", "repos/untrusted"].map((p) => h.project(p));
+    const trusted = projects
+      .slice(0, 3)
+      .map((p) => `[projects."${p.replaceAll("\\", "\\\\")}"]\ntrust_level = "trusted"\n`);
+    h.codex("personal", ".codex", `${trusted.join("\n")}\n[mcp_servers.good]\ncommand = "good"\n`);
+    // Codex 0.159.3's config/read from each: "invalid type: integer `5`", "invalid transport" (a
+    // switch for a server the user does not define), read, and ignored.
+    h.write("repos/bad/.codex/config.toml", "[mcp_servers.p]\ncommand = 5\n");
+    h.write("repos/orphan/.codex/config.toml", "[mcp_servers.other]\nenabled = false\n");
+    h.write("repos/switch/.codex/config.toml", "[mcp_servers.good]\nenabled = false\n");
+    h.write("repos/untrusted/.codex/config.toml", "[mcp_servers.p]\ncommand = 5\n");
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(
+      ctx,
+      projects.map((p) => ({ path: p, tools: ["codex"], profiles: [] })),
+      out,
+    );
+    const said = "has an MCP server Codex cannot read, so Codex loads no config in this project";
+    expect(out.warnings.map((w) => [path.basename(path.dirname(path.dirname(w.file))), w.message]).sort()).toEqual([
+      ["bad", said],
+      ["orphan", said],
+    ]);
+    // The switch of a server the user defines still counts.
+    expect(out.facts.codexMcpEnabled.map((e) => [e.name, e.enabled])).toEqual([["good", false]]);
+  });
+
   it("warns for a config.toml that does not parse and reads the rest", async () => {
     const h = new TestHome();
     homes.push(h);
