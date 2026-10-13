@@ -1,8 +1,9 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { acquireFileLock, type FileLockOptions } from "./file-lock.js";
 import {
   parseRoutesText,
   pickWithRecord,
@@ -14,6 +15,21 @@ import {
   routesPaths,
   updateRoutes,
 } from "./routes-store.js";
+
+// The real lock, with the wait each caller asks for noted and cut to `cutTo`, so a case can hold
+// the pick-record lock past pickWithRecord's wait without waiting that long.
+const lockWait = vi.hoisted(() => ({ cutTo: Number.POSITIVE_INFINITY, asked: [] as Array<number | undefined> }));
+
+vi.mock("./file-lock.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./file-lock.js")>();
+  return {
+    ...actual,
+    acquireFileLock: (lockPath: string, options: FileLockOptions) => {
+      lockWait.asked.push(options.waitMs);
+      return actual.acquireFileLock(lockPath, { ...options, waitMs: Math.min(options.waitMs ?? 0, lockWait.cutTo) });
+    },
+  };
+});
 
 const temps: string[] = [];
 afterEach(() => {
@@ -229,5 +245,33 @@ describe("picks", () => {
     };
     const picked = await Promise.all([1, 2, 3].map(() => pickWithRecord(choose, clock, p)));
     expect(picked.sort()).toEqual(["claude:a", "claude:b", "claude:c"]);
+  });
+
+  it("picks from the record as it is, and records nothing, when the lock stays held past 2 s", async () => {
+    const p = paths();
+    const record = `${JSON.stringify({ version: 1, lastPicked: { "claude:a": "2026-10-08T00:00:00.000Z" } })}\n`;
+    writeFileSync(p.picksPath, record);
+    const held = await acquireFileLock(p.picksLock, { staleMs: 10_000 });
+    expect(held).not.toBeNull();
+    lockWait.cutTo = 0;
+    lockWait.asked.length = 0;
+    try {
+      const seen: Array<Record<string, string>> = [];
+      const result = await pickWithRecord(
+        (lastPicked) => {
+          seen.push(lastPicked);
+          return { result: "claude:b", picked: "claude:b" };
+        },
+        () => Date.parse("2026-10-09T00:00:00.000Z"),
+        p,
+      );
+      expect(lockWait.asked).toEqual([2_000]);
+      expect(result).toBe("claude:b");
+      expect(seen).toEqual([{ "claude:a": "2026-10-08T00:00:00.000Z" }]);
+      expect(readFileSync(p.picksPath, "utf8")).toBe(record);
+    } finally {
+      lockWait.cutTo = Number.POSITIVE_INFINITY;
+      await held?.();
+    }
   });
 });
