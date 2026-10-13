@@ -54,7 +54,7 @@ const IGNORE_ENV: NodeJS.ProcessEnv = {
 function checkIgnore(app: string, env: NodeJS.ProcessEnv): number | null {
   const home = path.dirname(path.dirname(app));
   return spawnSync("git", ["-C", app, "check-ignore", "-q", "--", path.join(".claude", "settings.local.json")], {
-    env: { ...env, HOME: home },
+    env: { ...env, PATH: process.env.PATH, HOME: home },
   }).status;
 }
 
