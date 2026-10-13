@@ -44,6 +44,7 @@ import {
   describeUnconfirmedCredential,
   describeUnverifiedLogin,
   renderDoctor,
+  renderDoctorRoutes,
   renderList,
   renderUsageSummary,
   unconfirmedCredentialHint,
@@ -103,7 +104,7 @@ import {
   updateProfileEnv,
   updateProfileSecret,
 } from "./lib/service.js";
-import { runRouteCommand } from "./route-commands.js";
+import { routeDoctor, runRouteCommand } from "./route-commands.js";
 import { CLAUDE_ENV_CATALOG, validateEnvEntry } from "./tools/claude-env-catalog.js";
 import { ALL_TOOLS, getAdapter } from "./tools/registry.js";
 import type { Profile, Registry, SecretSource, ToolName } from "./types.js";
@@ -737,6 +738,12 @@ function subcommandHelpText(command: string, args: string[] = []): string | unde
         `    ${dim("A subscription profile: its account file and its stored login. Run")}`,
         `    ${dim("`clausona login <profile>` for what that reports.")}`,
         "",
+        `    ${dim("Then ~/.clausona/routes.json, when there is one: routes that cannot be used,")}`,
+        `    ${dim("names that are not registered, patterns that match nobody, and dir rules and")}`,
+        `    ${dim("defaults that name a route that is missing or for the other tool. These are")}`,
+        `    ${dim("warnings, listed after every profile; --json leaves them out (`clausona route")}`,
+        `    ${dim("list --json` has them).")}`,
+        "",
         `  ${bold("API PROFILES")}`,
         `    ${dim("An API profile has no account file and no stored login, so neither is")}`,
         `    ${dim("checked for it and neither is reported missing. These are, instead:")}`,
@@ -1250,7 +1257,11 @@ export async function runCommand(command: string, args: string[]) {
       const keysStored = Object.values(registry?.profiles ?? {}).some(
         (profile) => profile.kind === "api" && profile.api?.secret?.source === "keychain",
       );
-      const rendered = renderDoctor(results);
+      // routes.json's warnings come after every profile, as one more section; --json leaves them
+      // out, since its list holds profiles only (`route list --json` has them).
+      const routes = await routeDoctor();
+      const section = renderDoctorRoutes(routes.shown, routes.warnings);
+      const rendered = `${renderDoctor(results)}${section ? `${section}\n\n` : ""}`;
       return keysStored ? `${rendered}  ${dim(`Stored API keys are kept in ${secretStoreName()}.`)}\n` : rendered;
     }
 

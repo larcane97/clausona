@@ -9,7 +9,7 @@ import { stripAnsi } from "./lib/cli-style.js";
 import type { RouteIo } from "./lib/route-io.js";
 import { renderRoutesEmpty } from "./lib/route-render.js";
 import { NoAccountError, type RouteDeps } from "./lib/route-service.js";
-import { runRouteCommand } from "./route-commands.js";
+import { routeDoctor, runRouteCommand } from "./route-commands.js";
 import type { QuotaSnapshot, Registry } from "./types.js";
 
 const NOW = Date.parse("2026-10-09T00:00:00.000Z");
@@ -861,6 +861,48 @@ describe("dir rules and defaults", () => {
       ],
       problems: [],
     });
+  });
+
+  it("are warned about by doctor, with what route list warns about the routes, and no quota read", async () => {
+    const { deps } = setup();
+    writeFileSync(
+      deps.paths.routesPath,
+      JSON.stringify({
+        version: 1,
+        routes: {
+          solo: { tool: "claude", from: ["gone", "x-*"] },
+          bad: { tool: "claude", strategy: "fastest" },
+          cx: { tool: "codex" },
+        },
+        dirs: { "~/work": { claude: "missing" } },
+        defaults: { claude: "cx", codex: 5 },
+      }),
+    );
+    let read = false;
+    const report = await routeDoctor({
+      ...deps,
+      collectQuotas: async () => {
+        read = true;
+        return {};
+      },
+    });
+    expect(report).toEqual({
+      shown: path.join("~", "routes.json"),
+      warnings: [
+        "routes.bad.strategy: must be one of round-robin, headroom, expiring",
+        "Fix it with clausona route edit, or remove the route: clausona route remove bad.",
+        "solo names 'gone', which is not a registered profile.",
+        "solo: 'x-*' matches nobody.",
+        "defaults.codex: must be a route's name",
+        "~/work names route 'missing' for claude, which does not exist.",
+        "The claude default names route 'cx', which is for codex.",
+      ],
+    });
+    expect(read).toBe(false);
+    writeFileSync(deps.paths.routesPath, "{ not json");
+    expect((await routeDoctor(deps)).warnings).toEqual([
+      "It cannot be used: not valid JSON (line 1, column 3). Fix it with clausona route edit.",
+    ]);
   });
 
   describe("explain with no name", () => {

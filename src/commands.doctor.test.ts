@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { stripAnsi } from "./lib/cli-style.js";
 import { renderDoctor } from "./lib/format.js";
 
 /**
@@ -87,6 +88,20 @@ describe("doctor with no profiles.json at all", () => {
     const doctor = await doctorWith();
 
     expect(await doctor()).toBe(renderDoctor([]));
+    expect(await doctor("--json")).toBe("[]");
+  });
+
+  it("warns about a dir rule or default in routes.json that names a route it cannot use", async () => {
+    const doctor = await doctorWith((registryPath) =>
+      writeFileSync(
+        path.join(path.dirname(registryPath), "routes.json"),
+        JSON.stringify({ version: 1, routes: {}, dirs: { "~/work": { claude: "gone" } } }),
+      ),
+    );
+
+    const report = stripAnsi(await doctor());
+    expect(report).toContain(`  routes (${path.join("~", ".clausona", "routes.json")})\n    ⚠ 1 warning\n`);
+    expect(report).toContain("    ╰─ ⚠ ~/work names route 'gone' for claude, which does not exist.\n");
     expect(await doctor("--json")).toBe("[]");
   });
 });

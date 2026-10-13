@@ -696,6 +696,45 @@ function routeWarnings(name: string, ranking: Ranking): string[] {
   ];
 }
 
+/**
+ * What `clausona doctor` says about routes.json: what `route list` warns about, with no quota
+ * read. A routes.json that cannot be read at all is one warning; none at all is nothing.
+ */
+export async function routeDoctor(
+  deps: RouteDeps = defaultRouteDeps(),
+): Promise<{ shown: string; warnings: string[] }> {
+  const shown = storedDir(deps.paths.routesPath, deps.cwd, pathsFor(deps));
+  const registry = await deps.loadRegistry();
+  let loaded: LoadedRoutes;
+  try {
+    loaded = await loadRoutes(deps.paths, namesOf(registry));
+  } catch (error) {
+    if (!(error instanceof RoutesFileError)) {
+      return { shown, warnings: [`It cannot be read: ${error instanceof Error ? error.message : String(error)}`] };
+    }
+    const fix = error.newer ? "" : " Fix it with clausona route edit.";
+    return { shown, warnings: [`It cannot be used: ${error.problems.join("; ")}.${fix}`] };
+  }
+  const { file, broken } = loaded;
+  const names = Object.keys(file.routes).sort();
+  const rankings = registry
+    ? await rankEvery(
+        names.map((name) => withDefaults(file.routes[name])),
+        registry,
+        deps,
+        false,
+      )
+    : undefined;
+  return {
+    shown,
+    warnings: [
+      ...brokenWarnings(broken),
+      ...(rankings ? names.flatMap((name, i) => routeWarnings(name, rankings[i])) : []),
+      ...ruleNotes(loaded, readRules(file)),
+    ],
+  };
+}
+
 async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
   const read = readArgs(args, { values: [], flags: ["--json", "--no-quota"] }, "route list");
   if (read.positionals.length) {

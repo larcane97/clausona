@@ -645,6 +645,23 @@ export function renderDoctor(results: DoctorProfileResult[]) {
 }
 
 /**
+ * doctor's section for routes.json (`shown`, the path as it is shown): what `route list` warns
+ * about, as a profile's warnings are listed. Nothing when there is nothing to say.
+ */
+export function renderDoctorRoutes(shown: string, warnings: string[]): string {
+  if (warnings.length === 0) return "";
+  const lines = warnings.map((warning, i) => {
+    const connector = i === warnings.length - 1 ? symbol.cornerBL : symbol.teeR;
+    return `    ${dim(connector + symbol.lineH)} ${warnIcon} ${warning}`;
+  });
+  return [
+    `  ${bold("routes")} ${dim(`(${shown})`)}`,
+    `    ${warnIcon} ${yellow(plural(warnings.length, "warning"))}`,
+    ...lines,
+  ].join("\n");
+}
+
+/**
  * Whether `clausona repair` can fix something in a doctor result: the CLI's "Run clausona
  * repair" line and the TUI doctor screen's `r` both ask this, so neither offers it where the
  * other would not. repair rebuilds shared links, folds in session state and re-runs the
