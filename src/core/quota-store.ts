@@ -56,7 +56,12 @@ async function writeCache(cachePath: string, cache: QuotaCache): Promise<void> {
 }
 
 function windowsOf(snapshot: QuotaSnapshot): QuotaWindows {
-  return { session: snapshot.session, weekly: snapshot.weekly, scoped: snapshot.scoped };
+  return {
+    session: snapshot.session,
+    weekly: snapshot.weekly,
+    scoped: snapshot.scoped,
+    ...(snapshot.scopedLimits ? { scopedLimits: snapshot.scopedLimits } : {}),
+  };
 }
 
 function hasWindows(snapshot: QuotaSnapshot | undefined): snapshot is QuotaSnapshot {

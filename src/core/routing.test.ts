@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { QuotaSnapshot, ToolName } from "../types.js";
 import { type RouteSpec, withDefaults } from "./route-config.js";
 import type { Member } from "./route-patterns.js";
-import { blockingReset, rankRoute, usageOf } from "./routing.js";
+import { blockingReset, modelFallsUnder, rankRoute, scopedLimitFor, usageOf } from "./routing.js";
 
 const NOW = Date.parse("2026-10-09T00:00:00.000Z");
 const inHours = (hours: number) => new Date(NOW + hours * 3_600_000).toISOString();
@@ -42,7 +42,7 @@ const CX = member("codex:x");
 function rank(
   spec: Omit<RouteSpec, "tool">,
   quotas: Record<string, QuotaSnapshot>,
-  options: { lastPicked?: Record<string, string>; resume?: boolean; members?: Member[] } = {},
+  options: { lastPicked?: Record<string, string>; resume?: boolean; members?: Member[]; model?: string } = {},
 ) {
   return rankRoute({
     route: withDefaults({ tool: "claude", ...spec }),
@@ -51,7 +51,19 @@ function rank(
     lastPicked: options.lastPicked ?? {},
     now: NOW,
     resume: options.resume ?? false,
+    ...(options.model ? { model: options.model } : {}),
   });
+}
+
+/** A reading with limits on single models, as quota.ts stores them: the most used is `scoped`. */
+function withLimits(base: QuotaSnapshot, limits: Array<[label: string, percent: number, resetsAt?: string]>) {
+  const scopedLimits = limits.map(([label, usedPercent, resetsAt]) => ({
+    label,
+    usedPercent,
+    resetsAt: resetsAt ?? null,
+  }));
+  const scoped = [...scopedLimits].sort((a, b) => b.usedPercent - a.usedPercent)[0];
+  return { ...base, scoped, scopedLimits };
 }
 
 describe("usageOf", () => {
@@ -76,6 +88,93 @@ describe("usageOf", () => {
     expect(usageOf(snap(1, 1, { state: "missing" }), NOW)).toEqual({ skip: "signed-out" });
     expect(usageOf(snap(1, 1, { state: "expired" }), NOW)).toEqual({ skip: "expired" });
     expect(usageOf(snap(undefined, undefined), NOW)).toEqual({ skip: "no-reading" });
+  });
+});
+
+describe("model limits", () => {
+  // Labels as the tools report them (quota.test.ts): Claude's display names, Codex's limit_name.
+  // Model names as a run gives them: Claude Code's --model aliases and full names, Codex's -m.
+  it.each([
+    ["opus", "Opus", true],
+    ["OPUS", "Opus", true],
+    ["claude-opus-4-5", "Opus", true],
+    ["claude-opus-4-5-20251101", "Opus", true],
+    ["opus[1m]", "Opus", true],
+    ["fable", "Fable", true],
+    ["claude-fable-5-1", "Fable", true],
+    ["claude-sonnet-4-5", "Sonnet", true],
+    ["sonnet", "Opus", false],
+    ["claude-sonnet-4-5", "Opus", false],
+    // Opus only while planning: which limit a session spends is not known, so none counts.
+    ["opusplan", "Opus", false],
+    ["default", "Opus", false],
+    ["gpt-5.3-codex-spark", "GPT-5.3-Codex-Spark", true],
+    ["GPT-5.3-Codex-Spark", "GPT-5.3-Codex-Spark", true],
+    // The model the Spark limit is not on, and a short name the limit does not spell out.
+    ["gpt-5.3-codex", "GPT-5.3-Codex-Spark", false],
+    ["codex-spark", "GPT-5.3-Codex-Spark", false],
+    ["gpt-5-codex", "GPT-5.3-Codex-Spark", false],
+    // A version is one word: a limit labelled GPT-5 would not take gpt-5.3's runs.
+    ["gpt-5.3-codex", "GPT-5", false],
+    ["gpt-5", "GPT-5", true],
+    ["opus", "", false],
+  ])("a run of %s falls under %s: %s", (model, label, expected) => {
+    expect(modelFallsUnder(model, label)).toBe(expected);
+  });
+
+  it.each([
+    // [5H, 7D, the Opus limit, model] → usage
+    [20, 30, 90, "opus", { percent: 90, window: "Opus" }],
+    [20, 95, 90, "opus", { percent: 95, window: "7D" }],
+    [99, 30, 90, "claude-opus-4-5", { percent: 99, window: "5H" }],
+    [20, 30, 90, "sonnet", { percent: 30, window: "7D" }],
+    [20, 30, 90, undefined, { percent: 30, window: "7D" }],
+  ] as const)("5H %d, 7D %d and Opus %d for a run of %s: %o", (five, seven, opus, model, expected) => {
+    const quota = withLimits(snap(five, seven), [
+      ["Fable", 99],
+      ["Opus", opus],
+    ]);
+    expect(usageOf(quota, NOW, model)).toEqual({ usage: { ...expected, stale: false } });
+  });
+
+  it("takes the most used of several limits a model falls under", () => {
+    const quota = withLimits(snap(1, 1), [
+      ["Opus", 40],
+      ["claude-opus-4-5", 70],
+    ]);
+    expect(scopedLimitFor(quota, "claude-opus-4-5")?.usedPercent).toBe(70);
+    expect(scopedLimitFor(quota, "opus")?.usedPercent).toBe(40);
+  });
+
+  it("matches a reading cached before every limit was kept against its one most used limit", () => {
+    const old: QuotaSnapshot = { ...snap(1, 1), scoped: { label: "Opus", usedPercent: 88, resetsAt: null } };
+    expect(usageOf(old, NOW, "opus")).toEqual({ usage: { percent: 88, window: "Opus", stale: false } });
+    expect(usageOf(old, NOW, "fable")).toEqual({ usage: { percent: 1, window: "5H", stale: false } });
+  });
+
+  it("ranks by the model's limit, keeps it on the row, and waits for its reset", () => {
+    const quotas = {
+      "claude:a": withLimits(snap(10, 10), [["Opus", 100, inHours(30)]]),
+      "claude:b": withLimits(snap(20, 20), [["Opus", 10, inHours(30)]]),
+    };
+    const opus = rank({ strategy: "headroom" }, quotas, { members: [A, B], model: "opus" });
+    expect(opus.outcome).toMatchObject({ kind: "picked", id: "claude:b" });
+    expect(opus.model).toBe("opus");
+    expect(opus.rows[0]).toMatchObject({ id: "claude:a", status: "over-limit", scoped: { label: "Opus" } });
+    expect(blockingReset(opus.rows[0], 100)).toBe(inHours(30));
+    // Without a model, no limit on one counts.
+    const plain = rank({ strategy: "headroom" }, quotas, { members: [A, B] });
+    expect(plain.outcome).toMatchObject({ kind: "picked", id: "claude:a" });
+    expect(plain.rows[0].scoped).toBeUndefined();
+    expect(plain.model).toBeUndefined();
+  });
+
+  it("names the model limit's reset as the soonest when it is the one holding an account back", () => {
+    const quotas = { "claude:a": withLimits(snap(10, 10), [["Opus", 100, inHours(3)]]) };
+    expect(rank({}, quotas, { members: [A], model: "opus" }).outcome).toEqual({
+      kind: "none",
+      soonest: { id: "claude:a", at: inHours(3) },
+    });
   });
 });
 

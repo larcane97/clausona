@@ -85,6 +85,29 @@ describe("parseClaudeQuota", () => {
     expect(quota?.scoped).toEqual({ usedPercent: 90, resetsAt: "2026-09-05T00:00:00.000Z", label: "Opus" });
   });
 
+  it("keeps every model-scoped weekly limit, for routing", () => {
+    const quota = parseClaudeQuota({
+      ...CLAUDE_PAYLOAD,
+      limits: [
+        ...CLAUDE_PAYLOAD.limits,
+        {
+          kind: "weekly_scoped",
+          group: "weekly",
+          percent: 20,
+          severity: "normal",
+          resets_at: "2026-09-05T00:00:00Z",
+          scope: { model: { display_name: "Opus" }, surface: null },
+        },
+      ],
+    });
+
+    expect(quota?.scopedLimits).toEqual([
+      { usedPercent: 77, resetsAt: "2026-09-04T19:59:59.000Z", label: "Fable" },
+      { usedPercent: 20, resetsAt: "2026-09-05T00:00:00.000Z", label: "Opus" },
+    ]);
+    expect(quota?.scoped?.label).toBe("Fable");
+  });
+
   it("omits windows the account does not have", () => {
     const quota = parseClaudeQuota({ five_hour: { utilization: 3, resets_at: null }, seven_day: null, limits: null });
 
@@ -135,6 +158,29 @@ describe("parseCodexQuota", () => {
       resetsAt: "2026-09-10T00:57:03.000Z",
       label: "GPT-5.3-Codex-Spark",
     });
+  });
+
+  it("keeps every additional rate limit, for routing", () => {
+    const quota = parseCodexQuota({
+      ...CODEX_PAYLOAD,
+      additional_rate_limits: [
+        ...CODEX_PAYLOAD.additional_rate_limits,
+        { limit_name: "codex_other", rate_limit: { primary_window: { used_percent: 70, limit_window_seconds: 900 } } },
+      ],
+    });
+
+    expect(quota?.scopedLimits?.map((limit) => [limit.label, limit.usedPercent])).toEqual([
+      ["GPT-5.3-Codex-Spark", 40],
+      ["codex_other", 70],
+    ]);
+    expect(quota?.scoped?.label).toBe("codex_other");
+  });
+
+  it("has no scoped limits when the account reports none", () => {
+    const quota = parseCodexQuota({ rate_limit: CODEX_PAYLOAD.rate_limit });
+
+    expect(quota?.scoped).toBeUndefined();
+    expect(quota?.scopedLimits).toBeUndefined();
   });
 
   it("returns null when the payload carries no windows", () => {

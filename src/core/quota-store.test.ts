@@ -227,6 +227,23 @@ describe("collectQuotas", () => {
     expect(result[TARGET.id]).toMatchObject({ state: "cooldown", weekly: { usedPercent: 42 } });
   });
 
+  it("asked to refresh while cooling down, still makes no request and keeps every scoped limit", async () => {
+    const adapter = stubAdapter();
+    const opus = { usedPercent: 100, resetsAt: null, label: "Opus" };
+    seedCache({
+      version: 1,
+      cooldowns: { claude: NOW + 60_000 },
+      profiles: {
+        [TARGET.id]: { state: "ok", fetchedAt: NOW - 60_000, scoped: opus, scopedLimits: [opus] },
+      },
+    });
+
+    const result = await collectQuotas([TARGET], { refresh: true, now: NOW, cachePath });
+
+    expect(adapter.fetchQuota).not.toHaveBeenCalled();
+    expect(result[TARGET.id]).toMatchObject({ state: "cooldown", scopedLimits: [opus] });
+  });
+
   it("resumes fetching once the cooldown has elapsed", async () => {
     const adapter = stubAdapter();
     seedCache({ version: 1, cooldowns: { claude: NOW - 1 }, profiles: {} });

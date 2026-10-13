@@ -5,9 +5,10 @@ import { compareIds, type Expansion, expandPatterns, type Member, splitToolPrefi
 
 /**
  * Picks a profile for a route. Pure: the caller brings the members, their quota and the pick
- * record. One number drives everything - an account's usage, the higher of its 5H and 7D
- * windows - through the stages: pool under maxUsage by strategy, fallback under maxUsage in
- * listed order, anyone under 100% by lowest usage, else nobody.
+ * record. One number drives everything - an account's usage, the highest of its 5H and 7D
+ * windows and, when the run names a model, that model's own weekly limit - through the stages:
+ * pool under maxUsage by strategy, fallback under maxUsage in listed order, anyone under 100% by
+ * lowest usage, else nobody.
  */
 
 /** Past the cut, any account under this can run: one at 100% of a window cannot. */
@@ -21,7 +22,14 @@ export const EXPIRING_WITHIN_MS = 24 * 60 * 60 * 1000;
 
 export type UsageWindow = "5H" | "7D";
 
-export type Usage = { percent: number; window: UsageWindow; stale: boolean };
+/** A limit on one model, as quota.ts reads it, labelled by the model's name: `Opus`, `GPT-5.3-Codex-Spark`. */
+export type ScopedWindow = QuotaWindow & { label: string };
+
+/**
+ * `window` is where the percent came from: `5H`, `7D`, or the label of the model limit the run's
+ * model falls under (`Opus`).
+ */
+export type Usage = { percent: number; window: string; stale: boolean };
 
 export type SkipReason =
   | "signed-out"
@@ -38,6 +46,8 @@ export type Row = {
   pattern: string;
   fiveHour?: QuotaWindow;
   sevenDay?: QuotaWindow;
+  /** The limit on the run's model, when the run names one and the account reports a limit on it. */
+  scoped?: ScopedWindow;
   usage?: Usage;
   lastPickedAt?: string;
   skip?: SkipReason;
@@ -65,6 +75,8 @@ export type Ranking = {
   /** Patterns of `exclude` that match nobody, names too: a typo there leaves in the account meant to go. */
   emptyExcludes: string[];
   outcome: Outcome;
+  /** The model the run names, as RankInput has it. */
+  model?: string;
 };
 
 export type RankInput = {
@@ -79,15 +91,66 @@ export type RankInput = {
    * tool's members are ranked, and the other tool's are left out entirely, not shown as rows.
    */
   onlyTool?: ToolName;
+  /**
+   * The model the run names (`claude --model opus`, `codex -m …`): the account's limit on that
+   * model counts as a third window. Without it, no model's limit counts.
+   */
+  model?: string;
 };
 
-export function usageOf(snapshot: QuotaSnapshot | undefined, now: number): { usage?: Usage; skip?: SkipReason } {
+/** Letters, digits and dots make up a word of a model's name: `gpt-5.3` is one word, not `gpt-5` and `3`. */
+const WORD_CHAR = /[a-z0-9.]/;
+
+/**
+ * Whether a run of `model` falls under the limit labelled `label`: the label, ignoring case, is a
+ * word (or a run of words) of the model's name. `opus`, `claude-opus-4-5` and `opus[1m]` fall
+ * under `Opus`, and `gpt-5.3-codex-spark` under `GPT-5.3-Codex-Spark`; `gpt-5.3-codex` does not,
+ * nor does `opusplan`, which runs Opus only while planning. Nothing is guessed: a model whose
+ * name does not hold the label counts no limit.
+ */
+export function modelFallsUnder(model: string, label: string): boolean {
+  const name = model.toLowerCase();
+  const word = label.toLowerCase();
+  if (word === "") return false;
+  for (let at = name.indexOf(word); at !== -1; at = name.indexOf(word, at + 1)) {
+    const before = name[at - 1];
+    const after = name[at + word.length];
+    if ((before === undefined || !WORD_CHAR.test(before)) && (after === undefined || !WORD_CHAR.test(after))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** The account's limit on `model`; of several it falls under, the most used. */
+export function scopedLimitFor(
+  snapshot: QuotaSnapshot | undefined,
+  model: string | undefined,
+): ScopedWindow | undefined {
+  if (!snapshot || !model) return undefined;
+  // A reading an older clausona cached keeps only the most used limit: still the right one when
+  // the model falls under it.
+  const limits = snapshot.scopedLimits ?? (snapshot.scoped ? [snapshot.scoped] : []);
+  let best: ScopedWindow | undefined;
+  for (const limit of limits) {
+    if (modelFallsUnder(model, limit.label) && (!best || limit.usedPercent > best.usedPercent)) best = limit;
+  }
+  return best;
+}
+
+export function usageOf(
+  snapshot: QuotaSnapshot | undefined,
+  now: number,
+  model?: string,
+): { usage?: Usage; skip?: SkipReason } {
   if (!snapshot) return { skip: "no-reading" };
   if (snapshot.state === "missing") return { skip: "signed-out" };
   if (snapshot.state === "expired") return { skip: "expired" };
-  const present: Array<[UsageWindow, QuotaWindow]> = [];
+  const present: Array<[string, QuotaWindow]> = [];
   if (snapshot.session) present.push(["5H", snapshot.session]);
   if (snapshot.weekly) present.push(["7D", snapshot.weekly]);
+  const scoped = scopedLimitFor(snapshot, model);
+  if (scoped) present.push([scoped.label, scoped]);
   if (present.length === 0) return { skip: "no-reading" };
   const stale = snapshot.state !== "ok";
   if (stale && now - snapshot.fetchedAt >= STALE_LIMIT_MS) return { skip: "no-reading" };
@@ -137,7 +200,7 @@ function byStrategy(route: Route, candidates: Row[], now: number): { row: Row; r
 
 /** When every window at or above `limit` will have reset; null when one has no known reset. */
 export function blockingReset(row: Row, limit: number): string | null {
-  const blocking = [row.fiveHour, row.sevenDay].filter(
+  const blocking = [row.fiveHour, row.sevenDay, row.scoped].filter(
     (window): window is QuotaWindow => window !== undefined && window.usedPercent >= limit,
   );
   if (blocking.length === 0 || blocking.some((window) => !window.resetsAt)) return null;
@@ -197,11 +260,13 @@ function rowFor(member: Member, role: Row["role"], pattern: string, input: RankI
   if (member.kind === "api") return { ...base, skip: "api-not-supported", status: "skipped" };
   if (input.resume && !member.sharesSessions) return { ...base, skip: "keeps-own-sessions", status: "skipped" };
   const snapshot = input.quotas[member.id];
-  const { usage, skip } = usageOf(snapshot, input.now);
+  const { usage, skip } = usageOf(snapshot, input.now, input.model);
+  const scoped = scopedLimitFor(snapshot, input.model);
   return {
     ...base,
     ...(snapshot?.session ? { fiveHour: snapshot.session } : {}),
     ...(snapshot?.weekly ? { sevenDay: snapshot.weekly } : {}),
+    ...(scoped ? { scoped } : {}),
     ...(usage ? { usage } : {}),
     ...(skip ? { skip, status: "skipped" as const } : {}),
   };
@@ -257,7 +322,15 @@ export function rankRoute(input: RankInput): Ranking {
   const emptyPatterns = once([...pool.emptyPatterns, ...fallback.emptyPatterns].filter(thisRun));
   const matchedNobody = new Set([...exclusion.emptyPatterns, ...exclusion.unknownNames]);
   const emptyExcludes = once(route.exclude.filter((pattern) => matchedNobody.has(pattern) && thisRun(pattern)));
-  return { route, rows, excluded, emptyPatterns, emptyExcludes, outcome };
+  return {
+    route,
+    rows,
+    excluded,
+    emptyPatterns,
+    emptyExcludes,
+    outcome,
+    ...(input.model ? { model: input.model } : {}),
+  };
 }
 
 /** Each pattern once, where it first comes; two that differ only in case match the same accounts. */

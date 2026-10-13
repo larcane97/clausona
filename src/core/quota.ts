@@ -54,14 +54,13 @@ function claudeWindow(value: unknown): QuotaWindow | undefined {
   return { usedPercent, resetsAt: toIso(obj.resets_at) };
 }
 
-/**
- * Picks the most-consumed scoped limit (Claude reports one entry per model, so the
- * binding one is whichever sits highest).
- */
-function claudeScoped(value: unknown): (QuotaWindow & { label: string }) | undefined {
-  if (!Array.isArray(value)) return undefined;
+type ScopedWindow = QuotaWindow & { label: string };
 
-  let best: (QuotaWindow & { label: string }) | undefined;
+/** Every model-scoped weekly limit Claude reports: one entry per model, labelled by its name. */
+function claudeScopedLimits(value: unknown): ScopedWindow[] {
+  if (!Array.isArray(value)) return [];
+
+  const limits: ScopedWindow[] = [];
   for (const entry of value) {
     const obj = record(entry);
     if (!obj || obj.kind !== "weekly_scoped") continue;
@@ -72,11 +71,23 @@ function claudeScoped(value: unknown): (QuotaWindow & { label: string }) | undef
     const label = record(record(obj.scope)?.model)?.display_name;
     if (typeof label !== "string" || label === "") continue;
 
-    if (!best || usedPercent > best.usedPercent) {
-      best = { usedPercent, resetsAt: toIso(obj.resets_at), label };
-    }
+    limits.push({ usedPercent, resetsAt: toIso(obj.resets_at), label });
+  }
+  return limits;
+}
+
+/** The binding one of several scoped limits is whichever sits highest; on a tie, the first. */
+function mostUsed(limits: ScopedWindow[]): ScopedWindow | undefined {
+  let best: ScopedWindow | undefined;
+  for (const limit of limits) {
+    if (!best || limit.usedPercent > best.usedPercent) best = limit;
   }
   return best;
+}
+
+/** `scoped` for the dashboard, and the whole list for routing; no list when there is none. */
+function scopedWindows(limits: ScopedWindow[]): Pick<QuotaWindows, "scoped" | "scopedLimits"> {
+  return limits.length ? { scoped: mostUsed(limits), scopedLimits: limits } : {};
 }
 
 /** Parses `GET https://api.anthropic.com/api/oauth/usage`. */
@@ -87,7 +98,7 @@ export function parseClaudeQuota(raw: unknown): QuotaWindows | null {
   const windows: QuotaWindows = {
     session: claudeWindow(obj.five_hour),
     weekly: claudeWindow(obj.seven_day),
-    scoped: claudeScoped(obj.limits),
+    ...scopedWindows(claudeScopedLimits(obj.limits)),
   };
 
   return hasAnyWindow(windows) ? windows : null;
@@ -129,6 +140,8 @@ export function parseCodexQuota(raw: unknown): QuotaWindows | null {
     }
   }
 
+  // Each limit on one model (`GPT-5.3-Codex-Spark`), labelled by its name.
+  const scoped: ScopedWindow[] = [];
   if (Array.isArray(obj.additional_rate_limits)) {
     for (const entry of obj.additional_rate_limits) {
       const additional = record(entry);
@@ -140,11 +153,10 @@ export function parseCodexQuota(raw: unknown): QuotaWindows | null {
       const parsed = codexWindow(record(additional.rate_limit)?.primary_window);
       if (!parsed) continue;
 
-      if (!windows.scoped || parsed.window.usedPercent > windows.scoped.usedPercent) {
-        windows.scoped = { ...parsed.window, label };
-      }
+      scoped.push({ ...parsed.window, label });
     }
   }
+  Object.assign(windows, scopedWindows(scoped));
 
   return hasAnyWindow(windows) ? windows : null;
 }

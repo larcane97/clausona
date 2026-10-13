@@ -28,6 +28,11 @@ export type QuotaWindows = {
   weekly?: QuotaWindow;
   /** Most-consumed model-scoped weekly limit, when the tool reports one. */
   scoped?: QuotaWindow & { label: string };
+  /**
+   * Every model-scoped limit the tool reports, `scoped` among them: routing counts the one a
+   * run's model falls under. Absent from a reading an older clausona cached.
+   */
+  scopedLimits?: Array<QuotaWindow & { label: string }>;
 };
 
 /**
