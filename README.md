@@ -170,7 +170,15 @@ By default an account at 80% or more of its 5-hour or weekly limit is used only 
 account in the route is under 80%. Then the one with the most left is picked, even at 99%. Only
 when every account is at 100%, or skipped because it is signed out or its quota could not be
 read, does clausona say when each one resets or why it was skipped, and exit with code 75
-instead of starting a session.
+instead of starting a session. With `--wait` it waits for the soonest reset instead, up to 5
+hours or the cap you give, and then runs. That suits scripts and cron:
+
+```bash
+clausona run --route main --wait=2h -- -p "run the nightly review"
+```
+
+When the tool's arguments name a model, as in `-- --model opus`, an account's weekly limit on
+that model counts too, so an account whose Opus limit is used up is not picked for an Opus run.
 
 A route is for Claude Code unless you say otherwise. `--tool codex` makes a Codex route, and
 `--tool all` makes one that takes the accounts of both tools. `clausona route` on its own opens
@@ -187,8 +195,8 @@ clausona route explain                           # what a run here would take, a
 
 With neither, `clausona run claude` runs the active profile, as it always has.
 
-Patterns like `*@example.com`, fallbacks, the strategies, and the JSON that scripts and agents
-read: **[docs/routing.md](docs/routing.md)**.
+Patterns like `*@example.com`, fallbacks, the strategies, waiting in scripts, and the JSON that
+scripts and agents read: **[docs/routing.md](docs/routing.md)**.
 
 ## API profiles
 

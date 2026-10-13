@@ -103,6 +103,21 @@ describe("route help", () => {
     expect(help).toContain("Docs: https://github.com/larcane97/clausona/blob/main/docs/routing.md");
   });
 
+  it("covers --wait, --model and exit code 130 in route's, pick's and run's help", async () => {
+    const { run } = setup();
+    const overview = await run("--help");
+    expect(overview).toContain(
+      "4. nobody    with --wait, sleep until the soonest reset and start again at 1; else exit 75",
+    );
+    expect(overview).toMatch(/130\s+Ctrl-C while --wait waited/);
+    const pick = await run("pick", "--help");
+    expect(pick).toContain("[--model <name>] [--wait[=<duration>]]");
+    expect(await run("explain", "--help")).toContain("--model ranks as a run of that model would");
+    const runHelp = stripAnsi(await runCommand("run", ["--help"]));
+    expect(runHelp).toMatch(/--wait\[=<duration>\]\s+When nobody is free, wait for a reset: up to 5h/);
+    expect(runHelp).toContain("130 on Ctrl-C while --wait waits");
+  });
+
   it("shows the overview for a word that is not a subcommand, even one every object has", async () => {
     const { run } = setup();
     for (const sub of ["toString", "constructor", "hasOwnProperty"]) {

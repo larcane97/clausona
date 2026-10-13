@@ -49,7 +49,8 @@ clausona then goes through four stages and stops at the first one that finds som
    at 90% or at 99%.
 4. Otherwise nobody is picked, because every account is at 100% or was skipped. clausona lists
    the route's accounts, each with when it resets or why it was skipped, and exits with code 75.
-   Nothing is launched.
+   Nothing is launched. With `--wait` it waits for the soonest reset instead, and starts again
+   at stage 1 (see [Waiting for an account](#waiting-for-an-account)).
 
 An account that is signed out, or whose sign-in has expired, is skipped at every stage. So is one
 whose quota could not be read. `clausona route explain` gives the reason for each.
@@ -83,6 +84,43 @@ Picks are made under a lock, and each one sees the picks before it. Start
 `clausona run --route main` in four terminals at the same moment and they land on four
 different accounts, as long as four are under the cut. If the lock stays busy for more than
 2 seconds, the run goes ahead without recording its pick.
+
+### Limits on one model
+
+Some plans also have a weekly limit on one model, such as Claude's limit on Opus, or Codex's on
+GPT-5.3-Codex-Spark. When the tool's arguments name a model, the account's limit on that model
+counts too, and the usage is the highest of the three:
+
+```bash
+clausona run --route main -- --model opus -p "plan the migration"
+clausona run codex --route cx -- exec -m gpt-5.3-codex-spark "fix the lint"
+```
+
+```
+  ▸ claude:work  route main, next in turn, 40% of 7D used
+```
+
+Here `claude:team` is at 10% of its 5 hours and 20% of its week, but its Opus limit is at 95%,
+over the cut, so an Opus run goes to another account. A run that names no model can still
+take `claude:team`. When the model's limit is the highest of an account's windows, the note
+says so, as in `62% of the Opus limit used`.
+
+clausona reads the model from `--model` for Claude Code, and from `-m` or `--model` for Codex,
+also after a subcommand such as `exec`. It stops reading at a `--`, and hands the arguments to
+the tool as they were. A model falls under a limit when the limit's name is a word of the
+model's name, in any case. `opus`, `claude-opus-4-5` and `opus[1m]` fall under Opus, and
+`gpt-5.3-codex-spark` under GPT-5.3-Codex-Spark. A version number is one word, so
+`gpt-5.3-codex` does not fall under GPT-5.3-Codex-Spark, and nor does a short name the limit
+does not spell out, such as `codex-spark`.
+
+A run that names no model counts no model's limit, even when the account's default model is
+the one with the tight limit. clausona does not read a profile's settings to find its default
+model. It does not read Codex's `-c model=…` or a Codex config profile (`-p`) either, and
+`opusplan`, which runs Opus only while planning, falls under no limit. If you mostly run a
+model that has its own limit, name it in the run.
+
+`route explain --model <name>` and `route pick --model <name>` rank the way a run of that model
+does.
 
 ### Resumed sessions
 
@@ -450,6 +488,7 @@ clausona run claude --from 'team-*' --max-usage 90 -- -p "quick question"  # an 
 clausona run codex --route any -- exec "review this"   # only the Codex accounts of an all route
 clausona run claude -- -p "hi"            # no route named: a dir rule's or the default's, else the active profile
 clausona run claude:team -- -p "hi"       # one account by name, whatever its quota
+clausona run --route main --wait=2h -- -p "run the tests"   # nobody free: wait up to 2h for someone
 ```
 
 Routing options go before the tool's own arguments. The first argument that is not one of them
@@ -593,7 +632,7 @@ $ clausona run --route busy -- -p "run the tests"
     claude:personal  100% 1h     81% 2d    in 1h 15m (5H resets)   soonest
     claude:side      100% 1h     40% 3d    in 1h 57m (5H resets)
 
-    Run again after 1h 15m, or see everything with: clausona route explain busy
+    Run again after 1h 15m or with --wait, or see everything with: clausona route explain busy
 ```
 
 The run exits with code 75 and launches nothing. That happens only when every account is at
@@ -602,8 +641,50 @@ window at 100% has reset, and the column says which one is last. An account that
 such as a signed-out one, is listed under the others with the reason. When every account is
 skipped, no reset will help, and the last line says to look at those reasons instead.
 
+The last line offers `--wait`. When the soonest reset is more than the 5 hours a bare `--wait`
+waits, it offers one long enough, as in `--wait=48h`. A run that names a model shows the
+accounts' limits on it in a column of their own, and `FREE AGAIN` can then say `(Opus resets)`.
+
 On an `all` route narrowed to one tool, the message is about that tool's accounts only, as in
 "No claude account in route any is free right now."
+
+### Waiting for an account
+
+With `--wait`, a run that finds nobody free waits instead of exiting:
+
+```
+$ clausona run --route busy --wait -- -p "run the tests"
+  waiting until 14:05 for claude:personal (5H resets) …
+  ▸ claude:personal  route busy, next in turn, 41% of 7D used
+```
+
+It sleeps until 30 seconds after the soonest moment an account can run again. For an account
+at 100%, that is when the last of its full windows resets. On the way it reads quota again at
+least every 30 minutes, so an account that frees up sooner is seen. When it wakes, it reads
+quota afresh and ranks the route from the first stage. The line on stderr says until when, in
+local time (with the date when it is not today), for which account, and which window it waits
+for.
+
+A bare `--wait` waits up to 5 hours. Give it another cap after `=`: `--wait=30m`, `--wait=2h` or
+`--wait=1h30m`. If the soonest reset is past the cap, or no account at 100% has a known reset
+time, the run does not wait. It exits 75 at once with the usual table, and says why:
+
+```
+    Nothing comes free within the 1h wait. Wait longer with --wait=2h, run again after 1h 59m, or see everything with:
+    clausona route explain busy
+```
+
+A waiting run records nothing until it picks, and then picks under the same lock as any other
+run. Several runs that wake together still land on different accounts, as long as enough have
+come free.
+
+If a quota read is refused while it waits (the endpoint answered 429, and clausona leaves it
+alone for a while), the run ranks on the last reading. An account that still reads as full after
+its reset is read again every 5 minutes, until the cap runs out.
+
+Ctrl-C while waiting stops the run with exit code 130. Nothing is launched or recorded.
+
+`clausona route pick --wait` waits the same way (see [Waiting in scripts and cron](#waiting-in-scripts-and-cron)).
 
 ## Dir rules and defaults
 
@@ -733,6 +814,23 @@ It takes the same field options as a run. `--resume` ranks the route as a resume
 `--tool` narrows an `all` route to one tool's accounts. A route that is not saved is ranked with
 `clausona route explain --tool claude --from '<patterns>'`.
 
+`--model` ranks the route as a run of that model would. The box says whether the model has a
+limit of its own, and each account's limit on it is a column, named by the limit:
+
+```
+$ clausona route explain main --model opus
+  …
+  │  Model      opus: the Opus limit counts too                      │
+  …
+    ACCOUNT       5H        7D       OPUS      LAST PICKED
+    ──────────────────────────────────────────────────────
+  ▸ claude:work  30% 2h    40% 2d    10% 2d    never        picked next
+    claude:team  10% 1h    20% 2d    95% 2d                 over 80%
+```
+
+When no account has a limit on the model, the box says `no account reports a limit on it`, and
+there is no column.
+
 Fallback members are marked `(fallback)`. A pick from the fallback says so, in the table and in
 the run's note. Here `solo`'s cut is lowered for one look, so its only pool member is over it:
 
@@ -787,7 +885,8 @@ clausona run "$id" -- -p "run the tests"   # start the tool on that account
 `route pick` prints the picked profile id on stdout and nothing else. It records the pick the way
 a run does. To start several workers, call `pick` once per worker on a round-robin route, and
 each call takes the next account. On a `headroom` or `expiring` route, picks made close together
-land on the same account, because their readings are cached for 5 minutes.
+land on the same account, because their readings are cached for 5 minutes. With `--model`, a
+pick counts each account's limit on the model the worker will run.
 
 On an `all` route a pick can come back as an account of either tool, and `clausona run "$id"`
 starts the right one. When the worker's arguments are for one tool, pick with `--tool`:
@@ -799,6 +898,43 @@ first show you its accounts and wait for your OK. It can rank the route without 
 `clausona route explain --tool claude --from '<patterns>'`.
 
 Without a terminal an unknown `--route` creates nothing.
+
+### Waiting in scripts and cron
+
+`--wait` turns "nobody is free" into a wait, for `run` and for `pick` alike. While it waits it
+writes one line to stderr, so stdout stays the tool's output, or `pick`'s id or JSON.
+
+```bash
+#!/bin/sh
+# Nightly review: wait up to 4 hours for a free account, then run.
+cd ~/work/app || exit 1
+clausona run claude --route nightly --wait=4h -- -p "review yesterday's commits" > review.md
+case $? in
+  0) ;;
+  75) echo "no account came free within 4h" >&2; exit 75 ;;
+  *) exit 1 ;;
+esac
+```
+
+```
+# crontab -e: every night at 2:00, with the waiting line and any error in the log
+0 2 * * * $HOME/bin/nightly-review.sh >> $HOME/nightly-review.log 2>&1
+```
+
+cron runs with a short `PATH`, so give the script one that reaches `clausona`, `claude` and
+`node`, or use their full paths. There is no terminal, so an unknown route exits 1 instead of
+asking. Exit 75 means nobody came free within the cap; the log has the table that says when
+each account frees up.
+
+An orchestrator that takes a turn per worker can wait in `pick`:
+
+```bash
+id=$(clausona route pick main --wait=1h) || exit $?   # 75: nobody free within the hour
+clausona run "$id" -- -p "run the tests"
+```
+
+With `--json`, stdout carries only the final JSON, and exit 75 still prints the `pick` JSON
+with `profile` null. Ctrl-C while waiting exits 130 and leaves no pick recorded.
 
 ### `pick --json`
 
@@ -814,6 +950,8 @@ Without a terminal an unknown `--route` creates nothing.
 
 `stage` is `pool`, `fallback` or `overflow`. `overflow` is the third stage: no account was under
 the cut, and the one with the most left was picked. `route` is null for an unsaved route.
+`usage.window` is `"5H"` or `"7D"`, or the name of the limit on the model `--model` named, such
+as `"Opus"`, when that limit is the highest.
 
 When nobody can be picked, the JSON is still printed on stdout, and the exit code is 75:
 
@@ -837,6 +975,7 @@ When nobody can be picked, the JSON is still printed on stdout, and the exit cod
 | `route` | The route's name, or null for an unsaved route |
 | `resolvedBy` | `"flag"` for a saved route, `"inline"` for one made from `--from`. With no name (below), `"dir:<path>"` for a dir rule, with its path as stored (`"dir:~/work"`), `"default"` for the tool's default, or `"active"` when no route applies |
 | `settings` | The route with every default filled in: `tool`, `from`, `exclude`, `strategy`, `maxUsage`, `fallback`. `tool` is `"claude"`, `"codex"` or `"all"` |
+| `model` | The model `--model` named, or null |
 | `outcome` | `{ "kind": "picked", "id", "stage", "reason" }`, or `{ "kind": "none" }` plus `soonest` (`{ "id", "at" }`) when a reset time is known |
 | `members` | One entry per account, below |
 | `excluded` | Accounts the exclude list took out, as `{ "profile", "matchedBy" }` |
@@ -852,8 +991,9 @@ Each entry in `members`:
 | `matchedBy` | The pattern that brought it in |
 | `status` | `"picked"`, `"eligible"` (under the cut, not picked), `"over-limit"` (at or above `maxUsage`, not picked) or `"skipped"` |
 | `skipReason` | null, or one of `"signed-out"`, `"expired"`, `"no-reading"`, `"not-registered"`, `"keeps-own-sessions"` (a resumed run), `"api-not-supported"` |
-| `usage` | `{ "percent", "window", "stale" }` with `window` `"5H"` or `"7D"`, or null |
+| `usage` | `{ "percent", "window", "stale" }` with `window` `"5H"`, `"7D"`, or the name of the limit on the model (`"Opus"`) when that is the highest, or null |
 | `fiveHour`, `sevenDay` | `{ "usedPercent", "resetsAt" }` with `resetsAt` an ISO time or null, or null |
+| `scoped` | The account's limit on the model `--model` named, as `{ "label", "usedPercent", "resetsAt" }`, or null without `--model` or such a limit |
 | `lastPickedAt` | The ISO time of the last pick, or null |
 
 An account picked at the `overflow` stage has the status `picked`, even though its usage is at or
@@ -923,7 +1063,8 @@ It also has the [dir rules and defaults](#dir-rules-and-defaults):
 |---|---|
 | the tool's own | The tool ran. |
 | 1 | A usage error, an unknown route without a terminal (or answered `n` in one), or a `routes.json` or a named route that cannot be used. |
-| 75 | No account is available now, from `run` or `pick`. Retry later, or name a profile. |
+| 75 | No account is available now, from `run` or `pick`: nobody is free, or a `--wait` found the soonest reset past its cap, or none known. Retry later or with `--wait`, or name a profile. |
+| 130 | Ctrl-C while `--wait` waited. Nothing was launched or recorded. |
 
 ### Errors
 
@@ -944,6 +1085,7 @@ same as without `--json`:
 | `usage` | 1 | Bad usage: an unknown option or subcommand, a bad option value, or no route named |
 | `not-found` | 1 | No route has that name |
 | `failed` | 1 | Anything else, such as clausona not set up yet. When `routes.json`, or the route named, cannot be used, it adds `file`, the file's path, and `problems`, what is wrong, as `route list` words it |
+| `failed` | 130 | `pick --wait` stopped by Ctrl-C |
 
 `message` is what the command prints without `--json`. Read `error` to tell failures apart. Exit
 75 from `pick --json` is not an error object: it prints the `pick` JSON above, with `profile`
