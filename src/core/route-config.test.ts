@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { foldProfileName } from "./profile-name.js";
 import {
   applyOverrides,
   checkPattern,
@@ -183,6 +184,18 @@ describe("checkPattern", () => {
     expect(checkPattern(keyShaped(), "claude", names)).toBe(
       "looks like an API key, or names a profile that is no longer registered",
     );
+  });
+
+  // A hand edit can put a key before an id's colon, where a tool goes.
+  it("lets no registered id through whose tool part is not a tool, and never quotes that part", () => {
+    const id = `${keyShaped()}:work`;
+    const names = profileNames([id, "gemini:work"]);
+    expect(names.size).toBe(0);
+    const refused = checkPattern(id, "claude", names);
+    expect(refused).toBe("looks like an API key, or names a profile that is no longer registered");
+    // Should such an id ever be let through, the tool part is still left out of the message.
+    const quoted = checkPattern(id, "claude", new Set([foldProfileName(id)]));
+    expect(quoted).toBe("names an unknown tool, but this route is for claude");
   });
 
   // profiles.json is read without the profile-name rule: a hand edit can register a key as a name.

@@ -174,12 +174,16 @@ export const NO_PROFILE_NAMES: ProfileNames = new Set();
  */
 const passesNameRule = (name: string) => !looksLikeCredential(name) && PROFILE_NAME.test(name);
 
-/** The names of the profiles with these ids (`tool:name`) that pass the profile-name rule. */
+/**
+ * The names of the profiles with these ids (`tool:name`) that pass the profile-name rule, and
+ * whose tool is one: a hand-edited id can put anything before its colon, a key too.
+ */
 export function profileNames(ids: Iterable<string>): ProfileNames {
   const names = new Set<string>();
   for (const id of ids) {
-    const name = id.slice(id.indexOf(":") + 1);
-    if (!passesNameRule(name)) continue;
+    const colon = id.indexOf(":");
+    const name = id.slice(colon + 1);
+    if (!TOOLS.includes(id.slice(0, colon)) || !passesNameRule(name)) continue;
     names.add(foldProfileName(id));
     names.add(foldProfileName(name));
   }
@@ -208,8 +212,11 @@ export function checkPattern(pattern: unknown, tool: RouteTool, names: ProfileNa
   // Split as the matcher splits it, so a name and an email pattern read a prefix the same way.
   const { prefix, body } = splitToolPrefix(pattern);
   if (prefix !== null && !toolsOf(tool).includes(prefix as ToolName)) {
+    const routeTool = tool === "all" ? "claude + codex" : tool;
+    // A key-shaped tool part is not quoted, nor the pattern around it.
+    if (holdsKey(prefix)) return `names an unknown tool, but this route is for ${routeTool}`;
     const what = TOOLS.includes(prefix) ? `a ${prefix} profile` : `unknown tool '${prefix}'`;
-    return `'${pattern}' names ${what}, but this route is for ${tool === "all" ? "claude + codex" : tool}`;
+    return `'${pattern}' names ${what}, but this route is for ${routeTool}`;
   }
   // A colon left in an email pattern would sit inside the address, which no account has.
   if (body.includes("@")) return /[\s,:]/.test(body) ? `'${pattern}' is not an email pattern` : null;
