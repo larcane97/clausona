@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { type Extension, emptyFacts, type Inventory, type StateFacts } from "./model.js";
+import { pathKey } from "./read.js";
 import {
   claudeMcpTaken,
   claudeSkillOverride,
@@ -832,6 +833,38 @@ describe("Codex", () => {
     expect(codexTrusted(i, "/wt/unread")).toBe(false);
     const viaRoot = inv([], { codexTrust: [{ project: P, trusted: false }], codexTrustFolders: { [wt]: [wt, P] } });
     expect(codexTrusted(viaRoot, wt)).toBe(false);
+  });
+
+  describe("Codex's trust keys", () => {
+    const realPlatform = process.platform;
+    const on = (platform: NodeJS.Platform) =>
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    afterEach(() => on(realPlatform));
+
+    it("match in any case on Windows alone, and a network share by Codex's spelling of its real path", () => {
+      // codexRoots' folders for a repo on a network share, as Z: maps one: the real path as
+      // Codex spells it, then as reached.
+      const share = "\\\\?\\UNC\\Server\\Share\\Repo";
+      const local = "C:\\Users\\RunnerAdmin\\Repo";
+      const facts = (key: string, folders: string[]) =>
+        inv([], {
+          codexTrust: [{ project: key, trusted: true }],
+          codexTrustFolders: { [pathKey("Z:\\Repo")]: folders },
+        });
+      on("win32");
+      expect(codexTrusted(facts(share.toLowerCase(), [share, "Z:\\Repo"]), "Z:\\Repo")).toBe(true);
+      expect(codexTrusted(facts(local.toLowerCase(), [local, "Z:\\Repo"]), "Z:\\Repo")).toBe(true);
+      // realpath's spelling of the share is not Codex's, which it records the trust by.
+      expect(codexTrusted(facts(share.toLowerCase(), ["\\\\Server\\Share\\Repo", "Z:\\Repo"]), "Z:\\Repo")).toBe(false);
+      // An 8.3 short name is a spelling of its own.
+      expect(codexTrusted(facts("c:\\users\\runner~1\\repo", [local, "Z:\\Repo"]), "Z:\\Repo")).toBe(false);
+      // Anywhere else Codex compares the key as it is.
+      for (const platform of ["darwin", "linux"] as const) {
+        on(platform);
+        expect(codexTrusted(facts(local.toLowerCase(), [local, "Z:\\Repo"]), "Z:\\Repo")).toBe(false);
+        expect(codexTrusted(facts(local, [local, "Z:\\Repo"]), "Z:\\Repo")).toBe(true);
+      }
+    });
   });
 });
 

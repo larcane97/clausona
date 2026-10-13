@@ -7,8 +7,9 @@ import { entryInfo, isRecord, readText, realPath } from "../read.js";
  * (config/src/loader/mod.rs) takes the first `[projects."<folder>"]` with a `trust_level` among
  * the folder that holds a `.codex`, the project root, and the repository's root - for a linked
  * worktree, its main checkout (`resolve_root_git_project_for_trust`, git-utils/src/trust.rs).
- * Each folder by its real path first, then as spelled (`normalized_project_trust_keys`). It reads
- * the files git keeps and runs no git, and so does this.
+ * Each folder by its real path first, then as spelled (`normalized_project_trust_keys`), and on
+ * Windows in any case of its letters. It reads the files git keeps and runs no git, and so does
+ * this.
  */
 
 /** Codex's project root markers when the user config.toml names none. */
@@ -60,12 +61,68 @@ export async function codexRoots(
   const repository = checkout === undefined ? undefined : await repositoryRoot(checkout);
   const folders = [dir, root, repository].filter((folder): folder is string => folder !== undefined);
   const spelled = await Promise.all(
-    folders.map(async (folder) => [await realPath(folder).catch(() => folder), folder]),
+    // A folder that is not there, as Codex's canonicalize fails for, is looked up as spelled alone.
+    folders.map(async (folder) => [
+      await realPath(folder).then(
+        (real) => codexCanonical(real),
+        () => folder,
+      ),
+      folder,
+    ]),
   );
   const unique = [...new Set(spelled.flat())];
   if (checkout === undefined || repository === undefined || repository === checkout) return { folders: unique };
   const hooks = path.join(repository, path.relative(checkout, dir), ".codex");
   return { folders: unique, worktree: { main: repository, hooks } };
+}
+
+/** The names Windows keeps for its devices, which dunce will not drop the `\\?\` of a path for. */
+const DEVICE_NAMES = new Set(
+  ["AUX", "NUL", "PRN", "CON"].concat(
+    ["COM", "LPT"].flatMap((name) => [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `${name}${n}`)),
+  ),
+);
+
+/**
+ * A real path, as `realpath` gives it, spelled as Codex's real path is (`dunce::canonicalize`,
+ * dunce 1.0.5). Windows gives a real path with `\\?\` before it. `realpath` always drops it,
+ * and dunce drops it only where that cannot change the path. It keeps it for:
+ * - a network share, a mapped drive's among them (`\\?\UNC\server\share`);
+ * - a path of over 260 characters;
+ * - a part that is a device name (`con`, `com1.txt`) or ends in a dot or a space.
+ * Codex records a trust by that spelling. Anywhere but Windows the real path is Codex's as it is.
+ */
+export function codexCanonical(real: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== "win32") return real;
+  if (real.startsWith("\\\\?\\")) return real;
+  if (real.startsWith("\\\\")) return `\\\\?\\UNC\\${real.slice(2)}`;
+  const verbatim = `\\\\?\\${real}`;
+  if (!/^[A-Za-z]:\\/.test(real) || verbatim.length > 260) return verbatim;
+  const parts = real
+    .slice(3)
+    .split("\\")
+    .filter((part) => part !== "");
+  return parts.every((part) => plainName(part) && !DEVICE_NAMES.has(deviceStem(part))) ? real : verbatim;
+}
+
+/**
+ * A part dunce takes as a plain name: at most 255 characters, none that Windows keeps out of
+ * names, and not ending in a dot or a space.
+ */
+function plainName(part: string): boolean {
+  const control = [...part].some((c) => c.charCodeAt(0) < 0x20);
+  return part.length <= 255 && !control && !/[<>:"/\\|?*]/.test(part) && !/[ .]$/.test(part);
+}
+
+/**
+ * The part as dunce checks it for a device name: Rust's file_stem, its trailing dots and spaces
+ * trimmed, its ASCII letters in capitals.
+ */
+function deviceStem(part: string): string {
+  const dot = part.lastIndexOf(".");
+  const stem = part === ".." || dot <= 0 ? part : part.slice(0, dot);
+  const trimmed = stem.replace(/[ .]+$/, "");
+  return trimmed.length <= 4 ? trimmed.replace(/[a-z]/g, (c) => c.toUpperCase()) : "";
 }
 
 /**

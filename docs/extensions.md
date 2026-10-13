@@ -315,7 +315,8 @@ The switches are read from these places:
   worktree is the main checkout. So a worktree of a trusted repository, and a folder inside one,
   are trusted, unless their own entry says `untrusted`. Each folder matches by its real path or
   as you reached it; git names a worktree's main checkout by its real path, as Codex records a
-  trust.
+  trust. On Windows a key matches in any case, and the real path is Codex's spelling of it: long
+  names, and `\\?\UNC\` kept for a network share or a mapped drive.
 - Codex plugins and what they bring: a `[plugins."<plugin>@<marketplace>"]` table in Codex's or
   the project's `config.toml` turns a plugin on, and `enabled = false` in it turns it off. A
   plugin no table names is off. A plugin's skill is switched by its full name in

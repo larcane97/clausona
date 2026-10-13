@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../../test-timeouts.js";
 import { isWithin } from "../read.js";
 import { TestHome } from "../test-home.js";
-import { codexRoots, codexTrustFolders } from "./codex-trust.js";
+import { codexCanonical, codexRoots, codexTrustFolders } from "./codex-trust.js";
 
 // Most cases start git.
 vi.setConfig({ testTimeout: SPAWNING_TEST_TIMEOUT_MS });
@@ -136,5 +136,37 @@ describe.skipIf(!hasGit)("codexTrustFolders", () => {
     const loose = h.path("loose");
     mkdirSync(loose);
     expect(real(await codexTrustFolders(loose, [".git"]))).toEqual([realpathSync(loose)]);
+  });
+});
+
+describe("codexCanonical", () => {
+  // What realpath gives on Windows, which always drops the \\?\ that Windows gives a real path.
+  const share = "\\\\server\\share\\repos\\app";
+  const local = "C:\\Users\\runneradmin\\repos\\app";
+
+  it("spells a real path as Codex's dunce::canonicalize does on Windows, keeping its verbatim prefix where dropping it could change the path", () => {
+    expect(codexCanonical(local, "win32")).toBe(local);
+    expect(codexCanonical("C:\\", "win32")).toBe("C:\\");
+    // A network share, a mapped drive's among them: Windows names it \\?\UNC\server\share.
+    expect(codexCanonical(share, "win32")).toBe("\\\\?\\UNC\\server\\share\\repos\\app");
+    // Over 260 characters with the \\?\.
+    const fits = path.win32.join("C:\\", "a".repeat(253));
+    expect(`\\\\?\\${fits}`).toHaveLength(260);
+    expect(codexCanonical(fits, "win32")).toBe(fits);
+    expect(codexCanonical(`${fits}b`, "win32")).toBe(`\\\\?\\${fits}b`);
+    // A part that is a device name, or ends in a dot or a space; a name like one is fine.
+    for (const part of ["con", "COM1.txt", "aux .log", "dot.", "space "]) {
+      expect(codexCanonical(path.win32.join(local, part), "win32")).toBe(`\\\\?\\${path.win32.join(local, part)}`);
+    }
+    for (const part of ["console", ".con", "com0", "con.d.txt"]) {
+      expect(codexCanonical(path.win32.join(local, part), "win32")).toBe(path.win32.join(local, part));
+    }
+  });
+
+  it("is the real path itself anywhere but Windows", () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      expect(codexCanonical("/private/var/folders/app", platform)).toBe("/private/var/folders/app");
+      expect(codexCanonical(share, platform)).toBe(share);
+    }
   });
 });
