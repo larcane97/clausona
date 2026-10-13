@@ -128,7 +128,8 @@ describe("readClaudeHooks and readClaudePlugins", () => {
     h.write("repos/app/.claude/settings.json", {
       hooks: { SessionStart: [{ hooks: [null, "setup", { type: "command", command: "setup" }] }] },
     });
-    // A plugin's hooks.json written without the "hooks" key: the events sit at the root.
+    // A plugin's hooks.json written without the "hooks" key, its events at the root: Claude Code
+    // 2.1.296 loads none of it, so none is listed, and a warning says why.
     const sp = h.path(".claude/plugins/cache/m/sp/1.0.0");
     h.write(".claude/plugins/installed_plugins.json", { plugins: { "sp@m": [{ installPath: sp }] } });
     h.write(".claude/plugins/cache/m/sp/1.0.0/hooks/hooks.json", {
@@ -150,8 +151,13 @@ describe("readClaudeHooks and readClaudePlugins", () => {
     );
     expect(byCommand("fmt").hook).toEqual({ base: "hooks", event: "PreToolUse", matcher: "Edit", group: 0, index: 0 });
     expect(byCommand("setup").hook).toEqual({ base: "hooks", event: "SessionStart", group: 0, index: 2 });
-    expect(byCommand("sp-start").hook).toEqual({ base: "root", event: "SessionStart", group: 0, index: 0 });
-    expect(out.facts.fingerprints[byCommand("sp-start").id]).toBe(valueHash({ type: "command", command: "sp-start" }));
+    expect(out.items.some((i) => i.summary?.command === "sp-start")).toBe(false);
+    expect(out.warnings).toEqual([
+      {
+        file: path.join(realpathSync.native(sp), "hooks", "hooks.json"),
+        message: 'has no top-level "hooks", so Claude Code loads none of it',
+      },
+    ]);
     // One fingerprint per hook listed, none for what is no command.
     const hooks = out.items.filter((i) => i.kind === "hook");
     expect(Object.keys(out.facts.fingerprints).sort()).toEqual(hooks.map((i) => i.id).sort());
@@ -175,6 +181,7 @@ describe("readClaudeHooks and readClaudePlugins", () => {
       name: "kit",
       hooks: [
         "./config/extra.json",
+        "./config/bare.json",
         // The standard file again, and a path out of the plugin: read once, and not at all.
         "./hooks/hooks.json",
         "../outside.json",
@@ -184,6 +191,8 @@ describe("readClaudeHooks and readClaudePlugins", () => {
     h.write(".claude/plugins/cache/m/kit/outside.json", {
       hooks: { Stop: [{ hooks: [{ type: "command", command: "from-outside" }] }] },
     });
+    // A file the manifest names must have the "hooks" key too, as hooks.json must.
+    h.write(`${root}/config/bare.json`, { Stop: [{ hooks: [{ type: "command", command: "from-bare" }] }] });
     // The inline object form alone, in a second plugin.
     const solo = ".claude/plugins/cache/m/solo/1.0.0";
     h.write(".claude/plugins/installed_plugins.json", {
@@ -215,7 +224,7 @@ describe("readClaudeHooks and readClaudePlugins", () => {
     expect(byCommand("from-hooks-json").id).toBe(`hook:claude:plugin:${owner}:SessionStart#0.0`);
     expect(new Set(hooks.map((i) => i.id)).size).toBe(hooks.length);
     expect(new Set(hooks.map(rowKey)).size).toBe(hooks.length);
-    expect(rowKey(byCommand("from-manifest"))).toBe("hook:claude:plugin:user:-:kit@m:SessionStart#plugin.json[3]:0.0");
+    expect(rowKey(byCommand("from-manifest"))).toBe("hook:claude:plugin:user:-:kit@m:SessionStart#plugin.json[4]:0.0");
     expect(rowKey(byCommand("from-extra"))).toBe("hook:claude:plugin:user:-:kit@m:SessionStart#config/extra.json:0.0");
     expect(rowKey(byCommand("solo-fmt"))).toBe("hook:claude:plugin:user:-:solo@m:PostToolUse Edit#plugin.json:0.0");
     // Each with the plugin's place, as its hooks.json hook has.
@@ -224,7 +233,12 @@ describe("readClaudeHooks and readClaudePlugins", () => {
     expect(manifest.location.accounts).toEqual(["claude:default", "claude:work"]);
     expect(manifest.hook).toEqual({ base: "hooks", event: "SessionStart", group: 0, index: 0 });
     expect(out.facts.fingerprints[manifest.id]).toBe(valueHash({ type: "command", command: "from-manifest" }));
-    expect(out.warnings).toEqual([]);
+    expect(out.warnings).toEqual([
+      {
+        file: path.join(realpathSync.native(kit), "config", "bare.json"),
+        message: 'has no top-level "hooks", so Claude Code loads none of it',
+      },
+    ]);
   });
 
   it("gives each install of one plugin its own items", async () => {

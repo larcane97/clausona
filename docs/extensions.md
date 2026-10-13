@@ -123,9 +123,12 @@ Some scopes need a word more:
   A plugin's servers come from its `.mcp.json` and from what its `.claude-plugin/plugin.json`
   declares under `mcpServers`: servers inline, or the `.json` files of servers it names, in
   that order. A server name declared again replaces the earlier one, as Claude Code merges
-  them, so the manifest's copy wins over the `.mcp.json` one. Its hooks come from `hooks/hooks.json` and from `plugin.json`'s `hooks` the same way. A path that
-  leads out of the plugin's folder, through `..` or a link, is not read, as Claude Code does not
-  load it. Nor is an MCP bundle (`.mcpb` or `.dxt`), which Claude Code unpacks itself.
+  them, so the manifest's copy wins over the `.mcp.json` one. Its hooks come from
+  `hooks/hooks.json` and from `plugin.json`'s `hooks` the same way. A hooks file holds its
+  events under a top-level `hooks` object; Claude Code loads none of one that has them at its
+  root, so clausona lists none of them and names the file among those it could not read. A path
+  that leads out of the plugin's folder, through `..` or a link, is not read, as Claude Code does
+  not load it. Nor is an MCP bundle (`.mcpb` or `.dxt`), which Claude Code unpacks itself.
 
   - Codex's plugins are the ones in the `plugins/cache` folder of its home, read from the
     version Codex loads. Each is `<plugin>@<marketplace>`, as `config.toml` names it. It brings
