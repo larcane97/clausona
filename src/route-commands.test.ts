@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runCommand } from "./commands.js";
 import { RoutesFileError, routesPaths } from "./core/routes-store.js";
+import { budgetWindow } from "./core/spend.js";
 import { reportError } from "./index.js";
 import { stripAnsi } from "./lib/cli-style.js";
 import type { ExitError } from "./lib/json-errors.js";
@@ -615,7 +616,14 @@ describe("a route in routes.json that cannot be used", () => {
     expect(out).toContain(`  ⚠ ${PROBLEM}`);
     expect(out).toContain("  ⚠ Fix it with clausona route edit, or remove the route: clausona route remove bad.");
     const json = JSON.parse(await run("list", "--json"));
-    expect(Object.keys(json).sort()).toEqual(["defaults", "dirs", "problems", "routes", "ruleWarnings"]);
+    expect(Object.keys(json).sort()).toEqual([
+      "budgetWarnings",
+      "defaults",
+      "dirs",
+      "problems",
+      "routes",
+      "ruleWarnings",
+    ]);
     expect(json.routes.map((route: { name: string }) => route.name)).toEqual(["main"]);
     expect(json.problems).toEqual([PROBLEM]);
     expect(await run("explain", "main")).toContain(`  ⚠ ${PROBLEM}`);
@@ -1284,6 +1292,256 @@ describe("failures with --json", () => {
     await run("add", "main");
     const none = await fails(run("pick", "main", "--json"));
     expect(none).toMatchObject({ code: 75, json: { profile: null, route: "main" }, stderr: "" });
+  });
+});
+
+describe("route budget", () => {
+  const api = (name: string, baseUrl: string) => ({
+    tool: "claude" as const,
+    kind: "api" as const,
+    configDir: `/home/u/.claude-${name}`,
+    email: "",
+    api: { baseUrl, authScheme: "bearer" as const, secret: { source: "env" as const, name: "GW_KEY" } },
+  });
+  const BUDGETED: Registry = {
+    ...REGISTRY,
+    profiles: {
+      ...REGISTRY.profiles,
+      "claude:gw": api("gw", "https://gw.example.com"),
+      "claude:or": api("or", "https://openrouter.ai/api"),
+      "claude:proxy": api("proxy", "https://proxy.example.com"),
+      "claude:bare": api("bare", "https://bare.example.com"),
+    },
+  };
+  // The spend each provider reports, as the quota cache keeps it. NOW is Friday 2026-10-09 in UTC.
+  const SPEND: Record<string, QuotaSnapshot> = {
+    "claude:gw": {
+      state: "ok",
+      fetchedAt: NOW,
+      spend: {
+        totalUsd: 107,
+        baselines: {
+          day: { start: "2026-10-09T00:00:00.000Z", totalUsd: 107 },
+          week: { start: "2026-10-05T00:00:00.000Z", totalUsd: 103 },
+          month: { start: "2026-10-01T00:00:00.000Z", totalUsd: 100 },
+        },
+      },
+    },
+    "claude:or": {
+      state: "ok",
+      fetchedAt: NOW,
+      spend: {
+        totalUsd: 40,
+        periods: { day: 1, week: 6, month: 12.5 },
+        limit: { usd: 50, resetsAt: "2026-11-01T00:00:00.000Z", per: "month", remainingUsd: 37.5 },
+      },
+    },
+    "claude:proxy": { state: "error", fetchedAt: NOW, noSpendReading: true },
+    "claude:bare": { state: "ok", fetchedAt: NOW, spend: { totalUsd: 3 } },
+  };
+
+  /**
+   * The CLI over BUDGETED, its spend read as collectQuotas reads it from the cache: the window for
+   * the budget each target carries, else the key's own limit. Nothing reaches a network.
+   */
+  function budgetSetup(spend: Record<string, QuotaSnapshot> = SPEND) {
+    const s = setup();
+    const asked: string[][] = [];
+    s.deps.loadRegistry = async () => BUDGETED;
+    s.deps.collectQuotas = async (targets) => {
+      asked.push(targets.map((target) => target.id));
+      return Object.fromEntries(
+        targets.flatMap((target) => {
+          const snapshot = spend[target.id] ?? QUOTAS[target.id];
+          if (!snapshot) return [];
+          if (!snapshot.spend || !target.api) return [[target.id, snapshot]];
+          const window = budgetWindow(snapshot.spend, target.api.budget, NOW);
+          return [[target.id, window ? { ...snapshot, budget: window } : snapshot]];
+        }),
+      );
+    };
+    return { ...s, asked };
+  }
+
+  it("lists every API profile with its limit, where the limit comes from, the spend and the usage", async () => {
+    const { run, deps, asked } = budgetSetup();
+    writeFileSync(
+      deps.paths.routesPath,
+      JSON.stringify({
+        version: 1,
+        routes: { main: { tool: "claude", from: ["a", "gw"] } },
+        budgets: { "claude:gw": { usd: 20, per: "month" } },
+      }),
+    );
+    const out = await run("budget");
+    expect(out).toMatch(/^ {4}PROFILE\s+LIMIT\s+SOURCE\s+SPENT\s+USAGE\s+RENEWS$/m);
+    expect(out).toMatch(/^ {4}claude:bare {3}no spend limit: clausona route budget claude:bare --usd 20 --per month$/m);
+    expect(out).toMatch(/^ {4}claude:gw {5}\$20\/month\s+clausona budget\s+\$7\.00\s+35%\s+23d$/m);
+    expect(out).toMatch(/^ {4}claude:or {5}\$50\/month\s+provider limit\s+\$12\.50\s+25%\s+23d$/m);
+    expect(out).toMatch(/^ {4}claude:proxy {2}the provider does not report spend$/m);
+    // Only API profiles' spend is read.
+    expect(asked).toEqual([["claude:bare", "claude:gw", "claude:or", "claude:proxy"]]);
+    const json = JSON.parse(await run("budget", "--json"));
+    expect(json.problems).toEqual([]);
+    expect(json.warnings).toEqual([]);
+    expect(json.profiles.find((row: { profile: string }) => row.profile === "claude:gw")).toEqual({
+      profile: "claude:gw",
+      budget: { usd: 20, per: "month" },
+      limit: { source: "budget", usd: 20, per: "month", resetsAt: "2026-11-01T00:00:00.000Z" },
+      spentUsd: 7,
+      usage: 35,
+      spend: "ok",
+      reason: null,
+      routes: ["main"],
+    });
+    expect(json.profiles.find((row: { profile: string }) => row.profile === "claude:proxy")).toMatchObject({
+      budget: null,
+      limit: null,
+      spend: "not-reported",
+      reason: "the provider does not report spend",
+    });
+  });
+
+  it("says why spend could not be read", async () => {
+    const { run, deps } = budgetSetup({ ...SPEND, "claude:gw": { state: "expired", fetchedAt: NOW } });
+    expect(await run("budget", "gw")).toMatch(
+      /^ {4}claude:gw {2}spend could not be read: the provider refused the key$/m,
+    );
+    writeFileSync(
+      deps.paths.routesPath,
+      JSON.stringify({ version: 1, routes: {}, budgets: { "claude:gw": { usd: 20, per: "month" } } }),
+    );
+    expect(await run("budget", "gw")).toMatch(
+      /^ {4}claude:gw {2}\$20\/month \(clausona budget\); spend could not be read: the provider refused the key$/m,
+    );
+  });
+
+  it("sets a budget, which replaces the key's limit and lets the profile join a route", async () => {
+    const { run, file } = budgetSetup();
+    await expect(run("add", "paid", "--from", "bare")).rejects.toThrow(/claude:bare has no spend limit/);
+    const out = await run("budget", "bare", "--usd", "12.5", "--per", "week");
+    expect(out.split("\n")[0]).toBe("  ✔ Budget for claude:bare: $12.50/week");
+    expect(out).toMatch(/^ {4}claude:bare\s+\$12\.50\/week\s+clausona budget\s+\$0\.00\s+0%\s+3d$/m);
+    expect(out).toContain(
+      "Spend counts from clausona's first reading this week; what was spent before it is not counted.",
+    );
+    expect(file().budgets).toEqual({ "claude:bare": { usd: 12.5, per: "week" } });
+    await run("add", "paid", "--from", "bare");
+    expect(file().routes.paid.from).toEqual(["bare"]);
+    // Set again, it is changed in place.
+    await run("budget", "claude:bare", "--usd", "30", "--per", "month");
+    expect(file().budgets).toEqual({ "claude:bare": { usd: 30, per: "month" } });
+    expect(JSON.parse(await run("budget", "bare", "--usd", "30", "--per", "month", "--json"))).toMatchObject({
+      profile: "claude:bare",
+      changed: true,
+      limit: { source: "budget", usd: 30 },
+    });
+  });
+
+  it("says a budget on a provider that reports no spend cannot be checked", async () => {
+    const { run } = budgetSetup();
+    expect(await run("budget", "proxy", "--usd", "20", "--per", "month")).toContain(
+      "claude:proxy's provider does not report spend, so the budget cannot be checked and claude:proxy cannot join a route.",
+    );
+  });
+
+  it("clears a budget, saying which limit counts now, or that routes skip the profile", async () => {
+    const { run, file, deps } = budgetSetup();
+    writeFileSync(
+      deps.paths.routesPath,
+      JSON.stringify({
+        version: 1,
+        routes: { main: { tool: "claude", from: ["a", "bare"] } },
+        budgets: { "claude:bare": { usd: 5, per: "day" }, "claude:or": { usd: 5, per: "day" } },
+      }),
+    );
+    const bare = await run("budget", "bare", "--clear");
+    expect(bare.split("\n")[0]).toBe("  ✔ Cleared the budget for claude:bare");
+    expect(bare.replace(/\s+/g, " ")).toContain(
+      "claude:bare has no spend limit now, so route main skips it. Set a limit on the provider key, or a budget again: clausona route budget claude:bare --usd 20 --per month",
+    );
+    expect(await run("budget", "or", "--clear")).toContain(
+      "Routes now count it against its key's own limit, $50/month.",
+    );
+    expect(file()).not.toHaveProperty("budgets");
+    expect(await run("budget", "or", "--clear")).toBe("  ✔ No budget for claude:or. Nothing was changed.");
+  });
+
+  it("refuses what is not a budget, or not an API profile, and never quotes a key", async () => {
+    const { run, file } = budgetSetup();
+    await run("add", "main");
+    for (const [args, message] of [
+      [["bare", "--usd", "0", "--per", "month"], "--usd must be a number of dollars above 0, such as 20 or 12.50."],
+      [["bare", "--usd", "20", "--per", "year"], "--per must be one of day, week, month."],
+      [["bare", "--usd", "20"], "Give both --usd and --per: clausona route budget <profile> --usd 20 --per month."],
+      [["bare", "--clear", "--per", "day"], "--clear cannot be used with --usd or --per."],
+      [["--clear"], "Usage: clausona route budget [<profile>] [--json]"],
+      [["a", "--usd", "20", "--per", "day"], "claude:a is not an API profile."],
+      [["gone", "--usd", "20", "--per", "day"], "Profile 'gone' not found."],
+    ] as const) {
+      await expect(run("budget", ...args), args.join(" ")).rejects.toThrow(message);
+    }
+    const key = ["sk", "ant", "api03", ["Qm7", "Zt4"].join("").repeat(5)].join("-");
+    const error = await run("budget", key, "--usd", "20", "--per", "day").catch((e: unknown) => e);
+    expect(String(error)).not.toContain(key.slice(-10));
+    expect(file()).not.toHaveProperty("budgets");
+  });
+
+  it("warns about budgets that cannot be read, or that name no API profile, and refuses to write past them", async () => {
+    const { run, deps } = budgetSetup();
+    writeFileSync(
+      deps.paths.routesPath,
+      JSON.stringify({
+        version: 1,
+        routes: { main: { tool: "claude" } },
+        budgets: { "claude:gw": { usd: "20", per: "month" }, "claude:a": { usd: 5, per: "day" } },
+      }),
+    );
+    const list = await run("list");
+    expect(list).toContain('⚠ budgets["claude:gw"].usd: must be a number of dollars above 0');
+    expect(list).toContain("⚠ budgets names claude:a, which is not an API profile; a budget applies only to one.");
+    const json = JSON.parse(await run("list", "--json"));
+    expect(json.problems).toEqual(['budgets["claude:gw"].usd: must be a number of dollars above 0']);
+    expect(json.budgetWarnings).toEqual([
+      "budgets names claude:a, which is not an API profile; a budget applies only to one.",
+    ]);
+    await expect(run("set", "main", "--strategy", "headroom")).rejects.toThrow(
+      "has a budget that cannot be used, so nothing was saved",
+    );
+    // Setting the broken one mends it.
+    await run("budget", "gw", "--usd", "20", "--per", "month");
+    await run("set", "main", "--strategy", "headroom");
+  });
+
+  it("explains an API member: its budget column, its spend and whose limit counts it", async () => {
+    const { run, deps } = budgetSetup();
+    writeFileSync(
+      deps.paths.routesPath,
+      JSON.stringify({
+        version: 1,
+        routes: { main: { tool: "claude", from: ["a", "gw", "or"], strategy: "headroom" } },
+        budgets: { "claude:gw": { usd: 20, per: "month" } },
+      }),
+    );
+    const out = await run("explain", "main");
+    expect(out).toMatch(/^ {4}ACCOUNT\s+5H\s+7D\s+BUDGET$/m);
+    expect(out).toMatch(/^ {2}▸ claude:a\s+10%.*picked next$/m);
+    expect(out).toMatch(/^ {4}claude:or\s+—\s+—\s+25% 23d\s+\$12\.50 of \$50\/month \(provider limit\)$/m);
+    expect(out).toMatch(/^ {4}claude:gw\s+—\s+—\s+35% 23d\s+\$7\.00 of \$20\/month \(clausona budget\)$/m);
+    const json = JSON.parse(await run("explain", "main", "--json"));
+    expect(json.members.find((member: { profile: string }) => member.profile === "claude:gw")).toMatchObject({
+      usage: { percent: 35, window: "budget", stale: false },
+      budget: { usedPercent: 35, spentUsd: 7, limitUsd: 20, source: "budget", per: "month" },
+    });
+  });
+
+  it("is not-found with --json for a profile that is not there", async () => {
+    const { run } = budgetSetup();
+    const error = (await run("budget", "gone", "--json").catch((e: unknown) => e)) as ExitError;
+    expect(error).toMatchObject({ code: 1, kind: "not-found" });
+    const out: string[] = [];
+    reportError(error, { write: () => true }, { write: (chunk: string) => out.push(chunk) > 0 });
+    expect(JSON.parse(out.join(""))).toEqual({ version: 1, error: "not-found", message: "Profile 'gone' not found." });
   });
 });
 

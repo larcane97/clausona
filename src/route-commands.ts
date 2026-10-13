@@ -3,7 +3,20 @@ import { existsSync } from "node:fs";
 import { carriesCredentialToken } from "./core/credential-token.js";
 import { foldProfileName } from "./core/profile-name.js";
 import type { QuotaTarget } from "./core/quota-store.js";
-import { type Budgets, readBudgets } from "./core/route-budgets.js";
+import {
+  BUDGET_PERIODS,
+  type Budget,
+  type BudgetPeriod,
+  type Budgets,
+  budgetCommand,
+  budgetText,
+  budgetWarnings,
+  clearBudget,
+  isBudgetPeriod,
+  isBudgetUsd,
+  readBudgets,
+  setBudget,
+} from "./core/route-budgets.js";
 import {
   applyOverrides,
   type BrokenRoute,
@@ -23,6 +36,7 @@ import {
   storedRoute,
   withDefaults,
 } from "./core/route-config.js";
+import { compareIds } from "./core/route-patterns.js";
 import {
   clearDefaultRoute,
   clearDirRoute,
@@ -54,15 +68,21 @@ import {
   writeRefusal,
 } from "./core/routes-store.js";
 import type { Ranking } from "./core/routing.js";
+import { spendProvider } from "./core/spend.js";
 import { accent, bold, dim, helpSection, helpUsage, stripAnsi, success, warnIcon } from "./lib/cli-style.js";
 import { ExitError, withJsonErrors } from "./lib/json-errors.js";
+import { parseProfileRef } from "./lib/profile-ref.js";
 import { type RouteIo, terminalIo } from "./lib/route-io.js";
 import {
+  type BudgetRow,
+  budgetRowJson,
   explainJson,
+  limitText,
   nobodyAdvice,
   pickJson,
   type RuleRow,
   type RunHere,
+  renderBudgets,
   renderNoAccount,
   renderRouteDetail,
   renderRouteTable,
@@ -75,6 +95,7 @@ import {
   takesNobody,
 } from "./lib/route-render.js";
 import {
+  apiMembers,
   checkRouteMembers,
   checkRouteMembersNow,
   defaultRouteDeps,
@@ -91,6 +112,7 @@ import {
   resolveRoute,
   routeByRules,
   routesFor,
+  spendTarget,
   UnknownRouteError,
 } from "./lib/route-service.js";
 import { rankWaiting, WaitInterrupted } from "./lib/route-wait.js";
@@ -189,6 +211,22 @@ const SUB_HELP: Record<string, string[]> = {
     `    ${dim("or the one --tool names. --clear removes the rule, or one tool's slot of it. With")}`,
     `    ${dim("nothing after it, lists every dir rule and default.")}`,
   ],
+  budget: [
+    helpUsage("clausona route budget [<profile>] [--json]"),
+    helpUsage("clausona route budget <profile> --usd <n> --per day|week|month [--json]"),
+    helpUsage("clausona route budget <profile> --clear [--json]"),
+    "",
+    `    ${dim("An API profile joins a route only by its exact name, and only with a spend limit: a")}`,
+    `    ${dim("budget set here, which replaces the limit on its provider key, or else that limit. Its")}`,
+    `    ${dim("usage is its spend against the limit, read from the provider (LiteLLM's /key/info,")}`,
+    `    ${dim("OpenRouter's /api/v1/key). Periods are UTC: a day from midnight, a week from Monday, a")}`,
+    `    ${dim("month from the 1st. With no profile, lists every API profile: its limit, where it comes")}`,
+    `    ${dim("from, the spend and the usage. A budget stops new routed sessions, not a running one.")}`,
+    "",
+    `  ${bold("EXAMPLE")}`,
+    `    ${dim("clausona route budget claude:gateway --usd 20 --per month")}`,
+    `    ${dim("clausona route set main --add claude:gateway")}`,
+  ],
   default: [
     helpUsage("clausona route default <route> [--tool claude|codex]"),
     helpUsage("clausona route default --clear --tool claude|codex|all"),
@@ -241,6 +279,7 @@ export function routeHelp(sub?: string): string {
       ["pick <name>", "Take a turn: print the picked profile and record it"],
       ["dir <path> <route>", "In <path> and below, run claude|codex with no route takes <route>"],
       ["default <route>", "Elsewhere, run claude|codex with no route takes <route>"],
+      ["budget [profile]", "List or set API profiles' spend limits, which let them join routes"],
     ]),
     "",
     `  ${bold("RUN ON A ROUTE")}`,
@@ -259,7 +298,8 @@ export function routeHelp(sub?: string): string {
     "",
     `  ${bold("HOW A PROFILE IS PICKED")}`,
     `    ${dim("usage = the higher of the account's 5H and 7D windows, and of its limit on the")}`,
-    `    ${dim("        model the run names (claude --model opus, codex -m …, route pick --model)")}`,
+    `    ${dim("        model the run names (claude --model opus, codex -m …, route pick --model);")}`,
+    `    ${dim("        an API profile's is its spend against its limit (clausona route budget)")}`,
     `    ${dim("1. pool      from-members under max-usage, by strategy")}`,
     `    ${dim("2. fallback  fallback-members under max-usage, first in listed order")}`,
     `    ${dim("3. overflow  any member under 100%, lowest usage first")}`,
@@ -272,7 +312,7 @@ export function routeHelp(sub?: string): string {
     `    ${dim("*               every subscription profile of the route's tool (of both, on an all route)")}`,
     `    ${dim("team-*          profile names; a tool prefix works too: claude:team-*")}`,
     `    ${dim("*@example.com   account emails: any pattern with an @")}`,
-    `    ${dim("API profiles never match a pattern; routes take subscription profiles only for now.")}`,
+    `    ${dim("API profiles never match a pattern: name one exactly, once it has a spend limit.")}`,
     "",
     `  ${bold("FOR AGENTS")}`,
     `    ${dim("clausona route add <name> --tool <tool>  create a route: claude (default), codex or all")}`,
@@ -284,6 +324,7 @@ export function routeHelp(sub?: string): string {
     `    ${dim("add and set never ask; run asks one Y/n only for an unknown route in a terminal.")}`,
     `    ${dim("Without a terminal, run exits 1 on an unknown route and creates nothing.")}`,
     `    ${dim("Create and change routes with add / set / remove, not by editing routes.json.")}`,
+    `    ${dim("Never put an API profile (billed per use) in a route unless the user names it.")}`,
     `    ${dim("Before creating or changing a route for the user, show them its members (explain).")}`,
     "",
     `  ${bold("EXIT CODES")}`,
@@ -682,6 +723,188 @@ async function defaultRule(args: string[], deps: RouteDeps): Promise<string> {
   return success(`Outside every dir rule, ${runsUse(tools)} route ${bold(name)}`);
 }
 
+// ─── Budgets ───────────────────────────────────────────────────────
+
+/** The profile a command names is not registered: `not-found`, with --json. */
+class UnknownProfileError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnknownProfileError";
+  }
+}
+
+/** The API profile `input` names, by name or id; one that is not registered, or not an API profile, is refused. */
+function apiProfileArg(input: string, registry: Registry): string {
+  let id: string;
+  try {
+    id = parseProfileRef(input, registry).id;
+  } catch (error) {
+    // parseProfileRef never quotes a key-shaped name back.
+    throw new UnknownProfileError(error instanceof Error ? error.message : String(error));
+  }
+  if (registry.profiles[id]?.kind !== "api") {
+    throw new RouteUsageError(
+      `${id} is not an API profile. A budget is an API profile's limit on spend; a subscription's usage is its plan quota.`,
+    );
+  }
+  return id;
+}
+
+function parseUsd(value: string): number {
+  const usd = Number(value);
+  if (value.trim() === "" || !isBudgetUsd(usd)) {
+    throw new Error("--usd must be a number of dollars above 0, such as 20 or 12.50.");
+  }
+  return usd;
+}
+
+function parsePeriod(value: string): BudgetPeriod {
+  if (!isBudgetPeriod(value)) throw new Error(`--per must be one of ${BUDGET_PERIODS.join(", ")}.`);
+  return value;
+}
+
+/** The routes in `file` that take the API profile `id`: by its exact name, the only way one joins. */
+function routesTaking(file: RoutesFile, registry: Registry, id: string): string[] {
+  return Object.keys(file.routes)
+    .sort()
+    .filter((name) => apiMembers(file.routes[name], registry).some((member) => member.id === id));
+}
+
+/**
+ * Every API profile, or only `only`, as `route budget` lists it: its budget in `file`, and its spend
+ * read now, through the quota cache, against the limit that applies.
+ */
+async function budgetRows(registry: Registry, file: RoutesFile, deps: RouteDeps, only?: string): Promise<BudgetRow[]> {
+  const { budgets } = readBudgets(file, namesOf(registry));
+  const budgetOf = (id: string) => (Object.hasOwn(budgets, id) ? budgets[id] : undefined);
+  const members = membersOf(registry, "all")
+    .filter((member) => member.kind === "api" && (only === undefined || member.id === only))
+    .sort(compareIds);
+  const targets = members.flatMap((member) => spendTarget(member, budgetOf(member.id)) ?? []);
+  const quotas = targets.length ? await deps.collectQuotas(targets) : {};
+  return members.map((member): BudgetRow => {
+    const snapshot = quotas[member.id];
+    const budget = budgetOf(member.id);
+    const base = { id: member.id, ...(budget ? { budget } : {}), routes: routesTaking(file, registry, member.id) };
+    if (snapshot?.noSpendReading) return { ...base, spend: "not-reported" };
+    // No endpoint to read from is a profile doctor reports, as it does a key it cannot read.
+    if (!snapshot) return { ...base, spend: "unread", unread: "missing" };
+    if (snapshot.state !== "ok") return { ...base, spend: "unread", unread: snapshot.state };
+    if (!snapshot.budget) return { ...base, spend: "no-limit" };
+    return { ...base, spend: "ok", window: snapshot.budget };
+  });
+}
+
+const PERIOD_WORDS: Record<BudgetPeriod, string> = { day: "today", week: "this week", month: "this month" };
+
+/**
+ * What `route budget` says under a budget it set: a provider that reports only a running total
+ * counts from clausona's first reading in the period, and one that reports no spend cannot have
+ * its budget checked.
+ */
+function setNotes(row: BudgetRow, registry: Registry, budget: Budget): string[] {
+  if (row.spend === "not-reported") {
+    return [
+      `${row.id}'s provider does not report spend, so the budget cannot be checked and ${row.id} cannot join a route.`,
+    ];
+  }
+  const baseUrl = registry.profiles[row.id]?.api?.baseUrl;
+  if (row.spend === "ok" && typeof baseUrl === "string" && spendProvider(baseUrl) === "litellm") {
+    return [
+      `Spend counts from clausona's first reading ${PERIOD_WORDS[budget.per]}; what was spent before it is not counted.`,
+    ];
+  }
+  return [];
+}
+
+/** What `route budget --clear` says after: the key's own limit that applies now, or that there is none. */
+function clearNotes(row: BudgetRow): string[] {
+  if (row.spend === "ok" && row.window)
+    return [`Routes now count it against its key's own limit, ${limitText(row.window)}.`];
+  if (row.spend !== "no-limit" || row.routes.length === 0) return [];
+  const routes = row.routes.map((name) => `route ${name}`);
+  const which =
+    routes.length === 1
+      ? `${routes[0]} skips`
+      : `${routes.slice(0, -1).join(", ")} and ${routes[routes.length - 1]} skip`;
+  return [
+    `${row.id} has no spend limit now, so ${which} it. Set a limit on the provider key, or a budget again: ${budgetCommand(row.id)}`,
+  ];
+}
+
+/**
+ * `route budget`: every API profile with its limit and spend; one profile's; or a budget set or
+ * cleared. Setting one is the consent for a route to take the profile; the limit is checked when
+ * a route is added or changed and on every run, never here.
+ */
+async function budgetCommandRun(args: string[], deps: RouteDeps): Promise<string> {
+  const read = readArgs(args, { values: ["--usd", "--per"], flags: ["--clear", "--json"] }, "route budget");
+  const [profileArg, ...extra] = read.positionals;
+  const json = read.flags.has("--json");
+  const clear = read.flags.has("--clear");
+  const usd = read.values.get("--usd");
+  const per = read.values.get("--per");
+  const setting = usd !== undefined || per !== undefined;
+  if (extra.length || (profileArg === undefined && (clear || setting))) {
+    throw new RouteUsageError(`${usage("budget")}\nRun \`clausona route budget --help\` for usage.`);
+  }
+  if (clear && setting) throw new RouteUsageError("--clear cannot be used with --usd or --per.");
+  if (setting && (usd === undefined || per === undefined)) {
+    throw new RouteUsageError("Give both --usd and --per: clausona route budget <profile> --usd 20 --per month.");
+  }
+  const registry = await registryOrThrow(deps);
+  const names = namesOf(registry);
+  if (profileArg === undefined) {
+    const { file } = await loadRoutes(deps.paths, names);
+    const rows = await budgetRows(registry, file, deps);
+    const read = readBudgets(file, names);
+    if (json) {
+      return JSON.stringify(
+        {
+          profiles: rows.map(budgetRowJson),
+          problems: read.problems,
+          warnings: budgetWarnings(read.budgets, registry.profiles),
+        },
+        null,
+        2,
+      );
+    }
+    return renderBudgets(rows, budgetNotes(file, registry), { now: deps.clock() });
+  }
+  const id = apiProfileArg(profileArg, registry);
+  const budget = setting
+    ? asUsage(() => ({ usd: parseUsd(usd as string), per: parsePeriod(per as string) }))
+    : undefined;
+  let changed = false;
+  let file: RoutesFile;
+  if (budget) {
+    file = await changeRoutes(deps, (current) => {
+      setBudget(current, id, budget);
+      return current;
+    });
+    changed = true;
+  } else if (clear) {
+    file = await changeRoutes(deps, (current) => {
+      changed = clearBudget(current, id);
+      return changed ? current : null;
+    });
+  } else {
+    file = (await loadRoutes(deps.paths, names)).file;
+  }
+  const [row] = await budgetRows(registry, file, deps, id);
+  if (json) return JSON.stringify({ ...budgetRowJson(row), ...(budget || clear ? { changed } : {}) }, null, 2);
+  const now = deps.clock();
+  if (budget) {
+    const shown = renderBudgets([row], setNotes(row, registry, budget), { now });
+    return [success(`Budget for ${bold(id)}: ${budgetText(budget)}`), shown].join("\n");
+  }
+  if (clear) {
+    if (!changed) return success(dim(`No budget for ${id}. Nothing was changed.`));
+    return [success(`Cleared the budget for ${bold(id)}`), renderBudgets([row], clearNotes(row), { now })].join("\n");
+  }
+  return renderBudgets([row], [], { now });
+}
+
 /**
  * `route edit`: routes.json as it is on disk (an invalid one too, so it can be fixed), or an
  * empty file when there is none. Saved only once it checks out, and only if routes.json is still
@@ -775,25 +998,39 @@ export async function routeDoctor(
   const rankings = registry
     ? await rankEvery(routes, registry, deps, false, readBudgets(loaded.file, namesOf(registry)).budgets)
     : undefined;
-  return { shown, warnings: listWarnings(loaded, names, rankings, readRules(loaded.file)) };
+  return {
+    shown,
+    warnings: listWarnings(loaded, names, rankings, readRules(loaded.file), budgetNotes(loaded.file, registry)),
+  };
 }
 
 /**
  * What `route list` warns about under its tables: routes that cannot be used, names and patterns
  * of the others that take nobody (`rankings`, theirs in `names` order; none before init), then
- * the rules.
+ * the rules, then the budgets (budgetNotes).
  */
 function listWarnings(
   loaded: LoadedRoutes,
   names: string[],
   rankings: Ranking[] | undefined,
   rules: RouteRules,
+  budgets: string[],
 ): string[] {
   return [
     ...brokenWarnings(loaded.broken),
     ...(rankings ? names.flatMap((name, i) => routeWarnings(name, rankings[i])) : []),
     ...ruleNotes(loaded, rules),
+    ...budgets,
   ];
+}
+
+/**
+ * What is wrong with the budgets: entries that cannot be read, then budgets for a profile that is
+ * not a registered API profile (none of those before init, when nothing is registered).
+ */
+function budgetNotes(file: RoutesFile, registry: Registry | null): string[] {
+  const read = readBudgets(file, namesOf(registry));
+  return [...read.problems, ...(registry ? budgetWarnings(read.budgets, registry.profiles) : [])];
 }
 
 async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
@@ -810,9 +1047,8 @@ async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
   const readQuota = !read.flags.has("--no-quota");
   // Ranked as a run ranks, so a route's members are the accounts a run would consider. Without a
   // registry nobody is registered yet, so nothing is ranked and no name is called unknown.
-  const rankings = registry
-    ? await rankEvery(routes, registry, deps, readQuota, readBudgets(file, namesOf(registry)).budgets)
-    : undefined;
+  const budgets = readBudgets(file, namesOf(registry));
+  const rankings = registry ? await rankEvery(routes, registry, deps, readQuota, budgets.budgets) : undefined;
   // Each problem as it is worded, for the routes left out: their names can be anything.
   const problems = broken.flatMap((route) => route.problems);
   if (read.flags.has("--json")) {
@@ -820,9 +1056,10 @@ async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
     return JSON.stringify(
       {
         routes: entries,
-        problems: [...problems, ...rules.problems],
+        problems: [...problems, ...rules.problems, ...budgets.problems],
         ...rulesJson(rules),
         ruleWarnings: ruleWarnings(file, broken, rules),
+        budgetWarnings: registry ? budgetWarnings(budgets.budgets, registry.profiles) : [],
       },
       null,
       2,
@@ -831,7 +1068,7 @@ async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
   // With --no-quota nothing was read, and the table says so with a dash.
   return renderRouteTable(
     names.map((name, i) => ({ name, route: routes[i], ...(rankings && readQuota ? { ranking: rankings[i] } : {}) })),
-    listWarnings(loaded, names, rankings, rules),
+    listWarnings(loaded, names, rankings, rules, budgetNotes(file, registry)),
     { now: deps.clock(), rules: ruleRows(loaded, rules) },
   );
 }
@@ -909,7 +1146,11 @@ async function explainRoute(args: string[], deps: RouteDeps): Promise<string> {
     now: deps.clock(),
     onlyTool: resolved.onlyTool,
     overrides,
-    warnings: [...brokenWarnings(loaded.broken), ...ruleNotes(loaded, rules)],
+    warnings: [
+      ...brokenWarnings(loaded.broken),
+      ...ruleNotes(loaded, rules),
+      ...readBudgets(loaded.file, namesOf(await deps.loadRegistry())).problems,
+    ],
   });
 }
 
@@ -1007,7 +1248,9 @@ function asJsonError(error: unknown): unknown {
   if (error instanceof NoAccountError) return new ExitError(error.message, error.exitCode, error.stdout, "failed");
   if (error instanceof WaitInterrupted) return new ExitError(error.message, error.exitCode, undefined, "failed");
   if (error instanceof RouteUsageError) return new ExitError(error.message, 1, undefined, "usage");
-  if (error instanceof UnknownRouteError) return new ExitError(error.message, 1, undefined, "not-found");
+  if (error instanceof UnknownRouteError || error instanceof UnknownProfileError) {
+    return new ExitError(error.message, 1, undefined, "not-found");
+  }
   if (error instanceof RoutesFileError) {
     return new ExitError(error.message, 1, undefined, "failed", { file: error.filePath, problems: error.problems });
   }
@@ -1058,6 +1301,8 @@ async function routeCommand(args: string[], io: RouteIo, deps: RouteDeps): Promi
       return dirRule(rest, deps);
     case "default":
       return defaultRule(rest, deps);
+    case "budget":
+      return budgetCommandRun(rest, deps);
     default:
       // Not quoted back when it holds something key-shaped, as a route name or a pattern is not.
       if (holdsKey(sub)) throw new RouteUsageError("Unknown route command. Run `clausona route --help` for the list.");

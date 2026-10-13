@@ -1,4 +1,4 @@
-import { budgetCommand, usdText } from "../core/route-budgets.js";
+import { type Budget, budgetCommand, budgetText, usdText } from "../core/route-budgets.js";
 import {
   DEFAULT_MAX_USAGE,
   type Route,
@@ -27,7 +27,7 @@ import {
   type UsageWindow,
 } from "../core/routing.js";
 import { posixQuote } from "../core/shell.js";
-import type { BudgetWindow, QuotaWindow, ToolName } from "../types.js";
+import type { BudgetWindow, QuotaState, QuotaWindow, ToolName } from "../types.js";
 import { accent, bold, box, dim, dimmer, padEnd, secondary, truncate, warnIcon, yellow } from "./cli-style.js";
 import {
   formatAge,
@@ -700,6 +700,145 @@ export function renderRunsHere(
   return [...summary, ...details.flatMap((detail) => ["", detail.replace(/^\n/, "").replace(/\n$/, "")]), ""].join(
     "\n",
   );
+}
+
+// ─── route budget ───────────────────────────────────────────────────
+
+/**
+ * An API profile as `route budget` lists it: its budget as routes.json holds it, its spend against
+ * the limit that applies (`window`) or why there is none (`spend`), and the routes that name it.
+ */
+export type BudgetRow = {
+  id: string;
+  budget?: Budget;
+  window?: BudgetWindow;
+  spend: "ok" | "no-limit" | "not-reported" | "unread";
+  /** Why a reading failed: its state. */
+  unread?: Exclude<QuotaState, "ok">;
+  routes: string[];
+};
+
+const UNREAD_WORDS: Record<Exclude<QuotaState, "ok">, string> = {
+  missing: "its key could not be read (clausona doctor says why)",
+  expired: "the provider refused the key",
+  cooldown: "the provider is rate limiting; clausona asks again later",
+  error: "the request failed",
+};
+
+/** Why a row has no usage, as `route budget` says it; undefined when it has one. */
+export function budgetReason(row: Pick<BudgetRow, "id" | "spend" | "unread">): string | undefined {
+  if (row.spend === "no-limit") return `no spend limit: ${budgetCommand(row.id)}`;
+  if (row.spend === "not-reported") return "the provider does not report spend";
+  if (row.spend === "unread") return `spend could not be read: ${UNREAD_WORDS[row.unread ?? "error"]}`;
+  return undefined;
+}
+
+type BudgetColumn = "profile" | "limit" | "source" | "spent" | "usage" | "resets";
+
+const BUDGET_LABELS: Record<BudgetColumn, string> = {
+  profile: "PROFILE",
+  limit: "LIMIT",
+  source: "SOURCE",
+  spent: "SPENT",
+  usage: "USAGE",
+  resets: "RENEWS",
+};
+
+/** Widest first: SOURCE goes first, then when the limit renews; the usage never does. */
+const BUDGET_LAYOUTS: BudgetColumn[][] = [
+  ["profile", "limit", "source", "spent", "usage", "resets"],
+  ["profile", "limit", "spent", "usage", "resets"],
+  ["profile", "limit", "spent", "usage"],
+];
+
+const sourceWords = (source: BudgetWindow["source"]) => (source === "budget" ? "clausona budget" : "provider limit");
+
+/** A usage in its severity colour, as a quota window's. */
+function usageCell(window: BudgetWindow): Cell {
+  const percent = formatQuotaPercent(window);
+  const styled = styledQuota(window, "ok");
+  return [[percent, (text) => (text === percent ? styled : text)]];
+}
+
+/**
+ * A row of the table: its columns when it has a usage, else its profile and, across the rest, why
+ * not, after its budget when it has one.
+ */
+function budgetTableRow(row: BudgetRow, keys: BudgetColumn[], now: number): TableRow {
+  const { window, budget } = row;
+  if (!window) {
+    const reason = budgetReason(row) ?? "";
+    const before = budget ? `${budgetText(budget)} (clausona budget); ` : "";
+    return { span: [[[row.id]], [[before], [reason, row.spend === "unread" ? yellow : dim]]] };
+  }
+  const cells: Record<BudgetColumn, Cell> = {
+    profile: [[row.id]],
+    limit: [[limitText(window)]],
+    source: [[sourceWords(window.source), secondary]],
+    spent: [[`$${window.spentUsd.toFixed(2)}`]],
+    usage: usageCell(window),
+    resets: [[window.resetsAt ? formatResetShort(window.resetsAt, new Date(now)) : "never", secondary]],
+  };
+  return { cells: keys.map((key) => cells[key]) };
+}
+
+/**
+ * `route budget` with nothing after it: every API profile with its limit, where the limit comes
+ * from, what it has spent against it and its usage, then the warnings. None at all says how to
+ * give one a limit.
+ */
+export function renderBudgets(rows: BudgetRow[], warnings: string[], options: { width?: number; now?: number } = {}) {
+  const width = options.width ?? terminalWidth();
+  const now = options.now ?? Date.now();
+  const notes = warningLines(warnings, width);
+  if (rows.length === 0) {
+    return [
+      "",
+      `  ${bold("No API profiles.")}`,
+      "",
+      ...wrap(
+        `An API profile joins a route once it has a spend limit: one set on its provider key, or a budget set with ${unbroken("clausona route budget <profile> --usd 20 --per month")}.`,
+        Math.min(width, PROSE_WIDTH),
+        "  ",
+      ),
+      ...(notes.length ? ["", ...notes] : []),
+      "",
+    ].join("\n");
+  }
+  const layouts = BUDGET_LAYOUTS.map(
+    (keys): Table => ({
+      columns: keys.map((key) => ({ label: BUDGET_LABELS[key] })),
+      rows: rows.map((row) => budgetTableRow(row, keys, now)),
+    }),
+  );
+  // The layout is the widest whose columns fit; a reason across them is cut to the line rather
+  // than cost the others a column.
+  const columnsOnly = (table: Table): Table => ({ ...table, rows: table.rows.filter((row) => "cells" in row) });
+  const chosen =
+    layouts.find((table) => tableWidth(columnsOnly(table), measure(columnsOnly(table))) <= width) ??
+    layouts[layouts.length - 1];
+  return ["", ...fitTable([chosen], width), ...(notes.length ? ["", ...notes] : []), ""].join("\n");
+}
+
+/** One API profile of `route budget --json`. */
+export function budgetRowJson(row: BudgetRow): object {
+  return {
+    profile: row.id,
+    budget: row.budget ? { usd: row.budget.usd, per: row.budget.per } : null,
+    limit: row.window
+      ? {
+          source: row.window.source,
+          usd: row.window.limitUsd,
+          per: row.window.per ?? null,
+          resetsAt: row.window.resetsAt ?? null,
+        }
+      : null,
+    spentUsd: row.window ? row.window.spentUsd : null,
+    usage: row.window ? row.window.usedPercent : null,
+    spend: row.spend,
+    reason: budgetReason(row) ?? null,
+    routes: [...row.routes],
+  };
 }
 
 // ─── route explain / add / set ──────────────────────────────────────
