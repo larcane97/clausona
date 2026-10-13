@@ -150,6 +150,11 @@ export type StateFacts = {
   claudeManagedMcp?: string;
   /** Claude MCP server id -> what it starts, which the lists match. Never printed. */
   mcpTargets: Record<string, McpTarget>;
+  /**
+   * pathKey of a project whose own settings set `env` -> server id -> what the server starts
+   * there, where that differs from `mcpTargets`. Never printed.
+   */
+  mcpTargetsIn: Record<string, Record<string, McpTarget>>;
   /** `.claude.json` → projects[P].disabledMcpServers, per account. */
   claudeMcpDisabled: { file: string; profile: string; project: string; names: string[] }[];
   /** `.mcp.json` approvals, from settings and from an account's project entry. */
@@ -216,6 +221,7 @@ export function emptyFacts(): StateFacts {
     claudeFlags: [],
     claudeMcpPolicy: [],
     mcpTargets: {},
+    mcpTargetsIn: {},
     claudeMcpDisabled: [],
     claudeMcpjson: [],
     codexSkillConfig: [],

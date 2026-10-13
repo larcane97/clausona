@@ -223,7 +223,10 @@ export function mcpBlocked(inv: Inventory, item: Extension, project: string | un
   const managed = item.location.scope === "managed";
   const exclusive = inv.facts.claudeManagedMcp;
   if (exclusive !== undefined && !managed) return { value: "off", setBy: { file: exclusive, key: MANAGED_MCP_KEY } };
-  const target = inv.facts.mcpTargets[item.id];
+  // What the server starts here: a project's own settings can set `env` for Claude Code.
+  const target =
+    (project === undefined ? undefined : inv.facts.mcpTargetsIn[pathKey(project)]?.[item.id]) ??
+    inv.facts.mcpTargets[item.id];
   const policies = mcpPolicies(inv, project);
   for (const policy of policies) {
     const rule = policy.denied?.find((entry) => ruleMatches(entry, item.name, target));

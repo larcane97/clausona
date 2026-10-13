@@ -140,6 +140,21 @@ describe("mcpRules and ruleMatches", () => {
     expect(entry && ruleMatches(entry, "any", mcpTarget({ command: `${ref("NOPE")}/srv` }, {}))).toBe(true);
   });
 
+  it("reads a fallback for a variable the environment does not set, after the default, as a denylist entry does", () => {
+    const fallback = { TOOLS: "/from/settings", HOST: "*.example.com" };
+    expect(expandVars(`${ref("TOOLS")}/srv`, {}, fallback).text).toBe("/from/settings/srv");
+    expect(expandVars(`${ref("TOOLS")}/srv`, { TOOLS: "/from/shell" }, fallback).text).toBe("/from/shell/srv");
+    expect(expandVars(`${ref("TOOLS", "/usr")}/srv`, {}, fallback).text).toBe("/usr/srv");
+    expect(expandVars(`https://${ref("HOST")}/*`, {}, fallback)).toEqual({
+      text: "https://*.example.com/*",
+      reads: ["HOST"],
+      wildcard: true,
+    });
+    expect(mcpRules([{ serverCommand: [`${ref("TOOLS")}/bad`] }], {}, fallback)).toEqual([
+      { serverCommand: valueHash(["/from/settings/bad"]), reads: ["TOOLS"] },
+    ]);
+  });
+
   it("says a value that brings a * into a URL entry, which an allowlist then never takes", () => {
     expect(expandVars(`https://${ref("HOST")}/*`, { HOST: "*.example.com" }).wildcard).toBe(true);
     expect(expandVars(`https://${ref("HOST")}/*`, { HOST: "a%2Ab.example.com" }).wildcard).toBe(true);

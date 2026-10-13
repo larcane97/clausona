@@ -46,8 +46,9 @@ export type LoadOptions = {
    */
   mcpjsonStop?: string;
   /**
-   * The environment `${VAR}` in Claude Code's MCP lists and servers expands from before they
-   * match; default process.env, the shell clausona runs in. Tests set one of their own.
+   * The environment clausona runs in, which `${VAR}` in Claude Code's MCP lists and servers
+   * expands from, with the settings files' `env` over it (mcpEnvs); default process.env. Tests
+   * set one of their own.
    */
   env?: Env;
 };

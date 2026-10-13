@@ -276,9 +276,26 @@ The switches are read from these places:
     stays as written, so an entry and a server that spell it alike still match. A plugin's
     server reads its own folder as `${CLAUDE_PLUGIN_ROOT}`. A `serverUrl` entry that a value
     brings a `*` into is one no allowlist takes, while a denylist still does.
-  - Claude Code expands a variable in its own environment, which the `env` of your settings can
-    add to, and clausona in the shell it runs in. So when a match reads one, the details say so:
-    `off (deniedMcpServers in …, with ${TOOLS} as this shell has it)`.
+  - What a variable expands from, as Claude Code 2.1.296 reads it. In a server's command,
+    arguments or URL: the environment clausona runs in, with the `env` of your settings laid over
+    it in the order Claude Code reads them, user settings, then the project's
+    `.claude/settings.json`, then its `.claude/settings.local.json`, then managed settings, a
+    later one winning a name. A project's own files count in that project only. In a list entry:
+    the environment clausona runs in, with managed settings' `env` over it, and a
+    `deniedMcpServers` entry also takes user and managed settings' `env` for a variable that
+    neither sets and that has no default. When a match reads a variable, the details say so:
+    `off (deniedMcpServers in …, with ${TOOLS} as your shell and settings set it)`.
+  - A match can differ from Claude Code's where clausona does not model what Claude Code reads:
+    when Claude Code starts in another environment than this shell, such as an IDE's or one a
+    launcher sets (clausona's sets `CLAUDE_CONFIG_DIR` for each account but the default one);
+    the `env` of an account's `.claude.json` and of a `--settings` file; the variables Claude
+    Code leaves out of a settings file's `env`, in a folder it does not trust yet, names it keeps
+    for itself, or a project's value for a name already set when it starts; its own credentials,
+    which it reads as empty in a server's config and in an entry; a `serverUrl` entry it finds
+    unsafe for another reason than a `*`, such as a value that changes the URL's shape or a
+    whole URL in one variable, which no allowlist then takes; and `${CLAUDE_PROJECT_DIR}`,
+    `${CLAUDE_PLUGIN_DATA}` and `${user_config.…}` in a plugin's server, which stay as written
+    unless the environment sets them.
 - Codex skills: `[[skills.config]]` in Codex's `config.toml`, by name or by path. A path names
   the skill whether it goes through a link or not, as Codex reads it.
 - Codex MCP servers: `mcp_servers.<name>.enabled` in Codex's or the project's `config.toml`.

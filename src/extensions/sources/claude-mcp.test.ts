@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { valueHash } from "../hash.js";
 import type { Env } from "../mcp-policy.js";
 import { type Collector, emptyFacts, type Project } from "../model.js";
+import { pathKey } from "../read.js";
 import { TestHome } from "../test-home.js";
 import { collectClaudeSettingsFacts, loadClaudeAccounts, loadClaudeContext } from "./claude-context.js";
 import { readClaudeMcp } from "./claude-mcp.js";
@@ -303,6 +304,45 @@ describe("readClaudeMcp", () => {
       command: valueHash([`${realpathSync(kit)}/kit-mcp`]),
       vars: true,
     });
+  });
+
+  it("lays the settings files' env over the shell's for a server, and managed settings' alone for a list", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const ref = (name: string) => ["$", "{", name, "}"].join("");
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", { mcpServers: { tools: { command: `${ref("TOOLS")}/srv`, args: [ref("MODE")] } } });
+    // User settings set TOOLS and MODE, the project's local settings TOOLS again, managed settings MODE.
+    const user = h.write(".claude/settings.json", {
+      env: { TOOLS: "/user/tools", MODE: "user", LIST: "/user/list" },
+      allowedMcpServers: [{ serverCommand: [`${ref("LIST")}/srv`] }],
+      deniedMcpServers: [{ serverCommand: [`${ref("LIST")}/bad`] }, { serverCommand: [`${ref("ONLY")}/bad`] }],
+    });
+    h.write("repos/app/.claude/settings.local.json", { env: { TOOLS: "/local/tools" } });
+    const managed = h.write("policy/managed-settings.json", { env: { MODE: "managed", ONLY: "/managed/only" } });
+
+    const out = await read(h, [{ path: app, tools: ["claude"], profiles: [] }], managed, { TOOLS: "/shell/tools" });
+    const id = "mcp:claude:account:claude:default:tools";
+    // A setting's env wins over the shell's; managed settings' over the user's.
+    expect(out.facts.mcpTargets[id]).toMatchObject({ command: valueHash(["/user/tools/srv", "managed"]) });
+    // In the project, its local settings win TOOLS; elsewhere the user's still holds.
+    expect(out.facts.mcpTargetsIn[pathKey(app)]?.[id]).toMatchObject({
+      command: valueHash(["/local/tools/srv", "managed"]),
+    });
+    // An entry reads the shell and managed settings alone; a denylist entry falls back to the user's env.
+    expect(out.facts.claudeMcpPolicy).toEqual([
+      {
+        file: user,
+        layer: "user",
+        allowed: [{ serverCommand: valueHash([`${ref("LIST")}/srv`]), reads: ["LIST"] }],
+        denied: [
+          { serverCommand: valueHash(["/user/list/bad"]), reads: ["LIST"] },
+          { serverCommand: valueHash(["/managed/only/bad"]), reads: ["ONLY"] },
+        ],
+      },
+    ]);
+    // No project of its own env: nothing kept apart.
+    expect((await read(h, [], managed)).facts.mcpTargetsIn).toEqual({});
   });
 
   it("reads every settings file's allowedMcpServers and deniedMcpServers, and the managed lock", async () => {

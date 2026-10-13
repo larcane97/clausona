@@ -8,8 +8,9 @@ import { isRecord } from "./read.js";
  * An entry has one key: `serverName`, the server's name, matched exactly; `serverCommand`, the
  * command and its arguments, every one in order; or `serverUrl`, a URL pattern with `*`
  * wildcards. Claude Code expands `${VAR}` in a command or URL on both sides before it compares
- * them, from the environment it runs in; clausona expands them from its own, the user's shell's
- * (`expandVars`).
+ * them, from the environment it runs in; clausona expands them (`expandVars`) from the one it
+ * runs in, with the settings files' `env` over it as Claude Code lays them (claude-context.ts
+ * `mcpEnvs`).
  */
 
 /** The environment `${VAR}` expands from. */
@@ -50,30 +51,35 @@ function bringsWildcard(value: string): boolean {
 /**
  * `text` with each `${NAME}` and `${NAME:-default}` expanded from `env`, as Claude Code 2.1.296
  * expands a server's config and a list entry: a variable that is set gives its value, an empty
- * one too; one that is not gives the default after `:-`, and with no default it stays as
- * written. `$NAME` with no braces is no reference. `reads` names each variable met, set or not,
- * once; `wildcard` says a value brought a `*` in.
+ * one too; one that is not gives the default after `:-`, then what `fallback` sets it to, and
+ * with neither it stays as written. `$NAME` with no braces is no reference. `reads` names each
+ * variable met, set or not, once; `wildcard` says a value brought a `*` in.
  */
-export function expandVars(text: string, env: Env): { text: string; reads: string[]; wildcard: boolean } {
+export function expandVars(
+  text: string,
+  env: Env,
+  fallback: Env = {},
+): { text: string; reads: string[]; wildcard: boolean } {
   const reads: string[] = [];
   let wildcard = false;
-  const expanded = text.replace(REFERENCE, (whole, name: string, fallback: string | undefined) => {
+  const expanded = text.replace(REFERENCE, (whole, name: string, preset: string | undefined) => {
     if (!reads.includes(name)) reads.push(name);
     const value: unknown = env[name];
-    if (typeof value === "string") {
-      if (bringsWildcard(value)) wildcard = true;
-      return value;
-    }
-    return fallback ?? whole;
+    const later: unknown = fallback[name];
+    const found =
+      typeof value === "string" ? value : preset === undefined && typeof later === "string" ? later : undefined;
+    if (found === undefined) return preset ?? whole;
+    if (bringsWildcard(found)) wildcard = true;
+    return found;
   });
   return { text: expanded, reads, wildcard };
 }
 
 /** Each of `words` expanded, and the variables they read, each once. */
-function expandAll(words: string[], env: Env): { words: string[]; reads: string[] } {
+function expandAll(words: string[], env: Env, fallback: Env = {}): { words: string[]; reads: string[] } {
   const reads: string[] = [];
   const out = words.map((word) => {
-    const expanded = expandVars(word, env);
+    const expanded = expandVars(word, env, fallback);
     for (const name of expanded.reads) if (!reads.includes(name)) reads.push(name);
     return expanded.text;
   });
@@ -82,19 +88,19 @@ function expandAll(words: string[], env: Env): { words: string[]; reads: string[
 
 /**
  * A list of entries as read from a settings file: undefined when it is no list, each entry kept
- * that is one, its command or URL expanded from `env`.
+ * that is one, its command or URL expanded from `env`, then `fallback` (see expandVars).
  */
-export function mcpRules(value: unknown, env: Env = {}): McpRule[] | undefined {
+export function mcpRules(value: unknown, env: Env = {}, fallback: Env = {}): McpRule[] | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.flatMap((entry): McpRule[] => {
     if (!isRecord(entry) || Object.keys(entry).length !== 1) return [];
     if (typeof entry.serverName === "string") return [{ serverName: entry.serverName }];
     if (Array.isArray(entry.serverCommand) && entry.serverCommand.every((word) => typeof word === "string")) {
-      const { words, reads } = expandAll(entry.serverCommand, env);
+      const { words, reads } = expandAll(entry.serverCommand, env, fallback);
       return [{ serverCommand: valueHash(words), ...(reads.length > 0 ? { reads } : {}) }];
     }
     if (typeof entry.serverUrl === "string") {
-      const { text, reads, wildcard } = expandVars(entry.serverUrl, env);
+      const { text, reads, wildcard } = expandVars(entry.serverUrl, env, fallback);
       return [{ serverUrl: text, ...(reads.length > 0 ? { reads } : {}), ...(wildcard ? { wildcard: true } : {}) }];
     }
     return [];

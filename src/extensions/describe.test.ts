@@ -356,11 +356,37 @@ describe("managed MCP servers and the MCP lists", () => {
     expect(jsonItem(set, github, app, NOW).stateByAccount).toEqual({ "claude:default": "on", "claude:work": "off" });
     expect(detailsOf(set, github, app, NOW).filter((l) => l.label === "Accounts" || l.label === "")).toContainEqual({
       label: "",
-      text: `work     off (deniedMcpServers in ${managed}, with ${ref("TOOLS")} as this shell has it)`,
+      text: `work     off (deniedMcpServers in ${managed}, with ${ref("TOOLS")} as your shell and settings set it)`,
     });
     // Unset, the entry stays as written and matches neither.
     const unset = await loadInventory(h.inventoryOptions(app, policy));
     expect(jsonItem(unset, serverRow(unset, "global", app, "github"), app, NOW).state).toBe("on");
+  });
+
+  it("expands a server's variables with the settings' env too, a project's own in that project", async () => {
+    const ref = (name: string) => ["$", "{", name, "}"].join("");
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    const web = h.project("repos/web");
+    h.claude("default", ".claude", { projects: { [app]: {}, [web]: {} } });
+    h.claude("work", ".claude-work", {
+      projects: { [app]: {}, [web]: {} },
+      mcpServers: { github: { command: `${ref("TOOLS")}/gh-mcp` } },
+    });
+    h.write("policy/managed-settings.json", { deniedMcpServers: [{ serverCommand: ["/opt/tools/gh-mcp"] }] });
+    h.write(".claude/settings.json", { env: { TOOLS: "/opt/tools" } });
+    h.write("repos/app/.claude/settings.local.json", { env: { TOOLS: "/app/tools" } });
+    const inv = await loadInventory(h.inventoryOptions(app, h.path("policy", "managed-settings.json")));
+    // In web the user settings' TOOLS holds, and the list keeps work's copy out.
+    const inWeb = serverRow(inv, "global", web, "github");
+    expect(detailsOf(inv, inWeb, web, NOW).find((l) => l.label === "Accounts")?.text).toBe(
+      `work    off (deniedMcpServers in ${tilde(h.path("policy", "managed-settings.json"), h.home)}, with ${ref("TOOLS")} as your shell and settings set it)`,
+    );
+    // In app its local settings set TOOLS to another folder: no entry names that.
+    expect(jsonItem(inv, serverRow(inv, "global", app, "github"), app, NOW).stateByAccount).toEqual({
+      "claude:work": "on",
+    });
   });
 
   it("says a copy hidden by one the lists keep off does not start either, naming the list", async () => {
