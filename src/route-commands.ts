@@ -16,7 +16,6 @@ import {
   type RouteTool,
   withDefaults,
 } from "./core/route-config.js";
-import { expandPatterns } from "./core/route-patterns.js";
 import {
   brokenRoutesHint,
   loadRoutes,
@@ -38,6 +37,7 @@ import {
   renderRouteDetail,
   renderRoutesEmpty,
   renderRouteTable,
+  routeListJson,
   takesNobody,
 } from "./lib/route-render.js";
 import {
@@ -79,7 +79,8 @@ const SUB_HELP: Record<string, string[]> = {
     "",
     `    ${dim("Every route with its settings, how many of its accounts are free now, and the one it")}`,
     `    ${dim("would pick next (nothing is recorded). --no-quota reads no quota and shows a dash.")}`,
-    `    ${dim("Warns about names that are not registered (removed profiles) and patterns that match nobody.")}`,
+    `    ${dim("Warns about names that are not registered (removed profiles), patterns and excludes that")}`,
+    `    ${dim("match nobody, and routes in routes.json that cannot be used.")}`,
   ],
   add: [
     helpUsage("clausona route add <name> [--tool claude|codex|all] [options]"),
@@ -438,15 +439,27 @@ function brokenWarnings(broken: BrokenRoute[]): string[] {
 /**
  * Every route ranked as `route explain` ranks it, recording nothing, from one quota read for the
  * members of all of them: a route that shares accounts with another does not read them twice.
+ * Without `readQuota` nothing is read, and the rankings say only who the members are.
  */
-async function rankEvery(routes: Route[], registry: Registry, deps: RouteDeps): Promise<Ranking[]> {
+async function rankEvery(routes: Route[], registry: Registry, deps: RouteDeps, readQuota: boolean): Promise<Ranking[]> {
   const targets = new Map<string, QuotaTarget>();
   for (const route of routes) {
     for (const target of quotaTargets(route, membersOf(registry, route.tool), false)) targets.set(target.id, target);
   }
-  const quotas = await deps.collectQuotas([...targets.values()]);
+  const quotas = readQuota ? await deps.collectQuotas([...targets.values()]) : {};
   const read: RouteDeps = { ...deps, loadRegistry: async () => registry, collectQuotas: async () => quotas };
   return Promise.all(routes.map((route) => rankRouteNow({ route }, read, { resume: false, record: false })));
+}
+
+/** What `route list` warns about one route, from its ranking: names and patterns that take nobody. */
+function routeWarnings(name: string, ranking: Ranking): string[] {
+  return [
+    ...ranking.rows
+      .filter((row) => row.skip === "not-registered")
+      .map((row) => `${name} names '${row.pattern}', which is not a registered profile.`),
+    ...ranking.emptyPatterns.map((pattern) => `${name}: '${pattern}' matches nobody.`),
+    ...ranking.emptyExcludes.map((pattern) => `${name}: exclude '${pattern}' matches nobody.`),
+  ];
 }
 
 async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
@@ -454,41 +467,26 @@ async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
   if (read.positionals.length) throw new Error(`${usage("list")}\nRun \`clausona route list --help\` for usage.`);
   const registry = await deps.loadRegistry();
   const { file, broken } = await loadRoutes(deps.paths, namesOf(registry));
-  const entries = Object.keys(file.routes)
-    .sort()
-    .map((name) => {
-      const route = withDefaults(file.routes[name]);
-      const members = registry ? membersOf(registry, route.tool) : [];
-      const excluded = new Set(expandPatterns(route.exclude, members).members.map((entry) => entry.member.id));
-      const pool = expandPatterns(route.from, members);
-      const fallback = expandPatterns(route.fallback, members);
-      const ids = (list: typeof pool.members) => list.map((entry) => entry.member.id).filter((id) => !excluded.has(id));
-      return {
-        name,
-        route,
-        members: ids(pool.members),
-        fallbackMembers: ids(fallback.members),
-        excluded: [...excluded],
-        unknownNames: [...pool.unknownNames, ...fallback.unknownNames],
-        emptyPatterns: [...pool.emptyPatterns, ...fallback.emptyPatterns],
-      };
-    });
+  const names = Object.keys(file.routes).sort();
+  const routes = names.map((name) => withDefaults(file.routes[name]));
+  const readQuota = !read.flags.has("--no-quota");
+  // Ranked as a run ranks, so a route's members are the accounts a run would consider. Without a
+  // registry nobody is registered yet, so nothing is ranked and no name is called unknown.
+  const rankings = registry ? await rankEvery(routes, registry, deps, readQuota) : undefined;
   // Each problem as it is worded, for the routes left out: their names can be anything.
   const problems = broken.flatMap((route) => route.problems);
-  if (read.flags.has("--json")) return JSON.stringify({ routes: entries, problems }, null, 2);
-  if (entries.length === 0 && broken.length === 0) return renderRoutesEmpty();
+  if (read.flags.has("--json")) {
+    const entries = names.map((name, i) => routeListJson(name, routes[i], rankings?.[i], readQuota));
+    return JSON.stringify({ routes: entries, problems }, null, 2);
+  }
+  if (names.length === 0 && broken.length === 0) return renderRoutesEmpty();
   const warnings = [
     ...brokenWarnings(broken),
-    ...entries.flatMap((entry) => [
-      ...entry.unknownNames.map((name) => `${entry.name} names '${name}', which is not a registered profile.`),
-      ...entry.emptyPatterns.map((pattern) => `${entry.name}: '${pattern}' matches nobody.`),
-    ]),
+    ...(rankings ? names.flatMap((name, i) => routeWarnings(name, rankings[i])) : []),
   ];
-  // Without a registry there is nobody to rank; with --no-quota nothing is read, and the table says so.
-  const routes = entries.map((entry) => entry.route);
-  const rankings = registry && !read.flags.has("--no-quota") ? await rankEvery(routes, registry, deps) : undefined;
+  // With --no-quota nothing was read, and the table says so with a dash.
   return renderRouteTable(
-    entries.map(({ name, route }, i) => ({ name, route, ...(rankings ? { ranking: rankings[i] } : {}) })),
+    names.map((name, i) => ({ name, route: routes[i], ...(rankings && readQuota ? { ranking: rankings[i] } : {}) })),
     warnings,
     { now: deps.clock() },
   );

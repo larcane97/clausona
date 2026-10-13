@@ -12,6 +12,7 @@ import {
   blockingReset,
   FULL,
   mostLeftReason,
+  type Outcome,
   type Ranking,
   type Row,
   type SkipReason,
@@ -470,11 +471,14 @@ export function nothingRead(rows: Row[]): boolean {
 }
 
 /**
- * Members free now - not skipped, and under the cut - out of every member: a skipped one counts
- * (it is in the route, just unusable now), a name that is not registered does not.
+ * The rows a route counts as its members: a skipped one is (it is in the route, just unusable
+ * now), but neither a name that is not registered nor an API profile, which no run ever takes.
  */
+const isMember = (row: Row) => row.skip !== "not-registered" && row.skip !== "api-not-supported";
+
+/** Members free now - not skipped, and under the cut - out of every member (isMember). */
 export function freeNow(ranking: Ranking): { free: number; members: number } {
-  const members = ranking.rows.filter((row) => row.skip !== "not-registered");
+  const members = ranking.rows.filter(isMember);
   const free = members.filter(
     (row) => !row.skip && row.usage !== undefined && row.usage.percent < ranking.route.maxUsage,
   );
@@ -608,6 +612,7 @@ function memberLines(ranking: Ranking, width: number, now: number, nobodyHint?: 
       .map((row): [string, string] => [row.id, skipText(row)]),
     ...ranking.emptyPatterns.map((pattern): [string, string] => [pattern, "matches nobody"]),
     ...ranking.excluded.map((entry): [string, string] => [entry.id, `excluded by ${entry.pattern}`]),
+    ...ranking.emptyExcludes.map((pattern): [string, string] => [pattern, "excludes nobody"]),
   ];
   const otherRows = others.map(([id, text]): TableRow => ({ span: [[[id]], [[text, dim]]] }));
   if (members.length === 0) {
@@ -908,6 +913,21 @@ const windowJson = (window: QuotaWindow | undefined) =>
 const soonestJson = (soonest: { id: string; at: string } | undefined) =>
   soonest ? { id: soonest.id, at: soonest.at } : null;
 
+/** A route with every default filled in. */
+const settingsJson = (route: Route) => ({
+  tool: route.tool,
+  from: [...route.from],
+  exclude: [...route.exclude],
+  strategy: route.strategy,
+  maxUsage: route.maxUsage,
+  fallback: [...route.fallback],
+});
+
+const outcomeJson = (outcome: Outcome) =>
+  outcome.kind === "picked"
+    ? { kind: outcome.kind, id: outcome.id, stage: outcome.stage, reason: outcome.reason }
+    : { kind: outcome.kind, ...(outcome.soonest ? { soonest: soonestJson(outcome.soonest) } : {}) };
+
 export function pickJson(name: string | undefined, ranking: Ranking): object {
   const { outcome } = ranking;
   if (outcome.kind === "none") {
@@ -929,18 +949,8 @@ export function explainJson(name: string | undefined, resolvedBy: ResolvedBy, ra
   return {
     route: name ?? null,
     resolvedBy,
-    settings: {
-      tool: route.tool,
-      from: [...route.from],
-      exclude: [...route.exclude],
-      strategy: route.strategy,
-      maxUsage: route.maxUsage,
-      fallback: [...route.fallback],
-    },
-    outcome:
-      outcome.kind === "picked"
-        ? { kind: outcome.kind, id: outcome.id, stage: outcome.stage, reason: outcome.reason }
-        : { kind: outcome.kind, ...(outcome.soonest ? { soonest: soonestJson(outcome.soonest) } : {}) },
+    settings: settingsJson(route),
+    outcome: outcomeJson(outcome),
     members: ranking.rows.map((row) => ({
       profile: row.id,
       role: row.role,
@@ -954,5 +964,31 @@ export function explainJson(name: string | undefined, resolvedBy: ResolvedBy, ra
     })),
     excluded: ranking.excluded.map((entry) => ({ profile: entry.id, matchedBy: entry.pattern })),
     emptyPatterns: [...ranking.emptyPatterns],
+    emptyExcludes: [...ranking.emptyExcludes],
+  };
+}
+
+/**
+ * One route of `route list --json`, from its ranking: its members are the accounts a run would
+ * consider, as `explain` lists them. Without a registry there is no ranking, and nobody to list.
+ * `quotaRead` says whether quota was read (not with `--no-quota`): who is free and who is next are
+ * null without it, and when nothing could be read for any member.
+ */
+export function routeListJson(name: string, route: Route, ranking: Ranking | undefined, quotaRead: boolean): object {
+  const rows = ranking?.rows ?? [];
+  const ids = (role: Row["role"]) => rows.filter((row) => row.role === role && isMember(row)).map((row) => row.id);
+  const counted = ranking && quotaRead && !nothingRead(rows) ? ranking : undefined;
+  const count = counted ? freeNow(counted) : undefined;
+  return {
+    name,
+    route: settingsJson(route),
+    members: ids("pool"),
+    fallbackMembers: ids("fallback"),
+    excluded: (ranking?.excluded ?? []).map((entry) => entry.id),
+    unknownNames: rows.filter((row) => row.skip === "not-registered").map((row) => row.pattern),
+    emptyPatterns: [...(ranking?.emptyPatterns ?? [])],
+    emptyExcludes: [...(ranking?.emptyExcludes ?? [])],
+    freeNow: count ? { free: count.free, members: count.members } : null,
+    next: counted ? outcomeJson(counted.outcome) : null,
   };
 }

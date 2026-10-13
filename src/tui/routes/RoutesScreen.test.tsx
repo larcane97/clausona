@@ -370,6 +370,14 @@ describe("RoutesScreen", () => {
     expect(frame).toContain("⚠ routes.json has a route that cannot be used: clausona route list says why.");
   });
 
+  // A typo in an exclude leaves in the account it was meant to leave out, so it is pointed out.
+  it("points out an exclude that matches nobody, as route explain does", async () => {
+    const file: RoutesFile = { version: 1, routes: { main: { tool: "claude", exclude: ["persnal"] } } };
+    const { instance } = setup({ file });
+    const { detail } = panes(await ranked(instance));
+    expect(detail).toContain("persnal           excludes nobody");
+  });
+
   // Offline, or nothing readable. Nothing read says nothing about who is free: a dash, as
   // `clausona route list` prints, not 0.
   it("shows no quota reading on every member and a dash for who is free when no quota can be read", async () => {

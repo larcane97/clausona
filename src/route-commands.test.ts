@@ -484,8 +484,69 @@ describe("route list", () => {
     const out = await run("list", "--no-quota");
     expect(out).toMatch(/^ {4}main\s+claude\s+round-robin\s+80%\s+—\s+—$/m);
     expect(reads).toBe(0);
-    await run("list", "--json");
+    // --json reads quota for freeNow and next, and with --no-quota does not.
+    const json = JSON.parse(await run("list", "--json", "--no-quota"));
     expect(reads).toBe(0);
+    expect(json.routes[0]).toMatchObject({ members: ["claude:a", "claude:b", "claude:c"], freeNow: null, next: null });
+  });
+
+  it("lists in --json the members a run would rank, who is free now and who is next", async () => {
+    const { run, deps } = setup({ ...QUOTAS, "claude:b": snap(90, 0) });
+    // claude:glm is an API profile, which every run skips: not a member, though named exactly.
+    writeFileSync(
+      deps.paths.routesPath,
+      JSON.stringify({ version: 1, routes: { main: { tool: "claude", from: ["glm", "a", "b"], fallback: ["c"] } } }),
+    );
+    const [entry] = JSON.parse(await run("list", "--json")).routes;
+    expect(entry).toEqual({
+      name: "main",
+      route: {
+        tool: "claude",
+        from: ["glm", "a", "b"],
+        exclude: [],
+        strategy: "round-robin",
+        maxUsage: 80,
+        fallback: ["c"],
+      },
+      members: ["claude:a", "claude:b"],
+      fallbackMembers: ["claude:c"],
+      excluded: [],
+      unknownNames: [],
+      emptyPatterns: [],
+      emptyExcludes: [],
+      freeNow: { free: 2, members: 3 },
+      next: { kind: "picked", id: "claude:a", stage: "pool", reason: "next in turn" },
+    });
+    expect(await run("list")).toMatch(/^ {4}main\s+claude\s+round-robin\s+80%\s+2 of 3\s+claude:a$/m);
+  });
+
+  it("names nobody unknown before clausona init, when no profile is registered yet", async () => {
+    const { run, deps } = setup();
+    deps.loadRegistry = async () => null;
+    writeFileSync(
+      deps.paths.routesPath,
+      JSON.stringify({ version: 1, routes: { main: { tool: "claude", from: ["work"] } } }),
+    );
+    expect(await run("list")).not.toContain("⚠");
+    const [entry] = JSON.parse(await run("list", "--json")).routes;
+    expect(entry).toMatchObject({ members: [], unknownNames: [], emptyPatterns: [], freeNow: null, next: null });
+  });
+
+  it("says a pattern that matches nobody once, and an exclude that matches nobody too", async () => {
+    const { run, deps } = setup();
+    writeFileSync(
+      deps.paths.routesPath,
+      JSON.stringify({
+        version: 1,
+        routes: { main: { tool: "claude", from: ["*", "x-*"], fallback: ["x-*"], exclude: ["persnal", "c"] } },
+      }),
+    );
+    const out = await run("list");
+    expect(out.match(/'x-\*' matches nobody/g)).toHaveLength(1);
+    expect(out).toContain("  ⚠ main: exclude 'persnal' matches nobody.");
+    const [entry] = JSON.parse(await run("list", "--json")).routes;
+    expect(entry).toMatchObject({ emptyPatterns: ["x-*"], emptyExcludes: ["persnal"], excluded: ["claude:c"] });
+    expect(await run("explain", "main")).toMatch(/^ {4}persnal\s+excludes nobody$/m);
   });
 
   // A route can name a profile that has since been removed.

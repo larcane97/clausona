@@ -1,4 +1,5 @@
 import type { QuotaSnapshot, QuotaWindow, ToolName } from "../types.js";
+import { foldProfileName } from "./profile-name.js";
 import { type Route, type RouteTool, toolsOf } from "./route-config.js";
 import { compareIds, type Expansion, expandPatterns, type Member, splitToolPrefix } from "./route-patterns.js";
 
@@ -59,7 +60,10 @@ export type Ranking = {
   route: Route;
   rows: Row[];
   excluded: Array<{ id: string; pattern: string }>;
+  /** Glob and email patterns of `from` and `fallback` that match nobody, each once. */
   emptyPatterns: string[];
+  /** Patterns of `exclude` that match nobody, names too: a typo there leaves in the account meant to go. */
+  emptyExcludes: string[];
   outcome: Outcome;
 };
 
@@ -210,8 +214,9 @@ export function rankRoute(input: RankInput): Ranking {
   // other tool has is left out of the run rather than called not registered.
   const members = input.members.filter((member) => tools.includes(member.tool));
   const inRun = (tool: string | null) => !onlyTool || tool === null || tool === onlyTool;
+  const exclusion = expandPatterns(route.exclude, members);
   const excludedBy = new Map<string, string>();
-  for (const { member, pattern } of expandPatterns(route.exclude, members).members) excludedBy.set(member.id, pattern);
+  for (const { member, pattern } of exclusion.members) excludedBy.set(member.id, pattern);
 
   const rows: Row[] = [];
   const excluded: Ranking["excluded"] = [];
@@ -246,9 +251,22 @@ export function rankRoute(input: RankInput): Ranking {
     if (outcome.kind === "picked" && row.id === outcome.id) row.status = "picked";
     else if (row.usage && row.usage.percent >= route.maxUsage) row.status = "over-limit";
   }
-  // As with unknown names: a pattern of the other tool that matches nobody is not this run's.
-  const emptyPatterns = [...pool.emptyPatterns, ...fallback.emptyPatterns].filter((pattern) =>
-    inRun(splitToolPrefix(pattern.trim()).prefix),
-  );
-  return { route, rows, excluded, emptyPatterns, outcome };
+  // As with unknown names: a pattern of the other tool that matches nobody is not this run's. One
+  // listed in both from and fallback, or twice in either, is said once.
+  const thisRun = (pattern: string) => inRun(splitToolPrefix(pattern.trim()).prefix);
+  const emptyPatterns = once([...pool.emptyPatterns, ...fallback.emptyPatterns].filter(thisRun));
+  const matchedNobody = new Set([...exclusion.emptyPatterns, ...exclusion.unknownNames]);
+  const emptyExcludes = once(route.exclude.filter((pattern) => matchedNobody.has(pattern) && thisRun(pattern)));
+  return { route, rows, excluded, emptyPatterns, emptyExcludes, outcome };
+}
+
+/** Each pattern once, where it first comes; two that differ only in case match the same accounts. */
+function once(patterns: string[]): string[] {
+  const seen = new Set<string>();
+  return patterns.filter((pattern) => {
+    const folded = foldProfileName(pattern);
+    if (seen.has(folded)) return false;
+    seen.add(folded);
+    return true;
+  });
 }

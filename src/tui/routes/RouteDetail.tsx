@@ -140,6 +140,16 @@ function MemberTable({ ranking, pending, width }: { ranking: Ranking; pending: b
         tone: color.muted,
       }),
     ),
+    ...ranking.emptyExcludes.map(
+      (pattern): Line => ({
+        key: `exclude:${pattern}`,
+        id: pattern,
+        picked: false,
+        fallback: false,
+        status: "excludes nobody",
+        tone: color.muted,
+      }),
+    ),
   ];
   const windows = lines.flatMap(({ row }) =>
     [row?.fiveHour, row?.sevenDay].filter((window): window is QuotaWindow => window !== undefined),

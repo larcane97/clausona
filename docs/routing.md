@@ -218,7 +218,8 @@ $ clausona route list
 ```
 
 `SKIP AT` is the cut. `FREE NOW` counts the accounts under the cut right now, out of every
-account in the route. One that is signed out still counts as a member, just not as free. `NEXT`
+account in the route. One that is signed out still counts as a member, just not as free. An API
+profile does not count at all, since no run takes one. `NEXT`
 is the account a run would get now. When nobody can be picked it says `none`, and when the first
 account frees up.
 
@@ -303,12 +304,16 @@ that fixes the problem, such as `route set old --strategy headroom`.
 
 Removing a profile leaves its routes alone. A name that is no longer registered is skipped, and
 both `route list` and `route explain` point it out. They point out patterns that match nobody
-too. `route list` puts both under its table:
+too, each one once, and an `exclude` entry that matches nobody. That one matters most: a typo
+there leaves in the account it was meant to leave out. `route list` puts them under its table:
 
 ```
   ⚠ ghost names 'gone', which is not a registered profile.
   ⚠ ghost: 'x-*' matches nobody.
+  ⚠ ghost: exclude 'persnal' matches nobody.
 ```
+
+Before `clausona init` no profile is registered, so `route list` names none of them as unknown.
 
 ## The Routes screen
 
@@ -682,7 +687,8 @@ When nobody can be picked, the JSON is still printed on stdout, and the exit cod
 | `outcome` | `{ "kind": "picked", "id", "stage", "reason" }`, or `{ "kind": "none" }` plus `soonest` (`{ "id", "at" }`) when a reset time is known |
 | `members` | One entry per account, below |
 | `excluded` | Accounts the exclude list took out, as `{ "profile", "matchedBy" }` |
-| `emptyPatterns` | Glob and email patterns in `from` or `fallback` that match nobody |
+| `emptyPatterns` | Glob and email patterns in `from` or `fallback` that match nobody, each once |
+| `emptyExcludes` | Entries of `exclude` that match nobody, names as well as patterns |
 
 Each entry in `members`:
 
@@ -700,10 +706,29 @@ Each entry in `members`:
 An account picked at the `overflow` stage has the status `picked`, even though its usage is at or
 over `maxUsage`. Percentages are not rounded in JSON. Fields are only ever added.
 
-`route list --json` gives `{ "routes": [...], "problems": [...] }`. Each entry has `name`, `route` (the settings
-with defaults, where `tool` can be `"all"` too), `members` and `fallbackMembers` (profile ids,
-after the exclude list), `excluded`, `unknownNames` and `emptyPatterns`. `problems` lists, as
-text, what is wrong with each route that cannot be used; those routes are not in `routes`.
+### `list --json`
+
+`route list --json` gives `{ "routes": [...], "problems": [...] }`. Each route is ranked the way
+`explain` ranks it, so its members are the accounts a run would consider. Each entry in `routes`:
+
+| Field | Value |
+|---|---|
+| `name` | The route's name |
+| `route` | The route with every default filled in, as `settings` in `explain --json` |
+| `members`, `fallbackMembers` | Profile ids of the pool and of the fallback, after the exclude list. An API profile is in neither, since no run takes one |
+| `excluded` | Profile ids the exclude list took out of `from` or `fallback` |
+| `unknownNames` | Names in `from` or `fallback` that are not registered profiles, as written |
+| `emptyPatterns`, `emptyExcludes` | As in `explain --json` |
+| `freeNow` | `{ "free", "members" }`, what the `FREE NOW` column shows, or null |
+| `next` | Who a run would get now, as `outcome` in `explain --json`, or null |
+
+`freeNow` and `next` are null with `--no-quota`, and when no reading could be had for any account
+of the route. Before `clausona init` there is nobody to rank: the lists are empty, and both are
+null. `list --json` reads quota as the table does; add `--no-quota` when you only need the
+members.
+
+`problems` lists, as text, what is wrong with each route that cannot be used. Those routes are
+not in `routes`.
 
 ### Exit codes
 

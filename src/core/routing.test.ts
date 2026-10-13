@@ -319,6 +319,20 @@ describe("skips", () => {
   it("lists patterns that match nobody", () => {
     expect(rank({ from: ["*", "team-*"] }, {}).emptyPatterns).toEqual(["team-*"]);
   });
+
+  it("lists a pattern that matches nobody once, though from and fallback both have it", () => {
+    expect(rank({ from: ["a", "team-*"], fallback: ["Team-*", "x@nowhere.example.com"] }, {}).emptyPatterns).toEqual([
+      "team-*",
+      "x@nowhere.example.com",
+    ]);
+  });
+
+  // A typo in an exclude leaves in the account it was meant to leave out.
+  it("lists exclude patterns that match nobody, a name too, in the order they are given", () => {
+    const ranking = rank({ exclude: ["persnal", "b", "old-*"] }, {});
+    expect(ranking.emptyExcludes).toEqual(["persnal", "old-*"]);
+    expect(rank({}, {}).emptyExcludes).toEqual([]);
+  });
 });
 
 describe("all routes", () => {

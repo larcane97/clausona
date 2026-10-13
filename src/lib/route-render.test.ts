@@ -15,6 +15,7 @@ import {
   renderRouteDetail,
   renderRoutesEmpty,
   renderRouteTable,
+  routeListJson,
   skipText,
   toolLabel,
   usageText,
@@ -840,7 +841,16 @@ describe("JSON", () => {
       members: Array<Record<string, unknown>>;
       excluded: object[];
     };
-    expect(keys(json)).toEqual(["emptyPatterns", "excluded", "members", "outcome", "resolvedBy", "route", "settings"]);
+    expect(keys(json)).toEqual([
+      "emptyExcludes",
+      "emptyPatterns",
+      "excluded",
+      "members",
+      "outcome",
+      "resolvedBy",
+      "route",
+      "settings",
+    ]);
     expect(keys(json.settings)).toEqual(["exclude", "fallback", "from", "maxUsage", "strategy", "tool"]);
     expect(keys(json.outcome)).toEqual(["id", "kind", "reason", "stage"]);
     for (const entry of json.members) {
@@ -878,6 +888,39 @@ describe("JSON", () => {
     const none = pickJson("main", withInternals(busy)) as { soonest: object };
     expect(keys(none)).toEqual(["profile", "reason", "route", "soonest", "stage", "usage"]);
     expect(keys(none.soonest)).toEqual(["at", "id"]);
+  });
+
+  it("list has exactly the documented fields", () => {
+    const r = ranking({ "claude:team": snap(40, 30), "claude:work": snap(20, 70), "claude:old": snap(0, 99) });
+    const route = { ...r.route, internal: 1 };
+    const json = routeListJson("main", route, withInternals(r), true) as Record<string, unknown> & {
+      route: object;
+      freeNow: object;
+      next: object;
+    };
+    expect(keys(json)).toEqual([
+      "emptyExcludes",
+      "emptyPatterns",
+      "excluded",
+      "fallbackMembers",
+      "freeNow",
+      "members",
+      "name",
+      "next",
+      "route",
+      "unknownNames",
+    ]);
+    expect(keys(json.route)).toEqual(["exclude", "fallback", "from", "maxUsage", "strategy", "tool"]);
+    expect(keys(json.freeNow)).toEqual(["free", "members"]);
+    expect(keys(json.next)).toEqual(["id", "kind", "reason", "stage"]);
+    const busy = ranking({ "claude:team": snap(100, 1), "claude:work": snap(100, 1), "claude:old": snap(100, 1) });
+    const none = routeListJson("main", busy.route, withInternals(busy), true) as { next: { soonest: object } };
+    expect(keys(none.next)).toEqual(["kind", "soonest"]);
+    expect(keys(none.next.soonest)).toEqual(["at", "id"]);
+    // Nothing read: nobody is known to be free, and nobody to be next.
+    expect(routeListJson("main", r.route, r, false)).toMatchObject({ freeNow: null, next: null });
+    expect(routeListJson("main", r.route, ranking({}), true)).toMatchObject({ freeNow: null, next: null });
+    expect(routeListJson("main", r.route, undefined, true)).toMatchObject({ members: [], freeNow: null, next: null });
   });
 
   it("explain lists every member with its status", () => {
