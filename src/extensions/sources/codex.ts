@@ -93,11 +93,13 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
   const jobs: Promise<void>[] = [
     readCodexSkills(path.join(ctx.homeDir, ".agents", "skills"), global, "agents", out),
     readCodexSkills(path.join(ctx.primary.dir, "skills"), global, "home", out),
+    // Codex writes these itself, and follows no link among them.
     readCodexSkills(
       path.join(ctx.primary.dir, "skills", ".system"),
       { tool: "codex", scope: "builtin" },
       "system",
       out,
+      { followLinks: false },
     ),
   ];
   for (const home of ctx.homes) {

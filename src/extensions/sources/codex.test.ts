@@ -251,6 +251,62 @@ describe("readCodex", () => {
     expect(out.items.find((i) => i.location.file.endsWith("plain"))?.name).toBe("plain");
   });
 
+  it("finds skills in nested folders down to Codex's depth of 6, through links, but not in hidden ones", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.codex("personal", ".codex");
+    const at = (rel: string, name: string) => h.write(`${rel}/SKILL.md`, `---\nname: ${name}\ndescription: d\n---\n`);
+    at(".agents/skills/top", "top");
+    at(".agents/skills/g2/d2", "depth-2");
+    at(".agents/skills/g6/a/b/c/d/d6", "depth-6");
+    at(".agents/skills/g7/a/b/c/d/e/d7", "depth-7");
+    // A skill inside a skill is one too; a hidden folder is not looked in.
+    at(".agents/skills/outer/inner", "inner");
+    at(".agents/skills/outer", "outer");
+    at(".agents/skills/.hidden/h", "hidden");
+    // A linked folder is followed, once, however many links lead to it.
+    at("elsewhere/pack/linked", "linked");
+    h.link("elsewhere/pack", ".agents/skills/via-link");
+    h.link("elsewhere/pack", ".agents/skills/again");
+    at(".codex/skills/own/nested", "own-nested");
+    at("repos/app/.agents/skills/group/repo-nested", "repo-nested");
+    // Codex's own skills are its own: a link there is not followed.
+    at(".codex/skills/.system/sys/deep", "sys-deep");
+    at("elsewhere/sys-linked", "sys-linked");
+    h.link("elsewhere/sys-linked", ".codex/skills/.system/linked");
+    const kit = ".codex/plugins/cache/m/kit/1.0.0";
+    h.write(`${kit}/.codex-plugin/plugin.json`, { name: "kit" });
+    at(`${kit}/skills/group/deep`, "deep");
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(ctx, [{ path: app, tools: ["codex"], profiles: [] }], out);
+    const skills = out.items.filter((i) => i.kind === "skill");
+    expect(skills.map((i) => i.name).sort()).toEqual(
+      [
+        "top",
+        "depth-2",
+        "depth-6",
+        "outer",
+        "inner",
+        "linked",
+        "own-nested",
+        "repo-nested",
+        "sys-deep",
+        "kit:deep",
+      ].sort(),
+    );
+    // The id ends in the folder below the skills folder; one at the top keeps its id of before.
+    const id = (name: string) => skills.find((i) => i.name === name)?.id;
+    expect([id("top"), id("depth-2"), id("kit:deep")]).toEqual([
+      "skill:codex:global:agents:top",
+      "skill:codex:global:agents:g2/d2",
+      "skill:codex:plugin:kit@m:kit:group/deep",
+    ]);
+    expect(skills.find((i) => i.name === "linked")?.location.file).toMatch(/(via-link|again)[\\/]linked$/);
+  });
+
   it("warns for a config.toml that does not parse and reads the rest", async () => {
     const h = new TestHome();
     homes.push(h);

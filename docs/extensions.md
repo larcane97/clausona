@@ -86,6 +86,10 @@ Project and Global are these files. The header names the folders it found.
 `~/.claude` stands for the primary Claude Code folder, which every account's `settings.json`
 and `skills` link to. Codex's home is the primary Codex folder, `~/.codex` by default.
 
+Codex looks for skills below its skills folders too, as Codex does: any folder with a
+SKILL.md in it, down to six folders deep, through links, and in no folder whose name starts
+with `.`.
+
 The screen lists the scopes of each tool and kind in this order:
 
 | Tool, kind | Scopes |
