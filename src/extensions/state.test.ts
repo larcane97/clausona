@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { type Extension, emptyFacts, type Inventory, type StateFacts } from "./model.js";
@@ -801,17 +803,59 @@ describe("Codex", () => {
     expect(stateOf(i, user)).toEqual({ value: "on" });
   });
 
-  it("trusts a project whose recorded key is the same path and says trusted", () => {
+  it("trusts a project whose recorded key is its path exactly, as Codex compares the key", () => {
     const i = inv([], {
       codexTrust: [
-        { project: `${P}/`, trusted: true },
-        { project: Q, trusted: false },
+        { project: P, trusted: true },
+        // Codex 0.159.3 compares the key exactly: a trailing slash, a `..` or another case of
+        // a letter names no project.
+        { project: `${Q}/`, trusted: true },
+        { project: "/repos/x/../lab", trusted: true },
+        { project: "/repos/WEB2", trusted: true },
       ],
     });
     expect(codexTrusted(i, P)).toBe(true);
     expect(codexTrusted(i, Q)).toBe(false);
+    expect(codexTrusted(i, "/repos/lab")).toBe(false);
+    expect(codexTrusted(i, "/repos/web2")).toBe(false);
     expect(codexTrusted(i, "/repos/elsewhere")).toBe(false);
     expect(codexTrusted(i, undefined)).toBe(false);
+  });
+
+  describe("on Windows", () => {
+    const realPlatform = process.platform;
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+    });
+
+    it("folds the case of ASCII letters alone, as Codex does, and takes no other spelling", () => {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      const app = path.win32.join("C:\\", "Users", "me", "repos", "app");
+      const keyed = (project: string, trusted = true) => inv([], { codexTrust: [{ project, trusted }] });
+      expect(codexTrusted(keyed("c:\\USERS\\Me\\Repos\\APP"), app)).toBe(true);
+      // Forward slashes, a trailing separator: other strings, which Codex does not take.
+      expect(codexTrusted(keyed("C:/Users/me/repos/app"), app)).toBe(false);
+      expect(codexTrusted(keyed(`${app}\\`), app)).toBe(false);
+      // Only ASCII letters fold: an É is not an é.
+      const ecole = path.win32.join("C:\\", "Users", "me", "école");
+      expect(codexTrusted(keyed("C:\\Users\\me\\École"), ecole)).toBe(false);
+      expect(codexTrusted(keyed("C:\\USERS\\ME\\école"), ecole)).toBe(true);
+      // Of two keys that fold alike, the exact one decides, else the first in order, as Codex picks.
+      const both = inv([], {
+        codexTrust: [
+          { project: "C:\\Users\\me\\repos\\APP", trusted: false },
+          { project: "c:\\users\\me\\repos\\app", trusted: true },
+        ],
+      });
+      expect(codexTrusted(both, app)).toBe(true);
+      const neither = inv([], {
+        codexTrust: [
+          { project: "c:\\Users\\me\\repos\\app", trusted: false },
+          { project: "C:\\Users\\me\\repos\\app", trusted: true },
+        ],
+      });
+      expect(codexTrusted(neither, app)).toBe(true);
+    });
   });
 
   it("takes a project's trust from the first of its folders with a trust_level, as Codex looks them up", () => {

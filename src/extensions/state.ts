@@ -8,6 +8,7 @@ import {
   type SettingsLayer,
   SKILL_VISIBILITY,
   type SkillVisibility,
+  type StateFacts,
 } from "./model.js";
 import { isWithin, pathKey, samePath } from "./read.js";
 
@@ -434,7 +435,7 @@ export function isManagedSetting(inv: Inventory, file: string): boolean {
 /**
  * Whether Codex trusts `project`, as Codex 0.159.3 decides it (`decision_for_dir`): the first of
  * the project's folders (codexTrustFolders) - its own, its project root, its repository's root -
- * that a [projects."<key>"] table with a trust_level samePaths decides, trusted only with
+ * that a [projects."<key>"] table with a trust_level names (codexTrustLevel), trusted only with
  * trust_level = "trusted". So a linked worktree of a trusted repo, and a folder inside one, are
  * trusted, unless a nearer table says otherwise. Codex ignores the `.codex/` folder of any other
  * project, one it has no record of too.
@@ -442,10 +443,31 @@ export function isManagedSetting(inv: Inventory, file: string): boolean {
 export function codexTrusted(inv: Inventory, project: string | undefined): boolean {
   if (project === undefined) return false;
   for (const folder of inv.facts.codexTrustFolders[pathKey(project)] ?? [project]) {
-    const set = inv.facts.codexTrust.filter((t) => t.trusted !== undefined && samePath(t.project, folder));
-    if (set.length > 0) return set.some((t) => t.trusted === true);
+    const trusted = codexTrustLevel(inv.facts.codexTrust, folder);
+    if (trusted !== undefined) return trusted;
   }
   return false;
+}
+
+/** ASCII letters made lower case, and no other: Rust's `to_ascii_lowercase`. */
+function asciiLower(text: string): string {
+  return text.replace(/[A-Z]/g, (c) => c.toLowerCase());
+}
+
+/**
+ * The trust a `[projects."<key>"]` table with a trust_level gives `folder`, as Codex 0.159.3 looks
+ * it up (`project_trust_for_lookup_key`): by the key's very string, resolved or folded no further,
+ * and on Windows in any case of its ASCII letters - the exact key first, else the first in order
+ * of those that fold alike. Undefined where no key names it.
+ */
+function codexTrustLevel(entries: StateFacts["codexTrust"], folder: string): boolean | undefined {
+  const fold = process.platform === "win32" ? asciiLower : (text: string) => text;
+  const lookup = fold(folder);
+  const set = entries.filter((t) => t.trusted !== undefined);
+  const exact = set.find((t) => t.project === lookup);
+  if (exact) return exact.trusted;
+  const folded = set.filter((t) => fold(t.project) === lookup).sort((a, b) => (a.project < b.project ? -1 : 1));
+  return folded[0]?.trusted;
 }
 
 /**
