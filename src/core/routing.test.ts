@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { QuotaSnapshot, ToolName } from "../types.js";
+import { parseCodexQuota } from "./quota.js";
 import { type RouteSpec, withDefaults } from "./route-config.js";
 import type { Member } from "./route-patterns.js";
-import { blockingReset, modelFallsUnder, rankRoute, scopedLimitFor, usageOf } from "./routing.js";
+import { blockingReset, modelFallsUnder, rankRoute, scopedLimitFor, scopedWindowName, usageOf } from "./routing.js";
 
 const NOW = Date.parse("2026-10-09T00:00:00.000Z");
 const inHours = (hours: number) => new Date(NOW + hours * 3_600_000).toISOString();
@@ -55,12 +56,19 @@ function rank(
   });
 }
 
-/** A reading with limits on single models, as quota.ts stores them: the most used is `scoped`. */
-function withLimits(base: QuotaSnapshot, limits: Array<[label: string, percent: number, resetsAt?: string]>) {
-  const scopedLimits = limits.map(([label, usedPercent, resetsAt]) => ({
+/**
+ * A reading with limits on single models, as quota.ts stores them: the most used is `scoped`. A
+ * Codex limit's windows come with their length, and one limit can have two.
+ */
+function withLimits(
+  base: QuotaSnapshot,
+  limits: Array<[label: string, percent: number, resetsAt?: string, windowSeconds?: number]>,
+) {
+  const scopedLimits = limits.map(([label, usedPercent, resetsAt, windowSeconds]) => ({
     label,
     usedPercent,
     resetsAt: resetsAt ?? null,
+    ...(windowSeconds === undefined ? {} : { windowSeconds }),
   }));
   const scoped = [...scopedLimits].sort((a, b) => b.usedPercent - a.usedPercent)[0];
   return { ...base, scoped, scopedLimits };
@@ -170,6 +178,69 @@ describe("model limits", () => {
     expect(plain.outcome).toMatchObject({ kind: "picked", id: "claude:a" });
     expect(plain.rows[0].scoped).toBeUndefined();
     expect(plain.model).toBeUndefined();
+  });
+
+  // A Codex limit can have a 5-hour and a weekly window (quota.test.ts): a run counts the higher,
+  // as an account's own 5H and 7D, and names it by the window.
+  it.each([
+    // [5H, 7D, Spark's 5-hour window, Spark's weekly window] → usage of a Spark run
+    [10, 20, 90, 30, { percent: 90, window: "GPT-5.3-Codex-Spark 5H" }],
+    [10, 20, 30, 95, { percent: 95, window: "GPT-5.3-Codex-Spark 7D" }],
+    [10, 60, 30, 40, { percent: 60, window: "7D" }],
+  ] as const)("5H %d, 7D %d and Spark 5H %d, 7D %d for a Spark run: %o", (five, seven, sparkFive, sparkWeek, expected) => {
+    const quota = withLimits(snap(five, seven), [
+      ["GPT-5.3-Codex-Spark", sparkFive, inHours(3), 18000],
+      ["GPT-5.3-Codex-Spark", sparkWeek, inHours(100), 604800],
+    ]);
+    expect(usageOf(quota, NOW, "gpt-5.3-codex-spark")).toEqual({ usage: { ...expected, stale: false } });
+    expect(usageOf(quota, NOW, "gpt-5.3-codex").usage?.window).not.toContain("Spark");
+  });
+
+  it.each([
+    [undefined, "Opus"],
+    [18000, "Opus 5H"],
+    // At or below a day is the session window, as an account's own Codex windows are read.
+    [86400, "Opus 5H"],
+    [604800, "Opus 7D"],
+  ])("names a model limit's window %o long %s", (windowSeconds, name) => {
+    const limit = { label: "Opus", usedPercent: 1, resetsAt: null, ...(windowSeconds ? { windowSeconds } : {}) };
+    expect(scopedWindowName(limit)).toBe(name);
+  });
+
+  it("does not pick an account whose weekly limit on the run's model is used up in the second window", () => {
+    const CY = member("codex:y");
+    const sparkReading = (fiveHour: number, weekly: number) =>
+      parseCodexQuota({
+        rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: 604800, reset_at: 1_791_000_000 } },
+        additional_rate_limits: [
+          {
+            limit_name: "GPT-5.3-Codex-Spark",
+            rate_limit: {
+              primary_window: { used_percent: fiveHour, limit_window_seconds: 18000, reset_at: 1_790_000_000 },
+              secondary_window: { used_percent: weekly, limit_window_seconds: 604800, reset_at: 1_791_000_000 },
+            },
+          },
+        ],
+      });
+    const quotas = {
+      "codex:x": { state: "ok" as const, fetchedAt: NOW, ...sparkReading(0, 100) },
+      "codex:y": { state: "ok" as const, fetchedAt: NOW, ...sparkReading(20, 30) },
+    };
+    const ranking = rankRoute({
+      route: withDefaults({ tool: "codex", strategy: "headroom" }),
+      members: [CX, CY],
+      quotas,
+      lastPicked: {},
+      now: NOW,
+      resume: false,
+      model: "gpt-5.3-codex-spark",
+    });
+    expect(ranking.outcome).toMatchObject({ kind: "picked", id: "codex:y" });
+    expect(ranking.rows[0]).toMatchObject({
+      id: "codex:x",
+      status: "over-limit",
+      usage: { percent: 100, window: "GPT-5.3-Codex-Spark 7D" },
+    });
   });
 
   it("names the model limit's reset as the soonest when it is the one holding an account back", () => {

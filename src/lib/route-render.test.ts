@@ -772,6 +772,58 @@ describe("a run's model limit", () => {
   });
 });
 
+describe("a Codex model limit with two windows", () => {
+  const codex = ["codex:a", "codex:b"].map(member);
+  /** `base` with Spark's 5-hour and weekly windows, as quota.ts reads Codex's: the higher is `scoped`. */
+  const withSpark = (base: QuotaSnapshot, fiveHour: number, weekly: number): QuotaSnapshot => {
+    const limits = [
+      { label: "GPT-5.3-Codex-Spark", usedPercent: fiveHour, resetsAt: inHours(3), windowSeconds: 18000 },
+      { label: "GPT-5.3-Codex-Spark", usedPercent: weekly, resetsAt: inHours(100), windowSeconds: 604800 },
+    ];
+    return { ...base, scoped: fiveHour >= weekly ? limits[0] : limits[1], scopedLimits: limits };
+  };
+  const spec: RouteSpec = { tool: "codex", from: ["a", "b"], strategy: "headroom" };
+  const model = "gpt-5.3-codex-spark";
+
+  it("explain shows the higher window and says which; the note and the JSON name it", () => {
+    const quotas = { "codex:a": withSpark(quota(5, 22), 90, 30), "codex:b": withSpark(quota(12, 34), 10, 60) };
+    const r = rank(spec, quotas, { members: codex, model });
+    const text = plain(renderRouteDetail("main", r, at(120)));
+    expect(text).toMatch(/^ {4}ACCOUNT\s+5H\s+7D\s+GPT-5\.3-CODEX-SPARK$/m);
+    expect(text).toMatch(/^ {4}codex:a\s+5% 1h\s+22% 2d\s+90% 5H 3h\s+over 80%$/m);
+    expect(text).toMatch(/^ {2}▸ codex:b\s+12% 1h\s+34% 2d\s+60% 7D 4d\s+picked next$/m);
+    expect(plain(renderNote("main", r))).toBe(
+      "  ▸ codex:b  route main, most room, 60% of the GPT-5.3-Codex-Spark 7D limit used",
+    );
+    const json = explainJson("main", "flag", r) as { members: Array<Record<string, unknown>> };
+    expect(json.members.map((row) => row.usage)).toEqual([
+      { percent: 90, window: "GPT-5.3-Codex-Spark 5H", stale: false },
+      { percent: 60, window: "GPT-5.3-Codex-Spark 7D", stale: false },
+    ]);
+  });
+
+  it("exit 75 says which window of the model limit resets, and waits for both when both are full", () => {
+    const quotas = {
+      "codex:a": withSpark(quota(5, 22), 100, 30),
+      "codex:b": withSpark(quota(12, 34), 10, 100),
+      "codex:c": withSpark(quota(3, 3), 100, 100),
+    };
+    const r = rank({ ...spec, from: ["a", "b", "c"] }, quotas, { members: [...codex, member("codex:c")], model });
+    const text = plain(renderNoAccount("main", r, at(120)));
+    const spark = "GPT-5\\.3-Codex-Spark";
+    expect(text).toMatch(
+      new RegExp(`^ {4}codex:a\\s+5% 1h\\s+22% 2d\\s+100% 5H 3h\\s+in 3h \\(${spark} 5H resets\\)\\s+soonest$`, "m"),
+    );
+    expect(text).toMatch(
+      new RegExp(`^ {4}codex:b\\s+12% 1h\\s+34% 2d\\s+100% 7D 4d\\s+in 4d 4h \\(${spark} 7D resets\\)$`, "m"),
+    );
+    // Its 5-hour window resets first, but the weekly one still holds it.
+    expect(text).toMatch(
+      new RegExp(`^ {4}codex:c\\s+3% 1h\\s+3% 2d\\s+100% 5H 3h\\s+in 4d 4h \\(${spark} 7D resets\\)$`, "m"),
+    );
+  });
+});
+
 describe("renderNewRoutePreview", () => {
   const four = ["claude:team", "claude:work", "claude:side", "claude:personal", "claude:old"].map(member);
   const quotas = {

@@ -1,14 +1,15 @@
-import type { QuotaSnapshot, QuotaWindow, ToolName } from "../types.js";
+import type { QuotaSnapshot, QuotaWindow, ScopedQuotaWindow, ToolName } from "../types.js";
 import { foldProfileName } from "./profile-name.js";
+import { isSessionLength } from "./quota.js";
 import { type Route, type RouteTool, toolsOf } from "./route-config.js";
 import { compareIds, type Expansion, expandPatterns, type Member, splitToolPrefix } from "./route-patterns.js";
 
 /**
  * Picks a profile for a route. Pure: the caller brings the members, their quota and the pick
  * record. One number drives everything - an account's usage, the highest of its 5H and 7D
- * windows and, when the run names a model, that model's own weekly limit - through the stages:
- * pool under maxUsage by strategy, fallback under maxUsage in listed order, anyone under 100% by
- * lowest usage, else nobody.
+ * windows and, when the run names a model, of that model's own windows - through the stages: pool
+ * under maxUsage by strategy, fallback under maxUsage in listed order, anyone under 100% by lowest
+ * usage, else nobody.
  */
 
 /** Past the cut, any account under this can run: one at 100% of a window cannot. */
@@ -22,12 +23,12 @@ export const EXPIRING_WITHIN_MS = 24 * 60 * 60 * 1000;
 
 export type UsageWindow = "5H" | "7D";
 
-/** A limit on one model, as quota.ts reads it, labelled by the model's name: `Opus`, `GPT-5.3-Codex-Spark`. */
-export type ScopedWindow = QuotaWindow & { label: string };
+/** A window of a model limit, as quota.ts reads it, labelled by the limit's name: `Opus`, `GPT-5.3-Codex-Spark`. */
+export type ScopedWindow = ScopedQuotaWindow;
 
 /**
- * `window` is where the percent came from: `5H`, `7D`, or the label of the model limit the run's
- * model falls under (`Opus`).
+ * `window` is where the percent came from: `5H`, `7D`, or the model limit the run's model falls
+ * under, by scopedWindowName (`Opus`, `GPT-5.3-Codex-Spark 7D`).
  */
 export type Usage = { percent: number; window: string; stale: boolean };
 
@@ -48,6 +49,11 @@ export type Row = {
   sevenDay?: QuotaWindow;
   /** The limit on the run's model, when the run names one and the account reports a limit on it. */
   scoped?: ScopedWindow;
+  /**
+   * Every window of the limits on the run's model, `scoped` the most used, when there is more than
+   * one (a Codex limit's 5H and 7D): the account is free again once each that is full has reset.
+   */
+  scopedWindows?: ScopedWindow[];
   usage?: Usage;
   lastPickedAt?: string;
   skip?: SkipReason;
@@ -127,18 +133,42 @@ export function modelFallsUnder(model: string, label: string): boolean {
   return false;
 }
 
-/** The account's limit on `model`; of several it falls under, the most used. */
+/**
+ * Which window of its model limit `limit` is, `5H` or `7D`, by the length the tool gives: Codex
+ * gives it, and one Codex limit can have both. Claude's limits do not say, and are all weekly.
+ */
+export function scopedWindowKind(limit: ScopedWindow): UsageWindow | undefined {
+  if (!limit.windowSeconds) return undefined;
+  return isSessionLength(limit.windowSeconds) ? "5H" : "7D";
+}
+
+/** How a usage names a window of a model limit: `GPT-5.3-Codex-Spark 7D`, or `Opus` without a length. */
+export function scopedWindowName(limit: ScopedWindow): string {
+  const kind = scopedWindowKind(limit);
+  return kind ? `${limit.label} ${kind}` : limit.label;
+}
+
+/** Every window of every limit a run of `model` falls under: a Codex limit can have a 5H and a 7D. */
+function scopedWindowsFor(snapshot: QuotaSnapshot | undefined, model: string | undefined): ScopedWindow[] {
+  if (!snapshot || !model) return [];
+  // A reading an older clausona cached keeps only the most used limit: still the right one when
+  // the model falls under it.
+  const limits = snapshot.scopedLimits ?? (snapshot.scoped ? [snapshot.scoped] : []);
+  return limits.filter((limit) => modelFallsUnder(model, limit.label));
+}
+
+/**
+ * The account's limit on `model`: of the windows of every limit it falls under, the most used.
+ * A Codex limit with a 5-hour and a weekly window counts the higher, as an account's own 5H and
+ * 7D do.
+ */
 export function scopedLimitFor(
   snapshot: QuotaSnapshot | undefined,
   model: string | undefined,
 ): ScopedWindow | undefined {
-  if (!snapshot || !model) return undefined;
-  // A reading an older clausona cached keeps only the most used limit: still the right one when
-  // the model falls under it.
-  const limits = snapshot.scopedLimits ?? (snapshot.scoped ? [snapshot.scoped] : []);
   let best: ScopedWindow | undefined;
-  for (const limit of limits) {
-    if (modelFallsUnder(model, limit.label) && (!best || limit.usedPercent > best.usedPercent)) best = limit;
+  for (const limit of scopedWindowsFor(snapshot, model)) {
+    if (!best || limit.usedPercent > best.usedPercent) best = limit;
   }
   return best;
 }
@@ -155,7 +185,7 @@ export function usageOf(
   if (snapshot.session) present.push(["5H", snapshot.session]);
   if (snapshot.weekly) present.push(["7D", snapshot.weekly]);
   const scoped = scopedLimitFor(snapshot, model);
-  if (scoped) present.push([scoped.label, scoped]);
+  if (scoped) present.push([scopedWindowName(scoped), scoped]);
   if (present.length === 0) return { skip: "no-reading" };
   const stale = snapshot.state !== "ok";
   if (stale && now - snapshot.fetchedAt >= STALE_LIMIT_MS) return { skip: "no-reading" };
@@ -205,7 +235,7 @@ function byStrategy(route: Route, candidates: Row[], now: number): { row: Row; r
 
 /** When every window at or above `limit` will have reset; null when one has no known reset. */
 export function blockingReset(row: Row, limit: number): string | null {
-  const blocking = [row.fiveHour, row.sevenDay, row.scoped].filter(
+  const blocking = [row.fiveHour, row.sevenDay, ...(row.scopedWindows ?? [row.scoped])].filter(
     (window): window is QuotaWindow => window !== undefined && window.usedPercent >= limit,
   );
   if (blocking.length === 0 || blocking.some((window) => !window.resetsAt)) return null;
@@ -267,11 +297,13 @@ function rowFor(member: Member, role: Row["role"], pattern: string, input: RankI
   const snapshot = input.quotas[member.id];
   const { usage, skip } = usageOf(snapshot, input.now, input.model);
   const scoped = scopedLimitFor(snapshot, input.model);
+  const scopedWindows = scopedWindowsFor(snapshot, input.model);
   return {
     ...base,
     ...(snapshot?.session ? { fiveHour: snapshot.session } : {}),
     ...(snapshot?.weekly ? { sevenDay: snapshot.weekly } : {}),
     ...(scoped ? { scoped } : {}),
+    ...(scopedWindows.length > 1 ? { scopedWindows } : {}),
     ...(usage ? { usage } : {}),
     ...(skip ? { skip, status: "skipped" as const } : {}),
   };

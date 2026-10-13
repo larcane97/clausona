@@ -18,6 +18,8 @@ import {
   type Row,
   type ScopedWindow,
   type SkipReason,
+  scopedWindowKind,
+  scopedWindowName,
   type Usage,
   type UsageWindow,
 } from "../core/routing.js";
@@ -369,7 +371,8 @@ function windowColumns(rows: Row[]): Array<[WindowColumn, string]> {
 /**
  * One window of a row, as `csn list` shows it: the percentage in its severity colour, then when
  * the window resets, dimmed. The window that sets the row's usage is bold. A window under the
- * route's cut never reads as the cut (wholeQuotaPercent).
+ * route's cut never reads as the cut (wholeQuotaPercent). A model limit's cell is the higher of
+ * its windows, and says which (`5H`, `7D`) where the tool gives their lengths.
  */
 function quotaCell(
   row: Row,
@@ -383,12 +386,14 @@ function quotaCell(
   if (!window || row.skip) return [["—", dim]];
   const percent = formatQuotaPercent(window, cut);
   const styled = styledQuota(window, row.usage?.stale ? "error" : "ok", cut);
-  const name = which === "model" ? row.scoped?.label : which;
+  const name = which === "model" ? row.scoped && scopedWindowName(row.scoped) : which;
   const shown = row.usage?.window === name ? bold(styled) : styled;
   const cell: Cell = [
     [" ".repeat(Math.max(0, percentAt - percent.length))],
     [percent, (text) => (text === percent ? shown : text)],
   ];
+  const kind = which === "model" && row.scoped ? scopedWindowKind(row.scoped) : undefined;
+  if (kind) cell.push([" "], [kind, dim]);
   const reset = withReset ? formatResetShort(window.resetsAt, new Date(now)) : "";
   if (reset) cell.push([" "], [reset, dimmer]);
   return cell;
@@ -950,7 +955,7 @@ const resetOrder = (at: string | null) => (at === null ? Number.MAX_SAFE_INTEGER
 
 /**
  * Which of a row's windows at or above `limit` resets at `at` (blockingReset's answer): `7D`, the
- * limit on the run's model by its label, or `5H`.
+ * limit on the run's model by scopedWindowName, or `5H`.
  */
 export function resettingWindow(row: Row, limit: number, at: string): string {
   const ms = Date.parse(at);
@@ -960,7 +965,8 @@ export function resettingWindow(row: Row, limit: number, at: string): string {
     Boolean(window.resetsAt) &&
     Date.parse(window.resetsAt as string) === ms;
   if (resetsThen(row.sevenDay)) return "7D";
-  if (row.scoped && resetsThen(row.scoped)) return row.scoped.label;
+  const scoped = (row.scopedWindows ?? [row.scoped]).find(resetsThen);
+  if (scoped) return scopedWindowName(scoped);
   return "5H";
 }
 

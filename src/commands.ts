@@ -982,7 +982,7 @@ function subcommandHelpText(command: string, args: string[] = []): string | unde
         `    ${dim("On a route over claude and codex, name the tool before its arguments: clausona run codex --route any …")}`,
         `    ${dim("Resumed runs (-c, --resume, --from-pr, codex resume) use only accounts that share sessions.")}`,
         `    ${dim("An account's usage is the higher of its 5H and 7D windows. When the tool's arguments name a")}`,
-        `    ${dim("model (claude --model opus, codex -m …), the account's weekly limit on that model counts too;")}`,
+        `    ${dim("model (claude --model opus, codex -m …), the account's limit on that model counts too;")}`,
         `    ${dim("without one, no model's limit counts.")}`,
         `    ${dim("With --wait, a run that finds nobody free says on stderr until when it waits, reads quota")}`,
         `    ${dim("again at least every 30 minutes, and runs once an account is free. A reset past the cap, or")}`,
