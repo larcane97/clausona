@@ -295,6 +295,10 @@ const NOT_A_TOOL_FORMS = [
   t(["--name", "tar", "-b", "{S1}"], "--name tar -b {S1}"),
   t(["img", "sort", "-b", "{S1}"], "img sort -b {S1}"),
   t(["--file", "/srv/du", "-b", "sid={S1}"], "--file /srv/du -b sid={S1}"),
+  t(["-c", "tar", "-b", "{S1}"], "-c tar -b {S1}"),
+  t(["-c", "git", "-b", "{S1}"], "-c git -b {S1}"),
+  t(["--mode", "time", "sort", "-b", "{S1}"], "--mode time sort -b {S1}"),
+  t(["--run", "env", "git", "-b", "{S1}"], "--run env git -b {S1}"),
 ];
 
 const SECRET_FORMS = [...FIRST_SECRET_FORMS, ...OPTION_VALUE_FORMS, ...FIELD_FORMS, ...NOT_A_TOOL_FORMS];
@@ -315,7 +319,11 @@ const PROGRAMS = [
 
 const GIT_PROGRAMS = [["git"], ["git", "-C", "/srv/repo"]];
 
-/** #139: tools whose `-b` is no credential, as their man pages give it. */
+/**
+ * #139: tools whose `-b` is no credential, as their man pages give it. ssh's is a bind address,
+ * but redact.ts leaves ssh out, since the words after its host are a remote command's: its
+ * cases count what that costs.
+ */
 const TOOL_B_PROGRAMS = [["tar"], ["sort"], ["/usr/bin/du"], ["cut"], ["ssh"], ["wget"], ["sudo", "rsync"]];
 
 const SHELLS = [

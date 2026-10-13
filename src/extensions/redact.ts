@@ -339,31 +339,98 @@ function mayBeSecretFlag(word: string): boolean {
 }
 
 /**
- * Whether `words[i]` is curl's cookie option, `-b` or `--cookie`. Under git, `-b` names a branch
- * (`git checkout -b feature`): the command it is in starts with git. Anywhere else `-b` is read
- * as curl's, the safe side, whatever the program.
+ * The programs whose `-b` is no credential, as their man pages give it: git's names a branch;
+ * the others' is a size, a byte list, a path or a batch file (tar, cut, split, tail, base64,
+ * zip, sftp), a backup (cp, mv, ln, install, rsync, patch), or a switch of their own (sort, du,
+ * ls, grep, diff, ...). Left out are a tool whose `-b` can be a secret (`gh secret set -b`), and
+ * one whose later words can be another program's (python's script, ssh's remote command).
+ */
+const NO_COOKIE_B = new Set([
+  "base64",
+  "cat",
+  "cp",
+  "cut",
+  "df",
+  "diff",
+  "du",
+  "file",
+  "fold",
+  "git",
+  "grep",
+  "hexdump",
+  "install",
+  "ln",
+  "ls",
+  "lsof",
+  "md5sum",
+  "mv",
+  "nl",
+  "od",
+  "patch",
+  "rg",
+  "rsync",
+  "sftp",
+  "sha256sum",
+  "shasum",
+  "sort",
+  "split",
+  "tail",
+  "tar",
+  "unzip",
+  "wget",
+  "xxd",
+  "zip",
+]);
+
+/**
+ * Whether `words[i]` is curl's cookie option, `-b` or `--cookie`. Under git and the other
+ * programs of NO_COOKIE_B, `-b` is their own (`git checkout -b feature`, `tar -b 20`): the
+ * command it is in is theirs. Anywhere else `-b` is read as curl's, the safe side, whatever the
+ * program.
  */
 function isCookieFlag(line: Line, i: number): boolean {
   const word = line.words[i] ?? "";
   const body = word.slice(leadingQuote(word).length);
-  return COOKIE_FLAG.test(body) && (body !== "-b" || !underGit(line, i));
+  return COOKIE_FLAG.test(body) && (body !== "-b" || !underNoCookieTool(line, i));
 }
 
 /**
- * Whether the command `words[i]` is in is git's: walking back to where the command starts - the
- * line's start, a separator, a shell's command option, a word that runs the next one - its
- * first word names git, and no word on the way names curl.
+ * Whether the command `words[i]` is in is one of NO_COOKIE_B's: walking back to a separator or
+ * the line's start, a word names one of them where it starts a command (`startsCommand`), and
+ * no word on the way names curl. A name that starts no command is an argument (`--name tar`),
+ * and the walk goes on past it.
  */
-function underGit(line: Line, i: number): boolean {
+function underNoCookieTool(line: Line, i: number): boolean {
   for (let k = i - 1; k >= 0; k--) {
     const word = unquoted(line.words[k] ?? "");
     const program = programName(word);
     if (SEPARATOR.test(word) || program === "curl") return false;
-    if (program !== "git") continue;
-    const before = unquoted(line.words[k - 1] ?? "");
-    return k === 0 || SEPARATOR.test(before) || RUNS_NEXT.test(before) || isShellCommand(line.words, k - 1);
+    if (NO_COOKIE_B.has(program) && startsCommand(line.words, k)) return true;
   }
   return false;
+}
+
+/**
+ * Whether `words[k]` starts a command: it is the line's first word, or follows a separator, a
+ * shell's command option, or a word that runs the next one where that word starts a command
+ * itself - `sudo rsync`, but not `--mode time sort`, where time is an argument.
+ */
+function startsCommand(words: string[], k: number): boolean {
+  if (k === 0) return true;
+  const before = unquoted(words[k - 1] ?? "");
+  if (SEPARATOR.test(before) || opensShellLine(words, k - 1)) return true;
+  return RUNS_NEXT.test(before) && startsCommand(words, k - 1);
+}
+
+/**
+ * Whether `words[at]` is the option a shell takes its command line with (`isShellCommand`), and
+ * not a later program's: when the line's program is the shell, its first such option is. So in
+ * `bash -c "tool -c tar -b x"`, tool's `-c` starts no command, and its `-b` stays curl's.
+ */
+function opensShellLine(words: string[], at: number): boolean {
+  const shell = SHELL_COMMAND.get(programName(words[0] ?? ""));
+  if (shell !== undefined && words.slice(1, at).some((word) => shell.test(word))) return false;
+  return isShellCommand(words, at);
 }
 
 /** A word without the quotes at its ends. */

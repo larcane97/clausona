@@ -537,6 +537,37 @@ describe("redactCommand on the shapes the differential left after #97", () => {
       [command(`tool -b --api-key ${HEX} --verbose`), "tool -b --api-key <hidden> --verbose"],
     ]);
   });
+
+  it("shows -b and what follows under a tool whose -b is no cookie, and reads it as curl's elsewhere", () => {
+    expect(redactCommand(["tar", "-c", "-b", "20", "-f", "out.tar", "dir"])).toBe("tar -c -b 20 -f out.tar dir");
+    expect(command("sort -b -k 2 names.txt")).toBe("sort -b -k 2 names.txt");
+    expect(command("du -b /srv/data | sort -b")).toBe("du -b /srv/data | sort -b");
+    expect(command("sudo rsync -b -a src/ dst/")).toBe("sudo rsync -b -a src/ dst/");
+    expect(redactCommand(["bash", "-c", "cut -b 1-8 app.log && split -b 1m app.log part"])).toBe(
+      "bash -c cut -b 1-8 app.log && split -b 1m app.log part",
+    );
+    // Its command's first word decides, so a tool's name as an argument does not.
+    expect(command("tar -f sort -b 20 -x")).toBe("tar -f sort -b 20 -x");
+    hidden([
+      [
+        command(`tar -b 20 -xf a.tar && curl -b sid=${HEX} https://h.example`),
+        "tar -b 20 -xf a.tar && curl -b <hidden> https://h.example",
+      ],
+      [mcp(["--name", "tar", "-b", HEX]), "tool --name tar -b <hidden>"],
+      [command(`docker run img sort -b ${HEX}`), "docker run img sort -b <hidden>"],
+      // A program's -c in a shell's command line is that program's: what follows starts nothing.
+      [redactCommand(["bash", "-c", `tool -c tar -b ${HEX}`]), "bash -c tool -c tar -b <hidden>"],
+      [command(`bash -c "tool -c git -b ${HEX}"`), `bash -c "tool -c git -b <hidden>"`],
+      // So does a word that runs the next one, when it is an argument itself.
+      [mcp(["--mode", "time", "sort", "-b", HEX]), "tool --mode time sort -b <hidden>"],
+      [command(`tool --run env git -b ${HEX}`), "tool --run env git -b <hidden>"],
+      // A tool whose -b can be a secret is not one of them: gh secret set takes the secret there.
+      [command(`gh secret set API_TOKEN -b ${HEX}`), "gh secret set API_TOKEN -b <hidden>"],
+      // Nor one whose later words are another program's: a script's, a remote command's.
+      [command(`python3 fetch.py -b ${HEX}`), "python3 fetch.py -b <hidden>"],
+      [command(`ssh host fetch -b ${HEX}`), "ssh host fetch -b <hidden>"],
+    ]);
+  });
 });
 
 describe("mcpSummary", () => {
