@@ -107,6 +107,8 @@ for (const { columns, rows } of SIZES) {
     "Wait+Screen@60s /Extensions/",
     // The dashboard draws its rows a moment before it takes keys: sent at once, they can be lost.
     "Sleep 1s",
+    // Extensions is the fourth: Profiles, Routes, Usage, Extensions.
+    "Down",
     "Down",
     "Down",
     "Enter",
