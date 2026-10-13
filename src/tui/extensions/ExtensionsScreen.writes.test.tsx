@@ -724,7 +724,9 @@ describe("ExtensionsScreen: writes from the MCP matrix", () => {
   const serverLine = (frame: string, name: string) =>
     frame.split("\n").find((line) => new RegExp(`[✦ ] ${name} `).test(line)) ?? "";
 
-  it("turns one account's server off in this project from its cell, and back on u", async () => {
+  it("turns one account's server off in this project from its cell, and back on u", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);
     const defaultBefore = readFileSync(h.path(".claude.json"), "utf8");
@@ -739,28 +741,34 @@ describe("ExtensionsScreen: writes from the MCP matrix", () => {
     await press(instance, RIGHT);
     const onWork = await seen(instance, (f) => f.includes("[work]"));
     expect(serverLine(onWork, "figma")).toMatch(/✦ figma +● +\[●\] +·/);
-    await press(instance, SPACE);
-    const dialog = await seen(instance, (f) => f.includes("Turn off figma in this project, for work?"));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    const dialog = await seen(instance, (f) => f.includes("Turn off figma in this project, for work?"), PLAN_STEP_MS);
     // The picker has the cell's account, and only it, chosen.
     expect(dialog).toContain("○ default");
     expect(dialog).toContain("◉ work");
     expect(dialog).toContain("disabledMcpServers + figma");
-    await press(instance, "y");
+    await press(instance, "y", PLAN_STEP_MS);
     // The matrix again, from the files read again, the cursor on the same cell.
     const off = await seen(instance, (f) => f.includes("Turned off figma in this project, for work · u to undo"));
     expect(off).toContain("[work]");
     expect(serverLine(off, "figma")).toMatch(/✦ figma +● +\[○\] +·/);
     expect(work()).toEqual(["github", "figma"]);
     expect(readFileSync(h.path(".claude.json"), "utf8")).toBe(defaultBefore);
-    await press(instance, "u");
-    await seen(instance, (f) => f.includes("Undo: Turned off figma in this project, for work?"));
-    await press(instance, "y");
-    const undone = await seen(instance, (f) => f.includes("Undid: Turned off figma in this project, for work"));
+    await press(instance, "u", PLAN_STEP_MS);
+    await seen(instance, (f) => f.includes("Undo: Turned off figma in this project, for work?"), PLAN_STEP_MS);
+    await press(instance, "y", PLAN_STEP_MS);
+    const undone = await seen(
+      instance,
+      (f) => f.includes("Undid: Turned off figma in this project, for work"),
+      PLAN_STEP_MS,
+    );
     expect(serverLine(undone, "figma")).toMatch(/✦ figma +● +\[●\] +·/);
     expect(work()).toEqual(["github"]);
   });
 
-  it("names each account's file in a dialog opened from a cell, and changes the one picked there too", async () => {
+  it("names each account's file in a dialog opened from a cell, and changes the one picked there too", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);
     const mine = path.join("~", ".claude.json");
@@ -771,22 +779,32 @@ describe("ExtensionsScreen: writes from the MCP matrix", () => {
     await press(instance, DOWN);
     await press(instance, RIGHT);
     await seen(instance, (f) => f.includes("[work]"));
-    await press(instance, SPACE);
+    await press(instance, SPACE, PLAN_STEP_MS);
     const dialog = await seen(instance, (f) => f.includes("Turn off figma in this project, for work?"), PLAN_STEP_MS);
     // default is not picked, and its line says what picking it would change, as from the row.
     expect(accountLine(dialog, "default")).toMatch(/○ default +\S+ +disabledMcpServers \+ figma/);
     expect(accountLine(dialog, "default")).toContain(mine);
     // The cursor is on default: space picks it, and y writes the file its line names.
-    await press(instance, SPACE);
-    const both = await seen(instance, (f) => f.includes("Turn off figma in this project, for default and work?"));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    const both = await seen(
+      instance,
+      (f) => f.includes("Turn off figma in this project, for default and work?"),
+      PLAN_STEP_MS,
+    );
     expect(accountLine(both, "default")).toMatch(/◉ default +\S+ +disabledMcpServers \+ figma/);
-    await press(instance, "y");
-    await seen(instance, (f) => f.includes("Turned off figma in this project, for default and work · u to undo"));
+    await press(instance, "y", PLAN_STEP_MS);
+    await seen(
+      instance,
+      (f) => f.includes("Turned off figma in this project, for default and work · u to undo"),
+      PLAN_STEP_MS,
+    );
     expect(json(h.path(".claude.json")).projects[app].disabledMcpServers).toEqual(["figma"]);
     expect(json(h.path(".claude-work", ".claude.json")).projects[app].disabledMcpServers).toEqual(["github", "figma"]);
   });
 
-  it("says why a cell can't change, as a row's refusal does, and opens no dialog", async () => {
+  it("says why a cell can't change, as a row's refusal does, and opens no dialog", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);
     await seen(instance, (f) => f.includes("Read "));
@@ -799,13 +817,17 @@ describe("ExtensionsScreen: writes from the MCP matrix", () => {
     await press(instance, DOWN);
     await press(instance, RIGHT);
     await seen(instance, (f) => f.includes("[work]") && /✦ figma/.test(f));
-    await press(instance, SPACE);
-    const opened = await seen(instance, (f) => f.includes("No account that has it has opened this project."));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    const opened = await seen(
+      instance,
+      (f) => f.includes("No account that has it has opened this project."),
+      PLAN_STEP_MS,
+    );
     expect(opened).not.toContain("Turn off figma");
     await press(instance, RIGHT);
     await press(instance, UP);
     await seen(instance, (f) => f.includes("[Codex]") && /✦ docs/.test(f));
-    await press(instance, SPACE);
+    await press(instance, SPACE, PLAN_STEP_MS);
     await seen(instance, (f) =>
       f.includes(
         "Codex does not trust this project, so it ignores its .codex folder. Trust the project in Codex first.",
@@ -813,12 +835,14 @@ describe("ExtensionsScreen: writes from the MCP matrix", () => {
     );
     // A cell with no server in it.
     await press(instance, LEFT);
-    await press(instance, SPACE);
-    await seen(instance, (f) => f.includes("work has no docs here."));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    await seen(instance, (f) => f.includes("work has no docs here."), PLAN_STEP_MS);
     expect(existsSync(local(h.path("repos", "web")))).toBe(false);
   });
 
-  it("turns a server clausona keeps aside for one account back on from its cell, in every project", async () => {
+  it("turns a server clausona keeps aside for one account back on from its cell, in every project", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h, app } = seed();
     const instance = mount(h, app, 140, 40);
     const work = () => json(h.path(".claude-work", ".claude.json")).mcpServers;
@@ -826,43 +850,53 @@ describe("ExtensionsScreen: writes from the MCP matrix", () => {
     await openRow(instance, "Global", "github", "2");
     await press(instance, "g");
     await seen(instance, (f) => f.includes("◉ default") && f.includes("◉ work"));
-    await press(instance, SPACE);
-    await seen(instance, (f) => f.includes("Turn off github in every project, for work?"));
-    await press(instance, "y");
-    await seen(instance, (f) => f.includes("Turned off github in every project, for work · u to undo"));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    await seen(instance, (f) => f.includes("Turn off github in every project, for work?"), PLAN_STEP_MS);
+    await press(instance, "y", PLAN_STEP_MS);
+    await seen(instance, (f) => f.includes("Turned off github in every project, for work · u to undo"), PLAN_STEP_MS);
     expect(work().github).toBeUndefined();
     await press(instance, "m");
     await seen(instance, (f) => f.includes("SERVER"));
     for (const key of [DOWN, DOWN, DOWN, RIGHT]) await press(instance, key);
     await seen(instance, (f) => f.includes("[work]") && /✦ github +● +\[○\]/.test(f));
     // Off here is no way back for it: space puts it back, for work alone, as g on its row would.
-    await press(instance, SPACE);
-    const dialog = await seen(instance, (f) => f.includes("Turn on github in every project, for work?"));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    const dialog = await seen(instance, (f) => f.includes("Turn on github in every project, for work?"), PLAN_STEP_MS);
     expect(dialog).toContain("mcpServers.github put back");
-    await press(instance, "y");
-    const back = await seen(instance, (f) => f.includes("Turned on github in every project, for work · u to undo"));
+    await press(instance, "y", PLAN_STEP_MS);
+    const back = await seen(
+      instance,
+      (f) => f.includes("Turned on github in every project, for work · u to undo"),
+      PLAN_STEP_MS,
+    );
     expect(work().github).toEqual({ command: "gh" });
     // work had turned it off in this project too, which stays; back in its file, space switches it here.
     expect(serverLine(back, "github")).toMatch(/✦ github +● +\[○\]/);
-    await press(instance, SPACE);
-    await seen(instance, (f) => f.includes("Turn on github in this project, for work?"));
-    await press(instance, "y");
-    const on = await seen(instance, (f) => f.includes("Turned on github in this project, for work · u to undo"));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    await seen(instance, (f) => f.includes("Turn on github in this project, for work?"), PLAN_STEP_MS);
+    await press(instance, "y", PLAN_STEP_MS);
+    const on = await seen(
+      instance,
+      (f) => f.includes("Turned on github in this project, for work · u to undo"),
+      PLAN_STEP_MS,
+    );
     expect(serverLine(on, "github")).toMatch(/✦ github +● +\[●\]/);
     for (const frame of instance.frames) expect(stripAnsi(frame)).not.toContain("Press g");
   });
 
-  it("switches Codex's server in the home folder from its cell, where this project's config is the user's", async () => {
+  it("switches Codex's server in the home folder from its cell, where this project's config is the user's", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { h } = seed();
     const instance = mount(h, h.home, 140, 40);
     await openMatrix(instance);
     await press(instance, RIGHT);
     await press(instance, RIGHT);
     await seen(instance, (f) => f.includes("[Codex]") && /✦ docs +· +· +\[●\]/.test(f));
-    await press(instance, SPACE);
-    await seen(instance, (f) => f.includes("Turn off docs in every project?"));
-    await press(instance, "y");
-    const off = await seen(instance, (f) => f.includes("Turned off docs in every project · u to undo"));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    await seen(instance, (f) => f.includes("Turn off docs in every project?"), PLAN_STEP_MS);
+    await press(instance, "y", PLAN_STEP_MS);
+    const off = await seen(instance, (f) => f.includes("Turned off docs in every project · u to undo"), PLAN_STEP_MS);
     expect(serverLine(off, "docs")).toMatch(/✦ docs +· +· +\[○\]/);
     expect(readFileSync(h.path(".codex", "config.toml"), "utf8")).toMatch(
       /\[mcp_servers\.docs\]\n[^[]*enabled = false/,
@@ -892,8 +926,8 @@ describe("ExtensionsScreen: writes from the MCP matrix", () => {
     const matrix = await openMatrix(instance);
     expect(hintLine(matrix)).not.toContain("space on/off");
     expect(hintLine(matrix)).not.toContain("u undo");
-    await press(instance, SPACE);
-    await seen(instance, (f) => f.includes("Changes are not available here."));
+    await press(instance, SPACE, PLAN_STEP_MS);
+    await seen(instance, (f) => f.includes("Changes are not available here."), PLAN_STEP_MS);
   });
 });
 

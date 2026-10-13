@@ -95,6 +95,8 @@ export class TestHome {
   }
 
   dispose(): void {
-    rmSync(this.home, { recursive: true, force: true });
+    // Windows can hold a file a moment after the process that wrote it is gone: retry, as the
+    // other Windows-safe cleanups do.
+    rmSync(this.home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }
