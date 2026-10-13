@@ -766,45 +766,90 @@ function planSkillRemoval(run: Run, row: ScopeRow): Outcome {
 
 // ─── Claude MCP servers ─────────────────────────────────────────────
 
+/** No copy left out. */
+const NONE_LEFT_OUT: ReadonlySet<string> = new Set();
+
 function planClaudeMcp(run: Run, row: ScopeRow): Outcome {
   const item = firstOf(row);
   const kept = run.action.verb === "on" ? keptOffByPolicy(run, row) : undefined;
   if (kept && "refusal" in kept) return kept.refusal;
+  const leftOut = kept?.leftOut ?? NONE_LEFT_OUT;
   const out = isMcpjsonServer(item)
     ? planMcpjson(run, row)
     : item.location.scope === "plugin"
-      ? planPluginServer(run, row)
+      ? planPluginServer(run, row, leftOut)
       : isAccountServer(item)
-        ? planAccountServer(run, row)
+        ? planAccountServer(run, row, leftOut)
         : refused(run, row, "managed");
-  if (kept) note(out, kept.note);
+  for (const text of kept?.notes ?? []) note(out, text);
   return out;
 }
 
+type PolicyBlock = { file: string; key: string };
+
 /**
- * For `on`: whether Claude Code's MCP policy keeps the server from starting (`mcpBlocked`) in
- * every copy the change takes, which on would not change. managed-mcp.json is named; a list in
- * managed settings is the organization's, as any managed setting is; a list elsewhere is named
- * with its file. A project's own list holds in that project alone, so on everywhere goes ahead,
- * with a note.
+ * For `on`: what Claude Code's MCP policy (`mcpBlocked`) does to the copies the change takes.
+ * When it keeps every one from starting, on would change nothing, and is refused: managed-mcp.json
+ * is named; a list in managed settings is the organization's, as any managed setting is; a list
+ * elsewhere is named with its file. A list's command or URL entry can match some accounts'
+ * copies and not others', when the accounts define the server differently. Then the change goes
+ * ahead for the others and leaves those copies out (`leftOut`), each with a note that names its
+ * accounts and the list, as an account that has not opened the project is left out. A project's
+ * own list holds in that project alone, so on everywhere goes ahead for every copy, with a note.
  */
-function keptOffByPolicy(run: Run, row: ScopeRow): { refusal: Outcome } | { note: string } | undefined {
+function keptOffByPolicy(
+  run: Run,
+  row: ScopeRow,
+): { refusal: Outcome } | { notes: string[]; leftOut: ReadonlySet<string> } | undefined {
   const inv = run.inv;
   const copies = row.items.filter((copy) => chosenIn(run, copy.location.profile));
-  const blocks = copies.map((copy) => mcpBlocked(inv, copy, run.ctx.project)?.setBy);
-  const first = blocks[0];
-  if (first === undefined || blocks.some((block) => block === undefined)) return undefined;
-  const file = tilde(first.file, inv.homeDir);
-  if (first.key === MANAGED_MCP_KEY) return { refusal: refused(run, row, "managed-mcp", { "~file": file }) };
-  if (isManagedSetting(inv, first.file)) return { refusal: refused(run, row, "managed") };
-  const layer = inv.facts.claudeMcpPolicy.find((p) => samePath(p.file, first.file))?.layer;
-  const denied = first.key === "deniedMcpServers";
-  if (run.action.reach === "everywhere" && (layer === "project" || layer === "local")) {
-    return {
-      note: `Still off in this project: ${denied ? "deniedMcpServers" : "not in allowedMcpServers"} in ${file}`,
-    };
+  const blocked = copies.flatMap((copy) => {
+    const setBy = mcpBlocked(inv, copy, run.ctx.project)?.setBy;
+    return setBy ? [{ copy, setBy }] : [];
+  });
+  const first = blocked[0]?.setBy;
+  if (first === undefined) return undefined;
+  const projectList = (block: PolicyBlock) => {
+    const layer = inv.facts.claudeMcpPolicy.find((p) => samePath(p.file, block.file))?.layer;
+    return run.action.reach === "everywhere" && (layer === "project" || layer === "local");
+  };
+  const listWords = (block: PolicyBlock) =>
+    `${block.key === "deniedMcpServers" ? "deniedMcpServers" : "not in allowedMcpServers"} in ${tilde(block.file, inv.homeDir)}`;
+  if (blocked.length === copies.length) {
+    const file = tilde(first.file, inv.homeDir);
+    if (first.key === MANAGED_MCP_KEY) return { refusal: refused(run, row, "managed-mcp", { "~file": file }) };
+    if (isManagedSetting(inv, first.file)) return { refusal: refused(run, row, "managed") };
+    if (projectList(first))
+      return { notes: [`Still off in this project: ${listWords(first)}`], leftOut: NONE_LEFT_OUT };
+    const code = first.key === "deniedMcpServers" ? "mcp-denied" : "mcp-not-allowed";
+    return { refusal: refused(run, row, code, { "~file": file }) };
   }
-  return { refusal: refused(run, row, denied ? "mcp-denied" : "mcp-not-allowed", { "~file": file }) };
+  const notes: string[] = [];
+  const leftOut = new Set<string>();
+  for (const { copy, setBy } of blocked) {
+    const who = ownersOf(run, copy);
+    if (projectList(setBy)) {
+      notes.push(`Still off in this project for ${who}: ${listWords(setBy)}`);
+      continue;
+    }
+    const code =
+      setBy.key === MANAGED_MCP_KEY
+        ? "managed-mcp"
+        : setBy.key === "deniedMcpServers"
+          ? "mcp-denied"
+          : "mcp-not-allowed";
+    const why = refusal(code, row, "claude", { "~file": tilde(setBy.file, inv.homeDir) }).reason;
+    notes.push(`Stays off for ${who}: ${why}`);
+    leftOut.add(copy.id);
+  }
+  return { notes, leftOut };
+}
+
+/** A copy's chosen accounts by their short names: "work", "personal and work". */
+function ownersOf(run: Run, copy: Extension): string {
+  const owners = copy.location.profile !== undefined ? [copy.location.profile] : (copy.location.accounts ?? []);
+  const names = owners.filter((owner) => chosenIn(run, owner)).map(shortProfile);
+  return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
 /** Where an account's server sits in its `.claude.json`: a user one at the top, a local one in its project's entry. */
@@ -856,11 +901,14 @@ function switchStillOff(run: Run, out: Outcome, copy: Extension): void {
   note(out, stillOff(run, seen, "disabledMcpServers", file, account));
 }
 
-/** An account's own server, each chosen account's copy: here its project switch, everywhere out of its file. */
-function planAccountServer(run: Run, row: ScopeRow): Outcome {
+/**
+ * An account's own server, each chosen account's copy but those `leftOut`: here its project
+ * switch, everywhere out of its file.
+ */
+function planAccountServer(run: Run, row: ScopeRow, leftOut: ReadonlySet<string>): Outcome {
   const { verb, reach } = run.action;
   const inv = run.inv;
-  const copies = row.items.filter((copy) => chosenIn(run, copy.location.profile));
+  const copies = row.items.filter((copy) => chosenIn(run, copy.location.profile) && !leftOut.has(copy.id));
   const out = outcome();
   const short = (copy: Extension) => shortProfile(copy.location.profile ?? "");
   if (verb === "rm" || reach === "everywhere") {
@@ -960,8 +1008,11 @@ function planAccountServer(run: Run, row: ScopeRow): Outcome {
   return out;
 }
 
-/** A plugin's server, here only: each chosen account that has the plugin and has opened the project. */
-function planPluginServer(run: Run, row: ScopeRow): Outcome {
+/**
+ * A plugin's server, here only: each chosen account that has the plugin and has opened the
+ * project, but those whose copy is `leftOut`.
+ */
+function planPluginServer(run: Run, row: ScopeRow, leftOut: ReadonlySet<string>): Outcome {
   const inv = run.inv;
   const item = firstOf(row);
   const plugin = item.location.plugin ?? "";
@@ -978,13 +1029,14 @@ function planPluginServer(run: Run, row: ScopeRow): Outcome {
     .sort((a, b) => rank(a) - rank(b));
   let opened = 0;
   for (const account of accounts) {
+    const copy = row.items.find((c) => c.location.accounts?.includes(account)) ?? item;
+    if (leftOut.has(copy.id)) continue;
     const file = inv.places.claudeJson[account];
     if (file === undefined || !hasOpened(inv, seen, account)) {
       note(out, `${shortProfile(account)} has not opened this project`);
       continue;
     }
     opened += 1;
-    const copy = row.items.find((c) => c.location.accounts?.includes(account)) ?? item;
     switchHere(run, row, out, account, file, seen, item.name, stateOf(inv, copy, seen, account).value === "off");
   }
   if (opened === 0) return refused(run, row, "no-account");

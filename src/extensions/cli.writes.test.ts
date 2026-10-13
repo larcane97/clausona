@@ -447,6 +447,28 @@ describe("on, for what a setting elsewhere keeps off", () => {
     expect(existsSync(h.path(".clausona"))).toBe(false);
   });
 
+  it("turns a server on for the accounts a list lets start it, and notes the one whose copy it keeps off", async () => {
+    const { h, app } = seed();
+    // Both accounts turned figma off here, and work's copy runs another command, which the list names.
+    const defaultJson = json(h.path(".claude.json"));
+    defaultJson.projects[app].disabledMcpServers = ["figma"];
+    h.write(".claude.json", defaultJson);
+    const workFile = h.write(".claude-work/.claude.json", {
+      projects: { [app]: { disabledMcpServers: ["figma"] } },
+      mcpServers: { figma: { command: "figma-work" } },
+    });
+    h.write(".claude/settings.json", { deniedMcpServers: [{ serverCommand: ["figma-work"] }] });
+    const before = read(workFile);
+    const { run } = cli(h, app);
+    const text = stripAnsi(await run("mcp", ["on", "figma", "--tool", "claude", "--yes"]));
+    expect(text).toMatch(/^ {2}✔ Turned on figma in this project, for default/);
+    expect(text).toContain(
+      `  Note:\n      Stays off for work: deniedMcpServers in ${tilde(h.path(".claude", "settings.json"), h.home)} keeps it from starting.`,
+    );
+    expect(json(h.path(".claude.json")).projects[app].disabledMcpServers).toEqual([]);
+    expect(read(workFile)).toBe(before);
+  });
+
   it("refuses a built-in skill while disableBundledSkills holds, naming where it is set", async () => {
     const { h, app } = seed();
     h.write(".claude/settings.json", { disableBundledSkills: true, skillOverrides: { "claude-api": "off" } });

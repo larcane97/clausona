@@ -670,6 +670,13 @@ Some rows can only be switched one way:
   managed settings is refused as `managed`, as anything there is. One in this project's own
   settings holds here alone, so `on --everywhere` goes ahead, with a note such as
   `Still off in this project: deniedMcpServers in …`. `off` is never refused for it.
+  A `serverCommand` or `serverUrl` entry can keep out one account's copy of a server and not
+  another's, when the accounts define the server differently. Then `on` turns on the copies
+  that can start and leaves the others as they are, each with a note that names its account
+  and the list, such as
+  `Stays off for work: deniedMcpServers in ~/.claude/settings.json keeps it from starting.`
+  It leaves them out as it leaves out an account that has not opened the project, and is
+  refused only when no copy it takes can start.
 
 [Refusals](#refusals) has every reason a change can't be made, in the words the CLI and the
 screen use.
