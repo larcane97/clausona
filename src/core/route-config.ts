@@ -225,8 +225,22 @@ export function checkRoute(name: string, raw: unknown, at = `routes.${name}`): s
   return problems;
 }
 
-export type RoutesCheck = { ok: true; file: RoutesFile } | { ok: false; problems: string[]; newerVersion?: number };
+/**
+ * A route in routes.json that fails its checks: as it is stored, and its problems. Its name can
+ * be anything, a key too, so it is never shown unless checkRouteName passes it.
+ */
+export type BrokenRoute = { name: string; spec: unknown; problems: string[] };
 
+export type RoutesCheck =
+  | { ok: true; file: RoutesFile; broken: BrokenRoute[] }
+  | { ok: false; problems: string[]; newerVersion?: number };
+
+/**
+ * The file's shape - a JSON object of this version, with an object of routes - is all or
+ * nothing. A route that fails its own checks is set apart in `broken` and left out of `file`, so
+ * that the others can still be used: a command refuses only the problems of the route it uses,
+ * and a write refuses a file that still has any.
+ */
 export function checkRoutesFile(raw: unknown): RoutesCheck {
   if (!isRecord(raw)) return { ok: false, problems: ["must be a JSON object"] };
   if (typeof raw.version === "number" && raw.version > ROUTES_VERSION) {
@@ -240,14 +254,16 @@ export function checkRoutesFile(raw: unknown): RoutesCheck {
   if (raw.routes !== undefined && !isRecord(raw.routes)) {
     return { ok: false, problems: ["routes: must be an object of named routes"] };
   }
-  const routes = (raw.routes ?? {}) as Record<string, unknown>;
-  const problems = Object.entries(routes).flatMap(([name, spec]) => checkRoute(name, spec));
-  if (problems.length > 0) return { ok: false, problems };
-  const kept = Object.fromEntries(
-    Object.entries(routes as Record<string, Record<string, unknown>>).map(([name, spec]) => [
-      name,
-      Object.fromEntries(Object.entries(spec).filter(([key]) => !RETIRED_KEYS.has(key))) as RouteSpec,
-    ]),
-  );
-  return { ok: true, file: { ...raw, version: ROUTES_VERSION, routes: kept } };
+  const kept: Array<[string, RouteSpec]> = [];
+  const broken: BrokenRoute[] = [];
+  for (const [name, spec] of Object.entries((raw.routes ?? {}) as Record<string, unknown>)) {
+    const problems = checkRoute(name, spec);
+    if (problems.length > 0) {
+      broken.push({ name, spec, problems });
+      continue;
+    }
+    const fields = Object.entries(spec as Record<string, unknown>).filter(([key]) => !RETIRED_KEYS.has(key));
+    kept.push([name, Object.fromEntries(fields) as RouteSpec]);
+  }
+  return { ok: true, file: { ...raw, version: ROUTES_VERSION, routes: Object.fromEntries(kept) }, broken };
 }

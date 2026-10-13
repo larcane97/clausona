@@ -14,7 +14,7 @@ import { color, symbol } from "../theme.js";
 import { useWidth } from "../use-width.js";
 import { type Entry, GAP, MARK, RouteDetail, Setting } from "./RouteDetail.js";
 import { formAccounts, RouteForm } from "./RouteForm.js";
-import { defaultRoutesScreenDeps, errorText, type RoutesScreenDeps } from "./routes-deps.js";
+import { defaultRoutesScreenDeps, errorText, type RoutesListDeps } from "./routes-deps.js";
 
 /**
  * The dashboard's Routes screen: every route, and the one selected with its members ranked as
@@ -49,7 +49,8 @@ const BACK_HINTS = [{ keys: "esc", action: "back" }];
 type Loaded =
   | { kind: "loading" }
   | { kind: "broken"; error: unknown }
-  | { kind: "ready"; file: RoutesFile; registry: Registry | null };
+  /** `broken` counts the routes routes.json holds that cannot be used, which are not listed. */
+  | { kind: "ready"; file: RoutesFile; broken: number; registry: Registry | null };
 
 /** One quota read, and the pick record as it was then. */
 type Reading = { quotas: Record<string, QuotaSnapshot>; lastPicked: Record<string, string>; now: number };
@@ -93,6 +94,12 @@ function targetsOf(file: RoutesFile, registry: Registry | null): QuotaTarget[] {
   return [...targets.values()];
 }
 
+/** The line that says routes are left out, and where to see why: `route list` lists each problem. */
+function brokenNotice(count: number): string {
+  const what = count === 1 ? "a route" : `${count} routes`;
+  return `⚠ routes.json has ${what} that cannot be used: clausona route list says why.`;
+}
+
 /** A failed read is nothing read: the screen shows "no quota reading" rather than an error. */
 const settle = <T,>(read: () => Promise<T>, fallback: T) =>
   Promise.resolve()
@@ -113,7 +120,7 @@ function useColumns(): number {
   return columns;
 }
 
-export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit: () => void }) {
+export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: () => void }) {
   const [io] = useState(() => deps ?? defaultRoutesScreenDeps());
   const [loaded, setLoaded] = useState<Loaded>({ kind: "loading" });
   const [reading, setReading] = useState<Reading | null>(null);
@@ -147,7 +154,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
     alive.current = true;
     void (async () => {
       try {
-        const [file, registry] = await Promise.all([io.readRoutes(), io.loadRegistry()]);
+        const [{ file, broken }, registry] = await Promise.all([io.loadRoutes(), io.loadRegistry()]);
         // A profiles.json that cannot be read loads as none at all, which listed every route with
         // no accounts. None that is not there is clausona not set up, which the App sends to init.
         const problem = registry === null ? await io.registryProblem() : null;
@@ -157,7 +164,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
           return;
         }
         // Painted at once; the quota follows.
-        setLoaded({ kind: "ready", file, registry });
+        setLoaded({ kind: "ready", file, broken: broken.length, registry });
         await rank(file, registry, false);
       } catch (error) {
         if (alive.current) setLoaded({ kind: "broken", error });
@@ -185,7 +192,8 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
         return current;
       });
       if (!alive.current) return;
-      setLoaded((prev) => (prev.kind === "ready" ? { ...prev, file } : prev));
+      // Written, so nothing in it is left that cannot be used.
+      setLoaded((prev) => (prev.kind === "ready" ? { ...prev, file, broken: 0 } : prev));
       setCursor((prev) => Math.max(0, Math.min(prev, Object.keys(file.routes).length - 1)));
     } catch (error) {
       if (!alive.current) return;
@@ -223,10 +231,12 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
     const { registry } = loaded;
     const keep = saved ?? selected?.name;
     try {
-      const file = await io.readRoutes();
+      const { file, broken } = await io.loadRoutes();
       if (!alive.current) return;
-      if (saved === null && JSON.stringify(file) === JSON.stringify(loaded.file)) return;
-      setLoaded({ kind: "ready", file, registry });
+      if (saved === null && JSON.stringify(file) === JSON.stringify(loaded.file) && broken.length === loaded.broken) {
+        return;
+      }
+      setLoaded({ kind: "ready", file, broken: broken.length, registry });
       setCursor(Math.max(0, keep === undefined ? 0 : Object.keys(file.routes).sort().indexOf(keep)));
       await rank(file, registry, false);
     } catch (error) {
@@ -270,7 +280,8 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesScreenDeps; onExit
   useInput(onInput, { isActive: form === null });
 
   const question = removing ? `Remove route ${removing}? (y/N)` : undefined;
-  const footer = refreshing ? "Reading quota again…" : message || undefined;
+  const notice = loaded.kind === "ready" && loaded.broken > 0 ? brokenNotice(loaded.broken) : "";
+  const footer = [notice, refreshing ? "Reading quota again…" : message];
   const hints = removing
     ? CONFIRM_HINTS
     : loaded.kind !== "ready"

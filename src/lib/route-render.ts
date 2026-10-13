@@ -488,14 +488,25 @@ function nextCell(ranking: Ranking, now: number): Cell {
   return [[`none, soonest ${resetsIn(outcome.soonest.at, now)}`, yellow]];
 }
 
-/** `route list`: one row per route, then the warnings. No routes at all is the empty state. */
+/** Warnings under a table, each wrapped under its own `⚠`. */
+function warningLines(warnings: string[], width: number): string[] {
+  return warnings.flatMap((warning) =>
+    wrap(warning, width, " ".repeat(INDENT)).map((line, i) => (i === 0 ? `  ${warnIcon} ${line.trimStart()}` : line)),
+  );
+}
+
+/**
+ * `route list`: one row per route, then the warnings. No routes at all is the empty state; only
+ * routes that cannot be used is their warnings alone.
+ */
 export function renderRouteTable(
   rows: RouteListRow[],
   warnings: string[],
   options: { width?: number; now?: number } = {},
 ): string {
-  if (rows.length === 0) return renderRoutesEmpty();
   const width = options.width ?? terminalWidth();
+  if (rows.length === 0)
+    return warnings.length ? ["", ...warningLines(warnings, width), ""].join("\n") : renderRoutesEmpty();
   const now = options.now ?? Date.now();
   const cells = rows.map(({ name, route, ranking: given }): Record<RouteColumn, Cell> => {
     // A ranking with nothing read says nothing about who is free: dashes, as with --no-quota.
@@ -516,9 +527,7 @@ export function renderRouteTable(
       rows: cells.map((row) => ({ cells: keys.map((key) => row[key]) })),
     }),
   );
-  const notes = warnings.flatMap((warning) =>
-    wrap(warning, width, " ".repeat(INDENT)).map((line, i) => (i === 0 ? `  ${warnIcon} ${line.trimStart()}` : line)),
-  );
+  const notes = warningLines(warnings, width);
   return ["", ...fitTable(layouts, width), ...(notes.length ? ["", ...notes] : []), ""].join("\n");
 }
 
@@ -659,12 +668,20 @@ function memberLines(ranking: Ranking, width: number, now: number, nobodyHint?: 
  * `route explain`, and what `route add` and `route set` show: the settings, then every member.
  * `onlyTool` is the tool an explain narrowed an `all` route to, as a run naming it would;
  * `overrides` are the field options the explain was given, which the run it names carries too.
- * `nobodyHint` follows the line that says the route takes nobody, when it does.
+ * `nobodyHint` follows the line that says the route takes nobody, when it does. `warnings` come
+ * last: what is wrong with the other routes.
  */
 export function renderRouteDetail(
   name: string | undefined,
   ranking: Ranking,
-  options: { width?: number; now?: number; onlyTool?: ToolName; overrides?: RouteOverrides; nobodyHint?: string } = {},
+  options: {
+    width?: number;
+    now?: number;
+    onlyTool?: ToolName;
+    overrides?: RouteOverrides;
+    nobodyHint?: string;
+    warnings?: string[];
+  } = {},
 ): string {
   const width = options.width ?? terminalWidth();
   const now = options.now ?? Date.now();
@@ -683,6 +700,7 @@ export function renderRouteDetail(
     ]);
     lines.push("", ...wrap(`Nobody can be picked now; ${run} would exit 75.`, width, "  "));
   }
+  if (options.warnings?.length) lines.push("", ...warningLines(options.warnings, width));
   lines.push("");
   return lines.join("\n");
 }

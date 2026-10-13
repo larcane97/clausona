@@ -356,7 +356,7 @@ describe("all routes", () => {
 describe("checkRoutesFile", () => {
   it("accepts a file and keeps keys a later version writes", () => {
     const raw = { version: 1, routes: { main: { tool: "claude" } }, dirs: { "~/w": { claude: "main" } } };
-    expect(checkRoutesFile(raw)).toEqual({ ok: true, file: raw });
+    expect(checkRoutesFile(raw)).toEqual({ ok: true, file: raw, broken: [] });
   });
 
   // An earlier build of this version wrote a reserve limit, which routes no longer have.
@@ -372,6 +372,7 @@ describe("checkRoutesFile", () => {
     expect(checkRoutesFile(raw)).toEqual({
       ok: true,
       file: { version: 1, routes: { main: { tool: "claude", maxUsage: 80 }, odd: { tool: "codex", maxUsage: 90 } } },
+      broken: [],
     });
   });
 
@@ -387,7 +388,7 @@ describe("checkRoutesFile", () => {
   });
 
   it("reads a missing routes object as none", () => {
-    expect(checkRoutesFile({ version: 1 })).toEqual({ ok: true, file: { version: 1, routes: {} } });
+    expect(checkRoutesFile({ version: 1 })).toEqual({ ok: true, file: { version: 1, routes: {} }, broken: [] });
   });
 
   it("says a newer version is newer", () => {
@@ -402,13 +403,22 @@ describe("checkRoutesFile", () => {
     expect(checkRoutesFile({ routes: {} })).toEqual({ ok: false, problems: ["version: must be 1"] });
   });
 
-  it("collects every route's problems", () => {
-    const raw = { version: 1, routes: { a: { tool: "x" }, b: { tool: "claude", strategy: "?" } } };
+  // One route's problem must not take the others down with it.
+  it("sets apart each route with problems, as stored, and keeps the others", () => {
+    const raw = {
+      version: 1,
+      routes: { a: { tool: "x" }, good: { tool: "claude" }, b: { tool: "claude", strategy: "?" } },
+    };
     expect(checkRoutesFile(raw)).toEqual({
-      ok: false,
-      problems: [
-        'routes.a.tool: must be "claude", "codex" or "all"',
-        "routes.b.strategy: must be one of round-robin, headroom, expiring",
+      ok: true,
+      file: { version: 1, routes: { good: { tool: "claude" } } },
+      broken: [
+        { name: "a", spec: { tool: "x" }, problems: ['routes.a.tool: must be "claude", "codex" or "all"'] },
+        {
+          name: "b",
+          spec: { tool: "claude", strategy: "?" },
+          problems: ["routes.b.strategy: must be one of round-robin, headroom, expiring"],
+        },
       ],
     });
   });

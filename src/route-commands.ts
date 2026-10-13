@@ -2,6 +2,7 @@ import { foldProfileName } from "./core/profile-name.js";
 import type { QuotaTarget } from "./core/quota-store.js";
 import {
   applyOverrides,
+  type BrokenRoute,
   checkPattern,
   checkRoute,
   checkRouteName,
@@ -13,11 +14,12 @@ import {
   type RouteSpec,
   type RoutesFile,
   type RouteTool,
-  storedRoute,
   withDefaults,
 } from "./core/route-config.js";
 import { expandPatterns } from "./core/route-patterns.js";
 import {
+  brokenRoutesHint,
+  loadRoutes,
   parseRoutesText,
   RoutesFileError,
   readRoutes,
@@ -49,6 +51,7 @@ import {
   type RouteDeps,
   rankRouteNow,
   resolveRoute,
+  routesFor,
   UnknownRouteError,
 } from "./lib/route-service.js";
 import { parsePatterns, parseRouteTool, ROUTE_FIELD_OPTIONS, readOptions, toRoutingOptions } from "./lib/run-args.js";
@@ -227,7 +230,7 @@ export function newRouteFrom(tool: RouteTool, overrides: RouteOverrides): RouteS
 
 /** Refuses a name a route already has, pointing at the command that changes that route. */
 function refuseTakenName(file: RoutesFile, name: string): void {
-  if (storedRoute(file, name)) {
+  if (Object.hasOwn(file.routes, name)) {
     throw new Error(`Route '${name}' already exists. Change it with clausona route set ${name} …`);
   }
 }
@@ -296,9 +299,13 @@ async function setRoute(args: string[], deps: RouteDeps): Promise<string> {
   }
   const registry = await registryOrThrow(deps);
   const written = await updateRoutes((file) => {
-    const current = storedRoute(file, name);
-    if (!current) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
-    const next = applyOverrides(current, options);
+    if (!Object.hasOwn(file.routes, name)) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
+    const current: unknown = file.routes[name];
+    // A route routes.json holds as something other than an object has no fields to change.
+    if (typeof current !== "object" || current === null || Array.isArray(current)) {
+      throw new Error(checkRoute(name, current).join("\n"));
+    }
+    const next = applyOverrides(current as RouteSpec, options);
     if (add.length || drop.length) {
       // Entries compare as profile names do: `Work` and `work` are one entry.
       const same = (a: string, b: string) => foldProfileName(a) === foldProfileName(b);
@@ -350,9 +357,9 @@ async function renameRoute(args: string[], deps: RouteDeps): Promise<string> {
     return success(dim(`Route ${from} already has that name. Nothing was changed.`));
   }
   await updateRoutes((file) => {
-    const spec = storedRoute(file, from);
-    if (!spec) throw new UnknownRouteError(from, Object.keys(file.routes).sort());
-    if (storedRoute(file, to)) throw new Error(`Route '${to}' already exists.`);
+    if (!Object.hasOwn(file.routes, from)) throw new UnknownRouteError(from, Object.keys(file.routes).sort());
+    if (Object.hasOwn(file.routes, to)) throw new Error(`Route '${to}' already exists.`);
+    const spec = file.routes[from];
     delete file.routes[from];
     file.routes[to] = spec;
     return file;
@@ -366,7 +373,7 @@ async function removeRoute(args: string[], deps: RouteDeps): Promise<string> {
   if (extra.length) throw new Error(`${usage("remove")}\nRun \`clausona route remove --help\` for usage.`);
   const name = routeNameArg(nameArg, "remove");
   await updateRoutes((file) => {
-    if (!storedRoute(file, name)) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
+    if (!Object.hasOwn(file.routes, name)) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
     delete file.routes[name];
     return file;
   }, deps.paths);
@@ -402,6 +409,11 @@ async function editRoutes(args: string[], io: RouteIo, deps: RouteDeps): Promise
   return success(`Saved ${deps.paths.routesPath}`);
 }
 
+/** The routes routes.json holds that cannot be used, as warnings: each problem, then the way out. */
+function brokenWarnings(broken: BrokenRoute[]): string[] {
+  return broken.length ? [...broken.flatMap((route) => route.problems), brokenRoutesHint(broken)] : [];
+}
+
 /**
  * Every route ranked as `route explain` ranks it, recording nothing, from one quota read for the
  * members of all of them: a route that shares accounts with another does not read them twice.
@@ -419,7 +431,7 @@ async function rankEvery(routes: Route[], registry: Registry, deps: RouteDeps): 
 async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
   const read = readOptions(args, { values: [], flags: ["--json", "--no-quota"] }, "route list");
   if (read.positionals.length) throw new Error(`${usage("list")}\nRun \`clausona route list --help\` for usage.`);
-  const file = await readRoutes(deps.paths);
+  const { file, broken } = await loadRoutes(deps.paths);
   const registry = await deps.loadRegistry();
   const entries = Object.keys(file.routes)
     .sort()
@@ -440,12 +452,17 @@ async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
         emptyPatterns: [...pool.emptyPatterns, ...fallback.emptyPatterns],
       };
     });
-  if (read.flags.has("--json")) return JSON.stringify({ routes: entries }, null, 2);
-  if (entries.length === 0) return renderRoutesEmpty();
-  const warnings = entries.flatMap((entry) => [
-    ...entry.unknownNames.map((name) => `${entry.name} names '${name}', which is not a registered profile.`),
-    ...entry.emptyPatterns.map((pattern) => `${entry.name}: '${pattern}' matches nobody.`),
-  ]);
+  // Each problem as it is worded, for the routes left out: their names can be anything.
+  const problems = broken.flatMap((route) => route.problems);
+  if (read.flags.has("--json")) return JSON.stringify({ routes: entries, problems }, null, 2);
+  if (entries.length === 0 && broken.length === 0) return renderRoutesEmpty();
+  const warnings = [
+    ...brokenWarnings(broken),
+    ...entries.flatMap((entry) => [
+      ...entry.unknownNames.map((name) => `${entry.name} names '${name}', which is not a registered profile.`),
+      ...entry.emptyPatterns.map((pattern) => `${entry.name}: '${pattern}' matches nobody.`),
+    ]),
+  ];
   // Without a registry there is nobody to rank; with --no-quota nothing is read, and the table says so.
   const routes = entries.map((entry) => entry.route);
   const rankings = registry && !read.flags.has("--no-quota") ? await rankEvery(routes, registry, deps) : undefined;
@@ -465,24 +482,27 @@ async function resolveForRanking(sub: "explain" | "pick", args: string[], deps: 
   const [name, ...extra] = read.positionals;
   if (extra.length) throw new Error(`${usage(sub)}\nRun \`clausona route ${sub} --help\` for usage.`);
   const overrides = toRoutingOptions(read.values);
-  const resolved = resolveRoute(await readRoutes(deps.paths), {
-    tool: parseRouteTool(read.values.get("--tool")),
-    options: { ...overrides, ...(name ? { route: name } : {}) },
-  });
+  const tool = parseRouteTool(read.values.get("--tool"));
+  const { file, broken } = await routesFor(name, deps.paths);
+  const resolved = resolveRoute(file, { tool, options: { ...overrides, ...(name ? { route: name } : {}) } });
   if (!resolved) {
     throw new Error(
       `Name a route: clausona route ${sub} <name>, or an unsaved one: clausona route ${sub} --tool claude --from '<patterns>'.`,
     );
   }
-  return { resolved, overrides, json: read.flags.has("--json"), resume: read.flags.has("--resume") };
+  return { resolved, overrides, broken, json: read.flags.has("--json"), resume: read.flags.has("--resume") };
 }
 
 async function explainRoute(args: string[], deps: RouteDeps): Promise<string> {
-  const { resolved, overrides, json, resume } = await resolveForRanking("explain", args, deps);
+  const { resolved, overrides, broken, json, resume } = await resolveForRanking("explain", args, deps);
   const ranking = await rankRouteNow(resolved, deps, { resume, record: false });
-  return json
-    ? JSON.stringify(explainJson(resolved.name, resolved.resolvedBy, ranking), null, 2)
-    : renderRouteDetail(resolved.name, ranking, { now: deps.clock(), onlyTool: resolved.onlyTool, overrides });
+  if (json) return JSON.stringify(explainJson(resolved.name, resolved.resolvedBy, ranking), null, 2);
+  return renderRouteDetail(resolved.name, ranking, {
+    now: deps.clock(),
+    onlyTool: resolved.onlyTool,
+    overrides,
+    warnings: brokenWarnings(broken),
+  });
 }
 
 async function pickRoute(args: string[], deps: RouteDeps): Promise<string> {

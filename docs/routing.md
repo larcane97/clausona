@@ -280,9 +280,24 @@ changed." If `routes.json` changed while you were editing, your edit is not save
 It is kept in `~/.clausona/routes.edit.json`, which only you can read. Run `route edit` again
 and paste it in. Once an edit saves what that file holds, the file is deleted.
 
-When `routes.json` cannot be used, every command that reads it stops with exit code 1 and lists
-what is wrong. That includes `clausona run claude` with no route named. `clausona run <profile>`
-does not read the file.
+When `routes.json` cannot be read as routes at all (it is not JSON, say, or it comes from a
+newer clausona), every command that reads it stops with exit code 1 and lists what is wrong.
+`clausona run claude` with no route named, a run with `--from` and `clausona run <profile>` do
+not read the file, so they are never stopped by it.
+
+A problem in one route stops only the commands that use that route. `clausona run --route main`
+and `route pick main` work while route `old` has a typo. `route list` and `route explain` show
+the other routes as usual and warn about each problem:
+
+```
+  ⚠ routes.old.strategy: must be one of round-robin, headroom, expiring
+  ⚠ Fix it with clausona route edit, or remove the route: clausona route remove old.
+```
+
+A change that would save the file with such a problem still in it is refused, with the same
+problems and the same way out. So while `old` is broken, `route add` and `route set` on other
+routes stop and ask you to fix it first. `route remove old` works, and so does a `route set old`
+that fixes the problem, such as `route set old --strategy headroom`.
 
 Removing a profile leaves its routes alone. A name that is no longer registered is skipped, and
 both `route list` and `route explain` point it out. They point out patterns that match nobody
@@ -316,7 +331,8 @@ list instead.
 
 The screen never records a pick. It writes `routes.json` only when you remove a route or save one
 from the form. If the file cannot be used, the screen says what is wrong with it and points you
-to `clausona route edit`.
+to `clausona route edit`. A route with a problem is left off the list, and one line under it
+says so and points you to `clausona route list`, which shows the problem.
 
 ### The form
 
@@ -682,16 +698,17 @@ Each entry in `members`:
 An account picked at the `overflow` stage has the status `picked`, even though its usage is at or
 over `maxUsage`. Percentages are not rounded in JSON. Fields are only ever added.
 
-`route list --json` gives `{ "routes": [...] }`. Each entry has `name`, `route` (the settings
+`route list --json` gives `{ "routes": [...], "problems": [...] }`. Each entry has `name`, `route` (the settings
 with defaults, where `tool` can be `"all"` too), `members` and `fallbackMembers` (profile ids,
-after the exclude list), `excluded`, `unknownNames` and `emptyPatterns`.
+after the exclude list), `excluded`, `unknownNames` and `emptyPatterns`. `problems` lists, as
+text, what is wrong with each route that cannot be used; those routes are not in `routes`.
 
 ### Exit codes
 
 | Code | Meaning |
 |---|---|
 | the tool's own | The tool ran. |
-| 1 | A usage error, an unknown route without a terminal (or answered `n` in one), or a `routes.json` that cannot be used. |
+| 1 | A usage error, an unknown route without a terminal (or answered `n` in one), or a `routes.json` or a named route that cannot be used. |
 | 75 | No account is available now, from `run` or `pick`. Retry later, or name a profile. |
 
 ### The routing skill

@@ -4,7 +4,14 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { acquireFileLock } from "./file-lock.js";
-import { checkRoutesFile, emptyRoutesFile, type RoutesFile } from "./route-config.js";
+import {
+  type BrokenRoute,
+  checkRouteName,
+  checkRoutesFile,
+  emptyRoutesFile,
+  type RouteSpec,
+  type RoutesFile,
+} from "./route-config.js";
 
 /**
  * ~/.clausona/routes.json (the user's routes) and ~/.clausona/route-picks.json (when each
@@ -99,7 +106,8 @@ function jsonProblem(error: unknown, body: string): string {
   return `not valid JSON (line ${line}, column ${column})`;
 }
 
-export function parseRoutesText(text: string, filePath: string): RoutesFile {
+/** The text as routes.json, checked: its shape as a whole, which a RoutesFileError refuses, and each route on its own. */
+function checkText(text: string, filePath: string): { file: RoutesFile; broken: BrokenRoute[] } {
   // Windows Notepad saves UTF-8 with a byte-order mark, which JSON.parse refuses.
   const body = text.replace(/^\uFEFF/, "");
   let raw: unknown;
@@ -110,7 +118,18 @@ export function parseRoutesText(text: string, filePath: string): RoutesFile {
   }
   const check = checkRoutesFile(raw);
   if (!check.ok) throw new RoutesFileError(filePath, check.problems, check.newerVersion !== undefined);
-  return check.file;
+  return check;
+}
+
+/** routes.json as `route edit` saves it: every route of it has to check out. */
+export function parseRoutesText(text: string, filePath: string): RoutesFile {
+  const { file, broken } = checkText(text, filePath);
+  if (broken.length > 0)
+    throw new RoutesFileError(
+      filePath,
+      broken.flatMap((route) => route.problems),
+    );
+  return file;
 }
 
 /** routes.json exactly as it is on disk, or null when there is none: what `route edit` starts from. */
@@ -118,9 +137,46 @@ export function readRoutesText(paths: RoutesPaths = routesPaths()): Promise<stri
   return readText(paths.routesPath);
 }
 
-export async function readRoutes(paths: RoutesPaths = routesPaths()): Promise<RoutesFile> {
+/**
+ * routes.json as read: the routes that can be used, and the ones that cannot with their problems.
+ * A file that cannot be read as routes at all - not JSON, another version, no object of routes -
+ * is refused whole, with a RoutesFileError.
+ */
+export type LoadedRoutes = { filePath: string; file: RoutesFile; broken: BrokenRoute[] };
+
+export async function loadRoutes(paths: RoutesPaths = routesPaths()): Promise<LoadedRoutes> {
   const text = await readText(paths.routesPath);
-  return text === null ? emptyRoutesFile() : parseRoutesText(text, paths.routesPath);
+  const { file, broken } = text === null ? { file: emptyRoutesFile(), broken: [] } : checkText(text, paths.routesPath);
+  return { filePath: paths.routesPath, file, broken };
+}
+
+/** The routes that can be used. */
+export async function readRoutes(paths: RoutesPaths = routesPaths()): Promise<RoutesFile> {
+  return (await loadRoutes(paths)).file;
+}
+
+/**
+ * How to get past routes that cannot be used: `route edit`, or removing each one whose name can
+ * be shown and typed.
+ */
+export function brokenRoutesHint(broken: BrokenRoute[]): string {
+  const removable = broken.map((route) => route.name).filter((name) => checkRouteName(name) === null);
+  const edit = `Fix ${broken.length === 1 ? "it" : "them"} with clausona route edit`;
+  if (removable.length === 0) return `${edit}.`;
+  const remove = removable.map((name) => `clausona route remove ${name}`).join(", ");
+  return `${edit}, or remove ${removable.length === 1 ? "the route" : "the routes"}: ${remove}.`;
+}
+
+/** Why a write was refused: the file it would write still has routes that cannot be used. */
+function refusal(filePath: string, broken: BrokenRoute[]): Error {
+  const count = broken.length === 1 ? "a route" : `${broken.length} routes`;
+  return new Error(
+    [
+      `${filePath} has ${count} that cannot be used, so nothing was saved:`,
+      ...broken.flatMap((route) => route.problems).map((problem) => `    ${problem}`),
+      `  ${brokenRoutesHint(broken)}`,
+    ].join("\n"),
+  );
 }
 
 async function withRoutesLock<T>(paths: RoutesPaths, fn: () => Promise<T>): Promise<T> {
@@ -140,17 +196,28 @@ async function withRoutesLock<T>(paths: RoutesPaths, fn: () => Promise<T>): Prom
 /**
  * Changes routes.json as it stands under the lock. `update` gets a copy and returns the file to
  * write, or null to leave it alone; what it returns is checked before anything is written.
+ *
+ * The copy holds the routes that cannot be used too, as they are stored, so that removing one,
+ * or a `route set` that mends it, can be written. A file that would still hold one is not: the
+ * write is refused with its problems and the way out.
  */
 export async function updateRoutes(
   update: (current: RoutesFile) => RoutesFile | null,
   paths: RoutesPaths = routesPaths(),
 ): Promise<RoutesFile> {
   return withRoutesLock(paths, async () => {
-    const current = await readRoutes(paths);
-    const next = update(structuredClone(current));
-    if (next === null) return current;
+    const { file, broken } = await loadRoutes(paths);
+    const current = structuredClone(file);
+    // Built rather than assigned: a broken route may be called `__proto__`, which assignment drops.
+    current.routes = Object.fromEntries([
+      ...Object.entries(current.routes),
+      ...broken.map((route): [string, RouteSpec] => [route.name, structuredClone(route.spec) as RouteSpec]),
+    ]);
+    const next = update(current);
+    if (next === null) return file;
     const check = checkRoutesFile(next);
     if (!check.ok) throw new Error(check.problems.join("\n"));
+    if (check.broken.length > 0) throw refusal(paths.routesPath, check.broken);
     await writeAtomic(paths.routesPath, toText(check.file));
     return check.file;
   });

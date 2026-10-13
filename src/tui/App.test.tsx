@@ -65,6 +65,11 @@ vi.mock("../lib/service", async (importOriginal) => ({
 // The Routes screen reads routes.json and the pick record, and quota, none of them from this HOME.
 vi.mock("../core/routes-store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../core/routes-store.js")>()),
+  loadRoutes: vi.fn(async () => ({
+    filePath: "/Users/test/.clausona/routes.json",
+    file: { version: 1, routes: { main: { tool: "claude" } } },
+    broken: [],
+  })),
   readRoutes: vi.fn(async () => ({ version: 1, routes: { main: { tool: "claude" } } })),
   updateRoutes: vi.fn(async () => {
     throw new Error("nothing in these tests writes routes.json");

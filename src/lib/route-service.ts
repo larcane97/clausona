@@ -4,6 +4,7 @@ import {
   checkPattern,
   checkRoute,
   checkRouteName,
+  emptyRoutesFile,
   type Route,
   type RouteOverrides,
   type RouteSpec,
@@ -14,7 +15,15 @@ import {
   withDefaults,
 } from "../core/route-config.js";
 import { expandPatterns, type Member, splitToolPrefix } from "../core/route-patterns.js";
-import { pickWithRecord, type RoutesPaths, readPicks, routesPaths } from "../core/routes-store.js";
+import {
+  type LoadedRoutes,
+  loadRoutes,
+  pickWithRecord,
+  RoutesFileError,
+  type RoutesPaths,
+  readPicks,
+  routesPaths,
+} from "../core/routes-store.js";
 import { type Ranking, rankRoute } from "../core/routing.js";
 import type { QuotaSnapshot, Registry, ToolName } from "../types.js";
 import { editInEditor } from "./editor.js";
@@ -57,14 +66,18 @@ export class NoAccountError extends Error {
 }
 
 export class UnknownRouteError extends Error {
+  /** The routes there are. A key pasted into routes.json as a route's name is never among them. */
+  readonly existing: string[];
   constructor(
     readonly routeName: string,
-    readonly existing: string[],
+    existing: string[],
   ) {
+    const listed = existing.filter((name) => checkRouteName(name) === null);
     super(
-      `Route '${routeName}' does not exist.${existing.length ? ` Existing routes: ${existing.join(", ")}.` : ""} Create it: clausona route add ${routeName}`,
+      `Route '${routeName}' does not exist.${listed.length ? ` Existing routes: ${listed.join(", ")}.` : ""} Create it: clausona route add ${routeName}`,
     );
     this.name = "UnknownRouteError";
+    this.existing = listed;
   }
 }
 
@@ -213,6 +226,20 @@ export function resolveRoute(
     resolvedBy: name ? "flag" : "inline",
     ...(onlyTool ? { onlyTool } : {}),
   };
+}
+
+/**
+ * routes.json as a command that names the route `name` needs it. It is not read at all when no
+ * route is named: an unsaved route, or a tool's active profile, needs nothing from it. The other
+ * routes' problems do not stop the command; the named route's own do, as a RoutesFileError.
+ */
+export async function routesFor(name: string | undefined, paths: RoutesPaths): Promise<LoadedRoutes> {
+  if (name === undefined) return { filePath: paths.routesPath, file: emptyRoutesFile(), broken: [] };
+  const loaded = await loadRoutes(paths);
+  // A name that cannot be a route's is resolveRoute's to refuse, without quoting it.
+  const broken = checkRouteName(name) === null ? loaded.broken.find((route) => route.name === name) : undefined;
+  if (broken) throw new RoutesFileError(loaded.filePath, broken.problems);
+  return loaded;
 }
 
 /**

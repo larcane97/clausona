@@ -1,5 +1,4 @@
 import { holdsKey, type RouteTool, toolsOf, withDefaults } from "../core/route-config.js";
-import { readRoutes } from "../core/routes-store.js";
 import { posixQuote } from "../core/shell.js";
 import { createRoute, newRouteFrom } from "../route-commands.js";
 import type { Registry } from "../types.js";
@@ -28,6 +27,7 @@ import {
   type RouteDeps,
   rankRouteNow,
   resolveRoute,
+  routesFor,
   UnknownRouteError,
 } from "./route-service.js";
 import { isResumeRun, type RunArgs, readRunArgs } from "./run-args.js";
@@ -122,7 +122,7 @@ async function offerToCreate(
     throw new Error("Nothing was created, and nothing was run.");
   }
   await createRoute(error.routeName, spec, deps);
-  const resolved = resolveRoute(await readRoutes(deps.paths), run);
+  const resolved = resolveRoute((await routesFor(error.routeName, deps.paths)).file, run);
   if (!resolved) throw error;
   return resolved;
 }
@@ -150,7 +150,9 @@ export async function runRouted(
   let resolved: ResolvedRoute | null = null;
   let unknown: UnknownRouteError | undefined;
   try {
-    resolved = resolveRoute(await readRoutes(deps.paths), run);
+    // Read only for a named route, and refused only for that route's problems: a run on the
+    // active profile, or on an unsaved route, goes ahead whatever routes.json holds.
+    resolved = resolveRoute((await routesFor(run.options.route, deps.paths)).file, run);
   } catch (error) {
     if (!(error instanceof UnknownRouteError)) throw error;
     unknown = error;

@@ -1,6 +1,13 @@
 import { collectQuotas, type QuotaTarget } from "../../core/quota-store.js";
 import type { RoutesFile } from "../../core/route-config.js";
-import { readPicks, readRoutes, routesPaths, updateRoutes } from "../../core/routes-store.js";
+import {
+  type LoadedRoutes,
+  loadRoutes,
+  readPicks,
+  readRoutes,
+  routesPaths,
+  updateRoutes,
+} from "../../core/routes-store.js";
 import { loadRegistry, registryProblem } from "../../lib/service.js";
 import type { QuotaSnapshot, Registry } from "../../types.js";
 
@@ -22,11 +29,15 @@ export type RoutesScreenDeps = {
   clock: () => number;
 };
 
-export function defaultRoutesScreenDeps(): RoutesScreenDeps {
+/** The screen's own, beyond its form's: routes.json with the routes that cannot be used set apart. */
+export type RoutesListDeps = RoutesScreenDeps & { loadRoutes: () => Promise<LoadedRoutes> };
+
+export function defaultRoutesScreenDeps(): RoutesListDeps {
   const paths = routesPaths();
   return {
     loadRegistry,
     registryProblem,
+    loadRoutes: () => loadRoutes(paths),
     readRoutes: () => readRoutes(paths),
     updateRoutes: (update) => updateRoutes(update, paths),
     collectQuotas: (targets, options) => collectQuotas(targets, { refresh: options?.refresh }),

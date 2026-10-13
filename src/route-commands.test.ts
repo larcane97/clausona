@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runCommand } from "./commands.js";
-import { routesPaths } from "./core/routes-store.js";
+import { RoutesFileError, routesPaths } from "./core/routes-store.js";
 import { stripAnsi } from "./lib/cli-style.js";
 import type { RouteIo } from "./lib/route-io.js";
 import { renderRoutesEmpty } from "./lib/route-render.js";
@@ -505,6 +505,89 @@ describe("route list", () => {
       members: ["claude:a", "claude:b", "claude:c"],
       unknownNames: ["gone"],
     });
+  });
+});
+
+describe("a route in routes.json that cannot be used", () => {
+  const BROKEN = {
+    version: 1,
+    routes: { main: { tool: "claude" }, bad: { tool: "claude", strategy: "fastest" } },
+  };
+  const PROBLEM = "routes.bad.strategy: must be one of round-robin, headroom, expiring";
+
+  function withBroken() {
+    const s = setup();
+    writeFileSync(s.deps.paths.routesPath, `${JSON.stringify(BROKEN, null, 2)}\n`);
+    return s;
+  }
+
+  it("is warned about by list and explain, which go on with the others", async () => {
+    const { run } = withBroken();
+    const out = await run("list");
+    expect(out).toMatch(/^ {4}main\s+claude\s+round-robin\s+80%\s+3 of 3\s+claude:a$/m);
+    expect(out).not.toMatch(/^ {4}bad\s/m);
+    expect(out).toContain(`  ⚠ ${PROBLEM}`);
+    expect(out).toContain("  ⚠ Fix it with clausona route edit, or remove the route: clausona route remove bad.");
+    const json = JSON.parse(await run("list", "--json"));
+    expect(json.routes.map((route: { name: string }) => route.name)).toEqual(["main"]);
+    expect(json.problems).toEqual([PROBLEM]);
+    expect(await run("explain", "main")).toContain(`  ⚠ ${PROBLEM}`);
+  });
+
+  it("stops only a command that uses it", async () => {
+    const { run } = withBroken();
+    expect(await run("pick", "main")).toBe("claude:a");
+    for (const sub of ["pick", "explain"]) {
+      const error = (await run(sub, "bad").catch((e: unknown) => e)) as Error;
+      expect(error).toBeInstanceOf(RoutesFileError);
+      expect(error.message).toContain(PROBLEM);
+    }
+  });
+
+  it("keeps every write from saving it again, and says how to get past it", async () => {
+    const { run, deps } = withBroken();
+    const before = readFileSync(deps.paths.routesPath, "utf8");
+    for (const args of [
+      ["add", "new"],
+      ["set", "main", "--strategy", "headroom"],
+      ["rename", "main", "other"],
+      ["remove", "main"],
+    ]) {
+      const error = (await run(...args).catch((e: unknown) => e)) as Error;
+      expect(error.message, args.join(" ")).toBe(
+        [
+          `${deps.paths.routesPath} has a route that cannot be used, so nothing was saved:`,
+          `    ${PROBLEM}`,
+          "  Fix it with clausona route edit, or remove the route: clausona route remove bad.",
+        ].join("\n"),
+      );
+    }
+    expect(readFileSync(deps.paths.routesPath, "utf8")).toBe(before);
+  });
+
+  it("can be mended with route set, or removed", async () => {
+    const mended = withBroken();
+    await mended.run("set", "bad", "--strategy", "headroom");
+    expect(mended.file().routes.bad).toEqual({ tool: "claude", strategy: "headroom" });
+    const removed = withBroken();
+    await removed.run("remove", "bad");
+    expect(removed.file().routes).toEqual({ main: { tool: "claude" } });
+  });
+
+  it("never names a route whose name looks like a key, in a warning, a list of routes or a way out", async () => {
+    const { run, deps } = setup();
+    const key = ["sk", "ant", "y".repeat(24)].join("-");
+    writeFileSync(
+      deps.paths.routesPath,
+      JSON.stringify({ version: 1, routes: { main: { tool: "claude" }, [key]: { tool: "claude" } } }),
+    );
+    const out = await run("list");
+    expect(out).toContain("  ⚠ That looks like an API key, not a route name.");
+    expect(out).toContain("  ⚠ Fix it with clausona route edit.");
+    const unknown = (await run("explain", "nope").catch((e: unknown) => e)) as Error;
+    expect(unknown.message).toContain("Existing routes: main.");
+    const refused = (await run("add", "new").catch((e: unknown) => e)) as Error;
+    for (const text of [out, unknown.message, refused.message]) expect(text).not.toContain("sk-");
   });
 });
 

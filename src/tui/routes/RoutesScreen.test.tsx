@@ -2,13 +2,13 @@ import { render } from "ink-testing-library";
 import { describe, expect, it, vi } from "vitest";
 
 import type { QuotaTarget } from "../../core/quota-store.js";
-import type { RoutesFile } from "../../core/route-config.js";
+import type { BrokenRoute, RoutesFile } from "../../core/route-config.js";
 import { RoutesFileError } from "../../core/routes-store.js";
 import { stripAnsi } from "../../lib/cli-style.js";
 import type { QuotaSnapshot, Registry } from "../../types.js";
 import { DOWN, ENTER, ESC, type Instance, press, renderAt, type, waitForFrame } from "../test-drive.js";
 import { RoutesScreen } from "./RoutesScreen.js";
-import type { RoutesScreenDeps } from "./routes-deps.js";
+import type { RoutesListDeps, RoutesScreenDeps } from "./routes-deps.js";
 
 vi.setConfig({ testTimeout: 15_000 });
 
@@ -75,6 +75,8 @@ function setup(
     file?: RoutesFile;
     collect?: Collect;
     readError?: Error;
+    /** Routes routes.json holds that cannot be used, set apart from `file`. */
+    broken?: BrokenRoute[];
     columns?: number;
     /** profiles.json as `loadRegistry` reads it, and why it cannot be used when it reads as none. */
     registry?: { loads: Registry | null; problem: string | null };
@@ -84,6 +86,14 @@ function setup(
   const deps = {
     loadRegistry: vi.fn(async () => (options.registry ? options.registry.loads : REGISTRY)),
     registryProblem: vi.fn(async (): Promise<string | null> => options.registry?.problem ?? null),
+    loadRoutes: vi.fn(async () => {
+      if (options.readError) throw options.readError;
+      return {
+        filePath: "/home/u/.clausona/routes.json",
+        file: structuredClone(current),
+        broken: options.broken ?? [],
+      };
+    }),
     readRoutes: vi.fn(async () => {
       if (options.readError) throw options.readError;
       return structuredClone(current);
@@ -96,7 +106,7 @@ function setup(
     collectQuotas: vi.fn<Collect>(options.collect ?? (async () => QUOTAS)),
     readPicks: vi.fn(async () => ({})),
     clock: () => NOW,
-  } satisfies RoutesScreenDeps;
+  } satisfies RoutesListDeps;
   const onExit = vi.fn();
   const tree = <RoutesScreen deps={deps} onExit={onExit} />;
   const instance: Instance = options.columns ? renderAt(tree, options.columns) : render(tree);
@@ -345,6 +355,19 @@ describe("RoutesScreen", () => {
 
     await type(instance, ESC);
     await vi.waitFor(() => expect(onExit).toHaveBeenCalledTimes(1));
+  });
+
+  // One route's problem must not take the screen down: the others work, and one line says so.
+  it("lists the routes that can be used, and says in one line that one cannot and where to see why", async () => {
+    const broken: BrokenRoute[] = [
+      { name: "bad", spec: { tool: "x" }, problems: ['routes.bad.tool: must be "claude", "codex" or "all"'] },
+    ];
+    const { instance } = setup({ broken });
+    const frame = await ranked(instance);
+    const { list } = panes(frame);
+    expect(list).toHaveLength(3);
+    expect(list.some((line) => line.includes("bad"))).toBe(false);
+    expect(frame).toContain("⚠ routes.json has a route that cannot be used: clausona route list says why.");
   });
 
   // Offline, or nothing readable. Nothing read says nothing about who is free: a dash, as
