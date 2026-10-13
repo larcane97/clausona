@@ -37,7 +37,8 @@ import { codexTrusted, isMcpjsonServer, MANAGED_MCP_KEY, relevantIn, STASH_KEY }
 
 /**
  * One of the verbatim tags: off, off here, off in N of M accounts, not here, unused, broken
- * link, pending approval, hidden by … copy, no front matter, name too long, invalid hooks file.
+ * link, pending approval, hidden by … copy, no front matter, invalid front matter, name too long,
+ * invalid hooks file.
  */
 export type Tag = string;
 
@@ -99,6 +100,7 @@ export function hookWhen(item: Extension): string {
 /** Why Codex does not load something, by its `codexError`, for its details. */
 const CODEX_SKIPS: Record<NonNullable<Extension["codexError"]>, string> = {
   "no front matter": "Codex skips its SKILL.md: it has no front matter",
+  "invalid front matter": "Codex skips its SKILL.md: its front matter is not valid YAML",
   "name too long": "Codex skips its SKILL.md: its name is over 64 characters",
   "invalid hooks file": "Codex skips its hooks file: it holds more than hooks and a description at its top",
 };
@@ -294,11 +296,12 @@ function scopeLabel(item: Extension, project: string | undefined): string {
 
 /**
  * Every tag that applies, most important first: broken link > off > off here > off in N of M
- * accounts > not here > pending approval > hidden by … > unused > no front matter > name too
- * long > invalid hooks file. A row that is not here has no state here, so no tag of one. `no
- * front matter` is a quiet note for a Claude skill, which Claude Code loads all the same; for a
- * Codex skill, which Codex skips, it and `name too long` are why it is not in Loaded, and
- * `invalid hooks file` is why a Codex hook does not run, which its details say.
+ * accounts > not here > pending approval > hidden by … > unused > no front matter > invalid
+ * front matter > name too long > invalid hooks file. A row that is not here has no state here,
+ * so no tag of one. `no front matter` is a quiet note for a Claude skill, which Claude Code loads
+ * all the same; for a Codex skill, which Codex skips, it, `invalid front matter` and `name too
+ * long` are why it is not in Loaded, and `invalid hooks file` is why a Codex hook does not run,
+ * which its details say.
  */
 export function tagsOf(inv: Inventory, row: ScopeRow, project: string | undefined, now: number): Tag[] {
   const item = firstOf(row);

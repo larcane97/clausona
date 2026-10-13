@@ -12,6 +12,7 @@ import {
   readText,
   realPath,
 } from "../read.js";
+import { codexFrontMatterError, rustTrim } from "./codex-front-matter.js";
 import type { SkillLocation } from "./skill-dirs.js";
 
 /** How deep below a skills folder Codex looks for a SKILL.md: the folder holding one, at most 6 down. */
@@ -36,7 +37,8 @@ type Folder = { path: string; rel: string; depth: number; real: string; info: En
  * A skill is named by the `name` in its front matter, whitespace collapsed, or, with none, by its
  * folder. Its id ends in its folder's path below the skills folder, so a skill at the top keeps
  * the id it always had, whatever its front matter names it. A SKILL.md Codex refuses - one with
- * no front matter, or a name over 64 characters - is listed with `codexError`, and does not load.
+ * no front matter, front matter that is not valid YAML, or a name over 64 characters - is listed
+ * with `codexError`, and does not load.
  * A link at the top whose target is gone is listed too, to be cleaned up. `prefix` is a plugin's
  * `<name>:`.
  */
@@ -135,23 +137,27 @@ async function walk(
 }
 
 /**
- * A SKILL.md's front matter as Codex finds it: a first line that is `---`, spaces aside, then
- * the lines up to the next such line. Undefined when there is no closing line or nothing between
- * the two, which Codex calls missing front matter and does not load.
+ * A SKILL.md's front matter as Codex finds it: a first line that is `---`, spaces aside as Rust
+ * trims them - a byte order mark is none - then the lines up to the next such line. Undefined
+ * when there is no closing line or nothing between the two, which Codex calls missing front
+ * matter and does not load.
  */
 function frontMatterOf(text: string): string | undefined {
   const lines = text.split(/\r?\n/);
-  if (lines[0]?.trim() !== "---") return undefined;
-  const end = lines.findIndex((line, i) => i > 0 && line.trim() === "---");
+  if (rustTrim(lines[0] ?? "") !== "---") return undefined;
+  const end = lines.findIndex((line, i) => i > 0 && rustTrim(line) === "---");
   return end > 1 ? lines.slice(1, end).join("\n") : undefined;
 }
 
 /**
- * Why Codex lists no skill for a SKILL.md, if it does not: no front matter, or a name over
- * Codex's 64 characters. Such a folder is listed all the same, so it can be found and fixed.
+ * Why Codex lists no skill for a SKILL.md, if it does not, in the order it checks: no front
+ * matter, front matter that is not YAML it reads (codexFrontMatterError), or a name over Codex's
+ * 64 characters. Such a folder is listed all the same, so it can be found and fixed.
  */
 function refusal(block: string | undefined, name: string): Extension["codexError"] {
   if (block === undefined) return "no front matter";
+  const invalid = codexFrontMatterError(block);
+  if (invalid) return invalid;
   return [...name].length > 64 ? "name too long" : undefined;
 }
 

@@ -247,6 +247,33 @@ describe("readCodex", () => {
     expect(out.items.find((i) => i.location.file.endsWith("plain"))?.name).toBe("plain");
   });
 
+  it("marks a SKILL.md whose front matter Codex cannot read as YAML, and one with a byte order mark", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.codex("personal", ".codex");
+    // What Codex 0.159.3 said of each: an invalid YAML error, the last two listed.
+    h.write(".agents/skills/trailing/SKILL.md", '---\nname: trailing\ndescription: "Use it" when asked\n---\n');
+    h.write(".agents/skills/as-list/SKILL.md", "---\nname: as-list\ndescription: [a, b]\n---\n");
+    h.write(".agents/skills/unindented/SKILL.md", "---\nname: unindented\ndescription: one line\nand the next\n---\n");
+    h.write(".agents/skills/colon/SKILL.md", "---\nname: colon\ndescription: Use when: asked\n---\n");
+    h.write(".agents/skills/wrapped/SKILL.md", "---\nname: wrapped\ndescription: one line\n  and the next\n---\n");
+    // Rust's trim leaves a byte order mark, so Codex finds no front matter.
+    h.write(".agents/skills/bom/SKILL.md", "﻿---\nname: bom\ndescription: d\n---\n");
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(ctx, [], out);
+    const error = (folder: string) => out.items.find((i) => i.location.file.endsWith(folder))?.codexError;
+    expect(["trailing", "as-list", "unindented", "colon", "wrapped", "bom"].map(error)).toEqual([
+      "invalid front matter",
+      "invalid front matter",
+      "invalid front matter",
+      undefined,
+      undefined,
+      "no front matter",
+    ]);
+  });
+
   it("finds skills in nested folders down to Codex's depth of 6, through links, but not in hidden ones", async () => {
     const h = new TestHome();
     homes.push(h);
