@@ -416,7 +416,8 @@ on:
 ```
 
 Only a word that is exactly a registered profile's name stops the run. Any other word is the
-tool's first argument.
+tool's first argument. So a profile named like one of the tool's own commands, such as `exec`,
+needs the `--` in front of the command: `clausona run codex -- exec …`.
 
 A first argument that is neither a profile nor a tool, such as a prompt typed without the tool,
 is refused with the fix:
