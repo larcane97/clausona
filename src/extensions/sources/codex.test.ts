@@ -741,6 +741,29 @@ describe("readCodex", () => {
     }
   });
 
+  it("refuses a config.toml whose [hooks.state] Codex cannot read, as Codex refuses the whole file", async () => {
+    // Codex 0.159.3's config/read: "expected a boolean", "expected a string", "expected struct
+    // HookStateToml", "expected a map" - and a key it does not know in an entry, read.
+    for (const [state, refused] of [
+      ['[hooks.state."k"]\nenabled = "yes"\n', true],
+      ['[hooks.state."k"]\ntrusted_hash = 5\n', true],
+      ["[hooks.state]\nk = 5\n", true],
+      ["[hooks]\nstate = 5\n", true],
+      ['[hooks.state."k"]\nfoo = 1\nenabled = false\n', false],
+    ] as const) {
+      const h = new TestHome();
+      homes.push(h);
+      h.codex("personal", ".codex", `[mcp_servers.x]\ncommand = "x"\n\n${state}`);
+      const warnings: Warning[] = [];
+      const ctx = await loadCodexContext(h.registry, h.home, warnings);
+      expect([state, ctx?.config === undefined, warnings.map((w) => w.message)]).toEqual([
+        state,
+        refused,
+        refused ? ["has a hook Codex cannot read, so Codex refuses the whole file"] : [],
+      ]);
+    }
+  });
+
   it("refuses a config.toml with a hook Codex cannot read, as Codex refuses the whole file", async () => {
     const h = new TestHome();
     homes.push(h);

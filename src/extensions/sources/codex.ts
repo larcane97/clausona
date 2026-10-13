@@ -16,6 +16,7 @@ import {
   addConfigHooks,
   codexHomeHooksFile,
   codexReadsHookEvents,
+  codexReadsHookStates,
   codexReadsHooksFile,
   exactConfigHooks,
   exactJsonFile,
@@ -71,7 +72,7 @@ export async function readTomlObject(file: string, warnings: Warning[]): Promise
   }
   // Checked with its numbers as Codex reads them, which tells a timeout of 30 from 30.0.
   const exact = exactToml(text) ?? value;
-  if (isRecord(exact.hooks) && !codexReadsHookEvents(exact.hooks)) {
+  if (isRecord(exact.hooks) && !(codexReadsHookEvents(exact.hooks) && codexReadsHookStates(exact.hooks.state))) {
     warnings.push({ file, message: "has a hook Codex cannot read, so Codex refuses the whole file" });
     return undefined;
   }

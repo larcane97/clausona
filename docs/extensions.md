@@ -344,7 +344,9 @@ The switches are read from these places:
   a `description` at its top, and every hook in it is one it can read: a known `type`, a string
   `command`, `server` and `tool`, a `timeout` or `additionalContextLimit` written as a whole
   number (`30`, not `30.0` or `3e1`, which Codex's JSON reading keeps as text), and so on. In a
-  `config.toml` a float there makes Codex refuse the whole file. The hooks of any other
+  `config.toml` a float there makes Codex refuse the whole file, and so does a `[hooks.state]`
+  entry that is no table, or whose `enabled` is no boolean or `trusted_hash` no string. The
+  hooks of any other
   file are tagged `invalid hooks file`, and so are all of a plugin manifest's inline hooks when
   one of them is unreadable. A plugin whose `hooks` lists hook files and hooks together has
   none. Codex runs no prompt or agent hook yet, nor an MCP tool hook when a session ends: those

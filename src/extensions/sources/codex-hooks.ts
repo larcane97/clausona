@@ -143,6 +143,9 @@ const optional = (value: unknown, is: (v: unknown) => boolean) => value === unde
 /** A field with a default, which serde reads absent or of its type, not null. */
 const defaulted = (value: unknown, is: (v: unknown) => boolean) => value === undefined || is(value);
 const isString = (value: unknown) => typeof value === "string";
+/** A table or an object, as serde reads a map or a struct: no number kept as text, no date. */
+const isTable = (value: unknown): value is Record<string, unknown> =>
+  isRecord(value) && !(value instanceof SerdeNumber) && !(value instanceof TomlDate);
 /** The most a hook's timeout or limit can be: Codex hashes it as a TOML integer, an i64. */
 const MAX_COUNT = 2n ** 63n - 1n;
 /**
@@ -159,7 +162,20 @@ const isCount = (value: unknown) => {
 /** A value TOML can hold, as Codex checks an MCP hook's input: no null anywhere in it. */
 const inToml = (value: unknown): boolean =>
   value !== null &&
-  (Array.isArray(value) ? value.every(inToml) : !isRecord(value) || Object.values(value).every(inToml));
+  (Array.isArray(value) ? value.every(inToml) : !isTable(value) || Object.values(value).every(inToml));
+
+/**
+ * Whether serde reads a config.toml's `[hooks.state]` as Codex 0.159.3's `HookStateToml` map, as
+ * config/read showed, or Codex refuses the whole file: a table of tables, `enabled` a boolean and
+ * `trusted_hash` a string where given. A key it does not know in an entry is fine.
+ */
+export function codexReadsHookStates(state: unknown): boolean {
+  if (state === undefined) return true;
+  if (!isTable(state)) return false;
+  return Object.values(state).every(
+    (s) => isTable(s) && optional(s.enabled, (v) => typeof v === "boolean") && optional(s.trusted_hash, isString),
+  );
+}
 
 /**
  * Whether serde reads every group and hook of the known events in `events` into Codex 0.159.3's
@@ -178,12 +194,12 @@ export function codexReadsHookEvents(events: Record<string, unknown>): boolean {
 }
 
 function readsGroup(group: unknown): boolean {
-  if (!isRecord(group) || !optional(group.matcher, isString)) return false;
+  if (!isTable(group) || !optional(group.matcher, isString)) return false;
   return defaulted(group.hooks, (hooks) => Array.isArray(hooks) && hooks.every(readsHook));
 }
 
 function readsHook(hook: unknown): boolean {
-  if (!isRecord(hook)) return false;
+  if (!isTable(hook)) return false;
   const common = optional(hook.timeout, isCount) && optional(hook.statusMessage, isString);
   switch (hook.type) {
     case "command":
@@ -199,7 +215,7 @@ function readsHook(hook: unknown): boolean {
         common &&
         isString(hook.server) &&
         isString(hook.tool) &&
-        defaulted(hook.input, (input) => isRecord(input) && inToml(input))
+        defaulted(hook.input, (input) => isTable(input) && inToml(input))
       );
     case "prompt":
     case "agent":
