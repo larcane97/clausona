@@ -221,7 +221,9 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
         const file = codexProjectConfig(project.path);
         const config = await projectConfig(ctx, project.path, file, out);
         if (config) {
-          addServers(config, { ...here, file }, project.path, out);
+          // Where Codex trusts the project, it merges each server over the user's of its name.
+          const user = codexTrustedIn(out.facts, project.path) ? ctx.config?.mcp_servers : undefined;
+          addServers(config, { ...here, file }, project.path, out, isRecord(user) ? user : undefined);
           addPluginSwitches(config, file, project.path, out.facts);
         }
         // Codex looks up no trust for a worktree's own hooks: it never reads them there.
@@ -398,14 +400,25 @@ async function resolvedSkillPath(skillPath: string | undefined): Promise<string 
 /**
  * Each `[mcp_servers.<name>]` table: a server when it says how to start one, by `command` or
  * `url`. A table that only sets `enabled` - as a project's config.toml switches a user server
- * off - is that switch alone, for the server of that name, and not a second server.
+ * off - is that switch alone, for the server of that name, and not a second server. With
+ * `under`, the user's servers in a project Codex trusts: a server's summary is what Codex runs,
+ * its table merged over the user's of its name (mergeCodexConfig), so the project's `command`
+ * with the user's `args`, and `env` from both. Its fingerprint is its own table, which a write changes.
  */
-function addServers(config: Record<string, unknown>, location: Location, owner: string, out: Collector): void {
+function addServers(
+  config: Record<string, unknown>,
+  location: Location,
+  owner: string,
+  out: Collector,
+  under?: Record<string, unknown>,
+): void {
   for (const [name, server] of Object.entries(isRecord(config.mcp_servers) ? config.mcp_servers : {})) {
     if (!isRecord(server)) continue;
     if (server.command !== undefined || server.url !== undefined) {
       const id = `mcp:codex:${location.scope}:${owner}:${name}`;
-      out.items.push({ id, kind: "mcp", name, location, summary: mcpSummary(server) });
+      // What Codex runs: the table merged over the user's of its name, at every depth.
+      const runs = under !== undefined && Object.hasOwn(under, name) ? mergeCodexConfig(under[name], server) : server;
+      out.items.push({ id, kind: "mcp", name, location, summary: mcpSummary(runs) });
       out.facts.fingerprints[id] = valueHash(server);
     }
     if (typeof server.enabled === "boolean") {

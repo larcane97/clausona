@@ -1069,6 +1069,27 @@ describe("Codex hooks and Codex's trust", () => {
     expect(there.items.map((i: { name: string; scope: string }) => [i.name, i.scope])).toEqual([["shared", "global"]]);
   });
 
+  it("shows a trusted project's server merged over the user's, as Codex runs it, and an untrusted one's as written", async () => {
+    const { h, app, web } = seed();
+    h.write(
+      ".codex/config.toml",
+      `[projects.${JSON.stringify(app)}]\ntrust_level = "trusted"\n\n[mcp_servers.shared]\ncommand = "npx"\nargs = ["-y", "shared"]\nenv = { A = "1" }\n`,
+    );
+    h.write("repos/app/.codex/config.toml", '[mcp_servers.shared]\ncommand = "app-shared"\nenv = { B = "2" }\n');
+    h.write("repos/web/.codex/config.toml", '[mcp_servers.shared]\ncommand = "web-shared"\nenv = { B = "2" }\n');
+    // Codex 0.159.3's config/read in app: command app-shared, args -y shared, env A and B. In
+    // web, untrusted, it reads none of web's file.
+    const project = JSON.parse(await run(h, app, "mcp", ["ls", "--tool", "codex", "--scope", "project", "--json"]));
+    expect(project.items.map((i: { summary: Record<string, string> }) => i.summary)).toEqual([
+      { transport: "stdio", command: "app-shared -y shared", env: "A, B" },
+    ]);
+    expect(await run(h, app, "mcp", ["show", "--id", project.items[0].id])).toMatch(/^Runs\s+app-shared -y shared$/m);
+    const there = JSON.parse(await run(h, web, "mcp", ["ls", "--tool", "codex", "--scope", "project", "--json"]));
+    expect(there.items.map((i: { summary: Record<string, string> }) => i.summary)).toEqual([
+      { transport: "stdio", command: "web-shared", env: "B" },
+    ]);
+  });
+
   it.skipIf(!hasGit)(
     "trusts a linked worktree of a trusted repo, and a folder inside one, by the repo's entry, as Codex does",
     async () => {

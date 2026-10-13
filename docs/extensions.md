@@ -309,6 +309,10 @@ The switches are read from these places:
   server a project's `config.toml` defines is `off` while Codex does not trust the project, as
   Codex leaves that file out: a same-name server of your own loads there instead. Its details
   say so, with the `Trust` line a switch there gets.
+  Where Codex trusts the project, it merges such a server over your own of the same name, key
+  by key: the project's `command` with your `args`, and `env` from both, the project's winning
+  where both set a key; a list such as `args` is the project's whole when it sets one. Runs,
+  the details and the JSON `summary` show that merged server, which is what Codex starts.
 - Codex's trust: Codex looks for a `[projects."<folder>"]` with a `trust_level` in its
   `config.toml` in three places, and the first it finds decides. First the project's folder,
   then its project root: the nearest folder at or above it with a `.git`, or with one of the
