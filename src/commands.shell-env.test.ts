@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LAUNCH_MARKER, renderPosixShellInit, type ShellInitPaths } from "./core/shell.js";
+import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "./test-timeouts.js";
 
 /**
  * `_shell-env` is the one command whose stdout the user's shell runs:
@@ -581,40 +582,44 @@ describe("_shell-env", () => {
   });
 
   // The end of the real path: what the shell function actually does with this stdout.
-  it.skipIf(process.platform === "win32")("survives eval in a real shell with a hostile secret", async () => {
-    const secret = "a'b$c`d\ne;f\\g";
-    const h = await harness((home, workDir) =>
-      registryWith(
-        {
-          tool: "claude",
-          kind: "api",
-          configDir: workDir,
-          email: "",
-          label: "local",
-          api: {
-            baseUrl: "http://localhost:8000",
-            authScheme: "bearer",
-            secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
+  it.skipIf(process.platform === "win32")(
+    "survives eval in a real shell with a hostile secret",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    async () => {
+      const secret = "a'b$c`d\ne;f\\g";
+      const h = await harness((home, workDir) =>
+        registryWith(
+          {
+            tool: "claude",
+            kind: "api",
+            configDir: workDir,
+            email: "",
+            label: "local",
+            api: {
+              baseUrl: "http://localhost:8000",
+              authScheme: "bearer",
+              secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
+            },
           },
-        },
-        home,
-      ),
-    );
-    vi.stubEnv("CLAUSONA_TEST_SECRET", secret);
+          home,
+        ),
+      );
+      vi.stubEnv("CLAUSONA_TEST_SECRET", secret);
 
-    const out = await h.run("claude");
-    const outPath = path.join(h.home, "shell-env.sh");
-    writeFileSync(outPath, out);
+      const out = await h.run("claude");
+      const outPath = path.join(h.home, "shell-env.sh");
+      writeFileSync(outPath, out);
 
-    const result = spawnSync("/bin/sh", ["-c", `eval "$(cat '${outPath}')"\nprintf %s "$ANTHROPIC_AUTH_TOKEN"`], {
-      encoding: "utf8",
-      timeout: 5000,
-    });
+      const result = spawnSync("/bin/sh", ["-c", `eval "$(cat '${outPath}')"\nprintf %s "$ANTHROPIC_AUTH_TOKEN"`], {
+        encoding: "utf8",
+        timeout: SPAWN_TIMEOUT_MS,
+      });
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toBe(secret);
-  });
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe(secret);
+    },
+  );
 
   /**
    * The leak this guards against, end to end: Claude Code sends X-Api-Key and
@@ -626,6 +631,7 @@ describe("_shell-env", () => {
    */
   it.skipIf(process.platform === "win32")(
     "keeps a credential the parent shell exported away from a bearer profile's tool",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
     async () => {
       const parentKey = "sk-ant-parent-sentinel";
       const parentOauth = "sk-ant-oat-parent-sentinel";
@@ -667,7 +673,7 @@ describe("_shell-env", () => {
       ].join("\n");
       const result = spawnSync("/bin/sh", ["-c", script], {
         encoding: "utf8",
-        timeout: 5000,
+        timeout: SPAWN_TIMEOUT_MS,
         env: { PATH: process.env.PATH ?? "", ANTHROPIC_API_KEY: parentKey, CLAUDE_CODE_OAUTH_TOKEN: parentOauth },
       });
 
@@ -707,6 +713,7 @@ describe("_shell-env", () => {
   ] as const) {
     it.skipIf(process.platform === "win32")(
       `keeps an inherited ${ownVar} from a ${authScheme} profile whose key will not resolve`,
+      { timeout: SPAWNING_TEST_TIMEOUT_MS },
       async () => {
         const parentValue = "sk-ant-parent-sentinel";
         const h = await harness((home, workDir) =>
@@ -749,7 +756,7 @@ describe("_shell-env", () => {
         };
         const result = spawnSync("/bin/sh", ["-c", script], {
           encoding: "utf8",
-          timeout: 5000,
+          timeout: SPAWN_TIMEOUT_MS,
           env: { PATH: process.env.PATH ?? "", [ownVar]: parentValue, ...federation },
         });
 
@@ -775,6 +782,7 @@ describe("_shell-env", () => {
   // A readonly credential cannot be unset, so the eval stops the run rather than leak it.
   it.skipIf(process.platform === "win32")(
     "stops the run in a real shell when a credential it must clear is read-only",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
     async () => {
       const parentKey = "sk-ant-parent-sentinel";
       const h = await harness((home, workDir) =>
@@ -810,7 +818,7 @@ describe("_shell-env", () => {
       ].join("\n");
       const result = spawnSync("/bin/sh", ["-c", script], {
         encoding: "utf8",
-        timeout: 5000,
+        timeout: SPAWN_TIMEOUT_MS,
         env: { PATH: process.env.PATH ?? "", ANTHROPIC_API_KEY: parentKey },
       });
 
@@ -836,7 +844,7 @@ describe("_shell-env", () => {
       expected: { ANTHROPIC_CUSTOM_HEADERS: "X-Team: platform", CLAUDE_CODE_USE_BEDROCK: "1" },
     },
   ]) {
-    it.skipIf(process.platform === "win32")(c.name, async () => {
+    it.skipIf(process.platform === "win32")(c.name, { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
       const inheritedHeaders = "Authorization: Bearer sk-ant-parent-sentinel";
       const h = await harness((home, workDir) =>
         registryWith(
@@ -871,7 +879,7 @@ describe("_shell-env", () => {
       ].join("\n");
       const result = spawnSync("/bin/sh", ["-c", script], {
         encoding: "utf8",
-        timeout: 5000,
+        timeout: SPAWN_TIMEOUT_MS,
         env: { PATH: process.env.PATH ?? "", CLAUDE_CODE_USE_BEDROCK: "1", ANTHROPIC_CUSTOM_HEADERS: inheritedHeaders },
       });
 
@@ -948,7 +956,7 @@ function hookRunner(h: Harness, out: string) {
     const args = shell === "zsh" ? ["-f"] : ["--noprofile", "--norc"];
     return spawnSync(shell, [...args, "-c", `${renderPosixShellInit(paths)}\n${body}\n`], {
       encoding: "utf8",
-      timeout: 15_000,
+      timeout: SPAWN_TIMEOUT_MS,
       env: { PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, HOME: h.home, ...env },
     });
   };
@@ -978,6 +986,7 @@ const PROFILE_TOKEN = "sk-or-profile-token";
 
 describe.skipIf(HOOK_SHELLS.every(({ available }) => !available))(
   "the real hook, with a variable the profile must control made readonly",
+  { timeout: SPAWNING_TEST_TIMEOUT_MS },
   () => {
     const cases = [
       // The name the profile exports as its own credential, under each scheme.

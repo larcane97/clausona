@@ -2,9 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import { keychainServiceForConfigDir } from "../core/paths.js";
 import { keychainStandIn, splitSecurityLine } from "../lib/test-keychain.js";
+import { SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import { claudeAdapter, claudeAuthStatusEnv, claudeKeychainAccount, claudeLoginEnv } from "./claude.js";
 
 // The OS's user name can be set per case, so the case for it does not depend on who runs it.
@@ -212,7 +212,9 @@ describe.skipIf(process.platform === "win32")("renewing a Claude credential in t
     return { keychain, service, expected };
   }
 
-  it("stores the same bytes under the same item, with nothing of the blob in security's arguments", async () => {
+  it("stores the same bytes under the same item, with nothing of the blob in security's arguments", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { keychain, service, expected } = await renew({
       claudeAiOauth: OAUTH,
       mcpOAuth: { "tracker|0123456789abcdef": mcpServer("mcp-fixture-token") },
@@ -252,7 +254,9 @@ describe.skipIf(process.platform === "win32")("renewing a Claude credential in t
   // line `security -i` reads (4094 bytes, the blob as hex). Refusing would lose tokens the
   // provider has already replaced, so the write goes in the arguments, as -X <hex> - what
   // Claude Code does with the same item - and still stores the same bytes.
-  it("stores a blob too long for one security line through its arguments, as Claude Code does", async () => {
+  it("stores a blob too long for one security line through its arguments, as Claude Code does", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const { keychain, service, expected } = await renew({
       claudeAiOauth: OAUTH,
       mcpOAuth: { "tracker|0123456789abcdef": mcpServer(`mcp-fixture-${"t".repeat(2400)}`) },

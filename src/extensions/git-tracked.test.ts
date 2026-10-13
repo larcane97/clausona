@@ -2,8 +2,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import { apply, undo, writeEnvFor } from "./apply.js";
 import { planChecked, trackedPaths } from "./git-tracked.js";
 import { loadInventory } from "./inventory.js";
@@ -12,6 +13,9 @@ import { plan } from "./plan.js";
 import { pathKey } from "./read.js";
 import { rowsIn } from "./scopes.js";
 import { TestHome } from "./test-home.js";
+
+// Every case starts git, some of them a dozen times.
+vi.setConfig({ testTimeout: SPAWNING_TEST_TIMEOUT_MS });
 
 const NOW = Date.UTC(2026, 9, 10);
 
@@ -26,7 +30,7 @@ const GIT_ENV: NodeJS.ProcessEnv = {
 const hasGit = spawnSync("git", ["--version"], { env: GIT_ENV }).status === 0;
 
 function git(cwd: string, args: string[]): void {
-  const result = spawnSync("git", args, { cwd, env: GIT_ENV, encoding: "utf8" });
+  const result = spawnSync("git", args, { cwd, env: GIT_ENV, encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
   if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr}`);
 }
 
@@ -145,7 +149,7 @@ describe("trackedPaths", () => {
         new Set([pathKey(held), pathKey(path.join(held, "SKILL.md"))]),
       );
     },
-    20_000,
+    SPAWNING_TEST_TIMEOUT_MS,
   );
 
   it.skipIf(!hasGit)(
@@ -163,7 +167,7 @@ describe("trackedPaths", () => {
         new Set([pathKey(path.join(pack, "SKILL.md"))]),
       );
     },
-    20_000,
+    SPAWNING_TEST_TIMEOUT_MS,
   );
 
   it("finds nothing outside a repo, or when git cannot be run", async () => {
@@ -236,7 +240,7 @@ describe("planChecked", () => {
       expect(existsSync(h.path(".config"))).toBe(false);
       expect(existsSync(local(app))).toBe(false);
     },
-    20_000,
+    SPAWNING_TEST_TIMEOUT_MS,
   );
 
   it.skipIf(!hasGit)(
@@ -261,7 +265,7 @@ describe("planChecked", () => {
       const { plan: inXdg } = await xdg.check(env);
       expect(inXdg.changes[1]?.file).toBe(xdg.h.path("xdg", "git", "ignore"));
     },
-    20_000,
+    SPAWNING_TEST_TIMEOUT_MS,
   );
 
   it.skipIf(!hasGit)(
@@ -288,7 +292,7 @@ describe("planChecked", () => {
       const notRepo = ignoring(undefined, false);
       expect(await kinds(notRepo.check)).toEqual(["json"]);
     },
-    20_000,
+    SPAWNING_TEST_TIMEOUT_MS,
   );
 
   it.skipIf(!hasGit)("plans again with what git tracks, so a tracked folder is refused", async () => {

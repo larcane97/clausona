@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "./test-timeouts.js";
+
 /**
  * Where spawn would find `name`: the first executable file of that name in a PATH entry, the
  * lookup execvp does. Only resolved, never run - unguarded, this is the real binary.
@@ -29,15 +31,17 @@ describe.skipIf(process.platform === "win32")("the credential stores every test 
     expect(resolveOnPath(name)).toBe(path.join(shimDir, name));
   });
 
-  it("answers as the real binaries do for an item that is not there", () => {
+  it("answers as the real binaries do for an item that is not there", { timeout: SPAWNING_TEST_TIMEOUT_MS }, () => {
     const security = spawnSync(path.join(shimDir, "security"), ["find-generic-password", "-s", "clausona-isolation"], {
       encoding: "utf8",
+      timeout: SPAWN_TIMEOUT_MS,
     });
     expect(security.status).toBe(44);
     expect(security.stderr).toContain("could not be found");
 
     const secretTool = spawnSync(path.join(shimDir, "secret-tool"), ["lookup", "clausona", "isolation"], {
       encoding: "utf8",
+      timeout: SPAWN_TIMEOUT_MS,
     });
     expect(secretTool.status).toBe(1);
     expect(secretTool.stdout).toBe("");

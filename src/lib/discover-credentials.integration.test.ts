@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
+
 // discoverAccounts scans the home directory, so the whole module graph has to see a
 // temporary one. The mock is read through `currentHome`, set before each import.
 let currentHome = "";
@@ -46,7 +48,9 @@ async function discover(platform: NodeJS.Platform): Promise<string[]> {
 }
 
 describe("discoverAccounts credential gate", () => {
-  it("includes an account whose token is only in Claude Code's plaintext fallback on macOS", async () => {
+  it("includes an account whose token is only in Claude Code's plaintext fallback on macOS", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const found = await discover("darwin");
 
     expect(found).toContain(".claude-file");

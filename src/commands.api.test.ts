@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { stripAnsi } from "./lib/cli-style.js";
 import { randomBody } from "./test-leaks.js";
+import { SPAWNING_TEST_TIMEOUT_MS } from "./test-timeouts.js";
 import type { DoctorProfileResult, Profile, SecretSource } from "./types.js";
 
 /**
@@ -2288,6 +2289,8 @@ describe("the plain-text credential warning", () => {
   for (const [source, { secret, said }] of Object.entries(SOURCES)) {
     it.skipIf(process.platform === "win32" && source === "command:")(
       `gives doctor's finding advice that clears it, for a key from ${source}`,
+      // Only a command: key starts a process, the shell it runs in.
+      { timeout: source === "command:" ? SPAWNING_TEST_TIMEOUT_MS : undefined },
       async () => {
         // Linux, so doctor reads the primary's login from a file rather than spawning `security`.
         Object.defineProperty(process, "platform", { value: "linux", configurable: true });
@@ -2430,7 +2433,9 @@ describe.skipIf(process.platform === "win32")("a key command that fails", () => 
     ["exits non-zero", "exit 3", "exited with 3"],
     ["prints nothing", "true", "produced no output"],
   ] as const) {
-    it(`says where the command is when it ${label}, and the command it names fixes it`, async () => {
+    it(`says where the command is when it ${label}, and the command it names fixes it`, {
+      timeout: SPAWNING_TEST_TIMEOUT_MS,
+    }, async () => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       allowShell = true;
       const h = await harness({

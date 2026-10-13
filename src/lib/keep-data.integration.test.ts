@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import type { Registry } from "../types.js";
 
 /**
@@ -198,7 +199,9 @@ describe("repair over the profile's own data", () => {
     expect(h.stderr()).toContain("still in");
   });
 
-  it("the session-mode toggle brings a private directory back from its newest backup", async () => {
+  it("the session-mode toggle brings a private directory back from its newest backup", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const h = await workHarness();
     mkdirSync(path.join(h.dirs.codex, "sessions"));
     writeFileSync(path.join(h.dirs.codex, "sessions", "primary.jsonl"), "primary");
@@ -272,7 +275,9 @@ describe("repair over the profile's own data", () => {
     expect(h.stderr()).toContain(path.join("plugins", "known_marketplaces.json"));
   });
 
-  it("takes out a second name of the primary's credential even when the primary reaches it by a link", async () => {
+  it("takes out a second name of the primary's credential even when the primary reaches it by a link", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const h = await workHarness();
     const shared = path.join(h.home, "shared-auth.json");
     writeFileSync(shared, codexAuth("primary@example.com"));
@@ -306,7 +311,9 @@ describe("repair over the profile's own data", () => {
     expect(lstatSync(own).isFile() && readFileSync(own, "utf8"), "remove deleted it").toBe(before);
   });
 
-  it("remove puts no backup over what the profile has written since, and keeps that backup", async () => {
+  it("remove puts no backup over what the profile has written since, and keeps that backup", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
     const h = await workHarness();
     mkdirSync(path.join(h.dirs.codex, "sessions"));
     mkdirSync(path.join(h.dirs.codexWork, "sessions"));
@@ -332,7 +339,7 @@ describe("repair over the profile's own data", () => {
     expect(h.stderr()).toContain("history.jsonl, sessions");
   });
 
-  it("puts a relative link back exactly as it was written", async () => {
+  it("puts a relative link back exactly as it was written", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
     const h = await workHarness();
     mkdirSync(path.join(h.home, "dotfiles"));
     writeFileSync(path.join(h.home, "dotfiles", "foo.md"), "from dotfiles");
