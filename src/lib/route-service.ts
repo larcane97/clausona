@@ -1,6 +1,7 @@
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
 import {
   applyOverrides,
+  checkPattern,
   checkRoute,
   checkRouteName,
   type Route,
@@ -99,6 +100,27 @@ const FIELD_FLAGS: ReadonlyArray<[keyof RouteOverrides, string]> = [
   ["fallback", "--fallback"],
 ];
 
+/** The pattern options a run may give, as their flags. */
+const PATTERN_FLAGS: ReadonlyArray<["from" | "exclude" | "fallback", string]> = [
+  ["from", "--from"],
+  ["exclude", "--exclude"],
+  ["fallback", "--fallback"],
+];
+
+/**
+ * The problems with a run's pattern options, each named by its flag and quoting the entry as it
+ * was given: not by where it would sit in routes.json, which it never reaches, and not by an
+ * index into the exclude list the route's own entries are merged into.
+ */
+function runPatternProblems(overrides: RouteOverrides, tool: RouteTool): string[] {
+  return PATTERN_FLAGS.flatMap(([key, flag]) =>
+    (overrides[key] ?? []).flatMap((pattern) => {
+      const problem = checkPattern(pattern, tool);
+      return problem ? [`${flag}: ${problem}`] : [];
+    }),
+  );
+}
+
 /** `--a`, `--a and --b`, `--a, --b and --c`. */
 function listFlags(flags: string[]): string {
   return flags.length < 2 ? flags.join("") : `${flags.slice(0, -1).join(", ")} and ${flags[flags.length - 1]}`;
@@ -174,6 +196,8 @@ export function resolveRoute(
     }
     return null;
   }
+  const runProblems = runPatternProblems(overrides, spec.tool);
+  if (runProblems.length) throw new Error(runProblems.join("\n"));
   // Leaving one more account out for a run must not bring back the ones the route leaves out.
   // (`route set --exclude` replaces the list: that is an edit, and goes through applyOverrides.)
   const runOverrides =

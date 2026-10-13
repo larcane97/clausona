@@ -149,8 +149,24 @@ describe("resolveRoute", () => {
   it("checks the run's overrides, without quoting a key-shaped one", () => {
     const key = ["sk", "ant", "x".repeat(24)].join("-");
     const run = () => resolveRoute(file, { options: { route: "main", exclude: [key] } });
-    expect(run).toThrow("routes.main.exclude[0]: looks like an API key, not a profile name or email pattern");
+    expect(run).toThrow("--exclude: looks like an API key, not a profile name or email pattern");
     expect(run).not.toThrow(key);
+  });
+
+  it("names a run's option by its flag and the entry as given, not by where routes.json would hold it", () => {
+    const stored = {
+      version: 1 as const,
+      routes: { main: { tool: "claude" as const, exclude: ["*-share"] } },
+    };
+    // The run's entry is third in the exclude list it is merged into; it is named alone.
+    expect(() => resolveRoute(stored, { options: { route: "main", exclude: ["old", "codex:x"] } })).toThrow(
+      /^--exclude: 'codex:x' names a codex profile, but this route is for claude$/,
+    );
+    expect(() =>
+      resolveRoute(stored, { options: { route: "main", from: ["codex:x"], fallback: ["a", "codex:y"] } }),
+    ).toThrow(
+      /^--from: 'codex:x' names a codex profile, but this route is for claude\n--fallback: 'codex:y' names a codex profile, but this route is for claude$/,
+    );
   });
 
   it("adds a run's --exclude to the route's own, folding case, rather than replacing it", () => {
@@ -300,7 +316,7 @@ describe("all routes in the service", () => {
     expect(resolveRoute(file, { tool: "codex", options: { from: ["a"] } })).not.toHaveProperty("onlyTool");
     // The word and the prefixes disagree: the prefix is checked against the word's tool.
     expect(() => resolveRoute(file, { tool: "codex", options: { from: ["claude:a"] } })).toThrow(
-      "--from route.from[0]: 'claude:a' names a claude profile, but this route is for codex",
+      "--from: 'claude:a' names a claude profile, but this route is for codex",
     );
   });
 
