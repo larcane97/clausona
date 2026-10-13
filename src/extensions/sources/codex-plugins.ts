@@ -5,7 +5,7 @@ import type { Collector, Extension, Location, StateFacts } from "../model.js";
 import { entryInfo, IO_LIMIT, isRecord, isWithin, listNames, mapLimit, readJsonObject } from "../read.js";
 import { mcpSummary } from "../redact.js";
 import { addHooks, addHooksFile } from "./claude-hooks.js";
-import { readSkillFolders } from "./skill-dirs.js";
+import { readCodexSkills } from "./codex-skills.js";
 
 /**
  * Codex's plugins, as Codex 0.159.3 loads them - checked against what its app-server lists
@@ -59,7 +59,7 @@ async function readPlugin(id: string, dir: string, out: Collector): Promise<Exte
   // Codex names a plugin's skills after the manifest's name - or, with none, the version folder.
   const prefix = `${typeof manifest.name === "string" ? manifest.name : version}:`;
   for (const skills of paths(root, manifest.skills, "skills")) {
-    await readSkillFolders(skills, place, id, own, { prefix, usageKeys: () => [] });
+    await readCodexSkills(skills, place, id, own, { prefix });
   }
   await readServers(root, manifest, manifestFile, place, own);
   await readHooks(root, manifest, manifestFile, place, own);

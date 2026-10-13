@@ -194,6 +194,37 @@ describe("readCodex", () => {
     expect([state("lint"), state("deploy"), state("eli5")]).toEqual(["off", "off", "off"]);
   });
 
+  it("names a skill by its front matter's name, as Codex does, and keeps its folder in the id", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.codex("personal", ".codex", '[[skills.config]]\nname = "front-name"\nenabled = false\n');
+    h.write(".agents/skills/folder-name/SKILL.md", "---\nname: front-name\ndescription: d\n---\nbody\n");
+    // No name, or an empty one: the folder's. Whitespace collapses to one space, in both.
+    h.write(".agents/skills/unnamed/SKILL.md", "---\ndescription: only this\n---\nbody\n");
+    h.write(".agents/skills/blank/SKILL.md", '---\nname: ""\ndescription:   two   spaces\n---\nbody\n');
+    h.write(".codex/skills/spaced/SKILL.md", "---\nname:  My   Skill\ndescription: d\n---\nbody\n");
+    h.write("repos/app/.agents/skills/repo-folder/SKILL.md", "---\nname: repo-name\ndescription: d\n---\n");
+    const kit = ".codex/plugins/cache/m/kit/1.0.0";
+    h.write(`${kit}/.codex-plugin/plugin.json`, { name: "kit" });
+    h.write(`${kit}/skills/plan-folder/SKILL.md`, "---\nname: plan\ndescription: d\n---\n");
+    const inv = await loadInventory(h.inventoryOptions(app, h.path("m.json")));
+    const codex = inv.items.filter((i) => i.kind === "skill" && i.location.tool === "codex");
+    expect(codex.map((i) => [i.name, i.id.split(":").slice(-1)[0], i.description]).sort()).toEqual(
+      [
+        ["blank", "blank", "two spaces"],
+        ["front-name", "folder-name", "d"],
+        ["kit:plan", "plan-folder", "d"],
+        ["My Skill", "spaced", "d"],
+        ["repo-name", "repo-folder", "d"],
+        ["unnamed", "unnamed", "only this"],
+      ].sort(),
+    );
+    // Codex switches a skill by that name.
+    const front = codex.find((i) => i.name === "front-name");
+    expect(front && stateOf(inv, front, app).value).toBe("off");
+  });
+
   it("warns for a config.toml that does not parse and reads the rest", async () => {
     const h = new TestHome();
     homes.push(h);

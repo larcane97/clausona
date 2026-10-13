@@ -11,7 +11,8 @@ import { isRecord, readJsonObject, readText, realPath, samePath } from "../read.
 import { mcpSummary } from "../redact.js";
 import { addHooksFile } from "./claude-hooks.js";
 import { addPluginSwitches, readCodexPlugins } from "./codex-plugins.js";
-import { readSkillFolders, type SkillLocation } from "./skill-dirs.js";
+import { readCodexSkills } from "./codex-skills.js";
+import type { SkillLocation } from "./skill-dirs.js";
 
 export type CodexHome = { id: string; dir: string; isPrimary: boolean };
 
@@ -88,17 +89,15 @@ export function codexProjectRecords(ctx: CodexContext): ProjectRecord[] {
  * carry no usage keys.
  */
 export async function readCodex(ctx: CodexContext, projects: Project[], out: Collector): Promise<void> {
-  const noUsage = { usageKeys: () => [] };
   const global: SkillLocation = { tool: "codex", scope: "global" };
   const jobs: Promise<void>[] = [
-    readSkillFolders(path.join(ctx.homeDir, ".agents", "skills"), global, "agents", out, noUsage),
-    readSkillFolders(path.join(ctx.primary.dir, "skills"), global, "home", out, noUsage),
-    readSkillFolders(
+    readCodexSkills(path.join(ctx.homeDir, ".agents", "skills"), global, "agents", out),
+    readCodexSkills(path.join(ctx.primary.dir, "skills"), global, "home", out),
+    readCodexSkills(
       path.join(ctx.primary.dir, "skills", ".system"),
       { tool: "codex", scope: "builtin" },
       "system",
       out,
-      noUsage,
     ),
   ];
   for (const home of ctx.homes) {
@@ -110,12 +109,11 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
           realPath(path.join(ctx.primary.dir, "skills")).catch(() => undefined),
         ]);
         if (mine === undefined || samePath(mine, primary)) return;
-        await readSkillFolders(
+        await readCodexSkills(
           path.join(home.dir, "skills"),
           { tool: "codex", scope: "account", profile: home.id },
           home.id,
           out,
-          noUsage,
         );
       })(),
     );
@@ -124,7 +122,7 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
     // The home dir's .agents/skills and .codex/ are the user's own, read above.
     if (isHomeProject(project, ctx.homeDir)) continue;
     const here: SkillLocation = { tool: "codex", scope: "project", project: project.path };
-    jobs.push(readSkillFolders(path.join(project.path, ".agents", "skills"), here, project.path, out, noUsage));
+    jobs.push(readCodexSkills(path.join(project.path, ".agents", "skills"), here, project.path, out));
     jobs.push(
       (async () => {
         const file = codexProjectConfig(project.path);

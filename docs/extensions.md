@@ -336,7 +336,8 @@ The columns:
 
 - NAME is what `show` takes. A plugin's skill is `<plugin>:<name>`, a plugin's server
   `plugin:<plugin>:<name>` (in Codex, its own name), a plugin `<plugin>@<marketplace>`, and a
-  hook `<Event>` or `<Event> <matcher>`.
+  hook `<Event>` or `<Event> <matcher>`. A Codex skill goes by the `name` in its SKILL.md's
+  front matter, as Codex names it, or by its folder's name when that has none.
 - TOOL appears only when both tools are listed.
 - WHERE is where the row comes from: `Project`, `Global`, `Cloud`, the plugin's name, a
   parent folder's `.mcp.json` such as `~/repos/.mcp.json`, `Built-in`, `Managed`, or another
@@ -548,7 +549,8 @@ A server in several accounts' `.claude.json` has a `File` line for each copy, wi
 
 Every item has an id, `<kind>:<tool>:<scope>:<owner>:<name>`, built from where it is stored.
 The owner part can hold a profile id or an absolute path, so treat an id as an opaque string:
-copy it from `--json` and pass it back as it is.
+copy it from `--json` and pass it back as it is. A Codex skill's id ends in its folder, which its
+name can differ from.
 
 A row of copies has a row key. It is the same with one copy as with many:
 
