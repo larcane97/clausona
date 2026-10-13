@@ -76,18 +76,33 @@ function claudeScopedLimits(value: unknown): ScopedWindow[] {
   return limits;
 }
 
-/** The binding one of several scoped windows is whichever sits highest; on a tie, the first. */
-function mostUsed(limits: ScopedWindow[]): ScopedWindow | undefined {
+/** Whether `a` resets after `b`; false when either reset is unknown. */
+function resetsLater(a: ScopedWindow, b: ScopedWindow): boolean {
+  return a.resetsAt !== null && b.resetsAt !== null && Date.parse(a.resetsAt) > Date.parse(b.resetsAt);
+}
+
+/**
+ * The binding one of several scoped windows is whichever sits highest. Two windows of one limit
+ * at the same height (Codex's 5-hour and weekly, both full) give the one that resets later, which
+ * holds the model longer; any other tie, the first.
+ */
+export function mostUsedWindow(limits: ScopedWindow[]): ScopedWindow | undefined {
   let best: ScopedWindow | undefined;
   for (const limit of limits) {
-    if (!best || limit.usedPercent > best.usedPercent) best = limit;
+    if (
+      !best ||
+      limit.usedPercent > best.usedPercent ||
+      (limit.usedPercent === best.usedPercent && limit.label === best.label && resetsLater(limit, best))
+    ) {
+      best = limit;
+    }
   }
   return best;
 }
 
 /** `scoped` for the dashboard, and the whole list for routing; no list when there is none. */
 function scopedWindows(limits: ScopedWindow[]): Pick<QuotaWindows, "scoped" | "scopedLimits"> {
-  return limits.length ? { scoped: mostUsed(limits), scopedLimits: limits } : {};
+  return limits.length ? { scoped: mostUsedWindow(limits), scopedLimits: limits } : {};
 }
 
 /** Parses `GET https://api.anthropic.com/api/oauth/usage`. */

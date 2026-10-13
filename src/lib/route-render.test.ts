@@ -774,13 +774,13 @@ describe("a run's model limit", () => {
 
 describe("a Codex model limit with two windows", () => {
   const codex = ["codex:a", "codex:b"].map(member);
-  /** `base` with Spark's 5-hour and weekly windows, as quota.ts reads Codex's: the higher is `scoped`. */
+  /** `base` with Spark's 5-hour and weekly windows, as quota.ts reads them: `scoped` is the higher, on a tie 7D. */
   const withSpark = (base: QuotaSnapshot, fiveHour: number, weekly: number): QuotaSnapshot => {
     const limits = [
       { label: "GPT-5.3-Codex-Spark", usedPercent: fiveHour, resetsAt: inHours(3), windowSeconds: 18000 },
       { label: "GPT-5.3-Codex-Spark", usedPercent: weekly, resetsAt: inHours(100), windowSeconds: 604800 },
     ];
-    return { ...base, scoped: fiveHour >= weekly ? limits[0] : limits[1], scopedLimits: limits };
+    return { ...base, scoped: fiveHour > weekly ? limits[0] : limits[1], scopedLimits: limits };
   };
   const spec: RouteSpec = { tool: "codex", from: ["a", "b"], strategy: "headroom" };
   const model = "gpt-5.3-codex-spark";
@@ -817,9 +817,9 @@ describe("a Codex model limit with two windows", () => {
     expect(text).toMatch(
       new RegExp(`^ {4}codex:b\\s+12% 1h\\s+34% 2d\\s+100% 7D 4d\\s+in 4d 4h \\(${spark} 7D resets\\)$`, "m"),
     );
-    // Its 5-hour window resets first, but the weekly one still holds it.
+    // Both full: the weekly window shows, the one that resets later and so holds it.
     expect(text).toMatch(
-      new RegExp(`^ {4}codex:c\\s+3% 1h\\s+3% 2d\\s+100% 5H 3h\\s+in 4d 4h \\(${spark} 7D resets\\)$`, "m"),
+      new RegExp(`^ {4}codex:c\\s+3% 1h\\s+3% 2d\\s+100% 7D 4d\\s+in 4d 4h \\(${spark} 7D resets\\)$`, "m"),
     );
   });
 });

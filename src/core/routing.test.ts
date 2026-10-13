@@ -181,11 +181,13 @@ describe("model limits", () => {
   });
 
   // A Codex limit can have a 5-hour and a weekly window (quota.test.ts): a run counts the higher,
-  // as an account's own 5H and 7D, and names it by the window.
+  // as an account's own 5H and 7D, and names it by the window; of two as high, the weekly one,
+  // which resets later.
   it.each([
     // [5H, 7D, Spark's 5-hour window, Spark's weekly window] → usage of a Spark run
     [10, 20, 90, 30, { percent: 90, window: "GPT-5.3-Codex-Spark 5H" }],
     [10, 20, 30, 95, { percent: 95, window: "GPT-5.3-Codex-Spark 7D" }],
+    [10, 20, 100, 100, { percent: 100, window: "GPT-5.3-Codex-Spark 7D" }],
     [10, 60, 30, 40, { percent: 60, window: "7D" }],
   ] as const)("5H %d, 7D %d and Spark 5H %d, 7D %d for a Spark run: %o", (five, seven, sparkFive, sparkWeek, expected) => {
     const quota = withLimits(snap(five, seven), [

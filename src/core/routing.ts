@@ -1,6 +1,6 @@
 import type { QuotaSnapshot, QuotaWindow, ScopedQuotaWindow, ToolName } from "../types.js";
 import { foldProfileName } from "./profile-name.js";
-import { isSessionLength } from "./quota.js";
+import { isSessionLength, mostUsedWindow } from "./quota.js";
 import { type Route, type RouteTool, toolsOf } from "./route-config.js";
 import { compareIds, type Expansion, expandPatterns, type Member, splitToolPrefix } from "./route-patterns.js";
 
@@ -160,17 +160,13 @@ function scopedWindowsFor(snapshot: QuotaSnapshot | undefined, model: string | u
 /**
  * The account's limit on `model`: of the windows of every limit it falls under, the most used.
  * A Codex limit with a 5-hour and a weekly window counts the higher, as an account's own 5H and
- * 7D do.
+ * 7D do, and of two as high, the one that resets later.
  */
 export function scopedLimitFor(
   snapshot: QuotaSnapshot | undefined,
   model: string | undefined,
 ): ScopedWindow | undefined {
-  let best: ScopedWindow | undefined;
-  for (const limit of scopedWindowsFor(snapshot, model)) {
-    if (!best || limit.usedPercent > best.usedPercent) best = limit;
-  }
-  return best;
+  return mostUsedWindow(scopedWindowsFor(snapshot, model));
 }
 
 export function usageOf(

@@ -145,6 +145,25 @@ describe("parseClaudeQuota", () => {
     expect(quota?.scoped?.label).toBe("Fable");
   });
 
+  it("keeps the first of two limits on different models as high, whichever resets later", () => {
+    const quota = parseClaudeQuota({
+      ...CLAUDE_PAYLOAD,
+      limits: [
+        ...CLAUDE_PAYLOAD.limits,
+        {
+          kind: "weekly_scoped",
+          group: "weekly",
+          percent: 77,
+          severity: "warning",
+          resets_at: "2026-09-05T00:00:00Z",
+          scope: { model: { display_name: "Opus" }, surface: null },
+        },
+      ],
+    });
+
+    expect(quota?.scoped?.label).toBe("Fable");
+  });
+
   it("omits windows the account does not have", () => {
     const quota = parseClaudeQuota({ five_hour: { utilization: 3, resets_at: null }, seven_day: null, limits: null });
 
@@ -199,11 +218,12 @@ describe("parseCodexQuota", () => {
   });
 
   // [5-hour window, weekly window] → the one the dashboard shows: whichever is higher stops the
-  // model first, as an account's own 5H and 7D do. A weekly window alone comes as primary.
+  // model first, as an account's own 5H and 7D do; of two as high, the weekly one, which resets
+  // later and so holds the model longer. Either slot can also come alone.
   it.each([
     [90, 30, { usedPercent: 90, resetsAt: "2026-09-04T02:17:03.000Z", windowSeconds: 18000 }],
     [10, 95, { usedPercent: 95, resetsAt: "2026-09-10T00:57:03.000Z", windowSeconds: 604800 }],
-    [50, 50, { usedPercent: 50, resetsAt: "2026-09-04T02:17:03.000Z", windowSeconds: 18000 }],
+    [100, 100, { usedPercent: 100, resetsAt: "2026-09-10T00:57:03.000Z", windowSeconds: 604800 }],
     [null, 70, { usedPercent: 70, resetsAt: "2026-09-10T00:57:03.000Z", windowSeconds: 604800 }],
   ] as const)("reads both windows of a model limit (5h %o, weekly %o) and shows the higher", (five, week, shown) => {
     const quota = parseCodexQuota({ ...CODEX_PAYLOAD, additional_rate_limits: [codexModelLimit(five, week)] });
