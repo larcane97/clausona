@@ -31,6 +31,48 @@ export type ScopedQuotaWindow = QuotaWindow & {
   windowSeconds?: number;
 };
 
+/** The period an API profile's limit renews over: a UTC calendar day, week (from Monday) or month. */
+export type BudgetPeriod = "day" | "week" | "month";
+
+/**
+ * An API profile's usage as a window: its spend against its limit. `resetsAt` is when the limit
+ * renews, or null for one that never does.
+ */
+export type BudgetWindow = QuotaWindow & {
+  /** The spend that counts against the limit, in USD. */
+  spentUsd: number;
+  limitUsd: number;
+  /** A clausona budget (`budgets` in routes.json), or the limit set on the provider key. */
+  source: "budget" | "provider";
+  /** The period the limit renews over, when it is one of these. */
+  per?: BudgetPeriod;
+};
+
+/**
+ * An API profile's spend as its provider reported it, kept in the quota cache: what its `budget`
+ * window is worked out from, whichever limit applies when it is read.
+ */
+export type SpendReading = {
+  /** What the provider counts as spent on the key, in USD: since its own last reset, or ever. */
+  totalUsd: number;
+  /** The limit set on the provider key, when there is one. */
+  limit?: {
+    usd: number;
+    /** When the provider renews it, or null for a limit that never renews. */
+    resetsAt: string | null;
+    per?: BudgetPeriod;
+    /** What is left of it, as the provider says (OpenRouter). */
+    remainingUsd?: number;
+  };
+  /** Spend in the current UTC day, week and month, from a provider that reports it (OpenRouter). */
+  periods?: Partial<Record<BudgetPeriod, number>>;
+  /**
+   * For a provider that reports only a running total (LiteLLM): the total at clausona's first
+   * reading in each current period, which a budget for that period counts from.
+   */
+  baselines?: Partial<Record<BudgetPeriod, { start: string; totalUsd: number }>>;
+};
+
 export type QuotaWindows = {
   /** Short rolling window: Claude's 5-hour session, Codex's sub-day window. */
   session?: QuotaWindow;
@@ -43,6 +85,8 @@ export type QuotaWindows = {
    * the most used one a run's model falls under. Absent from a reading an older clausona cached.
    */
   scopedLimits?: ScopedQuotaWindow[];
+  /** An API profile's spend against its limit; it has no plan windows. */
+  budget?: BudgetWindow;
 };
 
 /**
@@ -61,6 +105,13 @@ export type QuotaSnapshot = QuotaWindows & {
   state: QuotaState;
   /** ms epoch of the fetch that produced these windows. */
   fetchedAt: number;
+  /** An API profile's: the last spend its provider reported, kept through a failed read for its baselines. */
+  spend?: SpendReading;
+  /**
+   * An API profile's provider answered, but with no spend reading: a 404, a body that is not
+   * JSON, or one of another shape. `state` is `error`.
+   */
+  noSpendReading?: true;
 };
 
 export type ToolName = "claude" | "codex";

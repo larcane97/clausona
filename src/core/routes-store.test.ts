@@ -221,6 +221,33 @@ describe("updateRoutes", () => {
     expect(readJson(p.routesPath).dirs).toEqual({ "/srv": { claude: "main" }, "/opt": { claude: "gone" } });
   });
 
+  it("refuses a write while a budget cannot be read, and takes one that mends it", async () => {
+    const p = paths();
+    const text = JSON.stringify({ version: 1, routes: {}, budgets: { "claude:gw": { usd: -1, per: "month" } } });
+    writeFileSync(p.routesPath, text);
+    await expect(
+      updateRoutes((file) => {
+        file.routes.main = { tool: "claude" };
+        return file;
+      }, p),
+    ).rejects.toThrow(
+      [
+        `${p.routesPath} has a budget that cannot be used, so nothing was saved:`,
+        `    budgets["claude:gw"].usd: must be a number of dollars above 0`,
+        "  Fix it with clausona route edit.",
+      ].join("\n"),
+    );
+    expect(readFileSync(p.routesPath, "utf8")).toBe(text);
+    await updateRoutes((file) => {
+      file.budgets = { "claude:gw": { usd: 1, per: "month" } };
+      return file;
+    }, p);
+    expect(readJson(p.routesPath).budgets).toEqual({ "claude:gw": { usd: 1, per: "month" } });
+    expect(() =>
+      parseRoutesText(JSON.stringify({ version: 1, routes: {}, budgets: { "claude:gw": {} } }), p.routesPath),
+    ).toThrow(RoutesFileError);
+  });
+
   it("refuses to change a file it cannot use, and leaves it as it was", async () => {
     const p = paths();
     writeFileSync(p.routesPath, "{ not json");
