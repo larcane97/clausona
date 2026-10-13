@@ -3,7 +3,7 @@ import { Box, Text } from "ink";
 import type { Route } from "../../core/route-config.js";
 import type { Ranking, Row } from "../../core/routing.js";
 import { fitQuotaValue } from "../../lib/format.js";
-import { detailOrder, skipReason, toolLabel } from "../../lib/route-render.js";
+import { detailOrder, overLimitText, skipReason, toolLabel } from "../../lib/route-render.js";
 import type { QuotaWindow } from "../../types.js";
 import { QuotaCell } from "../components/QuotaCell.js";
 import { color } from "../theme.js";
@@ -63,7 +63,7 @@ function statusOf(row: Row, ranking: Ranking): string {
   const { outcome, route } = ranking;
   if (row.status === "picked")
     return outcome.kind === "picked" && outcome.stage === "overflow" ? "next (most room left)" : "next";
-  if (row.status === "over-limit") return `over ${route.maxUsage}%`;
+  if (row.status === "over-limit") return overLimitText(row, route);
   return "";
 }
 

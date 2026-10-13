@@ -309,6 +309,17 @@ describe("renderRouteDetail", () => {
     );
   });
 
+  // Both are over the cut, but only one can still be picked when nobody is under it.
+  it("says at 100% for a member no stage can pick, and over the cut for one past it", () => {
+    const r = rank(
+      { tool: "claude", from: ["team", "work", "side"], strategy: "headroom" },
+      { "claude:team": quota(10, 10), "claude:work": quota(85, 10), "claude:side": quota(100, 40) },
+    );
+    const text = plain(renderRouteDetail("main", r, at(120)));
+    expect(text).toMatch(/^ {4}claude:work\s+85% 1h\s+10% 2d\s+over 80%$/m);
+    expect(text).toMatch(/^ {4}claude:side\s+100% 1h\s+40% 2d\s+at 100%$/m);
+  });
+
   it("says when nobody can be picked, and that a run would exit 75", () => {
     const r = rank(
       { tool: "claude", from: ["team", "work"] },

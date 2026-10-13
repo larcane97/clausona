@@ -257,6 +257,14 @@ describe("RoutesScreen", () => {
     expect(row(detail, "claude:work")).toMatch(/^claude:work\s.*80%.*34%\s+over 80%$/);
   });
 
+  it("says at 100% for a member no stage can pick", async () => {
+    const full = { ...QUOTAS, "claude:work": snap(100, 34) };
+    const { instance } = setup({ collect: async () => full });
+    const { detail } = panes(await ranked(instance));
+    expect(row(detail, "claude:work")).toMatch(/^claude:work\s.*100%.*34%\s+at 100%$/);
+    expect(row(detail, "claude:side")).toMatch(/^claude:side\s.*88%.*40%\s+over 80%$/);
+  });
+
   it("explains routes, the route n would make, and n, in one column when there are none", async () => {
     for (const columns of [80, 120]) {
       const { instance } = setup({ file: { version: 1, routes: {} }, columns });

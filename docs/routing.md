@@ -533,10 +533,11 @@ $ clausona route explain main
 
 The box is the route with every default filled in. Under it comes every account, with its 5H
 and 7D use and the time until each resets. The `▸` and "picked next" mark the account a run
-would get now. "over 80%" is an account at or above the cut, and a skipped account says why in
-grey. At the bottom are the entries nothing was ranked for, such as an account the exclude list
-took out or a name that is not registered. `LAST PICKED` appears on round-robin routes, the one
-strategy that reads it.
+would get now. "over 80%" is an account at or above the cut, which can still be picked when
+nobody is under it. "at 100%" is one at its limit, which no stage picks. A skipped account says
+why in grey. At the bottom are the entries nothing was ranked for, such as an account the
+exclude list took out or a name that is not registered. `LAST PICKED` appears on round-robin
+routes, the one strategy that reads it.
 
 Percentages are rounded to whole numbers, except that one under the cut never reads as the cut.
 An account at 79.6% of a window can be picked under an 80% cut, so it reads 79%, here, in the

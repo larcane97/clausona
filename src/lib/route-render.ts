@@ -557,6 +557,14 @@ function settingsLines(route: Route, width: number): string[] {
   ];
 }
 
+/**
+ * What a member at the cut or over it reads, here and on the Routes screen: `over 80%`, or
+ * `at 100%` for one no stage can pick, where one over the cut runs when nobody is under it.
+ */
+export function overLimitText(row: Row, route: Route): string {
+  return (row.usage?.percent ?? 0) >= FULL ? `at ${FULL}%` : `over ${route.maxUsage}%`;
+}
+
 function statusCell(row: Row, ranking: Ranking): Cell {
   const { outcome, route } = ranking;
   if (row.status === "picked" && outcome.kind === "picked") {
@@ -564,7 +572,7 @@ function statusCell(row: Row, ranking: Ranking): Cell {
     if (outcome.stage === "fallback") return [["picked: fallback", accent]];
     return [[`picked: ${mostLeftReason(route)}`, accent]];
   }
-  if (row.status === "over-limit") return [[`over ${route.maxUsage}%`, yellow]];
+  if (row.status === "over-limit") return [[overLimitText(row, route), yellow]];
   if (row.skip) return [[skipText(row), dim]];
   return [];
 }
