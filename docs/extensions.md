@@ -665,6 +665,13 @@ too. So it is refused unless both rows are in the same `rm`, as in
 `csn skills rm --id '<id>' --id '<other id>'`, or both are marked with `x` on the screen. Then
 the folder moves once.
 
+A folder can also hold what other skill links lead to. gstack, cloned into
+`.claude/skills/gstack`, links each skill it holds in next to it, as `.claude/skills/canary`
+leading to `gstack/canary`. Deleting `gstack` alone leaves those links broken, so the plan says
+so next to the folder, `breaks 30 links: canary, careful, freeze, … (add them to delete them too)`.
+It is not refused: undo puts the folder back, and the links work again. Add the links to the
+same `rm`, or mark them too on the screen, and the note goes.
+
 A file or folder that git tracks in a project changes the repo when it changes. The CLI refuses
 such a change unless you add `--tracked`, for `off`, `on` and `visibility` as well as `rm`.
 What is in your home folder and in no project counts as not tracked, even when the home folder
@@ -958,6 +965,7 @@ Each of `changes`:
 | `note` | string or null | Such as `link only, target kept`, `changes the repo` or `the folder at ~/dotfiles/skills/eli5`. |
 | `tracked` | boolean | `true` when git tracks it and `--tracked` let the change go ahead. |
 | `rows` | string[] | The row keys this line is for, as `id` in `ls --json`. |
+| `breaks` | string[] | For a folder deleted, the row keys of the skill links that lead into it and are not in the same `rm`: the links it leaves broken. Empty otherwise. |
 
 Each of `refused`:
 
@@ -994,7 +1002,8 @@ Each of `unchanged`:
       "account": null,
       "note": null,
       "tracked": false,
-      "rows": ["skill:claude:global:-:old-one"]
+      "rows": ["skill:claude:global:-:old-one"],
+      "breaks": []
     }
   ],
   "unchanged": [],

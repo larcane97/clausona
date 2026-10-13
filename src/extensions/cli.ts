@@ -104,7 +104,16 @@ export const PLAN_JSON_KEYS: readonly string[] = [
   "backupRoot",
   "operation",
 ];
-export const CHANGE_JSON_KEYS: readonly string[] = ["file", "change", "what", "account", "note", "tracked", "rows"];
+export const CHANGE_JSON_KEYS: readonly string[] = [
+  "file",
+  "change",
+  "what",
+  "account",
+  "note",
+  "tracked",
+  "rows",
+  "breaks",
+];
 export const REFUSED_JSON_KEYS: readonly string[] = ["id", "name", "code", "reason"];
 export const UNCHANGED_JSON_KEYS: readonly string[] = ["id", "name", "why"];
 export const UNDO_JSON_KEYS: readonly string[] = [
@@ -829,6 +838,7 @@ function lineJson(line: PlanLine) {
     note: line.note ?? null,
     tracked: line.tracked,
     rows: [...line.rows],
+    breaks: [...(line.breaks ?? [])],
   };
 }
 

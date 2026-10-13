@@ -311,6 +311,23 @@ describe("ExtensionsScreen: writes", () => {
     expect(existsSync(h.path(".claude", "skills", "old-one"))).toBe(false);
   });
 
+  it("says in the dialog which links deleting a folder leaves broken", async () => {
+    const { h, app } = seed();
+    h.skill("repos/app/.claude/skills", "gstack");
+    for (const name of ["canary", "careful"]) {
+      h.skill("repos/app/.claude/skills/gstack", name);
+      h.link(`repos/app/.claude/skills/gstack/${name}`, `repos/app/.claude/skills/${name}`);
+    }
+    const instance = mount(h, app, 140, 40);
+    await openRow(instance, "Project", "gstack");
+    await press(instance, "d");
+    const dialog = await seen(instance, (f) => f.includes("Delete gstack?"));
+    expect(dialog.split("\n").find((line) => line.includes(`skills${path.sep}gstack`))).toContain(
+      "breaks 2 links: canary, careful (add them to delete them too)",
+    );
+    expect(hintLine(dialog)).toContain("y apply");
+  });
+
   it.skipIf(!hasGit)(
     "warns that deleting a skill git tracks changes the repo, and turns it off instead on o",
     async () => {

@@ -204,6 +204,7 @@ describe("skills off", () => {
       note: null,
       tracked: false,
       rows: ["skill:claude:global:-:eli5"],
+      breaks: [],
     });
     expect(out).not.toContain("expect");
     expect(out).not.toContain("hash");
@@ -431,6 +432,38 @@ describe("skills rm", () => {
     expect(existsSync(h.path(".claude", "skills", "old-one"))).toBe(false);
     expect(existsSync(h.path(".claude", "skills", "notes"))).toBe(false);
     expect(existsSync(h.path("shared", "notes", "SKILL.md"))).toBe(true);
+  });
+
+  it("says which links a folder it deletes leaves broken, in the text and as breaks in JSON", async () => {
+    const { h, app } = seed();
+    // gstack cloned into the project, a link next to it for each skill it holds.
+    h.skill("repos/app/.claude/skills", "gstack");
+    for (const name of ["canary", "careful"]) {
+      h.skill("repos/app/.claude/skills/gstack", name);
+      h.link(`repos/app/.claude/skills/gstack/${name}`, `repos/app/.claude/skills/${name}`);
+    }
+    const { run } = cli(h, app);
+    const dry = stripAnsi(await run("skills", ["rm", "gstack", "--dry-run"]));
+    expect(dry).toMatch(/gstack +breaks 2 links: canary, careful \(add them to delete them too\)$/m);
+    expect(dry).toContain("Dry run: nothing changed. Run it again with --yes to apply.");
+    const plan = JSON.parse(await run("skills", ["rm", "gstack", "--dry-run", "--json"]));
+    const listed = JSON.parse(await run("skills", ["ls", "--scope", "project", "--json"]));
+    const idOf = (name: string) => listed.items.find((i: { name: string }) => i.name === name).id;
+    expect(plan.changes).toMatchObject([
+      {
+        change: "delete",
+        note: "breaks 2 links: canary, careful (add them to delete them too)",
+        breaks: [idOf("canary"), idOf("careful")],
+      },
+    ]);
+    // With the links in the same rm, nothing is left broken: the folder's line says nothing.
+    const ids = ["gstack", "canary", "careful"].flatMap((name) => ["--id", idOf(name)]);
+    const together = JSON.parse(await run("skills", ["rm", ...ids, "--dry-run", "--json"]));
+    expect(together.changes.map((c: { note: string | null; breaks: string[] }) => [c.note, c.breaks])).toEqual([
+      [null, []],
+      ["link only, target kept", []],
+      ["link only, target kept", []],
+    ]);
   });
 });
 

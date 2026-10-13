@@ -398,6 +398,52 @@ describe("plan: Claude skills", () => {
     expect(both.question).toBe("Delete 2 skills?");
   });
 
+  it("says which skill links a deleted folder leaves broken, unless they are deleted too", async () => {
+    // gstack's shape: a skill folder that holds more skills, each linked in next to it.
+    const names = ["canary", "careful", "freeze", "guard"];
+    const { app, inv, ctx } = await seed((h) => {
+      h.skill("repos/app/.claude/skills", "gstack");
+      for (const name of names) {
+        h.skill("repos/app/.claude/skills/gstack", name);
+        h.link(`repos/app/.claude/skills/gstack/${name}`, `repos/app/.claude/skills/${name}`);
+      }
+    });
+    const gstack = rowIn(inv, app, "project", "gstack");
+    const links = Object.fromEntries(names.map((name) => [name, rowIn(inv, app, "project", name)]));
+    const keys = (...picked: string[]) => picked.map((name) => links[name]?.key);
+    const folderLine = (p: Plan) => p.changes.find((c) => c.kind === "remove" && c.what === "folder")?.lines[0];
+
+    const alone = plan(ctx, "skills", act("rm", "here", [gstack]));
+    // Undo puts the folder back, so the links are only said, never refused.
+    expect(alone.refused).toEqual([]);
+    expect(folderLine(alone)).toMatchObject({
+      note: "breaks 4 links: canary, careful, freeze, … (add them to delete them too)",
+      breaks: keys("canary", "careful", "freeze", "guard"),
+    });
+
+    const some = plan(ctx, "skills", act("rm", "here", [gstack, links.canary, links.careful] as ScopeRow[]));
+    expect(folderLine(some)).toMatchObject({
+      note: "breaks 2 links: freeze, guard (add them to delete them too)",
+      breaks: keys("freeze", "guard"),
+    });
+    const one = plan(
+      ctx,
+      "skills",
+      act("rm", "here", [gstack, links.canary, links.careful, links.freeze] as ScopeRow[]),
+    );
+    expect(folderLine(one)).toMatchObject({ note: "breaks 1 link: guard (add it to delete it too)" });
+
+    const all = plan(ctx, "skills", act("rm", "here", [gstack, ...Object.values(links)]));
+    expect(all.changes).toHaveLength(5);
+    expect(folderLine(all)?.note).toBeUndefined();
+    expect(folderLine(all)?.breaks).toBeUndefined();
+    // A link into the folder is a row of its own: deleting it alone says nothing of gstack.
+    expect(plan(ctx, "skills", act("rm", "here", [links.canary as ScopeRow])).changes[0]?.lines[0]).toMatchObject({
+      change: "unlink",
+      note: "link only, target kept",
+    });
+  });
+
   it("refuses to delete a Cloud skill or a plugin, and to switch a plugin's skill", async () => {
     const { app, inv, ctx } = await seed();
     const pdf = rowIn(inv, app, "cloud", "pdf");

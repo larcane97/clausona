@@ -55,6 +55,8 @@ export type PlanLine = {
   tracked: boolean;
   /** Row keys. */
   rows: string[];
+  /** A folder deleted: the row keys of the skill links into it, not in the action, that it leaves broken. */
+  breaks?: string[];
 };
 
 export type Expect =
@@ -518,6 +520,36 @@ function folderNote(inv: Inventory, copy: Extension, real: string): string | und
   return `the folder at ${tilde(real, inv.homeDir)}`;
 }
 
+/**
+ * The skill links that lead into a folder being deleted and are not in the action, by name: each
+ * is left broken. Undo puts the folder back, so they are said, not refused - unlike a link to the
+ * folder itself, which sameFolder refuses as the same folder in a second row.
+ */
+function linksInto(run: Run, real: string): { key: string; name: string }[] {
+  const found = new Map<string, string>();
+  for (const other of run.inv.items) {
+    if (other.kind !== "skill" || !other.link || other.link.broken || run.inAction.has(other.id)) continue;
+    if (isWithin(folderKey(other), real)) found.set(rowKey(other), other.name);
+  }
+  return [...found]
+    .map(([key, name]) => ({ key, name }))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+}
+
+/** How many names `breaksNote` shows before the `…`. */
+const BREAKS_SHOWN = 3;
+
+/** "breaks 30 links: canary, careful, freeze, … (add them to delete them too)". */
+function breaksNote(links: readonly { name: string }[]): string | undefined {
+  const names = [...new Set(links.map((link) => link.name))];
+  if (names.length === 0) return undefined;
+  const shown = names.slice(0, BREAKS_SHOWN).join(", ");
+  const list = names.length > BREAKS_SHOWN ? `${shown}, …` : shown;
+  return names.length === 1
+    ? `breaks 1 link: ${list} (add it to delete it too)`
+    : `breaks ${names.length} links: ${list} (add them to delete them too)`;
+}
+
 /** Each copy's folder by its real path, a link unlinked, a command's file; never what a link leads to. */
 function planSkillRemoval(run: Run, row: ScopeRow): Outcome {
   for (const copy of row.items) {
@@ -548,7 +580,13 @@ function planSkillRemoval(run: Run, row: ScopeRow): Outcome {
       });
     }
     const real = copy.realFolder ?? listed;
-    const line = lineFor(run, row, listed, "", { change: "delete", note: folderNote(run.inv, copy, real) });
+    const links = linksInto(run, real);
+    const notes = [folderNote(run.inv, copy, real), breaksNote(links)].filter((n) => n !== undefined);
+    const line = lineFor(run, row, listed, "", {
+      change: "delete",
+      note: notes.length > 0 ? notes.join(", ") : undefined,
+    });
+    if (links.length > 0) line.breaks = links.map((link) => link.key);
     out.changes.push(removal(real, "folder", [{ type: "entry", kind: "dir", realPath: real }], line));
   }
   return out;
