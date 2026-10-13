@@ -870,6 +870,11 @@ A 401 or 403 from the spend request reads as "the provider refused the spend req
 That is the request, not necessarily the key: a gateway can refuse `/key/info` alone for a key
 that works for everything else.
 
+`/key/info` is asked under the base URL's own path, with its query and fragment left off:
+`https://gw.example.com/team-a` is asked at `https://gw.example.com/team-a/key/info`. A LiteLLM
+proxy reached through a path of its own, such as its `/anthropic` pass-through, has `/key/info` at
+its root instead, so it answers 404 there and reads as not reporting spend.
+
 A provider that answers `/key/info` with a 404, or with anything but LiteLLM's JSON, gives no
 spend reading. Such a profile cannot join a route, budget or not, and `route budget` and
 `route explain` say "the provider does not report spend". A LiteLLM proxy behind another gateway
