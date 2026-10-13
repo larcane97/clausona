@@ -916,6 +916,17 @@ describe("Codex plugins", () => {
       "It comes with the plugin kit@m. Turn the plugin on or off with /plugins in Codex.",
     );
   });
+
+  it("shows a server named as its plugin is, and the plugin by its full name", async () => {
+    const { h, app } = withKit();
+    // Shipped off, so it is not in Loaded: the lookup goes on to the places, the plugin's among them.
+    h.write(".codex/plugins/cache/m/kit/1.0.0/.mcp.json", {
+      mcpServers: { kit: { command: "kit-mcp", enabled: false } },
+    });
+    expect(firstLine(await run(h, app, "mcp", ["show", "kit"]))).toBe("PLUGINS › kit");
+    expect(await run(h, app, "mcp", ["show", "kit"])).toMatch(/^Runs\s+kit-mcp$/m);
+    expect(await run(h, app, "mcp", ["show", "kit@m"])).toMatch(/^Contains\s+1 skill · 1 MCP server · 1 hook$/m);
+  });
 });
 
 describe("ls from the home dir", () => {

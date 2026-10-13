@@ -418,7 +418,9 @@ lists nothing.
 `show` takes one name, or an id in its place, or `--id <id>`. A name is matched exactly, case
 included. It is the NAME column: `eli5`, `kit:plan`, `kit@demo`, `Stop`,
 `"PreToolUse Bash"`. A plugin also goes by its name before the `@`: `kit` finds `kit@demo`. Two
-plugins of one name from two marketplaces make that short name ambiguous.
+plugins of one name from two marketplaces make that short name ambiguous. A row of that very
+name comes first, so in Codex `code-review` is the server even beside its plugin
+`code-review@openai-bundled`.
 
 Without `--scope`, `show` looks in tiers. The first tier that has a match decides:
 
