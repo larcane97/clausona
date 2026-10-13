@@ -509,8 +509,9 @@ export function renderRouteTable(
   options: { width?: number; now?: number } = {},
 ): string {
   const width = options.width ?? terminalWidth();
-  if (rows.length === 0)
+  if (rows.length === 0) {
     return warnings.length ? ["", ...warningLines(warnings, width), ""].join("\n") : renderRoutesEmpty();
+  }
   const now = options.now ?? Date.now();
   const cells = rows.map(({ name, route, ranking: given }): Record<RouteColumn, Cell> => {
     // A ranking with nothing read says nothing about who is free: dashes, as with --no-quota.

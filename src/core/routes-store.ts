@@ -130,11 +130,8 @@ function checkText(text: string, filePath: string, names: ProfileNames): { file:
 /** routes.json as `route edit` saves it: every route of it has to check out. */
 export function parseRoutesText(text: string, filePath: string, names: ProfileNames = NO_PROFILE_NAMES): RoutesFile {
   const { file, broken } = checkText(text, filePath, names);
-  if (broken.length > 0)
-    throw new RoutesFileError(
-      filePath,
-      broken.flatMap((route) => route.problems),
-    );
+  const problems = broken.flatMap((route) => route.problems);
+  if (problems.length > 0) throw new RoutesFileError(filePath, problems);
   return file;
 }
 
@@ -273,8 +270,8 @@ export async function replaceRoutesText(
       );
     }
     await writeAtomic(paths.routesPath, body);
-    const kept = await readText(paths.editPath).catch(() => null);
-    if (kept !== null && sameJson(kept, text)) await rm(paths.editPath, { force: true }).catch(() => {});
+    const keptEdit = await readText(paths.editPath).catch(() => null);
+    if (keptEdit !== null && sameJson(keptEdit, text)) await rm(paths.editPath, { force: true }).catch(() => {});
   });
 }
 
