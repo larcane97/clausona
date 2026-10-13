@@ -406,7 +406,7 @@ describe("checkRoutesFile", () => {
       routes: { "eu.sk-team": { tool: "claude", from: ["*@sk-gaming.com", "team.sk-dev"], exclude: ["*sk-*"] } },
     };
     expect(checkRouteName("eu.sk-team")).toBeNull();
-    expect(checkRoutesFile(raw)).toEqual({ ok: true, file: raw });
+    expect(checkRoutesFile(raw)).toEqual({ ok: true, file: raw, broken: [] });
   });
 
   it("reads a missing routes object as none", () => {
