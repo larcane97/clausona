@@ -419,7 +419,7 @@ describe("route set, rename, remove", () => {
     const { run, file, deps } = setup();
     await run("add", "main");
     const before = readFileSync(deps.paths.routesPath, "utf8");
-    expect(await run("rename", "main", "main")).toBe("Route main already has that name. Nothing was changed.");
+    expect(await run("rename", "main", "main")).toBe("  ✔ Route main already has that name. Nothing was changed.");
     expect(readFileSync(deps.paths.routesPath, "utf8")).toBe(before);
     expect(Object.keys(file().routes)).toEqual(["main"]);
     await expect(run("rename", "gone", "gone")).rejects.toThrow(/^Route 'gone' does not exist\./);

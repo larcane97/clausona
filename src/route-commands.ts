@@ -347,7 +347,7 @@ async function renameRoute(args: string[], deps: RouteDeps): Promise<string> {
     // Not "already exists": the name it is taken by is its own, and there is nothing to write.
     const file = await readRoutes(deps.paths);
     if (!storedRoute(file, from)) throw new UnknownRouteError(from, Object.keys(file.routes).sort());
-    return `Route ${bold(from)} already has that name. Nothing was changed.`;
+    return success(dim(`Route ${from} already has that name. Nothing was changed.`));
   }
   await updateRoutes((file) => {
     const spec = storedRoute(file, from);
