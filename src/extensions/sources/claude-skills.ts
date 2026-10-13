@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Collector, Extension, Project } from "../model.js";
 import { isHomeProject } from "../projects.js";
 import { entryInfo, IO_LIMIT, isRecord, listNames, mapLimit, parseFrontmatter, readText } from "../read.js";
-import { type ClaudeContext, pluginOwner, sharesPrimaryEntry } from "./claude-context.js";
+import { type ClaudeContext, pluginLocation, pluginOwner, sharesPrimaryEntry } from "./claude-context.js";
 import { readSkillFolders, type SkillLocation } from "./skill-dirs.js";
 
 /**
@@ -43,13 +43,7 @@ export async function readClaudeSkills(ctx: ClaudeContext, projects: Project[], 
     jobs.push(readCommandFiles(path.join(project.path, ".claude", "commands"), here, project.path, out));
   }
   for (const plugin of ctx.plugins) {
-    const from: SkillLocation = {
-      tool: "claude",
-      scope: "plugin",
-      plugin: plugin.id,
-      ...(plugin.project ? { project: plugin.project } : {}),
-      accounts: plugin.profiles,
-    };
+    const from: SkillLocation = pluginLocation(plugin);
     const prefix = `${plugin.name}:`;
     const owner = pluginOwner(plugin);
     jobs.push(readSkillFolders(path.join(plugin.installPath, "skills"), from, owner, out, { prefix }));

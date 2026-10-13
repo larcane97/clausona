@@ -4,7 +4,7 @@ import { valueHash } from "../hash.js";
 import type { Collector, Location, Project } from "../model.js";
 import { isRecord, isWithin, pathKey, readJsonObject, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
-import { type ClaudeContext, pluginOwner } from "./claude-context.js";
+import { type ClaudeContext, pluginLocation, pluginOwner } from "./claude-context.js";
 
 export function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
@@ -62,13 +62,7 @@ export async function readClaudeMcp(ctx: ClaudeContext, projects: Project[], out
   }
   await Promise.all(
     ctx.plugins.map(async (plugin) => {
-      const from = {
-        tool: "claude" as const,
-        scope: "plugin" as const,
-        plugin: plugin.id,
-        ...(plugin.project ? { project: plugin.project } : {}),
-        accounts: plugin.profiles,
-      };
+      const from = pluginLocation(plugin);
       // Named as `disabledMcpServers` records a plugin's server, so the switch finds it.
       const prefix = `plugin:${plugin.name}:`;
       const owner = pluginOwner(plugin);

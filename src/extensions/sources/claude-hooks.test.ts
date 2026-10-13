@@ -82,6 +82,7 @@ describe("readClaudeHooks and readClaudePlugins", () => {
       plugin: "sp@m",
       file: path.join(realSp, "hooks", "hooks.json"),
       accounts: ["claude:default"],
+      installScope: "user",
     });
     expect(out.items.filter((i) => i.kind === "plugin")).toEqual([
       {
@@ -89,7 +90,14 @@ describe("readClaudeHooks and readClaudePlugins", () => {
         kind: "plugin",
         name: "sp@m",
         description: "Skills pack",
-        location: { tool: "claude", scope: "plugin", plugin: "sp@m", file: realSp, accounts: ["claude:default"] },
+        location: {
+          tool: "claude",
+          scope: "plugin",
+          plugin: "sp@m",
+          file: realSp,
+          accounts: ["claude:default"],
+          installScope: "user",
+        },
       },
     ]);
     expect(out.warnings).toEqual([]);

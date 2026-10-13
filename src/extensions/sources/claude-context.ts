@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { claudeJsonPathForConfigDir } from "../../core/paths.js";
 import type { Registry } from "../../types.js";
-import type { Collector, Project, SettingsLayer, Warning } from "../model.js";
+import type { Collector, Location, Project, SettingsLayer, Warning } from "../model.js";
 import { localSettingsFile, projectSettingsFile } from "../places.js";
 import { isHomeProject } from "../projects.js";
 import { IO_LIMIT, isRecord, listNames, mapLimit, pathKey, readJsonObject, realPath, samePath } from "../read.js";
@@ -35,6 +35,22 @@ export type PluginInstall = {
  */
 export function pluginOwner(plugin: PluginInstall): string {
   return `${plugin.id}|${plugin.scope}|${plugin.project ?? "-"}|${pathKey(plugin.installPath)}`;
+}
+
+/**
+ * Where a plugin install and what it brings are, but the file: the plugin, the project it is
+ * installed for, the accounts that have it and its install scope, which a row of its installs
+ * across accounts is keyed by.
+ */
+export function pluginLocation(plugin: PluginInstall): Omit<Location, "file"> {
+  return {
+    tool: "claude",
+    scope: "plugin",
+    plugin: plugin.id,
+    ...(plugin.project ? { project: plugin.project } : {}),
+    accounts: plugin.profiles,
+    installScope: plugin.scope,
+  };
 }
 
 export type ClaudeContext = {

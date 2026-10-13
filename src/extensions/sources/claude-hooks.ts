@@ -4,7 +4,7 @@ import { valueHash } from "../hash.js";
 import type { Collector, HookPlace, Location, Scope, SettingsLayer } from "../model.js";
 import { isRecord, pathKey, readJsonObject } from "../read.js";
 import { hookSummary } from "../redact.js";
-import { type ClaudeContext, type PluginInstall, pluginOwner } from "./claude-context.js";
+import { type ClaudeContext, pluginLocation, pluginOwner } from "./claude-context.js";
 
 function layerScope(layer: SettingsLayer): Scope {
   return layer === "user" ? "global" : layer;
@@ -56,18 +56,6 @@ export function addHooksFile(json: Record<string, unknown>, location: Location, 
   else addHooks(json, location, owner, out, "root");
 }
 
-/** Where something a plugin install brings is defined, with the accounts that have the install. */
-function pluginLocation(plugin: PluginInstall, file: string): Location {
-  return {
-    tool: "claude",
-    scope: "plugin",
-    plugin: plugin.id,
-    file,
-    ...(plugin.project ? { project: plugin.project } : {}),
-    accounts: plugin.profiles,
-  };
-}
-
 /**
  * The hooks in every settings file Claude Code reads, and in each plugin's hooks/hooks.json. A
  * settings hook's id owner is its file, which fixes the layer and the project too: the managed
@@ -93,7 +81,7 @@ export async function readClaudeHooks(ctx: ClaudeContext, out: Collector): Promi
     ctx.plugins.map(async (plugin) => {
       const file = path.join(plugin.installPath, "hooks", "hooks.json");
       const json = await readJsonObject(file, out.warnings);
-      if (json) addHooksFile(json, pluginLocation(plugin, file), pluginOwner(plugin), out);
+      if (json) addHooksFile(json, { ...pluginLocation(plugin), file }, pluginOwner(plugin), out);
     }),
   );
 }
@@ -111,7 +99,7 @@ export async function readClaudePlugins(ctx: ClaudeContext, out: Collector): Pro
         kind: "plugin",
         name: plugin.id,
         ...(typeof manifest?.description === "string" ? { description: manifest.description } : {}),
-        location: pluginLocation(plugin, plugin.installPath),
+        location: { ...pluginLocation(plugin), file: plugin.installPath },
       });
     }),
   );

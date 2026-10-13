@@ -1,15 +1,17 @@
+import { realpathSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 import { statesByAccount, tagsOf } from "./describe.js";
 import { loadInventory } from "./inventory.js";
-import type { Inventory } from "./model.js";
+import type { Extension, Inventory } from "./model.js";
 import { pathKey } from "./read.js";
 import {
   homeScope,
   itemsIn,
   otherProjects,
   pluginContents,
+  rowKey,
   rowsIn,
   SCOPE_LABEL,
   type ScopeRow,
@@ -463,6 +465,35 @@ describe("rows across accounts", () => {
     expect(shape(contents.skill)).toEqual([["skill:claude:plugin:user:-:kit@m:kit:plan", 2]]);
     expect(contents.hook).toHaveLength(2);
     expect(contents.mcp).toEqual([]);
+  });
+
+  it("keys a plugin's rows by the install scope its items carry, with the same keys and ids as before", async () => {
+    const { h, inv, app } = await shared();
+    const kit = rowsIn(inv, "claude", "skill", "plugins", app, NOW)[0];
+    const plan = rowsIn(inv, "claude", "skill", "loaded", app, NOW)[0];
+    if (!kit || !plan) throw new Error("no kit rows");
+    // The keys and ids an agent may have stored: the row key, and each install's own id.
+    const owner = (dir: string) => `kit@m|user|-|${pathKey(realpathSync.native(dir))}`;
+    const [kitA, kitB] = [
+      h.path(".claude/plugins/cache/m/kit/1.0.0"),
+      h.path(".claude-work/plugins/cache/m/kit/1.0.0"),
+    ];
+    expect(kit.key).toBe("plugin:claude:user:-:kit@m");
+    expect(kit.items.map((i) => i.id)).toEqual([
+      `plugin:claude:plugin:${owner(kitA)}:kit@m`,
+      `plugin:claude:plugin:${owner(kitB)}:kit@m`,
+    ]);
+    expect(plan.key).toBe("skill:claude:plugin:user:-:kit@m:kit:plan");
+    expect(plan.items.map((i) => i.id)).toEqual([
+      `skill:claude:plugin:${owner(kitA)}:kit:plan`,
+      `skill:claude:plugin:${owner(kitB)}:kit:plan`,
+    ]);
+    expect([...kit.items, ...plan.items].map((i) => i.location.installScope)).toEqual(["user", "user", "user", "user"]);
+    const lint = itemsIn(inv, "claude", "skill", "loaded", app, NOW).find((i) => i.name === "lp:lint");
+    expect(lint?.location.installScope).toBe("project");
+    // The install scope is read from the item, not from its id: an id of another form keys alike.
+    const copy = { ...(plan.items[0] as Extension), id: "skill:claude:plugin:another-form:kit:plan" };
+    expect(rowKey(copy)).toBe(plan.key);
   });
 
   it("keeps an account's own skills folder per account", async () => {

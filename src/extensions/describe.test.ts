@@ -471,6 +471,7 @@ describe("rowAccounts and accountsWord", () => {
       plugin: "sp@m",
       file: `/${dir}/.mcp.json`,
       ...(accounts ? { accounts } : {}),
+      installScope: "user",
     },
   });
   const row = (...items: Extension[]): ScopeRow => ({ key: "row", name: "plugin:sp:search", items });

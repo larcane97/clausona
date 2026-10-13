@@ -23,6 +23,11 @@ export type Location = {
   plugin?: string;
   /** For what a plugin brings: the Claude accounts that have the plugin installed. */
   accounts?: string[];
+  /**
+   * For a plugin install and what it brings: the scope it is installed at, as
+   * `installed_plugins.json` records it (an install for the home dir reads as `user`).
+   */
+  installScope?: "user" | "project" | "local";
 };
 
 /** Where a hook command sits in its file: hooks[event][group].hooks[index], under "hooks" or at the root. */
