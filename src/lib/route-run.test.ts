@@ -256,6 +256,30 @@ describe("runRouted", () => {
     expect(s.launches).toEqual([]);
   });
 
+  // Creating it would be refused while another route cannot be used, so it is not offered.
+  it("offers no new route while another route cannot be used, and reads no quota", async () => {
+    const s = setup({
+      interactive: true,
+      answers: ["y"],
+      routes: { version: 1, routes: { bad: { tool: "claude", strategy: "fastest" } } },
+    });
+    let reads = 0;
+    s.deps.collectQuotas = async () => {
+      reads++;
+      return {};
+    };
+    await expect(runRouted(["--route", "work"], s.launch, s.io, s.deps)).rejects.toThrow(
+      [
+        `${s.paths.routesPath} has a route that cannot be used, so nothing was saved:`,
+        "    routes.bad.strategy: must be one of round-robin, headroom, expiring",
+        "  Fix it with clausona route edit, or remove the route: clausona route remove bad.",
+      ].join("\n"),
+    );
+    expect(reads).toBe(0);
+    expect(s.confirmed).toEqual([]);
+    expect(s.launches).toEqual([]);
+  });
+
   it("offers to create an unknown route in a terminal, then runs on it", async () => {
     const s = setup({ interactive: true, answers: ["y"] });
     await runRouted(["--route", "work", "-p", "hi"], s.launch, s.io, s.deps);

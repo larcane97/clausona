@@ -510,6 +510,9 @@ clausona asks nothing, creates nothing and exits 1. If the other tool has accoun
 patterns would take, it names that run, such as `clausona run codex --route nightly`. Otherwise
 it points you to `clausona list`.
 
+Nor is a route offered while another route in `routes.json` cannot be used, since saving it would
+be refused. clausona reads no quota, asks nothing and exits 1 with the problem and how to fix it.
+
 Without a terminal nothing is created. clausona prints the command that would create it and
 exits 1:
 

@@ -1,4 +1,5 @@
 import { holdsKey, type RouteTool, toolsOf, withDefaults } from "../core/route-config.js";
+import { type LoadedRoutes, writeRefusal } from "../core/routes-store.js";
 import { posixQuote } from "../core/shell.js";
 import { createRoute, newRouteFrom } from "../route-commands.js";
 import type { Registry } from "../types.js";
@@ -102,8 +103,12 @@ async function offerToCreate(
   registry: Registry,
   io: RouteIo,
   deps: RouteDeps,
+  loaded: LoadedRoutes,
 ): Promise<ResolvedRoute> {
   if (!io.interactive) throw error;
+  // Writing it would be refused while another route cannot be used: said now, before any quota
+  // is read or a question asked that a yes could not make good.
+  if (loaded.broken.length > 0) throw writeRefusal(loaded.filePath, loaded.broken);
   const { route: _name, ...overrides } = run.options;
   const tool = run.tool ?? inferRouteTool(overrides.from ?? []) ?? "claude";
   checkArgsHaveTool(error.routeName, tool, run);
@@ -151,11 +156,12 @@ export async function runRouted(
   const run = readRunArgs(args);
   let resolved: ResolvedRoute | null = null;
   let unknown: UnknownRouteError | undefined;
+  // Read only for a named route, and refused only for that route's problems: a run on the
+  // active profile, or on an unsaved route, goes ahead whatever routes.json holds.
+  const names = namesOf(registry);
+  const loaded = await routesFor(run.options.route, deps.paths, names);
   try {
-    // Read only for a named route, and refused only for that route's problems: a run on the
-    // active profile, or on an unsaved route, goes ahead whatever routes.json holds.
-    const names = namesOf(registry);
-    resolved = resolveRoute((await routesFor(run.options.route, deps.paths, names)).file, run, names);
+    resolved = resolveRoute(loaded.file, run, names);
   } catch (error) {
     if (!(error instanceof UnknownRouteError)) throw error;
     unknown = error;
@@ -171,7 +177,7 @@ export async function runRouted(
       "Routing options cannot be combined with a profile. Run it by name: clausona run <profile> …, or put it after -- to pass it to the tool.",
     );
   }
-  if (unknown) resolved = await offerToCreate(unknown, run, registry, io, deps);
+  if (unknown) resolved = await offerToCreate(unknown, run, registry, io, deps, loaded);
 
   if (!resolved) {
     if (!run.tool) {
