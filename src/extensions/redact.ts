@@ -89,8 +89,26 @@ const ATTACHED_USER = /^-[uU][^\s:=/-][^\s:=/]*:/;
 /** A URL inside a word: a scheme, `//`, then up to a space, a quote or a backtick. */
 const URL_RUN = /[a-z][a-z0-9+.-]*:\/\/[^\s"'`]+/gi;
 
-/** A command line's words, and whether each ends an argument: an MCP server's can hold several. */
-type Line = { words: string[]; ends: boolean[]; shown: string[] };
+/** The word SQL puts before a password literal: `PASSWORD 'x'`. MySQL's `IDENTIFIED BY 'x'` is the other. */
+const SQL_PASSWORD = /^password$/i;
+
+/** A word that ends one command and starts the next, in a shell's command line. */
+const SEPARATOR = /^(&&|\|\||\||;)$|;$/;
+
+/** A word that may start a command: what a command line or a separator puts first, or runs the rest. */
+const RUNS_NEXT = /^(env|sudo|exec|command|nohup|time|xargs)$/;
+
+/** An option name as people spell them: lowercase words in kebab, snake or camel case, a number only at the end. */
+const SPELLED_OPTION = /^[a-z]+(?:[A-Z][a-z]+)*(?:[-_][a-z]+(?:[A-Z][a-z]+)*)*\d?$/;
+
+/** A single-dash option in Go's style: lowercase words, `-token`, `-api-key`. */
+const GO_OPTION = /^-[a-z][a-z\d]*(?:[-_][a-z\d]+)*$/;
+
+/**
+ * A command line's words: whether each ends an argument (an MCP server's argument can hold
+ * several), and the quote a value that ends at a word goes on in (`openQuotes`).
+ */
+type Line = { words: string[]; ends: boolean[]; open: string[]; shown: string[] };
 
 /** A POSIX shell's option for a command line: `-c`, alone or ending a run of short options (`-lc`, `-euc`). */
 const POSIX_COMMAND = /^-[a-zA-Z]*c$/;
@@ -121,10 +139,6 @@ function isOption(word: string): boolean {
  * `docker exec ctr sh -c` count too. After any other program's `-c`, `-C` or `/c` the argument
  * stays one value, which hides all of a value that runs through it (`make -C "TOKEN=a b"`):
  * a shell this does not know is over-hidden, never shown.
- *
- * Known limits, as the name rules have them anywhere: a password in free-form text - SQL's
- * `psql -c "ALTER ROLE r PASSWORD 'x'"` - is no secret-named key or option and is shown, and so
- * is a spaced value in a one-argument form body (`-d "user=bob&password=a b"` shows `b`).
  */
 function isShellCommand(args: string[], at: number): boolean {
   const option = args[at];
@@ -148,6 +162,7 @@ function isShellCommand(args: string[], at: number): boolean {
  *   (`X-Auth-Token: ...`, `{"apiKey":"..."}`, `user=bob&password=...`), and `Cookie`'s;
  * - the word after `Bearer` or `Basic`, and after `token` behind a header's colon;
  * - the password of `-u`/`--user`/`-U`/`--proxy-user` `user:password`;
+ * - SQL's password literal, `PASSWORD 'x'` and `IDENTIFIED BY 'x'`;
  * - in every URL, its userinfo, query and fragment, and a path segment that is a secret.
  * The name rules are what catch a token that is not key-shaped - a gateway's hex token, say -
  * which the shape check misses.
@@ -155,21 +170,63 @@ function isShellCommand(args: string[], at: number): boolean {
  * The words come from an MCP server's command and args, one argument each, or from a hook
  * command split at whitespace, where a quoted argument arrives as several words with the quotes
  * still on its first and last. So a value that opens a quote runs on through the word that
- * closes it, the way the shell would read it, and one in an argument of several words runs to
+ * closes it, the way the shell would read it, and so does one that ends at a word inside a
+ * quoted string (`-d "user=bob&password=a b"`); one in an argument of several words runs to
  * that argument's end. The quotes are kept around what stands in for a value.
  */
 export function redactCommand(args: string[]): string {
-  const line: Line = { words: [], ends: [], shown: [] };
+  const line: Line = { words: [], ends: [], open: [], shown: [] };
+  const bodies: boolean[] = [];
   for (const [n, arg] of args.entries()) {
     const words = arg.split(/\s+/).filter(Boolean);
     const commandLine = isShellCommand(args, n - 1);
     for (const [k, word] of words.entries()) {
       line.words.push(word);
       line.ends.push(commandLine || k === words.length - 1);
+      bodies.push(commandLine && k === 0);
     }
   }
+  line.open = openQuotes(line.words, bodies);
   for (let i = 0; i < line.words.length; i++) i = redactAt(line, i);
   return line.shown.join(" ");
+}
+
+/** What may stand after a closing quote at a word's end: `x"}`, `y'),`. */
+const CLOSERS = /[)\]},;]/;
+
+/**
+ * For each word, the quote a value that ends at it goes on in: one opened by it or by a word
+ * before it - at a word's start, or right after the `=` or `:` of an assignment
+ * (`TOKEN='a`) - and not closed by its end. Empty when there is none, or when the innermost
+ * open quote holds a shell's command line (`bash -c "...`, `bodies`), whose words are the
+ * shell's own and not one value. A word closes the quotes its end does, innermost first, a
+ * bracket or comma after them aside (`b'"`, `x"}`), but not one it opened itself (`x='y'`).
+ */
+function openQuotes(words: string[], bodies: boolean[]): string[] {
+  const stack: { quote: string; body: boolean }[] = [];
+  return words.map((word, i) => {
+    const lead = leadingQuote(word);
+    if (lead !== "" && word === lead) {
+      // A lone quote closes the one open, or opens one.
+      if (stack.at(-1)?.quote === lead) stack.pop();
+      else stack.push({ quote: lead, body: bodies[i] === true });
+    } else {
+      if (lead !== "") stack.push({ quote: lead, body: bodies[i] === true });
+      const inner = lead === "" ? /^[^\s"']*?[=:](["'])/.exec(word) : null;
+      const innerQuote = inner?.[1] ?? "";
+      if (inner && !word.slice(inner[0].length).includes(innerQuote)) stack.push({ quote: innerQuote, body: false });
+      const tail = /["')\]},;]*$/.exec(word)?.[0] ?? "";
+      const before = word.slice(lead.length, word.length - tail.length);
+      for (const c of tail) {
+        if (CLOSERS.test(c) || stack.at(-1)?.quote !== c) continue;
+        // A quote the word opened and closed itself, as `x='y'` does, is the word's own.
+        if (before.split(c).length % 2 === 0) continue;
+        stack.pop();
+      }
+    }
+    const top = stack.at(-1);
+    return top === undefined || top.body ? "" : top.quote;
+  });
 }
 
 /** Shows `words[i]`, and the words its value takes, redacted; returns the index of the last one. */
@@ -200,34 +257,105 @@ function redactAt(line: Line, i: number): number {
   }
   const open = openKeyValue(word);
   if (open) return hideValue(line, i, redactWord(word.slice(0, open.at)), open.quote, word.slice(open.at));
+  // A secret-named key's unquoted value that runs to the word's end goes on with its argument,
+  // or in the quoted string the word is in: `-d "user=bob&password=a b"`.
+  const tail = valueAtEnd(word);
+  if (tail !== undefined && (!line.ends[i] || line.open[i] !== "")) {
+    return hideValue(line, i, redactWord(word.slice(0, tail)), "", word.slice(tail));
+  }
   line.shown.push(redactWord(word));
   if (i + 1 >= line.words.length) return i;
   if (isSecretName(ENDS_WITH_KEY.exec(word)?.[2] ?? ""))
     return hideFollowing(line, i, quote !== "" && !body.includes(quote) ? quote : "");
   const afterColon = (line.words[i - 1] ?? "").endsWith(":");
-  const scheme = AUTH_SCHEME.test(body) || ENDING_SCHEME.test(word) || (afterColon && TOKEN_SCHEME.test(body));
+  // A scheme closing a quoted value takes its credential from the next word all the same:
+  // `-H "X-Upstream: Basic" "$TOKEN"`.
+  const closed = word.replace(/["']+$/, "");
+  const scheme =
+    AUTH_SCHEME.test(unquoted(word)) || ENDING_SCHEME.test(closed) || (afterColon && TOKEN_SCHEME.test(body));
   // After a scheme, the next word is the credential, whatever its shape.
   if (scheme) return hideWord(line, i + 1);
-  if (isSecretFlag(body) || COOKIE_FLAG.test(body)) {
-    // The next word is this flag's value, dash or not - a URL-safe token or a password can start
-    // with one - unless its own rule hides what it carries: then this flag takes no value (`-b`
-    // in many tools, `--auth`), and taking the word would print that word's secret instead.
-    if (hidesOwnValue(line.words[i + 1] ?? "")) return i;
-    return hideWord(line, i + 1);
-  }
+  // SQL's password literal is the quoted string after PASSWORD, or after IDENTIFIED BY.
+  const sql =
+    SQL_PASSWORD.test(body) || (/^by$/i.test(body) && /^identified$/i.test(unquoted(line.words[i - 1] ?? "")));
+  if (sql && leadingQuote(line.words[i + 1] ?? "") !== "") return hideWord(line, i + 1);
+  if (isSecretFlag(body) || isCookieFlag(line, i)) return hideFlagValue(line, i);
   if (USER_FLAG.test(body)) return hideUserinfo(line, i + 1, "", line.words[i + 1] ?? "") ?? i;
   return i;
 }
 
 /**
- * Whether `word`'s own rule hides the value it carries or takes: an option spelled out and named
- * for a secret (`--api-key`, `--token=x`), curl's cookie and user options, `-H`/`--header`, an
- * auth scheme, a header named for a secret (`X-Api-Key:`). Only a double-dash option name
+ * Hides the value of `words[i]`, an option named for a secret or curl's cookie option, and
+ * returns the index of its last word. The next word is the value, dash or not - a URL-safe token
+ * or a password can start with one - unless its own rule hides what it carries: then this option
+ * takes no value (`-b` in many tools, `--auth`), and taking the word would print that word's
+ * secret instead. But a quoted string and an argument of several words are a value, whatever
+ * they start with (`--token "-u x"`). And a word that may be either - an option named for a
+ * secret in Go's single-dash style (`-b -token x`), or a double-dash one not spelled the way
+ * option names are (`--Tk9Secret`) - is hidden as a value, and so is the word after it, its
+ * value if it is an option: whichever it is, the secret is hidden.
+ */
+function hideFlagValue(line: Line, i: number): number {
+  const at = i + 1;
+  const next = line.words[at] ?? "";
+  if (leadingQuote(next) !== "" || !line.ends[at]) return hideWord(line, at);
+  const either = mayBeSecretFlag(next);
+  if (!either && hidesOwnValue(line, at)) return i;
+  const last = hideWord(line, at);
+  if (!either || last !== at || at + 1 >= line.words.length || hidesOwnValue(line, at + 1)) return last;
+  return hideWord(line, at + 1);
+}
+
+/** See hideFlagValue: a word after a secret's option that may be its value or an option of its own. */
+function mayBeSecretFlag(word: string): boolean {
+  if (GO_OPTION.test(word)) return isSecretFlag(word);
+  const option = /^--([\w.-]+)$/.exec(word)?.[1];
+  return option !== undefined && isSecretName(option) && !SPELLED_OPTION.test(option);
+}
+
+/**
+ * Whether `words[i]` is curl's cookie option, `-b` or `--cookie`. Under git, `-b` names a branch
+ * (`git checkout -b feature`): the command it is in starts with git. Anywhere else `-b` is read
+ * as curl's, the safe side, whatever the program.
+ */
+function isCookieFlag(line: Line, i: number): boolean {
+  const word = line.words[i] ?? "";
+  const body = word.slice(leadingQuote(word).length);
+  return COOKIE_FLAG.test(body) && (body !== "-b" || !underGit(line, i));
+}
+
+/**
+ * Whether the command `words[i]` is in is git's: walking back to where the command starts - the
+ * line's start, a separator, a shell's command option, a word that runs the next one - its
+ * first word names git, and no word on the way names curl.
+ */
+function underGit(line: Line, i: number): boolean {
+  for (let k = i - 1; k >= 0; k--) {
+    const word = unquoted(line.words[k] ?? "");
+    const program = programName(word);
+    if (SEPARATOR.test(word) || program === "curl") return false;
+    if (program !== "git") continue;
+    const before = unquoted(line.words[k - 1] ?? "");
+    return k === 0 || SEPARATOR.test(before) || RUNS_NEXT.test(before) || isShellCommand(line.words, k - 1);
+  }
+  return false;
+}
+
+/** A word without the quotes at its ends. */
+function unquoted(word: string): string {
+  return word.replace(/^["']+|["']+$/g, "");
+}
+
+/**
+ * Whether `words[at]`'s own rule hides the value it carries or takes: an option spelled out and
+ * named for a secret (`--api-key`, `--token=x`), curl's cookie and user options, `-H`/`--header`,
+ * an auth scheme, a header named for a secret (`X-Api-Key:`). Only a double-dash option name
  * counts as named for a secret: a dash-led token can read like a single-dash one (`-xKey9…`).
  */
-function hidesOwnValue(word: string): boolean {
+function hidesOwnValue(line: Line, at: number): boolean {
+  const word = line.words[at] ?? "";
   const body = word.slice(leadingQuote(word).length);
-  if (COOKIE_FLAG.test(body) || USER_FLAG.test(body) || /^(-H|--header)$/.test(body) || AUTH_SCHEME.test(body)) {
+  if (isCookieFlag(line, at) || USER_FLAG.test(body) || /^(-H|--header)$/.test(body) || AUTH_SCHEME.test(body)) {
     return true;
   }
   const option = /^(--[\w.-]+)(=?)/.exec(body);
@@ -293,7 +421,8 @@ function valueEnd(line: Line, i: number): number {
  * quote it is in, if any: the value runs to the quote's closing - in this word or a later one,
  * or the end - and what follows that is shown, redacted. An unquoted value is the rest of the
  * word, with any closing quotes or brackets after it shown - or, when the word is not the last
- * of its argument, the rest of that argument.
+ * of its argument, the rest of that argument; or, when the word is in a quoted string that goes
+ * on past it (`openQuotes`), the rest of that string.
  */
 function hideValue(line: Line, at: number, prefix: string, quote: string, rest: string): number {
   if (quote === "") {
@@ -304,19 +433,46 @@ function hideValue(line: Line, at: number, prefix: string, quote: string, rest: 
       line.shown.push(`${prefix}${HIDDEN}`);
       return valueEnd(line, at);
     }
+    // So is a quoted string the shell reads as one word: `-b TOKEN='a b'`, `-u alice:"a b"`. A
+    // quote the value opened goes with it; one opened before it is shown closing.
+    const open = line.open[at] ?? "";
+    if (open !== "" && at + 1 < line.words.length) {
+      const { last, after } = closing(line, at + 1, open, line.words[at + 1] ?? "");
+      line.shown.push(`${prefix}${HIDDEN}${rest.includes(open) ? "" : open}${after}`);
+      return last;
+    }
     line.shown.push(`${prefix}${HIDDEN}${closingTail(rest)}`);
     return at;
   }
+  const { last, after, closed, inside } = closing(line, at, quote, rest);
+  line.shown.push(`${prefix}${HIDDEN}${quote}${after}`);
+  // `--header "Authorization: Bearer" "$TOKEN"`: a quoted value that ends in a bare scheme takes
+  // the credential from the word after it.
+  const scheme = closed && after === "" && AUTH_SCHEME.test(inside.trim().split(/\s+/).pop() ?? "");
+  return scheme && last + 1 < line.words.length ? hideWord(line, last + 1) : last;
+}
+
+/**
+ * Where a quoted value that goes on from `text` in `words[at]` closes: the index of the word with
+ * the closing quote - in this word or a later one, or the last word when none closes it - what
+ * follows the quote there, redacted, and the closing word's text before the quote.
+ */
+function closing(
+  line: Line,
+  at: number,
+  quote: string,
+  text: string,
+): { last: number; after: string; closed: boolean; inside: string } {
   let last = at;
-  let text = rest;
-  let close = text.indexOf(quote);
+  let word = text;
+  let close = word.indexOf(quote);
   while (close < 0 && last + 1 < line.words.length) {
     last++;
-    text = line.words[last] ?? "";
-    close = text.indexOf(quote);
+    word = line.words[last] ?? "";
+    close = word.indexOf(quote);
   }
-  line.shown.push(`${prefix}${HIDDEN}${quote}${close < 0 ? "" : redactWord(text.slice(close + 1))}`);
-  return last;
+  if (close < 0) return { last, after: "", closed: false, inside: word };
+  return { last, after: redactWord(word.slice(close + 1)), closed: true, inside: word.slice(0, close) };
 }
 
 /** Hides `words[at]`, a secret on its own: what follows `--api-key` or `Bearer`, and the rest of its argument. */
@@ -437,6 +593,24 @@ function openKeyValue(word: string): { at: number; quote: string } | undefined {
     const quote = key[3] ?? "";
     const at = key.index + key[0].length;
     if (quote !== "" && isSecretName(key[2] ?? "") && !word.slice(at).includes(quote)) return { at, quote };
+  }
+  return undefined;
+}
+
+/**
+ * Where a secret-named key's unquoted value starts in `word` when it runs to the word's end, as
+ * `hideKeyValues` reads it: `user=bob&password=x`. Not a key in a URL, whose rules hide its query.
+ */
+function valueAtEnd(word: string): number | undefined {
+  const urls = [...word.matchAll(URL_RUN)].map((m) => ({ from: m.index ?? 0, to: (m.index ?? 0) + m[0].length }));
+  const keys = new RegExp(KEY_AT.source, "g");
+  for (let key = keys.exec(word); key !== null; key = keys.exec(word)) {
+    const start = key.index;
+    const at = start + key[0].length;
+    if (key[3] !== "" || !isSecretName(key[2] ?? "") || urls.some((url) => start >= url.from && start < url.to))
+      continue;
+    const value = /^[^\s"'&,;}]+/.exec(word.slice(at))?.[0];
+    if (value !== undefined && at + value.length === word.length) return at;
   }
   return undefined;
 }
