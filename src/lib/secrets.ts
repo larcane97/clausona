@@ -43,27 +43,45 @@ function killRunning(child: ChildProcess): void {
 /** The signals that end clausona from outside: Ctrl-C, a kill, a terminal closing. */
 const ENDING_SIGNALS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
 
+/** The detached children clausona is waiting on: a signal that ends clausona ends each of them. */
+const detachedChildren = new Set<ChildProcess>();
+
+const killDetached = () => {
+  for (const child of detachedChildren) killRunning(child);
+};
+
+/**
+ * A signal that ends clausona: it kills every detached child still running, then takes its
+ * course - with no other handler for it, it is raised again, and clausona ends as it would have.
+ */
+function onEndingSignal(signal: NodeJS.Signals): void {
+  killDetached();
+  detachedChildren.clear();
+  stopListening();
+  if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+}
+
+function stopListening(): void {
+  for (const signal of ENDING_SIGNALS) process.off(signal, onEndingSignal);
+  process.off("exit", killDetached);
+}
+
 /**
  * Ends a detached child with clausona. Detached, it is out of the terminal's process group, which
  * the terminal's Ctrl-C reaches, so a signal that ends clausona kills its group here, as
- * process.exit() does (the dashboard quitting). The signal then takes its course: with no other
- * handler for it, it is raised again, and clausona ends as it would have. Returns what removes
- * the handlers, once the child is done with.
+ * process.exit() does (the dashboard quitting). One set of handlers serves every child: put on
+ * for the first, taken off with the last, however many keys are read at once. Returns what lets
+ * this child go, once it is done with.
  */
 function endWithClausona(child: ChildProcess): () => void {
-  const onExit = () => killRunning(child);
-  const onSignal = (signal: NodeJS.Signals) => {
-    killRunning(child);
-    remove();
-    if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+  if (detachedChildren.size === 0) {
+    for (const signal of ENDING_SIGNALS) process.on(signal, onEndingSignal);
+    process.on("exit", killDetached);
+  }
+  detachedChildren.add(child);
+  return () => {
+    if (detachedChildren.delete(child) && detachedChildren.size === 0) stopListening();
   };
-  const remove = () => {
-    for (const signal of ENDING_SIGNALS) process.off(signal, onSignal);
-    process.off("exit", onExit);
-  };
-  for (const signal of ENDING_SIGNALS) process.on(signal, onSignal);
-  process.on("exit", onExit);
-  return remove;
 }
 
 /**

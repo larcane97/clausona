@@ -166,6 +166,34 @@ describe("resolveSecret", () => {
     },
   );
 
+  // Every API profile's key can be read at once: one set of handlers serves them all.
+  it.skipIf(windows)(
+    "puts on one set of signal handlers for many key commands at once, and takes it off after",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    async () => {
+      const counts = () => ["SIGINT", "SIGTERM", "SIGHUP", "exit"].map((event) => process.listenerCount(event));
+      const before = counts();
+      const warning = vi.spyOn(process, "emitWarning");
+      const controller = new AbortController();
+      try {
+        const reads = Array.from({ length: 12 }, () =>
+          resolveSecret("claude:x", { source: "command", run: "sleep 30" }, undefined, {
+            signal: controller.signal,
+          }).catch(() => "not read"),
+        );
+        // Each started as it was asked for: one handler more for each event, not twelve.
+        expect(counts()).toEqual(before.map((count) => count + 1));
+        controller.abort();
+        expect(await Promise.all(reads)).toEqual(Array(12).fill("not read"));
+        expect(counts()).toEqual(before);
+        expect(warning).not.toHaveBeenCalled();
+      } finally {
+        warning.mockRestore();
+        controller.abort();
+      }
+    },
+  );
+
   // Its pid, once it has exited, can be another process's: nothing is signalled then, even with a
   // job it left behind holding its output open, which the abort no longer waits for.
   it.skipIf(windows)(
