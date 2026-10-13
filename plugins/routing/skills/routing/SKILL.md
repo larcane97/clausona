@@ -67,8 +67,10 @@ clausona list --json                       # every profile, with its email and q
   `over-limit` (at or above `maxUsage`) or `skipped`. A skipped one has `skipReason`:
   `signed-out`, `expired`, `no-reading`, `not-registered`, `keeps-own-sessions` or
   `api-not-supported`. Each also has `usage`, `fiveHour`, `sevenDay` and `lastPickedAt`, and
-  `scoped` (`{"label", "usedPercent", "resetsAt"}`, its limit on the `--model` model, or null).
-  `usage.window` is `5H`, `7D` or that limit's label (`Opus`). The top level has `model`.
+  `scoped` (`{"label", "usedPercent", "resetsAt"}`, its limit on the `--model` model, of a Codex
+  limit with two windows the higher, or null). `usage.window` is `5H`, `7D` or the name of that
+  limit: its label for Claude (`Opus`), its label and window for Codex
+  (`GPT-5.3-Codex-Spark 7D`). The top level has `model`.
 
 `route list --json` gives each route's `members`, `freeNow` (`{"free", "members"}`) and `next`
 (as `outcome`), and `problems`: what is wrong with each route in `routes.json` that cannot be

@@ -34,8 +34,9 @@ for that setting. If it is there, tell the user: the fix is to start this Codex 
 
 - Every profile has `name`, `tool` (`claude` or `codex`) and `configDir`.
 - A subscription profile has `quota.state`, `quota.session.usedPercent` (5H) and
-  `quota.weekly.usedPercent` (7D). It can also have `quota.scoped`: a weekly limit on one model,
-  named in its `label`.
+  `quota.weekly.usedPercent` (7D). It can also have `quota.scoped`: the most used window of a
+  limit on one model, named in its `label`. Claude's are weekly; a Codex one can be its 5-hour
+  window, and `windowSeconds` says which.
 - An API profile has `kind: "api"` and `model` instead. These exist for Claude Code only.
 
 The **main tool** is the tool you run in: `claude` in Claude Code, `codex` in Codex. The **main
