@@ -475,13 +475,40 @@ export function stateOf(inv: Inventory, item: Extension, project?: string, profi
         ? codexPluginState(inv, item.location.plugin ?? item.name, project)
         : pluginState(inv, item.location.plugin ?? item.name, project);
     case "hook":
-      if (item.location.scope !== "plugin" || !item.location.plugin)
-        return allHooksOff(inv, item, project) ?? { value: "on" };
+      // Codex keeps its own trust for each hook; disableAllHooks is Claude Code's.
+      if (item.location.tool === "codex") return codexHookState(inv, item, project);
       return (
         allHooksOff(inv, item, project) ??
-        (item.location.tool === "codex"
-          ? codexPluginState(inv, item.location.plugin, project)
-          : pluginState(inv, item.location.plugin, project))
+        (item.location.scope === "plugin" && item.location.plugin
+          ? pluginState(inv, item.location.plugin, project)
+          : { value: "on" })
       );
   }
+}
+
+/**
+ * A Codex hook's state, as Codex 0.159.3 runs it: off with its plugin; else on where, in at least
+ * one Codex profile, the hook as it is now is the one trusted under its key and the key does not
+ * turn it off (`[hooks.state."<key>"]`) - a bundled plugin's cleanup hook always, and one with
+ * no trust identity as before; off where every profile's key turns it off; else pending
+ * approval, Codex waiting for the user to review it with /hooks - `setBy` naming the trust that
+ * no longer matches when the hook changed since.
+ */
+function codexHookState(inv: Inventory, item: Extension, project: string | undefined): EffectiveState {
+  const off = codexPluginOff(inv, item, project);
+  if (off) return off;
+  const trust = inv.facts.codexHookTrust.find((t) => t.id === item.id);
+  if (!trust || trust.builtin) return { value: "on" };
+  const keyed = trust.keys.map((key) => ({ key, state: inv.facts.codexHookStates.find((s) => s.key === key) }));
+  if (keyed.some(({ state }) => state?.enabled !== false && state?.trustedHash === trust.hash)) return { value: "on" };
+  const first = keyed[0];
+  if (first?.state && keyed.every(({ state }) => state?.enabled === false)) {
+    return { value: "off", setBy: { file: first.state.file, key: `hooks.state."${first.key}".enabled` } };
+  }
+  const stale = keyed.find(({ state }) => state?.trustedHash !== undefined);
+  if (!stale?.state) return { value: "pending-approval" };
+  return {
+    value: "pending-approval",
+    setBy: { file: stale.state.file, key: `hooks.state."${stale.key}".trusted_hash` },
+  };
 }

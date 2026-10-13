@@ -5,6 +5,7 @@ import type { Collector, Extension, Location, StateFacts } from "../model.js";
 import { entryInfo, IO_LIMIT, isRecord, isWithin, listNames, mapLimit, readJsonObject } from "../read.js";
 import { mcpSummary } from "../redact.js";
 import { addHooks, addHooksFile } from "./claude-hooks.js";
+import { addCodexHookTrust } from "./codex-hooks.js";
 import { readCodexSkills } from "./codex-skills.js";
 
 /**
@@ -185,13 +186,21 @@ async function readHooks(
   for (const [k, entry] of entries.entries()) {
     if (isRecord(entry)) {
       const owner = `${place.plugin}|${relative(manifestFile)}#hooks[${k}]`;
-      if (isRecord(entry.hooks)) addHooks(entry.hooks, { ...place, file: manifestFile }, owner, out, "hooks");
+      if (!isRecord(entry.hooks)) continue;
+      addHooks(entry.hooks, { ...place, file: manifestFile }, owner, out, "hooks");
+      // Codex keys an inline entry by the manifest's name alone, whichever folder holds it.
+      const source = `${place.plugin}:plugin.json#hooks[${k}]`;
+      addCodexHookTrust(entry.hooks, `hook:codex:plugin:${owner}`, [source], out.facts, place.plugin);
       continue;
     }
     if (typeof entry !== "string") continue;
     for (const file of paths(root, entry, "")) {
       const json = await readJsonObject(file, out.warnings);
-      if (json) addHooksFile(json, { ...place, file }, `${place.plugin}|${relative(file)}`, out);
+      if (!json) continue;
+      const owner = `${place.plugin}|${relative(file)}`;
+      addHooksFile(json, { ...place, file }, owner, out);
+      const source = `${place.plugin}:${relative(file)}`;
+      addCodexHookTrust(json.hooks, `hook:codex:plugin:${owner}`, [source], out.facts, place.plugin);
     }
   }
 }

@@ -189,6 +189,15 @@ export type StateFacts = {
     enabled: boolean;
     default?: true;
   }[];
+  /**
+   * Each Codex hook's trust identity, by item id: the keys Codex records its trust under -
+   * for the user's hooks.json, one per Codex profile, whose path is in the key - and the hash
+   * of its definition that a trust must match. `builtin` for a bundled plugin's cleanup hook,
+   * which Codex runs without a review. A hook Codex never runs, such as a prompt hook, has none.
+   */
+  codexHookTrust: { id: string; keys: string[]; hash: string; builtin?: true }[];
+  /** `[hooks.state."<key>"]` in the user config.toml: one hook's `enabled`, and the hash it was trusted at. */
+  codexHookStates: { file: string; key: string; enabled?: boolean; trustedHash?: string }[];
 };
 
 export function emptyFacts(): StateFacts {
@@ -206,6 +215,8 @@ export function emptyFacts(): StateFacts {
     codexTrust: [],
     codexPlugins: [],
     codexPluginServers: [],
+    codexHookTrust: [],
+    codexHookStates: [],
   };
 }
 

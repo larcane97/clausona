@@ -10,6 +10,7 @@ import { isHomeProject, type ProjectRecord, recordedPaths } from "../projects.js
 import { isRecord, readJsonObject, readText, realPath, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
 import { addHooksFile } from "./claude-hooks.js";
+import { addCodexHookStates, addCodexHookTrust } from "./codex-hooks.js";
 import { addPluginSwitches, readCodexPlugins } from "./codex-plugins.js";
 import { readCodexSkills } from "./codex-skills.js";
 import type { SkillLocation } from "./skill-dirs.js";
@@ -135,7 +136,11 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
         }
         const hooksFile = codexProjectHooks(project.path);
         const hooks = await readJsonObject(hooksFile, out.warnings);
-        if (hooks) addHooksFile(hooks, { ...here, file: hooksFile }, project.path, out);
+        if (hooks) {
+          addHooksFile(hooks, { ...here, file: hooksFile }, project.path, out);
+          const sources = await hookSources(hooksFile);
+          addCodexHookTrust(hooks.hooks, `hook:codex:project:${project.path}`, sources, out.facts);
+        }
       })(),
     );
   }
@@ -143,13 +148,16 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
     (async () => {
       const file = path.join(ctx.primary.dir, "hooks.json");
       const hooks = await readJsonObject(file, out.warnings);
-      if (hooks) addHooksFile(hooks, { ...global, file }, "-", out);
+      if (!hooks) return;
+      addHooksFile(hooks, { ...global, file }, "-", out);
+      addCodexHookTrust(hooks.hooks, "hook:codex:global:-", await userHookSources(ctx, file), out.facts);
     })(),
   );
   jobs.push(readCodexPlugins(ctx.primary.dir, out));
   if (ctx.config) {
     addServers(ctx.config, { ...global, file: ctx.configFile }, "-", out);
     addPluginSwitches(ctx.config, ctx.configFile, undefined, out.facts);
+    addCodexHookStates(ctx.config, ctx.configFile, out.facts);
     for (const [project, table] of Object.entries(isRecord(ctx.config.projects) ? ctx.config.projects : {})) {
       if (isRecord(table)) out.facts.codexTrust.push({ project, trusted: table.trust_level === "trusted" });
     }
@@ -176,6 +184,33 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
     }
   }
   await Promise.all(jobs);
+}
+
+/**
+ * The paths a trust key can name a hooks file by: as found, and its real path - how Codex names
+ * it depends on how it reached the project.
+ */
+async function hookSources(file: string): Promise<string[]> {
+  const real = await realPath(file).catch(() => undefined);
+  return real === undefined || real === file ? [file] : [file, real];
+}
+
+/**
+ * The user hooks.json under each Codex profile that shares the primary's: Codex keys a hook's
+ * trust by the hooks file's path under the CODEX_HOME it runs with, so each profile trusts it on
+ * its own.
+ */
+async function userHookSources(ctx: CodexContext, file: string): Promise<string[]> {
+  const shared = await realPath(file).catch(() => undefined);
+  const each = await Promise.all(
+    ctx.homes.map(async (home) => {
+      const own = path.join(home.dir, "hooks.json");
+      if (home.isPrimary) return hookSources(own);
+      const real = await realPath(own).catch(() => undefined);
+      return real !== undefined && samePath(real, shared) ? [own] : [];
+    }),
+  );
+  return [...new Set(each.flat())];
 }
 
 /**

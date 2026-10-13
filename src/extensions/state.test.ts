@@ -743,6 +743,53 @@ describe("Codex plugins", () => {
   });
 });
 
+describe("Codex hooks", () => {
+  const config = "/c/config.toml";
+  const stop = ext("hook", "Stop", { tool: "codex", scope: "global", file: "/c/hooks.json" });
+  const keys = ["/c/hooks.json:stop:0:0", "/w/hooks.json:stop:0:0"];
+  const trust: StateFacts["codexHookTrust"] = [{ id: stop.id, keys, hash: "sha256:now" }];
+  const states = (...entries: StateFacts["codexHookStates"]) =>
+    inv([stop], { codexHookTrust: trust, codexHookStates: entries });
+
+  it("waits for approval until Codex trusts the hook as it is now, in some profile", () => {
+    expect(stateOf(states(), stop, P)).toEqual({ value: "pending-approval" });
+    expect(stateOf(states({ file: config, key: keys[1] ?? "", trustedHash: "sha256:now" }), stop, P)).toEqual({
+      value: "on",
+    });
+    // Trusted at an earlier definition: changed since, so to be reviewed again.
+    expect(stateOf(states({ file: config, key: keys[0] ?? "", trustedHash: "sha256:before" }), stop, P)).toEqual({
+      value: "pending-approval",
+      setBy: { file: config, key: `hooks.state."${keys[0]}".trusted_hash` },
+    });
+  });
+
+  it("is off where every profile's key turns it off, and on where one runs it", () => {
+    const off = states(
+      { file: config, key: keys[0] ?? "", enabled: false },
+      { file: config, key: keys[1] ?? "", enabled: false },
+    );
+    expect(stateOf(off, stop, P)).toEqual({
+      value: "off",
+      setBy: { file: config, key: `hooks.state."${keys[0]}".enabled` },
+    });
+    const one = states(
+      { file: config, key: keys[0] ?? "", enabled: false, trustedHash: "sha256:now" },
+      { file: config, key: keys[1] ?? "", trustedHash: "sha256:now" },
+    );
+    expect(stateOf(one, stop, P).value).toBe("on");
+  });
+
+  it("runs a bundled cleanup hook and a hook with no trust identity, and none of a plugin that is off", () => {
+    const builtin = inv([stop], {
+      codexHookTrust: [{ ...trust[0], id: stop.id, keys, hash: "sha256:now", builtin: true }],
+    });
+    expect(stateOf(builtin, stop, P).value).toBe("on");
+    expect(stateOf(inv([stop]), stop, P).value).toBe("on");
+    const pluginStop = ext("hook", "Stop", { tool: "codex", scope: "plugin", plugin: "kit@m", file: "/k/hooks.json" });
+    expect(stateOf(inv([pluginStop]), pluginStop, P).value).toBe("off");
+  });
+});
+
 describe("isManagedSetting", () => {
   it("is true for a managed settings file the inventory read, and for no other", () => {
     const i = inv([], {

@@ -555,6 +555,11 @@ function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined)
     const here = isProjectSetting(inv, state.setBy.file);
     return [{ label: "Loaded", text: `${here ? "off here" : "off everywhere"} (${place})`, tone: "warning" }];
   }
+  if (state.value === "pending-approval" && item.kind === "hook" && item.location.tool === "codex") {
+    // Codex runs a hook only once it is trusted, and as it was trusted.
+    const why = state.setBy ? "it changed since you trusted it" : "you have not trusted it yet";
+    return [{ label: "Loaded", text: `not yet: ${why} - review it with /hooks in Codex`, tone: "warning" }];
+  }
   if (state.value === "pending-approval") return [{ label: "Loaded", text: "pending approval here", tone: "warning" }];
   const own = item.location.project;
   const where = own === undefined ? "every project" : samePath(own, project) ? "this project" : projectName(own, inv);

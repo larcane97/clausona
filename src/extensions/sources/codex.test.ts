@@ -307,6 +307,84 @@ describe("readCodex", () => {
     expect(skills.find((i) => i.name === "linked")?.location.file).toMatch(/(via-link|again)[\\/]linked$/);
   });
 
+  it("keys each hook's trust as Codex does, per profile, with the hash Codex 0.159.3 gives it", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    const user = h.path(".codex", "hooks.json");
+    const work = h.path(".codex-work", "hooks.json");
+    h.codex(
+      "personal",
+      ".codex",
+      [
+        `[hooks.state.${JSON.stringify(`${user}:stop:0:0`)}]`,
+        'trusted_hash = "sha256:x"',
+        `[hooks.state.${JSON.stringify(` ${work}:stop:0:1 `)}]`,
+        "enabled = false",
+      ].join("\n"),
+    );
+    h.codex("work", ".codex-work");
+    // Every profile links the primary's hooks.json, and keys its hooks by its own path.
+    h.write(".codex/hooks.json", {
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              { type: "command", command: "echo a" },
+              { type: "command", command: "echo b", timeout: 30 },
+            ],
+          },
+          // Codex runs neither, so they have no trust to read.
+          {
+            hooks: [
+              { type: "prompt", prompt: "p" },
+              { type: "command", command: "  " },
+            ],
+          },
+        ],
+        PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "echo e" }] }],
+        SessionStart: [{ hooks: [{ type: "command", command: "echo d", statusMessage: "hi" }] }],
+      },
+    });
+    h.link(".codex/hooks.json", ".codex-work/hooks.json");
+    h.write("repos/app/.codex/hooks.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "echo p" }] }] } });
+    const kit = ".codex/plugins/cache/m/kit/1.0.0";
+    h.write(`${kit}/.codex-plugin/plugin.json`, {
+      name: "kit",
+      hooks: [
+        { hooks: { Stop: [{ hooks: [{ type: "mcp_tool", server: "srv", tool: "t", input: { a: 1, b: "x" } }] }] } },
+      ],
+    });
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(ctx, [{ path: app, tools: ["codex"], profiles: [] }], out);
+    const trust = (command: string) => {
+      const item = out.items.find((i) => i.kind === "hook" && i.summary?.command === command);
+      return out.facts.codexHookTrust.find((t) => t.id === item?.id);
+    };
+    // The hashes Codex's hooks/list reported for these very hooks.
+    expect(trust("echo a")).toEqual({
+      id: expect.any(String),
+      keys: expect.arrayContaining([`${user}:stop:0:0`, `${work}:stop:0:0`]),
+      hash: "sha256:f9b7a328de9c5845f5eed806f12f8f5adeba50ba82617690fd3f8ededeb12f90",
+    });
+    expect(trust("echo b")?.hash).toBe("sha256:8bc692b8683e57143231758daf9cea94d84862d2dfe702ff8d5d75c1c5ce4713");
+    expect(trust("echo d")?.hash).toBe("sha256:5e5315cfa6a6d8a596960cfa128f46887b882abf3224c7d94af6c774e106a126");
+    expect(trust("echo e")?.hash).toBe("sha256:b500dbf8519fc7cab049f31ec4788be3b7f50c889022bd7d4792197fc83ac207");
+    expect(trust("echo p")?.keys).toContain(path.join(app, ".codex", "hooks.json:stop:0:0"));
+    const mcp = out.facts.codexHookTrust.find((t) => t.keys[0]?.startsWith("kit@m:"));
+    expect(mcp).toMatchObject({
+      keys: ["kit@m:plugin.json#hooks[0]:stop:0:0"],
+      hash: "sha256:e8b7611c6b6f118f78081ea67de3bbaaa1d8e6061637871e83176156fea65374",
+    });
+    expect(out.facts.codexHookTrust).toHaveLength(6);
+    expect(out.facts.codexHookStates).toEqual([
+      { file: h.path(".codex", "config.toml"), key: `${user}:stop:0:0`, trustedHash: "sha256:x" },
+      { file: h.path(".codex", "config.toml"), key: `${work}:stop:0:1`, enabled: false },
+    ]);
+  });
+
   it("warns for a config.toml that does not parse and reads the rest", async () => {
     const h = new TestHome();
     homes.push(h);

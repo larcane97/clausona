@@ -214,7 +214,7 @@ The `state` of an item in JSON is one of these:
 | `off` | It is turned off. |
 | `name-only` | A Claude skill set to `name-only` in `skillOverrides`. The details say "Shows as name only". |
 | `user-invocable-only` | A Claude skill set to `user-invocable-only` in `skillOverrides`. The details say "Shows as only when you call it". |
-| `pending-approval` | A `.mcp.json` server not approved yet. Claude Code does not start it. |
+| `pending-approval` | A `.mcp.json` server not approved yet: Claude Code does not start it. Or a Codex hook not trusted yet, or changed since it was: Codex does not run it. |
 | `not-here` | A `.mcp.json` server of a folder that is no project, seen from a project outside that folder. It loads in each project below the folder, with that project's approvals, and has no state of its own: look from one of those projects with `--project`. |
 | `mixed` | The accounts differ: `stateByAccount` has each one's. |
 
@@ -265,12 +265,19 @@ The switches are read from these places:
   plugin no table names is off. A plugin's skill is switched by its full name in
   `[[skills.config]]`, and its server by `plugins."<id>".mcp_servers.<name>.enabled`. A server
   the plugin ships with `"enabled": false` is off until that switch turns it on.
-- Hooks are on, except a plugin's hooks while the plugin is off. `disableAllHooks` set to
+- Claude hooks are on, except a plugin's hooks while the plugin is off. `disableAllHooks` set to
   `true` turns every Claude hook off. Set in managed settings, it turns off the managed hooks
   too. Set anywhere else, it leaves the managed hooks on, and a plugin's hooks while managed
   `enabledPlugins` turns the plugin on, as Claude Code runs those. The details name the setting
   and its file, as in `off everywhere (disableAllHooks in ~/.claude/settings.json)`; a project's
   own setting reads `off here`.
+- Codex hooks: Codex runs a hook only once you have trusted it with `/hooks` in Codex, as it
+  is now. It keeps that in its `config.toml`, as `[hooks.state."<key>"]` with the hook's
+  `trusted_hash`, and the key holds the path of the profile's `hooks.json`, so each Codex
+  profile trusts a hook on its own. A hook trusted in at least one profile is `on`. One trusted
+  in none, or changed since it was, is `pending-approval`, and `enabled = false` under every
+  profile's key turns it `off`. A bundled plugin's cleanup hook runs without a review. A
+  plugin's hooks are off while the plugin is off.
 
 ### Tags
 
@@ -286,7 +293,7 @@ column shows the first; JSON `tags` has them all.
 | `off here` | Off in every account by this project's own settings: its `.claude/settings*.json`, an account's entry for it in `.claude.json`, or its `.codex/config.toml`. |
 | `off in N of M accounts` | Off in N accounts and on in the others. M counts the accounts that have the row; for a server every account sees, the accounts that have opened this project. |
 | `not here` | A `.mcp.json` server of a folder that is no project, seen from a project outside it: the state `not-here`. |
-| `pending approval` | A `.mcp.json` server that no account has approved in this project. |
+| `pending approval` | A `.mcp.json` server that no account has approved in this project, or a Codex hook not trusted yet with `/hooks`, or changed since it was. |
 | `hidden by Project copy` | In every account that has it, a same-name copy in Project wins: the account's local server, or this project's `.mcp.json`. |
 | `hidden by Global copy` | In every account that has it, a same-name skill in Global wins: the primary's, or the account's own. |
 | `hidden by Parent folders copy` | In every account that has it, a same-name `.mcp.json` copy in a parent folder wins. |

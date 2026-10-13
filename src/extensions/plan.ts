@@ -1151,7 +1151,17 @@ function planHook(run: Run, row: ScopeRow): Outcome {
       ),
     );
   }
-  if (!item.stashed) return unchanged(out, row, "already on in every project");
+  if (!item.stashed) {
+    // In its file already: what keeps a Codex hook from running is Codex's to change.
+    const now = loc.tool === "codex" ? stateHere(inv, item, run.ctx.project).value : "on";
+    const why =
+      now === "pending-approval"
+        ? "already in its file: Codex runs it once you trust it with /hooks"
+        : now === "off"
+          ? "already in its file: turn it back on with /hooks in Codex"
+          : "already on in every project";
+    return unchanged(out, row, why);
+  }
   if (item.stashed.gone) {
     return refused(run, row, "stash-gone", { "~file": tilde(loc.file, inv.homeDir), id: item.id });
   }

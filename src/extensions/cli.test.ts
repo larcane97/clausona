@@ -956,6 +956,42 @@ describe("hooks ls", () => {
   });
 });
 
+describe("Codex hooks and Codex's trust", () => {
+  it("lists a hook Codex has not trusted as pending approval, out of Loaded, and one it trusts as on", async () => {
+    const { h, app } = seed();
+    const file = h.path(".codex", "hooks.json");
+    h.write(".codex/hooks.json", {
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              { type: "command", command: "echo a" },
+              { type: "command", command: "echo b" },
+            ],
+          },
+        ],
+      },
+    });
+    // Trusted at the hash Codex 0.159.3 gives `echo a` on Stop; `echo b` never reviewed.
+    h.write(
+      ".codex/config.toml",
+      `[mcp_servers.exa]\ncommand = "npx"\n\n[hooks.state.${JSON.stringify(`${file}:stop:0:0`)}]\ntrusted_hash = "sha256:f9b7a328de9c5845f5eed806f12f8f5adeba50ba82617690fd3f8ededeb12f90"\n`,
+    );
+    const loaded = await run(h, app, "hooks", ["ls", "--tool", "codex"]);
+    expect(loaded).toContain("echo a");
+    expect(loaded).not.toContain("echo b");
+    const global = await run(h, app, "hooks", ["ls", "--tool", "codex", "--scope", "global"], 160);
+    expect(global).toMatch(/^Stop\s+Global\s+When Codex finishes replying\s+echo b\s+pending approval$/m);
+    const json = JSON.parse(await run(h, app, "hooks", ["ls", "--tool", "codex", "--scope", "global", "--json"]));
+    const b = json.items.find((i: { summary: { command: string } }) => i.summary.command === "echo b");
+    expect(b).toMatchObject({ state: "pending-approval", tags: ["pending approval"] });
+    const shown = await run(h, app, "hooks", ["show", "--id", b.id]);
+    expect(shown).toMatch(/^Loaded\s+not yet: you have not trusted it yet - review it with \/hooks in Codex$/m);
+    const on = await run(h, app, "hooks", ["on", "--id", b.id, "--yes"]);
+    expect(on).toContain("already in its file: Codex runs it once you trust it with /hooks");
+  });
+});
+
 describe("Codex skills Codex skips", () => {
   it("lists one with no front matter under its folder, tagged, out of Loaded, and says why", async () => {
     const { h, app } = seed();
