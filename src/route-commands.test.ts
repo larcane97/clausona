@@ -591,6 +591,40 @@ describe("a route in routes.json that cannot be used", () => {
   });
 });
 
+// The profile rule takes this name, and the key check, which is wider, would not.
+describe("a profile whose name the key check would take for a key", () => {
+  const longName = ["Team", "Build", "2026", "Runner", "Alpha", "7Beta", "9Zed"].join("");
+  const withLong = () => {
+    const s = setup({ ...QUOTAS, [`claude:${longName}`]: snap(5, 5) });
+    s.deps.loadRegistry = async () => ({
+      ...REGISTRY,
+      profiles: {
+        ...REGISTRY.profiles,
+        [`claude:${longName}`]: { tool: "claude", configDir: "/home/u/.claude-l", email: "l@example.com" },
+      },
+    });
+    return s;
+  };
+
+  it("can be named in a route, by route add and by hand", async () => {
+    const { run, file, deps } = withLong();
+    await run("add", "solo", "--from", longName);
+    expect(file().routes.solo.from).toEqual([longName]);
+    writeFileSync(
+      deps.paths.routesPath,
+      JSON.stringify({ version: 1, routes: { hand: { tool: "claude", from: [`claude:${longName}`, "a"] } } }),
+    );
+    expect(await run("pick", "hand")).toBe(`claude:${longName}`);
+    expect(JSON.parse(await run("list", "--json")).problems).toEqual([]);
+  });
+
+  it("is a key to every route command while no profile has that name", async () => {
+    const { run } = setup();
+    const error = (await run("add", "solo", "--from", longName).catch((e: unknown) => e)) as Error;
+    expect(error.message).toBe("routes.solo.from[0]: looks like an API key, not a profile name or email pattern");
+  });
+});
+
 describe("route explain and pick", () => {
   it("explains without recording", async () => {
     const { run, deps } = setup();

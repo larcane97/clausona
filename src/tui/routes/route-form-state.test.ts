@@ -97,6 +97,14 @@ describe("a new form", () => {
   it("saves what route add writes", () => {
     expect(formToSpec(named(newForm()), ACCOUNTS)).toEqual({ name: "main", spec: newRouteSpec(), errors: {} });
   });
+
+  // The profile rule takes a long CamelCase name with digits through it; the key check would not.
+  it("saves an account whose name the key check alone would take for a key", () => {
+    const name = ["Team", "Build", "2026", "Runner", "Alpha", "7Beta", "9Zed"].join("");
+    const accounts: FormAccount[] = [...ACCOUNTS, { id: `claude:${name}`, tool: "claude", name, email: "" }];
+    const state = { ...named(initialFormState({ mode: "new" }, accounts)), every: false, ticked: [`claude:${name}`] };
+    expect(formToSpec(state, accounts)).toMatchObject({ spec: { from: [name] }, errors: {} });
+  });
 });
 
 describe("an edit form", () => {

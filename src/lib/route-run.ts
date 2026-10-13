@@ -22,6 +22,7 @@ import {
   defaultRouteDeps,
   inferRouteTool,
   NoAccountError,
+  namesOf,
   otherToolTaking,
   type ResolvedRoute,
   type RouteDeps,
@@ -122,7 +123,8 @@ async function offerToCreate(
     throw new Error("Nothing was created, and nothing was run.");
   }
   await createRoute(error.routeName, spec, deps);
-  const resolved = resolveRoute((await routesFor(error.routeName, deps.paths)).file, run);
+  const names = namesOf(registry);
+  const resolved = resolveRoute((await routesFor(error.routeName, deps.paths, names)).file, run, names);
   if (!resolved) throw error;
   return resolved;
 }
@@ -152,7 +154,8 @@ export async function runRouted(
   try {
     // Read only for a named route, and refused only for that route's problems: a run on the
     // active profile, or on an unsaved route, goes ahead whatever routes.json holds.
-    resolved = resolveRoute((await routesFor(run.options.route, deps.paths)).file, run);
+    const names = namesOf(registry);
+    resolved = resolveRoute((await routesFor(run.options.route, deps.paths, names)).file, run, names);
   } catch (error) {
     if (!(error instanceof UnknownRouteError)) throw error;
     unknown = error;

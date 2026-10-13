@@ -5,6 +5,9 @@ import {
   checkRoute,
   checkRouteName,
   emptyRoutesFile,
+  NO_PROFILE_NAMES,
+  type ProfileNames,
+  profileNames,
   type Route,
   type RouteOverrides,
   type RouteSpec,
@@ -80,6 +83,9 @@ export class UnknownRouteError extends Error {
     this.existing = listed;
   }
 }
+
+/** The registered profiles' names, which routes.json's checks let through (checkPattern); none before init. */
+export const namesOf = (registry: Registry | null): ProfileNames => profileNames(Object.keys(registry?.profiles ?? {}));
 
 /** The registry's profiles of every tool a route of `tool` takes, as routing sees them. */
 export function membersOf(registry: Registry, tool: RouteTool): Member[] {
@@ -177,6 +183,7 @@ export function inferRouteTool(patterns: string[]): RouteTool | undefined {
 export function resolveRoute(
   file: RoutesFile,
   run: { tool?: RouteTool; options: RoutingOptions },
+  names: ProfileNames = NO_PROFILE_NAMES,
 ): ResolvedRoute | null {
   const { tool, options } = run;
   const { route: name, ...overrides } = options;
@@ -218,7 +225,7 @@ export function resolveRoute(
       ? { ...overrides, exclude: unionPatterns(spec.exclude, overrides.exclude) }
       : overrides;
   const merged = applyOverrides(spec, runOverrides);
-  const problems = checkRoute(name ?? "inline", merged, name ? `routes.${name}` : "--from route");
+  const problems = checkRoute(name ?? "inline", merged, name ? `routes.${name}` : "--from route", names);
   if (problems.length) throw new Error(problems.join("\n"));
   return {
     ...(name ? { name } : {}),
@@ -233,9 +240,13 @@ export function resolveRoute(
  * route is named: an unsaved route, or a tool's active profile, needs nothing from it. The other
  * routes' problems do not stop the command; the named route's own do, as a RoutesFileError.
  */
-export async function routesFor(name: string | undefined, paths: RoutesPaths): Promise<LoadedRoutes> {
+export async function routesFor(
+  name: string | undefined,
+  paths: RoutesPaths,
+  names: ProfileNames = NO_PROFILE_NAMES,
+): Promise<LoadedRoutes> {
   if (name === undefined) return { filePath: paths.routesPath, file: emptyRoutesFile(), broken: [] };
-  const loaded = await loadRoutes(paths);
+  const loaded = await loadRoutes(paths, names);
   // A name that cannot be a route's is resolveRoute's to refuse, without quoting it.
   const broken = checkRouteName(name) === null ? loaded.broken.find((route) => route.name === name) : undefined;
   if (broken) throw new RoutesFileError(loaded.filePath, broken.problems);
@@ -315,7 +326,7 @@ export function otherToolTaking(spec: RouteSpec, registry: Registry): ToolName |
 
 /** For add and set: the route's own problems, then the API profiles this version refuses. */
 export function checkRouteMembers(name: string, spec: RouteSpec, registry: Registry): void {
-  const problems = checkRoute(name, spec);
+  const problems = checkRoute(name, spec, undefined, namesOf(registry));
   if (problems.length) throw new Error(problems.join("\n"));
   const route = withDefaults(spec);
   const members = membersOf(registry, route.tool);

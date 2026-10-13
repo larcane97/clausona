@@ -9,6 +9,8 @@ import {
   checkRouteName,
   checkRoutesFile,
   emptyRoutesFile,
+  NO_PROFILE_NAMES,
+  type ProfileNames,
   type RouteSpec,
   type RoutesFile,
 } from "./route-config.js";
@@ -106,8 +108,12 @@ function jsonProblem(error: unknown, body: string): string {
   return `not valid JSON (line ${line}, column ${column})`;
 }
 
-/** The text as routes.json, checked: its shape as a whole, which a RoutesFileError refuses, and each route on its own. */
-function checkText(text: string, filePath: string): { file: RoutesFile; broken: BrokenRoute[] } {
+/**
+ * The text as routes.json, checked: its shape as a whole, which a RoutesFileError refuses, and
+ * each route on its own. `names` are the registered profiles' (checkPattern in route-config.ts),
+ * here and in every function below that takes them.
+ */
+function checkText(text: string, filePath: string, names: ProfileNames): { file: RoutesFile; broken: BrokenRoute[] } {
   // Windows Notepad saves UTF-8 with a byte-order mark, which JSON.parse refuses.
   const body = text.replace(/^\uFEFF/, "");
   let raw: unknown;
@@ -116,14 +122,14 @@ function checkText(text: string, filePath: string): { file: RoutesFile; broken: 
   } catch (error) {
     throw new RoutesFileError(filePath, [jsonProblem(error, body)]);
   }
-  const check = checkRoutesFile(raw);
+  const check = checkRoutesFile(raw, names);
   if (!check.ok) throw new RoutesFileError(filePath, check.problems, check.newerVersion !== undefined);
   return check;
 }
 
 /** routes.json as `route edit` saves it: every route of it has to check out. */
-export function parseRoutesText(text: string, filePath: string): RoutesFile {
-  const { file, broken } = checkText(text, filePath);
+export function parseRoutesText(text: string, filePath: string, names: ProfileNames = NO_PROFILE_NAMES): RoutesFile {
+  const { file, broken } = checkText(text, filePath, names);
   if (broken.length > 0)
     throw new RoutesFileError(
       filePath,
@@ -144,15 +150,22 @@ export function readRoutesText(paths: RoutesPaths = routesPaths()): Promise<stri
  */
 export type LoadedRoutes = { filePath: string; file: RoutesFile; broken: BrokenRoute[] };
 
-export async function loadRoutes(paths: RoutesPaths = routesPaths()): Promise<LoadedRoutes> {
+export async function loadRoutes(
+  paths: RoutesPaths = routesPaths(),
+  names: ProfileNames = NO_PROFILE_NAMES,
+): Promise<LoadedRoutes> {
   const text = await readText(paths.routesPath);
-  const { file, broken } = text === null ? { file: emptyRoutesFile(), broken: [] } : checkText(text, paths.routesPath);
+  const { file, broken } =
+    text === null ? { file: emptyRoutesFile(), broken: [] } : checkText(text, paths.routesPath, names);
   return { filePath: paths.routesPath, file, broken };
 }
 
 /** The routes that can be used. */
-export async function readRoutes(paths: RoutesPaths = routesPaths()): Promise<RoutesFile> {
-  return (await loadRoutes(paths)).file;
+export async function readRoutes(
+  paths: RoutesPaths = routesPaths(),
+  names: ProfileNames = NO_PROFILE_NAMES,
+): Promise<RoutesFile> {
+  return (await loadRoutes(paths, names)).file;
 }
 
 /**
@@ -204,9 +217,10 @@ async function withRoutesLock<T>(paths: RoutesPaths, fn: () => Promise<T>): Prom
 export async function updateRoutes(
   update: (current: RoutesFile) => RoutesFile | null,
   paths: RoutesPaths = routesPaths(),
+  names: ProfileNames = NO_PROFILE_NAMES,
 ): Promise<RoutesFile> {
   return withRoutesLock(paths, async () => {
-    const { file, broken } = await loadRoutes(paths);
+    const { file, broken } = await loadRoutes(paths, names);
     const current = structuredClone(file);
     // Built rather than assigned: a broken route may be called `__proto__`, which assignment drops.
     current.routes = Object.fromEntries([
@@ -215,7 +229,7 @@ export async function updateRoutes(
     ]);
     const next = update(current);
     if (next === null) return file;
-    const check = checkRoutesFile(next);
+    const check = checkRoutesFile(next, names);
     if (!check.ok) throw new Error(check.problems.join("\n"));
     if (check.broken.length > 0) throw refusal(paths.routesPath, check.broken);
     await writeAtomic(paths.routesPath, toText(check.file));

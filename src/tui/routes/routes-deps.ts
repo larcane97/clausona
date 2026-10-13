@@ -8,6 +8,7 @@ import {
   routesPaths,
   updateRoutes,
 } from "../../core/routes-store.js";
+import { namesOf } from "../../lib/route-service.js";
 import { loadRegistry, registryProblem } from "../../lib/service.js";
 import type { QuotaSnapshot, Registry } from "../../types.js";
 
@@ -34,12 +35,14 @@ export type RoutesListDeps = RoutesScreenDeps & { loadRoutes: () => Promise<Load
 
 export function defaultRoutesScreenDeps(): RoutesListDeps {
   const paths = routesPaths();
+  // Read with each use, as the CLI does: a profile added meanwhile is a name routes.json may hold.
+  const names = async () => namesOf(await loadRegistry());
   return {
     loadRegistry,
     registryProblem,
-    loadRoutes: () => loadRoutes(paths),
-    readRoutes: () => readRoutes(paths),
-    updateRoutes: (update) => updateRoutes(update, paths),
+    loadRoutes: async () => loadRoutes(paths, await names()),
+    readRoutes: async () => readRoutes(paths, await names()),
+    updateRoutes: async (update) => updateRoutes(update, paths, await names()),
     collectQuotas: (targets, options) => collectQuotas(targets, { refresh: options?.refresh }),
     readPicks: () => readPicks(paths),
     clock: () => Date.now(),

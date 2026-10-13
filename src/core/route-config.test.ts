@@ -8,6 +8,7 @@ import {
   checkRoutesFile,
   holdsKey,
   newRouteSpec,
+  profileNames,
   toolsOf,
   withDefaults,
 } from "./route-config.js";
@@ -161,6 +162,27 @@ describe("checkRouteName", () => {
 });
 
 describe("checkPattern", () => {
+  // A name the profile rule takes and the key check does not: CamelCase with digits through it.
+  const longName = ["Team", "Build", "2026", "Runner", "Alpha", "7Beta", "9Zed"].join("");
+
+  it("lets a registered profile's exact name through the key check, and nothing else", () => {
+    const names = profileNames([`claude:${longName}`, "claude:work"]);
+    expect(checkPattern(longName, "claude")).toBe("looks like an API key, not a profile name or email pattern");
+    for (const pattern of [longName, longName.toLowerCase(), `claude:${longName}`]) {
+      expect(checkPattern(pattern, "claude", names), pattern).toBeNull();
+    }
+    // Not the name itself: one character more, or the name of another tool's profile.
+    expect(checkPattern(`${longName}x`, "claude", names)).toBe(
+      "looks like an API key, not a profile name or email pattern",
+    );
+    expect(checkPattern(`codex:${longName}`, "all", names)).toBe(
+      "looks like an API key, not a profile name or email pattern",
+    );
+    expect(checkPattern(keyShaped(), "claude", names)).toBe(
+      "looks like an API key, not a profile name or email pattern",
+    );
+  });
+
   it.each([
     "*",
     "team-*",

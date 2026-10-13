@@ -3,6 +3,7 @@ import {
   checkRouteName,
   DEFAULT_STRATEGY,
   newRouteSpec,
+  profileNames,
   type RouteSpec,
   type RouteTool,
   type Strategy,
@@ -336,9 +337,11 @@ export function formToSpec(
   // An empty from list is not saved, and a route without one takes every account.
   if (from.length === 0) errors.accounts = PICK_ONE;
 
-  // The name has its own check above; a stand-in keeps a refused one out of the spec's checks.
+  // The name has its own check above; a stand-in keeps a refused one out of the spec's checks. The
+  // accounts' own names are let through the key check, as the CLI lets registered names through.
   const ticked = new Set(tickedNames);
-  for (const problem of checkRoute(nameProblem ? AT : name, spec, AT)) {
+  const names = profileNames(accounts.map((account) => account.id));
+  for (const problem of checkRoute(nameProblem ? AT : name, spec, AT, names)) {
     const [, key, index, message = problem] = PROBLEM.exec(problem) ?? [];
     let field: ErrorKey = "form";
     if (key === "from") {

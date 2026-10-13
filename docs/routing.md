@@ -120,7 +120,9 @@ are billed per use, and this version keeps them out of routes.
 and the form on the Routes screen offers only those.
 
 A pattern that looks like an API key or a token is refused, and clausona does not print it back.
-Route names get the same check.
+Route names get the same check. The one exception is the exact name of a profile you registered,
+with or without its tool prefix. A long name can look like a key to that check, such as a
+CamelCase name with digits through it, and a profile of that name can still be put in a route.
 
 ## Managing routes
 

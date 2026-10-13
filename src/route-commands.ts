@@ -46,6 +46,7 @@ import {
   inferRouteTool,
   membersOf,
   NoAccountError,
+  namesOf,
   otherToolTaking,
   quotaTargets,
   type RouteDeps,
@@ -237,11 +238,15 @@ function refuseTakenName(file: RoutesFile, name: string): void {
 
 /** Writes a new route, refusing a name someone created meanwhile. */
 export async function createRoute(name: string, spec: RouteSpec, deps: RouteDeps): Promise<void> {
-  await updateRoutes((file) => {
-    refuseTakenName(file, name);
-    file.routes[name] = spec;
-    return file;
-  }, deps.paths);
+  await updateRoutes(
+    (file) => {
+      refuseTakenName(file, name);
+      file.routes[name] = spec;
+      return file;
+    },
+    deps.paths,
+    namesOf(await deps.loadRegistry()),
+  );
 }
 
 /**
@@ -264,7 +269,7 @@ async function addRoute(args: string[], deps: RouteDeps): Promise<string> {
   const options = toRoutingOptions(read.values);
   const tool = parseRouteTool(read.values.get("--tool")) ?? inferRouteTool(options.from ?? []) ?? "claude";
   const registry = await registryOrThrow(deps);
-  refuseTakenName(await readRoutes(deps.paths), name);
+  refuseTakenName(await readRoutes(deps.paths, namesOf(registry)), name);
   const spec = newRouteFrom(tool, options);
   checkRouteMembers(name, spec, registry);
   await createRoute(name, spec, deps);
@@ -298,48 +303,53 @@ async function setRoute(args: string[], deps: RouteDeps): Promise<string> {
     );
   }
   const registry = await registryOrThrow(deps);
-  const written = await updateRoutes((file) => {
-    if (!Object.hasOwn(file.routes, name)) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
-    const current: unknown = file.routes[name];
-    // A route routes.json holds as something other than an object has no fields to change.
-    if (typeof current !== "object" || current === null || Array.isArray(current)) {
-      throw new Error(checkRoute(name, current).join("\n"));
-    }
-    const next = applyOverrides(current as RouteSpec, options);
-    if (add.length || drop.length) {
-      // Entries compare as profile names do: `Work` and `work` are one entry.
-      const same = (a: string, b: string) => foldProfileName(a) === foldProfileName(b);
-      const from = next.from ?? ["*"];
-      // The message below quotes the from list and the dropped entry, so both are checked first:
-      // a key given to --from or --drop is refused without being repeated.
-      const problems = [
-        ...checkRoute(name, next),
-        ...drop.flatMap((entry) => {
-          const problem = checkPattern(entry, next.tool);
-          return problem ? [`--drop: ${problem}`] : [];
-        }),
-      ];
-      if (problems.length) throw new Error(problems.join("\n"));
-      for (const entry of drop) {
-        if (!from.some((pattern) => same(pattern, entry))) {
-          throw new Error(
-            `'${entry}' is not in ${name}'s from list (${from.join(", ")}). To leave an account out of a pattern, use --exclude ${entry}.`,
-          );
+  const names = namesOf(registry);
+  const written = await updateRoutes(
+    (file) => {
+      if (!Object.hasOwn(file.routes, name)) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
+      const current: unknown = file.routes[name];
+      // A route routes.json holds as something other than an object has no fields to change.
+      if (typeof current !== "object" || current === null || Array.isArray(current)) {
+        throw new Error(checkRoute(name, current, undefined, names).join("\n"));
+      }
+      const next = applyOverrides(current as RouteSpec, options);
+      if (add.length || drop.length) {
+        // Entries compare as profile names do: `Work` and `work` are one entry.
+        const same = (a: string, b: string) => foldProfileName(a) === foldProfileName(b);
+        const from = next.from ?? ["*"];
+        // The message below quotes the from list and the dropped entry, so both are checked first:
+        // a key given to --from or --drop is refused without being repeated.
+        const problems = [
+          ...checkRoute(name, next, undefined, names),
+          ...drop.flatMap((entry) => {
+            const problem = checkPattern(entry, next.tool, names);
+            return problem ? [`--drop: ${problem}`] : [];
+          }),
+        ];
+        if (problems.length) throw new Error(problems.join("\n"));
+        for (const entry of drop) {
+          if (!from.some((pattern) => same(pattern, entry))) {
+            throw new Error(
+              `'${entry}' is not in ${name}'s from list (${from.join(", ")}). To leave an account out of a pattern, use --exclude ${entry}.`,
+            );
+          }
+        }
+        const kept = from.filter((pattern) => !drop.some((entry) => same(entry, pattern)));
+        next.from = [...kept, ...add.filter((entry) => !kept.some((pattern) => same(pattern, entry)))];
+        // Said here, in the words of the options given: the file's own check would point at
+        // leaving `from` out of routes.json, which `route set` cannot do.
+        if (next.from.length === 0) {
+          throw new Error("A route needs at least one entry in from; add one with --add, or remove the route.");
         }
       }
-      const kept = from.filter((pattern) => !drop.some((entry) => same(entry, pattern)));
-      next.from = [...kept, ...add.filter((entry) => !kept.some((pattern) => same(pattern, entry)))];
-      // Said here, in the words of the options given: the file's own check would point at
-      // leaving `from` out of routes.json, which `route set` cannot do.
-      if (next.from.length === 0) {
-        throw new Error("A route needs at least one entry in from; add one with --add, or remove the route.");
-      }
-    }
-    if (noFallback) delete next.fallback;
-    checkRouteMembers(name, next, registry);
-    file.routes[name] = next;
-    return file;
-  }, deps.paths);
+      if (noFallback) delete next.fallback;
+      checkRouteMembers(name, next, registry);
+      file.routes[name] = next;
+      return file;
+    },
+    deps.paths,
+    names,
+  );
   return [success(`Updated route ${bold(name)}`), await routeDetail(name, written.routes[name], deps)].join("\n");
 }
 
@@ -352,18 +362,24 @@ async function renameRoute(args: string[], deps: RouteDeps): Promise<string> {
   const to = routeNameArg(newArg, "rename");
   if (from === to) {
     // Not "already exists": the name it is taken by is its own, and there is nothing to write.
-    const file = await readRoutes(deps.paths);
-    if (!storedRoute(file, from)) throw new UnknownRouteError(from, Object.keys(file.routes).sort());
+    const { file, broken } = await loadRoutes(deps.paths, namesOf(await deps.loadRegistry()));
+    if (!Object.hasOwn(file.routes, from) && !broken.some((route) => route.name === from)) {
+      throw new UnknownRouteError(from, Object.keys(file.routes).sort());
+    }
     return success(dim(`Route ${from} already has that name. Nothing was changed.`));
   }
-  await updateRoutes((file) => {
-    if (!Object.hasOwn(file.routes, from)) throw new UnknownRouteError(from, Object.keys(file.routes).sort());
-    if (Object.hasOwn(file.routes, to)) throw new Error(`Route '${to}' already exists.`);
-    const spec = file.routes[from];
-    delete file.routes[from];
-    file.routes[to] = spec;
-    return file;
-  }, deps.paths);
+  await updateRoutes(
+    (file) => {
+      if (!Object.hasOwn(file.routes, from)) throw new UnknownRouteError(from, Object.keys(file.routes).sort());
+      if (Object.hasOwn(file.routes, to)) throw new Error(`Route '${to}' already exists.`);
+      const spec = file.routes[from];
+      delete file.routes[from];
+      file.routes[to] = spec;
+      return file;
+    },
+    deps.paths,
+    namesOf(await deps.loadRegistry()),
+  );
   return success(`Renamed route ${bold(from)} to ${bold(to)}`);
 }
 
@@ -372,11 +388,15 @@ async function removeRoute(args: string[], deps: RouteDeps): Promise<string> {
   const [nameArg, ...extra] = read.positionals;
   if (extra.length) throw new Error(`${usage("remove")}\nRun \`clausona route remove --help\` for usage.`);
   const name = routeNameArg(nameArg, "remove");
-  await updateRoutes((file) => {
-    if (!Object.hasOwn(file.routes, name)) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
-    delete file.routes[name];
-    return file;
-  }, deps.paths);
+  await updateRoutes(
+    (file) => {
+      if (!Object.hasOwn(file.routes, name)) throw new UnknownRouteError(name, Object.keys(file.routes).sort());
+      delete file.routes[name];
+      return file;
+    },
+    deps.paths,
+    namesOf(await deps.loadRegistry()),
+  );
   return success(`Removed route ${bold(name)}`);
 }
 
@@ -389,12 +409,13 @@ async function editRoutes(args: string[], io: RouteIo, deps: RouteDeps): Promise
   const read = readOptions(args, { values: [], flags: [] }, "route edit");
   if (read.positionals.length) throw new Error(`${usage("edit")}\nRun \`clausona route edit --help\` for usage.`);
   const original = await readRoutesText(deps.paths);
+  const names = namesOf(await deps.loadRegistry());
   const opened = original ?? `${JSON.stringify(emptyRoutesFile(), null, 2)}\n`;
   let text = opened;
   for (;;) {
     text = await deps.editText(text, "routes.json");
     try {
-      parseRoutesText(text, deps.paths.routesPath);
+      parseRoutesText(text, deps.paths.routesPath, names);
       break;
     } catch (error) {
       if (!(error instanceof RoutesFileError) || !io.interactive) throw error;
@@ -431,8 +452,8 @@ async function rankEvery(routes: Route[], registry: Registry, deps: RouteDeps): 
 async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
   const read = readOptions(args, { values: [], flags: ["--json", "--no-quota"] }, "route list");
   if (read.positionals.length) throw new Error(`${usage("list")}\nRun \`clausona route list --help\` for usage.`);
-  const { file, broken } = await loadRoutes(deps.paths);
   const registry = await deps.loadRegistry();
+  const { file, broken } = await loadRoutes(deps.paths, namesOf(registry));
   const entries = Object.keys(file.routes)
     .sort()
     .map((name) => {
@@ -483,8 +504,9 @@ async function resolveForRanking(sub: "explain" | "pick", args: string[], deps: 
   if (extra.length) throw new Error(`${usage(sub)}\nRun \`clausona route ${sub} --help\` for usage.`);
   const overrides = toRoutingOptions(read.values);
   const tool = parseRouteTool(read.values.get("--tool"));
-  const { file, broken } = await routesFor(name, deps.paths);
-  const resolved = resolveRoute(file, { tool, options: { ...overrides, ...(name ? { route: name } : {}) } });
+  const names = namesOf(await deps.loadRegistry());
+  const { file, broken } = await routesFor(name, deps.paths, names);
+  const resolved = resolveRoute(file, { tool, options: { ...overrides, ...(name ? { route: name } : {}) } }, names);
   if (!resolved) {
     throw new Error(
       `Name a route: clausona route ${sub} <name>, or an unsaved one: clausona route ${sub} --tool claude --from '<patterns>'.`,
