@@ -27,6 +27,8 @@ import {
   updateRoutes,
 } from "./core/routes-store.js";
 import type { Ranking } from "./core/routing.js";
+import { withJsonErrors } from "./extensions/cli.js";
+import { ExitError } from "./extensions/exit-error.js";
 import { accent, bold, dim, helpSection, helpUsage, stripAnsi, success } from "./lib/cli-style.js";
 import { type RouteIo, terminalIo } from "./lib/route-io.js";
 import {
@@ -198,6 +200,7 @@ export function routeHelp(sub?: string): string {
     `    ${dim("the tool's own   run launched the tool")}`,
     `    ${dim("1                usage error, or routes.json cannot be used")}`,
     `    ${dim("75               no account is available now: retry later, or name a profile")}`,
+    `    ${dim("With --json, a failure is one object on stdout: { version, error, message }.")}`,
     "",
     `  ${dim("Run clausona route <command> --help for each command.")}`,
     `  ${dim("Docs: https://github.com/larcane97/clausona/blob/main/docs/routing.md")}`,
@@ -208,6 +211,32 @@ export function routeHelp(sub?: string): string {
 // ─── Subcommands ───────────────────────────────────────────────────
 
 const usage = (sub: string) => `Usage: ${stripAnsi(SUB_HELP[sub]?.[0] ?? "").trim()}`;
+
+/** Bad usage, which `--json` calls `usage`. It exits 1, as every routing failure but 75 does. */
+class RouteUsageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteUsageError";
+  }
+}
+
+/**
+ * Reads a command's arguments with `read`: whatever plain error it throws is bad usage. Only a
+ * plain one: an unknown route, or a routes.json that cannot be used, keeps its own kind.
+ */
+function asUsage<T>(read: () => T): T {
+  try {
+    return read();
+  } catch (error) {
+    if (error instanceof Error && Object.getPrototypeOf(error) === Error.prototype) {
+      throw new RouteUsageError(error.message);
+    }
+    throw error;
+  }
+}
+
+/** readOptions for the subcommands: an option they do not take is bad usage. */
+const readArgs = (...args: Parameters<typeof readOptions>) => asUsage(() => readOptions(...args));
 
 async function registryOrThrow(deps: RouteDeps): Promise<Registry> {
   const registry = await deps.loadRegistry();
@@ -263,7 +292,7 @@ async function routeDetail(name: string, spec: RouteSpec, deps: RouteDeps, advis
 /** Asks nothing: the flags say everything, and what was created is shown. */
 async function addRoute(args: string[], deps: RouteDeps): Promise<string> {
   // --yes is read and changes nothing: add asked before creating once, and scripts still pass it.
-  const read = readOptions(args, { values: ["--tool", ...ROUTE_FIELD_OPTIONS], flags: ["--yes", "-y"] }, "route add");
+  const read = readArgs(args, { values: ["--tool", ...ROUTE_FIELD_OPTIONS], flags: ["--yes", "-y"] }, "route add");
   const [nameArg, ...extra] = read.positionals;
   if (extra.length) throw new Error(`${usage("add")}\nRun \`clausona route add --help\` for usage.`);
   const name = routeNameArg(nameArg, "add");
@@ -285,7 +314,7 @@ async function addRoute(args: string[], deps: RouteDeps): Promise<string> {
 }
 
 async function setRoute(args: string[], deps: RouteDeps): Promise<string> {
-  const read = readOptions(
+  const read = readArgs(
     args,
     { values: [...ROUTE_FIELD_OPTIONS, "--add", "--drop"], flags: ["--no-fallback"] },
     "route set",
@@ -355,7 +384,7 @@ async function setRoute(args: string[], deps: RouteDeps): Promise<string> {
 }
 
 async function renameRoute(args: string[], deps: RouteDeps): Promise<string> {
-  const read = readOptions(args, { values: [], flags: [] }, "route rename");
+  const read = readArgs(args, { values: [], flags: [] }, "route rename");
   const [oldArg, newArg, ...extra] = read.positionals;
   if (!oldArg || !newArg || extra.length)
     throw new Error(`${usage("rename")}\nRun \`clausona route rename --help\` for usage.`);
@@ -385,7 +414,7 @@ async function renameRoute(args: string[], deps: RouteDeps): Promise<string> {
 }
 
 async function removeRoute(args: string[], deps: RouteDeps): Promise<string> {
-  const read = readOptions(args, { values: [], flags: [] }, "route remove");
+  const read = readArgs(args, { values: [], flags: [] }, "route remove");
   const [nameArg, ...extra] = read.positionals;
   if (extra.length) throw new Error(`${usage("remove")}\nRun \`clausona route remove --help\` for usage.`);
   const name = routeNameArg(nameArg, "remove");
@@ -407,7 +436,7 @@ async function removeRoute(args: string[], deps: RouteDeps): Promise<string> {
  * what the edit started from.
  */
 async function editRoutes(args: string[], io: RouteIo, deps: RouteDeps): Promise<string> {
-  const read = readOptions(args, { values: [], flags: [] }, "route edit");
+  const read = readArgs(args, { values: [], flags: [] }, "route edit");
   if (read.positionals.length) throw new Error(`${usage("edit")}\nRun \`clausona route edit --help\` for usage.`);
   const original = await readRoutesText(deps.paths);
   const names = namesOf(await deps.loadRegistry());
@@ -463,8 +492,10 @@ function routeWarnings(name: string, ranking: Ranking): string[] {
 }
 
 async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
-  const read = readOptions(args, { values: [], flags: ["--json", "--no-quota"] }, "route list");
-  if (read.positionals.length) throw new Error(`${usage("list")}\nRun \`clausona route list --help\` for usage.`);
+  const read = readArgs(args, { values: [], flags: ["--json", "--no-quota"] }, "route list");
+  if (read.positionals.length) {
+    throw new RouteUsageError(`${usage("list")}\nRun \`clausona route list --help\` for usage.`);
+  }
   const registry = await deps.loadRegistry();
   const { file, broken } = await loadRoutes(deps.paths, namesOf(registry));
   const names = Object.keys(file.routes).sort();
@@ -493,20 +524,24 @@ async function listRoutes(args: string[], deps: RouteDeps): Promise<string> {
 }
 
 async function resolveForRanking(sub: "explain" | "pick", args: string[], deps: RouteDeps) {
-  const read = readOptions(
-    args,
-    { values: ["--tool", ...ROUTE_FIELD_OPTIONS], flags: ["--json", "--resume"] },
-    `route ${sub}`,
-  );
-  const [name, ...extra] = read.positionals;
-  if (extra.length) throw new Error(`${usage(sub)}\nRun \`clausona route ${sub} --help\` for usage.`);
-  const overrides = toRoutingOptions(read.values);
-  const tool = parseRouteTool(read.values.get("--tool"));
+  const { read, name, overrides, tool } = asUsage(() => {
+    const read = readOptions(
+      args,
+      { values: ["--tool", ...ROUTE_FIELD_OPTIONS], flags: ["--json", "--resume"] },
+      `route ${sub}`,
+    );
+    const [name, ...extra] = read.positionals;
+    if (extra.length) throw new Error(`${usage(sub)}\nRun \`clausona route ${sub} --help\` for usage.`);
+    return { read, name, overrides: toRoutingOptions(read.values), tool: parseRouteTool(read.values.get("--tool")) };
+  });
   const names = namesOf(await deps.loadRegistry());
   const { file, broken } = await routesFor(name, deps.paths, names);
-  const resolved = resolveRoute(file, { tool, options: { ...overrides, ...(name ? { route: name } : {}) } }, names);
+  // A bad name or option value is bad usage; a route that does not exist is not.
+  const resolved = asUsage(() =>
+    resolveRoute(file, { tool, options: { ...overrides, ...(name ? { route: name } : {}) } }, names),
+  );
   if (!resolved) {
-    throw new Error(
+    throw new RouteUsageError(
       `Name a route: clausona route ${sub} <name>, or an unsaved one: clausona route ${sub} --tool claude --from '<patterns>'.`,
     );
   }
@@ -537,12 +572,40 @@ async function pickRoute(args: string[], deps: RouteDeps): Promise<string> {
   return json ? JSON.stringify(pickJson(resolved.name, ranking), null, 2) : ranking.outcome.id;
 }
 
-/** `clausona route …`. Reads its own subcommand, options and --help. */
+/**
+ * What `--json` calls a failure (withJsonErrors, which the Extensions commands use): bad usage
+ * `usage`, an unknown route `not-found`, and a routes.json or route that cannot be used `failed`,
+ * with the file and its problems. Exit 75 keeps the JSON `pick` prints; each keeps its exit code.
+ * Anything else is `failed`.
+ */
+function asJsonError(error: unknown): unknown {
+  if (error instanceof NoAccountError) return new ExitError(error.message, error.exitCode, error.stdout, "failed");
+  if (error instanceof RouteUsageError) return new ExitError(error.message, 1, undefined, "usage");
+  if (error instanceof UnknownRouteError) return new ExitError(error.message, 1, undefined, "not-found");
+  if (error instanceof RoutesFileError) {
+    return new ExitError(error.message, 1, undefined, "failed", { file: error.filePath, problems: error.problems });
+  }
+  return error;
+}
+
+/**
+ * `clausona route …`. Reads its own subcommand, options and --help. With --json, whatever way it
+ * fails is one JSON object on stdout, as the Extensions commands' failures are.
+ */
 export async function runRouteCommand(
   args: string[],
   io: RouteIo = terminalIo(process.stdout),
   deps: RouteDeps = defaultRouteDeps(),
 ): Promise<string> {
+  if (!args.includes("--json")) return routeCommand(args, io, deps);
+  return withJsonErrors(args, () =>
+    routeCommand(args, io, deps).catch((error: unknown) => {
+      throw asJsonError(error);
+    }),
+  );
+}
+
+async function routeCommand(args: string[], io: RouteIo, deps: RouteDeps): Promise<string> {
   const [sub, ...rest] = args;
   // In a terminal, bare `route` opens the dashboard's Routes screen (index.tsx renders it).
   if (!sub) return io.interactive ? "__OPEN_TUI__:routes" : routeHelp();
@@ -567,7 +630,7 @@ export async function runRouteCommand(
       return pickRoute(rest, deps);
     default:
       // Not quoted back when it holds something key-shaped, as a route name or a pattern is not.
-      if (holdsKey(sub)) throw new Error("Unknown route command. Run `clausona route --help` for the list.");
-      throw new Error(`Unknown route command '${sub}'. Run \`clausona route --help\` for the list.`);
+      if (holdsKey(sub)) throw new RouteUsageError("Unknown route command. Run `clausona route --help` for the list.");
+      throw new RouteUsageError(`Unknown route command '${sub}'. Run \`clausona route --help\` for the list.`);
   }
 }

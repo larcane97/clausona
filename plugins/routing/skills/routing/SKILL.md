@@ -55,6 +55,15 @@ clausona list --json                       # every profile, with its email and q
   `signed-out`, `expired`, `no-reading`, `not-registered`, `keeps-own-sessions` or
   `api-not-supported`. Each also has `usage`, `fiveHour`, `sevenDay` and `lastPickedAt`.
 
+`route list --json` gives each route's `members`, `freeNow` (`{"free", "members"}`) and `next`
+(as `outcome`), and `problems`: what is wrong with each route in `routes.json` that cannot be
+used. Such a route is left out, and only commands that use it fail; tell the user, and point
+them to `clausona route edit` rather than editing the file yourself.
+
+With `--json`, a failing `route` command prints `{"version": 1, "error", "message"}` on stdout.
+`error` is `usage`, `not-found` (no such route) or `failed`; a `routes.json` that cannot be used
+adds `problems`.
+
 Answer "why did it pick X" from `explain`: `outcome.stage` and `outcome.reason` for the pick, and
 each other member's `status`, `skipReason` and usage. `explain` takes the same field options as a
 run (`--strategy`, `--max-usage`, …) and `--resume`, to show what a run like that would get.

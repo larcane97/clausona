@@ -738,6 +738,30 @@ not in `routes`.
 | 1 | A usage error, an unknown route without a terminal (or answered `n` in one), or a `routes.json` or a named route that cannot be used. |
 | 75 | No account is available now, from `run` or `pick`. Retry later, or name a profile. |
 
+### Errors
+
+With `--json`, a `route` command that fails prints one object on stdout, and nothing on stderr.
+It is the shape the [Extensions commands](extensions.md#errors) use, and the exit code is the
+same as without `--json`:
+
+```json
+{
+  "version": 1,
+  "error": "not-found",
+  "message": "Route 'nope' does not exist. Existing routes: main. Create it: clausona route add nope"
+}
+```
+
+| `error` | Exit code | When |
+|---|---|---|
+| `usage` | 1 | Bad usage: an unknown option or subcommand, a bad option value, or no route named |
+| `not-found` | 1 | No route has that name |
+| `failed` | 1 | Anything else, such as clausona not set up yet. When `routes.json`, or the route named, cannot be used, it adds `file`, the file's path, and `problems`, what is wrong, as `route list` words it |
+
+`message` is what the command prints without `--json`. Read `error` to tell failures apart. Exit
+75 from `pick --json` is not an error object: it prints the `pick` JSON above, with `profile`
+null.
+
 ### The routing skill
 
 The `routing` plugin has a skill of the same name that teaches a session all of this.

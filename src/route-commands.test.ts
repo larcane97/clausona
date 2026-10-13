@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runCommand } from "./commands.js";
 import { RoutesFileError, routesPaths } from "./core/routes-store.js";
+import { reportError } from "./index.js";
 import { stripAnsi } from "./lib/cli-style.js";
 import type { RouteIo } from "./lib/route-io.js";
 import { renderRoutesEmpty } from "./lib/route-render.js";
@@ -805,6 +806,73 @@ describe("the reserve limit, which routes no longer have", () => {
     }
     expect(stripAnsi(await runCommand("run", ["--help"]))).not.toContain("--reserve-usage");
     expect(await run("--help")).toContain("3. overflow  any member under 100%, lowest usage first");
+  });
+});
+
+describe("failures with --json", () => {
+  /** What the command leaves with: its exit code, and what it prints on stdout and stderr. */
+  async function fails(run: Promise<string>) {
+    const error = await run.then(
+      () => {
+        throw new Error("did not fail");
+      },
+      (e: unknown) => e,
+    );
+    const out: string[] = [];
+    const err: string[] = [];
+    const sink = (chunks: string[]) => ({ write: (chunk: string) => chunks.push(chunk) > 0 });
+    const code = reportError(error, sink(err), sink(out));
+    return { code, json: JSON.parse(out.join("")), stderr: err.join("") };
+  }
+
+  it("is one JSON object on stdout, as the Extensions commands print it, with the exit code kept", async () => {
+    const { run } = setup();
+    await run("add", "main");
+    for (const args of [
+      ["list", "main", "--json"],
+      ["explain", "--json"],
+      ["pick", "main", "--bogus", "--json"],
+      ["explain", "main", "--max-usage", "0", "--json"],
+      ["add", "work", "--json"],
+      ["frobnicate", "--json"],
+    ]) {
+      const failure = await fails(run(...args));
+      expect(failure, args.join(" ")).toMatchObject({ code: 1, json: { version: 1, error: "usage" }, stderr: "" });
+      expect(Object.keys(failure.json).sort()).toEqual(["error", "message", "version"]);
+    }
+    const missing = await fails(run("explain", "nope", "--json"));
+    expect(missing).toMatchObject({ code: 1, stderr: "" });
+    expect(missing.json).toEqual({
+      version: 1,
+      error: "not-found",
+      message: "Route 'nope' does not exist. Existing routes: main. Create it: clausona route add nope",
+    });
+  });
+
+  it("names the file and its problems when routes.json, or the route named, cannot be used", async () => {
+    const { run, deps } = setup();
+    writeFileSync(deps.paths.routesPath, "{ not json");
+    const unusable = await fails(run("list", "--json"));
+    expect(unusable).toMatchObject({ code: 1, stderr: "" });
+    expect(unusable.json).toMatchObject({
+      version: 1,
+      error: "failed",
+      file: deps.paths.routesPath,
+      problems: [expect.stringMatching(/^not valid JSON/)],
+    });
+    writeFileSync(deps.paths.routesPath, JSON.stringify({ version: 1, routes: { bad: { tool: "x" } } }));
+    const broken = await fails(run("pick", "bad", "--json"));
+    expect(broken.json).toMatchObject({
+      error: "failed",
+      problems: ['routes.bad.tool: must be "claude", "codex" or "all"'],
+    });
+  });
+
+  it("leaves exit 75 and the JSON pick prints for it as they are", async () => {
+    const { run } = setup({ "claude:a": snap(100, 0), "claude:b": snap(100, 0), "claude:c": snap(0, 100) });
+    await run("add", "main");
+    const none = await fails(run("pick", "main", "--json"));
+    expect(none).toMatchObject({ code: 75, json: { profile: null, route: "main" }, stderr: "" });
   });
 });
 
