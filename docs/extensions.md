@@ -1361,7 +1361,10 @@ Secret values stay out of every output, the screen, the text and `--json`, plans
 - An MCP server's env and header values are never copied out of its config. Only their names
   are shown, such as `GITHUB_TOKEN (value hidden)`.
 - In a command line, a URL or a hook's command, a value that looks like a secret reads
-  `<hidden>`, such as the word after `--api-key` or a token in a URL.
+  `<hidden>`, such as the word after `--api-key` or a token in a URL. Telling a secret from an
+  option is a heuristic, and it leans toward hiding. One shape still shows: a secret spelled like
+  a secret option, such as `--mytoken`, after a secret flag and before a plain word
+  (`--password --mytoken serve`), which reads the same as `--auth --api-key K`.
 - A warning about a file names the file and a position in it, never what the file holds.
 - A plan or an error names files, keys and server names, never what a server's or a hook's
   entry holds.
