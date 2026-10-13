@@ -75,6 +75,8 @@ function seed() {
   h.claude("work", ".claude-work", { projects: { [app]: {} }, mcpServers: { figma: { command: "figma" } } });
   h.skill(".claude/skills", "eli5");
   h.skill(".claude/skills", "old-one");
+  // work loads the primary's skills through the link clausona makes for every account.
+  h.link(".claude/skills", ".claude-work/skills");
   h.skill("repos/app/.claude/skills", "eli5");
   h.skill("repos/app/.claude/skills", "deploy-check");
   h.skill("repos/web/.claude/skills", "web-only");

@@ -113,6 +113,15 @@ describe("who may touch the file system", () => {
     expect(importers((module) => module === "extensions/writers/fs")).toEqual(["extensions/apply.ts"]);
   });
 
+  it("takes from core/shared-links only inspectSharedLink, which reads a link as doctor does", () => {
+    const shared = (module: string) => module === "core/shared-links";
+    expect(importers(shared)).toEqual(["extensions/sources/claude-context.ts"]);
+    const lines = text("extensions/sources/claude-context.ts")
+      .split(/\r?\n/)
+      .filter((line) => importsIn(line, "extensions/sources/claude-context.ts").some((found) => shared(found.module)));
+    expect(lines).toEqual(['import { inspectSharedLink } from "../../core/shared-links.js";']);
+  });
+
   it("has git-tracked.ts alone start a process (git ls-files, which only reads)", () => {
     expect(FILES).toContain("extensions/git-tracked.ts");
     expect(importers((module) => module === "child_process")).toEqual(["extensions/git-tracked.ts"]);

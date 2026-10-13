@@ -256,6 +256,8 @@ function seed() {
   h.skill(".claude/skills/synced/org_two", "pdf");
   h.skill(".claude/skills", "eli5");
   h.skill(".claude/skills", "old-one");
+  // work loads the primary's skills through the link clausona makes for every account.
+  h.link(".claude/skills", ".claude-work/skills");
   h.skill("shared", "notes");
   h.link("shared/notes", ".claude/skills/notes");
   h.link(h.path("gone", "lost"), ".claude/skills/lost");

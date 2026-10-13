@@ -110,14 +110,18 @@ export function stateHere(inv: Inventory, item: Extension, project: string | und
 
 export type AccountState = { profile: string; state: EffectiveState };
 
-/** Whether some account's own skills folder has a Claude skill of `name`. */
-function ownSkillNamed(inv: Inventory, name: string): boolean {
+/**
+ * Whether a personal Claude skill of `name` loads in some accounts only: one in an account's own
+ * skills folder, or a Global one that an account whose skills folder is its own does not load.
+ */
+function personalSkillInSome(inv: Inventory, name: string): boolean {
   return inv.items.some(
     (other) =>
       other.kind === "skill" &&
       other.location.tool === "claude" &&
-      other.location.scope === "account" &&
-      other.name === name,
+      other.name === name &&
+      (other.location.scope === "account" ||
+        (other.location.scope === "global" && other.location.accounts !== undefined)),
   );
 }
 
@@ -127,8 +131,8 @@ function ownSkillNamed(inv: Inventory, name: string): boolean {
  *   each account switches, and a local server can hide. Only the accounts that can load it
  *   count: Claude accounts that have recorded the project, and for a plugin's server the ones
  *   with the plugin installed. Codex records projects too, but never loads a Claude server;
- * - a Claude project skill that an account's own same-name skill hides in that account only, in
- *   every Claude account.
+ * - a Claude project skill that a same-name personal skill hides in some accounts only - an
+ *   account's own, or a Global one that not every account loads - in every Claude account.
  * Undefined for any other item, and for such a server when no such account has recorded the
  * project.
  */
@@ -143,7 +147,7 @@ export function accountStates(
   const read = (profiles: string[]) =>
     profiles.map((profile) => ({ profile, state: stateOf(inv, item, here, profile) }));
   if (item.kind === "skill") {
-    return loc.scope === "project" && ownSkillNamed(inv, item.name) ? read(inv.claudeProfiles) : undefined;
+    return loc.scope === "project" && personalSkillInSome(inv, item.name) ? read(inv.claudeProfiles) : undefined;
   }
   if (item.kind !== "mcp") return undefined;
   const accounts = loc.scope === "plugin" && loc.accounts ? loc.accounts : inv.claudeProfiles;

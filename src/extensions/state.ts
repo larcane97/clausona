@@ -154,13 +154,16 @@ function claudeSkillState(
   const state = claudeSkillOverride(inv, item.name, project) ?? { value: "on" };
   if (item.location.scope !== "project") return state;
   // A personal skill wins over a project skill of the same name (Claude Code docs): a Global one
-  // in every account, and one in an account's own skills folder in that account only.
+  // in every account that loads the primary's skills, and one in an account's own skills folder
+  // in that account only.
   const personal = (other: Extension, scope: "global" | "account") =>
     other.kind === "skill" &&
     other.location.tool === "claude" &&
     other.name === item.name &&
     other.location.scope === scope &&
-    (scope === "global" || (profile !== undefined && other.location.profile === profile));
+    (scope === "global"
+      ? profile === undefined || other.location.accounts === undefined || other.location.accounts.includes(profile)
+      : profile !== undefined && other.location.profile === profile);
   const winner =
     inv.items.find((other) => personal(other, "account")) ?? inv.items.find((other) => personal(other, "global"));
   return winner ? { ...state, shadowedBy: winner.id } : state;

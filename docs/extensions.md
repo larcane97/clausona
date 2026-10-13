@@ -44,7 +44,8 @@ of it:
 
 Such a row lists all its copies. Every other item is a row of its own. An account's own skills
 folder, one that is not linked to the primary's, is a folder of its own, so its skills are one
-row per account.
+row per account. That account does not load the primary's skills, so a Global skill lists only
+the accounts that do. The same goes for the `commands` folder.
 
 The text output names an account by its short name (`work`), JSON by its profile id
 (`claude:work`). `--account` takes either.
@@ -148,8 +149,11 @@ by account.
 
 For skills, Claude Code ranks managed first, then personal (Global), then project. clausona
 reads no managed skills, so in practice a Global skill wins over a Project skill of the same
-name. A skill in the primary's skills folder wins in every account. A skill in one account's
-own skills folder wins in that account only.
+name. A skill in the primary's skills folder wins in every account that loads it: the primary,
+and each account whose skills folder is linked to the primary's, as `clausona doctor` reads the
+link. A skill in one account's own skills folder wins in that account only. An account whose
+skills folder is its own, or missing, does not load the primary's skills, so there a Global
+skill hides no Project skill.
 
 For MCP servers, Claude Code takes one server per name: the account's local server first, then
 the `.mcp.json` ones, then the account's user server. Of two `.mcp.json` files, the nearest
@@ -850,7 +854,7 @@ apply; the others are always there, `null` when empty.
 | `from` | string | Display text, the WHERE label: `Project`, `Global`, `Cloud`, a plugin's name, a parent folder's `.mcp.json`, another project's name, `Built-in`, `Managed`. Its wording can change within version 1. |
 | `project` | string or null | The project the row belongs to, or the folder of a parent `.mcp.json`. `null` for what no project owns. |
 | `plugin` | string | When set: the plugin, `<plugin>@<marketplace>`, for a plugin row and what a plugin brings. |
-| `accounts` | string[] | When set: the profile ids of the accounts that have the row, primary first. Set when the row is held, switched or hidden per account. |
+| `accounts` | string[] | When set: the profile ids of the accounts that have the row, primary first. Set when the row is held, switched or hidden per account, and for a Global Claude skill that some accounts do not load. |
 | `state` | string | One of the states above, or `mixed` when the accounts differ. |
 | `stateByAccount` | object | When set: profile id to state, for a row read per account. |
 | `loadsByAccount` | object | When set, with `stateByAccount`: profile id to `true` when the row loads here for that account, else `false`. |

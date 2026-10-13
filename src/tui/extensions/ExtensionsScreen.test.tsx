@@ -67,6 +67,8 @@ async function seed(more?: (h: TestHome) => void): Promise<Inventory> {
   });
   h.skill(".claude/skills", "eli5", "Explain things simply");
   h.skill(".claude/skills", `a-very-long-skill-name-${"x".repeat(50)}`);
+  // work loads the primary's skills through the link clausona makes for every account.
+  h.link(".claude/skills", ".claude-work/skills");
   h.skill("repos/app/.claude/skills", "deploy-check");
   h.write(".claude/settings.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-me" }] }] } });
   h.write("repos/app/.claude/settings.local.json", "{ broken");

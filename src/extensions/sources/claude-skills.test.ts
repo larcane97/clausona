@@ -159,6 +159,58 @@ describe("readClaudeSkills", () => {
     },
   );
 
+  it("gives a Global skill the accounts whose skills folder is the primary's, and leaves it alone when all are", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    h.claude("work", ".claude-work");
+    h.claude("solo", ".claude-solo");
+    // bare has no skills folder at all, and loads no one's skills.
+    h.claude("bare", ".claude-bare");
+    h.skill(".claude/skills", "eli5");
+    h.write(".claude/commands/review.md", "Review.");
+    h.link(".claude/skills", ".claude-work/skills");
+    h.link(".claude/commands", ".claude-solo/commands");
+    h.skill(".claude-solo/skills", "solo-only");
+
+    const out = await inventoryOf(h, []);
+    const global = (name: string) => out.items.find((i) => i.location.scope === "global" && i.name === name);
+    // Each folder by itself: work links skills, solo links commands.
+    expect(global("eli5")?.location.accounts).toEqual(["claude:default", "claude:work"]);
+    expect(global("review")?.location.accounts).toEqual(["claude:default", "claude:solo"]);
+    // An account's own folder is read as its own, as before, and a linked one is not.
+    expect(
+      out.items.filter((i) => i.location.scope === "account").map((i) => `${i.location.profile}|${i.name}`),
+    ).toEqual(["claude:solo|solo-only"]);
+
+    const all = new TestHome();
+    homes.push(all);
+    all.claude("default", ".claude");
+    all.claude("work", ".claude-work");
+    all.skill(".claude/skills", "eli5");
+    all.link(".claude/skills", ".claude-work/skills");
+    const linked = await inventoryOf(all, []);
+    expect(linked.items.find((i) => i.name === "eli5")?.location).not.toHaveProperty("accounts");
+  });
+
+  it("reads a profile whose dir is a link to the primary's as the primary's, with no skills of its own", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    h.skill(".claude/skills", "eli5");
+    h.link(".claude", ".claude-alias");
+    h.registry.profiles["claude:alias"] = {
+      tool: "claude",
+      configDir: h.path(".claude-alias"),
+      email: "a@example.com",
+    };
+
+    const out = await inventoryOf(h, []);
+    expect(out.items.map((i) => `${i.location.scope}|${i.name}|${i.location.accounts ?? "every"}`)).toEqual([
+      "global|eli5|every",
+    ]);
+  });
+
   it("lists a plugin's skills once per install, each with its own id", async () => {
     const h = new TestHome();
     homes.push(h);

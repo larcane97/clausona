@@ -12,27 +12,35 @@ import { readSkillFolders, type SkillLocation } from "./skill-dirs.js";
  * buckets under `skills/synced/`, each project's, and each installed plugin's. Then one
  * built-in item for each `skillOverrides` key no skill found here answers to - so it must run
  * after `collectClaudeSettingsFacts`.
+ *
+ * An account whose `skills` folder is its own, or missing, does not load the primary's skills,
+ * so a Global skill then lists the accounts that do; the same goes for `commands`.
  */
 export async function readClaudeSkills(ctx: ClaudeContext, projects: Project[], out: Collector): Promise<void> {
   const jobs: Promise<void>[] = [];
-  const global: SkillLocation = { tool: "claude", scope: "global" };
-  jobs.push(readSkillFolders(path.join(ctx.primaryDir, "skills"), global, "-", out, { skip: ["synced"] }));
-  jobs.push(readCommandFiles(path.join(ctx.primaryDir, "commands"), global, "-", out));
-  for (const account of ctx.accounts) {
+  const shares = await Promise.all(
+    ctx.accounts.map(async (account) => ({
+      account,
+      skills: await sharesPrimaryEntry(account, ctx.primaryDir, "skills"),
+      commands: await sharesPrimaryEntry(account, ctx.primaryDir, "commands"),
+    })),
+  );
+  const globalFor = (folder: "skills" | "commands"): SkillLocation => {
+    const seen = shares.filter((s) => s[folder]).map((s) => s.account.id);
+    // No list when every account loads them. The primary always does, so none can only mean no
+    // primary account is registered: no list then either, as before.
+    const some = seen.length > 0 && seen.length < shares.length;
+    return { tool: "claude", scope: "global", ...(some ? { accounts: seen } : {}) };
+  };
+  jobs.push(readSkillFolders(path.join(ctx.primaryDir, "skills"), globalFor("skills"), "-", out, { skip: ["synced"] }));
+  jobs.push(readCommandFiles(path.join(ctx.primaryDir, "commands"), globalFor("commands"), "-", out));
+  for (const { account, skills, commands } of shares) {
     if (account.isPrimary) continue;
     const own: SkillLocation = { tool: "claude", scope: "account", profile: account.id };
-    jobs.push(
-      (async () => {
-        if (!(await sharesPrimaryEntry(account, ctx.primaryDir, "skills"))) {
-          await readSkillFolders(path.join(account.configDir, "skills"), own, account.id, out, { skip: ["synced"] });
-        }
-      })(),
-      (async () => {
-        if (!(await sharesPrimaryEntry(account, ctx.primaryDir, "commands"))) {
-          await readCommandFiles(path.join(account.configDir, "commands"), own, account.id, out);
-        }
-      })(),
-    );
+    if (!skills) {
+      jobs.push(readSkillFolders(path.join(account.configDir, "skills"), own, account.id, out, { skip: ["synced"] }));
+    }
+    if (!commands) jobs.push(readCommandFiles(path.join(account.configDir, "commands"), own, account.id, out));
   }
   jobs.push(readSynced(ctx, out));
   for (const project of projects) {

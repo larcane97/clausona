@@ -21,7 +21,11 @@ export type Location = {
   project?: string;
   /** `<plugin>@<marketplace>`, for what a plugin brings. */
   plugin?: string;
-  /** For what a plugin brings: the Claude accounts that have the plugin installed. */
+  /**
+   * For what a plugin brings: the Claude accounts that have the plugin installed. For a Global
+   * Claude skill that not every account loads: the accounts whose skills (or commands) folder
+   * is the primary's.
+   */
   accounts?: string[];
   /**
    * For a plugin install and what it brings: the scope it is installed at, as

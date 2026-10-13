@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { claudeJsonPathForConfigDir } from "../../core/paths.js";
+import { inspectSharedLink } from "../../core/shared-links.js";
 import type { Registry } from "../../types.js";
 import type { Collector, Location, Project, SettingsLayer, Warning } from "../model.js";
 import { localSettingsFile, projectSettingsFile } from "../places.js";
@@ -237,12 +238,20 @@ export function collectClaudeSettingsFacts(ctx: ClaudeContext, out: Collector): 
   }
 }
 
-/** Whether a profile's entry `name` is the primary's own, through clausona's shared link. */
+/**
+ * Whether a profile's entry `name` is the primary's own: the profile is on the primary's dir, or
+ * the entry is clausona's shared link to the primary's, read as doctor reads it
+ * (`inspectSharedLink`: a link or junction that resolves where the primary's entry does). An
+ * entry of the profile's own, or none, is not: Claude Code started with that profile reads its
+ * own folder, or nothing, and never the primary's.
+ */
 export async function sharesPrimaryEntry(account: ClaudeAccount, primaryDir: string, name: string): Promise<boolean> {
-  if (samePath(account.configDir, primaryDir)) return true;
+  if (account.isPrimary || samePath(account.configDir, primaryDir)) return true;
   const [mine, primary] = await Promise.all([
-    realPath(path.join(account.configDir, name)).catch(() => undefined),
-    realPath(path.join(primaryDir, name)).catch(() => undefined),
+    realPath(account.configDir).catch(() => undefined),
+    realPath(primaryDir).catch(() => undefined),
   ]);
-  return mine !== undefined && samePath(mine, primary);
+  // A profile dir that is itself a link to the primary's holds the primary's entries.
+  if (mine !== undefined && samePath(mine, primary)) return true;
+  return (await inspectSharedLink(path.join(account.configDir, name), path.join(primaryDir, name))).pointsToSource;
 }

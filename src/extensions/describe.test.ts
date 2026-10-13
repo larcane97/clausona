@@ -58,6 +58,8 @@ async function seed(extra: Extra = {}): Promise<Seeded> {
   h.codex("personal", ".codex");
   h.skill(".claude/skills", "eli5", "Explain things simply");
   h.skill(".claude/skills", "old-one");
+  // work loads the primary's skills through the link clausona makes for every account.
+  h.link(".claude/skills", ".claude-work/skills");
   h.skill("repos/app/.claude/skills", "eli5");
   h.skill("repos/app/.claude/skills", "deploy-check");
   h.skill("repos/web/.claude/skills", "web-only");
@@ -749,5 +751,66 @@ describe("rows across accounts", () => {
     expect(plan.items).toHaveLength(2);
     expect(statesByAccount(inv, plan, app)?.map((a) => a.profile)).toEqual(["claude:default", "claude:work"]);
     expect(detailsOf(inv, plan, app, NOW).some((l) => l.label === "Also in")).toBe(false);
+  });
+});
+
+describe("an account whose skills folder is not the primary's", () => {
+  /**
+   * default is the primary; work's skills folder links to it; solo has a folder of its own and
+   * bare none. A Global eli5, and app's own eli5, read from app.
+   */
+  async function unlinked() {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", { projects: { [app]: {} } });
+    h.claude("work", ".claude-work", { projects: { [app]: {} } });
+    h.claude("solo", ".claude-solo", { projects: { [app]: {} } });
+    h.claude("bare", ".claude-bare");
+    h.skill(".claude/skills", "eli5", "Explain things simply");
+    h.link(".claude/skills", ".claude-work/skills");
+    h.skill(".claude-solo/skills", "mine");
+    h.skill("repos/app/.claude/skills", "eli5");
+    const inv = await loadInventory({
+      homeDir: h.home,
+      registry: h.registry,
+      cwd: app,
+      managedSettings: h.path("none.json"),
+    });
+    return { inv, app };
+  }
+
+  it("leaves it out of a Global skill's accounts, and out of where that skill loads", async () => {
+    const { inv, app } = await unlinked();
+    const eli5 = single(claudeSkill(inv, "eli5"));
+    expect(detailsOf(inv, eli5, app, NOW).filter((l) => l.label === "Loaded" || l.label === "")).toEqual([
+      { label: "Loaded", text: "on in 2 accounts, every project" },
+      { label: "", text: "default, work" },
+    ]);
+    expect(jsonItem(inv, eli5, app, NOW).accounts).toEqual(["claude:default", "claude:work"]);
+    expect(rowAccounts(inv, eli5)).toEqual(["claude:default", "claude:work"]);
+  });
+
+  it("loads a project skill there that the Global copy hides in the linked accounts", async () => {
+    const { inv, app } = await unlinked();
+    const project = single(claudeSkill(inv, "eli5", app));
+    expect(statesByAccount(inv, project, app)?.map((a) => [a.profile, a.state.shadowedBy !== undefined])).toEqual([
+      ["claude:default", true],
+      ["claude:work", true],
+      ["claude:solo", false],
+      ["claude:bare", false],
+    ]);
+    // Hidden in some accounts only: no tag says so, it is in Loaded, and its details say where.
+    expect(tagsOf(inv, project, app, NOW).filter((tag) => tag.startsWith("hidden"))).toEqual([]);
+    expect(rowsIn(inv, "claude", "skill", "loaded", app, NOW).map((r) => r.key)).toContain(project.key);
+    expect(detailsOf(inv, project, app, NOW).find((l) => l.label === "Loaded")?.text).toBe(
+      "hidden by the Global copy in default, work · on in solo, bare",
+    );
+    expect(jsonItem(inv, project, app, NOW).loadsByAccount).toEqual({
+      "claude:default": false,
+      "claude:work": false,
+      "claude:solo": true,
+      "claude:bare": true,
+    });
   });
 });
