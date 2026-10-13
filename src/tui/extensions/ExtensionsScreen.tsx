@@ -185,6 +185,34 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
         : null,
     [inventory, tool, kind, current, project, loadedAt, layout.tableWidth, query],
   );
+  /**
+   * The project the list's cursor is on, while the list is open and the cursor is on another
+   * project than the one seen from: the right pane shows its table, as picking it would.
+   */
+  const hovered = listOpen ? projects[listCursor] : undefined;
+  const previewFrom = hovered && !hovered.current ? hovered : undefined;
+  /** The scope seen from the hovered project: the chosen one, or Loaded where it has none such. */
+  const previewScope = useMemo(() => {
+    if (!inventory || !previewFrom) return undefined;
+    const there = scopesFor(inventory, tool, kind, previewFrom.path, loadedAt);
+    return there.some((s) => s.id === current) ? current : "loaded";
+  }, [inventory, previewFrom, tool, kind, loadedAt, current]);
+  const previewTable = useMemo(
+    () =>
+      inventory && previewFrom && previewScope
+        ? buildTable(
+            inventory,
+            tool,
+            kind,
+            previewScope,
+            previewFrom.path,
+            loadedAt,
+            layout.tableWidth - CURSOR_COLUMNS,
+            "",
+          )
+        : null,
+    [inventory, previewFrom, previewScope, tool, kind, loadedAt, layout.tableWidth],
+  );
   const rows = table?.rows ?? [];
   const found = rowKey === undefined ? -1 : rows.findIndex((row) => row.key === rowKey);
   const at = found >= 0 ? found : Math.min(rowCursor, Math.max(0, rows.length - 1));
@@ -269,17 +297,20 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       return;
     }
     if (listOpen) {
-      // esc and ← leave everything as it was; enter sees every scope from the project picked.
+      // esc and ← leave everything as it was; enter sees every scope from the project picked, as
+      // the table beside the list shows it: the same scope, or Loaded where that project has none.
+      // Picking the project seen from changes nothing.
       if (key.escape || key.leftArrow) setListOpen(false);
       else if (key.upArrow) moveList(-1);
       else if (key.downArrow) moveList(1);
       else if (key.pageUp) moveList(-Math.max(1, projectRoom - 1));
       else if (key.pageDown) moveList(Math.max(1, projectRoom - 1));
       else if (key.return) {
-        const chosen = projects[listCursor]?.path;
-        setPicked(chosen === undefined ? {} : { project: chosen });
-        toScope("loaded");
-        setFocus("scopes");
+        if (previewFrom) {
+          setPicked(previewFrom.path === undefined ? {} : { project: previewFrom.path });
+          toScope(previewScope ?? "loaded");
+          setFocus("scopes");
+        }
         setListOpen(false);
       }
       return;
@@ -505,7 +536,16 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       top={scopeTop.current}
     />
   );
-  const right = details ? (
+  const right = previewTable ? (
+    <ItemTable
+      table={previewTable}
+      width={layout.tableWidth}
+      height={layout.height}
+      cursor={0}
+      top={0}
+      focused={false}
+    />
+  ) : details ? (
     <DetailsView
       title={details.title}
       rows={details.rows}

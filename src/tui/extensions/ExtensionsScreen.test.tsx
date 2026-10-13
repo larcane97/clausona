@@ -285,12 +285,11 @@ describe("ExtensionsScreen", () => {
     expect(await seen(instance, (f) => !listOpen(f, "MCP servers"))).toBe(details);
   });
 
-  it("picks another project from the list: every scope seen from it, back on Loaded", async () => {
+  it("picks another project from the list, from the table: every scope seen from it, the scope list focused", async () => {
     const { instance } = screen(await seed(more), 140, 40);
     const first = await seen(instance, (f) => f.includes("deploy-check"));
     // web has a skill of its own, and the scope list has no Other projects: the list is for that.
     expect(first).not.toContain("Other projects");
-    await press(instance, DOWN);
     await press(instance, RIGHT);
     await press(instance, "p");
     await seen(instance, (f) => listOpen(f));
@@ -312,6 +311,83 @@ describe("ExtensionsScreen", () => {
     const head = list.findIndex((line) => listOpen(line));
     expect(list[head + 1]).toMatch(/▸ web +1/);
     expect(list[head + 2]).toMatch(/ {3}app \(here\) +2/);
+  });
+
+  it("shows the table of the project the list's cursor is on: esc puts everything back, enter keeps it", async () => {
+    const { instance } = screen(await seed(more), 140, 40);
+    await seen(instance, (f) => f.includes("deploy-check"));
+    await press(instance, "p");
+    // On app, the project seen from, the table is as it was.
+    const onApp = await seen(instance, (f) => listOpen(f));
+    expect(onApp).toMatch(/LOADED — what Claude Code loads in ~[\\/]repos[\\/]app/);
+    expect(onApp).toContain("deploy-check");
+    await press(instance, DOWN);
+    const onWeb = await seen(instance, (f) => f.includes("web-only"));
+    expect(listOpen(onWeb)).toBe(true);
+    expect(onWeb).toMatch(/LOADED — what Claude Code loads in ~[\\/]repos[\\/]web/);
+    expect(onWeb).not.toContain("deploy-check");
+    // The title bar names the project seen from until another is picked.
+    expect(onWeb).toMatch(/Extensions │ ~[\\/]repos[\\/]app/);
+    await press(instance, DOWN);
+    const onNone = await seen(instance, (f) => f.includes("what Claude Code loads with no project"));
+    expect(onNone).not.toContain("web-only");
+    expect(onNone).toContain("eli5");
+    await press(instance, UP);
+    await seen(instance, (f) => f.includes("web-only"));
+    await press(instance, ESC);
+    const back = await seen(instance, (f) => !listOpen(f));
+    expect(back).toContain("deploy-check");
+    expect(back).not.toContain("web-only");
+    expect(onRow(back)).toBe(true);
+    await press(instance, "p");
+    await seen(instance, (f) => listOpen(f));
+    await press(instance, DOWN);
+    await seen(instance, (f) => f.includes("web-only"));
+    await press(instance, ENTER);
+    const picked = await seen(instance, (f) => onRow(f, "web"));
+    expect(picked).toMatch(/Extensions │ ~[\\/]repos[\\/]web/);
+    expect(picked).toContain("web-only");
+  });
+
+  it("keeps the scope it was on while the list moves and once one is picked, or Loaded where that project has none", async () => {
+    const side = (h: TestHome) => {
+      more(h);
+      // site is under other/, so the .mcp.json above app is not above it: it has no Parent folders.
+      const site = h.project("other/site");
+      h.claude("side", ".claude-side", { projects: { [site]: {} } });
+      h.write("repos/.mcp.json", { mcpServers: { shared: { command: "shared-mcp" } } });
+    };
+    const { instance } = screen(await seed(side), 140, 40);
+    await seen(instance, (f) => f.includes("deploy-check"));
+    // Project: web's own skills while the cursor is on web, and once it is picked.
+    await scopeTo(instance, "Project");
+    await press(instance, "p");
+    await seen(instance, (f) => listOpen(f));
+    await scopeTo(instance, "web");
+    const onWeb = await seen(instance, (f) => f.includes("web-only"));
+    expect(onWeb).toMatch(/PROJECT — .*~[\\/]repos[\\/]web/);
+    await press(instance, ENTER);
+    const picked = await seen(instance, (f) => !listOpen(f) && /Extensions │ ~[\\/]repos[\\/]web/.test(f));
+    expect(picked).toContain("▸ Project");
+    expect(picked).toMatch(/PROJECT — .*~[\\/]repos[\\/]web/);
+    expect(picked).toContain("web-only");
+    // Parent folders, which site has not: Loaded, there and once it is picked.
+    await press(instance, "p");
+    await seen(instance, (f) => listOpen(f));
+    await scopeTo(instance, "app (here)");
+    await press(instance, ENTER);
+    await press(instance, "2");
+    await scopeTo(instance, "Parent folders");
+    await seen(instance, (f) => f.includes("shared"));
+    await press(instance, "p");
+    await seen(instance, (f) => listOpen(f, "MCP servers"));
+    await scopeTo(instance, "site");
+    const onSite = await seen(instance, (f) => /LOADED — what Claude Code loads in ~[\\/]other[\\/]site/.test(f));
+    expect(onSite).not.toContain("shared");
+    await press(instance, ENTER);
+    expect(await seen(instance, (f) => onRow(f, "site"))).toMatch(
+      /LOADED — what Claude Code loads in ~[\\/]other[\\/]site/,
+    );
   });
 
   it("names the home dir ~ in the row and the list, the project it was started in", async () => {
