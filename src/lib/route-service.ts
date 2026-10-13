@@ -249,7 +249,7 @@ export async function routesFor(
   const loaded = await loadRoutes(paths, names);
   // A name that cannot be a route's is resolveRoute's to refuse, without quoting it.
   const broken = checkRouteName(name) === null ? loaded.broken.find((route) => route.name === name) : undefined;
-  if (broken) throw new RoutesFileError(loaded.filePath, broken.problems);
+  if (broken) throw new RoutesFileError(loaded.filePath, broken.problems, false, name);
   return loaded;
 }
 

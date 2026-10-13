@@ -596,14 +596,35 @@ describe("a route in routes.json that cannot be used", () => {
     expect(await run("explain", "main")).toContain(`  ⚠ ${PROBLEM}`);
   });
 
-  it("stops only a command that uses it", async () => {
-    const { run } = withBroken();
+  it("stops only a command that uses it, naming that route and the way out route list gives", async () => {
+    const { run, deps } = withBroken();
     expect(await run("pick", "main")).toBe("claude:a");
     for (const sub of ["pick", "explain"]) {
       const error = (await run(sub, "bad").catch((e: unknown) => e)) as Error;
       expect(error).toBeInstanceOf(RoutesFileError);
-      expect(error.message).toContain(PROBLEM);
+      expect(error.message).toBe(
+        [
+          `Route 'bad' in ${deps.paths.routesPath} cannot be used:`,
+          `    ${PROBLEM}`,
+          "  Fix it with clausona route edit, or remove the route: clausona route remove bad.",
+        ].join("\n"),
+      );
     }
+  });
+
+  // Renamed, it would still be broken: the refusal names it as it is on disk, where remove finds it.
+  it("refuses to rename it, naming it by its name on disk", async () => {
+    const { run, deps } = withBroken();
+    const before = readFileSync(deps.paths.routesPath, "utf8");
+    const error = (await run("rename", "bad", "older").catch((e: unknown) => e)) as Error;
+    expect(error.message).toBe(
+      [
+        `${deps.paths.routesPath} has a route that cannot be used, so nothing was saved:`,
+        `    ${PROBLEM}`,
+        "  Fix it with clausona route edit, or remove the route: clausona route remove bad.",
+      ].join("\n"),
+    );
+    expect(readFileSync(deps.paths.routesPath, "utf8")).toBe(before);
   });
 
   it("keeps every write from saving it again, and says how to get past it", async () => {

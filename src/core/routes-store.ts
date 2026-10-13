@@ -48,17 +48,23 @@ const ROUTES_LOCK_WAIT_MS = 5_000;
 /** Routing never blocks a launch on its own bookkeeping for longer than this. */
 const PICKS_LOCK_WAIT_MS = 2_000;
 
+/**
+ * routes.json, or the route `route` in it, cannot be used. A route is named only once
+ * checkRouteName has passed its name, and gets the way out `route list` gives it.
+ */
 export class RoutesFileError extends Error {
   constructor(
     readonly filePath: string,
     readonly problems: string[],
     readonly newer = false,
+    readonly route?: string,
   ) {
+    const wayOut = route ? brokenRoutesHint([{ name: route, spec: undefined, problems }]) : undefined;
     super(
       [
-        `${filePath} cannot be used:`,
+        route ? `Route '${route}' in ${filePath} cannot be used:` : `${filePath} cannot be used:`,
         ...problems.map((problem) => `    ${problem}`),
-        ...(newer ? [] : ["  Fix it with `clausona route edit`, or by hand."]),
+        ...(newer ? [] : [`  ${wayOut ?? "Fix it with `clausona route edit`, or by hand."}`]),
       ].join("\n"),
     );
     this.name = "RoutesFileError";
@@ -177,8 +183,11 @@ export function brokenRoutesHint(broken: BrokenRoute[]): string {
   return `${edit}, or remove ${removable.length === 1 ? "the route" : "the routes"}: ${remove}.`;
 }
 
-/** Why a write was refused: the file it would write still has routes that cannot be used. */
-function refusal(filePath: string, broken: BrokenRoute[]): Error {
+/**
+ * Why a write is refused: the file it would write still has routes that cannot be used. Also
+ * said before a route is offered for creation that this refusal would stop.
+ */
+export function writeRefusal(filePath: string, broken: BrokenRoute[]): Error {
   const count = broken.length === 1 ? "a route" : `${broken.length} routes`;
   return new Error(
     [
@@ -219,16 +228,26 @@ export async function updateRoutes(
   return withRoutesLock(paths, async () => {
     const { file, broken } = await loadRoutes(paths, names);
     const current = structuredClone(file);
+    // Each broken route's copy, to the route as stored: one the update moved (a rename) is named
+    // in the refusal as it is on disk, which is where its way out finds it.
+    const asStored = new Map<unknown, BrokenRoute>();
+    const copies = broken.map((route): [string, RouteSpec] => {
+      const spec = structuredClone(route.spec);
+      if (typeof spec === "object" && spec !== null) asStored.set(spec, route);
+      return [route.name, spec as RouteSpec];
+    });
     // Built rather than assigned: a broken route may be called `__proto__`, which assignment drops.
-    current.routes = Object.fromEntries([
-      ...Object.entries(current.routes),
-      ...broken.map((route): [string, RouteSpec] => [route.name, structuredClone(route.spec) as RouteSpec]),
-    ]);
+    current.routes = Object.fromEntries([...Object.entries(current.routes), ...copies]);
     const next = update(current);
     if (next === null) return file;
     const check = checkRoutesFile(next, names);
     if (!check.ok) throw new Error(check.problems.join("\n"));
-    if (check.broken.length > 0) throw refusal(paths.routesPath, check.broken);
+    if (check.broken.length > 0) {
+      throw writeRefusal(
+        paths.routesPath,
+        check.broken.map((route) => asStored.get(route.spec) ?? route),
+      );
+    }
     await writeAtomic(paths.routesPath, toText(check.file));
     return check.file;
   });
