@@ -81,23 +81,35 @@ export async function readClaudeMcp(ctx: ClaudeContext, projects: Project[], out
       // Named as `disabledMcpServers` records a plugin's server, so the switch finds it.
       const prefix = `plugin:${plugin.name}:`;
       const owner = pluginOwner(plugin);
+      // Claude Code 2.1.296 reads the plugin's .mcp.json, then what the manifest declares, in its
+      // order - inline servers, and the .json files of servers it names - and a server name
+      // declared later replaces an earlier one.
+      const declarations: { servers: unknown; file: string }[] = [];
       const mcpFile = path.join(plugin.installPath, ".mcp.json");
       const mcp = await readJsonObject(mcpFile, out.warnings);
-      if (mcp) addServers(serversIn(mcp), { ...from, file: mcpFile }, owner, out, ids, prefix);
-      // Then what the manifest declares, in its order, so a server it defines again keeps the
-      // .mcp.json one: inline servers, and the .json files of servers it names.
+      if (mcp) declarations.push({ servers: serversIn(mcp), file: mcpFile });
       const manifestFile = pluginManifestFile(plugin);
       const manifest = await readJsonObject(manifestFile, out.warnings);
       for (const entry of declared(manifest, "mcpServers")) {
         if (typeof entry !== "string") {
-          addServers(entry, { ...from, file: manifestFile }, owner, out, ids, prefix);
+          declarations.push({ servers: entry, file: manifestFile });
           continue;
         }
         // An MCP bundle (.mcpb, .dxt) or its URL is unpacked by Claude Code: nothing to read here.
         if (!entry.toLowerCase().endsWith(".json") || /^[a-z][a-z0-9+.-]*:\/\//i.test(entry)) continue;
         const file = await insidePlugin(plugin, entry);
         const json = file === undefined ? undefined : await readJsonObject(file, out.warnings);
-        if (file !== undefined && json) addServers(serversIn(json), { ...from, file }, owner, out, ids, prefix);
+        if (file !== undefined && json) declarations.push({ servers: serversIn(json), file });
+      }
+      const last = new Map<string, { config: unknown; file: string }>();
+      for (const { servers, file } of declarations) {
+        if (!isRecord(servers)) continue;
+        for (const [name, config] of Object.entries(servers)) {
+          if (isRecord(config)) last.set(name, { config, file });
+        }
+      }
+      for (const [name, { config, file }] of last) {
+        addServers({ [name]: config }, { ...from, file }, owner, out, ids, prefix);
       }
     }),
   );

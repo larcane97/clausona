@@ -58,8 +58,8 @@ export function addHooks(
 }
 
 /**
- * A hooks.json's hooks - a plugin's or Codex's - whose events sit under a "hooks" key, or at the
- * root of a file written without one.
+ * A Codex hooks.json's hooks, whose events sit under a "hooks" key, or at the root of a file
+ * written without one. A Claude plugin's hooks file goes through `addPluginHooksFile`.
  */
 export function addHooksFile(
   json: Record<string, unknown>,
@@ -110,7 +110,7 @@ async function readPluginHooks(plugin: PluginInstall, out: Collector): Promise<v
   const owner = pluginOwner(plugin);
   const file = path.join(plugin.installPath, "hooks", "hooks.json");
   const json = await readJsonObject(file, out.warnings);
-  if (json) addHooksFile(json, { ...from, file }, owner, out);
+  if (json) addPluginHooksFile(json, { ...from, file }, owner, out);
   const manifestFile = pluginManifestFile(plugin);
   const manifest = await readJsonObject(manifestFile, out.warnings);
   const entries = declared(manifest, "hooks");
@@ -136,7 +136,30 @@ async function readPluginHooks(plugin: PluginInstall, out: Collector): Promise<v
     seen.add(key);
     const hooks = await readJsonObject(named, out.warnings);
     const at = `${path.relative(plugin.installPath, named).split(path.sep).join("/").replaceAll("#", "%23")}:`;
-    if (hooks) addHooksFile(hooks, { ...from, file: named }, owner, out, at);
+    if (hooks) addPluginHooksFile(hooks, { ...from, file: named }, owner, out, at);
+  }
+}
+
+/**
+ * A Claude plugin's hooks file - its hooks/hooks.json, or one its manifest names - as Claude Code
+ * 2.1.296 reads it: the events under a top-level "hooks" object. A file whose events sit at its
+ * root, or whose "hooks" is no object, is one Claude Code refuses whole, so none of its hooks is
+ * listed and a warning says why. One with neither holds no hooks.
+ */
+function addPluginHooksFile(
+  json: Record<string, unknown>,
+  location: Location,
+  owner: string,
+  out: Collector,
+  at = "",
+): void {
+  if (isRecord(json.hooks)) {
+    addHooks(json.hooks, location, owner, out, "hooks", at);
+    return;
+  }
+  const events = Object.values(json).some(Array.isArray);
+  if (json.hooks !== undefined || events) {
+    out.warnings.push({ file: location.file, message: 'has no top-level "hooks", so Claude Code loads none of it' });
   }
 }
 

@@ -60,6 +60,10 @@ export const REFUSAL_CODES = [
   "no-account",
   "elsewhere",
   "all-hooks-off",
+  "mcp-denied",
+  "mcp-not-allowed",
+  "managed-mcp",
+  "bundled-off",
 ] as const;
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
 
@@ -188,6 +192,26 @@ export const REFUSALS: Readonly<Record<RefusalCode, { reason: Words; keys?: Word
   },
   "all-hooks-off": {
     reason: "disableAllHooks in {~file} turns every hook off.",
+    keys: "Change it there.",
+    flags: "Change it there.",
+  },
+  "mcp-denied": {
+    reason: "deniedMcpServers in {~file} keeps it from starting.",
+    keys: "Change it there.",
+    flags: "Change it there.",
+  },
+  "mcp-not-allowed": {
+    reason: "allowedMcpServers in {~file} leaves it out.",
+    keys: "Change it there.",
+    flags: "Change it there.",
+  },
+  "managed-mcp": {
+    reason: "{~file} lets only its own servers start.",
+    keys: "Only your organization can change that file.",
+    flags: "Only your organization can change that file.",
+  },
+  "bundled-off": {
+    reason: "disableBundledSkills in {~file} turns off the skills that come with Claude Code.",
     keys: "Change it there.",
     flags: "Change it there.",
   },

@@ -121,10 +121,14 @@ Some scopes need a word more:
   Loaded while the plugin is on, and in `all`, with the plugin's name as WHERE.
 
   A plugin's servers come from its `.mcp.json` and from what its `.claude-plugin/plugin.json`
-  declares under `mcpServers`: servers inline, or the `.json` files of servers it names. Its
-  hooks come from `hooks/hooks.json` and from `plugin.json`'s `hooks` the same way. A path that
-  leads out of the plugin's folder, through `..` or a link, is not read, as Claude Code does not
-  load it. Nor is an MCP bundle (`.mcpb` or `.dxt`), which Claude Code unpacks itself.
+  declares under `mcpServers`: servers inline, or the `.json` files of servers it names, in
+  that order. A server name declared again replaces the earlier one, as Claude Code merges
+  them, so the manifest's copy wins over the `.mcp.json` one. Its hooks come from
+  `hooks/hooks.json` and from `plugin.json`'s `hooks` the same way. A hooks file holds its
+  events under a top-level `hooks` object; Claude Code loads none of one that has them at its
+  root, so clausona lists none of them and names the file among those it could not read. A path
+  that leads out of the plugin's folder, through `..` or a link, is not read, as Claude Code does
+  not load it. Nor is an MCP bundle (`.mcpb` or `.dxt`), which Claude Code unpacks itself.
 
   - Codex's plugins are the ones in the `plugins/cache` folder of its home, read from the
     version Codex loads. Each is `<plugin>@<marketplace>`, as `config.toml` names it. It brings
@@ -633,6 +637,14 @@ Some rows can only be switched one way:
   switch of its own here, in each account, so `mcp off` works on one in this project.
 - Codex's plugins, and what they bring, are switched in Codex, with `/plugins`. clausona lists
   them and changes none of them.
+- Turning on what a setting elsewhere keeps off would change nothing, so `on` is refused, and
+  the reason names the setting and its file: a Claude server that `deniedMcpServers` keeps out
+  (`mcp-denied`), that `allowedMcpServers` leaves out (`mcp-not-allowed`) or that
+  `managed-mcp.json` shuts out (`managed-mcp`), and a built-in skill while
+  `disableBundledSkills` holds (`bundled-off`, for `visibility` too). A list or setting in
+  managed settings is refused as `managed`, as anything there is. One in this project's own
+  settings holds here alone, so `on --everywhere` goes ahead, with a note such as
+  `Still off in this project: deniedMcpServers in …`. `off` is never refused for it.
 
 [Refusals](#refusals) has every reason a change can't be made, in the words the CLI and the
 screen use.
@@ -922,6 +934,10 @@ the CLI's words. In the table `<tool>` is the tool's name and `<scope>` a scope'
 | `no-account` | No account that has it has opened this project. | | |
 | `elsewhere` | It is turned off in `<file>`, which applies here. | Change it there. | Change it there. |
 | `all-hooks-off` | `disableAllHooks` in `<file>` turns every hook off. | Change it there. | Change it there. |
+| `mcp-denied` | `deniedMcpServers` in `<file>` keeps it from starting. | Change it there. | Change it there. |
+| `mcp-not-allowed` | `allowedMcpServers` in `<file>` leaves it out. | Change it there. | Change it there. |
+| `managed-mcp` | `<file>` lets only its own servers start. | Only your organization can change that file. | Only your organization can change that file. |
+| `bundled-off` | `disableBundledSkills` in `<file>` turns off the skills that come with Claude Code. | Change it there. | Change it there. |
 
 On the screen, `stash-gone` on one account's server, in a row other accounts share, says
 `Press d and choose only work in the dialog.` instead, since `d` on the row would delete the
@@ -1096,7 +1112,7 @@ Each of `refused`:
 |---|---|---|
 | `id` | string | The row's key. |
 | `name` | string | The row's name. |
-| `code` | string | Why, as a code from [Refusals](#refusals). Read this one. |
+| `code` | string | Why, as a code from [Refusals](#refusals). Read this one. `all-hooks-off`, `mcp-denied`, `mcp-not-allowed`, `managed-mcp` and `bundled-off` say a setting elsewhere keeps the row off; the reason names it and its file. |
 | `reason` | string | The reason and what to do, in the CLI's words. Display text. |
 
 Each of `unchanged`:

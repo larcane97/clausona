@@ -412,6 +412,50 @@ describe("skills off", () => {
   });
 });
 
+describe("on, for what a setting elsewhere keeps off", () => {
+  it("refuses a server the lists keep from starting, naming the list and its file, in text and JSON", async () => {
+    const { h, app } = seed();
+    h.write(".claude/settings.json", { deniedMcpServers: [{ serverName: "figma" }] });
+    const { run } = cli(h, app);
+    const error = await failure(run("mcp", ["on", "figma", "--yes"]));
+    expect(error).toMatchObject({ code: 1, kind: "refused" });
+    expect(error.message).toContain(
+      "figma  deniedMcpServers in ~/.claude/settings.json keeps it from starting. Change it there.",
+    );
+    const body = JSON.parse((await failure(run("mcp", ["on", "figma", "--yes", "--json"]))).stdout ?? "");
+    expect(body.refused[0]).toMatchObject({ name: "figma", code: "mcp-denied" });
+    // The dry run lists it and exits 0; managed-mcp.json shuts every other server out by name.
+    h.write("managed-settings.json", {});
+    h.write("managed-mcp.json", { mcpServers: {} });
+    const plan = JSON.parse(await run("mcp", ["on", "pg-dev", "--dry-run", "--json"]));
+    expect(plan.refused).toEqual([
+      expect.objectContaining({
+        name: "pg-dev",
+        code: "managed-mcp",
+        reason: "~/managed-mcp.json lets only its own servers start. Only your organization can change that file.",
+      }),
+    ]);
+    expect(existsSync(h.path(".clausona"))).toBe(false);
+  });
+
+  it("refuses a built-in skill while disableBundledSkills holds, naming where it is set", async () => {
+    const { h, app } = seed();
+    h.write(".claude/settings.json", { disableBundledSkills: true, skillOverrides: { "claude-api": "off" } });
+    const { run } = cli(h, app);
+    const error = await failure(run("skills", ["on", "claude-api", "--yes", "--json"]));
+    const body = JSON.parse(error.stdout ?? "");
+    expect(body.refused).toEqual([
+      expect.objectContaining({
+        name: "claude-api",
+        code: "bundled-off",
+        reason:
+          "disableBundledSkills in ~/.claude/settings.json turns off the skills that come with Claude Code. Change it there.",
+      }),
+    ]);
+    expect(json(h.path(".claude", "settings.json")).skillOverrides).toEqual({ "claude-api": "off" });
+  });
+});
+
 describe("skills rm", () => {
   it("refuses a Cloud skill, saying what to do instead, in text and JSON", async () => {
     const { h, app } = seed();

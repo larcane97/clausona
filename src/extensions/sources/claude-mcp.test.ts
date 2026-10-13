@@ -78,7 +78,7 @@ describe("readClaudeMcp", () => {
     expect(Object.keys(out.facts.fingerprints).sort()).toEqual(out.items.map((i) => i.id).sort());
   });
 
-  it("keeps the first of a plugin server defined in both its .mcp.json and its manifest", async () => {
+  it("takes the last of a plugin server defined more than once, as Claude Code picks it", async () => {
     const h = new TestHome();
     homes.push(h);
     h.claude("default", ".claude");
@@ -91,7 +91,23 @@ describe("readClaudeMcp", () => {
 
     const out = await read(h, []);
 
-    expect(out.items.map((i) => [i.name, i.summary?.command])).toEqual([["plugin:context7:context7", "from-mcp-json"]]);
+    // Claude Code 2.1.296 reads the plugin's .mcp.json first, then what the manifest declares, in
+    // its order, and a server name declared later replaces an earlier one.
+    expect(out.items.map((i) => [i.name, i.summary?.command])).toEqual([["plugin:context7:context7", "from-manifest"]]);
+    const [context7] = out.items;
+    expect(context7?.location.file).toBe(path.join(realpathSync.native(ctx7), ".claude-plugin", "plugin.json"));
+    expect(out.facts.fingerprints[context7?.id ?? ""]).toBe(valueHash({ command: "from-manifest" }));
+
+    // In a list, the last entry that names it wins too, a file of servers as an inline one.
+    h.write(".claude/plugins/cache/m/context7/1.0.0/servers.json", { context7: { command: "from-file" } });
+    h.write(".claude/plugins/cache/m/context7/1.0.0/.claude-plugin/plugin.json", {
+      mcpServers: ["./servers.json", { context7: { command: "from-list" } }],
+    });
+    expect((await read(h, [])).items.map((i) => i.summary?.command)).toEqual(["from-list"]);
+    h.write(".claude/plugins/cache/m/context7/1.0.0/.claude-plugin/plugin.json", {
+      mcpServers: [{ context7: { command: "from-list" } }, "./servers.json"],
+    });
+    expect((await read(h, [])).items.map((i) => i.summary?.command)).toEqual(["from-file"]);
   });
 
   it("reads the servers a plugin's manifest names by path, in a list too, with the plugin's place", async () => {
