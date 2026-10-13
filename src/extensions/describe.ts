@@ -575,6 +575,10 @@ function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined)
   // A link to nothing has no SKILL.md to read, whatever the settings say.
   if (item.link?.broken) return [{ label: "Loaded", text: "no, its link leads nowhere", tone: "error" }];
   if (item.codexError) {
+    // Where Codex does not trust a worktree it runs no project hooks there, its main checkout's
+    // neither: the trust comes first, as for the main checkout's rows.
+    const untrusted = item.codexError === "main checkout's runs" && untrustedOwn(inv, item);
+    if (untrusted) return [{ label: "Loaded", text: UNTRUSTED_OFF.hook ?? "", tone: "warning" }];
     return [{ label: "Loaded", text: `no, ${codexSkip(inv, item, item.codexError)}`, tone: "error" }];
   }
   const perAccount = statesByAccount(inv, row, project);

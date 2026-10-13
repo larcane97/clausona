@@ -356,8 +356,9 @@ The switches are read from these places:
   the main checkout's keys, and turning one off changes the main checkout's file, which git
   tracks there. The worktree's own hooks are tagged `main checkout's runs` and are not in
   Loaded. Their details name the main checkout's file, and clausona does not change them
-  (`codex-worktree-hook`). This is only for a worktree with a `.codex` folder of its own: Codex
-  runs no project hooks in one without.
+  (`codex-worktree-hook`). In a worktree Codex does not trust, it runs neither, so their details
+  and refusals say that first (`codex-untrusted`). This is only for a worktree with a `.codex`
+  folder of its own: Codex runs no project hooks in one without.
 
 ### Tags
 

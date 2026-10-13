@@ -1207,6 +1207,41 @@ describe("Codex hooks and Codex's trust", () => {
     SPAWNING_TEST_TIMEOUT_MS,
   );
 
+  it.skipIf(!hasGit)(
+    "says first that Codex does not trust a worktree, where it runs neither its own hooks nor its main checkout's",
+    async () => {
+      const { h } = seed();
+      const main = h.path("repos", "main");
+      mkdirSync(main, { recursive: true });
+      gitIn(h, main, "init", "-q");
+      h.write("repos/main/.codex/hooks.json", {
+        hooks: { Stop: [{ hooks: [{ type: "command", command: "echo a" }] }] },
+      });
+      gitIn(h, main, "add", ".");
+      gitIn(h, main, "commit", "-q", "-m", "init");
+      const own = h.path("repos", "main-own");
+      gitIn(h, main, "worktree", "add", "-q", own);
+      // main is trusted, and the worktree's own entry says untrusted: Codex lists no hooks there.
+      h.write(
+        ".codex/config.toml",
+        `[projects.${JSON.stringify(realpathSync(main))}]\ntrust_level = "trusted"\n\n[projects.${JSON.stringify(own)}]\ntrust_level = "untrusted"\n`,
+      );
+      h.claude("default", ".claude", { projects: { [own]: {} } });
+      type Row = { id: string; state: string; tags: string[]; file: string };
+      const rows: Row[] = JSON.parse(
+        await run(h, own, "hooks", ["ls", "--tool", "codex", "--scope", "project", "--json"]),
+      ).items;
+      const ownRow = rows.find((i) => i.file === path.join(own, ".codex", "hooks.json"));
+      expect(ownRow && [ownRow.state, ownRow.tags]).toEqual(["off", ["off", "main checkout's runs"]]);
+      const shown = await run(h, own, "hooks", ["show", "--id", ownRow?.id ?? ""]);
+      expect(shown).toMatch(/^Loaded\s+off: Codex runs a project's hooks only once it trusts the project$/m);
+      expect(shown).toMatch(/^Trust\s+Codex does not trust this project, so it ignores its \.codex folder\.$/m);
+      const off = JSON.parse(await run(h, own, "hooks", ["off", "--id", ownRow?.id ?? "", "--dry-run", "--json"]));
+      expect(off.refused.map((r: { code: string }) => r.code)).toEqual(["codex-untrusted"]);
+    },
+    SPAWNING_TEST_TIMEOUT_MS,
+  );
+
   it("lists a Codex hook clausona keeps aside as off, not as one Codex skips", async () => {
     const { h, app } = seed();
     h.write(".codex/hooks.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "echo kept" }] }] } });

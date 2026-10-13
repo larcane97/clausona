@@ -449,10 +449,12 @@ function planRow(run: Run, row: ScopeRow): Outcome {
   }
   // Codex's plugins are switched and uninstalled in Codex; the rest of this file is Claude's.
   if (item.kind === "plugin" && loc.tool === "codex") return refused(run, row, "codex-plugin");
-  // A linked worktree's own hook, which Codex never runs there: its main checkout's runs instead.
+  // A linked worktree's own hook, which Codex never runs there: its main checkout's runs instead,
+  // where Codex trusts the worktree; where it does not, neither runs, and the trust comes first.
   // Deleting what clausona kept writes nothing under the worktree's .codex folder.
   const runs = codexWorktreeRuns(run.inv, item);
   if (runs !== undefined && !(verb === "rm" && item.stashed)) {
+    if (!codexTrusted(run.inv, loc.project)) return refused(run, row, "codex-untrusted");
     return refused(run, row, "codex-worktree-hook", { "~file": tilde(runs, run.inv.homeDir) });
   }
   // A hook in a config.toml: clausona keeps hooks it takes out as JSON, and changes no TOML hook.
