@@ -618,7 +618,10 @@ with the repo. When a change needs a file that is not there yet, such as a proje
 
 `on` writes in the same places. For a `.mcp.json` server it also takes the name out of
 `disabledMcpjsonServers` in each account's entry for the project, where an account turned it
-down. A server turned off in your user settings or in the project's shared
+down. Adding the name to `enabledMcpjsonServers` approves a command the repo defines, so that
+line of the plan says what the server runs, its command or URL with secrets hidden as the
+details hide them, as in `runs npx docs-mcp --api-key <hidden>`. A server approved before has
+nothing new to approve, and its plan says nothing of it. A server turned off in your user settings or in the project's shared
 `.claude/settings.json` stays off whatever is written here, so `on` is refused and the reason
 names that file. `visibility` writes `skillOverrides.<name>` as off does, with the level as the
 value.
@@ -966,6 +969,7 @@ Each of `changes`:
 | `tracked` | boolean | `true` when git tracks it and `--tracked` let the change go ahead. |
 | `rows` | string[] | The row keys this line is for, as `id` in `ls --json`. |
 | `breaks` | string[] | For a folder deleted, the row keys of the skill links that lead into it and are not in the same `rm`: the links it leaves broken. Empty otherwise. |
+| `runs` | string or null | For a line that approves a `.mcp.json` server, what the server runs: its command or URL, with secrets hidden as in an item's `summary`. `null` otherwise. |
 
 Each of `refused`:
 
@@ -1003,7 +1007,8 @@ Each of `unchanged`:
       "note": null,
       "tracked": false,
       "rows": ["skill:claude:global:-:old-one"],
-      "breaks": []
+      "breaks": [],
+      "runs": null
     }
   ],
   "unchanged": [],
@@ -1021,7 +1026,7 @@ Each of `unchanged`:
 ```
 
 A plan names files, keys and server names. It never holds what a server's or a hook's entry
-holds.
+holds, but for what a `.mcp.json` server runs when the plan approves it, with secrets hidden.
 
 ### Undo
 
@@ -1380,7 +1385,8 @@ that: `Nothing to do: already off in this project.`
 
 Otherwise a dialog takes the panes' place, before anything changes. It has the question, such as
 `Turn off eli5 in this project?`, then a line per file with what changes in it, the rows that
-can't change and why, the backup folder, and `Press u afterwards to put them back.` `y` makes
+can't change and why, the backup folder, and `Press u afterwards to put them back.` Under the
+line that approves a `.mcp.json` server is what it runs, whole. `y` makes
 the change, `n` or `esc` closes it and changes nothing, and `pgup` and `pgdn` scroll its lines.
 
 For a Claude MCP server that several accounts have, the dialog lists the accounts, each `◉`

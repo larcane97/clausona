@@ -796,6 +796,45 @@ describe("plan: Claude MCP servers", () => {
     ]);
   });
 
+  it("says what a .mcp.json server runs, secrets hidden, on the line that approves it", async () => {
+    const { h, app, inv, ctx } = await seed((h) =>
+      h.write("repos/app/.mcp.json", {
+        mcpServers: {
+          "docs-search": { command: "npx", args: ["docs-mcp", "--api-key", KEY], env: { DOCS_TOKEN: KEY } },
+          wiki: { type: "http", url: "https://wiki.example.com/mcp" },
+        },
+      }),
+    );
+    const docs = rowIn(inv, app, "project", "docs-search", "claude", "mcp");
+    const wiki = rowIn(inv, app, "project", "wiki", "claude", "mcp");
+    const lines = (p: Plan) => p.changes.flatMap((c) => c.lines);
+    // Pending approval: on approves the command the repo defines, and the line says what it is,
+    // as the details say it.
+    const approve = plan(ctx, "mcp", act("on", "here", [docs, wiki]));
+    expect(lines(approve).map((l) => [l.what, l.runs])).toEqual([
+      ["enabledMcpjsonServers + docs-search", docs.items[0]?.summary?.command],
+      ["enabledMcpjsonServers + wiki", "https://wiki.example.com/mcp"],
+    ]);
+    expect(docs.items[0]?.summary?.command).toMatch(/^npx docs-mcp --api-key \S+$/);
+    expect(JSON.stringify(approve)).not.toContain(KEY);
+    // Off says nothing of what it runs.
+    expect(lines(plan(ctx, "mcp", act("off", "here", [docs])))[0]?.runs).toBeUndefined();
+
+    // Approved before, and only an account's denial left to clear: nothing new to approve.
+    const approved = await seed((h, app) => {
+      h.write("repos/app/.mcp.json", { mcpServers: { "docs-search": { command: "ds" } } });
+      h.write("repos/app/.claude/settings.local.json", { enabledMcpjsonServers: ["docs-search"] });
+      h.claude("work", ".claude-work", { projects: { [app]: { disabledMcpjsonServers: ["docs-search"] } } });
+    });
+    const again = plan(
+      approved.ctx,
+      "mcp",
+      act("on", "here", [rowIn(approved.inv, approved.app, "project", "docs-search", "claude", "mcp")]),
+    );
+    expect(lines(again).map((l) => [l.what, l.runs])).toEqual([["disabledMcpjsonServers - docs-search", undefined]]);
+    expect(h.home).not.toBe(approved.h.home);
+  });
+
   it("turns a .mcp.json server on here, also in the accounts that denied it, and not over user settings", async () => {
     const accounts = await seed((h, app) => {
       h.claude("work", ".claude-work", {

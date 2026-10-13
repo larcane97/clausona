@@ -205,6 +205,7 @@ describe("skills off", () => {
       tracked: false,
       rows: ["skill:claude:global:-:eli5"],
       breaks: [],
+      runs: null,
     });
     expect(out).not.toContain("expect");
     expect(out).not.toContain("hash");
@@ -573,6 +574,30 @@ describe("mcp off and rm", () => {
     await run("mcp", ["rm", "--id", kept.id, "--yes"]);
     expect(json(h.path(".claude.json")).mcpServers.figma).toEqual({ command: "figma" });
     expect(readdirSync(keptDir)).toEqual([]);
+  });
+});
+
+describe("mcp on", () => {
+  it("shows what a pending .mcp.json server runs before it approves it, whole and with secrets hidden", async () => {
+    const { h, app } = seed();
+    h.write("repos/app/.mcp.json", {
+      mcpServers: { "docs-search": { command: "npx", args: ["docs-mcp", "--api-key", KEY] } },
+    });
+    const { run } = cli(h, app);
+    const runs = "runs npx docs-mcp --api-key <hidden>";
+    const dry = stripAnsi(await run("mcp", ["on", "docs-search", "--dry-run"]));
+    expect(dry).toContain("Turn on docs-search in this project?");
+    expect(dry).toMatch(/settings\.local\.json +enabledMcpjsonServers \+ docs-search\n {8}runs npx docs-mcp/);
+    // On a narrow terminal the path gives way, and what it runs is never cut.
+    const narrow = stripAnsi(await run("mcp", ["on", "docs-search", "--dry-run"], { columns: 40 }));
+    expect(narrow.split("\n")).toContain(`        ${runs}`);
+    const plan = JSON.parse(await run("mcp", ["on", "docs-search", "--dry-run", "--json"]));
+    expect(plan.changes.map((c: { what: string; runs: string | null }) => [c.what, c.runs])).toEqual([
+      ["enabledMcpjsonServers + docs-search", "npx docs-mcp --api-key <hidden>"],
+    ]);
+    // Off writes no approval, and says nothing of what it runs.
+    const off = JSON.parse(await run("mcp", ["off", "docs-search", "--dry-run", "--json"]));
+    expect(off.changes.map((c: { runs: string | null }) => c.runs)).toEqual([null]);
   });
 });
 

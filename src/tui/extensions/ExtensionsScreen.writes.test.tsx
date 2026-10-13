@@ -311,6 +311,31 @@ describe("ExtensionsScreen: writes", () => {
     expect(existsSync(h.path(".claude", "skills", "old-one"))).toBe(false);
   });
 
+  it("says what a .mcp.json server runs in the dialog where space approves it", async () => {
+    const { h, app } = seed();
+    h.write("repos/app/.mcp.json", {
+      mcpServers: { "docs-search": { command: "npx", args: ["docs-mcp", "--api-key", KEY] } },
+    });
+    const instance = mount(h, app, 140, 40);
+    await openRow(instance, "Project", "docs-search", "2");
+    // Pending approval is not off, so space turns it off first: that approves nothing.
+    await press(instance, SPACE);
+    const off = await seen(instance, (f) => f.includes("Turn off docs-search in this project?"));
+    expect(off).not.toContain("  runs ");
+    await press(instance, "y");
+    await seen(instance, (f) => f.includes("Turned off docs-search in this project · u to undo"));
+    await press(instance, SPACE);
+    const dialog = await seen(instance, (f) => f.includes("Turn on docs-search in this project?"));
+    const lines = dialog.split("\n");
+    const at = lines.findIndex((line) => line.includes("enabledMcpjsonServers + docs-search"));
+    expect(at).toBeGreaterThan(0);
+    expect(lines[at + 1]).toContain("  runs npx docs-mcp --api-key <hidden>");
+    expect(dialog).not.toContain(KEY);
+    await press(instance, "y");
+    await seen(instance, (f) => f.includes("Turned on docs-search in this project · u to undo"));
+    expect(json(local(app)).enabledMcpjsonServers).toEqual(["docs-search"]);
+  });
+
   it("says in the dialog which links deleting a folder leaves broken", async () => {
     const { h, app } = seed();
     h.skill("repos/app/.claude/skills", "gstack");

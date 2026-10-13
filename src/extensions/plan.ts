@@ -39,7 +39,8 @@ import type { SkillSelector, TomlEdit } from "./writers/toml.js";
  * as asked, and what cannot change and why. Pure - it reads the inventory and nothing else -
  * and exactly what the confirm dialog and `--dry-run` show; apply.ts carries it out. It names
  * keys and server names, never a value of a server's or a hook's entry: those it only checks
- * by fingerprint.
+ * by fingerprint. The one exception is what a `.mcp.json` server it approves runs, redacted as
+ * the details show it.
  */
 
 export type PlanLine = {
@@ -57,6 +58,11 @@ export type PlanLine = {
   rows: string[];
   /** A folder deleted: the row keys of the skill links into it, not in the action, that it leaves broken. */
   breaks?: string[];
+  /**
+   * A `.mcp.json` server this line approves: what it runs, its command or URL as the inventory's
+   * summary has it, secrets hidden (redact.ts). The one value of a server's entry a plan holds.
+   */
+  runs?: string;
 };
 
 export type Expect =
@@ -869,20 +875,24 @@ function planMcpjson(run: Run, row: ScopeRow): Outcome {
       ...(denied ? [`disabledMcpjsonServers - ${name}`] : []),
       ...(approved ? [] : [`enabledMcpjsonServers + ${name}`]),
     ];
-    out.changes.push(
-      jsonChange(
-        run,
-        row,
-        local,
-        [
-          { op: "list-remove", path: ["disabledMcpjsonServers"], value: name },
-          { op: "list-add", path: ["enabledMcpjsonServers"], value: name },
-        ],
-        [],
-        what.join(", "),
-        { create: true },
-      ),
+    const change = jsonChange(
+      run,
+      row,
+      local,
+      [
+        { op: "list-remove", path: ["disabledMcpjsonServers"], value: name },
+        { op: "list-add", path: ["enabledMcpjsonServers"], value: name },
+      ],
+      [],
+      what.join(", "),
+      { create: true },
     );
+    // Approving runs a command the repo defines: the line says which, as Claude Code's own
+    // approval prompt does. One approved before has nothing new to say.
+    const runs = item.summary?.command ?? item.summary?.url;
+    const line = change.lines[0];
+    if (!approved && runs !== undefined && line) line.runs = runs;
+    out.changes.push(change);
   }
   out.changes.push(...accountChanges);
   return out;
