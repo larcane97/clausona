@@ -1,4 +1,5 @@
 import type { ToolName } from "../types.js";
+import { foldProfileName } from "./profile-name.js";
 
 /** A registered profile as routing sees it. */
 export type Member = {
@@ -14,9 +15,6 @@ export type Member = {
   configDir: string;
 };
 
-/** The form two names are compared in, as foldProfileName (src/lib/profile-ref.ts) does. */
-const fold = (value: string) => value.normalize("NFKC").toLowerCase();
-
 const hasGlob = (pattern: string) => /[*?]/.test(pattern);
 
 /** Orders anything with an id - a member, a ranked row, a form's account - by that id. */
@@ -25,7 +23,7 @@ export const compareIds = (a: { id: string }, b: { id: string }) => (a.id < b.id
 /** A glob as an anchored, case-folded RegExp: `*` any run, `?` one character, the rest literal. */
 export function globToRegExp(glob: string): RegExp {
   let source = "";
-  for (const ch of fold(glob)) {
+  for (const ch of foldProfileName(glob)) {
     if (ch === "*") source += ".*";
     else if (ch === "?") source += ".";
     else source += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
@@ -54,7 +52,7 @@ export function matchesMember(pattern: string, member: Member): boolean {
   if (member.kind === "api" && (isEmail || hasGlob(body))) return false;
   const subject = isEmail ? member.email : member.name;
   if (!subject) return false;
-  return globToRegExp(body).test(fold(subject));
+  return globToRegExp(body).test(foldProfileName(subject));
 }
 
 export type Expansion = {

@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { looksLikeCredential } from "../core/credential-token.js";
+import { foldProfileName } from "../core/profile-name.js";
 import { ALL_TOOLS } from "../tools/registry.js";
 import type { DiscoveredAccount, Registry, ToolName } from "../types.js";
 
@@ -40,14 +41,8 @@ export { looksLikeCredential };
 export const CREDENTIAL_AS_NAME_ERROR =
   "That looks like an API key, not a profile name - a profile name is at most 64 characters and never starts with 'sk-'. A key is never an argument, because `ps` shows every process's arguments to every user on the machine: pipe it in (printf %s \"$KEY\" | clausona add <profile> --api …) or point at it with --key-from env:NAME.";
 
-/**
- * The form in which two names are compared. A case-insensitive filesystem (macOS and Windows
- * by default) treats `Work` and `work` as one directory, and APFS folds more than ASCII
- * case - `ſ` (U+017F) is `s` to it - which NFKC normalization covers.
- */
-export function foldProfileName(name: string): string {
-  return name.normalize("NFKC").toLowerCase();
-}
+/** The form in which two names are compared: `foldProfileName`, in core so route patterns use it too. */
+export { foldProfileName };
 
 export function validateProfileName(name: string): { ok: true } | { ok: false; error: string } {
   // Checked first, so the message below never echoes something key-shaped.
