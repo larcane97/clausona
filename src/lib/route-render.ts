@@ -688,10 +688,9 @@ function pickedWhy(ranking: Ranking): string {
   if (outcome.stage === "fallback") return "fallback";
   if (outcome.stage === "overflow") return mostLeftReason(route);
   if (route.strategy === "round-robin") return "next in turn";
-  // routing.ts says which of the two `expiring` took.
-  if (route.strategy === "expiring" && outcome.reason.startsWith("weekly limit resets")) {
-    return "weekly limit resets within 24h";
-  }
+  // routing.ts says which `expiring` took: a weekly reset, within 24h or already past, or the
+  // lowest usage.
+  if (route.strategy === "expiring" && outcome.reason.startsWith("weekly limit")) return outcome.reason;
   return "most room";
 }
 

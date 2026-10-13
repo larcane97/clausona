@@ -128,6 +128,17 @@ describe("strategies", () => {
     });
   });
 
+  // An older reading can hold a reset time already past: that week is over, so the pick stands.
+  it("expiring keeps a weekly reset already past, and says it has reset", () => {
+    const past = { ...quotas, "claude:a": snap(20, 70, { weekly: { usedPercent: 70, resetsAt: inHours(-1) } }) };
+    expect(rank({ strategy: "expiring" }, past).outcome).toEqual({
+      kind: "picked",
+      id: "claude:a",
+      stage: "pool",
+      reason: "weekly limit has reset",
+    });
+  });
+
   it("expiring falls back to the lowest usage when nothing resets soon", () => {
     expect(rank({ strategy: "expiring" }, quotas).outcome).toMatchObject({ id: "claude:b" });
   });

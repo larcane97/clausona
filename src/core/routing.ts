@@ -115,11 +115,17 @@ function byStrategy(route: Route, candidates: Row[], now: number): { row: Row; r
     return { row, reason: "next in turn" };
   }
   if (route.strategy === "expiring") {
+    const resetAt = (row: Row) => (row.sevenDay?.resetsAt ? Date.parse(row.sevenDay.resetsAt) : Number.NaN);
     const soon = candidates.filter((row) => {
-      const at = row.sevenDay?.resetsAt ? Date.parse(row.sevenDay.resetsAt) : Number.NaN;
+      const at = resetAt(row);
       return !Number.isNaN(at) && at - now <= EXPIRING_WITHIN_MS;
     });
-    if (soon.length > 0) return { row: [...soon].sort(byUsage)[0], reason: "weekly limit resets within 24h" };
+    if (soon.length > 0) {
+      const row = [...soon].sort(byUsage)[0];
+      // A reset already past is an older reading's: that week is over, which is as good a reason to
+      // take the account, but not the same one.
+      return { row, reason: resetAt(row) <= now ? "weekly limit has reset" : "weekly limit resets within 24h" };
+    }
     return { row: [...candidates].sort(byUsage)[0], reason: "lowest usage (no weekly reset within 24h)" };
   }
   return { row: [...candidates].sort(byUsage)[0], reason: "lowest usage" };

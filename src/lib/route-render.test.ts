@@ -463,6 +463,11 @@ describe("renderNote", () => {
     );
     const later = rank({ tool: "claude", from: ["work"], strategy: "expiring" }, quotas);
     expect(plain(renderNote("main", later))).toBe("  ▸ claude:work  route main, most room, 5% of 5H used");
+    const past = rank(
+      { tool: "claude", from: ["team"], strategy: "expiring" },
+      { "claude:team": quota(10, 30, 1, -1) },
+    );
+    expect(plain(renderNote("main", past))).toBe("  ▸ claude:team  route main, weekly limit has reset, 30% of 7D used");
   });
 
   it("says when the usage is the last reading", () => {

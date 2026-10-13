@@ -65,6 +65,10 @@ The strategy only decides among pool members under the cut.
 | `headroom` | The lowest usage. | One run at a time, always on the account with the most room |
 | `expiring` | Among accounts whose weekly limit resets within 24 hours, the lowest usage. With none, the same as `headroom`. | Spending weekly quota before it resets unused |
 
+An older reading can carry a weekly reset time that has already passed. `expiring` counts that
+account too, since its week is over, and the run's note says `weekly limit has reset` instead of
+`weekly limit resets within 24h`.
+
 Round-robin keeps one record, `~/.clausona/route-picks.json`, with the time each account was
 last picked. The time belongs to the account, not to a route. A pick on one route counts as that
 account's turn on every route it is in.
