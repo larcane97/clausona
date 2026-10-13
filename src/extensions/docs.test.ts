@@ -55,6 +55,7 @@ const TAGS = [
   "off",
   "off here",
   "off in N of M accounts",
+  "not here",
   "pending approval",
   "hidden by Project copy",
   "hidden by Global copy",
@@ -237,12 +238,14 @@ afterEach(() => {
  * - a Project eli5 a Global one hides; a `.mcp.json` server pending approval, hidden by the
  *   project's copy in the folder above, and one hidden by a nearer parent folder's;
  * - a plugin and its skill, a hook, and an eli5 that Claude and Codex both load here;
- * - a skill whose SKILL.md has no front matter.
+ * - a skill whose SKILL.md has no front matter;
+ * - a `.mcp.json` server of a folder that is no project, above another project.
  */
 function seed() {
   const h = new TestHome();
   homes.push(h);
   const app = h.project("repos/team/app");
+  const lab = h.project("labs/lab");
   const server = { github: { command: "npx", args: ["gh-mcp"], env: { GITHUB_TOKEN: "x" } } };
   h.claude("personal", ".claude", {
     oauthAccount: { organizationUuid: "org", accountUuid: "one" },
@@ -251,7 +254,7 @@ function seed() {
   });
   h.claude("work", ".claude-work", {
     oauthAccount: { organizationUuid: "org", accountUuid: "two" },
-    projects: { [app]: { disabledMcpServers: ["github"] } },
+    projects: { [app]: { disabledMcpServers: ["github"] }, [lab]: {} },
     mcpServers: server,
   });
   h.skill(".claude/skills/synced/org_one", "pdf");
@@ -270,6 +273,8 @@ function seed() {
   h.write("repos/team/app/.mcp.json", { mcpServers: { docs: { command: "docs-mcp" } } });
   h.write("repos/team/.mcp.json", { mcpServers: { docs: { command: "docs-mcp" }, wiki: { command: "wiki-mcp" } } });
   h.write("repos/.mcp.json", { mcpServers: { wiki: { command: "wiki-mcp" } } });
+  // A folder that is no project, above a project that is not app's: its server is not here.
+  h.write("labs/.mcp.json", { mcpServers: { lab: { command: "lab-mcp" } } });
   const kit = h.path(".claude/plugins/cache/m/kit/1.0.0");
   h.write(".claude/plugins/installed_plugins.json", { plugins: { "kit@m": [{ installPath: kit }] } });
   h.skill(".claude/plugins/cache/m/kit/1.0.0/skills", "plan");

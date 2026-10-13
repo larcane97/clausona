@@ -200,6 +200,7 @@ The `state` of an item in JSON is one of these:
 | `name-only` | A Claude skill set to `name-only` in `skillOverrides`. The details say "Shows as name only". |
 | `user-invocable-only` | A Claude skill set to `user-invocable-only` in `skillOverrides`. The details say "Shows as only when you call it". |
 | `pending-approval` | A `.mcp.json` server not approved yet. Claude Code does not start it. |
+| `not-here` | A `.mcp.json` server of a folder that is no project, seen from a project outside that folder. It loads in each project below the folder, with that project's approvals, and has no state of its own: look from one of those projects with `--project`. |
 | `mixed` | The accounts differ: `stateByAccount` has each one's. |
 
 `state` is the switch's value and nothing more. A row loads here when its state is `on`,
@@ -208,6 +209,10 @@ copy and a broken link keep their own `state`; only the tags say they do not loa
 row loads in the accounts whose `stateByAccount` value is `on`, except where another copy wins
 there, which its details say. A row read per account says it for each account in
 `loadsByAccount`.
+
+A row is read in the project it loads in: this project for what loads here, and its own
+project for another project's row, as `--scope other` lists them. So an Other projects row's
+state and tags are that project's, the one WHERE names, not this one's.
 
 The switches are read from these places:
 
@@ -249,7 +254,7 @@ The switches are read from these places:
 ### Tags
 
 A row can carry several tags. They are listed most important first: `broken link`, then
-`off`, `off here` or `off in N of M accounts`, then `pending approval`, then
+`off`, `off here` or `off in N of M accounts`, then `not here`, then `pending approval`, then
 `hidden by … copy`, then `unused`, then `no front matter`. The NOTE column shows the first; JSON
 `tags` has them all.
 
@@ -259,6 +264,7 @@ A row can carry several tags. They are listed most important first: `broken link
 | `off` | Off in every account that has it, by a user or managed setting, or because nothing turns it on (a plugin no settings file enables). |
 | `off here` | Off in every account by this project's own settings: its `.claude/settings*.json`, an account's entry for it in `.claude.json`, or its `.codex/config.toml`. |
 | `off in N of M accounts` | Off in N accounts and on in the others. M counts the accounts that have the row; for a server every account sees, the accounts that have opened this project. |
+| `not here` | A `.mcp.json` server of a folder that is no project, seen from a project outside it: the state `not-here`. |
 | `pending approval` | A `.mcp.json` server that no account has approved in this project. |
 | `hidden by Project copy` | In every account that has it, a same-name copy in Project wins: the account's local server, or this project's `.mcp.json`. |
 | `hidden by Global copy` | In every account that has it, a same-name skill in Global wins: the primary's, or the account's own. |
@@ -923,6 +929,15 @@ apply; the others are always there, `null` when empty.
 
 The parts of the larger fields:
 
+- `state` and `stateByAccount`. A row read per account has `stateByAccount`, each account's own
+  state, and `state` is the value they share, or `mixed`. That is a row of copies in accounts'
+  own files, a Cloud skill, a plugin and what it brings, and a `.mcp.json` or plugin server in a
+  project an account has opened. Every other row has `state` alone, one value for every account:
+  what the files that every account reads say. So for a `.mcp.json` server and for a plugin's
+  server in a project no account has opened yet, `state` means the same thing, the settings
+  files' word: a `.mcp.json` server's approval there, `pending-approval` until one approves it,
+  and a plugin's server its plugin's switch. Each account's own switch, in its `.claude.json`
+  entry for the project, comes in with `stateByAccount` once the account opens the project.
 - `loadsByAccount` is worked out as Loaded is. It is `true` where that account's state is `on`,
   `name-only` or `user-invocable-only`, no other copy of the name wins in that account, and the
   row is no broken link. So it is `false` where the row is off, pending approval or hidden in
@@ -1277,7 +1292,8 @@ each account, `true` or `false`, with the switch and the copy that wins both cou
 
 A Codex server has no `accounts`, because Codex has no accounts here; its `state` is the one
 state. A `.mcp.json` server in a project no account has opened has none either, and its `state`
-merges every account's approvals.
+is what the settings files approve, as for any row read once for every account (see
+[Item fields](#item-fields)).
 
 A name in several places is not ambiguous by itself. Claude Code takes one server per name, so
 a user `github` and this project's `.mcp.json` `github` make one row in Loaded, the copy
