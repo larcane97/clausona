@@ -14,6 +14,7 @@ import {
   type RouteSpec,
   type RoutesFile,
 } from "./route-config.js";
+import { readRules } from "./route-rules.js";
 
 /**
  * ~/.clausona/routes.json (the user's routes) and ~/.clausona/route-picks.json (when each
@@ -133,10 +134,14 @@ function checkText(text: string, filePath: string, names: ProfileNames): { file:
   return check;
 }
 
-/** routes.json as `route edit` saves it: every route of it has to check out. */
+/**
+ * routes.json as `route edit` saves it: every route of it has to check out, and every dir rule
+ * and default has to be readable. One that names a route that is not there is not refused: it
+ * is a warning, as it is when a route is removed some other way.
+ */
 export function parseRoutesText(text: string, filePath: string, names: ProfileNames = NO_PROFILE_NAMES): RoutesFile {
   const { file, broken } = checkText(text, filePath, names);
-  const problems = broken.flatMap((route) => route.problems);
+  const problems = [...broken.flatMap((route) => route.problems), ...readRules(file).problems];
   if (problems.length > 0) throw new RoutesFileError(filePath, problems);
   return file;
 }
@@ -184,18 +189,31 @@ export function brokenRoutesHint(broken: BrokenRoute[]): string {
 }
 
 /**
- * Why a write is refused: the file it would write still has routes that cannot be used. Also
- * said before a route is offered for creation that this refusal would stop.
+ * Why a write is refused: the file it would write still has routes that cannot be used, or dir
+ * rules and defaults that cannot be read (`ruleProblems`, readRules' problems).
  */
-export function writeRefusal(filePath: string, broken: BrokenRoute[]): Error {
-  const count = broken.length === 1 ? "a route" : `${broken.length} routes`;
+export function writeRefusal(filePath: string, broken: BrokenRoute[], ruleProblems: string[] = []): Error {
+  const what = [
+    ...(broken.length ? [broken.length === 1 ? "a route" : `${broken.length} routes`] : []),
+    ...(ruleProblems.length ? [ruleProblems.length === 1 ? "a dir rule or default" : "dir rules or defaults"] : []),
+  ].join(" and ");
+  const count = broken.length + ruleProblems.length;
   return new Error(
     [
-      `${filePath} has ${count} that cannot be used, so nothing was saved:`,
-      ...broken.flatMap((route) => route.problems).map((problem) => `    ${problem}`),
-      `  ${brokenRoutesHint(broken)}`,
+      `${filePath} has ${what} that cannot be used, so nothing was saved:`,
+      ...[...broken.flatMap((route) => route.problems), ...ruleProblems].map((problem) => `    ${problem}`),
+      `  ${broken.length ? brokenRoutesHint(broken) : `Fix ${count === 1 ? "it" : "them"} with clausona route edit.`}`,
     ].join("\n"),
   );
+}
+
+/**
+ * The refusal a write of `file` would meet, or null: said before a route is offered for creation
+ * that this refusal would stop.
+ */
+export function refusalOf(filePath: string, file: RoutesFile, broken: BrokenRoute[]): Error | null {
+  const ruleProblems = readRules(file).problems;
+  return broken.length || ruleProblems.length ? writeRefusal(filePath, broken, ruleProblems) : null;
 }
 
 async function withRoutesLock<T>(paths: RoutesPaths, fn: () => Promise<T>): Promise<T> {
@@ -217,8 +235,8 @@ async function withRoutesLock<T>(paths: RoutesPaths, fn: () => Promise<T>): Prom
  * write, or null to leave it alone; what it returns is checked before anything is written.
  *
  * The copy holds the routes that cannot be used too, as they are stored, so that removing one,
- * or a `route set` that mends it, can be written. A file that would still hold one is not: the
- * write is refused with its problems and the way out.
+ * or a `route set` that mends it, can be written. A file that would still hold one, or a dir rule
+ * or default that cannot be read, is not: the write is refused with its problems and the way out.
  */
 export async function updateRoutes(
   update: (current: RoutesFile) => RoutesFile | null,
@@ -242,12 +260,12 @@ export async function updateRoutes(
     if (next === null) return file;
     const check = checkRoutesFile(next, names);
     if (!check.ok) throw new Error(check.problems.join("\n"));
-    if (check.broken.length > 0) {
-      throw writeRefusal(
-        paths.routesPath,
-        check.broken.map((route) => asStored.get(route.spec) ?? route),
-      );
-    }
+    const refusal = refusalOf(
+      paths.routesPath,
+      check.file,
+      check.broken.map((route) => asStored.get(route.spec) ?? route),
+    );
+    if (refusal) throw refusal;
     await writeAtomic(paths.routesPath, toText(check.file));
     return check.file;
   });

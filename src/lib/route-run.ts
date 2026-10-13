@@ -1,5 +1,5 @@
 import { holdsKey, type RouteTool, toolsOf, withDefaults } from "../core/route-config.js";
-import { type LoadedRoutes, writeRefusal } from "../core/routes-store.js";
+import { type LoadedRoutes, refusalOf } from "../core/routes-store.js";
 import { posixQuote } from "../core/shell.js";
 import { createRoute, newRouteFrom } from "../route-commands.js";
 import type { Registry } from "../types.js";
@@ -106,9 +106,10 @@ async function offerToCreate(
   loaded: LoadedRoutes,
 ): Promise<ResolvedRoute> {
   if (!io.interactive) throw error;
-  // Writing it would be refused while another route cannot be used: said now, before any quota
-  // is read or a question asked that a yes could not make good.
-  if (loaded.broken.length > 0) throw writeRefusal(loaded.filePath, loaded.broken);
+  // Writing it would be refused while another route, a dir rule or a default cannot be used:
+  // said now, before any quota is read or a question asked that a yes could not make good.
+  const refusal = refusalOf(loaded.filePath, loaded.file, loaded.broken);
+  if (refusal) throw refusal;
   const { route: _name, ...overrides } = run.options;
   const tool = run.tool ?? inferRouteTool(overrides.from ?? []) ?? "claude";
   checkArgsHaveTool(error.routeName, tool, run);

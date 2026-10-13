@@ -84,6 +84,16 @@ describe("parseRoutesText", () => {
     expect(error.problems).toEqual(["not valid JSON (line 4, column 1)"]);
   });
 
+  it("refuses a dir rule or default it cannot read, and takes one that names a missing route", () => {
+    const error = parseError(JSON.stringify({ version: 1, dirs: { "/srv": { claude: 5 } }, defaults: [] }));
+    expect(error.problems).toEqual([
+      `dirs["/srv"].claude: must be a route's name`,
+      'defaults: must be an object of a route per tool, such as { "claude": "main" }',
+    ]);
+    const dangling = { version: 1, routes: {}, dirs: { "/srv": { claude: "gone" } } };
+    expect(parseRoutesText(JSON.stringify(dangling), "routes.json")).toEqual(dangling);
+  });
+
   // Two objects pasted one after the other: V8 says "after JSON", not "in JSON".
   it("says where text after the closing brace starts", () => {
     const error = parseError('{ "version": 1 }\n{ "version": 1 }\n');
@@ -184,6 +194,31 @@ describe("updateRoutes", () => {
     const p = paths();
     await updateRoutes(() => null, p);
     expect(existsSync(p.routesPath)).toBe(false);
+  });
+
+  it("refuses a write while a dir rule or default cannot be read, and takes one that mends it", async () => {
+    const p = paths();
+    const text = JSON.stringify({ version: 1, routes: {}, dirs: { "/srv": "main", "/opt": { claude: "gone" } } });
+    writeFileSync(p.routesPath, text);
+    await expect(
+      updateRoutes((file) => {
+        file.routes.main = { tool: "claude" };
+        return file;
+      }, p),
+    ).rejects.toThrow(
+      [
+        `${p.routesPath} has a dir rule or default that cannot be used, so nothing was saved:`,
+        `    dirs["/srv"]: must be an object of a route per tool, such as { "claude": "main" }`,
+        "  Fix it with clausona route edit.",
+      ].join("\n"),
+    );
+    expect(readFileSync(p.routesPath, "utf8")).toBe(text);
+    await updateRoutes((file) => {
+      (file.dirs as Record<string, unknown>)["/srv"] = { claude: "main" };
+      return file;
+    }, p);
+    // A rule that names a route that is not there is a warning, and stops no write.
+    expect(readJson(p.routesPath).dirs).toEqual({ "/srv": { claude: "main" }, "/opt": { claude: "gone" } });
   });
 
   it("refuses to change a file it cannot use, and leaves it as it was", async () => {
