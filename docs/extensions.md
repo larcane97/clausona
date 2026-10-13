@@ -621,8 +621,12 @@ file for each tool and kind.
 
 `on` takes back what `off` wrote at the same level. It removes the value, or writes the row on
 there where removing it would leave a value below that still turns it off. For a plugin, `on`
-always writes `true`. When a file at another level still turns the row off, the plan says so in
-a note, such as `Still off in ~/app/.claude/settings.local.json`.
+always writes `true`. When a switch in one project's own place still turns the row off there,
+`on --everywhere` says so in a note naming the switch, its file and any account, such as
+`Still off in this project (skillOverrides.eli5 in ~/app/.claude/settings.local.json). Turn it on here too.`
+That is a project's settings for a skill or a plugin, an account's entry for the project in its
+`.claude.json` for a server, and for Codex a project skill's path entry or the project's
+`config.toml`.
 
 Some rows can only be switched one way:
 
@@ -662,8 +666,9 @@ has the server changes. On the screen the dialog lists the accounts to pick from
 
 Off everywhere takes the server out of each account's `.claude.json`. clausona keeps the entry
 it took out, so that `on --everywhere` can put it back where it was. `on --everywhere` leaves an
-account's switch in this project as it is. When one still turns the server off here, the plan
-says so in a note, `Still off in this project for work.`
+account's switch in this project as it is, whether it puts an entry back or finds none kept.
+When one still turns the server off here, the plan says so in a note,
+`Still off in this project for work (disabledMcpServers in ~/.claude-work/.claude.json). Turn it on here too.`
 
 Neither Claude Code nor Codex has a switch for one hook in one project. So `hooks off` and
 `hooks on` always work everywhere: off takes the hook out of its settings file and clausona

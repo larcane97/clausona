@@ -229,7 +229,19 @@ describe("plan: Claude skills", () => {
     });
     const p = plan(ctx, "skills", act("on", "everywhere", [rowIn(inv, app, "global", "eli5")]));
     expect(p.changes).toHaveLength(1);
-    expect(p.notes).toEqual([`Still off in ${tilde(path.join(app, ".claude", "settings.local.json"), inv.homeDir)}`]);
+    const local = tilde(path.join(app, ".claude", "settings.local.json"), inv.homeDir);
+    expect(p.notes).toEqual([`Still off in this project (skillOverrides.eli5 in ${local}). Turn it on here too.`]);
+  });
+
+  it("notes the project's own off when on everywhere finds the user settings not off", async () => {
+    const { app, inv, ctx } = await seed((h) =>
+      h.write("repos/app/.claude/settings.local.json", { skillOverrides: { eli5: "off" } }),
+    );
+    const p = plan(ctx, "skills", act("on", "everywhere", [rowIn(inv, app, "global", "eli5")]));
+    expect(p.changes).toEqual([]);
+    expect(p.unchanged.map((u) => u.why)).toEqual(["not off in your user settings"]);
+    const local = tilde(path.join(app, ".claude", "settings.local.json"), inv.homeDir);
+    expect(p.notes).toEqual([`Still off in this project (skillOverrides.eli5 in ${local}). Turn it on here too.`]);
   });
 
   it("sets a visibility level in this project", async () => {
@@ -982,7 +994,9 @@ describe("plan: Claude MCP servers", () => {
       { file: h.path(".claude.json"), edits: [{ op: "restore", path: ["mcpServers", "github"] }] },
     ]);
     expect(on.unchanged).toEqual([{ rowKey: github.key, name: "github", why: "not off everywhere in work" }]);
-    expect(on.notes).toEqual(["Still off in this project for work."]);
+    expect(on.notes).toEqual([
+      "Still off in this project for work (disabledMcpServers in ~/.claude-work/.claude.json). Turn it on here too.",
+    ]);
     // Seen from web, where work has turned nothing off, there is nothing to note.
     const fromWeb = rowIn(inv, web, "global", "github", "claude", "mcp");
     expect(plan(contextFor(h, inv, web), "mcp", act("on", "everywhere", [fromWeb])).notes).toEqual([]);
@@ -1224,6 +1238,92 @@ describe("plan: a setting that keeps a Claude server or a built-in skill off", (
     expect(everywhere.notes).toContain(
       `Still off in this project: disableBundledSkills in ${tilde(path.join(local.app, ".claude", "settings.local.json"), local.h.home)}`,
     );
+  });
+});
+
+describe("plan: on everywhere, and what is still off in this project", () => {
+  it("notes an account's own switch here when it puts a server clausona kept back", async () => {
+    const { h, app, inv, ctx } = await seed((h, app) => {
+      // default turned github off here, then off everywhere: clausona keeps its entry.
+      const mine = h.claude("default", ".claude", {
+        oauthAccount: { organizationUuid: "org", accountUuid: "one" },
+        projects: { [app]: { disabledMcpServers: ["github"] } },
+        mcpServers: { figma: { command: "figma" } },
+      });
+      const id = stashIdFor("mcp:claude:account:claude:default:github", NOW - DAY);
+      h.write(
+        path.join(STASH, stashFileName(id)),
+        stashText({
+          version: 1,
+          id,
+          kind: "mcp",
+          tool: "claude",
+          name: "github",
+          file: mine.jsonPath,
+          path: ["mcpServers", "github"],
+          scope: "account",
+          profile: "claude:default",
+          entry: { command: "gh" },
+          stashedAt: new Date(NOW - DAY).toISOString(),
+        }),
+      );
+    });
+    const github = rowIn(inv, app, "global", "github", "claude", "mcp");
+    const on = plan(ctx, "mcp", act("on", "everywhere", [github], { accounts: ["claude:default"] }));
+    expect(on.changes).toMatchObject([
+      { file: h.path(".claude.json"), edits: [{ op: "restore", path: ["mcpServers", "github"] }] },
+    ]);
+    expect(on.notes).toEqual([
+      "Still off in this project for default (disabledMcpServers in ~/.claude.json). Turn it on here too.",
+    ]);
+  });
+
+  it("notes a plugin the project's own settings keep off, whether or not the user settings change", async () => {
+    const { app, inv, ctx } = await seed((h) => {
+      h.write(".claude/settings.json", { ...SETTINGS, enabledPlugins: { "kit@m": false } });
+      h.write("repos/app/.claude/settings.local.json", { enabledPlugins: { "kit@m": false } });
+    });
+    const kit = rowIn(inv, app, "plugins", "kit@m");
+    const local = tilde(path.join(app, ".claude", "settings.local.json"), inv.homeDir);
+    const note = `Still off in this project (enabledPlugins.kit@m in ${local}). Turn it on here too.`;
+    const on = plan(ctx, "skills", act("on", "everywhere", [kit]));
+    expect(on.changes).toHaveLength(1);
+    expect(on.notes).toEqual([note]);
+    const already = await seed((h) =>
+      h.write("repos/app/.claude/settings.local.json", { enabledPlugins: { "kit@m": false } }),
+    );
+    const unchangedOn = plan(
+      already.ctx,
+      "skills",
+      act("on", "everywhere", [rowIn(already.inv, already.app, "plugins", "kit@m")]),
+    );
+    expect(unchangedOn.changes).toEqual([]);
+    expect(unchangedOn.notes).toEqual([note.replace(app, already.app)]);
+  });
+
+  it("notes a Codex project skill's own off, and a trusted project's enabled = false for a server", async () => {
+    const skillFile = (app: string) => path.join(app, ".agents", "skills", "app-lint", "SKILL.md");
+    const skill = await seed((h, appDir) =>
+      h.codex(
+        "personal",
+        ".codex",
+        `[projects.'${appDir}']\ntrust_level = "trusted"\n\n[[skills.config]]\npath = '${skillFile(appDir)}'\nenabled = false\n`,
+      ),
+    );
+    const appLint = rowIn(skill.inv, skill.app, "project", "app-lint", "codex");
+    const on = plan(skill.ctx, "skills", act("on", "everywhere", [appLint]));
+    expect(on.changes).toEqual([]);
+    expect(on.notes).toEqual([
+      `Still off in this project (skills.config ${tilde(skillFile(skill.app), skill.h.home)} in ~/.codex/config.toml). Turn it on here too.`,
+    ]);
+
+    const server = await seed((h) => h.write("repos/app/.codex/config.toml", "[mcp_servers.docs]\nenabled = false\n"));
+    const docs = rowIn(server.inv, server.app, "global", "docs", "codex", "mcp");
+    const onServer = plan(server.ctx, "mcp", act("on", "everywhere", [docs]));
+    expect(onServer.unchanged.map((u) => u.why)).toEqual(["not off in Codex's config.toml"]);
+    expect(onServer.notes).toEqual([
+      `Still off in this project (mcp_servers.docs.enabled in ${tilde(path.join(server.app, ".codex", "config.toml"), server.h.home)}). Turn it on here too.`,
+    ]);
   });
 });
 

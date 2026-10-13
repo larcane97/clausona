@@ -177,6 +177,19 @@ function whereFor(ctx: PlanContext, reach: Reach, project: string | undefined): 
     : `in ${projectName(project, ctx.inv)}`;
 }
 
+/**
+ * The note an `on --everywhere` adds when a switch in one project's own place still turns the row
+ * off there: an account's entry for the project in its `.claude.json`, the project's settings,
+ * a Codex path entry or project config. It names the account, the switch and its file. Said in
+ * no voice of keys or flags: a note reaches the dialog, the CLI and JSON alike.
+ */
+function stillOff(run: Run, project: string | undefined, what: string, file: string, account?: string): string {
+  const where = whereFor(run.ctx, "here", project);
+  const whose = account === undefined ? "" : ` for ${shortProfile(account)}`;
+  const again = where === "in this project" ? "here" : "there";
+  return `Still off ${where}${whose} (${what} in ${tilde(file, run.inv.homeDir)}). Turn it on ${again} too.`;
+}
+
 // ─── One row ────────────────────────────────────────────────────────
 
 type Unchanged = Plan["unchanged"][number];
@@ -471,6 +484,12 @@ function planClaudeSkill(run: Run, row: ScopeRow): Outcome {
   // A toggle takes any level but off as on; visibility on is the full skill.
   const toggle = verb === "on";
   const isOn = (value: unknown) => (toggle ? value !== "off" : value === "on" || (!here && value === undefined));
+  // Everywhere is the user settings: a project's own off, above them, still holds there.
+  if (!here) {
+    const above = claudeSkillOverride(inv, name, seen, ["user"]);
+    if (above?.value === "off" && above.setBy)
+      note(out, stillOff(run, seen, `skillOverrides.${name}`, above.setBy.file));
+  }
   if (isOn(effective)) {
     const why = toggle
       ? here
@@ -483,10 +502,6 @@ function planClaudeSkill(run: Run, row: ScopeRow): Outcome {
   const below = here ? claudeSkillOverride(inv, name, seen, ["local"])?.value : undefined;
   const removable = current !== undefined && (toggle ? below !== "off" : below === undefined || below === "on");
   write(removable ? null : "on");
-  if (!here) {
-    const above = claudeSkillOverride(inv, name, seen, ["user"]);
-    if (above?.value === "off" && above.setBy) note(out, `Still off in ${tilde(above.setBy.file, inv.homeDir)}`);
-  }
   return out;
 }
 
@@ -529,7 +544,14 @@ function planCodexSkill(run: Run, row: ScopeRow): Outcome {
       ? unchanged(out, row, here ? `already off ${where}` : "already off in every project")
       : write(false);
   }
-  if (!here) return byName?.enabled === false ? write(null) : unchanged(out, row, "not off in Codex's config.toml");
+  if (!here) {
+    // A project skill's own path entry, which wins over the name one, still turns it off there.
+    const skillFile = path.join(item.location.file, "SKILL.md");
+    if (item.location.scope === "project" && codexSkillEntry(inv, { path: skillFile })?.enabled === false) {
+      note(out, stillOff(run, item.location.project, `skills.config ${tilde(skillFile, inv.homeDir)}`, file));
+    }
+    return byName?.enabled === false ? write(null) : unchanged(out, row, "not off in Codex's config.toml");
+  }
   if (stateHere(inv, item, run.ctx.project).value !== "off") return unchanged(out, row, `already on ${where}`);
   // A path entry wins over a name one: it goes, unless the name entry would then turn it off.
   return write(entry !== undefined && byName?.enabled !== false ? null : true);
@@ -724,6 +746,15 @@ function switchHere(
   }
 }
 
+/** The note that an account's own `disabledMcpServers` for the project still turns its copy off there. */
+function switchStillOff(run: Run, out: Outcome, copy: Extension): void {
+  const account = copy.location.profile;
+  const seen = viewFrom(copy, run.ctx.project);
+  const file = account === undefined ? undefined : run.inv.places.claudeJson[account];
+  if (account === undefined || file === undefined || !mcpDisabled(run.inv, account, seen, copy.name)) return;
+  note(out, stillOff(run, seen, "disabledMcpServers", file, account));
+}
+
 /** An account's own server, each chosen account's copy: here its project switch, everywhere out of its file. */
 function planAccountServer(run: Run, row: ScopeRow): Outcome {
   const { verb, reach } = run.action;
@@ -769,11 +800,8 @@ function planAccountServer(run: Run, row: ScopeRow): Outcome {
           );
       } else if (!copy.stashed) {
         unchanged(out, row, `not off everywhere in ${short(copy)}`);
-        // Its switch in this project stays as it is. Said in no voice of keys or flags: a note
-        // reaches the dialog, the CLI and JSON alike.
-        if (mcpDisabled(inv, account ?? "", viewFrom(copy, run.ctx.project), name)) {
-          note(out, `Still off in this project for ${short(copy)}.`);
-        }
+        // Its switch in this project stays as it is.
+        switchStillOff(run, out, copy);
       } else if (copy.stashed.gone) {
         // d on a row that holds other accounts' copies too would delete theirs: pick this one's account.
         const others = row.items.some((other) => other.location.profile !== copy.location.profile);
@@ -798,6 +826,8 @@ function planAccountServer(run: Run, row: ScopeRow): Outcome {
             { account, fromStash: copy.stashed.file },
           ),
         );
+        // Put back, it is still off here while the account's switch here says so.
+        switchStillOff(run, out, copy);
       }
     }
     return out;
@@ -1043,6 +1073,14 @@ function planCodexMcp(run: Run, row: ScopeRow): Outcome {
     const out = outcome();
     const off = codexMcpEntry(inv, own, name)?.enabled === false;
     if (verb === "off") return off ? unchanged(out, row, "already off in every project") : write(out, own, false, true);
+    // This project's own config, which Codex reads where it trusts the project, still turns it off.
+    const project = run.ctx.project;
+    const here = inv.facts.codexMcpEnabled.find(
+      (entry) => entry.name === name && entry.project !== undefined && samePath(entry.project, project),
+    );
+    if (here?.enabled === false && codexTrusted(inv, project)) {
+      note(out, stillOff(run, project, `mcp_servers.${name}.enabled`, here.file));
+    }
     return off ? write(out, own, null, true) : unchanged(out, row, "not off in Codex's config.toml");
   }
   const project = run.ctx.project;
@@ -1142,6 +1180,13 @@ function planPlugin(run: Run, row: ScopeRow): Outcome {
   if (unreadable) return unreadable;
   const value = verb === "on";
   const out = outcome(seen);
+  if (!here && value) {
+    // A project's own false still wins over the user's true.
+    const above = (["local", "project"] as const)
+      .map((layer) => inv.facts.claudeEnabledPlugins.find((e) => e.layer === layer && samePath(e.project, seen)))
+      .find((entry) => entry !== undefined && ownValue(entry.map, id) === false);
+    if (above) note(out, stillOff(run, seen, `enabledPlugins.${id}`, above.file));
+  }
   if (pluginState(inv, id, here ? seen : undefined).value === verb) {
     return unchanged(out, row, `already ${verb} ${whereFor(run.ctx, reach, seen)}`);
   }
@@ -1159,13 +1204,6 @@ function planPlugin(run: Run, row: ScopeRow): Outcome {
       { create: true },
     ),
   );
-  if (!here && value) {
-    // A project's own false still wins over the user's true.
-    const above = (["local", "project"] as const)
-      .map((layer) => inv.facts.claudeEnabledPlugins.find((e) => e.layer === layer && samePath(e.project, seen)))
-      .find((entry) => entry !== undefined && ownValue(entry.map, id) === false);
-    if (above) note(out, `Still off in ${tilde(above.file, inv.homeDir)}`);
-  }
   return out;
 }
 

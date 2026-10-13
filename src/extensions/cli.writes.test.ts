@@ -456,6 +456,28 @@ describe("on, for what a setting elsewhere keeps off", () => {
   });
 });
 
+describe("on --everywhere, with an account's own off left here", () => {
+  it("puts back what clausona kept and says in the dry run what still keeps it off here", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
+    const { h, app } = seed();
+    const { run } = cli(h, app);
+    // figma off here in both accounts, then off everywhere: clausona keeps each entry.
+    await run("mcp", ["off", "figma", "--yes"]);
+    await run("mcp", ["off", "figma", "--everywhere", "--yes"]);
+    const text = stripAnsi(await run("mcp", ["on", "figma", "--everywhere", "--dry-run"]));
+    expect(text).toContain("mcpServers.figma put back");
+    expect(text).toContain(
+      "Still off in this project for default (disabledMcpServers in ~/.claude.json). Turn it on here too.",
+    );
+    expect(text).toContain(
+      "Still off in this project for work (disabledMcpServers in ~/.claude-work/.claude.json). Turn it on here too.",
+    );
+    const plan = JSON.parse(await run("mcp", ["on", "figma", "--everywhere", "--dry-run", "--json"]));
+    expect(plan.notes).toHaveLength(2);
+  });
+});
+
 describe("skills rm", () => {
   it("refuses a Cloud skill, saying what to do instead, in text and JSON", async () => {
     const { h, app } = seed();
