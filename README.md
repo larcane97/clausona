@@ -177,8 +177,8 @@ hours or the cap you give, and then runs. That suits scripts and cron:
 clausona run --route main --wait=2h -- -p "run the nightly review"
 ```
 
-When the tool's arguments name a model, as in `-- --model opus`, an account's weekly limit on
-that model counts too, so an account whose Opus limit is used up is not picked for an Opus run.
+When the tool's arguments name a model, as in `-- --model opus`, an account's limit on that
+model counts too, so an account whose Opus limit is used up is not picked for an Opus run.
 
 A route is for Claude Code unless you say otherwise. `--tool codex` makes a Codex route, and
 `--tool all` makes one that takes the accounts of both tools. `clausona route` on its own opens

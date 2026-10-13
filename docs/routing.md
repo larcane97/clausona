@@ -87,9 +87,9 @@ different accounts, as long as four are under the cut. If the lock stays busy fo
 
 ### Limits on one model
 
-Some plans also have a weekly limit on one model, such as Claude's limit on Opus, or Codex's on
+Some plans also have a limit on one model, such as Claude's weekly limit on Opus, or Codex's on
 GPT-5.3-Codex-Spark. When the tool's arguments name a model, the account's limit on that model
-counts too, and the usage is the highest of the three:
+counts too, and the usage is the highest of them all:
 
 ```bash
 clausona run --route main -- --model opus -p "plan the migration"
@@ -104,6 +104,12 @@ Here `claude:team` is at 10% of its 5 hours and 20% of its week, but its Opus li
 over the cut, so an Opus run goes to another account. A run that names no model can still
 take `claude:team`. When the model's limit is the highest of an account's windows, the note
 says so, as in `62% of the Opus limit used`.
+
+A Codex limit on a model can have two windows, like the account's own: 5 hours and a week.
+Either can run out first, so the higher of the two counts, as with the account's 5H and 7D. The
+note names the window, as in `62% of the GPT-5.3-Codex-Spark 7D limit used`, and so does the
+model's column in `route explain`. Claude's model limits are all weekly and are named without
+one.
 
 clausona reads the model from `--model` for Claude Code, and from `-m` or `--model` for Codex,
 also after a subcommand such as `exec`. It stops reading at a `--`, and hands the arguments to
@@ -844,7 +850,17 @@ $ clausona route explain main --model opus
 ```
 
 When no account has a limit on the model, the box says `no account reports a limit on it`, and
-there is no column.
+there is no column. A Codex limit's column shows the higher of its windows, and says which:
+
+```
+$ clausona route explain cx --model gpt-5.3-codex-spark
+  …
+    ACCOUNT   5H        7D       GPT-5.3-CODEX-SPARK
+    ────────────────────────────────────────────────
+  ▸ codex:c   3% 1h     3% 2d     5% 7D 4d            picked next
+    codex:b  12% 1h    34% 2d    60% 7D 4d
+    codex:a   5% 1h    22% 2d    90% 5H 3h            over 80%
+```
 
 Fallback members are marked `(fallback)`. A pick from the fallback says so, in the table and in
 the run's note. Here `solo`'s cut is lowered for one look, so its only pool member is over it:
@@ -966,7 +982,8 @@ with `profile` null. Ctrl-C while waiting exits 130 and leaves no pick recorded.
 `stage` is `pool`, `fallback` or `overflow`. `overflow` is the third stage: no account was under
 the cut, and the one with the most left was picked. `route` is null for an unsaved route.
 `usage.window` is `"5H"` or `"7D"`, or the name of the limit on the model `--model` named, such
-as `"Opus"`, when that limit is the highest.
+as `"Opus"`, when that limit is the highest. A Codex limit is named with its window, as in
+`"GPT-5.3-Codex-Spark 7D"`.
 
 When nobody can be picked, the JSON is still printed on stdout, and the exit code is 75:
 
@@ -1006,9 +1023,9 @@ Each entry in `members`:
 | `matchedBy` | The pattern that brought it in |
 | `status` | `"picked"`, `"eligible"` (under the cut, not picked), `"over-limit"` (at or above `maxUsage`, not picked) or `"skipped"` |
 | `skipReason` | null, or one of `"signed-out"`, `"expired"`, `"no-reading"`, `"not-registered"`, `"keeps-own-sessions"` (a resumed run), `"api-not-supported"` |
-| `usage` | `{ "percent", "window", "stale" }` with `window` `"5H"`, `"7D"`, or the name of the limit on the model (`"Opus"`) when that is the highest, or null |
+| `usage` | `{ "percent", "window", "stale" }` with `window` `"5H"`, `"7D"`, or the name of the limit on the model (`"Opus"`, `"GPT-5.3-Codex-Spark 7D"`) when that is the highest, or null |
 | `fiveHour`, `sevenDay` | `{ "usedPercent", "resetsAt" }` with `resetsAt` an ISO time or null, or null |
-| `scoped` | The account's limit on the model `--model` named, as `{ "label", "usedPercent", "resetsAt" }`, or null without `--model` or such a limit |
+| `scoped` | The account's limit on the model `--model` named, as `{ "label", "usedPercent", "resetsAt" }` (of a Codex limit with two windows, the higher), or null without `--model` or such a limit |
 | `lastPickedAt` | The ISO time of the last pick, or null |
 
 An account picked at the `overflow` stage has the status `picked`, even though its usage is at or
