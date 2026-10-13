@@ -62,6 +62,7 @@ const TAGS = [
   "hidden by Parent folders copy",
   "unused",
   "no front matter",
+  "name too long",
 ];
 
 /** The keys `ls --json` writes, in order. */
@@ -285,6 +286,9 @@ function seed() {
   });
   h.codex("personal", ".codex");
   h.skill(".agents/skills", "eli5");
+  // Two SKILL.md files Codex skips.
+  h.write(".agents/skills/plain/SKILL.md", "just text\n");
+  h.write(".agents/skills/long/SKILL.md", `---\nname: ${"x".repeat(65)}\ndescription: d\n---\n`);
   // The managed settings are the home's own, so the test never reads this machine's. `terminal`
   // runs it as if on one, answering yes.
   const run = (command: ExtensionsCommand, args: string[], terminal = false) =>

@@ -9,8 +9,9 @@ import type { SkillLocation } from "./skill-dirs.js";
  * `parse_skill_frontmatter_metadata` in codex-rs/skills): a folder holding a SKILL.md is a skill,
  * named by the `name` in its front matter - whitespace collapsed - or, with none, by its folder.
  * The id keeps the folder, as it always has, so an id read before still names the skill when
- * its front matter names it otherwise. A link whose target is gone is listed too, to be cleaned
- * up. `prefix` is a plugin's `<name>:`.
+ * its front matter names it otherwise. A SKILL.md Codex refuses - one with no front matter, or a
+ * name over 64 characters - is listed with `codexError`, and does not load. A link whose target
+ * is gone is listed too, to be cleaned up. `prefix` is a plugin's `<name>:`.
  */
 export async function readCodexSkills(
   dir: string,
@@ -28,13 +29,17 @@ export async function readCodexSkills(
     const text = broken ? undefined : await readText(path.join(folder, "SKILL.md"), out.warnings);
     if (!broken && text === undefined) return undefined;
     const realFolder = broken ? undefined : await realPath(folder).catch(() => undefined);
-    const front = text === undefined ? {} : parseFrontmatter(text);
+    const block = text === undefined ? undefined : frontMatterOf(text);
+    const front = block === undefined ? {} : parseFrontmatter(`---\n${block}\n---\n`);
     const description = singleLine(front.description ?? "");
+    const name = skillName(front.name, entry);
+    const codexError = text === undefined ? undefined : refusal(block, name);
     const item: Extension = {
       id: `skill:${location.tool}:${location.scope}:${owner}:${prefix}${entry}`,
       kind: "skill",
-      name: `${prefix}${skillName(front.name, entry)}`,
+      name: `${prefix}${name}`,
       ...(description ? { description } : {}),
+      ...(codexError ? { codexError } : {}),
       location: { ...location, file: folder },
       ...(info.link ? { link: info.link } : {}),
       ...(realFolder !== undefined ? { realFolder } : {}),
@@ -45,6 +50,27 @@ export async function readCodexSkills(
     return item;
   });
   for (const item of found) if (item) out.items.push(item);
+}
+
+/**
+ * A SKILL.md's front matter as Codex finds it: a first line that is `---`, spaces aside, then
+ * the lines up to the next such line. Undefined when there is no closing line or nothing between
+ * the two, which Codex calls missing front matter and does not load.
+ */
+function frontMatterOf(text: string): string | undefined {
+  const lines = text.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") return undefined;
+  const end = lines.findIndex((line, i) => i > 0 && line.trim() === "---");
+  return end > 1 ? lines.slice(1, end).join("\n") : undefined;
+}
+
+/**
+ * Why Codex lists no skill for a SKILL.md, if it does not: no front matter, or a name over
+ * Codex's 64 characters. Such a folder is listed all the same, so it can be found and fixed.
+ */
+function refusal(block: string | undefined, name: string): Extension["codexError"] {
+  if (block === undefined) return "no front matter";
+  return [...name].length > 64 ? "name too long" : undefined;
 }
 
 /** Whitespace collapsed to single spaces, as Codex's `sanitize_single_line` does. */

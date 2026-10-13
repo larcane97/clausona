@@ -956,6 +956,24 @@ describe("hooks ls", () => {
   });
 });
 
+describe("Codex skills Codex skips", () => {
+  it("lists one with no front matter under its folder, tagged, out of Loaded, and says why", async () => {
+    const { h, app } = seed();
+    h.write(".agents/skills/plain/SKILL.md", "just text\n");
+    expect(await run(h, app, "skills", ["ls", "--tool", "codex"])).not.toMatch(/^plain\s/m);
+    expect(await run(h, app, "skills", ["ls", "--tool", "codex", "--scope", "global"])).toMatch(
+      /^plain\s+Global\s+—\s+—\s+no front matter$/m,
+    );
+    const shown = await run(h, app, "skills", ["show", "plain"]);
+    expect(shown).toMatch(/^Loaded\s+no, Codex skips its SKILL\.md: it has no front matter$/m);
+    const json = JSON.parse(await run(h, app, "skills", ["ls", "--tool", "codex", "--scope", "global", "--json"]));
+    expect(json.items.find((i: { name: string }) => i.name === "plain")).toMatchObject({
+      state: "on",
+      tags: ["no front matter"],
+    });
+  });
+});
+
 describe("Codex plugins", () => {
   /** The seed, with Codex's plugin kit@m on, bringing a skill, a server and a hook. */
   function withKit() {

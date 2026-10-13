@@ -283,8 +283,8 @@ export function stateLoads(state: EffectiveState): boolean {
  * and a state that loads (`stateLoads`) - each account's, where it is read per account.
  */
 export function loadsHere(inv: Inventory, item: Extension, project: string | undefined): boolean {
-  // A link to nothing has no SKILL.md for Claude Code or Codex to read.
-  if (!relevantIn(item, project) || item.link?.broken === true) return false;
+  // A link to nothing has no SKILL.md for Claude Code or Codex to read, and Codex refuses some it reads.
+  if (!relevantIn(item, project) || item.link?.broken === true || item.codexError !== undefined) return false;
   const states = accountStates(inv, item, project)?.map((a) => a.state) ?? [stateHere(inv, item, project)];
   return states.some(stateLoads);
 }

@@ -206,7 +206,7 @@ The `state` of an item in JSON is one of these:
 
 | State | Meaning |
 |---|---|
-| `on` | The switch is on. It loads unless a tag says `hidden by …` or `broken link`. |
+| `on` | The switch is on. It loads unless a tag says `hidden by …` or `broken link`, or, for a Codex skill, `no front matter` or `name too long`. |
 | `off` | It is turned off. |
 | `name-only` | A Claude skill set to `name-only` in `skillOverrides`. The details say "Shows as name only". |
 | `user-invocable-only` | A Claude skill set to `user-invocable-only` in `skillOverrides`. The details say "Shows as only when you call it". |
@@ -215,11 +215,11 @@ The `state` of an item in JSON is one of these:
 | `mixed` | The accounts differ: `stateByAccount` has each one's. |
 
 `state` is the switch's value and nothing more. A row loads here when its state is `on`,
-`name-only` or `user-invocable-only` and no tag says `hidden by …` or `broken link`. A hidden
-copy and a broken link keep their own `state`; only the tags say they do not load. A `mixed`
-row loads in the accounts whose `stateByAccount` value is `on`, except where another copy wins
-there, which its details say. A row read per account says it for each account in
-`loadsByAccount`.
+`name-only` or `user-invocable-only` and no tag says `hidden by …` or `broken link`, or, for a
+Codex skill, `no front matter` or `name too long`. A hidden copy, a broken link and a SKILL.md
+Codex skips keep their own `state`; only the tags say they do not load. A `mixed` row loads
+in the accounts whose `stateByAccount` value is `on`, except where another copy wins there,
+which its details say. A row read per account says it for each account in `loadsByAccount`.
 
 A row is read in the project it loads in: this project for what loads here, and its own
 project for another project's row, as `--scope other` lists them. So an Other projects row's
@@ -272,8 +272,8 @@ The switches are read from these places:
 
 A row can carry several tags. They are listed most important first: `broken link`, then
 `off`, `off here` or `off in N of M accounts`, then `not here`, then `pending approval`, then
-`hidden by … copy`, then `unused`, then `no front matter`. The NOTE column shows the first; JSON
-`tags` has them all.
+`hidden by … copy`, then `unused`, then `no front matter`, then `name too long`. The NOTE
+column shows the first; JSON `tags` has them all.
 
 | Tag | When |
 |---|---|
@@ -287,7 +287,8 @@ A row can carry several tags. They are listed most important first: `broken link
 | `hidden by Global copy` | In every account that has it, a same-name skill in Global wins: the primary's, or the account's own. |
 | `hidden by Parent folders copy` | In every account that has it, a same-name `.mcp.json` copy in a parent folder wins. |
 | `unused` | A Claude skill the rule below calls unused. |
-| `no front matter` | A Claude skill whose `SKILL.md` has no front matter. Claude Code loads it under its folder's name, with no description, so it has only the skill's first non-empty line to tell when to use it. A quiet note: the skill still loads. |
+| `no front matter` | A skill whose `SKILL.md` has no front matter. Claude Code loads it under its folder's name, with no description, so it has only the skill's first non-empty line to tell when to use it: a quiet note, the skill still loads. Codex skips it, with no front matter between `---` lines, so a Codex one is not in Loaded. |
+| `name too long` | A Codex skill whose name is over 64 characters. Codex skips it, so it is not in Loaded. |
 
 The three `hidden by` tags are the forms of `hidden by <scope> copy`, which names the scope of
 the copy that wins. [Which copy wins](#which-copy-wins) says which copy that is.

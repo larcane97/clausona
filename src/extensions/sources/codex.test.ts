@@ -225,6 +225,32 @@ describe("readCodex", () => {
     expect(front && stateOf(inv, front, app).value).toBe("off");
   });
 
+  it("marks a SKILL.md Codex does not load: no front matter, or a name over 64 characters", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.codex("personal", ".codex");
+    h.write(".agents/skills/plain/SKILL.md", "just text\n");
+    h.write(".agents/skills/empty-block/SKILL.md", "---\n---\nbody\n");
+    h.write(".agents/skills/unclosed/SKILL.md", "---\nname: x\ndescription: d\nbody\n");
+    h.write(".agents/skills/long/SKILL.md", `---\nname: ${"x".repeat(65)}\ndescription: d\n---\n`);
+    // Codex reads the delimiter lines trimmed, and 64 characters is still a name.
+    h.write(".agents/skills/padded/SKILL.md", ` --- \nname: ${"y".repeat(64)}\ndescription: d\n --- \n`);
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(ctx, [], out);
+    const error = (folder: string) => out.items.find((i) => i.location.file.endsWith(folder))?.codexError;
+    expect(["plain", "empty-block", "unclosed", "long", "padded"].map(error)).toEqual([
+      "no front matter",
+      "no front matter",
+      "no front matter",
+      "name too long",
+      undefined,
+    ]);
+    // Listed by its folder, so it can be found and cleaned up.
+    expect(out.items.find((i) => i.location.file.endsWith("plain"))?.name).toBe("plain");
+  });
+
   it("warns for a config.toml that does not parse and reads the rest", async () => {
     const h = new TestHome();
     homes.push(h);

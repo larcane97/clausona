@@ -37,7 +37,7 @@ import { codexTrusted, isMcpjsonServer, MANAGED_MCP_KEY, relevantIn, STASH_KEY }
 
 /**
  * One of the verbatim tags: off, off here, off in N of M accounts, not here, unused, broken
- * link, pending approval, hidden by … copy, no front matter.
+ * link, pending approval, hidden by … copy, no front matter, name too long.
  */
 export type Tag = string;
 
@@ -217,9 +217,12 @@ export function loadsFor(inv: Inventory, row: ScopeRow, project: string | undefi
   return (who === undefined || who.some((p) => profiles.includes(p))) && stateLoads(stateHere(inv, item, project));
 }
 
-/** Whether an item can load here at all: relevant here, and not a link to nothing, which has no SKILL.md to read. */
+/**
+ * Whether an item can load here at all: relevant here, not a link to nothing, which has no
+ * SKILL.md to read, and no SKILL.md Codex refuses.
+ */
 function canLoad(item: Extension, project: string | undefined): boolean {
-  return relevantIn(item, project) && item.link?.broken !== true;
+  return relevantIn(item, project) && item.link?.broken !== true && item.codexError === undefined;
 }
 
 /**
@@ -284,8 +287,10 @@ function scopeLabel(item: Extension, project: string | undefined): string {
 
 /**
  * Every tag that applies, most important first: broken link > off > off here > off in N of M
- * accounts > not here > pending approval > hidden by … > unused > no front matter, a quiet note
- * last. A row that is not here has no state here, so no tag of one.
+ * accounts > not here > pending approval > hidden by … > unused > no front matter > name too
+ * long. A row that is not here has no state here, so no tag of one. `no front matter` is a quiet
+ * note for a Claude skill, which Claude Code loads all the same; for a Codex skill, which Codex
+ * skips, it and `name too long` are why it is not in Loaded, which its details say.
  */
 export function tagsOf(inv: Inventory, row: ScopeRow, project: string | undefined, now: number): Tag[] {
   const item = firstOf(row);
@@ -308,6 +313,7 @@ export function tagsOf(inv: Inventory, row: ScopeRow, project: string | undefine
   if (winner) tags.push(`hidden by ${scopeLabel(winner, project)} copy`);
   if (!broken && marksOf(inv, item, now).includes("cleanup")) tags.push("unused");
   if (item.noFrontMatter) tags.push("no front matter");
+  if (item.codexError) tags.push(item.codexError);
   return tags;
 }
 
@@ -512,6 +518,10 @@ function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined)
   const item = firstOf(row);
   // A link to nothing has no SKILL.md to read, whatever the settings say.
   if (item.link?.broken) return [{ label: "Loaded", text: "no, its link leads nowhere", tone: "error" }];
+  if (item.codexError) {
+    const why = item.codexError === "no front matter" ? "it has no front matter" : "its name is over 64 characters";
+    return [{ label: "Loaded", text: `no, Codex skips its SKILL.md: ${why}`, tone: "error" }];
+  }
   const perAccount = statesByAccount(inv, row, project);
   const parts = perAccount?.map((a) => ({ name: shortProfile(a.profile), ...stateParts(inv, item, project, a.state) }));
   const groups = new Map<string, { word: string; because?: string; names: string[] }>();

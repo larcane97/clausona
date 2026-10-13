@@ -181,6 +181,18 @@ describe("scopes", () => {
     expect(rowsIn(inv, "claude", "skill", "plugins", app, NOW)).toEqual([]);
   });
 
+  it("leaves a Codex skill Codex does not load out of Loaded, with its reason as a tag", async () => {
+    const { inv, app } = await seed((h) => {
+      h.write(".agents/skills/plain/SKILL.md", "just text\n");
+      h.write(".agents/skills/long/SKILL.md", `---\nname: ${"x".repeat(65)}\ndescription: d\n---\n`);
+    });
+    const loaded = rowsIn(inv, "codex", "skill", "loaded", app, NOW).map((r) => r.name);
+    expect(loaded).toEqual(["eli5"]);
+    const global = rowsIn(inv, "codex", "skill", "global", app, NOW);
+    const tags = (name: string) => tagsOf(inv, global.find((r) => r.name === name) as ScopeRow, app, NOW);
+    expect([tags("plain"), tags("x".repeat(65)), tags("eli5")]).toEqual([["no front matter"], ["name too long"], []]);
+  });
+
   it("tags a Codex plugin a trusted project turns off as off here, and leaves it on elsewhere", async () => {
     const { inv, app, web } = await seed((h, app) => {
       h.write(".codex/config.toml", `[projects.'${app}']\ntrust_level = "trusted"\n\n[plugins."kit@m"]\n`);

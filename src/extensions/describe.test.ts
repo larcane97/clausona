@@ -211,7 +211,7 @@ describe("tagsOf", () => {
     expect(tagsOf(inv, { key: row.key, name: "github", items: [work] }, app, NOW)).toEqual(["off here"]);
   });
 
-  it("says no front matter last, for a Claude SKILL.md without it, and for no Codex one", async () => {
+  it("says no front matter last, for a Claude SKILL.md without it, and for a Codex one, which Codex skips", async () => {
     const { inv, app } = await seed({
       more: (h) => {
         h.write(".claude/skills/bare/SKILL.md", "Do the thing.\n");
@@ -225,9 +225,10 @@ describe("tagsOf", () => {
     expect(tagsOf(inv, plain, app, NOW)).toEqual(["unused", "no front matter"]);
     expect(jsonItem(inv, plain, app, NOW).tags).toEqual(["unused", "no front matter"]);
     const codex = find(inv, (i) => i.location.tool === "codex" && i.name === "bare", "codex bare");
-    expect(tagsOf(inv, single(codex), app, NOW)).toEqual([]);
-    // Its row still lists, and loads, under its folder's name.
+    expect(tagsOf(inv, single(codex), app, NOW)).toEqual(["no front matter"]);
+    // Claude Code lists, and loads, its row under its folder's name; Codex skips its own.
     expect(rowsIn(inv, "claude", "skill", "loaded", app, NOW).map((r) => r.name)).toContain("bare");
+    expect(rowsIn(inv, "codex", "skill", "loaded", app, NOW).map((r) => r.name)).not.toContain("bare");
   });
 
   it("puts broken link first and leaves unused out after it; a .mcp.json server waits for approval", async () => {
