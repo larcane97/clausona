@@ -170,23 +170,47 @@ function mcpPolicies(inv: Inventory, project: string | undefined) {
 }
 
 /**
- * Whether an allowlist admits a server: a stdio one by a serverCommand entry once the list has
- * one, a remote one by a serverUrl entry likewise, and otherwise by its name.
+ * The kind of entry an allowlist admits a server by: a stdio one by command, and a remote one by
+ * URL, once the list has such an entry; else by its name.
+ */
+function admittedBy(rules: McpRule[], target: McpTarget | undefined): "serverName" | "serverCommand" | "serverUrl" {
+  const kind = target?.command !== undefined ? "serverCommand" : target?.url !== undefined ? "serverUrl" : undefined;
+  return kind !== undefined && rules.some((rule) => kind in rule) ? kind : "serverName";
+}
+
+/**
+ * Whether an allowlist admits a server, by an entry of the kind `admittedBy` says. A URL entry
+ * that a variable's value brought a `*` into admits nothing: Claude Code takes no such entry.
  */
 function admits(rules: McpRule[], name: string, target: McpTarget | undefined): boolean {
-  const kind = target?.command !== undefined ? "serverCommand" : target?.url !== undefined ? "serverUrl" : undefined;
-  const by = kind !== undefined && rules.some((rule) => kind in rule) ? kind : "serverName";
-  return rules.some((rule) => by in rule && ruleMatches(rule, name, target));
+  const by = admittedBy(rules, target);
+  return rules.some((rule) => by in rule && !("wildcard" in rule) && ruleMatches(rule, name, target));
+}
+
+/** The variables of `rules` and of `target`, each once; none for name entries, which read none. */
+function readsOf(rules: McpRule[], target: McpTarget | undefined): string[] {
+  const names = rules.flatMap((rule) => ("reads" in rule ? (rule.reads ?? []) : []));
+  if (rules.every((rule) => "serverName" in rule)) return [];
+  return [...new Set([...names, ...(target?.reads ?? [])])];
+}
+
+/** `setBy` for a list, with the variables its match read when there are any. */
+function listSetBy(file: string, key: string, reads: string[]): NonNullable<EffectiveState["setBy"]> {
+  return { file, key, ...(reads.length > 0 ? { reads } : {}) };
 }
 
 /**
  * The off that Claude Code's MCP policy puts Claude MCP server `item` in, in `project`; undefined
  * where it lets the server start. As Claude Code 2.1.296 checks a server before it starts one:
- * - while managed-mcp.json is there, it starts that file's servers and no other;
+ * - while managed-mcp.json is there, it starts the organization's servers and no other: that
+ *   file's and those of managed settings' `managedMcpServers`;
  * - a server that an entry of any denylist that applies matches does not start;
  * - with an allowlist anywhere, a server must be on it (`admits`), the lists of every file
  *   merged, or the managed ones alone when managed settings set allowManagedMcpServersOnly.
- *   A managed-mcp.json server that reads no variable of the user's needs no entry.
+ *   A server of the organization's that reads no variable of the user's needs no entry: one of
+ *   `managedMcpServers` never reads one, and one of managed-mcp.json unless its config does.
+ * `setBy.reads` names the variables the match read, as the entries and the server's config were
+ * expanded (see mcp-policy.ts): what Claude Code sees in them can differ.
  */
 export function mcpBlocked(inv: Inventory, item: Extension, project: string | undefined): EffectiveState | undefined {
   if (item.kind !== "mcp" || item.location.tool !== "claude") return undefined;
@@ -195,15 +219,19 @@ export function mcpBlocked(inv: Inventory, item: Extension, project: string | un
   if (exclusive !== undefined && !managed) return { value: "off", setBy: { file: exclusive, key: MANAGED_MCP_KEY } };
   const target = inv.facts.mcpTargets[item.id];
   const policies = mcpPolicies(inv, project);
-  const denied = policies.find((p) => p.denied?.some((rule) => ruleMatches(rule, item.name, target)));
-  if (denied) return { value: "off", setBy: { file: denied.file, key: "deniedMcpServers" } };
+  for (const policy of policies) {
+    const rule = policy.denied?.find((entry) => ruleMatches(entry, item.name, target));
+    if (rule) return { value: "off", setBy: listSetBy(policy.file, "deniedMcpServers", readsOf([rule], target)) };
+  }
   if (managed && target?.vars !== true) return undefined;
   const lock = policies.some((p) => p.managedOnly);
   const lists = policies.filter((p) => p.allowed !== undefined && (!lock || p.layer === "managed"));
   const first = lists[0];
   const rules = lists.flatMap((p) => p.allowed ?? []);
   if (first === undefined || admits(rules, item.name, target)) return undefined;
-  return { value: "off", setBy: { file: first.file, key: "allowedMcpServers" } };
+  const by = admittedBy(rules, target);
+  const decided = rules.filter((rule) => by in rule);
+  return { value: "off", setBy: listSetBy(first.file, "allowedMcpServers", readsOf(decided, target)) };
 }
 
 /**

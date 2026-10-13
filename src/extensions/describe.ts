@@ -452,18 +452,28 @@ const WHOLE_KIND: ReadonlySet<string> = new Set(["disableAllHooks", "disableBund
 /**
  * Where a state is set, in words: the file (`settingPlace`), and for a setting that turns a whole
  * kind off, or a list of servers, the setting too - "disableAllHooks in ~/.claude/settings.json",
- * "not in allowedMcpServers in …", "only the servers in …/managed-mcp.json start".
+ * "not in allowedMcpServers in …", "only the servers in …/managed-mcp.json start". A list's
+ * match that read a variable says so, since Claude Code reads it in its own environment:
+ * "deniedMcpServers in …, with ${TOOLS} as this shell has it".
  */
 function setByWords(
   inv: Inventory,
   item: Extension,
   project: string | undefined,
-  setBy: { file: string; key: string },
+  setBy: NonNullable<EffectiveState["setBy"]>,
 ): string {
   const place = settingPlace(inv, item, project, setBy.file);
-  if (setBy.key === "allowedMcpServers") return `not in allowedMcpServers in ${place}`;
+  if (setBy.key === "allowedMcpServers") return `not in allowedMcpServers in ${place}${readWords(setBy.reads)}`;
   if (setBy.key === MANAGED_MCP_KEY) return `only the servers in ${place} start`;
-  return WHOLE_KIND.has(setBy.key) ? `${setBy.key} in ${place}` : place;
+  return WHOLE_KIND.has(setBy.key) ? `${setBy.key} in ${place}${readWords(setBy.reads)}` : place;
+}
+
+/** ", with ${A} as this shell has it", ", with ${A} and ${B} as this shell has them"; "" for none. */
+function readWords(reads: string[] | undefined): string {
+  if (reads === undefined || reads.length === 0) return "";
+  const names = reads.map((name) => `\${${name}}`);
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  return `, with ${list} as this shell has ${names.length === 1 ? "it" : "them"}`;
 }
 
 /** A state in words, and where it is set when that matters: off, and where it is turned off. */

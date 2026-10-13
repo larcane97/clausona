@@ -265,7 +265,15 @@ The switches are read from these places:
     set `allowManagedMcpServersOnly`. An empty list keeps every server out. A server of
     `managedMcpServers` needs no entry, nor does one of `managed-mcp.json` unless its config
     uses `${VAR}`.
-  - clausona compares `${VAR}` in an entry or a config as written, where Claude Code expands it.
+  - `${VAR}` and `${VAR:-default}` are expanded before they match, in an entry's command or URL
+    and in a server's command, arguments or URL, as Claude Code expands them. A variable that is
+    set gives its value, an empty one too. One that is not gives its default, and with none it
+    stays as written, so an entry and a server that spell it alike still match. A plugin's
+    server reads its own folder as `${CLAUDE_PLUGIN_ROOT}`. A `serverUrl` entry that a value
+    brings a `*` into is one no allowlist takes, while a denylist still does.
+  - Claude Code expands a variable in its own environment, which the `env` of your settings can
+    add to, and clausona in the shell it runs in. So when a match reads one, the details say so:
+    `off (deniedMcpServers in …, with ${TOOLS} as this shell has it)`.
 - Codex skills: `[[skills.config]]` in Codex's `config.toml`, by name or by path. A path names
   the skill whether it goes through a link or not, as Codex reads it.
 - Codex MCP servers: `mcp_servers.<name>.enabled` in Codex's or the project's `config.toml`.

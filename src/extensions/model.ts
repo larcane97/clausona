@@ -104,8 +104,11 @@ export type StateValue = SkillVisibility | "pending-approval";
 
 export type EffectiveState = {
   value: StateValue;
-  /** Where the value comes from; absent for a default. */
-  setBy?: { file: string; key: string };
+  /**
+   * Where the value comes from; absent for a default. `reads`, for an MCP list's match: the
+   * variables the entry and the server's config were expanded with (mcp-policy.ts).
+   */
+  setBy?: { file: string; key: string; reads?: string[] };
   /** The id of a same-name item that wins over this one. */
   shadowedBy?: string;
 };

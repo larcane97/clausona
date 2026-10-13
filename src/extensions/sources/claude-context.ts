@@ -3,7 +3,7 @@ import path from "node:path";
 import { claudeJsonPathForConfigDir } from "../../core/paths.js";
 import { inspectSharedLink } from "../../core/shared-links.js";
 import type { Registry } from "../../types.js";
-import { mcpRules } from "../mcp-policy.js";
+import { type Env, mcpRules } from "../mcp-policy.js";
 import type { ClaudeFlag, Collector, Location, Project, SettingsLayer, Warning } from "../model.js";
 import { localSettingsFile, projectSettingsFile } from "../places.js";
 import { isHomeProject } from "../projects.js";
@@ -105,6 +105,8 @@ export type ClaudeContext = {
   plugins: PluginInstall[];
   /** managed-mcp.json beside the managed settings, when it is there; `json` when it reads as JSON. */
   managedMcp?: { file: string; json?: Record<string, unknown> };
+  /** See LoadOptions.env. */
+  env: Env;
 };
 
 /** Where Claude Code reads organisation policy on each platform. */
@@ -162,6 +164,8 @@ export async function loadClaudeContext(options: {
   managedSettings: string;
   /** See LoadOptions.mcpjsonStop. */
   mcpjsonStop?: string;
+  /** See LoadOptions.env; default none, so every variable stays as written. */
+  env?: Env;
   warnings: Warning[];
 }): Promise<ClaudeContext> {
   const { accounts, registry, homeDir, projects, warnings } = options;
@@ -197,6 +201,7 @@ export async function loadClaudeContext(options: {
     settings: read.filter((s): s is SettingsFile => s !== undefined),
     plugins,
     ...(managedMcp ? { managedMcp } : {}),
+    env: options.env ?? {},
   };
 }
 
@@ -309,8 +314,8 @@ export function collectClaudeSettingsFacts(ctx: ClaudeContext, out: Collector): 
       const value = settings.data[key];
       if (typeof value === "boolean") out.facts.claudeFlags.push({ ...where, key, value });
     }
-    const allowed = mcpRules(settings.data.allowedMcpServers);
-    const denied = mcpRules(settings.data.deniedMcpServers);
+    const allowed = mcpRules(settings.data.allowedMcpServers, ctx.env);
+    const denied = mcpRules(settings.data.deniedMcpServers, ctx.env);
     // The lock is a managed setting's alone; anywhere else Claude Code ignores it.
     const managedOnly = settings.layer === "managed" && settings.data.allowManagedMcpServersOnly === true;
     if (allowed || denied || managedOnly) {

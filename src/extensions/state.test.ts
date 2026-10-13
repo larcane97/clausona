@@ -391,6 +391,66 @@ describe("Claude MCP under managed-mcp.json, allowedMcpServers and deniedMcpServ
     expect(stateOf(denied, delivered, P, "claude:a")).toEqual(off("/u/settings.json", "deniedMcpServers"));
   });
 
+  it("names the variables a match read, and takes no URL entry a value brought a * into on an allowlist", () => {
+    const denied = inv(items, {
+      mcpTargets: { ...targets, [fs.id]: { command: "hash-fs", vars: true, reads: ["TOOLS"] } },
+      claudeMcpPolicy: [
+        { file: "/u/settings.json", layer: "user", denied: [{ serverCommand: "hash-gh", reads: ["BIN"] }] },
+        { file: "/m/managed.json", layer: "managed", denied: [{ serverCommand: "hash-fs" }] },
+      ],
+    });
+    // The entry's variables, or the server's: either can make the match.
+    expect(stateOf(denied, gh, P, "claude:a")).toEqual({
+      value: "off",
+      setBy: { file: "/u/settings.json", key: "deniedMcpServers", reads: ["BIN"] },
+    });
+    expect(stateOf(denied, fs, P, "claude:a")).toEqual({
+      value: "off",
+      setBy: { file: "/m/managed.json", key: "deniedMcpServers", reads: ["TOOLS"] },
+    });
+    // A name entry reads none, whatever the server's config does.
+    const byName = inv(items, {
+      mcpTargets: { ...targets, [fs.id]: { command: "hash-fs", vars: true, reads: ["TOOLS"] } },
+      claudeMcpPolicy: [{ file: "/u/settings.json", layer: "user", denied: [{ serverName: "files" }] }],
+    });
+    expect(stateOf(byName, fs, P, "claude:a")).toEqual(off("/u/settings.json", "deniedMcpServers"));
+
+    // Left out of an allowlist: the variables of the entries of the kind that decides, and the server's.
+    const allowed = inv(items, {
+      mcpTargets: { ...targets, [remote.id]: { url: "https://mcp.example.com/api", vars: true, reads: ["HOST"] } },
+      claudeMcpPolicy: [
+        {
+          file: "/u/settings.json",
+          layer: "user",
+          allowed: [
+            { serverUrl: "https://other.example/*", reads: ["OTHER"] },
+            { serverCommand: "hash-x", reads: ["BIN"] },
+          ],
+        },
+      ],
+    });
+    expect(stateOf(allowed, remote, P, "claude:a")).toEqual({
+      value: "off",
+      setBy: { file: "/u/settings.json", key: "allowedMcpServers", reads: ["OTHER", "HOST"] },
+    });
+
+    // A value that brings a * in: an allowlist never takes the entry, a denylist does.
+    const wild = { serverUrl: "https://*.example.com/*", reads: ["HOST"], wildcard: true as const };
+    const allowWild = inv(items, {
+      mcpTargets: targets,
+      claudeMcpPolicy: [{ file: "/u/settings.json", layer: "user", allowed: [wild] }],
+    });
+    expect(stateOf(allowWild, remote, P, "claude:a").value).toBe("off");
+    const denyWild = inv(items, {
+      mcpTargets: targets,
+      claudeMcpPolicy: [{ file: "/u/settings.json", layer: "user", denied: [wild] }],
+    });
+    expect(stateOf(denyWild, remote, P, "claude:a")).toEqual({
+      value: "off",
+      setBy: { file: "/u/settings.json", key: "deniedMcpServers", reads: ["HOST"] },
+    });
+  });
+
   it("lets a copy the lists block hide no other copy", () => {
     const local = {
       ...named(

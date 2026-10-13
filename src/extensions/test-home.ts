@@ -21,10 +21,11 @@ export class TestHome {
   /**
    * What loadInventory reads for this home, seen from `cwd`: managed settings from a file of the
    * home's own, and the parent `.mcp.json` walk stopped at the home, so a test never reads the
-   * machine's real ones - a temp dir sits under the real home on Windows.
+   * machine's real ones - a temp dir sits under the real home on Windows. No environment either:
+   * a variable in an MCP list or server stays as written unless a test sets `env`.
    */
   inventoryOptions(cwd: string, managedSettings = this.path("none.json")): LoadOptions {
-    return { homeDir: this.home, registry: this.registry, cwd, managedSettings, mcpjsonStop: this.home };
+    return { homeDir: this.home, registry: this.registry, cwd, managedSettings, mcpjsonStop: this.home, env: {} };
   }
 
   path(...parts: string[]): string {

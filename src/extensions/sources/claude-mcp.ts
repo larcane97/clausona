@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import { valueHash } from "../hash.js";
-import { mcpTarget } from "../mcp-policy.js";
+import { type Env, mcpTarget } from "../mcp-policy.js";
 import type { Collector, Location, Project } from "../model.js";
 import { isRecord, pathKey, readJsonObject, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
@@ -40,6 +40,7 @@ export async function readClaudeMcp(ctx: ClaudeContext, projects: Project[], out
       account.id,
       out,
       ids,
+      ctx.env,
     );
     for (const [project, entry] of projectEntries(json.projects, existing)) {
       addServers(
@@ -48,6 +49,7 @@ export async function readClaudeMcp(ctx: ClaudeContext, projects: Project[], out
         `${account.id}@${project}`,
         out,
         ids,
+        ctx.env,
       );
       const disabled = stringList(entry.disabledMcpServers);
       if (disabled.length > 0) {
@@ -60,14 +62,16 @@ export async function readClaudeMcp(ctx: ClaudeContext, projects: Project[], out
     mcpjsonDirs(projects, ctx.mcpjsonStop).map(async (dir) => {
       const file = path.join(dir, ".mcp.json");
       const json = await readJsonObject(file, out.warnings);
-      if (json) addServers(json.mcpServers, { tool: "claude", scope: "project", project: dir, file }, dir, out, ids);
+      if (json) {
+        addServers(json.mcpServers, { tool: "claude", scope: "project", project: dir, file }, dir, out, ids, ctx.env);
+      }
     }),
   );
   // managed-mcp.json takes the same shape as a project's .mcp.json.
   if (ctx.managedMcp) {
     const { file, json } = ctx.managedMcp;
     out.facts.claudeManagedMcp = file;
-    if (json) addServers(json.mcpServers, { tool: "claude", scope: "managed", file }, "-", out, ids);
+    if (json) addServers(json.mcpServers, { tool: "claude", scope: "managed", file }, "-", out, ids, ctx.env);
   }
   // Managed settings come highest first, so the first file to name a server is the one whose
   // entry Claude Code takes, whole.
@@ -82,6 +86,7 @@ export async function readClaudeMcp(ctx: ClaudeContext, projects: Project[], out
       "settings",
       out,
       ids,
+      ctx.env,
     );
   }
   for (const settings of ctx.settings) {
@@ -125,7 +130,10 @@ export async function readClaudeMcp(ctx: ClaudeContext, projects: Project[], out
         }
       }
       for (const [name, { config, file }] of last) {
-        addServers({ [name]: config }, { ...from, file }, owner, out, ids, prefix);
+        addServers({ [name]: config }, { ...from, file }, owner, out, ids, ctx.env, {
+          prefix,
+          root: plugin.installPath,
+        });
       }
     }),
   );
@@ -206,24 +214,30 @@ function projectEntries(projects: unknown, existing: Map<string, string>): [stri
   return [...byProject];
 }
 
+/**
+ * Each server of `servers`, as one item, unless its id is in `ids` already: with its fingerprint,
+ * and what it starts expanded from `env` (mcpTarget). A plugin's server goes by `plugin.prefix`
+ * and its name, and reads the plugin's folder, `plugin.root`.
+ */
 function addServers(
   servers: unknown,
   location: Location,
   owner: string,
   out: Collector,
   ids: Set<string>,
-  prefix = "",
+  env: Env,
+  plugin?: { prefix: string; root: string },
 ): void {
   if (!isRecord(servers)) return;
   for (const [name, config] of Object.entries(servers)) {
     if (!isRecord(config)) continue;
-    const full = `${prefix}${name}`;
+    const full = `${plugin?.prefix ?? ""}${name}`;
     const id = `mcp:claude:${location.scope}:${owner}:${full}`;
     if (ids.has(id)) continue;
     ids.add(id);
     out.items.push({ id, kind: "mcp", name: full, location, summary: mcpSummary(config) });
     out.facts.fingerprints[id] = valueHash(config);
-    out.facts.mcpTargets[id] = mcpTarget(config);
+    out.facts.mcpTargets[id] = mcpTarget(config, env, plugin?.root);
   }
 }
 

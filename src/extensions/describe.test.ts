@@ -337,6 +337,32 @@ describe("managed MCP servers and the MCP lists", () => {
     expect(tagsOf(inv, github, app, NOW)).toEqual(["hidden by Managed copy"]);
   });
 
+  it("expands the variables of a list and of a server from this shell before they match, and says so", async () => {
+    const ref = (name: string) => ["$", "{", name, "}"].join("");
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", { projects: { [app]: {} }, mcpServers: { github: { command: "gh-mcp" } } });
+    h.claude("work", ".claude-work", {
+      projects: { [app]: {} },
+      mcpServers: { github: { command: "/opt/tools/gh-mcp" } },
+    });
+    h.write("policy/managed-settings.json", { deniedMcpServers: [{ serverCommand: [`${ref("TOOLS")}/gh-mcp`] }] });
+    const policy = h.path("policy", "managed-settings.json");
+    const set = await loadInventory({ ...h.inventoryOptions(app, policy), env: { TOOLS: "/opt/tools" } });
+    const github = serverRow(set, "global", app, "github");
+    const managed = tilde(h.path("policy", "managed-settings.json"), h.home);
+    // Only work's copy runs what the entry names once TOOLS is read.
+    expect(jsonItem(set, github, app, NOW).stateByAccount).toEqual({ "claude:default": "on", "claude:work": "off" });
+    expect(detailsOf(set, github, app, NOW).filter((l) => l.label === "Accounts" || l.label === "")).toContainEqual({
+      label: "",
+      text: `work     off (deniedMcpServers in ${managed}, with ${ref("TOOLS")} as this shell has it)`,
+    });
+    // Unset, the entry stays as written and matches neither.
+    const unset = await loadInventory(h.inventoryOptions(app, policy));
+    expect(jsonItem(unset, serverRow(unset, "global", app, "github"), app, NOW).state).toBe("on");
+  });
+
   it("says which list turns a server off, and where it is", async () => {
     const { h, inv, app } = await managedSeed((h) =>
       h.write("policy/managed-settings.json", { deniedMcpServers: [{ serverName: "github" }] }),

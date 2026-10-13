@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import type { Registry } from "../types.js";
+import type { Env } from "./mcp-policy.js";
 import {
   type Collector,
   type Extension,
@@ -44,6 +45,11 @@ export type LoadOptions = {
    * real `.mcp.json` above it.
    */
   mcpjsonStop?: string;
+  /**
+   * The environment `${VAR}` in Claude Code's MCP lists and servers expands from before they
+   * match; default process.env, the shell clausona runs in. Tests set one of their own.
+   */
+  env?: Env;
 };
 
 const DAY = 86_400_000;
@@ -82,6 +88,7 @@ export async function loadInventory(options: LoadOptions): Promise<Inventory> {
       projects,
       managedSettings: options.managedSettings ?? managedSettingsPath(process.platform),
       ...(options.mcpjsonStop !== undefined ? { mcpjsonStop: options.mcpjsonStop } : {}),
+      env: options.env ?? process.env,
       warnings,
     });
     collectClaudeSettingsFacts(ctx, out);
