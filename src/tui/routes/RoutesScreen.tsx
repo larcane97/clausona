@@ -186,14 +186,16 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
 
   async function remove(name: string) {
     try {
+      let written = false;
       const file = await io.updateRoutes((current) => {
         if (!Object.hasOwn(current.routes, name)) return null;
         delete current.routes[name];
+        written = true;
         return current;
       });
       if (!alive.current) return;
-      // Written, so nothing in it is left that cannot be used.
-      setLoaded((prev) => (prev.kind === "ready" ? { ...prev, file, broken: 0 } : prev));
+      // A file written has nothing left that cannot be used; one left alone has what it had.
+      setLoaded((prev) => (prev.kind === "ready" ? { ...prev, file, broken: written ? 0 : prev.broken } : prev));
       setCursor((prev) => Math.max(0, Math.min(prev, Object.keys(file.routes).length - 1)));
     } catch (error) {
       if (!alive.current) return;

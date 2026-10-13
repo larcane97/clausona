@@ -436,6 +436,22 @@ describe("RoutesScreen", () => {
     expect(detail.find(Boolean)).toBe("solo");
   });
 
+  // Another window removed it first: nothing is written, so the routes that cannot be used are still there.
+  it("keeps the notice of a route that cannot be used when the route removed was already gone", async () => {
+    const broken: BrokenRoute[] = [
+      { name: "bad", spec: { tool: "x" }, problems: ['routes.bad.tool: must be "claude", "codex" or "all"'] },
+    ];
+    const { instance, replace } = setup({ broken });
+    await ranked(instance);
+    const { main: _gone, ...others } = FILE.routes;
+    replace({ version: 1, routes: others });
+
+    await press(instance, "d");
+    await press(instance, "y");
+    const frame = await until(instance, (f) => panes(f).list.length === 2 && !f.includes("(y/N)"));
+    expect(frame).toContain("⚠ routes.json has a route that cannot be used: clausona route list says why.");
+  });
+
   it.each([
     ["n", "n"],
     ["esc", ESC],
