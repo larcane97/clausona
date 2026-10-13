@@ -27,7 +27,7 @@ import {
   stateLoads,
   type ToolName,
 } from "./scopes.js";
-import { codexTrusted, relevantIn, STASH_KEY } from "./state.js";
+import { codexTrusted, isMcpjsonServer, MANAGED_MCP_KEY, relevantIn, STASH_KEY } from "./state.js";
 
 /**
  * The words the Extensions screen and the CLI say about a row: its tags, a hook's event in plain
@@ -35,7 +35,10 @@ import { codexTrusted, relevantIn, STASH_KEY } from "./state.js";
  * reads the inventory, and what it shows of an MCP server or a hook is the redacted summary.
  */
 
-/** One of the verbatim tags: off, off here, off in N of M accounts, unused, broken link, pending approval, hidden by … copy. */
+/**
+ * One of the verbatim tags: off, off here, off in N of M accounts, not here, unused, broken
+ * link, pending approval, hidden by … copy, no front matter.
+ */
 export type Tag = string;
 
 export type DetailLine = { label?: string; text: string; tone?: "muted" | "warning" | "error" | "healthy" };
@@ -156,6 +159,23 @@ export function statesByAccount(
   return [...states].map(([profile, state]) => ({ profile, state })).sort((a, b) => rank(a.profile) - rank(b.profile));
 }
 
+/**
+ * Whether a row is a `.mcp.json` server of a folder that is no project, seen from a project
+ * outside that folder. It loads in each project below the folder, with that project's
+ * approvals, and has no state of its own to show here: it reads `not here`, where its approvals
+ * in the folder itself, which no session starts in, would say pending approval.
+ */
+export function notHere(inv: Inventory, row: ScopeRow, project: string | undefined): boolean {
+  const item = firstOf(row);
+  const dir = item.location.project;
+  return (
+    isMcpjsonServer(item) &&
+    dir !== undefined &&
+    !relevantIn(item, project) &&
+    !inv.projects.some((p) => samePath(p.path, dir))
+  );
+}
+
 /** A row's first item: its only one, or the primary-most account's copy. Rows are never empty. */
 function firstOf(row: ScopeRow): Extension {
   const first = row.items[0];
@@ -248,6 +268,8 @@ function isProjectSetting(inv: Inventory, file: string): boolean {
   return (
     facts.claudeSkillOverrides.some(at) ||
     facts.claudeEnabledPlugins.some(at) ||
+    facts.claudeFlags.some(at) ||
+    facts.claudeMcpPolicy.some(at) ||
     facts.claudeMcpDisabled.some(at) ||
     facts.claudeMcpjson.some(at) ||
     facts.codexMcpEnabled.some(at) ||
@@ -260,12 +282,17 @@ function scopeLabel(item: Extension, project: string | undefined): string {
   return SCOPE_LABEL[homeScope(item, project)](item.location.tool);
 }
 
-/** Every tag that applies, most important first: broken link > off > off here > off in N of M accounts > pending approval > hidden by … > unused. */
+/**
+ * Every tag that applies, most important first: broken link > off > off here > off in N of M
+ * accounts > not here > pending approval > hidden by … > unused > no front matter, a quiet note
+ * last. A row that is not here has no state here, so no tag of one.
+ */
 export function tagsOf(inv: Inventory, row: ScopeRow, project: string | undefined, now: number): Tag[] {
   const item = firstOf(row);
   const tags: Tag[] = [];
   const broken = item.link?.broken === true;
   if (broken) tags.push("broken link");
+  if (notHere(inv, row, project)) return [...tags, "not here"];
   const perAccount = statesByAccount(inv, row, project);
   const states = perAccount?.map((a) => a.state) ?? [stateHere(inv, item, project)];
   const off = states.filter((s) => s.value === "off");
@@ -280,6 +307,7 @@ export function tagsOf(inv: Inventory, row: ScopeRow, project: string | undefine
   const winner = winnerOf(inv, row, project);
   if (winner) tags.push(`hidden by ${scopeLabel(winner, project)} copy`);
   if (!broken && marksOf(inv, item, now).includes("cleanup")) tags.push("unused");
+  if (item.noFrontMatter) tags.push("no front matter");
   return tags;
 }
 
@@ -402,6 +430,26 @@ function settingPlace(inv: Inventory, item: Extension, project: string | undefin
   return `${whose} ${inside ? path.relative(here, file) : `entry in ${tilde(file, inv.homeDir)}`}`;
 }
 
+/** The settings that turn a whole kind off, or a list of servers, which the words name along with their file. */
+const WHOLE_KIND: ReadonlySet<string> = new Set(["disableAllHooks", "disableBundledSkills", "deniedMcpServers"]);
+
+/**
+ * Where a state is set, in words: the file (`settingPlace`), and for a setting that turns a whole
+ * kind off, or a list of servers, the setting too - "disableAllHooks in ~/.claude/settings.json",
+ * "not in allowedMcpServers in …", "only the servers in …/managed-mcp.json start".
+ */
+function setByWords(
+  inv: Inventory,
+  item: Extension,
+  project: string | undefined,
+  setBy: { file: string; key: string },
+): string {
+  const place = settingPlace(inv, item, project, setBy.file);
+  if (setBy.key === "allowedMcpServers") return `not in allowedMcpServers in ${place}`;
+  if (setBy.key === MANAGED_MCP_KEY) return `only the servers in ${place} start`;
+  return WHOLE_KIND.has(setBy.key) ? `${setBy.key} in ${place}` : place;
+}
+
 /** A state in words, and where it is set when that matters: off, and where it is turned off. */
 function stateParts(
   inv: Inventory,
@@ -417,7 +465,7 @@ function stateParts(
   if (state.value !== "off") return { word: "on" };
   // The stash file is clausona's, no setting of the tool's: no place to name.
   if (state.setBy?.key === STASH_KEY) return { word: "off everywhere", because: "kept by clausona" };
-  return state.setBy ? { word: "off", because: settingPlace(inv, item, project, state.setBy.file) } : { word: "off" };
+  return state.setBy ? { word: "off", because: setByWords(inv, item, project, state.setBy) } : { word: "off" };
 }
 
 /** A state as one account line says it: "on", "off (this project's …)", "pending approval". */
@@ -491,7 +539,7 @@ function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined)
       const text = "off everywhere — clausona keeps its settings so you can turn it back on";
       return [{ label: "Loaded", text, tone: "warning" }];
     }
-    const place = settingPlace(inv, item, project, state.setBy.file);
+    const place = setByWords(inv, item, project, state.setBy);
     const here = isProjectSetting(inv, state.setBy.file);
     return [{ label: "Loaded", text: `${here ? "off here" : "off everywhere"} (${place})`, tone: "warning" }];
   }
@@ -517,6 +565,10 @@ function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined)
 /** Each account's state of an MCP server, one line each, and "on in every account" when that says it all. */
 function accountLines(inv: Inventory, row: ScopeRow, project: string | undefined): DetailLine[] {
   const item = firstOf(row);
+  if (notHere(inv, row, project)) {
+    const dir = tilde(item.location.project ?? "", inv.homeDir);
+    return [{ label: "Accounts", text: `not here: it loads in the projects in ${dir}, each with its own approvals` }];
+  }
   const perAccount = statesByAccount(inv, row, project);
   if (!perAccount) {
     const words = stateWords(inv, item, project, stateHere(inv, item, project));
@@ -831,7 +883,7 @@ export function jsonItem(
     project: loc.project ?? null,
     ...(loc.plugin ? { plugin: loc.plugin } : {}),
     ...(accounts ? { accounts } : {}),
-    state: values.length === 1 ? values[0] : "mixed",
+    state: notHere(inv, row, project) ? "not-here" : values.length === 1 ? values[0] : "mixed",
     ...(perAccount
       ? {
           stateByAccount: Object.fromEntries(perAccount.map((a) => [a.profile, a.state.value])),

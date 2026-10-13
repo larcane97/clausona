@@ -38,12 +38,7 @@ async function seed(more?: (h: TestHome, app: string, web: string) => void) {
   });
   h.codex("personal", ".codex", '[mcp_servers.exa]\ncommand = "npx"\n');
   more?.(h, app, web);
-  const inv = await loadInventory({
-    homeDir: h.home,
-    registry: h.registry,
-    cwd: app,
-    managedSettings: h.path("none.json"),
-  });
+  const inv = await loadInventory(h.inventoryOptions(app));
   return { h, app, web, inv };
 }
 
@@ -115,12 +110,7 @@ describe("a .mcp.json in a parent dir", () => {
     h.claude("work", ".claude-work", { projects: { [app]: {} } });
     h.write(".mcp.json", { mcpServers: { tools: { command: "tools-mcp" }, notes: { command: "home-notes" } } });
     h.write("repos/app/.mcp.json", { mcpServers: { notes: { command: "app-notes" } } });
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     return { h, app, inv };
   }
 

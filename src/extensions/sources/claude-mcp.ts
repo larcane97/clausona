@@ -1,10 +1,18 @@
 import path from "node:path";
 
 import { valueHash } from "../hash.js";
+import { mcpTarget } from "../mcp-policy.js";
 import type { Collector, Location, Project } from "../model.js";
-import { isRecord, isWithin, pathKey, readJsonObject, samePath } from "../read.js";
+import { isRecord, pathKey, readJsonObject, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
-import { type ClaudeContext, pluginLocation, pluginOwner } from "./claude-context.js";
+import {
+  type ClaudeContext,
+  declared,
+  insidePlugin,
+  pluginLocation,
+  pluginManifestFile,
+  pluginOwner,
+} from "./claude-context.js";
 
 export function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
@@ -13,7 +21,8 @@ export function stringList(value: unknown): string[] {
 /**
  * Every MCP server Claude Code can start: each account's user-scope servers and its local ones
  * for each project that still exists (both in that account's `.claude.json`), the `.mcp.json`
- * of each project and of each dir above it (see `mcpjsonDirs`), and each plugin's. Alongside, the switches: `disabledMcpServers` per account and
+ * of each project and of each dir above it (see `mcpjsonDirs`), managed-mcp.json's, and each
+ * plugin's. Alongside, the switches: `disabledMcpServers` per account and
  * project (what `/mcp disable` writes), and the `.mcp.json` approvals from settings - a
  * project's, or the user's and managed ones for every project - and from the account's project
  * entry. A server id is kept once, the first definition winning.
@@ -47,12 +56,18 @@ export async function readClaudeMcp(ctx: ClaudeContext, projects: Project[], out
     }
   }
   await Promise.all(
-    mcpjsonDirs(projects, ctx.homeDir).map(async (dir) => {
+    mcpjsonDirs(projects, ctx.mcpjsonStop).map(async (dir) => {
       const file = path.join(dir, ".mcp.json");
       const json = await readJsonObject(file, out.warnings);
       if (json) addServers(json.mcpServers, { tool: "claude", scope: "project", project: dir, file }, dir, out, ids);
     }),
   );
+  // managed-mcp.json takes the same shape as a project's .mcp.json.
+  if (ctx.managedMcp) {
+    const { file, json } = ctx.managedMcp;
+    out.facts.claudeManagedMcp = file;
+    if (json) addServers(json.mcpServers, { tool: "claude", scope: "managed", file }, "-", out, ids);
+  }
   for (const settings of ctx.settings) {
     if (settings.project && (settings.layer === "project" || settings.layer === "local")) {
       pushApprovals(settings.data, settings.file, settings.project, undefined, out);
@@ -68,37 +83,43 @@ export async function readClaudeMcp(ctx: ClaudeContext, projects: Project[], out
       const owner = pluginOwner(plugin);
       const mcpFile = path.join(plugin.installPath, ".mcp.json");
       const mcp = await readJsonObject(mcpFile, out.warnings);
-      // The manifest is read second, so a server it defines again keeps the .mcp.json one.
-      if (mcp)
-        addServers(
-          isRecord(mcp.mcpServers) ? mcp.mcpServers : mcp,
-          { ...from, file: mcpFile },
-          owner,
-          out,
-          ids,
-          prefix,
-        );
-      const manifestFile = path.join(plugin.installPath, ".claude-plugin", "plugin.json");
+      if (mcp) addServers(serversIn(mcp), { ...from, file: mcpFile }, owner, out, ids, prefix);
+      // Then what the manifest declares, in its order, so a server it defines again keeps the
+      // .mcp.json one: inline servers, and the .json files of servers it names.
+      const manifestFile = pluginManifestFile(plugin);
       const manifest = await readJsonObject(manifestFile, out.warnings);
-      if (manifest) addServers(manifest.mcpServers, { ...from, file: manifestFile }, owner, out, ids, prefix);
+      for (const entry of declared(manifest, "mcpServers")) {
+        if (typeof entry !== "string") {
+          addServers(entry, { ...from, file: manifestFile }, owner, out, ids, prefix);
+          continue;
+        }
+        // An MCP bundle (.mcpb, .dxt) or its URL is unpacked by Claude Code: nothing to read here.
+        if (!entry.toLowerCase().endsWith(".json") || /^[a-z][a-z0-9+.-]*:\/\//i.test(entry)) continue;
+        const file = await insidePlugin(plugin, entry);
+        const json = file === undefined ? undefined : await readJsonObject(file, out.warnings);
+        if (file !== undefined && json) addServers(serversIn(json), { ...from, file }, owner, out, ids, prefix);
+      }
     }),
   );
 }
 
+/** A plugin's file of servers: an `mcpServers` map, as `.mcp.json` has, or the map itself. */
+function serversIn(json: Record<string, unknown>): unknown {
+  return isRecord(json.mcpServers) ? json.mcpServers : json;
+}
+
 /**
- * The dirs whose `.mcp.json` a project's sessions read, each once: Claude Code 2.1.294 reads the
- * file in the dir it starts in and in each parent dir up to the filesystem root, the nearest
- * winning a name. For a project inside the home dir the walk here stops at the home dir: a
- * .mcp.json above it - in /Users or C:\Users, shared by every user - is not read, which also
- * keeps a test home in the temp dir, under the real home on Windows, from reading the real one.
+ * The dirs whose `.mcp.json` a project's sessions read, each once: Claude Code 2.1.296 reads the
+ * file in the dir it starts in and in each parent dir up to the filesystem root, the root left
+ * out, the nearest winning a name. So a `.mcp.json` in /Users or C:\Users, above the home dir,
+ * counts too. `stop`, which only tests set, ends the walk at their home.
  */
-function mcpjsonDirs(projects: Project[], homeDir: string): string[] {
+function mcpjsonDirs(projects: Project[], stop: string | undefined): string[] {
   const dirs = new Map<string, string>();
   for (const project of projects) {
-    const inHome = isWithin(project.path, homeDir);
     for (let dir = path.resolve(project.path); path.dirname(dir) !== dir; dir = path.dirname(dir)) {
       if (!dirs.has(pathKey(dir))) dirs.set(pathKey(dir), dir === path.resolve(project.path) ? project.path : dir);
-      if (inHome && samePath(dir, homeDir)) break;
+      if (samePath(dir, stop)) break;
     }
   }
   return [...dirs.values()];
@@ -136,6 +157,7 @@ function addServers(
     ids.add(id);
     out.items.push({ id, kind: "mcp", name: full, location, summary: mcpSummary(config) });
     out.facts.fingerprints[id] = valueHash(config);
+    out.facts.mcpTargets[id] = mcpTarget(config);
   }
 }
 

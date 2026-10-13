@@ -124,6 +124,7 @@ function cli(h: TestHome, cwd: string, more: Pick<WriteEnv, "lockWaitMs"> = {}) 
           now: NOW,
           columns: options.columns ?? 200,
           managedSettings: h.path("managed-settings.json"),
+          mcpjsonStop: h.home,
           interactive: options.interactive ?? false,
           ...(options.confirm ? { confirm: options.confirm } : {}),
           writeEnv,

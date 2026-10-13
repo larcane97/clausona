@@ -3,10 +3,22 @@ import path from "node:path";
 import { claudeJsonPathForConfigDir } from "../../core/paths.js";
 import { inspectSharedLink } from "../../core/shared-links.js";
 import type { Registry } from "../../types.js";
-import type { Collector, Location, Project, SettingsLayer, Warning } from "../model.js";
+import { mcpRules } from "../mcp-policy.js";
+import type { ClaudeFlag, Collector, Location, Project, SettingsLayer, Warning } from "../model.js";
 import { localSettingsFile, projectSettingsFile } from "../places.js";
 import { isHomeProject } from "../projects.js";
-import { IO_LIMIT, isRecord, listNames, mapLimit, pathKey, readJsonObject, realPath, samePath } from "../read.js";
+import {
+  entryInfo,
+  IO_LIMIT,
+  isRecord,
+  isWithin,
+  listNames,
+  mapLimit,
+  pathKey,
+  readJsonObject,
+  realPath,
+  samePath,
+} from "../read.js";
 
 export type ClaudeAccount = {
   id: string;
@@ -54,12 +66,45 @@ export function pluginLocation(plugin: PluginInstall): Omit<Location, "file"> {
   };
 }
 
+/** A plugin's manifest, `.claude-plugin/plugin.json` in its install folder. */
+export function pluginManifestFile(plugin: PluginInstall): string {
+  return path.join(plugin.installPath, ".claude-plugin", "plugin.json");
+}
+
+/**
+ * What a plugin's manifest declares under `key` - `mcpServers` or `hooks` - as a list: the
+ * manifest takes one path, one inline object, or a list of either.
+ */
+export function declared(manifest: Record<string, unknown> | undefined, key: string): unknown[] {
+  const value = manifest?.[key];
+  return Array.isArray(value) ? value : value === undefined ? [] : [value];
+}
+
+/**
+ * A path a plugin's manifest names, as Claude Code 2.1.296 resolves one: from the plugin's
+ * install folder, and only while it stays in it - not up through `..`, not an absolute path
+ * elsewhere, not through a link that leads out. Undefined for one that leaves it, which Claude
+ * Code does not load either.
+ */
+export async function insidePlugin(plugin: PluginInstall, named: string): Promise<string | undefined> {
+  const root = plugin.installPath;
+  const file = path.resolve(root, named);
+  if (!isWithin(file, root)) return undefined;
+  // A file that is not there has nothing to read; one that is must lead into the plugin too.
+  const [real, realRoot] = await Promise.all([realPath(file).catch(() => undefined), realPath(root).catch(() => root)]);
+  return real === undefined || isWithin(real, realRoot) ? file : undefined;
+}
+
 export type ClaudeContext = {
   homeDir: string;
+  /** The last dir the parent `.mcp.json` walk reads; undefined walks to the filesystem root. */
+  mcpjsonStop?: string;
   primaryDir: string;
   accounts: ClaudeAccount[];
   settings: SettingsFile[];
   plugins: PluginInstall[];
+  /** managed-mcp.json beside the managed settings, when it is there; `json` when it reads as JSON. */
+  managedMcp?: { file: string; json?: Record<string, unknown> };
 };
 
 /** Where Claude Code reads organisation policy on each platform. */
@@ -115,6 +160,8 @@ export async function loadClaudeContext(options: {
   homeDir: string;
   projects: Project[];
   managedSettings: string;
+  /** See LoadOptions.mcpjsonStop. */
+  mcpjsonStop?: string;
   warnings: Warning[];
 }): Promise<ClaudeContext> {
   const { accounts, registry, homeDir, projects, warnings } = options;
@@ -131,7 +178,8 @@ export async function loadClaudeContext(options: {
       { file: localSettingsFile(project.path), layer: "local" as const, project: project.path },
     ]),
   ];
-  const [read, plugins] = await Promise.all([
+  const managedMcpFile = path.join(path.dirname(options.managedSettings), "managed-mcp.json");
+  const [read, plugins, managedMcp] = await Promise.all([
     Promise.all(
       wanted.map(async (entry) => {
         const data = await readJsonObject(entry.file, warnings);
@@ -139,14 +187,30 @@ export async function loadClaudeContext(options: {
       }),
     ),
     readPluginInstalls(accounts, homeDir, warnings),
+    readManagedMcp(managedMcpFile, warnings),
   ]);
   return {
     homeDir,
+    ...(options.mcpjsonStop !== undefined ? { mcpjsonStop: options.mcpjsonStop } : {}),
     primaryDir,
     accounts,
     settings: read.filter((s): s is SettingsFile => s !== undefined),
     plugins,
+    ...(managedMcp ? { managedMcp } : {}),
   };
+}
+
+/**
+ * managed-mcp.json, while it is there. Claude Code 2.1.296 gives it control of the MCP servers
+ * as long as the file exists, one it cannot read or parse too: then no server starts.
+ */
+async function readManagedMcp(
+  file: string,
+  warnings: Warning[],
+): Promise<{ file: string; json?: Record<string, unknown> } | undefined> {
+  if ((await entryInfo(file)).kind === "missing") return undefined;
+  const json = await readJsonObject(file, warnings);
+  return { file, ...(json ? { json } : {}) };
 }
 
 /**
@@ -221,7 +285,13 @@ async function readPluginInstalls(
   );
 }
 
-/** Each settings file's `skillOverrides` and `enabledPlugins`, for `state.ts`. */
+const FLAGS: readonly ClaudeFlag[] = ["disableAllHooks", "disableBundledSkills"];
+
+/**
+ * Each settings file's `skillOverrides` and `enabledPlugins`, its `disableAllHooks` and
+ * `disableBundledSkills` where one is true or false, and its `allowedMcpServers` and
+ * `deniedMcpServers`, for `state.ts`.
+ */
 export function collectClaudeSettingsFacts(ctx: ClaudeContext, out: Collector): void {
   for (const settings of ctx.settings) {
     const where = {
@@ -234,6 +304,22 @@ export function collectClaudeSettingsFacts(ctx: ClaudeContext, out: Collector): 
     }
     if (isRecord(settings.data.enabledPlugins)) {
       out.facts.claudeEnabledPlugins.push({ ...where, map: settings.data.enabledPlugins });
+    }
+    for (const key of FLAGS) {
+      const value = settings.data[key];
+      if (typeof value === "boolean") out.facts.claudeFlags.push({ ...where, key, value });
+    }
+    const allowed = mcpRules(settings.data.allowedMcpServers);
+    const denied = mcpRules(settings.data.deniedMcpServers);
+    // The lock is a managed setting's alone; anywhere else Claude Code ignores it.
+    const managedOnly = settings.layer === "managed" && settings.data.allowManagedMcpServersOnly === true;
+    if (allowed || denied || managedOnly) {
+      out.facts.claudeMcpPolicy.push({
+        ...where,
+        ...(allowed ? { allowed } : {}),
+        ...(denied ? { denied } : {}),
+        ...(managedOnly ? { managedOnly: true as const } : {}),
+      });
     }
   }
 }

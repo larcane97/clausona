@@ -9,17 +9,6 @@ import { isMcpjsonServer, stateOf } from "./state.js";
  * labels for profiles, paths and locations, and the state of an item as either one shows it.
  */
 
-const SCOPE_WORD = {
-  global: "global",
-  account: "account",
-  project: "project",
-  local: "local",
-  plugin: "plugin",
-  synced: "claude.ai",
-  builtin: "built-in",
-  managed: "managed",
-} as const;
-
 /** A profile id without its tool: `claude:work` is `work`. */
 export function shortProfile(id: string): string {
   return id.replace(/^(claude|codex):/, "");
@@ -108,18 +97,6 @@ function projectNames(inv: Pick<Inventory, "homeDir" | "projects">): Map<string,
   const names = new Map(longer.map((p) => [pathKey(p.dir), still(p.name) > 1 ? tilde(p.dir, inv.homeDir) : p.name]));
   namesCache.set(inv.projects, { homeDir: inv.homeDir, names });
   return names;
-}
-
-/** Where an item is defined, in a few words: `project app`, `local work · ~`, `plugin superpowers`. */
-export function whereLabel(item: Extension, inv: Pick<Inventory, "homeDir" | "projects">): string {
-  const loc = item.location;
-  const parts: string[] = [SCOPE_WORD[loc.scope]];
-  if (loc.scope === "plugin" && loc.plugin) parts.push(loc.plugin.split("@")[0] ?? loc.plugin);
-  else if (loc.profile) parts.push(shortProfile(loc.profile));
-  if (loc.project && loc.scope !== "plugin") {
-    parts.push(`${loc.profile ? "· " : ""}${projectName(loc.project, inv)}`);
-  }
-  return parts.join(" ");
 }
 
 /**

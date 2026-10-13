@@ -19,7 +19,7 @@ import {
 } from "./describe.js";
 import { loadInventory } from "./inventory.js";
 import type { Extension, Inventory } from "./model.js";
-import { projectName, stateHere, viewFrom } from "./present.js";
+import { projectName, stateHere, tilde, viewFrom } from "./present.js";
 import { isAccountCopy, otherProjects, rowsIn, type ScopeRow } from "./scopes.js";
 import { TestHome } from "./test-home.js";
 
@@ -67,12 +67,7 @@ async function seed(extra: Extra = {}): Promise<Seeded> {
   h.write(".mcp.json", { mcpServers: { tools: { command: "tools-mcp" } } });
   h.write(".claude/settings.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-me" }] }] } });
   extra.more?.(h, app, web);
-  const inv = await loadInventory({
-    homeDir: h.home,
-    registry: h.registry,
-    cwd: app,
-    managedSettings: h.path("none.json"),
-  });
+  const inv = await loadInventory(h.inventoryOptions(app));
   return { h, inv, app, web };
 }
 
@@ -194,12 +189,7 @@ describe("tagsOf", () => {
       h.skill(".claude/skills", "x");
       h.write(file, { skillOverrides: { x: "off" } });
       // Started in the home dir, which is then the project: every file is under it.
-      const inv = await loadInventory({
-        homeDir: h.home,
-        registry: h.registry,
-        cwd: h.home,
-        managedSettings: h.path("none.json"),
-      });
+      const inv = await loadInventory(h.inventoryOptions(h.home));
       expect(inv.currentProject).toBe(h.home);
       return tagsOf(inv, single(claudeSkill(inv, "x")), h.home, NOW);
     };
@@ -221,10 +211,155 @@ describe("tagsOf", () => {
     expect(tagsOf(inv, { key: row.key, name: "github", items: [work] }, app, NOW)).toEqual(["off here"]);
   });
 
+  it("says no front matter last, for a Claude SKILL.md without it, and for no Codex one", async () => {
+    const { inv, app } = await seed({
+      more: (h) => {
+        h.write(".claude/skills/bare/SKILL.md", "Do the thing.\n");
+        h.write("repos/app/.claude/skills/plain/SKILL.md", "Deploy it.\n");
+        h.write(".agents/skills/bare/SKILL.md", "Do the thing.\n");
+      },
+    });
+    // Never used, 200 days on: unused comes first.
+    expect(tagsOf(inv, single(claudeSkill(inv, "bare")), app, NOW)).toEqual(["unused", "no front matter"]);
+    const plain = single(claudeSkill(inv, "plain", app));
+    expect(tagsOf(inv, plain, app, NOW)).toEqual(["unused", "no front matter"]);
+    expect(jsonItem(inv, plain, app, NOW).tags).toEqual(["unused", "no front matter"]);
+    const codex = find(inv, (i) => i.location.tool === "codex" && i.name === "bare", "codex bare");
+    expect(tagsOf(inv, single(codex), app, NOW)).toEqual([]);
+    // Its row still lists, and loads, under its folder's name.
+    expect(rowsIn(inv, "claude", "skill", "loaded", app, NOW).map((r) => r.name)).toContain("bare");
+  });
+
   it("puts broken link first and leaves unused out after it; a .mcp.json server waits for approval", async () => {
     const { inv, app } = await seed({ more: (h) => h.link(path.join(h.home, "gone"), ".claude/skills/dangling") });
     expect(tagsOf(inv, single(claudeSkill(inv, "dangling")), app, NOW)).toEqual(["broken link"]);
     expect(tagsOf(inv, single(find(inv, (i) => i.name === "tools", "tools")), app, NOW)).toEqual(["pending approval"]);
+  });
+});
+
+describe("settings that turn a whole kind off", () => {
+  it("reads every Claude hook off under disableAllHooks, and says where it is set", async () => {
+    const { h, inv, app } = await seed({
+      more: (h) =>
+        h.write(".claude/settings.json", {
+          disableAllHooks: true,
+          hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-me" }] }] },
+        }),
+    });
+    const stop = rowsIn(inv, "claude", "hook", "global", app, NOW)[0] as ScopeRow;
+    expect(tagsOf(inv, stop, app, NOW)).toEqual(["off"]);
+    expect(jsonItem(inv, stop, app, NOW).state).toBe("off");
+    expect(detailsOf(inv, stop, app, NOW).find((l) => l.label === "Loaded")).toEqual({
+      label: "Loaded",
+      text: `off everywhere (disableAllHooks in ${tilde(h.path(".claude", "settings.json"), h.home)})`,
+      tone: "warning",
+    });
+    expect(rowsIn(inv, "claude", "hook", "loaded", app, NOW)).toEqual([]);
+  });
+
+  it("says off here for a project's own disableAllHooks", async () => {
+    const { inv, app } = await seed({
+      more: (h) => h.write("repos/app/.claude/settings.local.json", { disableAllHooks: true }),
+    });
+    const stop = rowsIn(inv, "claude", "hook", "global", app, NOW)[0] as ScopeRow;
+    expect(tagsOf(inv, stop, app, NOW)).toEqual(["off here"]);
+    expect(detailsOf(inv, stop, app, NOW).find((l) => l.label === "Loaded")?.text).toBe(
+      "off here (disableAllHooks in this project's .claude/settings.local.json)",
+    );
+  });
+
+  it("reads the built-in skills off under disableBundledSkills, and leaves the others on", async () => {
+    const { h, inv, app } = await seed({
+      more: (h) =>
+        h.write(".claude/settings.json", { disableBundledSkills: true, skillOverrides: { "claude-api": "name-only" } }),
+    });
+    const builtin = rowsIn(inv, "claude", "skill", "builtin", app, NOW);
+    expect(builtin.map((r) => r.name)).toEqual(["claude-api"]);
+    const api = builtin[0] as ScopeRow;
+    expect(tagsOf(inv, api, app, NOW)).toEqual(["off"]);
+    expect(jsonItem(inv, api, app, NOW).state).toBe("off");
+    expect(detailsOf(inv, api, app, NOW).find((l) => l.label === "Loaded")?.text).toBe(
+      `off everywhere (disableBundledSkills in ${tilde(h.path(".claude", "settings.json"), h.home)})`,
+    );
+    expect(tagsOf(inv, single(claudeSkill(inv, "eli5")), app, NOW)).toEqual([]);
+  });
+});
+
+describe("managed MCP servers and the MCP lists", () => {
+  /** seed()'s home with managed settings beside a managed-mcp.json, in a folder of its own. */
+  async function managedSeed(more: (h: TestHome, app: string) => void) {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", { projects: { [app]: {} }, mcpServers: { github: { command: "gh-mcp" } } });
+    h.claude("work", ".claude-work", { projects: { [app]: {} }, mcpServers: { github: { command: "gh-mcp" } } });
+    more(h, app);
+    const inv = await loadInventory(h.inventoryOptions(app, h.path("policy", "managed-settings.json")));
+    return { h, inv, app };
+  }
+
+  it("lists managed-mcp.json's servers under Managed, and every other server off while it is there", async () => {
+    const { h, inv, app } = await managedSeed((h) =>
+      h.write("policy/managed-mcp.json", { mcpServers: { company: { type: "http", url: "https://c.example/mcp" } } }),
+    );
+    const managed = rowsIn(inv, "claude", "mcp", "managed", app, NOW);
+    expect(managed.map((r) => r.name)).toEqual(["company"]);
+    expect(whereLabel(managed[0]?.items[0] as Extension, inv, app)).toBe("Managed");
+    expect(rowsIn(inv, "claude", "mcp", "loaded", app, NOW).map((r) => r.name)).toEqual(["company"]);
+    const github = serverRow(inv, "global", app, "github");
+    expect(tagsOf(inv, github, app, NOW)).toEqual(["off"]);
+    expect(detailsOf(inv, github, app, NOW).find((l) => l.label === "Accounts")?.text).toBe(
+      `off (only the servers in ${tilde(h.path("policy", "managed-mcp.json"), h.home)} start) in every account`,
+    );
+  });
+
+  it("says which list turns a server off, and where it is", async () => {
+    const { h, inv, app } = await managedSeed((h) =>
+      h.write("policy/managed-settings.json", { deniedMcpServers: [{ serverName: "github" }] }),
+    );
+    const github = serverRow(inv, "global", app, "github");
+    expect(jsonItem(inv, github, app, NOW)).toMatchObject({
+      state: "off",
+      stateByAccount: { "claude:default": "off", "claude:work": "off" },
+      tags: ["off"],
+    });
+    expect(detailsOf(inv, github, app, NOW).find((l) => l.label === "Accounts")?.text).toBe(
+      `off (deniedMcpServers in ${tilde(h.path("policy", "managed-settings.json"), h.home)}) in every account`,
+    );
+    const allow = await managedSeed((h, app) =>
+      h.write(path.join(path.relative(h.home, app), ".claude", "settings.local.json"), { allowedMcpServers: [] }),
+    );
+    const blocked = serverRow(allow.inv, "global", allow.app, "github");
+    expect(tagsOf(allow.inv, blocked, allow.app, NOW)).toEqual(["off here"]);
+    expect(detailsOf(allow.inv, blocked, allow.app, NOW).find((l) => l.label === "Accounts")?.text).toBe(
+      "off (not in allowedMcpServers in this project's .claude/settings.local.json) in every account",
+    );
+  });
+});
+
+describe("Cloud skills of an account whose skills folder is its own", () => {
+  it("lists them as that account's, and the primary's stale bucket for it nowhere", async () => {
+    const { inv, app } = await seed({
+      defaultJson: () => ({ oauthAccount: { organizationUuid: "org1", accountUuid: "a" } }),
+      more: (h) => {
+        h.claude("solo", ".claude-solo", { oauthAccount: { organizationUuid: "org1", accountUuid: "c" } });
+        h.skill(".claude-solo/skills/synced/org1_c", "fresh");
+        h.skill(".claude/skills/synced/org1_c", "stale");
+      },
+    });
+    const cloud = rowsIn(inv, "claude", "skill", "cloud", app, NOW);
+    expect(cloud.map((r) => r.name)).toEqual(["fresh"]);
+    const fresh = cloud[0] as ScopeRow;
+    expect(rowAccounts(inv, fresh)).toEqual(["claude:solo"]);
+    expect(jsonItem(inv, fresh, app, NOW).copies).toEqual([
+      {
+        id: fresh.items[0]?.id,
+        account: "claude:solo",
+        file: inv.items.find((i) => i.name === "fresh")?.location.file,
+      },
+    ]);
+    expect(rowsIn(inv, "claude", "skill", "loaded", app, NOW).map((r) => r.name)).toContain("fresh");
+    expect(inv.items.some((i) => i.name === "stale")).toBe(false);
   });
 });
 
@@ -669,6 +804,8 @@ describe("rows across accounts", () => {
     });
     h.claude("work", ".claude-work", { oauthAccount: { organizationUuid: "org1", accountUuid: "acc2" } });
     h.claude("solo", ".claude-solo");
+    // work finds its Cloud skills in the primary's folder through the link clausona makes.
+    h.link(".claude/skills", ".claude-work/skills");
     h.skill(".claude/skills/synced/org1_acc1", "pdf", "Read PDFs");
     h.skill(".claude/skills/synced/org1_acc2", "pdf", "Read PDFs");
     h.skill(".claude/skills", "pdf", "My own pdf");
@@ -679,12 +816,7 @@ describe("rows across accounts", () => {
     h.write(".claude/settings.json", { enabledPlugins: { "kit@m": true } });
     h.skill(".claude/plugins/cache/m/kit/1.0.0/skills", "plan");
     h.skill(".claude-work/plugins/cache/m/kit/1.0.0/skills", "plan");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     const row = (scope: "cloud" | "plugins" | "loaded", name: string): ScopeRow => {
       const found = rowsIn(inv, "claude", "skill", scope, app, NOW).find((r) => r.name === name);
       if (!found) throw new Error(`no ${name} row`);
@@ -794,12 +926,7 @@ describe("an account whose skills folder is not the primary's", () => {
     h.link(".claude/skills", ".claude-work/skills");
     h.skill(".claude-solo/skills", "mine");
     h.skill("repos/app/.claude/skills", "eli5");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     return { inv, app };
   }
 
@@ -848,12 +975,7 @@ describe("two projects of one folder name", () => {
     h.claude("default", ".claude", { projects: { [work as string]: pg, [mine as string]: pg, [tool as string]: {} } });
     h.skill("work/app/.claude/skills", "deploy");
     h.skill("personal/app/.claude/skills", "deploy");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: tool as string,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(tool as string));
     return { inv, work: work as string, mine: mine as string, tool: tool as string };
   }
 

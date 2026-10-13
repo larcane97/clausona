@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { tagsOf } from "./describe.js";
 import { duplicateGroups, loadInventory, marksOf, usageOf } from "./inventory.js";
-import { rowsIn } from "./scopes.js";
+import { homeScope, rowsIn } from "./scopes.js";
 import { codexTrusted, relevantIn, stateOf } from "./state.js";
 import { TestHome } from "./test-home.js";
 
@@ -38,12 +38,7 @@ function seed() {
 describe("loadInventory", () => {
   it("wires every source and sums usage across accounts", async () => {
     const { h, app } = seed();
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     expect(inv.currentProject).toBe(app);
     expect(inv.claudeProfiles).toEqual(["claude:default", "claude:work"]);
     expect(inv.usage.eli5).toEqual({
@@ -58,12 +53,7 @@ describe("loadInventory", () => {
 
   it("hashes only duplicated skills and marks copies that differ", async () => {
     const { h, app } = seed();
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     const hashed = Object.keys(inv.hashes)
       .map((id) => inv.items.find((i) => i.id === id)?.name)
       .sort();
@@ -86,12 +76,7 @@ describe("loadInventory", () => {
     h.claude("default", ".claude", { projects: { [app]: {}, [web]: {} } });
     h.skill("repos/app/.claude/skills", "deploy", "Deploy", "the app's way");
     h.skill("repos/web/.claude/skills", "deploy", "Deploy", "the web's way");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     const copies = inv.items.filter((i) => i.name === "deploy");
     expect(copies.map((i) => i.location.project).sort()).toEqual([app, web].sort());
     // Still one duplicate group, hashed apart, for the Duplicates filter and the Copies line.
@@ -107,12 +92,7 @@ describe("loadInventory", () => {
     h.skill(".claude/skills", "deploy", "Deploy", "the usual way");
     h.skill("repos/app/.claude/skills", "deploy", "Deploy", "the app's way");
     h.skill("repos/web/.claude/skills", "deploy", "Deploy", "the usual way");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     const copy = (project: string | undefined) => {
       const found = inv.items.find((i) => i.name === "deploy" && i.location.project === project);
       if (!found) throw new Error(`no deploy in ${project ?? "global"}`);
@@ -127,12 +107,7 @@ describe("loadInventory", () => {
 
   it("calls a skill cleanup when no account used it for 90 days, after a 14-day grace for new folders", async () => {
     const { h, app } = seed();
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     const byName = (name: string) => {
       const item = inv.items.find((i) => i.name === name && i.location.tool === "claude");
       if (!item) throw new Error(name);
@@ -154,12 +129,7 @@ describe("loadInventory", () => {
     h.claude("default", ".claude", { skillUsage: { shared: { usageCount: 9, lastUsedAt: now - 200 * DAY } } });
     h.claude("work", ".claude-work", { skillUsage: { shared: { usageCount: 1, lastUsedAt: now - 2 * DAY } } });
     h.skill(".claude/skills", "shared");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: h.home,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(h.home));
     const shared = inv.items.find((i) => i.name === "shared");
     if (!shared) throw new Error("shared");
     expect(marksOf(inv, shared, now)).not.toContain("cleanup");
@@ -171,12 +141,7 @@ describe("loadInventory", () => {
     h.claude("default", ".claude", { skillUsage: { "no-time": { usageCount: 2 } } });
     h.skill(".claude/skills", "no-time");
     h.skill(".claude/skills", "no-age");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: h.home,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(h.home));
     const byName = (name: string) => {
       const item = inv.items.find((i) => i.name === name);
       if (!item) throw new Error(name);
@@ -202,12 +167,7 @@ describe("loadInventory", () => {
     utimesSync(path.join(folder, "SKILL.md"), old, old);
     utimesSync(folder, old, old);
     h.link("library/brand-new-here", ".claude/skills/brand-new-here");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: h.home,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(h.home));
     const item = inv.items.find((i) => i.name === "brand-new-here");
     if (!item) throw new Error("brand-new-here");
     expect(item.link?.broken).toBe(false);
@@ -219,12 +179,7 @@ describe("loadInventory", () => {
     const { h, app } = seed();
     h.skill(".agents/skills", "linked");
     h.link(".agents/skills/linked", ".claude/skills/linked");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     const linked = inv.items.filter((i) => i.name === "linked");
     expect(linked.map((i) => i.location.tool).sort()).toEqual(["claude", "codex"]);
     // eli5's two real copies, alike as they are, still make a group.
@@ -245,12 +200,7 @@ describe("loadInventory", () => {
     h.skill(".agents/skills", "plannotator");
     // The natural way to end the drift: one folder of skills, which Claude Code reads through a link.
     h.link(".agents/skills", ".claude/skills");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: h.home,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(h.home));
     const eli5 = inv.items.filter((i) => i.name === "eli5");
     expect(eli5.map((i) => i.location.tool).sort()).toEqual(["claude", "codex"]);
     // Each copy keeps the path its tool reads it by.
@@ -266,12 +216,7 @@ describe("loadInventory", () => {
     const { h, app } = seed();
     h.skill(".agents/skills", "ghost");
     h.link(h.path("gone", "ghost"), ".claude/skills/ghost");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     const ghost = inv.items.find((i) => i.name === "ghost" && i.location.tool === "claude");
     const copy = inv.items.find((i) => i.name === "ghost" && i.location.tool === "codex");
     if (!ghost || !copy) throw new Error("missing items");
@@ -287,12 +232,7 @@ describe("loadInventory", () => {
     h.write("repos/app/.claude/settings.local.json", "{ nope");
     h.write(".codex/config.toml", "[broken\n");
     h.write(".claude/skills/no-front/SKILL.md", "# just a title\n");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     expect(inv.warnings.map((w) => w.file).sort()).toEqual(
       [h.path(".codex/config.toml"), h.path("repos/app/.claude/settings.local.json")].sort(),
     );
@@ -309,12 +249,7 @@ describe("loadInventory", () => {
     });
     h.write(".claude/plugins/cache/m/sp/1.0.0/.claude-plugin/plugin.json", { name: "sp", description: "Skills pack" });
     h.write(".claude/plugins/cache/m/sp/1.0.0/hooks/hooks.json", "{ nope");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     expect(inv.items.filter((i) => i.kind === "plugin")).toHaveLength(2);
     // Install paths are realpaths: on macOS the temp dir sits behind the /var link.
     expect(inv.warnings.map((w) => w.file)).toEqual([path.join(realpathSync.native(sp), "hooks", "hooks.json")]);
@@ -322,12 +257,7 @@ describe("loadInventory", () => {
 
   it("says where the writes go: the user settings, each account's .claude.json, Codex's files, the stash", async () => {
     const { h, app } = seed();
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     expect(inv.places).toEqual({
       claudeUserSettings: h.path(".claude", "settings.json"),
       claudeJson: { "claude:default": h.path(".claude.json"), "claude:work": h.path(".claude-work", ".claude.json") },
@@ -341,13 +271,7 @@ describe("loadInventory", () => {
     const h = new TestHome();
     homes.push(h);
     h.codex("personal", ".codex-main");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: h.home,
-      managedSettings: h.path("none.json"),
-      stashDir: h.path("elsewhere", "stash"),
-    });
+    const inv = await loadInventory({ ...h.inventoryOptions(h.home), stashDir: h.path("elsewhere", "stash") });
     expect(inv.places).toEqual({
       claudeJson: {},
       codexConfig: h.path(".codex-main", "config.toml"),
@@ -361,12 +285,7 @@ describe("loadInventory", () => {
     const { h, app } = seed();
     for (let i = 0; i < 300; i++) h.skill(".claude/skills", `bulk-${i}`);
     const started = performance.now();
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     expect(inv.items.length).toBeGreaterThan(300);
     // Windows runners open fresh files many times slower (Defender scans each one), so their bound is wider.
     expect(performance.now() - started).toBeLessThan(process.platform === "win32" ? 8000 : 3000);
@@ -414,8 +333,7 @@ describe("loadInventory, the home dir as a project", () => {
     h.write(".codex/hooks.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "codex-notify" }] }] } });
     return { h, app, home, main, local };
   }
-  const load = (h: TestHome, cwd: string) =>
-    loadInventory({ homeDir: h.home, registry: h.registry, cwd, managedSettings: h.path("none.json") });
+  const load = (h: TestHome, cwd: string) => loadInventory(h.inventoryOptions(cwd));
   const find = (inv: Awaited<ReturnType<typeof load>>, name: string, scope?: string) => {
     const found = inv.items.filter((i) => i.name === name && (scope === undefined || i.location.scope === scope));
     if (found.length !== 1) throw new Error(`${found.length} items named ${name}`);
@@ -530,15 +448,14 @@ describe("loadInventory, a .mcp.json in a parent dir", () => {
     h.write("repos/app/.mcp.json", { mcpServers: { notes: { command: "app-notes" } } });
     return { h, app, web, main };
   }
-  const load = (h: TestHome, cwd: string) =>
-    loadInventory({ homeDir: h.home, registry: h.registry, cwd, managedSettings: h.path("none.json") });
+  const load = (h: TestHome, cwd: string) => loadInventory(h.inventoryOptions(cwd));
   const server = (inv: Awaited<ReturnType<typeof load>>, name: string, file: string) => {
     const found = inv.items.find((i) => i.kind === "mcp" && i.name === name && i.location.file === file);
     if (!found) throw new Error(`no ${name} in ${file}`);
     return found;
   };
 
-  it("reads each .mcp.json once: the project's and each parent dir's up to the home dir", async () => {
+  it("reads each .mcp.json once: the project's and each parent dir's up to where the walk stops", async () => {
     const { h, app } = ancestorSeed();
     const inv = await load(h, app);
     const files = inv.items
@@ -587,6 +504,29 @@ describe("loadInventory, a .mcp.json in a parent dir", () => {
     const reposShared = server(inv, "shared", h.path("repos/.mcp.json"));
     expect(stateOf(inv, server(inv, "shared", h.path(".mcp.json")), app).shadowedBy).toBe(reposShared.id);
   });
+
+  it("walks on past the home dir, as Claude Code walks to the root, and stops where a test says", async () => {
+    // A home in a dir of its own, with a .mcp.json above the home, as /Users/.mcp.json is.
+    const outer = new TestHome();
+    homes.push(outer);
+    const h = new TestHome(outer.home);
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", { projects: { [app]: {} } });
+    h.write(".claude/settings.json", { enabledMcpjsonServers: ["above"] });
+    const file = outer.write(".mcp.json", { mcpServers: { above: { command: "above-mcp" } } });
+
+    // Stopped at the home, as every other test is: the file above is not read.
+    const stopped = await load(h, app);
+    expect(stopped.items.filter((i) => i.kind === "mcp")).toEqual([]);
+
+    const walked = await loadInventory({ ...h.inventoryOptions(app), mcpjsonStop: outer.home });
+    const above = server(walked, "above", file);
+    expect(above.location).toEqual({ tool: "claude", scope: "project", project: outer.home, file });
+    expect(homeScope(above, app)).toBe("parents");
+    expect(stateOf(walked, above, app, "claude:default").value).toBe("on");
+    expect(rowsIn(walked, "claude", "mcp", "loaded", app, Date.now()).map((r) => r.name)).toEqual(["above"]);
+  });
 });
 
 describe("loadInventory, Codex project trust", () => {
@@ -617,12 +557,7 @@ describe("loadInventory, Codex project trust", () => {
     for (const dir of ["repos/app", "repos/web", "repos/notes"]) {
       h.write(`${dir}/.codex/config.toml`, "[mcp_servers.docs]\nenabled = false\n");
     }
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     const docs = inv.items.find((i) => i.kind === "mcp" && i.location.tool === "codex" && i.name === "docs");
     if (!docs) throw new Error("no docs");
     expect(stateOf(inv, docs, app)).toEqual({
@@ -657,12 +592,7 @@ describe("loadInventory, legacy commands and the not-used rule", () => {
     h.write(".claude/commands/ops/deploy.md", "Deploy it.");
     h.write(".claude/commands/never.md", "Never run.");
     h.link(h.path("gone", "lost.md"), ".claude/commands/lost.md");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     const unused = rowsIn(inv, "claude", "skill", "unused", app, NOW);
     expect(unused.map((row) => row.name).sort()).toEqual(["lost", "never"]);
     const lost = unused.find((row) => row.name === "lost");

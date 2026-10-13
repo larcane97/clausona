@@ -59,6 +59,7 @@ export const REFUSAL_CODES = [
   "tracked",
   "no-account",
   "elsewhere",
+  "all-hooks-off",
 ] as const;
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
 
@@ -182,6 +183,11 @@ export const REFUSALS: Readonly<Record<RefusalCode, { reason: Words; keys?: Word
   "no-account": { reason: "No account that has it has opened this project." },
   elsewhere: {
     reason: "It is turned off in {~file}, which applies here.",
+    keys: "Change it there.",
+    flags: "Change it there.",
+  },
+  "all-hooks-off": {
+    reason: "disableAllHooks in {~file} turns every hook off.",
     keys: "Change it there.",
     flags: "Change it there.",
   },

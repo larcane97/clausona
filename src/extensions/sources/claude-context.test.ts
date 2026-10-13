@@ -111,6 +111,31 @@ describe("loadClaudeContext", () => {
     expect(out.facts.claudeEnabledPlugins.map((o) => o.map)).toEqual([{ "sp@m": true }]);
   });
 
+  it("keeps each settings file's disableAllHooks and disableBundledSkills that is true or false", async () => {
+    const { h, app } = seed();
+    const warnings: Warning[] = [];
+    const managed = h.write("managed-settings.json", { disableAllHooks: false });
+    h.write(".claude/settings.json", { disableAllHooks: true, disableBundledSkills: "yes" });
+    const local = h.write("repos/app/.claude/settings.local.json", { disableBundledSkills: false });
+    const accounts = await loadClaudeAccounts(h.registry, h.home, warnings);
+    const ctx = await loadClaudeContext({
+      accounts,
+      registry: h.registry,
+      homeDir: h.home,
+      projects: [{ path: app, tools: ["claude"], profiles: [] }],
+      managedSettings: managed,
+      warnings,
+    });
+    const out: Collector = { items: [], facts: emptyFacts(), warnings };
+    collectClaudeSettingsFacts(ctx, out);
+    // A value that is no boolean is not one Claude Code takes.
+    expect(out.facts.claudeFlags).toEqual([
+      { file: managed, layer: "managed", key: "disableAllHooks", value: false },
+      { file: h.path(".claude", "settings.json"), layer: "user", key: "disableAllHooks", value: true },
+      { file: local, layer: "local", project: app, key: "disableBundledSkills", value: false },
+    ]);
+  });
+
   it("merges each account's plugin installs by the folder they resolve to", async () => {
     const { h, app } = seed();
     // The work profile records paths under its own dir, whose plugins/cache links to the primary's.

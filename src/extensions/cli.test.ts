@@ -56,6 +56,7 @@ const run = (h: TestHome, cwd: string, command: ExtensionsCommand, args: string[
       now: NOW,
       columns,
       managedSettings: h.path("managed-settings.json"),
+      mcpjsonStop: h.home,
     }),
   );
 
@@ -272,7 +273,7 @@ describe("skills ls", () => {
     const text = await run(h, app, "skills", ["ls", "--scope", "builtin", "--tool", "claude"]);
     expect(firstLine(text)).toMatch(/^1 skill · Built-in · project ~/);
     expect(text).toMatch(/^claude-api\s+Built-in\s+0\s+never\s+off$/m);
-    const inv = await loadInventory({ homeDir: h.home, registry: h.registry, cwd: app });
+    const inv = await loadInventory(h.inventoryOptions(app));
     // In the screen's scope list, after Plugins' place and before Not used in 90 days.
     expect(scopesFor(inv, "claude", "skill", app, NOW).map((s) => s.id)).toEqual([
       "loaded",
@@ -308,6 +309,8 @@ describe("ls, rows that differ only in whose they are", () => {
       oauthAccount: { organizationUuid: "org1", accountUuid: "acc1" },
     });
     h.claude("work", ".claude-work", { oauthAccount: { organizationUuid: "org1", accountUuid: "acc2" } });
+    // work finds its Cloud skills in the primary's folder through the link clausona makes.
+    h.link(".claude/skills", ".claude-work/skills");
     h.skill(".claude/skills/synced/org1_acc1", "pdf");
     h.skill(".claude/skills/synced/org1_acc2", "pdf");
     h.skill(".claude/skills", "eli5");
@@ -417,6 +420,17 @@ describe("ls options", () => {
         const json = JSON.parse(await run(h, app, command, ["ls", "--scope", scope, "--json"]));
         expect(json).toMatchObject({ version: 1, command, scope });
         await expect(run(h, app, command, ["ls", `--scope=${scope}`])).resolves.toMatch(/^\d+ /);
+      }
+    }
+  });
+
+  it("says on the ls and show pages what state and stateByAccount hold", async () => {
+    const { h, app } = seed();
+    for (const command of ["skills", "mcp", "hooks"] as const) {
+      for (const sub of ["ls", "show"]) {
+        const help = await run(h, app, command, [sub, "--help"]);
+        expect(help, `${command} ${sub}`).toContain("state: the row's one state, or mixed when its accounts differ");
+        expect(help, `${command} ${sub}`).toContain("stateByAccount: each account's, for a row read per account");
       }
     }
   });
@@ -541,6 +555,8 @@ describe("what an agent tripped on", () => {
       cwd: app,
       registry: h.registry,
       now: Date.now() + 3 * DAY,
+      managedSettings: h.path("managed-settings.json"),
+      mcpjsonStop: h.home,
     });
     expect(fresh).toMatch(/^Used {6}never, in any account · added 3d ago$/m);
   });
@@ -801,6 +817,56 @@ describe("mcp ls, a server more than one account sees", () => {
     const search = parsed.items.find((i: { name: string }) => i.name === "plugin:sp:search");
     expect(search.accounts).toEqual(["claude:default", "claude:work"]);
     expect(search.stateByAccount).toEqual({ "claude:default": "on", "claude:work": "off" });
+  });
+});
+
+describe("mcp ls --scope other, a .mcp.json server seen from outside its folder", () => {
+  /**
+   * site is the project looked from. app, under repos, has docs in its .mcp.json, approved there
+   * by default; repos is no project, and its .mcp.json has wiki, which loads in app.
+   */
+  function outside() {
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    const site = h.project("site");
+    h.write("repos/app/.mcp.json", { mcpServers: { docs: { command: "docs-mcp" } } });
+    h.write("repos/.mcp.json", { mcpServers: { wiki: { command: "wiki-mcp" } } });
+    h.claude("default", ".claude", {
+      projects: { [app]: { enabledMcpjsonServers: ["docs", "wiki"] }, [site]: {} },
+    });
+    h.claude("work", ".claude-work", { projects: { [app]: {}, [site]: {} } });
+    return { h, app, site };
+  }
+
+  it("reads each row's state in its own project, where WHERE says it is", async () => {
+    const { h, app, site } = outside();
+    const parsed = JSON.parse(await run(h, site, "mcp", ["ls", "--scope", "other", "--json"]));
+    const docs = parsed.items.find((i: { name: string }) => i.name === "docs");
+    // In app, where it is: approved by default, pending for work. site has no say in it.
+    expect(docs).toMatchObject({ project: app, from: "app", state: "mixed" });
+    expect(docs.stateByAccount).toEqual({ "claude:default": "on", "claude:work": "pending-approval" });
+    expect(docs.tags).toEqual([]);
+    expect(await run(h, site, "mcp", ["ls", "--scope", "other"])).toMatch(/^docs\s+claude\s+app\s+all\s*$/m);
+  });
+
+  it("says not here for one of a folder that is no project, which has no state of its own", async () => {
+    const { h, app, site } = outside();
+    const text = await run(h, site, "mcp", ["ls", "--scope", "other"]);
+    expect(text).toMatch(/^wiki\s+claude\s+~\/repos\s+all\s+not here$/m);
+    const wiki = JSON.parse(await run(h, site, "mcp", ["ls", "--scope", "other", "--json"])).items.find(
+      (i: { name: string }) => i.name === "wiki",
+    );
+    expect(wiki).toMatchObject({ project: h.path("repos"), state: "not-here", tags: ["not here"] });
+    expect(wiki).not.toHaveProperty("stateByAccount");
+    expect(await run(h, site, "mcp", ["show", "wiki"])).toMatch(
+      /^Accounts {2}not here: it loads in the projects in ~\/repos, each with its own approvals$/m,
+    );
+    // Seen from app, below it, it has app's approvals.
+    const fromApp = JSON.parse(await run(h, app, "mcp", ["ls", "--json"])).items.find(
+      (i: { name: string }) => i.name === "wiki",
+    );
+    expect(fromApp.stateByAccount).toEqual({ "claude:default": "on", "claude:work": "pending-approval" });
   });
 });
 

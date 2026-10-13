@@ -1,4 +1,5 @@
 import { mkdirSync, symlinkSync } from "node:fs";
+import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -85,6 +86,24 @@ describe("readClaudeSkills", () => {
     expect(byName["plugin:superpowers:brainstorming"]?.usageKeys).toEqual(["superpowers:brainstorming"]);
     expect(byName["plugin:superpowers:brainstorming"]?.location.accounts).toEqual(["claude:default"]);
     expect(new Set(out.items.map((i) => i.id)).size).toBe(out.items.length);
+  });
+
+  it("marks a Claude SKILL.md that has no front matter, and nothing else", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    h.skill(".claude/skills", "eli5");
+    h.write(".claude/skills/bare/SKILL.md", "Do the thing, step by step.\n");
+    h.write(".claude/commands/plain.md", "Review the diff.");
+    const sp = h.path(".claude/plugins/cache/m/kit/1.0.0");
+    h.write(".claude/plugins/installed_plugins.json", { plugins: { "kit@m": [{ installPath: sp }] } });
+    h.write(".claude/plugins/cache/m/kit/1.0.0/skills/plain/SKILL.md", "# Plain\n");
+
+    const out = await inventoryOf(h, []);
+    const marked = out.items.filter((i) => i.noFrontMatter).map((i) => i.name);
+    // A command file needs none: Claude Code takes its first line for its description.
+    expect(marked.sort()).toEqual(["bare", "kit:plain"]);
+    expect(out.items.find((i) => i.name === "bare")?.description).toBeUndefined();
   });
 
   it("lists a command file whose link leads nowhere, and keys a namespaced command's use two ways", async () => {
@@ -191,6 +210,43 @@ describe("readClaudeSkills", () => {
     all.link(".claude/skills", ".claude-work/skills");
     const linked = await inventoryOf(all, []);
     expect(linked.items.find((i) => i.name === "eli5")?.location).not.toHaveProperty("accounts");
+  });
+
+  it("reads an account's Cloud skills where it keeps them, and not its bucket left in the primary's folder", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude", { oauthAccount: { organizationUuid: "org1", accountUuid: "a" } });
+    h.claude("work", ".claude-work", { oauthAccount: { organizationUuid: "org1", accountUuid: "b" } });
+    h.claude("solo", ".claude-solo", { oauthAccount: { organizationUuid: "org1", accountUuid: "c" } });
+    h.link(".claude/skills", ".claude-work/skills");
+    // solo's skills folder is its own: Claude Code started with solo keeps its claude.ai skills there.
+    h.skill(".claude-solo/skills", "solo-only");
+    h.skill(".claude-solo/skills/synced/org1_c", "fresh");
+    // A bucket of another account in solo's folder is not solo's to load either.
+    h.skill(".claude-solo/skills/synced/org1_a", "elsewhere");
+    h.skill(".claude/skills/synced/org1_a", "pdf");
+    h.skill(".claude/skills/synced/org1_b", "pdf");
+    // What solo synced before its folder was its own: no account loads it now.
+    h.skill(".claude/skills/synced/org1_c", "stale");
+    // A bucket that matches no account is listed as before, with none.
+    h.skill(".claude/skills/synced/org9_z", "orphan");
+
+    const out = await inventoryOf(h, []);
+    const synced = out.items
+      .filter((i) => i.location.scope === "synced")
+      .map((i) => `${i.location.profile ?? "-"}|${i.name}|${path.relative(h.home, i.location.file)}`)
+      .sort();
+    expect(synced).toEqual(
+      [
+        `claude:default|pdf|${path.join(".claude", "skills", "synced", "org1_a", "pdf")}`,
+        `claude:work|pdf|${path.join(".claude", "skills", "synced", "org1_b", "pdf")}`,
+        `claude:solo|fresh|${path.join(".claude-solo", "skills", "synced", "org1_c", "fresh")}`,
+        `-|orphan|${path.join(".claude", "skills", "synced", "org9_z", "orphan")}`,
+      ].sort(),
+    );
+    // solo's own folder is read as its own, synced/ left to the Cloud reading above.
+    expect(out.items.filter((i) => i.location.scope === "account").map((i) => i.name)).toEqual(["solo-only"]);
+    expect(new Set(out.items.map((i) => i.id)).size).toBe(out.items.length);
   });
 
   it("reads a profile whose dir is a link to the primary's as the primary's, with no skills of its own", async () => {

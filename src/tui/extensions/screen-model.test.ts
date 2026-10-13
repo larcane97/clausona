@@ -83,12 +83,7 @@ async function seed(more?: (h: TestHome, app: string, web: string) => void): Pro
   h.write(".mcp.json", { mcpServers: { tools: { command: "tools-mcp" } } });
   h.write(".claude/settings.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-me" }] }] } });
   more?.(h, app, web);
-  const inv = await loadInventory({
-    homeDir: h.home,
-    registry: h.registry,
-    cwd: app,
-    managedSettings: h.path("none.json"),
-  });
+  const inv = await loadInventory(h.inventoryOptions(app));
   return { h, inv, app, web };
 }
 
@@ -98,12 +93,7 @@ async function bare(): Promise<Seeded> {
   homes.push(h);
   const app = h.project("repos/app");
   h.claude("default", ".claude", { projects: { [app]: {} } });
-  const inv = await loadInventory({
-    homeDir: h.home,
-    registry: h.registry,
-    cwd: app,
-    managedSettings: h.path("none.json"),
-  });
+  const inv = await loadInventory(h.inventoryOptions(app));
   return { h, inv, app, web: "" };
 }
 
@@ -140,6 +130,31 @@ describe("tables", () => {
     // A hidden copy never loads: Claude counts its name's use under the copy that wins.
     expect(cells(byName(project, "eli5"))).toEqual(["eli5", "—", "—"]);
     expect(byName(project, "eli5")?.row.items[0]?.location.project).toBe(app);
+  });
+
+  it("tags a skill with no front matter in muted words, as the other quiet tags are", async () => {
+    const { inv, app } = await seed((h, here) => {
+      h.write(".claude/skills/bare/SKILL.md", "Do the thing.\n");
+      // Used yesterday, so no unused tag comes first.
+      h.write(".claude.json", {
+        projects: { [here]: {} },
+        skillUsage: { bare: { usageCount: 1, lastUsedAt: NOW - DAY } },
+      });
+    });
+    const global = buildTable(inv, "claude", "skill", "global", app, NOW, 100, "");
+    expect(byName(global, "bare")?.tag).toEqual({ text: "no front matter", tone: "muted" });
+  });
+
+  it("tags every Claude hook off under disableAllHooks, and leaves it out of Loaded", async () => {
+    const { inv, app } = await seed((h) =>
+      h.write(".claude/settings.json", {
+        disableAllHooks: true,
+        hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-me" }] }] },
+      }),
+    );
+    const global = buildTable(inv, "claude", "hook", "global", app, NOW, 100, "");
+    expect(byName(global, "Stop")?.tag).toEqual({ text: "off", tone: "muted" });
+    expect(names(buildTable(inv, "claude", "hook", "loaded", app, NOW, 100, ""))).toEqual([]);
   });
 
   it("groups Loaded by the place each row comes from, in the scope list's order, with a heading for each", async () => {
@@ -378,14 +393,11 @@ describe("tables", () => {
       oauthAccount: { organizationUuid: "org1", accountUuid: "acc2" },
       skillUsage: { pdf: { usageCount: 3, lastUsedAt: NOW - DAY } },
     });
+    // work finds its Cloud skills in the primary's folder through the link clausona makes.
+    h.link(".claude/skills", ".claude-work/skills");
     h.skill(".claude/skills/synced/org1_acc1", "pdf");
     h.skill(".claude/skills/synced/org1_acc2", "pdf");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     const cloud = buildTable(inv, "claude", "skill", "cloud", app, NOW, 100, "");
     expect(cloud.rows).toHaveLength(1);
     expect(cloud.rows[0]?.row.items).toHaveLength(2);

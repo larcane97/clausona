@@ -30,7 +30,16 @@ import { accountStates, projectName, shortProfile, stateHere, tilde, viewFrom } 
 import { isWithin, pathKey, samePath } from "./read.js";
 import { homeScope, isAccountServer, rowKey, SCOPE_LABEL, type ScopeRow } from "./scopes.js";
 import { type StashMeta, stashFileName, stashIdFor } from "./stash.js";
-import { claudeSkillOverride, codexTrusted, isManagedSetting, isMcpjsonServer, pluginState, stateOf } from "./state.js";
+import {
+  allHooksOff,
+  claudeFlag,
+  claudeSkillOverride,
+  codexTrusted,
+  isManagedSetting,
+  isMcpjsonServer,
+  pluginState,
+  stateOf,
+} from "./state.js";
 import type { JsonEdit, JsonPath } from "./writers/json.js";
 import type { SkillSelector, TomlEdit } from "./writers/toml.js";
 
@@ -1016,6 +1025,14 @@ function planHook(run: Run, row: ScopeRow): Outcome {
   const at: JsonPath = [...eventPath(place), place.group, "hooks", place.index];
   const event = place.event;
   const out = outcome();
+  // While disableAllHooks holds, turning one hook on would not make it run.
+  const holds = verb === "on" ? claudeFlag(inv, "disableAllHooks", run.ctx.project) : undefined;
+  if (holds?.value === true && allHooksOff(inv, item, run.ctx.project)) {
+    if (holds.layer === "managed") return refused(run, row, "managed");
+    if (holds.layer === "user") return refused(run, row, "all-hooks-off", { "~file": tilde(holds.file, inv.homeDir) });
+    // A project's own setting holds in that project alone, and on is in every project.
+    note(out, `Still off in this project: disableAllHooks in ${tilde(holds.file, inv.homeDir)}`);
+  }
   if (verb === "rm") {
     if (item.stashed) return adding(out, stashRemoval(run, row, item, item.stashed.file));
     return adding(

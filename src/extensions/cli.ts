@@ -1179,6 +1179,8 @@ export async function runExtensionsCommand(
     columns?: number;
     /** Where to look for Claude Code's managed settings; tests point it at a file of their own. */
     managedSettings?: string;
+    /** See LoadOptions.mcpjsonStop: tests set their home. */
+    mcpjsonStop?: string;
     /** stdin and stdout are both TTYs; default false. */
     interactive?: boolean;
     /** Asks the question and resolves to the answer; required when interactive. */
@@ -1222,6 +1224,7 @@ export async function runExtensionsCommand(
     registry: deps.registry,
     cwd: options.project ?? deps.cwd,
     ...(deps.managedSettings !== undefined ? { managedSettings: deps.managedSettings } : {}),
+    ...(deps.mcpjsonStop !== undefined ? { mcpjsonStop: deps.mcpjsonStop } : {}),
   });
   const project = inv.currentProject;
   const now = deps.now ?? Date.now();

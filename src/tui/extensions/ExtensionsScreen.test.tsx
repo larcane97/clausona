@@ -73,7 +73,7 @@ async function seed(more?: (h: TestHome) => void): Promise<Inventory> {
   h.write(".claude/settings.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "notify-me" }] }] } });
   h.write("repos/app/.claude/settings.local.json", "{ broken");
   more?.(h);
-  return loadInventory({ homeDir: h.home, registry: h.registry, cwd: app, managedSettings: h.path("none.json") });
+  return loadInventory(h.inventoryOptions(app));
 }
 
 function mount(tree: ReactElement, columns: number, rows?: number): WatchedInstance {
@@ -400,12 +400,7 @@ describe("ExtensionsScreen", () => {
     h.claude("default", ".claude", {
       projects: { [h.home]: { mcpServers: { "home-db": { command: "db-mcp" } } }, [app]: {} },
     });
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: h.home,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(h.home));
     const { instance } = screen(inv, 140);
     expect(await seen(instance, (f) => f.includes("Extensions │ ~"))).toContain("▸ ~ (here)");
     await press(instance, "2");
@@ -631,12 +626,7 @@ describe("ExtensionsScreen", () => {
     const app = h.project("repos/app");
     h.claude("default", ".claude");
     h.write("repos/app/.mcp.json", { mcpServers: { docs: { command: "docs" } } });
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(app));
     const { instance } = screen(inv, 140, 40);
     await seen(instance, (f) => f.includes("Skills"));
     await press(instance, "2");
@@ -952,12 +942,7 @@ describe("ExtensionsScreen", () => {
     const h = new TestHome();
     homes.push(h);
     h.claude("default", ".claude");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: h.home,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(h.home));
     const { instance } = screen(inv, 100, 30);
     const frame = await seen(instance, (f) => f.includes("Nothing is loaded here."));
     // Started in the home dir, which is a project for what Claude Code keys by it.
@@ -1026,12 +1011,7 @@ describe("ExtensionsScreen", () => {
     const projects = names.map((name) => h.project(`repos/${name}`));
     h.claude("default", ".claude", { projects: Object.fromEntries(projects.map((p) => [p, {}])) });
     for (const name of names) h.write(`repos/${name}/.claude/settings.local.json`, "{ broken");
-    const inv = await loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: h.home,
-      managedSettings: h.path("none.json"),
-    });
+    const inv = await loadInventory(h.inventoryOptions(h.home));
     expect(inv.warnings).toHaveLength(7);
     const { instance } = screen(inv, 60, 20);
     await seen(instance, (f) => f.includes("Skills"));

@@ -4,8 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { valueHash } from "../hash.js";
-import { type Collector, emptyFacts, type Project } from "../model.js";
+import { type Collector, type Extension, emptyFacts, type Project } from "../model.js";
 import { pathKey } from "../read.js";
+import { rowKey } from "../scopes.js";
 import { TestHome } from "../test-home.js";
 import { loadClaudeAccounts, loadClaudeContext } from "./claude-context.js";
 import { readClaudeHooks, readClaudePlugins } from "./claude-hooks.js";
@@ -154,6 +155,76 @@ describe("readClaudeHooks and readClaudePlugins", () => {
     // One fingerprint per hook listed, none for what is no command.
     const hooks = out.items.filter((i) => i.kind === "hook");
     expect(Object.keys(out.facts.fingerprints).sort()).toEqual(hooks.map((i) => i.id).sort());
+  });
+
+  it("reads the hooks a plugin's manifest has inline or names by path, each a row of its own", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    h.claude("work", ".claude-work");
+    const root = ".claude/plugins/cache/m/kit/1.0.0";
+    const kit = h.path(root);
+    const installs = { "kit@m": [{ installPath: kit }] };
+    h.write(".claude-work/plugins/installed_plugins.json", { plugins: installs });
+    const start = { SessionStart: [{ hooks: [{ type: "command", command: "from-hooks-json" }] }] };
+    h.write(`${root}/hooks/hooks.json`, { hooks: start });
+    h.write(`${root}/config/extra.json`, {
+      hooks: { SessionStart: [{ hooks: [{ type: "command", command: "from-extra" }] }] },
+    });
+    h.write(`${root}/.claude-plugin/plugin.json`, {
+      name: "kit",
+      hooks: [
+        "./config/extra.json",
+        // The standard file again, and a path out of the plugin: read once, and not at all.
+        "./hooks/hooks.json",
+        "../outside.json",
+        { SessionStart: [{ hooks: [{ type: "command", command: "from-manifest" }] }] },
+      ],
+    });
+    h.write(".claude/plugins/cache/m/kit/outside.json", {
+      hooks: { Stop: [{ hooks: [{ type: "command", command: "from-outside" }] }] },
+    });
+    // The inline object form alone, in a second plugin.
+    const solo = ".claude/plugins/cache/m/solo/1.0.0";
+    h.write(".claude/plugins/installed_plugins.json", {
+      plugins: { ...installs, "solo@m": [{ installPath: h.path(solo) }] },
+    });
+    h.write(`${solo}/.claude-plugin/plugin.json`, {
+      hooks: { PostToolUse: [{ matcher: "Edit", hooks: [{ type: "command", command: "solo-fmt" }] }] },
+    });
+
+    const out = await inventoryOf(h, []);
+
+    const hooks = out.items.filter((i) => i.kind === "hook");
+    const home = realpathSync.native(h.home);
+    expect(hooks.map((i) => `${i.name}|${i.summary?.command}|${path.relative(home, i.location.file)}`).sort()).toEqual(
+      [
+        `PostToolUse Edit|solo-fmt|${path.join(solo, ".claude-plugin", "plugin.json")}`,
+        `SessionStart|from-extra|${path.join(root, "config", "extra.json")}`,
+        `SessionStart|from-hooks-json|${path.join(root, "hooks", "hooks.json")}`,
+        `SessionStart|from-manifest|${path.join(root, ".claude-plugin", "plugin.json")}`,
+      ].sort(),
+    );
+    const byCommand = (command: string): Extension => {
+      const found = hooks.find((i) => i.summary?.command === command);
+      if (!found) throw new Error(`no hook ${command}`);
+      return found;
+    };
+    // The hooks.json one keeps its id; the others say which file they are in, so each is a row.
+    const owner = `kit@m|user|-|${pathKey(realpathSync.native(kit))}`;
+    expect(byCommand("from-hooks-json").id).toBe(`hook:claude:plugin:${owner}:SessionStart#0.0`);
+    expect(new Set(hooks.map((i) => i.id)).size).toBe(hooks.length);
+    expect(new Set(hooks.map(rowKey)).size).toBe(hooks.length);
+    expect(rowKey(byCommand("from-manifest"))).toBe("hook:claude:plugin:user:-:kit@m:SessionStart#plugin.json[3]:0.0");
+    expect(rowKey(byCommand("from-extra"))).toBe("hook:claude:plugin:user:-:kit@m:SessionStart#config/extra.json:0.0");
+    expect(rowKey(byCommand("solo-fmt"))).toBe("hook:claude:plugin:user:-:solo@m:PostToolUse Edit#plugin.json:0.0");
+    // Each with the plugin's place, as its hooks.json hook has.
+    const manifest = byCommand("from-manifest");
+    expect(manifest.location).toEqual({ ...byCommand("from-hooks-json").location, file: manifest.location.file });
+    expect(manifest.location.accounts).toEqual(["claude:default", "claude:work"]);
+    expect(manifest.hook).toEqual({ base: "hooks", event: "SessionStart", group: 0, index: 0 });
+    expect(out.facts.fingerprints[manifest.id]).toBe(valueHash({ type: "command", command: "from-manifest" }));
+    expect(out.warnings).toEqual([]);
   });
 
   it("gives each install of one plugin its own items", async () => {

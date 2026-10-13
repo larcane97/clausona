@@ -107,14 +107,25 @@ Some scopes need a word more:
 - Project for Claude MCP includes local servers: the ones an account added for this
   project with `claude mcp add`, kept in that account's `.claude.json`.
 - Parent folders: Claude Code reads `.mcp.json` in the project and in every folder above
-  it. The header names each folder, nearest first.
+  it, past the home folder too, up to the filesystem root. So does clausona: a `.mcp.json` in
+  `/Users` or `C:\Users` is listed here. The header names each folder, nearest first.
 - Cloud: the skills Claude Code downloaded from each account's claude.ai skills, under
-  `~/.claude/skills/synced`.
+  `skills/synced` in the skills folder that account loads: `~/.claude/skills/synced` for the
+  accounts that share the primary's, and its own for an account whose skills folder is its own.
+  What such an account left in the primary's folder before is not listed, as no account loads
+  it.
 - Plugins lists the plugins themselves (rows of kind `plugin`) that bring at least one
   thing of the kind, installed for everyone or for this project. A plugin installed only for
   another project is under Plugins seen from that project, and under Other projects in the CLI.
   In JSON a plugin row has `contains`, the names of what it brings. What a plugin brings is in
   Loaded while the plugin is on, and in `all`, with the plugin's name as WHERE.
+
+  A plugin's servers come from its `.mcp.json` and from what its `.claude-plugin/plugin.json`
+  declares under `mcpServers`: servers inline, or the `.json` files of servers it names. Its
+  hooks come from `hooks/hooks.json` and from `plugin.json`'s `hooks` the same way. A path that
+  leads out of the plugin's folder, through `..` or a link, is not read, as Claude Code does not
+  load it. Nor is an MCP bundle (`.mcpb` or `.dxt`), which Claude Code unpacks itself.
+
   - Codex's plugins are the ones in the `plugins/cache` folder of its home, read from the
     version Codex loads. Each is `<plugin>@<marketplace>`, as `config.toml` names it. It brings
     what its `.codex-plugin/plugin.json`, or else `.claude-plugin/plugin.json`, names, or the
@@ -129,8 +140,11 @@ Some scopes need a word more:
     both. Shown only when there is one.
   - Codex keeps them in the `skills/.system` folder of its home, which it fills itself.
 - Managed: the administrator's managed settings, `managed-settings.json` and the files in
-  `managed-settings.d/`. In this version that means hooks: clausona reads no managed MCP file,
-  so `mcp ls --scope managed` is always empty.
+  `managed-settings.d/`, for hooks, and `managed-mcp.json` beside them for MCP servers. While
+  `managed-mcp.json` is there, Claude Code starts its servers and no other, so every other
+  Claude server reads `off`, in every account, and its details say
+  `only the servers in …/managed-mcp.json start`. clausona does not read the
+  `managedMcpServers` key of managed settings.
 - Other projects, in the CLI only: `ls --scope other` lists the rows of every other project at
   once, each with its `project`. On the screen, pick that project from the project list to see
   its rows.
@@ -177,7 +191,10 @@ hidden: `Loaded  on in personal · hidden by the Global copy in work`.
 
 `skillOverrides` and `enabledPlugins` are read the way Claude Code reads them: managed
 settings first, then the project's `.claude/settings.local.json`, then its
-`.claude/settings.json`, then the user settings. The first that sets a name wins.
+`.claude/settings.json`, then the user settings. The first that sets a name wins. So are
+`disableAllHooks` and `disableBundledSkills`: the first file that sets one to `true` or
+`false` decides, so a project's `false` turns hooks back on there over a `true` in your user
+settings.
 
 ## States and tags
 
@@ -190,6 +207,7 @@ The `state` of an item in JSON is one of these:
 | `name-only` | A Claude skill set to `name-only` in `skillOverrides`. The details say "Shows as name only". |
 | `user-invocable-only` | A Claude skill set to `user-invocable-only` in `skillOverrides`. The details say "Shows as only when you call it". |
 | `pending-approval` | A `.mcp.json` server not approved yet. Claude Code does not start it. |
+| `not-here` | A `.mcp.json` server of a folder that is no project, seen from a project outside that folder. It loads in each project below the folder, with that project's approvals, and has no state of its own: look from one of those projects with `--project`. |
 | `mixed` | The accounts differ: `stateByAccount` has each one's. |
 
 `state` is the switch's value and nothing more. A row loads here when its state is `on`,
@@ -199,9 +217,15 @@ row loads in the accounts whose `stateByAccount` value is `on`, except where ano
 there, which its details say. A row read per account says it for each account in
 `loadsByAccount`.
 
+A row is read in the project it loads in: this project for what loads here, and its own
+project for another project's row, as `--scope other` lists them. So an Other projects row's
+state and tags are that project's, the one WHERE names, not this one's.
+
 The switches are read from these places:
 
-- Claude skills: `skillOverrides` in the settings files.
+- Claude skills: `skillOverrides` in the settings files. A built-in skill is off while
+  `disableBundledSkills` is `true`, whatever `skillOverrides` says, and the details name the
+  setting and its file: `off everywhere (disableBundledSkills in ~/.claude/settings.json)`.
 - Claude plugins and what they bring: `enabledPlugins` in the settings files. A plugin no
   settings file turns on is off.
 - Claude user and local MCP servers: `disabledMcpServers` in the account's `.claude.json`
@@ -210,6 +234,21 @@ The switches are read from these places:
   way.
 - `.mcp.json` servers: `enabledMcpjsonServers`, `disabledMcpjsonServers` and
   `enableAllProjectMcpServers`, in the settings files or the account's project entry.
+- Every Claude server, before its own switch: `managed-mcp.json` (see [Scopes](#scopes)), then
+  `deniedMcpServers` and `allowedMcpServers` in the settings files, a project's in that project
+  only. A server either list keeps out is `off` in every account, and its details name the list
+  and its file: `off (deniedMcpServers in …)` or `off (not in allowedMcpServers in …)`. They
+  match as Claude Code matches them:
+  - an entry is `serverName`, the server's name exactly; `serverCommand`, its command and every
+    argument in order; or `serverUrl`, a URL pattern where `*` is anything, the host in any case,
+    and a host written out in full on its scheme's default port only;
+  - a denylist entry from any file keeps a server out, a managed one too;
+  - once any file has an allowlist, a server must be on one: a stdio server by `serverCommand`
+    once the lists have such an entry, a remote one by `serverUrl` likewise, else by its name.
+    The lists of every file count together, or the managed ones alone when managed settings
+    set `allowManagedMcpServersOnly`. An empty list keeps every server out. A server of
+    `managed-mcp.json` needs no entry unless its config uses `${VAR}`.
+  - clausona compares `${VAR}` in an entry or a config as written, where Claude Code expands it.
 - Codex skills: `[[skills.config]]` in Codex's `config.toml`, by name or by path. A path names
   the skill whether it goes through a link or not, as Codex reads it.
 - Codex MCP servers: `mcp_servers.<name>.enabled` in Codex's or the project's `config.toml`.
@@ -218,13 +257,19 @@ The switches are read from these places:
   plugin no table names is off. A plugin's skill is switched by its full name in
   `[[skills.config]]`, and its server by `plugins."<id>".mcp_servers.<name>.enabled`. A server
   the plugin ships with `"enabled": false` is off until that switch turns it on.
-- Hooks are on, except a plugin's hooks while the plugin is off.
+- Hooks are on, except a plugin's hooks while the plugin is off. `disableAllHooks` set to
+  `true` turns every Claude hook off. Set in managed settings, it turns off the managed hooks
+  too. Set anywhere else, it leaves the managed hooks on, and a plugin's hooks while managed
+  `enabledPlugins` turns the plugin on, as Claude Code runs those. The details name the setting
+  and its file, as in `off everywhere (disableAllHooks in ~/.claude/settings.json)`; a project's
+  own setting reads `off here`.
 
 ### Tags
 
 A row can carry several tags. They are listed most important first: `broken link`, then
-`off`, `off here` or `off in N of M accounts`, then `pending approval`, then
-`hidden by … copy`, then `unused`. The NOTE column shows the first; JSON `tags` has them all.
+`off`, `off here` or `off in N of M accounts`, then `not here`, then `pending approval`, then
+`hidden by … copy`, then `unused`, then `no front matter`. The NOTE column shows the first; JSON
+`tags` has them all.
 
 | Tag | When |
 |---|---|
@@ -232,11 +277,13 @@ A row can carry several tags. They are listed most important first: `broken link
 | `off` | Off in every account that has it, by a user or managed setting, or because nothing turns it on (a plugin no settings file enables). |
 | `off here` | Off in every account by this project's own settings: its `.claude/settings*.json`, an account's entry for it in `.claude.json`, or its `.codex/config.toml`. |
 | `off in N of M accounts` | Off in N accounts and on in the others. M counts the accounts that have the row; for a server every account sees, the accounts that have opened this project. |
+| `not here` | A `.mcp.json` server of a folder that is no project, seen from a project outside it: the state `not-here`. |
 | `pending approval` | A `.mcp.json` server that no account has approved in this project. |
 | `hidden by Project copy` | In every account that has it, a same-name copy in Project wins: the account's local server, or this project's `.mcp.json`. |
 | `hidden by Global copy` | In every account that has it, a same-name skill in Global wins: the primary's, or the account's own. |
 | `hidden by Parent folders copy` | In every account that has it, a same-name `.mcp.json` copy in a parent folder wins. |
 | `unused` | A Claude skill the rule below calls unused. |
+| `no front matter` | A Claude skill whose `SKILL.md` has no front matter. Claude Code loads it under its folder's name, with no description, so it has only the skill's first non-empty line to tell when to use it. A quiet note: the skill still loads. |
 
 The three `hidden by` tags are the forms of `hidden by <scope> copy`, which names the scope of
 the copy that wins. [Which copy wins](#which-copy-wins) says which copy that is.
@@ -512,7 +559,8 @@ The first part after `mcp:claude:` is `account` for a user server and `local` fo
 `<project>` is the project's absolute path, lower-cased on Windows, and `-` when there is none.
 The install scope is `user`, `project` or `local`. A plugin's hook adds its place in its file,
 as in `hook:claude:plugin:user:-:kit@demo:SessionStart#0.0`, so two hooks on one event are two
-rows.
+rows. A hook in `plugin.json`, or in a file it names, adds that file too:
+`SessionStart#plugin.json:0.0`, `SessionStart#config/extra.json:0.0`.
 
 Ids and keys name where a thing is stored, not where it is seen from. They are the same from
 every project, so an agent can store one and pass it to `show --id` later. A row key stays the
@@ -609,6 +657,11 @@ Neither Claude Code nor Codex has a switch for one hook in one project. So `hook
 `hooks on` always work everywhere: off takes the hook out of its settings file and clausona
 keeps it, and on puts it back. `--everywhere` is taken and changes nothing. On the screen `g`
 turns a hook off, and `space` says why it can't.
+
+While `disableAllHooks` keeps every Claude hook off, turning one on would not make it run, so
+`on` is refused and the reason names the file that sets it. When this project's own settings
+set it, it holds in this project only, so `on` goes ahead and the plan says
+`Still off in this project: disableAllHooks in …`.
 
 A server or a hook taken out and kept by clausona still has its row, in its own scope and in
 `--scope all`, with the tag `off`. It is not in Loaded, since it does not load. For a server the
@@ -868,6 +921,7 @@ the CLI's words. In the table `<tool>` is the tool's name and `<scope>` a scope'
 | `tracked` | Git tracks it in `<project>`, so this changes the repo. | Press `o` to turn it off here instead, or `y` to go ahead. | Add `--tracked` to go ahead, or turn it off: `clausona <command> off <name>`. |
 | `no-account` | No account that has it has opened this project. | | |
 | `elsewhere` | It is turned off in `<file>`, which applies here. | Change it there. | Change it there. |
+| `all-hooks-off` | `disableAllHooks` in `<file>` turns every hook off. | Change it there. | Change it there. |
 
 On the screen, `stash-gone` on one account's server, in a row other accounts share, says
 `Press d and choose only work in the dialog.` instead, since `d` on the row would delete the
@@ -923,6 +977,15 @@ apply; the others are always there, `null` when empty.
 
 The parts of the larger fields:
 
+- `state` and `stateByAccount`. A row read per account has `stateByAccount`, each account's own
+  state, and `state` is the value they share, or `mixed`. That is a row of copies in accounts'
+  own files, a Cloud skill, a plugin and what it brings, and a `.mcp.json` or plugin server in a
+  project an account has opened. Every other row has `state` alone, one value for every account:
+  what the files that every account reads say. So for a `.mcp.json` server and for a plugin's
+  server in a project no account has opened yet, `state` means the same thing, the settings
+  files' word: a `.mcp.json` server's approval there, `pending-approval` until one approves it,
+  and a plugin's server its plugin's switch. Each account's own switch, in its `.claude.json`
+  entry for the project, comes in with `stateByAccount` once the account opens the project.
 - `loadsByAccount` is worked out as Loaded is. It is `true` where that account's state is `on`,
   `name-only` or `user-invocable-only`, no other copy of the name wins in that account, and the
   row is no broken link. So it is `false` where the row is off, pending approval or hidden in
@@ -1281,7 +1344,8 @@ each account, `true` or `false`, with the switch and the copy that wins both cou
 
 A Codex server has no `accounts`, because Codex has no accounts here; its `state` is the one
 state. A `.mcp.json` server in a project no account has opened has none either, and its `state`
-merges every account's approvals.
+is what the settings files approve, as for any row read once for every account (see
+[Item fields](#item-fields)).
 
 A name in several places is not ambiguous by itself. Claude Code takes one server per name, so
 a user `github` and this project's `.mcp.json` `github` make one row in Loaded, the copy

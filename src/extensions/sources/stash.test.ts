@@ -43,12 +43,7 @@ function stashed(h: TestHome, stash: Omit<StashFile, "version" | "id" | "stashed
 }
 
 async function load(h: TestHome, app: string): Promise<Inventory> {
-  return loadInventory({
-    homeDir: h.home,
-    registry: h.registry,
-    cwd: app,
-    managedSettings: h.path("no-managed.json"),
-  });
+  return loadInventory(h.inventoryOptions(app, h.path("no-managed.json")));
 }
 
 function rowNamed(rows: ScopeRow[], name: string): ScopeRow {

@@ -1,7 +1,7 @@
 import { render } from "ink-testing-library";
 import { describe, expect, it, vi } from "vitest";
 
-import type { Inventory } from "../extensions/model.js";
+import { emptyFacts, type Inventory } from "../extensions/model.js";
 
 vi.mock("../commands", () => ({
   bootstrapInitFromCurrentState: vi.fn(async () => ({
@@ -66,18 +66,7 @@ const inventory: Inventory = {
   projects: [],
   homeDir: "/h",
   claudeProfiles: ["claude:default"],
-  facts: {
-    claudeSkillOverrides: [],
-    claudeEnabledPlugins: [],
-    claudeMcpDisabled: [],
-    claudeMcpjson: [],
-    codexSkillConfig: [],
-    codexMcpEnabled: [],
-    fingerprints: {},
-    codexTrust: [],
-    codexPlugins: [],
-    codexPluginServers: [],
-  },
+  facts: emptyFacts(),
   usage: {},
   hashes: {},
   warnings: [],

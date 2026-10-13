@@ -3,14 +3,29 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { Registry } from "../types.js";
+import type { LoadOptions } from "./inventory.js";
 
 /**
  * A throwaway home with Claude Code and Codex profiles, projects, skills and settings, for the
  * extensions tests. Only for tests: nothing in the app imports it.
  */
 export class TestHome {
-  readonly home = mkdtempSync(path.join(tmpdir(), "clausona-ext-"));
+  readonly home: string;
   readonly registry: Registry = { version: 2, primarySources: {}, activeProfiles: {}, profiles: {} };
+
+  /** `parent`: the dir to make the home in, the system temp dir by default. */
+  constructor(parent = tmpdir()) {
+    this.home = mkdtempSync(path.join(parent, "clausona-ext-"));
+  }
+
+  /**
+   * What loadInventory reads for this home, seen from `cwd`: managed settings from a file of the
+   * home's own, and the parent `.mcp.json` walk stopped at the home, so a test never reads the
+   * machine's real ones - a temp dir sits under the real home on Windows.
+   */
+  inventoryOptions(cwd: string, managedSettings = this.path("none.json")): LoadOptions {
+    return { homeDir: this.home, registry: this.registry, cwd, managedSettings, mcpjsonStop: this.home };
+  }
 
   path(...parts: string[]): string {
     return path.join(this.home, ...parts);

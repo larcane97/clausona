@@ -55,11 +55,13 @@ const TAGS = [
   "off",
   "off here",
   "off in N of M accounts",
+  "not here",
   "pending approval",
   "hidden by Project copy",
   "hidden by Global copy",
   "hidden by Parent folders copy",
   "unused",
+  "no front matter",
 ];
 
 /** The keys `ls --json` writes, in order. */
@@ -235,12 +237,15 @@ afterEach(() => {
  * - a working link and a broken one, a skill off in user settings and one off in the project's;
  * - a Project eli5 a Global one hides; a `.mcp.json` server pending approval, hidden by the
  *   project's copy in the folder above, and one hidden by a nearer parent folder's;
- * - a plugin and its skill, a hook, and an eli5 that Claude and Codex both load here.
+ * - a plugin and its skill, a hook, and an eli5 that Claude and Codex both load here;
+ * - a skill whose SKILL.md has no front matter;
+ * - a `.mcp.json` server of a folder that is no project, above another project.
  */
 function seed() {
   const h = new TestHome();
   homes.push(h);
   const app = h.project("repos/team/app");
+  const lab = h.project("labs/lab");
   const server = { github: { command: "npx", args: ["gh-mcp"], env: { GITHUB_TOKEN: "x" } } };
   h.claude("personal", ".claude", {
     oauthAccount: { organizationUuid: "org", accountUuid: "one" },
@@ -249,13 +254,14 @@ function seed() {
   });
   h.claude("work", ".claude-work", {
     oauthAccount: { organizationUuid: "org", accountUuid: "two" },
-    projects: { [app]: { disabledMcpServers: ["github"] } },
+    projects: { [app]: { disabledMcpServers: ["github"] }, [lab]: {} },
     mcpServers: server,
   });
   h.skill(".claude/skills/synced/org_one", "pdf");
   h.skill(".claude/skills/synced/org_two", "pdf");
   h.skill(".claude/skills", "eli5");
   h.skill(".claude/skills", "old-one");
+  h.write(".claude/skills/bare/SKILL.md", "Do the thing, step by step.\n");
   // work loads the primary's skills through the link clausona makes for every account.
   h.link(".claude/skills", ".claude-work/skills");
   h.skill("shared", "notes");
@@ -267,6 +273,8 @@ function seed() {
   h.write("repos/team/app/.mcp.json", { mcpServers: { docs: { command: "docs-mcp" } } });
   h.write("repos/team/.mcp.json", { mcpServers: { docs: { command: "docs-mcp" }, wiki: { command: "wiki-mcp" } } });
   h.write("repos/.mcp.json", { mcpServers: { wiki: { command: "wiki-mcp" } } });
+  // A folder that is no project, above a project that is not app's: its server is not here.
+  h.write("labs/.mcp.json", { mcpServers: { lab: { command: "lab-mcp" } } });
   const kit = h.path(".claude/plugins/cache/m/kit/1.0.0");
   h.write(".claude/plugins/installed_plugins.json", { plugins: { "kit@m": [{ installPath: kit }] } });
   h.skill(".claude/plugins/cache/m/kit/1.0.0/skills", "plan");
@@ -286,6 +294,7 @@ function seed() {
       registry: h.registry,
       now: NOW,
       managedSettings: h.path("managed-settings.json"),
+      mcpjsonStop: h.home,
       ...(terminal ? { interactive: true, confirm: async () => true, print: () => {} } : {}),
     });
   /** Every item `ls --json` writes: `all` has every place's rows but the plugins, which `plugins` lists. */

@@ -122,13 +122,7 @@ function mount(h: TestHome, app: string, columns: number, rows: number, options:
     at += 1000;
     return at;
   };
-  const load = () =>
-    loadInventory({
-      homeDir: h.home,
-      registry: h.registry,
-      cwd: app,
-      managedSettings: h.path("managed-settings.json"),
-    });
+  const load = () => loadInventory(h.inventoryOptions(app, h.path("managed-settings.json")));
   const later = () => Date.now() + 200 * DAY;
   const writes = options.writes === false ? undefined : writesFor(h.home, { now: clock });
   const instance = renderAt(

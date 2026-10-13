@@ -1,4 +1,5 @@
 import type { ToolName } from "../types.js";
+import type { McpRule, McpTarget } from "./mcp-policy.js";
 
 /**
  * The extensions inventory: every skill, MCP server, hook and plugin that the Claude Code and
@@ -68,6 +69,11 @@ export type Extension = {
   createdAt?: number;
   /** Skills: the keys Claude Code may record its use under in `skillUsage`. */
   usageKeys?: string[];
+  /**
+   * Claude skills: set when the SKILL.md has no front matter. Claude Code loads it under its
+   * folder's name, with no description of when to use it.
+   */
+  noFrontMatter?: true;
   /** What is shown about it, already redacted. */
   summary?: Record<string, string>;
   /** Hooks: where the command sits in its file. */
@@ -105,9 +111,30 @@ export type SettingsLayer = "managed" | "local" | "project" | "user";
 
 type SettingsMap = { file: string; layer: SettingsLayer; project?: string; map: Record<string, unknown> };
 
+/** A Claude Code setting that turns a whole kind off: every hook, or the skills that come with it. */
+export type ClaudeFlag = "disableAllHooks" | "disableBundledSkills";
+
 export type StateFacts = {
   claudeSkillOverrides: SettingsMap[];
   claudeEnabledPlugins: SettingsMap[];
+  /** Each settings file's `disableAllHooks` and `disableBundledSkills`, where it sets one to true or false. */
+  claudeFlags: { file: string; layer: SettingsLayer; project?: string; key: ClaudeFlag; value: boolean }[];
+  /**
+   * Each settings file's `allowedMcpServers` and `deniedMcpServers` where it has a list, and
+   * `managedOnly` where a managed one sets `allowManagedMcpServersOnly`.
+   */
+  claudeMcpPolicy: {
+    file: string;
+    layer: SettingsLayer;
+    project?: string;
+    allowed?: McpRule[];
+    denied?: McpRule[];
+    managedOnly?: true;
+  }[];
+  /** managed-mcp.json, while it is there: Claude Code then starts its servers and no other. */
+  claudeManagedMcp?: string;
+  /** Claude MCP server id -> what it starts, which the lists match. Never printed. */
+  mcpTargets: Record<string, McpTarget>;
   /** `.claude.json` → projects[P].disabledMcpServers, per account. */
   claudeMcpDisabled: { file: string; profile: string; project: string; names: string[] }[];
   /** `.mcp.json` approvals, from settings and from an account's project entry. */
@@ -162,6 +189,9 @@ export function emptyFacts(): StateFacts {
   return {
     claudeSkillOverrides: [],
     claudeEnabledPlugins: [],
+    claudeFlags: [],
+    claudeMcpPolicy: [],
+    mcpTargets: {},
     claudeMcpDisabled: [],
     claudeMcpjson: [],
     codexSkillConfig: [],
