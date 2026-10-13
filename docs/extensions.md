@@ -190,6 +190,11 @@ because Claude Code leaves out a pending or denied one before it picks. So with 
 and a `.mcp.json` `github` that no one has approved, the user copy loads and the `.mcp.json`
 one is `pending approval`.
 
+Codex takes a server a trusted project's `.codex/config.toml` defines over your own of the same
+name: it merges the project's table over yours, and starts that one. So there your copy is
+`hidden by Project copy`, and Loaded has the project's. A project Codex does not trust leaves
+yours in place.
+
 The copy that loses is tagged with the scope of the one that wins: `hidden by Global copy` for
 a Global skill, `hidden by Project copy` for a local server or this project's `.mcp.json`, and
 `hidden by Parent folders copy` for a `.mcp.json` in a folder above. It gets the tag only when
@@ -312,7 +317,7 @@ A row can carry several tags. They are listed most important first: `broken link
 | `off in N of M accounts` | Off in N accounts and on in the others. M counts the accounts that have the row; for a server every account sees, the accounts that have opened this project. |
 | `not here` | A `.mcp.json` server of a folder that is no project, seen from a project outside it: the state `not-here`. |
 | `pending approval` | A `.mcp.json` server that no account has approved in this project, or a Codex hook not trusted yet with `/hooks`, or changed since it was. |
-| `hidden by Project copy` | In every account that has it, a same-name copy in Project wins: the account's local server, or this project's `.mcp.json`. |
+| `hidden by Project copy` | In every account that has it, a same-name copy in Project wins: the account's local server, or this project's `.mcp.json`. For Codex, a server this project's `.codex/config.toml` defines, where Codex trusts the project. |
 | `hidden by Global copy` | In every account that has it, a same-name skill in Global wins: the primary's, or the account's own. |
 | `hidden by Parent folders copy` | In every account that has it, a same-name `.mcp.json` copy in a parent folder wins. |
 | `unused` | A Claude skill the rule below calls unused. |

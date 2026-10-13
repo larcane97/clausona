@@ -656,6 +656,29 @@ describe("Codex", () => {
     expect(stateOf(i, lab, "/repos/lab").value).toBe("off");
   });
 
+  it("hides a user server under a same-name one a trusted project defines, and not in an untrusted one", () => {
+    const user = ext("mcp", "shared", { tool: "codex", scope: "global", file: "/c/config.toml" });
+    const own = (project: string): Extension => ({
+      ...ext("mcp", "shared", { tool: "codex", scope: "project", project, file: `${project}/.codex/config.toml` }),
+      id: `mcp:codex:project:${project}:shared`,
+    });
+    const [app, web] = [own(P), own(Q)];
+    const i: Inventory = {
+      ...inv([user, app, web], {
+        codexTrust: [
+          { project: P, trusted: true },
+          { project: Q, trusted: false },
+        ],
+      }),
+      places: { claudeJson: {}, stashDir: "/s", codexConfig: "/c/config.toml" },
+    };
+    // Codex 0.159.3's config/read: the project's in place of the user's, where it trusts the project.
+    expect(stateOf(i, user, P)).toEqual({ value: "on", shadowedBy: app.id });
+    expect(stateOf(i, app, P)).toEqual({ value: "on" });
+    expect(stateOf(i, user, Q)).toEqual({ value: "on" });
+    expect(stateOf(i, user)).toEqual({ value: "on" });
+  });
+
   it("trusts a project whose recorded key is the same path and says trusted", () => {
     const i = inv([], {
       codexTrust: [

@@ -438,8 +438,27 @@ function codexMcpState(inv: Inventory, item: Extension, project: string | undefi
     inv.facts.codexMcpEnabled.filter((e) => e.name === item.name),
     project,
   );
-  if (!hit) return { value: "on" };
-  return { value: hit.enabled ? "on" : "off", setBy: { file: hit.file, key: `mcp_servers.${item.name}.enabled` } };
+  const state: EffectiveState = hit
+    ? { value: hit.enabled ? "on" : "off", setBy: { file: hit.file, key: `mcp_servers.${item.name}.enabled` } }
+    : { value: "on" };
+  const winner = projectCopy(inv, item, project);
+  return winner ? { ...state, shadowedBy: winner.id } : state;
+}
+
+/**
+ * The server of a user server's name that `project` defines, where Codex trusts the project: Codex
+ * 0.159.3 merges the project's table over the user's, so the project's copy is the one it starts.
+ */
+function projectCopy(inv: Inventory, item: Extension, project: string | undefined): Extension | undefined {
+  if (item.location.scope !== "global" || project === undefined || !codexTrusted(inv, project)) return undefined;
+  return inv.items.find(
+    (other) =>
+      other.kind === "mcp" &&
+      other.location.tool === "codex" &&
+      other.location.scope === "project" &&
+      other.name === item.name &&
+      samePath(other.location.project, project),
+  );
 }
 
 /** Of one switch's entries, the one Codex takes in `project`: that project's where it trusts it, else the user's. */
