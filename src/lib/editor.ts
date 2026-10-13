@@ -20,6 +20,16 @@ export function splitCommandLine(input: string): string[] {
 }
 
 /**
+ * The editor to run, as a command and its arguments: $VISUAL, or $EDITOR when that is unset.
+ * The first element is missing or empty when neither names one.
+ */
+export function editorCommand(): string[] {
+  // A blank $VISUAL is as good as an unset one; `??` would take "" and stop there.
+  const editor = [process.env.VISUAL, process.env.EDITOR].find((value) => (value ?? "").trim() !== "");
+  return splitCommandLine(editor ?? "");
+}
+
+/**
  * Opens `initial` in $VISUAL or $EDITOR as `fileName`, in a temp directory only this user can
  * read, and resolves to what was saved.
  *
@@ -32,9 +42,7 @@ export function splitCommandLine(input: string): string[] {
  * otherwise kill it before any `finally` ran.
  */
 export async function editInEditor(initial: string, fileName: string): Promise<string> {
-  // A blank $VISUAL is as good as an unset one; `??` would take "" and stop there.
-  const editor = [process.env.VISUAL, process.env.EDITOR].find((value) => (value ?? "").trim() !== "");
-  const [command, ...editorArgs] = splitCommandLine(editor ?? "");
+  const [command, ...editorArgs] = editorCommand();
   if (!command) throw new Error("Set $EDITOR (or $VISUAL) to edit.");
 
   const dir = await mkdtemp(path.join(tmpdir(), "clausona-edit-"));

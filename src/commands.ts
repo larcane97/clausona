@@ -38,7 +38,7 @@ import {
 } from "./extensions/cli.js";
 import { ExitError } from "./extensions/exit-error.js";
 import { accent, bold, box, dim, helpSection, helpUsage, secondary, success, warnIcon } from "./lib/cli-style.js";
-import { editInEditor, splitCommandLine } from "./lib/editor.js";
+import { editInEditor, editorCommand } from "./lib/editor.js";
 import {
   describeOtherAccount,
   describeUnconfirmedCredential,
@@ -521,9 +521,8 @@ async function editProfileEnv(id: string, profile: Profile): Promise<string> {
   // `null` and `[]` open as the `{}` they apply as. One that is not a map opens as it is, so
   // what the user meant to set is there to save as one.
   const current = envMapOf(profile.env) ?? profile.env;
-  // Checked here too, so the message names --edit. A blank $VISUAL is as good as an unset one.
-  const editor = [process.env.VISUAL, process.env.EDITOR].find((value) => (value ?? "").trim() !== "");
-  if (!splitCommandLine(editor ?? "")[0]) throw new Error("Set $EDITOR (or $VISUAL) to use --edit.");
+  // Checked here too, so the message names --edit.
+  if (!editorCommand()[0]) throw new Error("Set $EDITOR (or $VISUAL) to use --edit.");
   const saved = await editInEditor(`${JSON.stringify(current, null, 2)}\n`, "env.json");
   const edited = parseEditedEnv(saved);
   await updateProfileEnv(id, { set: edited, replace: true });
