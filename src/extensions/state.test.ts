@@ -341,7 +341,119 @@ describe("Claude MCP under managed-mcp.json, allowedMcpServers and deniedMcpServ
     expect(stateOf(locked, fs, P, "claude:a")).toEqual(off("/m/managed.json", "allowedMcpServers"));
   });
 
-  it("lets a copy the lists block hide no other copy", () => {
+  it("starts managedMcpServers' servers beside managed-mcp.json's, over every other copy of the name, unless denied", () => {
+    // github in managed settings' managedMcpServers, as in account a's user and local servers.
+    const delivered: Extension = {
+      ...ext("mcp", "github", { tool: "claude", scope: "managed", file: "/m/managed-settings.json" }),
+      id: "mcp:claude:managed:settings:github",
+    };
+    const localA: Extension = {
+      ...ext("mcp", "github", { tool: "claude", scope: "local", profile: "claude:a", project: P, file: "/u/a.json" }),
+      id: "mcp:claude:local:claude:a@app:github",
+    };
+    const all = [...items, delivered, localA];
+    const settled = { ...targets, [delivered.id]: { url: "https://gh.example.com/mcp", vars: false } };
+    const open = inv(all, { mcpTargets: settled });
+    expect(stateOf(open, delivered, P, "claude:a")).toEqual({ value: "on" });
+    // Claude Code lays the organization's servers over the local, project and user ones of the name.
+    for (const copy of [gh, ghB, localA]) {
+      expect(stateOf(open, copy, P, copy.location.profile).shadowedBy).toBe(delivered.id);
+    }
+    expect(claudeMcpTaken(open, "github", P, "claude:a")?.id).toBe(delivered.id);
+
+    // While managed-mcp.json is there, they still start, and a managed-mcp.json server of the name wins.
+    const exclusive = inv(all, { mcpTargets: settled, claudeManagedMcp: "/m/managed-mcp.json" });
+    expect(stateOf(exclusive, delivered, P, "claude:a")).toEqual({ value: "on" });
+    const company = {
+      ...delivered,
+      id: "mcp:claude:managed:-:github",
+      location: { ...delivered.location, file: "/m/managed-mcp.json" },
+    };
+    const both = inv([company, delivered], {
+      mcpTargets: { ...settled, [company.id]: { url: "https://company.example.com/mcp", vars: false } },
+      claudeManagedMcp: "/m/managed-mcp.json",
+    });
+    expect(stateOf(both, delivered, P, "claude:a").shadowedBy).toBe(company.id);
+    expect(stateOf(both, company, P, "claude:a")).toEqual({ value: "on" });
+
+    // They need no allowlist entry; a denylist entry keeps them out.
+    const allowNone = inv(all, {
+      mcpTargets: settled,
+      claudeMcpPolicy: [{ file: "/u/settings.json", layer: "user", allowed: [] }],
+    });
+    expect(stateOf(allowNone, delivered, P, "claude:a")).toEqual({ value: "on" });
+    const denied = inv(all, {
+      mcpTargets: settled,
+      claudeMcpPolicy: [
+        { file: "/u/settings.json", layer: "user", denied: [{ serverUrl: "https://gh.example.com/*" }] },
+      ],
+    });
+    expect(stateOf(denied, delivered, P, "claude:a")).toEqual(off("/u/settings.json", "deniedMcpServers"));
+  });
+
+  it("names the variables a match read, and takes no URL entry a value brought a * into on an allowlist", () => {
+    const denied = inv(items, {
+      mcpTargets: { ...targets, [fs.id]: { command: "hash-fs", vars: true, reads: ["TOOLS"] } },
+      claudeMcpPolicy: [
+        { file: "/u/settings.json", layer: "user", denied: [{ serverCommand: "hash-gh", reads: ["BIN"] }] },
+        { file: "/m/managed.json", layer: "managed", denied: [{ serverCommand: "hash-fs" }] },
+      ],
+    });
+    // The entry's variables, or the server's: either can make the match.
+    expect(stateOf(denied, gh, P, "claude:a")).toEqual({
+      value: "off",
+      setBy: { file: "/u/settings.json", key: "deniedMcpServers", reads: ["BIN"] },
+    });
+    expect(stateOf(denied, fs, P, "claude:a")).toEqual({
+      value: "off",
+      setBy: { file: "/m/managed.json", key: "deniedMcpServers", reads: ["TOOLS"] },
+    });
+    // A name entry reads none, whatever the server's config does.
+    const byName = inv(items, {
+      mcpTargets: { ...targets, [fs.id]: { command: "hash-fs", vars: true, reads: ["TOOLS"] } },
+      claudeMcpPolicy: [{ file: "/u/settings.json", layer: "user", denied: [{ serverName: "files" }] }],
+    });
+    expect(stateOf(byName, fs, P, "claude:a")).toEqual(off("/u/settings.json", "deniedMcpServers"));
+
+    // Left out of an allowlist: the variables of the entries of the kind that decides, and the server's.
+    const allowed = inv(items, {
+      mcpTargets: { ...targets, [remote.id]: { url: "https://mcp.example.com/api", vars: true, reads: ["HOST"] } },
+      claudeMcpPolicy: [
+        {
+          file: "/u/settings.json",
+          layer: "user",
+          allowed: [
+            { serverUrl: "https://other.example/*", reads: ["OTHER"] },
+            { serverCommand: "hash-x", reads: ["BIN"] },
+          ],
+        },
+      ],
+    });
+    expect(stateOf(allowed, remote, P, "claude:a")).toEqual({
+      value: "off",
+      setBy: { file: "/u/settings.json", key: "allowedMcpServers", reads: ["OTHER", "HOST"] },
+    });
+
+    // A value that brings a * in: an allowlist never takes the entry, a denylist does.
+    const wild = { serverUrl: "https://*.example.com/*", reads: ["HOST"], wildcard: true as const };
+    const allowWild = inv(items, {
+      mcpTargets: targets,
+      claudeMcpPolicy: [{ file: "/u/settings.json", layer: "user", allowed: [wild] }],
+    });
+    expect(stateOf(allowWild, remote, P, "claude:a").value).toBe("off");
+    const denyWild = inv(items, {
+      mcpTargets: targets,
+      claudeMcpPolicy: [{ file: "/u/settings.json", layer: "user", denied: [wild] }],
+    });
+    expect(stateOf(denyWild, remote, P, "claude:a")).toEqual({
+      value: "off",
+      setBy: { file: "/u/settings.json", key: "deniedMcpServers", reads: ["HOST"] },
+    });
+  });
+
+  // Claude Code 2.1.296 picks one copy per name before it checks the lists (bk, then Rz): a
+  // copy a list keeps from starting still hides the copies below it, and none of them starts.
+  it("lets a copy the lists block still hide the copies below it, as Claude Code picks before it checks", () => {
     const local = {
       ...named(
         ext("mcp", "gh-local", {
@@ -359,8 +471,17 @@ describe("Claude MCP under managed-mcp.json, allowedMcpServers and deniedMcpServ
       claudeMcpPolicy: [{ file: "/u/settings.json", layer: "user", denied: [{ serverCommand: "hash-local" }] }],
     });
     expect(stateOf(i, local, P, "claude:a")).toEqual(off("/u/settings.json", "deniedMcpServers"));
-    expect(stateOf(i, gh, P, "claude:a")).toEqual({ value: "on" });
-    expect(claudeMcpTaken(i, "github", P, "claude:a")?.id).toBe(gh.id);
+    expect(stateOf(i, gh, P, "claude:a")).toEqual({ value: "on", shadowedBy: local.id });
+    expect(claudeMcpTaken(i, "github", P, "claude:a")?.id).toBe(local.id);
+    // b has no local copy: its user server is the one of the name, and it starts.
+    expect(stateOf(i, ghB, P, "claude:b")).toEqual({ value: "on" });
+    // While managed-mcp.json is there, only the organization's copies are in the running.
+    const exclusive = inv([...items, local], {
+      mcpTargets: { ...targets, [local.id]: { command: "hash-local", vars: false } },
+      claudeManagedMcp: "/m/managed-mcp.json",
+    });
+    expect(stateOf(exclusive, gh, P, "claude:a")).toEqual(off("/m/managed-mcp.json", "managed-mcp.json"));
+    expect(claudeMcpTaken(exclusive, "github", P, "claude:a")).toBeUndefined();
   });
 });
 

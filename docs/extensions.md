@@ -151,8 +151,13 @@ Some scopes need a word more:
   `managed-settings.d/`, for hooks, and `managed-mcp.json` beside them for MCP servers. While
   `managed-mcp.json` is there, Claude Code starts its servers and no other, so every other
   Claude server reads `off`, in every account, and its details say
-  `only the servers in …/managed-mcp.json start`. clausona does not read the
-  `managedMcpServers` key of managed settings.
+  `only the servers in …/managed-mcp.json start`. The `managedMcpServers` key of managed
+  settings lists servers too, and Claude Code starts them beside `managed-mcp.json`'s. It
+  takes only a remote server there: an `http`, `streamable-http` or `sse` type on an `https://`
+  URL, with no command, no `${VAR}` in it, and a name of letters, digits, `-` and `_`. It drops
+  any other entry, and so does clausona. A name in two managed files is the one that ranks
+  higher's, a file in `managed-settings.d/` over `managed-settings.json`. The key does nothing in
+  any other settings file.
 - Other projects, in the CLI only: `ls --scope other` lists the rows of every other project at
   once, each with its `project`. On the screen, pick that project from the project list to see
   its rows.
@@ -183,16 +188,23 @@ link. A skill in one account's own skills folder wins in that account only. An a
 skills folder is its own, or missing, does not load the primary's skills, so there a Global
 skill hides no Project skill.
 
-For MCP servers, Claude Code takes one server per name: the account's local server first, then
-the `.mcp.json` ones, then the account's user server. Of two `.mcp.json` files, the nearest
+For MCP servers, Claude Code takes one server per name: your organization's first, the one in
+`managed-mcp.json` and then the one in `managedMcpServers`, then the account's local server,
+then the `.mcp.json` ones, then the account's user server. Of two `.mcp.json` files, the nearest
 wins. A `.mcp.json` copy wins over a user server only once it is approved for that account,
 because Claude Code leaves out a pending or denied one before it picks. So with a user `github`
 and a `.mcp.json` `github` that no one has approved, the user copy loads and the `.mcp.json`
 one is `pending approval`.
 
+The MCP lists come after the pick: Claude Code takes one copy per name, then checks it against
+`deniedMcpServers` and `allowedMcpServers`. So a copy the lists keep from starting still wins
+its name, and the copies below it don't start either. Their details say why, as in
+`hidden by the Project copy (itself off: deniedMcpServers in ~/.claude/settings.json)`.
+
 The copy that loses is tagged with the scope of the one that wins: `hidden by Global copy` for
-a Global skill, `hidden by Project copy` for a local server or this project's `.mcp.json`, and
-`hidden by Parent folders copy` for a `.mcp.json` in a folder above. It gets the tag only when
+a Global skill, `hidden by Project copy` for a local server or this project's `.mcp.json`,
+`hidden by Parent folders copy` for a `.mcp.json` in a folder above, and `hidden by Managed
+copy` for a server your organization's settings bring. It gets the tag only when
 it loses in every account that has it, and is then not in Loaded. When it loses in some
 accounts only, it still loads here, with no `hidden by` tag, and its details say where it is
 hidden: `Loaded  on in personal · hidden by the Global copy in work`.
@@ -256,8 +268,34 @@ The switches are read from these places:
     once the lists have such an entry, a remote one by `serverUrl` likewise, else by its name.
     The lists of every file count together, or the managed ones alone when managed settings
     set `allowManagedMcpServersOnly`. An empty list keeps every server out. A server of
-    `managed-mcp.json` needs no entry unless its config uses `${VAR}`.
-  - clausona compares `${VAR}` in an entry or a config as written, where Claude Code expands it.
+    `managedMcpServers` needs no entry, nor does one of `managed-mcp.json` unless its config
+    uses `${VAR}`.
+  - `${VAR}` and `${VAR:-default}` are expanded before they match, in an entry's command or URL
+    and in a server's command, arguments or URL, as Claude Code expands them. A variable that is
+    set gives its value, an empty one too. One that is not gives its default, and with none it
+    stays as written, so an entry and a server that spell it alike still match. A plugin's
+    server reads its own folder as `${CLAUDE_PLUGIN_ROOT}`. A `serverUrl` entry that a value
+    brings a `*` into is one no allowlist takes, while a denylist still does.
+  - What a variable expands from, as Claude Code 2.1.296 reads it. In a server's command,
+    arguments or URL: the environment clausona runs in, with the `env` of your settings laid over
+    it in the order Claude Code reads them, user settings, then the project's
+    `.claude/settings.json`, then its `.claude/settings.local.json`, then managed settings, a
+    later one winning a name. A project's own files count in that project only. In a list entry:
+    the environment clausona runs in, with managed settings' `env` over it, and a
+    `deniedMcpServers` entry also takes user and managed settings' `env` for a variable that
+    neither sets and that has no default. When a match reads a variable, the details say so:
+    `off (deniedMcpServers in …, with ${TOOLS} as your shell and settings set it)`.
+  - A match can differ from Claude Code's where clausona does not model what Claude Code reads:
+    when Claude Code starts in another environment than this shell, such as an IDE's or one a
+    launcher sets (clausona's sets `CLAUDE_CONFIG_DIR` for each account but the default one);
+    the `env` of an account's `.claude.json` and of a `--settings` file; the variables Claude
+    Code leaves out of a settings file's `env`, in a folder it does not trust yet, names it keeps
+    for itself, or a project's value for a name already set when it starts; its own credentials,
+    which it reads as empty in a server's config and in an entry; a `serverUrl` entry it finds
+    unsafe for another reason than a `*`, such as a value that changes the URL's shape or a
+    whole URL in one variable, which no allowlist then takes; and `${CLAUDE_PROJECT_DIR}`,
+    `${CLAUDE_PLUGIN_DATA}` and `${user_config.…}` in a plugin's server, which stay as written
+    unless the environment sets them.
 - Codex skills: `[[skills.config]]` in Codex's `config.toml`, by name or by path. A path names
   the skill whether it goes through a link or not, as Codex reads it.
 - Codex MCP servers: `mcp_servers.<name>.enabled` in Codex's or the project's `config.toml`.
@@ -670,6 +708,13 @@ Some rows can only be switched one way:
   managed settings is refused as `managed`, as anything there is. One in this project's own
   settings holds here alone, so `on --everywhere` goes ahead, with a note such as
   `Still off in this project: deniedMcpServers in …`. `off` is never refused for it.
+  A `serverCommand` or `serverUrl` entry can keep out one account's copy of a server and not
+  another's, when the accounts define the server differently. Then `on` turns on the copies
+  that can start and leaves the others as they are, each with a note that names its account
+  and the list, such as
+  `Stays off for work: deniedMcpServers in ~/.claude/settings.json keeps it from starting.`
+  It leaves them out as it leaves out an account that has not opened the project, and is
+  refused only when no copy it takes can start.
 
 [Refusals](#refusals) has every reason a change can't be made, in the words the CLI and the
 screen use.

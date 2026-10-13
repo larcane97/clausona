@@ -1298,6 +1298,68 @@ describe("plan: a setting that keeps a Claude server or a built-in skill off", (
     );
   });
 
+  // Both accounts turned github off here; work's copy runs another command, which a list names.
+  const split = (list: Record<string, unknown>, where = ".claude/settings.json") =>
+    seed((h, app) => {
+      h.claude("default", ".claude", {
+        oauthAccount: { organizationUuid: "org", accountUuid: "one" },
+        projects: { [app]: { disabledMcpServers: ["github"] } },
+        mcpServers: { github: { command: "gh" } },
+      });
+      h.claude("work", ".claude-work", {
+        projects: { [app]: { disabledMcpServers: ["github"] } },
+        mcpServers: { github: { command: "gh-work" } },
+      });
+      h.write(where === ".claude/settings.json" ? where : path.join(path.relative(h.home, app), where), {
+        ...(where === ".claude/settings.json" ? SETTINGS : {}),
+        ...list,
+      });
+    });
+
+  it("turns on the copies a list lets start and leaves out, with a note, the account whose copy it keeps off", async () => {
+    const { h, app, inv, ctx } = await split({ deniedMcpServers: [{ serverCommand: ["gh-work"] }] });
+    const github = rowIn(inv, app, "global", "github", "claude", "mcp");
+    const settings = tilde(h.path(".claude", "settings.json"), h.home);
+    const on = plan(ctx, "mcp", act("on", "here", [github]));
+    expect(codes(on)).toEqual([]);
+    expect(on.changes.map((c) => c.file)).toEqual([h.path(".claude.json")]);
+    expect(on.notes).toEqual([`Stays off for work: deniedMcpServers in ${settings} keeps it from starting.`]);
+    expect(on.accounts).toEqual([{ profile: "claude:default", chosen: true }]);
+    // Only work's copy asked for: every copy the change takes is kept off, so on is refused.
+    expect(codes(plan(ctx, "mcp", act("on", "here", [github], { accounts: ["claude:work"] })))).toEqual(["mcp-denied"]);
+    // Off is never refused, and takes every account's copy.
+    expect(plan(ctx, "mcp", act("off", "everywhere", [github])).changes).toHaveLength(2);
+
+    const allow = await split({ allowedMcpServers: [{ serverCommand: ["gh"] }] });
+    const allowed = plan(
+      allow.ctx,
+      "mcp",
+      act("on", "here", [rowIn(allow.inv, allow.app, "global", "github", "claude", "mcp")]),
+    );
+    expect(codes(allowed)).toEqual([]);
+    expect(allowed.changes.map((c) => c.file)).toEqual([allow.h.path(".claude.json")]);
+    expect(allowed.notes).toEqual([
+      `Stays off for work: allowedMcpServers in ${tilde(allow.h.path(".claude", "settings.json"), allow.h.home)} leaves it out.`,
+    ]);
+  });
+
+  it("names the list of a project's own settings for the one account it keeps off, on everywhere", async () => {
+    const { h, app, inv, ctx } = await split(
+      { deniedMcpServers: [{ serverCommand: ["gh-work"] }] },
+      path.join(".claude", "settings.local.json"),
+    );
+    const github = rowIn(inv, app, "global", "github", "claude", "mcp");
+    const local = tilde(path.join(app, ".claude", "settings.local.json"), h.home);
+    // Here, the project's list holds: work is left out.
+    expect(plan(ctx, "mcp", act("on", "here", [github])).notes).toEqual([
+      `Stays off for work: deniedMcpServers in ${local} keeps it from starting.`,
+    ]);
+    // Everywhere, it holds in this project alone: every account goes ahead, and the note says where.
+    const everywhere = plan(ctx, "mcp", act("on", "everywhere", [github]));
+    expect(codes(everywhere)).toEqual([]);
+    expect(everywhere.notes).toContain(`Still off in this project for work: deniedMcpServers in ${local}`);
+  });
+
   it("refuses on and a visibility for a built-in skill while disableBundledSkills holds", async () => {
     const { h, app, inv, ctx } = await seed((h) =>
       h.write(".claude/settings.json", {

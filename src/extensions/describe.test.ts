@@ -314,6 +314,104 @@ describe("managed MCP servers and the MCP lists", () => {
     );
   });
 
+  it("lists managed settings' managedMcpServers under Managed, and the accounts' copies of a name as hidden by it", async () => {
+    const { h, inv, app } = await managedSeed((h) =>
+      h.write("policy/managed-settings.json", {
+        managedMcpServers: { github: { type: "http", url: "https://gh.example.com/mcp" } },
+      }),
+    );
+    const managed = rowsIn(inv, "claude", "mcp", "managed", app, NOW);
+    expect(managed.map((r) => r.name)).toEqual(["github"]);
+    const delivered = managed[0] as ScopeRow;
+    expect(whereLabel(delivered.items[0] as Extension, inv, app)).toBe("Managed");
+    expect(jsonItem(inv, delivered, app, NOW)).toMatchObject({
+      id: "mcp:claude:managed:settings:github",
+      scope: "managed",
+      state: "on",
+      file: h.path("policy", "managed-settings.json"),
+    });
+    expect(rowsIn(inv, "claude", "mcp", "loaded", app, NOW).map((r) => r.items[0]?.id)).toEqual([
+      "mcp:claude:managed:settings:github",
+    ]);
+    const github = serverRow(inv, "global", app, "github");
+    expect(tagsOf(inv, github, app, NOW)).toEqual(["hidden by Managed copy"]);
+  });
+
+  it("expands the variables of a list and of a server from this shell before they match, and says so", async () => {
+    const ref = (name: string) => ["$", "{", name, "}"].join("");
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", { projects: { [app]: {} }, mcpServers: { github: { command: "gh-mcp" } } });
+    h.claude("work", ".claude-work", {
+      projects: { [app]: {} },
+      mcpServers: { github: { command: "/opt/tools/gh-mcp" } },
+    });
+    h.write("policy/managed-settings.json", { deniedMcpServers: [{ serverCommand: [`${ref("TOOLS")}/gh-mcp`] }] });
+    const policy = h.path("policy", "managed-settings.json");
+    const set = await loadInventory({ ...h.inventoryOptions(app, policy), env: { TOOLS: "/opt/tools" } });
+    const github = serverRow(set, "global", app, "github");
+    const managed = tilde(h.path("policy", "managed-settings.json"), h.home);
+    // Only work's copy runs what the entry names once TOOLS is read.
+    expect(jsonItem(set, github, app, NOW).stateByAccount).toEqual({ "claude:default": "on", "claude:work": "off" });
+    expect(detailsOf(set, github, app, NOW).filter((l) => l.label === "Accounts" || l.label === "")).toContainEqual({
+      label: "",
+      text: `work     off (deniedMcpServers in ${managed}, with ${ref("TOOLS")} as your shell and settings set it)`,
+    });
+    // Unset, the entry stays as written and matches neither.
+    const unset = await loadInventory(h.inventoryOptions(app, policy));
+    expect(jsonItem(unset, serverRow(unset, "global", app, "github"), app, NOW).state).toBe("on");
+  });
+
+  it("expands a server's variables with the settings' env too, a project's own in that project", async () => {
+    const ref = (name: string) => ["$", "{", name, "}"].join("");
+    const h = new TestHome();
+    homes.push(h);
+    const app = h.project("repos/app");
+    const web = h.project("repos/web");
+    h.claude("default", ".claude", { projects: { [app]: {}, [web]: {} } });
+    h.claude("work", ".claude-work", {
+      projects: { [app]: {}, [web]: {} },
+      mcpServers: { github: { command: `${ref("TOOLS")}/gh-mcp` } },
+    });
+    h.write("policy/managed-settings.json", { deniedMcpServers: [{ serverCommand: ["/opt/tools/gh-mcp"] }] });
+    h.write(".claude/settings.json", { env: { TOOLS: "/opt/tools" } });
+    h.write("repos/app/.claude/settings.local.json", { env: { TOOLS: "/app/tools" } });
+    const inv = await loadInventory(h.inventoryOptions(app, h.path("policy", "managed-settings.json")));
+    // In web the user settings' TOOLS holds, and the list keeps work's copy out.
+    const inWeb = serverRow(inv, "global", web, "github");
+    expect(detailsOf(inv, inWeb, web, NOW).find((l) => l.label === "Accounts")?.text).toBe(
+      `work    off (deniedMcpServers in ${tilde(h.path("policy", "managed-settings.json"), h.home)}, with ${ref("TOOLS")} as your shell and settings set it)`,
+    );
+    // In app its local settings set TOOLS to another folder: no entry names that.
+    expect(jsonItem(inv, serverRow(inv, "global", app, "github"), app, NOW).stateByAccount).toEqual({
+      "claude:work": "on",
+    });
+  });
+
+  it("says a copy hidden by one the lists keep off does not start either, naming the list", async () => {
+    const { h, inv, app } = await managedSeed((h, app) => {
+      h.claude("default", ".claude", {
+        projects: { [app]: { mcpServers: { github: { command: "gh-local" } } } },
+        mcpServers: { github: { command: "gh-mcp" } },
+      });
+      h.write(".claude/settings.json", { deniedMcpServers: [{ serverCommand: ["gh-local"] }] });
+    });
+    const settings = tilde(h.path(".claude", "settings.json"), h.home);
+    const github = serverRow(inv, "global", app, "github");
+    expect(jsonItem(inv, github, app, NOW).loadsByAccount).toEqual({ "claude:default": false, "claude:work": true });
+    const lines = detailsOf(inv, github, app, NOW);
+    const at = lines.findIndex((l) => l.label === "Accounts");
+    expect(lines.slice(at, at + 2)).toEqual([
+      { label: "Accounts", text: `default  hidden by the Project copy (itself off: deniedMcpServers in ${settings})` },
+      { label: "", text: "work     on" },
+    ]);
+    const local = serverRow(inv, "project", app, "github");
+    expect(detailsOf(inv, local, app, NOW).find((l) => l.label === "Accounts")?.text).toBe(
+      `default  off (deniedMcpServers in ${settings})`,
+    );
+  });
+
   it("says which list turns a server off, and where it is", async () => {
     const { h, inv, app } = await managedSeed((h) =>
       h.write("policy/managed-settings.json", { deniedMcpServers: [{ serverName: "github" }] }),

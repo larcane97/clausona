@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { valueHash } from "../hash.js";
+import type { Env } from "../mcp-policy.js";
 import { type Collector, emptyFacts, type Project } from "../model.js";
+import { pathKey } from "../read.js";
 import { TestHome } from "../test-home.js";
 import { collectClaudeSettingsFacts, loadClaudeAccounts, loadClaudeContext } from "./claude-context.js";
 import { readClaudeMcp } from "./claude-mcp.js";
@@ -214,6 +216,135 @@ describe("readClaudeMcp", () => {
     expect((await read(h, [])).facts.claudeManagedMcp).toBeUndefined();
   });
 
+  it("lists the managedMcpServers of managed settings that Claude Code accepts, a drop-in's over the base file's", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.claude("default", ".claude");
+    const ref = (name: string) => ["$", "{", name, "}"].join("");
+    const remote = (url: string, more: Record<string, unknown> = {}) => ({ type: "http", url, ...more });
+    const base = h.write("policy/managed-settings.json", {
+      managedMcpServers: {
+        docs: remote("https://docs.example.com/mcp", { headers: { "X-Team": "core" } }),
+        wiki: { type: "sse", url: "https://wiki.example.com/sse" },
+        stream: { type: "streamable-http", url: "https://stream.example.com/mcp" },
+        shared: remote("https://base.example.com/mcp"),
+        // Each of these Claude Code drops: a program to run, no type, plain http, a variable,
+        // a control character, a name it does not take.
+        local: { type: "stdio", command: "srv" },
+        runs: remote("https://runs.example.com/mcp", { command: "srv" }),
+        untyped: { url: "https://untyped.example.com/mcp" },
+        plain: remote("http://plain.example.com/mcp"),
+        fromEnv: remote(`https://${ref("HOST")}/mcp`),
+        bell: remote("https://bell.example.com/mcp", { headers: { "X-Note": "a\u0007b" } }),
+        "bad name": remote("https://bad.example.com/mcp"),
+        constructor: remote("https://proto.example.com/mcp"),
+      },
+    });
+    const dropIn = h.write("policy/managed-settings.d/10-team.json", {
+      managedMcpServers: { shared: remote("https://team.example.com/mcp") },
+    });
+    // Claude Code honors the key from managed settings alone.
+    h.write(".claude/settings.json", { managedMcpServers: { mine: remote("https://mine.example.com/mcp") } });
+
+    const out = await read(h, [], base);
+    const managed = out.items.filter((i) => i.location.scope === "managed");
+    expect(managed.map((i) => i.name).sort()).toEqual(["docs", "shared", "stream", "wiki"]);
+    const docs = managed.find((i) => i.name === "docs");
+    expect(docs?.id).toBe("mcp:claude:managed:settings:docs");
+    expect(docs?.location).toEqual({ tool: "claude", scope: "managed", file: base });
+    expect(docs?.summary).toMatchObject({ url: "https://docs.example.com/mcp" });
+    expect(out.facts.mcpTargets[docs?.id ?? ""]).toEqual({ url: "https://docs.example.com/mcp", vars: false });
+    // A name in two managed files is the higher one's, the drop-in's, whole.
+    const shared = managed.find((i) => i.name === "shared");
+    expect(shared?.location.file).toBe(dropIn);
+    expect(out.facts.mcpTargets[shared?.id ?? ""]).toMatchObject({ url: "https://team.example.com/mcp" });
+    expect(out.items.some((i) => i.name === "mine")).toBe(false);
+
+    // Not an object of servers: none of it.
+    h.write("policy/managed-settings.json", { managedMcpServers: [remote("https://docs.example.com/mcp")] });
+    h.write("policy/managed-settings.d/10-team.json", {});
+    expect((await read(h, [], base)).items.filter((i) => i.location.scope === "managed")).toEqual([]);
+  });
+
+  it("expands the variables of the lists and of what each server starts from the environment it is given", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const ref = (name: string) => ["$", "{", name, "}"].join("");
+    h.claude("default", ".claude", {
+      mcpServers: {
+        tools: { command: `${ref("TOOLS")}/srv`, args: ["--home", ref("NOPE")] },
+        remote: { type: "http", url: `https://${ref("HOST")}/mcp` },
+      },
+    });
+    const kit = h.path(".claude/plugins/cache/m/kit/1.0.0");
+    h.write(".claude/plugins/installed_plugins.json", { plugins: { "kit@m": [{ installPath: kit }] } });
+    h.write(".claude/plugins/cache/m/kit/1.0.0/.mcp.json", {
+      kit: { command: `${ref("CLAUDE_PLUGIN_ROOT")}/kit-mcp` },
+    });
+    const user = h.write(".claude/settings.json", { deniedMcpServers: [{ serverCommand: [`${ref("TOOLS")}/bad`] }] });
+
+    const env = { TOOLS: "/opt/tools", HOST: "mcp.example.com" };
+    const out = await read(h, [], h.path("none.json"), env);
+    expect(out.facts.claudeMcpPolicy).toEqual([
+      { file: user, layer: "user", denied: [{ serverCommand: valueHash(["/opt/tools/bad"]), reads: ["TOOLS"] }] },
+    ]);
+    // NOPE is unset, so it stays as written.
+    expect(out.facts.mcpTargets["mcp:claude:account:claude:default:tools"]).toEqual({
+      command: valueHash(["/opt/tools/srv", "--home", ref("NOPE")]),
+      vars: true,
+      reads: ["TOOLS", "NOPE"],
+    });
+    expect(out.facts.mcpTargets["mcp:claude:account:claude:default:remote"]).toEqual({
+      url: "https://mcp.example.com/mcp",
+      vars: true,
+      reads: ["HOST"],
+    });
+    const plugin = out.items.find((i) => i.name === "plugin:kit:kit");
+    expect(out.facts.mcpTargets[plugin?.id ?? ""]).toEqual({
+      command: valueHash([`${realpathSync(kit)}/kit-mcp`]),
+      vars: true,
+    });
+  });
+
+  it("lays the settings files' env over the shell's for a server, and managed settings' alone for a list", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    const ref = (name: string) => ["$", "{", name, "}"].join("");
+    const app = h.project("repos/app");
+    h.claude("default", ".claude", { mcpServers: { tools: { command: `${ref("TOOLS")}/srv`, args: [ref("MODE")] } } });
+    // User settings set TOOLS and MODE, the project's local settings TOOLS again, managed settings MODE.
+    const user = h.write(".claude/settings.json", {
+      env: { TOOLS: "/user/tools", MODE: "user", LIST: "/user/list" },
+      allowedMcpServers: [{ serverCommand: [`${ref("LIST")}/srv`] }],
+      deniedMcpServers: [{ serverCommand: [`${ref("LIST")}/bad`] }, { serverCommand: [`${ref("ONLY")}/bad`] }],
+    });
+    h.write("repos/app/.claude/settings.local.json", { env: { TOOLS: "/local/tools" } });
+    const managed = h.write("policy/managed-settings.json", { env: { MODE: "managed", ONLY: "/managed/only" } });
+
+    const out = await read(h, [{ path: app, tools: ["claude"], profiles: [] }], managed, { TOOLS: "/shell/tools" });
+    const id = "mcp:claude:account:claude:default:tools";
+    // A setting's env wins over the shell's; managed settings' over the user's.
+    expect(out.facts.mcpTargets[id]).toMatchObject({ command: valueHash(["/user/tools/srv", "managed"]) });
+    // In the project, its local settings win TOOLS; elsewhere the user's still holds.
+    expect(out.facts.mcpTargetsIn[pathKey(app)]?.[id]).toMatchObject({
+      command: valueHash(["/local/tools/srv", "managed"]),
+    });
+    // An entry reads the shell and managed settings alone; a denylist entry falls back to the user's env.
+    expect(out.facts.claudeMcpPolicy).toEqual([
+      {
+        file: user,
+        layer: "user",
+        allowed: [{ serverCommand: valueHash([`${ref("LIST")}/srv`]), reads: ["LIST"] }],
+        denied: [
+          { serverCommand: valueHash(["/user/list/bad"]), reads: ["LIST"] },
+          { serverCommand: valueHash(["/managed/only/bad"]), reads: ["ONLY"] },
+        ],
+      },
+    ]);
+    // No project of its own env: nothing kept apart.
+    expect((await read(h, [], managed)).facts.mcpTargetsIn).toEqual({});
+  });
+
   it("reads every settings file's allowedMcpServers and deniedMcpServers, and the managed lock", async () => {
     const h = new TestHome();
     homes.push(h);
@@ -263,7 +394,12 @@ describe("readClaudeMcp", () => {
   });
 });
 
-async function read(h: TestHome, projects: Project[], managedSettings = h.path("none.json")): Promise<Collector> {
+async function read(
+  h: TestHome,
+  projects: Project[],
+  managedSettings = h.path("none.json"),
+  env: Env = {},
+): Promise<Collector> {
   const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
   const accounts = await loadClaudeAccounts(h.registry, h.home, out.warnings);
   const ctx = await loadClaudeContext({
@@ -273,6 +409,7 @@ async function read(h: TestHome, projects: Project[], managedSettings = h.path("
     projects,
     managedSettings,
     mcpjsonStop: h.home,
+    env,
     warnings: out.warnings,
   });
   collectClaudeSettingsFacts(ctx, out);

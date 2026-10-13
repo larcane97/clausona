@@ -3,7 +3,7 @@ import path from "node:path";
 import { claudeJsonPathForConfigDir } from "../../core/paths.js";
 import { inspectSharedLink } from "../../core/shared-links.js";
 import type { Registry } from "../../types.js";
-import { mcpRules } from "../mcp-policy.js";
+import { type Env, mcpRules } from "../mcp-policy.js";
 import type { ClaudeFlag, Collector, Location, Project, SettingsLayer, Warning } from "../model.js";
 import { localSettingsFile, projectSettingsFile } from "../places.js";
 import { isHomeProject } from "../projects.js";
@@ -105,7 +105,57 @@ export type ClaudeContext = {
   plugins: PluginInstall[];
   /** managed-mcp.json beside the managed settings, when it is there; `json` when it reads as JSON. */
   managedMcp?: { file: string; json?: Record<string, unknown> };
+  /** What `${VAR}` in a Claude MCP list or server expands from (`mcpEnvs`). */
+  mcpEnv: McpEnvs;
 };
+
+/**
+ * The environments Claude Code 2.1.296 expands `${VAR}` in, for the MCP lists to match:
+ * - `servers`, for what a server starts: Claude Code's own environment, the one it started in
+ *   with the `env` of each settings file laid over it in the order Claude Code reads them - user
+ *   settings, then the project's, then its local ones, then managed settings - the later winning
+ *   a name. That is with no project's own files; `projects` holds it for each project whose own
+ *   files set `env`.
+ * - `entries`, for a list entry: the environment it started in, with managed settings' `env`.
+ * - `fallback`, for a denylist entry's variable that `entries` does not set and has no default
+ *   for: user and managed settings' `env`.
+ */
+export type McpEnvs = {
+  servers: Env;
+  projects: { project: string; env: Env }[];
+  entries: Env;
+  fallback: Env;
+};
+
+/** Each string of a settings file's `env`. */
+function envOf(settings: SettingsFile): Record<string, string> {
+  const env = settings.data.env;
+  if (!isRecord(env)) return {};
+  return Object.fromEntries(
+    Object.entries(env).filter((pair): pair is [string, string] => typeof pair[1] === "string"),
+  );
+}
+
+/** `mcpEnvs` for `base`, the environment clausona runs in, and the settings files read. */
+export function mcpEnvs(base: Env, settings: SettingsFile[]): McpEnvs {
+  // ctx.settings ranks the managed files highest first: laid over one another, the lowest goes first.
+  const managed = settings.filter((s) => s.layer === "managed").reverse();
+  const user = settings.filter((s) => s.layer === "user");
+  const lay = (...files: SettingsFile[]) => Object.assign({}, ...files.map(envOf)) as Record<string, string>;
+  const own = (project: string) => [
+    ...settings.filter((s) => s.layer === "project" && samePath(s.project, project)),
+    ...settings.filter((s) => s.layer === "local" && samePath(s.project, project)),
+  ];
+  const projects = [...new Set(settings.flatMap((s) => (s.project !== undefined ? [s.project] : [])))]
+    .filter((project) => own(project).some((s) => Object.keys(envOf(s)).length > 0))
+    .map((project) => ({ project, env: { ...base, ...lay(...user, ...own(project), ...managed) } }));
+  return {
+    servers: { ...base, ...lay(...user, ...managed) },
+    projects,
+    entries: { ...base, ...lay(...managed) },
+    fallback: lay(...user, ...managed),
+  };
+}
 
 /** Where Claude Code reads organisation policy on each platform. */
 export function managedSettingsPath(platform: NodeJS.Platform): string {
@@ -162,6 +212,8 @@ export async function loadClaudeContext(options: {
   managedSettings: string;
   /** See LoadOptions.mcpjsonStop. */
   mcpjsonStop?: string;
+  /** See LoadOptions.env; default none, so every variable the settings leave unset stays as written. */
+  env?: Env;
   warnings: Warning[];
 }): Promise<ClaudeContext> {
   const { accounts, registry, homeDir, projects, warnings } = options;
@@ -189,14 +241,16 @@ export async function loadClaudeContext(options: {
     readPluginInstalls(accounts, homeDir, warnings),
     readManagedMcp(managedMcpFile, warnings),
   ]);
+  const settings = read.filter((s): s is SettingsFile => s !== undefined);
   return {
     homeDir,
     ...(options.mcpjsonStop !== undefined ? { mcpjsonStop: options.mcpjsonStop } : {}),
     primaryDir,
     accounts,
-    settings: read.filter((s): s is SettingsFile => s !== undefined),
+    settings,
     plugins,
     ...(managedMcp ? { managedMcp } : {}),
+    mcpEnv: mcpEnvs(options.env ?? {}, settings),
   };
 }
 
@@ -309,8 +363,8 @@ export function collectClaudeSettingsFacts(ctx: ClaudeContext, out: Collector): 
       const value = settings.data[key];
       if (typeof value === "boolean") out.facts.claudeFlags.push({ ...where, key, value });
     }
-    const allowed = mcpRules(settings.data.allowedMcpServers);
-    const denied = mcpRules(settings.data.deniedMcpServers);
+    const allowed = mcpRules(settings.data.allowedMcpServers, ctx.mcpEnv.entries);
+    const denied = mcpRules(settings.data.deniedMcpServers, ctx.mcpEnv.entries, ctx.mcpEnv.fallback);
     // The lock is a managed setting's alone; anywhere else Claude Code ignores it.
     const managedOnly = settings.layer === "managed" && settings.data.allowManagedMcpServersOnly === true;
     if (allowed || denied || managedOnly) {
