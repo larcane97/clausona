@@ -31,9 +31,9 @@ import {
 } from "./apply.js";
 import { tagsOf } from "./describe.js";
 import { loadInventory } from "./inventory.js";
-import type { Inventory } from "./model.js";
+import type { Extension, Inventory } from "./model.js";
 import { type Plan, type PlanContext, plan } from "./plan.js";
-import { tilde } from "./present.js";
+import { stateHere, tilde } from "./present.js";
 import { hashTree } from "./read.js";
 import { type ItemKind, rowsIn, type ScopeId, type ScopeRow, type ToolName } from "./scopes.js";
 import { TestHome } from "./test-home.js";
@@ -590,6 +590,45 @@ describe("apply: folders and links", () => {
       rowIn(inv, app, "project", "p-link", "codex"),
     ]);
     expect(again.changes).toMatchObject([{ edits: [{ selector: { path: listed }, enabled: null }] }]);
+  });
+
+  it("turns a linked Codex skill that Codex turned off by its real path on, off and on again", async () => {
+    // Codex's own UI writes the real path of a skill reached through a link (#125). Each change
+    // edits or takes out every entry that names the skill, by either path, and adds one only when
+    // none does: one entry never says on while another says off.
+    const { h, app } = home((h) => {
+      h.skill("elsewhere", "p-link");
+      h.link("elsewhere/p-link", "repos/app/.agents/skills/p-link");
+    });
+    const env = writeEnvFor(h.home, clock());
+    const config = h.path(".codex", "config.toml");
+    const real = path.join(realpathSync.native(h.path("elsewhere")), "p-link", "SKILL.md");
+    const listed = path.join(app, ".agents", "skills", "p-link", "SKILL.md");
+    writeFileSync(
+      config,
+      `${readFileSync(config, "utf8")}\n[[skills.config]]\npath = ${JSON.stringify(real)}\nenabled = false\n`,
+    );
+    const pLink: Pick = (inv, project) => [rowIn(inv, project, "project", "p-link", "codex")];
+    const stateNow = async () => {
+      const inv = await load(h, app);
+      return stateHere(inv, pLink(inv, app)[0]?.items[0] as Extension, app).value;
+    };
+    const entries = () => readFileSync(config, "utf8").match(/^path = .*$/gm) ?? [];
+    expect(await stateNow()).toBe("off");
+
+    const on = await planNow(h, app, "skills", "on", "here", pLink);
+    expect(on.changes).toMatchObject([{ edits: [{ op: "skill-config", selector: { path: listed }, enabled: null }] }]);
+    await apply(on, env);
+    expect(entries()).toEqual([]);
+    expect(await stateNow()).toBe("on");
+
+    await apply(await planNow(h, app, "skills", "off", "here", pLink), env);
+    expect(entries()).toEqual([`path = ${JSON.stringify(listed)}`]);
+    expect(await stateNow()).toBe("off");
+
+    await apply(await planNow(h, app, "skills", "on", "here", pLink), env);
+    expect(entries()).toEqual([]);
+    expect(await stateNow()).toBe("on");
   });
 
   it("removes a linked skill's link, never its folder, and makes the link again", async () => {

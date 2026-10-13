@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { editToml, parseTomlText, type TomlEdit, TomlEditError, tomlValueAt } from "./toml.js";
+import { editToml, parseTomlText, selects, type TomlEdit, TomlEditError, tomlValueAt } from "./toml.js";
 
 // Built from pieces, so no key-shaped string sits in the source.
 const KEY = ["sk", "ant", "api03", "Q2xhdXNvbmFUZXN0S2V5MTIzNDU2Nzg5MA"].join("-");
@@ -153,6 +153,38 @@ describe("skill-config", () => {
     expect(editToml(three, [{ op: "skill-config", selector: { name: "b" }, enabled: null }])).toBe(
       '[[skills.config]]\nname = "a"\nenabled = true\n\n[[skills.config]]\nname = "c"\nenabled = true\n',
     );
+  });
+
+  it("changes or takes out every entry whose path is the selector's or one of its aliases, and adds none then", () => {
+    // One SKILL.md by its listed path and by its real one, through a link: both name it.
+    const listed = "/home/me/app/.agents/skills/x/SKILL.md";
+    const real = "/home/me/elsewhere/x/SKILL.md";
+    const both = [
+      "[[skills.config]]",
+      `path = "${real}"`,
+      "enabled = false",
+      "",
+      "[[skills.config]]",
+      'name = "y"',
+      "enabled = false",
+      "",
+      "[[skills.config]]",
+      `path = "${listed}"`,
+      "enabled = true",
+      "",
+    ].join("\n");
+    const selector = { path: listed, aliases: [real] };
+    expect(selects({ path: real }, selector)).toBe(true);
+    expect(selects({ path: listed }, selector)).toBe(true);
+    expect(selects({ path: "/home/me/other/SKILL.md" }, selector)).toBe(false);
+    expect(editToml(both, [{ op: "skill-config", selector, enabled: false }])).toBe(
+      both.replace("enabled = true", "enabled = false"),
+    );
+    const taken = editToml(both, [{ op: "skill-config", selector, enabled: null }]);
+    expect(tomlValueAt(parseTomlText(taken), ["skills", "config"])).toEqual([{ name: "y", enabled: false }]);
+    // By its real path alone, the listed one is no new entry.
+    const one = `[[skills.config]]\npath = "${real}"\nenabled = false\n`;
+    expect(editToml(one, [{ op: "skill-config", selector, enabled: true }])).toBe(one.replace("false", "true"));
   });
 });
 

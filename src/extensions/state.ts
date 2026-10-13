@@ -337,22 +337,28 @@ function codexPluginOff(inv: Inventory, item: Extension, project: string | undef
 }
 
 /**
+ * Whether a `[[skills.config]]` path entry names a Codex skill, through a link or not, as Codex
+ * reads it: the entry's path or its real one, against the skill's own SKILL.md or its real one.
+ */
+export function namesCodexSkill(entry: { path?: string; realPath?: string }, item: Extension): boolean {
+  if (entry.path === undefined) return false;
+  const files = [item.location.file, item.realFolder]
+    .filter((folder): folder is string => folder !== undefined)
+    .map((folder) => path.join(folder, "SKILL.md"));
+  return [entry.path, entry.realPath].some((p) => files.some((file) => samePath(p, file)));
+}
+
+/**
  * By name - a plugin's skill by its full `<plugin>:<name>` - or by path, the path winning. A path
- * names the skill through a link or not, as Codex reads it: the path or its real one, against
- * the skill's own path or its real one.
+ * names the skill through a link or not (namesCodexSkill).
  */
 function codexSkillState(inv: Inventory, item: Extension, project: string | undefined): EffectiveState {
   const off = codexPluginOff(inv, item, project);
   if (off) return off;
-  const skillFiles = [item.location.file, item.realFolder]
-    .filter((folder): folder is string => folder !== undefined)
-    .map((folder) => path.join(folder, "SKILL.md"));
-  const names = (entry: (typeof inv.facts.codexSkillConfig)[number]) =>
-    [entry.path, entry.realPath].some((p) => skillFiles.some((file) => samePath(p, file)));
   let byPath: (typeof inv.facts.codexSkillConfig)[number] | undefined;
   let byName: (typeof inv.facts.codexSkillConfig)[number] | undefined;
   for (const entry of inv.facts.codexSkillConfig) {
-    if (entry.path !== undefined && names(entry)) byPath = entry;
+    if (namesCodexSkill(entry, item)) byPath = entry;
     else if (entry.name === item.name) byName = entry;
   }
   const hit = byPath ?? byName;

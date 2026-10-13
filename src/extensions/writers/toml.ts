@@ -9,7 +9,12 @@ import { isRecord, samePath } from "../read.js";
  * what the edits intend. Pure: text in, text out; writing the file is writers/fs.ts's.
  */
 
-export type SkillSelector = { name: string } | { path: string };
+/**
+ * A [[skills.config]] entry by name, or by path. A path names the skill by `path`, the one a new
+ * entry is written with, and by each of `aliases`: the other paths that name its SKILL.md, such
+ * as its real one through a link, which Codex takes alike.
+ */
+export type SkillSelector = { name: string } | { path: string; aliases?: readonly string[] };
 
 export type TomlEdit =
   /** null removes the line. */
@@ -80,11 +85,16 @@ function tableIn(table: Record<string, unknown>, key: string): Record<string, un
   return found;
 }
 
-/** Whether a [[skills.config]] entry is the one `selector` names: by its name, or by its path as samePath compares; Codex ignores an entry with both. */
+/**
+ * Whether a [[skills.config]] entry is one `selector` names: by its name, or by its path - the
+ * selector's or one of its aliases - as samePath compares; Codex ignores an entry with both.
+ */
 export function selects(entry: unknown, selector: SkillSelector): boolean {
   if (!isTable(entry)) return false;
   if ("name" in selector) return entry.name === selector.name && entry.path === undefined;
-  return typeof entry.path === "string" && entry.name === undefined && samePath(entry.path, selector.path);
+  const at = entry.path;
+  if (typeof at !== "string" || entry.name !== undefined) return false;
+  return [selector.path, ...(selector.aliases ?? [])].some((p) => samePath(at, p));
 }
 
 function expectOne(root: Record<string, unknown>, edit: TomlEdit): void {
@@ -117,7 +127,10 @@ function expectOne(root: Record<string, unknown>, edit: TomlEdit): void {
       }
       for (const entry of matches) put(entry as Record<string, unknown>, "enabled", edit.enabled);
       if (matches.length > 0) return;
-      const added = { ...edit.selector, enabled: edit.enabled };
+      const added =
+        "name" in edit.selector
+          ? { name: edit.selector.name, enabled: edit.enabled }
+          : { path: edit.selector.path, enabled: edit.enabled };
       if (Array.isArray(config)) config.push(added);
       else put(tableIn(root, "skills"), "config", [added]);
       return;

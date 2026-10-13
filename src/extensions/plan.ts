@@ -6,6 +6,7 @@ import {
   chosenAccount,
   codexMcpEntry,
   codexSkillEntry,
+  codexSkillPath,
   type ExtensionsCommand,
   hasOpened,
   layerMap,
@@ -521,7 +522,8 @@ function planCodexSkill(run: Run, row: ScopeRow): Outcome {
   const unreadable = unreadableAt(run, row, file);
   if (unreadable) return unreadable;
   const seen = here ? item.location.project : undefined;
-  const selector: SkillSelector = here ? { path: path.join(item.location.file, "SKILL.md") } : { name: item.name };
+  // Here, every entry that names the skill by a path, through a link or not, is changed or taken out.
+  const selector: SkillSelector = here ? codexSkillPath(inv, item) : { name: item.name };
   const entry = codexSkillEntry(inv, selector);
   const byName = here ? codexSkillEntry(inv, { name: item.name }) : entry;
   const where = whereFor(run.ctx, reach, seen);
@@ -548,7 +550,7 @@ function planCodexSkill(run: Run, row: ScopeRow): Outcome {
   if (!here) {
     // A project skill's own path entry, which wins over the name one, still turns it off there.
     const skillFile = path.join(item.location.file, "SKILL.md");
-    if (item.location.scope === "project" && codexSkillEntry(inv, { path: skillFile })?.enabled === false) {
+    if (item.location.scope === "project" && codexSkillEntry(inv, codexSkillPath(inv, item))?.enabled === false) {
       note(out, stillOff(run, item.location.project, `skills.config ${tilde(skillFile, inv.homeDir)}`, file));
     }
     return byName?.enabled === false ? write(null) : unchanged(out, row, "not off in Codex's config.toml");

@@ -761,6 +761,11 @@ nothing new to approve, and its plan says nothing of it. A server turned off in 
 names that file. `visibility` writes `skillOverrides.<name>` as off does, with the level as the
 value.
 
+A Codex project skill's `[[skills.config]]` entry names its `SKILL.md` by a path, and Codex
+takes any path that leads there, through a link or not: Codex's own UI writes the real one. So
+off and on here change every entry that names the skill, by whichever path, and add one, with
+the path the skill is listed at, only when none does.
+
 A JSON file keeps its indent, key order, line endings and last newline. A TOML file is changed
 line by line, so its comments stay, and the result is read back and checked before it is saved.
 

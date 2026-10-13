@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import type { ToolName } from "../types.js";
 import type { UndoSkip } from "./apply.js";
 import { statesByAccount } from "./describe.js";
@@ -6,7 +8,7 @@ import { isClaudeJson } from "./places.js";
 import { stateHere, tilde, viewFrom } from "./present.js";
 import { isWithin, samePath } from "./read.js";
 import { type ItemKind, isAccountServer, type ScopeRow } from "./scopes.js";
-import { pluginState, stateOf } from "./state.js";
+import { namesCodexSkill, pluginState, stateOf } from "./state.js";
 import type { SkillSelector } from "./writers/toml.js";
 
 /**
@@ -394,19 +396,41 @@ export function layerMap(
 
 /**
  * The `[[skills.config]]` entry `selector` names, as writers/toml.ts finds it: by name an entry
- * with no path, by path (samePath) one with no name - the inventory reads no entry with both,
- * as Codex ignores those. The last of several, as state.ts reads them.
+ * with no path, by path one with no name whose path, or real path, is the selector's or one of
+ * its aliases - the inventory reads no entry with both, as Codex ignores those. The last of
+ * several, as state.ts reads them.
  */
 export function codexSkillEntry(inv: Inventory, selector: SkillSelector): { enabled: boolean } | undefined {
+  const paths = "name" in selector ? [] : [selector.path, ...(selector.aliases ?? [])];
   let found: { enabled: boolean } | undefined;
   for (const entry of inv.facts.codexSkillConfig) {
     const named =
       "name" in selector
         ? entry.path === undefined && entry.name === selector.name
-        : entry.name === undefined && entry.path !== undefined && samePath(entry.path, selector.path);
+        : entry.name === undefined &&
+          entry.path !== undefined &&
+          [entry.path, entry.realPath].some((p) => paths.some((q) => samePath(p, q)));
     if (named) found = entry;
   }
   return found;
+}
+
+/**
+ * A Codex skill's own path selector: its SKILL.md as listed, which a new entry is written with,
+ * and as aliases every other path that names it as state.ts reads one (namesCodexSkill) - its
+ * real SKILL.md, and each `[[skills.config]]` path, as written, that leads to either. So an
+ * edit finds every entry that names the skill, the ones Codex wrote by its real path too.
+ */
+export function codexSkillPath(inv: Inventory, item: Extension): SkillSelector {
+  const own = path.join(item.location.file, "SKILL.md");
+  const others = [
+    ...(item.realFolder !== undefined ? [path.join(item.realFolder, "SKILL.md")] : []),
+    ...inv.facts.codexSkillConfig.flatMap((entry) =>
+      entry.name === undefined && entry.path !== undefined && namesCodexSkill(entry, item) ? [entry.path] : [],
+    ),
+  ];
+  const aliases = others.filter((p, at) => !samePath(p, own) && others.findIndex((q) => samePath(q, p)) === at);
+  return aliases.length > 0 ? { path: own, aliases } : { path: own };
 }
 
 /** `mcp_servers.<name>.enabled` as read in one config.toml. */
