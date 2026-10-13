@@ -1125,8 +1125,8 @@ describe("RouteForm", () => {
         expect(row(frame, "Strategy")).toMatch(/Strategy\s+● round-robin\s+○ headroom$/);
         expect(frame).toMatch(/^\s*│\s+○ claude \+ codex\s+│$/m);
         expect(frame).toMatch(/^\s*│\s+○ expiring\s+│$/m);
-        // Who would be picked is cut short, as the descriptions are, rather than wrapped.
-        expect(frame).toMatch(/^\s*Now: 20 of 20 accounts under 80% · next claude:acct.*…$/m);
+        // Who would be picked wraps whole onto a line of its own, rather than being cut short.
+        expect(frame).toMatch(/^\s*Now: 20 of 20 accounts under 80% · next\s*\n\s*claude:acct-01\s*$/m);
       }
       expect(lines(frame).length).toBe(ROWS - 1);
       for (const line of lines(frame)) expect(line.length).toBeLessThanOrEqual(columns);

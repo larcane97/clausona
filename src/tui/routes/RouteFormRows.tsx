@@ -372,22 +372,36 @@ export function FallbackPicker({ ids, cursor, none }: { ids: string[]; cursor: n
 /**
  * Who the route would pick now, from the quota already read: what `clausona route explain` would
  * say. Nothing read (offline) is said as such, as `route list` and the Routes screen say it.
- *
- * Cut short in a narrow terminal rather than wrapped, as the descriptions in the frame are: the
- * form counts it as one line.
+ */
+function nowSaid(ranking: Ranking | null): { lead: string; next?: string; tone: "muted" | "warning" | "text" } {
+  if (!ranking) return { lead: "Now: —", tone: "muted" };
+  const { outcome } = ranking;
+  if (outcome.kind !== "picked" && nothingRead(ranking.rows)) return { lead: "Now: no quota reading", tone: "muted" };
+  if (outcome.kind !== "picked") return { lead: "Now: nobody can be picked", tone: "warning" };
+  const { free, members } = freeNow(ranking);
+  return {
+    lead: `Now: ${free} of ${members} accounts under ${ranking.route.maxUsage}% · next `,
+    next: outcome.id,
+    tone: "text",
+  };
+}
+
+/** NowLine's text without its colours, for the form to count the lines it wraps into. */
+export function nowText(ranking: Ranking | null): string {
+  const { lead, next = "" } = nowSaid(ranking);
+  return lead + next;
+}
+
+/**
+ * The Now line. Wrapped in a narrow terminal, not cut short: the account it ends with is what it
+ * is there to say, and the form counts its lines (`nowText`).
  */
 export function NowLine({ ranking }: { ranking: Ranking | null }) {
-  if (!ranking) return <Text color={color.muted}>Now: —</Text>;
-  const { outcome } = ranking;
-  if (outcome.kind !== "picked" && nothingRead(ranking.rows)) {
-    return <Text color={color.muted}>Now: no quota reading</Text>;
-  }
-  if (outcome.kind !== "picked") return <Text color={color.warning}>Now: nobody can be picked</Text>;
-  const { free, members } = freeNow(ranking);
+  const { lead, next, tone } = nowSaid(ranking);
   return (
-    <Text color={color.text} wrap="truncate-end">
-      {`Now: ${free} of ${members} accounts under ${ranking.route.maxUsage}% · next `}
-      <Text color={color.accent}>{outcome.id}</Text>
+    <Text color={color[tone]}>
+      {lead}
+      {next === undefined ? null : <Text color={color.accent}>{next}</Text>}
     </Text>
   );
 }

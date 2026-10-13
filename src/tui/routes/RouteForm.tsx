@@ -30,6 +30,7 @@ import {
   fallbackLines,
   Line,
   NowLine,
+  nowText,
   Radio,
   radioLines,
   SubLabel,
@@ -89,8 +90,8 @@ export function formAccounts(registry: Registry): FormAccount[] {
  * wrapped), the every-account row, the Now line, and one more, since ink redraws the whole screen
  * once its output is as tall as the terminal. A question, the saving note, the picker and each
  * error take one or more besides, and so does each line past its first that a row which wraps
- * takes: the key hints, the radios and the fallback in a narrow terminal, and a text field whose
- * text is longer than its line.
+ * takes: the key hints, the radios, the fallback and the Now line in a narrow terminal, and a text
+ * field whose text is longer than its line.
  */
 const FORM_LINES = 24;
 
@@ -471,6 +472,7 @@ export function RouteForm(props: RouteFormProps) {
     radioLines(toolOptions, room),
     radioLines(strategyOptions, room),
     fallbackLines(state.fallback, pool, room),
+    textLines(nowText(preview), inside),
     ...(Object.keys(TEXT_KEYS) as TextField[]).map(textFieldLines),
   ].reduce((sum, lines) => sum + lines - 1, 0);
   /** Lines in the frame and under it that come and go; the errors as they wrap inside the chrome. */
