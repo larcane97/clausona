@@ -85,6 +85,31 @@ describe("readRunArgs", () => {
       "--strategy must be one of round-robin, headroom, expiring.",
     );
     expect(() => readRunArgs(["--from", " , "])).toThrow("--from needs at least one pattern.");
+
+    // A key typed into an option's slot, or after an option missing its value, is not repeated.
+    const key = ["sk", "ant", "y".repeat(24)].join("-");
+    const refusal = (args: string[]) => {
+      try {
+        readRunArgs(args);
+      } catch (error) {
+        return (error as Error).message;
+      }
+      throw new Error("read");
+    };
+    for (const args of [
+      ["--route", "--from", key],
+      ["--route", key, "--route", key],
+      [`--route=${key}`, `--route=${key}`],
+      ["--max-usage", key],
+      [`--max-usage=${key}`],
+      ["--strategy", key],
+      ["--max-usage", "70", "--max-usage", key],
+    ]) {
+      const message = refusal(args);
+      expect(message).toMatch(/^--[a-z-]+ /);
+      expect(message).not.toContain(key);
+      expect(message).not.toContain("sk-");
+    }
   });
 });
 
