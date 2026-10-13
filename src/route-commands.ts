@@ -6,6 +6,7 @@ import {
   checkPattern,
   checkRoute,
   checkRouteName,
+  checkRoutesFile,
   emptyRoutesFile,
   holdsKey,
   newRouteSpec,
@@ -25,6 +26,7 @@ import {
   readRoutesText,
   replaceRoutesText,
   updateRoutes,
+  writeRefusal,
 } from "./core/routes-store.js";
 import type { Ranking } from "./core/routing.js";
 import { withJsonErrors } from "./extensions/cli.js";
@@ -387,9 +389,10 @@ async function renameRoute(args: string[], deps: RouteDeps): Promise<string> {
     throw new Error(`${usage("rename")}\nRun \`clausona route rename --help\` for usage.`);
   const from = routeNameArg(oldArg, "rename");
   const to = routeNameArg(newArg, "rename");
+  const names = namesOf(await deps.loadRegistry());
   if (from === to) {
     // Not "already exists": the name it is taken by is its own, and there is nothing to write.
-    const { file, broken } = await loadRoutes(deps.paths, namesOf(await deps.loadRegistry()));
+    const { file, broken } = await loadRoutes(deps.paths, names);
     if (!Object.hasOwn(file.routes, from) && !broken.some((route) => route.name === from)) {
       throw new UnknownRouteError(from, Object.keys(file.routes).sort());
     }
@@ -398,6 +401,12 @@ async function renameRoute(args: string[], deps: RouteDeps): Promise<string> {
   await changeRoutes(deps, (file) => {
     if (!Object.hasOwn(file.routes, from)) throw new UnknownRouteError(from, Object.keys(file.routes).sort());
     if (Object.hasOwn(file.routes, to)) throw new Error(`Route '${to}' already exists.`);
+    // A route that cannot be used is no better under another name. Refused here, while it still has
+    // the name its way out (route remove) needs, whatever it is stored as.
+    const check = checkRoutesFile(file, names);
+    if (check.ok && check.broken.some((route) => route.name === from)) {
+      throw writeRefusal(deps.paths.routesPath, check.broken);
+    }
     const spec = file.routes[from];
     delete file.routes[from];
     file.routes[to] = spec;

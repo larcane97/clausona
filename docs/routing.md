@@ -309,9 +309,10 @@ that fixes the problem, such as `route set old --strategy headroom`.
 Removing a profile leaves its routes alone. A name that is no longer registered is skipped, and
 both `route list` and `route explain` point it out. The one exception is a name the key check
 would refuse, which a route can hold only while the profile is registered (see
-[Patterns](#patterns)): once it is removed, that route cannot be used until the name is taken out. They point out patterns that match nobody
-too, each one once, and an `exclude` entry that matches nobody. That one matters most: a typo
-there leaves in the account it was meant to leave out. `route list` puts them under its table:
+[Patterns](#patterns)): once it is removed, that route cannot be used until the name is taken
+out. They point out patterns that match nobody too, each one once, and an `exclude` entry that
+matches nobody. That one matters most: a typo there leaves in the account it was meant to leave
+out. `route list` puts them under its table:
 
 ```
   ⚠ ghost names 'gone', which is not a registered profile.

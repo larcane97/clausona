@@ -613,6 +613,27 @@ describe("a route in routes.json that cannot be used", () => {
     }
   });
 
+  // Identity cannot follow a string or null through a rename, so the name is checked before the move.
+  it("refuses to rename one stored as a string or null, naming it by its name on disk", async () => {
+    for (const spec of ["claude", null]) {
+      const { run, deps } = setup();
+      writeFileSync(
+        deps.paths.routesPath,
+        JSON.stringify({ version: 1, routes: { main: { tool: "claude" }, old: spec } }),
+      );
+      const before = readFileSync(deps.paths.routesPath, "utf8");
+      const error = (await run("rename", "old", "older").catch((e: unknown) => e)) as Error;
+      expect(error.message, String(spec)).toBe(
+        [
+          `${deps.paths.routesPath} has a route that cannot be used, so nothing was saved:`,
+          "    routes.old: must be an object",
+          "  Fix it with clausona route edit, or remove the route: clausona route remove old.",
+        ].join("\n"),
+      );
+      expect(readFileSync(deps.paths.routesPath, "utf8")).toBe(before);
+    }
+  });
+
   // Renamed, it would still be broken: the refusal names it as it is on disk, where remove finds it.
   it("refuses to rename it, naming it by its name on disk", async () => {
     const { run, deps } = withBroken();
