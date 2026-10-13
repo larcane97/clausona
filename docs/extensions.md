@@ -121,8 +121,9 @@ Some scopes need a word more:
   Loaded while the plugin is on, and in `all`, with the plugin's name as WHERE.
 
   A plugin's servers come from its `.mcp.json` and from what its `.claude-plugin/plugin.json`
-  declares under `mcpServers`: servers inline, or the `.json` files of servers it names. Its
-  hooks come from `hooks/hooks.json` and from `plugin.json`'s `hooks` the same way. A path that
+  declares under `mcpServers`: servers inline, or the `.json` files of servers it names, in
+  that order. A server name declared again replaces the earlier one, as Claude Code merges
+  them, so the manifest's copy wins over the `.mcp.json` one. Its hooks come from `hooks/hooks.json` and from `plugin.json`'s `hooks` the same way. A path that
   leads out of the plugin's folder, through `..` or a link, is not read, as Claude Code does not
   load it. Nor is an MCP bundle (`.mcpb` or `.dxt`), which Claude Code unpacks itself.
 
