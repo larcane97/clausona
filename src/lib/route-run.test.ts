@@ -528,6 +528,34 @@ describe("runRouted", () => {
       ]);
     });
 
+    it("takes the route --route or --from names over the dir rule, and says nothing of the rules", async () => {
+      const named = setup({ routes: RULES, cwd: path.join("work", "app") });
+      await runRouted(["claude", "--route", "main"], named.launch, named.io, named.deps);
+      const inline = setup({ routes: RULES, cwd: path.join("work", "app") });
+      await runRouted(["claude", "--from", "a"], inline.launch, inline.io, inline.deps);
+      expect(named.notes).toEqual(["  ▸ claude:solo  route main, most room, 5% of 5H used"]);
+      expect(inline.notes).toEqual(["  ▸ claude:a  inline route, next in turn, 30% of 5H used"]);
+    });
+
+    it("says in one line that a dir rule cannot be read, as well as taking the next rule", async () => {
+      const s = setup({ routes: { ...RULES, dirs: { work: { claude: "work" } } }, cwd: "work" });
+      await runRouted(["claude"], s.launch, s.io, s.deps);
+      expect(s.notes).toEqual([
+        `  ⚠ ${s.paths.routesPath} has a dir rule or default that cannot be read: clausona route list says why.`,
+        "  ▸ claude:solo  route main (default), most room, 5% of 5H used",
+      ]);
+    });
+
+    // Editing a newer file with this build would take it back a version: the way out is to update.
+    it("names no route edit when routes.json comes from a newer clausona", async () => {
+      const s = setup({ routes: { ...RULES, version: 2 }, cwd: "work" });
+      await runRouted(["claude"], s.launch, s.io, s.deps);
+      expect(s.notes).toEqual([
+        `  ⚠ ${s.paths.routesPath} cannot be used, so no dir rule or default applies: was written by a newer clausona (version 2); update clausona to use it.`,
+        "  ▸ claude:a  active profile (no route)",
+      ]);
+    });
+
     it("still asks for the tool when none is named", async () => {
       const s = setup({ routes: RULES, cwd: "work" });
       await expect(runRouted(["-p", "hi"], s.launch, s.io, s.deps)).rejects.toThrow(

@@ -864,6 +864,15 @@ export function renderRulesUnread(filePath: string, problem: string, newer: bool
   return `  ${warnIcon} ${filePath} cannot be used, so no dir rule or default applies: ${problem}.${fix}`;
 }
 
+/**
+ * routes.json holds dir rules or defaults that cannot be read, for a run that names no route: one
+ * line, pointing at the command that lists them.
+ */
+export function renderRulesProblems(filePath: string, count: number): string {
+  const what = count === 1 ? "a dir rule or default" : `${count} dir rules or defaults`;
+  return `  ${warnIcon} ${filePath} has ${what} that cannot be read: clausona route list says why.`;
+}
+
 /** A reset nobody knows sorts after every known one. */
 const resetOrder = (at: string | null) => (at === null ? Number.MAX_SAFE_INTEGER : Date.parse(at));
 

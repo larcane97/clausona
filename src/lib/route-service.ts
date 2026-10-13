@@ -276,7 +276,8 @@ export async function routesFor(
 /**
  * What a run of `tool` that names no route takes in `cwd`: the route of the deepest dir rule that
  * holds there, else the tool's default, else none (the active profile). `skipped` are the rules
- * passed over on the way, which cannot be used.
+ * passed over on the way, which cannot be used; `problems` the entries of dirs and defaults that
+ * cannot be read at all, which no run can take.
  */
 export function routeByRules(
   loaded: LoadedRoutes,
@@ -284,20 +285,16 @@ export function routeByRules(
   cwd: string,
   sys: PathSystem,
   names: ProfileNames = NO_PROFILE_NAMES,
-): { resolved: ResolvedRoute | null; skipped: SkippedRule[] } {
-  const { chosen, skipped } = chooseRule(
-    loaded.file,
-    loaded.broken,
-    readRules(loaded.file, sys.platform),
-    tool,
-    cwd,
-    sys,
-  );
-  if (!chosen) return { resolved: null, skipped };
+): { resolved: ResolvedRoute | null; skipped: SkippedRule[]; problems: string[] } {
+  const rules = readRules(loaded.file, sys.platform);
+  const { problems } = rules;
+  const { chosen, skipped } = chooseRule(loaded.file, loaded.broken, rules, tool, cwd, sys);
+  if (!chosen) return { resolved: null, skipped, problems };
   // The rule's route is one of this tool's, or an `all` route that the tool narrows.
   const resolved = resolveRoute(loaded.file, { tool, options: { route: chosen.route } }, names);
-  if (!resolved) return { resolved: null, skipped };
-  return { resolved: { ...resolved, resolvedBy: chosen.dir === undefined ? "default" : `dir:${chosen.dir}` }, skipped };
+  if (!resolved) return { resolved: null, skipped, problems };
+  const resolvedBy = chosen.dir === undefined ? "default" : (`dir:${chosen.dir}` as const);
+  return { resolved: { ...resolved, resolvedBy }, skipped, problems };
 }
 
 /**

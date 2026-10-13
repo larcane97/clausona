@@ -16,6 +16,7 @@ import {
   renderNoAccount,
   renderNote,
   renderNothingToCreate,
+  renderRulesProblems,
   renderRulesUnread,
   renderSkippedRule,
   takesNobody,
@@ -163,7 +164,9 @@ async function ruleRoute(
     io.say(renderRulesUnread(deps.paths.routesPath, problem, error instanceof RoutesFileError && error.newer));
     return null;
   }
-  const { resolved, skipped } = routeByRules(loaded, tool, deps.cwd, pathsFor(deps), names);
+  const { resolved, skipped, problems } = routeByRules(loaded, tool, deps.cwd, pathsFor(deps), names);
+  // A rule whose directory cannot be read never comes up below, yet may have been meant for here.
+  if (problems.length) io.say(renderRulesProblems(loaded.filePath, problems.length));
   for (const skip of skipped) io.say(renderSkippedRule(skip));
   return resolved;
 }

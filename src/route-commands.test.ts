@@ -945,6 +945,13 @@ describe("dir rules and defaults", () => {
       expect(await run("explain", "--tool", "codex")).not.toContain("clausona run claude");
     });
 
+    it("warns about a dir rule it cannot read, which no run here could take", async () => {
+      const { run, deps } = await inApp();
+      const raw = JSON.parse(readFileSync(deps.paths.routesPath, "utf8"));
+      writeFileSync(deps.paths.routesPath, JSON.stringify({ ...raw, dirs: { ...raw.dirs, work: { codex: "cx" } } }));
+      expect(await run("explain")).toContain('  ⚠ dirs["work"]: must be an absolute path, or start with ~');
+    });
+
     it("gives each run's resolvedBy and the rules it skipped in --json", async () => {
       const { run, deps } = await inApp();
       const json = JSON.parse(await run("explain", "--json"));

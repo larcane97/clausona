@@ -896,7 +896,12 @@ async function explainHere({ tool, json, resume }: RankingArgs, deps: RouteDeps)
       : [],
   );
   return renderRunsHere(storedDir(deps.cwd, deps.cwd, sys), runs, details, {
-    warnings: [...found.flatMap(({ skipped }) => skipped.map(skippedText)), ...brokenWarnings(loaded.broken)],
+    warnings: [
+      ...found.flatMap(({ skipped }) => skipped.map(skippedText)),
+      ...brokenWarnings(loaded.broken),
+      // Not in `skipped`: a rule whose directory cannot be read never matches, here or anywhere.
+      ...readRules(loaded.file, sys.platform).problems,
+    ],
   });
 }
 
