@@ -44,6 +44,8 @@ async function loadBase(ref: string): Promise<Redact> {
 /**
  * A piece of a command line, as MCP arguments and as shell text. `{S1}`, `{S2}` stand for secret
  * words and `{H1}`, `{H2}` for harmless ones; each case fills them with markers of its own.
+ * `{A1}` and `{B1}` are a secret and a harmless one in letters only, for a word that must read
+ * the way option names are spelled (`--{A1}-token`), which a digit in it would not.
  */
 type Template = { argv: string[]; hook: string };
 
@@ -214,7 +216,19 @@ const GIT_FORMS = [
   t(["-b", "{H1}"], "-b {H1}"),
 ];
 
-const SECRET_FORMS = [
+/** #139: under a tool whose `-b` is no credential, it is a block size, a byte list, a flag. */
+const TOOL_B_FORMS = [
+  t(["-b", "{H1}"], "-b {H1}"),
+  t(["-b", "{H1}", "{H2}"], "-b {H1} {H2}"),
+  t(["-f", "{H1}", "-b", "{H2}"], "-f {H1} -b {H2}"),
+  t(["-b", "{H1}", "--token", "{S1}"], "-b {H1} --token {S1}"),
+  t(["-b", "--api-key", "{S1}"], "-b --api-key {S1}"),
+  t(["-b", "{H1}", "&&", "curl", "-b", "sid={S1}"], "-b {H1} && curl -b sid={S1}"),
+  t(["-b", "{H1}", "|", "curl", "--cookie", "{S1}"], "-b {H1} | curl --cookie {S1}"),
+];
+
+/** The forms #97's run had; the followers are drawn from these, so its cases stay as they were. */
+const FIRST_SECRET_FORMS = [
   ...FLAG_FORMS,
   ...VALUELESS_FORMS,
   ...COOKIE_FORMS,
@@ -226,6 +240,68 @@ const SECRET_FORMS = [
   ...URL_FORMS,
   ...SQL_FORMS,
 ];
+
+/**
+ * #139: a password spelled like an option named for a secret, right after a secret flag; and
+ * the real option of that spelling after a flag that may take no value, its name harmless.
+ */
+const OPTION_VALUE_FORMS = [
+  ...SECRET_FLAGS.flatMap((flag) => [
+    t([flag, "--{A1}-token"], `${flag} --{A1}-token`),
+    t([flag, "--{A1}password"], `${flag} --{A1}password`),
+  ]),
+  ...["-b", "--cookie", "--auth"].flatMap((before) => [
+    t([before, "--api-key", "--{A1}-token"], `${before} --api-key --{A1}-token`),
+    t([before, "--api-key", "-{S1}"], `${before} --api-key -{S1}`),
+    t([before, "--{B1}-token", "{S1}"], `${before} --{B1}-token {S1}`),
+    t([before, "--{B1}-token", "-{S1}"], `${before} --{B1}-token -{S1}`),
+    t([before, "--{B1}-token", "{S1} {S2}"], `${before} --{B1}-token "{S1} {S2}"`),
+  ]),
+];
+
+/**
+ * #139: a spaced secret in a form body, with fields after it, which are no part of it; and a
+ * value with `&x=` in it that is no form, all of which is the secret.
+ */
+const FIELD_FORMS = [
+  t(["-d", "a=1&password={S1} {S2}&name={H1}&x={H2}"], `-d "a=1&password={S1} {S2}&name={H1}&x={H2}"`),
+  t(
+    ["-d", "a=1&password={S1} {S2}&token={S3} {S4}&name={H1}"],
+    `-d "a=1&password={S1} {S2}&token={S3} {S4}&name={H1}"`,
+  ),
+  t(["-d", "a=1&password={S1} {S2} {S3}&name={H1}"], `-d "a=1&password={S1} {S2} {S3}&name={H1}"`),
+  t(["-d", "a=1&password={S1} {S2}&name={H1} {H2}"], `-d "a=1&password={S1} {S2}&name={H1} {H2}"`),
+  t(["-d", "a=1&password={S1} {S2} &name={H1}"], `-d "a=1&password={S1} {S2} &name={H1}"`),
+  t(["--data", "x=1&token={S1} {S2}&y={H1}"], "--data 'x=1&token={S1} {S2}&y={H1}'"),
+  t(["-d", "a=1&password={S1} {S2}&{S3} {S4}"], `-d "a=1&password={S1} {S2}&{S3} {S4}"`),
+  t(["-d", "a=1&password={S1} {S2}&{S3}"], `-d "a=1&password={S1} {S2}&{S3}"`),
+  t(["-d", "password={S1} {S2}&name={H1}"], `-d "password={S1} {S2}&name={H1}"`),
+  t(["-d", "a=1&password={S1} {S2}", "&name={H1}"], `-d "a=1&password={S1} {S2}" "&name={H1}"`),
+  t(["TOKEN={S1} {S2}&x={S3}"], "TOKEN='{S1} {S2}&x={S3}'"),
+  t(["--api-key", "{S1} {S2}&x={S3}"], `--api-key "{S1} {S2}&x={S3}"`),
+  t(["--api-key={S1} {S2}&x={S3}"], `--api-key="{S1} {S2}&x={S3}"`),
+  t(["-u", "alice:{S1} {S2}&x={S3}"], `-u "alice:{S1} {S2}&x={S3}"`),
+  t(["-H", "X-Api-Key: {S1} {S2}&x={S3}"], `-H "X-Api-Key: {S1} {S2}&x={S3}"`),
+  t(["--cookie", "sid={S1} {S2}&x={S3}"], `--cookie "sid={S1} {S2}&x={S3}"`),
+  t(['{"token":"{S1} {S2}&x={S3}"}'], `'{"token":"{S1} {S2}&x={S3}"}'`),
+  t(["-d", "a=1&password='{S1} {S2}&x={S3}'"], `-d "a=1&password='{S1} {S2}&x={S3}'"`),
+];
+
+/**
+ * #139: a tool's name where the command is not that tool's, so its `-b` stays curl's: after an
+ * option, or after another program's word.
+ */
+const NOT_A_TOOL_FORMS = [
+  t(["--name", "tar", "-b", "{S1}"], "--name tar -b {S1}"),
+  t(["img", "sort", "-b", "{S1}"], "img sort -b {S1}"),
+  t(["--file", "/srv/du", "-b", "sid={S1}"], "--file /srv/du -b sid={S1}"),
+  t(["-c", "tar", "-b", "{S1}"], "-c tar -b {S1}"),
+  t(["-c", "git", "-b", "{S1}"], "-c git -b {S1}"),
+  t(["--mode", "time", "sort", "-b", "{S1}"], "--mode time sort -b {S1}"),
+  t(["--run", "env", "git", "-b", "{S1}"], "--run env git -b {S1}"),
+];
+
+const SECRET_FORMS = [...FIRST_SECRET_FORMS, ...OPTION_VALUE_FORMS, ...FIELD_FORMS, ...NOT_A_TOOL_FORMS];
 
 const PROGRAMS = [
   ["tool"],
@@ -243,6 +319,13 @@ const PROGRAMS = [
 
 const GIT_PROGRAMS = [["git"], ["git", "-C", "/srv/repo"]];
 
+/**
+ * #139: tools whose `-b` is no credential, as their man pages give it. ssh's is a bind address,
+ * but redact.ts leaves ssh out, since the words after its host are a remote command's: its
+ * cases count what that costs.
+ */
+const TOOL_B_PROGRAMS = [["tar"], ["sort"], ["/usr/bin/du"], ["cut"], ["ssh"], ["wget"], ["sudo", "rsync"]];
+
 const SHELLS = [
   ["bash", "-c"],
   ["sh", "-euc"],
@@ -255,7 +338,7 @@ const SHELLS = [
 /** A second piece for some cases, before or after the first: harmless words, and a few secret shapes. */
 const FOLLOWERS = [
   ...HARMLESS_FORMS,
-  ...SECRET_FORMS.filter((_, i) => i % 61 === 0),
+  ...FIRST_SECRET_FORMS.filter((_, i) => i % 61 === 0),
   ...COOKIE_FORMS.slice(0, 2),
   ...SQL_FORMS.slice(0, 1),
 ];
@@ -285,7 +368,14 @@ type Case = { mode: string; input: string; run: (r: Redact) => string; secrets: 
 
 type Filled = { argv: string[]; hook: string; secrets: Mark[]; harmless: Mark[]; spaced: boolean };
 
-/** Fills a case's templates with markers, secret ones `zq…k` and harmless ones `hm…w`, unique in the case. */
+/** A marker's middle in letters only: base 26, its digits written `a` to `z`. */
+const letters = (n: number) =>
+  [...n.toString(26).padStart(4, "0")].map((c) => String.fromCharCode(97 + Number.parseInt(c, 26))).join("");
+
+/**
+ * Fills a case's templates with markers, secret ones `zq…k` and harmless ones `hm…w`, unique in
+ * the case; `{A}` and `{B}` take the letters-only middle.
+ */
 function fill(parts: Template[]): Filled {
   const secrets: Mark[] = [];
   const harmless: Mark[] = [];
@@ -294,12 +384,14 @@ function fill(parts: Template[]): Filled {
   for (const part of parts) {
     const names = new Map<string, string>();
     const sub = (text: string) =>
-      text.replace(/\{([SH])(\d)\}/g, (whole, kind: "S" | "H") => {
+      text.replace(/\{([SHAB])(\d)\}/g, (whole, kind: "S" | "H" | "A" | "B") => {
         const known = names.get(whole);
         if (known) return known;
-        const n = (secrets.length + harmless.length).toString(36).padStart(4, "0");
-        const word = kind === "S" ? `zq${n}k` : `hm${n}w`;
-        (kind === "S" ? secrets : harmless).push({ word, from: part.hook });
+        const count = secrets.length + harmless.length;
+        const n = kind === "A" || kind === "B" ? letters(count) : count.toString(36).padStart(4, "0");
+        const secret = kind === "S" || kind === "A";
+        const word = secret ? `zq${n}k` : `hm${n}w`;
+        (secret ? secrets : harmless).push({ word, from: part.hook });
         names.set(whole, word);
         return word;
       });
@@ -363,6 +455,8 @@ function* cases(): Generator<Case> {
       GIT_PROGRAMS,
       GIT_FORMS,
     ),
+    withPrograms([...TOOL_B_FORMS, ...HARMLESS_FORMS], TOOL_B_PROGRAMS, GIT_FOLLOWERS),
+    withPrograms([...FLAG_FORMS.filter((_, i) => i % 7 === 0), ...OPTION_VALUE_FORMS], TOOL_B_PROGRAMS, TOOL_B_FORMS),
   ];
   for (const set of sets) for (const parts of set) yield* forms(fill(parts));
   // A shell's command line: the pieces as one argument, and as a quoted hook body.
@@ -373,6 +467,7 @@ function* cases(): Generator<Case> {
     for (const parts of [
       ...withPrograms(SECRET_FORMS, inner, followers),
       ...withPrograms([...GIT_FORMS, ...HARMLESS_FORMS], [["git"]], gitFollowers),
+      ...withPrograms(TOOL_B_FORMS, [["tar"], ["sort"]], gitFollowers),
     ]) {
       const { hook, secrets, harmless } = fill(parts);
       const args = [...shell, hook];
@@ -429,6 +524,8 @@ describe.skipIf(BASE === undefined)(`redact.ts against ${BASE ?? "a base version
       unhidden: [] as Example[],
       /** Harmless words base showed that head hides. */
       "over-hidden": [] as Example[],
+      /** Harmless words both hide: the over-hiding still left. */
+      "still over-hidden": [] as Example[],
     };
     for (const c of cases()) {
       total += 1;
@@ -455,6 +552,7 @@ describe.skipIf(BASE === undefined)(`redact.ts against ${BASE ?? "a base version
         const after = now.includes(mark.word);
         if (!before && after) found.unhidden.push(example(mark));
         if (before && !after) found["over-hidden"].push(example(mark));
+        if (!before && !after) found["still over-hidden"].push(example(mark));
       }
     }
     const lines = [
@@ -464,6 +562,7 @@ describe.skipIf(BASE === undefined)(`redact.ts against ${BASE ?? "a base version
       `secrets both show (still open): ${found["still open"].length}`,
       `harmless words base hid, head shows (unhidden): ${found.unhidden.length}`,
       `harmless words base showed, head hides (over-hidden): ${found["over-hidden"].length}`,
+      `harmless words both hide (still over-hidden): ${found["still over-hidden"].length}`,
     ];
     const limit = Number(process.env.REDACT_DIFF_EXAMPLES ?? 60);
     for (const [name, list] of Object.entries(found)) {
