@@ -737,13 +737,19 @@ async function codexStateToMove(
 /**
  * Refuses, unless `force`, to move `moving` in a Codex home where Codex is running: it has those
  * files open, and moved under it they split - its open copy goes on being written while the
- * profile's name leads to another. `retry` is the command that goes ahead anyway.
+ * profile's name leads to another. `retry` is the command that goes ahead anyway. A look that
+ * timed out is no answer, and refuses the same: Codex may be running.
  */
 async function refuseWhileCodexRuns(configDir: string, moving: string[], retry: string, force = false) {
   if (force || moving.length === 0) return;
   const running = await codexProcessesFor(configDir);
-  if (running.length === 0) return;
+  if (running?.length === 0) return;
   const shown = configDir.replace(homedir(), "~");
+  if (running === null) {
+    throw new Error(
+      `The check for a running Codex in ${shown} timed out: pgrep and ps did not answer in time. This would move files a running Codex has open: ${moving.join(", ")}. Nothing was changed. Run this again, or, with Codex quit in this profile, go ahead without the check: ${retry}`,
+    );
+  }
   throw new Error(
     `Codex is running in ${shown} (pid ${running.join(", ")}), and this would move files it has open: ${moving.join(", ")}. Quit Codex in this profile and stop its app-server daemon with 'CODEX_HOME=${shown} codex app-server daemon stop', then run this again. Nothing was changed. To go ahead while it runs: ${retry}`,
   );

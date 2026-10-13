@@ -3,12 +3,27 @@ import { readdir, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
-/** Long enough for pgrep and ps on a loaded machine; a check that runs out finds nothing. */
-const CHECK_TIMEOUT_MS = 3_000;
+/**
+ * How long pgrep and ps each get. On a busy machine (a load average of 13 to 68) ps ran into the
+ * 3 s this was before 39 times in 806 runs, one in eight in the busiest stretch, and pgrep once
+ * in 49, where an idle machine answers in milliseconds. Over three times that, for a busier one.
+ */
+const CHECK_TIMEOUT_MS = 10_000;
 
-function run(command: string, args: string[]): Promise<string> {
+/** What the look runs, for tests: the platform's way, pgrep and ps, Linux's /proc, and how long each gets. */
+export type ProcessCheck = {
+  platform?: NodeJS.Platform;
+  pgrep?: string;
+  ps?: string;
+  proc?: string;
+  timeoutMs?: number;
+};
+
+/** What `command` printed; null when it ran out of time, or was stopped, before it finished. */
+function run(command: string, args: string[], timeoutMs: number): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile(command, args, { timeout: CHECK_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
+    execFile(command, args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
+      if (error?.killed || error?.signal) return resolve(null);
       // pgrep exits 1 when nothing matches: that is an answer, not a failure.
       resolve(error && !stdout ? "" : String(stdout));
     });
@@ -48,26 +63,30 @@ export function codexHomesInPsLine(line: string): string[] {
  * app-server daemon it starts; the npm launcher is a `node` that runs one.
  *
  * Linux reads /proc, macOS asks pgrep and `ps -E`, both for the user's own processes only.
- * Anywhere else, and whenever the check cannot run, none are found.
+ * Anywhere else, and whenever the check cannot run, none are found. Null when pgrep or ps ran
+ * out of time: a check that did not finish is no answer, and Codex may be running.
  */
-export async function codexProcessesFor(configDir: string, platform = process.platform): Promise<number[]> {
+export async function codexProcessesFor(configDir: string, check: ProcessCheck = {}): Promise<number[] | null> {
   const home = await normalizeHome(configDir);
+  const platform = check.platform ?? process.platform;
   try {
-    if (platform === "linux") return await fromProc(home);
-    if (platform === "darwin") return await fromPs(home);
+    if (platform === "linux") return await fromProc(home, check.proc ?? "/proc");
+    if (platform === "darwin") {
+      return await fromPs(home, check.pgrep ?? "pgrep", check.ps ?? "ps", check.timeoutMs ?? CHECK_TIMEOUT_MS);
+    }
   } catch {
     // An answer the check cannot give is no running Codex.
   }
   return [];
 }
 
-async function fromProc(home: string): Promise<number[]> {
+async function fromProc(home: string, proc: string): Promise<number[]> {
   const found: number[] = [];
-  for (const entry of await readdir("/proc")) {
+  for (const entry of await readdir(proc)) {
     if (!/^\d+$/.test(entry)) continue;
-    const comm = await readFile(`/proc/${entry}/comm`, "utf8").catch(() => "");
+    const comm = await readFile(path.join(proc, entry, "comm"), "utf8").catch(() => "");
     if (comm.trim() !== "codex") continue;
-    const environ = await readFile(`/proc/${entry}/environ`, "utf8").catch(() => "");
+    const environ = await readFile(path.join(proc, entry, "environ"), "utf8").catch(() => "");
     for (const variable of environ.split("\0")) {
       if (!variable.startsWith("CODEX_HOME=")) continue;
       if ((await normalizeHome(variable.slice("CODEX_HOME=".length))) === home) found.push(Number(entry));
@@ -76,14 +95,19 @@ async function fromProc(home: string): Promise<number[]> {
   return found;
 }
 
-async function fromPs(home: string): Promise<number[]> {
-  const pids = (await run("pgrep", ["-x", "codex"])).split(/\s+/).filter((pid) => /^\d+$/.test(pid));
+async function fromPs(home: string, pgrep: string, ps: string, timeoutMs: number): Promise<number[] | null> {
+  const listed = await run(pgrep, ["-x", "codex"], timeoutMs);
+  if (listed === null) return null;
+  const pids = listed.split(/\s+/).filter((pid) => /^\d+$/.test(pid));
   // One pid at a time: ps reads that one process, where a list makes it read the whole
   // process table, which took seconds on a loaded machine.
-  const lines = await Promise.all(pids.map((pid) => run("ps", ["-wwE", "-o", "command=", "-p", pid])));
+  const lines = await Promise.all(pids.map((pid) => run(ps, ["-wwE", "-o", "command=", "-p", pid], timeoutMs)));
   const found: number[] = [];
   for (const [index, pid] of pids.entries()) {
-    for (const value of codexHomesInPsLine(lines[index])) {
+    const line = lines[index];
+    // Any process ps did not answer for could be a Codex in this home.
+    if (line === null || line === undefined) return null;
+    for (const value of codexHomesInPsLine(line)) {
       if ((await normalizeHome(value)) === home) found.push(Number(pid));
     }
   }

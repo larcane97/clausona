@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -18,6 +19,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { ProcessCheck } from "../core/running-codex.js";
 import { SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import type { DoctorIssue, DoctorProfileResult, Registry } from "../types.js";
 
@@ -79,13 +81,13 @@ function seedPrimary(dir: string) {
 }
 
 /**
- * `realProcessCheck` keeps the look for a running Codex, which the cases about it need. Every
- * other case goes without it: on a loaded machine its pgrep and ps take seconds, and nothing
- * else here is about them.
+ * `processes` gives the look for a running Codex what it runs, stand-ins for pgrep and ps, for
+ * the cases about it. Every other case goes without the look: on a loaded machine pgrep and ps
+ * take seconds, and nothing else here is about them. No case reads this machine's own processes.
  */
 async function harness(
   profiles: (dirs: { codex: string; work: string }) => Registry["profiles"] = () => ({}),
-  { realProcessCheck = false } = {},
+  { processes }: { processes?: (dirs: { codex: string; work: string }) => ProcessCheck } = {},
 ) {
   currentHome = mkdtempSync(path.join(tmpdir(), "clausona-allow-"));
   temps.push(currentHome);
@@ -106,8 +108,14 @@ async function harness(
   writeFileSync(registryPath, JSON.stringify(registry));
 
   vi.resetModules();
-  if (realProcessCheck) vi.doUnmock("../core/running-codex.js");
-  else vi.doMock("../core/running-codex.js", () => ({ codexProcessesFor: async () => [] }));
+  const check = processes?.(dirs);
+  if (check === undefined) vi.doMock("../core/running-codex.js", () => ({ codexProcessesFor: async () => [] }));
+  else {
+    vi.doMock("../core/running-codex.js", async (importOriginal) => {
+      const real = await importOriginal<typeof import("../core/running-codex.js")>();
+      return { ...real, codexProcessesFor: (configDir: string) => real.codexProcessesFor(configDir, check) };
+    });
+  }
   const stderr: string[] = [];
   vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
     stderr.push(String(chunk));
@@ -609,18 +617,61 @@ describe.skipIf(process.platform === "win32")("repair while Codex runs in the pr
     return child;
   }
 
+  /** The temporary home's bin folder, where the stand-ins and the codex link go. */
+  const binOf = (dirs: { work: string }) => path.join(path.dirname(dirs.work), "bin");
+
+  /** A shell script named `name` in the home's bin folder that runs `body`. */
+  function script(dirs: { work: string }, name: string, body: string): string {
+    mkdirSync(binOf(dirs), { recursive: true });
+    const file = path.join(binOf(dirs), name);
+    writeFileSync(file, `#!/bin/sh\n${body}\n`);
+    chmodSync(file, 0o755);
+    return file;
+  }
+
+  /**
+   * pgrep and ps as they answer with a Codex running in the profile as pid 4242, its CODEX_HOME
+   * spelled with a trailing separator: macOS's look, wherever the test runs, and no process of
+   * this machine's read.
+   */
+  const codexInWork = (dirs: { work: string }): ProcessCheck => ({
+    platform: "darwin",
+    pgrep: script(dirs, "pgrep", "echo 4242"),
+    // ps -wwE -o command= -p <pid>: the pid is its fifth argument.
+    ps: script(dirs, "ps", `[ "$5" = 4242 ] && echo "codex CODEX_HOME=${dirs.work}${path.sep} PATH=/usr/bin"`),
+  });
+
+  /** Where markOwn lists the processes a case starts: ids for pgrep's list, links for /proc. */
+  const ownIds = (dirs: { work: string }) => path.join(path.dirname(dirs.work), "own-pids");
+  const ownProc = (dirs: { work: string }) => path.join(path.dirname(dirs.work), "own-proc");
+
+  /**
+   * The real look - ps on macOS, /proc on Linux - kept to the processes the case starts: on macOS
+   * pgrep's list cut to the ids markOwn writes, so ps reads no other process; on Linux a /proc of
+   * links to theirs alone.
+   */
+  function onlyOwn(dirs: { work: string }): ProcessCheck {
+    mkdirSync(ownProc(dirs));
+    return { pgrep: script(dirs, "pgrep", `pgrep "$@" | grep -x -F -f '${ownIds(dirs)}'`), proc: ownProc(dirs) };
+  }
+
+  function markOwn(dirs: { work: string }, pids: number[]) {
+    writeFileSync(ownIds(dirs), `${pids.join("\n")}\n`);
+    if (process.platform !== "linux") return;
+    for (const pid of pids) symlinkSync(path.join("/proc", String(pid)), path.join(ownProc(dirs), String(pid)));
+  }
+
   /** Starts one codex with the profile's CODEX_HOME, spelled with a trailing separator, and one with the primary's. */
   async function codexRunning(h: Awaited<ReturnType<typeof harness>>, signal: AbortSignal) {
-    const bin = path.join(path.dirname(h.dirs.work), "bin");
-    mkdirSync(bin);
     const { codexProcessesFor } = await import("../core/running-codex.js");
-    const other = startCodex(bin, h.dirs.codex, signal);
-    const child = startCodex(bin, `${h.dirs.work}${path.sep}`, signal);
+    const other = startCodex(binOf(h.dirs), h.dirs.codex, signal);
+    const child = startCodex(binOf(h.dirs), `${h.dirs.work}${path.sep}`, signal);
     const pid = child.pid ?? -1;
-    let found: number[] = [];
-    for (let tries = 0; tries < 50 && !found.includes(pid); tries++) {
+    markOwn(h.dirs, [other.pid ?? -1, pid]);
+    let found: number[] | null = [];
+    for (let tries = 0; tries < 50 && !found?.includes(pid); tries++) {
       found = await codexProcessesFor(h.dirs.work);
-      if (!found.includes(pid)) await new Promise((resolve) => setTimeout(resolve, 100));
+      if (!found?.includes(pid)) await new Promise((resolve) => setTimeout(resolve, 100));
     }
     other.kill();
     return { pid, found, other: other.pid };
@@ -629,7 +680,7 @@ describe.skipIf(process.platform === "win32")("repair while Codex runs in the pr
   it("is found by its CODEX_HOME however it is spelled, and repair refuses until --force", {
     timeout: SPAWNING_TEST_TIMEOUT_MS,
   }, async ({ signal }) => {
-    const h = await harness(linkedByOlderClausona, { realProcessCheck: true });
+    const h = await harness(linkedByOlderClausona, { processes: onlyOwn });
     const { pid, found, other } = await codexRunning(h, signal);
     expect(found).toContain(pid);
     expect(found).not.toContain(other);
@@ -645,11 +696,32 @@ describe.skipIf(process.platform === "win32")("repair while Codex runs in the pr
     expect(lstatOrNull(path.join(h.dirs.work, "app-server-control"))).toBeNull();
   });
 
+  it("refuses repair while its look for a running Codex runs out of time, until --force", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
+    // ps stalled, as on a busy machine: exec, so the kill at the limit stops the sleep itself.
+    const stalled = (dirs: { work: string }): ProcessCheck => ({
+      ...codexInWork(dirs),
+      ps: script(dirs, "ps", "exec sleep 30"),
+      timeoutMs: 500,
+    });
+    const h = await harness(linkedByOlderClausona, { processes: stalled });
+    const before = snapshot(h.dirs.work);
+
+    await expect(h.service.repairProfile("codex:work")).rejects.toThrow(
+      /The check for a running Codex in .* timed out.*Nothing was changed.*clausona repair codex:work --force/,
+    );
+    expect(snapshot(h.dirs.work)).toEqual(before);
+
+    await h.service.repairProfile("codex:work", { force: true });
+
+    expect(lstatOrNull(path.join(h.dirs.work, "app-server-control"))).toBeNull();
+  });
+
   it("refuses the session-mode toggle too, which leaves the mode as it was", {
     timeout: SPAWNING_TEST_TIMEOUT_MS,
-  }, async ({ signal }) => {
-    const h = await harness(linkedByOlderClausona, { realProcessCheck: true });
-    await codexRunning(h, signal);
+  }, async () => {
+    const h = await harness(linkedByOlderClausona, { processes: codexInWork });
     const before = snapshot(h.dirs.work);
 
     await expect(h.service.updateProfileConfig("codex:work", { mergeSessions: true })).rejects.toThrow(
@@ -665,9 +737,8 @@ describe.skipIf(process.platform === "win32")("repair while Codex runs in the pr
 
   it("refuses init on a profile it would unlink, before writing anything", {
     timeout: SPAWNING_TEST_TIMEOUT_MS,
-  }, async ({ signal }) => {
-    const h = await harness(linkedByOlderClausona, { realProcessCheck: true });
-    await codexRunning(h, signal);
+  }, async () => {
+    const h = await harness(linkedByOlderClausona, { processes: codexInWork });
     const registryPath = path.join(path.dirname(h.dirs.work), ".clausona", "profiles.json");
     const registryBefore = readFileSync(registryPath, "utf8");
     const before = snapshot(h.dirs.work);

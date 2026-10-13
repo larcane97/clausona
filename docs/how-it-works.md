@@ -308,7 +308,9 @@ daemon stop`, before you repair it, change its session mode or run `clausona ini
 These move files a running Codex holds open, such as its databases and the daemon's directories.
 On macOS and Linux, each of them looks for a `codex` process running with the profile's
 `CODEX_HOME` when it has something like that to move. If it finds one, it refuses and changes
-nothing. `--force` goes ahead anyway: `clausona repair <profile> --force`,
+nothing. On macOS, where that look asks `pgrep` and `ps`, a look they don't answer within 10
+seconds refuses the same way and says the check timed out, since Codex may be running. Run it
+again. `--force` goes ahead anyway: `clausona repair <profile> --force`,
 `clausona config <profile> --merge-sessions --force`, `clausona init --auto --force`.
 
 ## Data Storage
