@@ -567,9 +567,9 @@ function loadedLines(inv: Inventory, row: ScopeRow, project: string | undefined)
     return [{ label: "Loaded", text, tone: "muted" }];
   }
   if (state.value === "off") {
-    if (state.setBy?.key !== STASH_KEY && untrustedHook(inv, item)) {
-      const text = "off: Codex runs a project's hooks only once it trusts the project";
-      return [{ label: "Loaded", text, tone: "warning" }];
+    const untrusted = UNTRUSTED_OFF[item.kind];
+    if (state.setBy?.key !== STASH_KEY && untrusted !== undefined && untrustedOwn(inv, item)) {
+      return [{ label: "Loaded", text: untrusted, tone: "warning" }];
     }
     if (!state.setBy) return [{ label: "Loaded", text: "off: no settings file turns it on", tone: "warning" }];
     if (state.setBy.key === STASH_KEY) {
@@ -795,25 +795,41 @@ function mcpLines(inv: Inventory, row: ScopeRow, project: string | undefined): D
 }
 
 /**
- * Why a Codex server's switch in the project it is read in does not count: Codex reads a
- * project's `.codex/` only once it trusts the project. Said only where that folder names the
- * server, so the state shown would differ if Codex read it.
+ * Why a Codex server, or its switch, in the project it is read in does not count: Codex reads a
+ * project's `.codex/` only once it trusts the project. Said only where that folder defines the
+ * server or names it, so the state shown would differ if Codex read it.
  */
 function trustLines(inv: Inventory, row: ScopeRow, project: string | undefined): DetailLine[] {
   const here = viewFrom(firstOf(row), project);
   if (here === undefined || codexTrusted(inv, here)) return [];
-  const ignored = inv.facts.codexMcpEnabled.some(
-    (entry) => entry.project !== undefined && samePath(entry.project, here) && entry.name === row.name,
-  );
+  const ignored =
+    untrustedOwn(inv, firstOf(row)) ||
+    inv.facts.codexMcpEnabled.some(
+      (entry) => entry.project !== undefined && samePath(entry.project, here) && entry.name === row.name,
+    );
   return ignored ? [{ label: "Trust", text: CODEX_UNTRUSTED, tone: "warning" }] : [];
 }
 
 const CODEX_UNTRUSTED = "Codex does not trust this project, so it ignores its .codex folder.";
 
-/** Whether an item is a Codex project's own hook, in a project Codex does not trust, so does not run. */
-function untrustedHook(inv: Inventory, item: Extension): boolean {
+/** Why an untrusted project's own hook or server does not load, by its kind. */
+const UNTRUSTED_OFF: Partial<Record<Extension["kind"], string>> = {
+  hook: "off: Codex runs a project's hooks only once it trusts the project",
+  mcp: "off: Codex starts a project's servers only once it trusts the project",
+};
+
+/**
+ * Whether an item is a Codex project's own hook or server, in a project Codex does not trust, so
+ * does not load.
+ */
+function untrustedOwn(inv: Inventory, item: Extension): boolean {
   const loc = item.location;
-  return item.kind === "hook" && loc.tool === "codex" && loc.scope === "project" && !codexTrusted(inv, loc.project);
+  return (
+    (item.kind === "hook" || item.kind === "mcp") &&
+    loc.tool === "codex" &&
+    loc.scope === "project" &&
+    !codexTrusted(inv, loc.project)
+  );
 }
 
 function hookLines(inv: Inventory, row: ScopeRow, project: string | undefined): DetailLine[] {
@@ -824,7 +840,7 @@ function hookLines(inv: Inventory, row: ScopeRow, project: string | undefined): 
   lines.push({ label: "File", text: tilde(item.location.file, inv.homeDir) });
   // A plugin's hook is off with its plugin: say where, as for any item that is off.
   if (stateHere(inv, item, project).value !== "on" || item.codexError) lines.push(...loadedLines(inv, row, project));
-  if (untrustedHook(inv, item)) lines.push({ label: "Trust", text: CODEX_UNTRUSTED, tone: "warning" });
+  if (untrustedOwn(inv, item)) lines.push({ label: "Trust", text: CODEX_UNTRUSTED, tone: "warning" });
   return lines;
 }
 

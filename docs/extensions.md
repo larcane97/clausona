@@ -261,7 +261,10 @@ The switches are read from these places:
   - clausona compares `${VAR}` in an entry or a config as written, where Claude Code expands it.
 - Codex skills: `[[skills.config]]` in Codex's `config.toml`, by name or by path. A path names
   the skill whether it goes through a link or not, as Codex reads it.
-- Codex MCP servers: `mcp_servers.<name>.enabled` in Codex's or the project's `config.toml`.
+- Codex MCP servers: `mcp_servers.<name>.enabled` in Codex's or the project's `config.toml`. A
+  server a project's `config.toml` defines is `off` while Codex does not trust the project, as
+  Codex leaves that file out: a same-name server of your own loads there instead. Its details
+  say so, with the `Trust` line a switch there gets.
 - Codex plugins and what they bring: a `[plugins."<plugin>@<marketplace>"]` table in Codex's or
   the project's `config.toml` turns a plugin on, and `enabled = false` in it turns it off. A
   plugin no table names is off. A plugin's skill is switched by its full name in

@@ -991,6 +991,34 @@ describe("Codex hooks and Codex's trust", () => {
     expect(on).toContain("already in its file: Codex runs it once you trust it with /hooks");
   });
 
+  it("lists the servers a project Codex does not trust defines as off there, out of Loaded", async () => {
+    const { h, app, web } = seed();
+    h.write(
+      ".codex/config.toml",
+      `[projects.${JSON.stringify(app)}]\ntrust_level = "trusted"\n\n[projects.${JSON.stringify(web)}]\ntrust_level = "untrusted"\n\n[mcp_servers.shared]\ncommand = "user-shared"\n`,
+    );
+    const servers = (d: string) =>
+      `[mcp_servers.${d}-srv]\ncommand = "${d}-srv"\n\n[mcp_servers.shared]\ncommand = "${d}-shared"\n`;
+    h.write("repos/app/.codex/config.toml", servers("app"));
+    h.write("repos/web/.codex/config.toml", servers("web"));
+    // What Codex 0.159.3's config/read gave in web: the user's shared alone.
+    const project = JSON.parse(await run(h, web, "mcp", ["ls", "--tool", "codex", "--scope", "project", "--json"]));
+    expect(
+      project.items.map((i: { name: string; state: string; tags: string[] }) => [i.name, i.state, i.tags]),
+    ).toEqual([
+      ["shared", "off", ["off"]],
+      ["web-srv", "off", ["off"]],
+    ]);
+    const loaded = JSON.parse(await run(h, web, "mcp", ["ls", "--tool", "codex", "--json"]));
+    expect(loaded.items.map((i: { name: string; scope: string }) => [i.name, i.scope])).toEqual([["shared", "global"]]);
+    const shown = await run(h, web, "mcp", ["show", "web-srv"]);
+    expect(shown).toMatch(/^Loaded\s+off: Codex starts a project's servers only once it trusts the project$/m);
+    expect(shown).toMatch(/^Trust\s+Codex does not trust this project, so it ignores its \.codex folder\.$/m);
+    // In app, which Codex trusts, app's own load.
+    const own = JSON.parse(await run(h, app, "mcp", ["ls", "--tool", "codex", "--scope", "project", "--json"]));
+    expect(own.items.map((i: { state: string }) => i.state)).toEqual(["on", "on"]);
+  });
+
   it("lists the hooks of a project Codex does not trust as off there, and says it is the trust", async () => {
     const { h, app, web } = seed();
     const stop = (command: string) => ({ hooks: { Stop: [{ hooks: [{ type: "command", command }] }] } });

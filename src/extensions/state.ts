@@ -393,10 +393,26 @@ export function codexTrusted(inv: Inventory, project: string | undefined): boole
 }
 
 /**
+ * The off a project's own Codex hook or server is in while Codex does not trust the project:
+ * Codex 0.159.3 then leaves the project's `.codex` folder out, its hooks and its config.toml's
+ * servers with it. `setBy` names the project's `trust_level` in the user config.toml.
+ */
+function codexUntrustedOff(inv: Inventory, item: Extension): EffectiveState | undefined {
+  const own = item.location.scope === "project" ? item.location.project : undefined;
+  if (own === undefined || codexTrusted(inv, own)) return undefined;
+  const config = inv.places.codexConfig;
+  const key = `projects.${JSON.stringify(own)}.trust_level`;
+  return config === undefined ? { value: "off" } : { value: "off", setBy: { file: config, key } };
+}
+
+/**
  * The user's `mcp_servers.<name>.enabled`, or the project's when Codex trusts the project; for a
- * plugin's server, its plugin's state, then `plugins."<id>".mcp_servers.<name>.enabled`.
+ * plugin's server, its plugin's state, then `plugins."<id>".mcp_servers.<name>.enabled`. A server
+ * a project defines is off while Codex does not trust the project (codexUntrustedOff).
  */
 function codexMcpState(inv: Inventory, item: Extension, project: string | undefined): EffectiveState {
+  const untrusted = codexUntrustedOff(inv, item);
+  if (untrusted) return untrusted;
   const plugin = item.location.scope === "plugin" ? item.location.plugin : undefined;
   if (plugin !== undefined) {
     // A plugin's server is switched under the plugin's table, never by a user server's name.
@@ -503,14 +519,8 @@ export function stateOf(inv: Inventory, item: Extension, project?: string, profi
  * no longer matches when the hook changed since.
  */
 function codexHookState(inv: Inventory, item: Extension, project: string | undefined): EffectiveState {
-  const off = codexPluginOff(inv, item, project);
+  const off = codexPluginOff(inv, item, project) ?? codexUntrustedOff(inv, item);
   if (off) return off;
-  const own = item.location.scope === "project" ? item.location.project : undefined;
-  if (own !== undefined && !codexTrusted(inv, own)) {
-    const config = inv.places.codexConfig;
-    const key = `projects.${JSON.stringify(own)}.trust_level`;
-    return config === undefined ? { value: "off" } : { value: "off", setBy: { file: config, key } };
-  }
   const trust = inv.facts.codexHookTrust.find((t) => t.id === item.id);
   if (!trust || trust.builtin) return { value: "on" };
   const keyed = trust.keys.map((key) => ({ key, state: inv.facts.codexHookStates.find((s) => s.key === key) }));

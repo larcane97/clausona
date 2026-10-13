@@ -632,6 +632,30 @@ describe("Codex", () => {
     expect(stateOf(i, exa, Q).value).toBe("off");
   });
 
+  it("reads a server an untrusted project defines as off there, as Codex leaves out the project's config", () => {
+    const own = (project: string): Extension => ({
+      ...ext("mcp", "db", { tool: "codex", scope: "project", project, file: `${project}/.codex/config.toml` }),
+      id: `mcp:codex:project:${project}:db`,
+    });
+    const [app, web, lab] = [P, Q, "/repos/lab"].map(own) as [Extension, Extension, Extension];
+    const i: Inventory = {
+      // web is marked untrusted; lab has no record at all.
+      ...inv([app, web, lab], {
+        codexTrust: [
+          { project: P, trusted: true },
+          { project: Q, trusted: false },
+        ],
+      }),
+      places: { claudeJson: {}, stashDir: "/s", codexConfig: "/c/config.toml" },
+    };
+    expect(stateOf(i, app, P)).toEqual({ value: "on" });
+    expect(stateOf(i, web, Q)).toEqual({
+      value: "off",
+      setBy: { file: "/c/config.toml", key: `projects."${Q}".trust_level` },
+    });
+    expect(stateOf(i, lab, "/repos/lab").value).toBe("off");
+  });
+
   it("trusts a project whose recorded key is the same path and says trusted", () => {
     const i = inv([], {
       codexTrust: [
