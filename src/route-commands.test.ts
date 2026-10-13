@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runCommand } from "./commands.js";
 import { RoutesFileError, routesPaths } from "./core/routes-store.js";
+import type { ExitError } from "./extensions/exit-error.js";
 import { reportError } from "./index.js";
 import { stripAnsi } from "./lib/cli-style.js";
 import type { RouteIo } from "./lib/route-io.js";
@@ -58,6 +59,11 @@ function setup(quotas: Record<string, QuotaSnapshot> = QUOTAS) {
     },
     cwd: dir,
     home: dir,
+    sleep: async () => {
+      throw new Error("slept without --wait");
+    },
+    onInterrupt: () => () => {},
+    progress: () => {},
   };
   const io: RouteIo = { interactive: false, ask: async () => null, say: () => {}, confirm: async () => false };
   const run = async (...args: string[]) => stripAnsi(await runRouteCommand(args, io, deps));
@@ -1082,6 +1088,74 @@ describe("route explain and pick", () => {
     expect(await run("pick", "main", "--model", "opus")).toBe("claude:b");
     expect(await run("pick", "main")).toBe("claude:a");
     await expect(run("pick", "main", "--model=")).rejects.toThrow("--model needs a value.");
+  });
+
+  it("with --wait, says what it waits for on stderr and prints only the pick on stdout", async () => {
+    let now = NOW;
+    const full = { usedPercent: 100, resetsAt: new Date(NOW + 10 * 60_000).toISOString() };
+    const said: string[] = [];
+    const { deps, io } = setup();
+    Object.assign(deps, {
+      collectQuotas: async () =>
+        now < NOW + 10 * 60_000
+          ? {
+              "claude:a": { ...snap(100, 0), session: full },
+              "claude:b": { ...snap(100, 0), session: full },
+              "claude:c": { ...snap(100, 0), session: full },
+            }
+          : QUOTAS,
+      clock: () => now,
+      sleep: async (ms: number) => {
+        now += ms;
+      },
+      progress: (text: string) => said.push(stripAnsi(text)),
+    });
+    const run = async (...args: string[]) => stripAnsi(await runRouteCommand(args, io, deps));
+    await run("add", "main");
+    expect(JSON.parse(await run("pick", "main", "--wait", "--json"))).toMatchObject({ profile: "claude:a" });
+    expect(said).toEqual([expect.stringMatching(/^ {2}waiting until \d\d:\d\d for claude:a \(5H resets\) …$/)]);
+
+    // Past the cap, exit 75 at once, with the JSON pick prints for nobody.
+    now = NOW - 60 * 60_000;
+    const error = (await run("pick", "main", "--wait=30m", "--json").catch((e: unknown) => e)) as ExitError;
+    expect(error.code).toBe(75);
+    expect(JSON.parse(error.stdout ?? "")).toMatchObject({ profile: null, soonest: { id: "claude:a" } });
+    expect(said).toHaveLength(1);
+  });
+
+  it("refuses --wait on explain, a cap after a space, and a cap it cannot read", async () => {
+    const { run } = setup();
+    await run("add", "main");
+    await expect(run("explain", "main", "--wait")).rejects.toThrow("Unknown option: --wait");
+    await expect(run("pick", "--wait", "30m")).rejects.toThrow("Give --wait its cap after =, as in --wait=30m.");
+    await expect(run("pick", "main", "--wait=2d")).rejects.toThrow("--wait takes a duration such as 30m, 2h or 1h30m");
+  });
+
+  it("stops a wait on Ctrl-C with exit code 130, as JSON when asked", async () => {
+    const full = { usedPercent: 100, resetsAt: new Date(NOW + 10 * 60_000).toISOString() };
+    const { deps, io } = setup({ "claude:a": { ...snap(100, 0), session: full } });
+    let interrupt = () => {};
+    Object.assign(deps, {
+      onInterrupt: (handler: () => void) => {
+        interrupt = handler;
+        return () => {};
+      },
+      sleep: async () => interrupt(),
+    });
+    await runRouteCommand(["add", "main", "--from", "a"], io, deps);
+    const error = (await runRouteCommand(["pick", "main", "--wait", "--json"], io, deps).catch(
+      (e: unknown) => e,
+    )) as ExitError;
+    expect(error.code).toBe(130);
+    expect(JSON.parse(error.stdout ?? "")).toEqual({
+      version: 1,
+      error: "failed",
+      message: "Stopped waiting. No account was picked.",
+    });
+    const plain = await runRouteCommand(["pick", "main", "--wait"], io, deps).catch((e: unknown) => e);
+    const err: string[] = [];
+    expect(reportError(plain, { write: (chunk: string) => err.push(chunk) })).toBe(130);
+    expect(stripAnsi(err.join(""))).toBe("  ✘ Stopped waiting. No account was picked.\n");
   });
 
   it("fails with exit code 75 when nobody can be picked, as JSON when asked", async () => {

@@ -92,12 +92,15 @@ import {
   routesFor,
   UnknownRouteError,
 } from "./lib/route-service.js";
+import { rankWaiting, WaitInterrupted } from "./lib/route-wait.js";
 import {
   parseModel,
   parsePatterns,
   parseRouteTool,
+  parseWait,
   ROUTE_FIELD_OPTIONS,
   readOptions,
+  refuseSpacedWait,
   toRoutingOptions,
 } from "./lib/run-args.js";
 import { noRegistryError } from "./lib/service.js";
@@ -795,18 +798,28 @@ type RankingArgs = {
   resume: boolean;
   /** The model a run would name: its own limit counts, as in that run. */
   model?: string;
+  /** pick's `--wait` cap in ms. */
+  waitMs?: number;
 };
 
 function readRankingArgs(sub: "explain" | "pick", args: string[]): RankingArgs {
   return asUsage(() => {
+    // pick takes --wait bare or with its cap after `=`, as run does; explain picks nothing to wait for.
+    const wait = sub === "pick" ? ["--wait"] : [];
     const read = readOptions(
       args,
-      { values: ["--tool", "--model", ...ROUTE_FIELD_OPTIONS], flags: ["--json", "--resume"] },
+      { values: ["--tool", "--model", ...ROUTE_FIELD_OPTIONS, ...wait], flags: ["--json", "--resume", ...wait] },
       `route ${sub}`,
     );
+    const at = args.indexOf("--wait");
+    if (sub === "pick" && at !== -1) refuseSpacedWait(args[at + 1]);
+    if (read.flags.has("--wait") && read.values.has("--wait")) {
+      throw new Error("--wait was given more than once. Pass it at most once.");
+    }
     const [name, ...extra] = read.positionals;
     if (extra.length) throw new Error(`${usage(sub)}\nRun \`clausona route ${sub} --help\` for usage.`);
     const model = read.values.get("--model");
+    const waits = read.flags.has("--wait") || read.values.has("--wait");
     return {
       name,
       overrides: toRoutingOptions(read.values),
@@ -814,6 +827,7 @@ function readRankingArgs(sub: "explain" | "pick", args: string[]): RankingArgs {
       json: read.flags.has("--json"),
       resume: read.flags.has("--resume"),
       ...(model === undefined ? {} : { model: parseModel(model) }),
+      ...(waits ? { waitMs: parseWait(read.values.get("--wait")) } : {}),
     };
   });
 }
@@ -913,12 +927,22 @@ async function explainHere({ tool, json, resume, model }: RankingArgs, deps: Rou
 
 async function pickRoute(args: string[], deps: RouteDeps): Promise<string> {
   const parsed = readRankingArgs("pick", args);
-  const { overrides, json, resume, model } = parsed;
+  const { overrides, json, resume, model, waitMs } = parsed;
   const { resolved } = await resolveForRanking("pick", parsed, deps);
-  const ranking = await rankRouteNow(resolved, deps, { resume, record: true, model });
+  // While it waits, pick says so on stderr: stdout keeps only the id or the JSON.
+  const { ranking, gaveUp } =
+    waitMs === undefined
+      ? { ranking: await rankRouteNow(resolved, deps, { resume, record: true, model }), gaveUp: undefined }
+      : await rankWaiting(resolved, deps, { resume, model, capMs: waitMs });
   if (ranking.outcome.kind === "none") {
     throw new NoAccountError(
-      renderNoAccount(resolved.name, ranking, { now: deps.clock(), onlyTool: resolved.onlyTool, overrides, resume }),
+      renderNoAccount(resolved.name, ranking, {
+        now: deps.clock(),
+        onlyTool: resolved.onlyTool,
+        overrides,
+        resume,
+        ...(waitMs === undefined ? {} : { wait: { capMs: waitMs, gaveUp } }),
+      }),
       json ? JSON.stringify(pickJson(resolved.name, ranking), null, 2) : undefined,
     );
   }
@@ -928,11 +952,12 @@ async function pickRoute(args: string[], deps: RouteDeps): Promise<string> {
 /**
  * What `--json` calls a failure (withJsonErrors, which the Extensions commands use): bad usage
  * `usage`, an unknown route `not-found`, and a routes.json or route that cannot be used `failed`,
- * with the file and its problems. Exit 75 keeps the JSON `pick` prints; each keeps its exit code.
- * Anything else is `failed`.
+ * with the file and its problems. Exit 75 keeps the JSON `pick` prints, and a wait stopped by
+ * Ctrl-C (`failed`) its 130; each keeps its exit code. Anything else is `failed`.
  */
 function asJsonError(error: unknown): unknown {
   if (error instanceof NoAccountError) return new ExitError(error.message, error.exitCode, error.stdout, "failed");
+  if (error instanceof WaitInterrupted) return new ExitError(error.message, error.exitCode, undefined, "failed");
   if (error instanceof RouteUsageError) return new ExitError(error.message, 1, undefined, "usage");
   if (error instanceof UnknownRouteError) return new ExitError(error.message, 1, undefined, "not-found");
   if (error instanceof RoutesFileError) {

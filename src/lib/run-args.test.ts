@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_WAIT_MS,
   isResumeRun,
   modelOf,
   parseModel,
   parseRouteTool,
+  parseWait,
   ROUTE_FIELD_OPTIONS,
   readOptions,
   readRunArgs,
@@ -117,6 +119,55 @@ describe("readRunArgs", () => {
       expect(message).not.toContain(key);
       expect(message).not.toContain("sk-");
     }
+  });
+});
+
+describe("--wait", () => {
+  it.each([
+    ["30m", 30],
+    ["2h", 120],
+    ["1h30m", 90],
+    ["90m", 90],
+  ])("takes %s as %d minutes", (value, minutes) => {
+    expect(parseWait(value)).toBe(minutes * 60_000);
+  });
+
+  it("is five hours with no cap given", () => {
+    expect(parseWait(undefined)).toBe(DEFAULT_WAIT_MS);
+    expect(DEFAULT_WAIT_MS).toBe(5 * 60 * 60_000);
+  });
+
+  it.each(["", "0m", "30", "30s", "1d", "2H", "1.5h", "h", "-5m", "30m2h"])("refuses %j, naming the forms", (value) => {
+    expect(() => parseWait(value)).toThrow("--wait takes a duration such as 30m, 2h or 1h30m: --wait=30m.");
+  });
+
+  it("is read by a run, bare or with its cap after =, and never takes the tool's next argument", () => {
+    expect(readRunArgs(["claude", "--wait", "-p", "hi"])).toEqual({
+      tool: "claude",
+      options: {},
+      waitMs: DEFAULT_WAIT_MS,
+      toolArgs: ["-p", "hi"],
+      sawSeparator: false,
+    });
+    expect(readRunArgs(["--route", "main", "--wait=1h30m", "fix it"])).toMatchObject({
+      options: { route: "main" },
+      waitMs: 90 * 60_000,
+      toolArgs: ["fix it"],
+    });
+    expect(readRunArgs(["--route", "main"]).waitMs).toBeUndefined();
+    // After the tool's part has begun, --wait is the tool's.
+    expect(readRunArgs(["--route", "main", "-p", "--wait"])).toMatchObject({ toolArgs: ["-p", "--wait"] });
+  });
+
+  it("refuses a cap given after a space, and --wait twice", () => {
+    for (const next of ["30m", "2h", "90"]) {
+      expect(() => readRunArgs(["--route", "main", "--wait", next])).toThrow(
+        "Give --wait its cap after =, as in --wait=30m.",
+      );
+    }
+    expect(() => readRunArgs(["--wait", "--route", "main", "--wait=1h"])).toThrow(
+      "--wait was given more than once. Pass it at most once.",
+    );
   });
 });
 

@@ -28,6 +28,8 @@ const isRoutingFlag = (flag: string): flag is RoutingFlag =>
 export type RunArgs = {
   tool?: ToolName;
   options: RoutingOptions;
+  /** `--wait`'s cap in ms, when the run waits for an account to come free. */
+  waitMs?: number;
   toolArgs: string[];
   /** Whether a `--` ended clausona's part, so that what follows is the tool's whatever it looks like. */
   sawSeparator: boolean;
@@ -53,6 +55,31 @@ function parsePercent(flag: string, value: string): number {
 function parseStrategy(value: string): Strategy {
   if (!STRATEGIES.includes(value as Strategy)) throw new Error(`--strategy must be one of ${STRATEGIES.join(", ")}.`);
   return value as Strategy;
+}
+
+/** How long `--wait` waits for a reset when no cap is given. */
+export const DEFAULT_WAIT_MS = 5 * 60 * 60 * 1000;
+
+/**
+ * `--wait`'s cap: `30m`, `2h` or `1h30m`, or the default when none is given. Anything else is
+ * refused with the forms it takes, the value not echoed.
+ */
+export function parseWait(value: string | undefined): number {
+  if (value === undefined) return DEFAULT_WAIT_MS;
+  const match = /^(?:(\d+)h)?(?:(\d+)m)?$/.exec(value);
+  const ms = match ? (Number(match[1] ?? 0) * 60 + Number(match[2] ?? 0)) * 60_000 : 0;
+  if (ms <= 0) throw new Error("--wait takes a duration such as 30m, 2h or 1h30m: --wait=30m.");
+  return ms;
+}
+
+/**
+ * `--wait`'s cap is given after `=`: `--wait 30m` would hand 30m to the tool as its prompt, or to
+ * `route pick` as the route's name. Refused when the next argument looks like a duration.
+ */
+export function refuseSpacedWait(next: string | undefined): void {
+  if (next !== undefined && /^\d[\da-z]*$/i.test(next)) {
+    throw new Error("Give --wait its cap after =, as in --wait=30m.");
+  }
 }
 
 /** `--tool` of the `route` subcommands: claude, codex, or all for a route over both. */
@@ -141,6 +168,7 @@ function readValue(values: Map<string, string>, args: string[], i: number): numb
 export function readRunArgs(args: string[]): RunArgs {
   const values = new Map<string, string>();
   let tool: ToolName | undefined;
+  let waitMs: number | undefined;
   let sawSeparator = false;
   let i = 0;
   for (; i < args.length; i++) {
@@ -154,10 +182,24 @@ export function readRunArgs(args: string[]): RunArgs {
       tool = arg;
       continue;
     }
-    if (!isRoutingFlag(splitOption(arg)[0])) break;
+    const [flag, inline] = splitOption(arg);
+    // `--wait` takes its cap after `=` only, so a bare one never takes the tool's first argument.
+    if (flag === "--wait") {
+      if (waitMs !== undefined) throw new Error("--wait was given more than once. Pass it at most once.");
+      if (inline === undefined) refuseSpacedWait(args[i + 1]);
+      waitMs = parseWait(inline);
+      continue;
+    }
+    if (!isRoutingFlag(flag)) break;
     i = readValue(values, args, i);
   }
-  return { ...(tool ? { tool } : {}), options: toRoutingOptions(values), toolArgs: args.slice(i), sawSeparator };
+  return {
+    ...(tool ? { tool } : {}),
+    options: toRoutingOptions(values),
+    ...(waitMs === undefined ? {} : { waitMs }),
+    toolArgs: args.slice(i),
+    sawSeparator,
+  };
 }
 
 export type OptionSpec = { values: readonly string[]; flags: readonly string[] };

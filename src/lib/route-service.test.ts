@@ -71,6 +71,11 @@ function deps(quotas: Record<string, QuotaSnapshot>): RouteDeps & { asked: strin
     },
     cwd: dir,
     home: dir,
+    sleep: async () => {
+      throw new Error("slept without --wait");
+    },
+    onInterrupt: () => () => {},
+    progress: () => {},
   };
 }
 

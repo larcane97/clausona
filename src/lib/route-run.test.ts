@@ -58,6 +58,11 @@ function setup(
     editText: async () => "",
     cwd,
     home: dir,
+    sleep: async () => {
+      throw new Error("slept without --wait");
+    },
+    onInterrupt: () => () => {},
+    progress: () => {},
   };
   const answers = [...(options.answers ?? [])];
   const notes: string[] = [];
@@ -177,6 +182,44 @@ describe("runRouted", () => {
     await runRouted(["--route", "main", "--model", "sonnet"], s.launch, s.io, s.deps);
     await runRouted(["--route", "main", "-p", "hi"], s.launch, s.io, s.deps);
     expect(s.launches.slice(1).map(([id]) => id)).toEqual(["claude:solo", "claude:solo"]);
+  });
+
+  it("with --wait, waits for a reset within the cap and runs, and exits 75 at once past it", async () => {
+    let now = NOW;
+    const reset = new Date(NOW + 30_000).toISOString();
+    const quotas = (): Record<string, QuotaSnapshot> => {
+      const full = now < NOW + 30_000;
+      const window = { usedPercent: full ? 100 : 0, resetsAt: full ? reset : null };
+      return { "claude:a": { ...snap(0), session: window } };
+    };
+    const s = setup({ routes: { version: 1, routes: { main: { tool: "claude", from: ["a"] } } } });
+    const sleeps: number[] = [];
+    const said: string[] = [];
+    Object.assign(s.deps, {
+      collectQuotas: async () => quotas(),
+      clock: () => now,
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+        now += ms;
+      },
+      progress: (text: string) => said.push(stripAnsi(text)),
+    });
+    expect(await runRouted(["--route", "main", "--wait=1m", "-p", "hi"], s.launch, s.io, s.deps)).toBe(0);
+    expect(sleeps).toEqual([60_000]);
+    expect(said).toEqual([expect.stringMatching(/^ {2}waiting until \d\d:\d\d for claude:a \(5H resets\) …$/)]);
+    expect(s.launches).toEqual([["claude:a", ["-p", "hi"]]]);
+
+    // The same reset 2 minutes away is past a 1m cap: no wait, and the message says so.
+    now = NOW - 90_000;
+    const error = (await runRouted(["--route", "main", "--wait=1m"], s.launch, s.io, s.deps).catch(
+      (e: unknown) => e,
+    )) as NoAccountError;
+    expect(error).toBeInstanceOf(NoAccountError);
+    expect(error.exitCode).toBe(75);
+    expect(stripAnsi(error.message).replace(/\s+/g, " ")).toContain(
+      "Nothing comes free within the 1m wait. Wait longer with --wait=1h, run again after 2m, or see everything with: clausona route explain main",
+    );
+    expect([sleeps, s.launches.length]).toEqual([[60_000], 1]);
   });
 
   it("keeps a resumed run to profiles that share sessions", async () => {

@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { collectQuotas, type QuotaTarget } from "../core/quota-store.js";
 import {
@@ -48,9 +49,16 @@ import { loadRegistry, noRegistryError } from "./service.js";
 /** What routing reaches outside itself, injectable for tests. */
 export type RouteDeps = {
   loadRegistry: () => Promise<Registry | null>;
-  collectQuotas: (targets: QuotaTarget[]) => Promise<Record<string, QuotaSnapshot>>;
+  /** With `refresh`, a cached reading is fetched again, unless the tool's endpoint is cooling down. */
+  collectQuotas: (targets: QuotaTarget[], options?: { refresh?: boolean }) => Promise<Record<string, QuotaSnapshot>>;
   paths: RoutesPaths;
   clock: () => number;
+  /** Resolves after `ms`, or as soon as `signal` aborts (`--wait`). */
+  sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** Calls `handler` on Ctrl-C until the function it returns is called (`--wait`). */
+  onInterrupt: (handler: () => void) => () => void;
+  /** Where a waiting command says what it waits for: stderr, so that stdout keeps only its answer. */
+  progress: (text: string) => void;
   /** Opens text in the user's editor and resolves to what was saved (route edit). */
   editText: (initial: string, fileName: string) => Promise<string>;
   /** The directory a run starts in, which picks its dir rule. */
@@ -62,9 +70,20 @@ export type RouteDeps = {
 export function defaultRouteDeps(): RouteDeps {
   return {
     loadRegistry,
-    collectQuotas: (targets) => collectQuotas(targets),
+    collectQuotas: (targets, options) => collectQuotas(targets, { refresh: options?.refresh }),
     paths: routesPaths(),
     clock: () => Date.now(),
+    // Aborted, the timer rejects; a wait checks the signal itself, so that is not an error here.
+    sleep: (ms, signal) => delay(ms, undefined, { signal }).catch(() => {}),
+    onInterrupt: (handler) => {
+      process.on("SIGINT", handler);
+      return () => {
+        process.off("SIGINT", handler);
+      };
+    },
+    progress: (text) => {
+      process.stderr.write(`${text}\n`);
+    },
     editText: editInEditor,
     cwd: currentDir(),
     home: homedir(),
@@ -322,19 +341,23 @@ export function quotaTargets(route: Route, members: Member[], resume: boolean, o
 
 /**
  * Ranks a route on quota read now. `record` makes it a pick, under the pick-record lock; `model`
- * is the model the run names, whose own limit then counts.
+ * is the model the run names, whose own limit then counts. `refresh` reads quota again however
+ * fresh the cache is. Once `signal` has aborted, the pick throws its reason and records nothing.
  */
 export async function rankRouteNow(
   resolved: Pick<ResolvedRoute, "route" | "onlyTool">,
   deps: RouteDeps,
-  options: { resume: boolean; record: boolean; model?: string },
+  options: { resume: boolean; record: boolean; model?: string; refresh?: boolean; signal?: AbortSignal },
 ): Promise<Ranking> {
   const registry = await deps.loadRegistry();
   if (!registry) throw await noRegistryError();
   const { route, onlyTool } = resolved;
   const members = membersOf(registry, route.tool);
   // Read first: it can take seconds, and the pick-record lock is held only for the pick itself.
-  const quotas = await deps.collectQuotas(quotaTargets(route, members, options.resume, onlyTool));
+  const quotas = await deps.collectQuotas(
+    quotaTargets(route, members, options.resume, onlyTool),
+    options.refresh ? { refresh: true } : undefined,
+  );
   const rank = (lastPicked: Record<string, string>) =>
     rankRoute({
       route,
@@ -349,6 +372,8 @@ export async function rankRouteNow(
   if (!options.record) return rank(await readPicks(deps.paths));
   return pickWithRecord(
     (lastPicked) => {
+      // Ctrl-C while the quota was read: nothing is picked or recorded, and the lock is let go.
+      options.signal?.throwIfAborted();
       const ranking = rank(lastPicked);
       return { result: ranking, picked: ranking.outcome.kind === "picked" ? ranking.outcome.id : undefined };
     },

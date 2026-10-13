@@ -32,6 +32,7 @@ import {
   styledQuota,
   wholeQuotaPercent,
 } from "./format.js";
+import type { GaveUp } from "./route-wait.js";
 
 /**
  * Text and JSON for routing. Pure: `now` and the terminal width come in, nothing is read. The
@@ -889,6 +890,31 @@ export function renderNote(name: string | undefined, ranking: Ranking, resolvedB
   return `  ${accent("▸")} ${bold(outcome.id)}  ${dim(parts.join(", "))}`;
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** A moment in local time: `14:05`, or `Oct 15 14:05` when it is not on the same day as `now`. */
+export function clockTime(at: number, now: number): string {
+  const when = new Date(at);
+  const today = new Date(now);
+  const time = `${String(when.getHours()).padStart(2, "0")}:${String(when.getMinutes()).padStart(2, "0")}`;
+  const sameDay =
+    when.getFullYear() === today.getFullYear() &&
+    when.getMonth() === today.getMonth() &&
+    when.getDate() === today.getDate();
+  return sameDay ? time : `${MONTHS[when.getMonth()]} ${when.getDate()} ${time}`;
+}
+
+/**
+ * What a waiting run or pick says on stderr: until when, for which account, and the window whose
+ * reset it waits for. Without a window, the account reads as full after its reset, and the wait
+ * is for a new reading.
+ */
+export function renderWaiting(id: string, window: string | undefined, times: { until: number; now: number }): string {
+  const until = clockTime(times.until, times.now);
+  const why = window ? `(${window} resets)` : "(for a new quota reading)";
+  return `  ${dim(`waiting until ${until} for`)} ${bold(id)} ${dim(`${why} …`)}`;
+}
+
 /** A rule a run passed over: which rule, and why. */
 export function skippedText(skip: SkippedRule): string {
   const rule = skip.dir === undefined ? `the ${skip.tool} default` : `the dir rule for ${skip.dir}`;
@@ -943,17 +969,33 @@ function freeAgainCell(row: Row, limit: number, at: string | null, now: number):
   return [[`${resetsIn(at, now)} (${resettingWindow(row, limit, at)} resets)`, secondary]];
 }
 
+/** A `--wait` cap as it is given: `30m`, `2h`, `1h30m`. */
+function capText(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  const hours = Math.floor(minutes / 60);
+  return `${hours ? `${hours}h` : ""}${minutes % 60 || !hours ? `${minutes % 60}m` : ""}`;
+}
+
 /**
  * Exit 75's message: who is held back and until when, and what to do. NoAccountError prints it
  * after a `✘`, on stderr, so its first line is the headline and the rest is indented under it.
  * `onlyTool` is the tool a run narrowed an `all` route to: the message is about that tool's
  * accounts only, and so is the explain it points to. `overrides` are the field options the run
  * was given, and `resume` whether it resumed: the explain it points to ranks with them too.
+ * `wait` is a `--wait` that gave up, with its cap and why: the soonest reset is past the cap, or
+ * none is known.
  */
 export function renderNoAccount(
   name: string | undefined,
   ranking: Ranking,
-  options: { width?: number; now?: number; onlyTool?: ToolName; overrides?: RouteOverrides; resume?: boolean } = {},
+  options: {
+    width?: number;
+    now?: number;
+    onlyTool?: ToolName;
+    overrides?: RouteOverrides;
+    resume?: boolean;
+    wait?: { capMs: number; gaveUp?: GaveUp };
+  } = {},
 ): string {
   const width = options.width ?? terminalWidth("stderr");
   const now = options.now ?? Date.now();
@@ -1016,12 +1058,28 @@ export function renderNoAccount(
   ]);
   const when = soonest ? formatResetIn(soonest.at, new Date(now)) : undefined;
   const again = when === "now" ? "now" : when ? `after ${unbroken(when)}` : "later";
+  const gaveUp = options.wait?.gaveUp;
+  const cap = options.wait ? capText(options.wait.capMs) : "";
+  // A wait that gave up: the soonest reset is past its cap - a longer one would reach it - or it
+  // waited the cap out on a reading that still shows the account full; or no reset is known.
+  const waitAdvice = () => {
+    if (gaveUp === "no-reset") {
+      return `No account above has a known reset time, so there is nothing to wait for. Run again later, or see everything with: ${explain}`;
+    }
+    if (!soonest || when === "now") {
+      return `The ${cap} wait ran out before a quota reading showed an account free. Run again later, or see everything with: ${explain}`;
+    }
+    const longer = `--wait=${Math.ceil((Date.parse(soonest.at) - now) / 3_600_000)}h`;
+    return `Nothing comes free within the ${cap} wait. Wait longer with ${longer}, run again ${again}, or see everything with: ${explain}`;
+  };
   // Nobody held back by a limit, only skipped members: no reset frees them, and their reasons say what will.
   const advice = nothingRead(rows)
     ? `No quota could be read for any member: check the network, or run ${unbroken("clausona list --refresh")}.`
     : held.length === 0
       ? `Each account above says why it is skipped. See everything with: ${explain}`
-      : `Run again ${again}, or see everything with: ${explain}`;
+      : gaveUp
+        ? waitAdvice()
+        : `Run again ${again}, or see everything with: ${explain}`;
   return [headline, "", ...fitTable(tables, width), "", ...wrap(advice, width, indent), ""].join("\n");
 }
 

@@ -37,6 +37,7 @@ import {
   routesFor,
   UnknownRouteError,
 } from "./route-service.js";
+import { rankWaiting } from "./route-wait.js";
 import { isResumeRun, modelOf, type RunArgs, readRunArgs } from "./run-args.js";
 import { noRegistryError } from "./service.js";
 
@@ -250,12 +251,22 @@ export async function runRouted(
   const resume = runTool ? isResumeRun(runTool, run.toolArgs) : false;
   // The model the tool is told to use; without one, no model's own limit counts.
   const model = runTool ? modelOf(runTool, run.toolArgs) : undefined;
-  const ranking = await rankRouteNow(resolved, deps, { resume, record: true, model });
+  const { waitMs } = run;
+  const { ranking, gaveUp } =
+    waitMs === undefined
+      ? { ranking: await rankRouteNow(resolved, deps, { resume, record: true, model }), gaveUp: undefined }
+      : await rankWaiting(resolved, deps, { resume, model, capMs: waitMs });
   if (ranking.outcome.kind === "none") {
     // The explain it points to ranks with the run's own options, as the run did.
     const { route: _name, ...overrides } = run.options;
     throw new NoAccountError(
-      renderNoAccount(resolved.name, ranking, { now: deps.clock(), onlyTool: resolved.onlyTool, overrides, resume }),
+      renderNoAccount(resolved.name, ranking, {
+        now: deps.clock(),
+        onlyTool: resolved.onlyTool,
+        overrides,
+        resume,
+        ...(waitMs === undefined ? {} : { wait: { capMs: waitMs, gaveUp } }),
+      }),
     );
   }
   io.say(renderNote(resolved.name, ranking, resolved.resolvedBy));
