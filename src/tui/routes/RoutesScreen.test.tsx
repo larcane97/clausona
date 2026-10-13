@@ -1169,4 +1169,38 @@ describe("ranked as a run of one model", () => {
     expect(opus.detail.some((line) => line.includes("codex:"))).toBe(false);
     expect(opus.list[2]).toMatch(/^▸ wide\s+all\s+2\/5$/);
   });
+
+  it("drops the model it ranked by once its route is removed", async () => {
+    const removed = setup({ collect: async () => OPUS });
+    await ranked(removed.instance);
+    await press(removed.instance, "m");
+    await press(removed.instance, "d");
+    await press(removed.instance, "y");
+    await until(removed.instance, (f) => panes(f).list.length === 2 && !f.includes("(y/N)"));
+    // A route of the same name, made again, is ranked as a run that names no model.
+    await press(removed.instance, "n");
+    await until(removed.instance, (f) => f.includes("New route"));
+    await press(removed.instance, "main");
+    await type(removed.instance, ENTER);
+    const again = await until(removed.instance, (f) => /▸ main/.test(f) && !f.includes("New route"));
+    expect(again).not.toContain("--model");
+    expect(panes(again).detail).toContain("Model limits: Opus, Sonnet · m to rank by one");
+  });
+
+  it("drops the model it ranked by once a refresh no longer reports it, so a later one cannot bring it back", async () => {
+    // Read with Opus, then without it, then with it again.
+    const readings = [OPUS, QUOTAS, OPUS];
+    let reads = 0;
+    const { instance, deps } = setup({ collect: async () => readings[Math.min(reads++, readings.length - 1)] });
+    await ranked(instance);
+    await press(instance, "m");
+    expect(text(instance)).toContain("ranked as --model opus");
+    await press(instance, "r");
+    await until(instance, (f) => !f.includes("--model") && !f.includes("Reading quota again"));
+    await press(instance, "r");
+    await vi.waitFor(() => expect(deps.collectQuotas).toHaveBeenCalledTimes(3));
+    const frame = await until(instance, (f) => !f.includes("Reading quota again"));
+    expect(frame).not.toContain("--model");
+    expect(panes(frame).detail).toContain("Model limits: Opus, Sonnet · m to rank by one");
+  });
 });

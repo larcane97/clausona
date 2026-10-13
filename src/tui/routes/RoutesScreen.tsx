@@ -374,6 +374,11 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   );
   const model =
     chosen && chosen.route === plain[index]?.name ? models.find((each) => each.model === chosen.model) : undefined;
+  // A choice that no longer applies - its route removed or left, or its model no longer reported
+  // after a refresh - is dropped, so that it cannot come back with a later reading.
+  useEffect(() => {
+    if (chosen && !model) setChosen(null);
+  }, [chosen, model]);
   /** Every route as the screen shows it: the selected one ranked as a run of the chosen model. */
   const entries = useMemo(
     () =>
