@@ -158,37 +158,38 @@ function rankAll(file: RoutesFile, registry: Registry | null, reading: Reading |
  */
 type ModelChoice = { label: string; model: string; tool?: ToolName };
 
+/** Whether two choices rank the same: one model, for one tool or none. */
+const sameChoice = (a: Pick<ModelChoice, "model" | "tool">, b: Pick<ModelChoice, "model" | "tool">) =>
+  a.model === b.model && a.tool === b.tool;
+
+const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
 /**
- * The models a route's accounts report a limit on, each once, in alphabetical order. The model is
- * the limit's name in lower case (`opus`, `gpt-5.3-codex-spark`), which routing matches to that
- * limit as it matches a run's. Only an account that can be ranked counts: a skipped one's limit
- * counts for nothing.
+ * The models a route's accounts report a limit on, in alphabetical order: each once, or on an `all`
+ * route once for each tool that reports it. The model is the limit's name in lower case (`opus`,
+ * `gpt-5.3-codex-spark`), which routing matches to that limit as it matches a run's. Only an
+ * account that can be ranked counts: a skipped one's limit counts for nothing.
  *
  * A run on an `all` route that names a model names its tool too, and only that tool's accounts are
- * ranked for it (`clausona run claude --route any --model opus`). So a limit only one tool's
- * accounts report ranks those accounts alone, as `route explain --tool` does.
+ * ranked for it (`clausona run claude --route any --model opus`). So each choice there ranks one
+ * tool's accounts, as `route explain --tool` does: a limit both tools reported would be two
+ * choices, since no run ranks both tools' accounts together.
  */
 function modelChoices(ranking: Ranking, quotas: Record<string, QuotaSnapshot>): ModelChoice[] {
-  const choices = new Map<string, { label: string; tools: Set<ToolName> }>();
+  const narrows = ranking.route.tool === "all";
+  const choices: ModelChoice[] = [];
   for (const row of ranking.rows) {
     if (row.skip) continue;
-    const tool = toolsOf(ranking.route.tool).find((each) => each === splitToolPrefix(row.id).prefix);
+    const prefix = splitToolPrefix(row.id).prefix;
+    const tool = narrows ? toolsOf(ranking.route.tool).find((each) => each === prefix) : undefined;
     for (const { label } of modelLimitsOf(quotas[row.id])) {
       const model = asModel(label);
-      if (model === undefined) continue;
-      const choice = choices.get(model) ?? { label, tools: new Set() };
-      if (tool) choice.tools.add(tool);
-      choices.set(model, choice);
+      if (model === undefined || choices.some((each) => sameChoice(each, { model, tool }))) continue;
+      choices.push({ label, model, ...(tool ? { tool } : {}) });
     }
   }
-  const narrows = ranking.route.tool === "all";
-  return [...choices]
-    .sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([model, { label, tools }]) => ({
-      label,
-      model,
-      ...(narrows && tools.size === 1 ? { tool: [...tools][0] } : {}),
-    }));
+  // By model, then by tool.
+  return choices.sort((a, b) => byText(a.model, b.model) || byText(a.tool ?? "", b.tool ?? ""));
 }
 
 /** A limit's name as `--model` takes it, or undefined for one it would refuse. */
@@ -316,7 +317,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   /** The ids `extra` was asked for that have not been answered yet: loading, not unreadable. */
   const [asked, setAsked] = useState<ReadonlySet<string>>(new Set());
   /** The model the selected route is ranked as (`m`): none again once another route is selected. */
-  const [chosen, setChosen] = useState<{ route: string; model: string } | null>(null);
+  const [chosen, setChosen] = useState<({ route: string } & Pick<ModelChoice, "model" | "tool">) | null>(null);
   const columns = useColumns();
   const alive = useRef(true);
   /** Only the latest read is shown: an `r` pressed twice must not end on the older answer. */
@@ -373,7 +374,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
     [plain, index, shown],
   );
   const model =
-    chosen && chosen.route === plain[index]?.name ? models.find((each) => each.model === chosen.model) : undefined;
+    chosen && chosen.route === plain[index]?.name ? models.find((each) => sameChoice(each, chosen)) : undefined;
   // A choice that no longer applies - its route removed or left, or its model no longer reported
   // after a refresh - is dropped, so that it cannot come back with a later reading.
   useEffect(() => {
@@ -646,8 +647,8 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
       setChosen(null);
     } else if (input === "m" && selected && models.length > 0) {
       // No model, then each in turn, then no model again.
-      const next = models[models.findIndex((each) => each.model === model?.model) + 1];
-      setChosen(next ? { route: selected.name, model: next.model } : null);
+      const next = models[(model ? models.indexOf(model) : -1) + 1];
+      setChosen(next ? { route: selected.name, model: next.model, ...(next.tool ? { tool: next.tool } : {}) } : null);
     } else if (input === "r" && count > 0) {
       setRefreshing(true);
       void rank(loaded.file, loaded.registry, true);
@@ -829,7 +830,12 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
         </Box>
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={1}>
           {selected ? (
-            <RouteDetail entry={selected} pending={reading === null} models={models.map((each) => each.label)} />
+            <RouteDetail
+              entry={selected}
+              pending={reading === null}
+              // A limit both tools report is one name, however many choices it is.
+              models={[...new Set(models.map((each) => each.label))]}
+            />
           ) : null}
         </Box>
       </Box>

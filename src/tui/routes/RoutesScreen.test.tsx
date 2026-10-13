@@ -1170,6 +1170,37 @@ describe("ranked as a run of one model", () => {
     expect(opus.list[2]).toMatch(/^▸ wide\s+all\s+2\/5$/);
   });
 
+  // No run ranks both tools' accounts for one model: were a label reported by both, each tool's
+  // accounts would be ranked for it in turn.
+  it("ranks an all route by a label both tools report once for each tool", async () => {
+    const quotas = {
+      ...QUOTAS,
+      "claude:work": limited(snap(12, 34), limit("Opus", 10)),
+      "codex:x": limited(snap(30, 10), limit("Opus", 20, WEEK)),
+    };
+    const { instance } = setup({ collect: async () => quotas });
+    await ranked(instance);
+    await press(instance, DOWN);
+    await press(instance, DOWN);
+    expect(panes(text(instance)).detail).toContain("Model limits: Opus · m to rank by one");
+
+    await press(instance, "m");
+    const claude = panes(text(instance));
+    expect(claude.detail).toContain("Model     ranked as --tool claude --model opus");
+    // Each ranked by its own tool's limit on the model.
+    expect(row(claude.detail, "claude:work")).toMatch(/12%\s+34%\s+10%/);
+    expect(claude.detail.some((line) => line.includes("codex:"))).toBe(false);
+
+    await press(instance, "m");
+    const codex = panes(text(instance));
+    expect(codex.detail).toContain("Model     ranked as --tool codex --model opus");
+    expect(row(codex.detail, "codex:x")).toMatch(/30%\s+10%\s+7D\s+20%/);
+    expect(codex.detail.some((line) => line.includes("claude:"))).toBe(false);
+
+    await press(instance, "m");
+    expect(text(instance)).not.toContain("--model");
+  });
+
   it("cuts the model's name before the cells lose their reset times", async () => {
     // Reset times from the real clock, which the cells count from: each reads a whole number of hours.
     const inHours = (hours: number) => new Date(Date.now() + (hours + 0.5) * 3_600_000).toISOString();
