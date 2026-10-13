@@ -1415,6 +1415,10 @@ A row's details end with what the keys would do to it, such as
 `space off here · g off everywhere · d delete · v name only`. A key that would be refused is
 left out.
 
+`space` turns a row on when it does not run here, and off when it does. A `.mcp.json` server
+pending approval does not run, so `space` turns it on, which approves it, and its details say
+`space on here`. To turn one down instead, use `csn mcp off <name>`.
+
 When the row can't change, nothing opens, and the status line says why, in keys:
 `It comes back from claude.ai. Press space to turn it off instead.` When none of the marked rows
 can, it says how many can't and why the first one can't. When there is nothing to do, it says

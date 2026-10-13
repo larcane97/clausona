@@ -1433,6 +1433,27 @@ describe("keys and toggles", () => {
     expect(toggleVerb(inv, github, app, "here", ["claude:work"])).toBe("on");
   });
 
+  it("toggles a .mcp.json server pending approval on, as it does not run, and off once an account runs it", async () => {
+    const { app, inv, ctx } = await seed();
+    const docs = rowIn(inv, app, "project", "docs-search", "claude", "mcp");
+    expect(toggleVerb(inv, docs, app, "here")).toBe("on");
+    const keys = keysFor(ctx, "mcp", docs);
+    expect(keys[0]).toMatchObject({ key: "space", label: "on here", action: { verb: "on", reach: "here" } });
+    expect(actionsLine(keys)).toBe("space on here · d delete");
+    // Off is still there to ask for: it denies the server.
+    const off = plan(ctx, "mcp", act("off", "here", [docs]));
+    expect(off.changes.flatMap((c) => c.lines).map((l) => l.what)).toEqual(["disabledMcpjsonServers + docs-search"]);
+
+    // work has approved it: it runs there, so the toggle turns it off, but for default alone.
+    const approved = await seed((h, a) =>
+      h.claude("work", ".claude-work", { projects: { [a]: { enabledMcpjsonServers: ["docs-search"] } } }),
+    );
+    const one = rowIn(approved.inv, approved.app, "project", "docs-search", "claude", "mcp");
+    expect(toggleVerb(approved.inv, one, approved.app, "here")).toBe("off");
+    expect(toggleVerb(approved.inv, one, approved.app, "here", ["claude:default"])).toBe("on");
+    expect(toggleVerb(approved.inv, one, approved.app, "here", ["claude:work"])).toBe("off");
+  });
+
   it("goes round the visibility levels, names each command's kind, and words every refusal", () => {
     expect(NEXT_VISIBILITY).toEqual({
       on: "name-only",

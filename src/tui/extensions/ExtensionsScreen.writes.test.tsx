@@ -318,12 +318,12 @@ describe("ExtensionsScreen: writes", () => {
     });
     const instance = mount(h, app, 140, 40);
     await openRow(instance, "Project", "docs-search", "2");
-    // Pending approval is not off, so space turns it off first: that approves nothing.
-    await press(instance, SPACE);
-    const off = await seen(instance, (f) => f.includes("Turn off docs-search in this project?"));
-    expect(off).not.toContain("  runs ");
-    await press(instance, "y");
-    await seen(instance, (f) => f.includes("Turned off docs-search in this project · u to undo"));
+    // Pending approval, it does not run: its details offer on, and space in the table approves it.
+    await press(instance, ENTER);
+    const details = await seen(instance, (f) => f.includes("PROJECT › docs-search"));
+    expect(lastPaneLine(details)).toBe("space on here · d delete");
+    await press(instance, ESC);
+    await seen(instance, (f) => focusedOn(f, "docs-search"));
     await press(instance, SPACE);
     const dialog = await seen(instance, (f) => f.includes("Turn on docs-search in this project?"));
     const lines = dialog.split("\n");
