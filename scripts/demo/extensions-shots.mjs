@@ -58,15 +58,15 @@ const steps = (onePane) => {
     ["04-details", [...intoTable, "Enter"], "PROJECT › db-migrate"],
     ["05-codex", ["Escape", "Escape", "Tab", ...open], "LOADED — what Codex"],
     ["06-claude-mcp", ["Tab", "Type 2", ...open], "LOADED — what Claude Code loads[\\s\\S]*docs-search"],
-    // github, the second row: off in the work account here.
-    ["07-mcp-details", [...intoTable, "Down", "Enter"], "GLOBAL › github"],
+    // github, off in the work account here: Global's first, after the project's two and notes.
+    ["07-mcp-details", [...intoTable, "Down", "Down", "Down", "Enter"], "GLOBAL › github"],
     ["08-matrix", ["Escape", "Type m"], "SERVER"],
     ["09-hooks", ["Escape", "Type 3", ...open], "LOADED — what Claude Code runs"],
     // The project list, in the scope list's place: app first, then web, then No project.
     ["10-projects", [...back, "Type p"], "PROJECT\\s+hooks"],
-    // web picked: every scope is seen from it - the subtitle and the row say so - back on the row.
+    // web picked: every scope is seen from it - the subtitle and the row say so - on its own hooks.
     // \x2F for the slash, which would end the tape's /regexp/.
-    ["10b-web", ["Down", "Enter"], "~\\x2Fweb[\\s\\S]*▸ web\\s+\\d+"],
+    ["10b-web", ["Down", "Enter"], "~\\x2Fweb[\\s\\S]*▸ Project"],
     // 1 for Skills: the search is in the table on screen, and Hooks has no eli.
     ["11-search", ["Type 1", "Type /", "Type eli", "Enter"], "(?m)\\Weli *$"],
     // The list again, seen from web: web first, and app still (here).

@@ -1,7 +1,7 @@
 import { Box, Text } from "ink";
 
 import { color, symbol } from "../theme.js";
-import { columnText, listRoom, PANE_HEAD_ROWS, type Table, type TagTone } from "./screen-model.js";
+import { columnText, listRoom, PANE_HEAD_ROWS, type Table, type TagTone, tableLines } from "./screen-model.js";
 import { cell } from "./view-model.js";
 
 const TONE: Record<TagTone, string> = { muted: color.muted, warning: color.warning, error: color.error };
@@ -16,7 +16,7 @@ type Props = {
   width: number;
   height: number;
   cursor: number;
-  /** The first row shown, when the rows do not all fit. */
+  /** The first line shown - a row or a place's heading - when they do not all fit. */
   top: number;
   /** Whether the table has the focus: only then does the selected row carry the cursor. */
   focused: boolean;
@@ -24,9 +24,11 @@ type Props = {
 
 /**
  * The right pane: the scope's header line with its count on the right, the column titles, and
- * the rows that fit from `top`, each cut to the width by the model. When rows do not fit, the
- * last line says how many more are below; when there are none, the table's sentence says why,
- * and an empty sentence - the header has said it - is no line at all.
+ * the lines that fit from `top`, each row cut to the width by the model. In Loaded, a heading
+ * before each place's rows names it - bold, its count, and a rule to the edge - and starts where
+ * the cursor does, so it stands out from the rows. When lines do not fit, the last says how many
+ * more rows are below; when there are none, the table's sentence says why, and an empty sentence -
+ * the header has said it - is no line at all.
  */
 export function ItemTable({ table, width, height, cursor, top, focused }: Props) {
   const count = table.countText;
@@ -35,9 +37,12 @@ export function ItemTable({ table, width, height, cursor, top, focused }: Props)
   const dash = words.indexOf(DASH);
   const name = dash < 0 ? words : words.slice(0, dash);
   const sentence = dash < 0 ? "" : words.slice(dash);
-  const room = listRoom(Math.max(0, height - PANE_HEAD_ROWS), table.rows.length);
-  const visible = table.rows.slice(top, top + room);
-  const below = table.rows.length - top - visible.length;
+  const lines = tableLines(table.rows);
+  const room = listRoom(Math.max(0, height - PANE_HEAD_ROWS), lines.length);
+  const window = lines.slice(top, top + room);
+  // A heading with none of its rows under it is left for the line that says how many more.
+  const visible = window.at(-1)?.type === "group" && top + room < lines.length ? window.slice(0, -1) : window;
+  const below = lines.slice(top + visible.length).filter((line) => line.type === "row").length;
   return (
     <Box flexDirection="column" width={width} flexShrink={0}>
       <Text wrap="truncate-end">
@@ -59,8 +64,23 @@ export function ItemTable({ table, width, height, cursor, top, focused }: Props)
           {cell(table.empty, Math.max(0, width - INDENT.length)).trimEnd()}
         </Text>
       ) : null}
-      {visible.map((row, i) => {
-        const active = focused && top + i === cursor;
+      {visible.map((line) => {
+        if (line.type === "group") {
+          const count = ` ${line.count} `;
+          return (
+            <Text key={line.key} wrap="truncate-end">
+              <Text color={color.text} bold>
+                {line.label}
+              </Text>
+              <Text color={color.muted}>{count}</Text>
+              <Text color={color.dim}>
+                {symbol.lineH.repeat(Math.max(0, width - line.label.length - count.length))}
+              </Text>
+            </Text>
+          );
+        }
+        const { row } = line;
+        const active = focused && line.index === cursor;
         return (
           <Text key={row.key} wrap="truncate-end">
             <Text color={active ? color.cursor : color.dim}>{active ? symbol.cursor : " "} </Text>

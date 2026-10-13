@@ -32,6 +32,8 @@ import {
   scrolled,
   type Table,
   type TableRow,
+  tableLines,
+  tableTop,
 } from "./screen-model.js";
 
 const DAY = 86_400_000;
@@ -134,18 +136,64 @@ describe("tables", () => {
     expect(byName(project, "eli5")?.row.items[0]?.location.project).toBe(app);
   });
 
-  it("adds FROM after the first column in Loaded", async () => {
+  it("groups Loaded by the place each row comes from, in the scope list's order, with a heading for each", async () => {
     const { inv, app } = await seed();
     const loaded = buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, "");
-    expect(titles(loaded)).toEqual(["NAME", "FROM", "USES", "LAST USED"]);
+    // The places' headings say where each row is from: no FROM column for that.
+    expect(titles(loaded)).toEqual(["NAME", "USES", "LAST USED"]);
     expect(names(loaded)).toEqual(["deploy-check", "eli5", "old-one"]);
-    expect(byName(loaded, "eli5")?.cells[1]?.trim()).toBe("Global");
-    expect(byName(loaded, "deploy-check")?.cells[1]?.trim()).toBe("Project");
+    expect(loaded.rows.map((row) => row.group)).toEqual(["Project", "Global", "Global"]);
+    expect(
+      tableLines(loaded.rows).map((line) =>
+        line.type === "group" ? `${line.label} ${line.count}` : line.row.row.name,
+      ),
+    ).toEqual(["Project 1", "deploy-check", "Global 2", "eli5", "old-one"]);
+    // A search keeps the places of the rows it matches, and counts those.
+    const searched = buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, "old-one");
+    expect(
+      tableLines(searched.rows).map((line) => (line.type === "group" ? `${line.label} ${line.count}` : line.key)),
+    ).toEqual(["Global 1", searched.rows[0]?.key]);
+    // The place's name is searched too.
+    expect(names(buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, "project"))).toContain("deploy-check");
+    // Other scopes have no places.
+    expect(
+      buildTable(inv, "claude", "skill", "global", app, NOW, 100, "").rows.every((row) => row.group === undefined),
+    ).toBe(true);
     expect(loaded.header).toBe(
       `LOADED — what Claude Code loads in ${path.join("~", "repos", "app")}, in at least one account`,
     );
     expect(loaded.count).toBe(3);
     expect(loaded.empty).toBe("");
+  });
+
+  it("adds FROM in Loaded for what a place's heading does not say: the plugin a row comes from", async () => {
+    const { inv, app } = await seed((h) => {
+      const kit = h.path(".claude/plugins/cache/m/kit/1.0.0");
+      h.write(".claude/plugins/installed_plugins.json", { plugins: { "kit@m": [{ installPath: kit }] } });
+      h.write(".claude/settings.json", { enabledPlugins: { "kit@m": true } });
+      h.skill(".claude/plugins/cache/m/kit/1.0.0/skills", "kit-skill");
+    });
+    const loaded = buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, "");
+    expect(titles(loaded)).toEqual(["NAME", "FROM", "USES", "LAST USED"]);
+    // Plugins come after Global, as in the scope list.
+    expect(loaded.rows.map((row) => row.group)).toEqual(["Project", "Global", "Global", "Plugins"]);
+    const plugin = loaded.rows.at(-1);
+    expect(plugin?.cells[1]?.trim()).toBe("kit");
+    expect(byName(loaded, "eli5")?.cells[1]?.trim()).toBe("");
+  });
+
+  it("keeps the cursor's row in view, and its place's heading when it is the place's first row", async () => {
+    const { inv, app } = await seed();
+    const lines = tableLines(buildTable(inv, "claude", "skill", "loaded", app, NOW, 100, "").rows);
+    // Project 1, deploy-check, Global 2, eli5, old-one: two lines at a time.
+    expect(tableTop(0, 0, lines, 2)).toBe(0);
+    expect(tableTop(0, 1, lines, 2)).toBe(2);
+    expect(tableTop(0, 2, lines, 2)).toBe(3);
+    // Back up to eli5, Global's first: its heading comes into view with it.
+    expect(tableTop(3, 1, lines, 2)).toBe(2);
+    expect(tableTop(2, 0, lines, 2)).toBe(0);
+    // A cursor on no row goes to the top.
+    expect(tableTop(3, 9, lines, 2)).toBe(0);
   });
 
   it("gives Codex skills a muted DESCRIPTION and no use", async () => {
@@ -154,11 +202,7 @@ describe("tables", () => {
     expect(titles(global)).toEqual(["NAME", "DESCRIPTION"]);
     expect(global.columns[1]?.muted).toBe(true);
     expect(cells(global.rows[0])).toEqual(["eli5", "eli5 skill"]);
-    expect(titles(buildTable(inv, "codex", "skill", "loaded", app, NOW, 100, ""))).toEqual([
-      "NAME",
-      "FROM",
-      "DESCRIPTION",
-    ]);
+    expect(titles(buildTable(inv, "codex", "skill", "loaded", app, NOW, 100, ""))).toEqual(["NAME", "DESCRIPTION"]);
   });
 
   it("says when a hook runs in plain words, and what it runs", async () => {
@@ -167,7 +211,7 @@ describe("tables", () => {
     expect(titles(hooks)).toEqual(["WHEN", "RUNS"]);
     expect(hooks.rows[0]?.cells[0]?.trim()).toBe("When Claude finishes replying");
     expect(hooks.rows[0]?.cells[1]?.trim()).toBe("notify-me");
-    expect(titles(buildTable(inv, "claude", "hook", "loaded", app, NOW, 100, ""))).toEqual(["WHEN", "FROM", "RUNS"]);
+    expect(titles(buildTable(inv, "claude", "hook", "loaded", app, NOW, 100, ""))).toEqual(["WHEN", "RUNS"]);
   });
 
   it("sorts hooks by when they run, two on one event in the inventory's order", async () => {

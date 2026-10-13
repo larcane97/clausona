@@ -22,7 +22,9 @@ import {
 import { windowsOnScreen } from "../test-frames.js";
 import { color, symbol } from "../theme.js";
 import { ExtensionsScreen } from "./ExtensionsScreen.js";
+import { ItemTable } from "./ItemTable.js";
 import { MARK_COLOR, McpMatrix } from "./McpMatrix.js";
+import type { Table, TableRow } from "./screen-model.js";
 import type { Matrix } from "./view-model.js";
 
 vi.setConfig({ testTimeout: 15_000 });
@@ -241,7 +243,9 @@ describe("ExtensionsScreen", () => {
     for (const open of [RIGHT, ENTER]) {
       await press(instance, open);
       const table = await seen(instance, (f) => f.includes("← scopes"));
-      expect(focusedOn(table, "a-very-long")).toBe(true);
+      // Loaded's first row: the project's own, under its heading.
+      expect(focusedOn(table, "deploy-check")).toBe(true);
+      expect(table).toMatch(/│ Project 1 ─+/);
       expect(table).toContain("LOADED — ");
       await press(instance, LEFT);
       await seen(instance, (f) => !f.includes(symbol.cursor));
@@ -255,9 +259,9 @@ describe("ExtensionsScreen", () => {
     expect(lines[head + 2]).toMatch(/ {3}web +1/);
     expect(lines[head + 3]).toMatch(/ {3}No project +—/);
     expect(hintLine(list)).toMatch(/↑↓ move │ enter pick │ esc cancel/);
-    // In place of the scope list: the table is still beside it.
+    // In place of the scope list; beside it, the own rows of the project under the cursor.
     expect(list).not.toMatch(/^ {4}Global +\d+ +│/m);
-    expect(list).toContain("LOADED — ");
+    expect(list).toMatch(/PROJECT — .*~[\\/]repos[\\/]app/);
     expect(list).not.toContain(symbol.cursor);
   });
 
@@ -285,7 +289,7 @@ describe("ExtensionsScreen", () => {
     expect(await seen(instance, (f) => !listOpen(f, "MCP servers"))).toBe(details);
   });
 
-  it("picks another project from the list, from the table: every scope seen from it, the scope list focused", async () => {
+  it("picks another project from the list, from the table: every scope seen from it, its own table, the scope list focused", async () => {
     const { instance } = screen(await seed(more), 140, 40);
     const first = await seen(instance, (f) => f.includes("deploy-check"));
     // web has a skill of its own, and the scope list has no Other projects: the list is for that.
@@ -295,11 +299,12 @@ describe("ExtensionsScreen", () => {
     await seen(instance, (f) => listOpen(f));
     await scopeTo(instance, "web");
     await press(instance, ENTER);
-    const picked = await seen(instance, (f) => onRow(f, "web"));
+    const picked = await seen(instance, (f) => !listOpen(f) && /Extensions │ ~[\\/]repos[\\/]web/.test(f));
     expect(picked).not.toContain("(here)");
-    expect(picked).toMatch(/Extensions │ ~[\\/]repos[\\/]web/);
-    expect(picked).toMatch(/LOADED — what Claude Code loads in ~[\\/]repos[\\/]web/);
-    expect(picked).toMatch(/▸ web +\d+ +│/);
+    expect(picked).toMatch(/PROJECT — .*~[\\/]repos[\\/]web/);
+    expect(picked).toContain("▸ Project");
+    // The row names web, and Loaded is one ↑ away.
+    expect(picked).toMatch(/^ {4}web +\d+ +│/m);
     expect(picked).toContain("web-only");
     expect(picked).not.toContain("deploy-check");
     // The scope list has the focus.
@@ -313,21 +318,23 @@ describe("ExtensionsScreen", () => {
     expect(list[head + 2]).toMatch(/ {3}app \(here\) +2/);
   });
 
-  it("shows the table of the project the list's cursor is on: esc puts everything back, enter keeps it", async () => {
+  it("shows the own rows of the project the list's cursor is on: esc puts everything back, enter keeps them", async () => {
     const { instance } = screen(await seed(more), 140, 40);
     await seen(instance, (f) => f.includes("deploy-check"));
     await press(instance, "p");
-    // On app, the project seen from, the table is as it was.
-    const onApp = await seen(instance, (f) => listOpen(f));
-    expect(onApp).toMatch(/LOADED — what Claude Code loads in ~[\\/]repos[\\/]app/);
+    // The list counts each project's own rows; beside it, the rows of the one under the cursor.
+    const onApp = await seen(instance, (f) => listOpen(f) && f.includes("PROJECT — "));
+    expect(onApp).toMatch(/▸ app \(here\) +2/);
+    expect(onApp).toMatch(/PROJECT — .*~[\\/]repos[\\/]app +2/);
     expect(onApp).toContain("deploy-check");
+    expect(onApp).toContain("hidden by Global copy");
     await press(instance, DOWN);
     const onWeb = await seen(instance, (f) => f.includes("web-only"));
-    expect(listOpen(onWeb)).toBe(true);
-    expect(onWeb).toMatch(/LOADED — what Claude Code loads in ~[\\/]repos[\\/]web/);
+    expect(onWeb).toMatch(/PROJECT — .*~[\\/]repos[\\/]web +1/);
     expect(onWeb).not.toContain("deploy-check");
     // The title bar names the project seen from until another is picked.
     expect(onWeb).toMatch(/Extensions │ ~[\\/]repos[\\/]app/);
+    // No project has none of its own: what loads with none.
     await press(instance, DOWN);
     const onNone = await seen(instance, (f) => f.includes("what Claude Code loads with no project"));
     expect(onNone).not.toContain("web-only");
@@ -336,7 +343,7 @@ describe("ExtensionsScreen", () => {
     await seen(instance, (f) => f.includes("web-only"));
     await press(instance, ESC);
     const back = await seen(instance, (f) => !listOpen(f));
-    expect(back).toContain("deploy-check");
+    expect(back).toContain("LOADED — ");
     expect(back).not.toContain("web-only");
     expect(onRow(back)).toBe(true);
     await press(instance, "p");
@@ -344,50 +351,54 @@ describe("ExtensionsScreen", () => {
     await press(instance, DOWN);
     await seen(instance, (f) => f.includes("web-only"));
     await press(instance, ENTER);
-    const picked = await seen(instance, (f) => onRow(f, "web"));
-    expect(picked).toMatch(/Extensions │ ~[\\/]repos[\\/]web/);
+    const picked = await seen(instance, (f) => !listOpen(f) && /Extensions │ ~[\\/]repos[\\/]web/.test(f));
+    expect(picked).toContain("▸ Project");
     expect(picked).toContain("web-only");
   });
 
-  it("keeps the scope it was on while the list moves and once one is picked, or Loaded where that project has none", async () => {
-    const side = (h: TestHome) => {
-      more(h);
-      // site is under other/, so the .mcp.json above app is not above it: it has no Parent folders.
-      const site = h.project("other/site");
-      h.claude("side", ".claude-side", { projects: { [site]: {} } });
-      h.write("repos/.mcp.json", { mcpServers: { shared: { command: "shared-mcp" } } });
-    };
-    const { instance } = screen(await seed(side), 140, 40);
+  it("picks a project onto its own table from any scope, and No project onto what loads with none", async () => {
+    const { instance } = screen(await seed(more), 140, 40);
     await seen(instance, (f) => f.includes("deploy-check"));
-    // Project: web's own skills while the cursor is on web, and once it is picked.
-    await scopeTo(instance, "Project");
+    await scopeTo(instance, "Global");
     await press(instance, "p");
     await seen(instance, (f) => listOpen(f));
     await scopeTo(instance, "web");
-    const onWeb = await seen(instance, (f) => f.includes("web-only"));
-    expect(onWeb).toMatch(/PROJECT — .*~[\\/]repos[\\/]web/);
     await press(instance, ENTER);
-    const picked = await seen(instance, (f) => !listOpen(f) && /Extensions │ ~[\\/]repos[\\/]web/.test(f));
-    expect(picked).toContain("▸ Project");
-    expect(picked).toMatch(/PROJECT — .*~[\\/]repos[\\/]web/);
-    expect(picked).toContain("web-only");
-    // Parent folders, which site has not: Loaded, there and once it is picked.
+    const web = await seen(instance, (f) => !listOpen(f) && /Extensions │ ~[\\/]repos[\\/]web/.test(f));
+    expect(web).toContain("▸ Project");
+    expect(web).toContain("web-only");
     await press(instance, "p");
     await seen(instance, (f) => listOpen(f));
-    await scopeTo(instance, "app (here)");
+    await scopeTo(instance, "No project");
     await press(instance, ENTER);
-    await press(instance, "2");
-    await scopeTo(instance, "Parent folders");
-    await seen(instance, (f) => f.includes("shared"));
-    await press(instance, "p");
-    await seen(instance, (f) => listOpen(f, "MCP servers"));
-    await scopeTo(instance, "site");
-    const onSite = await seen(instance, (f) => /LOADED — what Claude Code loads in ~[\\/]other[\\/]site/.test(f));
-    expect(onSite).not.toContain("shared");
-    await press(instance, ENTER);
-    expect(await seen(instance, (f) => onRow(f, "site"))).toMatch(
-      /LOADED — what Claude Code loads in ~[\\/]other[\\/]site/,
+    const none = await seen(instance, (f) => onRow(f, "No project"));
+    expect(none).toContain("what Claude Code loads with no project");
+  });
+
+  it("leaves no place's heading at the foot of the table without a row of its own under it", () => {
+    const row = (key: string, group: string): TableRow => ({
+      key,
+      cells: [key.padEnd(8)],
+      row: { key, name: key, items: [] },
+      group,
+    });
+    const table: Table = {
+      header: "LOADED — what Claude Code loads in ~/app",
+      count: 4,
+      countText: "4",
+      columns: [{ key: "name", title: "NAME", width: 8 }],
+      rows: [row("one", "Project"), row("two", "Project"), row("three", "Global"), row("four", "Global")],
+      empty: "",
+    };
+    // Seven rows: the header, the titles, Project 2, one, two - and Global's heading would be the
+    // last of the four lines the body has, its rows below: the line that says how many more is
+    // what follows two instead.
+    const frame = stripAnsi(
+      mount(<ItemTable table={table} width={40} height={7} cursor={0} top={0} focused={false} />, 40).lastFrame() ?? "",
     );
+    expect(frame).toContain("Project 2");
+    expect(frame).not.toContain("Global");
+    expect(frame).toContain("↓ 2 more");
   });
 
   it("names the home dir ~ in the row and the list, the project it was started in", async () => {
@@ -559,13 +570,14 @@ describe("ExtensionsScreen", () => {
     await seen(instance, (f) => f.includes("deploy-check"));
     await press(instance, "2");
     await press(instance, RIGHT);
-    await moveTo(instance, "github");
-    await press(instance, ENTER);
-    expect(await seen(instance, (f) => f.includes("Runs"))).toContain("--api-key <hidden>");
-    await press(instance, ESC);
+    // pg-dev, the project's own, comes first; github, a user server, under Global.
     await moveTo(instance, "pg-dev");
     await press(instance, ENTER);
     expect(await seen(instance, (f) => f.includes("Secrets"))).toContain("PGPASSWORD (value hidden)");
+    await press(instance, ESC);
+    await moveTo(instance, "github");
+    await press(instance, ENTER);
+    expect(await seen(instance, (f) => f.includes("Runs"))).toContain("--api-key <hidden>");
     expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
   });
 
@@ -574,13 +586,14 @@ describe("ExtensionsScreen", () => {
     await seen(instance, (f) => onRow(f));
     await press(instance, "2");
     await press(instance, ENTER);
-    await moveTo(instance, "github");
-    await press(instance, ENTER);
-    expect(await seen(instance, (f) => f.includes("Runs"))).toContain("--api-key <hidden>");
-    await press(instance, ESC);
+    // pg-dev, the project's own, comes first; github, a user server, under Global.
     await moveTo(instance, "pg-dev");
     await press(instance, ENTER);
     expect(await seen(instance, (f) => f.includes("Secrets"))).toContain("PGPASSWORD (value hidden)");
+    await press(instance, ESC);
+    await moveTo(instance, "github");
+    await press(instance, ENTER);
+    expect(await seen(instance, (f) => f.includes("Runs"))).toContain("--api-key <hidden>");
     expect(windowsOnScreen(instance.frames, KEY)).toEqual([]);
   });
 
@@ -594,7 +607,7 @@ describe("ExtensionsScreen", () => {
     const { instance } = screen(await seed(), columns, rows);
     await seen(instance, (f) => f.includes("Read "));
     await press(instance, RIGHT);
-    await seen(instance, (f) => focusedOn(f, "a-very-long"));
+    await moveTo(instance, "a-very-long");
     await press(instance, ENTER);
     const details = await seen(instance, (f) => f.includes("GLOBAL › a-very-long"));
     expect(hintLine(details)).toContain("esc back");
@@ -618,7 +631,7 @@ describe("ExtensionsScreen", () => {
     expect(table).not.toContain("app (here)");
     expect(hintLine(table)).toContain("← scopes");
     await press(instance, ENTER);
-    const details = await seen(instance, (f) => f.includes("GLOBAL › a-very-long"));
+    const details = await seen(instance, (f) => f.includes("PROJECT › deploy-check"));
     expect(details).not.toContain("LOADED — ");
     await press(instance, ESC);
     await seen(instance, (f) => f.includes("LOADED — "));
@@ -653,9 +666,9 @@ describe("ExtensionsScreen", () => {
     for (const line of list.split("\n")) expect(line.length).toBeLessThanOrEqual(80);
     await press(instance, DOWN);
     await press(instance, ENTER);
-    const picked = await seen(instance, (f) => onRow(f, "web"));
-    expect(picked).not.toContain("LOADED — ");
-    expect(listOpen(picked)).toBe(false);
+    const picked = await seen(instance, (f) => !listOpen(f) && f.includes("▸ Project"));
+    expect(picked).toMatch(/^ {4}web +\d+/m);
+    expect(picked).not.toContain("PROJECT — ");
   });
 
   it("keeps the open details on their row across a reload, wherever the row has moved to", async () => {
@@ -706,11 +719,11 @@ describe("ExtensionsScreen", () => {
     const frame = await seen(instance, (f) => f.includes("That item is gone."));
     expect(frame).not.toContain("deploy-check");
     // The nearest row, the one that took its place, has the cursor; no row's details are open.
-    expect(focusedOn(frame, "eli5")).toBe(true);
-    expect(frame).not.toContain("GLOBAL › eli5");
+    expect(focusedOn(frame, "a-very-long")).toBe(true);
+    expect(frame).not.toContain("GLOBAL › a-very-long");
     expect(hintLine(frame)).toContain("enter details");
     // No frame showed another row's details in its place.
-    expect(instance.frames.some((f) => stripAnsi(f).includes("GLOBAL › eli5"))).toBe(false);
+    expect(instance.frames.some((f) => stripAnsi(f).includes("GLOBAL › a-very-long"))).toBe(false);
   });
 
   it("goes back to Loaded and the scope list on tab and on 1 2 3, from another scope's table", async () => {
@@ -746,9 +759,9 @@ describe("ExtensionsScreen", () => {
     const { instance } = screen(await seed(many), 80, 24);
     await seen(instance, (f) => onRow(f));
     await press(instance, ENTER);
-    await seen(instance, (f) => focusedOn(f, "a-very-long"));
-    // Fifteen rows; six show at 80 by 24, over the line that says how many more. A page moves
-    // five, so the row the cursor was on stays in view.
+    await seen(instance, (f) => focusedOn(f, "deploy-check"));
+    // Fifteen rows under two headings; six lines show at 80 by 24, over the line that says how
+    // many more. A page moves five rows.
     await press(instance, PAGE_DOWN);
     await seen(instance, (f) => focusedOn(f, "s03"));
     await press(instance, PAGE_DOWN);
@@ -756,7 +769,7 @@ describe("ExtensionsScreen", () => {
     await press(instance, PAGE_UP);
     await seen(instance, (f) => focusedOn(f, "s03"));
     await press(instance, PAGE_UP);
-    await seen(instance, (f) => focusedOn(f, "a-very-long"));
+    await seen(instance, (f) => focusedOn(f, "deploy-check"));
   });
 
   it("goes from the details to the table and from the table to the scopes on ←", async () => {
@@ -809,7 +822,7 @@ describe("ExtensionsScreen", () => {
     await seen(instance, (f) => listOpen(f));
     await scopeTo(instance, "web");
     await press(instance, ENTER);
-    await seen(instance, (f) => onRow(f, "web"));
+    await seen(instance, (f) => !listOpen(f) && f.includes("▸ Project"));
     await press(instance, ENTER);
     await seen(instance, (f) => f.includes("web-only"));
     await press(instance, "/");

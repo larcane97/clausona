@@ -19,9 +19,11 @@ import {
   type ItemKind,
   rowKey,
   rowsIn,
+  SCOPE_LABEL,
   type ScopeEntry,
   type ScopeId,
   type ScopeRow,
+  scopeOrder,
   type ToolName,
 } from "../../extensions/scopes.js";
 import { COLUMN_GAP, cell, column, wrapText } from "./view-model.js";
@@ -45,13 +47,15 @@ export type TagTone = "muted" | "warning" | "error";
 
 /**
  * One line of a table: its cells, each as wide as its column, and the tag after them, cut to what
- * is left, and the row of the inventory it shows.
+ * is left, and the row of the inventory it shows. In Loaded, `group` is the place it comes from -
+ * Project, Global, a plugin's - which a heading line above the place's rows names.
  */
 export type TableRow = {
   key: string;
   cells: string[];
   tag?: { text: string; tone: TagTone };
   row: ScopeRow;
+  group?: string;
 };
 
 /**
@@ -118,7 +122,18 @@ function runsWord(inv: Inventory, row: ScopeRow): string {
   return tildeIn(summary?.command ?? summary?.url ?? summary?.prompt ?? "", inv.homeDir);
 }
 
-/** The columns of a scope's table of rows, per the spec's Tables section. */
+/** The places whose rows in Loaded name more than the place: a plugin's name, a folder's file. */
+const FROM_SAYS: ReadonlySet<ScopeId> = new Set(["plugins", "parents"]);
+
+/** A Loaded row's FROM: the plugin or the file above the project it comes from, else nothing. */
+function fromWord(inv: Inventory, row: ScopeRow, project: string | undefined): string {
+  return FROM_SAYS.has(homeScope(firstOf(row), project)) ? fromLabel(firstOf(row), inv, project) : "";
+}
+
+/**
+ * The columns of a scope's table of rows, per the spec's Tables section. `fromColumn`: whether
+ * Loaded has a row whose FROM says something.
+ */
 function rowSpecs(
   inv: Inventory,
   tool: Tool,
@@ -126,6 +141,7 @@ function rowSpecs(
   scope: ScopeId,
   project: string | undefined,
   now: number,
+  fromColumn: boolean,
 ): Spec<ScopeRow>[] {
   const name: Spec<ScopeRow> = { key: "name", title: "NAME", fit: "lead", text: (row) => row.name };
   const lastUsed: Spec<ScopeRow> = {
@@ -145,9 +161,10 @@ function rowSpecs(
   }
   const lead: Spec<ScopeRow> =
     kind === "hook" ? { key: "when", title: "WHEN", fit: "lead", text: (row) => hookWhen(firstOf(row)) } : name;
+  // In Loaded, FROM says what the place's heading cannot: which plugin, which folder above.
   const from: Spec<ScopeRow>[] =
-    scope === "loaded"
-      ? [{ key: "from", title: "FROM", fit: "fixed", text: (row) => fromLabel(firstOf(row), inv, project) }]
+    scope === "loaded" && fromColumn
+      ? [{ key: "from", title: "FROM", fit: "fixed", text: (row) => fromWord(inv, row, project) }]
       : [];
   const runs: Spec<ScopeRow> = { key: "runs", title: "RUNS", fit: "flex", text: (row) => runsWord(inv, row) };
   const rest: Record<Tool, Record<Kind, Spec<ScopeRow>[]>> = {
@@ -201,17 +218,29 @@ function rowHaystack(inv: Inventory, row: ScopeRow): string[] {
   ];
 }
 
-/** Rows by name; hooks by when they run, two on one event in the inventory's order. */
-function sortRows(rows: ScopeRow[], kind: Kind, scope: ScopeId): ScopeRow[] {
+/**
+ * Rows by name; hooks by when they run, two on one event in the inventory's order. In Loaded, by
+ * the place each comes from first, in the scope list's order: Project, then Global, and so on.
+ */
+function sortRows(rows: ScopeRow[], tool: Tool, kind: Kind, scope: ScopeId, project: string | undefined): ScopeRow[] {
+  const order = scopeOrder(tool, kind);
+  const place = (row: ScopeRow) => {
+    const at = order.indexOf(homeScope(firstOf(row), project));
+    return at < 0 ? order.length : at;
+  };
+  const byPlace = (a: ScopeRow, b: ScopeRow) => (scope === "loaded" ? place(a) - place(b) : 0);
   if (kind === "hook" && scope !== "plugins") {
     return [...rows].sort(
-      (a, b) => hookWhen(firstOf(a)).localeCompare(hookWhen(firstOf(b))) || firstOf(a).id.localeCompare(firstOf(b).id),
+      (a, b) =>
+        byPlace(a, b) ||
+        hookWhen(firstOf(a)).localeCompare(hookWhen(firstOf(b))) ||
+        firstOf(a).id.localeCompare(firstOf(b).id),
     );
   }
-  return [...rows].sort((a, b) => a.name.localeCompare(b.name));
+  return [...rows].sort((a, b) => byPlace(a, b) || a.name.localeCompare(b.name));
 }
 
-type Line = { key: string; texts: string[]; tag?: string; haystack: string[]; row: ScopeRow };
+type Line = { key: string; texts: string[]; tag?: string; haystack: string[]; row: ScopeRow; group?: string };
 
 /**
  * Each column's width, its gap included, summing to at most `width`. Every column starts as wide as
@@ -259,7 +288,11 @@ function layOut(heads: Head[], lines: Line[], width: number, query: string): Pic
   const left = Math.max(0, width) - widths.reduce((sum, w) => sum + w, 0);
   const needle = query.toLowerCase();
   // What the row shows - WHEN, FROM, ACCOUNTS, CONTAINS, WHERE - in full, as well as what it holds.
-  const searched = (l: Line) => [...l.texts.filter((_, i) => heads[i]?.search !== false), ...l.haystack];
+  const searched = (l: Line) => [
+    ...l.texts.filter((_, i) => heads[i]?.search !== false),
+    ...l.haystack,
+    ...(l.group !== undefined ? [l.group] : []),
+  ];
   const rows = lines
     .filter((l) => needle === "" || searched(l).some((text) => text.toLowerCase().includes(needle)))
     .map((l): TableRow => {
@@ -270,6 +303,7 @@ function layOut(heads: Head[], lines: Line[], width: number, query: string): Pic
         cells: columns.map((col, i) => columnText(l.texts[i] ?? "", col)),
         ...(l.tag !== undefined && text !== "" ? { tag: { text, tone: toneOf(l.tag) } } : {}),
         row: l.row,
+        ...(l.group !== undefined ? { group: l.group } : {}),
       };
     });
   return { columns, rows };
@@ -295,8 +329,9 @@ export function buildTable(
 ): Table {
   const header = scopeSentence(scope, tool, kind, inv, project);
   const q = query.trim();
-  const rows = sortRows(rowsIn(inv, tool, kind, scope, project, now), kind, scope);
-  const specs = rowSpecs(inv, tool, kind, scope, project, now);
+  const rows = sortRows(rowsIn(inv, tool, kind, scope, project, now), tool, kind, scope, project);
+  const fromColumn = scope === "loaded" && rows.some((row) => fromWord(inv, row, project) !== "");
+  const specs = rowSpecs(inv, tool, kind, scope, project, now, fromColumn);
   const lines = rows.map((row) => {
     const tag = tagsOf(inv, row, project, now)[0];
     return {
@@ -305,6 +340,7 @@ export function buildTable(
       ...(tag !== undefined ? { tag } : {}),
       haystack: rowHaystack(inv, row),
       row,
+      ...(scope === "loaded" ? { group: SCOPE_LABEL[homeScope(firstOf(row), project)](tool) } : {}),
     };
   });
   const laid = layOut(specs, lines, width, q);
@@ -312,6 +348,39 @@ export function buildTable(
   const empty = laid.rows.length > 0 ? "" : total > 0 ? `Nothing matches /${q}.` : nothingIn(scope, project);
   const countText = q === "" ? String(total) : `${laid.rows.length} of ${total}`;
   return { header, count: total, countText, ...laid, empty };
+}
+
+/**
+ * A line of a table's body: a row, or the heading of the place the rows under it come from, with
+ * how many of the rows shown are from there. `index` is the row's place among the rows.
+ */
+export type TableLine =
+  | { type: "group"; key: string; label: string; count: number }
+  | { type: "row"; key: string; row: TableRow; index: number };
+
+/** The rows, with a heading before each place's first row where the rows have places: Loaded's. */
+export function tableLines(rows: TableRow[]): TableLine[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) if (row.group !== undefined) counts.set(row.group, (counts.get(row.group) ?? 0) + 1);
+  const lines: TableLine[] = [];
+  rows.forEach((row, index) => {
+    if (row.group !== undefined && row.group !== rows[index - 1]?.group) {
+      lines.push({ type: "group", key: `group-${row.group}`, label: row.group, count: counts.get(row.group) ?? 0 });
+    }
+    lines.push({ type: "row", key: row.key, row, index });
+  });
+  return lines;
+}
+
+/**
+ * The first line a table shows in a window `room` lines tall: from `top`, moved as little as keeps
+ * the cursor's row in view, and its place's heading too when it is the place's first row.
+ */
+export function tableTop(top: number, cursor: number, lines: TableLine[], room: number): number {
+  const at = lines.findIndex((line) => line.type === "row" && line.index === cursor);
+  if (at < 0) return scrolled(top, 0, room, lines.length);
+  const heading = lines[at - 1]?.type === "group" ? at - 1 : at;
+  return scrolled(scrolled(top, heading, room, lines.length), at, room, lines.length);
 }
 
 /**

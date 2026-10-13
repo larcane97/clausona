@@ -105,3 +105,36 @@ it("colours a tag by its tone: unused amber, a broken link red", async () => {
   expect(painted(frame, color.warning, "unused")).toBe(true);
   expect(painted(frame, color.error, "broken link")).toBe(true);
 });
+
+it("sets a place's heading apart in Loaded: its name bold in the text's colour, its count muted, a dim rule", async () => {
+  const { render } = await import("ink-testing-library");
+  const { ItemTable } = await import("./ItemTable.js");
+  const { color } = await import("../theme.js");
+  const row = (key: string, group: string) => ({
+    key,
+    cells: [`${key.padEnd(8)}`],
+    row: { key, name: key, items: [] },
+    group,
+  });
+  const table: Table = {
+    header: "LOADED — what Claude Code loads in ~/app",
+    count: 2,
+    countText: "2",
+    columns: [{ key: "name", title: "NAME", width: 8 }],
+    rows: [row("mine", "Project"), row("theirs", "Global")],
+    empty: "",
+  };
+  const frame =
+    render(<ItemTable table={table} width={40} height={8} cursor={0} top={0} focused={true} />).lastFrame() ?? "";
+  expect(painted(frame, color.text, "Project")).toBe(true);
+  // Bold, then the colour, then the name.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the codes are what is checked.
+  expect(frame).toMatch(/\u001b\[1m(\u001b\[[0-9;]*m)*Project/);
+  expect(painted(frame, color.muted, " 1 ")).toBe(true);
+  expect(painted(frame, color.dim, "───")).toBe(true);
+  // The heading starts where the cursor does; the rows after the cursor's column.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the colour codes are taken out to read the text.
+  const text = frame.replace(/\u001b\[[0-9;]*m/g, "").split("\n");
+  expect(text.find((line) => line.includes("Project"))).toMatch(/^Project 1 ─+$/);
+  expect(text.find((line) => line.includes("theirs"))).toMatch(/^ {2}theirs/);
+});

@@ -59,6 +59,11 @@ const ORDER: Record<ToolName, Record<ItemKind, readonly ScopeId[]>> = {
   },
 };
 
+/** The scopes of a tool and kind in the left pane's order, Loaded first. */
+export function scopeOrder(tool: ToolName, kind: ItemKind): readonly ScopeId[] {
+  return ORDER[tool][kind];
+}
+
 /** Shown even at 0: an empty project or nothing loaded is worth seeing. */
 const ALWAYS: ReadonlySet<ScopeId> = new Set(["loaded", "project"]);
 

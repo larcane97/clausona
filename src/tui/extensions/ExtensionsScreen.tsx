@@ -33,6 +33,8 @@ import {
   scopeLines,
   scrolled,
   type Tool,
+  tableLines,
+  tableTop,
 } from "./screen-model.js";
 import { ToolKindBar } from "./ToolKindBar.js";
 import { useTerminalSize } from "./use-terminal-size.js";
@@ -186,17 +188,16 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     [inventory, tool, kind, current, project, loadedAt, layout.tableWidth, query],
   );
   /**
-   * The project the list's cursor is on, while the list is open and the cursor is on another
-   * project than the one seen from: the right pane shows its table, as picking it would.
+   * The project the list's cursor is on, while the list is open: the right pane shows its own
+   * rows, the ones the list counts - its Project table - as picking it would. No project has
+   * none of its own, so it shows what loads with none.
    */
-  const hovered = listOpen ? projects[listCursor] : undefined;
-  const previewFrom = hovered && !hovered.current ? hovered : undefined;
-  /** The scope seen from the hovered project: the chosen one, or Loaded where it has none such. */
-  const previewScope = useMemo(() => {
-    if (!inventory || !previewFrom) return undefined;
-    const there = scopesFor(inventory, tool, kind, previewFrom.path, loadedAt);
-    return there.some((s) => s.id === current) ? current : "loaded";
-  }, [inventory, previewFrom, tool, kind, loadedAt, current]);
+  const previewFrom = listOpen ? projects[listCursor] : undefined;
+  const previewScope: ScopeId | undefined = previewFrom
+    ? previewFrom.path === undefined
+      ? "loaded"
+      : "project"
+    : undefined;
   const previewTable = useMemo(
     () =>
       inventory && previewFrom && previewScope
@@ -238,7 +239,8 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
   const detailRoom = Math.max(0, layout.height - PANE_HEAD_ROWS);
   const detailMax = details ? maxDetailTop(details.rows.length, detailRoom) : 0;
   const detailPage = Math.max(1, detailRoom - 2);
-  const rowRoom = listRoom(Math.max(0, layout.height - PANE_HEAD_ROWS), rows.length);
+  const bodyLines = useMemo(() => tableLines(rows), [rows]);
+  const rowRoom = listRoom(Math.max(0, layout.height - PANE_HEAD_ROWS), bodyLines.length);
   const projectRoom = listRoom(Math.max(0, layout.height - LIST_HEAD_ROWS), projects.length);
   const matrix = useMemo(() => (inventory && project ? buildMatrix(inventory, project) : null), [inventory, project]);
 
@@ -297,9 +299,8 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       return;
     }
     if (listOpen) {
-      // esc and ← leave everything as it was; enter sees every scope from the project picked, as
-      // the table beside the list shows it: the same scope, or Loaded where that project has none.
-      // Picking the project seen from changes nothing.
+      // esc and ← leave everything as it was; enter sees every scope from the project picked, and
+      // keeps the table beside the list: the project's own rows, or for No project what loads.
       if (key.escape || key.leftArrow) setListOpen(false);
       else if (key.upArrow) moveList(-1);
       else if (key.downArrow) moveList(1);
@@ -448,7 +449,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     lines.length,
   );
   listTop.current = scrolled(listTop.current, listCursor, projectRoom, projects.length);
-  rowTop.current = scrolled(rowTop.current, at, rowRoom, rows.length);
+  rowTop.current = tableTop(rowTop.current, at, bodyLines, rowRoom);
   const matrixRoom = Math.max(1, layout.height - 3);
   matrixTop.current = scrolled(matrixTop.current, matrixCursor, matrixRoom, matrix?.rows.length ?? 0);
   // The warnings below their heading; when they do not all fit, the last line says how many more.

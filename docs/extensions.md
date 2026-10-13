@@ -741,13 +741,17 @@ of its own rows of this tool and kind, the ones its Project scope lists. A proje
 shows `—`. `No project` is last. When two projects have the same folder name, the folder above
 is shown too, as in `work/site`.
 
-While the list is open, the table beside it shows the project under the cursor: the scope you
-were on, or Loaded where that project has no such scope. `enter` picks that project and keeps
-the table. Every scope is then seen from it, and the title bar and the table's header name it.
-`esc` or `←` closes the list and changes nothing.
+While the list is open, the table beside it shows the own rows of the project under the
+cursor, the ones the list counts: its Project table. No project has none, so it shows what
+loads with no project. `enter` picks that project and keeps the table: every scope is then seen
+from it, and the title bar and the table's header name it. Loaded is one `↑` away, on the
+project row. `esc` or `←` closes the list and changes nothing.
 
-The screen's tables differ a little from the CLI's. They have no TOOL column, Loaded adds
-FROM, and Codex skills show their description.
+The screen's tables differ a little from the CLI's. They have no TOOL column, and Codex skills
+show their description. Loaded groups its rows by the place each comes from, in the scope
+list's order, under a heading that names the place and counts its rows: `Project 1`, then
+`Global 7`, and so on. Its FROM column says only what a heading does not, the plugin a row
+comes from or the `.mcp.json` above the project, and is left out when no row has that.
 
 | Key | What it does |
 |---|---|
