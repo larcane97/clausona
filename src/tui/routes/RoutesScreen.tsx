@@ -23,9 +23,10 @@ import {
   type Slots,
 } from "../../core/route-rules.js";
 import { RoutesFileError } from "../../core/routes-store.js";
-import { type Ranking, rankRoute } from "../../core/routing.js";
+import { modelLimitsOf, type Ranking, rankRoute } from "../../core/routing.js";
 import { type BudgetRow, budgetNote, budgetRowOf, freeNow, nothingRead } from "../../lib/route-render.js";
 import { apiMembers, limitProblem, membersOf, namesOf, quotaTargets, spendTarget } from "../../lib/route-service.js";
+import { parseModel } from "../../lib/run-args.js";
 import type { QuotaSnapshot, Registry, ToolName } from "../../types.js";
 import { Chrome } from "../components/Chrome.js";
 import { QuotaCell } from "../components/QuotaCell.js";
@@ -39,10 +40,10 @@ import { defaultRoutesScreenDeps, errorText, type RoutesListDeps } from "./route
 
 /**
  * The dashboard's Routes screen: every route, and the one selected with its members ranked as
- * `csn route explain` ranks them. It reads routes.json, the registry, quota and the pick record,
- * and writes only when a route is removed or saved from its form (RouteForm.tsx), a dir rule or
- * default changed (RuleForm.tsx), or a budget set (BudgetForm.tsx) or cleared; a pick is never
- * recorded here.
+ * `csn route explain` ranks them, or with `m` as `csn route explain --model` does. It reads
+ * routes.json, the registry, quota and the pick record, and writes only when a route is removed or
+ * saved from its form (RouteForm.tsx), a dir rule or default changed (RuleForm.tsx), or a budget
+ * set (BudgetForm.tsx) or cleared; a pick is never recorded here.
  */
 
 /** From this many terminal columns the detail sits beside the list; below, under it. */
@@ -59,6 +60,8 @@ const HINTS = [
   { keys: "b", action: "budgets" },
   { keys: "esc", action: "back" },
 ];
+/** `m` is hinted only on a route whose accounts report a limit on a model: elsewhere it does nothing. */
+const MODEL_HINTS = HINTS.flatMap((hint) => (hint.keys === "r" ? [hint, { keys: "m", action: "model" }] : [hint]));
 const CONFIRM_HINTS = [
   { keys: "y", action: "remove" },
   { keys: "n/esc", action: "cancel" },
@@ -115,22 +118,66 @@ type FormOpen = { mode: "new" } | { mode: "edit"; name: string; spec: RouteSpec 
 /** Without profiles.json the form has no accounts to offer, and every pattern names nobody. */
 const NO_PROFILES: Registry = { version: 2, primarySources: {}, activeProfiles: {}, profiles: {} };
 
-/** Every route, by name, ranked on `reading`; with none yet, on nothing, which lists the members only. */
+/**
+ * The route `name` ranked on `reading`, as a run of `model` would rank it when one is given; with
+ * no reading yet, on nothing, which lists the members only.
+ */
+function rankEntry(
+  name: string,
+  file: RoutesFile,
+  registry: Registry | null,
+  reading: Reading | null,
+  now: number,
+  model?: string,
+): Entry {
+  const route = withDefaults(file.routes[name]);
+  const ranking = rankRoute({
+    route,
+    members: registry ? membersOf(registry, route.tool) : [],
+    quotas: reading?.quotas ?? {},
+    lastPicked: reading?.lastPicked ?? {},
+    now: reading?.now ?? now,
+    resume: false,
+    ...(model ? { model } : {}),
+  });
+  return { name, route, ranking };
+}
+
+/** Every route, by name, ranked as a run that names no model. */
 function rankAll(file: RoutesFile, registry: Registry | null, reading: Reading | null, now: number): Entry[] {
   return Object.keys(file.routes)
     .sort()
-    .map((name) => {
-      const route = withDefaults(file.routes[name]);
-      const ranking = rankRoute({
-        route,
-        members: registry ? membersOf(registry, route.tool) : [],
-        quotas: reading?.quotas ?? {},
-        lastPicked: reading?.lastPicked ?? {},
-        now: reading?.now ?? now,
-        resume: false,
-      });
-      return { name, route, ranking };
-    });
+    .map((name) => rankEntry(name, file, registry, reading, now));
+}
+
+/** A model `m` ranks by: the limit's name, and the model `--model` would be given for it. */
+type ModelChoice = { label: string; model: string };
+
+/**
+ * The models a route's accounts report a limit on, each once, in alphabetical order. The model is
+ * the limit's name in lower case (`opus`, `gpt-5.3-codex-spark`), which routing matches to that
+ * limit as it matches a run's. Only an account that can be ranked counts: a skipped one's limit
+ * counts for nothing.
+ */
+function modelChoices(ranking: Ranking, quotas: Record<string, QuotaSnapshot>): ModelChoice[] {
+  const choices = new Map<string, string>();
+  for (const row of ranking.rows) {
+    if (row.skip) continue;
+    for (const { label } of modelLimitsOf(quotas[row.id])) {
+      const model = asModel(label);
+      if (model !== undefined && !choices.has(model)) choices.set(model, label);
+    }
+  }
+  return [...choices].sort(([a], [b]) => (a < b ? -1 : 1)).map(([model, label]) => ({ label, model }));
+}
+
+/** A limit's name as `--model` takes it, or undefined for one it would refuse. */
+function asModel(label: string): string | undefined {
+  try {
+    return parseModel(label.toLowerCase());
+  } catch {
+    return undefined;
+  }
 }
 
 /** Every API profile, by id. */
@@ -248,6 +295,8 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   const [clearingBudget, setClearingBudget] = useState<string | null>(null);
   /** The ids `extra` was asked for that have not been answered yet: loading, not unreadable. */
   const [asked, setAsked] = useState<ReadonlySet<string>>(new Set());
+  /** The model the selected route is ranked as (`m`): none again once another route is selected. */
+  const [chosen, setChosen] = useState<{ route: string; model: string } | null>(null);
   const columns = useColumns();
   const alive = useRef(true);
   /** Only the latest read is shown: an `r` pressed twice must not end on the older answer. */
@@ -294,11 +343,30 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
 
   /** Everything read so far: a saved route whose accounts were read for the form shows them at once. */
   const shown = useMemo(() => reading && { ...reading, quotas: { ...extra, ...reading.quotas } }, [reading, extra]);
-  const entries = useMemo(
+  const plain = useMemo(
     () => (loaded.kind === "ready" ? rankAll(loaded.file, loaded.registry, shown, io.clock()) : []),
     [loaded, shown, io],
   );
-  const index = Math.min(cursor, Math.max(0, entries.length - 1));
+  const index = Math.min(cursor, Math.max(0, plain.length - 1));
+  const models = useMemo(
+    () => (plain[index] ? modelChoices(plain[index].ranking, shown?.quotas ?? {}) : []),
+    [plain, index, shown],
+  );
+  // A model no account reports a limit on any more, after a refresh, is no choice.
+  const model =
+    chosen && chosen.route === plain[index]?.name && models.some((each) => each.model === chosen.model)
+      ? chosen.model
+      : undefined;
+  /** Every route as the screen shows it: the selected one ranked as a run of the chosen model. */
+  const entries = useMemo(
+    () =>
+      loaded.kind === "ready" && model !== undefined
+        ? plain.map((entry, i) =>
+            i === index ? rankEntry(entry.name, loaded.file, loaded.registry, shown, io.clock(), model) : entry,
+          )
+        : plain,
+    [plain, index, model, loaded, shown, io],
+  );
   const selected = entries[index];
   const rules = useMemo(
     () => (loaded.kind === "ready" ? readRules(loaded.file, io.system.platform) : null),
@@ -548,9 +616,17 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
       return;
     }
     const count = entries.length;
-    if (key.upArrow && count > 0) setCursor((index - 1 + count) % count);
-    else if (key.downArrow && count > 0) setCursor((index + 1) % count);
-    else if (input === "r" && count > 0) {
+    if (key.upArrow && count > 0) {
+      setCursor((index - 1 + count) % count);
+      setChosen(null);
+    } else if (key.downArrow && count > 0) {
+      setCursor((index + 1) % count);
+      setChosen(null);
+    } else if (input === "m" && selected && models.length > 0) {
+      // No model, then each in turn, then no model again.
+      const next = models[models.findIndex((each) => each.model === model) + 1];
+      setChosen(next ? { route: selected.name, model: next.model } : null);
+    } else if (input === "r" && count > 0) {
       setRefreshing(true);
       void rank(loaded.file, loaded.registry, true);
     } else if (input === "d" && selected) setRemoving(selected.name);
@@ -596,7 +672,9 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
               : BUDGET_HINTS
             : entries.length === 0
               ? EMPTY_HINTS
-              : HINTS;
+              : models.length > 0
+                ? MODEL_HINTS
+                : HINTS;
 
   if (loaded.kind !== "ready") {
     return (
@@ -728,7 +806,9 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
           <RouteList entries={entries} index={index} pending={reading === null} />
         </Box>
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={1}>
-          {selected ? <RouteDetail entry={selected} pending={reading === null} /> : null}
+          {selected ? (
+            <RouteDetail entry={selected} pending={reading === null} models={models.map((each) => each.label)} />
+          ) : null}
         </Box>
       </Box>
     </Chrome>
