@@ -8,7 +8,7 @@ import { type Collector, emptyFacts } from "../model.js";
 import { stateOf } from "../state.js";
 import { TestHome } from "../test-home.js";
 import { codexProjectRecords, loadCodexContext, readCodex } from "./codex.js";
-import { codexHomeHooksFile } from "./codex-hooks.js";
+import { addCodexHookTrust, codexHomeHooksFile } from "./codex-hooks.js";
 
 const homes: TestHome[] = [];
 afterEach(() => {
@@ -454,5 +454,35 @@ describe("codexHomeHooksFile", () => {
     // A folder that is not there: Codex does not start with it, so it trusts nothing under it.
     const gone = () => Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
     expect(await codexHomeHooksFile("/gone/.codex-work", gone, path.posix)).toBeUndefined();
+  });
+});
+
+describe("addCodexHookTrust", () => {
+  const realPlatform = process.platform;
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+  });
+
+  it("hashes a hook by its Windows command on Windows alone, as Codex does, and keys it by its file as given", () => {
+    const source = path.win32.join("C:\\Users\\me\\.codex-work", "hooks.json");
+    const trustOn = (platform: NodeJS.Platform, hook: Record<string, unknown>) => {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+      const facts = emptyFacts();
+      addCodexHookTrust({ Stop: [{ hooks: [hook] }] }, "hook:codex:global:-", [source], facts);
+      return facts.codexHookTrust[0];
+    };
+    // The hash Codex 0.159.3 reported for a Stop hook running "echo a".
+    const echoA = "sha256:f9b7a328de9c5845f5eed806f12f8f5adeba50ba82617690fd3f8ededeb12f90";
+    const plain = (command: string) => ({ type: "command", command });
+    for (const hook of [
+      { ...plain("echo a"), commandWindows: "echo w" },
+      { ...plain("echo a"), command_windows: "echo w" },
+    ]) {
+      // On Windows Codex runs the Windows command in place of command, and leaves it out of the hash.
+      expect(trustOn("win32", hook)?.hash).toBe(trustOn("win32", plain("echo w"))?.hash);
+      expect(trustOn("win32", hook)?.hash).not.toBe(echoA);
+      for (const platform of ["darwin", "linux"] as const) expect(trustOn(platform, hook)?.hash).toBe(echoA);
+    }
+    expect(trustOn("win32", plain("echo a"))?.keys).toEqual(["C:\\Users\\me\\.codex-work\\hooks.json:stop:0:0"]);
   });
 });
