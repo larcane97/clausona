@@ -668,9 +668,10 @@ the folder moves once.
 A file or folder that git tracks in a project changes the repo when it changes. The CLI refuses
 such a change unless you add `--tracked`, for `off`, `on` and `visibility` as well as `rm`.
 What is in your home folder and in no project counts as not tracked, even when the home folder
-is a repository. A folder that is a repository of its own, such as a skills pack cloned into
-`.claude/skills`, counts as tracked only when the project's repository holds it as a submodule:
-its own files belong to the clone, not to the project.
+is a repository. A folder inside the project that is a repository of its own, such as a skills
+pack or a whole `.claude/skills` cloned into place, counts as tracked, and so does what is in it,
+only when the project's repository holds that folder as a submodule: its files belong to the
+clone, not to the project.
 
 On the screen, `d` on what git tracks opens the dialog with a warning,
 `Git tracks deploy-check in app, so deleting changes the repo.` It offers `o` to turn it off

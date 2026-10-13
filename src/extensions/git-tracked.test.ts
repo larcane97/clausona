@@ -56,22 +56,55 @@ describe("trackedPaths", () => {
     );
   });
 
-  it.skipIf(!hasGit)("asks the repo above a folder that is a clone of its own, not the clone", async () => {
-    const { h, app } = repo();
-    // A skills pack cloned into the project, which the project's git does not hold: the clone's
-    // files are its own, and deleting it leaves the project's repo as it was.
-    const pack = h.skill("repos/app/.claude/skills", "pack");
-    git(pack, ["init", "-q"]);
-    git(pack, ["add", "SKILL.md"]);
-    expect(await trackedPaths([pack])).toEqual(new Set());
-    // One the project's repo holds, as a submodule's gitlink, is the project's.
-    const held = h.skill("repos/app/.claude/skills", "held");
-    git(held, ["init", "-q"]);
-    git(held, ["add", "SKILL.md"]);
-    git(held, ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "x"]);
-    git(app, ["add", path.join(".claude", "skills", "held")]);
-    expect(await trackedPaths([pack, held])).toEqual(new Set([pathKey(held)]));
-  });
+  it.skipIf(!hasGit)(
+    "asks the project's repo about a folder that is a clone of its own, and what is in it",
+    async () => {
+      const { h, app } = repo();
+      const projects = [app];
+      const commit = (dir: string) =>
+        git(dir, ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "x"]);
+      // A skills pack cloned into the project, which the project's git does not hold: the clone's
+      // files are its own, and deleting it leaves the project's repo as it was.
+      const pack = h.skill("repos/app/.claude/skills", "pack");
+      git(pack, ["init", "-q"]);
+      git(pack, ["add", "SKILL.md"]);
+      expect(await trackedPaths([pack], { projects })).toEqual(new Set());
+      // A whole skills folder cloned into place: a skill in it is the clone's too.
+      const team = h.path("repos", "app", ".agents", "skills");
+      const inTeam = h.skill("repos/app/.agents/skills", "team-one");
+      git(team, ["init", "-q"]);
+      git(team, ["add", "."]);
+      expect(await trackedPaths([inTeam, path.join(inTeam, "SKILL.md")], { projects })).toEqual(new Set());
+      // One the project's repo holds, as a submodule's gitlink, is the project's, and so is what is in it.
+      const held = h.skill("repos/app/.claude/skills", "held");
+      git(held, ["init", "-q"]);
+      git(held, ["add", "SKILL.md"]);
+      commit(held);
+      git(app, ["add", path.join(".claude", "skills", "held")]);
+      expect(await trackedPaths([pack, held, path.join(held, "SKILL.md")], { projects })).toEqual(
+        new Set([pathKey(held), pathKey(path.join(held, "SKILL.md"))]),
+      );
+    },
+    20_000,
+  );
+
+  it.skipIf(!hasGit)(
+    "finds nothing tracked in a project that is no repo, a clone inside it aside",
+    async () => {
+      const h = new TestHome();
+      homes.push(h);
+      const site = h.path("repos", "site");
+      const pack = h.skill("repos/site/.claude/skills", "pack");
+      git(pack, ["init", "-q"]);
+      git(pack, ["add", "SKILL.md"]);
+      expect(await trackedPaths([pack, path.join(pack, "SKILL.md")], { projects: [site] })).toEqual(new Set());
+      // Asked with no project, a path is asked of the repo it is in.
+      expect(await trackedPaths([path.join(pack, "SKILL.md")])).toEqual(
+        new Set([pathKey(path.join(pack, "SKILL.md"))]),
+      );
+    },
+    20_000,
+  );
 
   it("finds nothing outside a repo, or when git cannot be run", async () => {
     const h = new TestHome();

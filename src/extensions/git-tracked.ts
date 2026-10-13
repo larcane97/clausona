@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { Action, ExtensionsCommand } from "./actions.js";
 import { type Plan, type PlanContext, type PlanLine, plan, trackCandidates } from "./plan.js";
-import { entryInfo, gitRoot, pathKey, samePath } from "./read.js";
+import { entryInfo, gitRoot, isWithin, pathKey, samePath } from "./read.js";
 
 /**
  * The plan as the confirm dialog and `--dry-run` show it: which of the paths it touches git
@@ -46,39 +46,58 @@ function gitForm(root: string, p: string): string {
   return process.platform === "win32" ? rel.toLowerCase() : rel;
 }
 
-/**
- * The repo a path's change would change: the one it is in (gitRoot), or for a folder that is a
- * repo of its own - a skills pack cloned into place - the one above it. The clone's files are
- * its own, and deleting it changes that repo only where it holds the folder, as a submodule.
- */
-async function repoOf(p: string): Promise<string | undefined> {
-  const root = await gitRoot(p);
-  return root !== undefined && samePath(root, p) ? gitRoot(path.dirname(path.resolve(p))) : root;
+/** The deepest of `projects` that holds `p`. */
+function projectOf(p: string, projects: readonly string[]): string | undefined {
+  let found: string | undefined;
+  for (const dir of projects) if (isWithin(p, dir) && (found === undefined || isWithin(dir, found))) found = dir;
+  return found;
 }
 
-/** pathKeys of the paths git tracks: one `git -C <root> ls-files -z -- <rel…>` per repo (repoOf), 5 s timeout. A folder is tracked when any file under it is. Any failure: none from that root. */
+/**
+ * Where to ask whether a change to `p` changes a repo, and what to ask for: the repo of
+ * `project`, the project `p` is in, and `p`. Or, for a `p` in a repo of its own inside the
+ * project - a skills pack, a `.claude` or a `.claude/skills` cloned into place - that repo's
+ * folder, which the project's repo holds only as a submodule: the clone's files are its own, not
+ * the project's. Without a project, the repo `p` is in. Undefined where no repo can hold it.
+ */
+async function askAt(p: string, project: string | undefined): Promise<{ root: string; path: string } | undefined> {
+  const own = await gitRoot(p);
+  if (own === undefined) return undefined;
+  if (project === undefined) return { root: own, path: p };
+  const outer = await gitRoot(project);
+  if (outer !== undefined && samePath(own, outer)) return { root: own, path: p };
+  return outer === undefined ? undefined : { root: outer, path: own };
+}
+
+/**
+ * pathKeys of the paths git tracks: one `git -C <root> ls-files -z -- <rel…>` per repo, 5 s
+ * timeout, where each path is asked as askAt says, in the deepest of `projects` holding it. A
+ * folder is tracked when any file under it is. Any failure: none from that root.
+ */
 export async function trackedPaths(
   paths: readonly string[],
-  options: { git?: string; timeoutMs?: number } = {},
+  options: { git?: string; timeoutMs?: number; projects?: readonly string[] } = {},
 ): Promise<Set<string>> {
-  const roots = await Promise.all(paths.map((p) => repoOf(p)));
-  const byRoot = new Map<string, { root: string; paths: string[] }>();
+  const asks = await Promise.all(paths.map((p) => askAt(p, projectOf(p, options.projects ?? []))));
+  const byRoot = new Map<string, { root: string; asks: { path: string; asked: string }[] }>();
   paths.forEach((p, at) => {
-    const root = roots[at];
-    if (root === undefined) return;
-    const group = byRoot.get(pathKey(root)) ?? { root, paths: [] };
-    group.paths.push(p);
-    byRoot.set(pathKey(root), group);
+    const ask = asks[at];
+    if (ask === undefined) return;
+    const group = byRoot.get(pathKey(ask.root)) ?? { root: ask.root, asks: [] };
+    group.asks.push({ path: p, asked: ask.path });
+    byRoot.set(pathKey(ask.root), group);
   });
   const tracked = new Set<string>();
   await Promise.all(
-    [...byRoot.values()].map(async ({ root, paths: inRoot }) => {
-      const rels = inRoot.map((p) => path.relative(root, p) || ".");
+    [...byRoot.values()].map(async ({ root, asks: inRoot }) => {
+      const rels = inRoot.map((ask) => path.relative(root, ask.asked) || ".");
       const listed = await lsFiles(options.git ?? "git", root, rels, options.timeoutMs ?? TIMEOUT_MS);
       const files = process.platform === "win32" ? listed.map((f) => f.toLowerCase()) : listed;
-      for (const p of inRoot) {
-        const rel = gitForm(root, p);
-        if (files.some((file) => rel === "" || file === rel || file.startsWith(`${rel}/`))) tracked.add(pathKey(p));
+      for (const ask of inRoot) {
+        const rel = gitForm(root, ask.asked);
+        if (files.some((file) => rel === "" || file === rel || file.startsWith(`${rel}/`))) {
+          tracked.add(pathKey(ask.path));
+        }
       }
     }),
   );
@@ -114,7 +133,10 @@ export async function planChecked(
   const tracked =
     candidates.length === 0
       ? new Set<string>()
-      : await trackedPaths(candidates, options.git !== undefined ? { git: options.git } : {});
+      : await trackedPaths(candidates, {
+          projects: ctx.inv.projects.map((p) => p.path),
+          ...(options.git !== undefined ? { git: options.git } : {}),
+        });
   const checked = tracked.size === 0 ? first : plan({ ...ctx, tracked }, command, action);
   return { plan: await filesLookedAt(checked), tracked };
 }
