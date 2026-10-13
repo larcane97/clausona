@@ -13,8 +13,11 @@ import {
   pathSystem,
   readRules,
   removeReferences,
+  removeUnfillable,
   renameReferences,
   rulesFor,
+  rulesNaming,
+  rulesText,
   ruleWarnings,
   sameDir,
   setDefaultRoute,
@@ -121,13 +124,11 @@ describe("readRules", () => {
     expect(JSON.stringify(rules)).not.toContain(key);
   });
 
-  it("reads a Windows path as a directory on Windows only", () => {
+  // An earlier build wrote `~\app` on Windows: a file shared with a Mac must not block its writes.
+  it("reads a drive path on Windows only, and ~\\ on every platform", () => {
     const raw = file({ dirs: { "C:\\work": { claude: "main" }, "~\\app": { claude: "app" } } });
     expect(readRules(raw, "win32").problems).toEqual([]);
-    expect(readRules(raw, "linux").problems).toEqual([
-      'dirs["C:\\\\work"]: must be an absolute path, or start with ~',
-      'dirs["~\\\\app"]: must be an absolute path, or start with ~',
-    ]);
+    expect(readRules(raw, "linux").problems).toEqual(['dirs["C:\\\\work"]: must be an absolute path, or start with ~']);
   });
 });
 
@@ -156,10 +157,18 @@ describe("storedDir", () => {
     ["a sibling of home that starts like it", linux, "/", "/home/user2/x", "/home/user2/x"],
     ["home in another case on Linux", linux, "/", "/Home/u/work", "/Home/u/work"],
     ["home in another case on macOS", mac, "/", "/users/U/work", "~/work"],
-    ["a relative path on Windows", windows, "C:\\Users\\u", "work", "~\\work"],
-    ["~/ on Windows", windows, "D:\\", "~/work/app", "~\\work\\app"],
-    ["home in another case on Windows", windows, "D:\\", "c:\\users\\U\\Work", "~\\Work"],
+    ["a relative path on Windows, with ~/ as everywhere", windows, "C:\\Users\\u", "work\\app", "~/work/app"],
+    ["~\\ on Windows", windows, "D:\\", "~\\work\\app", "~/work/app"],
+    ["home in another case on Windows", windows, "D:\\", "c:\\users\\U\\Work", "~/Work"],
     ["another drive on Windows", windows, "C:\\Users\\u", "D:/data", "D:\\data"],
+    // The current directory comes with its links resolved: home is home under its real path too.
+    [
+      "home's real path",
+      { ...linux, realpath: (p: string) => p.replace(/^\/home(?=\/|$)/, "/data/home") },
+      "/data/home/u/work",
+      ".",
+      "~/work",
+    ],
   ])("stores %s", (_, sys, cwd, input, stored) => {
     expect(storedDir(input, cwd, sys)).toBe(stored);
   });
@@ -209,6 +218,27 @@ describe("matching a directory", () => {
     expect(matched({ [viaLink]: { claude: "work" } }, path.join(real, "app"), sys)).toEqual([viaLink]);
     expect(matched({ [real]: { claude: "work" } }, path.join(viaLink, "app"), sys)).toEqual([real]);
     expect(sameDir(viaLink, storedDir(real, root, sys), root, sys)).toBe(true);
+  });
+
+  it("reads ~\\ as ~/ on Linux too", () => {
+    expect(matched({ "~\\work\\app": { claude: "work" } }, "/home/u/work/app/src")).toEqual(["~\\work\\app"]);
+  });
+
+  // A cwd deleted under the shell is its PWD, which names it through the link /home is.
+  it("resolves the links above a directory that does not exist", () => {
+    const real = ["/", "/data", "/data/home", "/data/home/u", "/data/home/u/work"];
+    const linked: PathSystem = {
+      ...linux,
+      realpath: (p) => {
+        const resolved = p.replace(/^\/home(?=\/|$)/, "/data/home");
+        if (!real.includes(resolved)) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        return resolved;
+      },
+    };
+    expect(matched({ "~/work": { claude: "work" } }, "/home/u/work/gone", linked)).toEqual(["~/work"]);
+    expect(matched({ "/data/home/u/work/later": { claude: "work" } }, "/home/u/work/later/x", linked)).toEqual([
+      "/data/home/u/work/later",
+    ]);
   });
 
   it("compares a directory that does not exist as it is written", () => {
@@ -363,6 +393,31 @@ describe("editing rules", () => {
       "/odd": "work",
     });
     expect(raw.defaults).toEqual({ claude: "office" });
+  });
+
+  it("clears the rules a route whose tool changed can no longer fill, and leaves the rest", () => {
+    const raw = file({ dirs: { "~/work": { claude: "work", codex: "work" } }, defaults: { claude: "work" } });
+    expect(removeUnfillable(raw, "work", "codex")).toEqual([{ dir: "~/work", tool: "claude" }, { tool: "claude" }]);
+    expect(raw.dirs).toEqual({ "~/work": { codex: "work" } });
+    expect(raw).not.toHaveProperty("defaults");
+    expect(removeUnfillable(raw, "work", "all")).toEqual([]);
+  });
+
+  it("names the rules a sentence lists, a directory once for its slots", () => {
+    expect(
+      rulesText([
+        { dir: "~/work", tool: "codex" },
+        { tool: "codex" },
+        { dir: "~/work", tool: "claude" },
+        { dir: "/srv", tool: "claude" },
+        { tool: "claude" },
+      ]),
+    ).toEqual([
+      "the dir rule for ~/work (claude, codex)",
+      "the dir rule for /srv (claude)",
+      "the claude and codex defaults",
+    ]);
+    expect(rulesNaming(file({ defaults: { claude: "main" } }), "main")).toEqual([{ tool: "claude" }]);
   });
 
   it("clears every rule that names a removed route, and a rule left with no slot", () => {

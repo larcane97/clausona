@@ -749,8 +749,8 @@ describe("a profile whose name the key check would take for a key", () => {
 });
 
 describe("dir rules and defaults", () => {
-  /** `~/work` as this platform writes it. */
-  const WORK = path.join("~", "work");
+  /** As routes.json stores it on every platform. */
+  const WORK = "~/work";
 
   /** Routes for each kind of slot, and ~/work/app under the scratch home. */
   async function withRoutes() {
@@ -769,7 +769,7 @@ describe("dir rules and defaults", () => {
     deps.cwd = deps.home;
     await run("dir", "~/work", "cx");
     expect(file().dirs).toEqual({ [WORK]: { claude: "main", codex: "cx" } });
-    expect(await run("dir")).toMatch(new RegExp(`^ {4}${WORK.replaceAll("\\", "\\\\")}\\s+main\\s+cx$`, "m"));
+    expect(await run("dir")).toMatch(/^ {4}~\/work\s+main\s+cx$/m);
     expect(await run("dir", "work", "--clear", "--tool", "codex")).toBe(`  ✔ Cleared the codex rule for ${WORK}`);
     expect(file().dirs).toEqual({ [WORK]: { claude: "main" } });
     expect(await run("dir", path.join(deps.home, "work"), "--clear")).toBe(`  ✔ Cleared the dir rule for ${WORK}`);
@@ -782,7 +782,7 @@ describe("dir rules and defaults", () => {
     expect(await run("dir", "~/work", "any")).toBe(
       `  ✔ In ${WORK} and below, clausona run claude and clausona run codex use route any`,
     );
-    const other = path.join("~", "other");
+    const other = "~/other";
     expect(await run("dir", "~/other", "any", "--tool", "codex")).toBe(
       [
         `  ✔ In ${other} and below, clausona run codex uses route any`,
@@ -836,6 +836,25 @@ describe("dir rules and defaults", () => {
     );
     expect(file().dirs).toEqual({ [WORK]: { codex: "cx" } });
     expect(file()).not.toHaveProperty("defaults");
+  });
+
+  it("names a directory once for the slots of both tools when it renames or removes an all route", async () => {
+    const { run } = await withRoutes();
+    await run("dir", "~/work/app", "any");
+    await run("default", "any", "--tool", "codex");
+    expect(await run("rename", "any", "both")).toBe(
+      [
+        "  ✔ Renamed route any to both",
+        "    Also renamed in the dir rule for ~/work/app (claude, codex) and the codex default.",
+      ].join("\n"),
+    );
+    await run("default", "both");
+    expect(await run("remove", "both")).toBe(
+      [
+        "  ✔ Removed route both",
+        "    Also removed the dir rule for ~/work/app (claude, codex) and the claude and codex defaults.",
+      ].join("\n"),
+    );
   });
 
   it("lists the rules under the routes, and warns about one that names a route it cannot use", async () => {
@@ -918,10 +937,8 @@ describe("dir rules and defaults", () => {
     it("says what each tool's run would take here and why, then explains each route", async () => {
       const { run } = await inApp();
       const out = await run("explain");
-      expect(out).toContain(`  In ${path.join("~", "work", "app")}\n`);
-      expect(out).toMatch(
-        new RegExp(`^ {4}clausona run claude\\s+route main\\s+dir rule ${WORK.replaceAll("\\", "\\\\")}$`, "m"),
-      );
+      expect(out).toContain("  In ~/work/app\n");
+      expect(out).toMatch(/^ {4}clausona run claude\s+route main\s+dir rule ~\/work$/m);
       expect(out).toMatch(/^ {4}clausona run codex\s+nothing\s+no active profile \(clausona use\)$/m);
       expect(out).toContain("  ⚠ Skipped the codex default: route 'gone' does not exist.");
       expect(out).toContain("╭─ main ─");

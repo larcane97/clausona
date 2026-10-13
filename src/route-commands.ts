@@ -32,7 +32,7 @@ import {
   removeReferences,
   renameReferences,
   routeProblem,
-  ruleText,
+  rulesText,
   ruleWarnings,
   SLOT_TOOLS,
   type Slots,
@@ -481,7 +481,7 @@ async function renameRoute(args: string[], deps: RouteDeps): Promise<string> {
   });
   return [
     success(`Renamed route ${bold(from)} to ${bold(to)}`),
-    ...(rules.length ? [dim(`    Also renamed in ${andList(rules.map(ruleText))}.`)] : []),
+    ...(rules.length ? [dim(`    Also renamed in ${andList(rulesText(rules))}.`)] : []),
   ].join("\n");
 }
 
@@ -500,7 +500,7 @@ async function removeRoute(args: string[], deps: RouteDeps): Promise<string> {
   });
   return [
     success(`Removed route ${bold(name)}`),
-    ...(rules.length ? [dim(`    Also removed ${andList(rules.map(ruleText))}.`)] : []),
+    ...(rules.length ? [dim(`    Also removed ${andList(rulesText(rules))}.`)] : []),
   ].join("\n");
 }
 
@@ -711,7 +711,7 @@ function routeWarnings(name: string, ranking: Ranking): string[] {
 export async function routeDoctor(
   deps: RouteDeps = defaultRouteDeps(),
 ): Promise<{ shown: string; warnings: string[] }> {
-  const shown = storedDir(deps.paths.routesPath, deps.cwd, pathsFor(deps));
+  const shown = deps.paths.routesPath.replace(deps.home, "~");
   const registry = await deps.loadRegistry();
   let loaded: LoadedRoutes;
   try {

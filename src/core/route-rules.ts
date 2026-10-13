@@ -5,7 +5,15 @@ import path from "node:path";
 import type { ToolName } from "../types.js";
 import { carriesCredentialToken } from "./credential-token.js";
 import { foldProfileName } from "./profile-name.js";
-import { type BrokenRoute, checkRouteName, holdsKey, type RoutesFile, storedRoute } from "./route-config.js";
+import {
+  type BrokenRoute,
+  checkRouteName,
+  holdsKey,
+  type RoutesFile,
+  type RouteTool,
+  storedRoute,
+  toolsOf,
+} from "./route-config.js";
 
 /**
  * Dir rules and defaults: the route a `clausona run claude|codex` takes when it names none.
@@ -77,10 +85,15 @@ function readSlots(raw: unknown, at: string): { slots: Slots; problems: string[]
   return { slots, problems };
 }
 
+/**
+ * `~`, or a path under it. `~/` is what clausona writes; `~\`, which an earlier build wrote on
+ * Windows, is read the same way on every platform, so a file shared between machines still reads.
+ */
+const isTildePath = (dir: string) => dir === "~" || dir.startsWith("~/") || dir.startsWith("~\\");
+
 /** A directory as routes.json may store it: `~`, under `~`, or absolute. */
 function isStoredDir(dir: string, platform: NodeJS.Platform): boolean {
-  if (dir === "~" || dir.startsWith("~/") || (platform === "win32" && dir.startsWith("~\\"))) return true;
-  return (platform === "win32" ? path.win32 : path.posix).isAbsolute(dir);
+  return isTildePath(dir) || (platform === "win32" ? path.win32 : path.posix).isAbsolute(dir);
 }
 
 /**
@@ -148,40 +161,57 @@ const pathsOf = (sys: PathSystem) => (sys.platform === "win32" ? path.win32 : pa
 const fold = (text: string, sys: PathSystem) =>
   sys.platform === "darwin" || sys.platform === "win32" ? foldProfileName(text) : text;
 
-const startsWithTilde = (dir: string, sys: PathSystem) =>
-  dir === "~" || dir.startsWith("~/") || (sys.platform === "win32" && dir.startsWith("~\\"));
-
 /** A directory as given or stored, made absolute: `~` is home, and a relative one is read from `cwd`. */
 export function expandDir(dir: string, cwd: string, sys: PathSystem): string {
   const paths = pathsOf(sys);
-  if (startsWithTilde(dir, sys)) return paths.resolve(sys.home, dir.slice(2));
+  // Either separator after `~`, and in what follows it: a `~` path is clausona's own form.
+  if (isTildePath(dir)) return paths.resolve(sys.home, ...dir.slice(2).split(/[\\/]/));
   return paths.resolve(cwd, dir);
 }
 
-/** A directory as routes.json stores it: absolute, with `~` for home when it is under it. */
-export function storedDir(dir: string, cwd: string, sys: PathSystem): string {
+/**
+ * The path with every link resolved. One that does not exist (a rule's directory not made yet,
+ * or a cwd deleted under the shell) has its deepest existing ancestor resolved and the rest put
+ * back, so that it compares with the paths around it however links lead to them.
+ */
+function realOf(absolute: string, sys: PathSystem): string {
   const paths = pathsOf(sys);
-  const absolute = expandDir(dir, cwd, sys);
-  const home = paths.resolve(sys.home);
-  if (fold(absolute, sys) === fold(home, sys)) return "~";
-  const under = home.endsWith(paths.sep) ? home : `${home}${paths.sep}`;
-  if (!fold(absolute, sys).startsWith(fold(under, sys))) return absolute;
-  return `~${paths.sep}${absolute.slice(under.length)}`;
+  const rest: string[] = [];
+  let head = absolute;
+  for (;;) {
+    try {
+      return paths.join(paths.resolve(sys.realpath(head)), ...rest);
+    } catch {
+      const parent = paths.dirname(head);
+      if (parent === head) return absolute;
+      rest.unshift(paths.basename(head));
+      head = parent;
+    }
+  }
 }
 
 /**
- * A directory as two are compared: every link resolved (or as it is, when it does not exist),
- * and folded where case does not count.
+ * A directory as routes.json stores it: absolute, with `~/` for home when it is under it, on every
+ * platform. Home counts as it is named and as it really is, since the current directory comes
+ * with its links resolved: `/tmp/home` and `/private/tmp/home` on macOS are one home.
  */
-function comparable(dir: string, cwd: string, sys: PathSystem): string {
+export function storedDir(dir: string, cwd: string, sys: PathSystem): string {
+  const paths = pathsOf(sys);
   const absolute = expandDir(dir, cwd, sys);
-  let real: string;
-  try {
-    real = pathsOf(sys).resolve(sys.realpath(absolute));
-  } catch {
-    real = absolute;
+  const named = paths.resolve(sys.home);
+  for (const home of new Set([named, realOf(named, sys)])) {
+    if (fold(absolute, sys) === fold(home, sys)) return "~";
+    const under = home.endsWith(paths.sep) ? home : `${home}${paths.sep}`;
+    if (fold(absolute, sys).startsWith(fold(under, sys))) {
+      return `~/${absolute.slice(under.length).split(paths.sep).join("/")}`;
+    }
   }
-  return fold(real, sys);
+  return absolute;
+}
+
+/** A directory as two are compared: every link resolved (realOf), and folded where case does not count. */
+function comparable(dir: string, cwd: string, sys: PathSystem): string {
+  return fold(realOf(expandDir(dir, cwd, sys), sys), sys);
 }
 
 function contains(parent: string, child: string, sys: PathSystem): boolean {
@@ -387,24 +417,28 @@ export function clearDefaultRoute(file: RoutesFile, tools: readonly ToolName[]):
 }
 
 /**
- * Calls `change` with every slot that names the route `name`, and sets it to what `change`
- * returns, or removes it for undefined. A dir rule left with no slot goes. Returns the rules
- * changed. Entries that cannot be read are left as they are.
+ * Calls `change` with the tool of every slot that names the route `name`: the slot is set to what
+ * it returns, removed for undefined, or left alone for null. A dir rule left with no slot goes.
+ * Returns the rules changed. Entries that cannot be read are left as they are.
  */
-function changeReferences(file: RoutesFile, name: string, change: () => string | undefined): RuleRef[] {
+function changeReferences(
+  file: RoutesFile,
+  name: string,
+  change: (tool: ToolName) => string | undefined | null,
+): RuleRef[] {
   const changed: RuleRef[] = [];
-  /** The slots changed, or null when none names the route. */
+  /** The slots changed, or null when none was. */
   const inSlots = (slots: Record<string, unknown>, dir?: string): Record<string, unknown> | null => {
     const next: Array<[string, unknown]> = [];
     let hit = false;
     for (const [tool, value] of Object.entries(slots)) {
-      if (!isSlotTool(tool) || value !== name) {
+      const to = isSlotTool(tool) && value === name ? change(tool) : null;
+      if (to === null) {
         next.push([tool, value]);
         continue;
       }
       hit = true;
-      changed.push(dir === undefined ? { tool } : { dir, tool });
-      const to = change();
+      changed.push(dir === undefined ? { tool: tool as ToolName } : { dir, tool: tool as ToolName });
       if (to !== undefined) next.push([tool, to]);
     }
     return hit ? Object.fromEntries(next) : null;
@@ -437,7 +471,36 @@ export function removeReferences(file: RoutesFile, name: string): RuleRef[] {
   return changeReferences(file, name, () => undefined);
 }
 
-/** A rule as a sentence names it: `the dir rule for ~/work (claude)`, `the claude default`. */
-export function ruleText(ref: RuleRef): string {
-  return ref.dir === undefined ? `the ${ref.tool} default` : `the dir rule for ${ref.dir} (${ref.tool})`;
+/**
+ * Clears the rules that name `name` for a tool a route of `tool` cannot fill: what a route whose
+ * tool changed leaves behind. Returns the rules cleared.
+ */
+export function removeUnfillable(file: RoutesFile, name: string, tool: RouteTool): RuleRef[] {
+  return changeReferences(file, name, (slot) => (toolsOf(tool).includes(slot) ? null : undefined));
+}
+
+/** The rules that name `name`, which removing it would clear; routes.json is not changed. */
+export function rulesNaming(file: RoutesFile, name: string): RuleRef[] {
+  return removeReferences(structuredClone(file), name);
+}
+
+/**
+ * Rules as a sentence lists them, a directory's slots together: `the dir rule for ~/work (claude,
+ * codex)`, `the claude default`, `the claude and codex defaults`. Join them with an `and`.
+ */
+export function rulesText(refs: readonly RuleRef[]): string[] {
+  const dirs = new Map<string, ToolName[]>();
+  let defaults: ToolName[] = [];
+  for (const ref of refs) {
+    if (ref.dir === undefined) defaults.push(ref.tool);
+    else dirs.set(ref.dir, [...(dirs.get(ref.dir) ?? []), ref.tool]);
+  }
+  // Tools in one order, claude first, whichever order the file holds them in.
+  const ordered = (tools: ToolName[]) => SLOT_TOOLS.filter((tool) => tools.includes(tool));
+  defaults = ordered(defaults);
+  for (const [dir, tools] of dirs) dirs.set(dir, ordered(tools));
+  return [
+    ...[...dirs].map(([dir, tools]) => `the dir rule for ${dir} (${tools.join(", ")})`),
+    ...(defaults.length ? [`the ${defaults.join(" and ")} default${defaults.length > 1 ? "s" : ""}`] : []),
+  ];
 }
