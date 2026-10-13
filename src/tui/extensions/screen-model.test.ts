@@ -23,6 +23,7 @@ import {
   maxDetailTop,
   NO_PROJECT,
   type ProjectEntry,
+  pageRow,
   paneLayout,
   projectLabel,
   projectList,
@@ -195,6 +196,46 @@ describe("tables", () => {
     expect(tableTop(2, 0, lines, 2)).toBe(0);
     // A cursor on no row goes to the top.
     expect(tableTop(3, 9, lines, 2)).toBe(0);
+  });
+
+  it("pages by lines, so a page over two headings leaves no row unshown", () => {
+    // Project 3, Global 4, Cloud 1, Plugins 4: 12 rows under 4 headings, 6 lines at a time.
+    const groups: [string, number][] = [
+      ["Project", 3],
+      ["Global", 4],
+      ["Cloud", 1],
+      ["Plugins", 4],
+    ];
+    const rows: TableRow[] = groups.flatMap(([group, n]) =>
+      Array.from({ length: n }, (_, i) => {
+        const key = `${group}-${i}`;
+        return { key, cells: [key], row: { key, name: key, items: [] }, group };
+      }),
+    );
+    const lines = tableLines(rows);
+    const room = 6;
+    const shown = (top: number) =>
+      lines.slice(top, top + room).flatMap((line) => (line.type === "row" ? [line.index] : []));
+    for (const direction of [1, -1] as const) {
+      let cursor = direction > 0 ? 0 : rows.length - 1;
+      let top = tableTop(direction > 0 ? 0 : lines.length, cursor, lines, room);
+      const seen = new Set(shown(top));
+      for (let step = 0; step < rows.length; step++) {
+        const next = pageRow(lines, cursor, room, direction);
+        // Each page moves on, and never further than the window shows at once.
+        if (next === cursor) break;
+        expect(Math.abs(next - cursor)).toBeLessThan(room);
+        cursor = next;
+        top = tableTop(top, cursor, lines, room);
+        for (const index of shown(top)) seen.add(index);
+      }
+      expect(cursor, `direction ${direction}`).toBe(direction > 0 ? rows.length - 1 : 0);
+      expect(seen.size, `direction ${direction}`).toBe(rows.length);
+    }
+    // A window of one line still moves a row at a time; a cursor on no row stays.
+    expect(pageRow(lines, 0, 1, 1)).toBe(1);
+    expect(pageRow(lines, 0, 6, -1)).toBe(0);
+    expect(pageRow(lines, 99, 6, 1)).toBe(99);
   });
 
   it("gives Codex skills a muted DESCRIPTION and no use", async () => {

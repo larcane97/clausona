@@ -494,6 +494,22 @@ describe("ExtensionsScreen", () => {
     expect(await seen(instance, (f) => f.includes("▸ app (here)"))).toMatch(/↓ 6 more/);
   });
 
+  it("keeps every key of a search that comes in before the list is drawn again", async () => {
+    const { instance } = screen(await seed(more), 140, 40);
+    await seen(instance, (f) => onRow(f));
+    await press(instance, "p");
+    await seen(instance, (f) => listOpen(f));
+    // ink takes the list's keys from the next tick on.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Two writes in one tick, as a fast typist or a slow link sends them, then a ↓ with nothing below.
+    instance.stdin.write("w");
+    instance.stdin.write("e");
+    instance.stdin.write(DOWN);
+    const typed = await seen(instance, (f) => f.includes("/we▏"));
+    expect(typed).toMatch(/▸ web +1/);
+    expect(typed).toContain("web-only");
+  });
+
   it("narrows the project list as it is typed, by name or path: esc clears it, then closes the list", async () => {
     const clients = (h: TestHome) => {
       const dirs = ["clients/acme", "clients/beta", "repos/site"].map((dir) => h.project(dir));
@@ -816,13 +832,13 @@ describe("ExtensionsScreen", () => {
     await press(instance, ENTER);
     await seen(instance, (f) => focusedOn(f, "deploy-check"));
     // Fifteen rows under two headings; six lines show at 80 by 24, over the line that says how
-    // many more. A page moves five rows.
+    // many more. A page moves five lines, Global's heading among them.
     await press(instance, PAGE_DOWN);
-    await seen(instance, (f) => focusedOn(f, "s03"));
+    await seen(instance, (f) => focusedOn(f, "s02"));
     await press(instance, PAGE_DOWN);
-    await seen(instance, (f) => focusedOn(f, "s08"));
+    await seen(instance, (f) => focusedOn(f, "s07"));
     await press(instance, PAGE_UP);
-    await seen(instance, (f) => focusedOn(f, "s03"));
+    await seen(instance, (f) => focusedOn(f, "s02"));
     await press(instance, PAGE_UP);
     await seen(instance, (f) => focusedOn(f, "deploy-check"));
   });

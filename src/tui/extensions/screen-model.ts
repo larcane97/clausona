@@ -384,6 +384,24 @@ export function tableTop(top: number, cursor: number, lines: TableLine[], room: 
 }
 
 /**
+ * The row a page from row `at` lands on, in a window `room` lines tall: the furthest row in
+ * `direction` whose line is less than a page of lines away, or the next row where none is. A
+ * page counts the headings it crosses, so the window after it starts where the last one ended
+ * and no row between is left unshown.
+ */
+export function pageRow(lines: TableLine[], at: number, room: number, direction: 1 | -1): number {
+  const rows = lines.flatMap((line, i) => (line.type === "row" ? [{ index: line.index, line: i }] : []));
+  const from = rows.find((row) => row.index === at);
+  if (from === undefined) return at;
+  const page = Math.max(1, room - 1);
+  const ahead = rows.filter((row) => (row.line - from.line) * direction > 0);
+  const near = ahead.filter((row) => Math.abs(row.line - from.line) <= page);
+  const nearest = direction > 0 ? ahead[0] : ahead.at(-1);
+  const furthest = direction > 0 ? near.at(-1) : near[0];
+  return (furthest ?? nearest)?.index ?? at;
+}
+
+/**
  * The rows the screen's chrome takes, as ExtensionsScreen draws it: Chrome's header (padding,
  * title, gap, rule, gap: 5), the tool and kind bar and the line under it (2), and Chrome's footer
  * with a status line (gap, rule, gap, status, hints, padding: 6).

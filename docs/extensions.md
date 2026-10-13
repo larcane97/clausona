@@ -746,7 +746,8 @@ row already list what loads outside any project, whichever project is picked.
 Type to narrow the list. What you type matches a project's name or its path, in any case, and
 the heading shows it in `PROJECT`'s place, as `/clau▏`. `esc` clears it, and a second `esc`
 closes the list. `pgup` and `pgdn` move a page, and `home` and `end` go to the first and the
-last project. On a Mac keyboard those are `fn` with `↑`, `↓`, `←` and `→`.
+last project. On a Mac keyboard those are `fn` with `↑`, `↓`, `←` and `→`. Terminal.app keeps
+them for scrolling its own window, so add `shift` there.
 
 While the list is open, the table beside it shows the own rows of the project under the
 cursor, the ones the list counts: its Project table. `enter` picks that project and keeps the

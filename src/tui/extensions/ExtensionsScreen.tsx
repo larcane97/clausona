@@ -28,6 +28,7 @@ import {
   PANE_HEAD_ROWS,
   PROJECT_ROWS,
   type ProjectEntry,
+  pageRow,
   paneLayout,
   projectList,
   projectPaneWidth,
@@ -204,7 +205,9 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
    * The project the list's cursor is on, while the list is open: the right pane shows its own
    * rows, the ones the list counts - its Project table - as picking it would.
    */
-  const previewFrom = listOpen ? listed[listCursor] : undefined;
+  // Kept inside the list as the search leaves it, whatever keys came in before it was drawn.
+  const listAt = Math.min(listCursor, Math.max(0, listed.length - 1));
+  const previewFrom = listOpen ? listed[listAt] : undefined;
   const previewTable = useMemo(
     () =>
       inventory && previewFrom
@@ -271,10 +274,8 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     setRowCursor(index);
     setRowKey(key);
   }
-  const moveRow = (delta: number) => {
-    const next = Math.max(0, Math.min(rows.length - 1, at + delta));
-    pointAt(next, rows[next]?.key);
-  };
+  const pointAtRow = (index: number) => pointAt(index, rows[index]?.key);
+  const moveRow = (delta: number) => pointAtRow(Math.max(0, Math.min(rows.length - 1, at + delta)));
   const scrollDetail = (delta: number) =>
     setDetailTop((t) => Math.max(0, Math.min(detailMax, Math.min(t, detailMax) + delta)));
   /** The project list, its cursor on the project everything is seen from, nothing typed. */
@@ -287,9 +288,13 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     setListCursor(Math.max(0, projects.indexOf(seenFrom)));
     setListOpen(true);
   };
-  const moveList = (delta: number) => setListCursor((c) => Math.max(0, Math.min(listed.length - 1, c + delta)));
-  /** Another search of the list: the cursor goes to the first project it leaves. */
-  const searchList = (next: string) => {
+  const moveList = (delta: number) =>
+    setListCursor((c) => Math.max(0, Math.min(listed.length - 1, Math.min(c, listed.length - 1) + delta)));
+  /**
+   * Another search of the list, from the one before it: keys that come in one go each build on
+   * the last. The cursor goes to the first project it leaves.
+   */
+  const searchList = (next: (query: string) => string) => {
     setListQuery(next);
     setListCursor(0);
   };
@@ -319,7 +324,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       // What is typed narrows the list; esc clears it first, then, as ←, leaves everything as it
       // was. enter sees every scope from the project picked, and keeps the table beside the list:
       // the project's own rows.
-      if (key.escape && listQuery !== "") searchList("");
+      if (key.escape && listQuery !== "") searchList(() => "");
       else if (key.escape || key.leftArrow) setListOpen(false);
       else if (key.upArrow) moveList(-1);
       else if (key.downArrow) moveList(1);
@@ -335,10 +340,10 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
           setFocus("scopes");
           setListOpen(false);
         }
-      } else if (key.backspace || key.delete) searchList(listQuery.slice(0, -1));
+      } else if (key.backspace || key.delete) searchList((q) => q.slice(0, -1));
       // A / first is the table's way to start a search: here typing is enough.
-      else if (input && !key.ctrl && !key.meta && !key.tab && !(input === "/" && listQuery === ""))
-        searchList(listQuery + input);
+      else if (input && !key.ctrl && !key.meta && !key.tab)
+        searchList((q) => (q === "" && input === "/" ? q : q + input));
       return;
     }
     if (view === "matrix") {
@@ -413,8 +418,8 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
       } else if (key.escape || key.leftArrow) setFocus("scopes");
       else if (key.upArrow) moveRow(-1);
       else if (key.downArrow) moveRow(1);
-      else if (key.pageUp) moveRow(-Math.max(1, rowRoom - 1));
-      else if (key.pageDown) moveRow(Math.max(1, rowRoom - 1));
+      else if (key.pageUp) pointAtRow(pageRow(bodyLines, at, rowRoom, -1));
+      else if (key.pageDown) pointAtRow(pageRow(bodyLines, at, rowRoom, 1));
       else if (key.return && selected) {
         pointAt(at, selected.key);
         setDetailTop(0);
@@ -473,7 +478,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     listRoom(Math.max(0, layout.height - PROJECT_ROWS), lines.length),
     lines.length,
   );
-  listTop.current = scrolled(listTop.current, listCursor, projectRoom, listed.length);
+  listTop.current = scrolled(listTop.current, listAt, projectRoom, listed.length);
   rowTop.current = tableTop(rowTop.current, at, bodyLines, rowRoom);
   const matrixRoom = Math.max(1, layout.height - 3);
   matrixTop.current = scrolled(matrixTop.current, matrixCursor, matrixRoom, matrix?.rows.length ?? 0);
@@ -549,7 +554,7 @@ export function ExtensionsScreen({ load, onExit, now = Date.now }: Props) {
     <ProjectList
       entries={listed}
       noun={NOUN[kind]}
-      cursor={listCursor}
+      cursor={listAt}
       width={layout.scopeWidth}
       height={layout.height}
       top={listTop.current}
