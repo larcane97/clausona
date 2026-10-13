@@ -821,6 +821,13 @@ describe("a Codex model limit with two windows", () => {
     expect(text).toMatch(
       new RegExp(`^ {4}codex:c\\s+3% 1h\\s+3% 2d\\s+100% 7D 4d\\s+in 4d 4h \\(${spark} 7D resets\\)$`, "m"),
     );
+
+    // At 80 columns FREE AGAIN gives the time alone rather than wrap a row; the model's cell
+    // still says which window holds it.
+    const narrow = plain(renderNoAccount("main", r, at(80)));
+    expect(widest(narrow)).toBeLessThanOrEqual(80);
+    expect(narrow).toMatch(/^ {4}codex:a\s+5%\s+22%\s+100% 5H\s+in 3h\s+soonest$/m);
+    expect(narrow).toMatch(/^ {4}codex:c\s+3%\s+3%\s+100% 7D\s+in 4d 4h$/m);
   });
 });
 

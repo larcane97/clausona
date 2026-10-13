@@ -654,7 +654,9 @@ skipped, no reset will help, and the last line says to look at those reasons ins
 
 The last line offers `--wait`. When the soonest reset is more than the 5 hours a bare `--wait`
 waits, it offers one long enough, as in `--wait=48h`. A run that names a model shows the
-accounts' limits on it in a column of their own, and `FREE AGAIN` can then say `(Opus resets)`.
+accounts' limits on it in a column of their own, and `FREE AGAIN` can then say `(Opus resets)`
+or `(GPT-5.3-Codex-Spark 7D resets)`. In a terminal too narrow for that, `FREE AGAIN` gives the
+time alone rather than wrap a row.
 
 On an `all` route narrowed to one tool, the message is about that tool's accounts only, as in
 "No claude account in route any is free right now."

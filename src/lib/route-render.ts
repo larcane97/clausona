@@ -971,9 +971,10 @@ export function resettingWindow(row: Row, limit: number, at: string): string {
 }
 
 /** When every window at or above `limit` will have reset, and which window that is. */
-function freeAgainCell(row: Row, limit: number, at: string | null, now: number): Cell {
+function freeAgainCell(row: Row, limit: number, at: string | null, now: number, withWindow: boolean): Cell {
   if (!at) return [["—", dim]];
-  return [[`${resetsIn(at, now)} (${resettingWindow(row, limit, at)} resets)`, secondary]];
+  const why = withWindow ? ` (${resettingWindow(row, limit, at)} resets)` : "";
+  return [[`${resetsIn(at, now)}${why}`, secondary]];
 }
 
 /** The `--wait` that reaches a reset at `at`: the bare one within its 5h, else one of whole hours. */
@@ -1035,8 +1036,15 @@ export function renderNoAccount(
   const cut = route.maxUsage;
   const percent = percentWidth(rows, cut);
   const windows = windowColumns(rows);
-  const tables = [true, false].map(
-    (resets): Table => ({
+  // Widest first: reset times in the window columns, then none, then FREE AGAIN without the
+  // window that resets, which runs long for a model limit (`GPT-5.3-Codex-Spark 7D`).
+  const layouts = [
+    { resets: true, why: true },
+    { resets: false, why: true },
+    { resets: false, why: false },
+  ];
+  const tables = layouts.map(
+    ({ resets, why }): Table => ({
       // Nobody held back by a limit, only skipped members: their reasons, without a header.
       header: held.length > 0,
       columns: [
@@ -1051,7 +1059,7 @@ export function renderNoAccount(
             cells: [
               [[row.id]],
               ...windows.map(([which]) => quotaCell(row, which, percent, resets, now, cut)),
-              freeAgainCell(row, FULL, at, now),
+              freeAgainCell(row, FULL, at, now, why),
               row.id === soonest?.id ? [["soonest", accent]] : [],
             ],
           }),
