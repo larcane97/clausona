@@ -92,19 +92,21 @@ const LITELLM_PERIODS: Record<string, BudgetPeriod> = {
  * `GET /key/info` of a LiteLLM proxy, called with the key itself and no `key` parameter:
  * `{ info: { spend, max_budget, budget_duration, budget_reset_at, … } }`. Without a duration the
  * spend is a running total and `max_budget` a limit that never renews; with one, LiteLLM sets the
- * spend back to 0 at `budget_reset_at`. Null when there is no spend in it. The response names the
- * key too, which is never read.
+ * spend back to 0 at `budget_reset_at`, whether or not the key has a `max_budget`. Null when there
+ * is no spend in it. The response names the key too, which is never read.
  */
 export function parseLiteLlmKeyInfo(raw: unknown): SpendReading | null {
   const info = record(record(raw)?.info);
   const spend = dollars(info?.spend);
   if (!info || spend === null) return null;
   const reading: SpendReading = { totalUsd: spend };
+  const duration = typeof info.budget_duration === "string" ? info.budget_duration.trim().toLowerCase() : "";
+  const resetsAt = duration ? toIso(info.budget_reset_at) : null;
+  if (resetsAt) reading.totalResetsAt = resetsAt;
   const max = dollars(info.max_budget);
   if (max !== null) {
-    const duration = typeof info.budget_duration === "string" ? info.budget_duration.trim().toLowerCase() : "";
     const per = Object.hasOwn(LITELLM_PERIODS, duration) ? LITELLM_PERIODS[duration] : undefined;
-    reading.limit = { usd: max, resetsAt: duration ? toIso(info.budget_reset_at) : null, ...(per ? { per } : {}) };
+    reading.limit = { usd: max, resetsAt, ...(per ? { per } : {}) };
   }
   return reading;
 }
@@ -195,6 +197,16 @@ export async function readSpend(
 // ─── Usage ──────────────────────────────────────────────────────────
 
 /**
+ * When a reading says the provider sets its count back to 0. A reading an older clausona stored
+ * has the time only on its limit, where it is the same time: an upgrade neither misses a reset nor
+ * sees one that was not.
+ */
+function countResetsAt(reading: SpendReading): number {
+  const at = reading.totalResetsAt ?? reading.limit?.resetsAt;
+  return at ? Date.parse(at) : Number.NaN;
+}
+
+/**
  * Whether the provider set its count back to 0 since the last reading: the total fell, or the
  * reset time it reports has moved on (LiteLLM moves budget_reset_at in the job that zeroes the
  * spend). The second catches a reset after which the spend has already climbed past the last
@@ -203,8 +215,8 @@ export async function readSpend(
  */
 function providerReset(reading: SpendReading, previous: SpendReading): boolean {
   if (reading.totalUsd < previous.totalUsd) return true;
-  const was = previous.limit?.resetsAt ? Date.parse(previous.limit.resetsAt) : Number.NaN;
-  const is = reading.limit?.resetsAt ? Date.parse(reading.limit.resetsAt) : Number.NaN;
+  const was = countResetsAt(previous);
+  const is = countResetsAt(reading);
   return !Number.isNaN(was) && !Number.isNaN(is) && is > was;
 }
 

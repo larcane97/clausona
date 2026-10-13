@@ -62,6 +62,7 @@ describe("readSpend: LiteLLM", () => {
     });
     expect(await read(stub, "https://gw.example.com/anthropic/?team=a#x", "api-key")).toEqual({
       totalUsd: 7.25,
+      totalResetsAt: "2026-11-01T00:00:00.000Z",
       limit: { usd: 50, resetsAt: "2026-11-01T00:00:00.000Z", per: "month" },
     });
     const [url, init] = stub.mock.calls[0];
@@ -93,6 +94,16 @@ describe("readSpend: LiteLLM", () => {
       totalUsd: 3,
       limit: { usd: 10, resetsAt: null },
     });
+  });
+
+  // LiteLLM's reset job zeroes the spend of any key with a budget_duration, max_budget or not.
+  it("keeps when a key with a budget_duration and no max_budget is reset, with no limit", () => {
+    const reading = parseLiteLlmKeyInfo({
+      info: { spend: 3, max_budget: null, budget_duration: "1d", budget_reset_at: "2026-10-15T00:00:00" },
+    });
+    expect(reading).toEqual({ totalUsd: 3, totalResetsAt: "2026-10-15T00:00:00.000Z" });
+    // Without a budget it has no limit, as before.
+    expect(budgetWindow(reading as SpendReading, undefined, NOW)).toBeUndefined();
   });
 
   it("gives no spend reading for a 404, a body that is not JSON, or one of another shape", async () => {
@@ -241,6 +252,38 @@ describe("withBaselines", () => {
       NOW + day + 2000,
     );
     expect(budgetWindow(next, { usd: 100, per: "month" }, NOW + day + 2000)?.spentUsd).toBe(65);
+  });
+
+  it("keeps what the period spent across a reset seen only by its moved time, on a key with no max_budget", () => {
+    // A key LiteLLM resets daily, with no limit of its own, under a $100 monthly budget.
+    const info = (spend: number, resetsAt: string) =>
+      parseLiteLlmKeyInfo({
+        info: { spend, max_budget: null, budget_duration: "1d", budget_reset_at: resetsAt },
+      }) as SpendReading;
+    const day = 24 * 60 * 60 * 1000;
+    const first = withBaselines(info(0, "2026-10-15T00:00:00"), undefined, NOW);
+    const later = withBaselines(info(30, "2026-10-15T00:00:00"), first, NOW + 1000);
+    // The next day the count began again at 0, and its reset time moved on; it has climbed to 35.
+    const next = withBaselines(info(35, "2026-10-16T00:00:00"), later, NOW + day + 2000);
+    expect(budgetWindow(next, { usd: 100, per: "month" }, NOW + day + 2000)?.spentUsd).toBe(65);
+  });
+
+  it("tells a reset from a reading stored before the reset time was kept on its own", () => {
+    // Stored by an older clausona: the reset time only on its limit.
+    const day = 24 * 60 * 60 * 1000;
+    const limit = { usd: 50, resetsAt: "2026-10-15T00:00:00.000Z", per: "day" as const };
+    const first = withBaselines({ totalUsd: 0, limit }, undefined, NOW);
+    const stored = withBaselines({ totalUsd: 30, limit }, first, NOW + 1000);
+    const info = (spend: number, resetsAt: string) =>
+      parseLiteLlmKeyInfo({
+        info: { spend, max_budget: 50, budget_duration: "1d", budget_reset_at: resetsAt },
+      }) as SpendReading;
+    const month = { usd: 100, per: "month" as const };
+    // The same reset time is no reset; one moved on is.
+    const same = withBaselines(info(32, "2026-10-15T00:00:00"), stored, NOW + 2000);
+    expect(budgetWindow(same, month, NOW + 2000)?.spentUsd).toBe(32);
+    const moved = withBaselines(info(35, "2026-10-16T00:00:00"), stored, NOW + day + 2000);
+    expect(budgetWindow(moved, month, NOW + day + 2000)?.spentUsd).toBe(65);
   });
 
   it("counts a late provider reset once, and not while its reset time has only passed", () => {

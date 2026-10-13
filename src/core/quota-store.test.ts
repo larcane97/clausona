@@ -438,6 +438,20 @@ describe("collectQuotas: an API profile's spend", () => {
     expect(await read("2026-10-15T18:00:00Z", 10, "2026-10-16T00:00:00Z")).toBe(41);
   });
 
+  it("keeps in the cache when a LiteLLM key with no max_budget is reset, and counts the reset", async () => {
+    const month = apiTarget({ usd: 100, per: "month" });
+    const read = async (when: string, spend: number, resets: string) => {
+      const info = { spend, max_budget: null, budget_duration: "1d", budget_reset_at: resets };
+      const result = await collect(month, stubFetch(200, { info }), Date.parse(when));
+      return result["claude:gw"]?.budget?.spentUsd;
+    };
+    await read("2026-10-14T08:00:00Z", 0, "2026-10-15T00:00:00Z");
+    expect(await read("2026-10-14T20:00:00Z", 30, "2026-10-15T00:00:00Z")).toBe(30);
+    expect(readCacheFile().profiles["claude:gw"].spend.totalResetsAt).toBe("2026-10-15T00:00:00.000Z");
+    // Reset at midnight, and climbed past the last reading since.
+    expect(await read("2026-10-15T18:00:00Z", 35, "2026-10-16T00:00:00Z")).toBe(65);
+  });
+
   it("keeps the last reading's spend through a failure, and pauses only this profile after a 429", async () => {
     await collect(apiTarget(), stubFetch(200, { info: { spend: 12, max_budget: 40 } }));
     const result = await collect(apiTarget(), stubFetch(429, {}, { "retry-after": "600" }), AT + QUOTA_FRESH_MS);

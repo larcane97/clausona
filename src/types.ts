@@ -55,6 +55,12 @@ export type BudgetWindow = QuotaWindow & {
 export type SpendReading = {
   /** What the provider counts as spent on the key, in USD: since its own last reset, or ever. */
   totalUsd: number;
+  /**
+   * When the provider next sets `totalUsd` back to 0, for a key it resets (LiteLLM's
+   * budget_reset_at, for a key with a budget_duration), whether or not the key has a limit: what
+   * tells a reset between two readings. Not a limit, which is `limit`.
+   */
+  totalResetsAt?: string;
   /** The limit set on the provider key, when there is one. */
   limit?: {
     usd: number;
