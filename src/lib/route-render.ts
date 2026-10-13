@@ -18,6 +18,7 @@ import {
   type Usage,
   type UsageWindow,
 } from "../core/routing.js";
+import { posixQuote } from "../core/shell.js";
 import type { QuotaWindow, ToolName } from "../types.js";
 import { accent, bold, box, dim, dimmer, padEnd, secondary, truncate, warnIcon, yellow } from "./cli-style.js";
 import {
@@ -97,9 +98,6 @@ function resetsIn(at: string, now: number): string {
   return left === "now" ? left : `in ${left}`;
 }
 
-/** A string quoted for a POSIX shell, so a command in a message can be pasted as it is. */
-const shellQuote = (text: string) => `'${text.replace(/'/g, "'\\''")}'`;
-
 /**
  * The field options a run or an explain was given, as the flags that give them again, in the
  * order the help lists them. A suggested command carries them, so that it ranks what was ranked.
@@ -107,7 +105,7 @@ const shellQuote = (text: string) => `'${text.replace(/'/g, "'\\''")}'`;
 function fieldFlags(overrides: RouteOverrides): string[] {
   const flags: string[] = [];
   const patterns = (flag: string, list: string[] | undefined) => {
-    if (list?.length) flags.push(`${flag} ${shellQuote(list.join(","))}`);
+    if (list?.length) flags.push(`${flag} ${posixQuote(list.join(","))}`);
   };
   patterns("--from", overrides.from);
   patterns("--exclude", overrides.exclude);

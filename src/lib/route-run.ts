@@ -1,5 +1,6 @@
 import { holdsKey, type RouteTool, toolsOf, withDefaults } from "../core/route-config.js";
 import { readRoutes } from "../core/routes-store.js";
+import { posixQuote } from "../core/shell.js";
 import { createRoute, newRouteFrom } from "../route-commands.js";
 import type { Registry } from "../types.js";
 import { accent, bold, dim } from "./cli-style.js";
@@ -32,9 +33,6 @@ import {
 import { isResumeRun, type RunArgs, readRunArgs } from "./run-args.js";
 import { noRegistryError } from "./service.js";
 
-/** A string quoted for a POSIX shell, so the command in a message can be pasted as it is. */
-const shellQuote = (text: string) => `'${text.replace(/'/g, "'\\''")}'`;
-
 /**
  * The profile `clausona run <target>` names. A target that cannot be a profile name - a prompt,
  * typed where the profile goes - is told how to pass it, rather than that no such profile
@@ -55,7 +53,7 @@ export function runTarget(input: string, registry: Registry): ParsedProfileRef {
         : /^[A-Za-z][A-Za-z0-9-]*$/.test(input.slice(0, colon)) && validateProfileName(input.slice(colon + 1)).ok;
     if (!refShaped) {
       throw new Error(
-        `'${input}' is not a profile or a tool. To pass a prompt, name the tool: clausona run claude ${shellQuote(input)}`,
+        `'${input}' is not a profile or a tool. To pass a prompt, name the tool: clausona run claude ${posixQuote(input)}`,
       );
     }
     throw error;
