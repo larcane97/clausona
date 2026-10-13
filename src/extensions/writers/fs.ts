@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
+import { constants } from "node:fs";
 import {
+  access,
   chmod,
   cp,
   lstat,
@@ -26,7 +28,8 @@ import { isWithin, samePath } from "../read.js";
  * Every file-system write the extension writes make, and the one lock they take: the only module
  * that changes the disk. apply.ts alone imports it (pinned by boundary.test.ts). A file is written
  * through its link, to a temp file next to the real one renamed over it; a link is removed as a
- * link, never followed; nothing here removes a tree but an operation's own backup folder.
+ * link, never followed; nothing here removes a tree but an operation's own backup folder, and
+ * what a move across file systems set aside or copied under its own names (ASIDE_NAME).
  */
 
 /**
@@ -168,37 +171,130 @@ export async function entryKind(p: string): Promise<"dir" | "file" | "link" | "m
 }
 
 /**
- * rename; on EXDEV, across file systems: `from` is renamed aside in its own folder first, then
- * cp(aside, temp next to `to`, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true })
- * and the temp renamed to `to`, then rm(aside, { recursive: true }). Neither follows a link inside.
- * So `from` is empty from before a copy can exist, and `to` holds the whole copy or nothing: a
- * move cut short is never taken for one made. A copy that fails is removed and `from` put back.
+ * A move across file systems under way, as moveTo has it recorded before each step: where the
+ * original waits meanwhile (`aside`, on its own volume), where the copy is made (`copy`, on the
+ * other), and whether the copy has landed at the move's end.
  */
-export async function moveTo(from: string, to: string): Promise<void> {
+export type CrossMove = { aside: string; copy: string; landed: boolean };
+
+/** The names asideName gives: what settleMove takes for clausona's own, and nothing else. */
+export const ASIDE_NAME = /^\.clausona-.+-\d+-[0-9a-f]{12}\.(moving|copying)$/;
+
+/** The asides of the moves across file systems this process has under way: settleMove leaves them be. */
+const underWay = new Set<string>();
+
+/**
+ * Where a move across file systems keeps `p` aside, or makes its copy: the folder above `p`'s
+ * own, when that is on the same volume and can be written, else `p`'s own folder. Claude Code
+ * loads every folder in a skills folder, a dot-folder too, as a skill; the folder above is no
+ * skills folder.
+ */
+async function asideDir(p: string): Promise<string> {
+  const own = path.dirname(p);
+  const above = path.dirname(own);
+  if (above === own) return own;
+  try {
+    const [here, there] = await Promise.all([stat(own), stat(above)]);
+    if (here.dev !== there.dev) return own;
+    await access(above, constants.W_OK);
+    return above;
+  } catch {
+    return own;
+  }
+}
+
+/** `.clausona-<name>-<pid>-<random>.<tag>` in asideDir(p): a dot-entry, which Codex does not list. */
+async function asideName(p: string, tag: "moving" | "copying"): Promise<string> {
+  const name = `.clausona-${path.basename(p)}-${process.pid}-${randomBytes(6).toString("hex")}.${tag}`;
+  return path.join(await asideDir(p), name);
+}
+
+/**
+ * rename; on EXDEV, across file systems, in steps, each recorded first through `record`: `from` is
+ * renamed aside on its own volume, out of its folder (asideDir); cp(aside, a copy on the other
+ * volume, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true }) and the copy
+ * renamed to `to`; recorded landed; then rm(aside, { recursive: true }); recorded done
+ * (`undefined`). Neither follows a link inside. So `from` is empty from before a copy can exist,
+ * and `to` holds the whole copy or nothing: a move cut short is never taken for one made. A copy
+ * that fails is removed and `from` put back. One stopped part way - killed, or the last removal
+ * failing - leaves its record, and settleMove finishes or rolls it back.
+ */
+export async function moveTo(
+  from: string,
+  to: string,
+  record: (move: CrossMove | undefined) => Promise<void> = async () => {},
+): Promise<void> {
   try {
     await rename(from, to);
     return;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
   }
-  const aside = besideName(from, "moving");
-  const copy = besideName(to, "copying");
-  await rename(from, aside);
+  const move: CrossMove = {
+    aside: await asideName(from, "moving"),
+    copy: await asideName(to, "copying"),
+    landed: false,
+  };
+  underWay.add(move.aside);
   try {
-    await cp(aside, copy, {
-      recursive: true,
-      verbatimSymlinks: true,
-      preserveTimestamps: true,
-      force: false,
-      errorOnExist: true,
-    });
-    await rename(copy, to);
-  } catch (error) {
-    await rm(copy, { recursive: true, force: true }).catch(() => {});
-    await rename(aside, from).catch(() => {});
-    throw error;
+    await record(move);
+    try {
+      await rename(from, move.aside);
+    } catch (error) {
+      await record(undefined).catch(() => {});
+      throw error;
+    }
+    try {
+      await cp(move.aside, move.copy, {
+        recursive: true,
+        verbatimSymlinks: true,
+        preserveTimestamps: true,
+        force: false,
+        errorOnExist: true,
+      });
+      await rename(move.copy, to);
+    } catch (error) {
+      await rm(move.copy, { recursive: true, force: true }).catch(() => {});
+      // Put back: the move never happened. Should that fail too, its record stays, for settleMove.
+      const back = await rename(move.aside, from).then(
+        () => true,
+        () => false,
+      );
+      if (back) await record(undefined).catch(() => {});
+      throw error;
+    }
+    move.landed = true;
+    await record({ ...move });
+    await rm(move.aside, { recursive: true });
+    await record(undefined);
+  } finally {
+    underWay.delete(move.aside);
   }
-  await rm(aside, { recursive: true });
+}
+
+/**
+ * A move across file systems from `from` that stopped part way, put right from its record. Once
+ * its copy has landed at the move's end, the move is done: what is left of the aside is removed,
+ * `finished`. Before, it never happened: the copy, whole or not, is removed and the aside renamed
+ * back to `from`, one rename on its own volume, `rolled back` - unless something is at `from`
+ * again, when the aside stays, `kept`. So is a move this process has under way, or one whose
+ * names are not asideName's. `gone` when nothing of it is left.
+ */
+export async function settleMove(from: string, move: CrossMove): Promise<"finished" | "rolled back" | "kept" | "gone"> {
+  if (underWay.has(move.aside)) return "kept";
+  if (!ASIDE_NAME.test(path.basename(move.aside)) || !ASIDE_NAME.test(path.basename(move.copy))) return "kept";
+  const kept = (kind: string) => kind === "dir" || kind === "file";
+  const aside = await entryKind(move.aside);
+  if (move.landed) {
+    if (!kept(aside)) return "gone";
+    await rm(move.aside, { recursive: true, force: true });
+    return "finished";
+  }
+  if (kept(await entryKind(move.copy))) await rm(move.copy, { recursive: true, force: true });
+  if (!kept(aside)) return "gone";
+  if ((await entryKind(from)) !== "missing") return "kept";
+  await rename(move.aside, from);
+  return "rolled back";
 }
 
 /**

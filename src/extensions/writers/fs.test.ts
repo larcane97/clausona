@@ -6,16 +6,23 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   statSync,
 } from "node:fs";
+import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 /**
  * Seams into `rename` and `cp`: the next `exdev` renames fail as a move across file systems does,
- * and with `cpFails` the next copy runs, then fails as a disk that filled up would.
+ * with `cpFails` the next copy runs, then fails as a disk that filled up would, and `duringCopy`
+ * is called once a copy has run.
  */
-const fsHooks = vi.hoisted(() => ({ exdev: 0, cpFails: false }));
+const fsHooks = vi.hoisted(() => ({
+  exdev: 0,
+  cpFails: false,
+  duringCopy: undefined as (() => void) | undefined,
+}));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   const rename: typeof actual.rename = async (from, to) => {
@@ -27,6 +34,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
   const cp: typeof actual.cp = async (from, to, options) => {
     await actual.cp(from, to, options);
+    fsHooks.duringCopy?.();
     if (!fsHooks.cpFails) return;
     fsHooks.cpFails = false;
     throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
@@ -37,6 +45,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 import { hashTree, samePath } from "../read.js";
 import { TestHome } from "../test-home.js";
 import {
+  type CrossMove,
   ensureDir,
   entryKind,
   makeLink,
@@ -46,6 +55,7 @@ import {
   realOrSelf,
   removeLink,
   removeTree,
+  settleMove,
   writeAtomic,
   writePrivate,
 } from "./fs.js";
@@ -54,6 +64,7 @@ const homes: TestHome[] = [];
 afterEach(() => {
   fsHooks.exdev = 0;
   fsHooks.cpFails = false;
+  fsHooks.duringCopy = undefined;
   for (const home of homes.splice(0)) home.dispose();
 });
 
@@ -156,6 +167,79 @@ describe("moveTo", () => {
     // Nothing left aside next to either end.
     expect(readdirSync(h.path("skills"))).toEqual([]);
     expect(readdirSync(h.path("backup"))).toEqual(["1"]);
+  });
+
+  it("sets the folder aside out of its skills folder under a dot name, saying where before each step", async () => {
+    const h = home();
+    h.skill(".claude/skills", "old-one");
+    const from = h.path(".claude", "skills", "old-one");
+    const before = await hashTree(from);
+    mkdirSync(h.path("backup", "op"), { recursive: true });
+    const to = h.path("backup", "op", "1");
+    const steps: (CrossMove | undefined)[] = [];
+    let during: string[] = [];
+    fsHooks.duringCopy = () => {
+      during = readdirSync(h.path(".claude", "skills"));
+    };
+
+    fsHooks.exdev = 1;
+    await moveTo(from, to, async (move) => {
+      steps.push(move && { ...move });
+      // Each step is recorded before it is taken: the original is still in place at the first.
+      if (steps.length === 1) expect(existsSync(from)).toBe(true);
+    });
+
+    // While it was copied, the skills folder held nothing Claude Code or Codex would list.
+    expect(during).toEqual([]);
+    const [first, landed, done] = steps;
+    expect(path.dirname(first?.aside ?? "")).toBe(h.path(".claude"));
+    expect(path.basename(first?.aside ?? "")).toMatch(/^\.clausona-old-one-\d+-[0-9a-f]{12}\.moving$/);
+    expect(path.dirname(first?.copy ?? "")).toBe(h.path("backup"));
+    expect(path.basename(first?.copy ?? "")).toMatch(/^\.clausona-1-\d+-[0-9a-f]{12}\.copying$/);
+    expect(first?.landed).toBe(false);
+    expect(landed).toEqual({ ...first, landed: true });
+    expect(done).toBeUndefined();
+    expect(steps).toHaveLength(3);
+    expect(await hashTree(to)).toBe(before);
+    expect(readdirSync(h.path(".claude")).filter((name) => name.startsWith(".clausona-"))).toEqual([]);
+  });
+
+  it("finishes a move cut short once its copy landed, and rolls one back before", async () => {
+    const h = home();
+    // Rolled back: the copy never landed, so the original goes back where it was.
+    h.skill("skills", "old-one");
+    const from = h.path("skills", "old-one");
+    const before = await hashTree(from);
+    const move: CrossMove = {
+      aside: h.path(".clausona-old-one-1-abcdefabcdef.moving"),
+      copy: h.path(".clausona-1-1-abcdefabcdef.copying"),
+      landed: false,
+    };
+    renameSync(from, move.aside);
+    h.write(".clausona-1-1-abcdefabcdef.copying/half.txt", "half");
+    expect(await settleMove(from, move)).toBe("rolled back");
+    expect(await hashTree(from)).toBe(before);
+    expect(existsSync(move.aside)).toBe(false);
+    expect(existsSync(move.copy)).toBe(false);
+    // Nothing left of it.
+    expect(await settleMove(from, move)).toBe("gone");
+
+    // Finished: the copy is whole at its place, so what is left of the original goes.
+    h.write("backup/1/SKILL.md", "copied");
+    renameSync(from, move.aside);
+    expect(await settleMove(from, { ...move, landed: true })).toBe("finished");
+    expect(existsSync(move.aside)).toBe(false);
+    expect(existsSync(from)).toBe(false);
+
+    // Something at the place again: the original stays aside, for nothing is put over it.
+    h.skill("skills", "old-one");
+    h.write(".clausona-old-one-1-abcdefabcdef.moving/SKILL.md", "aside");
+    expect(await settleMove(from, move)).toBe("kept");
+    expect(existsSync(move.aside)).toBe(true);
+    // A name clausona would never set aside under is not one to touch.
+    const other = { ...move, aside: h.path("skills") };
+    expect(await settleMove(h.path("elsewhere"), other)).toBe("kept");
+    expect(existsSync(h.path("skills", "old-one"))).toBe(true);
   });
 
   it("puts the folder back, and leaves no copy, when a copy across file systems fails", async () => {

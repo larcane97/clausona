@@ -7,7 +7,9 @@ import type { Expect, FileChange, Plan } from "./plan.js";
 import { hashTree, isRecord, samePath } from "./read.js";
 import { parseStash, type StashFile, stashItem, stashText } from "./stash.js";
 import {
+  ASIDE_NAME,
   CLAUDE_JSON_LOCK,
+  type CrossMove,
   ensureDir,
   entryKind,
   type FileRead,
@@ -22,6 +24,7 @@ import {
   removeFile,
   removeLink,
   removeTree,
+  settleMove,
   withLock,
   writeAtomic,
   writePrivate,
@@ -105,6 +108,13 @@ export type ManifestEntry = {
   with?: number;
   /** Set once an undo has dealt with it - put back, or left alone for good. A `locked` skip leaves it unset, to try again. */
   undone?: UndoOutcome;
+  /**
+   * A folder or file moved across file systems, while the move is under way: `from` and `to` -
+   * `path` and the backup, either way round - the process moving it, and what moveTo records of
+   * each step. Set before the first step and taken off once the move is done, so one left says a
+   * move was cut short: settleMoves, or undo, finishes or rolls it back (writers/fs.ts settleMove).
+   */
+  moving?: { from: string; to: string; pid: number } & CrossMove;
   done: boolean;
 };
 
@@ -205,6 +215,15 @@ function detailOf(error: unknown): string {
   if (error instanceof JsonEditError || error instanceof TomlEditError) return error.message;
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   return typeof code === "string" && code !== "" ? code : "unexpected error";
+}
+
+/** moveTo's record of a move across file systems, kept in `entry` and saved before each step. */
+function recordMove(entry: ManifestEntry, from: string, to: string, persist: () => Promise<void>) {
+  return async (move: CrossMove | undefined): Promise<void> => {
+    if (move) entry.moving = { from, to, pid: process.pid, ...move };
+    else delete entry.moving;
+    await persist();
+  };
 }
 
 /**
@@ -389,7 +408,11 @@ async function jsonChange(run: Run, change: JsonChange): Promise<Stop | undefine
     run.manifest.entries.push(entry);
     await save(run);
     await privateDir(path.dirname(into.abs));
-    await moveTo(kept.file, into.abs);
+    await moveTo(
+      kept.file,
+      into.abs,
+      recordMove(entry, kept.file, into.abs, () => save(run)),
+    );
     entry.done = true;
     await save(run);
   }
@@ -507,7 +530,11 @@ async function removeChange(run: Run, change: RemoveChange): Promise<Stop | unde
   run.manifest.entries.push(entry);
   await save(run);
   await privateDir(path.dirname(into.abs));
-  await moveTo(file, into.abs);
+  await moveTo(
+    file,
+    into.abs,
+    recordMove(entry, file, into.abs, () => save(run)),
+  );
   entry.done = true;
   await save(run);
   return undefined;
@@ -541,6 +568,8 @@ async function applyChange(run: Run, change: FileChange): Promise<Stop | undefin
  */
 export async function apply(plan: Plan, env: WriteEnv): Promise<ApplyResult> {
   if (plan.changes.length === 0) return { status: "nothing" };
+  // Housekeeping first: it never fails what is applied.
+  await settleMoves(env).catch(() => undefined);
   const at = env.now();
   const id = await freeId(env, operationId(at, plan));
   const dir = path.join(env.backupRoot, id);
@@ -585,6 +614,67 @@ export async function apply(plan: Plan, env: WriteEnv): Promise<ApplyResult> {
   return stop
     ? { status: "stopped", operation, done, total: plan.changes.length, stop }
     : { status: "applied", operation, done };
+}
+
+// ─── Moves across file systems cut short ────────────────────────────
+
+/** Whether `pid` is a process still running other than this one, whose moves `underWay` in writers/fs.ts knows. */
+function runningElsewhere(pid: number): boolean {
+  if (pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // Not ours to signal, but there.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Whether an entry's record of a move is one clausona made for it: between its path and its
+ * backup in `dir`, the aside and the copy under asideName's names, each beside or one folder
+ * above an end of the move. A damaged or foreign record moves nothing.
+ */
+function soundMove(entry: ManifestEntry, move: NonNullable<ManifestEntry["moving"]>, dir: string): boolean {
+  const backup = backupPath(dir, entry.backup);
+  if (backup === undefined) return false;
+  const ends = [entry.path, backup];
+  const between = ends.some((end) => samePath(end, move.from)) && ends.some((end) => samePath(end, move.to));
+  const near = (p: string, end: string) =>
+    ASIDE_NAME.test(path.basename(p)) &&
+    (samePath(path.dirname(p), path.dirname(end)) || samePath(path.dirname(p), path.dirname(path.dirname(end))));
+  return between && !samePath(move.from, move.to) && near(move.aside, move.from) && near(move.copy, move.to);
+}
+
+/**
+ * An entry's move cut short, put right with settleMove, and its record taken off once there is
+ * nothing left of it; "kept" leaves the record for another time, as does a move another process
+ * still has under way, or a step that fails.
+ */
+async function settleEntry(entry: ManifestEntry, dir: string): Promise<"finished" | "rolled back" | "kept" | "gone"> {
+  const move = entry.moving;
+  if (!move || !soundMove(entry, move, dir) || runningElsewhere(move.pid)) return "kept";
+  const settled = await settleMove(move.from, move).catch(() => "kept" as const);
+  if (settled !== "kept") delete entry.moving;
+  return settled;
+}
+
+/**
+ * The moves across file systems that an apply or an undo left part way, in every operation kept,
+ * finished or rolled back (settleEntry). A move whose copy landed is done; one whose copy did not
+ * never happened, and what it set aside goes back to its place. Run before each apply.
+ */
+async function settleMoves(env: WriteEnv): Promise<void> {
+  for (const id of await operationIds(env)) {
+    const dir = path.join(env.backupRoot, id);
+    const manifest = await readManifest(dir);
+    if (!manifest?.entries.some((entry) => entry.moving)) continue;
+    let settled = false;
+    for (const entry of manifest.entries) {
+      if (entry.moving && (await settleEntry(entry, dir)) !== "kept") settled = true;
+    }
+    if (settled) await save({ dir, manifest });
+  }
 }
 
 // ─── Undo ───────────────────────────────────────────────────────────
@@ -637,7 +727,20 @@ function isEntry(value: unknown): value is ManifestEntry {
     (value.lock === undefined || value.lock === true) &&
     (value.with === undefined || isIndex(value.with)) &&
     (value.undone === undefined || (typeof value.undone === "string" && OUTCOMES.has(value.undone))) &&
+    (value.moving === undefined || isMove(value.moving)) &&
     typeof value.done === "boolean"
+  );
+}
+
+function isMove(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.from === "string" &&
+    typeof value.to === "string" &&
+    typeof value.aside === "string" &&
+    typeof value.copy === "string" &&
+    typeof value.landed === "boolean" &&
+    isIndex(value.pid)
   );
 }
 
@@ -691,6 +794,8 @@ async function hashNow(file: string): Promise<string | null> {
 async function changeMade(entry: ManifestEntry, dir: string): Promise<boolean> {
   if (entry.done) return true;
   try {
+    // A move across file systems cut short, its folder set aside: undo puts it back from there.
+    if (entry.moving && (await entryKind(entry.moving.aside)) !== "missing") return true;
     if (entry.what === "json" || entry.what === "toml" || entry.what === "text") {
       return entry.hashAfter !== null && (await hashNow(entry.path)) === entry.hashAfter;
     }
@@ -790,18 +895,33 @@ async function undoFile(entry: ManifestEntry, dir: string): Promise<Outcome> {
   return (await undoPaths(entry, current, before)) ? "restored" : "changed";
 }
 
-/** Something moved into the backup, moved back to its place when that is still empty. */
-async function moveBack(entry: ManifestEntry, dir: string): Promise<Outcome> {
+/**
+ * Something moved into the backup, moved back to its place when that is still empty. A move of it
+ * across file systems that was cut short is put right first: rolled back into its place, or
+ * finished into it, it is back; the other way, it is moved again from the backup.
+ */
+async function moveBack(entry: ManifestEntry, dir: string, persist: () => Promise<void>): Promise<Outcome> {
   const backup = backupPath(dir, entry.backup);
+  if (entry.moving) {
+    const toPlace = samePath(entry.moving.to, entry.path);
+    const settled = await settleEntry(entry, dir);
+    if (settled !== "kept") await persist();
+    if ((settled === "rolled back" && !toPlace) || (settled === "finished" && toPlace)) return "restored";
+  }
   if (backup === undefined || (await entryKind(backup)) === "missing") return "missing";
   if ((await entryKind(entry.path)) !== "missing") return "occupied";
   if (entry.what === "stash") await privateDir(path.dirname(entry.path));
   else await ensureDir(path.dirname(entry.path));
-  await moveTo(backup, entry.path);
+  await moveTo(backup, entry.path, recordMove(entry, backup, entry.path, persist));
   return "restored";
 }
 
-async function undoEntry(entry: ManifestEntry, dir: string, env: WriteEnv): Promise<Outcome> {
+async function undoEntry(
+  entry: ManifestEntry,
+  dir: string,
+  env: WriteEnv,
+  persist: () => Promise<void>,
+): Promise<Outcome> {
   switch (entry.what) {
     case "json":
     case "toml":
@@ -812,7 +932,7 @@ async function undoEntry(entry: ManifestEntry, dir: string, env: WriteEnv): Prom
     }
     case "folder":
     case "file":
-      return moveBack(entry, dir);
+      return moveBack(entry, dir, persist);
     case "link": {
       if (!entry.link) return "missing";
       if ((await entryKind(entry.path)) !== "missing") return "occupied";
@@ -821,7 +941,7 @@ async function undoEntry(entry: ManifestEntry, dir: string, env: WriteEnv): Prom
       return "restored";
     }
     case "stash": {
-      if (entry.change === "removed") return moveBack(entry, dir);
+      if (entry.change === "removed") return moveBack(entry, dir, persist);
       const current = await readMaybe(entry.path);
       if (!current) return "missing";
       if (bytesHash(current.bytes) !== entry.hashAfter) return "changed";
@@ -859,7 +979,7 @@ export async function undo(env: WriteEnv, command?: ExtensionsCommand): Promise<
     if (known !== undefined) return known;
     const entry = entries[at] as ManifestEntry;
     try {
-      return record(at, await undoEntry(entry, dir, env));
+      return record(at, await undoEntry(entry, dir, env, () => save({ dir, manifest })));
     } catch {
       return record(at, "failed");
     }
