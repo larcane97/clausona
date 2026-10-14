@@ -55,6 +55,9 @@ It never puts an API profile in a route unless you name it, since those are bill
 won't edit `~/.clausona/routes.json` by hand, or run a spent account by name to get past its limit
 unless you say so.
 
+The plugin is one skill with no hooks or scripts. Everything it does is a `clausona` command in your
+shell.
+
 ## More
 
 - [Routing docs](https://github.com/larcane97/clausona/blob/main/docs/routing.md)

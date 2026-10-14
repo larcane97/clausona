@@ -8,7 +8,8 @@ those lets one Claude Code or Codex session run parallel workers, every one on i
 account or API model. The runner plugin says how to drive its tool. This one decides which account
 gets each task, and when a worker's work counts as done.
 
-You don't call it yourself. A fleet skill loads it when it starts.
+You don't call it yourself. A fleet skill loads it when it starts. It's one skill, with no hooks or
+scripts.
 
 ## What you need
 
