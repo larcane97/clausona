@@ -16,7 +16,7 @@
   <meta property="og:url" content="https://larcane97.github.io/clausona/ko/parallel-agents/">
   <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
   <meta property="article:published_time" content="2026-10-08">
-  <meta property="article:modified_time" content="2026-10-10">
+  <meta property="article:modified_time" content="2026-10-14">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="../../favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -30,7 +30,7 @@
     "headline": "Claude Code 에이전트를 여러 계정과 모델로 병렬 실행하기",
     "description": "서브에이전트 대신 에이전트마다 독립된 Claude Code 세션을 띄우고, 각각 다른 계정이나 DeepSeek 같은 API 모델에 맡기는 방법. 어느 터미널에서든 되고, Superset, herdr, Orca에서는 조율 플러그인이 배정과 검증을 맡습니다.",
     "datePublished": "2026-10-08",
-    "dateModified": "2026-10-10",
+    "dateModified": "2026-10-14",
     "inLanguage": "ko",
     "image": "https://larcane97.github.io/clausona/assets/superset-fleet.gif",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
@@ -101,7 +101,7 @@
       <nav class="crumbs" aria-label="현재 위치"><a href="../../">clausona</a> / <a href="../">가이드</a></nav>
       <h1>Claude Code 에이전트를 여러 계정과 모델로 병렬 실행하기</h1>
       <p class="lead">작업 하나를 다섯 갈래로 나눌 때 보통은 Claude Code(클로드 코드)의 서브에이전트를 씁니다. 부모 세션이 다섯 개를 한꺼번에 띄워 놓고, 각자 일을 마치면 돌려준 결과만 받아 보는 식이죠.</p>
-      <p class="updated"><time datetime="2026-10-10">2026년 10월 10일</time> 업데이트</p>
+      <p class="updated"><time datetime="2026-10-14">2026년 10월 14일</time> 업데이트</p>
       <p>그런데 서브에이전트는 일하는 과정이 보이지 않습니다. 다섯 개 중 하나만 골라 끼어들기도 어렵고요. 게다가 다섯 개가 모두 같은 계정을 씁니다.</p>
       <p>이 글에서는 에이전트마다 독립된 Claude Code 세션을 띄우는 방법을 다룹니다. 세션마다 지켜보다가 끼어들 수 있고, 각 세션을 정해 둔 계정이나 모델로 보낼 수 있습니다. 회사 계정과 두 번째 구독 계정은 물론, DeepSeek 같은 API 모델도 됩니다.</p>
 
@@ -187,7 +187,7 @@ claude plugin install superset-fleet@clausona   # herdr-fleet, orca-fleet도 같
       </div>
 
       <h2 id="routing">에이전트마다 계정과 모델 정하기</h2>
-      <p>세션을 손으로 띄울 때는 프로필도 손으로 고릅니다. 다섯 개쯤 되면 이것도 꽤 일이죠.</p>
+      <p>세션을 손으로 띄울 때는 작업에 맞는 프로필도 손으로 고릅니다. 다섯 개쯤 되면 이것도 꽤 일이죠.</p>
       <p>대신 스킬을 쓰면 이 선택을 규칙에 맡길 수 있습니다. 오케스트레이터가 따르는 순서는 이렇습니다.</p>
       <ol>
         <li>대화에서 말한 것</li>
