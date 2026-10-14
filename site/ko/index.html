@@ -65,7 +65,7 @@
         "name": "clausona를 쓰면 Claude Code 실행이 느려지나요?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "그냥 claude로 실행하면 느려지지 않습니다. 셸이 캐시해 둔 실행 스크립트만 읽거든요. M4 Pro Mac에서 재 보니 claude --version의 실행 시간 중앙값은 hook이 있을 때와 없을 때 모두 25ms였습니다. clausona run으로 띄우면 route를 쓰든 안 쓰든 clausona가 먼저 실행되므로 0.3초쯤 더 걸립니다. csn use처럼 설정을 바꾼 뒤의 첫 실행과 API 프로필 실행도 마찬가지입니다."
+          "text": "그냥 claude로 실행하면 느려지지 않습니다. 셸이 캐시해 둔 실행 스크립트만 읽거든요. M4 Pro Mac에서 재 보니 claude --version의 실행 시간 중앙값은 hook이 있을 때와 없을 때 모두 25ms였습니다. clausona run으로 띄우면 route를 쓰든 안 쓰든 clausona가 먼저 실행되는데, 이게 0.3초쯤 걸립니다. csn use처럼 설정을 바꾼 뒤의 첫 실행과 API 프로필 실행도 마찬가지입니다."
         }
       },
       {
@@ -296,7 +296,7 @@ codex:work          dev@example.com      —          12% 5d</code></pre>
       <h3>다른 계정에서 대화를 이어갈 수 있나요?</h3>
       <p>네. <code>clausona config &lt;프로필&gt; --merge-sessions</code>로 기록 공유를 켜면 <code>claude --resume</code>과 <code>claude --continue</code>가 기록을 공유하는 모든 계정의 대화를 찾습니다. macOS와 Linux에서는 <code>codex resume</code>도 마찬가지입니다.</p>
       <h3>clausona를 쓰면 Claude Code 실행이 느려지나요?</h3>
-      <p>그냥 <code>claude</code>로 실행하면 느려지지 않습니다. 셸이 캐시해 둔 실행 스크립트만 읽거든요. M4 Pro Mac에서 재 보니 <code>claude --version</code>의 실행 시간 중앙값은 hook이 있을 때와 없을 때 모두 25ms였습니다. <code>clausona run</code>으로 띄우면 route를 쓰든 안 쓰든 clausona가 먼저 실행되므로 0.3초쯤 더 걸립니다. <code>csn use</code>처럼 설정을 바꾼 뒤의 첫 실행과 API 프로필 실행도 마찬가지입니다.</p>
+      <p>그냥 <code>claude</code>로 실행하면 느려지지 않습니다. 셸이 캐시해 둔 실행 스크립트만 읽거든요. M4 Pro Mac에서 재 보니 <code>claude --version</code>의 실행 시간 중앙값은 hook이 있을 때와 없을 때 모두 25ms였습니다. <code>clausona run</code>으로 띄우면 route를 쓰든 안 쓰든 clausona가 먼저 실행되는데, 이게 0.3초쯤 걸립니다. <code>csn use</code>처럼 설정을 바꾼 뒤의 첫 실행과 API 프로필 실행도 마찬가지입니다.</p>
       <h3>로그인 정보도 공유되나요?</h3>
       <p>아니요. 로그인 정보는 계정마다 따로 있고 공유되지 않습니다.</p>
       <h3>한도에 걸리면 자동으로 다른 계정으로 바꿔 주나요?</h3>
