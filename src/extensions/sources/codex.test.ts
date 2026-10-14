@@ -88,6 +88,31 @@ describe("readCodex", () => {
     );
   });
 
+  it("names a skill as Codex does, its name tagged or aliased, and refuses one whose name that makes too long", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.codex("personal", ".codex");
+    // Codex 0.159.3's skills/list: "x", "description", the folder's name, and "invalid name:
+    // exceeds maximum length of 64 characters".
+    const skill = (folder: string, front: string) =>
+      h.write(`.agents/skills/${folder}/SKILL.md`, `---\n${front}\n---\nbody\n`);
+    skill("tagged", "name: !!str x\ndescription: d");
+    skill("keyed", "&k description: d\nname: *k");
+    skill("folder", "name: !!null ~\ndescription: d");
+    skill("long", `name: &n ${"n".repeat(65)}\ndescription: d\nother: *n`);
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(ctx, [], out);
+    const skills = out.items.filter((i) => i.kind === "skill" && i.location.scope === "global");
+    expect(skills.map((i) => [path.basename(i.location.file), i.name, i.codexError]).sort()).toEqual([
+      ["folder", "folder", undefined],
+      ["keyed", "description", undefined],
+      ["long", "n".repeat(65), "name too long"],
+      ["tagged", "x", undefined],
+    ]);
+  });
+
   it("reads a project table that only switches a server as that switch, not as a second server", async () => {
     const h = new TestHome();
     homes.push(h);

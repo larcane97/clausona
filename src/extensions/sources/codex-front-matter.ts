@@ -17,12 +17,14 @@
 
 /**
  * A node's shape: what the three fields' types turn on. A scalar says whether it is plain, its
- * tag, and whether it is null or blank as it stands; an alias, the node it names, if one is
- * anchored before it.
+ * tag, and whether it is null or blank as it stands, and keeps its value - all its lines, its
+ * escapes read - as far as the name and the description shown need it: their whitespace Codex
+ * collapses (`sanitize_single_line`), so a line break is a space here. An alias names the node it
+ * stands for, if one is anchored before it.
  */
 type Shape =
   | { kind: "empty"; tag?: string }
-  | { kind: "scalar"; text: string; null: boolean; blank: boolean; plain: boolean; tag?: string }
+  | { kind: "scalar"; text: string; value: string; null: boolean; blank: boolean; plain: boolean; tag?: string }
   | { kind: "seq" }
   | { kind: "map"; entries: Entry[] }
   | { kind: "alias"; target?: Shape; open: boolean };
@@ -39,24 +41,64 @@ class Unknown extends Error {}
 const NULL_TAG = "tag:yaml.org,2002:null";
 
 /**
- * Why Codex does not load a SKILL.md whose front matter is `block`, if it does not: the front
- * matter is not valid YAML, or it has no description - none, a null one, or one of whitespace
- * alone - which Codex checks after the name's length.
+ * What Codex reads of a SKILL.md's front matter, `block`: why it does not load the skill, if it
+ * does not - the front matter is not valid YAML, or it has no description (none, a null one, or
+ * one of whitespace alone), which Codex checks after the name's length - and, where it reads the
+ * front matter, the `name` and `description` it gives the skill, each on one line as
+ * `sanitize_single_line` makes it; no name where the field is none or empty, as Codex then takes
+ * the folder's. `followed` is false where this check says nothing (Unknown), and then only that.
  */
-export function codexFrontMatterError(block: string): "invalid front matter" | "no description" | undefined {
+export type CodexFrontMatter = {
+  error?: "invalid front matter" | "no description";
+  name?: string;
+  description?: string;
+  followed: boolean;
+};
+
+export function codexFrontMatter(block: string): CodexFrontMatter {
   try {
     let root = read(block);
     if (root === undefined) {
       const repaired = repairedFields(block);
       if (repaired !== undefined) root = read(repaired);
     }
-    if (root === undefined) return "invalid front matter";
-    const description = root === "empty" ? undefined : fieldOf(root, "description");
-    return description === undefined || stringField(description) !== "text" ? "no description" : undefined;
+    if (root === undefined) return { error: "invalid front matter", followed: true };
+    const map = root;
+    const field = (name: string) => (map === "empty" ? undefined : fieldOf(map, name));
+    const description = field("description");
+    const error = description === undefined || stringField(description) !== "text" ? "no description" : undefined;
+    const name = rustSingleLine(stringOf(field("name")) ?? "");
+    const shown = rustSingleLine(stringOf(description) ?? "");
+    return {
+      ...(error ? { error } : {}),
+      ...(name ? { name } : {}),
+      ...(shown ? { description: shown } : {}),
+      followed: true,
+    };
   } catch (error) {
-    if (error instanceof Unknown) return undefined;
+    if (error instanceof Unknown) return { followed: false };
     throw error;
   }
+}
+
+/** Why Codex does not load a SKILL.md whose front matter is `block`, if it does not (codexFrontMatter). */
+export function codexFrontMatterError(block: string): "invalid front matter" | "no description" | undefined {
+  return codexFrontMatter(block).error;
+}
+
+/** A field's string as serde gets it, undefined for none: a null, or no value at all. */
+function stringOf(shape: Shape | undefined): string | undefined {
+  if (shape === undefined) return undefined;
+  const node = resolved(shape);
+  if (node.kind === "empty") return node.tag === undefined ? undefined : "";
+  if (node.kind !== "scalar") return undefined;
+  if (node.plain && (node.tag === NULL_TAG || (node.tag === undefined && node.null))) return undefined;
+  return node.value;
+}
+
+/** Codex's `sanitize_single_line`: the words of `text`, split at Rust's whitespace, joined by one space. */
+function rustSingleLine(text: string): string {
+  return text.split(RUST_SPACES).filter(Boolean).join(" ");
 }
 
 /** The front matter's mapping, or "empty" for one with no node at all; undefined where Codex fails to read it. */
@@ -174,6 +216,7 @@ const RUST_SPACE = "\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\
 const RUST_TRIM_START = new RegExp(`^[${RUST_SPACE}]+`);
 const RUST_TRIM_END = new RegExp(`[${RUST_SPACE}]+$`);
 const RUST_WHITESPACE = new RegExp(`^[${RUST_SPACE}]$`);
+const RUST_SPACES = new RegExp(`[${RUST_SPACE}]+`);
 
 /** `text` trimmed as Rust's `trim` does. */
 export function rustTrim(text: string): string {
@@ -564,6 +607,7 @@ class Reader {
     const shape: Shape = {
       kind: "scalar",
       text: name.text,
+      value: name.text,
       null: false,
       blank: false,
       plain: name.plain,
@@ -718,6 +762,7 @@ class Reader {
     const first = plainLine(text);
     let ended = first.comment;
     let lines = 1;
+    let value = first.text;
     while (!ended && this.i < this.lines.length) {
       const line = this.lines[this.i] ?? "";
       const lead = /^[ \t]*/.exec(line)?.[0] ?? "";
@@ -733,10 +778,13 @@ class Reader {
       }
       if (lead.length <= n || MARKER.test(line)) break;
       this.i++;
-      ended = plainLine(rest).comment;
+      const next = plainLine(rest);
+      ended = next.comment;
+      value += ` ${next.text}`;
       lines++;
     }
-    return { kind: "scalar", text: first.text, null: lines === 1 && NULL.test(first.text), blank: false, plain: true };
+    const isNull = lines === 1 && NULL.test(first.text);
+    return { kind: "scalar", text: first.text, value, null: isNull, blank: false, plain: true };
   }
 
   /** A quoted scalar from the line just read, over as many lines as it takes; then nothing but a comment. */
@@ -745,6 +793,7 @@ class Reader {
     let line = text;
     let k = 1;
     let content = "";
+    let value = "";
     for (;;) {
       if (k >= line.length) {
         // On to the next line, which libyaml reads at any indentation.
@@ -752,14 +801,20 @@ class Reader {
         if (next === undefined || MARKER.test(next)) throw new Invalid();
         this.i++;
         line = next;
+        // libyaml drops a continued line's leading blanks.
         k = 0;
+        while (isBlank(line[k])) k++;
         content += " ";
+        // An escaped line break joins the lines with nothing between them.
+        if (value.endsWith(ESCAPED_BREAK)) value = value.slice(0, -ESCAPED_BREAK.length);
+        else value += " ";
         continue;
       }
       const ch = line[k] ?? "";
       if (q === "'" && ch === "'") {
         if (line[k + 1] === "'") {
           content += "'";
+          value += "'";
           k += 2;
           continue;
         }
@@ -768,16 +823,19 @@ class Reader {
       if (q === '"' && ch === '"') break;
       if (q === '"' && ch === "\\") {
         const length = escapeLength(line, k);
-        content += escapeBlank(line.slice(k, k + length)) ? " " : "x";
+        const sequence = line.slice(k, k + length);
+        content += escapeBlank(sequence) ? " " : "x";
+        value += escaped(sequence);
         k += length;
         continue;
       }
       content += ch;
+      value += ch;
       k++;
     }
     // libyaml takes a `#` right after the closing quote for a comment too.
     if (!isRestBlank(line.slice(k + 1))) throw new Invalid();
-    return { kind: "scalar", text: content, null: false, blank: rustTrim(content) === "", plain: false };
+    return { kind: "scalar", text: content, value, null: false, blank: rustTrim(content) === "", plain: false };
   }
 
   /**
@@ -792,6 +850,7 @@ class Reader {
     let indent = given === undefined ? undefined : n + Number(given);
     let longest = 0;
     let blank = true;
+    const content: string[] = [];
     for (let j = this.i; j < this.lines.length; j++) {
       const line = this.lines[j] ?? "";
       const spaces = line.length - line.replace(/^ +/, "").length;
@@ -808,10 +867,11 @@ class Reader {
         break;
       }
       blank = false;
+      content.push(line.slice(indent));
       this.i = j + 1;
     }
     // Trailing blank lines are the scalar's too; leaving them to be skipped reads the same.
-    return { kind: "scalar", text: "", null: false, blank, plain: false };
+    return { kind: "scalar", text: "", value: content.join(" "), null: false, blank, plain: false };
   }
 }
 
@@ -899,6 +959,39 @@ function escapeLength(line: string, k: number): number {
   const hex = digits === undefined ? "" : line.slice(k + 2, k + 2 + digits);
   if (digits === undefined || hex.length < digits || !/^[0-9a-fA-F]+$/.test(hex)) throw new Invalid();
   return 2 + digits;
+}
+
+/** What a value keeps for a backslash at a line's end, which the line break after it then drops. */
+const ESCAPED_BREAK = "\u0000break";
+
+/** What libyaml makes of an escape in a double-quoted scalar. */
+function escaped(sequence: string): string {
+  if (sequence === "\\") return ESCAPED_BREAK;
+  const e = sequence[1] ?? "";
+  const named: Record<string, string> = {
+    "0": "\0",
+    a: "\x07",
+    b: "\b",
+    t: "\t",
+    "\t": "\t",
+    n: "\n",
+    v: "\v",
+    f: "\f",
+    r: "\r",
+    e: "\x1b",
+    " ": " ",
+    '"': '"',
+    "/": "/",
+    "\\": "\\",
+    N: "\u0085",
+    _: "\u00a0",
+    L: "\u2028",
+    P: "\u2029",
+  };
+  const plain = named[e];
+  if (plain !== undefined) return plain;
+  const code = Number.parseInt(sequence.slice(2), 16);
+  return Number.isFinite(code) && code <= 0x10ffff ? String.fromCodePoint(code) : "";
 }
 
 /** Whether an escape stands for whitespace, as Rust's `trim` takes it. */
@@ -1081,7 +1174,7 @@ class Flow {
       lines++;
     }
     const text = value.trimEnd();
-    return { kind: "scalar", text, null: lines === 1 && NULL.test(text), blank: false, plain: true };
+    return { kind: "scalar", text, value: text, null: lines === 1 && NULL.test(text), blank: false, plain: true };
   }
 
   /** A quoted scalar, over as many lines as it takes; a document marker in it libyaml refuses. */
@@ -1089,19 +1182,24 @@ class Flow {
     const q = this.ch();
     this.col++;
     let content = "";
+    let value = "";
     for (;;) {
       const text = this.lines[this.line] ?? "";
       if (this.col >= text.length) {
         if (this.line + 1 >= this.lines.length || MARKER.test(this.lines[this.line + 1] ?? "")) throw new Invalid();
         this.line++;
         this.col = 0;
+        while (isBlank(this.lines[this.line]?.[this.col])) this.col++;
         content += " ";
+        if (value.endsWith(ESCAPED_BREAK)) value = value.slice(0, -ESCAPED_BREAK.length);
+        else value += " ";
         continue;
       }
       const ch = text[this.col] ?? "";
       if (q === "'" && ch === "'") {
         if (text[this.col + 1] === "'") {
           content += "'";
+          value += "'";
           this.col += 2;
           continue;
         }
@@ -1110,14 +1208,17 @@ class Flow {
       if (q === '"' && ch === '"') break;
       if (q === '"' && ch === "\\") {
         const length = escapeLength(text, this.col);
-        content += escapeBlank(text.slice(this.col, this.col + length)) ? " " : "x";
+        const sequence = text.slice(this.col, this.col + length);
+        content += escapeBlank(sequence) ? " " : "x";
+        value += escaped(sequence);
         this.col += length;
         continue;
       }
       content += ch;
+      value += ch;
       this.col++;
     }
     this.col++;
-    return { kind: "scalar", text: content, null: false, blank: rustTrim(content) === "", plain: false };
+    return { kind: "scalar", text: content, value, null: false, blank: rustTrim(content) === "", plain: false };
   }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { codexFrontMatterError, rustTrim } from "./codex-front-matter.js";
+import { codexFrontMatter, codexFrontMatterError, rustTrim } from "./codex-front-matter.js";
 
 /**
  * Front matters and what Codex 0.159.3's `skills/list` said of each, in a scratch CODEX_HOME:
@@ -149,6 +149,34 @@ describe("codexFrontMatterError", () => {
       ["%YAML 1.1\ndescription: d", "invalid front matter"],
     ];
     expect(fronts.map(([front]) => [front, codexFrontMatterError(front) ?? "ok"])).toEqual(fronts);
+  });
+
+  it("gives the name and the description Codex gives a skill, tagged, aliased or quoted", () => {
+    // Codex 0.159.3's skills/list name for each; none where Codex takes the folder's.
+    const names: [string, string | undefined][] = [
+      ["name: ! x\ndescription: d", "x"],
+      ["name: !x y\ndescription: d", "y"],
+      ["name: !!str 5\ndescription: d", "5"],
+      ["name: !!str ~\ndescription: d", "~"],
+      ["name: !!null ~\ndescription: d", undefined],
+      ["name: !!str ''\ndescription: d", undefined],
+      ["name: !t\ndescription: d", undefined],
+      ["name: !!str |\n  x\ndescription: d", "x"],
+      ["name: !!binary aGk=\ndescription: d", "aGk="],
+      ["name: !!str {a: b}\ndescription: d", "!!str {a: b}"],
+      ["name: &a n\ndescription: *a", "n"],
+      ["&k description: d\nname: *k", "description"],
+      ["? description\n: &a d\nname: *a", "d"],
+    ];
+    expect(names.map(([front]) => [front, codexFrontMatter(front).name])).toEqual(names);
+    // An escape is read, and the value is one line, as Codex shows it.
+    expect(codexFrontMatter('name: "a\\x42c"\ndescription: "one\\n  two\\\n  three"')).toMatchObject({
+      name: "aBc",
+      description: "one twothree",
+    });
+    expect(codexFrontMatter("description: |\n  one\n    two\n\n  three").description).toBe("one two three");
+    expect(codexFrontMatter("name: a\ndescription: *x").followed).toBe(true);
+    expect(codexFrontMatter("%TAG !e! tag:x,2000:\n--- # c\ndescription: d").followed).toBe(false);
   });
 
   it("says nothing of what it does not follow, though Codex refuses some of it", () => {

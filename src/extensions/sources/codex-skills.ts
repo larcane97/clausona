@@ -12,7 +12,7 @@ import {
   readText,
   realPath,
 } from "../read.js";
-import { codexFrontMatterError, rustTrim } from "./codex-front-matter.js";
+import { type CodexFrontMatter, codexFrontMatter, rustTrim } from "./codex-front-matter.js";
 import type { SkillLocation } from "./skill-dirs.js";
 
 /** How deep below a skills folder Codex looks for a SKILL.md: the folder holding one, at most 6 down. */
@@ -55,10 +55,13 @@ export async function readCodexSkills(
     const text = await readText(path.join(folder.path, "SKILL.md"), out.warnings);
     if (text === undefined) return undefined;
     const block = frontMatterOf(text);
-    const front = block === undefined ? {} : parseFrontmatter(`---\n${block}\n---\n`);
+    const read = block === undefined ? undefined : codexFrontMatter(block);
+    // Its name and description as Codex reads them, where the check follows the front matter and
+    // Codex reads it; else as the plain reader finds them.
+    const front = read?.followed && read.error !== "invalid front matter" ? read : plainFront(block);
     const description = singleLine(front.description ?? "");
     const name = skillName(front.name, path.basename(folder.path));
-    const codexError = refusal(block, name);
+    const codexError = refusal(block, read, name);
     const item: Extension = {
       id: `skill:${location.tool}:${location.scope}:${owner}:${prefix}${folder.rel || path.basename(folder.path)}`,
       kind: "skill",
@@ -151,15 +154,20 @@ function frontMatterOf(text: string): string | undefined {
 
 /**
  * Why Codex lists no skill for a SKILL.md, if it does not, in the order it checks: no front
- * matter, front matter that is not YAML it reads (codexFrontMatterError), a name over Codex's 64
+ * matter, front matter that is not YAML it reads (codexFrontMatter), a name over Codex's 64
  * characters, or no description. Such a folder is listed all the same, so it can be found and
  * fixed.
  */
-function refusal(block: string | undefined, name: string): Extension["codexError"] {
+function refusal(block: string | undefined, read: CodexFrontMatter | undefined, name: string): Extension["codexError"] {
   if (block === undefined) return "no front matter";
-  const problem = codexFrontMatterError(block);
+  const problem = read?.error;
   if (problem === "invalid front matter") return problem;
   return [...name].length > 64 ? "name too long" : problem;
+}
+
+/** The name and description the plain reader finds, for a front matter the check does not follow or Codex does not read. */
+function plainFront(block: string | undefined): { name?: string; description?: string } {
+  return block === undefined ? {} : parseFrontmatter(`---\n${block}\n---\n`);
 }
 
 /** Whitespace collapsed to single spaces, as Codex's `sanitize_single_line` does. */
