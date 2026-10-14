@@ -414,6 +414,24 @@ The switches are read from these places:
   above the project whose `.codex` Codex reads (Parent folders): in a worktree the main
   checkout's hooks at that place run, and the worktree's own there are tagged the same way.
 
+### What isn't modelled
+
+A few rare Codex cases clausona does not follow:
+
+- A hook matcher that is too big for Codex only because it repeats a Unicode class, such as
+  `\w` or `\p{Greek}` thousands of times. Codex skips the group; clausona lists its hooks as
+  running.
+- A few rare front matter forms Codex refuses: a `:` right before `,`, `[`, `]`, `{` or `}`
+  in a value inside `[…]` or `{…}`, a value there that starts with `:`, a `[…]` or `{…}` used
+  as a key, and a tag on a value that Codex quotes and reads again. clausona reads those skills
+  as fine.
+- The primary's Codex home read as a parent folder's `.codex` by the other profiles. Its own
+  rows are listed with those profiles, but what it changes in their other rows is not shown,
+  and neither is a refusal only they would meet.
+- A Codex profile whose own folder is a project's `.codex`. Codex run as that profile reads it as
+  its own configuration, not the project's; clausona lists that project's rows for every
+  profile.
+
 ### Tags
 
 A row can carry several tags. They are listed most important first: `broken link`, then
@@ -437,7 +455,7 @@ column shows the first; JSON `tags` has them all.
 | `hidden by Parent folders copy` | In every account that has it, a same-name `.mcp.json` copy in a parent folder wins. For Codex, a same-name server in a parent folder's `.codex/config.toml` that Codex reads for the project, with none in the project's own. |
 | `unused` | A Claude skill the rule below calls unused. |
 | `no front matter` | A skill whose `SKILL.md` has no front matter. Claude Code loads it under its folder's name, with no description, so it has only the skill's first non-empty line to tell when to use it: a quiet note, the skill still loads. Codex skips it, with no front matter between `---` lines, so a Codex one is not in Loaded. For Codex, a `SKILL.md` that starts with a byte order mark has none either. |
-| `invalid front matter` | A Codex skill whose front matter is not YAML Codex reads: say, a quoted description with more text after its closing quote, a description line that runs on to the next line unindented, or a description written as a list. Codex skips it, so it is not in Loaded. A description with a `: ` in it is fine: Codex quotes it and reads it again, and so does clausona. Tags (and the handles a `%TAG` directive sets), anchors and aliases, `?` keys, flow collections over several lines, block scalars as keys, and `%`, `---` or `...` lines are read as Codex reads them, so a `description: !`, a second document or an alias to no anchor counts. A few rare forms, such as a flow collection used as a key, are not checked, and read as fine. The name and description shown are the ones Codex gives the skill. |
+| `invalid front matter` | A Codex skill whose front matter is not YAML Codex reads: say, a quoted description with more text after its closing quote, a description line that runs on to the next line unindented, or a description written as a list. Codex skips it, so it is not in Loaded. A description with a `: ` in it is fine: Codex quotes it and reads it again, and so does clausona. Tags (and the handles a `%TAG` directive sets), anchors and aliases, `?` keys, flow collections over several lines, block scalars as keys, and `%`, `---` or `...` lines are read as Codex reads them, so a `description: !`, a second document or an alias to no anchor counts. A few rare forms, such as a flow collection used as a key, are not checked, and read as fine (see [What isn't modelled](#what-isnt-modelled)). The name and description shown are the ones Codex gives the skill. |
 | `name too long` | A Codex skill whose name is over 64 characters. Codex skips it, so it is not in Loaded. |
 | `no description` | A Codex skill whose front matter has no `description`, or one that is empty or only spaces. Codex skips it, so it is not in Loaded. |
 | `main checkout's runs` | A Codex hook in a linked git worktree's own `.codex` folder, the project's or a folder's above it. Codex runs the main checkout's hooks there instead, so it is not in Loaded. Its details name the main checkout's file. |
