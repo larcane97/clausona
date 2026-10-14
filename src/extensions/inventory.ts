@@ -35,6 +35,12 @@ export type LoadOptions = {
   homeDir: string;
   registry: Registry;
   cwd: string;
+  /**
+   * The folder asked for by path (`--project`), read from `cwd`'s place: it is the project when
+   * Claude Code or Codex recorded it by that very path (pathKey: on Windows in any case), so a
+   * project recorded inside a repository can be looked from; else `cwd`'s project, as ever.
+   */
+  project?: string;
   /** Where to look for Claude Code's managed settings; tests point it at a file of their own. */
   managedSettings?: string;
   /** Where clausona keeps what it took out to turn off everywhere; default stashDir(homeDir). */
@@ -68,7 +74,7 @@ export async function loadInventory(options: LoadOptions): Promise<Inventory> {
   const { homeDir, registry } = options;
   const warnings: Warning[] = [];
   const out: Collector = { items: [], facts: emptyFacts(), warnings };
-  const [startedIn, accounts, codex] = await Promise.all([
+  const [resolved, accounts, codex] = await Promise.all([
     resolveCurrentProject(options.cwd),
     loadClaudeAccounts(registry, homeDir, warnings),
     loadCodexContext(registry, homeDir, warnings),
@@ -77,6 +83,9 @@ export async function loadInventory(options: LoadOptions): Promise<Inventory> {
     ...accounts.map((a) => ({ tool: "claude" as const, profile: a.id, paths: recordedPaths(a.json?.projects) })),
     ...(codex ? codexProjectRecords(codex) : []),
   ];
+  const asked = options.project === undefined ? undefined : path.resolve(options.project);
+  const recorded = asked !== undefined && records.some((r) => r.paths.some((p) => pathKey(p) === pathKey(asked)));
+  const startedIn = recorded ? asked : resolved;
   const { projects, current: currentProject } = await collectProjects(records, startedIn);
   // The Claude, Codex and stash sources write apart - each its own items and facts, and
   // warnings are sorted below - so they read side by side.

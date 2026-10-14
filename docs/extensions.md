@@ -29,7 +29,9 @@ and `work`, the projects `~/app` and `~/site`, and a plugin `kit@demo`.
 Everything is seen from one project. It is the git root that holds the current directory, or
 the directory itself outside a repository. The home folder can be the project too.
 `--project <path>` looks from another one, and on the screen the project list picks one (see
-[On the screen](#on-the-screen)). At the filesystem root there is no project.
+[On the screen](#on-the-screen)). A path given to `--project` is resolved the same way, unless
+Claude Code or Codex recorded that very path as a project: then that folder is the project,
+even inside a repository. At the filesystem root there is no project.
 
 The other projects are the folders that Claude Code or Codex recorded in any account and that
 still exist.
@@ -122,7 +124,9 @@ Some scopes need a word more:
   folder's `config.toml` and `hooks.json` hold is listed here, each row with its file, as in
   `~/repos/.codex/config.toml`. clausona treats a repository's root as the project wherever in
   it you start, so this is mostly a folder above a repository that a marker of yours makes the
-  root, or a project Codex recorded inside one.
+  root, or a project recorded inside one. Look from such a project with `--project` and its
+  path, or pick it in the screen's project list; from anywhere else its rows are under Other
+  projects.
 - Cloud: the skills Claude Code downloaded from each account's claude.ai skills, under
   `skills/synced` in the skills folder that account loads: `~/.claude/skills/synced` for the
   accounts that share the primary's, and its own for an account whose skills folder is its own.
@@ -573,7 +577,7 @@ this page online, at its JSON, [Ids and row keys](#ids-and-row-keys) and
 |---|---|
 | `--scope <scope>` | For `ls`, the scope to list, `loaded` by default. For `show`, `off`, `on`, `visibility` and `rm`, the one scope to look in. |
 | `--tool <tool>` | `claude` or `codex`. Both by default. |
-| `--project <path>` | Look from another project, and make a change there. A relative path is read from the current directory, and a leading `~` is the home folder, so `--project '~/app'` works without a shell. It must be a directory, and its git root is used, as for the current directory. |
+| `--project <path>` | Look from another project, and make a change there. A relative path is read from the current directory, and a leading `~` is the home folder, so `--project '~/app'` works without a shell. It must be a directory, and its git root is used, as for the current directory, unless Claude Code or Codex recorded that very path as a project (on Windows in any case of its letters): then it is used as it is. |
 | `--account <name>` | MCP only. In Loaded, the default scope, keep the rows that load for this Claude account; in any other scope, the rows it has, on or off. With `off`, `on` and `rm`, change this account only. Give it more than once for several accounts. It takes `work` or `claude:work`, lists Claude rows only, and cannot be used with `--tool codex`. |
 | `--id <id>` | `show`, `off`, `on`, `visibility` and `rm`. A row key or a copy's id, from `ls --json`. `off`, `on` and `rm` take it more than once, for several rows; `show` and `visibility` take one. |
 | `--everywhere` | `off`, `on` and `visibility`: in every project, not only this one. Hooks always change everywhere, so for them it changes nothing. See [Off and on](#off-and-on). |

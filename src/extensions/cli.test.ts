@@ -503,6 +503,26 @@ describe("ls options", () => {
     expect(fromWeb).toBe(await run(h, app, "skills", ["ls", "--project", web]));
     expect(JSON.parse(await run(h, app, "skills", ["ls", "--project=~", "--json"])).project).toBe(h.home);
   });
+
+  it("stands in a project recorded inside a repository when --project names it by that path", async () => {
+    const { h } = seed();
+    // A repository (h.project makes its .git), and two folders in it.
+    const mono = h.project("repos/mono");
+    const [sub, other] = [h.path("repos", "mono", "sub"), h.path("repos", "mono", "other")];
+    for (const dir of [sub, other]) mkdirSync(dir, { recursive: true });
+    // Codex recorded sub (a table with no trust_level records it and decides nothing); other no one did.
+    h.write(".codex/config.toml", `[projects.${JSON.stringify(sub)}]\n`);
+    const projectOf = async (at: string, cwd = h.home) =>
+      JSON.parse(await run(h, cwd, "skills", ["ls", "--project", at, "--json"])).project;
+    expect(await projectOf(sub)).toBe(sub);
+    expect(await projectOf("~/repos/mono/sub")).toBe(sub);
+    expect(await projectOf("sub", mono)).toBe(sub);
+    // Any other folder in the repository is the repository, as the current directory is.
+    expect(await projectOf(other)).toBe(mono);
+    expect(JSON.parse(await run(h, sub, "skills", ["ls", "--json"])).project).toBe(mono);
+    // On Windows a path matches in any case, as there a folder does.
+    if (process.platform === "win32") expect(await projectOf(sub.toUpperCase())).toBe(sub);
+  });
 });
 
 describe("ls --json", () => {

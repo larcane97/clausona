@@ -1238,6 +1238,7 @@ export async function runExtensionsCommand(
     homeDir: deps.homeDir,
     registry: deps.registry,
     cwd: options.project ?? deps.cwd,
+    ...(options.project !== undefined ? { project: options.project } : {}),
     ...(deps.managedSettings !== undefined ? { managedSettings: deps.managedSettings } : {}),
     ...(deps.mcpjsonStop !== undefined ? { mcpjsonStop: deps.mcpjsonStop } : {}),
   });
