@@ -161,6 +161,19 @@ nothing in it is expanded before clausona stores it — for example with SecretM
 clausona add claude:vault --api --base-url https://openrouter.ai/api --key-from 'command:Get-Secret gw -AsPlainText'
 ```
 
+clausona takes the key once the command exits. If the command starts a job in the background,
+clausona does not wait for it to end.
+
+At a launch and in `clausona doctor`, that job is left running. The command runs in your
+terminal, so that it can ask you for a PIN or a passphrase there, and clausona cannot stop a job
+it starts there without knowing its process ID. When the key is read for spend, on macOS and
+Linux, the job is stopped as the command exits (see
+[Where the spend comes from](routing.md#where-the-spend-comes-from)).
+
+A launch waits for the command for as long as it takes, since you may be typing a passphrase.
+Ctrl-C stops it. `clausona doctor` and the dashboard's Health check screen give it 60 seconds,
+then stop it and report "the key command did not finish in 60 s".
+
 Never pass a key as an argument. With the default `keychain` source the key is read from a
 prompt that does not echo it, or from stdin when something is piped in — which is how to
 register a profile without a terminal:
