@@ -37,7 +37,7 @@ With a route called `main`, ask:
 The agent looks first, then runs:
 
 ```bash
-clausona route explain main --json      # every account's usage, and who would be picked
+clausona route explain main --json   # each account in the route: its usage, and who would be picked
 clausona run --route main -- -p "run the test suite"
 ```
 
@@ -47,8 +47,8 @@ frees up first.
 
 ## What it won't do
 
-`clausona route add` and `route set` write at once, without asking. So the asking falls to the
-agent: it shows which accounts a route would hold and waits for your OK. It does the same before
+`clausona route add` and `route set` write at once, without asking. So the agent asks first: it
+shows which accounts a route would hold and waits for your OK. It does the same before
 setting a directory rule or a default.
 
 It never puts an API profile in a route unless you name it, since those are billed per use. It

@@ -65,7 +65,8 @@ In an Orca terminal in your repo, start Claude Code or Codex and ask:
 > Split these across my accounts in Orca: add a `--json` flag to `notes list`, and write tests
 > for `src/parse.ts`. Run the tests task on DeepSeek.
 
-The orchestrator shows a table of tasks and profiles and, since you named one, starts at once.
+Since you said where one task runs, the orchestrator shows a table of tasks and profiles and starts
+without waiting for your OK.
 It reads each worker as it finishes, checks the branches, and tells you what it checked and what
 the worker only claimed.
 

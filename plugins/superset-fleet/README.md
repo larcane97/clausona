@@ -2,14 +2,15 @@
 
 Let one Claude Code or Codex session split a job across several agents in
 [Superset](https://superset.sh), each in its own workspace and on its own account or API model, so
-five agents don't drain one account's 5-hour window. Any worker's tab is yours to read or type into.
+five agents don't drain one account's 5-hour window. You can open any worker's tab and type into
+it.
 
 ## What you need
 
 [clausona](https://github.com/larcane97/clausona), which keeps several Claude Code and Codex
-accounts on one machine, with a profile per account or API model (`clausona add claude:work`). Superset has to be running on the same machine, with its orchestrate
-skill (`superset:orchestrate` in Claude Code, `superset-orchestrate` in Codex), which this plugin
-builds on.
+accounts on one machine, with a profile per account or API model (`clausona add claude:work`).
+Superset has to be running on the same machine, with its orchestrate skill (`superset:orchestrate`
+in Claude Code, `superset-orchestrate` in Codex), which this plugin builds on.
 
 Each worker profile needs a custom agent (Superset's Settings, under Agents) whose command is
 `clausona run <profile> -- …`. Without the Superset CLI logged in, the session can add these once

@@ -13,8 +13,8 @@ switch to any worker's pane and type into it.
 accounts on one machine, with a profile for each account or API model the workers should use
 (`clausona add claude:work`).
 
-Start the session inside a herdr pane, since herdr's CLI only talks to the session it runs in. The
-repository needs a remote, because workers push their branches.
+Start the session inside a herdr pane, since herdr's CLI only reaches the herdr session of the pane
+it runs in. The repository needs a remote, because workers push their branches.
 
 It needs `fleet-core`, the rules the fleet plugins share. Claude Code installs it for you; in
 Codex, add it yourself.

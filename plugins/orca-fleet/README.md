@@ -9,9 +9,8 @@ account. When a worker says it's done, the session checks the branch itself befo
 
 [clausona](https://github.com/larcane97/clausona), which keeps several Claude Code and Codex
 accounts on one machine, with a profile for each account or API model the workers should use
-(`clausona add claude:work`). Orca has to be open on the same machine, because
-the `orca` command talks to the running app. The repository needs a remote, since workers push
-their branches.
+(`clausona add claude:work`). Orca has to be open on the same machine, because the `orca` command
+talks to the running app. The repository needs a remote, since workers push their branches.
 
 It needs `fleet-core`, the rules the fleet plugins share. Claude Code installs it along with this
 one; in Codex, add it yourself.
@@ -43,7 +42,7 @@ In an Orca terminal in your repo, start Claude Code or Codex and ask:
 > Split these across my accounts in Orca: add a `--json` flag to `notes list`, and write tests for
 > `src/parse.ts`. Run the tests task on DeepSeek.
 
-You named a profile, so it shows its table of tasks and starts right away.
+Since you said where one task runs, it shows its table and starts without waiting for your OK.
 
 ## What it runs, and what it won't do
 

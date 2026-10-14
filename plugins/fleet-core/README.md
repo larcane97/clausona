@@ -40,9 +40,9 @@ codex plugin add fleet-core@clausona
 
 ## Try it
 
-Its settings live in `~/.clausona/fleet.json`, and you can change them by asking:
+Its settings live in `~/.clausona/fleet.json`. Ask the session that runs your fleet to change one:
 
-> Never use claude:personal for workers.
+> Never use claude:personal for my herdr fleet workers.
 
 The session changes just that setting and tells you which file it wrote.
 
@@ -52,9 +52,9 @@ It never puts a worker on the profile the coordinating session runs on, unless y
 worker's brief always goes through a file, never onto a command line, where the shell could run
 what's in it.
 
-A finished worker's branch gets checked before anything else. The worker is retired only once that
-branch is pushed and the worktree is clean, and nothing is ever removed with `--force`. A worker's
-permission prompt is always left for you.
+When a worker says it's done, the session checks its branch before it counts the task as done. The
+worker is retired only once that branch is pushed and the worktree is clean, and nothing is ever
+removed with `--force`. A worker's permission prompt is always left for you.
 
 ## More
 
