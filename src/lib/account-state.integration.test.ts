@@ -398,19 +398,19 @@ describe("doctor on the primary's backups/", () => {
 
     const results = await service.doctorProfiles();
     const issues = issuesFor(results, "claude:default");
+    // Shown as the platform's path module spells it: `~\.claude\backups` on Windows.
+    const shown = path.join("~", ".claude", "backups");
 
     expect(issues).toEqual([
       {
         kind: "foreign_account_backup",
         severity: "warning",
-        message:
-          "~/.claude/backups holds 2 copies of claude:work's .claude.json (.claude.json.backup.1760000100000, .claude.json.backup.1760000200000), saved there while that profile linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. They can be deleted: rm ~/.claude/backups/.claude.json.backup.1760000100000 ~/.claude/backups/.claude.json.backup.1760000200000",
+        message: `${shown} holds 2 copies of claude:work's .claude.json (.claude.json.backup.1760000100000, .claude.json.backup.1760000200000), saved there while that profile linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. They can be deleted: rm ${path.join(shown, ".claude.json.backup.1760000100000")} ${path.join(shown, ".claude.json.backup.1760000200000")}`,
       },
       {
         kind: "foreign_account_backup",
         severity: "warning",
-        message:
-          "~/.claude/backups holds 1 copy of another account's .claude.json (.claude.json.backup.1760000300000), saved there while a profile linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. It can be deleted: rm ~/.claude/backups/.claude.json.backup.1760000300000",
+        message: `${shown} holds 1 copy of another account's .claude.json (.claude.json.backup.1760000300000), saved there while a profile linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. It can be deleted: rm ${path.join(shown, ".claude.json.backup.1760000300000")}`,
       },
     ]);
     expect(results.find((r) => r.name === "claude:default")?.healthy).toBe(true);

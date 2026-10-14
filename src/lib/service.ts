@@ -2077,7 +2077,7 @@ async function foreignAccountBackups(registry: Registry, primaryId: string, conf
       const remove =
         process.platform === "win32"
           ? `del ${files.map((name) => `"${path.join(dir, name)}"`).join(" ")}`
-          : `rm ${files.map((name) => `${shownDir}/${name}`).join(" ")}`;
+          : `rm ${files.map((name) => path.join(shownDir, name)).join(" ")}`;
       return {
         kind: "foreign_account_backup",
         severity: "warning",
