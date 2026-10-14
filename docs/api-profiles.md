@@ -172,7 +172,9 @@ Linux, the job is stopped as the command exits (see
 
 A launch waits for the command for as long as it takes, since you may be typing a passphrase.
 Ctrl-C stops it. `clausona doctor` and the dashboard's Health check screen give it 60 seconds,
-then stop it and report "secret command did not finish in 60 s".
+then stop it and report "secret command did not finish in 60 s". On macOS and Linux they stop it
+the way Ctrl-C would, so a passphrase prompt can turn your terminal's echo back on, and kill it
+two seconds later if it is still running.
 
 Never pass a key as an argument. With the default `keychain` source the key is read from a
 prompt that does not echo it, or from stdin when something is piped in — which is how to

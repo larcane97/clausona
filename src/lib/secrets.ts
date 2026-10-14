@@ -44,6 +44,31 @@ function killRunning(child: ChildProcess, group: boolean): void {
   }
 }
 
+/** How long a command interrupted at its limit has to end before it is killed. */
+const KILL_GRACE_MS = 2_000;
+
+/**
+ * Ends a command that keeps the terminal, at its limit. On POSIX it is sent SIGINT, as Ctrl-C would
+ * send: a prompt that turned the terminal's echo off for a passphrase or a PIN turns it back on
+ * when interrupted, which SIGKILL and SIGTERM leave it no chance to do. If it is still running
+ * after KILL_GRACE_MS, it is killed. Each goes to its own pid alone, since its group is clausona's,
+ * and only while it is still running. Windows kills its tree at once, as killRunning does.
+ */
+function interrupt(child: ChildProcess): void {
+  if (process.platform === "win32") {
+    killRunning(child, false);
+    return;
+  }
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+  try {
+    process.kill(child.pid, "SIGINT");
+  } catch {
+    return;
+  }
+  const grace = setTimeout(() => killRunning(child, false), KILL_GRACE_MS);
+  child.once("exit", () => clearTimeout(grace));
+}
+
 /** The signals that end clausona from outside: Ctrl-C, a kill, a terminal closing. */
 const ENDING_SIGNALS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
 
@@ -141,8 +166,8 @@ type RunOptions = {
   /** Bounds the run, the command started in a process group of its own for it. */
   signal?: AbortSignal;
   /**
-   * How long a command that keeps the terminal may run: past it, the command itself is killed, if
-   * it is still running, and the result says so.
+   * How long a command that keeps the terminal may run: past it, the command itself is ended
+   * (interrupt), if it is still running, and the result says so at once.
    */
   limitMs?: number;
 };
@@ -187,15 +212,24 @@ function run(command: string, args: string[], options: RunOptions = {}): Promise
       release();
       resolve(result);
     };
-    /** Ends the run before the command has: it is killed, if it is still running, and no key is read. */
+    /** Ends the run before the command has, once the command has been told to end: no key is read. */
     const stop = (result: RunResult) => {
-      killRunning(child, detached);
       child.stdout?.destroy();
       finish(result);
     };
-    const forget = signal ? onAbort(signal, () => stop({ code: 1, stdout: "" })) : () => {};
+    const forget = signal
+      ? onAbort(signal, () => {
+          killRunning(child, detached);
+          stop({ code: 1, stdout: "" });
+        })
+      : () => {};
     const limit =
-      limitMs === undefined ? undefined : setTimeout(() => stop({ code: 1, stdout: "", timedOut: true }), limitMs);
+      limitMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            interrupt(child);
+            stop({ code: 1, stdout: "", timedOut: true });
+          }, limitMs);
     child.stdout?.on("data", (chunk) => {
       out += chunk;
     });
@@ -418,8 +452,8 @@ async function readStoredSecret(
  *
  * `signal` bounds a key that a command or the Keychain gives: once it aborts, what was started
  * for it is killed, and the key is not read. Without one, a key command keeps the terminal, where
- * it can prompt, and `limitMs` bounds it instead: past it, the command itself is killed, if it is
- * still running, and the key is not read.
+ * it can prompt, and `limitMs` bounds it instead: past it, the command itself is interrupted, and
+ * killed if it goes on running (interrupt), and the key is not read.
  */
 export async function resolveSecret(
   profileId: string,
