@@ -284,14 +284,24 @@ describe("what doctor says of a link to the primary's", () => {
       ["remote-settings.json.synced-at.tmp.0a1b2c3d", "remote-settings.json"],
       ["remote-settings-consent.json.tmp.0a1b2c3d", "remote-settings-consent.json"],
       ["remote-settings-helper-consent.tmp.0a1b2c3d", "remote-settings-helper-consent"],
-      [".config.json.backup", ".config.json"],
-      [".claude-custom-oauth.json.backup", ".claude-custom-oauth.json"],
-      [".claude-staging-oauth.json.tmp.12345.0a1b2c3d4e5f", ".claude-staging-oauth.json"],
+      // A copy of an account file is a copy: Claude Code reads only the file itself as the account.
+      [".config.json.backup", ".claude.json.backup"],
+      [".claude-custom-oauth.json.backup", ".claude.json.backup"],
+      [".claude-staging-oauth.json.tmp.12345.0a1b2c3d4e5f", ".claude.json.backup"],
       [".session_ingress_token.e3.tmp.0a1b2c3d", ".session_ingress_token"],
       ["daemon.log.1", "daemon.log"],
     ]) {
       expect(claudeAdapter.unsharedRisk?.(sibling), sibling).toEqual(claudeAdapter.unsharedRisk?.(file));
       expect(claudeAdapter.unsharedRisk?.(sibling), sibling).toBeDefined();
+    }
+  });
+
+  it("says the account files themselves act as the primary's account, and their copies are copies", () => {
+    for (const name of [".config.json", ".claude-custom-oauth.json", ".claude-local-oauth.json"]) {
+      expect(claudeAdapter.unsharedRisk?.(name)?.risk, name).toBe("wrong_account");
+    }
+    for (const name of [".config.json.backup", ".claude-local-oauth.json.backup", ".claude.json.backup"]) {
+      expect(claudeAdapter.unsharedRisk?.(name)?.risk, name).toBe("isolation");
     }
   });
 

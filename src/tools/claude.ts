@@ -142,13 +142,14 @@ const TEMP_LEFTOVER = /^.+\.tmp\.(?:[0-9a-f]{8}|\d+\.[0-9a-f]{12}|\d+\.\d+\.[0-9
  * cache for one config dir, or session state while sessions are kept apart.
  */
 function claudeUnsharedRisk(name: string): UnsharedRisk | undefined {
-  // A sibling is said as the file it belongs to; `.claude.json` itself is the profile's account
-  // file, which the skip set has kept apart since the first release.
-  // Every file the sibling rules above match is one here, followed by a dot.
-  const family = name.startsWith(".claude.json.")
+  // A sibling is said as the file it belongs to; every file the sibling rules above match is one
+  // here, followed by a dot. A sibling of any account file is a copy of it, which Claude Code can
+  // offer to restore but never reads as the account: only the file itself acts as one.
+  // `.claude.json` itself is the profile's account file, kept apart since the first release.
+  const family = /^(?:\.claude(?:-staging-oauth|-local-oauth|-custom-oauth)?\.json|\.config\.json)\./.test(name)
     ? ".claude.json."
     : name.match(
-        /^(?:policy-limits\.json|remote-settings\.json|remote-settings-consent\.json|remote-settings-helper-consent|\.config\.json|\.claude-(?:staging|local|custom)-oauth\.json|\.session_ingress_token|daemon\.log)(?=\.|$)/,
+        /^(?:policy-limits\.json|remote-settings\.json|remote-settings-consent\.json|remote-settings-helper-consent|\.session_ingress_token|daemon\.log)(?=\.|$)/,
       )?.[0];
   switch (family ?? name) {
     case "policy-limits.json":
