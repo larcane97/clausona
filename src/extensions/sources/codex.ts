@@ -8,7 +8,17 @@ import type { Collector, Location, Project, Warning } from "../model.js";
 import { codexProjectConfig } from "../places.js";
 import { tilde } from "../present.js";
 import { isHomeProject, type ProjectRecord, recordedPaths } from "../projects.js";
-import { entryInfo, isRecord, isWithin, pathKey, readJsonObject, readText, realPath, samePath } from "../read.js";
+import {
+  entryInfo,
+  fileIdentity,
+  isRecord,
+  isWithin,
+  pathKey,
+  readJsonObject,
+  readText,
+  realPath,
+  samePath,
+} from "../read.js";
 import { mcpSummary } from "../redact.js";
 import { codexTrustedIn } from "../state.js";
 import { addHooksFile } from "./claude-hooks.js";
@@ -219,6 +229,7 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
       })(),
     );
   }
+  out.facts.codexPrimary = ctx.primary.id;
   const refusals = new ProjectRefusals();
   const trustRecorded = isRecord(ctx.config?.projects) && Object.keys(ctx.config.projects).length > 0;
   const markers = projectRootMarkers(ctx.config);
@@ -249,9 +260,17 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
         let under: Record<string, unknown> = user;
         for (const layer of loaded ? layers : []) {
           const config = layer.read.value;
-          const at: SkillLocation = { ...here, layer: layer.dir };
-          addServers(config, { ...at, file: layer.file }, `${project.path}#up${layer.depth}`, out, under, layer.depth);
-          addPluginSwitches(config, layer.file, project.path, out.facts, layer.depth);
+          const at: SkillLocation = {
+            ...here,
+            layer: layer.dir,
+            ...(layer.accounts ? { accounts: layer.accounts } : {}),
+          };
+          // A config.toml that is the readers' own merges nothing new; switches the primary does not read are none of its view.
+          if (layer.config) {
+            const owner = `${project.path}#up${layer.depth}`;
+            addServers(config, { ...at, file: layer.file }, owner, out, under, layer.depth, layer.primary);
+            if (layer.primary) addPluginSwitches(config, layer.file, project.path, out.facts, layer.depth);
+          }
           const place = `up${layer.depth}:`;
           if (layer.mainFile === undefined)
             await addFolderHooks(layer.hooks, layer.hooksConfig, at, project.path, out, place);
@@ -269,6 +288,7 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
             }
             await addFolderHooks(layer.hooks, layer.hooksConfig, at, project.path, out, `${place}${MAIN_CHECKOUT_AT}`);
           }
+          if (!layer.primary || !layer.config) continue;
           under = { ...(mergeCodexConfig(under, isRecord(config.mcp_servers) ? config.mcp_servers : {}) as object) };
         }
         if (config) {
@@ -373,7 +393,8 @@ async function projectConfig(
     return cause.parse ? { loaded: false } : values;
   };
   // A parent's .codex Codex trusts it reads whatever the project's own trust: one that does not parse refuses.
-  for (const layer of layers) if (layer.refused) return refuse(layer.refused.file, layer.refused.cause);
+  for (const layer of layers)
+    if (layer.refused && layer.primary) return refuse(layer.refused.file, layer.refused.cause);
   if (!trusted) {
     if (read && "refused" in read) refusals.note(file, read, undefined);
     if (mainFile !== undefined && main && "refused" in main) refusals.note(mainFile, main, undefined);
@@ -383,7 +404,8 @@ async function projectConfig(
   }
   // What Codex checks: the user's, then each parent's, then the project's own where it trusts it -
   // in a worktree each with its main checkout's [hooks] in place of its own.
-  const parts: { file: string; mainFile?: string; checked: Record<string, unknown> }[] = layers.map((layer) => ({
+  const primaryLayers = layers.filter((layer) => layer.primary && layer.config);
+  const parts: { file: string; mainFile?: string; checked: Record<string, unknown> }[] = primaryLayers.map((layer) => ({
     file: layer.file,
     ...(layer.mainFile !== undefined ? { mainFile: layer.mainFile } : {}),
     checked: layer.checked,
@@ -435,6 +457,12 @@ type Layer = {
   hooksConfig?: Record<string, unknown>;
   mainFile?: string;
   refused?: { file: string; cause: Refused };
+  /** The Codex profiles that read it, where not every one does: one whose own home it is does not. */
+  accounts?: string[];
+  /** Whether the primary reads it: its view, which the inventory's states are, takes it in. */
+  primary: boolean;
+  /** Whether its config.toml merges anything: not where it is the file each reader reads as its own. */
+  config: boolean;
 };
 
 /**
@@ -455,7 +483,9 @@ async function parentLayers(
   const layers: Layer[] = [];
   for (const dir of foldersAbove(project, root)) {
     const folder = path.join(dir, ".codex");
-    if ((await entryInfo(folder)).kind !== "dir" || samePath(folder, ctx.primary.dir)) continue;
+    if ((await entryInfo(folder)).kind !== "dir") continue;
+    const readers = await codexReaders(ctx, folder);
+    if (readers.length === 0) continue;
     const roots = await codexRoots(dir, markers);
     out.facts.codexTrustFolders[pathKey(dir)] = roots.folders;
     if (!codexTrustedIn(out.facts, dir)) continue;
@@ -483,9 +513,40 @@ async function parentLayers(
       ...(mainFile === undefined ? { hooksConfig: parsed.value } : mainParsed ? { hooksConfig: mainParsed.value } : {}),
       ...(mainFile !== undefined ? { mainFile } : {}),
       ...(refused ? { refused } : {}),
+      ...(readers.length < ctx.homes.length ? { accounts: readers.map((home) => home.id) } : {}),
+      primary: readers.some((home) => home.isPrimary),
+      config: readers.length === ctx.homes.length || !(await sameAsOwn(readers, "config.toml", file)),
     });
   }
   return layers;
+}
+
+/**
+ * The Codex profiles that read `folder`, a `.codex` in a folder above a project or the
+ * project's own: every one but the profile whose home it is, which Codex 0.159.3 leaves out (as
+ * spelled, or by its real path).
+ */
+async function codexReaders(ctx: CodexContext, folder: string): Promise<CodexHome[]> {
+  const real = await realPath(folder).catch(() => undefined);
+  const readers: CodexHome[] = [];
+  for (const home of ctx.homes) {
+    if (samePath(home.dir, folder)) continue;
+    const own = await realPath(home.dir).catch(() => undefined);
+    if (real !== undefined && own !== undefined && samePath(real, own)) continue;
+    readers.push(home);
+  }
+  return readers;
+}
+
+/**
+ * Whether `file` is the `name` in each of `homes` - what each reads as its own - through a link
+ * or a hard link: the same device and inode (as bigints: NTFS inodes pass 2^53).
+ */
+async function sameAsOwn(homes: readonly CodexHome[], name: string, file: string): Promise<boolean> {
+  const target = await fileIdentity(file);
+  if (target === undefined) return false;
+  for (const home of homes) if ((await fileIdentity(path.join(home.dir, name))) !== target) return false;
+  return true;
 }
 
 /** The folders from the project root `root` down to `project`'s parent, root first; none without a root. */
@@ -513,19 +574,27 @@ async function readProjectSkills(
   here: SkillLocation,
   out: Collector,
 ): Promise<void> {
-  const codexSkills = (dir: string) => {
+  // A .codex's skills, for the profiles that read it as a project's - none where it is the
+  // skills folder each of them reads as its own, as Codex lists a skill once.
+  const codexSkills = async (dir: string, at: SkillLocation, owner: string) => {
     const folder = path.join(dir, ".codex");
-    return samePath(folder, ctx.primary.dir) ? undefined : path.join(folder, "skills");
+    const readers = await codexReaders(ctx, folder);
+    const skills = path.join(folder, "skills");
+    if (readers.length === 0) return;
+    if (readers.length < ctx.homes.length) {
+      if (await sameAsOwn(readers, "skills", skills)) return;
+      await readCodexSkills(skills, { ...at, accounts: readers.map((home) => home.id) }, owner, out);
+    } else await readCodexSkills(skills, at, owner, out);
   };
-  const reads: Promise<void>[] = [];
-  const own = codexSkills(project);
-  if (own !== undefined) reads.push(readCodexSkills(own, here, `${project}#.codex`, out));
+  const reads: Promise<void>[] = [codexSkills(project, here, `${project}#.codex`)];
   for (const dir of foldersAbove(project, root)) {
     const depth = path.relative(dir, project).split(path.sep).filter(Boolean).length;
     const at: SkillLocation = { ...here, layer: dir };
-    reads.push(readCodexSkills(path.join(dir, ".agents", "skills"), at, `${project}#up${depth}`, out));
-    const folder = codexSkills(dir);
-    if (folder !== undefined) reads.push(readCodexSkills(folder, at, `${project}#up${depth}.codex`, out));
+    // The home folder's .agents/skills is the user's, which Codex lists once, as the user's.
+    if (!samePath(dir, ctx.homeDir)) {
+      reads.push(readCodexSkills(path.join(dir, ".agents", "skills"), at, `${project}#up${depth}`, out));
+    }
+    reads.push(codexSkills(dir, at, `${project}#up${depth}.codex`));
   }
   await Promise.all(reads);
 }
@@ -626,6 +695,7 @@ function addServers(
   out: Collector,
   under?: Record<string, unknown>,
   layer?: number,
+  switches = true,
 ): void {
   for (const [name, server] of Object.entries(isRecord(config.mcp_servers) ? config.mcp_servers : {})) {
     if (!isRecord(server)) continue;
@@ -640,7 +710,7 @@ function addServers(
       out.items.push({ id, kind: "mcp", name, location, summary: mcpSummary(runs) });
       out.facts.fingerprints[id] = valueHash(server);
     }
-    if (typeof server.enabled === "boolean") {
+    if (switches && typeof server.enabled === "boolean") {
       out.facts.codexMcpEnabled.push({
         file: location.file,
         ...(location.project ? { project: location.project } : {}),

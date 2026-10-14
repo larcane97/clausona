@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { linkSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -1376,6 +1376,50 @@ describe("Codex hooks and Codex's trust", () => {
     expect(project.items.map((i: { summary: Record<string, string> }) => i.summary)).toEqual([
       { transport: "stdio", command: "sub-shared", env: "A" },
     ]);
+  });
+
+  it("reads the primary's Codex home as a parent folder's .codex for the other profiles alone", async () => {
+    const { h, app } = seed();
+    // The home is the project root (a .hg marker), so its .codex is above app: the primary's own
+    // home, which a second profile, linking its config.toml, hooks.json and skills, reads too.
+    h.write(".hg/requires", "");
+    h.write(
+      ".codex/config.toml",
+      `project_root_markers = [".hg"]\n\n[projects.${JSON.stringify(h.home)}]\ntrust_level = "trusted"\n\n[mcp_servers.exa]\ncommand = "npx"\n`,
+    );
+    const hooksFile = h.path(".codex", "hooks.json");
+    h.write(".codex/hooks.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "home-hook" }] }] } });
+    h.skill(".codex/skills", "askill");
+    type Row = { name: string; file: string; accounts?: string[]; summary: Record<string, string> };
+    const rows = async (command: ExtensionsCommand) =>
+      (
+        JSON.parse(await run(h, app, command, ["ls", "--tool", "codex", "--scope", "parents", "--json"])).items as Row[]
+      ).map((i) => [i.summary.command ?? i.name, i.file, i.accounts]);
+    // The primary leaves its own home out, as Codex 0.159.3 does with CODEX_HOME.
+    expect(await rows("hooks")).toEqual([]);
+    h.codex("work", ".codex-work");
+    h.link(".codex/skills", ".codex-work/skills");
+    // A file link; on Windows, where a test may not make one, a hard link, which is the same file.
+    for (const name of ["config.toml", "hooks.json"]) {
+      const [target, link] = [h.path(".codex", name), h.path(".codex-work", name)];
+      if (process.platform === "win32") linkSync(target, link);
+      else symlinkSync(target, link);
+    }
+    // Codex run as work listed the hook a second time, under ~/.codex's key; the servers and
+    // skills it merged in or listed once, the files being its own.
+    expect(await rows("hooks")).toEqual([["home-hook", hooksFile, ["codex:work"]]]);
+    expect(await rows("mcp")).toEqual([]);
+    expect(await rows("skills")).toEqual([]);
+    const shown = await run(h, app, "hooks", ["show", "Stop", "--scope", "parents"]);
+    expect(shown).toMatch(/^File\s+~[\\/]\.codex[\\/]hooks\.json$/m);
+    expect(shown).toMatch(/^Profiles\s+work, not the profile whose own Codex folder this is$/m);
+    // A profile whose config.toml is its own takes the primary's servers from there too, and the
+    // primary's reading, which the states are, is as it was.
+    rmSync(h.path(".codex-work", "config.toml"));
+    h.write(".codex-work/config.toml", 'project_root_markers = [".hg"]\n');
+    expect(await rows("mcp")).toEqual([["npx", h.path(".codex", "config.toml"), ["codex:work"]]]);
+    const global = JSON.parse(await run(h, app, "mcp", ["ls", "--tool", "codex", "--scope", "global", "--json"]));
+    expect(global.items.map((i: { name: string; tags: string[] }) => [i.name, i.tags])).toEqual([["exa", []]]);
   });
 
   it("lists the skills folders Codex reads from the project root down, whatever the trust", async () => {

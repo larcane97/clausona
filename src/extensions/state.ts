@@ -586,6 +586,8 @@ function projectCopy(inv: Inventory, item: Extension, project: string | undefine
     if (other === item || other.kind !== "mcp" || at.tool !== "codex" || at.scope !== "project") continue;
     if (other.name !== item.name || !samePath(at.project, project)) continue;
     if (at.layer === undefined && !codexTrusted(inv, project)) continue;
+    // A copy only other Codex profiles read hides nothing in the primary's reading.
+    if (at.accounts !== undefined && !at.accounts.includes(inv.facts.codexPrimary ?? "")) continue;
     const d = layerDepth(other);
     if (d < depth && (winner === undefined || d < winner.depth)) winner = { item: other, depth: d };
   }

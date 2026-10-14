@@ -118,6 +118,15 @@ function kindOf(stats: { isDirectory(): boolean; isFile(): boolean }): EntryInfo
 }
 
 /** What is at `p`: its kind as followed through a link, and the link itself if it is one. */
+/**
+ * What a path is on disk, through a link: its device and inode, which a hard link shares, as
+ * bigints (NTFS inodes pass 2^53). Undefined where it cannot be read.
+ */
+export async function fileIdentity(p: string): Promise<string | undefined> {
+  const stats = await limited(() => stat(p, { bigint: true })).catch(() => null);
+  return stats ? `${stats.dev}:${stats.ino}` : undefined;
+}
+
 export async function entryInfo(p: string): Promise<EntryInfo> {
   const own = await limited(() => lstat(p)).catch(() => null);
   if (!own) return { kind: "missing" };

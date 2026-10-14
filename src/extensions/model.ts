@@ -25,7 +25,8 @@ export type Location = {
   /**
    * For what a plugin brings: the Claude accounts that have the plugin installed. For a Global
    * Claude skill that not every account loads: the accounts whose skills (or commands) folder
-   * is the primary's.
+   * is the primary's. For a Codex row a parent folder's `.codex` holds, where that folder is a
+   * Codex profile's home: the other profiles, which read it (Codex leaves its own home out).
    */
   accounts?: string[];
   /**
@@ -222,6 +223,12 @@ export type StateFacts = {
    * own path alone.
    */
   codexTrustFolders: Record<string, string[]>;
+  /**
+   * The primary Codex profile's id. The states are its reading: a row only other profiles read
+   * (`Location.accounts` without it - a parent folder's `.codex` that is the primary's home)
+   * hides no row of its.
+   */
+  codexPrimary?: string;
   /**
    * By pathKey of each project read that is in a linked git worktree and has a `.codex` folder,
    * and of each parent folder whose `.codex` is read for one (`Location.layer`): the main

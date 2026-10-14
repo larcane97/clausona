@@ -124,7 +124,13 @@ Some scopes need a word more:
   folder's `config.toml` and `hooks.json` hold is listed here, each row with its file, as in
   `~/repos/.codex/config.toml`. Codex's skills come from the same folders, whatever their trust:
   each folder's `.agents/skills` and `.codex/skills`, from the root down to the project, and
-  none from a folder below the project or beside it. clausona treats a repository's root as the project wherever in
+  none from a folder below the project or beside it. Codex run as one profile leaves that
+  profile's own home out, so where the primary's home, `~/.codex`, is in a folder from the root
+  down (the home folder is the root, say), the other profiles read it as such a folder: its hooks
+  run a second time for them, under that file's key. clausona lists those rows with the profiles
+  that read them (`Profiles` in the details, `accounts` in JSON). Its `config.toml` and
+  `skills`, which every profile links to the primary's, add nothing there, as Codex merges and
+  lists them once. clausona treats a repository's root as the project wherever in
   it you start, so this is mostly a folder above a repository that a marker of yours makes the
   root, or a project recorded inside one. Look from such a project with `--project` and its
   path, or pick it in the screen's project list; from anywhere else its rows are under Other
