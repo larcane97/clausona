@@ -2081,10 +2081,12 @@ async function foreignAccountBackups(registry: Registry, primaryId: string, conf
     .sort(([a], [b]) => (a === "" ? 1 : b === "" ? -1 : a < b ? -1 : a > b ? 1 : 0))
     .map(([profile, files]) => {
       const copies = files.length === 1 ? "1 copy" : `${files.length} copies`;
+      // Each name quoted whole, a sync tool's "(1)" or a quote in it included: after the `~` on
+      // POSIX, so the shell still expands it; in PowerShell, where `del` takes one path, as a list.
       const remove =
         process.platform === "win32"
-          ? `del ${files.map((name) => `"${path.join(dir, name)}"`).join(" ")}`
-          : `rm ${files.map((name) => path.join(shownDir, name)).join(" ")}`;
+          ? `Remove-Item -LiteralPath ${files.map((name) => `'${path.join(dir, name).replaceAll("'", "''")}'`).join(",")}`
+          : `rm ${files.map((name) => path.join(shownDir, `'${name.replaceAll("'", "'\\''")}'`)).join(" ")}`;
       return {
         kind: "foreign_account_backup",
         severity: "warning",

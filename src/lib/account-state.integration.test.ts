@@ -190,6 +190,9 @@ function issuesFor(results: DoctorProfileResult[], name: string) {
 
 const lstatOrNull = (p: string) => lstatSync(p, { throwIfNoEntry: false }) ?? null;
 
+/** `text` as a regular expression that matches it and nothing else. */
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 describe("Claude Code state for one account or org", () => {
   it("is never linked into a profile, in either session mode", async () => {
     const { primary, work, backupDir, service, claudeAdapter } = await seedHome();
@@ -425,12 +428,12 @@ describe("doctor on the primary's backups/", () => {
       {
         kind: "foreign_account_backup",
         severity: "warning",
-        message: `${shown} holds 2 copies of claude:work's .claude.json (.claude.json.backup.1760000100000, .claude.json.backup.1760000200000), saved there while that profile linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. They can be deleted: rm ${path.join(shown, ".claude.json.backup.1760000100000")} ${path.join(shown, ".claude.json.backup.1760000200000")}`,
+        message: `${shown} holds 2 copies of claude:work's .claude.json (.claude.json.backup.1760000100000, .claude.json.backup.1760000200000), saved there while that profile linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. They can be deleted: rm ${path.join(shown, "'.claude.json.backup.1760000100000'")} ${path.join(shown, "'.claude.json.backup.1760000200000'")}`,
       },
       {
         kind: "foreign_account_backup",
         severity: "warning",
-        message: `${shown} holds 1 copy of another account's .claude.json (.claude.json.backup.1760000300000), saved there while a profile linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. It can be deleted: rm ${path.join(shown, ".claude.json.backup.1760000300000")}`,
+        message: `${shown} holds 1 copy of another account's .claude.json (.claude.json.backup.1760000300000), saved there while a profile linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. It can be deleted: rm ${path.join(shown, "'.claude.json.backup.1760000300000'")}`,
       },
     ]);
     expect(results.find((r) => r.name === "claude:default")?.healthy).toBe(true);
@@ -438,6 +441,39 @@ describe("doctor on the primary's backups/", () => {
     expect(JSON.stringify(issues)).not.toMatch(/uuid-|@example\.com/);
     // Nothing deleted.
     expect(readdirSync(path.join(primary, "backups"))).toHaveLength(7);
+  });
+
+  it("quotes each file in the command, whatever its name", async () => {
+    const { primary, service } = await seedHome();
+    // A sync tool's duplicate, and a name with a quote in it.
+    backUp(primary, ".claude.json.backup.1760000100000 (1)", JSON.stringify(accountFile("work@example.com")));
+    backUp(primary, ".claude.json.backup.1760000200000'x", JSON.stringify(accountFile("work@example.com")));
+    const shown = path.join("~", ".claude", "backups");
+
+    const [issue] = issuesFor(await service.doctorProfiles(), "claude:default");
+    expect(issue?.message).toMatch(
+      new RegExp(
+        `rm ${escape(path.join(shown, "'.claude.json.backup.1760000100000 (1)'"))} ${escape(path.join(shown, "'.claude.json.backup.1760000200000'\\''x'"))}$`,
+      ),
+    );
+  });
+
+  it("gives the command for PowerShell on Windows, each path quoted whole", async () => {
+    const { primary, service } = await seedHome();
+    backUp(primary, ".claude.json.backup.1760000100000", JSON.stringify(accountFile("work@example.com")));
+    backUp(primary, ".claude.json.backup.1760000200000", JSON.stringify(accountFile("work@example.com")));
+    const file = (name: string) => path.join(primary, "backups", name);
+
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const results = await service.doctorProfiles();
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+    const issue = issuesFor(results, "claude:default").find((found) => found.kind === "foreign_account_backup");
+    expect(issue?.message).toMatch(
+      new RegExp(
+        `Remove-Item -LiteralPath '${escape(file(".claude.json.backup.1760000100000"))}','${escape(file(".claude.json.backup.1760000200000"))}'$`,
+      ),
+    );
   });
 
   it("says nothing when every copy is the primary's own", async () => {
