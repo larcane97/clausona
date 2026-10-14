@@ -1,9 +1,10 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { getEventListeners } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { buildSync } from "esbuild";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
@@ -648,6 +649,61 @@ describe("resolveSecret", () => {
         expect(signals()).toEqual([[pid, "SIGINT"]]);
         expect(await gone()).toBe(true);
       });
+    },
+  );
+
+  /**
+   * The real resolveSecret in a node of its own, bundled once, whose stderr this test reads: what a
+   * key command writes to stderr, passed through, can only be seen from outside the process that
+   * ran it. It reads the command from $CLAUSONA_TEST_RUN and resolveSecret's options from
+   * $CLAUSONA_TEST_OPTIONS, and prints `key:<key>` or `error:<message>`.
+   */
+  let bundled: string | undefined;
+  function inNode(run: string, options: object): { stdout: string; stderr: string } {
+    if (!bundled) {
+      const dir = mkdtempSync(path.join(tmpdir(), "clausona-key-harness-"));
+      temps.push(dir);
+      const entry = path.join(dir, "harness.ts");
+      writeFileSync(
+        entry,
+        [
+          `import { resolveSecret } from ${JSON.stringify(path.join(import.meta.dirname, "secrets.ts"))};`,
+          'const options = JSON.parse(process.env.CLAUSONA_TEST_OPTIONS ?? "{}");',
+          'resolveSecret("claude:x", { source: "command", run: process.env.CLAUSONA_TEST_RUN ?? "" }, undefined, options).then(',
+          '  (key) => process.stdout.write("key:" + key),',
+          '  (error) => process.stdout.write("error:" + error.message),',
+          ");",
+        ].join("\n"),
+      );
+      bundled = path.join(dir, "harness.mjs");
+      buildSync({
+        entryPoints: [entry],
+        bundle: true,
+        platform: "node",
+        format: "esm",
+        outfile: bundled,
+        logLevel: "silent",
+      });
+    }
+    const ran = spawnSync(process.execPath, [bundled], {
+      encoding: "utf8",
+      env: { ...process.env, CLAUSONA_TEST_RUN: run, CLAUSONA_TEST_OPTIONS: JSON.stringify(options) },
+      timeout: SPAWN_TIMEOUT_MS,
+    });
+    return { stdout: ran.stdout, stderr: ran.stderr };
+  }
+
+  // A tool that prompts or reports on stderr: at a launch and in `clausona doctor` it reaches the
+  // terminal, as git's credential helpers' does; the dashboard and a spend read keep it out.
+  it.skipIf(windows)(
+    "passes a key command's stderr through where it keeps the terminal, and nowhere else",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    () => {
+      const run = "echo stderr-marker >&2; echo KEY";
+      const launch = inNode(run, {});
+      expect(launch.stdout).toBe("key:KEY");
+      expect(launch.stderr).toContain("stderr-marker");
+      expect(inNode(run, { limitMs: 60_000 }).stderr).toContain("stderr-marker");
     },
   );
 });

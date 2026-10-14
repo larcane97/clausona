@@ -220,6 +220,11 @@ type RunOptions = {
    * are ended (interrupt), if it is still running, and the result says so at once.
    */
   limitMs?: number;
+  /**
+   * Passes the command's stderr through to clausona's, where a prompt or an error it writes shows.
+   * Only for a command that keeps the terminal: otherwise it is not open.
+   */
+  showStderr?: boolean;
 };
 
 /**
@@ -233,19 +238,24 @@ type RunOptions = {
  * Until then, clausona ending ends it too (endWithClausona). On Windows the command starts in no
  * group of its own, and what it leaves running when it exits keeps running.
  *
- * Without one, the command keeps the terminal, in clausona's own process group, where it can ask
- * for a PIN or a passphrase, and Ctrl-C stops it with clausona. What it leaves running when it
- * exits keeps running: nothing can end it alone without its pid, which the command never gives.
+ * Otherwise the command keeps the terminal, in clausona's own process group, where it can ask for
+ * a PIN or a passphrase, and Ctrl-C stops it with clausona. What it leaves running when it exits
+ * keeps running: nothing can end it alone without its pid, which the command never gives.
  */
 function run(command: string, args: string[], options: RunOptions = {}): Promise<RunResult> {
-  const { input, signal, limitMs } = options;
+  const { input, signal, limitMs, showStderr } = options;
   return new Promise((resolve) => {
     if (signal?.aborted) {
       resolve({ code: 1, stdout: "" });
       return;
     }
-    const detached = signal !== undefined && process.platform !== "win32";
-    const stdio: ["ignore" | "pipe", "pipe", "ignore"] = [input === undefined ? "ignore" : "pipe", "pipe", "ignore"];
+    const ownGroup = signal !== undefined;
+    const detached = ownGroup && process.platform !== "win32";
+    const stdio: ["ignore" | "pipe", "pipe", "ignore" | "inherit"] = [
+      input === undefined ? "ignore" : "pipe",
+      "pipe",
+      showStderr && !ownGroup ? "inherit" : "ignore",
+    ];
     const child = detached
       ? spawnCommand("/bin/sh", ["-c", ENDS_ITS_GROUP, "sh", command, ...args], { stdio, detached: true })
       : spawnCommand(command, args, { stdio });
@@ -481,6 +491,7 @@ async function readStoredSecret(
 ): Promise<string | null> {
   if ((backend ?? detectBackend()) === "keychain") {
     const item = keychainItemFor(profileId);
+    // Its stderr stays shut: `security` writes nothing there worth showing, and asks in a dialog.
     const { code, stdout, timedOut } = await run("security", ["find-generic-password", "-s", item, "-w"], options);
     if (timedOut) {
       throw new Error(
@@ -506,9 +517,9 @@ async function readStoredSecret(
  *
  * `signal` bounds a key that a command or the Keychain gives: once it aborts, what was started
  * for it is killed, and the key is not read. Without one, a key command keeps the terminal, where
- * it can prompt, and `limitMs` bounds it instead: past it, the command and what it started are
- * interrupted, and killed if it goes on running (interrupt), and the key is not read. `limitMs`
- * bounds the Keychain's answer the same way.
+ * it can prompt, with its stderr shown there, and `limitMs` bounds it instead: past it, the
+ * command and what it started are interrupted, and killed if it goes on running (interrupt), and
+ * the key is not read. `limitMs` bounds the Keychain's answer the same way.
  */
 export async function resolveSecret(
   profileId: string,
@@ -547,7 +558,7 @@ export async function resolveSecret(
   if (source.source === "command") {
     const shell = process.platform === "win32" ? "powershell" : "/bin/sh";
     const args = process.platform === "win32" ? ["-NoProfile", "-Command", source.run] : ["-c", source.run];
-    const { code, stdout, timedOut } = await run(shell, args, { signal, limitMs });
+    const { code, stdout, timedOut } = await run(shell, args, { signal, limitMs, showStderr: true });
     if (signal?.aborted) throw new Error("the key was not read in time");
     // The command line is not quoted, so the message says where it is instead - profiles.json,
     // the one place it is shown - and what replaces it. Not `config --edit`: that opens the
