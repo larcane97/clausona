@@ -120,6 +120,77 @@ describe("collectQuotas", () => {
     expect(result[TARGET.id]?.state).toBe("expired");
   });
 
+  it.each([
+    400, 401, 403,
+  ])("reports expired when the token endpoint refuses the refresh token with a %i", async (status) => {
+    stubAdapter({
+      readCredential: vi.fn(async () => ({ accessToken: "old", refreshToken: "r", expiresAt: NOW - 1 })),
+      renewCredential: vi.fn(async () => {
+        throw new QuotaHttpError(status);
+      }),
+    });
+
+    const result = await collectQuotas([TARGET], { now: NOW, cachePath });
+
+    expect(result[TARGET.id]?.state).toBe("expired");
+  });
+
+  // Only a refusal says the sign-in is gone. A renewal that could not be asked this time says
+  // nothing about it, so the account keeps its last numbers, as for any failed lookup, rather
+  // than reading as one to sign in again: `csn list` hides an expired account's numbers.
+  it.each<[string, () => Promise<ToolCredential | null>]>([
+    ["a running Claude Code holds its refresh lock", async () => null],
+    [
+      "the token endpoint cannot be reached",
+      async () => {
+        throw new TypeError("fetch failed");
+      },
+    ],
+    [
+      "the token endpoint fails",
+      async () => {
+        throw new QuotaHttpError(503);
+      },
+    ],
+    [
+      "the token endpoint is rate limited",
+      async () => {
+        throw new QuotaHttpError(429);
+      },
+    ],
+  ])("reports an error, not expired, when %s", async (_, renew) => {
+    const adapter = stubAdapter({
+      readCredential: vi.fn(async () => ({ accessToken: "old", refreshToken: "r", expiresAt: NOW - 1 })),
+      renewCredential: vi.fn(renew),
+    });
+    seedCache({
+      version: 1,
+      cooldowns: {},
+      profiles: {
+        [TARGET.id]: { state: "ok", fetchedAt: NOW - 30 * 60_000, weekly: { usedPercent: 42, resetsAt: null } },
+      },
+    });
+
+    const result = await collectQuotas([TARGET], { now: NOW, cachePath });
+
+    expect(adapter.fetchQuota).not.toHaveBeenCalled();
+    expect(result[TARGET.id]).toMatchObject({ state: "error", weekly: { usedPercent: 42 } });
+  });
+
+  it("reports an error, not expired, when a 401's renewal could not be asked", async () => {
+    stubAdapter({
+      readCredential: vi.fn(async () => ({ accessToken: "old", refreshToken: "r", expiresAt: NOW + 3600_000 })),
+      renewCredential: vi.fn(async () => null),
+      fetchQuota: vi.fn(async () => {
+        throw new QuotaHttpError(401);
+      }),
+    });
+
+    const result = await collectQuotas([TARGET], { now: NOW, cachePath });
+
+    expect(result[TARGET.id]?.state).toBe("error");
+  });
+
   it("does not renew a credential with no refresh token", async () => {
     const adapter = stubAdapter({
       readCredential: vi.fn(async () => ({ accessToken: "old", expiresAt: NOW - 1 })),
@@ -324,8 +395,9 @@ describe("collectQuotas", () => {
 
     expect(maxInFlight).toBe(1);
     expect(adapter.renewCredential).toHaveBeenCalledTimes(1);
-    // The one that could not take the lock backs off rather than rotating anyway.
-    expect([a[TARGET.id]?.state, b[TARGET.id]?.state].sort()).toEqual(["expired", "ok"]);
+    // The one that could not take the lock backs off rather than rotating anyway, and its
+    // reading failed for that moment only: the sign-in is the one the other just renewed.
+    expect([a[TARGET.id]?.state, b[TARGET.id]?.state].sort()).toEqual(["error", "ok"]);
   });
 
   it("does no work for an empty target list", async () => {

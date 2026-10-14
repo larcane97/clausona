@@ -128,26 +128,40 @@ export type ApiQuotaTarget = SpendEndpoint & {
 const cooldownKey = (target: QuotaTarget) => (target.api ? target.id : target.tool);
 
 /**
- * Renews under a lock, returning null when renewal is impossible or another process
- * already holds the lock. Errors are contained: a profile that cannot be renewed is
- * reported as expired rather than failing the whole listing.
+ * How a renewal went. `refused`: there is no refresh token to offer, or the provider turned it
+ * down, and only signing in again helps - the profile is expired. `untried`: it could not be
+ * asked this time - another process was renewing the same sign-in, the token endpoint could not
+ * be reached or failed - which says nothing about the sign-in, so the reading is an error.
+ */
+type Renewal = { credential: ToolCredential } | "refused" | "untried";
+
+/** What the token endpoint answers a refresh token it will not take with. */
+const REFUSED_STATUSES = new Set([400, 401, 403]);
+
+/**
+ * Renews under a lock. Errors are contained: a profile that cannot be renewed is reported
+ * rather than failing the whole listing.
  */
 async function renewCredential(
   target: QuotaTarget,
   credential: ToolCredential,
   signal: AbortSignal,
   lockDir: string,
-): Promise<ToolCredential | null> {
+): Promise<Renewal> {
   const adapter = getAdapter(target.tool);
-  if (!adapter.renewCredential || !credential.refreshToken) return null;
+  if (!adapter.renewCredential || !credential.refreshToken) return "refused";
 
-  return withRenewalLock(lockDir, target.id, async () => {
+  const renewal = await withRenewalLock(lockDir, target.id, async (): Promise<Renewal> => {
     try {
-      return (await adapter.renewCredential?.(target.configDir, credential, signal)) ?? null;
-    } catch {
-      return null;
+      const renewed = await adapter.renewCredential?.(target.configDir, credential, signal);
+      // None: a running Claude Code holds its own refresh lock, and is renewing it.
+      return renewed ? { credential: renewed } : "untried";
+    } catch (error) {
+      return error instanceof QuotaHttpError && REFUSED_STATUSES.has(error.status) ? "refused" : "untried";
     }
   });
+  // None: another clausona holds the lock, or it could not be made.
+  return renewal ?? "untried";
 }
 
 /**
@@ -264,20 +278,25 @@ async function fetchOne(
   // cannot spin.
   let renewed = false;
 
-  const renew = async (): Promise<boolean> => {
-    if (!allowRenew || renewed) return false;
+  // With renewal turned off, a lapsed token is reported expired, as `--no-renew` says; and a
+  // token rejected again just after its renewal is no sign-in to keep trying.
+  const renew = async (): Promise<Renewal> => {
+    if (!allowRenew || renewed) return "refused";
     renewed = true;
-    const next = await renewCredential(target, credential as ToolCredential, controller.signal, lockDir);
-    if (!next) return false;
-    credential = next;
-    return true;
+    const renewal = await renewCredential(target, credential as ToolCredential, controller.signal, lockDir);
+    if (typeof renewal === "object") credential = renewal.credential;
+    return renewal;
   };
+  const notRenewed = (renewal: "refused" | "untried") => ({
+    snapshot: degraded(renewal === "refused" ? "expired" : "error", cached, now),
+  });
 
   try {
     // A lapsed access token can still be renewed from the refresh token, so this is
     // worth doing rather than reporting expired straight away.
     if (credential.expiresAt !== undefined && credential.expiresAt <= now + RENEW_MARGIN_MS) {
-      if (!(await renew())) return { snapshot: degraded("expired", cached, now) };
+      const renewal = await renew();
+      if (typeof renewal !== "object") return notRenewed(renewal);
     }
 
     for (;;) {
@@ -290,8 +309,9 @@ async function fetchOne(
           // A token can be rejected while still looking valid by the clock — revoked
           // elsewhere, or skew — so a 401 earns one renewal attempt too.
           if (error.status === 401 || error.status === 403) {
-            if (await renew()) continue;
-            return { snapshot: degraded("expired", cached, now) };
+            const renewal = await renew();
+            if (typeof renewal === "object") continue;
+            return notRenewed(renewal);
           }
           if (error.status === 429) {
             return {

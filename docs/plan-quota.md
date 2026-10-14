@@ -70,7 +70,7 @@ columns, and what to run is printed below the table:
 
 | On the row | Meaning |
 | --- | --- |
-| `expired` | The sign-in has lapsed past renewal (refresh token older than ~14 days, or revoked). Run `clausona login <profile>`. |
+| `expired` | The sign-in has lapsed past renewal: the provider refused the refresh token (older than ~14 days, or revoked). With `--no-renew`, a lapsed access token reads this way too. Run `clausona login <profile>`. |
 | `signed out` | No credential is stored for the profile. Claude Code leaves an empty one behind when it signs out. Run `clausona login <profile>`. |
 
 The numbers it last read are left off the row. They are from before the sign-in lapsed,
@@ -83,4 +83,4 @@ reason is printed below the table. A dash means there is no reading yet.
 | State | Meaning |
 | --- | --- |
 | `cooldown` | The endpoint returned 429. clausona pauses that tool until the window lifts. |
-| `error` | Network failure, timeout, or an unreadable response. |
+| `error` | Network failure, timeout, or an unreadable response. A renewal that could not be tried this time is one too: another process was renewing the same sign-in, or the token endpoint could not be reached or failed. |
