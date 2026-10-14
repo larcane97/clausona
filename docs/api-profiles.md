@@ -143,7 +143,7 @@ belongs in an argument.
 | --- | --- | --- |
 | `keychain` (default) | clausona stores it — in the macOS Keychain on a Mac, otherwise in `~/.clausona/secrets.json`. That includes Linux: in this version a stored key goes to that file, written owner-only (mode 0600) so that only you can read it, not to `secret-tool` or your desktop keyring. On Windows a file mode means nothing; the file is private because it sits inside your user profile, which Windows opens only to you, SYSTEM and administrators. `clausona doctor`'s text report ends by saying which. On a Mac a key longer than about 2,000 bytes is refused — it does not fit the one line the Keychain is handed it on — so point at such a key with `env:` or `command:` | at every launch, from that store |
 | `env:NAME` | your shell; clausona records only the variable name | at every launch, **in the shell that runs `claude`** — so `NAME` has to be exported there, not only where you ran `clausona add` |
-| `command:"…"` | wherever the command gets it — `op read`, `pass show`, `vault kv get` | at every launch, on every `clausona doctor`, and each time the dashboard's Health check screen opens — never by the dashboard itself; the first line of its output is the key |
+| `command:"…"` | wherever the command gets it — `op read`, `pass show`, `vault kv get` | at every launch, on every `clausona doctor`, and each time the dashboard's Health check screen opens — never by the dashboard itself; the first line of its output is the key, and what it writes to stderr shows at a launch and in `clausona doctor` |
 
 `profiles.json` never holds the key itself, only which of these to use. `env:` takes the
 variable's *name*: many keys are valid names too (`hf_…`, `gsk_…`, `sk_live_…`), so a `NAME`
@@ -164,17 +164,23 @@ clausona add claude:vault --api --base-url https://openrouter.ai/api --key-from 
 clausona takes the key once the command exits. If the command starts a job in the background,
 clausona does not wait for it to end.
 
-At a launch and in `clausona doctor`, that job is left running. The command runs in your
-terminal, so that it can ask you for a PIN or a passphrase there, and clausona cannot stop a job
-it starts there without knowing its process ID. When the key is read for spend, on macOS and
-Linux, the job is stopped as the command exits (see
+At a launch and in `clausona doctor`, the command runs in your terminal, so that it can ask you
+for a PIN or a passphrase there. What it writes to stderr, a prompt or an error, shows there too.
+A job it leaves running in the background is left running: clausona cannot stop a job it starts
+there without knowing its process ID. When the key is read for spend, on macOS and Linux, the job
+is stopped as the command exits (see
 [Where the spend comes from](routing.md#where-the-spend-comes-from)).
 
 A launch waits for the command for as long as it takes, since you may be typing a passphrase.
-Ctrl-C stops it. `clausona doctor` and the dashboard's Health check screen give it 60 seconds,
-then stop it and report "secret command did not finish in 60 s". On macOS and Linux they stop it
-the way Ctrl-C would, so a passphrase prompt can turn your terminal's echo back on, and kill it
-two seconds later if it is still running.
+Ctrl-C stops it. `clausona doctor` gives it 60 seconds, then stops it and reports "secret command
+did not finish in 60 s". On macOS and Linux it stops the command, and what the command started,
+the way Ctrl-C would, so a passphrase prompt can turn your terminal's echo back on, and kills them
+two seconds later if the command is still running. On a Mac, doctor gives the Keychain the same
+60 seconds, in case macOS is asking whether clausona may read the key and nobody answers.
+
+The dashboard's Health check screen holds your terminal, so there the command runs without it, as
+it does for spend, with its stderr shut and the same 60 seconds. A command that asks for a PIN or a
+passphrase fails there, and the screen says to check it with `clausona doctor` instead.
 
 Never pass a key as an argument. With the default `keychain` source the key is read from a
 prompt that does not echo it, or from stdin when something is piped in — which is how to
@@ -470,7 +476,8 @@ reports neither missing. It checks these instead:
   reported too, with the `config <profile> --auth` that sets one
 - that the key resolves. **A `command:` source is executed**, in a shell, every time doctor
   runs — so a vault round-trip or a touch-ID prompt happens on every `clausona doctor`, and each
-  time the dashboard's Health check screen opens. The dashboard itself resolves no key, so the
+  time the dashboard's Health check screen opens, where it runs without your terminal (see
+  [Where the key lives](#where-the-key-lives)). The dashboard itself resolves no key, so the
   health it shows beside a profile does not say whether the key resolves. An
   `env:` source is read from doctor's own environment, which is not necessarily the
   environment the profile will run in. A key source that is none of `keychain`, `env:` and
