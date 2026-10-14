@@ -7,7 +7,7 @@ import { loadInventory } from "../inventory.js";
 import { type Collector, emptyFacts, type Warning } from "../model.js";
 import { stateOf } from "../state.js";
 import { TestHome } from "../test-home.js";
-import { codexProjectRecords, loadCodexContext, readCodex } from "./codex.js";
+import { codexProjectRecords, loadCodexContext, ProjectRefusals, readCodex } from "./codex.js";
 import { addCodexHookTrust, codexHomeHooksFile } from "./codex-hooks.js";
 
 const homes: TestHome[] = [];
@@ -1133,6 +1133,49 @@ describe("readCodex", () => {
     const message = out.warnings[0]?.message ?? "";
     expect(message).toMatch(/^is not valid TOML( at line \d+, column \d+)?$/);
     expect(message).not.toContain("abc123");
+  });
+});
+
+describe("ProjectRefusals", () => {
+  const realPlatform = process.platform;
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+  });
+  const cause = { refused: "has a hook Codex cannot read", parse: false };
+  const warned = (notes: [string, string][]) => {
+    const refusals = new ProjectRefusals();
+    for (const [file, place] of notes) refusals.note(file, cause, place);
+    const warnings: Warning[] = [];
+    refusals.warn(warnings, "/nowhere");
+    return warnings;
+  };
+
+  it("warns once of a file its readers spell apart in case on Windows, under one spelling whatever the order", () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    // A main checkout's config.toml: as its own project, by Codex's lower-cased trust key; from a
+    // worktree, as git spells the main checkout.
+    const own: [string, string] = ["c:\\users\\me\\repos\\main\\.codex\\config.toml", "c:\\users\\me\\repos\\main"];
+    const fromWorktree: [string, string] = [
+      "C:\\Users\\Me\\repos\\main\\.codex\\config.toml",
+      "C:\\Users\\Me\\repos\\main-wt",
+    ];
+    for (const notes of [
+      [own, fromWorktree],
+      [fromWorktree, own],
+    ]) {
+      const warnings = warned(notes);
+      expect(warnings.map((w) => w.file)).toEqual(["C:\\Users\\Me\\repos\\main\\.codex\\config.toml"]);
+      expect(warnings[0]?.message).toMatch(/^has a hook Codex cannot read, so Codex loads no config in .+ and .+$/);
+    }
+  });
+
+  it("keeps two files apart that differ in case where the filesystem does", () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const warnings = warned([
+      ["/home/me/repos/main/.codex/config.toml", "/home/me/repos/main"],
+      ["/home/me/repos/Main/.codex/config.toml", "/home/me/repos/Main"],
+    ]);
+    expect(warnings).toHaveLength(2);
   });
 });
 

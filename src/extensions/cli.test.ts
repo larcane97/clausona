@@ -11,6 +11,7 @@ import { type ExtensionsCommand, runExtensionsCommand } from "./cli.js";
 import { scopeSentence } from "./describe.js";
 import { loadInventory } from "./inventory.js";
 import { tilde } from "./present.js";
+import { pathKey } from "./read.js";
 import { scopesFor } from "./scopes.js";
 import { codexCanonical } from "./sources/codex-trust.js";
 import { TestHome } from "./test-home.js";
@@ -1749,11 +1750,15 @@ describe("Codex hooks and Codex's trust", () => {
       ]);
       // git names the main checkout by its real path, and Codex reads its hooks there.
       const mainFile = realpathSync.native(path.join(main, ".codex", "config.toml"));
-      // One line per cause: the worktree's, and the main checkout's own, a recorded project too.
+      // One line per cause: the worktree's, and the main checkout's own, a recorded project too,
+      // which on Windows spells the file by Codex's lower-cased key: one file all the same.
       const place = (p: string) => tilde(p, h.home);
-      expect(listed.warnings.map((w: { file: string; message: string }) => [w.file, w.message])).toEqual([
-        [mainFile, `has a hook Codex cannot read, so Codex loads no config in ${place(wt)}`],
-        [mainFile, `has an MCP server Codex cannot read, so Codex loads no config in ${place(codexTrustKey(main))}`],
+      expect(listed.warnings.map((w: { file: string; message: string }) => [pathKey(w.file), w.message])).toEqual([
+        [pathKey(mainFile), `has a hook Codex cannot read, so Codex loads no config in ${place(wt)}`],
+        [
+          pathKey(mainFile),
+          `has an MCP server Codex cannot read, so Codex loads no config in ${place(codexTrustKey(main))}`,
+        ],
       ]);
       const id = listed.items.find((i: { name: string }) => i.name === "eli5").id;
       expect(await run(h, wt, "skills", ["show", "--id", id])).toContain(
@@ -1770,9 +1775,11 @@ describe("Codex hooks and Codex's trust", () => {
       const { main, wt } = worktreeHome(h, "");
       const mainFile = path.join(realpathSync.native(path.join(main, ".codex")), "config.toml");
       const places = `${tilde(codexTrustKey(main), h.home)} and ${tilde(wt, h.home)}`;
+      // The main checkout reads its file by Codex's key, on Windows lower-cased, and the worktree as
+      // git spells it: one file, one line.
       const warnings = async () =>
         JSON.parse(await run(h, wt, "skills", ["ls", "--tool", "codex", "--json"])).warnings.map(
-          (w: { file: string; message: string }) => [w.file, w.message],
+          (w: { file: string; message: string }) => [pathKey(w.file), w.message],
         );
       // A hook Codex cannot read refuses both, the main checkout as its own project and its worktree.
       h.write(
@@ -1780,7 +1787,7 @@ describe("Codex hooks and Codex's trust", () => {
         '[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "echo main"\ntimeout = 30.0\n',
       );
       expect(await warnings()).toEqual([
-        [mainFile, `has a hook Codex cannot read, so Codex loads no config in ${places}`],
+        [pathKey(mainFile), `has a hook Codex cannot read, so Codex loads no config in ${places}`],
       ]);
       // And one that does not parse: one parse warning.
       h.write("repos/main/.codex/config.toml", "[x\n");

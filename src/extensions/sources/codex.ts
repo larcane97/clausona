@@ -106,14 +106,20 @@ function refusedWords({ refused, parse }: Refused): string {
  * read it - a main checkout's, as its own project and as each of its worktrees' - naming every
  * project it keeps all config from, by its path: in a list of warnings each line reads the same
  * wherever it is shown. A file only an untrusted project reads, Codex leaves alone, and its
- * warning names none.
+ * warning names none. Exported for its tests.
+ *
+ * A file is one file however its readers spell it (pathKey): on Windows a main checkout's, as
+ * its own project by Codex's lower-cased trust key and from a worktree as git spells it. Its
+ * warning keeps the spelling that comes first in code-unit order, so it reads the same each run,
+ * and on Windows has the capitals the path has on disk.
  */
-class ProjectRefusals {
+export class ProjectRefusals {
   private readonly byCause = new Map<string, { file: string; cause: Refused; places: Set<string> }>();
 
   note(file: string, cause: Refused, place: string | undefined): void {
-    const key = `${file}\0${cause.refused}`;
+    const key = `${pathKey(file)}\0${cause.refused}`;
     const entry = this.byCause.get(key) ?? { file, cause, places: new Set<string>() };
+    if (file < entry.file) entry.file = file;
     if (place !== undefined) entry.places.add(place);
     this.byCause.set(key, entry);
   }
