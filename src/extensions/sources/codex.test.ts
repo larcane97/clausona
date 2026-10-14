@@ -113,6 +113,27 @@ describe("readCodex", () => {
     ]);
   });
 
+  it("shows a description of any length whole, as Codex lists it", async () => {
+    const h = new TestHome();
+    homes.push(h);
+    h.codex("personal", ".codex");
+    // Codex 0.159.3's skills/list gave each whole: 5,000 characters, 1,025 two-byte ones, and
+    // 1,023 with two emoji after them; only its whitespace made one space.
+    const long = "a".repeat(5000);
+    const wide = "é".repeat(1025);
+    const emoji = `${"a".repeat(1023)}😀😀`;
+    h.write(".agents/skills/long/SKILL.md", `---\nname: long\ndescription: ${long}\n---\n`);
+    h.write(".agents/skills/wide/SKILL.md", `---\nname: wide\ndescription: ${wide}\n---\n`);
+    h.write(".agents/skills/emoji/SKILL.md", `---\nname: emoji\ndescription: ${emoji}\n---\n`);
+    h.write(".agents/skills/spaced/SKILL.md", `---\nname: spaced\ndescription: ${"a".repeat(1020)}    b    c\n---\n`);
+    const out: Collector = { items: [], facts: emptyFacts(), warnings: [] };
+    const ctx = await loadCodexContext(h.registry, h.home, out.warnings);
+    if (!ctx) throw new Error("no codex context");
+    await readCodex(ctx, [], out);
+    const shown = Object.fromEntries(out.items.filter((i) => i.kind === "skill").map((i) => [i.name, i.description]));
+    expect(shown).toEqual({ long, wide, emoji, spaced: `${"a".repeat(1020)} b c` });
+  });
+
   it("reads a project table that only switches a server as that switch, not as a second server", async () => {
     const h = new TestHome();
     homes.push(h);
