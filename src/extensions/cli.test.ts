@@ -1777,7 +1777,7 @@ describe("Codex hooks and Codex's trust", () => {
     // The user config.toml, as anywhere: the name entry goes, and the path entry is made.
     expect(await lines(["on", "eli5", "--everywhere"])).toEqual([[user, "skills.config eli5 removed", noted]]);
     const skillFile = tilde(path.join(app, ".agents", "skills", "proj", "SKILL.md"), h.home);
-    expect(await lines(["off", "proj", "--here"])).toEqual([[user, `skills.config ${skillFile} → off`, noted]]);
+    expect(await lines(["off", "proj"])).toEqual([[user, `skills.config ${skillFile} → off`, noted]]);
   });
 
   it("plans a server switch in a project whose config.toml Codex refuses but clausona reads, noting it stays off", async () => {
@@ -1788,7 +1788,7 @@ describe("Codex hooks and Codex's trust", () => {
     );
     const file = path.join(app, ".codex", "config.toml");
     const plan = (verb: string) =>
-      run(h, app, "mcp", [verb, "exa", "--tool", "codex", "--here", "--dry-run", "--json"]).then(JSON.parse);
+      run(h, app, "mcp", [verb, "exa", "--tool", "codex", "--dry-run", "--json"]).then(JSON.parse);
     // A wrong type, which Codex refuses: the file reads, so the switch is planned in it.
     h.write("repos/app/.codex/config.toml", "[mcp_servers.p]\ncommand = 5\n");
     const off = await plan("off");

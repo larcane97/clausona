@@ -777,7 +777,7 @@ alone, one that is not valid TOML too.
 
 A trusted project's file Codex refuses for a value of the wrong type is one clausona still
 reads: what it holds is listed, off in that project, and a change can go to it. So in that
-project `skills on` and `off` write your `config.toml` as anywhere, and `mcp … --here` writes
+project `skills on` and `off` write your `config.toml` as anywhere, and `mcp off` and `on` here write
 the project's file, each change line noting that the row
 `stays off in this project until Codex can read <file>`. A file that is not valid TOML clausona
 cannot change either, and a change to it is refused (`unreadable`).
