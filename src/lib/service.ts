@@ -1999,6 +1999,13 @@ function unsharedLinkIssue(adapter: ToolAdapter, name: string): DoctorIssue {
   };
 }
 
+/**
+ * How long doctor's key check lets a key command run. The command keeps the terminal doctor was
+ * run from, where it can ask for a PIN or a passphrase, so the limit is generous; past it, the
+ * command is ended and the key reported unavailable, rather than doctor waiting on it for good.
+ */
+const KEY_CHECK_LIMIT_MS = 60_000;
+
 export async function doctorProfiles(
   options: {
     /**
@@ -2083,7 +2090,7 @@ export async function doctorProfiles(
           // and not when the caller asked for no key to be resolved: then it goes unchecked.
           secret:
             resolveSecrets && profile.api && isKnownSecretSource(profile.api.secret)
-              ? await resolveSecret(id, profile.api.secret)
+              ? await resolveSecret(id, profile.api.secret, undefined, { limitMs: KEY_CHECK_LIMIT_MS })
                   .then(() => ({ ok: true }) as const)
                   .catch((error: unknown) => ({
                     ok: false as const,

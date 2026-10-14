@@ -19,24 +19,26 @@ export function keychainItemFor(profileId: string): string {
   return `clausona-${profileId}`;
 }
 
-type RunResult = { code: number; stdout: string };
+/** `timedOut` when the command was ended at its limit (run()'s `limitMs`). */
+type RunResult = { code: number; stdout: string; timedOut?: true };
 
 /**
- * Kills a running child and everything it started. On POSIX the child is the sh that leads the
- * command's process group (run() starts it so, ENDS_ITS_GROUP), and the whole group is killed: the
- * command, and a `sh -c` command's own children, which would outlive the shell, among them.
- * Windows kills the tree under its pid. Only while the child is still running: once it has exited,
- * its pid can be another process's. By then the sh has sent what the command left in the group a
- * TERM.
+ * Kills a running child. On POSIX, with `group`, the child is the sh that leads the command's
+ * process group (run() starts a detached command so, ENDS_ITS_GROUP), and the whole group is
+ * killed: the command, and a `sh -c` command's own children, which would outlive the shell, among
+ * them. Without, the child keeps the terminal in clausona's own process group, so only the child
+ * is killed. Windows kills the tree under its pid. Only while the child is still running: once it
+ * has exited, its pid can be another process's. By then the sh has sent what the command left in
+ * the group a TERM.
  */
-function killRunning(child: ChildProcess): void {
+function killRunning(child: ChildProcess, group: boolean): void {
   if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === "win32") {
     spawnCommand("taskkill", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore" }).on("error", () => {});
     return;
   }
   try {
-    process.kill(-child.pid, "SIGKILL");
+    process.kill(group ? -child.pid : child.pid, "SIGKILL");
   } catch {
     // Gone already.
   }
@@ -49,7 +51,7 @@ const ENDING_SIGNALS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"
 const detachedChildren = new Set<ChildProcess>();
 
 const killDetached = () => {
-  for (const child of detachedChildren) killRunning(child);
+  for (const child of detachedChildren) killRunning(child, true);
 };
 
 /**
@@ -138,6 +140,11 @@ type RunOptions = {
   input?: string;
   /** Bounds the run, the command started in a process group of its own for it. */
   signal?: AbortSignal;
+  /**
+   * How long a command that keeps the terminal may run: past it, the command itself is killed, if
+   * it is still running, and the result says so.
+   */
+  limitMs?: number;
 };
 
 /**
@@ -156,7 +163,7 @@ type RunOptions = {
  * exits keeps running: nothing can end it alone without its pid, which the command never gives.
  */
 function run(command: string, args: string[], options: RunOptions = {}): Promise<RunResult> {
-  const { input, signal } = options;
+  const { input, signal, limitMs } = options;
   return new Promise((resolve) => {
     if (signal?.aborted) {
       resolve({ code: 1, stdout: "" });
@@ -174,22 +181,27 @@ function run(command: string, args: string[], options: RunOptions = {}): Promise
     const finish = (result: RunResult) => {
       if (settled) return;
       settled = true;
+      clearTimeout(limit);
       clearTimeout(drain);
       forget();
       release();
       resolve(result);
     };
-    const stop = () => {
-      killRunning(child);
+    /** Ends the run before the command has: it is killed, if it is still running, and no key is read. */
+    const stop = (result: RunResult) => {
+      killRunning(child, detached);
       child.stdout?.destroy();
-      finish({ code: 1, stdout: "" });
+      finish(result);
     };
-    const forget = signal ? onAbort(signal, stop) : () => {};
+    const forget = signal ? onAbort(signal, () => stop({ code: 1, stdout: "" })) : () => {};
+    const limit =
+      limitMs === undefined ? undefined : setTimeout(() => stop({ code: 1, stdout: "", timedOut: true }), limitMs);
     child.stdout?.on("data", (chunk) => {
       out += chunk;
     });
     child.on("exit", (code) => {
       if (settled) return;
+      clearTimeout(limit);
       // A turn of the event loop after the timer reads what is already in the pipe, however late
       // the timer ran.
       drain = setTimeout(
@@ -406,15 +418,16 @@ async function readStoredSecret(
  *
  * `signal` bounds a key that a command or the Keychain gives: once it aborts, what was started
  * for it is killed, and the key is not read. Without one, a key command keeps the terminal, where
- * it can prompt.
+ * it can prompt, and `limitMs` bounds it instead: past it, the command itself is killed, if it is
+ * still running, and the key is not read.
  */
 export async function resolveSecret(
   profileId: string,
   source: SecretSource,
   backend?: SecretBackend,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; limitMs?: number } = {},
 ): Promise<string> {
-  const { signal } = options;
+  const { signal, limitMs } = options;
   // A hand edit can leave anything in the slot, or nothing. Doctor calls such a source unknown
   // and never resolves it, so launch does not read the store for it either: a profile would
   // otherwise work while doctor reported it broken. Not quoted, since it can hold anything.
@@ -445,12 +458,13 @@ export async function resolveSecret(
   if (source.source === "command") {
     const shell = process.platform === "win32" ? "powershell" : "/bin/sh";
     const args = process.platform === "win32" ? ["-NoProfile", "-Command", source.run] : ["-c", source.run];
-    const { code, stdout } = await run(shell, args, { signal });
+    const { code, stdout, timedOut } = await run(shell, args, { signal, limitMs });
     if (signal?.aborted) throw new Error("the key was not read in time");
     // The command line is not quoted, so the message says where it is instead - profiles.json,
     // the one place it is shown - and what replaces it. Not `config --edit`: that opens the
     // env map, and the command lives in the endpoint block.
     const remedy = `run it yourself to see why - it is in ~/.clausona/profiles.json - or replace it with 'clausona config ${profileId} --key-from command:"<command>"'`;
+    if (timedOut) throw new Error(`the key command did not finish in ${(limitMs ?? 0) / 1000} s - ${remedy}`);
     if (code !== 0) throw new Error(`secret command exited with ${code} - ${remedy}`);
     const first = stdout.split(/\r?\n/)[0]?.trim() ?? "";
     if (first === "") throw new Error(`secret command produced no output - ${remedy}`);

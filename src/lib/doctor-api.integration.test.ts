@@ -27,6 +27,8 @@ import type { DoctorProfileResult, SecretSource } from "../types.js";
 
 const temps: string[] = [];
 let spawned: string[] = [];
+/** The options each key read was given, as the secrets mock saw them. */
+let keyReads: unknown[] = [];
 const realPlatform = process.platform;
 
 afterEach(async () => {
@@ -41,6 +43,7 @@ afterEach(async () => {
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
   const unexpected = spawned;
   spawned = [];
+  keyReads = [];
   expect(unexpected, "a test spawned a process").toEqual([]);
 });
 
@@ -113,7 +116,10 @@ async function harness(options: HarnessOptions = {}) {
       ...actual,
       storeSecret: (id: string, value: string) => actual.storeSecret(id, value, "file"),
       deleteSecret: (id: string) => actual.deleteSecret(id, "file"),
-      resolveSecret: (id: string, source: SecretSource) => actual.resolveSecret(id, source, "file"),
+      resolveSecret: (id: string, source: SecretSource, _backend?: unknown, options?: { limitMs?: number }) => {
+        keyReads.push(options);
+        return actual.resolveSecret(id, source, "file", options);
+      },
     };
   });
   const service = await import("./service.js");
@@ -247,6 +253,20 @@ describe("doctor on an API profile", () => {
     expect(spawned).toEqual(["/bin/sh"]);
     spawned = [];
     expect(issues.map((i) => i.kind)).toEqual(["missing_api_secret"]);
+  });
+
+  // With a limit and no signal: the command keeps the terminal doctor was run from, where it can
+  // ask for a PIN, and one that never finishes is ended after a minute.
+  it("gives a command key source 60 seconds, in the terminal doctor runs in", async () => {
+    const h = await harness();
+    await h.addApi({ secret: { source: "command", run: "op read op://vault/glm" }, secretValue: undefined });
+    keyReads = [];
+
+    await h.doctor();
+
+    expect(spawned).toEqual(["/bin/sh"]);
+    spawned = [];
+    expect(keyReads).toEqual([{ limitMs: 60_000 }]);
   });
 
   it("runs no command key source for a caller that asks for no key to be resolved", async () => {

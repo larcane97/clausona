@@ -1,7 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { getEventListeners } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
@@ -395,6 +397,82 @@ describe("resolveSecret", () => {
         // The job is this test's own, by the pid it wrote, and was never seen to end.
         const job = written();
         if (job > 0 && alive(job)) process.kill(job, "SIGKILL");
+      }
+    },
+  );
+
+  // A prompt for a PIN or a passphrase on /dev/tty works only for a process in the terminal's
+  // foreground process group: a launch and doctor run the command in clausona's own.
+  it.skipIf(windows)(
+    "runs a key command that keeps the terminal in clausona's own process group",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    async () => {
+      const run = "ps -o pgid= -p $$";
+      const own = execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim();
+      await expect(resolveSecret("claude:x", { source: "command", run })).resolves.toBe(own);
+      await expect(resolveSecret("claude:x", { source: "command", run }, undefined, { limitMs: 60_000 })).resolves.toBe(
+        own,
+      );
+    },
+  );
+
+  // doctor's check: a command that has not finished within its limit is ended, itself alone
+  // (its group is clausona's), and the key is not read.
+  it.skipIf(windows)(
+    "stops a key command that keeps the terminal once its limit passes, and only it",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "clausona-key-command-"));
+      temps.push(dir);
+      const pids = path.join(dir, "pids");
+      vi.stubEnv("CLAUSONA_TEST_PIDS", pids);
+      // Its own pid, which exec hands on to the sleep.
+      const run = 'echo $$ > "$CLAUSONA_TEST_PIDS"; exec sleep 600';
+      const alive = (pid: number) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const written = () => {
+        try {
+          return Number(readFileSync(pids, "utf8").trim());
+        } catch {
+          return 0;
+        }
+      };
+      // The limit's clock is a fake one, moved on once the command is under way. The test's own
+      // bound, on the real one, fails a read that goes on past it rather than hanging.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const unbound = new AbortController();
+      const waited = sleep(SPAWN_TIMEOUT_MS, undefined, { signal: unbound.signal }).then(() => {
+        throw new Error("the read went on past its limit");
+      });
+      waited.catch(() => {});
+      let ended = false;
+      try {
+        const read = resolveSecret("claude:x", { source: "command", run }, undefined, { limitMs: 60_000 });
+        const started = Date.now();
+        while (written() === 0 && Date.now() - started < 20_000) await sleep(50);
+        const pid = written();
+        expect(pid).toBeGreaterThan(0);
+        const kill = vi.spyOn(process, "kill");
+        vi.advanceTimersByTime(60_000);
+        await expect(Promise.race([read, waited])).rejects.toThrow(/^the key command did not finish in 60 s - /);
+        // Its pid, and no group.
+        expect(kill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([[pid, "SIGKILL"]]);
+        kill.mockRestore();
+        vi.useRealTimers();
+        await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 10_000 });
+        ended = true;
+      } finally {
+        unbound.abort();
+        vi.useRealTimers();
+        // The command is this test's own, by the pid it wrote.
+        const pid = written();
+        if (!ended && pid > 0 && alive(pid)) process.kill(pid, "SIGKILL");
       }
     },
   );
