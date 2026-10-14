@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { DaemonLook } from "../core/claude-daemon.js";
 import type { DoctorProfileResult, Registry } from "../types.js";
 
 // doctorProfiles and repairProfile resolve ~/.clausona at module load, so the whole module graph
@@ -115,10 +116,10 @@ function ownerOf(dir: string, name: string): string {
 
 /**
  * What the look for the profile's background daemon finds: none (every case not about it), a
- * stand-in listening on its control socket under the case's own folder in place of /tmp, or no
- * answer.
+ * stand-in listening on its control socket under the case's own folder in place of /tmp, no
+ * answer, or, as on Windows, the profile's own daemon.lock naming pid 4242.
  */
-type DaemonLook = "none" | "stand-in" | "no-answer";
+type DaemonFound = "none" | "stand-in" | "no-answer" | "lock";
 
 /**
  * A primary and one secondary Claude profile under a throwaway home, the primary holding its own
@@ -126,7 +127,7 @@ type DaemonLook = "none" | "stand-in" | "no-answer";
  * pinned to Linux so doctor reads that file instead of probing the Keychain: the only findings
  * left are about links.
  */
-async function seedHome({ daemon = "none" }: { daemon?: DaemonLook } = {}) {
+async function seedHome({ daemon = "none" }: { daemon?: DaemonFound } = {}) {
   currentHome = mkdtempSync(path.join(tmpdir(), "clausona-accountstate-"));
   temps.push(currentHome);
 
@@ -162,12 +163,12 @@ async function seedHome({ daemon = "none" }: { daemon?: DaemonLook } = {}) {
   temps.push(daemonRoot);
   vi.doMock("../core/claude-daemon.js", async (importOriginal) => {
     const real = await importOriginal<typeof import("../core/claude-daemon.js")>();
-    const running = async (configDir: string) =>
+    const running = async (configDir: string): Promise<DaemonLook> =>
       daemon === "stand-in"
         ? real.claudeDaemonRunning(configDir, { tmpRoot: daemonRoot })
-        : daemon === "none"
-          ? false
-          : null;
+        : daemon === "lock"
+          ? { running: true, pid: 4242 }
+          : { running: daemon === "none" ? false : null };
     return { ...real, claudeDaemonRunning: running };
   });
   const service = await import("./service.js");
@@ -370,6 +371,19 @@ describe.skipIf(process.platform === "win32")("repair while the profile's backgr
     await expect(service.updateProfileConfig("claude:work", { mergeSessions: true })).rejects.toThrow(
       "To go ahead while it runs: clausona config claude:work --merge-sessions --force",
     );
+    expect(lstatOrNull(path.join(work, "daemon"))?.isSymbolicLink()).toBe(true);
+  });
+
+  it("says on Windows the daemon's pid, and how to stop it in PowerShell", async () => {
+    const { primary, work, service } = await seedHome({ daemon: "lock" });
+    symlinkSync(path.join(primary, "daemon"), path.join(work, "daemon"));
+
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const repair = service.repairProfile("claude:work");
+    await expect(repair).rejects.toThrow(
+      `Claude Code's background daemon is running in ${work.replace(currentHome, "~")} (pid 4242), and this would take out the link to the primary's daemon/ it keeps its control key, roster and session tokens in. Stop it in PowerShell with \`$env:CLAUDE_CONFIG_DIR='${work}'; claude daemon stop\`, then run this again.`,
+    );
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     expect(lstatOrNull(path.join(work, "daemon"))?.isSymbolicLink()).toBe(true);
   });
 

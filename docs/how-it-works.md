@@ -266,9 +266,12 @@ config directory, as Claude Code derives it. Stop the daemon with
 `CLAUDE_CONFIG_DIR=~/.claude-<profile> claude daemon stop` and run the command again, or pass
 `--force`. The next daemon starts with the profile's own `daemon/`.
 
-On Windows the daemon listens on a pipe named by `daemon/pipe.key`, and through the link that is
-the primary's file. So the daemon found there can be the one the primary started, and stopping it
-from the profile stops that one.
+clausona never looks through the link itself: what it reaches is the primary's daemon, which keeps
+its own `~/.claude/daemon/` and goes on running whatever happens to the profile's link. On Windows
+the daemon's pipe is named by `daemon/pipe.key`, which through the link is the primary's file, so
+the pipe can't say whose daemon answers it. There clausona reads the profile's own `daemon.lock`
+instead: a file of the profile's own, not a link, naming a running process. The stop command is
+then given for PowerShell: `$env:CLAUDE_CONFIG_DIR='<profile dir>'; claude daemon stop`.
 
 While a profile linked the primary's `backups/`, Claude Code saved that profile's copies of
 `.claude.json` there, as `.claude.json.backup.<ms>`. When the primary's `.claude.json` is lost,

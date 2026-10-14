@@ -761,7 +761,8 @@ async function refuseWhileCodexRuns(configDir: string, moving: string[], retry: 
  * when that would take out the profile's link to the primary's `daemon/`. The daemon keeps its
  * control key, roster and session tokens in the directory the link leads to: taken out under it,
  * the profile's next client finds none of them and cannot reach it. `retry` is the command that
- * goes ahead anyway. A look that got no answer refuses the same: the daemon may be running.
+ * goes ahead anyway. A look that got no answer refuses the same: the daemon may be running. The
+ * look never goes through the link, whose far end is the primary's daemon (claudeDaemonRunning).
  */
 async function refuseWhileClaudeDaemonRuns(
   adapter: ToolAdapter,
@@ -773,16 +774,22 @@ async function refuseWhileClaudeDaemonRuns(
 ) {
   if (force || adapter.name !== "claude") return;
   if (!(await unsharedLinks(adapter, configDir, primarySource, mergeSessions)).includes("daemon")) return;
-  const running = await claudeDaemonRunning(configDir);
-  if (running === false) return;
+  const look = await claudeDaemonRunning(configDir);
+  if (look.running === false) return;
   const shown = configDir.replace(homedir(), "~");
-  if (running === null) {
+  if (look.running === null) {
     throw new Error(
       `The look for Claude Code's background daemon in ${shown} got no answer: its control socket neither took the connection nor refused it. This would take out the link to the primary's daemon/ a running daemon keeps its control key, roster and session tokens in. Nothing was changed. Run this again, or, with the daemon stopped in this profile, go ahead without the look: ${retry}`,
     );
   }
+  // PowerShell on Windows, where an assignment before a command is not a thing; quoted, with a
+  // quote in the path doubled, so the path is taken as it is.
+  const stop =
+    process.platform === "win32"
+      ? `in PowerShell with \`$env:CLAUDE_CONFIG_DIR='${configDir.replaceAll("'", "''")}'; claude daemon stop\``
+      : `with 'CLAUDE_CONFIG_DIR=${shown} claude daemon stop'`;
   throw new Error(
-    `Claude Code's background daemon is running in ${shown}, and this would take out the link to the primary's daemon/ it keeps its control key, roster and session tokens in. Stop it with 'CLAUDE_CONFIG_DIR=${shown} claude daemon stop', then run this again. Nothing was changed. To go ahead while it runs: ${retry}`,
+    `Claude Code's background daemon is running in ${shown}${look.pid === undefined ? "" : ` (pid ${look.pid})`}, and this would take out the link to the primary's daemon/ it keeps its control key, roster and session tokens in. Stop it ${stop}, then run this again. Nothing was changed. To go ahead while it runs: ${retry}`,
   );
 }
 
