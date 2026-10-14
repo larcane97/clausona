@@ -191,7 +191,7 @@ function issuesFor(results: DoctorProfileResult[], name: string) {
 const lstatOrNull = (p: string) => lstatSync(p, { throwIfNoEntry: false }) ?? null;
 
 /** `text` as a regular expression that matches it and nothing else. */
-const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const literally = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 describe("Claude Code state for one account or org", () => {
   it("is never linked into a profile, in either session mode", async () => {
@@ -479,7 +479,7 @@ describe("doctor on the primary's backups/", () => {
     const [issue] = issuesFor(await service.doctorProfiles(), "claude:default");
     expect(issue?.message).toMatch(
       new RegExp(
-        `rm ${escape(path.join(shown, "'.claude.json.backup.1760000100000 (1)'"))} ${escape(path.join(shown, "'.claude.json.backup.1760000200000'\\''x'"))}$`,
+        `rm ${literally(path.join(shown, "'.claude.json.backup.1760000100000 (1)'"))} ${literally(path.join(shown, "'.claude.json.backup.1760000200000'\\''x'"))}$`,
       ),
     );
   });
@@ -497,7 +497,7 @@ describe("doctor on the primary's backups/", () => {
     const issue = issuesFor(results, "claude:default").find((found) => found.kind === "foreign_account_backup");
     expect(issue?.message).toMatch(
       new RegExp(
-        `Remove-Item -LiteralPath '${escape(file(".claude.json.backup.1760000100000"))}','${escape(file(".claude.json.backup.1760000200000"))}'$`,
+        `Remove-Item -LiteralPath '${literally(file(".claude.json.backup.1760000100000"))}','${literally(file(".claude.json.backup.1760000200000"))}'$`,
       ),
     );
   });
