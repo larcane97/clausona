@@ -142,7 +142,7 @@
       <p class="updated">Updated <time datetime="2026-10-14">October 14, 2026</time></p>
 
       <div class="answer">
-        <p>Point <code>CLAUDE_CONFIG_DIR</code> at a separate directory for every extra account. Then link everything except the sign-in back to your main <code>~/.claude</code>.</p>
+        <p>Point <code>CLAUDE_CONFIG_DIR</code> at a separate directory for every extra account. Then link everything except the sign-in and the account's own state back to your main <code>~/.claude</code>.</p>
         <p><a href="https://github.com/larcane97/clausona">clausona</a> does that in three commands:</p>
 <pre data-copy><code>clausona init              <span class="c"># register the account already signed in</span>
 clausona add claude:work   <span class="c"># a second account, with Claude Code's own sign-in</span>
@@ -195,6 +195,7 @@ CLAUDE_CONFIG_DIR=~/.claude-work claude</code></pre>
         <li><strong><code>.credentials.json</code></strong> holds the sign-in tokens on Linux and Windows. On macOS it's used only when the Keychain refuses them. Otherwise the tokens sit in the Keychain under a name derived from the config directory, so two directories never share them.</li>
         <li><strong><code>plugins/</code> as a whole.</strong> Two files in it store absolute paths into the config directory: <code>known_marketplaces.json</code> and <code>installed_plugins.json</code>. Link the rest of <code>plugins/</code>. Keep a copy of those two files per directory, with the paths pointing at that directory. Update the copies whenever you add or remove a plugin.</li>
         <li><strong>Small per-directory state</strong>, such as <code>.last-update-result.json</code>. Claude Code rewrites it as a new file, and it describes one directory only.</li>
+        <li><strong>State Claude Code keeps for the signed-in account</strong>, such as <code>policy-limits.json</code> and <code>remote-settings.json</code>, your org's policy limits and managed settings. <code>mcp-needs-auth-cache.json</code>, <code>state/</code> and the background daemon's <code>daemon/</code> are among them too. Link one, and the second account reads the first account's copy. With the policy limits, it can apply the other org's until Claude Code fetches its own. (Checked with Claude Code 2.1.299.)</li>
       </ul>
       <p>Newer Claude Code versions also add directories.</p>
       <p>A link you made today doesn't cover a directory that appears next month. The second account quietly ends up with a separate copy, so check your links after you update Claude Code.</p>
@@ -217,7 +218,7 @@ CLAUDE_CONFIG_DIR=~/.claude-work claude</code></pre>
 clausona add claude:work   <span class="c"># makes ~/.claude-work and opens Claude Code's sign-in</span>
 csn use work               <span class="c"># plain `claude` now starts as the work account</span>
 csn use claude:default     <span class="c"># back to the first account; init names it default</span></code></pre>
-      <p>clausona gives each account a directory. It links everything from <code>~/.claude</code> into it except the sign-in, the account file and per-directory state. Conversation history stays out too, unless you merge sessions.</p>
+      <p>clausona gives each account a directory. It links everything from <code>~/.claude</code> into it except the sign-in, the account file, per-directory state and what Claude Code keeps for one account, like the org's policy limits. Conversation history stays out too, unless you merge sessions.</p>
       <p>So settings, hooks, skills, commands, agents, plugins and <code>CLAUDE.md</code> are the same under all of them. clausona also keeps the two plugin files in step, account by account.</p>
       <p>When a newer Claude Code adds a directory, <code>clausona doctor</code> reports that it isn't linked yet. <code>clausona repair &lt;profile&gt;</code> links it.</p>
       <p><code>csn</code> is the short name for <code>clausona</code>.</p>
