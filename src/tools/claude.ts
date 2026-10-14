@@ -144,9 +144,12 @@ const TEMP_LEFTOVER = /^.+\.tmp\.(?:[0-9a-f]{8}|\d+\.[0-9a-f]{12}|\d+\.\d+\.[0-9
 function claudeUnsharedRisk(name: string): UnsharedRisk | undefined {
   // A sibling is said as the file it belongs to; `.claude.json` itself is the profile's account
   // file, which the skip set has kept apart since the first release.
+  // Every file the sibling rules above match is one here, followed by a dot.
   const family = name.startsWith(".claude.json.")
     ? ".claude.json."
-    : name.match(/^(?:policy-limits\.json|remote-settings\.json|\.session_ingress_token|daemon\.log)/)?.[0];
+    : name.match(
+        /^(?:policy-limits\.json|remote-settings\.json|remote-settings-consent\.json|remote-settings-helper-consent|\.config\.json|\.claude-(?:staging|local|custom)-oauth\.json|\.session_ingress_token|daemon\.log)(?=\.|$)/,
+      )?.[0];
   switch (family ?? name) {
     case "policy-limits.json":
       return {

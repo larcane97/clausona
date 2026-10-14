@@ -277,6 +277,31 @@ describe("the rest of Claude Code's state for one config dir", () => {
   });
 });
 
+describe("what doctor says of a link to the primary's", () => {
+  it("says of a sibling what it says of the file it belongs to", () => {
+    for (const [sibling, file] of [
+      ["policy-limits.json.tmp.0a1b2c3d", "policy-limits.json"],
+      ["remote-settings.json.synced-at.tmp.0a1b2c3d", "remote-settings.json"],
+      ["remote-settings-consent.json.tmp.0a1b2c3d", "remote-settings-consent.json"],
+      ["remote-settings-helper-consent.tmp.0a1b2c3d", "remote-settings-helper-consent"],
+      [".config.json.backup", ".config.json"],
+      [".claude-custom-oauth.json.backup", ".claude-custom-oauth.json"],
+      [".claude-staging-oauth.json.tmp.12345.0a1b2c3d4e5f", ".claude-staging-oauth.json"],
+      [".session_ingress_token.e3.tmp.0a1b2c3d", ".session_ingress_token"],
+      ["daemon.log.1", "daemon.log"],
+    ]) {
+      expect(claudeAdapter.unsharedRisk?.(sibling), sibling).toEqual(claudeAdapter.unsharedRisk?.(file));
+      expect(claudeAdapter.unsharedRisk?.(sibling), sibling).toBeDefined();
+    }
+  });
+
+  it("says nothing more than that it is not shared of the account file itself or a temp file", () => {
+    for (const name of [".claude.json", ".credentials.json", "settings.json.tmp.0a1b2c3d"]) {
+      expect(claudeAdapter.unsharedRisk?.(name), name).toBeUndefined();
+    }
+  });
+});
+
 describe("temp files left from a save", () => {
   it("are never shared, whatever file they were saving", () => {
     for (const name of [
