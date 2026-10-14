@@ -1765,15 +1765,19 @@ describe("Codex hooks and Codex's trust", () => {
       // git names the main checkout by its real path, and Codex reads its hooks there.
       const mainFile = realpathSync.native(path.join(main, ".codex", "config.toml"));
       // One line per cause: the worktree's, and the main checkout's own, a recorded project too,
-      // which on Windows spells the file by Codex's lower-cased key: one file all the same.
+      // which on Windows spells the file by Codex's lower-cased key: one file all the same. In
+      // either order: projects come in path order, which that spelling changes on Windows.
       const place = (p: string) => tilde(p, h.home);
-      expect(listed.warnings.map((w: { file: string; message: string }) => [pathKey(w.file), w.message])).toEqual([
-        [pathKey(mainFile), `has a hook Codex cannot read, so Codex loads no config in ${place(wt)}`],
-        [
-          pathKey(mainFile),
-          `has an MCP server Codex cannot read, so Codex loads no config in ${place(codexTrustKey(main))}`,
-        ],
-      ]);
+      expect(listed.warnings.map((w: { file: string; message: string }) => [pathKey(w.file), w.message])).toEqual(
+        expect.arrayContaining([
+          [pathKey(mainFile), `has a hook Codex cannot read, so Codex loads no config in ${place(wt)}`],
+          [
+            pathKey(mainFile),
+            `has an MCP server Codex cannot read, so Codex loads no config in ${place(codexTrustKey(main))}`,
+          ],
+        ]),
+      );
+      expect(listed.warnings).toHaveLength(2);
       const id = listed.items.find((i: { name: string }) => i.name === "eli5").id;
       expect(await run(h, wt, "skills", ["show", "--id", id])).toContain(
         `off here (Codex cannot read ${tilde(mainFile, h.home)})`,
