@@ -263,6 +263,65 @@ describe("resolveSecret", () => {
     },
   );
 
+  // An abort while the output is still being read after the command has exited: the command's pid
+  // can be another process's by then, so nothing is signalled, and the job it left keeps running.
+  it.skipIf(windows)(
+    "signals nothing on an abort after the command has exited, while its output is still read",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "clausona-key-command-"));
+      temps.push(dir);
+      const pids = path.join(dir, "pids");
+      vi.stubEnv("CLAUSONA_TEST_PIDS", pids);
+      // As in the test above: the group's leader, then a job that ignores the group's TERM, and
+      // holds the output open past the command's exit.
+      const run =
+        'ps -o pgid= -p $$ > "$CLAUSONA_TEST_PIDS"; ' +
+        'sh -c \'trap "" TERM; echo $$ >> "$CLAUSONA_TEST_PIDS"; exec sleep 600\' & ' +
+        'while [ "$(wc -l < "$CLAUSONA_TEST_PIDS")" -lt 2 ]; do sleep 0.1; done; exit 0';
+      const alive = (pid: number) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const written = () => {
+        try {
+          return readFileSync(pids, "utf8").trim().split("\n").map(Number);
+        } catch {
+          return [];
+        }
+      };
+      // The drain's clock is a fake one, so the abort lands inside it; the wait for the command is
+      // on the real one.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const controller = new AbortController();
+      const kill = vi.spyOn(process, "kill");
+      try {
+        const read = resolveSecret("claude:x", { source: "command", run }, undefined, { signal: controller.signal });
+        const started = Date.now();
+        const exited = () => written().length === 2 && !alive(written()[0]);
+        while (!exited() && Date.now() - started < 20_000) await sleep(50);
+        // The leader is gone, so Node has seen it exit, and the drain has begun.
+        expect(exited()).toBe(true);
+        controller.abort();
+        await expect(read).rejects.toThrow("the key was not read in time");
+        // Only the checks above and below: no signal went to any pid.
+        expect(kill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([]);
+        expect(alive(written()[1])).toBe(true);
+      } finally {
+        kill.mockRestore();
+        controller.abort();
+        vi.useRealTimers();
+        // The job is this test's own, by the pid it wrote, and was never seen to end.
+        const job = written()[1] ?? 0;
+        if (job > 0 && alive(job)) process.kill(job, "SIGKILL");
+      }
+    },
+  );
+
   // A job left in the command's group holds its output open: it is ended once the command exits,
   // and the key is read then, not when the reading's time is up.
   it.skipIf(windows)(
