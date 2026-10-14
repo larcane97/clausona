@@ -200,7 +200,8 @@ function rowSpecs(
 
 /**
  * What a search looks in besides the row's cells: names, descriptions, files and summary values,
- * each as read and as shown.
+ * with ~ for the home dir, as shown. Not the home dir's own path: every row under it would match
+ * a word of it, as /Users/eli matches "eli". A home path typed out is searched as ~ (buildTable).
  */
 function rowHaystack(inv: Inventory, row: ScopeRow): string[] {
   return [
@@ -208,10 +209,7 @@ function rowHaystack(inv: Inventory, row: ScopeRow): string[] {
     ...row.items.flatMap((item) => [
       item.name,
       item.description ?? "",
-      ...[item.location.file, ...Object.values(item.summary ?? {})].flatMap((text) => [
-        text,
-        tildeIn(text, inv.homeDir),
-      ]),
+      ...[item.location.file, ...Object.values(item.summary ?? {})].map((text) => tildeIn(text, inv.homeDir)),
     ]),
   ];
 }
@@ -341,7 +339,7 @@ export function buildTable(
       ...(scope === "loaded" ? { group: SCOPE_LABEL[homeScope(firstOf(row), project)](tool) } : {}),
     };
   });
-  const laid = layOut(specs, lines, width, q);
+  const laid = layOut(specs, lines, width, tildeIn(q, inv.homeDir));
   const total = rows.length;
   const empty = laid.rows.length > 0 ? "" : total > 0 ? `Nothing matches /${q}.` : nothingIn(scope, project);
   const countText = q === "" ? String(total) : `${laid.rows.length} of ${total}`;

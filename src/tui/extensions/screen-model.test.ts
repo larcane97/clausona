@@ -1,3 +1,5 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -484,6 +486,26 @@ describe("search", () => {
     expect(sameText(shown.rows[0]?.cells[1]?.trim(), path.join("~", "bin", "notify"))).toBe(true);
     expect(buildTable(inv, "claude", "hook", "global", app, NOW, 100, path.join(h.home, "bin")).rows).toHaveLength(1);
     expect(buildTable(inv, "claude", "hook", "global", app, NOW, 100, "notify").rows).toHaveLength(1);
+  });
+
+  it("does not match the home dir's own path, which every row under it would", async () => {
+    // A home whose path holds a word, as /Users/eli holds "eli": the search is for what rows show.
+    const parent = mkdtempSync(path.join(tmpdir(), "clausona-zebra-"));
+    try {
+      const h = new TestHome(parent);
+      homes.push(h);
+      const app = h.project("repos/app");
+      h.claude("default", ".claude", { projects: { [app]: {} } });
+      h.skill(".claude/skills", "eli5");
+      h.skill(".claude/skills", "old-one");
+      const inv = await loadInventory(h.inventoryOptions(app));
+      expect(names(buildTable(inv, "claude", "skill", "global", app, NOW, 100, "zebra"))).toEqual([]);
+      expect(names(buildTable(inv, "claude", "skill", "global", app, NOW, 100, "old"))).toEqual(["old-one"]);
+      // The home's path typed out is ~, and finds what is under it.
+      expect(names(buildTable(inv, "claude", "skill", "global", app, NOW, 100, h.home))).toEqual(["eli5", "old-one"]);
+    } finally {
+      rmSync(parent, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
   });
 });
 

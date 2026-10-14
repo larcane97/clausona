@@ -1743,7 +1743,9 @@ comes from or the `.mcp.json` above the project, and is left out when no row has
 | `v` | In a Claude skill's details, move it to its next visibility, in this project. |
 
 Search matches a row's name, description, file, summary values, and the text cells the table
-shows. It does not match the numbers in USES and LAST USED.
+shows. It does not match the numbers in USES and LAST USED. Paths are matched as shown, with `~`
+for your home folder, so a word of the home folder's own path matches nothing; typing the home
+folder's path out finds what is under it.
 
 ### Changing things from the screen
 
