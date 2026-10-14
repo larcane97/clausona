@@ -9,6 +9,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -107,12 +108,19 @@ function ownerOf(dir: string, name: string): string {
 }
 
 /**
+ * What the look for the profile's background daemon finds: none (every case not about it), a
+ * stand-in listening on its control socket under the case's own folder in place of /tmp, or no
+ * answer.
+ */
+type DaemonLook = "none" | "stand-in" | "no-answer";
+
+/**
  * A primary and one secondary Claude profile under a throwaway home, the primary holding its own
  * copy of each entry. Both profiles have an account and a credential file, and the platform is
  * pinned to Linux so doctor reads that file instead of probing the Keychain: the only findings
  * left are about links.
  */
-async function seedHome() {
+async function seedHome({ daemon = "none" }: { daemon?: DaemonLook } = {}) {
   currentHome = mkdtempSync(path.join(tmpdir(), "clausona-accountstate-"));
   temps.push(currentHome);
 
@@ -143,10 +151,23 @@ async function seedHome() {
 
   Object.defineProperty(process, "platform", { value: "linux", configurable: true });
   vi.resetModules();
+  // In place of /tmp, for the daemon's control socket: short enough for sun_path.
+  const daemonRoot = mkdtempSync(path.join(tmpdir().length > 40 ? "/tmp" : tmpdir(), "cd-"));
+  temps.push(daemonRoot);
+  vi.doMock("../core/claude-daemon.js", async (importOriginal) => {
+    const real = await importOriginal<typeof import("../core/claude-daemon.js")>();
+    const running = async (configDir: string) =>
+      daemon === "stand-in"
+        ? real.claudeDaemonRunning(configDir, { tmpRoot: daemonRoot })
+        : daemon === "none"
+          ? false
+          : null;
+    return { ...real, claudeDaemonRunning: running };
+  });
   const service = await import("./service.js");
   const { claudeAdapter } = await import("../tools/claude.js");
   const backupDir = path.join(currentHome, ".clausona", "backups", "claude", "work");
-  return { primary, work, backupDir, service, claudeAdapter };
+  return { primary, work, backupDir, daemonRoot, service, claudeAdapter };
 }
 
 function issuesFor(results: DoctorProfileResult[], name: string) {
@@ -270,5 +291,84 @@ describe("temp files left from a save", () => {
 
     expect(readFileSync(path.join(work, own), "utf8")).toBe("{}");
     expect(issuesFor(await service.doctorProfiles(), "claude:work")).toEqual([]);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("repair while the profile's background daemon runs", () => {
+  const servers: Server[] = [];
+  afterEach(async () => {
+    await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))));
+  });
+
+  /** A stand-in for the profile's daemon: something listening on its control socket. */
+  async function daemonRunsIn(configDir: string, daemonRoot: string) {
+    const { claudeDaemonControlPath } = await import("../core/claude-daemon.js");
+    const socketPath = (await claudeDaemonControlPath(configDir, { tmpRoot: daemonRoot })) ?? "";
+    mkdirSync(path.dirname(socketPath), { recursive: true });
+    const server = createServer((connection) => connection.destroy());
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  }
+
+  it("is refused while it would take out the profile's daemon/ link, and goes ahead with --force", async () => {
+    const { primary, work, daemonRoot, service } = await seedHome({ daemon: "stand-in" });
+    symlinkSync(path.join(primary, "daemon"), path.join(work, "daemon"));
+    symlinkSync(path.join(primary, "policy-limits.json"), path.join(work, "policy-limits.json"));
+    await daemonRunsIn(work, daemonRoot);
+
+    await expect(service.repairProfile("claude:work")).rejects.toThrow(
+      "Claude Code's background daemon is running in ~/.claude-work, and this would take out the link to the primary's daemon/ it keeps its control key, roster and session tokens in. Stop it with 'CLAUDE_CONFIG_DIR=~/.claude-work claude daemon stop', then run this again. Nothing was changed. To go ahead while it runs: clausona repair claude:work --force",
+    );
+    // Nothing was changed: the other link is still there too.
+    expect(lstatOrNull(path.join(work, "daemon"))?.isSymbolicLink()).toBe(true);
+    expect(lstatOrNull(path.join(work, "policy-limits.json"))?.isSymbolicLink()).toBe(true);
+
+    await service.repairProfile("claude:work", { force: true });
+
+    expect(lstatOrNull(path.join(work, "daemon"))).toBeNull();
+    expect(lstatOrNull(path.join(work, "policy-limits.json"))).toBeNull();
+  });
+
+  it("goes ahead while the daemon runs on the profile's own daemon/", async () => {
+    const { primary, work, daemonRoot, service } = await seedHome({ daemon: "stand-in" });
+    writeOwned(work, "daemon", "work");
+    symlinkSync(path.join(primary, "policy-limits.json"), path.join(work, "policy-limits.json"));
+    await daemonRunsIn(work, daemonRoot);
+
+    await service.repairProfile("claude:work");
+
+    expect(ownerOf(work, "daemon")).toBe("work");
+    expect(lstatOrNull(path.join(work, "policy-limits.json"))).toBeNull();
+  });
+
+  it("goes ahead when the daemon running is another config dir's", async () => {
+    const { primary, work, daemonRoot, service } = await seedHome({ daemon: "stand-in" });
+    symlinkSync(path.join(primary, "daemon"), path.join(work, "daemon"));
+    await daemonRunsIn(primary, daemonRoot);
+
+    await service.repairProfile("claude:work");
+
+    expect(lstatOrNull(path.join(work, "daemon"))).toBeNull();
+  });
+
+  it("is refused for the session-mode toggle too, with its own --force", async () => {
+    const { primary, work, daemonRoot, service } = await seedHome({ daemon: "stand-in" });
+    symlinkSync(path.join(primary, "daemon"), path.join(work, "daemon"));
+    await daemonRunsIn(work, daemonRoot);
+
+    await expect(service.updateProfileConfig("claude:work", { mergeSessions: true })).rejects.toThrow(
+      "To go ahead while it runs: clausona config claude:work --merge-sessions --force",
+    );
+    expect(lstatOrNull(path.join(work, "daemon"))?.isSymbolicLink()).toBe(true);
+  });
+
+  it("is refused when the look gets no answer", async () => {
+    const { primary, work, service } = await seedHome({ daemon: "no-answer" });
+    symlinkSync(path.join(primary, "daemon"), path.join(work, "daemon"));
+
+    await expect(service.repairProfile("claude:work")).rejects.toThrow(
+      "The look for Claude Code's background daemon in ~/.claude-work got no answer: its control socket neither took the connection nor refused it. This would take out the link to the primary's daemon/ a running daemon keeps its control key, roster and session tokens in. Nothing was changed. Run this again, or, with the daemon stopped in this profile, go ahead without the look: clausona repair claude:work --force",
+    );
+    expect(lstatOrNull(path.join(work, "daemon"))?.isSymbolicLink()).toBe(true);
   });
 });

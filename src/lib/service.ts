@@ -21,6 +21,7 @@ import { constants, homedir, tmpdir } from "node:os";
 import path from "node:path";
 
 import { checkBaseUrl, hasBareUserinfo, isAnthropicHost, sendsKeyInClear } from "../core/api-url.js";
+import { claudeDaemonRunning } from "../core/claude-daemon.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { acquireDirLock, removeHeldDirLocks } from "../core/dir-lock.js";
 import { countIssues, evaluateApiHealth, evaluateSymlinkHealth, missingEndpointRemedy } from "../core/doctor.js";
@@ -752,6 +753,36 @@ async function refuseWhileCodexRuns(configDir: string, moving: string[], retry: 
   }
   throw new Error(
     `Codex is running in ${shown} (pid ${running.join(", ")}), and this would move files it has open: ${moving.join(", ")}. Quit Codex in this profile and stop its app-server daemon with 'CODEX_HOME=${shown} codex app-server daemon stop', then run this again. Nothing was changed. To go ahead while it runs: ${retry}`,
+  );
+}
+
+/**
+ * Refuses, unless `force`, to link `configDir` while Claude Code's background daemon runs there,
+ * when that would take out the profile's link to the primary's `daemon/`. The daemon keeps its
+ * control key, roster and session tokens in the directory the link leads to: taken out under it,
+ * the profile's next client finds none of them and cannot reach it. `retry` is the command that
+ * goes ahead anyway. A look that got no answer refuses the same: the daemon may be running.
+ */
+async function refuseWhileClaudeDaemonRuns(
+  adapter: ToolAdapter,
+  configDir: string,
+  primarySource: string,
+  mergeSessions: boolean,
+  retry: string,
+  force = false,
+) {
+  if (force || adapter.name !== "claude") return;
+  if (!(await unsharedLinks(adapter, configDir, primarySource, mergeSessions)).includes("daemon")) return;
+  const running = await claudeDaemonRunning(configDir);
+  if (running === false) return;
+  const shown = configDir.replace(homedir(), "~");
+  if (running === null) {
+    throw new Error(
+      `The look for Claude Code's background daemon in ${shown} got no answer: its control socket neither took the connection nor refused it. This would take out the link to the primary's daemon/ a running daemon keeps its control key, roster and session tokens in. Nothing was changed. Run this again, or, with the daemon stopped in this profile, go ahead without the look: ${retry}`,
+    );
+  }
+  throw new Error(
+    `Claude Code's background daemon is running in ${shown}, and this would take out the link to the primary's daemon/ it keeps its control key, roster and session tokens in. Stop it with 'CLAUDE_CONFIG_DIR=${shown} claude daemon stop', then run this again. Nothing was changed. To go ahead while it runs: ${retry}`,
   );
 }
 
@@ -1725,6 +1756,14 @@ export async function initializeRegistry(options: {
         restoreAll: false,
       });
       await refuseWhileCodexRuns(account.configDir, moving, "clausona init --auto --force", options.force);
+      await refuseWhileClaudeDaemonRuns(
+        adapter,
+        account.configDir,
+        toolPrimary,
+        merge,
+        "clausona init --auto --force",
+        options.force,
+      );
     }
     planned.push({ account, id, backupDir, kept });
   }
@@ -2396,6 +2435,14 @@ export async function repairProfile(id: string, options: { force?: boolean } = {
     { restoreAll: true },
   );
   await refuseWhileCodexRuns(profile.configDir, moving, `clausona repair ${id} --force`, options.force);
+  await refuseWhileClaudeDaemonRuns(
+    profileAdapter,
+    profile.configDir,
+    primarySource,
+    mergeSessions,
+    `clausona repair ${id} --force`,
+    options.force,
+  );
 
   const repaired = await setupSharedLinks(profileAdapter, profile.configDir, primarySource, mergeSessions, backupDir);
   if (profile.tool === "claude") {
@@ -2454,6 +2501,14 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
   await refuseWhileCodexRuns(
     profile.configDir,
     moving,
+    `clausona config ${id} ${next ? "--merge-sessions" : "--separate-sessions"} --force`,
+    options.force,
+  );
+  await refuseWhileClaudeDaemonRuns(
+    updateAdapter,
+    profile.configDir,
+    primarySource,
+    next,
     `clausona config ${id} ${next ? "--merge-sessions" : "--separate-sessions"} --force`,
     options.force,
   );
