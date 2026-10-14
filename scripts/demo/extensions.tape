@@ -1,14 +1,16 @@
 # Records the README's Extensions GIF: vhs writes scripts/demo/.build/extensions-raw.gif, and
-# outline.py outlines the row that is turned off, and back on, and writes assets/extensions.gif.
+# outline.py outlines the row that is turned off, and back on, captions the keys that open a dialog,
+# answer it or switch the view, and writes assets/extensions.gif.
 #
 #   pnpm install && pnpm build                    # from the repo root
 #   vhs scripts/demo/extensions.tape              # records .build/extensions-raw.gif
 #   python3 scripts/demo/outline.py extensions    # writes assets/extensions.gif (needs ffmpeg and Pillow)
 #
 # Same image, throwaway container and made-up user as demo.tape (see the comment there): nothing on
-# the host is read or written. extensions-rc.sh seeds the home with seed.mjs and then
-# seed-extensions.mjs, which adds the skills, MCP servers, hooks and plugins, with ~/app as the
-# project; the same files make extensions-shots.mjs's screenshots.
+# the host is read or written. extensions-gif-rc.sh runs extensions-rc.sh, which seeds the home
+# with seed.mjs and then seed-extensions.mjs (the skills, MCP servers, hooks and plugins, with ~/app
+# as the project, as extensions-shots.mjs's screenshots have them), and then takes out the broken
+# link and the unreadable settings file that seed plants for the screenshots' warning screens.
 #
 # The story: the dashboard's Extensions entry opens on what Claude Code loads in ~/app, grouped by
 # where each skill comes from. Global's sentry-cli, last used four months ago, is turned off in this
@@ -22,7 +24,11 @@
 # writing it shows it half drawn, or blank for a moment while the screen reads the home again after
 # a change. So each key below is pressed in a short cut of its own: the frame before it is the
 # screen the key was pressed on, and the frame after it the screen the key drew. No key's effect is
-# cut, only the drawing of it.
+# cut, only the drawing of it. A cursor that moves shows its arrow key; the keys that open a dialog,
+# answer it, undo or switch the view (enter, space, y, u, 2, m) get a caption from outline.py,
+# which comes up on the frames just before the screen changes. On a busy machine a take can still
+# catch a half-drawn frame: look through the frames of .build/extensions-raw.gif, and record again
+# if one does.
 #
 # The container is named clausona-demo-extensions. A run cut short can leave it behind, and the
 # next one then cannot start: `docker rm -f clausona-demo-extensions` removes it.
@@ -52,7 +58,7 @@ Set CursorBlink false
 Set Theme { "name": "clausona", "background": "#18181b", "foreground": "#f4f4f5", "cursor": "#ec4899", "selection": "#3f3f46", "black": "#18181b", "red": "#ef4444", "green": "#10b981", "yellow": "#f59e0b", "blue": "#6366f1", "magenta": "#ec4899", "cyan": "#22d3ee", "white": "#e4e4e7", "brightBlack": "#71717a", "brightRed": "#f87171", "brightGreen": "#34d399", "brightYellow": "#fbbf24", "brightBlue": "#818cf8", "brightMagenta": "#f472b6", "brightCyan": "#67e8f9", "brightWhite": "#f4f4f5" }
 
 Hide
-Type `docker build -q -t clausona-demo scripts/demo >/dev/null && docker run --rm -it --name clausona-demo-extensions --network none -e HOME=/Users/alex -e TZ=UTC -e TERM=xterm-256color -e COLORTERM=truecolor -w /Users/alex -v "$PWD/dist:/opt/clausona:ro" -v "$PWD/scripts/demo:/opt/demo:ro" clausona-demo bash --rcfile /opt/demo/extensions-rc.sh -i`
+Type `docker build -q -t clausona-demo scripts/demo >/dev/null && docker run --rm -it --name clausona-demo-extensions --network none -e HOME=/Users/alex -e TZ=UTC -e TERM=xterm-256color -e COLORTERM=truecolor -w /Users/alex -v "$PWD/dist:/opt/clausona:ro" -v "$PWD/scripts/demo:/opt/demo:ro" clausona-demo bash --rcfile /opt/demo/extensions-gif-rc.sh -i`
 Enter
 Wait+Screen@300s /^\$\s*$/
 Sleep 1s
@@ -116,12 +122,6 @@ Sleep 400ms
 Hide
 Down
 Wait+Screen@15s /✦ eli5/
-Sleep 100ms
-Show
-Sleep 200ms
-Hide
-Down
-Wait+Screen@15s /✦ gone-helper/
 Sleep 100ms
 Show
 Sleep 200ms
