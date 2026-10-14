@@ -1,6 +1,6 @@
 # clausona
 
-**Switch between multiple Claude Code and OpenAI Codex CLI accounts on one machine, all sharing one setup, or let clausona start each run on an account with quota left. One view shows the skills, MCP servers and hooks each account loads.**
+**Switch between multiple Claude Code and OpenAI Codex CLI accounts on one machine. They sign in separately and share one setup. clausona can also pick the account with quota left for each run, and show the skills, MCP servers and hooks every account loads.**
 
 <p align="center">
   <a href="https://github.com/hesreallyhim/awesome-claude-code"><img src="https://img.shields.io/badge/Mentioned%20in-Awesome%20Claude%20Code-fc60a8?style=for-the-badge&logo=awesomelists&logoColor=white" alt="Mentioned in Awesome Claude Code" /></a>
@@ -59,8 +59,8 @@ You don't sign in again, and you don't reinstall plugins.
 - **Shared environment** — plugins (and the MCP servers they bring), skills, and settings.json with its hooks and permissions (Claude), and config.toml (MCP servers included), skills, and hooks (Codex) are symlinked across profiles within each tool. Set up once, use everywhere. MCP servers added with `claude mcp add` stay per account — [see the FAQ](#do-my-mcp-servers-plugins-and-settings-carry-over-when-i-switch).
 - **Shared history, if you want** — `clausona config <profile> --merge-sessions` shares conversation history with your primary directory, so `claude --resume` and `claude --continue` (and `codex resume` on macOS and Linux) find conversations from every account that shares it
 - **Plan quota at a glance** — session and weekly limit usage for every account, read live from each tool's own usage endpoint (Claude and Codex)
-- **Routing** — `clausona run --route main` starts on whichever account still has room, going by the same plan-quota readings. With a directory rule or a default route, a plain `clausona run claude` picks on its own ([docs](docs/routing.md))
-- **Extensions** — the skills, MCP servers and hooks Claude Code and Codex load in a project, for every account, in one list on the dashboard or from `clausona skills`, `clausona mcp` and `clausona hooks`. Turn one off or delete it, with a backup and `undo` ([docs](docs/extensions.md))
+- **Routing** — `clausona run --route main` starts on whichever account still has room, going by the same plan-quota readings. With a directory rule or a default route, a plain `clausona run claude` (or `codex`) picks the account on its own ([docs](docs/routing.md))
+- **Extensions** — the skills, MCP servers and hooks Claude Code and Codex load in a project, for every account, on the dashboard's Extensions screen or from `clausona skills`, `clausona mcp` and `clausona hooks`. Turn one off or delete it, behind a backup, and `undo` puts it back ([docs](docs/extensions.md))
 - **Two accounts at once** — `clausona run claude:personal` starts one session under another profile without switching, so two terminals can run two accounts side by side
 - **Parallel agent fleets** — plugins from this repo let one Claude Code or Codex session run parallel agents in [Superset](docs/usecases/superset-fleet.md), [herdr](docs/usecases/herdr-fleet.md) or [Orca](docs/usecases/orca-fleet.md), each on its own account or API model, then check and clean up after them. Install only the one for the tool you use
 - **API profiles** — a profile can point at an API endpoint instead of a subscription login: the Anthropic API, a gateway, or a model you serve yourself
