@@ -51,7 +51,8 @@ The plugin's one script, `scripts/superset-host.mjs`, talks to the Superset host
 machine with the token from that service's manifest, and never prints the token. The session uses
 it to wait on workers and delete workspaces, and for the rest when the Superset CLI isn't logged
 in. Before a Claude Code worker starts, the script also marks its worktree as trusted in that
-profile's `.claude.json`.
+profile's `.claude.json`. A Codex worker asks instead, and the session answers yes for this
+repository only.
 
 Deleting a Superset workspace removes its worktree even with uncommitted work in it. So the session
 deletes only through the script, which checks right before that the branch is pushed and the

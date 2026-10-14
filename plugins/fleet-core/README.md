@@ -11,6 +11,12 @@ gets each task, and when a worker's work counts as done.
 You don't call it yourself. A fleet skill loads it when it starts. It's one skill, with no hooks or
 scripts.
 
+It reads your profiles with `clausona list` and its settings from `~/.clausona/fleet.json` (or the
+older `superset-fleet.json`). Workers start in the permission mode set there, or else the one the
+runner's agent config or the profile's own settings already use. If none sets one, it asks you
+once and, if you agree, saves your answer to `fleet.json`. For a risky change, it can also start a
+checker session on a third profile.
+
 ## What you need
 
 [clausona](https://github.com/larcane97/clausona), and one of the fleet plugins above along with the
