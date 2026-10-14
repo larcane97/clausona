@@ -253,7 +253,7 @@ claude:personal     me@example.org       8%         77% 5d</code></pre>
 
       <h2 id="routing">Optimize usage across multiple accounts with dynamic routing</h2>
       <p>With two accounts, it's easy to burn through one while the other sits unused.</p>
-      <p>clausona's dynamic routing makes that choice for you, every time a run starts. It reads each account's current 5-hour and weekly usage and starts on one with room. Accounts take turns, so usage spreads across all of them instead of piling onto one.</p>
+      <p>clausona's dynamic routing picks the account for you, every time a run starts. It reads each account's current 5-hour and weekly usage and starts on one with room. Accounts take turns, so usage spreads across all of them instead of piling onto one.</p>
       <p>You set it up as a route, a named group of your accounts:</p>
 <pre data-copy><code>clausona route add main        <span class="c"># every Claude Code account, taking turns</span>
 clausona route explain main    <span class="c"># who a run would get now, and why</span>
