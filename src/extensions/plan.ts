@@ -474,7 +474,7 @@ function planRow(run: Run, row: ScopeRow): Outcome {
   // Deleting what clausona kept writes nothing under the worktree's .codex folder.
   const runs = codexWorktreeRuns(run.inv, item);
   if (runs !== undefined && !(verb === "rm" && item.stashed)) {
-    if (!codexTrusted(run.inv, loc.project)) return refused(run, row, "codex-untrusted");
+    if (!codexTrusted(run.inv, codexTrustFolder(item))) return refused(run, row, "codex-untrusted");
     return refused(run, row, "codex-worktree-hook", { "~file": tilde(runs, run.inv.homeDir) });
   }
   // A hook in a config.toml: clausona keeps hooks it takes out as JSON, and changes no TOML hook.

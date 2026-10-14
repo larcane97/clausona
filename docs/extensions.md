@@ -404,7 +404,9 @@ The switches are read from these places:
   Loaded. Their details name the main checkout's file, and clausona does not change them
   (`codex-worktree-hook`). In a worktree Codex does not trust, it runs neither, so their details
   and refusals say that first (`codex-untrusted`). This is only for a worktree with a `.codex`
-  folder of its own: Codex runs no project hooks in one without.
+  folder of its own: Codex runs no project hooks in one without. The same goes for each folder
+  above the project whose `.codex` Codex reads (Parent folders): in a worktree the main
+  checkout's hooks at that place run, and the worktree's own there are tagged the same way.
 
 ### Tags
 
@@ -432,7 +434,7 @@ column shows the first; JSON `tags` has them all.
 | `invalid front matter` | A Codex skill whose front matter is not YAML Codex reads: say, a quoted description with more text after its closing quote, a description line that runs on to the next line unindented, or a description written as a list. Codex skips it, so it is not in Loaded. A description with a `: ` in it is fine: Codex quotes it and reads it again, and so does clausona. Tags (and the handles a `%TAG` directive sets), anchors and aliases, `?` keys, flow collections over several lines, block scalars as keys, and `%`, `---` or `...` lines are read as Codex reads them, so a `description: !`, a second document or an alias to no anchor counts. A few rare forms, such as a flow collection used as a key, are not checked, and read as fine. The name and description shown are the ones Codex gives the skill. |
 | `name too long` | A Codex skill whose name is over 64 characters. Codex skips it, so it is not in Loaded. |
 | `no description` | A Codex skill whose front matter has no `description`, or one that is empty or only spaces. Codex skips it, so it is not in Loaded. |
-| `main checkout's runs` | A Codex hook in a linked git worktree's own `.codex` folder. Codex runs the main checkout's hooks there instead, so it is not in Loaded. Its details name the main checkout's file. |
+| `main checkout's runs` | A Codex hook in a linked git worktree's own `.codex` folder, the project's or a folder's above it. Codex runs the main checkout's hooks there instead, so it is not in Loaded. Its details name the main checkout's file. |
 | `invalid hooks file` | A Codex hook in a hooks file with more than `hooks` and a `description` at its top, such as its events, or a `$schema`, or with a hook Codex cannot read, such as a `command` that is not a string. Codex skips the whole file, so the hook does not run. |
 | `not supported` | A Codex hook of a kind Codex does not run: a prompt or an agent hook, or an MCP tool hook on `SessionEnd`. Codex skips it, whatever its trust, so it is not in Loaded. |
 | `empty command` | A Codex command hook whose command is empty or only spaces. Codex skips it, and runs the rest of its file, so it is not in Loaded. |

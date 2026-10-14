@@ -483,16 +483,16 @@ function codexTrustLevel(entries: StateFacts["codexTrust"], folder: string): boo
 
 /**
  * The main checkout's file whose hooks Codex runs in place of `item`'s, a Codex hook in a linked
- * worktree's own `.codex` folder (codexWorktrees): the hooks.json, or the config.toml, of the
- * main checkout's `.codex` folder at that place. Undefined for any other item.
+ * worktree's own `.codex` folder (codexWorktrees), the project's or a parent folder's
+ * (`location.layer`): the hooks.json, or the config.toml, of the main checkout's `.codex`
+ * folder at that place. Undefined for any other item.
  */
 export function codexWorktreeRuns(inv: Inventory, item: Extension): string | undefined {
   const loc = item.location;
-  if (item.kind !== "hook" || loc.tool !== "codex" || loc.scope !== "project" || loc.project === undefined) {
-    return undefined;
-  }
-  const worktree = inv.facts.codexWorktrees[pathKey(loc.project)];
-  if (worktree === undefined || !samePath(path.dirname(loc.file), path.join(loc.project, ".codex"))) return undefined;
+  const dir = codexTrustFolder(item);
+  if (item.kind !== "hook" || loc.tool !== "codex" || dir === undefined) return undefined;
+  const worktree = inv.facts.codexWorktrees[pathKey(dir)];
+  if (worktree === undefined || !samePath(path.dirname(loc.file), path.join(dir, ".codex"))) return undefined;
   return path.join(worktree.hooks, path.basename(loc.file));
 }
 

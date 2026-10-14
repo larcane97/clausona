@@ -223,8 +223,9 @@ export type StateFacts = {
    */
   codexTrustFolders: Record<string, string[]>;
   /**
-   * By pathKey of each project read that is in a linked git worktree and has a `.codex` folder:
-   * the main checkout, and the `.codex` folder at the project's place in it. Codex 0.159.3 runs
+   * By pathKey of each project read that is in a linked git worktree and has a `.codex` folder,
+   * and of each parent folder whose `.codex` is read for one (`Location.layer`): the main
+   * checkout, and the `.codex` folder at that place in it. Codex 0.159.3 runs
    * that folder's hooks there - its hooks.json and its config.toml's `[hooks]` - in place of the
    * project's own; the rest of the project's config is its own (sources/codex-trust.ts).
    */

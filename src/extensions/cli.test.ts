@@ -1733,6 +1733,59 @@ describe("Codex hooks and Codex's trust", () => {
   );
 
   it.skipIf(!hasGit)(
+    "runs a worktree's main checkout's hooks for a folder above the project too, and none of the worktree's own there",
+    async () => {
+      const { h } = seed();
+      const { main, wt } = worktreeHome(h, "");
+      const sub = path.join(wt, "sub");
+      const stop = (command: string) => ({ hooks: { Stop: [{ hooks: [{ type: "command", command }] }] } });
+      const toml = (command: string) =>
+        `[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "${command}"\n`;
+      h.write("repos/main/.codex/hooks.json", stop("main-root"));
+      h.write("repos/main/.codex/config.toml", `[mcp_servers.mainsrv]\ncommand = "main"\n\n${toml("main-root-toml")}`);
+      h.write("repos/main/sub/.codex/hooks.json", stop("main-sub"));
+      h.write("repos/main-wt/.codex/hooks.json", stop("wt-root"));
+      h.write("repos/main-wt/.codex/config.toml", `[mcp_servers.wtsrv]\ncommand = "wt"\n\n${toml("wt-root-toml")}`);
+      h.write("repos/main-wt/sub/.codex/hooks.json", stop("wt-sub"));
+      // Codex recorded sub, a folder of the worktree, which --project then stands in.
+      h.write(
+        ".codex/config.toml",
+        `[projects.${JSON.stringify(codexTrustKey(main))}]\ntrust_level = "trusted"\n\n[projects.${JSON.stringify(sub)}]\n`,
+      );
+      type Row = { id: string; state: string; tags: string[]; summary: { command: string } };
+      const rows = async (command: ExtensionsCommand, scope: string) =>
+        (
+          JSON.parse(await run(h, wt, command, ["ls", "--tool", "codex", "--scope", scope, "--project", sub, "--json"]))
+            .items as Row[]
+        ).map((i) => [i.summary.command, i.tags]);
+      // What Codex 0.159.3's hooks/list gave started in the worktree's sub: the main checkout's
+      // at the worktree's root and at sub, and the worktree's own servers.
+      expect(await rows("hooks", "parents")).toEqual([
+        ["wt-root", ["main checkout's runs"]],
+        ["wt-root-toml", ["main checkout's runs"]],
+        ["main-root", ["pending approval"]],
+        ["main-root-toml", ["pending approval"]],
+      ]);
+      expect(await rows("hooks", "project")).toEqual([
+        ["wt-sub", ["main checkout's runs"]],
+        ["main-sub", ["pending approval"]],
+      ]);
+      expect((await rows("mcp", "parents")).map((r) => r[0])).toEqual(["wt"]);
+      // The worktree's own, above the project too: refused, naming the main checkout's file.
+      const listed: Row[] = JSON.parse(
+        await run(h, wt, "hooks", ["ls", "--tool", "codex", "--scope", "parents", "--project", sub, "--json"]),
+      ).items;
+      const own = listed.find((i) => i.summary.command === "wt-root")?.id ?? "";
+      const shownAt = tilde(path.join(realpathSync.native(path.join(main, ".codex")), "hooks.json"), h.home);
+      const off = JSON.parse(await run(h, wt, "hooks", ["off", "--id", own, "--project", sub, "--dry-run", "--json"]));
+      expect(off.refused.map((r: { code: string; reason: string }) => [r.code, r.reason])).toEqual([
+        ["codex-worktree-hook", `Codex runs the hooks in ${shownAt} in this worktree. Change them there.`],
+      ]);
+    },
+    SPAWNING_TEST_TIMEOUT_MS,
+  );
+
+  it.skipIf(!hasGit)(
     "says first that Codex does not trust a worktree, where it runs neither its own hooks nor its main checkout's",
     async () => {
       const { h } = seed();

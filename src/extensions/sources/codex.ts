@@ -252,7 +252,23 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
           const at: SkillLocation = { ...here, layer: layer.dir };
           addServers(config, { ...at, file: layer.file }, `${project.path}#up${layer.depth}`, out, under, layer.depth);
           addPluginSwitches(config, layer.file, project.path, out.facts, layer.depth);
-          await addFolderHooks(layer.hooks, layer.hooksConfig, at, project.path, out, `up${layer.depth}:`);
+          const place = `up${layer.depth}:`;
+          if (layer.mainFile === undefined)
+            await addFolderHooks(layer.hooks, layer.hooksConfig, at, project.path, out, place);
+          else {
+            // In a linked worktree, as for the project's own: the main checkout's at that place run, and none of these.
+            const folder = path.dirname(layer.file);
+            await addFolderHooks(folder, config, at, project.path, out, place, false);
+            for (const item of out.items) {
+              const loc = item.location;
+              if (item.kind !== "hook" || loc.tool !== "codex" || loc.project !== project.path || item.stashed)
+                continue;
+              if (samePath(loc.layer, layer.dir) && samePath(path.dirname(loc.file), folder)) {
+                item.codexError = "main checkout's runs";
+              }
+            }
+            await addFolderHooks(layer.hooks, layer.hooksConfig, at, project.path, out, `${place}${MAIN_CHECKOUT_AT}`);
+          }
           under = { ...(mergeCodexConfig(under, isRecord(config.mcp_servers) ? config.mcp_servers : {}) as object) };
         }
         if (config) {
@@ -447,6 +463,7 @@ async function parentLayers(
     const read = await readCodexConfig(file, out.warnings);
     const depth = path.relative(dir, project).split(path.sep).filter(Boolean).length;
     const mainFile = roots.worktree ? path.join(roots.worktree.hooks, "config.toml") : undefined;
+    if (roots.worktree) out.facts.codexWorktrees[pathKey(dir)] = roots.worktree;
     const main = mainFile === undefined ? undefined : await readCodexConfig(mainFile, out.warnings);
     const parsed = read && !("refused" in read) ? read : { value: {}, exact: {} };
     const mainParsed = main && !("refused" in main) ? main : undefined;
