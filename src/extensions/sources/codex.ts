@@ -445,7 +445,8 @@ async function resolvedSkillPath(skillPath: string | undefined): Promise<string 
  * Each `[mcp_servers.<name>]` table: a server when it says how to start one, by `command` or
  * `url`. A table that only sets `enabled` - as a project's config.toml switches a user server
  * off - is that switch alone, for the server of that name, and not a second server. With
- * `under`, the user's servers in a project Codex trusts: a server's summary is what Codex runs,
+ * `under`, the user's servers in a project Codex trusts: a table that changes one of them, a
+ * command or not, is a server too, and a server's summary is what Codex runs,
  * its table merged over the user's of its name (mergeCodexConfig), so the project's `command`
  * with the user's `args`, and `env` from both. Its fingerprint is its own table, which a write changes.
  */
@@ -458,7 +459,11 @@ function addServers(
 ): void {
   for (const [name, server] of Object.entries(isRecord(config.mcp_servers) ? config.mcp_servers : {})) {
     if (!isRecord(server)) continue;
-    if (server.command !== undefined || server.url !== undefined) {
+    // A table that changes more than `enabled` of a user server of its name, where Codex merges the
+    // two, is the server Codex runs there too, though it says nothing of how to start one.
+    const changes =
+      under !== undefined && Object.hasOwn(under, name) && Object.keys(server).some((k) => k !== "enabled");
+    if (server.command !== undefined || server.url !== undefined || changes) {
       const id = `mcp:codex:${location.scope}:${owner}:${name}`;
       // What Codex runs: the table merged over the user's of its name, at every depth.
       const runs = under !== undefined && Object.hasOwn(under, name) ? mergeCodexConfig(under[name], server) : server;

@@ -1141,6 +1141,39 @@ describe("Codex hooks and Codex's trust", () => {
     expect(there.items.map((i: { name: string; scope: string }) => [i.name, i.scope])).toEqual([["shared", "global"]]);
   });
 
+  it("shows a user server a trusted project's table changes without a command as Codex runs it there", async () => {
+    const { h, app, web } = seed();
+    h.write(
+      ".codex/config.toml",
+      `[projects.${JSON.stringify(app)}]\ntrust_level = "trusted"\n\n[mcp_servers.exa]\ncommand = "npx"\nargs = ["-y", "exa"]\nenv = { A = "1" }\n`,
+    );
+    // Codex 0.159.3's config/read in app: exa runs npx --p, env A; in web, untrusted, npx -y exa.
+    h.write("repos/app/.codex/config.toml", '[mcp_servers.exa]\nargs = ["--p"]\n');
+    h.write("repos/web/.codex/config.toml", '[mcp_servers.exa]\nargs = ["--p"]\n');
+    type Row = { name: string; scope: string; summary: Record<string, string>; tags: string[] };
+    const rows = async (cwd: string) =>
+      (JSON.parse(await run(h, cwd, "mcp", ["ls", "--tool", "codex", "--scope", "all", "--json"])).items as Row[]).map(
+        (i) => [i.scope, i.summary.command, i.tags],
+      );
+    expect(await rows(app)).toEqual([
+      ["project", "npx --p", []],
+      ["global", "npx -y exa", ["hidden by Project copy"]],
+    ]);
+    // From web app's copy is another project's.
+    expect(await rows(web)).toEqual([
+      ["global", "npx -y exa", []],
+      ["other", "npx --p", []],
+    ]);
+    // A change goes to app's own table, as for any project copy.
+    const off = JSON.parse(await run(h, app, "mcp", ["off", "exa", "--tool", "codex", "--dry-run", "--json"]));
+    expect(off.changes.map((c: { file: string; what: string }) => [c.file, c.what])).toEqual([
+      [path.join(app, ".codex", "config.toml"), "mcp_servers.exa.enabled → false"],
+    ]);
+    // A table that only switches it is that switch, and no copy.
+    h.write("repos/app/.codex/config.toml", "[mcp_servers.exa]\nenabled = false\n");
+    expect(await rows(app)).toEqual([["global", "npx -y exa", ["off here"]]]);
+  });
+
   it("shows a trusted project's server merged over the user's, as Codex runs it, and an untrusted one's as written", async () => {
     const { h, app, web } = seed();
     h.write(
@@ -1413,10 +1446,7 @@ describe("Codex hooks and Codex's trust", () => {
       const place = (p: string) => tilde(p, h.home);
       expect(listed.warnings.map((w: { file: string; message: string }) => [w.file, w.message])).toEqual([
         [mainFile, `has a hook Codex cannot read, so Codex loads no config in ${place(wt)}`],
-        [
-          mainFile,
-          `has an MCP server Codex cannot read, so Codex loads no config in ${place(codexTrustKey(main))}`,
-        ],
+        [mainFile, `has an MCP server Codex cannot read, so Codex loads no config in ${place(codexTrustKey(main))}`],
       ]);
       const id = listed.items.find((i: { name: string }) => i.name === "eli5").id;
       expect(await run(h, wt, "skills", ["show", "--id", id])).toContain(

@@ -313,6 +313,10 @@ The switches are read from these places:
   by key: the project's `command` with your `args`, and `env` from both, the project's winning
   where both set a key; a list such as `args` is the project's whole when it sets one. Runs,
   the details and the JSON `summary` show that merged server, which is what Codex starts.
+  A trusted project's table that changes one of your servers without a `command` or `url`, say
+  `args` alone, is that server's Project copy too, merged the same way; a change to it goes to
+  that table. A table that sets only `enabled` is a switch, and no copy. In an untrusted project
+  neither counts.
 - Codex's trust: Codex looks for a `[projects."<folder>"]` with a `trust_level` in its
   `config.toml` in three places, and the first it finds decides. First the project's folder,
   then its project root: the nearest folder at or above it with a `.git`, or with one of the
