@@ -29,7 +29,8 @@ clausona also shows how much of your accounts' 5-hour and weekly plan limits is 
 Step-by-step guides, including how to do it by hand:
 [multiple Claude Code accounts](https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/),
 [multiple Codex CLI accounts](https://larcane97.github.io/clausona/guides/multiple-codex-cli-accounts/),
-and [the same in Korean](https://larcane97.github.io/clausona/ko/).
+and [the same in Korean](https://larcane97.github.io/clausona/ko/). Another guide covers
+[the skills, MCP servers and hooks each account loads](https://larcane97.github.io/clausona/guides/claude-code-skills-mcp-hooks/).
 
 ## Why
 

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>clausona: multiple Claude Code and Codex accounts with shared skills, hooks and history</title>
-  <meta name="description" content="Run several Claude Code and Codex CLI accounts on one machine. Each keeps its own sign-in, while skills, hooks, plugins and settings stay shared, and conversation history can be shared too.">
+  <meta name="description" content="Run several Claude Code and Codex CLI accounts on one machine. Each keeps its own sign-in, while skills, hooks, plugins and settings stay shared, and conversation history can be shared too. Dynamic routing can pick the account each run starts on.">
   <link rel="canonical" href="https://larcane97.github.io/clausona/">
   <meta name="google-site-verification" content="JbB6RBZdOd_Rc0h4TI0OgwR7v2q9eaq2YHDv3pgQkxA">
   <meta property="og:type" content="website">
@@ -101,6 +101,7 @@
         <a href="guides/multiple-claude-code-accounts/">Claude Code</a>
         <a href="guides/multiple-codex-cli-accounts/">Codex</a>
         <a href="guides/parallel-claude-code-agents/">Agent fleets</a>
+        <a href="guides/claude-code-skills-mcp-hooks/">Extensions</a>
         <a href="ko/" hreflang="ko" lang="ko">한국어</a>
         <a href="https://github.com/larcane97/clausona">GitHub</a>
       </nav>
@@ -329,11 +330,11 @@ claude --continue    <span class="c"># the latest conversation in this folder</s
           </div>
           <div>
             <dt>Routing</dt>
-            <dd><code>clausona run --route main</code> starts on an account in the <a href="https://github.com/larcane97/clausona/blob/main/docs/routing.md">route</a> that still has quota left, and says which one it got.</dd>
+            <dd><code>clausona run --route main</code> starts on an account in the <a href="guides/multiple-claude-code-accounts/#routing">route</a> that still has quota left, and says which one it got.</dd>
           </div>
           <div>
             <dt>Extensions</dt>
-            <dd>The <a href="https://github.com/larcane97/clausona/blob/main/docs/extensions.md">Extensions screen</a> shows the skills, MCP servers and hooks each account loads in a project. You can turn one off or delete it, and undo the last change.</dd>
+            <dd>The <a href="guides/claude-code-skills-mcp-hooks/">Extensions screen</a> shows the skills, MCP servers and hooks each account loads in a project. You can turn one off or delete it, and undo the last change.</dd>
           </div>
           <div>
             <dt>API profiles</dt>
@@ -360,10 +361,12 @@ claude --continue    <span class="c"># the latest conversation in this folder</s
           <li><a href="guides/parallel-claude-code-agents/">Run parallel Claude Code agents on different accounts and models<span>Agents you can watch and steer on different accounts, or on an API model such as DeepSeek.</span></a></li>
           <li><a href="guides/parallel-agents-in-herdr/">Run parallel Claude Code and Codex agents in herdr<span>One session splits the job across herdr panes, each on its own account.</span></a></li>
           <li><a href="guides/parallel-agents-in-orca/">Run parallel Claude Code and Codex agents in Orca<span>One session splits the job across Orca worktrees, each on its own account.</span></a></li>
+          <li><a href="guides/claude-code-skills-mcp-hooks/">See which skills, MCP servers and hooks Claude Code loads, and turn them off<span>What each account loads in a project, and how to turn one off or undo it.</span></a></li>
           <li><a href="ko/" hreflang="ko" lang="ko">Claude Code와 Codex 계정 여러 개를 동시에 쓰는 법<span>스킬, hook, 대화 기록까지 공유하면서 계정을 나누는 방법.</span></a></li>
           <li><a href="ko/parallel-agents/" hreflang="ko" lang="ko">Claude Code 에이전트를 여러 계정과 모델로 병렬 실행하기<span>에이전트마다 다른 계정이나 DeepSeek 같은 API 모델을 쓰는 방법. 어느 터미널에서든 됩니다.</span></a></li>
           <li><a href="ko/parallel-agents-in-herdr/" hreflang="ko" lang="ko">herdr에서 Claude Code와 Codex 에이전트를 계정별로 병렬 실행하기<span>세션 하나가 herdr 창마다 다른 계정으로 작업을 나눠 맡깁니다.</span></a></li>
           <li><a href="ko/parallel-agents-in-orca/" hreflang="ko" lang="ko">Orca에서 Claude Code와 Codex 에이전트를 계정별로 병렬 실행하기<span>세션 하나가 Orca worktree마다 다른 계정으로 작업을 나눠 맡깁니다.</span></a></li>
+          <li><a href="ko/skills-mcp-hooks/" hreflang="ko" lang="ko">Claude Code와 Codex가 불러오는 스킬, MCP 서버, hook 확인하고 끄기<span>계정마다 프로젝트에서 무엇을 불러오는지 보고, 끄거나 되돌리는 방법.</span></a></li>
         </ul>
       </div>
     </section>
@@ -378,7 +381,7 @@ claude --continue    <span class="c"># the latest conversation in this folder</s
         <h3>Is my sign-in shared between accounts?</h3>
         <p>No. Credentials stay with their account. MCP servers added with <code>claude mcp add</code> live next to the sign-in, so they stay with the account too.</p>
         <h3>Does clausona switch accounts when one reaches its limit?</h3>
-        <p>A running session never moves to another account. With <a href="https://github.com/larcane97/clausona/blob/main/docs/routing.md">a route</a>, clausona picks the account when a run starts. <code>clausona run --route main</code> gets one that still has quota left. <code>clausona use</code> and <code>clausona run &lt;profile&gt;</code> leave the choice to you. Keep the accounts to what they're for, such as work and personal use, within Anthropic's and OpenAI's terms.</p>
+        <p>A running session never moves to another account. With <a href="guides/multiple-claude-code-accounts/#routing">a route</a>, clausona picks the account when a run starts. <code>clausona run --route main</code> gets one that still has quota left. <code>clausona use</code> and <code>clausona run &lt;profile&gt;</code> leave the choice to you. Keep the accounts to what they're for, such as work and personal use, within Anthropic's and OpenAI's terms.</p>
         <h3>Does it proxy or modify claude and codex?</h3>
         <p>No. The real binaries run unmodified, with the account's config directory set for that one run. If you set <code>CLAUDE_CONFIG_DIR</code> or <code>CODEX_HOME</code> yourself, clausona steps aside in that shell.</p>
         <h3>What does clausona send over the network?</h3>
