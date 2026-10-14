@@ -188,7 +188,7 @@ csn use codex:work         <span class="c"># plain `codex` now starts as the wor
       <p><code>clausona repair &lt;profile&gt;</code> unlinks it and puts the account's copy back from a backup. Nothing is deleted along the way.</p>
       <p><code>csn</code> is the short name for <code>clausona</code>.</p>
       <p>A shell hook sets <code>CODEX_HOME</code> for the run and starts the real <code>codex</code>. There's no wrapper around Codex and nothing running in the background.</p>
-      <p>clausona itself runs only after you change something, such as <code>csn use codex:work</code>.</p>
+      <p>A plain <code>codex</code> launch skips clausona itself. clausona runs on the first launch after you change something, such as <code>csn use codex:work</code>. <code>clausona run</code> starts it every time, routed or not.</p>
 
       <h2 id="history">Resume conversations across accounts</h2>
       <p>Codex keeps conversations in <code>sessions/</code>, with <code>history.jsonl</code> and <code>session_index.jsonl</code> beside them. Three databases go with them:</p>

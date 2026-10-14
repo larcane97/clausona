@@ -81,7 +81,7 @@
         "name": "Does clausona slow down Claude Code's start?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "No. A normal launch reads a cached script in the shell. On an M4 Pro Mac, claude --version took a median 25 ms with the hook and 25 ms without it. clausona's own process runs only after you change something, such as csn use."
+          "text": "Not a plain claude launch. That reads a cached script in the shell. On an M4 Pro Mac, claude --version took a median 25 ms with the hook and 25 ms without it. clausona run starts clausona's own process first, routed or not, and that takes about a third of a second. The first launch after a change such as csn use starts it too, and so does every launch of an API profile."
         }
       },
       {
@@ -222,7 +222,7 @@ csn use claude:default     <span class="c"># back to the first account; init nam
       <p>When a newer Claude Code adds a directory, <code>clausona doctor</code> reports that it isn't linked yet. <code>clausona repair &lt;profile&gt;</code> links it.</p>
       <p><code>csn</code> is the short name for <code>clausona</code>.</p>
       <p>There's no wrapper around Claude Code. A shell hook sets <code>CLAUDE_CONFIG_DIR</code> for the run and starts the real <code>claude</code>, and nothing stays running in the background.</p>
-      <p>A normal launch reads a cached script in the shell, so Claude Code starts as fast as it does without clausona. clausona itself runs only after you change something, such as <code>csn use</code>.</p>
+      <p>A plain <code>claude</code> launch reads a cached script in the shell, so Claude Code starts as fast as it does without clausona. clausona's own process runs on the first launch after you change something, such as <code>csn use</code>, and on every launch of an API profile. <code>clausona run</code> starts it every time, routed or not.</p>
 
       <h2 id="history">Share conversation history between accounts</h2>
       <p>Conversation history lives in <code>projects/</code>. Two directories next to it refer to it by session id: <code>jobs/</code> for background sessions, and <code>teams/</code>.</p>
@@ -256,7 +256,7 @@ claude:personal     me@example.org       8%         77% 5d</code></pre>
       <h3>Does clausona switch accounts automatically when I hit a limit?</h3>
       <p>A running session never moves to another account. With <a href="https://github.com/larcane97/clausona/blob/main/docs/routing.md">a route</a>, clausona picks the account when a run starts. <code>clausona run --route main</code> gets one that still has quota left. Set a directory rule or a default route, and plain <code>clausona run claude</code> does the same. <code>clausona use</code> and <code>clausona run &lt;profile&gt;</code> leave the choice to you. Keep the accounts to what they're for, such as work and personal use, within Anthropic's terms.</p>
       <h3>Does clausona slow down Claude Code's start?</h3>
-      <p>No. A normal launch reads a cached script in the shell. On an M4 Pro Mac, <code>claude --version</code> took a median 25 ms with the hook and 25 ms without it. clausona's own process runs only after you change something, such as <code>csn use</code>.</p>
+      <p>Not a plain <code>claude</code> launch. That reads a cached script in the shell. On an M4 Pro Mac, <code>claude --version</code> took a median 25 ms with the hook and 25 ms without it. <code>clausona run</code> starts clausona's own process first, routed or not, and that takes about a third of a second. The first launch after a change such as <code>csn use</code> starts it too, and so does every launch of an API profile.</p>
       <h3>Is my sign-in ever shared?</h3>
       <p>No, credentials and <code>.claude.json</code> stay with their account.</p>
       <h3>Does it work with tools that start Claude Code themselves?</h3>
