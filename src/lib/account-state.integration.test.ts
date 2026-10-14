@@ -196,3 +196,45 @@ describe("Claude Code state for one account or org", () => {
     expect(existsSync(path.join(primary, "policy-limits.json"))).toBe(true);
   });
 });
+
+describe("temp files left from a save", () => {
+  // One left in the primary on a real machine, linked into every profile from there.
+  const LEFTOVER = ".session-stats.json.tmp.56475.1780981766229.1qip4a37kvx";
+  const CLAUDE_CODE_LEFTOVER = "settings.json.tmp.12345.0a1b2c3d4e5f";
+
+  it("are never linked into a profile", async () => {
+    const { primary, work, backupDir, service, claudeAdapter } = await seedHome();
+    for (const name of [LEFTOVER, CLAUDE_CODE_LEFTOVER]) writeFileSync(path.join(primary, name), "{}");
+
+    await service.setupSharedLinks(claudeAdapter, work, primary, true, backupDir);
+
+    for (const name of [LEFTOVER, CLAUDE_CODE_LEFTOVER]) expect(lstatOrNull(path.join(work, name)), name).toBeNull();
+  });
+
+  it("lose a link left from before on repair, even once the primary's is gone", async () => {
+    const { primary, work, service } = await seedHome();
+    for (const name of [LEFTOVER, CLAUDE_CODE_LEFTOVER]) {
+      writeFileSync(path.join(primary, name), "{}");
+      symlinkSync(path.join(primary, name), path.join(work, name));
+    }
+    // Its writer, or Claude Code's cleanup, takes the primary's out in time.
+    rmSync(path.join(primary, CLAUDE_CODE_LEFTOVER));
+
+    await service.repairProfile("claude:work");
+
+    for (const name of [LEFTOVER, CLAUDE_CODE_LEFTOVER]) expect(lstatOrNull(path.join(work, name)), name).toBeNull();
+    expect(readFileSync(path.join(primary, LEFTOVER), "utf8")).toBe("{}");
+    expect(issuesFor(await service.doctorProfiles(), "claude:work")).toEqual([]);
+  });
+
+  it("of the profile's own are left alone, and doctor does not report them", async () => {
+    const { work, service } = await seedHome();
+    const own = ".claude.json.tmp.78985.429da2c70baf";
+    writeFileSync(path.join(work, own), "{}");
+
+    await service.repairProfile("claude:work");
+
+    expect(readFileSync(path.join(work, own), "utf8")).toBe("{}");
+    expect(issuesFor(await service.doctorProfiles(), "claude:work")).toEqual([]);
+  });
+});

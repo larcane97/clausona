@@ -190,6 +190,29 @@ describe("Claude Code state for one account or org", () => {
   });
 });
 
+describe("temp files left from a save", () => {
+  it("are never shared, whatever file they were saving", () => {
+    for (const name of [
+      // Claude Code's atomic writer: `<file>.tmp.<8 hex>`.
+      "settings.json.tmp.0a1b2c3d",
+      // Its synchronous writer: `<file>.tmp.<pid>.<12 hex>`.
+      "history.jsonl.tmp.12345.0a1b2c3d4e5f",
+      ".claude.json.tmp.78985.429da2c70baf",
+      // The `.session-stats.json` writer: `<file>.tmp.<pid>.<ms>.<base 36>`.
+      ".session-stats.json.tmp.56475.1780981766229.1qip4a37kvx",
+    ]) {
+      expect(keptApart(name, false), `${name} when separated`).toBe(true);
+      expect(keptApart(name, true), `${name} when merged`).toBe(true);
+    }
+  });
+
+  it("are told apart from names that only mention tmp", () => {
+    for (const name of ["notes.tmp", "settings.json.tmp", "settings.json.tmp.old", "a.tmp.0a1b2c3", "tmp.0a1b2c3d"]) {
+      expect(keptApart(name, true), name).toBe(false);
+    }
+  });
+});
+
 /**
  * The one place clausona writes Claude Code's own credentials: a renewal on macOS, into the
  * Keychain item Claude Code reads. It is the user's live subscription login, so the item must

@@ -72,6 +72,14 @@ const ACCOUNT_STATE = [
 const ACCOUNT_STATE_SIBLING =
   /^(?:policy-limits\.json|remote-settings\.json|remote-settings-consent\.json|remote-settings-helper-consent)\../;
 
+// A temp file a save writes beside its target and renames over it, left behind when the save
+// stopped part way. Claude Code's atomic writer names it `<file>.tmp.<8 hex>` and its synchronous
+// one `<file>.tmp.<pid>.<12 hex>` (2.1.299; the two shapes it recognises as its own). The writer
+// of `.session-stats.json`, which is not Claude Code, leaves `<file>.tmp.<pid>.<ms>.<base 36>`.
+// Linked into a profile, a leftover in the primary stays there for good, and holds nothing a
+// profile reads.
+const TEMP_LEFTOVER = /^.+\.tmp\.(?:[0-9a-f]{8}|\d+\.[0-9a-f]{12}|\d+\.\d+\.[0-9a-z]+)$/;
+
 // State keyed by session id. `jobs/` holds the background-session records that the
 // background list reads (state, respawn flags, resume target) and `teams/` holds team
 // membership; both are addressed by the same session id as the transcripts under
@@ -672,7 +680,7 @@ export const claudeAdapter: ToolAdapter & Required<Pick<ToolAdapter, "sharedSkip
   hasFallbackCredential,
   sharedSkipSet: (mergeSessions) =>
     new Set([...BASE_SHARED_LINK_SKIP, ...ACCOUNT_STATE, ...(mergeSessions ? [] : SESSION_SCOPED)]),
-  shouldSkipName: (name) => ACCOUNT_STATE_SIBLING.test(name),
+  shouldSkipName: (name) => ACCOUNT_STATE_SIBLING.test(name) || TEMP_LEFTOVER.test(name),
   rewritesWhole: (name) => REWRITTEN_WHOLE.has(name),
   // postSetup is left undefined here — service.ts's syncPluginsJson is wired into the
   // Claude code path explicitly because it has cross-cutting plugin marketplace state.
