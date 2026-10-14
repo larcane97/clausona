@@ -26,7 +26,7 @@
     {
       "name": "fleet-core",
       "source": "./plugins/fleet-core",
-      "description": "Shared rules for the fleet plugins; installed with them."
+      "description": "Shared rules for the fleet plugins. Claude Code installs it with them; in Codex, add it yourself."
     },
     { "name": "clausona", "source": "./plugins/clausona", "description": "Old name for superset-fleet; installs it." }
   ]
