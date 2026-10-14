@@ -524,6 +524,10 @@ describe("ls options", () => {
     expect(JSON.parse(await run(h, sub, "skills", ["ls", "--json"])).project).toBe(mono);
     // On Windows a path matches in any case, as there a folder does.
     if (process.platform === "win32") expect(await projectOf(sub.toUpperCase())).toBe(sub);
+    // Through a link it is the recorded project too, by its real path, as the current one is found.
+    h.link("repos/mono", "links/mono");
+    expect(await projectOf(h.path("links", "mono", "sub"))).toBe(sub);
+    expect(await projectOf(h.path("links", "mono", "other"))).toBe(h.path("links", "mono"));
   });
 });
 

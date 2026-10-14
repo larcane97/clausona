@@ -34,11 +34,14 @@ export function isHomeProject(project: Project, homeDir: string): boolean {
 
 /**
  * Every recorded project that still exists, sorted by path, with the current one among them:
- * the recorded project it is (see `asRecorded`), else itself, added.
+ * the recorded project it is (see `asRecorded`), else itself, added. `asked`, a folder asked
+ * for by path (`--project`), is the current one in its place when it is a recorded project
+ * itself, by `asRecorded`'s rule, under the recorded spelling.
  */
 export async function collectProjects(
   records: ProjectRecord[],
   current?: string,
+  asked?: string,
 ): Promise<{ projects: Project[]; current?: string }> {
   const byKey = new Map<string, Project>();
   const add = (p: string, tool?: ToolName, profile?: string) => {
@@ -58,6 +61,8 @@ export async function collectProjects(
     )
   ).filter((p): p is Project => p !== undefined);
   const byPath = (a: Project, b: Project) => a.path.localeCompare(b.path);
+  const named = asked === undefined ? undefined : await asRecorded(asked, kept);
+  if (named) return { projects: kept.sort(byPath), current: named.path };
   if (current === undefined) return { projects: kept.sort(byPath) };
   const recorded = await asRecorded(current, kept);
   if (recorded) return { projects: kept.sort(byPath), current: recorded.path };

@@ -37,8 +37,9 @@ export type LoadOptions = {
   cwd: string;
   /**
    * The folder asked for by path (`--project`), read from `cwd`'s place: it is the project when
-   * Claude Code or Codex recorded it by that very path (pathKey: on Windows in any case), so a
-   * project recorded inside a repository can be looked from; else `cwd`'s project, as ever.
+   * Claude Code or Codex recorded it - by that path (pathKey: on Windows in any case), or by one
+   * leading to the same real folder, as the current one is found (projects.ts `asRecorded`) - so
+   * a project recorded inside a repository can be looked from; else `cwd`'s project, as ever.
    */
   project?: string;
   /** Where to look for Claude Code's managed settings; tests point it at a file of their own. */
@@ -84,9 +85,7 @@ export async function loadInventory(options: LoadOptions): Promise<Inventory> {
     ...(codex ? codexProjectRecords(codex) : []),
   ];
   const asked = options.project === undefined ? undefined : path.resolve(options.project);
-  const recorded = asked !== undefined && records.some((r) => r.paths.some((p) => pathKey(p) === pathKey(asked)));
-  const startedIn = recorded ? asked : resolved;
-  const { projects, current: currentProject } = await collectProjects(records, startedIn);
+  const { projects, current: currentProject } = await collectProjects(records, resolved, asked);
   // The Claude, Codex and stash sources write apart - each its own items and facts, and
   // warnings are sorted below - so they read side by side.
   const readClaude = async (): Promise<void> => {
