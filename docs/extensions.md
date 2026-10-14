@@ -418,9 +418,9 @@ The switches are read from these places:
 
 A few rare Codex cases clausona does not follow:
 
-- A hook matcher that is too big for Codex only because it repeats a Unicode class, such as
-  `\w` or `\p{Greek}` thousands of times. Codex skips the group; clausona lists its hooks as
-  running.
+- A hook matcher that only compiling it shows is too big for Codex: one that repeats a Unicode
+  class, such as `\w` or `\p{Greek}`, thousands of times, or one right at the size limit, such
+  as `b{327680}*`. Codex skips the group; clausona lists its hooks as running.
 - A few rare front matter forms Codex refuses: a `:` right before `,`, `[`, `]`, `{` or `}`
   in a value inside `[…]` or `{…}`, a value there that starts with `:`, a `[…]` or `{…}` used
   as a key, and a tag on a value that Codex quotes and reads again. clausona reads those skills
