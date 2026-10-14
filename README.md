@@ -353,6 +353,10 @@ links back to your primary directory, so what you set up once is there for every
 └── ...
 ```
 
+What Claude Code keeps for one account or org, such as its policy limits, remote managed settings,
+MCP sign-in cache and background daemon, stays with each profile too ([the full
+list](docs/how-it-works.md#what-a-claude-profile-shares)).
+
 Codex profiles share only their configuration: `config.toml`, `hooks.json`, `AGENTS.md`, `rules/`,
 `skills/`, `plugins/`, `prompts/` and a few more. Everything else Codex keeps in its home, such as its
 app-server daemon and its memories, stays with each account ([the full list](docs/how-it-works.md#what-a-codex-profile-shares)).

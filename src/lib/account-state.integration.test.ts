@@ -36,7 +36,9 @@ afterEach(() => {
  * What Claude Code 2.1.299 keeps for one account or one org in its config directory: the org's
  * policy limits and remote managed settings with every sibling it names for them, the MCP servers
  * that need this account's sign-in, its `state/` and the Claude in Chrome host it writes for the
- * directory. Directories are the ones it keeps as directories.
+ * directory; then copies of the account file, the background daemon with its sign-in state, the
+ * telemetry it has yet to send, and the tokens of hosted sessions. Directories are the ones it
+ * keeps as directories.
  */
 const ACCOUNT_FILES = [
   "policy-limits.json",
@@ -50,12 +52,25 @@ const ACCOUNT_FILES = [
   "remote-settings-helper-consent",
   "remote-settings-consent.json",
   "mcp-needs-auth-cache.json",
+  ".claude.json.backup",
+  ".claude-custom-oauth.json",
+  ".config.json",
+  "daemon-auth-cooldown",
+  "daemon-auth-status.json",
+  ".session_ingress_token",
+  "hfi-auth.json",
 ];
-const ACCOUNT_DIRS = ["state", "chrome"];
+const ACCOUNT_DIRS = ["state", "chrome", "backups", "daemon", "telemetry"];
 const ACCOUNT_STATE = [...ACCOUNT_FILES, ...ACCOUNT_DIRS];
 
 /** The one file inside each directory above, holding whose it is. */
-const OWNER_FILE: Record<string, string> = { state: "mcp-discover-verdicts.json", chrome: "chrome-native-host" };
+const OWNER_FILE: Record<string, string> = {
+  state: "mcp-discover-verdicts.json",
+  chrome: "chrome-native-host",
+  backups: ".claude.json.backup.1760000000000",
+  daemon: "roster.json",
+  telemetry: "1p_failed_events.session.run.json",
+};
 
 /**
  * Writes `owner` into entry `name` under `dir`, as `as` (a backup's name, say): the file, or the

@@ -95,6 +95,8 @@ When you register a new profile, clausona symlinks shared resources from your pr
 │                            Keychain refuses them (NOT shared)
 ├── .last-update-result.json, gh-pr-status-cache.json, .session-stats.json
 │                          ← own per-dir state and caches (NOT shared)
+├── policy-limits.json, remote-settings.json, state/, daemon/, ...
+│                          ← own account and org state (NOT shared, see the list below)
 ├── projects/              ← own session history (NOT shared by default)
 ├── jobs/                  ← own background sessions (follows projects/)
 ├── teams/                 ← own team records (follows projects/)
@@ -128,9 +130,11 @@ When you register a new profile, clausona symlinks shared resources from your pr
 └── ...                    ← anything else Codex keeps here (NOT shared)
 ```
 
-For claude the principle is that credentials and session data stay profile-specific and
-everything else is shared. Codex is the other way round, because each Codex release adds state
-that belongs to one account to its home. See [What a Codex profile shares](#what-a-codex-profile-shares) below.
+For claude the principle is that credentials, session data and what Claude Code keeps for one
+account stay profile-specific and everything else is shared. See [What a Claude profile
+shares](#what-a-claude-profile-shares) below. Codex is the other way round, because each Codex
+release adds state that belongs to one account to its home. See [What a Codex profile
+shares](#what-a-codex-profile-shares) below.
 
 On Windows, shared directories use junctions. Shared files use symbolic links when Windows Developer Mode is enabled.
 Without it, a file the tool saves whole - Claude Code's `settings.json`, `CLAUDE.md` and `keybindings.json`, Codex's
@@ -212,6 +216,45 @@ to set clausona up again. `~/.clausona/backups` holds no copy of it to restore. 
 that would otherwise stop with "clausona is not initialized" prints the same line instead,
 `clausona init` refuses to replace the file while it is there, and the dashboard shows the
 line instead of opening init.
+
+### What a Claude profile shares
+
+A claude profile links every entry of the primary's `~/.claude` except the ones below. Claude
+Code 2.1.299 keeps its own list of the entries in its config directory that are state rather
+than configuration, and clausona went through it one entry at a time.
+
+| Entry | In a profile | Why |
+|---|---|---|
+| `.claude.json`, `.claude-*-oauth.json`, `.config.json`, their backups, and `backups/` | own | The signed-in account and its MCP servers. `.config.json` is the legacy name, which Claude Code reads in place of `.claude.json` when it is there. `backups/` holds copies of `.claude.json`, and Claude Code offers the newest one to restore a lost file. |
+| `.credentials.json` | own | OAuth tokens outside macOS, and on macOS when the Keychain refuses them. |
+| `policy-limits.json`, `remote-settings.json`, their `.signature.json`, `.signature-iat.json`, `.stamp.json` and `.synced-at`, `remote-settings-consent.json`, `remote-settings-helper-consent` | own | The org's policy limits and remote managed settings, stamped with the identity they were fetched for, and what this account agreed to apply. |
+| `mcp-needs-auth-cache.json` | own | The MCP servers and claude.ai connectors that need this account's sign-in. |
+| `state/` | own | Per-account records, such as MCP discovery verdicts. |
+| `chrome/` | own | The Claude in Chrome host that Claude Code writes for its config directory. |
+| `daemon/`, `daemon-auth-status.json`, `daemon-auth-cooldown` | own | The background daemon: its control key, the roster of the sessions it runs and its sign-in state. On Windows a profile linking the primary's `daemon/` reaches the primary's daemon, which runs on the primary's account. |
+| `telemetry/` | own | Events that failed to send, stamped with the account and org. A later run of the same session sends them again, on whichever account resumed it. |
+| `.session_ingress_token`, `hfi-auth.json` | own | Tokens of hosted sessions. |
+| `statsig/`, `image-cache/`, `.last-update-result.json`, `gh-pr-status-cache.json`, `.session-stats.json` | own | State and caches for one config directory. |
+| `plugins/` | own directory | Each entry links to the primary's, except the two JSON files that hold paths. |
+| `projects/`, `jobs/`, `teams/` | shared with merged sessions | One session's transcript and records, kept together. |
+| `sessions/`, `todos/`, `shell-snapshots/`, `file-history/`, `history.jsonl`, `tasks/`, `session-env/`, `plans/`, `paste-cache/`, `uploads/` | shared | So a session carries across accounts. |
+| A temp file a save left behind, `<file>.tmp.<suffix>` | never linked | It holds nothing a profile reads, and a link to one would stay for good. |
+| Everything else: `settings.json`, `CLAUDE.md`, `skills/`, `agents/`, `commands/`, ... | shared | Your configuration. |
+
+Some entries on Claude Code's list stay shared for now, since nothing showed that sharing them
+does harm: `cache/` (model lists and capabilities), `mcp-discovery-cache/`, `daemon.json` (the
+daemon's settings), `daemon.log`, `stats-cache.json`, `usage-data/`, `debug/`, `feedback/` and the
+like. `ide/` is shared too: Claude Code finds a running IDE through it, and reads `~/.claude/ide`
+from every profile in any case.
+
+Profiles set up by clausona 0.8.0-beta or earlier link the account entries above to the primary's.
+`clausona doctor` reports each such link as `stale_symlink`, and `clausona repair <profile>` takes
+it out. A copy that Claude Code has already saved in the profile is the profile's own: doctor no
+longer reports it, and repair keeps it. If an earlier repair set the profile's own copy aside to
+put the link back, repair brings the newest one back from `~/.clausona/backups/claude/<profile>/`.
+Repair takes out the `daemon/` link even while the profile's background daemon runs, so stop that
+daemon first: `CLAUDE_CONFIG_DIR=~/.claude-<profile> claude daemon stop`. The next one starts with
+the profile's own `daemon/`.
 
 ### What a Codex profile shares
 

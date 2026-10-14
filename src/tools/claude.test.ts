@@ -190,6 +190,71 @@ describe("Claude Code state for one account or org", () => {
   });
 });
 
+describe("the rest of Claude Code's state for one config dir", () => {
+  it("keeps what belongs to one account apart, in either session mode", () => {
+    for (const name of [
+      // Copies of the account file, and the legacy one Claude Code reads in its place.
+      ".claude.json.backup",
+      ".claude-staging-oauth.json",
+      ".claude-local-oauth.json",
+      ".claude-custom-oauth.json",
+      ".config.json",
+      "backups",
+      // The background daemon, its control key and roster, and its sign-in state.
+      "daemon",
+      "daemon-auth-cooldown",
+      "daemon-auth-status.json",
+      // Events stamped with the account, waiting to be sent again.
+      "telemetry",
+      ".session_ingress_token",
+      "hfi-auth.json",
+    ]) {
+      expect(keptApart(name, false), `${name} when separated`).toBe(true);
+      expect(keptApart(name, true), `${name} when merged`).toBe(true);
+      expect(claudeAdapter.sharedSkipSet(true).has(name), `${name} by name`).toBe(true);
+    }
+  });
+
+  it("keeps every copy and companion of the account file apart", () => {
+    for (const name of [
+      ".claude.json.backup.1760000000000",
+      ".claude.json.corrupted.1760000000000",
+      ".claude.json.bak",
+      ".claude-custom-oauth.json.backup",
+      ".config.json.backup",
+      ".session_ingress_token.e3.tmp.0a1b2c3d",
+    ]) {
+      expect(keptApart(name, true), name).toBe(true);
+    }
+  });
+
+  it("shares what carries sessions across accounts when sessions are merged", () => {
+    for (const name of [
+      "projects",
+      "jobs",
+      "teams",
+      "sessions",
+      "todos",
+      "shell-snapshots",
+      "file-history",
+      "history.jsonl",
+      "tasks",
+      "session-env",
+      "plans",
+      "paste-cache",
+      "uploads",
+    ]) {
+      expect(keptApart(name, true), name).toBe(false);
+    }
+  });
+
+  it("leaves names that only start alike shared", () => {
+    for (const name of [".claude-code-router.json", "config.json", "daemonize.sh", "telemetry.md", "backups-old"]) {
+      expect(keptApart(name, true), name).toBe(false);
+    }
+  });
+});
+
 describe("temp files left from a save", () => {
   it("are never shared, whatever file they were saving", () => {
     for (const name of [

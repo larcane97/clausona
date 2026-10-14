@@ -72,6 +72,43 @@ const ACCOUNT_STATE = [
 const ACCOUNT_STATE_SIBLING =
   /^(?:policy-limits\.json|remote-settings\.json|remote-settings-consent\.json|remote-settings-helper-consent)\../;
 
+// The rest of what Claude Code keeps for one account in its config dir (2.1.299). Each is on its
+// list of the entries it leaves out of a snapshot of the dir's configuration, as state:
+//
+// - Copies of the account file, which holds the signed-in account and its MCP servers:
+//   `.claude.json.backup`, and `backups/`, where Claude Code saves a copy at most once a minute
+//   and from where it offers the newest one to restore a lost `.claude.json`. Shared, that copy
+//   could be another account's. `.claude-<env>-oauth.json` is the account file under a staging,
+//   local or custom OAuth URL, and a `.config.json` beside it is the legacy one, which Claude Code
+//   reads in place of `.claude.json` when it is there.
+// - The background daemon: `daemon/` holds its control key, the roster of the sessions it runs,
+//   their tokens, and the nonce its Windows pipe is named by. On Windows a profile linking the
+//   primary's reaches the primary's daemon, which runs its sessions on the primary's sign-in;
+//   elsewhere two accounts' daemons write one roster. `daemon-auth-status.json` says whether the
+//   daemon's account must sign in again, and `daemon-auth-cooldown` when it may next ask.
+// - `telemetry/` holds events that failed to send, stamped with the account and org. A later run
+//   of the same session sends them again, on whichever account resumed it.
+// - `.session_ingress_token` and `hfi-auth.json` hold tokens of hosted sessions.
+const ACCOUNT_DIR_STATE = [
+  ".claude.json.backup",
+  ".claude-staging-oauth.json",
+  ".claude-local-oauth.json",
+  ".claude-custom-oauth.json",
+  ".config.json",
+  "backups",
+  "daemon",
+  "daemon-auth-cooldown",
+  "daemon-auth-status.json",
+  "telemetry",
+  ".session_ingress_token",
+  "hfi-auth.json",
+] as const;
+
+// Every other copy or companion of those files: `.claude.json.backup.<ms>`, `.corrupted.<ms>`,
+// a `.bak` of the user's, and a token's temp file.
+const ACCOUNT_DIR_STATE_SIBLING =
+  /^(?:\.claude(?:-staging-oauth|-local-oauth|-custom-oauth)?\.json|\.config\.json|\.session_ingress_token)\../;
+
 // A temp file a save writes beside its target and renames over it, left behind when the save
 // stopped part way. Claude Code's atomic writer names it `<file>.tmp.<8 hex>` and its synchronous
 // one `<file>.tmp.<pid>.<12 hex>` (2.1.299; the two shapes it recognises as its own). The writer
@@ -679,8 +716,14 @@ export const claudeAdapter: ToolAdapter & Required<Pick<ToolAdapter, "sharedSkip
   hasKeychainCredential: hasKeychain,
   hasFallbackCredential,
   sharedSkipSet: (mergeSessions) =>
-    new Set([...BASE_SHARED_LINK_SKIP, ...ACCOUNT_STATE, ...(mergeSessions ? [] : SESSION_SCOPED)]),
-  shouldSkipName: (name) => ACCOUNT_STATE_SIBLING.test(name) || TEMP_LEFTOVER.test(name),
+    new Set([
+      ...BASE_SHARED_LINK_SKIP,
+      ...ACCOUNT_STATE,
+      ...ACCOUNT_DIR_STATE,
+      ...(mergeSessions ? [] : SESSION_SCOPED),
+    ]),
+  shouldSkipName: (name) =>
+    ACCOUNT_STATE_SIBLING.test(name) || ACCOUNT_DIR_STATE_SIBLING.test(name) || TEMP_LEFTOVER.test(name),
   rewritesWhole: (name) => REWRITTEN_WHOLE.has(name),
   // postSetup is left undefined here — service.ts's syncPluginsJson is wired into the
   // Claude code path explicitly because it has cross-cutting plugin marketplace state.
