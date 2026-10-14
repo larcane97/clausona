@@ -1024,8 +1024,16 @@ describe("readCodex", () => {
       ["bad", said("bad")],
       ["orphan", said("orphan")],
     ]);
-    // The switch of a server the user defines still counts.
-    expect(out.facts.codexMcpEnabled.map((e) => [e.name, e.enabled])).toEqual([["good", false]]);
+    // The switch of a server the user defines still counts; orphan's, in a file Codex refuses that
+    // clausona reads, is listed too, and holds nothing there.
+    expect(out.facts.codexMcpEnabled.map((e) => [e.name, e.enabled]).sort()).toEqual([
+      ["good", false],
+      ["other", false],
+    ]);
+    expect(out.facts.codexConfigRefused.map((r) => [path.basename(r.project ?? ""), r.readable]).sort()).toEqual([
+      ["bad", true],
+      ["orphan", true],
+    ]);
   });
 
   it("records where Codex refuses a config.toml: the user's everywhere, a trusted project's there", async () => {
@@ -1070,9 +1078,13 @@ describe("readCodex", () => {
     expect(says.syntax?.startsWith("is not valid TOML") && says.syntax.endsWith(`, ${where("syntax")}`)).toBe(true);
     expect(says.big).toBe(`has an integer too large for 64 bits, ${where("big")}`);
     expect(says.untrusted).toMatch(/^is not valid TOML( at line \d+, column \d+)?$/);
+    // types's file Codex refuses for a wrong type, which clausona reads and lists: off there.
     expect(
-      out.items.filter((i) => i.kind === "mcp").map((i) => i.location.project && path.basename(i.location.project)),
-    ).toEqual(["fine"]);
+      out.items
+        .filter((i) => i.kind === "mcp")
+        .map((i) => i.location.project && path.basename(i.location.project))
+        .sort(),
+    ).toEqual(["fine", "types"]);
     // A user config.toml Codex refuses keeps all of its config out, in every project.
     const user = new TestHome();
     homes.push(user);

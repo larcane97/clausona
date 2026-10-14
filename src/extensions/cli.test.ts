@@ -1572,6 +1572,54 @@ describe("Codex hooks and Codex's trust", () => {
     );
   });
 
+  it("plans a skill switch in a project whose config.toml Codex refuses, noting it stays off there", async () => {
+    const { h, app } = seed();
+    h.write(
+      ".codex/config.toml",
+      `[projects.${JSON.stringify(app)}]\ntrust_level = "trusted"\n\n[[skills.config]]\nname = "eli5"\nenabled = false\n`,
+    );
+    h.write("repos/app/.codex/config.toml", "[mcp_servers.p]\ncommand = 5\n");
+    h.skill("repos/app/.agents/skills", "proj");
+    const own = tilde(path.join(app, ".codex", "config.toml"), h.home);
+    const user = h.path(".codex", "config.toml");
+    const noted = `stays off in this project until Codex can read ${own}`;
+    const lines = async (args: string[]) =>
+      JSON.parse(await run(h, app, "skills", [...args, "--tool", "codex", "--dry-run", "--json"])).changes.map(
+        (c: { file: string; what: string; note: string | null }) => [c.file, c.what, c.note],
+      );
+    // The user config.toml, as anywhere: the name entry goes, and the path entry is made.
+    expect(await lines(["on", "eli5", "--everywhere"])).toEqual([[user, "skills.config eli5 removed", noted]]);
+    const skillFile = tilde(path.join(app, ".agents", "skills", "proj", "SKILL.md"), h.home);
+    expect(await lines(["off", "proj", "--here"])).toEqual([[user, `skills.config ${skillFile} → off`, noted]]);
+  });
+
+  it("plans a server switch in a project whose config.toml Codex refuses but clausona reads, noting it stays off", async () => {
+    const { h, app } = seed();
+    h.write(
+      ".codex/config.toml",
+      `[projects.${JSON.stringify(app)}]\ntrust_level = "trusted"\n\n[mcp_servers.exa]\ncommand = "npx"\n`,
+    );
+    const file = path.join(app, ".codex", "config.toml");
+    const plan = (verb: string) =>
+      run(h, app, "mcp", [verb, "exa", "--tool", "codex", "--here", "--dry-run", "--json"]).then(JSON.parse);
+    // A wrong type, which Codex refuses: the file reads, so the switch is planned in it.
+    h.write("repos/app/.codex/config.toml", "[mcp_servers.p]\ncommand = 5\n");
+    const off = await plan("off");
+    expect(off.refused).toEqual([]);
+    expect(
+      off.changes.map((c: { file: string; what: string; note: string | null }) => [c.file, c.what, c.note]),
+    ).toEqual([
+      [
+        file,
+        "mcp_servers.exa.enabled → false",
+        `stays off in this project until Codex can read ${tilde(file, h.home)}`,
+      ],
+    ]);
+    // Not valid TOML: clausona cannot edit it either.
+    h.write("repos/app/.codex/config.toml", "[mcp_servers.p\n");
+    expect((await plan("off")).refused.map((r: { code: string }) => r.code)).toEqual(["unreadable"]);
+  });
+
   it("loads nothing of Codex in a trusted project whose config.toml Codex refuses, and says so", async () => {
     const { h, app, web } = seed();
     h.write(

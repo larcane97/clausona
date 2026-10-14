@@ -333,10 +333,11 @@ async function projectConfig(
   const read = await readCodexConfig(file, out.warnings);
   const main = mainFile === undefined ? undefined : await readCodexConfig(mainFile, out.warnings);
   const value = (r: CodexConfigFile | Refused | undefined) => (r === undefined || "refused" in r ? undefined : r.value);
+  // A file clausona reads all the same is read on: its rows are listed, off there, and can change.
   const refuse = (at: string, cause: Refused) => {
     refusals.note(at, cause, project);
-    out.facts.codexConfigRefused.push({ file: at, project });
-    return {};
+    out.facts.codexConfigRefused.push({ file: at, project, ...(cause.parse ? {} : { readable: true as const }) });
+    return cause.parse ? {} : { config: value(read), main: value(main) };
   };
   if (!trusted) {
     if (read && "refused" in read) refusals.note(file, read, undefined);

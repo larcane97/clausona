@@ -758,6 +758,13 @@ projects read, such as a main checkout's that its worktrees read too, gets one w
 cause, naming each project Codex loads no config in. An untrusted project's file Codex leaves
 alone, one that is not valid TOML too.
 
+A trusted project's file Codex refuses for a value of the wrong type is one clausona still
+reads: what it holds is listed, off in that project, and a change can go to it. So in that
+project `skills on` and `off` write your `config.toml` as anywhere, and `mcp … --here` writes
+the project's file, each change line noting that the row
+`stays off in this project until Codex can read <file>`. A file that is not valid TOML clausona
+cannot change either, and a change to it is refused (`unreadable`).
+
 In a linked worktree Codex checks the worktree's own `config.toml` with the main checkout's
 `[hooks]` (and `[hooks.state]`) in place of the worktree's, and nothing else of the main
 checkout's file, so clausona checks that. A wrong type in the worktree's own `[hooks]` refuses

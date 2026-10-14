@@ -248,9 +248,11 @@ export type StateFacts = {
    * Each config.toml Codex refuses whole - one it cannot parse, or with a value of the wrong type
    * in a section clausona reads: then Codex loads no config at all, and so no skill, server or
    * hook. The user config.toml has no `project`, and its refusal holds in every project; a trusted
-   * project's holds in that project, where Codex checks it merged over the user's.
+   * project's holds in that project, where Codex checks it merged over the user's. `readable`
+   * where clausona reads the file all the same - a value of the wrong type, an integer past 64
+   * bits - so it lists what the file holds, and can change it.
    */
-  codexConfigRefused: { file: string; project?: string }[];
+  codexConfigRefused: { file: string; project?: string; readable?: true }[];
 };
 
 export function emptyFacts(): StateFacts {
