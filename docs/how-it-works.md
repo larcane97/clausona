@@ -244,12 +244,23 @@ than configuration, and clausona went through it one entry at a time.
 
 Some entries on Claude Code's list stay shared, because you write them or sessions refer to them,
 or because nothing showed that sharing them does harm: `usage-data/`, `debug/`, `loop.md` and the
-like. `ide/` is shared too: Claude Code
-finds a running IDE through it, and reads `~/.claude/ide` from every profile in any case.
+like. `ide/` is shared too: Claude Code finds a running IDE through it, and reads `~/.claude/ide`
+from every profile in any case.
 
 Scheduled tasks and Remote Control set up on the primary stay with the primary, in its
 `daemon.json`. A profile sets its own, with `claude daemon scheduled add` or `claude daemon
 remote-control add` run in that profile.
+
+A scheduled task or Remote Control folder that a profile added while clausona 0.8.0-beta or earlier
+linked its `daemon.json` was saved in the primary's, and stays there. After repair it runs only on
+the primary's account, and the profile runs nothing of it, with nothing said. To move one:
+
+1. On the primary, list them with `claude daemon scheduled list` and `claude daemon remote-control
+   list`.
+2. In the profile, add the profile's own again with `claude daemon scheduled add` or `claude daemon
+   remote-control add`.
+3. On the primary, remove them with `claude daemon scheduled remove <task-id>` or `claude daemon
+   remote-control remove <name-or-dir>`.
 
 Profiles set up by clausona 0.8.0-beta or earlier link the account entries above to the primary's.
 `clausona doctor` reports each such link with what the profile reads of the primary account's
