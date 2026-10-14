@@ -116,14 +116,65 @@ describe("codexSkipsMatcher", () => {
     expect(skips.filter((m) => !codexSkipsMatcher(m))).toEqual([]);
   });
 
-  it("leans to running a matcher Rust parses and then cannot compile, as only the compiler knows", () => {
-    // Codex skips each; regex-syntax's parser takes them, and the Unicode tables, the UTF-8 check
-    // or the size limit refuse them later.
-    expect(["\\p{Foo}", "\\pX", "(?-u)\\xFF", "a{4294967295}"].map(codexSkipsMatcher)).toEqual([
-      false,
-      false,
-      false,
-      false,
-    ]);
+  it("skips what Rust's translator and compiler refuse: Unicode names, invalid UTF-8, nesting and size", () => {
+    const deep = (n: number) => `${"(".repeat(n)}a${")".repeat(n)}`;
+    const skips = [
+      // regex-syntax's Unicode tables know none of these names.
+      "\\p{Foo}",
+      "\\pX",
+      "\\p{}",
+      "\\p{Script}",
+      "\\p{script=foo}",
+      "\\p{Age=99.0}",
+      "\\p{Bidi_Class=L}",
+      "\\p{Block=Greek}",
+      "[\\p{Foo}]",
+      // `is` dropped, `isc` names ISO_Comment, which is no binary property.
+      "\\p{isc}",
+      // Under (?-u), what could match invalid UTF-8, or a byte class that meets Unicode.
+      "(?-u)\\xFF",
+      "(?-u).",
+      "(?-u)\\W",
+      "(?-u)\\pL",
+      "(?-u)[^a]",
+      "(?-u)[é]",
+      "(?-u)[[:^alpha:]]",
+      "a(?-u)|.",
+      // Past the nest limit of 250, and past the 10 MiB size limit.
+      deep(251),
+      "a{400000}",
+      "a{4294967295}",
+      "(a{1000}){2000}",
+    ];
+    expect(skips.filter((m) => !codexSkipsMatcher(m))).toEqual([]);
+    const runs = [
+      "\\pL",
+      "\\pl",
+      "\\p{ letter }",
+      "\\p{Is_Letter}",
+      "\\p{greek}",
+      "\\p{G-r-e-e-k}",
+      "\\p{sc!=Greek}",
+      "\\p{scx=Greek}",
+      "\\p{Age=16.0}",
+      "\\p{gcb=Extend}",
+      "\\p{cf}",
+      "\\p{c}",
+      "\\p{Any}",
+      "(?-u)\\x7F",
+      "(?-u)\\x{FF}",
+      "(?-u)é",
+      "(?-u)\\B",
+      "(?-u)[a-z]",
+      "(?-u:a).",
+      deep(250),
+      "a{300000}",
+    ];
+    expect(runs.filter(codexSkipsMatcher)).toEqual([]);
+  });
+
+  it("leans to running a matcher only compiling it could tell, past the size limit by more than its count", () => {
+    // Codex skips each: a Unicode class compiles to many states, which the lower bound counts as one.
+    expect(["\\w[^a]{100000}", "\\P{Script=Greek}\\S{300000}"].map(codexSkipsMatcher)).toEqual([false, false]);
   });
 });

@@ -363,9 +363,10 @@ The switches are read from these places:
   (letters, digits, `_` and `|`) as a Rust regex, and skips the whole group when it cannot:
   its hooks are tagged `invalid matcher`. Rust's regex is not JavaScript's: it has no
   lookaround (`(?=…)`) or backreferences, and takes `(?i)` and `\pL`. clausona checks the
-  matcher as Rust's parser does, so it tags only what Codex skips for sure; a matcher Rust
-  parses and then cannot compile, such as an unknown `\p{…}` name or one past its size limit,
-  is not tagged. Codex
+  matcher as Rust's regex crate does: its parser, the `\p{…}` names its Unicode tables know,
+  what could match invalid UTF-8 under `(?-u)`, nesting past 250 deep, and the size limit where
+  a pattern is past it for sure (`a{400000}`). It tags only what Codex skips for sure; a pattern
+  only compiling it could tell is past the size limit, such as `\w[^a]{100000}`, is not tagged. Codex
   also runs the hooks a `config.toml` holds, as `[[hooks.<Event>]]` tables, beside that folder's
   `hooks.json`: Codex's own and a trusted project's. Their key holds the `config.toml`'s path.
   clausona lists them and their trust, and leaves changing them to `/hooks` in Codex
