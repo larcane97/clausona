@@ -121,15 +121,15 @@ describe("skills, mcp and hooks commands", () => {
   it("spell out every scope a command takes, on its ls page", async () => {
     const ls = async (command: string) => stripAnsi(await runCommand(command, ["ls", "--help"]));
     expect(await ls("skills")).toContain(
-      "--scope <scope>   loaded (default) | project | global | cloud | plugins | builtin | other\n" +
-        "                      | unused | all",
+      "--scope <scope>   loaded (default) | project | parents | global | cloud | plugins\n" +
+        "                      | builtin | other | unused | all",
     );
     expect(await ls("mcp")).toContain(
       "--account <name>  Only this Claude account (repeatable): in Loaded, the rows that\n" +
         "                      load for it; in any other scope, the rows it has",
     );
     expect(await ls("hooks")).toMatch(
-      /--scope <scope> {3}loaded \(default\) \| project \| global \| plugins \| managed/,
+      /--scope <scope> {3}loaded \(default\) \| project \| parents \| global \| plugins \| managed/,
     );
   });
 
@@ -146,8 +146,8 @@ describe("skills, mcp and hooks commands", () => {
     }
     expect(await page("skills", "show")).toContain(
       "--scope <scope>   Look in this scope only, to pick one copy:\n" +
-        "                      loaded | project | global | cloud | plugins | builtin | other | unused\n" +
-        "                      | all",
+        "                      loaded | project | parents | global | cloud | plugins | builtin | other\n" +
+        "                      | unused | all",
     );
   });
 
