@@ -128,15 +128,35 @@ function onAbort(signal: AbortSignal, stop: () => void): () => void {
 const ENDS_ITS_GROUP = '"$@"; s=$?; trap "" TERM; kill -TERM 0 2>/dev/null; exit $s';
 
 /**
- * Runs `command` and resolves to its exit code and stdout. With a `signal`, the command starts
- * in a process group of its own, with no terminal, under an sh that ends what the command left
- * running in the group once it exits (ENDS_ITS_GROUP). Once the signal aborts, the group is
- * killed, if the sh is still running; the result is a failure at once, not when the output
- * closes, which a process left behind could still hold open: one that ignores TERM, or one outside
- * the group. Until then, clausona ending ends it too (endWithClausona). On Windows the command
- * starts in no group of its own, and what it leaves running when it exits keeps running.
+ * How long the output is still read once the command has exited. Normally it closes as the command
+ * exits; a job the command left running can hold it open for as long as the job runs.
  */
-function run(command: string, args: string[], input?: string, signal?: AbortSignal): Promise<RunResult> {
+const DRAIN_MS = 200;
+
+type RunOptions = {
+  /** Written to the command's stdin, which is otherwise not open. */
+  input?: string;
+  /** Bounds the run, the command started in a process group of its own for it. */
+  signal?: AbortSignal;
+};
+
+/**
+ * Runs `command` and resolves to its exit code and stdout, once the command has exited: what it
+ * wrote is read for a short drain after that (DRAIN_MS), then taken, whether or not the output has
+ * closed, so a job it left running does not hold the result up.
+ *
+ * With a `signal`, the command starts in a process group of its own, with no terminal, under an sh
+ * that ends what the command left running in the group once it exits (ENDS_ITS_GROUP). Once the
+ * signal aborts, the group is killed, if the sh is still running; the result is a failure at once.
+ * Until then, clausona ending ends it too (endWithClausona). On Windows the command starts in no
+ * group of its own, and what it leaves running when it exits keeps running.
+ *
+ * Without one, the command keeps the terminal, in clausona's own process group, where it can ask
+ * for a PIN or a passphrase, and Ctrl-C stops it with clausona. What it leaves running when it
+ * exits keeps running: nothing can end it alone without its pid, which the command never gives.
+ */
+function run(command: string, args: string[], options: RunOptions = {}): Promise<RunResult> {
+  const { input, signal } = options;
   return new Promise((resolve) => {
     if (signal?.aborted) {
       resolve({ code: 1, stdout: "" });
@@ -150,9 +170,11 @@ function run(command: string, args: string[], input?: string, signal?: AbortSign
     const release = detached ? endWithClausona(child) : () => {};
     let out = "";
     let settled = false;
+    let drain: NodeJS.Timeout | undefined;
     const finish = (result: RunResult) => {
       if (settled) return;
       settled = true;
+      clearTimeout(drain);
       forget();
       release();
       resolve(result);
@@ -165,6 +187,19 @@ function run(command: string, args: string[], input?: string, signal?: AbortSign
     const forget = signal ? onAbort(signal, stop) : () => {};
     child.stdout?.on("data", (chunk) => {
       out += chunk;
+    });
+    child.on("exit", (code) => {
+      if (settled) return;
+      // A turn of the event loop after the timer reads what is already in the pipe, however late
+      // the timer ran.
+      drain = setTimeout(
+        () =>
+          setImmediate(() => {
+            child.stdout?.destroy();
+            finish({ code: code ?? 1, stdout: out });
+          }),
+        DRAIN_MS,
+      );
     });
     child.on("close", (code) => finish({ code: code ?? 1, stdout: out }));
     child.on("error", () => finish({ code: 1, stdout: "" }));
@@ -299,7 +334,7 @@ export async function writeKeychainItem(item: KeychainItem, value: string): Prom
   const line = addGenericPasswordLine(item, hex);
   const { code } =
     Buffer.byteLength(line) <= SECURITY_MAX_LINE
-      ? await run("security", ["-i"], `${line}\n`)
+      ? await run("security", ["-i"], { input: `${line}\n` })
       : await run("security", ["add-generic-password", "-U", "-s", item.service, "-a", item.account, "-X", hex]);
   if (code !== 0) throw new Error(`could not write Keychain item '${item.service}'`);
 
@@ -349,12 +384,9 @@ async function readStoredSecret(
   signal?: AbortSignal,
 ): Promise<string | null> {
   if ((backend ?? detectBackend()) === "keychain") {
-    const { code, stdout } = await run(
-      "security",
-      ["find-generic-password", "-s", keychainItemFor(profileId), "-w"],
-      undefined,
+    const { code, stdout } = await run("security", ["find-generic-password", "-s", keychainItemFor(profileId), "-w"], {
       signal,
-    );
+    });
     return code === 0 && stdout.trim() !== "" ? stdout.trim() : null;
   }
   const values = await readSecretsFile();
@@ -373,7 +405,8 @@ async function readStoredSecret(
  * key in that slot.
  *
  * `signal` bounds a key that a command or the Keychain gives: once it aborts, what was started
- * for it is killed, and the key is not read.
+ * for it is killed, and the key is not read. Without one, a key command keeps the terminal, where
+ * it can prompt.
  */
 export async function resolveSecret(
   profileId: string,
@@ -412,7 +445,7 @@ export async function resolveSecret(
   if (source.source === "command") {
     const shell = process.platform === "win32" ? "powershell" : "/bin/sh";
     const args = process.platform === "win32" ? ["-NoProfile", "-Command", source.run] : ["-c", source.run];
-    const { code, stdout } = await run(shell, args, undefined, signal);
+    const { code, stdout } = await run(shell, args, { signal });
     if (signal?.aborted) throw new Error("the key was not read in time");
     // The command line is not quoted, so the message says where it is instead - profiles.json,
     // the one place it is shown - and what replaces it. Not `config --edit`: that opens the

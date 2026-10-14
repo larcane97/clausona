@@ -1,7 +1,10 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { isPosixEnvName } from "../core/shell.js";
+import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import type { Profile } from "../types.js";
 import {
   buildProfileEnv,
@@ -47,6 +50,12 @@ const ROUTING = [
   "CLAUDE_CODE_CUSTOM_OAUTH_URL",
 ];
 const except = (list: string[], ...keys: string[]) => list.filter((key) => !keys.includes(key));
+
+const temps: string[] = [];
+afterEach(() => {
+  for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
+  vi.unstubAllEnvs();
+});
 
 const identityRealpath = async (p: string) => p;
 const fakeSecret = async () => "sk-test";
@@ -171,6 +180,56 @@ describe("buildProfileEnv", () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatch(/no stored secret/);
   });
+
+  // The real key read, as a launch makes it: a job the key command left holding its output does
+  // not hold up the launch.
+  it.skipIf(process.platform === "win32")(
+    "builds the env once the key command exits, though a job it left holds its output",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "clausona-launch-key-"));
+      temps.push(dir);
+      const pids = path.join(dir, "pids");
+      vi.stubEnv("CLAUSONA_TEST_PIDS", pids);
+      const secret = { source: "command" as const, run: 'sleep 600 & echo $! > "$CLAUSONA_TEST_PIDS"; echo KEY' };
+      const profile = apiProfile({ api: { baseUrl: "http://gpu-box:30000", authScheme: "bearer", secret } });
+      const alive = (pid: number) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const written = () => {
+        try {
+          return Number(readFileSync(pids, "utf8").trim());
+        } catch {
+          return 0;
+        }
+      };
+      // Bounded here, so that a launch that waits for the job fails rather than hangs.
+      let bound: NodeJS.Timeout | undefined;
+      const waited = new Promise<never>((_, reject) => {
+        bound = setTimeout(() => reject(new Error("the launch waited for the job")), SPAWN_TIMEOUT_MS);
+      });
+      try {
+        const built = buildProfileEnv("claude:glm", profile, {
+          realpath: identityRealpath,
+          homedir: () => "/home/u",
+          readFile: noSettings,
+        });
+        const { env, warnings } = await Promise.race([built, waited]);
+        expect(env.ANTHROPIC_AUTH_TOKEN).toBe("KEY");
+        expect(warnings).toEqual([]);
+      } finally {
+        clearTimeout(bound);
+        // The job is this test's own, by the pid it wrote, and was never seen to end.
+        const job = written();
+        if (job > 0 && alive(job)) process.kill(job, "SIGKILL");
+      }
+    },
+  );
 
   it("drops an env-map key that no shell could export, and says which", async () => {
     // A hand-edited profiles.json is the way this lands, and the POSIX renderer

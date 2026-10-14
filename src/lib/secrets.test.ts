@@ -200,7 +200,7 @@ describe("resolveSecret", () => {
   );
 
   // Its pid, once it has exited, can be another process's: nothing is signalled then, even with a
-  // job it left behind holding its output open, which the abort no longer waits for.
+  // job it left behind holding its output open, which the read no longer waits for.
   it.skipIf(windows)(
     "signals nothing once the command has exited, though a job it left keeps its output open",
     { timeout: SPAWNING_TEST_TIMEOUT_MS },
@@ -215,7 +215,7 @@ describe("resolveSecret", () => {
       // have its group sent the TERM before the job ignored it.
       const run =
         'ps -o pgid= -p $$ > "$CLAUSONA_TEST_PIDS"; ' +
-        'sh -c \'trap "" TERM; echo $$ >> "$CLAUSONA_TEST_PIDS"; exec sleep 30\' & ' +
+        'sh -c \'trap "" TERM; echo $$ >> "$CLAUSONA_TEST_PIDS"; exec sleep 600\' & ' +
         'while [ "$(wc -l < "$CLAUSONA_TEST_PIDS")" -lt 2 ]; do sleep 0.1; done; exit 0';
       const alive = (pid: number) => {
         try {
@@ -225,24 +225,38 @@ describe("resolveSecret", () => {
           return false;
         }
       };
+      const job = () => {
+        try {
+          return Number(readFileSync(pids, "utf8").trim().split("\n")[1] ?? 0);
+        } catch {
+          return 0;
+        }
+      };
       const controller = new AbortController();
-      const read = resolveSecret("claude:x", { source: "command", run }, undefined, { signal: controller.signal });
-      await vi.waitFor(() => expect(readFileSync(pids, "utf8").trim().split("\n")).toHaveLength(2), {
-        timeout: 20_000,
+      // Bounded here, so that a read that waits for the job fails rather than hangs.
+      let bound: NodeJS.Timeout | undefined;
+      const waited = new Promise<never>((_, reject) => {
+        bound = setTimeout(() => reject(new Error("the read waited for the job")), SPAWN_TIMEOUT_MS);
       });
-      const [leader, job] = readFileSync(pids, "utf8").trim().split("\n").map(Number);
+      const kill = vi.spyOn(process, "kill");
       try {
-        await vi.waitFor(() => expect(alive(leader)).toBe(false), { timeout: 20_000 });
-        const kill = vi.spyOn(process, "kill");
+        const read = resolveSecret("claude:x", { source: "command", run }, undefined, { signal: controller.signal });
+        // Read once the command has exited, which printed nothing: neither the job nor the abort
+        // is waited for.
+        await expect(Promise.race([read, waited])).rejects.toThrow("secret command produced no output");
+        const [leader] = readFileSync(pids, "utf8").trim().split("\n").map(Number);
+        expect(alive(leader)).toBe(false);
         controller.abort();
-        await expect(read).rejects.toThrow("the key was not read in time");
         // Only the checks above and below: no signal went to any pid.
         expect(kill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([]);
-        kill.mockRestore();
-        expect(alive(job)).toBe(true);
+        expect(job()).toBeGreaterThan(0);
+        expect(alive(job())).toBe(true);
       } finally {
-        // The job is this test's own, by the pid it wrote.
-        if (alive(job)) process.kill(job, "SIGKILL");
+        clearTimeout(bound);
+        kill.mockRestore();
+        controller.abort();
+        // The job is this test's own, by the pid it wrote, and was never seen to end.
+        if (job() > 0 && alive(job())) process.kill(job(), "SIGKILL");
       }
     },
   );
@@ -334,6 +348,53 @@ describe("resolveSecret", () => {
         // The helper is this test's own, by the pid it wrote.
         const helperPid = written();
         if (helperPid > 0 && alive(helperPid)) process.kill(helperPid, "SIGKILL");
+      }
+    },
+  );
+
+  // A launch reads the key with no signal: the command keeps the terminal, in clausona's own
+  // process group. A job it left holding the output does not hold up the launch, and is left
+  // running, since nothing here can end it alone.
+  it.skipIf(windows)(
+    "reads a key at a launch once the command exits, though a job it left holds its output",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "clausona-key-command-"));
+      temps.push(dir);
+      const pids = path.join(dir, "pids");
+      vi.stubEnv("CLAUSONA_TEST_PIDS", pids);
+      const run = 'sleep 600 & echo $! > "$CLAUSONA_TEST_PIDS"; echo KEY';
+      const alive = (pid: number) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const written = () => {
+        try {
+          return Number(readFileSync(pids, "utf8").trim());
+        } catch {
+          return 0;
+        }
+      };
+      // Bounded here, so that a read that waits for the job fails rather than hangs.
+      let bound: NodeJS.Timeout | undefined;
+      const waited = new Promise<never>((_, reject) => {
+        bound = setTimeout(() => reject(new Error("the read waited for the job")), SPAWN_TIMEOUT_MS);
+      });
+      try {
+        await expect(Promise.race([resolveSecret("claude:x", { source: "command", run }), waited])).resolves.toBe(
+          "KEY",
+        );
+        expect(written()).toBeGreaterThan(0);
+        expect(alive(written())).toBe(true);
+      } finally {
+        clearTimeout(bound);
+        // The job is this test's own, by the pid it wrote, and was never seen to end.
+        const job = written();
+        if (job > 0 && alive(job)) process.kill(job, "SIGKILL");
       }
     },
   );
