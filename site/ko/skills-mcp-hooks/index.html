@@ -71,7 +71,7 @@
         "name": "스킬을 끄면 지워지나요?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "아니요. 끄기는 설정을 한 줄 적을 뿐이고, 스킬 폴더는 그대로 있습니다. Claude Code는 설정 파일의 skillOverrides에, Codex는 config.toml에 적습니다. space나 clausona skills on으로 다시 켜면 돼요. 지우기는 따로 하는 일이고, 그때는 폴더를 백업으로 옮깁니다."
+          "text": "아니요. 끄기는 설정을 한 줄 적을 뿐이고, 스킬 폴더는 그대로 있습니다. Claude Code 스킬은 설정 파일의 skillOverrides에, Codex 스킬은 config.toml에 적습니다. 끌 때 누른 키를 한 번 더 누르거나 clausona skills on을 실행하면 다시 켜져요. 모든 프로젝트에서 껐다면 --everywhere를 붙입니다. 지우기는 따로 하는 일이고, 그때는 폴더를 백업으로 옮깁니다."
         }
       },
       {
@@ -79,7 +79,7 @@
         "name": "MCP 서버를 한 프로젝트에서만 끌 수 있나요?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "네. 계정의 .claude.json에 있는 서버나 플러그인에 딸린 서버는 계정마다 끕니다. 그 계정의 프로젝트 항목에 있는 disabledMcpServers에 이름을 넣는데, /mcp disable이 쓰는 목록과 같습니다. 이 항목은 그 프로젝트를 한 번이라도 연 계정에만 있습니다. 프로젝트의 .mcp.json에 있는 서버는 모든 계정에 한꺼번에 적용됩니다. 프로젝트의 .claude/settings.local.json에서 disabledMcpjsonServers에 이름을 넣고 enabledMcpjsonServers에서는 뺍니다. Codex는 Codex가 신뢰하는 프로젝트라면 그 프로젝트의 .codex/config.toml에 enabled = false를 적습니다."
+          "text": "네. 계정의 .claude.json에 있는 서버나 플러그인에 딸린 서버는 계정마다 끕니다. 그 계정의 프로젝트 항목에 있는 disabledMcpServers에 이름을 넣는데, /mcp disable이 쓰는 목록과 같습니다. 이 항목은 그 프로젝트를 한 번이라도 연 계정에만 있습니다. 프로젝트의 .mcp.json에 있는 서버는 모든 계정에 한꺼번에 적용됩니다. 프로젝트의 .claude/settings.local.json에서 disabledMcpjsonServers에 이름을 넣고 enabledMcpjsonServers에서는 뺍니다. Codex 서버는 Codex가 신뢰하는 프로젝트라면 그 프로젝트의 .codex/config.toml에 enabled = false를 적어 끕니다."
         }
       },
       {
@@ -170,8 +170,8 @@ clausona skills ls --scope unused --tool claude</code></pre>
       </ul>
 
       <h2 id="loaded">이 프로젝트에서 불러오는 것</h2>
-      <p><code>clausona</code>를 실행하고 Extensions를 고르면 돼요. 기준이 되는 프로젝트는 지금 폴더를 담고 있는 git 저장소입니다. 저장소 밖이라면 그 폴더 자체가 기준이에요.</p>
-      <p>왼쪽 첫 줄이 그 프로젝트이고, 옆에 거기서 불러오는 항목 수가 나옵니다. 오른쪽 표는 이 항목들을 어디서 왔는지에 따라 묶어 보여 줍니다. 프로젝트 자체의 것이 먼저 나오고, 그다음은 Global, Cloud, 플러그인 순서입니다.</p>
+      <p><code>clausona</code>를 실행하고 Extensions를 고르면 돼요. 기준이 되는 프로젝트는 지금 있는 폴더가 속한 git 저장소입니다. 저장소 밖이라면 그 폴더 자체가 기준이에요.</p>
+      <p>왼쪽 첫 줄이 그 프로젝트이고, 옆에 거기서 불러오는 항목 수가 나옵니다. 오른쪽 표는 이 항목들을 어디서 왔는지에 따라 묶어 보여 줍니다. 프로젝트에 있는 것이 먼저 나오고, 나머지는 왼쪽 목록 순서대로 나옵니다.</p>
       <p>Claude와 Codex는 탭으로 나뉘어 있고, <code>tab</code>으로 오갑니다. 스킬, MCP 서버, hook은 <code>1</code>, <code>2</code>, <code>3</code>으로 바꿉니다.</p>
       <p>첫 줄 아래에는 출처마다 줄이 하나씩 있습니다. 이 줄을 열면 불러오지 않는 것까지 보여요. 이름이 같은 다른 스킬에 가려진 스킬이나, 이 프로젝트에서 꺼 둔 스킬 같은 것들입니다.</p>
       <p>행에서 <code>enter</code>를 누르면 자세한 내용이 열립니다. 파일 위치와 계정별 상태가 나오고, 스킬이라면 몇 번 썼는지도 나와요.</p>
@@ -190,10 +190,10 @@ clausona skills ls --scope unused --tool claude</code></pre>
       <h2 id="off">이 프로젝트에서만, 또는 모든 프로젝트에서 끄기</h2>
       <p>행을 골라 <code>space</code>를 누르면 이 프로젝트에서만 꺼집니다. <code>g</code>는 모든 프로젝트에서 끕니다.</p>
       <p>바꾸기 전에 확인 창이 먼저 뜹니다. 파일마다 무엇이 바뀌는지 한 줄씩 보여 주고, 백업을 어디에 두는지도 알려 줘요. <code>y</code>를 누르면 적용하고, <code>n</code>을 누르면 아무것도 바뀌지 않습니다.</p>
-      <p>clausona가 적는 설정은 Claude Code와 Codex가 원래 쓰는 바로 그 설정입니다.</p>
-      <p>Claude 스킬을 이 프로젝트에서 끄면 프로젝트의 <code>.claude/settings.local.json</code>에서 <code>skillOverrides</code>에 그 스킬을 <code>"off"</code>로 적습니다. 계정의 <code>.claude.json</code>에 있는 Claude MCP 서버나 플러그인에 딸린 서버를 이 프로젝트에서 끄면, 그 계정 <code>.claude.json</code>의 프로젝트 항목에 있는 <code>disabledMcpServers</code>에 이름을 넣습니다. <code>/mcp disable</code>이 쓰는 목록과 같아요. 프로젝트의 <code>.mcp.json</code>에 있는 서버는 <code>.claude/settings.local.json</code>의 <code>disabledMcpjsonServers</code>에 넣고, 모든 계정에 한꺼번에 적용됩니다.</p>
+      <p>clausona는 Claude Code와 Codex가 원래 읽는 설정에 적습니다.</p>
+      <p>Claude 스킬을 이 프로젝트에서 끄면 프로젝트의 <code>.claude/settings.local.json</code>에 있는 <code>skillOverrides</code>에 그 스킬을 <code>"off"</code>로 적습니다. 계정의 <code>.claude.json</code>에 있는 Claude MCP 서버나 플러그인에 딸린 서버를 이 프로젝트에서 끄면, 그 계정 <code>.claude.json</code>의 프로젝트 항목에 있는 <code>disabledMcpServers</code>에 이름을 넣습니다. <code>/mcp disable</code>이 쓰는 목록과 같아요. 프로젝트의 <code>.mcp.json</code>에 있는 서버는 <code>.claude/settings.local.json</code>의 <code>disabledMcpjsonServers</code>에 넣고, 모든 계정에 한꺼번에 적용됩니다.</p>
       <p>Codex 서버는 <code>enabled = false</code>로 끕니다. 이 프로젝트에서만 끌 때는 프로젝트의 <code>.codex/config.toml</code>에 적습니다. 모든 프로젝트에서 끄는 건 내가 추가한 서버만 되고, <code>~/.codex/config.toml</code>에 적습니다.</p>
-      <p>한쪽으로만 바꿀 수 있는 것도 있습니다.</p>
+      <p>켜고 끄는 방법이 다른 것도 있습니다.</p>
       <ul>
         <li>hook은 Claude Code에도 Codex에도 프로젝트별 스위치가 없습니다. 그래서 끄면 모든 프로젝트에서 꺼집니다. 설정 파일에서 빼낸 hook은 clausona가 보관해 두었다가, <code>g</code>로 다시 켤 때 돌려놓습니다.</li>
         <li>플러그인에 딸린 것은 플러그인째 켜고 끕니다. 플러그인의 MCP 서버만은 예외로, 계정마다 프로젝트별로 따로 끌 수 있습니다.</li>
@@ -233,9 +233,9 @@ clausona skills rm old-one --dry-run      <span class="c"># 지우면 무엇이 
       <h3>다른 계정에서는 MCP 서버가 안 보이는데 왜 그런가요?</h3>
       <p><code>claude mcp add</code>로 추가한 서버는 추가한 계정의 <code>.claude.json</code>에만 들어가고, clausona는 이 파일을 계정끼리 공유하지 않습니다. MCP 화면에서 <code>m</code>을 누르면 어느 계정에 있는지 보여요. 다른 계정에도 추가하거나, 모든 계정이 읽는 프로젝트의 <code>.mcp.json</code>에 넣으세요.</p>
       <h3>스킬을 끄면 지워지나요?</h3>
-      <p>아니요. 끄기는 설정을 한 줄 적을 뿐이고, 스킬 폴더는 그대로 있습니다. Claude Code는 설정 파일의 <code>skillOverrides</code>에, Codex는 <code>config.toml</code>에 적습니다. <code>space</code>나 <code>clausona skills on</code>으로 다시 켜면 돼요. 지우기는 따로 하는 일이고, 그때는 폴더를 백업으로 옮깁니다.</p>
+      <p>아니요. 끄기는 설정을 한 줄 적을 뿐이고, 스킬 폴더는 그대로 있습니다. Claude Code 스킬은 설정 파일의 <code>skillOverrides</code>에, Codex 스킬은 <code>config.toml</code>에 적습니다. 끌 때 누른 키를 한 번 더 누르거나 <code>clausona skills on</code>을 실행하면 다시 켜져요. 모든 프로젝트에서 껐다면 <code>--everywhere</code>를 붙입니다. 지우기는 따로 하는 일이고, 그때는 폴더를 백업으로 옮깁니다.</p>
       <h3>MCP 서버를 한 프로젝트에서만 끌 수 있나요?</h3>
-      <p>네. 계정의 <code>.claude.json</code>에 있는 서버나 플러그인에 딸린 서버는 계정마다 끕니다. 그 계정의 프로젝트 항목에 있는 <code>disabledMcpServers</code>에 이름을 넣는데, <code>/mcp disable</code>이 쓰는 목록과 같습니다. 이 항목은 그 프로젝트를 한 번이라도 연 계정에만 있습니다. 프로젝트의 <code>.mcp.json</code>에 있는 서버는 모든 계정에 한꺼번에 적용됩니다. 프로젝트의 <code>.claude/settings.local.json</code>에서 <code>disabledMcpjsonServers</code>에 이름을 넣고 <code>enabledMcpjsonServers</code>에서는 뺍니다. Codex는 Codex가 신뢰하는 프로젝트라면 그 프로젝트의 <code>.codex/config.toml</code>에 <code>enabled = false</code>를 적습니다.</p>
+      <p>네. 계정의 <code>.claude.json</code>에 있는 서버나 플러그인에 딸린 서버는 계정마다 끕니다. 그 계정의 프로젝트 항목에 있는 <code>disabledMcpServers</code>에 이름을 넣는데, <code>/mcp disable</code>이 쓰는 목록과 같습니다. 이 항목은 그 프로젝트를 한 번이라도 연 계정에만 있습니다. 프로젝트의 <code>.mcp.json</code>에 있는 서버는 모든 계정에 한꺼번에 적용됩니다. 프로젝트의 <code>.claude/settings.local.json</code>에서 <code>disabledMcpjsonServers</code>에 이름을 넣고 <code>enabledMcpjsonServers</code>에서는 뺍니다. Codex 서버는 Codex가 신뢰하는 프로젝트라면 그 프로젝트의 <code>.codex/config.toml</code>에 <code>enabled = false</code>를 적어 끕니다.</p>
       <h3>hook도 프로젝트마다 끌 수 있나요?</h3>
       <p>아니요. Claude Code에도 Codex에도 hook 하나를 한 프로젝트에서만 끄는 스위치가 없어서, 끄면 모든 프로젝트에서 꺼집니다. 설정 파일에서 빼낸 hook은 clausona가 보관해 두었다가 다시 켤 때 돌려놓습니다.</p>
       <h3>저장소 파일이 바뀌나요?</h3>

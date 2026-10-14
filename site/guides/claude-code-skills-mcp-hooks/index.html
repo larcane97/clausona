@@ -69,7 +69,7 @@
         "name": "Does turning a skill off delete it?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "No. Off writes a setting, and the skill's folder stays where it is. For Claude Code that's skillOverrides in a settings file, and for Codex an entry in config.toml. space or clausona skills on turns it back on. Deleting is a separate step, and it moves the folder into a backup."
+          "text": "No. Off writes a setting, and the skill's folder stays where it is. For Claude Code that's skillOverrides in a settings file, and for Codex an entry in config.toml. Press the same key again to turn it back on, or run clausona skills on, adding --everywhere if it was off everywhere. Deleting is a separate step, and it moves the folder into a backup."
         }
       },
       {
@@ -170,7 +170,7 @@ clausona skills ls --scope unused --tool claude</code></pre>
 
       <h2 id="loaded">What loads in this project</h2>
       <p>Run <code>clausona</code> and choose Extensions. The screen looks from the project you started it in: the git repository around the current folder, or the folder itself outside one.</p>
-      <p>The first line on the left is that project, with a count of everything that loads there. The table on the right groups those rows by where they come from. The project's own come first, then Global, Cloud and the plugins.</p>
+      <p>The first line on the left is that project, with a count of everything that loads there. The table on the right groups those rows by where they come from. The project's own come first, then the other places, in the order of the list on the left.</p>
       <p>Claude and Codex are tabs, and <code>tab</code> switches between them. <code>1</code>, <code>2</code> and <code>3</code> switch between skills, MCP servers and hooks.</p>
       <p>Under the first line, each place has a line of its own. Open one and you also see what doesn't load, such as a skill a same-name copy hides, or one you turned off here.</p>
       <p><code>enter</code> on a row opens its details. They show its files and its state in each account, and for a skill, how often it's been used.</p>
@@ -189,10 +189,10 @@ clausona skills ls --scope unused --tool claude</code></pre>
       <h2 id="off">Turn one off, here or everywhere</h2>
       <p>Select a row and press <code>space</code> to turn it off in this project. <code>g</code> turns it off in every project.</p>
       <p>Before anything changes, a dialog lists each file and what will change in it, and where the backup goes. <code>y</code> goes ahead, and <code>n</code> leaves everything as it was.</p>
-      <p>clausona writes the same settings Claude Code and Codex write themselves.</p>
+      <p>clausona writes the settings Claude Code and Codex already read.</p>
       <p>A Claude skill turned off here is set to <code>"off"</code> under <code>skillOverrides</code>, in the project's <code>.claude/settings.local.json</code>. A Claude MCP server from an account's <code>.claude.json</code>, or one a plugin brings, goes into <code>disabledMcpServers</code> in that account's <code>.claude.json</code>, under its entry for the project. That's the list <code>/mcp disable</code> writes. A server from the project's <code>.mcp.json</code> goes into <code>disabledMcpjsonServers</code> in <code>.claude/settings.local.json</code> instead, for every account at once.</p>
       <p>For Codex, a server is turned off with <code>enabled = false</code>. Here, that goes in the project's <code>.codex/config.toml</code>. Everywhere, which works for your own servers, it goes in <code>~/.codex/config.toml</code>.</p>
-      <p>Some things only switch one way:</p>
+      <p>A few things switch differently:</p>
       <ul>
         <li>A hook has no switch for one project, in Claude Code or in Codex. Off takes it out of its settings file in every project, and clausona keeps it so that <code>g</code> can put it back.</li>
         <li>What a plugin brings is switched with the plugin itself. A plugin's MCP server is the exception: it also has a switch of its own, per account, in each project.</li>
@@ -232,7 +232,7 @@ clausona skills rm old-one --dry-run      <span class="c"># what deleting it wou
       <h3>Why is my MCP server missing under my other Claude Code account?</h3>
       <p>A server added with <code>claude mcp add</code> is stored in the <code>.claude.json</code> of the account that added it, and clausona doesn't share that file between accounts. The matrix (<code>m</code> on the MCP tab) shows which accounts have it. Add it under the other account too, or put it in the project's <code>.mcp.json</code>, which every account reads.</p>
       <h3>Does turning a skill off delete it?</h3>
-      <p>No. Off writes a setting, and the skill's folder stays where it is. For Claude Code that's <code>skillOverrides</code> in a settings file, and for Codex an entry in <code>config.toml</code>. <code>space</code> or <code>clausona skills on</code> turns it back on. Deleting is a separate step, and it moves the folder into a backup.</p>
+      <p>No. Off writes a setting, and the skill's folder stays where it is. For Claude Code that's <code>skillOverrides</code> in a settings file, and for Codex an entry in <code>config.toml</code>. Press the same key again to turn it back on, or run <code>clausona skills on</code>, adding <code>--everywhere</code> if it was off everywhere. Deleting is a separate step, and it moves the folder into a backup.</p>
       <h3>Can I turn off an MCP server in one project only?</h3>
       <p>Yes. A server from an account's <code>.claude.json</code>, or one a plugin brings, is switched per account. clausona adds its name to <code>disabledMcpServers</code> in that account's entry for the project, the list <code>/mcp disable</code> writes, and only accounts that have opened the project have that entry. A server from the project's <code>.mcp.json</code> is switched for every account at once: off adds its name to <code>disabledMcpjsonServers</code> and takes it out of <code>enabledMcpjsonServers</code>, in the project's <code>.claude/settings.local.json</code>. For Codex, off writes <code>enabled = false</code> in the project's <code>.codex/config.toml</code>, in a project Codex trusts.</p>
       <h3>Can I turn off a hook in one project only?</h3>
