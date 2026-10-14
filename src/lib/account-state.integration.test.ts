@@ -65,6 +65,15 @@ const ACCOUNT_FILES = [
 const ACCOUNT_DIRS = ["state", "chrome", "backups", "daemon", "telemetry", "cache", "mcp-discovery-cache", "feedback"];
 const ACCOUNT_STATE = [...ACCOUNT_FILES, ...ACCOUNT_DIRS];
 
+/** Those through which Claude Code in the profile acts as the primary's account: doctor's wrong_account_link. */
+const WRONG_ACCOUNT = new Set([
+  ".claude-custom-oauth.json",
+  ".config.json",
+  "daemon",
+  ".session_ingress_token",
+  "hfi-auth.json",
+]);
+
 /** The one file inside each directory above, holding whose it is. */
 const OWNER_FILE: Record<string, string> = {
   state: "mcp-discover-verdicts.json",
@@ -164,9 +173,14 @@ describe("Claude Code state for one account or org", () => {
     // saved its own copy over the link.
     for (const name of ACCOUNT_STATE) symlinkSync(path.join(primary, name), path.join(work, name));
 
-    // stale_symlink is a finding doctor points at `clausona repair`.
+    // Said as Codex's are: what the profile reads of the primary account's, and the repair.
     const before = issuesFor(await service.doctorProfiles(), "claude:work");
-    expect(before.map((issue) => issue.kind)).toEqual(ACCOUNT_STATE.map(() => "stale_symlink"));
+    expect(before).toHaveLength(ACCOUNT_STATE.length);
+    for (const name of ACCOUNT_STATE) {
+      const issue = before.find((found) => found.message.startsWith(`${name} links to the primary's, `));
+      expect(issue?.kind, name).toBe(WRONG_ACCOUNT.has(name) ? "wrong_account_link" : "shared_account_state");
+      expect(issue?.message, name).toMatch(/, so .*primary.*\. `clausona repair claude:work` removes the link\.$/);
+    }
 
     await service.repairProfile("claude:work");
 

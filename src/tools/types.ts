@@ -59,10 +59,11 @@ export type ToolAdapter = {
   // profile's own, and one linked by an earlier clausona is unlinked by repair.
   sharedAllow?(name: string, mergeSessions: boolean): boolean;
 
-  // With sharedAllow: what linking `name` into the primary's does - acting as the primary's
-  // account, or sharing one account's state with another - for doctor to say when a profile
-  // links it. `why` follows "<name> links to the primary's, ".
-  unsharedRisk?(name: string): UnsharedRisk;
+  // What linking `name`, an entry the profile keeps for itself, into the primary's does - acting
+  // as the primary's account, or sharing one account's state with another - for doctor to say
+  // when a profile links it. `why` follows "<name> links to the primary's, ". Nothing for an
+  // entry with nothing to say beyond that it is not shared.
+  unsharedRisk?(name: string): UnsharedRisk | undefined;
 
   // With sharedAllow: entries the profile keeps for itself - setup the tool reads, which may
   // hold an account's own keys - that a profile which linked the primary's keeps as a copy of

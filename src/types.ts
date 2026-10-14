@@ -235,10 +235,10 @@ export type DoctorIssue = {
     | "broken_symlink"
     | "local_override"
     | "stale_symlink"
-    // A link to one of the primary's entries that a profile keeps for itself, from a tool that
-    // names the only entries it shares (Codex), by what the link does: the tool acts as the
-    // primary's account through it, or one account's state reaches the other's. repair
-    // unlinks it.
+    // A link to one of the primary's entries that a profile keeps for itself - any Codex entry
+    // not on its list, or Claude Code's state for one account - by what the link does: the tool
+    // acts as the primary's account through it, or one account's state reaches the other's.
+    // repair unlinks it.
     | "wrong_account_link"
     | "shared_account_state"
     | "missing_shared_link"

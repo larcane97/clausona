@@ -248,8 +248,9 @@ or because nothing showed that sharing them does harm: `daemon.json` (the daemon
 finds a running IDE through it, and reads `~/.claude/ide` from every profile in any case.
 
 Profiles set up by clausona 0.8.0-beta or earlier link the account entries above to the primary's.
-`clausona doctor` reports each such link as `stale_symlink`, and `clausona repair <profile>` takes
-it out. A copy that Claude Code has already saved in the profile is the profile's own: doctor no
+`clausona doctor` reports each such link with what the profile reads of the primary account's
+through it: `wrong_account_link` for the account files, the daemon's directory and the session
+tokens, and `shared_account_state` for the rest. `clausona repair <profile>` takes it out. A copy that Claude Code has already saved in the profile is the profile's own: doctor no
 longer reports it, and repair keeps it. If an earlier repair set the profile's own copy aside to
 put the link back, repair brings the newest one back from `~/.clausona/backups/claude/<profile>/`.
 Repair takes out the `daemon/` link even while the profile's background daemon runs, so stop that
