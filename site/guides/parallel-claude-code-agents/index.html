@@ -15,7 +15,7 @@
   <meta property="og:url" content="https://larcane97.github.io/clausona/guides/parallel-claude-code-agents/">
   <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
   <meta property="article:published_time" content="2026-10-08">
-  <meta property="article:modified_time" content="2026-10-09">
+  <meta property="article:modified_time" content="2026-10-14">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="../../favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -29,7 +29,7 @@
     "headline": "Run parallel Claude Code agents on different accounts and models",
     "description": "Subagents run out of sight, can't be steered one by one, and all spend one account. Run each agent as its own Claude Code session instead, on the account or API model (such as DeepSeek) you choose, in tmux, herdr, Orca or Superset.",
     "datePublished": "2026-10-08",
-    "dateModified": "2026-10-09",
+    "dateModified": "2026-10-14",
     "inLanguage": "en",
     "image": "https://larcane97.github.io/clausona/assets/superset-fleet.gif",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
@@ -113,7 +113,7 @@
       <nav class="crumbs" aria-label="Breadcrumb"><a href="../../">clausona</a> / Guides</nav>
       <h1>Run parallel Claude Code agents on different accounts and models</h1>
       <p class="lead">Your job just split into five tasks. Subagents would run all five out of sight, on one account.</p>
-      <p class="updated">Updated <time datetime="2026-10-09">October 9, 2026</time></p>
+      <p class="updated">Updated <time datetime="2026-10-14">October 14, 2026</time></p>
 
       <div class="answer">
         <p>Run them as separate Claude Code sessions instead, and start them with <code>clausona run</code>. That puts a session on the profile you name: your work account, a second subscription, or an API model such as DeepSeek.</p>
@@ -162,7 +162,7 @@ claude plugin install superset-fleet@clausona   # or herdr-fleet, orca-fleet</co
             <tr><th scope="row">Type into one agent</th><td>No</td><td class="is-shared">Yes</td></tr>
             <tr><th scope="row">A different account per agent</th><td>No, all on the parent's account</td><td class="is-shared">Yes, a clausona profile each</td></tr>
             <tr><th scope="row">An API model such as DeepSeek per agent</th><td>No, Claude models on the same account</td><td class="is-shared">Yes, an API profile</td></tr>
-            <tr><th scope="row">Routing by your rules and each account's usage</th><td>No</td><td class="is-shared">Yes<small>with a fleet plugin</small></td></tr>
+            <tr><th scope="row">Routing by your rules and each account's usage</th><td>No</td><td class="is-shared">Yes<small>with a route or a fleet plugin</small></td></tr>
             <tr><th scope="row">Result checked before cleanup</th><td>No</td><td class="is-shared">Yes, branch, diff and checks<small>with a fleet plugin</small></td></tr>
           </tbody>
         </table>
