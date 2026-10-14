@@ -278,7 +278,8 @@ While a profile linked the primary's `backups/`, Claude Code saved that profile'
 Claude Code suggests restoring the newest copy in that folder, which could be another account's.
 `clausona doctor` notes such copies on the primary as `foreign_account_backup`, a warning. It names
 the profile whose account each copy is, or says another account's, and gives the command that
-deletes them. clausona never deletes them itself.
+deletes them. clausona never deletes them itself. Claude Code keeps only the five newest copies, so
+they also go once the primary has saved five of its own.
 
 ### What a Codex profile shares
 

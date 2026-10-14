@@ -2090,7 +2090,8 @@ async function foreignAccountBackups(registry: Registry, primaryId: string, conf
       return {
         kind: "foreign_account_backup",
         severity: "warning",
-        message: `${shownDir} holds ${copies} of ${profile ? `${profile}'s` : "another account's"} .claude.json (${files.join(", ")}), saved there while ${profile ? "that profile" : "a profile"} linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. ${files.length === 1 ? "It" : "They"} can be deleted: ${remove}`,
+        // "Probably": a primary once signed in to that account keeps its own older copies of it too.
+        message: `${shownDir} holds ${copies} of ${profile ? `${profile}'s` : "another account's"} .claude.json (${files.join(", ")}), probably saved there by ${profile ? "that profile while it" : "a profile that"} linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. Claude Code keeps the five newest copies, so ${files.length === 1 ? "this one goes" : "these go"} once it has saved five newer ones. ${files.length === 1 ? "It" : "They"} can be deleted now: ${remove}`,
       } satisfies DoctorIssue;
     });
 }

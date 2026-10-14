@@ -428,12 +428,12 @@ describe("doctor on the primary's backups/", () => {
       {
         kind: "foreign_account_backup",
         severity: "warning",
-        message: `${shown} holds 2 copies of claude:work's .claude.json (.claude.json.backup.1760000100000, .claude.json.backup.1760000200000), saved there while that profile linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. They can be deleted: rm ${path.join(shown, "'.claude.json.backup.1760000100000'")} ${path.join(shown, "'.claude.json.backup.1760000200000'")}`,
+        message: `${shown} holds 2 copies of claude:work's .claude.json (.claude.json.backup.1760000100000, .claude.json.backup.1760000200000), probably saved there by that profile while it linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. Claude Code keeps the five newest copies, so these go once it has saved five newer ones. They can be deleted now: rm ${path.join(shown, "'.claude.json.backup.1760000100000'")} ${path.join(shown, "'.claude.json.backup.1760000200000'")}`,
       },
       {
         kind: "foreign_account_backup",
         severity: "warning",
-        message: `${shown} holds 1 copy of another account's .claude.json (.claude.json.backup.1760000300000), saved there while a profile linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. It can be deleted: rm ${path.join(shown, "'.claude.json.backup.1760000300000'")}`,
+        message: `${shown} holds 1 copy of another account's .claude.json (.claude.json.backup.1760000300000), probably saved there by a profile that linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. Claude Code keeps the five newest copies, so this one goes once it has saved five newer ones. It can be deleted now: rm ${path.join(shown, "'.claude.json.backup.1760000300000'")}`,
       },
     ]);
     expect(results.find((r) => r.name === "claude:default")?.healthy).toBe(true);
