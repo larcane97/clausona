@@ -167,6 +167,10 @@ The run says on stderr which account it got:
   ▸ claude:work  route main, next in turn, 34% of 7D used
 ```
 
+<p align="center">
+  <img src="assets/routing.gif" alt="clausona route explain main listing three Claude Code accounts with their 5-hour and weekly usage, personal over 80% and work picked next; clausona run --route main saying it took claude:work and opening Claude Code, whose /status shows the work account; the same command again taking claude:team, the next in turn" width="800" />
+</p>
+
 By default an account at 80% or more of its 5-hour or weekly limit is used only when no other
 account in the route is under 80%. Then the one with the most left is picked, even at 99%. Only
 when every account is at 100%, or skipped because it is signed out or its quota could not be
@@ -252,6 +256,10 @@ clausona hides or clears from the environment: **[docs/api-profiles.md](docs/api
 `csn skills`, `csn mcp` and `csn hooks` list the skills, MCP servers and hooks that Claude Code
 and Codex load, for every account, seen from one project. The dashboard's Extensions screen
 shows the same. Secret values are never shown.
+
+<p align="center">
+  <img src="assets/extensions.gif" alt="The dashboard's Extensions screen listing the skills Claude Code loads in ~/app, grouped by project, Global, Cloud and plugins; sentry-cli, unused for four months, turned off in this project after a dialog that asks first, then put back with u; then the MCP servers and which account starts each one" width="800" />
+</p>
 
 ```bash
 csn skills ls --scope project                 # the skills this project defines
