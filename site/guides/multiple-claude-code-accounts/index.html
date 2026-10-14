@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>How to use multiple Claude Code accounts on one machine (shared skills, hooks and history)</title>
-  <meta name="description" content="Run a work and a personal Claude Code account side by side. Give each its own CLAUDE_CONFIG_DIR, share skills, hooks, plugins and settings, and optionally conversation history.">
+  <meta name="description" content="Run a work and a personal Claude Code account side by side. Give each its own CLAUDE_CONFIG_DIR, share skills, hooks, plugins and settings, and optionally conversation history. Dynamic routing can pick the account each run starts on.">
   <link rel="canonical" href="https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/">
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="clausona">
@@ -13,7 +13,7 @@
   <meta property="og:url" content="https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/">
   <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
   <meta property="article:published_time" content="2026-10-08">
-  <meta property="article:modified_time" content="2026-10-14">
+  <meta property="article:modified_time" content="2026-10-15">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="../../favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -27,7 +27,7 @@
     "headline": "How to use multiple Claude Code accounts on one machine",
     "description": "Run a work and a personal Claude Code account side by side, with skills, hooks, plugins, settings and optionally conversation history shared between them.",
     "datePublished": "2026-10-08",
-    "dateModified": "2026-10-14",
+    "dateModified": "2026-10-15",
     "inLanguage": "en",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
     "mainEntityOfPage": "https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/",
@@ -139,7 +139,7 @@
       <nav class="crumbs" aria-label="Breadcrumb"><a href="../../">clausona</a> / Guides</nav>
       <h1>How to use multiple Claude Code accounts on one machine</h1>
       <p class="lead">Logging out of your work account to use your personal one gets old fast. With a config directory per account, both stay signed in and can still share one setup.</p>
-      <p class="updated">Updated <time datetime="2026-10-14">October 14, 2026</time></p>
+      <p class="updated">Updated <time datetime="2026-10-15">October 15, 2026</time></p>
 
       <div class="answer">
         <p>Point <code>CLAUDE_CONFIG_DIR</code> at a separate directory for every extra account. Then link everything except the sign-in and the account's own state back to your main <code>~/.claude</code>.</p>
@@ -157,6 +157,7 @@ csn use work               <span class="c"># plain `claude` now starts as that a
         <li><a href="#history">Share conversation history between accounts</a></li>
         <li><a href="#two-at-once">Use two accounts at the same time</a></li>
         <li><a href="#usage">See how much each account has left</a></li>
+        <li><a href="#routing">Optimize usage across multiple accounts with dynamic routing</a></li>
         <li><a href="#questions">Questions</a></li>
       </ul>
 
@@ -249,13 +250,31 @@ claude:work         dev@example.com      62% 1h     41% 3d
 claude:personal     me@example.org       8%         77% 5d</code></pre>
       <p>Running <code>csn</code> with no arguments opens a dashboard with the same readings and the exact reset times.</p>
 
+      <h2 id="routing">Optimize usage across multiple accounts with dynamic routing</h2>
+      <p>With two accounts, it's easy to burn through one while the other sits unused.</p>
+      <p>clausona's dynamic routing makes that choice for you, every time a run starts. It reads each account's current 5-hour and weekly usage and starts on one with room. Accounts take turns, so usage spreads across all of them instead of piling onto one.</p>
+      <p>You set it up as a route, a named group of your accounts:</p>
+<pre data-copy><code>clausona route add main        <span class="c"># every Claude Code account, taking turns</span>
+clausona route explain main    <span class="c"># who a run would get now, and why</span>
+clausona run --route main      <span class="c"># Claude Code starts on that account</span></code></pre>
+      <p>An account at 80% or more of its 5-hour or weekly limit sits out while another is still under 80%. The run names the account it got on one line.</p>
+      <figure class="figure">
+        <img class="demo" src="../../assets/routing.gif" width="1200" height="760" loading="lazy" alt="clausona route explain main lists three Claude Code accounts with their 5-hour and weekly usage. personal is over 80%, and work is picked next. clausona run --route main says it took claude:work and opens Claude Code, whose /status shows the work account. The same command again takes claude:team, the next in turn.">
+        <figcaption>Of the route's three accounts, personal is over 80%. The first run goes to work and the next to team.</figcaption>
+      </figure>
+      <p>A route doesn't need every account. <code>clausona route add work --from '*@work.example'</code> takes only the accounts on your work email. After <code>clausona route dir ~/work work</code>, a plain <code>clausona run claude</code> anywhere under <code>~/work</code> starts on one of them.</p>
+      <p>Plain <code>claude</code> isn't routed. It still starts on the account <code>csn use</code> set.</p>
+      <p>If every account in the route is used up, nothing starts, and clausona says when each one resets. <a href="https://github.com/larcane97/clausona/blob/main/docs/routing.md">The routing docs</a> cover the rest, including waiting for an account to free up.</p>
+      <p>The pick happens once, when the run starts. A running session never moves to another account.</p>
+      <p>Keep the accounts to what they're for, such as work and personal use, within Anthropic's terms.</p>
+
       <h2 id="questions">Questions</h2>
       <h3>Can I be signed in to two Claude Code accounts at once?</h3>
       <p>Yes, with one config directory per account. Two terminals with different <code>CLAUDE_CONFIG_DIR</code> values run two accounts side by side. <code>clausona run claude:work</code> starts one session under another account without changing the default.</p>
       <h3>Do MCP servers carry over to the other account?</h3>
       <p>Servers that come with a plugin do, because plugins are shared. Servers added with <code>claude mcp add</code> don't. They're stored in <code>.claude.json</code> next to the account's sign-in, and that file must not be shared. Add them under the other account too, or put them in a project's <code>.mcp.json</code>.</p>
       <h3>Does clausona switch accounts automatically when I hit a limit?</h3>
-      <p>A running session never moves to another account. With <a href="https://github.com/larcane97/clausona/blob/main/docs/routing.md">a route</a>, clausona picks the account when a run starts. <code>clausona run --route main</code> gets one that still has quota left. Set a directory rule or a default route, and plain <code>clausona run claude</code> does the same. <code>clausona use</code> and <code>clausona run &lt;profile&gt;</code> leave the choice to you. Keep the accounts to what they're for, such as work and personal use, within Anthropic's terms.</p>
+      <p>A running session never moves to another account. With <a href="#routing">a route</a>, clausona picks the account when a run starts. <code>clausona run --route main</code> gets one that still has quota left. Set a directory rule or a default route, and plain <code>clausona run claude</code> does the same. <code>clausona use</code> and <code>clausona run &lt;profile&gt;</code> leave the choice to you. Keep the accounts to what they're for, such as work and personal use, within Anthropic's terms.</p>
       <h3>Does clausona slow down Claude Code's start?</h3>
       <p>Not a plain <code>claude</code> launch. That reads a cached script in the shell. On an M4 Pro Mac, <code>claude --version</code> took a median 25 ms with the hook and 25 ms without it. <code>clausona run</code> starts clausona's own process first, routed or not, and that takes about a third of a second. The first launch after a change such as <code>csn use</code> starts it too, and so does every launch of an API profile.</p>
       <h3>Is my sign-in ever shared?</h3>

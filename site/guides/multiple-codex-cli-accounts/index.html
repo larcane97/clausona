@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>How to use multiple Codex CLI accounts on one machine (CODEX_HOME, shared config and sessions)</title>
-  <meta name="description" content="Switch Codex CLI accounts without logging out. Give each its own CODEX_HOME, share config.toml, hooks, skills and plugins, and keep auth, the daemon and memories per account.">
+  <meta name="description" content="Switch Codex CLI accounts without logging out. Give each its own CODEX_HOME, share config.toml, hooks, skills and plugins, and keep auth, the daemon and memories per account. Dynamic routing can pick the account each run starts on.">
   <link rel="canonical" href="https://larcane97.github.io/clausona/guides/multiple-codex-cli-accounts/">
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="clausona">
@@ -13,7 +13,7 @@
   <meta property="og:url" content="https://larcane97.github.io/clausona/guides/multiple-codex-cli-accounts/">
   <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
   <meta property="article:published_time" content="2026-10-08">
-  <meta property="article:modified_time" content="2026-10-14">
+  <meta property="article:modified_time" content="2026-10-15">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="../../favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -27,7 +27,7 @@
     "headline": "How to use multiple Codex CLI accounts on one machine",
     "description": "Give each Codex CLI account its own CODEX_HOME, share the configuration, and keep the sign-in, the app-server daemon, memories and databases with each account.",
     "datePublished": "2026-10-08",
-    "dateModified": "2026-10-14",
+    "dateModified": "2026-10-15",
     "inLanguage": "en",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
     "mainEntityOfPage": "https://larcane97.github.io/clausona/guides/multiple-codex-cli-accounts/",
@@ -123,7 +123,7 @@
       <nav class="crumbs" aria-label="Breadcrumb"><a href="../../">clausona</a> / Guides</nav>
       <h1>How to use multiple Codex CLI accounts on one machine</h1>
       <p class="lead">Logging in to a second Codex account replaces the first one's sign-in. With a separate home per account, you can switch without logging out.</p>
-      <p class="updated">Updated <time datetime="2026-10-14">October 14, 2026</time></p>
+      <p class="updated">Updated <time datetime="2026-10-15">October 15, 2026</time></p>
 
       <p>Codex CLI keeps its sign-in and everything else in one home directory, <code>~/.codex</code>.</p>
       <p>Give each account its own <code>CODEX_HOME</code>, and link only the configuration back to <code>~/.codex</code>. Then they all get the same config, hooks and skills.</p>
@@ -215,6 +215,20 @@ csn use codex:work         <span class="c"># plain `codex` now starts as the wor
 <pre data-copy><code>clausona run codex:default</code></pre>
       <p><code>clausona list</code> shows the 5-hour and weekly limits of your Codex accounts next to your Claude Code ones. It reads them from Codex's usage endpoint, with the login stored for the account.</p>
 
+      <h2 id="routing">Optimize usage across multiple accounts with dynamic routing</h2>
+      <p>With two accounts, it's easy to burn through one while the other sits unused.</p>
+      <p>clausona's dynamic routing makes that choice for you, every time a run starts. It reads each account's current 5-hour and weekly usage and starts on one with room. Accounts take turns, so usage spreads across all of them instead of piling onto one.</p>
+      <p>You set it up as a route, a named group of your accounts. A route is for Claude Code unless you add <code>--tool codex</code>:</p>
+<pre data-copy><code>clausona route add cx --tool codex    <span class="c"># every Codex account, taking turns</span>
+clausona route explain cx             <span class="c"># who a run would get now, and why</span>
+clausona run codex --route cx         <span class="c"># Codex starts on that account</span></code></pre>
+      <p>An account at 80% or more of its 5-hour or weekly limit sits out while another is still under 80%. The run names the account it got on one line.</p>
+      <p>A route doesn't need every account. <code>clausona route add cx-work --tool codex --from '*@work.example'</code> takes only the Codex accounts on your work email. After <code>clausona route dir ~/work cx-work</code>, a plain <code>clausona run codex</code> anywhere under <code>~/work</code> starts on one of them.</p>
+      <p>Plain <code>codex</code> isn't routed. It still starts on the account <code>csn use</code> set.</p>
+      <p>If every account in the route is used up, nothing starts, and clausona says when each one resets. <a href="https://github.com/larcane97/clausona/blob/main/docs/routing.md">The routing docs</a> cover the rest, including waiting for an account to free up.</p>
+      <p>The pick happens once, when the run starts. A running session never moves to another account.</p>
+      <p>Keep the accounts to what they're for, such as work and personal use, within OpenAI's terms.</p>
+
       <h2 id="questions">Common questions</h2>
       <h3>How do I switch Codex CLI accounts without logging out?</h3>
       <p>Give every account a separate <code>CODEX_HOME</code>, and sign in to it once with <code>CODEX_HOME=&lt;dir&gt; codex login</code>. Codex starts as whichever account's home it's pointed at. With clausona, run <code>clausona add codex:work</code>, then <code>csn use codex:work</code>.</p>
@@ -225,7 +239,7 @@ csn use codex:work         <span class="c"># plain `codex` now starts as the wor
       <h3>Are Codex and Claude Code setups shared with each other?</h3>
       <p>No. Codex accounts share <code>~/.codex</code>'s configuration, and Claude Code accounts share <code>~/.claude</code>'s. The two tools stay separate.</p>
       <h3>Does clausona switch accounts when one reaches its limit?</h3>
-      <p>A running session never moves to another account. With <a href="https://github.com/larcane97/clausona/blob/main/docs/routing.md">a route</a>, clausona picks the account when a run starts. <code>clausona run codex --route cx</code> gets one of the route's Codex accounts that still has quota left. <code>clausona use</code> and <code>clausona run &lt;profile&gt;</code> leave the choice to you. Keep the accounts to what they're for, such as work and personal use, within OpenAI's terms.</p>
+      <p>A running session never moves to another account. With <a href="#routing">a route</a>, clausona picks the account when a run starts. <code>clausona run codex --route cx</code> gets one of the route's Codex accounts that still has quota left. <code>clausona use</code> and <code>clausona run &lt;profile&gt;</code> leave the choice to you. Keep the accounts to what they're for, such as work and personal use, within OpenAI's terms.</p>
       <h3>What if I already set CODEX_HOME myself?</h3>
       <p>clausona steps aside in that shell, and Codex uses the home you set.</p>
       <section class="cta" aria-labelledby="try">
