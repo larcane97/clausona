@@ -176,15 +176,55 @@ describe("codexFrontMatterError", () => {
     });
     expect(codexFrontMatter("description: |\n  one\n    two\n\n  three").description).toBe("one two three");
     expect(codexFrontMatter("name: a\ndescription: *x").followed).toBe(true);
-    expect(codexFrontMatter("%TAG !e! tag:x,2000:\n--- # c\ndescription: d").followed).toBe(false);
+    expect(codexFrontMatter("%TAG !e! tag:x,2000:\n--- # c\nname: !e!y n\ndescription: d")).toMatchObject({
+      name: "n",
+      followed: true,
+    });
   });
 
-  it("says nothing of what it does not follow, though Codex refuses some of it", () => {
-    // Codex refuses each: an anchor's name with an indicator after it, a document end in a flow
-    // collection, an explicit key that is a mapping of an empty key.
-    for (const front of ["description: &a, d", "description: d\nother: [a,\n...\n]", "? :\n: d\ndescription: d"]) {
-      expect(codexFrontMatterError(front)).toBeUndefined();
-    }
+  it("reads the forms it once said nothing of as Codex does", () => {
+    // Codex 0.159.3's skills/list for each: "invalid YAML", read, or "missing field `description`".
+    const fronts: [string, "ok" | "invalid front matter" | "no description"][] = [
+      ["description: &a, d", "invalid front matter"],
+      ["description: &a] d", "invalid front matter"],
+      ["description: &a:x", "ok"],
+      ["description: d\nother: [a,\n...\n]", "invalid front matter"],
+      ["description: [a,\n...", "ok"],
+      ["name: [a,\n...\ndescription: d", "invalid front matter"],
+      ["? :\n: d\ndescription: d", "invalid front matter"],
+      ["description: : x", "ok"],
+      ["description: d\nlist:\n  - : x", "invalid front matter"],
+      ["%TAG !e! tag:x,2000:\n--- # c\ndescription: !e!y d", "ok"],
+      ["%TAG !e! tag:x:\n%TAG !e! tag:y:\n--- # c\ndescription: d", "invalid front matter"],
+      ["%TAG !e!\n--- # c\ndescription: d", "invalid front matter"],
+      ["%TAG !!  tag:x:\n--- # c\ndescription: !!null", "no description"],
+      ["%TAG !e! tag:yaml.org,2002:\n--- # c\ndescription: !e!null", "invalid front matter"],
+      ["%FOO bar\n--- # c\ndescription: d", "invalid front matter"],
+      // The reviewer's: a `--- ` line ends the front matter, so the directive has no document.
+      ["%TAG ! tag:x,2000:", "invalid front matter"],
+      ["%YAML 1.3\n--- # c\ndescription: d", "invalid front matter"],
+      ["? |-\n  description\n: d", "ok"],
+      ["? |\n  description\n: d", "no description"],
+      ["? |-\n  description\n: d\ndescription: e", "invalid front matter"],
+      ["{? description : d}", "ok"],
+      ["{? [a] : b, description: d}", "invalid front matter"],
+      ["description: d\nother: {? [a] : b}", "ok"],
+      ["description: d\nother: {? a\n  : b}", "ok"],
+      ["description: d\nother:\n  k: *nope", "invalid front matter"],
+      ["description: d\nother: [*nope]", "ok"],
+      ["description: d\nother:\n  - [*nope]", "invalid front matter"],
+      ["&r\ndescription: d\nother: *r", "ok"],
+      ["description: d\nmetadata: &m {short-description: *m}", "invalid front matter"],
+      ["description: d\nother: &a\n  - *a", "ok"],
+      ["!!map {description: d}", "ok"],
+    ];
+    expect(fronts.map(([front]) => [front, codexFrontMatterError(front) ?? "ok"])).toEqual(fronts);
+  });
+
+  it("says nothing of what it does not follow", () => {
+    // A tab after an entry's dash, and a flow collection as an implicit key.
+    expect(codexFrontMatter("description: d\nlist:\n-\tx").followed).toBe(false);
+    expect(codexFrontMatter("[a]: x\ndescription: d").followed).toBe(false);
   });
 });
 
