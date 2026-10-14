@@ -65,7 +65,7 @@
         "name": "Do MCP servers carry over to the other account?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "Servers that come with a plugin do, because plugins are shared. Servers added with claude mcp add don't. They're stored in .claude.json next to the account's sign-in, and that file must not be shared. Add them under the other account too, or put them in a project's .mcp.json."
+          "text": "Servers that come with a plugin do, because plugins are shared. Servers added with claude mcp add don't. They're stored in that account's own .claude.json, and that file must not be shared. Add them under the other account too, or put them in a project's .mcp.json. The Extensions guide shows which account has which."
         }
       },
       {
@@ -273,7 +273,7 @@ clausona run --route main      <span class="c"># Claude Code starts on that acco
       <h3>Can I be signed in to two Claude Code accounts at once?</h3>
       <p>Yes, with one config directory per account. Two terminals with different <code>CLAUDE_CONFIG_DIR</code> values run two accounts side by side. <code>clausona run claude:work</code> starts one session under another account without changing the default.</p>
       <h3>Do MCP servers carry over to the other account?</h3>
-      <p>Servers that come with a plugin do, because plugins are shared. Servers added with <code>claude mcp add</code> don't. They're stored in <code>.claude.json</code> next to the account's sign-in, and that file must not be shared. Add them under the other account too, or put them in a project's <code>.mcp.json</code>.</p>
+      <p>Servers that come with a plugin do, because plugins are shared. Servers added with <code>claude mcp add</code> don't. They're stored in that account's own <code>.claude.json</code>, and that file must not be shared. Add them under the other account too, or put them in a project's <code>.mcp.json</code>. The <a href="../claude-code-skills-mcp-hooks/#accounts">Extensions guide</a> shows which account has which.</p>
       <h3>Does clausona switch accounts automatically when I hit a limit?</h3>
       <p>A running session never moves to another account. With <a href="#routing">a route</a>, clausona picks the account when a run starts. <code>clausona run --route main</code> gets one that still has quota left. Set a directory rule or a default route, and plain <code>clausona run claude</code> does the same. <code>clausona use</code> and <code>clausona run &lt;profile&gt;</code> leave the choice to you. Keep the accounts to what they're for, such as work and personal use, within Anthropic's terms.</p>
       <h3>Does clausona slow down Claude Code's start?</h3>
