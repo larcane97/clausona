@@ -519,7 +519,7 @@ describe("resolveSecret", () => {
         expect(pid).toBeGreaterThan(0);
         const kill = vi.spyOn(process, "kill");
         vi.advanceTimersByTime(60_000);
-        await expect(Promise.race([read, waited])).rejects.toThrow(/^the key command did not finish in 60 s - /);
+        await expect(Promise.race([read, waited])).rejects.toThrow(/^secret command did not finish in 60 s - /);
         // Its pid, and no group.
         expect(kill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([[pid, "SIGKILL"]]);
         kill.mockRestore();

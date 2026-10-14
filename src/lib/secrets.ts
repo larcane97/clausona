@@ -464,7 +464,7 @@ export async function resolveSecret(
     // the one place it is shown - and what replaces it. Not `config --edit`: that opens the
     // env map, and the command lives in the endpoint block.
     const remedy = `run it yourself to see why - it is in ~/.clausona/profiles.json - or replace it with 'clausona config ${profileId} --key-from command:"<command>"'`;
-    if (timedOut) throw new Error(`the key command did not finish in ${(limitMs ?? 0) / 1000} s - ${remedy}`);
+    if (timedOut) throw new Error(`secret command did not finish in ${(limitMs ?? 0) / 1000} s - ${remedy}`);
     if (code !== 0) throw new Error(`secret command exited with ${code} - ${remedy}`);
     const first = stdout.split(/\r?\n/)[0]?.trim() ?? "";
     if (first === "") throw new Error(`secret command produced no output - ${remedy}`);
