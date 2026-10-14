@@ -14,10 +14,15 @@ export function shortProfile(id: string): string {
   return id.replace(/^(claude|codex):/, "");
 }
 
-/** `~` for the home dir, only where a path starts with it. */
+/**
+ * `~` for the home dir, only where a path starts with it. On Windows in any case, as tildeIn
+ * takes it: Codex writes its project keys in lower case, and they name the same folders.
+ */
 export function tilde(p: string, homeDir: string): string {
-  if (p === homeDir) return "~";
-  return p.startsWith(homeDir + path.sep) ? `~${p.slice(homeDir.length)}` : p;
+  const same = (a: string, b: string) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+  if (same(p, homeDir)) return "~";
+  const head = p.slice(0, homeDir.length);
+  return p.charAt(homeDir.length) === path.sep && same(head, homeDir) ? `~${p.slice(homeDir.length)}` : p;
 }
 
 /** A path cut to `width` from its middle: its start, `…`, and as many of its last parts as fit. */
