@@ -143,7 +143,7 @@ belongs in an argument.
 | --- | --- | --- |
 | `keychain` (default) | clausona stores it — in the macOS Keychain on a Mac, otherwise in `~/.clausona/secrets.json`. That includes Linux: in this version a stored key goes to that file, written owner-only (mode 0600) so that only you can read it, not to `secret-tool` or your desktop keyring. On Windows a file mode means nothing; the file is private because it sits inside your user profile, which Windows opens only to you, SYSTEM and administrators. `clausona doctor`'s text report ends by saying which. On a Mac a key longer than about 2,000 bytes is refused — it does not fit the one line the Keychain is handed it on — so point at such a key with `env:` or `command:` | at every launch, from that store |
 | `env:NAME` | your shell; clausona records only the variable name | at every launch, **in the shell that runs `claude`** — so `NAME` has to be exported there, not only where you ran `clausona add` |
-| `command:"…"` | wherever the command gets it — `op read`, `pass show`, `vault kv get` | at every launch, on every `clausona doctor`, and each time the dashboard's Health check screen opens — never by the dashboard itself; the first line of its output is the key, and what it writes to stderr shows at a launch and in `clausona doctor` |
+| `command:"…"` | wherever the command gets it — `op read`, `pass show`, `vault kv get` | at every launch, on every `clausona doctor`, and each time the dashboard's Health check screen opens — never by the dashboard itself; the first line of its output is the key, and what it writes to stderr shows in your terminal at a launch and in `clausona doctor` |
 
 `profiles.json` never holds the key itself, only which of these to use. `env:` takes the
 variable's *name*: many keys are valid names too (`hf_…`, `gsk_…`, `sk_live_…`), so a `NAME`
@@ -166,6 +166,8 @@ clausona does not wait for it to end.
 
 At a launch and in `clausona doctor`, the command runs in your terminal, so that it can ask you
 for a PIN or a passphrase there. What it writes to stderr, a prompt or an error, shows there too.
+When clausona's own stderr goes to a file or a pipe instead, as in `2>&1 | tee log`, the
+command's stderr is dropped, so that a job it leaves running cannot keep whatever reads it waiting.
 A job it leaves running in the background is left running: clausona cannot stop a job it starts
 there without knowing its process ID. When the key is read for spend, on macOS and Linux, the job
 is stopped as the command exits (see

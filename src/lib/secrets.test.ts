@@ -689,8 +689,9 @@ describe("resolveSecret", () => {
    * stderr this test reads: what a key command writes to stderr, passed through, can only be seen
    * from outside the process that ran it. It reads the command from $CLAUSONA_TEST_RUN and
    * resolveSecret's options from $CLAUSONA_TEST_OPTIONS, and prints `key:<key>` or
-   * `error:<message>`. Its directory is not one of `temps`, which go after each test, but goes once
-   * they are all done.
+   * `error:<message>`. Its stderr is a pipe, which `tty` has it take for a terminal, as clausona's
+   * is when a person runs it. Its directory is not one of `temps`, which go after each test, but
+   * goes once they are all done.
    */
   let harnessDir: string | undefined;
   let bundled: string | undefined;
@@ -699,7 +700,11 @@ describe("resolveSecret", () => {
     harnessDir = undefined;
     bundled = undefined;
   });
-  function inNode(run: string, options: object): { stdout: string; stderr: string } {
+  function inNode(
+    run: string,
+    options: object,
+    { tty = false }: { tty?: boolean } = {},
+  ): { stdout: string; stderr: string; error?: Error } {
     if (!bundled) {
       const dir = mkdtempSync(path.join(tmpdir(), "clausona-key-harness-"));
       harnessDir = dir;
@@ -708,6 +713,7 @@ describe("resolveSecret", () => {
         entry,
         [
           `import { resolveSecret } from ${JSON.stringify(path.join(import.meta.dirname, "secrets.ts"))};`,
+          'if (process.env.CLAUSONA_TEST_STDERR_TTY === "1") Object.defineProperty(process.stderr, "isTTY", { value: true });',
           'const options = JSON.parse(process.env.CLAUSONA_TEST_OPTIONS ?? "{}");',
           'resolveSecret("claude:x", { source: "command", run: process.env.CLAUSONA_TEST_RUN ?? "" }, undefined, options).then(',
           '  (key) => process.stdout.write("key:" + key),',
@@ -725,28 +731,76 @@ describe("resolveSecret", () => {
         logLevel: "silent",
       });
     }
+    // Bounded, as spawnSync waits for its pipes to close as well as for the node to exit.
     const ran = spawnSync(process.execPath, [bundled], {
       encoding: "utf8",
-      env: { ...process.env, CLAUSONA_TEST_RUN: run, CLAUSONA_TEST_OPTIONS: JSON.stringify(options) },
+      env: {
+        ...process.env,
+        CLAUSONA_TEST_RUN: run,
+        CLAUSONA_TEST_OPTIONS: JSON.stringify(options),
+        CLAUSONA_TEST_STDERR_TTY: tty ? "1" : "",
+      },
       timeout: SPAWN_TIMEOUT_MS,
     });
-    return { stdout: ran.stdout, stderr: ran.stderr };
+    return { stdout: ran.stdout, stderr: ran.stderr, ...(ran.error ? { error: ran.error } : {}) };
   }
 
   // A tool that prompts or reports on stderr: at a launch and in `clausona doctor` it reaches the
-  // terminal, as git's credential helpers' does; the dashboard and a spend read keep it out.
+  // terminal, as git's credential helpers' does; the dashboard and a spend read keep it out, and so
+  // does a stderr that is not a terminal.
   it.skipIf(windows)(
-    "passes a key command's stderr through where it keeps the terminal, and nowhere else",
+    "passes a key command's stderr through to a terminal where it keeps the terminal, and nowhere else",
     { timeout: SPAWNING_TEST_TIMEOUT_MS },
     () => {
       const run = "echo stderr-marker >&2; echo KEY";
-      const launch = inNode(run, {});
+      const launch = inNode(run, {}, { tty: true });
       expect(launch.stdout).toBe("key:KEY");
       expect(launch.stderr).toContain("stderr-marker");
-      expect(inNode(run, { limitMs: 60_000 }).stderr).toContain("stderr-marker");
-      const dashboard = inNode(run, { limitMs: 60_000, terminal: false });
+      expect(inNode(run, { limitMs: 60_000 }, { tty: true }).stderr).toContain("stderr-marker");
+      const dashboard = inNode(run, { limitMs: 60_000, terminal: false }, { tty: true });
       expect(dashboard.stdout).toBe("key:KEY");
       expect(dashboard.stderr).not.toContain("stderr-marker");
+      const piped = inNode(run, {});
+      expect(piped.stdout).toBe("key:KEY");
+      expect(piped.stderr).not.toContain("stderr-marker");
+    },
+  );
+
+  // A job the key command leaves running keeps the stderr it was given. Where clausona's own is a
+  // pipe read to its end - the Windows hook's `2>&1`, a `| tee` - the reader would wait out the job,
+  // as it waited for stdout before the key was read on exit.
+  it.skipIf(windows)(
+    "lets no job a key command left hold clausona's stderr when it is not a terminal",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "clausona-key-command-"));
+      temps.push(dir);
+      const pids = path.join(dir, "pids");
+      vi.stubEnv("CLAUSONA_TEST_PIDS", pids);
+      const alive = (pid: number) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      try {
+        const ran = inNode('sleep 600 & echo $! > "$CLAUSONA_TEST_PIDS"; echo KEY', {});
+        // Its stderr closed with the node: spawnSync did not wait out its bound for the job.
+        expect(ran.error).toBeUndefined();
+        expect(ran.stdout).toBe("key:KEY");
+      } finally {
+        // The job is this test's own, by the pid it wrote, and is left running at a launch.
+        const job = (() => {
+          try {
+            return Number(readFileSync(pids, "utf8").trim());
+          } catch {
+            return 0;
+          }
+        })();
+        if (job > 0 && alive(job)) process.kill(job, "SIGKILL");
+      }
     },
   );
 });

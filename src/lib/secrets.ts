@@ -228,7 +228,7 @@ type RunOptions = {
   limitMs?: number;
   /**
    * Passes the command's stderr through to clausona's, where a prompt or an error it writes shows.
-   * Only for a command that keeps the terminal: otherwise it is not open.
+   * Only for a command that keeps the terminal, and only to a terminal: otherwise it is not open.
    */
   showStderr?: boolean;
 };
@@ -258,10 +258,14 @@ function run(command: string, args: string[], options: RunOptions = {}): Promise
     }
     const ownGroup = signal !== undefined || options.terminal === false;
     const detached = ownGroup && process.platform !== "win32";
+    // A prompt or an error on stderr is for a person at a terminal, which no one reads to its end.
+    // A pipe is: the Windows hook's `2>&1`, a `| tee`. A job the command left running would keep
+    // it open, and its reader waiting, for as long as the job runs.
+    const stderr = showStderr && !ownGroup && process.stderr.isTTY === true ? "inherit" : "ignore";
     const stdio: ["ignore" | "pipe", "pipe", "ignore" | "inherit"] = [
       input === undefined ? "ignore" : "pipe",
       "pipe",
-      showStderr && !ownGroup ? "inherit" : "ignore",
+      stderr,
     ];
     const child = detached
       ? spawnCommand("/bin/sh", ["-c", ENDS_ITS_GROUP, "sh", command, ...args], { stdio, detached: true })
@@ -525,9 +529,10 @@ async function readStoredSecret(
  *
  * `signal` bounds a key that a command or the Keychain gives: once it aborts, what was started
  * for it is killed, and the key is not read. Without one, a key command keeps the terminal, where
- * it can prompt, with its stderr shown there, and `limitMs` bounds it instead: past it, the
- * command and what it started are interrupted, and killed if it goes on running (interrupt), and
- * the key is not read. `limitMs` bounds the Keychain's answer the same way.
+ * it can prompt, with its stderr shown there if clausona's stderr is the terminal, and `limitMs`
+ * bounds it instead: past it, the command and what it started are interrupted, and killed if it
+ * goes on running (interrupt), and the key is not read. `limitMs` bounds the Keychain's answer the
+ * same way.
  *
  * `terminal: false` reads the key as a `signal` does, in a group of its own with no terminal, and
  * bounds it with `limitMs`: for a caller that holds the terminal itself (the dashboard). A key
