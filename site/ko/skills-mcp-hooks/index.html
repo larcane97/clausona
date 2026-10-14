@@ -191,7 +191,7 @@ clausona skills ls --scope unused --tool claude</code></pre>
       <p>행을 골라 <code>space</code>를 누르면 이 프로젝트에서만 꺼집니다. <code>g</code>는 모든 프로젝트에서 끕니다.</p>
       <p>바꾸기 전에 확인 창이 먼저 뜹니다. 파일마다 무엇이 바뀌는지 한 줄씩 보여 주고, 백업을 어디에 두는지도 알려 줘요. <code>y</code>를 누르면 적용하고, <code>n</code>을 누르면 아무것도 바뀌지 않습니다.</p>
       <p>clausona가 적는 설정은 Claude Code와 Codex가 원래 쓰는 바로 그 설정입니다.</p>
-      <p>Claude 스킬을 이 프로젝트에서 끄면 프로젝트의 <code>.claude/settings.local.json</code>에서 <code>skillOverrides</code>에 그 스킬을 <code>"off"</code>로 적습니다. Claude MCP 서버를 끄면 그 계정의 프로젝트 항목에 있는 <code>disabledMcpServers</code>에 이름을 넣습니다. <code>/mcp disable</code>이 쓰는 목록과 같아요.</p>
+      <p>Claude 스킬을 이 프로젝트에서 끄면 프로젝트의 <code>.claude/settings.local.json</code>에서 <code>skillOverrides</code>에 그 스킬을 <code>"off"</code>로 적습니다. 계정의 <code>.claude.json</code>에 있는 Claude MCP 서버나 플러그인에 딸린 서버를 이 프로젝트에서 끄면, 그 계정 <code>.claude.json</code>의 프로젝트 항목에 있는 <code>disabledMcpServers</code>에 이름을 넣습니다. <code>/mcp disable</code>이 쓰는 목록과 같아요. 프로젝트의 <code>.mcp.json</code>에 있는 서버는 <code>.claude/settings.local.json</code>의 <code>disabledMcpjsonServers</code>에 넣고, 모든 계정에 한꺼번에 적용됩니다.</p>
       <p>Codex 서버는 <code>enabled = false</code>로 끕니다. 이 프로젝트에서만 끌 때는 프로젝트의 <code>.codex/config.toml</code>에 적습니다. 모든 프로젝트에서 끄는 건 내가 추가한 서버만 되고, <code>~/.codex/config.toml</code>에 적습니다.</p>
       <p>한쪽으로만 바꿀 수 있는 것도 있습니다.</p>
       <ul>
@@ -218,7 +218,7 @@ clausona skills ls --scope unused --tool claude</code></pre>
 clausona mcp undo
 clausona hooks undo</code></pre>
       <p>한 번 더 실행하면 그 전 변경까지 되돌려요.</p>
-      <p>되돌릴 때는 바꾼 내용이 그대로 남아 있는 파일만 되돌립니다. 그사이 나나 Claude Code가 고친 파일은 건드리지 않고, 그렇다고 알려 줍니다.</p>
+      <p>되돌릴 때는 바꾼 내용이 그대로 남아 있는 파일만 되돌립니다. 그사이 나나 Claude Code가 그 내용을 고쳤다면 그 파일은 건드리지 않고, 그렇다고 알려 줍니다. Claude Code가 수시로 다시 쓰는 <code>.claude.json</code> 같은 JSON 파일은 바꾼 키만 봅니다.</p>
 
       <h2 id="cli">명령줄과 에이전트에서 쓰기</h2>
       <p>화면에서 하는 일은 모두 명령으로도 할 수 있어요. <code>clausona skills</code>, <code>clausona mcp</code>, <code>clausona hooks</code>마다 <code>ls</code>, <code>show</code>, <code>off</code>, <code>on</code>, <code>rm</code>, <code>undo</code>가 있습니다.</p>

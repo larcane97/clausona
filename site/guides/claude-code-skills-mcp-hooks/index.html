@@ -190,7 +190,7 @@ clausona skills ls --scope unused --tool claude</code></pre>
       <p>Select a row and press <code>space</code> to turn it off in this project. <code>g</code> turns it off in every project.</p>
       <p>Before anything changes, a dialog lists each file and what will change in it, and where the backup goes. <code>y</code> goes ahead, and <code>n</code> leaves everything as it was.</p>
       <p>clausona writes the same settings Claude Code and Codex write themselves.</p>
-      <p>A Claude skill turned off here is set to <code>"off"</code> under <code>skillOverrides</code>, in the project's <code>.claude/settings.local.json</code>. A Claude MCP server turned off here goes into <code>disabledMcpServers</code> in the account's entry for the project. That's the list <code>/mcp disable</code> writes.</p>
+      <p>A Claude skill turned off here is set to <code>"off"</code> under <code>skillOverrides</code>, in the project's <code>.claude/settings.local.json</code>. A Claude MCP server from an account's <code>.claude.json</code>, or one a plugin brings, goes into <code>disabledMcpServers</code> in that account's <code>.claude.json</code>, under its entry for the project. That's the list <code>/mcp disable</code> writes. A server from the project's <code>.mcp.json</code> goes into <code>disabledMcpjsonServers</code> in <code>.claude/settings.local.json</code> instead, for every account at once.</p>
       <p>For Codex, a server is turned off with <code>enabled = false</code>. Here, that goes in the project's <code>.codex/config.toml</code>. Everywhere, which works for your own servers, it goes in <code>~/.codex/config.toml</code>.</p>
       <p>Some things only switch one way:</p>
       <ul>
@@ -217,7 +217,7 @@ clausona skills ls --scope unused --tool claude</code></pre>
 clausona mcp undo
 clausona hooks undo</code></pre>
       <p>Run it again to go one change further back.</p>
-      <p>Undo puts back only what still holds what the change wrote. If you or Claude Code changed a file since, undo leaves it alone and says so.</p>
+      <p>Undo puts back only what still holds what the change wrote. If you or Claude Code changed that since, undo leaves the file alone and says so. In a JSON file such as <code>.claude.json</code>, which Claude Code rewrites all the time, only the keys the change wrote count.</p>
 
       <h2 id="cli">From the command line, or from an agent</h2>
       <p>Everything on the screen has a command. <code>clausona skills</code>, <code>clausona mcp</code> and <code>clausona hooks</code> each take <code>ls</code>, <code>show</code>, <code>off</code>, <code>on</code>, <code>rm</code> and <code>undo</code>.</p>
