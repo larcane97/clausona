@@ -354,6 +354,31 @@ describe("App profile list, for an API profile", () => {
     expect(written.join("")).toContain("Switched to claude:gw (gpu-box)");
   });
 
+  // `csn list`'s word for it, on the profile list's row: the dimmed `7d 100% (expired)` there
+  // read as a full week rather than as an account to sign in again.
+  it("says a lapsed sign-in on the profile's row in place of the numbers it last read", async () => {
+    const { fetchProfileQuotas } = await import("../lib/service.js");
+    const quota: QuotaSnapshot = {
+      state: "expired",
+      fetchedAt: Date.now() - 3_600_000,
+      weekly: { usedPercent: 100, resetsAt: null },
+    };
+    vi.mocked(fetchProfileQuotas).mockImplementation(async () => ({ default: quota }));
+
+    try {
+      const instance = render(<App />);
+      await type(instance, ENTER);
+      await waitForFrame(instance.lastFrame, (f) => f.includes("Select a profile") && f.includes("lapsed"));
+      const row = (instance.lastFrame() ?? "").split("\n").find((line) => line.includes("● active")) ?? "";
+
+      expect(row).toMatch(/default ● active expired/);
+      expect(row).not.toContain("7d 100%");
+      instance.unmount();
+    } finally {
+      vi.mocked(fetchProfileQuotas).mockImplementation(async () => ({}));
+    }
+  });
+
   it("keeps the preview's quota through a switch from the dashboard, and reads it again", async () => {
     // The reload after a switch replaced the list with one that carries no quota, and the fetch
     // was keyed on the profile set alone - unchanged by a switch - so the panel read "loading…"

@@ -47,3 +47,18 @@ it("dims the model cell of a profile that pins none, and only that one", async (
   expect(work).toContain(dim("—"));
   expect(gw).toContain(secondary("z-ai/glm-5.3"));
 });
+
+// Red, as a full window is: the account cannot be used until it signs in again.
+it("paints a lapsed sign-in red in place of its dimmed last reading", async () => {
+  const { renderList } = await import("./format.js");
+  const { red } = await import("./cli-style.js");
+
+  const current = row("old");
+  const lapsed: ProfileListItem = { ...current, quota: current.quota && { ...current.quota, state: "expired" } };
+  const line = renderList([lapsed], { width: 200 })
+    .split("\n")
+    .find((candidate) => candidate.includes("old@example.com"));
+
+  expect(red("expired")).not.toBe("expired");
+  expect(line).toContain(red("expired"));
+});

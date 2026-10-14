@@ -63,9 +63,26 @@ export function formatCompactCurrency(value: number) {
   return value >= 1000 ? `$${COMPACT.format(value)}` : formatCurrency(value);
 }
 
+const SIGN_IN_LAPSES: Partial<Record<QuotaSnapshot["state"], string>> = {
+  expired: "expired",
+  // As routing says it: no credential is stored, and Claude Code leaves an empty one at sign-out.
+  missing: "signed out",
+};
+
+/**
+ * What a reading says in place of its numbers once the account cannot be used until it signs in
+ * again. Those numbers are the last ones read before that, and drawn dimmed they read as current:
+ * a codex account signed out for a month listed `100% now`.
+ */
+function signInLapse(quota: QuotaSnapshot | undefined): string | undefined {
+  return quota && SIGN_IN_LAPSES[quota.state];
+}
+
 /** Compact one-line quota for dense rows, e.g. `5h 61% | 7d 100%`. */
 export function formatQuotaInline(quota: QuotaSnapshot | undefined): string {
   if (!quota) return "";
+  const lapse = signInLapse(quota);
+  if (lapse) return lapse;
   const parts: string[] = [];
   if (quota.session) parts.push(`5h ${formatQuotaPercent(quota.session)}`);
   if (quota.weekly) parts.push(`7d ${formatQuotaPercent(quota.weekly)}`);
@@ -85,8 +102,16 @@ export function formatBudgetInline(quota: QuotaSnapshot | undefined, now: number
   return `budget ${formatQuotaPercent(quota.budget)}${live ? "" : ` (${formatAge(quota.fetchedAt, new Date(now))})`}`;
 }
 
-/** Severity of the most-consumed window, for colouring a whole row at a glance. */
-export function quotaSeverity(quota: QuotaSnapshot | undefined): "healthy" | "warning" | "error" | "muted" {
+/**
+ * Severity of the most-consumed window, for colouring a whole row at a glance. A lapsed sign-in
+ * is as bad as a full window, except an API profile's: its reading is spend, and a key its
+ * provider refused is `route budget`'s to say.
+ */
+export function quotaSeverity(
+  quota: QuotaSnapshot | undefined,
+  kind?: ProfileListItem["kind"],
+): "healthy" | "warning" | "error" | "muted" {
+  if (kind !== "api" && signInLapse(quota)) return "error";
   if (!quota || quota.state !== "ok") return "muted";
   const peak = Math.max(
     quota.session?.usedPercent ?? 0,
@@ -244,7 +269,7 @@ export function fitQuotaValue(window: QuotaWindow, width: number, now: Date = ne
 
 const QUOTA_NOTES: Record<Exclude<QuotaSnapshot["state"], "ok">, string> = {
   expired: "sign-in has lapsed — run `clausona login <profile>`",
-  missing: "no stored credential for this profile",
+  missing: "no stored credential — run `clausona login <profile>`",
   cooldown: "quota endpoint is rate limited; retrying later",
   error: "quota lookup failed",
 };
@@ -252,7 +277,7 @@ const QUOTA_NOTES: Record<Exclude<QuotaSnapshot["state"], "ok">, string> = {
 /**
  * One footnote per distinct problem, so a wide table does not need a status column. An API
  * profile's reading is the last one `route budget` or a routed run took, so its failures are
- * theirs to say.
+ * theirs to say. A lapsed sign-in's is headed by the word its row says.
  */
 export function quotaNotes(items: ProfileListItem[]): string[] {
   const states = new Set<Exclude<QuotaSnapshot["state"], "ok">>();
@@ -260,7 +285,13 @@ export function quotaNotes(items: ProfileListItem[]): string[] {
     const state = item.quota?.state;
     if (state && state !== "ok" && item.kind !== "api") states.add(state);
   }
-  return [...states].map((state) => `${state}: ${QUOTA_NOTES[state]}`);
+  return [...states].map((state) => `${SIGN_IN_LAPSES[state] ?? state}: ${QUOTA_NOTES[state]}`);
+}
+
+/** A lapsed sign-in across the 5H and 7D columns, as an API profile's budget runs across them. */
+function lapseSpan(quota: QuotaSnapshot | undefined): string | undefined {
+  const lapse = signInLapse(quota);
+  return lapse && red(lapse);
 }
 
 /** An API profile's spend against its limit, across the 5H and 7D columns: `budget 35% 18d`. */
@@ -462,8 +493,9 @@ export function renderList(items: ProfileListItem[], options: { width?: number }
     };
 
     const last = layout.keys.length - 1;
-    // An API profile has no plan windows; its budget, when it has a reading, runs across both.
-    const span = item.kind === "api" && item.quota ? budgetSpan(item.quota, layout.reset, now) : undefined;
+    // An API profile has no plan windows; its budget, when it has a reading, runs across both. So
+    // does a lapsed sign-in, in place of the windows it last read.
+    const span = item.kind === "api" ? item.quota && budgetSpan(item.quota, layout.reset, now) : lapseSpan(item.quota);
     const cells = layout.keys.flatMap((key, i) => {
       if (span !== undefined && key === "weekly" && layout.keys[i - 1] === "session") return [];
       if (span !== undefined && key === "session" && layout.keys[i + 1] === "weekly") {

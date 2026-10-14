@@ -65,14 +65,22 @@ if the Keychain refuses it.
 
 ## When a reading is unavailable
 
-A dash means the reading could not be taken, and the reason is printed below the table:
+An account that has to sign in again says so on its row, in red across the 5H and 7D
+columns, and what to run is printed below the table:
+
+| On the row | Meaning |
+| --- | --- |
+| `expired` | The sign-in has lapsed past renewal (refresh token older than ~14 days, or revoked). Run `clausona login <profile>`. |
+| `signed out` | No credential is stored for the profile. Claude Code leaves an empty one behind when it signs out. Run `clausona login <profile>`. |
+
+The numbers it last read are left off the row. They are from before the sign-in lapsed,
+and shown dimmed they read as current: an account signed out for a month listed
+`100% now`. `--json` still carries them, with `state` set to `expired` or `missing`.
+
+Any other reading that could not be taken keeps the numbers it already has, dimmed, and the
+reason is printed below the table. A dash means there is no reading yet.
 
 | State | Meaning |
 | --- | --- |
-| `expired` | The sign-in has lapsed past renewal (refresh token older than ~14 days, or revoked). Run `clausona login <profile>`. |
-| `missing` | No credential is stored for the profile. Run `clausona login <profile>`. |
 | `cooldown` | The endpoint returned 429. clausona pauses that tool until the window lifts. |
 | `error` | Network failure, timeout, or an unreadable response. |
-
-Where numbers are already known, they stay on screen dimmed with their age, rather than
-being blanked out.

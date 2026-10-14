@@ -130,6 +130,14 @@ describe("formatQuotaInline", () => {
     expect(formatQuotaInline(snapshot({ state: "expired" }))).toBe("expired");
     expect(formatQuotaInline(undefined)).toBe("");
   });
+
+  // A reading from before the sign-in lapsed: `7d 100% (expired)` read as a full week.
+  it("says a lapsed sign-in in place of the numbers it last read", () => {
+    const weekly = { usedPercent: 100, resetsAt: null };
+
+    expect(formatQuotaInline(snapshot({ state: "expired", weekly }))).toBe("expired");
+    expect(formatQuotaInline(snapshot({ state: "missing", weekly }))).toBe("signed out");
+  });
 });
 
 describe("quotaSeverity", () => {
@@ -151,6 +159,16 @@ describe("quotaSeverity", () => {
     expect(quotaSeverity(snapshot({ state: "cooldown", weekly: { usedPercent: 100, resetsAt: null } }))).toBe("muted");
     expect(quotaSeverity(undefined)).toBe("muted");
   });
+
+  it("flags a lapsed sign-in, whatever it last read", () => {
+    expect(quotaSeverity(snapshot({ state: "expired", weekly: { usedPercent: 3, resetsAt: null } }))).toBe("error");
+    expect(quotaSeverity(snapshot({ state: "missing" }))).toBe("error");
+  });
+
+  // Its reading is spend, and a key its provider refused is `route budget`'s to say.
+  it("leaves an API profile's refused reading neutral", () => {
+    expect(quotaSeverity(snapshot({ state: "expired" }), "api")).toBe("muted");
+  });
 });
 
 describe("quotaNotes", () => {
@@ -166,7 +184,15 @@ describe("quotaNotes", () => {
 
     expect(notes).toHaveLength(2);
     expect(notes[0]).toMatch(/^expired: /);
-    expect(notes[1]).toMatch(/^missing: /);
+    expect(notes[1]).toMatch(/^signed out: /);
+  });
+
+  // Headed by the word the row says, so the note can be found from the row.
+  it("tells a lapsed sign-in what to run", () => {
+    expect(quotaNotes([item(snapshot({ state: "expired" })), item(snapshot({ state: "missing" }))])).toEqual([
+      "expired: sign-in has lapsed — run `clausona login <profile>`",
+      "signed out: no stored credential — run `clausona login <profile>`",
+    ]);
   });
 
   it("is silent when everything is current", () => {
@@ -543,6 +569,77 @@ describe("renderList with API profiles", () => {
     expect(rowFor(render([subscription, { ...api, label: "  " }]), "claude:glm")).toBe(
       "    claude:glm          —                               —          —          —           —             —",
     );
+  });
+});
+
+/**
+ * An account whose sign-in lapsed, or that has none stored, still has the reading it last took,
+ * and drawn dimmed it read as current: a codex account signed out for a month listed `100% now`.
+ */
+describe("renderList with a lapsed sign-in", () => {
+  const zero = { cost: 0, inputTokens: 0, outputTokens: 0 };
+  const row = (name: string, quota: QuotaSnapshot): ProfileListItem => ({
+    name,
+    tool: "claude",
+    email: `${name.replace("claude:", "")}@example.com`,
+    configDir: `/home/u/.${name}`,
+    isPrimary: false,
+    isActive: false,
+    quota,
+    today: zero,
+    week: zero,
+    month: zero,
+    total: zero,
+  });
+  const lastRead = {
+    fetchedAt: Date.now() - 30 * 24 * 3_600_000,
+    session: { usedPercent: 22, resetsAt: "2026-01-01T00:00:00Z" },
+    weekly: { usedPercent: 100, resetsAt: "2026-01-01T00:00:00Z" },
+  };
+  const live = row("claude:work", snapshot({ weekly: { usedPercent: 41, resetsAt: null } }));
+  const expired = row("claude:old", snapshot({ state: "expired", ...lastRead }));
+  const missing = row("claude:gone", snapshot({ state: "missing", ...lastRead }));
+
+  const render = (items: ProfileListItem[], width = 120) => stripAnsi(renderList(items, { width }));
+  const rowFor = (out: string, name: string) => out.split("\n").find((line) => line.includes(name)) ?? "";
+
+  // Pinned: the columns after it start where every other row's do.
+  it("runs the state across the 5H and 7D columns in place of the numbers it last read", () => {
+    const out = render([live, expired, missing]);
+
+    expect(rowFor(out, "claude:old")).toBe(
+      "    claude:old          old@example.com                 expired               —           —             —",
+    );
+    expect(rowFor(out, "claude:gone")).toBe(
+      "    claude:gone         gone@example.com                signed out            —           —             —",
+    );
+  });
+
+  it("says what to run below the table", () => {
+    const out = render([live, expired, missing]);
+
+    expect(out).toContain("expired: sign-in has lapsed — run `clausona login <profile>`");
+    expect(out).toContain("signed out: no stored credential — run `clausona login <profile>`");
+  });
+
+  it("keeps the numbers of a reading that is only late", () => {
+    for (const state of ["cooldown", "error"] as const) {
+      const late = rowFor(render([live, row("claude:late", snapshot({ state, ...lastRead }))]), "claude:late");
+      expect(late).toContain("22%");
+      expect(late).toContain("100%");
+    }
+  });
+
+  it("fits the state in the narrowest table", () => {
+    const out = render([live, expired, missing], LIST_MIN_WIDTH);
+
+    for (const [name, word] of [
+      ["claude:old", "expired"],
+      ["claude:gone", "signed out"],
+    ]) {
+      expect(rowFor(out, name)).toContain(word);
+      expect(rowFor(out, name).length).toBeLessThanOrEqual(LIST_MIN_WIDTH);
+    }
   });
 });
 
