@@ -86,7 +86,7 @@
         "name": "What does clausona send over the network?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "clausona has no server and no telemetry. It reads an account's plan usage from that account's provider, and it renews a lapsed sign-in token when it has to. The dashboard also asks GitHub whether a newer clausona release is out."
+          "text": "clausona has no server and no telemetry. It reads an account's plan usage, or an API profile's spend, from that account's provider, and it renews a lapsed sign-in token when it has to. The dashboard also asks GitHub whether a newer clausona release is out."
         }
       }
     ]
@@ -374,7 +374,7 @@ claude --continue    <span class="c"># the latest conversation in this folder</s
         <h3>Does it proxy or modify claude and codex?</h3>
         <p>No. The real binaries run unmodified, with the account's config directory set for that one run. If you set <code>CLAUDE_CONFIG_DIR</code> or <code>CODEX_HOME</code> yourself, clausona steps aside in that shell.</p>
         <h3>What does clausona send over the network?</h3>
-        <p>clausona has no server and no telemetry. It reads an account's plan usage from that account's provider, and it renews a lapsed sign-in token when it has to. The dashboard also asks GitHub whether a newer clausona release is out.</p>
+        <p>clausona has no server and no telemetry. It reads an account's plan usage, or an API profile's spend, from that account's provider, and it renews a lapsed sign-in token when it has to. The dashboard also asks GitHub whether a newer clausona release is out.</p>
       </div>
     </section>
   </main>
