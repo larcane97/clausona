@@ -634,7 +634,11 @@ function planCodexSkill(run: Run, row: ScopeRow): Outcome {
   return write(entry !== undefined && byName?.enabled !== false ? null : true);
 }
 
-/** The other skill that is the folder this copy is, through a link, and is not in the action. */
+/**
+ * The other skill that is the folder this copy is, through a link, and is not in the action. A
+ * row listed at this very path is no such other: it is this folder as a project below reads it
+ * (Parent folders), which the one removal takes away too.
+ */
 function sameFolder(run: Run, copy: Extension): Extension | undefined {
   const key = folderKey(copy);
   const real = copy.realFolder ?? copy.location.file;
@@ -642,6 +646,7 @@ function sameFolder(run: Run, copy: Extension): Extension | undefined {
     (other) =>
       other.kind === "skill" &&
       other.id !== copy.id &&
+      !samePath(other.location.file, copy.location.file) &&
       !other.link?.broken &&
       !run.inAction.has(other.id) &&
       (folderKey(other) === key || samePath(other.link?.target, real)),

@@ -1461,6 +1461,22 @@ describe("Codex hooks and Codex's trust", () => {
     expect(await rows("parents")).toEqual([]);
   });
 
+  it("deletes a skill a project below also lists under Parent folders, as the one folder it is", async () => {
+    const { h, app, repos } = parentHome(() => "");
+    // ~/repos, recorded by its trust entry, is a project with the skill as its own; app sees it from below.
+    const folder = h.skill("repos/.agents/skills", "rootskill");
+    for (const [cwd, scope] of [
+      [repos, "project"],
+      [app, "parents"],
+    ] as const) {
+      const plan = JSON.parse(
+        await run(h, cwd, "skills", ["rm", "rootskill", "--tool", "codex", "--scope", scope, "--dry-run", "--json"]),
+      );
+      expect(plan.refused).toEqual([]);
+      expect(plan.changes.map((c: { file: string }) => c.file)).toEqual([folder]);
+    }
+  });
+
   it("switches a parent folder's server in the project's own config.toml, and deletes it in the parent's", async () => {
     const { h, app, parentFile } = parentHome(() => '[mcp_servers.u]\ncommand = "u"\n');
     h.write(
