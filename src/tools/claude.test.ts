@@ -134,6 +134,62 @@ describe("claudeAdapter.sharedSkipSet", () => {
   });
 });
 
+/** Whether a profile keeps `name` for itself, as setupSharedLinks decides it: by set or by pattern. */
+function keptApart(name: string, mergeSessions: boolean): boolean {
+  return (
+    claudeAdapter.sharedSkipSet(mergeSessions).has(name) || claudeAdapter.shouldSkipName?.(name, mergeSessions) === true
+  );
+}
+
+describe("Claude Code state for one account or org", () => {
+  // Names as Claude Code 2.1.299 builds them: the files, then each sibling it names for them.
+  const ACCOUNT_STATE = [
+    "policy-limits.json",
+    "policy-limits.json.signature.json",
+    "policy-limits.json.signature-iat.json",
+    "policy-limits.json.stamp.json",
+    "remote-settings.json",
+    "remote-settings.json.signature.json",
+    "remote-settings.json.signature-iat.json",
+    "remote-settings.json.synced-at",
+    "remote-settings-helper-consent",
+    "remote-settings-consent.json",
+    "mcp-needs-auth-cache.json",
+    "state",
+    "chrome",
+  ];
+
+  it("is never shared, in either session mode", () => {
+    for (const name of ACCOUNT_STATE) {
+      expect(keptApart(name, false), `${name} when separated`).toBe(true);
+      expect(keptApart(name, true), `${name} when merged`).toBe(true);
+    }
+  });
+
+  it("is in the skip set by name, so repair can bring a profile's own copy back from a backup", () => {
+    for (const name of ACCOUNT_STATE) expect(claudeAdapter.sharedSkipSet(true).has(name), name).toBe(true);
+  });
+
+  it("takes the temp files and locks Claude Code writes beside each of those files with it", () => {
+    // Its atomic writer stages `<file>.tmp.<8 hex>`, and the signature's lock is `<file>.lock`.
+    for (const name of [
+      "policy-limits.json.tmp.0a1b2c3d",
+      "policy-limits.json.signature-iat.json.lock",
+      "remote-settings.json.signature.json.tmp.0a1b2c3d",
+      "remote-settings-consent.json.tmp.0a1b2c3d",
+      "remote-settings-helper-consent.tmp.0a1b2c3d",
+    ]) {
+      expect(keptApart(name, true), name).toBe(true);
+    }
+  });
+
+  it("leaves names that only start alike shared", () => {
+    for (const name of ["policy-limits.jsonl", "remote-settings", "states", "chrome-profiles", "statefile.json"]) {
+      expect(keptApart(name, true), name).toBe(false);
+    }
+  });
+});
+
 /**
  * The one place clausona writes Claude Code's own credentials: a renewal on macOS, into the
  * Keychain item Claude Code reads. It is the user's live subscription login, so the item must

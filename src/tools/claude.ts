@@ -34,6 +34,44 @@ const BASE_SHARED_LINK_SKIP = new Set([
   ".session-stats.json",
 ]);
 
+// State Claude Code keeps for one account or one org (2.1.299), each name as it builds it:
+//
+// - `policy-limits.json` holds the org's policy limits. Beside it are the signature Claude Code
+//   checks them by (`.signature.json`, `.signature-iat.json`) and `.stamp.json`, which names the
+//   identity they were fetched for.
+// - `remote-settings.json` holds the org's remote managed settings, with the same two signature
+//   files and `.synced-at`, the time of the last sync. `remote-settings-helper-consent` and
+//   `remote-settings-consent.json` record what this account agreed to apply from them.
+// - `mcp-needs-auth-cache.json` lists the MCP servers and claude.ai connectors that need this
+//   account's sign-in.
+// - `state/` holds per-account records such as MCP discovery verdicts.
+// - `chrome/` holds the Claude in Chrome native host wrapper, written for this config dir.
+//
+// A link to the primary's makes a profile read the primary account's: until Claude Code refetches,
+// it can apply the primary org's policy limits and remote settings. Claude Code saves its own copy
+// by writing a new file and renaming it over the link, so the link does not last either.
+const ACCOUNT_STATE = [
+  "policy-limits.json",
+  "policy-limits.json.signature.json",
+  "policy-limits.json.signature-iat.json",
+  "policy-limits.json.stamp.json",
+  "remote-settings.json",
+  "remote-settings.json.signature.json",
+  "remote-settings.json.signature-iat.json",
+  "remote-settings.json.synced-at",
+  "remote-settings-helper-consent",
+  "remote-settings-consent.json",
+  "mcp-needs-auth-cache.json",
+  "state",
+  "chrome",
+] as const;
+
+// What Claude Code writes beside those files while it saves one: `<file>.tmp.<8 hex>` from its
+// atomic writer and `<file>.lock` while it holds a signature's lock. Each starts with the name of
+// the file it belongs to and a dot.
+const ACCOUNT_STATE_SIBLING =
+  /^(?:policy-limits\.json|remote-settings\.json|remote-settings-consent\.json|remote-settings-helper-consent)\../;
+
 // State keyed by session id. `jobs/` holds the background-session records that the
 // background list reads (state, respawn flags, resume target) and `teams/` holds team
 // membership; both are addressed by the same session id as the transcripts under
@@ -633,7 +671,8 @@ export const claudeAdapter: ToolAdapter & Required<Pick<ToolAdapter, "sharedSkip
   hasKeychainCredential: hasKeychain,
   hasFallbackCredential,
   sharedSkipSet: (mergeSessions) =>
-    mergeSessions ? new Set(BASE_SHARED_LINK_SKIP) : new Set([...BASE_SHARED_LINK_SKIP, ...SESSION_SCOPED]),
+    new Set([...BASE_SHARED_LINK_SKIP, ...ACCOUNT_STATE, ...(mergeSessions ? [] : SESSION_SCOPED)]),
+  shouldSkipName: (name) => ACCOUNT_STATE_SIBLING.test(name),
   rewritesWhole: (name) => REWRITTEN_WHOLE.has(name),
   // postSetup is left undefined here — service.ts's syncPluginsJson is wired into the
   // Claude code path explicitly because it has cross-cutting plugin marketplace state.
