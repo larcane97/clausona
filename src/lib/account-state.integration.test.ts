@@ -410,7 +410,7 @@ describe.skipIf(process.platform === "win32")("repair while the profile's backgr
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     const repair = service.repairProfile("claude:work");
     await expect(repair).rejects.toThrow(
-      `Claude Code's background daemon is running in ${work.replace(currentHome, "~")} (pid 4242), and this would take out the link to the primary's daemon/ it keeps its control key, roster and session tokens in. Stop it in PowerShell with \`$env:CLAUDE_CONFIG_DIR='${work}'; claude daemon stop\`, then run this again.`,
+      `Claude Code's background daemon is running in ${work.replace(currentHome, "~")} (pid 4242), and this would take out the link to the primary's daemon/ it keeps its control key, roster and session tokens in. Stop it in PowerShell with \`$env:CLAUDE_CONFIG_DIR='${work}'; claude daemon stop; Remove-Item Env:CLAUDE_CONFIG_DIR\`, then run this again.`,
     );
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     expect(lstatOrNull(path.join(work, "daemon"))?.isSymbolicLink()).toBe(true);

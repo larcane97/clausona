@@ -276,7 +276,9 @@ instead: a file of the profile's own, not a link, naming a running process. Wind
 dead daemon's pid to another program, so that process counts only if its command line is Claude
 Code's daemon (`claude ... daemon run`), which PowerShell reads. When PowerShell can't say, it still
 counts, and `--force` goes ahead. The stop command is then given for PowerShell:
-`$env:CLAUDE_CONFIG_DIR='<profile dir>'; claude daemon stop`.
+`$env:CLAUDE_CONFIG_DIR='<profile dir>'; claude daemon stop; Remove-Item Env:CLAUDE_CONFIG_DIR`.
+It clears the variable after: left set, every later `claude` in that window would run as that
+profile.
 
 While a profile linked the primary's `backups/`, Claude Code saved that profile's copies of
 `.claude.json` there, as `.claude.json.backup.<ms>`. When the primary's `.claude.json` is lost,

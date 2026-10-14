@@ -783,10 +783,12 @@ async function refuseWhileClaudeDaemonRuns(
     );
   }
   // PowerShell on Windows, where an assignment before a command is not a thing; quoted, with a
-  // quote in the path doubled, so the path is taken as it is.
+  // quote in the path doubled, so the path is taken as it is. The variable is cleared after:
+  // left set, every later `claude` in that window would run as this profile, since the shell
+  // hook steps aside while CLAUDE_CONFIG_DIR is set.
   const stop =
     process.platform === "win32"
-      ? `in PowerShell with \`$env:CLAUDE_CONFIG_DIR='${configDir.replaceAll("'", "''")}'; claude daemon stop\``
+      ? `in PowerShell with \`$env:CLAUDE_CONFIG_DIR='${configDir.replaceAll("'", "''")}'; claude daemon stop; Remove-Item Env:CLAUDE_CONFIG_DIR\``
       : `with 'CLAUDE_CONFIG_DIR=${shown} claude daemon stop'`;
   throw new Error(
     `Claude Code's background daemon is running in ${shown}${look.pid === undefined ? "" : ` (pid ${look.pid})`}, and this would take out the link to the primary's daemon/ it keeps its control key, roster and session tokens in. Stop it ${stop}, then run this again. Nothing was changed. To go ahead while it runs: ${retry}`,
