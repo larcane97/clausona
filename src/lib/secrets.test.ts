@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { buildSync } from "esbuild";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { SPAWN_TIMEOUT_MS, SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import type { SecretSource } from "../types.js";
@@ -685,16 +685,24 @@ describe("resolveSecret", () => {
   );
 
   /**
-   * The real resolveSecret in a node of its own, bundled once, whose stderr this test reads: what a
-   * key command writes to stderr, passed through, can only be seen from outside the process that
-   * ran it. It reads the command from $CLAUSONA_TEST_RUN and resolveSecret's options from
-   * $CLAUSONA_TEST_OPTIONS, and prints `key:<key>` or `error:<message>`.
+   * The real resolveSecret in a node of its own, bundled once for every test that uses it, whose
+   * stderr this test reads: what a key command writes to stderr, passed through, can only be seen
+   * from outside the process that ran it. It reads the command from $CLAUSONA_TEST_RUN and
+   * resolveSecret's options from $CLAUSONA_TEST_OPTIONS, and prints `key:<key>` or
+   * `error:<message>`. Its directory is not one of `temps`, which go after each test, but goes once
+   * they are all done.
    */
+  let harnessDir: string | undefined;
   let bundled: string | undefined;
+  afterAll(() => {
+    if (harnessDir) rmSync(harnessDir, { recursive: true, force: true });
+    harnessDir = undefined;
+    bundled = undefined;
+  });
   function inNode(run: string, options: object): { stdout: string; stderr: string } {
     if (!bundled) {
       const dir = mkdtempSync(path.join(tmpdir(), "clausona-key-harness-"));
-      temps.push(dir);
+      harnessDir = dir;
       const entry = path.join(dir, "harness.ts");
       writeFileSync(
         entry,
