@@ -216,8 +216,14 @@ type RunOptions = {
   /** Bounds the run, the command started in a process group of its own for it. */
   signal?: AbortSignal;
   /**
-   * How long a command that keeps the terminal may run: past it, the command and what it started
-   * are ended (interrupt), if it is still running, and the result says so at once.
+   * `false` starts the command in a process group of its own, with no terminal, as a `signal`
+   * does: for a caller that holds the terminal itself, and bounds the command with `limitMs`.
+   */
+  terminal?: boolean;
+  /**
+   * How long the command may run: past it, the command is ended, if it is still running, and the
+   * result says so at once. One in a group of its own is killed with its group; one that keeps the
+   * terminal is interrupted (interrupt).
    */
   limitMs?: number;
   /**
@@ -232,11 +238,12 @@ type RunOptions = {
  * wrote is read for a short drain after that (DRAIN_MS), then taken, whether or not the output has
  * closed, so a job it left running does not hold the result up.
  *
- * With a `signal`, the command starts in a process group of its own, with no terminal, under an sh
- * that ends what the command left running in the group once it exits (ENDS_ITS_GROUP). Once the
- * signal aborts, the group is killed, if the sh is still running; the result is a failure at once.
- * Until then, clausona ending ends it too (endWithClausona). On Windows the command starts in no
- * group of its own, and what it leaves running when it exits keeps running.
+ * With a `signal`, or `terminal: false`, the command starts in a process group of its own, with no
+ * terminal, under an sh that ends what the command left running in the group once it exits
+ * (ENDS_ITS_GROUP). Once the signal aborts, the group is killed, if the sh is still running; the
+ * result is a failure at once. Until then, clausona ending ends it too (endWithClausona). On
+ * Windows the command starts in no group of its own, and what it leaves running when it exits
+ * keeps running.
  *
  * Otherwise the command keeps the terminal, in clausona's own process group, where it can ask for
  * a PIN or a passphrase, and Ctrl-C stops it with clausona. What it leaves running when it exits
@@ -249,7 +256,7 @@ function run(command: string, args: string[], options: RunOptions = {}): Promise
       resolve({ code: 1, stdout: "" });
       return;
     }
-    const ownGroup = signal !== undefined;
+    const ownGroup = signal !== undefined || options.terminal === false;
     const detached = ownGroup && process.platform !== "win32";
     const stdio: ["ignore" | "pipe", "pipe", "ignore" | "inherit"] = [
       input === undefined ? "ignore" : "pipe",
@@ -287,7 +294,8 @@ function run(command: string, args: string[], options: RunOptions = {}): Promise
       limitMs === undefined
         ? undefined
         : setTimeout(() => {
-            interrupt(child);
+            if (ownGroup) killRunning(child, detached);
+            else interrupt(child);
             stop({ code: 1, stdout: "", timedOut: true });
           }, limitMs);
     child.stdout?.on("data", (chunk) => {
@@ -487,7 +495,7 @@ export async function deleteSecret(profileId: string, backend?: SecretBackend): 
 async function readStoredSecret(
   profileId: string,
   backend: SecretBackend | undefined,
-  options: Pick<RunOptions, "signal" | "limitMs">,
+  options: Pick<RunOptions, "signal" | "limitMs" | "terminal">,
 ): Promise<string | null> {
   if ((backend ?? detectBackend()) === "keychain") {
     const item = keychainItemFor(profileId);
@@ -520,14 +528,18 @@ async function readStoredSecret(
  * it can prompt, with its stderr shown there, and `limitMs` bounds it instead: past it, the
  * command and what it started are interrupted, and killed if it goes on running (interrupt), and
  * the key is not read. `limitMs` bounds the Keychain's answer the same way.
+ *
+ * `terminal: false` reads the key as a `signal` does, in a group of its own with no terminal, and
+ * bounds it with `limitMs`: for a caller that holds the terminal itself (the dashboard). A key
+ * command that asks for a PIN in the terminal then fails, and its message says where to check it.
  */
 export async function resolveSecret(
   profileId: string,
   source: SecretSource,
   backend?: SecretBackend,
-  options: { signal?: AbortSignal; limitMs?: number } = {},
+  options: { signal?: AbortSignal; limitMs?: number; terminal?: boolean } = {},
 ): Promise<string> {
-  const { signal, limitMs } = options;
+  const { signal, limitMs, terminal } = options;
   // A hand edit can leave anything in the slot, or nothing. Doctor calls such a source unknown
   // and never resolves it, so launch does not read the store for it either: a profile would
   // otherwise work while doctor reported it broken. Not quoted, since it can hold anything.
@@ -558,12 +570,17 @@ export async function resolveSecret(
   if (source.source === "command") {
     const shell = process.platform === "win32" ? "powershell" : "/bin/sh";
     const args = process.platform === "win32" ? ["-NoProfile", "-Command", source.run] : ["-c", source.run];
-    const { code, stdout, timedOut } = await run(shell, args, { signal, limitMs, showStderr: true });
+    const { code, stdout, timedOut } = await run(shell, args, { signal, limitMs, terminal, showStderr: true });
     if (signal?.aborted) throw new Error("the key was not read in time");
     // The command line is not quoted, so the message says where it is instead - profiles.json,
     // the one place it is shown - and what replaces it. Not `config --edit`: that opens the
-    // env map, and the command lives in the endpoint block.
-    const remedy = `run it yourself to see why - it is in ~/.clausona/profiles.json - or replace it with 'clausona config ${profileId} --key-from command:"<command>"'`;
+    // env map, and the command lives in the endpoint block. Run without the terminal for a caller
+    // that holds it, a command that prompts there has failed for that alone.
+    const remedy = `run it yourself to see why - it is in ~/.clausona/profiles.json - or replace it with 'clausona config ${profileId} --key-from command:"<command>"'${
+      terminal === false
+        ? " - it ran without a terminal here, so if it asks for a PIN or a passphrase, run 'clausona doctor' to check it"
+        : ""
+    }`;
     if (timedOut) throw new Error(`secret command did not finish in ${(limitMs ?? 0) / 1000} s - ${remedy}`);
     if (code !== 0) throw new Error(`secret command exited with ${code} - ${remedy}`);
     const first = stdout.split(/\r?\n/)[0]?.trim() ?? "";
@@ -571,7 +588,7 @@ export async function resolveSecret(
     return first;
   }
 
-  const stored = await readStoredSecret(profileId, backend, { signal, limitMs });
+  const stored = await readStoredSecret(profileId, backend, { signal, limitMs, terminal });
   if (signal?.aborted) throw new Error("the key was not read in time");
   if (!stored) throw new Error(`no stored secret for '${profileId}' - run 'clausona config ${profileId} --key'`);
   return stored;

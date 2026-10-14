@@ -1160,9 +1160,10 @@ export function App({
       // model, and where its key is read from. `list --json` does not ask for it. No key is
       // resolved for the dashboard - a `command:` source would run on open and after every
       // change - only for the doctor screen, which is also where this is called from on mount.
+      // Never with the terminal, which the dashboard holds in raw mode.
       const [nextProfiles, nextDoctor] = await Promise.all([
         listProfiles({ detail: true }),
-        doctorProfiles({ resolveSecrets: screen === "doctor" }),
+        doctorProfiles({ resolveSecrets: screen === "doctor", terminal: false }),
       ]);
       // The list carries no quota - that is fetched after it and merged in. A reload keyed on
       // the same profile set would not fetch again, so the panel sat on "loading" from the first
@@ -1190,11 +1191,14 @@ export function App({
     }
   }
 
-  /** The doctor screen's own read, which resolves every API profile's key as `clausona doctor` does. */
+  /**
+   * The doctor screen's own read, which resolves every API profile's key as `clausona doctor` does,
+   * but without the terminal, which the dashboard holds.
+   */
   async function refreshDoctor() {
     setLoading(true);
     try {
-      setDoctor(await doctorProfiles());
+      setDoctor(await doctorProfiles({ terminal: false }));
     } catch (error) {
       setMessage(`${symbol.cross} ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -2003,7 +2007,7 @@ export function App({
         void (async () => {
           try {
             await repairProfile(d.name);
-            const freshDoctor = await doctorProfiles();
+            const freshDoctor = await doctorProfiles({ terminal: false });
             setDoctor(freshDoctor);
             const fixed = freshDoctor.find((dd) => dd.name === d.name);
             setMessage(

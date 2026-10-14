@@ -652,6 +652,38 @@ describe("resolveSecret", () => {
     },
   );
 
+  // The Health check screen holds the terminal in raw mode: a key command there runs in a group of
+  // its own with no terminal, as a spend read does, and one that needs the terminal fails at once.
+  it.skipIf(windows)(
+    "reads a key without the terminal for the dashboard, and says to check one that prompts with doctor",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    async () => {
+      const own = execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim();
+      const options = { limitMs: 60_000, terminal: false };
+      // Bounded here, so that a read that waits on the terminal fails rather than hangs.
+      const unbound = new AbortController();
+      const waited = sleep(SPAWN_TIMEOUT_MS, undefined, { signal: unbound.signal }).then(() => {
+        throw new Error("the read waited on the terminal");
+      });
+      waited.catch(() => {});
+      try {
+        const group = await Promise.race([
+          resolveSecret("claude:x", { source: "command", run: "ps -o pgid= -p $$" }, undefined, options),
+          waited,
+        ]);
+        expect(group).not.toBe(own);
+        const prompt = 'printf "PIN: " > /dev/tty; read v < /dev/tty; echo "$v"';
+        await expect(
+          Promise.race([resolveSecret("claude:x", { source: "command", run: prompt }, undefined, options), waited]),
+        ).rejects.toThrow(
+          /^secret command .* - it ran without a terminal here, so if it asks for a PIN or a passphrase, run 'clausona doctor' to check it$/,
+        );
+      } finally {
+        unbound.abort();
+      }
+    },
+  );
+
   /**
    * The real resolveSecret in a node of its own, bundled once, whose stderr this test reads: what a
    * key command writes to stderr, passed through, can only be seen from outside the process that
@@ -704,6 +736,9 @@ describe("resolveSecret", () => {
       expect(launch.stdout).toBe("key:KEY");
       expect(launch.stderr).toContain("stderr-marker");
       expect(inNode(run, { limitMs: 60_000 }).stderr).toContain("stderr-marker");
+      const dashboard = inNode(run, { limitMs: 60_000, terminal: false });
+      expect(dashboard.stdout).toBe("key:KEY");
+      expect(dashboard.stderr).not.toContain("stderr-marker");
     },
   );
 });

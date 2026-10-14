@@ -2644,7 +2644,7 @@ describe("App's doctor reads", () => {
     const instance = render(<App initialScreen="dashboard" />);
     await waitForFrame(instance.lastFrame, (f) => f.includes("Dashboard"));
 
-    expect(vi.mocked(doctorProfiles).mock.calls).toEqual([[{ resolveSecrets: false }]]);
+    expect(vi.mocked(doctorProfiles).mock.calls).toEqual([[{ resolveSecrets: false, terminal: false }]]);
 
     await moveTo(instance, "Health check");
     await press(instance, ENTER);
@@ -2652,6 +2652,8 @@ describe("App's doctor reads", () => {
 
     expect(vi.mocked(doctorProfiles).mock.calls).toHaveLength(2);
     expect(vi.mocked(doctorProfiles).mock.calls[1]?.[0]?.resolveSecrets).not.toBe(false);
+    // The dashboard holds the terminal in raw mode: a key command reads none of it.
+    expect(vi.mocked(doctorProfiles).mock.calls[1]?.[0]?.terminal).toBe(false);
   });
 });
 

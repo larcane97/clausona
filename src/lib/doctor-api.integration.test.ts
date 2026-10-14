@@ -116,7 +116,12 @@ async function harness(options: HarnessOptions = {}) {
       ...actual,
       storeSecret: (id: string, value: string) => actual.storeSecret(id, value, "file"),
       deleteSecret: (id: string) => actual.deleteSecret(id, "file"),
-      resolveSecret: (id: string, source: SecretSource, _backend?: unknown, options?: { limitMs?: number }) => {
+      resolveSecret: (
+        id: string,
+        source: SecretSource,
+        _backend?: unknown,
+        options?: { limitMs?: number; terminal?: boolean },
+      ) => {
         keyReads.push(options);
         return actual.resolveSecret(id, source, "file", options);
       },
@@ -267,6 +272,20 @@ describe("doctor on an API profile", () => {
     expect(spawned).toEqual(["/bin/sh"]);
     spawned = [];
     expect(keyReads).toEqual([{ limitMs: 60_000 }]);
+  });
+
+  // The Health check screen holds the terminal itself, in raw mode: there a key command runs
+  // without it, in a group of its own, with the same limit.
+  it("reads a key without the terminal for a caller that holds it", async () => {
+    const h = await harness();
+    await h.addApi({ secret: { source: "command", run: "op read op://vault/glm" }, secretValue: undefined });
+    keyReads = [];
+
+    await h.service.doctorProfiles({ terminal: false });
+
+    expect(spawned).toEqual(["/bin/sh"]);
+    spawned = [];
+    expect(keyReads).toEqual([{ limitMs: 60_000, terminal: false }]);
   });
 
   it("runs no command key source for a caller that asks for no key to be resolved", async () => {

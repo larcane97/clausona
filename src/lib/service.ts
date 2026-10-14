@@ -2015,9 +2015,15 @@ export async function doctorProfiles(
      * round-trip or a touch-ID prompt there held the whole screen on Loading.
      */
     resolveSecrets?: boolean;
+    /**
+     * `false` reads each key without the terminal, in a group of its own, as a spend read does:
+     * the Health check screen holds the terminal in raw mode, and a key command's prompt there
+     * would compete with it for input.
+     */
+    terminal?: boolean;
   } = {},
 ): Promise<DoctorProfileResult[]> {
-  const { resolveSecrets = true } = options;
+  const { resolveSecrets = true, terminal = true } = options;
   const registry = await loadRegistry();
   if (!registry) {
     return [];
@@ -2091,7 +2097,10 @@ export async function doctorProfiles(
           // and not when the caller asked for no key to be resolved: then it goes unchecked.
           secret:
             resolveSecrets && profile.api && isKnownSecretSource(profile.api.secret)
-              ? await resolveSecret(id, profile.api.secret, undefined, { limitMs: KEY_CHECK_LIMIT_MS })
+              ? await resolveSecret(id, profile.api.secret, undefined, {
+                  limitMs: KEY_CHECK_LIMIT_MS,
+                  ...(terminal ? {} : { terminal: false }),
+                })
                   .then(() => ({ ok: true }) as const)
                   .catch((error: unknown) => ({
                     ok: false as const,
