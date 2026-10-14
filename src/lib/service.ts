@@ -2605,14 +2605,16 @@ export async function updateProfileConfig(id: string, options: { mergeSessions: 
     await setupPluginsDir(profile.configDir, primarySource, backupDir);
   }
 
-  // merged → separated: restore skip-set items from backup. A tool that names the only entries
-  // it shares has just had every other one unlinked whichever way it went, as repair does.
+  // Restore skip-set items from backup, whichever way the mode went, as repair does: the session
+  // state when sessions are separated again, and either way what the profile keeps for itself
+  // in every mode and had a link to the primary's in place of until now. A tool that names the
+  // only entries it shares has just had every other one unlinked whichever way it went too.
   if (updateAdapter.sharedAllow) {
     await settleUnshared(updateAdapter, profile.configDir, primarySource, backupDir, next, unlinked, {
       restoreAll: true,
     });
-  } else if (!next) {
-    await restoreSkippedFromBackup(updateAdapter, profile.configDir, primarySource, backupDir, false);
+  } else {
+    await restoreSkippedFromBackup(updateAdapter, profile.configDir, primarySource, backupDir, next);
   }
 
   return { name: id, mergeSessions: next, changed: true };

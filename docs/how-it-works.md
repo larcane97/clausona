@@ -256,8 +256,9 @@ Profiles set up by clausona 0.8.0-beta or earlier link the account entries above
 through it: `wrong_account_link` for the account files, the daemon's directory and lock, and the
 session tokens, and `shared_account_state` for the rest. `clausona repair <profile>` takes it out.
 A copy that Claude Code has already saved in the profile is the profile's own: doctor no longer
-reports it, and repair keeps it. If an earlier repair set the profile's own copy aside to
-put the link back, repair brings the newest one back from `~/.clausona/backups/claude/<profile>/`.
+reports it, and repair keeps it. If an earlier repair set the profile's own copy aside to put the
+link back, repair and the session-mode toggle, either way, bring the newest one back from
+`~/.clausona/backups/claude/<profile>/`.
 
 Repair, the session-mode toggle and `clausona init` refuse to take out a profile's `daemon/` link
 while the profile's background daemon runs. The daemon keeps its control key and roster in the

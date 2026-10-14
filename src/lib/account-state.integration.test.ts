@@ -265,6 +265,32 @@ describe("Claude Code state for one account or org", () => {
     expect(readdirSync(backupDir)).toHaveLength(ACCOUNT_STATE.length * 2);
     expect(existsSync(path.join(primary, "policy-limits.json"))).toBe(true);
   });
+
+  it.each([
+    { from: "separated", mergeSessions: true },
+    { from: "merged", mergeSessions: false },
+  ])("comes back from the profile's own backup when the session mode changes from $from", async ({ mergeSessions }) => {
+    const { primary, work, backupDir, service } = await seedHome();
+    if (!mergeSessions) {
+      const registryPath = path.join(currentHome, ".clausona", "profiles.json");
+      const registry = JSON.parse(readFileSync(registryPath, "utf8")) as Registry;
+      const workProfile = registry.profiles["claude:work"];
+      if (workProfile) workProfile.mergeSessions = true;
+      writeFileSync(registryPath, JSON.stringify(registry));
+    }
+    mkdirSync(backupDir, { recursive: true });
+    for (const name of ACCOUNT_STATE) {
+      writeOwned(backupDir, name, "work", `${name}.2026-01-01T00-00-00-000Z`);
+      symlinkSync(path.join(primary, name), path.join(work, name));
+    }
+
+    await service.updateProfileConfig("claude:work", { mergeSessions });
+
+    for (const name of ACCOUNT_STATE) {
+      expect(lstatOrNull(path.join(work, name))?.isSymbolicLink(), name).toBe(false);
+      expect(ownerOf(work, name), name).toBe("work");
+    }
+  });
 });
 
 describe("temp files left from a save", () => {
