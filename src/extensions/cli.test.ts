@@ -1986,6 +1986,11 @@ describe("Codex hooks and Codex's trust", () => {
         `stays off in this project until Codex can read ${tilde(file, h.home)}`,
       ],
     ]);
+    // In the text, on a line of its own under the change, so the file to fix is never cut off.
+    const text = (await run(h, app, "mcp", ["off", "exa", "--tool", "codex", "--dry-run"], 100)).split("\n");
+    const at = text.findIndex((line) => line.includes("mcp_servers.exa.enabled → false"));
+    expect(text[at]?.trimEnd().endsWith("mcp_servers.exa.enabled → false")).toBe(true);
+    expect(text[at + 1]).toBe(`        stays off in this project until Codex can read ${tilde(file, h.home)}`);
     // Not valid TOML: clausona cannot edit it either.
     h.write("repos/app/.codex/config.toml", "[mcp_servers.p\n");
     expect((await plan("off")).refused.map((r: { code: string }) => r.code)).toEqual(["unreadable"]);

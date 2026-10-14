@@ -355,6 +355,27 @@ describe("dialogView: a plan", () => {
     expect(narrow.every((text) => text.length <= 30)).toBe(true);
   });
 
+  it("puts a note that names the file to fix on a line of its own under the change, whole", () => {
+    const refused = at("repos", "a-long-project-name", ".codex", "config.toml");
+    const note = `stays off in this project until Codex can read ${tilded("repos", "a-long-project-name", ".codex", "config.toml")}`;
+    const plan = planOf({
+      command: "mcp",
+      verb: "off",
+      question: "Turn off github in this project?",
+      changes: [
+        removal(line(refused, { change: "edit", what: "mcp_servers.github.enabled → false", note, noteBelow: true })),
+      ],
+    });
+    const shown = texts(dialogOf(plan), 60, 20);
+    // The change line keeps what changes; the note, below it, wraps rather than being cut.
+    expect(shown[2]).toMatch(/ {2}mcp_servers\.github\.enabled → false$/);
+    const first = shown.findIndex((text) => text.startsWith("  stays off"));
+    expect(first).toBe(3);
+    const block = shown.slice(first, shown.indexOf("", first));
+    expect(block.map((text) => text.trim()).join(" ")).toBe(note);
+    expect(shown.every((text) => text.length <= 60)).toBe(true);
+  });
+
   it("names a copy clausona kept in words, never by its path", () => {
     const kept = (name: string, account: string) =>
       removal(line(path.join(STASH, `${name}.json`), { change: "delete", account, rows: ["github"] }));

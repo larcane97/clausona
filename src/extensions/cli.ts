@@ -913,7 +913,7 @@ function changeLines(lines: PlanLine[], talk: Talk): string[] {
     fileWords(line.file, talk.homeDir, talk.env.stashDir),
     line.what,
     line.account === undefined ? "" : shortProfile(line.account),
-    line.note ?? "",
+    line.noteBelow ? "" : (line.note ?? ""),
   ]);
   const used = [0, 1, 2, 3].filter((c) => c === 0 || cells.some((row) => row[c] !== ""));
   // The path gives way first, from its middle; then the note; what changes last.
@@ -925,8 +925,13 @@ function changeLines(lines: PlanLine[], talk: Talk): string[] {
     [0],
   ).flatMap(([file = "", ...rest], at) => {
     const text = `      ${[dimPath(file), ...rest].join(" ".repeat(GAP))}`.trimEnd();
-    const runs = lines[at]?.runs;
-    return runs === undefined ? [text] : [text, `        runs ${tildeIn(runs, talk.homeDir)}`];
+    const line = lines[at];
+    // Under the change, whole: what it runs, and a note that ends in the file to fix.
+    const below = [
+      ...(line?.runs !== undefined ? [`        runs ${tildeIn(line.runs, talk.homeDir)}`] : []),
+      ...(line?.noteBelow && line.note !== undefined ? [`        ${line.note}`] : []),
+    ];
+    return [text, ...below];
   });
 }
 

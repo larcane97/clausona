@@ -135,6 +135,18 @@ function runsLines(line: PlanLine, key: string, opts: Opts): DialogLine[] {
   }));
 }
 
+/** Under a line whose note names the file to fix (`noteBelow`), that note, whole, wrapped to the width. */
+function noteLines(line: PlanLine, key: string, opts: Opts): DialogLine[] {
+  if (!line.noteBelow || line.note === undefined) return [];
+  return wrapped(line.note, opts.width - NOTE_LEAD.length).map((text, at) => ({
+    key: `${key}-note-${at}`,
+    text: `${NOTE_LEAD}${text}`,
+  }));
+}
+
+/** Where a note under its change line starts. */
+const NOTE_LEAD = "  ";
+
 /**
  * The change lines: one per plan line - file, what, note - or with several accounts to pick from,
  * one per account. A picker line too wide for its file leaves the file out: the account says whose
@@ -146,13 +158,13 @@ function changeLines(dialog: Extract<Dialog, { type: "plan" }>, opts: Opts): Dia
   const lines = plan.changes.flatMap((change) => change.lines);
   const plain = (rows: PlanLine[], from: number): DialogLine[] =>
     aligned(
-      rows.map((line) => [home(line.file), line.what, line.note ?? ""]),
+      rows.map((line) => [home(line.file), line.what, line.noteBelow ? "" : (line.note ?? "")]),
       opts.width,
       0,
     ).flatMap((text, at) => {
       const key = `change-${from + at}`;
       const line = rows[at];
-      return [{ key, text }, ...(line ? runsLines(line, key, opts) : [])];
+      return [{ key, text }, ...(line ? [...runsLines(line, key, opts), ...noteLines(line, key, opts)] : [])];
     });
   const accounts = plan.accounts ?? [];
   if (accounts.length <= 1) return plain(lines, 0);

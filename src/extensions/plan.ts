@@ -72,6 +72,12 @@ export type PlanLine = {
   account?: string;
   /** "link only, target kept", "changes the repo". */
   note?: string;
+  /**
+   * Show `note` on a line of its own under the change, as `runs` is: a sentence that ends in the
+   * file to fix ("stays off in this project until Codex can read …"), which the note column would
+   * cut first. JSON has it in `note` all the same.
+   */
+  noteBelow?: true;
   tracked: boolean;
   /** Row keys. */
   rows: string[];
@@ -340,6 +346,7 @@ function lineFor(
     create?: boolean;
     account?: string | undefined;
     note?: string | undefined;
+    noteBelow?: boolean;
   } = {},
 ): PlanLine {
   return {
@@ -348,6 +355,7 @@ function lineFor(
     what,
     ...(more.account !== undefined ? { account: more.account } : {}),
     ...(more.note !== undefined ? { note: more.note } : {}),
+    ...(more.note !== undefined && more.noteBelow === true ? { noteBelow: true as const } : {}),
     tracked: false,
     rows: [row.key],
   };
@@ -390,9 +398,11 @@ function tomlChange(
   expect: Expect[],
   what: string,
   create: boolean,
+  /** Where Codex refuses the project's config.toml: that the row stays off there, under the line. */
   note?: string,
 ): FileChange {
-  return { kind: "toml", file, edits, expect, create, lines: [lineFor(run, row, file, what, { create, note })] };
+  const line = lineFor(run, row, file, what, { create, note, noteBelow: true });
+  return { kind: "toml", file, edits, expect, create, lines: [line] };
 }
 
 function removal(
