@@ -330,8 +330,9 @@ describe("skills ls", () => {
       "No .mcp.json in the folders above this project, and no .codex folder there has MCP servers.",
     );
     expect(await parents("hooks")).toBe("No .codex folder above this project has hooks.");
-    expect(await parents("hooks", "--tool", "claude")).toBe(
-      "Claude Code reads no hooks from the folders above a project.",
+    expect(await parents("hooks", "--tool", "claude")).toBe("Only Codex has hooks in Parent folders.");
+    expect(await parents("skills", "--tool", "codex")).toBe(
+      "No .agents/skills or .codex/skills in a folder above this project.",
     );
   });
 });
@@ -380,9 +381,9 @@ describe("ls with no project (Review Focus 3)", () => {
 describe("ls options", () => {
   it("refuses a value or a scope that does not apply, as bad usage", async () => {
     const { h, app } = seed();
-    expect(await failure(run(h, app, "skills", ["ls", "--scope", "parents"]))).toMatchObject({
+    expect(await failure(run(h, app, "skills", ["ls", "--scope", "managed"]))).toMatchObject({
       code: 2,
-      message: "--scope parents does not apply to skills.",
+      message: "--scope managed does not apply to skills.",
     });
     expect(await failure(run(h, app, "hooks", ["ls", "--scope", "cloud"]))).toMatchObject({ code: 2 });
     expect(await failure(run(h, app, "mcp", ["ls", "--scope", "unused"]))).toMatchObject({ code: 2 });
@@ -422,7 +423,7 @@ describe("ls options", () => {
     expect(JSON.parse(scope.stdout ?? "")).toEqual({
       version: 1,
       error: "usage",
-      message: "--scope takes loaded, project, global, cloud, plugins, builtin, other, unused or all.",
+      message: "--scope takes loaded, project, parents, global, cloud, plugins, builtin, other, unused or all.",
     });
     const missing = await failure(run(h, app, "skills", ["show", "nope", "--json"]));
     expect(missing.code).toBe(1);
@@ -448,9 +449,9 @@ describe("ls options", () => {
   it("takes every scope each command has", async () => {
     const { h, app } = seed();
     const scopes: Record<ExtensionsCommand, string[]> = {
-      skills: ["loaded", "project", "global", "cloud", "plugins", "builtin", "other", "unused", "all"],
+      skills: ["loaded", "project", "parents", "global", "cloud", "plugins", "builtin", "other", "unused", "all"],
       mcp: ["loaded", "project", "parents", "global", "plugins", "managed", "other", "all"],
-      hooks: ["loaded", "project", "global", "plugins", "managed", "other", "all"],
+      hooks: ["loaded", "project", "parents", "global", "plugins", "managed", "other", "all"],
     };
     for (const [command, list] of Object.entries(scopes) as [ExtensionsCommand, string[]][]) {
       for (const scope of list) {
@@ -1375,6 +1376,45 @@ describe("Codex hooks and Codex's trust", () => {
     expect(project.items.map((i: { summary: Record<string, string> }) => i.summary)).toEqual([
       { transport: "stdio", command: "sub-shared", env: "A" },
     ]);
+  });
+
+  it("lists the skills folders Codex reads from the project root down, whatever the trust", async () => {
+    const { h, app, repos } = parentHome(() => "");
+    // The root's own entry says untrusted, and app has none: skills/list still listed them all.
+    h.write(
+      ".codex/config.toml",
+      `project_root_markers = [".hg"]\n\n[projects.${JSON.stringify(repos)}]\ntrust_level = "untrusted"\n`,
+    );
+    const root = h.skill("repos/.agents/skills", "rootskill");
+    const rootCodex = h.skill("repos/.codex/skills", "rcskill");
+    const own = h.skill("repos/app/.agents/skills", "subskill");
+    const ownCodex = h.skill("repos/app/.codex/skills", "scskill");
+    h.skill("repos/app/deep/.agents/skills", "deepskill");
+    type Row = { name: string; file: string; state: string };
+    const rows = async (scope: string) =>
+      (
+        JSON.parse(await run(h, app, "skills", ["ls", "--tool", "codex", "--scope", scope, "--json"])).items as Row[]
+      ).map((i) => [i.name, i.file, i.state]);
+    // What Codex 0.159.3's skills/list gave started in a folder below the root, the root untrusted.
+    expect(await rows("parents")).toEqual([
+      ["rcskill", rootCodex, "on"],
+      ["rootskill", root, "on"],
+    ]);
+    expect(await rows("project")).toEqual([
+      ["scskill", ownCodex, "on"],
+      ["subskill", own, "on"],
+    ]);
+    const loaded = JSON.parse(await run(h, app, "skills", ["ls", "--tool", "codex", "--json"])).items;
+    expect(loaded.map((i: { name: string }) => i.name)).toEqual([
+      "eli5",
+      "rcskill",
+      "rootskill",
+      "scskill",
+      "subskill",
+    ]);
+    // With no marker, Codex reads the project's own alone.
+    h.write(".codex/config.toml", "project_root_markers = []\n");
+    expect(await rows("parents")).toEqual([]);
   });
 
   it("switches a parent folder's server in the project's own config.toml, and deletes it in the parent's", async () => {

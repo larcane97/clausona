@@ -230,8 +230,11 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
     jobs.push(
       (async () => {
         // Where Codex looks for the project's trust, and its main checkout in a linked worktree;
-        // with no project recorded, Codex trusts none, and runs none of its hooks.
-        const roots = trustRecorded ? await codexRoots(project.path, markers) : undefined;
+        // with no project recorded, Codex trusts none, and runs none of its hooks. Its skills
+        // Codex reads whatever the trust, from the project root down.
+        const found = await codexRoots(project.path, markers);
+        await readProjectSkills(ctx, project.path, found.root, here, out);
+        const roots = trustRecorded ? found : undefined;
         if (roots) out.facts.codexTrustFolders[pathKey(project.path)] = roots.folders;
         const own = path.dirname(codexProjectConfig(project.path));
         // Codex reads a worktree's main checkout's hooks only for a .codex folder there is.
@@ -433,14 +436,8 @@ async function parentLayers(
   markers: readonly string[],
   out: Collector,
 ): Promise<Layer[]> {
-  if (root === undefined || samePath(root, project) || !isWithin(project, root)) return [];
-  const dirs: string[] = [];
-  for (let dir = path.dirname(project); isWithin(dir, root); dir = path.dirname(dir)) {
-    dirs.unshift(dir);
-    if (samePath(dir, root) || path.dirname(dir) === dir) break;
-  }
   const layers: Layer[] = [];
-  for (const dir of dirs) {
+  for (const dir of foldersAbove(project, root)) {
     const folder = path.join(dir, ".codex");
     if ((await entryInfo(folder)).kind !== "dir" || samePath(folder, ctx.primary.dir)) continue;
     const roots = await codexRoots(dir, markers);
@@ -472,6 +469,48 @@ async function parentLayers(
     });
   }
   return layers;
+}
+
+/** The folders from the project root `root` down to `project`'s parent, root first; none without a root. */
+function foldersAbove(project: string, root: string | undefined): string[] {
+  if (root === undefined || samePath(root, project) || !isWithin(project, root)) return [];
+  const dirs: string[] = [];
+  for (let dir = path.dirname(project); isWithin(dir, root); dir = path.dirname(dir)) {
+    dirs.unshift(dir);
+    if (samePath(dir, root) || path.dirname(dir) === dir) break;
+  }
+  return dirs;
+}
+
+/**
+ * The skills Codex 0.159.3 reads for `project` beside its `.agents/skills` (read on its own):
+ * its `.codex/skills`, and in each folder from the project root (`root`) down to it, that
+ * folder's `.agents/skills` and `.codex/skills` - whatever Codex's trust of any of them, as
+ * skills/list showed, and none of a folder below the project or beside it. Codex's own home is
+ * no such folder: its skills are the user's.
+ */
+async function readProjectSkills(
+  ctx: CodexContext,
+  project: string,
+  root: string | undefined,
+  here: SkillLocation,
+  out: Collector,
+): Promise<void> {
+  const codexSkills = (dir: string) => {
+    const folder = path.join(dir, ".codex");
+    return samePath(folder, ctx.primary.dir) ? undefined : path.join(folder, "skills");
+  };
+  const reads: Promise<void>[] = [];
+  const own = codexSkills(project);
+  if (own !== undefined) reads.push(readCodexSkills(own, here, `${project}#.codex`, out));
+  for (const dir of foldersAbove(project, root)) {
+    const depth = path.relative(dir, project).split(path.sep).filter(Boolean).length;
+    const at: SkillLocation = { ...here, layer: dir };
+    reads.push(readCodexSkills(path.join(dir, ".agents", "skills"), at, `${project}#up${depth}`, out));
+    const folder = codexSkills(dir);
+    if (folder !== undefined) reads.push(readCodexSkills(folder, at, `${project}#up${depth}.codex`, out));
+  }
+  await Promise.all(reads);
 }
 
 /** What a worktree's id for one of its main checkout's hooks puts before the hook's place. */

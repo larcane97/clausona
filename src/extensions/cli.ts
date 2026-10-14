@@ -480,10 +480,11 @@ function nothingToList(command: ExtensionsCommand, scope: Scope, tools: ToolName
       if (!tools.includes("codex")) {
         return mcpjson
           ? "No .mcp.json in the folders above this project."
-          : `Claude Code reads no ${noun} from the folders above a project.`;
+          : `Only Codex has ${noun} in Parent folders.`;
       }
-      return mcpjson
-        ? `No .mcp.json in the folders above this project, and no .codex folder there has ${noun}.`
+      if (mcpjson) return `No .mcp.json in the folders above this project, and no .codex folder there has ${noun}.`;
+      return command === "skills"
+        ? "No .agents/skills or .codex/skills in a folder above this project."
         : `No .codex folder above this project has ${noun}.`;
     }
     case "plugins":

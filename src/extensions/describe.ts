@@ -382,7 +382,7 @@ const PROJECT_FILES: Record<ToolName, Record<ItemKind, (here: string) => string>
     hook: (here) => `.claude/settings.json and .claude/settings.local.json in ${here}`,
   },
   codex: {
-    skill: (here) => `.agents/skills in ${here}`,
+    skill: (here) => `.agents/skills and .codex/skills in ${here}`,
     mcp: (here) => `.codex/config.toml in ${here}`,
     hook: (here) => `.codex/hooks.json and .codex/config.toml in ${here}`,
   },
@@ -430,9 +430,10 @@ function sentence(scope: ScopeId, tool: ToolName, kind: ItemKind, inv: Inventory
       const dirs = [...new Set(inScope(inv, tool, kind, "parents", project).map(folder))]
         .sort((a, b) => b.length - a.length)
         .map((dir) => tilde(dir, inv.homeDir));
-      const file = tool === "codex" ? ".codex" : ".mcp.json";
+      const file = tool === "claude" ? ".mcp.json" : kind === "skill" ? ".agents/skills and .codex/skills" : ".codex";
+      const some = tool === "claude" ? ".mcp.json files" : kind === "skill" ? "skills folders" : ".codex folders";
       return dirs.length === 0
-        ? `${file} ${tool === "codex" ? "folders" : "files"} in folders above this project · ${kind === "hook" ? "run" : "load"} here too`
+        ? `${some} in folders above this project · ${kind === "hook" ? "run" : "load"} here too`
         : `${file} in ${fewPlaces(dirs)} · ${loads} here too`;
     }
     case "global": {

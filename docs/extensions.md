@@ -61,7 +61,7 @@ worked out from the others.
 |---|---|---|---|
 | Loaded | `loaded` | every tool and kind | `what Claude Code loads in ~/app, in at least one account` |
 | Project | `project` | every tool and kind | the project's own files, listed below |
-| Parent folders | `parents` | Claude MCP, Codex MCP and hooks | Claude: `.mcp.json in ~/repos · loads here too`; Codex: `.codex in ~/repos · loads here too` |
+| Parent folders | `parents` | Claude MCP; Codex skills, MCP and hooks | Claude: `.mcp.json in ~/repos · loads here too`; Codex: `.codex in ~/repos · loads here too`, for skills `.agents/skills and .codex/skills in ~/repos · loads here too` |
 | Global | `global` | every tool and kind | the user's own files, listed below, then `· loads in every project` |
 | Cloud | `cloud` | Claude skills | `skills on your claude.ai accounts, different per account` |
 | Plugins | `plugins` | every tool and kind | `plugins that bring skills, installed for you or for this project` |
@@ -81,7 +81,7 @@ Project and Global are these files. The header names the folders it found.
 | Claude skills | `.claude/skills` and `.claude/commands` | `~/.claude/skills` and `~/.claude/commands`, and an account's own `skills` and `commands` folders |
 | Claude MCP | `.mcp.json`, and each account's entry for the project in `.claude.json` | user servers in each account's `.claude.json` |
 | Claude hooks | `.claude/settings.json` and `.claude/settings.local.json` | `~/.claude/settings.json` |
-| Codex skills | `.agents/skills` | `~/.agents/skills` and the `skills` folder of Codex's home |
+| Codex skills | `.agents/skills` and `.codex/skills` | `~/.agents/skills` and the `skills` folder of Codex's home |
 | Codex MCP | `.codex/config.toml` | `config.toml` in Codex's home |
 | Codex hooks | `.codex/hooks.json`, and `[hooks]` in `.codex/config.toml` | `hooks.json` in Codex's home, and `[hooks]` in its `config.toml` |
 
@@ -99,7 +99,7 @@ The screen lists the scopes of each tool and kind in this order:
 | Claude skills | Loaded, Project, Global, Cloud, Plugins, Built-in, Not used in 90 days |
 | Claude MCP | Loaded, Project, Parent folders, Global, Plugins, Managed |
 | Claude hooks | Loaded, Project, Global, Plugins, Managed |
-| Codex skills | Loaded, Project, Global, Plugins, Built-in |
+| Codex skills | Loaded, Project, Parent folders, Global, Plugins, Built-in |
 | Codex MCP | Loaded, Project, Parent folders, Global, Plugins |
 | Codex hooks | Loaded, Project, Parent folders, Global, Plugins |
 
@@ -122,7 +122,9 @@ Some scopes need a word more:
   folder's `.codex` by that folder's own trust (see Codex's trust under
   [States and tags](#states-and-tags)), and never its own home. So does clausona: what such a
   folder's `config.toml` and `hooks.json` hold is listed here, each row with its file, as in
-  `~/repos/.codex/config.toml`. clausona treats a repository's root as the project wherever in
+  `~/repos/.codex/config.toml`. Codex's skills come from the same folders, whatever their trust:
+  each folder's `.agents/skills` and `.codex/skills`, from the root down to the project, and
+  none from a folder below the project or beside it. clausona treats a repository's root as the project wherever in
   it you start, so this is mostly a folder above a repository that a marker of yours makes the
   root, or a project recorded inside one. Look from such a project with `--project` and its
   path, or pick it in the screen's project list; from anywhere else its rows are under Other
@@ -603,7 +605,7 @@ exits 2.
 |---|---|---|---|---|
 | `loaded` | Loaded, the default | ✓ | ✓ | ✓ |
 | `project` | Project | ✓ | ✓ | ✓ |
-| `parents` | Parent folders | | ✓ | ✓ |
+| `parents` | Parent folders | ✓ | ✓ | ✓ |
 | `global` | Global | ✓ | ✓ | ✓ |
 | `cloud` | Cloud | ✓ | | |
 | `plugins` | Plugins | ✓ | ✓ | ✓ |
@@ -723,7 +725,10 @@ same when a plugin updates; a copy's id holds the plugin's install folder, which
 hook's id holds its place in its file (`#<group>.<index>`), which moves when hooks above it are
 added or removed. In a linked worktree, the main checkout's Codex hooks are the worktree's rows:
 their id holds the worktree's path, with `main:` before the place, as in
-`hook:codex:project:<worktree>:Stop#main:0.0`.
+`hook:codex:project:<worktree>:Stop#main:0.0`. What a folder above a Codex project holds
+(Parent folders) is that project's rows too: the owner part is the project's path with `#up<N>`
+after it, N folders up (`#up1.codex` for that folder's `.codex/skills`, `#.codex` for the
+project's own), and a hook's place has `up<N>:` before it.
 
 `--id`, and a name given as an id, take a row key or the id of any copy. For `show`, a copy's
 id picks its whole row. A change takes that copy alone, so `csn mcp rm --id` with one account's
@@ -1607,7 +1612,7 @@ csn skills ls --scope project --json
 ```
 
 Read `name` and `file`, the skill's folder. Claude's come from `.claude/skills` and
-`.claude/commands`, Codex's from `.agents/skills`. A Claude skill tagged
+`.claude/commands`, Codex's from `.agents/skills` and `.codex/skills`. A Claude skill tagged
 `hidden by Global copy` is defined here, but a Global skill of the same name loads instead.
 
 ### Which Claude skills haven't been used in 90 days?

@@ -53,7 +53,7 @@ const ORDER: Record<ToolName, Record<ItemKind, readonly ScopeId[]>> = {
     hook: ["loaded", "project", "global", "plugins", "managed"],
   },
   codex: {
-    skill: ["loaded", "project", "global", "plugins", "builtin"],
+    skill: ["loaded", "project", "parents", "global", "plugins", "builtin"],
     mcp: ["loaded", "project", "parents", "global", "plugins"],
     hook: ["loaded", "project", "parents", "global", "plugins"],
   },

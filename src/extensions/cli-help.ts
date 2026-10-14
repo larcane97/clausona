@@ -20,7 +20,7 @@ export type Scope = ScopeId | "all";
 
 /** The scopes each command has in either tool, in the order the help lists them. */
 export const SCOPES: Record<ExtensionsCommand, readonly Scope[]> = {
-  skills: ["loaded", "project", "global", "cloud", "plugins", "builtin", "other", "unused", "all"],
+  skills: ["loaded", "project", "parents", "global", "cloud", "plugins", "builtin", "other", "unused", "all"],
   mcp: ["loaded", "project", "parents", "global", "plugins", "managed", "other", "all"],
   hooks: ["loaded", "project", "parents", "global", "plugins", "managed", "other", "all"],
 };
