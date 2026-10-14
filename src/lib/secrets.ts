@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { isKnownSecretSource } from "../core/key-source.js";
-import { spawnCommand } from "../core/process.js";
+import { spawnCommand, spawnCommandSync } from "../core/process.js";
 import { isPosixEnvName } from "../core/shell.js";
 import type { SecretSource } from "../types.js";
 
@@ -23,6 +23,14 @@ export function keychainItemFor(profileId: string): string {
 type RunResult = { code: number; stdout: string; timedOut?: true };
 
 /**
+ * Whether a child is still running. Until Node has seen it exit its pid is its own, and nothing
+ * else can be given it; once it has exited, its pid can be another process's.
+ */
+function running(child: ChildProcess): child is ChildProcess & { pid: number } {
+  return child.pid !== undefined && child.exitCode === null && child.signalCode === null;
+}
+
+/**
  * Kills a running child. On POSIX, with `group`, the child is the sh that leads the command's
  * process group (run() starts a detached command so, ENDS_ITS_GROUP), and the whole group is
  * killed: the command, and a `sh -c` command's own children, which would outlive the shell, among
@@ -32,7 +40,7 @@ type RunResult = { code: number; stdout: string; timedOut?: true };
  * the group a TERM.
  */
 function killRunning(child: ChildProcess, group: boolean): void {
-  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+  if (!running(child)) return;
   if (process.platform === "win32") {
     spawnCommand("taskkill", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore" }).on("error", () => {});
     return;
@@ -48,24 +56,66 @@ function killRunning(child: ChildProcess, group: boolean): void {
 const KILL_GRACE_MS = 2_000;
 
 /**
- * Ends a command that keeps the terminal, at its limit. On POSIX it is sent SIGINT, as Ctrl-C would
- * send: a prompt that turned the terminal's echo off for a passphrase or a PIN turns it back on
- * when interrupted, which SIGKILL and SIGTERM leave it no chance to do. If it is still running
- * after KILL_GRACE_MS, it is killed. Each goes to its own pid alone, since its group is clausona's,
- * and only while it is still running. Windows kills its tree at once, as killRunning does.
+ * `pid` and every process under it - its children, theirs, and so on - from one listing of every
+ * process (`ps`, run without a shell). Just `pid` when that cannot be listed.
+ */
+function processTree(pid: number): number[] {
+  let listed: string;
+  try {
+    const ps = spawnCommandSync("ps", ["-A", "-o", "pid=", "-o", "ppid="], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    if (ps.status !== 0 || typeof ps.stdout !== "string") return [pid];
+    listed = ps.stdout;
+  } catch {
+    return [pid];
+  }
+  const children = new Map<number, number[]>();
+  for (const line of listed.split("\n")) {
+    const [each, parent] = line.trim().split(/\s+/).map(Number);
+    if (!Number.isInteger(each) || !Number.isInteger(parent)) continue;
+    children.set(parent, [...(children.get(parent) ?? []), each]);
+  }
+  const tree = [pid];
+  for (let i = 0; i < tree.length; i++) {
+    for (const each of children.get(tree[i]) ?? []) if (!tree.includes(each)) tree.push(each);
+  }
+  return tree;
+}
+
+/** Sends `signal` to each pid that is still there. */
+function signalEach(pids: number[], signal: NodeJS.Signals): void {
+  for (const pid of pids) {
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // Gone already.
+    }
+  }
+}
+
+/**
+ * Ends a command that keeps the terminal, at its limit, with what it started: a `sh -c` command's
+ * children - a pipeline's, or `cmd1; cmd2`'s - are in clausona's own process group, and can hold
+ * the prompt. On POSIX they are sent SIGINT, as Ctrl-C would send: a prompt that turned the
+ * terminal's echo off for a passphrase or a PIN turns it back on when interrupted, which SIGKILL
+ * and SIGTERM leave it no chance to do. If the command is still running after KILL_GRACE_MS, its
+ * tree, listed again, is killed. Each pid is signalled alone, never the group, which is clausona's,
+ * and only while the command is still running: once it has exited, nothing is, not even a pid
+ * listed before, which can be another process's by then. So a child that ignored SIGINT and
+ * outlived the command is left running. Windows kills its tree at once, as killRunning does.
  */
 function interrupt(child: ChildProcess): void {
   if (process.platform === "win32") {
     killRunning(child, false);
     return;
   }
-  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
-  try {
-    process.kill(child.pid, "SIGINT");
-  } catch {
-    return;
-  }
-  const grace = setTimeout(() => killRunning(child, false), KILL_GRACE_MS);
+  if (!running(child)) return;
+  signalEach(processTree(child.pid), "SIGINT");
+  const grace = setTimeout(() => {
+    if (running(child)) signalEach(processTree(child.pid), "SIGKILL");
+  }, KILL_GRACE_MS);
   child.once("exit", () => clearTimeout(grace));
 }
 
@@ -166,8 +216,8 @@ type RunOptions = {
   /** Bounds the run, the command started in a process group of its own for it. */
   signal?: AbortSignal;
   /**
-   * How long a command that keeps the terminal may run: past it, the command itself is ended
-   * (interrupt), if it is still running, and the result says so at once.
+   * How long a command that keeps the terminal may run: past it, the command and what it started
+   * are ended (interrupt), if it is still running, and the result says so at once.
    */
   limitMs?: number;
 };
@@ -452,8 +502,8 @@ async function readStoredSecret(
  *
  * `signal` bounds a key that a command or the Keychain gives: once it aborts, what was started
  * for it is killed, and the key is not read. Without one, a key command keeps the terminal, where
- * it can prompt, and `limitMs` bounds it instead: past it, the command itself is interrupted, and
- * killed if it goes on running (interrupt), and the key is not read.
+ * it can prompt, and `limitMs` bounds it instead: past it, the command and what it started are
+ * interrupted, and killed if it goes on running (interrupt), and the key is not read.
  */
 export async function resolveSecret(
   profileId: string,
