@@ -84,8 +84,14 @@ const ACCOUNT_STATE_SIBLING =
 // - The background daemon: `daemon/` holds its control key, the roster of the sessions it runs,
 //   their tokens, and the nonce its Windows pipe is named by. On Windows a profile linking the
 //   primary's reaches the primary's daemon, which runs its sessions on the primary's sign-in;
-//   elsewhere two accounts' daemons write one roster. `daemon-auth-status.json` says whether the
-//   daemon's account must sign in again, and `daemon-auth-cooldown` when it may next ask.
+//   elsewhere two accounts' daemons write one roster. `daemon.lock` names the daemon's pid, which
+//   Claude Code stops when it cannot reach that daemon, and `daemon.status.json` and
+//   `daemon.scheduled.status.json` its workers. `daemon.json` holds the workers it runs: scheduled
+//   tasks (a prompt, a folder, a cron) and the folders it serves for Remote Control, each run on
+//   the daemon's own sign-in, so shared, every account would run the same tasks again on its own
+//   quota. `daemon.log` is its log. `daemon-auth-status.json` says whether the daemon's account
+//   must sign in again, and `daemon-auth-cooldown` when it may next ask. Claude Code leaves every
+//   name starting with `daemon` out of a snapshot of the dir, and so does this.
 // - `telemetry/` holds events that failed to send, stamped with the account and org. A later run
 //   of the same session sends them again, on whichever account resumed it.
 // - `.session_ingress_token` and `hfi-auth.json` hold tokens of hosted sessions.
@@ -99,6 +105,11 @@ const ACCOUNT_DIR_STATE = [
   "daemon",
   "daemon-auth-cooldown",
   "daemon-auth-status.json",
+  "daemon.lock",
+  "daemon.status.json",
+  "daemon.scheduled.status.json",
+  "daemon.json",
+  "daemon.log",
   "telemetry",
   ".session_ingress_token",
   "hfi-auth.json",
@@ -135,7 +146,7 @@ function claudeUnsharedRisk(name: string): UnsharedRisk | undefined {
   // file, which the skip set has kept apart since the first release.
   const family = name.startsWith(".claude.json.")
     ? ".claude.json."
-    : name.match(/^(?:policy-limits\.json|remote-settings\.json|\.session_ingress_token)/)?.[0];
+    : name.match(/^(?:policy-limits\.json|remote-settings\.json|\.session_ingress_token|daemon\.log)/)?.[0];
   switch (family ?? name) {
     case "policy-limits.json":
       return {
@@ -191,6 +202,24 @@ function claudeUnsharedRisk(name: string): UnsharedRisk | undefined {
         risk: "wrong_account",
         why: "so this profile uses the primary's daemon directory: its control key, roster and session tokens, and on Windows the primary's daemon itself, which runs on the primary's account",
       };
+    case "daemon.lock":
+      return {
+        risk: "wrong_account",
+        why: "so this profile reads the primary's daemon lock as its own daemon's, and Claude Code here can stop the primary's daemon as this profile's",
+      };
+    case "daemon.status.json":
+    case "daemon.scheduled.status.json":
+      return {
+        risk: "isolation",
+        why: "so this profile reads the status of the primary account's daemon and its workers",
+      };
+    case "daemon.json":
+      return {
+        risk: "isolation",
+        why: "so this profile's daemon runs the primary's scheduled tasks and serves its Remote Control folders, on this account",
+      };
+    case "daemon.log":
+      return { risk: "isolation", why: "so this profile's daemon writes into the primary account's daemon log" };
     case "daemon-auth-cooldown":
     case "daemon-auth-status.json":
       return {
@@ -830,7 +859,10 @@ export const claudeAdapter: ToolAdapter & Required<Pick<ToolAdapter, "sharedSkip
       ...(mergeSessions ? [] : SESSION_SCOPED),
     ]),
   shouldSkipName: (name) =>
-    ACCOUNT_STATE_SIBLING.test(name) || ACCOUNT_DIR_STATE_SIBLING.test(name) || TEMP_LEFTOVER.test(name),
+    ACCOUNT_STATE_SIBLING.test(name) ||
+    ACCOUNT_DIR_STATE_SIBLING.test(name) ||
+    name.startsWith("daemon") ||
+    TEMP_LEFTOVER.test(name),
   unsharedRisk: claudeUnsharedRisk,
   rewritesWhole: (name) => REWRITTEN_WHOLE.has(name),
   // postSetup is left undefined here — service.ts's syncPluginsJson is wired into the

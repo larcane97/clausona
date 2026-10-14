@@ -200,10 +200,16 @@ describe("the rest of Claude Code's state for one config dir", () => {
       ".claude-custom-oauth.json",
       ".config.json",
       "backups",
-      // The background daemon, its control key and roster, and its sign-in state.
+      // The background daemon: its control key and roster, its lock and status, the scheduled
+      // tasks and Remote Control folders it runs, its log, and its sign-in state.
       "daemon",
       "daemon-auth-cooldown",
       "daemon-auth-status.json",
+      "daemon.lock",
+      "daemon.status.json",
+      "daemon.scheduled.status.json",
+      "daemon.json",
+      "daemon.log",
       // Events stamped with the account, waiting to be sent again.
       "telemetry",
       ".session_ingress_token",
@@ -212,6 +218,12 @@ describe("the rest of Claude Code's state for one config dir", () => {
       expect(keptApart(name, false), `${name} when separated`).toBe(true);
       expect(keptApart(name, true), `${name} when merged`).toBe(true);
       expect(claudeAdapter.sharedSkipSet(true).has(name), `${name} by name`).toBe(true);
+    }
+  });
+
+  it("keeps every name that starts with daemon apart, as Claude Code's own list of state does", () => {
+    for (const name of ["daemon.log.1", "daemon.lock.tmp.0a1b2c3d", "daemon-worker.json", "daemons"]) {
+      expect(keptApart(name, true), name).toBe(true);
     }
   });
 
@@ -259,7 +271,7 @@ describe("the rest of Claude Code's state for one config dir", () => {
   });
 
   it("leaves names that only start alike shared", () => {
-    for (const name of [".claude-code-router.json", "config.json", "daemonize.sh", "telemetry.md", "backups-old"]) {
+    for (const name of [".claude-code-router.json", "config.json", "my-daemon.json", "telemetry.md", "backups-old"]) {
       expect(keptApart(name, true), name).toBe(false);
     }
   });

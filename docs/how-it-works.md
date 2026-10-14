@@ -231,7 +231,7 @@ than configuration, and clausona went through it one entry at a time.
 | `mcp-needs-auth-cache.json` | own | The MCP servers and claude.ai connectors that need this account's sign-in. |
 | `state/` | own | Per-account records, such as MCP discovery verdicts. |
 | `chrome/` | own | The Claude in Chrome host that Claude Code writes for its config directory. |
-| `daemon/`, `daemon-auth-status.json`, `daemon-auth-cooldown` | own | The background daemon: its control key, the roster of the sessions it runs and its sign-in state. On Windows a profile linking the primary's `daemon/` reaches the primary's daemon, which runs on the primary's account. |
+| `daemon/` and every other name starting with `daemon`: `daemon.json`, `daemon.lock`, `daemon.status.json`, `daemon.scheduled.status.json`, `daemon.log`, `daemon-auth-status.json`, `daemon-auth-cooldown` | own | The background daemon: its control key, the roster of the sessions it runs, its lock and status, the workers it runs, its log and its sign-in state. `daemon.json` holds the scheduled tasks and the Remote Control folders, which the daemon runs on its own account: shared, every account's daemon would run them again. On Windows a profile linking the primary's `daemon/` reaches the primary's daemon, which runs on the primary's account. |
 | `telemetry/` | own | Events that failed to send, stamped with the account and org. A later run of the same session sends them again, on whichever account resumed it. |
 | `.session_ingress_token`, `hfi-auth.json` | own | Tokens of hosted sessions. |
 | `cache/`, `mcp-discovery-cache/`, `stats-cache.json`, `feedback/`, `active-time.json` | own | Caches and ledgers of the account Claude Code runs as: the models it was refused or served, MCP discovery, the `/stats` numbers, feedback drafts waiting to be sent, active time. Shared, two profiles overwrite each other's numbers, and a draft could go out on another account. |
@@ -243,9 +243,13 @@ than configuration, and clausona went through it one entry at a time.
 | Everything else: `settings.json`, `CLAUDE.md`, `skills/`, `agents/`, `commands/`, ... | shared | Your configuration. |
 
 Some entries on Claude Code's list stay shared, because you write them or sessions refer to them,
-or because nothing showed that sharing them does harm: `daemon.json` (the daemon's settings),
-`daemon.log`, `usage-data/`, `debug/`, `loop.md` and the like. `ide/` is shared too: Claude Code
+or because nothing showed that sharing them does harm: `usage-data/`, `debug/`, `loop.md` and the
+like. `ide/` is shared too: Claude Code
 finds a running IDE through it, and reads `~/.claude/ide` from every profile in any case.
+
+Scheduled tasks and Remote Control set up on the primary stay with the primary, in its
+`daemon.json`. A profile sets its own, with `claude daemon scheduled add` or `claude daemon
+remote-control add` run in that profile.
 
 Profiles set up by clausona 0.8.0-beta or earlier link the account entries above to the primary's.
 `clausona doctor` reports each such link with what the profile reads of the primary account's
