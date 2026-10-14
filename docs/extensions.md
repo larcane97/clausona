@@ -1248,7 +1248,9 @@ other accounts' copies too. Where Claude Code and Codex have recorded no project
 says `Run csn in a project.` instead, since `p` has none to pick. Where git did not answer in
 time, `tracked` says
 `Git did not answer in time whether it tracks it in <project>, so this may change the repo.`
-instead, with the same hints: it counts as tracked.
+instead, with the same hints: it counts as tracked. For a server a parent folder's `.codex`
+defines, `codex-project-everywhere` says
+`It is defined in <file>, for the projects below that folder.` instead, with the same hints.
 
 ## JSON
 

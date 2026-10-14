@@ -15,6 +15,7 @@ import {
   NO_PROJECT_KEYS,
   ONE_ACCOUNT_KEYS,
   ownValue,
+  PARENT_EVERYWHERE_REASON,
   type Reach,
   type Refusal,
   type RefusalCode,
@@ -1298,7 +1299,15 @@ function planCodexMcp(run: Run, row: ScopeRow): Outcome {
     const layer = item.location.layer;
     if (project === undefined || !codexTrusted(inv, layer ?? project)) return refused(run, row, "codex-untrusted");
     if (verb === "rm") return deleteServer();
-    if (reach === "everywhere") return refused(run, row, "codex-project-everywhere");
+    if (reach === "everywhere") {
+      const out = refused(run, row, "codex-project-everywhere");
+      const refusal = out.refused[0];
+      // A parent folder's: say whose it is.
+      if (layer !== undefined && refusal) {
+        refusal.reason = PARENT_EVERYWHERE_REASON.replace("{~file}", tilde(own, inv.homeDir));
+      }
+      return out;
+    }
     if (layer === undefined) return inProject(own, project, false);
     // A parent folder's server is switched here in the project's own config.toml, which Codex
     // merges over every parent's, as a user server is.

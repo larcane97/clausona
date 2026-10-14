@@ -292,6 +292,12 @@ export const NO_PROJECT_KEYS = "Run csn in a project.";
  * What `tracked` says instead where git did not answer in time whether it tracks the row: it
  * counts as tracked all the same, so the same consent goes ahead.
  */
+/**
+ * What `codex-project-everywhere` says instead for a server a parent folder's `.codex` defines:
+ * it is that folder's, for every project below it, not this project's alone.
+ */
+export const PARENT_EVERYWHERE_REASON = "It is defined in {~file}, for the projects below that folder.";
+
 export const UNCHECKED_REASON =
   "Git did not answer in time whether it tracks it in {project name}, so this may change the repo.";
 

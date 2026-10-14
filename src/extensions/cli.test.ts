@@ -1503,6 +1503,16 @@ describe("Codex hooks and Codex's trust", () => {
     expect(await plan(["on", "u"])).toEqual([[appFile, "mcp_servers.u.enabled → true"]]);
     expect(await plan(["off", "rootsrv"])).toEqual([[appFile, "mcp_servers.rootsrv.enabled → false"]]);
     expect(await plan(["rm", "rootsrv"])).toEqual([[parentFile, "[mcp_servers.rootsrv] deleted"]]);
+    // Everywhere is refused, as for a project's server, naming the file that defines it.
+    const everywhere = JSON.parse(
+      await run(h, app, "mcp", ["off", "rootsrv", "--everywhere", "--tool", "codex", "--dry-run", "--json"]),
+    );
+    expect(everywhere.refused.map((r: { code: string; reason: string }) => [r.code, r.reason])).toEqual([
+      [
+        "codex-project-everywhere",
+        `It is defined in ${tilde(parentFile, h.home)}, for the projects below that folder. Leave out --everywhere.`,
+      ],
+    ]);
     h.write("repos/app/.codex/config.toml", "[mcp_servers.u]\nenabled = true\n");
     expect(await state()).toEqual([["u", "on", []]]);
   });
