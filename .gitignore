@@ -10,3 +10,6 @@ docs/superpowers/
 .DS_Store
 
 plugins/*/evals/results/
+
+# Page snapshots and screenshots from the Playwright MCP server
+.playwright-mcp/
