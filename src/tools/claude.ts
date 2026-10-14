@@ -109,6 +109,14 @@ const ACCOUNT_DIR_STATE = [
 const ACCOUNT_DIR_STATE_SIBLING =
   /^(?:\.claude(?:-staging-oauth|-local-oauth|-custom-oauth)?\.json|\.config\.json|\.session_ingress_token)\../;
 
+// Caches and ledgers Claude Code keeps for the account it runs as (2.1.299): `cache/` (the models
+// this account was refused or served, its catalog's confidential ids, team discovery),
+// `mcp-discovery-cache/`, `stats-cache.json` (the /stats numbers, which two profiles would
+// overwrite in turn), `feedback/` (drafts queued to be sent, which could go out on another
+// account) and `active-time.json`. A profile whose copy stops following the primary's loses
+// nothing by it.
+const ACCOUNT_CACHES = ["cache", "mcp-discovery-cache", "stats-cache.json", "feedback", "active-time.json"] as const;
+
 // A temp file a save writes beside its target and renames over it, left behind when the save
 // stopped part way. Claude Code's atomic writer names it `<file>.tmp.<8 hex>` and its synchronous
 // one `<file>.tmp.<pid>.<12 hex>` (2.1.299; the two shapes it recognises as its own). The writer
@@ -720,6 +728,7 @@ export const claudeAdapter: ToolAdapter & Required<Pick<ToolAdapter, "sharedSkip
       ...BASE_SHARED_LINK_SKIP,
       ...ACCOUNT_STATE,
       ...ACCOUNT_DIR_STATE,
+      ...ACCOUNT_CACHES,
       ...(mergeSessions ? [] : SESSION_SCOPED),
     ]),
   shouldSkipName: (name) =>

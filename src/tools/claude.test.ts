@@ -228,6 +228,16 @@ describe("the rest of Claude Code's state for one config dir", () => {
     }
   });
 
+  it("keeps the caches and ledgers of the account it runs as apart", () => {
+    // Model access and catalog, MCP discovery, /stats, feedback drafts waiting to be sent, and
+    // active time: a copy that stops following the primary's loses nothing.
+    for (const name of ["cache", "mcp-discovery-cache", "stats-cache.json", "feedback", "active-time.json"]) {
+      expect(keptApart(name, false), `${name} when separated`).toBe(true);
+      expect(keptApart(name, true), `${name} when merged`).toBe(true);
+      expect(claudeAdapter.sharedSkipSet(true).has(name), `${name} by name`).toBe(true);
+    }
+  });
+
   it("shares what carries sessions across accounts when sessions are merged", () => {
     for (const name of [
       "projects",

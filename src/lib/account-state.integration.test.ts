@@ -37,8 +37,8 @@ afterEach(() => {
  * policy limits and remote managed settings with every sibling it names for them, the MCP servers
  * that need this account's sign-in, its `state/` and the Claude in Chrome host it writes for the
  * directory; then copies of the account file, the background daemon with its sign-in state, the
- * telemetry it has yet to send, and the tokens of hosted sessions. Directories are the ones it
- * keeps as directories.
+ * telemetry it has yet to send, the tokens of hosted sessions, and the caches and ledgers of the
+ * account it runs as. Directories are the ones it keeps as directories.
  */
 const ACCOUNT_FILES = [
   "policy-limits.json",
@@ -59,8 +59,10 @@ const ACCOUNT_FILES = [
   "daemon-auth-status.json",
   ".session_ingress_token",
   "hfi-auth.json",
+  "stats-cache.json",
+  "active-time.json",
 ];
-const ACCOUNT_DIRS = ["state", "chrome", "backups", "daemon", "telemetry"];
+const ACCOUNT_DIRS = ["state", "chrome", "backups", "daemon", "telemetry", "cache", "mcp-discovery-cache", "feedback"];
 const ACCOUNT_STATE = [...ACCOUNT_FILES, ...ACCOUNT_DIRS];
 
 /** The one file inside each directory above, holding whose it is. */
@@ -70,6 +72,9 @@ const OWNER_FILE: Record<string, string> = {
   backups: ".claude.json.backup.1760000000000",
   daemon: "roster.json",
   telemetry: "1p_failed_events.session.run.json",
+  cache: "model-access.json",
+  "mcp-discovery-cache": "discovery.json",
+  feedback: "draft.json",
 };
 
 /**

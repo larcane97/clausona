@@ -234,6 +234,7 @@ than configuration, and clausona went through it one entry at a time.
 | `daemon/`, `daemon-auth-status.json`, `daemon-auth-cooldown` | own | The background daemon: its control key, the roster of the sessions it runs and its sign-in state. On Windows a profile linking the primary's `daemon/` reaches the primary's daemon, which runs on the primary's account. |
 | `telemetry/` | own | Events that failed to send, stamped with the account and org. A later run of the same session sends them again, on whichever account resumed it. |
 | `.session_ingress_token`, `hfi-auth.json` | own | Tokens of hosted sessions. |
+| `cache/`, `mcp-discovery-cache/`, `stats-cache.json`, `feedback/`, `active-time.json` | own | Caches and ledgers of the account Claude Code runs as: the models it was refused or served, MCP discovery, the `/stats` numbers, feedback drafts waiting to be sent, active time. Shared, two profiles overwrite each other's numbers, and a draft could go out on another account. |
 | `statsig/`, `image-cache/`, `.last-update-result.json`, `gh-pr-status-cache.json`, `.session-stats.json` | own | State and caches for one config directory. |
 | `plugins/` | own directory | Each entry links to the primary's, except the two JSON files that hold paths. |
 | `projects/`, `jobs/`, `teams/` | shared with merged sessions | One session's transcript and records, kept together. |
@@ -241,11 +242,10 @@ than configuration, and clausona went through it one entry at a time.
 | A temp file a save left behind, `<file>.tmp.<suffix>` | never linked | It holds nothing a profile reads, and a link to one would stay for good. |
 | Everything else: `settings.json`, `CLAUDE.md`, `skills/`, `agents/`, `commands/`, ... | shared | Your configuration. |
 
-Some entries on Claude Code's list stay shared for now, since nothing showed that sharing them
-does harm: `cache/` (model lists and capabilities), `mcp-discovery-cache/`, `daemon.json` (the
-daemon's settings), `daemon.log`, `stats-cache.json`, `usage-data/`, `debug/`, `feedback/` and the
-like. `ide/` is shared too: Claude Code finds a running IDE through it, and reads `~/.claude/ide`
-from every profile in any case.
+Some entries on Claude Code's list stay shared, because you write them or sessions refer to them,
+or because nothing showed that sharing them does harm: `daemon.json` (the daemon's settings),
+`daemon.log`, `usage-data/`, `debug/`, `loop.md` and the like. `ide/` is shared too: Claude Code
+finds a running IDE through it, and reads `~/.claude/ide` from every profile in any case.
 
 Profiles set up by clausona 0.8.0-beta or earlier link the account entries above to the primary's.
 `clausona doctor` reports each such link as `stale_symlink`, and `clausona repair <profile>` takes
