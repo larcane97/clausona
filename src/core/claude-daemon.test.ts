@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -100,7 +100,29 @@ describe.skipIf(process.platform === "win32")("claudeDaemonRunning on macOS and 
 });
 
 describe("claudeDaemonRunning on Windows", () => {
-  const win32 = { platform: "win32" as const };
+  /**
+   * A stand-in for PowerShell that answers the look at a process's command line with `answer`
+   * (a line, or an exit code with nothing printed), and writes what it was asked to `asked`.
+   */
+  function powershellAnswering(answer: string | number): { powershell: string; asked: string } {
+    const dir = scratchTmp();
+    const asked = path.join(dir, "asked.txt");
+    if (process.platform === "win32") {
+      const powershell = path.join(dir, "powershell.cmd");
+      const body = typeof answer === "number" ? `@exit /b ${answer}` : `@echo ${answer}`;
+      writeFileSync(powershell, `@echo %* > "${asked}"\r\n${body}\r\n`);
+      return { powershell, asked };
+    }
+    const powershell = path.join(dir, "powershell");
+    const body = typeof answer === "number" ? `exit ${answer}` : `printf '%s\\n' '${answer.replaceAll("'", "'\\''")}'`;
+    writeFileSync(powershell, `#!/bin/sh\nprintf '%s ' "$@" > '${asked}'\n${body}\n`, { mode: 0o755 });
+    return { powershell, asked };
+  }
+  const daemonCommand = 'cmd:"C:\\Users\\u\\.local\\bin\\claude.exe" daemon run --origin transient --spawned-by {}';
+  const lookingAs = (answer: string | number) => ({ platform: "win32" as const, ...powershellAnswering(answer) });
+  // Made in each case: each case's scratch folders go after each one.
+  const win32 = () => lookingAs(daemonCommand);
+
   /** A config dir whose daemon.lock holds `lock`, as Claude Code writes it. */
   function profileWithLock(lock: unknown): string {
     const dir = scratchTmp();
@@ -108,30 +130,62 @@ describe("claudeDaemonRunning on Windows", () => {
     return dir;
   }
 
-  it("finds the daemon by the profile's own daemon.lock naming a live pid", async () => {
+  it("finds the daemon by the profile's own daemon.lock naming a live Claude Code daemon", async () => {
     const dir = profileWithLock({ pid: process.pid, version: "2.1.299", startedAt: 1 });
-    expect(await claudeDaemonRunning(dir, win32)).toEqual({ running: true, pid: process.pid });
+    const check = lookingAs(daemonCommand);
+    expect(await claudeDaemonRunning(dir, check)).toEqual({ running: true, pid: process.pid });
+    // The process it looked at is the lock's.
+    expect(readFileSync(check.asked, "utf8")).toContain(`ProcessId=${process.pid}`);
+  });
+
+  it("finds it whichever way Claude Code was installed", async () => {
+    const dir = profileWithLock({ pid: process.pid });
+    const npm =
+      'cmd:"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js daemon run --origin service';
+    expect(await claudeDaemonRunning(dir, lookingAs(npm))).toEqual({ running: true, pid: process.pid });
+  });
+
+  it("finds none when the lock's pid is now another program's, or no longer there", async () => {
+    // Windows hands a dead daemon's pid to the next process soon after.
+    const dir = profileWithLock({ pid: process.pid });
+    expect(await claudeDaemonRunning(dir, lookingAs("cmd:C:\\Windows\\System32\\svchost.exe -k netsvcs"))).toEqual({
+      running: false,
+    });
+    expect(await claudeDaemonRunning(dir, lookingAs('cmd:"C:\\Users\\u\\.local\\bin\\claude.exe" --resume'))).toEqual({
+      running: false,
+    });
+    expect(await claudeDaemonRunning(dir, lookingAs("none"))).toEqual({ running: false });
+  });
+
+  it("goes on counting the daemon as running when the look at the process cannot tell", async () => {
+    const dir = profileWithLock({ pid: process.pid });
+    // PowerShell failing, and a command line Windows does not show (another user's process).
+    expect(await claudeDaemonRunning(dir, lookingAs(1))).toEqual({ running: true, pid: process.pid });
+    expect(await claudeDaemonRunning(dir, lookingAs("cmd:"))).toEqual({ running: true, pid: process.pid });
+    expect(
+      await claudeDaemonRunning(dir, { platform: "win32", powershell: path.join(scratchTmp(), "no-such-powershell") }),
+    ).toEqual({ running: true, pid: process.pid });
   });
 
   it("finds none without a lock, with one naming a pid that is gone, or with one it cannot read", async () => {
-    expect(await claudeDaemonRunning(scratchTmp(), win32)).toEqual({ running: false });
+    expect(await claudeDaemonRunning(scratchTmp(), win32())).toEqual({ running: false });
     const gone = profileWithLock({ pid: 2_000_000_000 });
-    expect(await claudeDaemonRunning(gone, win32)).toEqual({ running: false });
-    expect(await claudeDaemonRunning(profileWithLock("{ not json"), win32)).toEqual({ running: false });
-    expect(await claudeDaemonRunning(profileWithLock({ pid: "1" }), win32)).toEqual({ running: false });
+    expect(await claudeDaemonRunning(gone, win32())).toEqual({ running: false });
+    expect(await claudeDaemonRunning(profileWithLock("{ not json"), win32())).toEqual({ running: false });
+    expect(await claudeDaemonRunning(profileWithLock({ pid: "1" }), win32())).toEqual({ running: false });
   });
 
   it("does not take a lock linked from another config dir for the profile's own", async () => {
     const primary = profileWithLock({ pid: process.pid });
     const hardLinked = scratchTmp();
     linkSync(path.join(primary, "daemon.lock"), path.join(hardLinked, "daemon.lock"));
-    expect(await claudeDaemonRunning(hardLinked, win32)).toEqual({ running: false });
+    expect(await claudeDaemonRunning(hardLinked, win32())).toEqual({ running: false });
   });
 
   it.skipIf(process.platform === "win32")("does not take a symbolic link to another dir's lock either", async () => {
     const primary = profileWithLock({ pid: process.pid });
     const linked = scratchTmp();
     symlinkSync(path.join(primary, "daemon.lock"), path.join(linked, "daemon.lock"));
-    expect(await claudeDaemonRunning(linked, win32)).toEqual({ running: false });
+    expect(await claudeDaemonRunning(linked, win32())).toEqual({ running: false });
   });
 });
