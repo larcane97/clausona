@@ -130,7 +130,7 @@ async function seedHome({ daemon = "none" }: { daemon?: DaemonLook } = {}) {
   mkdirSync(primary, { recursive: true });
   mkdirSync(work, { recursive: true });
 
-  const account = (email: string) => JSON.stringify({ oauthAccount: { emailAddress: email } });
+  const account = (email: string) => JSON.stringify(accountFile(email));
   writeFileSync(path.join(currentHome, ".claude.json"), account("primary@example.com"));
   writeFileSync(path.join(work, ".claude.json"), account("work@example.com"));
   const credential = JSON.stringify({ claudeAiOauth: { accessToken: "T" } });
@@ -169,6 +169,11 @@ async function seedHome({ daemon = "none" }: { daemon?: DaemonLook } = {}) {
   const backupDir = path.join(currentHome, ".clausona", "backups", "claude", "work");
   return { primary, work, backupDir, daemonRoot, service, claudeAdapter };
 }
+
+/** An account file for `email`, its account id made from the name before the @. */
+const accountFile = (email: string) => ({
+  oauthAccount: { emailAddress: email, accountUuid: `uuid-${email.split("@")[0]}` },
+});
 
 function issuesFor(results: DoctorProfileResult[], name: string) {
   const result = results.find((r) => r.name === name);
@@ -370,5 +375,55 @@ describe.skipIf(process.platform === "win32")("repair while the profile's backgr
       "The look for Claude Code's background daemon in ~/.claude-work got no answer: its control socket neither took the connection nor refused it. This would take out the link to the primary's daemon/ a running daemon keeps its control key, roster and session tokens in. Nothing was changed. Run this again, or, with the daemon stopped in this profile, go ahead without the look: clausona repair claude:work --force",
     );
     expect(lstatOrNull(path.join(work, "daemon"))?.isSymbolicLink()).toBe(true);
+  });
+});
+
+describe("doctor on the primary's backups/", () => {
+  /** Puts `file` in the primary's backups/: what Claude Code saves there of an account file. */
+  function backUp(primary: string, file: string, content: string) {
+    mkdirSync(path.join(primary, "backups"), { recursive: true });
+    writeFileSync(path.join(primary, "backups", file), content);
+  }
+
+  it("notes copies of other accounts' account files, by profile, and how to delete them", async () => {
+    const { primary, service } = await seedHome();
+    backUp(primary, ".claude.json.backup.1760000000000", JSON.stringify(accountFile("primary@example.com")));
+    backUp(primary, ".claude.json.backup.1760000100000", JSON.stringify(accountFile("work@example.com")));
+    backUp(primary, ".claude.json.backup.1760000200000", JSON.stringify(accountFile("work@example.com")));
+    backUp(primary, ".claude.json.backup.1760000300000", JSON.stringify(accountFile("someone@example.com")));
+    // Neither says whose it is: not this check's to judge.
+    backUp(primary, ".claude.json.backup.1760000400000", "{ not json");
+    backUp(primary, ".claude.json.backup.1760000500000", JSON.stringify({ projects: {} }));
+    backUp(primary, ".claude.json.corrupted.1760000600000", JSON.stringify(accountFile("work@example.com")));
+
+    const results = await service.doctorProfiles();
+    const issues = issuesFor(results, "claude:default");
+
+    expect(issues).toEqual([
+      {
+        kind: "foreign_account_backup",
+        severity: "warning",
+        message:
+          "~/.claude/backups holds 2 copies of claude:work's .claude.json (.claude.json.backup.1760000100000, .claude.json.backup.1760000200000), saved there while that profile linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. They can be deleted: rm ~/.claude/backups/.claude.json.backup.1760000100000 ~/.claude/backups/.claude.json.backup.1760000200000",
+      },
+      {
+        kind: "foreign_account_backup",
+        severity: "warning",
+        message:
+          "~/.claude/backups holds 1 copy of another account's .claude.json (.claude.json.backup.1760000300000), saved there while a profile linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. It can be deleted: rm ~/.claude/backups/.claude.json.backup.1760000300000",
+      },
+    ]);
+    expect(results.find((r) => r.name === "claude:default")?.healthy).toBe(true);
+    // Never a value from the files: no account id, no email.
+    expect(JSON.stringify(issues)).not.toMatch(/uuid-|@example\.com/);
+    // Nothing deleted.
+    expect(readdirSync(path.join(primary, "backups"))).toHaveLength(7);
+  });
+
+  it("says nothing when every copy is the primary's own", async () => {
+    const { primary, service } = await seedHome();
+    backUp(primary, ".claude.json.backup.1760000000000", JSON.stringify(accountFile("primary@example.com")));
+
+    expect(issuesFor(await service.doctorProfiles(), "claude:default")).toEqual([]);
   });
 });

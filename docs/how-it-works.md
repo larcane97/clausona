@@ -266,6 +266,13 @@ On Windows the daemon listens on a pipe named by `daemon/pipe.key`, and through 
 the primary's file. So the daemon found there can be the one the primary started, and stopping it
 from the profile stops that one.
 
+While a profile linked the primary's `backups/`, Claude Code saved that profile's copies of
+`.claude.json` there, as `.claude.json.backup.<ms>`. When the primary's `.claude.json` is lost,
+Claude Code suggests restoring the newest copy in that folder, which could be another account's.
+`clausona doctor` notes such copies on the primary as `foreign_account_backup`, a warning. It names
+the profile whose account each copy is, or says another account's, and gives the command that
+deletes them. clausona never deletes them itself.
+
 ### What a Codex profile shares
 
 A codex profile links only these entries of the primary's `~/.codex`:

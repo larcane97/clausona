@@ -613,6 +613,8 @@ const SELF_DIRECTED_ISSUE_KINDS = new Set<DoctorIssue["kind"]>([
   // variable outside what clausona manages.
   "socket_path_too_long",
   "shared_sqlite_home",
+  // The primary's own backups, which repair never touches; the message says how to delete them.
+  "foreign_account_backup",
 ]);
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;

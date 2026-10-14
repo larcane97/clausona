@@ -251,6 +251,9 @@ export type DoctorIssue = {
     | "primary_broken_link"
     // A shared file the tool saves whole, held by a hard link or a copy rather than a symlink.
     | "needs_symlink"
+    // The primary Claude profile only, a warning: copies of another account's .claude.json in
+    // its backups/, left by a profile that linked it. Named by profile; never deleted for you.
+    | "foreign_account_backup"
     // A config dir too long for a Unix socket the tool binds inside it.
     | "socket_path_too_long"
     // Codex's sqlite_home or CODEX_SQLITE_HOME, which put every profile's SQLite state in one place.

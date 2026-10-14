@@ -2024,6 +2024,68 @@ export async function getUsageSummary(profileId_: string | null, period: UsagePe
   );
 }
 
+/** The account id an account file names; undefined where it names none, or does not parse. */
+async function accountIdIn(file: string): Promise<string | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(file, "utf8")) as { oauthAccount?: { accountUuid?: unknown } } | null;
+    const id = parsed?.oauthAccount?.accountUuid;
+    return typeof id === "string" && id !== "" ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Copies of other accounts' account files in the primary's `backups/`, one finding per account.
+ * Claude Code saves a copy of `.claude.json` there as `.claude.json.backup.<ms>`, and while a
+ * profile linked the primary's `backups/`, the profile's copies landed there too. When the
+ * primary's `.claude.json` is lost, Claude Code suggests restoring the newest copy, which could be
+ * another account's. Each is named by the profile whose account it is, or as another account's;
+ * nothing from inside the files is said. Nothing is deleted: the finding says how.
+ */
+async function foreignAccountBackups(registry: Registry, primaryId: string, configDir: string): Promise<DoctorIssue[]> {
+  const home = homedir();
+  const own = await accountIdIn(claudeJsonPathForConfigDir({ homeDir: home, configDir }));
+  if (!own) return [];
+  const dir = path.join(configDir, "backups");
+  const names = (await readdir(dir).catch(() => [] as string[])).filter((name) =>
+    name.startsWith(".claude.json.backup."),
+  );
+  if (names.length === 0) return [];
+
+  const profiles = new Map<string, string>();
+  for (const [id, other] of Object.entries(registry.profiles)) {
+    if (id === primaryId || other.tool !== "claude" || other.kind === "api" || typeof other.configDir !== "string")
+      continue;
+    const account = await accountIdIn(claudeJsonPathForConfigDir({ homeDir: home, configDir: other.configDir }));
+    if (account && account !== own && !profiles.has(account)) profiles.set(account, id);
+  }
+  // By the profile each is of, "" for another account's.
+  const byProfile = new Map<string, string[]>();
+  for (const name of names.sort()) {
+    const account = await accountIdIn(path.join(dir, name));
+    if (!account || account === own) continue;
+    const profile = profiles.get(account) ?? "";
+    byProfile.set(profile, [...(byProfile.get(profile) ?? []), name]);
+  }
+
+  const shownDir = dir.replace(home, "~");
+  return [...byProfile.entries()]
+    .sort(([a], [b]) => (a === "" ? 1 : b === "" ? -1 : a < b ? -1 : a > b ? 1 : 0))
+    .map(([profile, files]) => {
+      const copies = files.length === 1 ? "1 copy" : `${files.length} copies`;
+      const remove =
+        process.platform === "win32"
+          ? `del ${files.map((name) => `"${path.join(dir, name)}"`).join(" ")}`
+          : `rm ${files.map((name) => `${shownDir}/${name}`).join(" ")}`;
+      return {
+        kind: "foreign_account_backup",
+        severity: "warning",
+        message: `${shownDir} holds ${copies} of ${profile ? `${profile}'s` : "another account's"} .claude.json (${files.join(", ")}), saved there while ${profile ? "that profile" : "a profile"} linked this folder. When .claude.json is lost, Claude Code suggests restoring the newest copy here, which could put that account in place of this one. ${files.length === 1 ? "It" : "They"} can be deleted: ${remove}`,
+      } satisfies DoctorIssue;
+    });
+}
+
 /**
  * doctor's finding for a profile entry linked to the primary's that the profile is to keep for
  * itself, which repair unlinks: what the link does, where the tool says, and the repair. An
@@ -2318,6 +2380,10 @@ export async function doctorProfiles(
           symlinkNeeded,
         }),
       );
+    }
+
+    if (profile.isPrimary && profile.tool === "claude" && typeof profile.configDir === "string") {
+      issues.push(...(await foreignAccountBackups(registry, id, profile.configDir)));
     }
 
     // Check plugins/ consistency for non-primary claude profiles with a real plugins/ dir
