@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>See and turn off Claude Code skills, MCP servers and hooks | clausona</title>
+  <meta name="description" content="Find out which skills, MCP servers and hooks Claude Code and Codex load in a project, account by account. Turn one off here or in every project, or delete one you no longer use. Every change is backed up, and undo puts it back.">
+  <link rel="canonical" href="https://larcane97.github.io/clausona/guides/claude-code-skills-mcp-hooks/">
+  <link rel="alternate" hreflang="en" href="https://larcane97.github.io/clausona/guides/claude-code-skills-mcp-hooks/">
+  <link rel="alternate" hreflang="ko" href="https://larcane97.github.io/clausona/ko/skills-mcp-hooks/">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="clausona">
+  <meta property="og:title" content="See which skills, MCP servers and hooks Claude Code loads, and turn them off">
+  <meta property="og:description" content="Every skill, MCP server and hook Claude Code and Codex load in a project, for each of your accounts, with a backup and undo for every change.">
+  <meta property="og:url" content="https://larcane97.github.io/clausona/guides/claude-code-skills-mcp-hooks/">
+  <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
+  <meta property="article:published_time" content="2026-10-15">
+  <meta property="article:modified_time" content="2026-10-15">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Recursive:wght,CASL,MONO@300..900,0..1,0..1&display=swap">
+  <link rel="stylesheet" href="../../style.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "See which skills, MCP servers and hooks Claude Code loads, and turn them off",
+    "description": "Find out which skills, MCP servers and hooks Claude Code and Codex load in a project, account by account. Turn one off here or in every project, or delete one you no longer use. Every change is backed up, and undo puts it back.",
+    "datePublished": "2026-10-15",
+    "dateModified": "2026-10-15",
+    "inLanguage": "en",
+    "image": "https://larcane97.github.io/clausona/assets/extensions.gif",
+    "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
+    "mainEntityOfPage": "https://larcane97.github.io/clausona/guides/claude-code-skills-mcp-hooks/",
+    "about": [
+      { "@type": "SoftwareApplication", "name": "Claude Code" },
+      { "@type": "SoftwareApplication", "name": "Codex CLI" },
+      { "@type": "SoftwareApplication", "name": "clausona", "url": "https://github.com/larcane97/clausona" }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      { "@type": "ListItem", "position": 1, "name": "clausona", "item": "https://larcane97.github.io/clausona/" },
+      { "@type": "ListItem", "position": 2, "name": "Skills, MCP servers and hooks", "item": "https://larcane97.github.io/clausona/guides/claude-code-skills-mcp-hooks/" }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "Why is my MCP server missing under my other Claude Code account?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "A server added with claude mcp add is stored in the .claude.json of the account that added it, and clausona doesn't share that file between accounts. The matrix (m on the MCP tab) shows which accounts have it. Add it under the other account too, or put it in the project's .mcp.json, which every account reads."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does turning a skill off delete it?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. Off writes a setting, and the skill's folder stays where it is. For Claude Code that's skillOverrides in a settings file, and for Codex an entry in config.toml. space or clausona skills on turns it back on. Deleting is a separate step, and it moves the folder into a backup."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can I turn off an MCP server in one project only?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. A server from an account's .claude.json, or one a plugin brings, is switched per account. clausona adds its name to disabledMcpServers in that account's entry for the project, the list /mcp disable writes, and only accounts that have opened the project have that entry. A server from the project's .mcp.json is switched for every account at once: off adds its name to disabledMcpjsonServers and takes it out of enabledMcpjsonServers, in the project's .claude/settings.local.json. For Codex, off writes enabled = false in the project's .codex/config.toml, in a project Codex trusts."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can I turn off a hook in one project only?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. Neither Claude Code nor Codex has a switch for one hook in one project, so a hook goes off everywhere. clausona takes it out of its settings file and keeps it, and turning it back on puts it back."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Will it change files in my repo?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Turning a Claude skill or a .mcp.json server off here writes the project's .claude/settings.local.json. Claude Code keeps that file out of git with a line in your global git ignore file, and clausona adds the same line when it creates the file and git doesn't ignore it yet. A change to a file git tracks, such as a skill folder in the repo or the project's .codex/config.toml, needs --tracked in the CLI, or your yes in the screen's dialog."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does it show my API keys or tokens?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. An MCP server's env and header values are never shown, only their names. In a command or a URL, a value that looks like a secret reads <hidden>. Nothing leaves the machine. The backups do hold whole entries, secrets included, so only you can read their folders."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does it work with Codex?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes, on the Codex tab, with the skills, MCP servers and hooks Codex loads in the project. Codex reads a project's .codex folder only when it trusts the project, and clausona follows that. Codex's plugins are listed, but you switch them in Codex, with /plugins."
+        }
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="wordmark" href="../../">clausona</a>
+      <nav class="site-nav" aria-label="Site">
+        <a href="../multiple-claude-code-accounts/">Claude Code</a>
+        <a href="../multiple-codex-cli-accounts/">Codex</a>
+        <a href="../parallel-claude-code-agents/">Agent fleets</a>
+        <a href="./" aria-current="page">Extensions</a>
+        <a href="../../ko/skills-mcp-hooks/" hreflang="ko" lang="ko">한국어</a>
+        <a href="https://github.com/larcane97/clausona">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <article class="article">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../../">clausona</a> / Guides</nav>
+      <h1>See which skills, MCP servers and hooks Claude Code loads, and turn them off</h1>
+      <p class="lead">You added a GitHub MCP server with <code>claude mcp add</code> under your work account. A week later you open the same repo under your personal account, and it isn't there.</p>
+      <p class="updated">Updated <time datetime="2026-10-15">October 15, 2026</time></p>
+      <p>That server lives in the work account's own <code>.claude.json</code>. To see what each account loads, you'd read one of those files per account, then the project's settings and every plugin.</p>
+      <p>Skills drift too. You copy one into <code>~/.agents/skills</code> so Codex has it, and now there are two. And a skill you last used four months ago still loads in every project.</p>
+
+      <div class="answer">
+        <p>clausona's Extensions screen puts it all on one list. Pick a project, and it shows the skills, MCP servers and hooks Claude Code and Codex load there, for every account clausona manages.</p>
+        <p>From that list you can turn one off, in this project or in all of them. You can also delete one you no longer use. clausona backs up every file before it changes it, and <code>u</code> puts the last change back.</p>
+<pre data-copy><code><span class="c"># the dashboard: choose Extensions</span>
+clausona
+
+<span class="c"># which accounts have github, and whether it's on here</span>
+clausona mcp show github
+
+<span class="c"># Claude skills not used in 90 days</span>
+clausona skills ls --scope unused --tool claude</code></pre>
+      </div>
+
+      <figure class="figure">
+        <img class="demo" src="../../assets/extensions.gif" width="1200" height="850" loading="lazy" alt="The dashboard's Extensions screen lists the skills Claude Code loads in ~/app, grouped by Project, Global, Cloud and Plugins. sentry-cli, last used four months ago, is turned off in this project after a dialog that asks first, and the row reads off here. u puts it back, after asking too. Last, the MCP tab's matrix shows which account starts which server.">
+        <figcaption>A skill nobody has used in four months, sentry-cli, is turned off in this project and then put back with u. The last screen shows which account starts which MCP server here.</figcaption>
+      </figure>
+
+      <ul class="toc" aria-label="On this page">
+        <li><a href="#loaded">What loads in this project</a></li>
+        <li><a href="#accounts">Which account loads which MCP server</a></li>
+        <li><a href="#off">Turn one off, here or everywhere</a></li>
+        <li><a href="#unused">Clear out skills you don't use</a></li>
+        <li><a href="#undo">Undo a change</a></li>
+        <li><a href="#cli">From the command line, or from an agent</a></li>
+        <li><a href="#questions">Questions</a></li>
+      </ul>
+
+      <h2 id="loaded">What loads in this project</h2>
+      <p>Run <code>clausona</code> and choose Extensions. The screen looks from the project you started it in: the git repository around the current folder, or the folder itself outside one.</p>
+      <p>The first line on the left is that project, with a count of everything that loads there. The table on the right groups those rows by where they come from. The project's own come first, then Global, Cloud and the plugins.</p>
+      <p>Claude and Codex are tabs, and <code>tab</code> switches between them. <code>1</code>, <code>2</code> and <code>3</code> switch between skills, MCP servers and hooks.</p>
+      <p>Under the first line, each place has a line of its own. Open one and you also see what doesn't load, such as a skill a same-name copy hides, or one you turned off here.</p>
+      <p><code>enter</code> on a row opens its details. They show its files and its state in each account, and for a skill, how often it's been used.</p>
+      <p>To look from another project, press <code>p</code>. It lists the folders Claude Code or Codex recorded in any of your accounts, and typing narrows the list.</p>
+
+      <h2 id="accounts">Which account loads which MCP server</h2>
+      <p>MCP servers are where accounts differ most.</p>
+      <p>Plugins are shared, so a server that comes with a plugin is there under every account. A server added with <code>claude mcp add</code> is stored in one account's <code>.claude.json</code>, and only that account starts it.</p>
+      <p>On Claude's MCP tab, <code>m</code> opens a matrix. Each server gets a row, and each account a column, with one more column for Codex. A cell says whether that server starts for that account in this project.</p>
+      <p><code>space</code> on a cell turns that one account's server off or on here, and the other accounts stay as they were.</p>
+      <p>A server from the project's <code>.mcp.json</code> is the exception. Claude Code switches it for the whole project, so its cell changes it for every account.</p>
+      <p>From the command line:</p>
+<pre data-copy><code>clausona mcp show github</code></pre>
+      <p>It says which accounts have the server, and whether it's on here. Secret values in its config are never shown.</p>
+
+      <h2 id="off">Turn one off, here or everywhere</h2>
+      <p>Select a row and press <code>space</code> to turn it off in this project. <code>g</code> turns it off in every project.</p>
+      <p>Before anything changes, a dialog lists each file and what will change in it, and where the backup goes. <code>y</code> goes ahead, and <code>n</code> leaves everything as it was.</p>
+      <p>clausona writes the same settings Claude Code and Codex write themselves.</p>
+      <p>A Claude skill turned off here is set to <code>"off"</code> under <code>skillOverrides</code>, in the project's <code>.claude/settings.local.json</code>. A Claude MCP server turned off here goes into <code>disabledMcpServers</code> in the account's entry for the project. That's the list <code>/mcp disable</code> writes.</p>
+      <p>For Codex, a server is turned off with <code>enabled = false</code>. Here, that goes in the project's <code>.codex/config.toml</code>. Everywhere, which works for your own servers, it goes in <code>~/.codex/config.toml</code>.</p>
+      <p>Some things only switch one way:</p>
+      <ul>
+        <li>A hook has no switch for one project, in Claude Code or in Codex. Off takes it out of its settings file in every project, and clausona keeps it so that <code>g</code> can put it back.</li>
+        <li>What a plugin brings is switched with the plugin itself. A plugin's MCP server is the exception: it also has a switch of its own, per account, in each project.</li>
+        <li>Codex's plugins are listed, but you switch them in Codex, with <code>/plugins</code>.</li>
+        <li>A server from the project's <code>.mcp.json</code> can only be switched in one project at a time. Claude Code has no switch for it everywhere.</li>
+      </ul>
+      <p>When a row can't change, nothing opens, and the status line says why.</p>
+
+      <h2 id="unused">Clear out skills you don't use</h2>
+      <p>Skills pile up. One you tried once and forgot about keeps loading until you remove it.</p>
+      <p>The Not used in 90 days line lists the Claude skills no account has used in 90 days. Skills never used at all show up there once they're more than 14 days old.</p>
+      <p>Use is added up over all your accounts. A skill your work account uses every day isn't on the list, even if your personal account has never touched it.</p>
+<pre data-copy><code>clausona skills ls --scope unused --tool claude</code></pre>
+      <p><code>d</code> deletes the selected skill, or every row you marked with <code>x</code>. The folder moves into a backup instead of being removed. A skill that's only a link loses the link, and the folder it points to stays.</p>
+      <p>A skill git tracks belongs to the repo, so deleting it changes the repo. The screen warns you in the dialog and offers to turn it off here instead. The CLI refuses unless you add <code>--tracked</code>.</p>
+      <p>A Cloud skill comes back from claude.ai, so turn it off instead of deleting it. A plugin is uninstalled with <code>/plugin</code> in Claude Code.</p>
+
+      <h2 id="undo">Undo a change</h2>
+      <p>Every change starts with a backup. clausona copies each file into <code>~/.clausona/backups/extensions/</code> before it writes, and a deleted folder moves there. The last 50 changes are kept.</p>
+      <p><code>u</code> undoes the newest change, after asking. From the command line, each kind has its own:</p>
+<pre data-copy><code>clausona skills undo
+clausona mcp undo
+clausona hooks undo</code></pre>
+      <p>Run it again to go one change further back.</p>
+      <p>Undo puts back only what still holds what the change wrote. If you or Claude Code changed a file since, undo leaves it alone and says so.</p>
+
+      <h2 id="cli">From the command line, or from an agent</h2>
+      <p>Everything on the screen has a command. <code>clausona skills</code>, <code>clausona mcp</code> and <code>clausona hooks</code> each take <code>ls</code>, <code>show</code>, <code>off</code>, <code>on</code>, <code>rm</code> and <code>undo</code>.</p>
+<pre data-copy><code>clausona skills ls --scope project        <span class="c"># the skills this project defines</span>
+clausona mcp off github --account work    <span class="c"># off here, for work only</span>
+clausona skills rm old-one --dry-run      <span class="c"># what deleting it would change</span></code></pre>
+      <p>A change prints its plan and asks first. <code>--dry-run</code> stops at the plan, and <code>--yes</code> skips the question.</p>
+      <p>A coding agent has no terminal to answer on, so it needs <code>--yes</code>. With <code>--json</code>, every command prints one JSON object, plans and errors included.</p>
+      <p><a href="https://github.com/larcane97/clausona/blob/main/docs/extensions.md">The Extensions docs</a> list every scope and option, with recipes for agents.</p>
+
+      <h2 id="questions">Questions</h2>
+      <h3>Why is my MCP server missing under my other Claude Code account?</h3>
+      <p>A server added with <code>claude mcp add</code> is stored in the <code>.claude.json</code> of the account that added it, and clausona doesn't share that file between accounts. The matrix (<code>m</code> on the MCP tab) shows which accounts have it. Add it under the other account too, or put it in the project's <code>.mcp.json</code>, which every account reads.</p>
+      <h3>Does turning a skill off delete it?</h3>
+      <p>No. Off writes a setting, and the skill's folder stays where it is. For Claude Code that's <code>skillOverrides</code> in a settings file, and for Codex an entry in <code>config.toml</code>. <code>space</code> or <code>clausona skills on</code> turns it back on. Deleting is a separate step, and it moves the folder into a backup.</p>
+      <h3>Can I turn off an MCP server in one project only?</h3>
+      <p>Yes. A server from an account's <code>.claude.json</code>, or one a plugin brings, is switched per account. clausona adds its name to <code>disabledMcpServers</code> in that account's entry for the project, the list <code>/mcp disable</code> writes, and only accounts that have opened the project have that entry. A server from the project's <code>.mcp.json</code> is switched for every account at once: off adds its name to <code>disabledMcpjsonServers</code> and takes it out of <code>enabledMcpjsonServers</code>, in the project's <code>.claude/settings.local.json</code>. For Codex, off writes <code>enabled = false</code> in the project's <code>.codex/config.toml</code>, in a project Codex trusts.</p>
+      <h3>Can I turn off a hook in one project only?</h3>
+      <p>No. Neither Claude Code nor Codex has a switch for one hook in one project, so a hook goes off everywhere. clausona takes it out of its settings file and keeps it, and turning it back on puts it back.</p>
+      <h3>Will it change files in my repo?</h3>
+      <p>Turning a Claude skill or a <code>.mcp.json</code> server off here writes the project's <code>.claude/settings.local.json</code>. Claude Code keeps that file out of git with a line in your global git ignore file, and clausona adds the same line when it creates the file and git doesn't ignore it yet. A change to a file git tracks, such as a skill folder in the repo or the project's <code>.codex/config.toml</code>, needs <code>--tracked</code> in the CLI, or your yes in the screen's dialog.</p>
+      <h3>Does it show my API keys or tokens?</h3>
+      <p>No. An MCP server's env and header values are never shown, only their names. In a command or a URL, a value that looks like a secret reads <code>&lt;hidden&gt;</code>. Nothing leaves the machine. The backups do hold whole entries, secrets included, so only you can read their folders.</p>
+      <h3>Does it work with Codex?</h3>
+      <p>Yes, on the Codex tab, with the skills, MCP servers and hooks Codex loads in the project. Codex reads a project's <code>.codex</code> folder only when it trusts the project, and clausona follows that. Codex's plugins are listed, but you switch them in Codex, with <code>/plugins</code>.</p>
+      <section class="cta" aria-labelledby="try">
+        <h2 id="try">Try clausona</h2>
+        <p>It's free and open source. If it saves you a hunt through config files, a star on <a href="https://github.com/larcane97/clausona">GitHub</a> helps other people find it.</p>
+        <div class="install">
+          <div class="cmd" data-copy>
+            <span class="cmd-label">macOS and Linux</span>
+            <code>curl -fsSL https://github.com/larcane97/clausona/releases/latest/download/install.sh | bash</code>
+          </div>
+          <div class="cmd" data-copy>
+            <span class="cmd-label">Windows PowerShell</span>
+            <code>irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex</code>
+          </div>
+        </div>
+        <p>Not set up for several accounts yet? Start with <a href="../multiple-claude-code-accounts/">multiple Claude Code accounts</a> or <a href="../multiple-codex-cli-accounts/">multiple Codex CLI accounts</a>.</p>
+      </section>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>clausona is open source under the MIT license, on <a href="https://github.com/larcane97/clausona">GitHub</a>, and listed in <a href="https://github.com/hesreallyhim/awesome-claude-code">Awesome Claude Code</a>.</p>
+      <p>clausona is an independent open-source project, not affiliated with Anthropic or OpenAI.</p>
+    </div>
+  </footer>
+  <script src="../../copy.js"></script>
+</body>
+</html>
