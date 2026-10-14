@@ -2000,9 +2000,10 @@ function unsharedLinkIssue(adapter: ToolAdapter, name: string): DoctorIssue {
 }
 
 /**
- * How long doctor's key check lets a key command run. The command keeps the terminal doctor was
- * run from, where it can ask for a PIN or a passphrase, so the limit is generous; past it, the
- * command is ended and the key reported unavailable, rather than doctor waiting on it for good.
+ * How long doctor's key check lets a key command, or the Keychain, take. The command keeps the
+ * terminal doctor was run from, where it can ask for a PIN or a passphrase, and the Keychain can
+ * ask in a dialog, so the limit is generous; past it, the read is ended and the key reported
+ * unavailable, rather than doctor waiting on it for good.
  */
 const KEY_CHECK_LIMIT_MS = 60_000;
 

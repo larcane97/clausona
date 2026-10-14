@@ -628,6 +628,28 @@ describe("resolveSecret", () => {
       );
     },
   );
+
+  // The Keychain read waits on macOS's own dialog asking whether clausona may read the key; left
+  // unanswered, doctor ends it at its limit. A stand-in `security` stands in for one never answered.
+  it.skipIf(windows)(
+    "ends a Keychain read that has not answered once doctor's limit passes",
+    { timeout: SPAWNING_TEST_TIMEOUT_MS },
+    async () => {
+      const bin = mkdtempSync(path.join(tmpdir(), "clausona-security-stand-in-"));
+      temps.push(bin);
+      writeFileSync(path.join(bin, "security"), '#!/bin/sh\necho $$ > "$CLAUSONA_TEST_PIDS"\nexec sleep 600\n', {
+        mode: 0o755,
+      });
+      vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH ?? ""}`);
+      const read = () => resolveSecret("claude:x", { source: "keychain" }, "keychain", { limitMs: 60_000 });
+      await atLimit(read, async ({ read, pids: [pid], signals, gone }) => {
+        vi.advanceTimersByTime(60_000);
+        await expect(read).rejects.toThrow(/^the Keychain did not answer in 60 s - /);
+        expect(signals()).toEqual([[pid, "SIGINT"]]);
+        expect(await gone()).toBe(true);
+      });
+    },
+  );
 });
 
 /**

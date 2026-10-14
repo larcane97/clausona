@@ -476,13 +476,17 @@ export async function deleteSecret(profileId: string, backend?: SecretBackend): 
 
 async function readStoredSecret(
   profileId: string,
-  backend?: SecretBackend,
-  signal?: AbortSignal,
+  backend: SecretBackend | undefined,
+  options: Pick<RunOptions, "signal" | "limitMs">,
 ): Promise<string | null> {
   if ((backend ?? detectBackend()) === "keychain") {
-    const { code, stdout } = await run("security", ["find-generic-password", "-s", keychainItemFor(profileId), "-w"], {
-      signal,
-    });
+    const item = keychainItemFor(profileId);
+    const { code, stdout, timedOut } = await run("security", ["find-generic-password", "-s", item, "-w"], options);
+    if (timedOut) {
+      throw new Error(
+        `the Keychain did not answer in ${(options.limitMs ?? 0) / 1000} s - answer its prompt if it shows one, or run 'clausona config ${profileId} --key' to store the key again`,
+      );
+    }
     return code === 0 && stdout.trim() !== "" ? stdout.trim() : null;
   }
   const values = await readSecretsFile();
@@ -503,7 +507,8 @@ async function readStoredSecret(
  * `signal` bounds a key that a command or the Keychain gives: once it aborts, what was started
  * for it is killed, and the key is not read. Without one, a key command keeps the terminal, where
  * it can prompt, and `limitMs` bounds it instead: past it, the command and what it started are
- * interrupted, and killed if it goes on running (interrupt), and the key is not read.
+ * interrupted, and killed if it goes on running (interrupt), and the key is not read. `limitMs`
+ * bounds the Keychain's answer the same way.
  */
 export async function resolveSecret(
   profileId: string,
@@ -555,7 +560,7 @@ export async function resolveSecret(
     return first;
   }
 
-  const stored = await readStoredSecret(profileId, backend, signal);
+  const stored = await readStoredSecret(profileId, backend, { signal, limitMs });
   if (signal?.aborted) throw new Error("the key was not read in time");
   if (!stored) throw new Error(`no stored secret for '${profileId}' - run 'clausona config ${profileId} --key'`);
   return stored;
