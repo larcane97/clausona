@@ -70,7 +70,7 @@
         "name": "Does clausona switch accounts when one reaches its limit?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "No. You choose the account a terminal uses. clausona shows how much of your accounts' limits is left."
+          "text": "A running session never moves to another account. With a route, clausona picks the account when a run starts. clausona run --route main gets one that still has quota left. clausona use and clausona run <profile> leave the choice to you. Keep the accounts to what they're for, such as work and personal use, within Anthropic's and OpenAI's terms."
         }
       },
       {
@@ -370,7 +370,7 @@ claude --continue    <span class="c"># the latest conversation in this folder</s
         <h3>Is my sign-in shared between accounts?</h3>
         <p>No. Credentials stay with their account. MCP servers added with <code>claude mcp add</code> live next to the sign-in, so they stay with the account too.</p>
         <h3>Does clausona switch accounts when one reaches its limit?</h3>
-        <p>No. You choose the account a terminal uses. clausona shows how much of your accounts' limits is left.</p>
+        <p>A running session never moves to another account. With <a href="https://github.com/larcane97/clausona/blob/main/docs/routing.md">a route</a>, clausona picks the account when a run starts. <code>clausona run --route main</code> gets one that still has quota left. <code>clausona use</code> and <code>clausona run &lt;profile&gt;</code> leave the choice to you. Keep the accounts to what they're for, such as work and personal use, within Anthropic's and OpenAI's terms.</p>
         <h3>Does it proxy or modify claude and codex?</h3>
         <p>No. The real binaries run unmodified, with the account's config directory set for that one run. If you set <code>CLAUDE_CONFIG_DIR</code> or <code>CODEX_HOME</code> yourself, clausona steps aside in that shell.</p>
         <h3>What does clausona send over the network?</h3>

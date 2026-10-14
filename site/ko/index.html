@@ -14,7 +14,7 @@
   <meta property="og:url" content="https://larcane97.github.io/clausona/ko/">
   <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
   <meta property="article:published_time" content="2026-10-08">
-  <meta property="article:modified_time" content="2026-10-08">
+  <meta property="article:modified_time" content="2026-10-14">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="../favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -28,7 +28,7 @@
     "headline": "Claude Code와 Codex 계정 여러 개를 동시에 쓰는 법",
     "description": "로그인은 계정마다 따로 두고 스킬, hook, 플러그인, 설정은 공유하며, 원하면 대화 기록도 공유하는 방법.",
     "datePublished": "2026-10-08",
-    "dateModified": "2026-10-08",
+    "dateModified": "2026-10-14",
     "inLanguage": "ko",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
     "mainEntityOfPage": "https://larcane97.github.io/clausona/ko/",
@@ -81,7 +81,7 @@
         "name": "한도에 걸리면 자동으로 다른 계정으로 바꿔 주나요?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "아니요. 터미널마다 어느 계정을 쓸지는 직접 고릅니다. 대신 clausona는 계정마다 한도가 얼마나 남았는지 보여 줍니다. 계정은 회사용, 개인용처럼 용도에 맞게 쓰고 Anthropic과 OpenAI 약관을 지켜 주세요."
+          "text": "실행 중인 세션은 다른 계정으로 옮겨 가지 않습니다. 다만 route를 쓰면 실행을 시작할 때 clausona가 계정을 골라 줍니다. clausona run --route main은 아직 한도가 남은 계정으로 시작하고, 폴더별 route나 기본 route를 정해 두면 clausona run claude만으로도 돼요. clausona use와 clausona run <프로필>은 여전히 직접 고른 계정을 씁니다. 계정은 회사용, 개인용처럼 용도에 맞게 쓰고 Anthropic과 OpenAI 약관을 지켜 주세요."
         }
       },
       {
@@ -130,7 +130,7 @@
       <nav class="crumbs" aria-label="현재 위치"><a href="../">clausona</a> / 가이드</nav>
       <h1>Claude Code와 Codex 계정 여러 개를 동시에 쓰는 법</h1>
       <p class="lead">회사 계정과 개인 계정을 오가며 Claude Code(클로드 코드)나 Codex를 쓰다 보면, 계정을 바꿀 때마다 다시 로그인하게 됩니다. 스킬과 플러그인도 계정마다 따로 설치해야 하고, 대화 기록은 계정별로 흩어지고요.</p>
-      <p class="updated"><time datetime="2026-10-08">2026년 10월 8일</time> 업데이트</p>
+      <p class="updated"><time datetime="2026-10-14">2026년 10월 14일</time> 업데이트</p>
       <p>저도 개인 계정과 회사 계정으로 Claude Code를 쓰다가, 계정마다 플러그인과 권한을 다시 설정하는 게 지겨워서 clausona를 만들었습니다.</p>
       <p>이 글에서는 로그인만 계정마다 따로 두고, 스킬이나 hook처럼 공들여 맞춘 환경은 하나로 공유하는 방법을 다룹니다. 원하면 대화 기록도 공유할 수 있습니다.</p>
 
@@ -299,7 +299,7 @@ codex:work          dev@example.com      —          12% 5d</code></pre>
       <h3>로그인 정보도 공유되나요?</h3>
       <p>아니요. 로그인 정보는 계정마다 따로 있고 공유되지 않습니다.</p>
       <h3>한도에 걸리면 자동으로 다른 계정으로 바꿔 주나요?</h3>
-      <p>아니요. 터미널마다 어느 계정을 쓸지는 직접 고릅니다. 대신 clausona는 계정마다 한도가 얼마나 남았는지 보여 줍니다. 계정은 회사용, 개인용처럼 용도에 맞게 쓰고 Anthropic과 OpenAI 약관을 지켜 주세요.</p>
+      <p>실행 중인 세션은 다른 계정으로 옮겨 가지 않습니다. 다만 <a href="https://github.com/larcane97/clausona/blob/main/docs/routing.md">route</a>를 쓰면 실행을 시작할 때 clausona가 계정을 골라 줍니다. <code>clausona run --route main</code>은 아직 한도가 남은 계정으로 시작하고, 폴더별 route나 기본 route를 정해 두면 <code>clausona run claude</code>만으로도 돼요. <code>clausona use</code>와 <code>clausona run &lt;프로필&gt;</code>은 여전히 직접 고른 계정을 씁니다. 계정은 회사용, 개인용처럼 용도에 맞게 쓰고 Anthropic과 OpenAI 약관을 지켜 주세요.</p>
       <h3>Claude Code와 Codex의 설정도 서로 공유되나요?</h3>
       <p>아니요. Claude Code 계정끼리 <code>~/.claude</code>를, Codex 계정끼리 <code>~/.codex</code>를 공유합니다.</p>
       <h3>API 키나 다른 모델도 프로필로 쓸 수 있나요?</h3>

@@ -13,7 +13,7 @@
   <meta property="og:url" content="https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/">
   <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
   <meta property="article:published_time" content="2026-10-08">
-  <meta property="article:modified_time" content="2026-10-08">
+  <meta property="article:modified_time" content="2026-10-14">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="../../favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -27,7 +27,7 @@
     "headline": "How to use multiple Claude Code accounts on one machine",
     "description": "Run a work and a personal Claude Code account side by side, with skills, hooks, plugins, settings and optionally conversation history shared between them.",
     "datePublished": "2026-10-08",
-    "dateModified": "2026-10-08",
+    "dateModified": "2026-10-14",
     "inLanguage": "en",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
     "mainEntityOfPage": "https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/",
@@ -73,7 +73,7 @@
         "name": "Does clausona switch accounts automatically when I hit a limit?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "No. You choose the account for a terminal yourself, and clausona shows how much of your accounts' limits is left. Keep the accounts to what they're for, such as work and personal use, within Anthropic's terms."
+          "text": "A running session never moves to another account. With a route, clausona picks the account when a run starts. clausona run --route main gets one that still has quota left. Set a directory rule or a default route, and plain clausona run claude does the same. clausona use and clausona run <profile> leave the choice to you. Keep the accounts to what they're for, such as work and personal use, within Anthropic's terms."
         }
       },
       {
@@ -139,7 +139,7 @@
       <nav class="crumbs" aria-label="Breadcrumb"><a href="../../">clausona</a> / Guides</nav>
       <h1>How to use multiple Claude Code accounts on one machine</h1>
       <p class="lead">Logging out of your work account to use your personal one gets old fast. With a config directory per account, both stay signed in and can still share one setup.</p>
-      <p class="updated">Updated <time datetime="2026-10-08">October 8, 2026</time></p>
+      <p class="updated">Updated <time datetime="2026-10-14">October 14, 2026</time></p>
 
       <div class="answer">
         <p>Point <code>CLAUDE_CONFIG_DIR</code> at a separate directory for every extra account. Then link everything except the sign-in back to your main <code>~/.claude</code>.</p>
@@ -254,7 +254,7 @@ claude:personal     me@example.org       8%         77% 5d</code></pre>
       <h3>Do MCP servers carry over to the other account?</h3>
       <p>Servers that come with a plugin do, because plugins are shared. Servers added with <code>claude mcp add</code> don't. They're stored in <code>.claude.json</code> next to the account's sign-in, and that file must not be shared. Add them under the other account too, or put them in a project's <code>.mcp.json</code>.</p>
       <h3>Does clausona switch accounts automatically when I hit a limit?</h3>
-      <p>No. You choose the account for a terminal yourself, and clausona shows how much of your accounts' limits is left. Keep the accounts to what they're for, such as work and personal use, within Anthropic's terms.</p>
+      <p>A running session never moves to another account. With <a href="https://github.com/larcane97/clausona/blob/main/docs/routing.md">a route</a>, clausona picks the account when a run starts. <code>clausona run --route main</code> gets one that still has quota left. Set a directory rule or a default route, and plain <code>clausona run claude</code> does the same. <code>clausona use</code> and <code>clausona run &lt;profile&gt;</code> leave the choice to you. Keep the accounts to what they're for, such as work and personal use, within Anthropic's terms.</p>
       <h3>Does clausona slow down Claude Code's start?</h3>
       <p>No. A normal launch reads a cached script in the shell. On an M4 Pro Mac, <code>claude --version</code> took a median 25 ms with the hook and 25 ms without it. clausona's own process runs only after you change something, such as <code>csn use</code>.</p>
       <h3>Is my sign-in ever shared?</h3>
