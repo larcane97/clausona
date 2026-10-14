@@ -193,6 +193,11 @@ describe("codexAdapter.unsharedRisk", () => {
     for (const name of ["goals_1.sqlite", "browser", "sessions", "node_repl"]) {
       expect(risk(name)?.risk, name).toBe("isolation");
     }
+    // A file an older clausona linked that Codex never wrote, such as a hand-made backup of
+    // config.toml: no claim about Codex, only what the link does.
+    expect(risk("config.toml.bak-20260830-0904")?.why).toBe(
+      "but Codex profiles don't share it, so this profile reads the primary's copy",
+    );
   });
 });
 

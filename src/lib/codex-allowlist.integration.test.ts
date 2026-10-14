@@ -319,11 +319,13 @@ describe("repairing a profile an older clausona linked", () => {
     }
     expect(readFileSync(path.join(h.dirs.work, "memories_1.sqlite"), "utf8")).toBe("work's own memories");
     expect(readFileSync(path.join(h.dirs.work, "memories_1.sqlite-wal"), "utf8")).toBe("work's own memories wal");
-    // No backup of goals_1.sqlite: the spot stays empty, Codex starts a new one, and repair says so.
+    // No backup of goals_1.sqlite: the spot stays empty, Codex makes a new one, and repair says so.
     expect(lstatOrNull(path.join(h.dirs.work, "goals_1.sqlite"))).toBeNull();
     for (const name of ["goals_1.sqlite", "app-server-control"]) {
       expect(h.stderr()).toMatch(
-        new RegExp(`${name.replace(".", "\\.")} in .* was a link to the primary's and is gone`),
+        new RegExp(
+          `${name.replace(".", "\\.")} in .* was a link to the primary's and is gone, and this profile had none of its own to put back\\. Codex makes a new one if it needs it\\.`,
+        ),
       );
     }
     expect(h.stderr()).not.toMatch(/memories_1\.sqlite in .* is gone/);

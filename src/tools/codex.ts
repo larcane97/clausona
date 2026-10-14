@@ -141,7 +141,7 @@ function codexUnsharedRisk(name: string): UnsharedRisk {
   }
   return {
     risk: "isolation",
-    why: "but Codex keeps it for each CODEX_HOME, so this profile shares it with the primary's account",
+    why: "but Codex profiles don't share it, so this profile reads the primary's copy",
   };
 }
 

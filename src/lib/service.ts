@@ -833,7 +833,7 @@ async function settleUnshared(
   for (const name of unlinked) {
     if (await exists(path.join(configDir, name))) continue;
     warn(
-      `${name} in ${shown} was a link to the primary's and is gone, with no backup of this profile's own to put back: Codex starts a new one. The primary's is unchanged.`,
+      `${name} in ${shown} was a link to the primary's and is gone, and this profile had none of its own to put back. Codex makes a new one if it needs it. The primary's is unchanged.`,
     );
   }
 }
