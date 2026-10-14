@@ -30,6 +30,7 @@ import {
 import {
   CODEX_REFUSED_KEY,
   codexTrusted,
+  codexTrustFolder,
   codexWorktreeRuns,
   isMcpjsonServer,
   MANAGED_MCP_KEY,
@@ -424,13 +425,15 @@ function sentence(scope: ScopeId, tool: ToolName, kind: ItemKind, inv: Inventory
       if (here === undefined) return inv.projects.length === 0 ? "no project" : "no project · pick one with p";
       return PROJECT_FILES[tool][kind](here);
     case "parents": {
-      // Nearest first, as Claude Code lets the nearest file win a name.
-      const dirs = [...new Set(inScope(inv, tool, kind, "parents", project).map((i) => i.location.project ?? ""))]
+      // Nearest first, as Claude Code lets the nearest file win a name, and Codex merges the nearest last.
+      const folder = (i: Extension) => (tool === "codex" ? i.location.layer : i.location.project) ?? "";
+      const dirs = [...new Set(inScope(inv, tool, kind, "parents", project).map(folder))]
         .sort((a, b) => b.length - a.length)
         .map((dir) => tilde(dir, inv.homeDir));
+      const file = tool === "codex" ? ".codex" : ".mcp.json";
       return dirs.length === 0
-        ? ".mcp.json files in folders above this project · load here too"
-        : `.mcp.json in ${fewPlaces(dirs)} · loads here too`;
+        ? `${file} ${tool === "codex" ? "folders" : "files"} in folders above this project · ${kind === "hook" ? "run" : "load"} here too`
+        : `${file} in ${fewPlaces(dirs)} · ${loads} here too`;
     }
     case "global": {
       if (tool === "claude" && kind === "mcp")
@@ -481,6 +484,8 @@ function settingPlace(inv: Inventory, item: Extension, project: string | undefin
   const whose = here === undefined || samePath(here, project) ? "this project's" : `${projectName(here, inv)}'s`;
   // An account's .claude.json holds an entry per project, wherever the file is.
   const inside = here !== undefined && !isClaudeJson(file) && isWithin(file, here);
+  // A parent folder's .codex, or a main checkout's, which Codex reads for the project: by its path.
+  if (!inside && !isClaudeJson(file)) return tilde(file, inv.homeDir);
   return `${whose} ${inside ? path.relative(here, file) : `entry in ${tilde(file, inv.homeDir)}`}`;
 }
 
@@ -857,7 +862,11 @@ function trustLines(inv: Inventory, row: ScopeRow, project: string | undefined):
   const ignored =
     untrustedOwn(inv, firstOf(row)) ||
     inv.facts.codexMcpEnabled.some(
-      (entry) => entry.project !== undefined && samePath(entry.project, here) && entry.name === row.name,
+      (entry) =>
+        entry.project !== undefined &&
+        entry.layer === undefined &&
+        samePath(entry.project, here) &&
+        entry.name === row.name,
     );
   return ignored ? [{ label: "Trust", text: CODEX_UNTRUSTED, tone: "warning" }] : [];
 }
@@ -872,7 +881,7 @@ const UNTRUSTED_OFF: Partial<Record<Extension["kind"], string>> = {
 
 /**
  * Whether an item is a Codex project's own hook or server, in a project Codex does not trust, so
- * does not load.
+ * does not load - one a parent folder's `.codex` holds by that folder's trust.
  */
 function untrustedOwn(inv: Inventory, item: Extension): boolean {
   const loc = item.location;
@@ -880,7 +889,7 @@ function untrustedOwn(inv: Inventory, item: Extension): boolean {
     (item.kind === "hook" || item.kind === "mcp") &&
     loc.tool === "codex" &&
     loc.scope === "project" &&
-    !codexTrusted(inv, loc.project)
+    !codexTrusted(inv, codexTrustFolder(item))
   );
 }
 

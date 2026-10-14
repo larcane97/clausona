@@ -33,6 +33,12 @@ export type Location = {
    * `installed_plugins.json` records it (an install for the home dir reads as `user`).
    */
   installScope?: "user" | "project" | "local";
+  /**
+   * For a Codex project's row a parent folder's `.codex` holds: that folder. Codex reads the
+   * `.codex` of each folder from the project's root down to the project, and each one's trust is
+   * its own (sources/codex-trust.ts).
+   */
+  layer?: string;
 };
 
 /** Where a hook command sits in its file: hooks[event][group].hooks[index], under "hooks" or at the root. */
@@ -191,7 +197,12 @@ export type StateFacts = {
    * alike.
    */
   codexSkillConfig: { file: string; name?: string; path?: string; realPath?: string; enabled: boolean }[];
-  codexMcpEnabled: { file: string; project?: string; name: string; enabled: boolean }[];
+  /**
+   * `mcp_servers.<name>.enabled`, in the user config.toml and a project's. `layer`, for a parent
+   * folder's `.codex` read for the project: how many folders up it is, the nearest winning, and the
+   * project's own over every parent's. A parent's is read only where Codex trusts that folder.
+   */
+  codexMcpEnabled: { file: string; project?: string; name: string; enabled: boolean; layer?: number }[];
   /**
    * Item id -> valueHash of its raw entry, for MCP servers and hooks: a write checks the entry is
    * still the one read. Never printed.
@@ -206,7 +217,9 @@ export type StateFacts = {
   /**
    * By pathKey of each project read, the folders whose trust Codex takes for it, in the order
    * it looks (sources/codex-trust.ts): the project's own, its project root, its repository's -
-   * a linked worktree's main checkout. A project not here is looked up by its own path alone.
+   * a linked worktree's main checkout. So for each parent folder whose `.codex` Codex would read
+   * for a project, by its own trust (`Location.layer`). A project not here is looked up by its
+   * own path alone.
    */
   codexTrustFolders: Record<string, string[]>;
   /**
@@ -221,7 +234,7 @@ export type StateFacts = {
    * Codex loads a plugin only where a table names it. `enabled` is absent when the table does not
    * set it, which leaves the plugin on.
    */
-  codexPlugins: { file: string; project?: string; plugin: string; enabled?: boolean }[];
+  codexPlugins: { file: string; project?: string; plugin: string; enabled?: boolean; layer?: number }[];
   /**
    * `plugins."<id>".mcp_servers.<name>.enabled`: a plugin's server switch, in the same files.
    * With `default`, the server's own `enabled` in the plugin's file, which Codex starts from
@@ -234,6 +247,7 @@ export type StateFacts = {
     name: string;
     enabled: boolean;
     default?: true;
+    layer?: number;
   }[];
   /**
    * Each Codex hook's trust identity, by item id: the keys Codex records its trust under -

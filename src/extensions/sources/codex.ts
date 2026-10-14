@@ -8,7 +8,7 @@ import type { Collector, Location, Project, Warning } from "../model.js";
 import { codexProjectConfig } from "../places.js";
 import { tilde } from "../present.js";
 import { isHomeProject, type ProjectRecord, recordedPaths } from "../projects.js";
-import { entryInfo, isRecord, pathKey, readJsonObject, readText, realPath, samePath } from "../read.js";
+import { entryInfo, isRecord, isWithin, pathKey, readJsonObject, readText, realPath, samePath } from "../read.js";
 import { mcpSummary } from "../redact.js";
 import { codexTrustedIn } from "../state.js";
 import { addHooksFile } from "./claude-hooks.js";
@@ -239,11 +239,23 @@ export async function readCodex(ctx: CodexContext, projects: Project[], out: Col
         if (worktree) out.facts.codexWorktrees[pathKey(project.path)] = worktree;
         const file = codexProjectConfig(project.path);
         const mainFile = worktree ? path.join(worktree.hooks, "config.toml") : undefined;
-        const { config, main } = await projectConfig(ctx, project.path, file, out, refusals, mainFile);
+        const layers = roots ? await parentLayers(ctx, project.path, roots.root, markers, out) : [];
+        const { config, main, loaded } = await projectConfig(ctx, project.path, file, out, refusals, mainFile, layers);
+        // Each server merged over the user's and each parent's of its name, as Codex merges them.
+        const user = isRecord(ctx.config?.mcp_servers) ? ctx.config.mcp_servers : {};
+        let under: Record<string, unknown> = user;
+        for (const layer of loaded ? layers : []) {
+          const config = layer.read.value;
+          const at: SkillLocation = { ...here, layer: layer.dir };
+          addServers(config, { ...at, file: layer.file }, `${project.path}#up${layer.depth}`, out, under, layer.depth);
+          addPluginSwitches(config, layer.file, project.path, out.facts, layer.depth);
+          await addFolderHooks(layer.hooks, layer.hooksConfig, at, project.path, out, `up${layer.depth}:`);
+          under = { ...(mergeCodexConfig(under, isRecord(config.mcp_servers) ? config.mcp_servers : {}) as object) };
+        }
         if (config) {
           // Where Codex trusts the project, it merges each server over the user's of its name.
-          const user = codexTrustedIn(out.facts, project.path) ? ctx.config?.mcp_servers : undefined;
-          addServers(config, { ...here, file }, project.path, out, isRecord(user) ? user : undefined);
+          const trusted = codexTrustedIn(out.facts, project.path);
+          addServers(config, { ...here, file }, project.path, out, trusted ? under : undefined);
           addPluginSwitches(config, file, project.path, out.facts);
         }
         // Codex looks up no trust for a worktree's own hooks: it never reads them there.
@@ -327,39 +339,139 @@ async function projectConfig(
   file: string,
   out: Collector,
   refusals: ProjectRefusals,
-  mainFile?: string,
-): Promise<{ config?: Record<string, unknown>; main?: Record<string, unknown> }> {
+  mainFile: string | undefined,
+  layers: readonly Layer[],
+): Promise<{ config?: Record<string, unknown>; main?: Record<string, unknown>; loaded: boolean }> {
   const trusted = codexTrustedIn(out.facts, project);
   const read = await readCodexConfig(file, out.warnings);
   const main = mainFile === undefined ? undefined : await readCodexConfig(mainFile, out.warnings);
   const value = (r: CodexConfigFile | Refused | undefined) => (r === undefined || "refused" in r ? undefined : r.value);
+  const values = { config: value(read), main: value(main), loaded: true };
   // A file clausona reads all the same is read on: its rows are listed, off there, and can change.
   const refuse = (at: string, cause: Refused) => {
     refusals.note(at, cause, project);
     out.facts.codexConfigRefused.push({ file: at, project, ...(cause.parse ? {} : { readable: true as const }) });
-    return cause.parse ? {} : { config: value(read), main: value(main) };
+    return cause.parse ? { loaded: false } : values;
   };
+  // A parent's .codex Codex trusts it reads whatever the project's own trust: one that does not parse refuses.
+  for (const layer of layers) if (layer.refused) return refuse(layer.refused.file, layer.refused.cause);
   if (!trusted) {
     if (read && "refused" in read) refusals.note(file, read, undefined);
     if (mainFile !== undefined && main && "refused" in main) refusals.note(mainFile, main, undefined);
-    return { config: value(read), main: value(main) };
+  } else {
+    if (read && "refused" in read) return refuse(file, read);
+    if (mainFile !== undefined && main && "refused" in main) return refuse(mainFile, main);
   }
-  if (read && "refused" in read) return refuse(file, read);
-  if (mainFile !== undefined && main && "refused" in main) return refuse(mainFile, main);
+  // What Codex checks: the user's, then each parent's, then the project's own where it trusts it -
+  // in a worktree each with its main checkout's [hooks] in place of its own.
+  const parts: { file: string; mainFile?: string; checked: Record<string, unknown> }[] = layers.map((layer) => ({
+    file: layer.file,
+    ...(layer.mainFile !== undefined ? { mainFile: layer.mainFile } : {}),
+    checked: layer.checked,
+  }));
   const mainRead = main && !("refused" in main) ? main : undefined;
-  if (read === undefined && mainRead === undefined) return {};
-  const own = read?.exact ?? {};
-  let checked = own;
-  if (mainFile !== undefined) {
-    const { hooks: _dropped, ...rest } = own;
-    const hooks = mainRead?.exact.hooks;
-    checked = hooks === undefined ? rest : { ...rest, hooks };
+  if (trusted && (read !== undefined || mainRead !== undefined)) {
+    const own = read && !("refused" in read) ? read.exact : {};
+    parts.push({
+      file,
+      ...(mainFile !== undefined ? { mainFile } : {}),
+      checked: mainFile === undefined ? own : withHooks(own, mainRead?.exact.hooks),
+    });
   }
-  const problem = codexConfigProblem(mergeCodexConfig(ctx.exact ?? {}, checked) as Record<string, unknown>);
-  if (problem === undefined) return { config: value(read), main: value(main) };
-  // In a worktree, a hook is the main checkout's.
-  const at = mainFile !== undefined && problem === "a hook" ? mainFile : file;
-  return refuse(at, { refused: `has ${problem} Codex cannot read`, parse: false });
+  if (parts.length === 0) return values;
+  let merged: unknown = ctx.exact ?? {};
+  for (const part of parts) merged = mergeCodexConfig(merged, part.checked);
+  if (codexConfigProblem(merged as Record<string, unknown>) === undefined) return values;
+  // The file to name: the first whose config, merged over what comes before it, Codex cannot read.
+  let prefix: unknown = ctx.exact ?? {};
+  for (const part of parts) {
+    prefix = mergeCodexConfig(prefix, part.checked);
+    const problem = codexConfigProblem(prefix as Record<string, unknown>);
+    if (problem === undefined) continue;
+    // In a worktree, a hook is the main checkout's.
+    const at = part.mainFile !== undefined && problem === "a hook" ? part.mainFile : part.file;
+    return refuse(at, { refused: `has ${problem} Codex cannot read`, parse: false });
+  }
+  return values;
+}
+
+/** A config with `hooks` - a main checkout's, for a worktree - in place of its own. */
+function withHooks(config: Record<string, unknown>, hooks: unknown): Record<string, unknown> {
+  const { hooks: _dropped, ...rest } = config;
+  return hooks === undefined ? rest : { ...rest, hooks };
+}
+
+/**
+ * A parent folder's `.codex`, read for a project below it: its folder, how many folders up it is,
+ * its config.toml as read (or why Codex refuses it), the folder its hooks come from - in a linked
+ * worktree the main checkout's at the same place - and the config those hooks are in.
+ */
+type Layer = {
+  dir: string;
+  depth: number;
+  file: string;
+  read: CodexConfigFile;
+  checked: Record<string, unknown>;
+  hooks: string;
+  hooksConfig?: Record<string, unknown>;
+  mainFile?: string;
+  refused?: { file: string; cause: Refused };
+};
+
+/**
+ * The `.codex` folders Codex 0.159.3 reads for `project` above it: one in each folder from its
+ * project root (`root`, the nearest folder with a marker) down to the project, root first, as
+ * `load_project_layers` reads them. Each where Codex trusts that folder - its own trust, by its
+ * own key, then the project root's and the repository's (codex-trust.ts) - which this records
+ * for it; one it does not trust Codex leaves out. Codex's own home is no layer. With no root there
+ * is none.
+ */
+async function parentLayers(
+  ctx: CodexContext,
+  project: string,
+  root: string | undefined,
+  markers: readonly string[],
+  out: Collector,
+): Promise<Layer[]> {
+  if (root === undefined || samePath(root, project) || !isWithin(project, root)) return [];
+  const dirs: string[] = [];
+  for (let dir = path.dirname(project); isWithin(dir, root); dir = path.dirname(dir)) {
+    dirs.unshift(dir);
+    if (samePath(dir, root) || path.dirname(dir) === dir) break;
+  }
+  const layers: Layer[] = [];
+  for (const dir of dirs) {
+    const folder = path.join(dir, ".codex");
+    if ((await entryInfo(folder)).kind !== "dir" || samePath(folder, ctx.primary.dir)) continue;
+    const roots = await codexRoots(dir, markers);
+    out.facts.codexTrustFolders[pathKey(dir)] = roots.folders;
+    if (!codexTrustedIn(out.facts, dir)) continue;
+    const file = path.join(folder, "config.toml");
+    const read = await readCodexConfig(file, out.warnings);
+    const depth = path.relative(dir, project).split(path.sep).filter(Boolean).length;
+    const mainFile = roots.worktree ? path.join(roots.worktree.hooks, "config.toml") : undefined;
+    const main = mainFile === undefined ? undefined : await readCodexConfig(mainFile, out.warnings);
+    const parsed = read && !("refused" in read) ? read : { value: {}, exact: {} };
+    const mainParsed = main && !("refused" in main) ? main : undefined;
+    const refused =
+      read && "refused" in read
+        ? { file, cause: read }
+        : mainFile !== undefined && main && "refused" in main
+          ? { file: mainFile, cause: main }
+          : undefined;
+    layers.push({
+      dir,
+      depth,
+      file,
+      read: parsed,
+      checked: mainFile === undefined ? parsed.exact : withHooks(parsed.exact, mainParsed?.exact.hooks),
+      hooks: roots.worktree?.hooks ?? folder,
+      ...(mainFile === undefined ? { hooksConfig: parsed.value } : mainParsed ? { hooksConfig: mainParsed.value } : {}),
+      ...(mainFile !== undefined ? { mainFile } : {}),
+      ...(refused ? { refused } : {}),
+    });
+  }
+  return layers;
 }
 
 /** What a worktree's id for one of its main checkout's hooks puts before the hook's place. */
@@ -457,6 +569,7 @@ function addServers(
   owner: string,
   out: Collector,
   under?: Record<string, unknown>,
+  layer?: number,
 ): void {
   for (const [name, server] of Object.entries(isRecord(config.mcp_servers) ? config.mcp_servers : {})) {
     if (!isRecord(server)) continue;
@@ -477,6 +590,7 @@ function addServers(
         ...(location.project ? { project: location.project } : {}),
         name,
         enabled: server.enabled,
+        ...(layer !== undefined ? { layer } : {}),
       });
     }
   }

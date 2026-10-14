@@ -475,8 +475,17 @@ function nothingToList(command: ExtensionsCommand, scope: Scope, tools: ToolName
       return project === undefined
         ? "No project — pick one with --project <path>."
         : "Nothing in this project's own files.";
-    case "parents":
-      return "No .mcp.json in the folders above this project.";
+    case "parents": {
+      const mcpjson = tools.includes("claude") && command === "mcp";
+      if (!tools.includes("codex")) {
+        return mcpjson
+          ? "No .mcp.json in the folders above this project."
+          : `Claude Code reads no ${noun} from the folders above a project.`;
+      }
+      return mcpjson
+        ? `No .mcp.json in the folders above this project, and no .codex folder there has ${noun}.`
+        : `No .codex folder above this project has ${noun}.`;
+    }
     case "plugins":
       return `No plugin brings ${noun}.`;
     case "builtin":

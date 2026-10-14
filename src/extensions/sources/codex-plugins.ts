@@ -254,8 +254,9 @@ export function addPluginSwitches(
   file: string,
   project: string | undefined,
   facts: StateFacts,
+  layer?: number,
 ): void {
-  const where = { file, ...(project !== undefined ? { project } : {}) };
+  const where = { file, ...(project !== undefined ? { project } : {}), ...(layer !== undefined ? { layer } : {}) };
   for (const [plugin, table] of Object.entries(isRecord(config.plugins) ? config.plugins : {})) {
     if (!isRecord(table)) continue;
     facts.codexPlugins.push({

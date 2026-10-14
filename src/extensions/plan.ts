@@ -39,7 +39,9 @@ import {
   CODEX_REFUSED_KEY,
   claudeFlag,
   claudeSkillOverride,
+  codexNearest,
   codexTrusted,
+  codexTrustFolder,
   codexWorktreeRuns,
   isManagedSetting,
   isMcpjsonServer,
@@ -1257,24 +1259,36 @@ function planCodexMcp(run: Run, row: ScopeRow): Outcome {
     if (unreadable) return unreadable;
     const out = outcome(project);
     const where = whereFor(run.ctx, "here", project);
+    // What it is with no switch in this file: the nearest parent folder's .codex, else the user's.
+    const parent = codexNearest(
+      inv,
+      inv.facts.codexMcpEnabled.filter((e) => e.name === name && e.layer !== undefined),
+      project,
+    );
     const userOff = codexMcpEntry(inv, inv.places.codexConfig, name)?.enabled === false;
+    const underOff = parent ? !parent.enabled : userOff;
     // Where Codex refuses the project's config.toml, it stays off there whatever this writes, and
     // whether it is off is what the switches say.
     const refusal = refusedNote(run, project);
     const own = codexMcpEntry(inv, file, name)?.enabled;
-    const off = refusal !== undefined ? (own ?? !userOff) === false : stateOf(inv, item, project).value === "off";
+    const off = refusal !== undefined ? (own ?? !underOff) === false : stateOf(inv, item, project).value === "off";
     if (verb === "off") {
       return off ? unchanged(out, row, `already off ${where}`) : write(out, file, false, create, refusal);
     }
     if (!off) return unchanged(out, row, refusal ?? `already on ${where}`);
-    return write(out, file, userOff ? true : null, create, refusal);
+    return write(out, file, underOff ? true : null, create, refusal);
   };
   if (item.location.scope === "project") {
     const project = item.location.project;
-    if (project === undefined || !codexTrusted(inv, project)) return refused(run, row, "codex-untrusted");
+    const layer = item.location.layer;
+    if (project === undefined || !codexTrusted(inv, layer ?? project)) return refused(run, row, "codex-untrusted");
     if (verb === "rm") return deleteServer();
     if (reach === "everywhere") return refused(run, row, "codex-project-everywhere");
-    return inProject(own, project, false);
+    if (layer === undefined) return inProject(own, project, false);
+    // A parent folder's server is switched here in the project's own config.toml, which Codex
+    // merges over every parent's, as a user server is.
+    if (!codexTrusted(inv, project)) return refused(run, row, "codex-untrusted");
+    return inProject(codexProjectConfig(project), project, true);
   }
   if (verb === "rm") return deleteServer();
   if (reach === "everywhere") {
@@ -1285,10 +1299,12 @@ function planCodexMcp(run: Run, row: ScopeRow): Outcome {
     if (verb === "off") return off ? unchanged(out, row, "already off in every project") : write(out, own, false, true);
     // This project's own config, which Codex reads where it trusts the project, still turns it off.
     const project = run.ctx.project;
-    const here = inv.facts.codexMcpEnabled.find(
-      (entry) => entry.name === name && entry.project !== undefined && samePath(entry.project, project),
+    const here = codexNearest(
+      inv,
+      inv.facts.codexMcpEnabled.filter((entry) => entry.name === name),
+      project,
     );
-    if (here?.enabled === false && codexTrusted(inv, project)) {
+    if (here?.enabled === false) {
       note(out, stillOff(run, project, `mcp_servers.${name}.enabled`, here.file));
     }
     return off ? write(out, own, null, true) : unchanged(out, row, "not off in Codex's config.toml");
@@ -1314,7 +1330,7 @@ function planHook(run: Run, row: ScopeRow): Outcome {
   const { verb, reach } = run.action;
   if (verb !== "rm" && reach === "here") return refused(run, row, "hook-here");
   const loc = item.location;
-  const untrusted = loc.tool === "codex" && loc.scope === "project" && !codexTrusted(inv, loc.project);
+  const untrusted = loc.tool === "codex" && loc.scope === "project" && !codexTrusted(inv, codexTrustFolder(item));
   // Deleting what clausona kept writes nothing under the project's .codex folder.
   if (untrusted && !(verb === "rm" && item.stashed)) return refused(run, row, "codex-untrusted");
   const place = item.hook;

@@ -22,7 +22,7 @@ export type Scope = ScopeId | "all";
 export const SCOPES: Record<ExtensionsCommand, readonly Scope[]> = {
   skills: ["loaded", "project", "global", "cloud", "plugins", "builtin", "other", "unused", "all"],
   mcp: ["loaded", "project", "parents", "global", "plugins", "managed", "other", "all"],
-  hooks: ["loaded", "project", "global", "plugins", "managed", "other", "all"],
+  hooks: ["loaded", "project", "parents", "global", "plugins", "managed", "other", "all"],
 };
 
 export const NOUN: Record<ExtensionsCommand, { one: string; many: string }> = {

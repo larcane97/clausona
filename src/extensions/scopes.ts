@@ -54,8 +54,8 @@ const ORDER: Record<ToolName, Record<ItemKind, readonly ScopeId[]>> = {
   },
   codex: {
     skill: ["loaded", "project", "global", "plugins", "builtin"],
-    mcp: ["loaded", "project", "global", "plugins"],
-    hook: ["loaded", "project", "global", "plugins"],
+    mcp: ["loaded", "project", "parents", "global", "plugins"],
+    hook: ["loaded", "project", "parents", "global", "plugins"],
   },
 };
 
@@ -102,7 +102,8 @@ export function homeScope(item: Extension, project: string | undefined): Exclude
   if (loc.scope === "builtin") return "builtin";
   if (loc.scope === "managed") return "managed";
   if (loc.project === undefined) return "global";
-  if (samePath(loc.project, project)) return "project";
+  // A parent folder's .codex, which Codex reads for the project too.
+  if (samePath(loc.project, project)) return loc.layer !== undefined ? "parents" : "project";
   // A dir's .mcp.json loads in every project below it.
   if (isMcpjsonServer(item) && isWithin(project, loc.project)) return "parents";
   return "other";

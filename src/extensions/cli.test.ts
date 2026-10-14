@@ -322,6 +322,17 @@ describe("skills ls", () => {
     expect(await run(h, app, "hooks", ["ls", "--scope", "global"])).toMatch(
       /^0 hooks · Global · project .+\n\nNo Global hooks\.$/,
     );
+    // Parent folders: .mcp.json for Claude Code, a parent's .codex for Codex.
+    const parents = async (command: ExtensionsCommand, ...tool: string[]) =>
+      (await run(h, app, command, ["ls", "--scope", "parents", ...tool])).split("\n\n")[1];
+    expect(await parents("mcp", "--tool", "claude")).toBe("No .mcp.json in the folders above this project.");
+    expect(await parents("mcp")).toBe(
+      "No .mcp.json in the folders above this project, and no .codex folder there has MCP servers.",
+    );
+    expect(await parents("hooks")).toBe("No .codex folder above this project has hooks.");
+    expect(await parents("hooks", "--tool", "claude")).toBe(
+      "Claude Code reads no hooks from the folders above a project.",
+    );
   });
 });
 
@@ -1193,6 +1204,182 @@ describe("Codex hooks and Codex's trust", () => {
     expect(there.items.map((i: { summary: Record<string, string> }) => i.summary)).toEqual([
       { transport: "stdio", command: "web-shared", env: "B" },
     ]);
+  });
+
+  /**
+   * A home whose project root, for Codex, is ~/repos (a `.hg` marker there), above app and web:
+   * Codex reads ~/repos/.codex for both, by ~/repos's own trust - and ~/repos, whose entry that
+   * is, is a project too. `user` goes after the markers.
+   */
+  const parentHome = (user: (projects: { app: string; web: string }) => string) => {
+    const seeded = seed();
+    const { h } = seeded;
+    const repos = h.path("repos");
+    h.write("repos/.hg/requires", "");
+    h.write(
+      ".codex/config.toml",
+      `project_root_markers = [".hg"]\n\n[projects.${JSON.stringify(repos)}]\ntrust_level = "trusted"\n\n${user(seeded)}`,
+    );
+    return { ...seeded, repos, parentFile: path.join(repos, ".codex", "config.toml") };
+  };
+
+  it("lists what a parent folder's .codex holds under Parent folders with its file, merged as Codex merges it", async () => {
+    const { h, app, web, parentFile } = parentHome(
+      ({ web }) =>
+        `[projects.${JSON.stringify(web)}]\ntrust_level = "untrusted"\n\n[mcp_servers.shared]\ncommand = "user-shared"\n`,
+    );
+    h.write(
+      "repos/.codex/config.toml",
+      '[mcp_servers.rootsrv]\ncommand = "root"\n\n[mcp_servers.shared]\ncommand = "root-shared"\nargs = ["--root"]\n',
+    );
+    h.write("repos/.codex/hooks.json", { hooks: { Stop: [{ hooks: [{ type: "command", command: "root-hook" }] }] } });
+    h.write(
+      "repos/app/.codex/config.toml",
+      '[mcp_servers.subsrv]\ncommand = "sub"\n\n[mcp_servers.shared]\nenv = { S = "1" }\n',
+    );
+    h.write("repos/app/.codex/hooks.json", {
+      hooks: { Stop: [{ hooks: [{ type: "command", command: "sub-hook" }] }] },
+    });
+    h.write("repos/web/.codex/config.toml", '[mcp_servers.websrv]\ncommand = "web"\n');
+    type Row = { name: string; file: string; state: string; tags: string[]; summary: Record<string, string> };
+    const rows = async (cwd: string, scope: string, command: ExtensionsCommand = "mcp") =>
+      (
+        JSON.parse(await run(h, cwd, command, ["ls", "--tool", "codex", "--scope", scope, "--json"])).items as Row[]
+      ).map((i) => [i.name, i.file, i.state, i.tags, i.summary.command]);
+    const appFile = path.join(app, ".codex", "config.toml");
+    // What Codex 0.159.3's config/read gave started in a folder below a trusted root: the root's
+    // rootsrv, the folder's subsrv, and shared as root-shared --root with the folder's env S.
+    expect(await rows(app, "parents")).toEqual([
+      ["rootsrv", parentFile, "on", [], "root"],
+      ["shared", parentFile, "on", ["hidden by Project copy"], "root-shared --root"],
+    ]);
+    expect(await rows(app, "project")).toEqual([
+      ["shared", appFile, "on", [], "root-shared --root"],
+      ["subsrv", appFile, "on", [], "sub"],
+    ]);
+    const shared = JSON.parse(await run(h, app, "mcp", ["ls", "--tool", "codex", "--scope", "project", "--json"]));
+    expect(shared.items[0].summary).toMatchObject({ env: "S" });
+    const table = await run(h, app, "mcp", ["ls", "--tool", "codex", "--scope", "parents"], 160);
+    expect(table).toMatch(/^rootsrv\s+~[\\/]repos[\\/]\.codex[\\/]config\.toml\s/m);
+    expect(firstLine(table)).toMatch(/^2 MCP servers · Parent folders · /);
+    // The screen lists them in a scope of their own, after Project and before Global.
+    const inv = await loadInventory(h.inventoryOptions(app));
+    expect(scopesFor(inv, "codex", "mcp", app, NOW).map((s) => s.id)).toEqual([
+      "loaded",
+      "project",
+      "parents",
+      "global",
+    ]);
+    expect(scopeSentence("parents", "codex", "hook", inv, app)).toBe(
+      `PARENT FOLDERS — .codex in ${tilde(h.path("repos"), h.home)} · runs here too`,
+    );
+    // Codex lists both folders' hooks.
+    expect((await rows(app, "parents", "hooks")).map((r) => r[1])).toEqual([
+      path.join(h.path("repos"), ".codex", "hooks.json"),
+    ]);
+    expect((await rows(app, "project", "hooks")).map((r) => r[1])).toEqual([path.join(app, ".codex", "hooks.json")]);
+    // Where Codex does not trust the folder but trusts the root, it reads the root's alone.
+    expect(await rows(web, "parents")).toEqual([
+      ["rootsrv", parentFile, "on", [], "root"],
+      ["shared", parentFile, "on", [], "root-shared --root"],
+    ]);
+    expect(await rows(web, "project")).toEqual([
+      ["websrv", path.join(web, ".codex", "config.toml"), "off", ["off"], "web"],
+    ]);
+    expect(await run(h, web, "mcp", ["show", "rootsrv"])).not.toMatch(/^Trust/m);
+    // Your shared gives way to the nearest copy Codex reads: app's own in app, the root's in web.
+    const userFile = h.path(".codex", "config.toml");
+    expect(await rows(app, "global")).toEqual([["shared", userFile, "on", ["hidden by Project copy"], "user-shared"]]);
+    expect(await rows(web, "global")).toEqual([
+      ["shared", userFile, "on", ["hidden by Parent folders copy"], "user-shared"],
+    ]);
+  });
+
+  it("reads no parent folder's .codex Codex does not trust, nor any where no marker is above", async () => {
+    // The root's own entry says untrusted, app's trusted: Codex reads app's alone.
+    const { h, app, repos } = parentHome(({ app }) => `[projects.${JSON.stringify(app)}]\ntrust_level = "trusted"\n`);
+    h.write(
+      ".codex/config.toml",
+      `project_root_markers = [".hg"]\n\n[projects.${JSON.stringify(repos)}]\ntrust_level = "untrusted"\n\n[projects.${JSON.stringify(app)}]\ntrust_level = "trusted"\n`,
+    );
+    h.write("repos/.codex/config.toml", '[mcp_servers.rootsrv]\ncommand = "root"\n');
+    h.write("repos/app/.codex/config.toml", '[mcp_servers.subsrv]\ncommand = "sub"\n');
+    const names = async (scope: string) =>
+      JSON.parse(await run(h, app, "mcp", ["ls", "--tool", "codex", "--scope", scope, "--json"])).items.map(
+        (i: { name: string }) => i.name,
+      );
+    expect(await names("parents")).toEqual([]);
+    expect(await names("project")).toEqual(["subsrv"]);
+    // With no marker, Codex's project root is the folder it starts in: no parent is read, and the
+    // root's entry is no longer app's.
+    h.write(
+      ".codex/config.toml",
+      `project_root_markers = []\n\n[projects.${JSON.stringify(repos)}]\ntrust_level = "trusted"\n\n[projects.${JSON.stringify(app)}]\ntrust_level = "trusted"\n`,
+    );
+    expect(await names("parents")).toEqual([]);
+    expect(await names("loaded")).toEqual(["subsrv"]);
+  });
+
+  it("refuses with Codex a parent's config.toml that does not parse, and a project's it makes unreadable", async () => {
+    const { h, app, web, repos, parentFile } = parentHome(() => "");
+    const warnings = async () =>
+      JSON.parse(await run(h, app, "mcp", ["ls", "--tool", "codex", "--json"])).warnings.map(
+        (w: { file: string; message: string }) => [w.file, w.message],
+      );
+    // Codex 0.159.3 refused the root's file for every folder below it, as for the root itself.
+    h.write("repos/.codex/config.toml", "[mcp_servers.bad\n");
+    const said = await warnings();
+    expect(said).toHaveLength(1);
+    expect(said[0][0]).toBe(parentFile);
+    expect(said[0][1]).toMatch(/^is not valid TOML at line \d+, column \d+, so Codex loads no config in /);
+    const all = `${tilde(repos, h.home)}, ${tilde(app, h.home)} and ${tilde(web, h.home)}`;
+    expect(said[0][1].endsWith(all)).toBe(true);
+    // Merged, as Codex checks it: the root's server with app's args of the wrong type is app's to fix.
+    h.write("repos/.codex/config.toml", '[mcp_servers.shared]\ncommand = "root-shared"\n');
+    h.write("repos/app/.codex/config.toml", '[mcp_servers.shared]\nargs = "x"\n');
+    const appFile = path.join(app, ".codex", "config.toml");
+    expect(await warnings()).toEqual([
+      [appFile, `has an MCP server Codex cannot read, so Codex loads no config in ${tilde(app, h.home)}`],
+    ]);
+    // And the root's table with no command, which app's command completes, is no problem in app.
+    // In the root and in web nothing completes it: Codex refuses it there, as the root's.
+    h.write("repos/.codex/config.toml", '[mcp_servers.shared]\nenv = { A = "1" }\n');
+    h.write("repos/app/.codex/config.toml", '[mcp_servers.shared]\ncommand = "sub-shared"\n');
+    expect(await warnings()).toEqual([
+      [
+        parentFile,
+        `has an MCP server Codex cannot read, so Codex loads no config in ${tilde(repos, h.home)} and ${tilde(web, h.home)}`,
+      ],
+    ]);
+    const project = JSON.parse(await run(h, app, "mcp", ["ls", "--tool", "codex", "--scope", "project", "--json"]));
+    expect(project.items.map((i: { summary: Record<string, string> }) => i.summary)).toEqual([
+      { transport: "stdio", command: "sub-shared", env: "A" },
+    ]);
+  });
+
+  it("switches a parent folder's server in the project's own config.toml, and deletes it in the parent's", async () => {
+    const { h, app, parentFile } = parentHome(() => '[mcp_servers.u]\ncommand = "u"\n');
+    h.write(
+      "repos/.codex/config.toml",
+      '[mcp_servers.rootsrv]\ncommand = "root"\n\n[mcp_servers.u]\nenabled = false\n',
+    );
+    const appFile = path.join(app, ".codex", "config.toml");
+    const plan = async (args: string[]) =>
+      JSON.parse(await run(h, app, "mcp", [...args, "--tool", "codex", "--dry-run", "--json"])).changes.map(
+        (c: { file: string; what: string }) => [c.file, c.what],
+      );
+    // Codex 0.159.3 left u off below the root that turns it off, and on where the folder turns it on.
+    const state = async () =>
+      JSON.parse(await run(h, app, "mcp", ["ls", "--tool", "codex", "--scope", "global", "--json"])).items.map(
+        (i: { name: string; state: string; tags: string[] }) => [i.name, i.state, i.tags],
+      );
+    expect(await state()).toEqual([["u", "off", ["off here"]]]);
+    expect(await run(h, app, "mcp", ["show", "u"])).toMatch(/~[\\/]repos[\\/]\.codex[\\/]config\.toml/);
+    expect(await plan(["on", "u"])).toEqual([[appFile, "mcp_servers.u.enabled → true"]]);
+    expect(await plan(["off", "rootsrv"])).toEqual([[appFile, "mcp_servers.rootsrv.enabled → false"]]);
+    expect(await plan(["rm", "rootsrv"])).toEqual([[parentFile, "[mcp_servers.rootsrv] deleted"]]);
+    h.write("repos/app/.codex/config.toml", "[mcp_servers.u]\nenabled = true\n");
+    expect(await state()).toEqual([["u", "on", []]]);
   });
 
   it.skipIf(!hasGit)(

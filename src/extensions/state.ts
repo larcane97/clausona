@@ -499,10 +499,11 @@ export function codexWorktreeRuns(inv: Inventory, item: Extension): string | und
 /**
  * The off a project's own Codex hook or server is in while Codex does not trust the project:
  * Codex 0.159.3 then leaves the project's `.codex` folder out, its hooks and its config.toml's
- * servers with it. `setBy` names the project's `trust_level` in the user config.toml.
+ * servers with it. `setBy` names the project's `trust_level` in the user config.toml. One a
+ * parent folder's `.codex` holds goes by that folder's trust (codexTrustFolder).
  */
 function codexUntrustedOff(inv: Inventory, item: Extension): EffectiveState | undefined {
-  const own = item.location.scope === "project" ? item.location.project : undefined;
+  const own = codexTrustFolder(item);
   if (own === undefined || codexTrusted(inv, own)) return undefined;
   const config = inv.places.codexConfig;
   const key = `projects.${JSON.stringify(own)}.trust_level`;
@@ -550,32 +551,73 @@ function codexMcpState(inv: Inventory, item: Extension, project: string | undefi
 }
 
 /**
- * The server of a user server's name that `project` defines, where Codex trusts the project: Codex
- * 0.159.3 merges the project's table over the user's, so the project's copy is the one it starts.
+ * The folder whose trust a Codex project item goes by: the parent folder whose `.codex` holds it
+ * (`location.layer`), else its project. Undefined for any other item.
  */
-function projectCopy(inv: Inventory, item: Extension, project: string | undefined): Extension | undefined {
-  if (item.location.scope !== "global" || project === undefined || !codexTrusted(inv, project)) return undefined;
-  return inv.items.find(
-    (other) =>
-      other.kind === "mcp" &&
-      other.location.tool === "codex" &&
-      other.location.scope === "project" &&
-      other.name === item.name &&
-      samePath(other.location.project, project),
-  );
+export function codexTrustFolder(item: Extension): string | undefined {
+  const loc = item.location;
+  return loc.scope === "project" ? (loc.layer ?? loc.project) : undefined;
 }
 
-/** Of one switch's entries, the one Codex takes in `project`: that project's where it trusts it, else the user's. */
-function codexLayered<T extends { project?: string }>(
+/** How many folders up from its project the `.codex` that holds a Codex project item is: 0 for the project's own. */
+function layerDepth(item: Extension): number {
+  const loc = item.location;
+  if (loc.layer === undefined || loc.project === undefined) return 0;
+  return path.relative(loc.layer, loc.project).split(path.sep).filter(Boolean).length;
+}
+
+/**
+ * The server of `item`'s name Codex starts in `project` in its place, for a user server or one a
+ * parent folder's `.codex` defines: Codex 0.159.3 merges each `.codex` from the project's root
+ * down over the user's, so the nearest copy - the project's own where Codex trusts the project, else
+ * the nearest parent's - is the one it starts. A parent's is read only where Codex trusts it.
+ */
+function projectCopy(inv: Inventory, item: Extension, project: string | undefined): Extension | undefined {
+  if (project === undefined) return undefined;
+  const loc = item.location;
+  let depth: number;
+  if (loc.scope === "global") depth = Number.POSITIVE_INFINITY;
+  else if (loc.scope === "project" && loc.layer !== undefined && samePath(loc.project, project))
+    depth = layerDepth(item);
+  else return undefined;
+  let winner: { item: Extension; depth: number } | undefined;
+  for (const other of inv.items) {
+    const at = other.location;
+    if (other === item || other.kind !== "mcp" || at.tool !== "codex" || at.scope !== "project") continue;
+    if (other.name !== item.name || !samePath(at.project, project)) continue;
+    if (at.layer === undefined && !codexTrusted(inv, project)) continue;
+    const d = layerDepth(other);
+    if (d < depth && (winner === undefined || d < winner.depth)) winner = { item: other, depth: d };
+  }
+  return winner?.item;
+}
+
+/**
+ * Of one switch's entries, the one Codex takes in `project`: that project's where it trusts it,
+ * else the nearest parent folder's `.codex` (`layer`, how many folders up; one is recorded only
+ * where Codex trusts it), else the user's - as Codex merges them.
+ */
+function codexLayered<T extends { project?: string; layer?: number }>(
   inv: Inventory,
   entries: T[],
   project: string | undefined,
 ): T | undefined {
-  const here =
-    project === undefined
-      ? undefined
-      : entries.find((e) => e.project !== undefined && samePath(e.project, project) && codexTrusted(inv, e.project));
-  return here ?? entries.find((e) => e.project === undefined);
+  return codexNearest(inv, entries, project) ?? entries.find((e) => e.project === undefined);
+}
+
+/** `codexLayered` without the user's: the project's entry where Codex trusts it, else the nearest parent's. */
+export function codexNearest<T extends { project?: string; layer?: number }>(
+  inv: Inventory,
+  entries: readonly T[],
+  project: string | undefined,
+): T | undefined {
+  let here: T | undefined;
+  for (const e of project === undefined ? [] : entries) {
+    if (e.project === undefined || !samePath(e.project, project)) continue;
+    if (e.layer === undefined && !codexTrusted(inv, e.project)) continue;
+    if (here === undefined || (e.layer ?? 0) < (here.layer ?? 0)) here = e;
+  }
+  return here;
 }
 
 /**

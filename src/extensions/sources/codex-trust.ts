@@ -42,7 +42,8 @@ export async function codexTrustFolders(project: string, markers: readonly strin
 export type CodexWorktree = { main: string; hooks: string };
 
 /**
- * `codexTrustFolders`, and when `project` is in a linked worktree, which Codex tells by a
+ * `codexTrustFolders`, its project root (`root`, where one of `markers` is), and when `project` is
+ * in a linked worktree, which Codex tells by a
  * repository root that is not the checkout's (`root_checkout_hooks_folder_for_dir`): the main
  * checkout, and the `.codex` folder at the project's place in it, whose hooks Codex runs in the
  * worktree in place of the project's own (`merge_root_checkout_project_hooks`).
@@ -50,7 +51,7 @@ export type CodexWorktree = { main: string; hooks: string };
 export async function codexRoots(
   project: string,
   markers: readonly string[],
-): Promise<{ folders: string[]; worktree?: CodexWorktree }> {
+): Promise<{ folders: string[]; worktree?: CodexWorktree; root?: string }> {
   const dir = path.resolve(project);
   const byGit = markers.length === 1 && markers[0] === ".git";
   const [checkout, other] = await Promise.all([
@@ -71,9 +72,11 @@ export async function codexRoots(
     ]),
   );
   const unique = [...new Set(spelled.flat())];
-  if (checkout === undefined || repository === undefined || repository === checkout) return { folders: unique };
+  const found = root === undefined ? {} : { root };
+  if (checkout === undefined || repository === undefined || repository === checkout)
+    return { folders: unique, ...found };
   const hooks = path.join(repository, path.relative(checkout, dir), ".codex");
-  return { folders: unique, worktree: { main: repository, hooks } };
+  return { folders: unique, worktree: { main: repository, hooks }, ...found };
 }
 
 /** The names Windows keeps for its devices, which dunce will not drop the `\\?\` of a path for. */
