@@ -51,16 +51,16 @@ for your OK.
 
 ## What it runs, and what it won't do
 
-It never forces a worktree removal. herdr refuses one that holds changes, and then the worker is
-kept. By default nothing is retired until you say yes.
-
-It closes only the panes and workspaces it created, and leaves a worker's permission prompt to you.
-
 The plugin has no hooks or scripts. The session runs herdr and git commands in your shell and starts
 each worker with `clausona run`. It writes each brief and follow-up to a `.fleet-*.md` file in the
 worker's worktree, and adds `/.fleet-*.md` to the repository's `.git/info/exclude` so they're never
 committed. When a worker asks whether to trust the folder, the session answers yes, for this
 repository only.
+
+It never forces a worktree removal. herdr refuses one that holds changes, and then the worker is
+kept. By default nothing is retired until you say yes.
+
+It closes only the panes and workspaces it created, and leaves a worker's permission prompt to you.
 
 ## More
 

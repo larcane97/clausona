@@ -46,18 +46,18 @@ Since you said where one task runs, it shows its table and starts without waitin
 
 ## What it runs, and what it won't do
 
+The plugin has no hooks or scripts. The session runs orca and git commands in your shell and starts
+each worker with `clausona run`. It writes each brief and follow-up to a `.fleet-*.md` file in the
+worker's worktree, and adds `/.fleet-*.md` to the repository's `.git/info/exclude` so they're never
+committed. When a worker asks whether to trust the folder, the session answers yes, for this
+repository only. If Orca doesn't list the repo yet, it asks before adding it to your sidebar.
+
 Orca has its own account switcher. The session doesn't use it: each worker starts with
 `clausona run`, which puts it on the account you chose.
 
 It never forces a worktree removal, and Orca refuses one that holds changes. Orca also deletes a
 worktree's local branch, so a worker is never retired before its branch is pushed. It never closes
 a terminal or removes a worktree it didn't create, and never answers a worker's permission prompt.
-
-The plugin has no hooks or scripts. The session runs orca and git commands in your shell and starts
-each worker with `clausona run`. It writes each brief and follow-up to a `.fleet-*.md` file in the
-worker's worktree, and adds `/.fleet-*.md` to the repository's `.git/info/exclude` so they're never
-committed. When a worker asks whether to trust the folder, the session answers yes, for this
-repository only. If Orca doesn't list the repo yet, it asks before adding it to your sidebar.
 
 ## More
 

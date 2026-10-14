@@ -2,8 +2,8 @@
 
 Let one Claude Code or Codex session split a job across several agents in
 [Superset](https://superset.sh), each in its own workspace and on its own account or API model, so
-five agents don't drain one account's 5-hour window. You can open any worker's tab and type into
-it.
+five agents don't drain one account's 5-hour window. You can open any
+worker's tab and type into it.
 
 ## What you need
 

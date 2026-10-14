@@ -12,10 +12,11 @@ You don't call it yourself. A fleet skill loads it when it starts. It's one skil
 scripts.
 
 It reads your profiles with `clausona list` and its settings from `~/.clausona/fleet.json` (or the
-older `superset-fleet.json`). Workers start in the permission mode set there, or else the one the
-runner's agent config or the profile's own settings already use. If none sets one, it asks you
+older `superset-fleet.json`). Workers start in the permission mode set there, or else the one a
+Superset agent config or the profile's own settings already use. If none sets one, it asks you
 once and, if you agree, saves your answer to `fleet.json`. For a risky change, it can also start a
-checker session on a third profile.
+checker session on a third profile, neither the worker's nor the one the coordinating session
+runs on.
 
 ## What you need
 
