@@ -229,7 +229,7 @@ than configuration, and clausona went through it one entry at a time.
 | `.credentials.json` | own | OAuth tokens outside macOS, and on macOS when the Keychain refuses them. |
 | `policy-limits.json`, `remote-settings.json`, their `.signature.json`, `.signature-iat.json`, `.stamp.json` and `.synced-at`, `remote-settings-consent.json`, `remote-settings-helper-consent` | own | The org's policy limits and remote managed settings, stamped with the identity they were fetched for, and what this account agreed to apply. |
 | `mcp-needs-auth-cache.json` | own | The MCP servers and claude.ai connectors that need this account's sign-in. |
-| `state/` | own | Per-account records, such as MCP discovery verdicts. |
+| `state/` | own | Per-account records, such as MCP discovery verdicts. It also holds the one-time consents Claude Code asks for on this device (device hooks, device MCP servers, cloud plugins), so each profile asks for those once more. |
 | `chrome/` | own | The Claude in Chrome host that Claude Code writes for its config directory. |
 | `daemon/` and every other name starting with `daemon`: `daemon.json`, `daemon.lock`, `daemon.status.json`, `daemon.scheduled.status.json`, `daemon.log`, `daemon-auth-status.json`, `daemon-auth-cooldown` | own | The background daemon: its control key, the roster of the sessions it runs, its lock and status, the workers it runs, its log and its sign-in state. `daemon.json` holds the scheduled tasks and the Remote Control folders, which the daemon runs on its own account: shared, every account's daemon would run them again. On Windows a profile linking the primary's `daemon/` reaches the primary's daemon, which runs on the primary's account. |
 | `telemetry/` | own | Events that failed to send, stamped with the account and org. A later run of the same session sends them again, on whichever account resumed it. |
@@ -253,9 +253,10 @@ remote-control add` run in that profile.
 
 Profiles set up by clausona 0.8.0-beta or earlier link the account entries above to the primary's.
 `clausona doctor` reports each such link with what the profile reads of the primary account's
-through it: `wrong_account_link` for the account files, the daemon's directory and the session
-tokens, and `shared_account_state` for the rest. `clausona repair <profile>` takes it out. A copy that Claude Code has already saved in the profile is the profile's own: doctor no
-longer reports it, and repair keeps it. If an earlier repair set the profile's own copy aside to
+through it: `wrong_account_link` for the account files, the daemon's directory and lock, and the
+session tokens, and `shared_account_state` for the rest. `clausona repair <profile>` takes it out.
+A copy that Claude Code has already saved in the profile is the profile's own: doctor no longer
+reports it, and repair keeps it. If an earlier repair set the profile's own copy aside to
 put the link back, repair brings the newest one back from `~/.clausona/backups/claude/<profile>/`.
 
 Repair, the session-mode toggle and `clausona init` refuse to take out a profile's `daemon/` link
