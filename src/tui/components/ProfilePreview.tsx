@@ -65,7 +65,8 @@ const EM_DASH = "\u2014";
 
 const QUOTA_STATE_NOTE: Record<Exclude<QuotaSnapshot["state"], "ok">, string> = {
   expired: "sign-in lapsed \u2014 clausona login",
-  missing: "no stored credential",
+  // The row beside the panel says `signed out`, as `csn list` and routing do.
+  missing: "signed out — clausona login",
   cooldown: "rate limited, retrying later",
   error: "lookup failed",
 };

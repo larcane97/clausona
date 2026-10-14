@@ -143,12 +143,12 @@ describe("formatQuotaInline", () => {
 describe("quotaSeverity", () => {
   it("grades on the most-consumed window", () => {
     const peak = (session: number, weekly: number) =>
-      quotaSeverity(
-        snapshot({
+      quotaSeverity({
+        quota: snapshot({
           session: { usedPercent: session, resetsAt: null },
           weekly: { usedPercent: weekly, resetsAt: null },
         }),
-      );
+      });
 
     expect(peak(5, 46)).toBe("healthy");
     expect(peak(5, 77)).toBe("warning");
@@ -156,18 +156,23 @@ describe("quotaSeverity", () => {
   });
 
   it("stays neutral when the reading is not live", () => {
-    expect(quotaSeverity(snapshot({ state: "cooldown", weekly: { usedPercent: 100, resetsAt: null } }))).toBe("muted");
-    expect(quotaSeverity(undefined)).toBe("muted");
+    expect(
+      quotaSeverity({ quota: snapshot({ state: "cooldown", weekly: { usedPercent: 100, resetsAt: null } }) }),
+    ).toBe("muted");
+    expect(quotaSeverity({ quota: undefined })).toBe("muted");
   });
 
   it("flags a lapsed sign-in, whatever it last read", () => {
-    expect(quotaSeverity(snapshot({ state: "expired", weekly: { usedPercent: 3, resetsAt: null } }))).toBe("error");
-    expect(quotaSeverity(snapshot({ state: "missing" }))).toBe("error");
+    expect(quotaSeverity({ quota: snapshot({ state: "expired", weekly: { usedPercent: 3, resetsAt: null } }) })).toBe(
+      "error",
+    );
+    expect(quotaSeverity({ quota: snapshot({ state: "missing" }) })).toBe("error");
   });
 
-  // Its reading is spend, and a key its provider refused is `route budget`'s to say.
+  // Its reading is spend, and a key its provider refused is `route budget`'s to say. Taken from
+  // the profile rather than passed beside its reading, so no caller can leave it out.
   it("leaves an API profile's refused reading neutral", () => {
-    expect(quotaSeverity(snapshot({ state: "expired" }), "api")).toBe("muted");
+    expect(quotaSeverity({ kind: "api", quota: snapshot({ state: "expired" }) })).toBe("muted");
   });
 });
 
@@ -559,6 +564,26 @@ describe("renderList with API profiles", () => {
     expect(
       render([subscription, { ...api, quota: { state: "error", fetchedAt: 0, noSpendReading: true } }]),
     ).not.toContain("budget");
+  });
+
+  // A key that cannot be read is `missing` and one its provider refused `expired`, but neither
+  // is a sign-in: the row keeps its budget, or its dashes, as for any other failed reading.
+  it("says no lapsed sign-in for an API profile, whose reading is spend", () => {
+    const budget = {
+      usedPercent: 35,
+      resetsAt: null,
+      spentUsd: 7,
+      limitUsd: 20,
+      source: "budget" as const,
+      per: "month" as const,
+    };
+    const unread = { ...api, quota: { state: "missing" as const, fetchedAt: Date.now() } };
+    const refused = { ...api, quota: { state: "expired" as const, fetchedAt: Date.now(), budget } };
+
+    expect(rowFor(render([subscription, unread]), "claude:glm")).toBe(
+      "    claude:glm          gpu-box                         —          —          —           —             —",
+    );
+    expect(rowFor(render([subscription, refused]), "claude:glm")).toMatch(/gpu-box +budget 35% +—/);
   });
 
   // addApiProfile and `config --label` both refuse a blank label - one rule, checkLabel,

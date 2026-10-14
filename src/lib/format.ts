@@ -103,14 +103,14 @@ export function formatBudgetInline(quota: QuotaSnapshot | undefined, now: number
 }
 
 /**
- * Severity of the most-consumed window, for colouring a whole row at a glance. A lapsed sign-in
- * is as bad as a full window, except an API profile's: its reading is spend, and a key its
- * provider refused is `route budget`'s to say.
+ * Severity of a profile's most-consumed window, for colouring a whole row at a glance. A lapsed
+ * sign-in is as bad as a full window, except an API profile's: its reading is spend, and a key
+ * its provider refused is `route budget`'s to say.
  */
-export function quotaSeverity(
-  quota: QuotaSnapshot | undefined,
-  kind?: ProfileListItem["kind"],
-): "healthy" | "warning" | "error" | "muted" {
+export function quotaSeverity({
+  kind,
+  quota,
+}: Pick<ProfileListItem, "kind" | "quota">): "healthy" | "warning" | "error" | "muted" {
   if (kind !== "api" && signInLapse(quota)) return "error";
   if (!quota || quota.state !== "ok") return "muted";
   const peak = Math.max(

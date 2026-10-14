@@ -304,3 +304,13 @@ describe("ProfilePreview in a narrow panel", () => {
     expect(arrow).toMatch(/➔ \/h\//);
   });
 });
+
+describe("ProfilePreview quota", () => {
+  // The profile list beside it says `signed out` on the row, as `csn list` does; the panel says it
+  // in the same words, and what to run, as it already did for a lapsed sign-in.
+  it("calls a profile with no stored credential signed out, as its row does", () => {
+    const frame = panelFor({ ...subscription, quota: { state: "missing", fetchedAt: Date.now() } });
+
+    expect(frame).toContain("signed out — clausona login");
+  });
+});

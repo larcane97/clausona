@@ -2699,7 +2699,7 @@ export function App({
                 badgeVariant: p.isActive ? ("active" as const) : undefined,
                 // An API profile's is its spend against its limit, as last read.
                 meta: p.kind === "api" ? formatBudgetInline(p.quota) : formatQuotaInline(p.quota),
-                metaVariant: quotaSeverity(p.quota, p.kind),
+                metaVariant: quotaSeverity(p),
               }))}
               index={cursor}
             />
