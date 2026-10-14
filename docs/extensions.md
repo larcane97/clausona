@@ -748,9 +748,11 @@ the sections it reads, against Codex's types:
 A trusted project's `config.toml` is checked merged over yours, as Codex merges them. So a
 switch for a server you do not define is a server with no transport, which Codex refuses too.
 When Codex refuses a trusted project's file, it loads no config in that project, yours
-included: the warning says so, and every Codex row is off in that project ("off here (Codex
-cannot read this project's .codex/config.toml)"). An untrusted project's file Codex leaves alone,
-one that is not valid TOML too.
+included: the warning says so, naming the project by its path, and every Codex row is off in
+that project ("off here (Codex cannot read this project's .codex/config.toml)"). A file several
+projects read, such as a main checkout's that its worktrees read too, gets one warning per
+cause, naming each project Codex loads no config in. An untrusted project's file Codex leaves
+alone, one that is not valid TOML too.
 
 In a linked worktree Codex checks the worktree's own `config.toml` with the main checkout's
 `[hooks]` (and `[hooks.state]`) in place of the worktree's, and nothing else of the main

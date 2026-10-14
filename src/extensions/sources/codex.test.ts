@@ -1017,10 +1017,12 @@ describe("readCodex", () => {
       projects.map((p) => ({ path: p, tools: ["codex"], profiles: [] })),
       out,
     );
-    const said = "has an MCP server Codex cannot read, so Codex loads no config in this project";
+    // Each names the project Codex then loads no config in, by its path.
+    const said = (p: string) =>
+      `has an MCP server Codex cannot read, so Codex loads no config in ${path.join("~", "repos", p)}`;
     expect(out.warnings.map((w) => [path.basename(path.dirname(path.dirname(w.file))), w.message]).sort()).toEqual([
-      ["bad", said],
-      ["orphan", said],
+      ["bad", said("bad")],
+      ["orphan", said("orphan")],
     ]);
     // The switch of a server the user defines still counts.
     expect(out.facts.codexMcpEnabled.map((e) => [e.name, e.enabled])).toEqual([["good", false]]);
@@ -1063,11 +1065,10 @@ describe("readCodex", () => {
       ["types", "types"],
     ]);
     const says = Object.fromEntries(out.warnings.map((w) => [name(w.file), w.message]));
-    expect(says.types).toBe("has an MCP server Codex cannot read, so Codex loads no config in this project");
-    expect(says.syntax).toMatch(
-      /^is not valid TOML( at line \d+, column \d+)?, so Codex loads no config in this project$/,
-    );
-    expect(says.big).toBe("has an integer too large for 64 bits, so Codex loads no config in this project");
+    const where = (p: string) => `so Codex loads no config in ${path.join("~", "repos", p)}`;
+    expect(says.types).toBe(`has an MCP server Codex cannot read, ${where("types")}`);
+    expect(says.syntax?.startsWith("is not valid TOML") && says.syntax.endsWith(`, ${where("syntax")}`)).toBe(true);
+    expect(says.big).toBe(`has an integer too large for 64 bits, ${where("big")}`);
     expect(says.untrusted).toMatch(/^is not valid TOML( at line \d+, column \d+)?$/);
     expect(
       out.items.filter((i) => i.kind === "mcp").map((i) => i.location.project && path.basename(i.location.project)),

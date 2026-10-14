@@ -1409,14 +1409,48 @@ describe("Codex hooks and Codex's trust", () => {
       ]);
       // git names the main checkout by its real path, and Codex reads its hooks there.
       const mainFile = realpathSync.native(path.join(main, ".codex", "config.toml"));
-      const fromWorktree = listed.warnings.filter((w: { message: string }) => w.message.includes("worktree"));
-      expect(fromWorktree.map((w: { file: string; message: string }) => [w.file, w.message])).toEqual([
-        [mainFile, `has a hook Codex cannot read, so Codex loads no config in the worktree ${tilde(wt, h.home)}`],
+      // One line per cause: the worktree's, and the main checkout's own, a recorded project too.
+      const place = (p: string) => tilde(p, h.home);
+      expect(listed.warnings.map((w: { file: string; message: string }) => [w.file, w.message])).toEqual([
+        [mainFile, `has a hook Codex cannot read, so Codex loads no config in ${place(wt)}`],
+        [
+          mainFile,
+          `has an MCP server Codex cannot read, so Codex loads no config in ${place(codexTrustKey(main))}`,
+        ],
       ]);
       const id = listed.items.find((i: { name: string }) => i.name === "eli5").id;
       expect(await run(h, wt, "skills", ["show", "--id", id])).toContain(
         `off here (Codex cannot read ${tilde(mainFile, h.home)})`,
       );
+    },
+    SPAWNING_TEST_TIMEOUT_MS,
+  );
+
+  it.skipIf(!hasGit)(
+    "warns once of a main checkout's config.toml Codex refuses, naming the main checkout and its worktree",
+    async () => {
+      const { h } = seed();
+      const { main, wt } = worktreeHome(h, "");
+      const mainFile = path.join(realpathSync.native(path.join(main, ".codex")), "config.toml");
+      const places = `${tilde(codexTrustKey(main), h.home)} and ${tilde(wt, h.home)}`;
+      const warnings = async () =>
+        JSON.parse(await run(h, wt, "skills", ["ls", "--tool", "codex", "--json"])).warnings.map(
+          (w: { file: string; message: string }) => [w.file, w.message],
+        );
+      // A hook Codex cannot read refuses both, the main checkout as its own project and its worktree.
+      h.write(
+        "repos/main/.codex/config.toml",
+        '[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "echo main"\ntimeout = 30.0\n',
+      );
+      expect(await warnings()).toEqual([
+        [mainFile, `has a hook Codex cannot read, so Codex loads no config in ${places}`],
+      ]);
+      // And one that does not parse: one parse warning.
+      h.write("repos/main/.codex/config.toml", "[x\n");
+      const said = await warnings();
+      expect(said).toHaveLength(1);
+      expect(said[0][1]).toMatch(/^is not valid TOML at line \d+, column \d+, so Codex loads no config in /);
+      expect(said[0][1].endsWith(places)).toBe(true);
     },
     SPAWNING_TEST_TIMEOUT_MS,
   );
