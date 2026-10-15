@@ -82,7 +82,7 @@ import {
   withoutMisplacedKeys,
 } from "./api-form.js";
 import { ApiForm } from "./components/ApiForm.js";
-import { Chrome } from "./components/Chrome.js";
+import { bodyRows, Chrome } from "./components/Chrome.js";
 import { Divider } from "./components/Divider.js";
 import { ProfilePreview } from "./components/ProfilePreview.js";
 import { SelectList, type SelectListItem } from "./components/SelectList.js";
@@ -94,11 +94,12 @@ import {
   starPopupHints,
 } from "./components/StarPopup.js";
 import { StepIndicator } from "./components/StepIndicator.js";
-import { UpdatePanel, type UpdatePhase } from "./components/UpdatePanel.js";
+import { UpdatePanel, type UpdatePhase, updatePanelRows } from "./components/UpdatePanel.js";
 import { UsageTable } from "./components/UsageTable.js";
 import { ExtensionsScreen } from "./extensions/ExtensionsScreen.js";
 import { RoutesScreen } from "./routes/RoutesScreen.js";
 import { color, symbol } from "./theme.js";
+import { textLines, useTerminalSize } from "./use-width.js";
 
 type Screen = "dashboard" | "use" | "routes" | "doctor" | "init" | "usage" | "extensions";
 type InitStep = "loading" | "select" | "name" | "default" | "review" | "applying" | "done" | "error";
@@ -210,6 +211,48 @@ type OverlayState =
   | { kind: "remove"; profileName: string; email: string; isPrimary: boolean }
   | { kind: "login"; profileName: string; email: string }
   | { kind: "sessions"; profileName: string; currentMerge: boolean };
+
+/** The texts of a question under the Profiles list, each on a line of its own: drawn, and counted. */
+function overlayTexts(overlay: NonNullable<OverlayState>): string[] {
+  switch (overlay.kind) {
+    case "remove":
+      return overlay.isPrimary
+        ? ["Cannot remove the primary profile.", "Press esc to dismiss."]
+        : [`Remove "${overlay.profileName}"?`, "This will unregister the profile and clean up associated files."];
+    case "login":
+      return [
+        `Re-login "${overlay.profileName}"?`,
+        `This will open your browser to re-authenticate the OAuth token for ${overlay.email}.`,
+        "The TUI will be suspended during login.",
+      ];
+    case "sessions":
+      return [
+        `Change sessions for "${overlay.profileName}"?`,
+        overlay.currentMerge
+          ? "Sessions will be isolated from the primary profile."
+          : "Sessions will be shared with the primary profile.",
+      ];
+  }
+}
+
+/** The columns a question's text loses of the terminal's: Chrome's padding, the border and its own. */
+const OVERLAY_INSET = 10;
+
+/**
+ * The lines a question under the Profiles list takes `columns` wide, for the list and the panel
+ * above it to leave room for: the blank line above it, its border and padding, its texts as they
+ * wrap, and its fixed rows - the keys after a blank line, and the sessions question's change.
+ */
+function overlayRows(overlay: OverlayState, columns: number): number {
+  if (!overlay) return 0;
+  const width = columns - OVERLAY_INSET;
+  const primary = overlay.kind === "remove" && overlay.isPrimary;
+  const [first = "", ...rest] = overlayTexts(overlay);
+  // The primary's refusal has its ✘ and a space before it, and no keys: esc is in its text.
+  const text = textLines(first, primary ? width - 2 : width) + rest.reduce((sum, t) => sum + textLines(t, width), 0);
+  const fixed = primary ? 0 : 2 + (overlay.kind === "sessions" ? 1 : 0);
+  return 1 + 2 + 2 + text + fixed;
+}
 
 const INIT_STEPS = [{ label: "Select" }, { label: "Name" }, { label: "Default" }, { label: "Review" }];
 
@@ -382,6 +425,8 @@ export function App({
   const { exit } = useApp();
   const { stdout, write } = useStdout();
   const { internal_eventEmitter: inputEvents } = useStdin();
+  // What a screen fits its lists to, so that its frame stays shorter than the terminal (fit.ts).
+  const size = useTerminalSize();
 
   const [screen, setScreen] = useState<Screen>(initialScreen);
   // Force clear the console state to prevent output duplication on terminal resize.
@@ -2344,18 +2389,22 @@ export function App({
   // ── Dashboard ──
   if (screen === "dashboard") {
     const activeProfile = profiles.find((p) => p.isActive) ?? profiles[0];
+    const footer = message || undefined;
+    const hints = starPopup
+      ? starPopupHints(starPopup)
+      : updatePhase.kind === "idle"
+        ? dashboardHints
+        : updatePanelHints[updatePhase.kind];
+    // The menu and the panel side by side, in what Chrome and the update under them leave.
+    const body = bodyRows(size, { footer, hints });
+    const sideBySide =
+      body === undefined || !updateOffer ? body : body - updatePanelRows(updatePhase, updateOffer, size.columns ?? 80);
     return (
       <Chrome
         title="Dashboard"
         notice={updateOffer ? `⬆ v${updateOffer.latest} available` : undefined}
-        footer={message || undefined}
-        hints={
-          starPopup
-            ? starPopupHints(starPopup)
-            : updatePhase.kind === "idle"
-              ? dashboardHints
-              : updatePanelHints[updatePhase.kind]
-        }
+        footer={footer}
+        hints={hints}
       >
         <Box gap={2} flexDirection="row" width="100%">
           <Box
@@ -2374,6 +2423,7 @@ export function App({
             <ProfilePreview
               profile={activeProfile}
               doctor={activeProfile ? doctor.find((d) => d.name === activeProfile.name) : undefined}
+              rows={sideBySide}
             />
           </Box>
         </Box>
@@ -2789,13 +2839,14 @@ export function App({
       ...(selectedProfile && !selectedProfile.isPrimary ? [{ keys: "s", action: "sessions" }] : []),
       { keys: "esc", action: "back" },
     ];
+    const hints = overlay ? overlayHints : profilesHints;
+    const overlayText = overlay ? overlayTexts(overlay) : [];
+    // The list and the panel side by side, in what Chrome and the question under them leave.
+    const body = bodyRows(size, { hints });
+    const sideBySide = body === undefined ? undefined : body - overlayRows(overlay, size.columns ?? 80);
 
     return (
-      <Chrome
-        title="Profiles"
-        subtitle={message || "Select a profile to manage"}
-        hints={overlay ? overlayHints : profilesHints}
-      >
+      <Chrome title="Profiles" subtitle={message || "Select a profile to manage"} hints={hints}>
         <Box gap={2} flexDirection="row" width="100%">
           <Box
             flexDirection="column"
@@ -2825,7 +2876,11 @@ export function App({
           {/* As on the dashboard: the preview draws its own border, and a second one around it
               only took four columns from a panel that is already half the screen. */}
           <Box flexGrow={1} flexShrink={1} minWidth={1} overflow="hidden">
-            <ProfilePreview profile={profiles[cursor]} doctor={doctor.find((d) => d.name === profiles[cursor]?.name)} />
+            <ProfilePreview
+              profile={profiles[cursor]}
+              doctor={doctor.find((d) => d.name === profiles[cursor]?.name)}
+              rows={sideBySide}
+            />
           </Box>
         </Box>
         {overlay?.kind === "remove" && (
@@ -2843,18 +2898,18 @@ export function App({
                   <Box flexShrink={0}>
                     <Text color={color.error}>{symbol.cross}</Text>
                   </Box>
-                  <Text color={color.error}>Cannot remove the primary profile.</Text>
+                  <Text color={color.error}>{overlayText[0]}</Text>
                 </Box>
                 <Text color={color.muted} dimColor>
-                  Press esc to dismiss.
+                  {overlayText[1]}
                 </Text>
               </>
             ) : (
               <>
                 <Text color={color.text} bold>
-                  Remove &quot;{overlay.profileName}&quot;?
+                  {overlayText[0]}
                 </Text>
-                <Text color={color.secondary}>This will unregister the profile and clean up associated files.</Text>
+                <Text color={color.secondary}>{overlayText[1]}</Text>
                 <Box marginTop={1} gap={2}>
                   <Text color={color.warning}>y confirm</Text>
                   <Text color={color.muted}>esc cancel</Text>
@@ -2873,12 +2928,10 @@ export function App({
             marginTop={1}
           >
             <Text color={color.text} bold>
-              Re-login &quot;{overlay.profileName}&quot;?
+              {overlayText[0]}
             </Text>
-            <Text color={color.secondary}>
-              This will open your browser to re-authenticate the OAuth token for {overlay.email}.
-            </Text>
-            <Text color={color.muted}>The TUI will be suspended during login.</Text>
+            <Text color={color.secondary}>{overlayText[1]}</Text>
+            <Text color={color.muted}>{overlayText[2]}</Text>
             <Box marginTop={1} gap={2}>
               <Text color={color.brand}>y proceed</Text>
               <Text color={color.muted}>esc cancel</Text>
@@ -2895,13 +2948,9 @@ export function App({
             marginTop={1}
           >
             <Text color={color.text} bold>
-              Change sessions for &quot;{overlay.profileName}&quot;?
+              {overlayText[0]}
             </Text>
-            <Text color={color.secondary}>
-              {overlay.currentMerge
-                ? "Sessions will be isolated from the primary profile."
-                : "Sessions will be shared with the primary profile."}
-            </Text>
+            <Text color={color.secondary}>{overlayText[1]}</Text>
             <Box gap={1}>
               <Text color={color.muted}>Current:</Text>
               <Text color={overlay.currentMerge ? color.warning : color.text}>

@@ -314,3 +314,76 @@ describe("ProfilePreview quota", () => {
     expect(frame).toContain("signed out — clausona login");
   });
 });
+
+/**
+ * The panel in the lines a screen gives it. The screen gives what the terminal leaves, so that
+ * its frame stays shorter than the terminal: ink redraws a frame as tall as the terminal whole,
+ * and a taller one loses its top - the title and the selected row - for good (#179, #182).
+ */
+describe("ProfilePreview in the lines it has", () => {
+  const findings = (count: number) =>
+    ({
+      ...doctor(
+        Array.from({ length: count }, (_, i) => ({
+          kind: "local_override" as const,
+          severity: "warning" as const,
+          message: `notes-${String(i + 1).padStart(2, "0")}.json replaced an expected shared link`,
+        })),
+      ),
+      name: "claude:work",
+    }) satisfies DoctorProfileResult;
+
+  const panel = (columns: number, rows: number | undefined, result?: DoctorProfileResult) =>
+    (
+      render(
+        <Box width={columns}>
+          <ProfilePreview profile={subscription} doctor={result} rows={rows} />
+        </Box>,
+      ).lastFrame() ?? ""
+    ).split("\n");
+
+  it("draws everything as it always has when the lines are there", () => {
+    expect(panel(60, 80, findings(3))).toEqual(panel(60, undefined, findings(3)));
+  });
+
+  it("keeps to the lines it is given, and says how many findings it leaves out", () => {
+    for (const columns of [40, 60]) {
+      for (let rows = 8; rows <= 60; rows++) {
+        const lines = panel(columns, rows, findings(15));
+        const shown = lines.filter((line) => line.includes("➔")).length;
+        const more = lines.find((line) => /… \d+ more in Health check/.test(line));
+
+        expect(lines.length, `${columns} columns, ${rows} rows`).toBeLessThanOrEqual(rows);
+        // Short of every finding, the ones it draws are followed by the count of the rest. Cut at
+        // its bottom edge it draws none, and the count may be what is cut.
+        if (shown > 0 && shown < 15) expect(more, `${columns} columns, ${rows} rows`).toBeDefined();
+        if (more) expect(more).toContain(`… ${15 - shown} more in Health check`);
+      }
+    }
+  });
+
+  it("gives up the blank lines between findings before it leaves any out", () => {
+    const natural = panel(60, undefined, findings(15)).length;
+    const lines = panel(60, natural - 1, findings(15));
+    const arrows = lines.flatMap((line, at) => (line.includes("➔") ? [at] : []));
+
+    expect(arrows).toHaveLength(15);
+    expect(arrows.at(-1)).toBe(arrows[0] + 14);
+  });
+
+  it("gives up its usage section before its health row", () => {
+    const lines = panel(60, 14, findings(0));
+
+    expect(lines.some((line) => line.includes("Health"))).toBe(true);
+    expect(lines.some((line) => line.includes("Today"))).toBe(false);
+    expect(lines.length).toBeLessThanOrEqual(14);
+  });
+
+  it("is cut at its bottom edge, its name still on top, when not even that fits", () => {
+    const lines = panel(60, 7, findings(15));
+
+    expect(lines).toHaveLength(7);
+    expect(lines[1]).toContain("claude:work");
+    expect(lines.at(-1)).toMatch(/╰─+╯/);
+  });
+});
