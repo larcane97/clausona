@@ -98,8 +98,14 @@ import { CURSOR, DOWN, ENTER, press, renderAt, type, waitForFrame } from "./test
 const lines = (frame: string | undefined) => stripAnsi(frame ?? "").split("\n");
 
 /** Every frame the screen drew from `from` on is at most `rows - 2` lines, and has the title. */
+/**
+ * The frames the App drew from `from` on. Not the line break ink writes on unmount in a CI, where
+ * it writes its last frame then - one it never keeps in debug mode, which `renderAt` renders in.
+ */
+const drawnFrom = (frames: string[], from: number) => frames.slice(from).filter((frame) => frame.trim() !== "");
+
 function expectFits(frames: string[], from: number, rows: number, title: string) {
-  for (const frame of frames.slice(from)) {
+  for (const frame of drawnFrom(frames, from)) {
     const drawn = lines(frame);
     expect(drawn.length, drawn.join("\n")).toBeLessThanOrEqual(rows - 2);
     expect(drawn.join("\n")).toContain(`CLAUSONA   │ ${title}`);
@@ -197,11 +203,12 @@ describe("a profile's findings, in the terminal's height (#179)", () => {
 
 /** Every frame from `from` on at most `rows - 2` lines; the last one titled `title`. */
 function expectInside(frames: string[], from: number, rows: number, title: string) {
-  for (const frame of frames.slice(from)) {
-    const drawn = lines(frame);
-    expect(drawn.length, drawn.join("\n")).toBeLessThanOrEqual(rows - 2);
+  const drawn = drawnFrom(frames, from);
+  for (const frame of drawn) {
+    const each = lines(frame);
+    expect(each.length, each.join("\n")).toBeLessThanOrEqual(rows - 2);
   }
-  expect(lines(frames.at(-1)).join("\n")).toContain(`CLAUSONA   │ ${title}`);
+  expect(lines(drawn.at(-1)).join("\n")).toContain(`CLAUSONA   │ ${title}`);
 }
 
 /** The count a `↑ N more` or `↓ N more` line in `frame` says, or 0. */
