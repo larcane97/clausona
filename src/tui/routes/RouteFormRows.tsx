@@ -247,7 +247,12 @@ export function AccountRows({
   // Where the window began last time: it moves only as far as the cursor takes it.
   const began = useRef(0);
   const cursor = focused && state.cursor > 0 ? state.cursor - 1 : null;
-  const view = listWindow(listed.length, lines, cursor, began.current);
+  // A list shows its cursor's row however little room it has. With none for the accounts, which
+  // the form gives them only while no cursor on them can move, they are left out.
+  const view =
+    lines < 1
+      ? { start: began.current, end: began.current, above: 0, below: 0 }
+      : listWindow(listed.length, lines, cursor, began.current);
   began.current = view.start;
   return (
     <>
@@ -256,7 +261,7 @@ export function AccountRows({
           {`[${state.every ? "x" : " "}] every account (*), new ones join`}
         </Text>
       </Line>
-      {view.start > 0 ? <MoreLine arrow="↑" count={view.start} /> : null}
+      {view.above > 0 ? <MoreLine arrow="↑" count={view.above} /> : null}
       {listed.slice(view.start, view.end).map((account, at) => {
         const index = view.start + at;
         const out = excluded.has(account.id);
@@ -293,7 +298,7 @@ export function AccountRows({
           </Line>
         );
       })}
-      {view.end < listed.length ? <MoreLine arrow="↓" count={listed.length - view.end} /> : null}
+      {view.below > 0 ? <MoreLine arrow="↓" count={view.below} /> : null}
     </>
   );
 }

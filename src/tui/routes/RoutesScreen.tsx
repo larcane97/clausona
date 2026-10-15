@@ -31,11 +31,22 @@ import { parseModel } from "../../lib/run-args.js";
 import type { QuotaSnapshot, Registry, ToolName } from "../../types.js";
 import { bodyRows, Chrome } from "../components/Chrome.js";
 import { QuotaCell } from "../components/QuotaCell.js";
+import { ScrollList, scrolls } from "../components/ScrollList.js";
 import { listWindow } from "../fit.js";
 import { color, symbol } from "../theme.js";
 import { textLines, useTerminalSize, useWidth } from "../use-width.js";
 import { BudgetForm } from "./BudgetForm.js";
-import { detailLines, type Entry, GAP, MARK, MoreRows, memberRows, RouteDetail, Setting } from "./RouteDetail.js";
+import {
+  detailLines,
+  type Entry,
+  GAP,
+  MARK,
+  MoreRows,
+  memberRows,
+  RouteDetail,
+  Setting,
+  settingLines,
+} from "./RouteDetail.js";
 import { formAccounts, RouteForm } from "./RouteForm.js";
 import { RuleForm, type RuleTarget } from "./RuleForm.js";
 import { defaultRoutesScreenDeps, errorText, type RoutesListDeps } from "./routes-deps.js";
@@ -99,6 +110,8 @@ const EMPTY_HINTS = [
   { keys: "esc", action: "back" },
 ];
 const BACK_HINTS = [{ keys: "esc", action: "back" }];
+/** Offered only where a list without a cursor has more than fits, as ScrollList scrolls it. */
+const SCROLL_HINT = { keys: "↑↓", action: "scroll" };
 /** The dir rules view: the defaults' row is always there, so every key has something to act on. */
 const RULE_HINTS = [
   { keys: "↑↓", action: "move" },
@@ -801,12 +814,21 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   const inside = columns - CHROME_PADDING;
 
   if (loaded.kind !== "ready") {
+    const error = loaded.kind === "broken" ? loaded.error : undefined;
+    const problems = problemsOf(error);
+    const size = problemSize(problems, inside);
+    // What the problems have of the body beside the hints, which offer ↑↓ only when they scroll.
+    const problemRows = (shown: typeof hints) => {
+      const body = bodyRows({ columns, rows: terminalRows }, { hints: shown });
+      return body === undefined ? undefined : body - problemHead(error, inside);
+    };
+    const shownHints = scrolls(problems.length, size, problemRows(hints)) ? [SCROLL_HINT, ...hints] : hints;
     return (
-      <Chrome title="Routes" hints={hints}>
+      <Chrome title="Routes" hints={shownHints}>
         {loaded.kind === "loading" ? (
           <Text color={color.muted}>Reading routes…</Text>
         ) : (
-          <FileProblem error={loaded.error} />
+          <FileProblem error={loaded.error} rows={problemRows(shownHints)} size={size} />
         )}
       </Chrome>
     );
@@ -911,7 +933,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   if (entries.length === 0) {
     return (
       <Chrome title="Routes" footer={footer} hints={hints}>
-        <NoRoutes accounts={newRouteAccounts(loaded.registry)} />
+        <NoRoutes accounts={newRouteAccounts(loaded.registry)} lines={room} width={inside} />
       </Chrome>
     );
   }
@@ -959,26 +981,60 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   );
 }
 
-/** Why routes.json (or the registry) cannot be read, in the words `csn route list` would print. */
-function FileProblem({ error }: { error: unknown }) {
-  const headline = error instanceof RoutesFileError ? `${error.filePath} cannot be used:` : errorText(error);
+/** The columns FileProblem indents each problem by. */
+const PROBLEM_INDENT = 4;
+const FIX_IT = "Fix it with clausona route edit.";
+
+/** What FileProblem says first: the file that cannot be used, or the error. */
+const problemHeadline = (error: unknown) =>
+  error instanceof RoutesFileError ? `${error.filePath} cannot be used:` : errorText(error);
+
+/** The problems FileProblem lists: routes.json's, or none for another error. */
+const problemsOf = (error: unknown) => (error instanceof RoutesFileError ? error.problems : []);
+
+/**
+ * The lines FileProblem takes `width` columns wide besides its problems: the headline beside its
+ * mark, and the line saying how to fix the file after a blank one.
+ */
+function problemHead(error: unknown, width: number): number {
+  const fix = error instanceof RoutesFileError && !error.newer ? 1 + textLines(FIX_IT, width) : 0;
+  return textLines(problemHeadline(error), width - 2) + fix;
+}
+
+/** The lines the longest of the problems takes `width` columns wide: what each is given in a ScrollList. */
+const problemSize = (problems: string[], width: number) =>
+  Math.max(1, ...problems.map((problem) => textLines(problem, width - PROBLEM_INDENT)));
+
+/**
+ * Why routes.json (or the registry) cannot be read, in the words `csn route list` would print.
+ * The problems take `rows` lines, `size` each, and scroll when there are more than fit.
+ */
+function FileProblem({ error, rows, size }: { error: unknown; rows: number | undefined; size: number }) {
   return (
     <Box flexDirection="column">
       <Box gap={1}>
         <Box flexShrink={0}>
           <Text color={color.error}>{symbol.cross}</Text>
         </Box>
-        <Text color={color.text}>{headline}</Text>
+        <Text color={color.text}>{problemHeadline(error)}</Text>
       </Box>
       {error instanceof RoutesFileError ? (
         <>
-          <Box paddingLeft={4}>
-            <Text color={color.text}>{error.problems.join("\n")}</Text>
-          </Box>
+          <ScrollList
+            items={error.problems.map((problem, at) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: the problems are in a fixed order, and two may read the same.
+              <Box key={at} paddingLeft={PROBLEM_INDENT}>
+                <Text color={color.text}>{problem}</Text>
+              </Box>
+            ))}
+            rows={rows}
+            size={size}
+            indent={PROBLEM_INDENT}
+          />
           {/* A file from a newer clausona is fixed by updating, which its problem says. */}
           {error.newer ? null : (
             <Box marginTop={1}>
-              <Text color={color.secondary}>Fix it with clausona route edit.</Text>
+              <Text color={color.secondary}>{FIX_IT}</Text>
             </Box>
           )}
         </>
@@ -998,40 +1054,77 @@ function accountsText(count: number): string {
   return count === 1 ? "your one Claude account" : `all ${count} Claude accounts`;
 }
 
+const NO_ROUTES = "No routes yet";
+const WHAT_A_ROUTE_IS = ["A route picks an account for each run, so", "you don't have to. Run on one with:"];
+const RUN_ON_ONE = "clausona run --route <name>";
+const NEW_ROUTE = "A new route, unless you change it:";
+/** NoRoutes' last line as it reads, counted from here: it draws the key in a colour of its own. */
+const PRESS_N = "Press n to create one.";
+/** The columns NoRoutes indents the command and the settings by. */
+const NO_ROUTES_INDENT = 2;
+
+/** What a new route takes unless it is changed, as NoRoutes says it. */
+const newRouteSettings = (accounts: number): Array<[string, string]> => [
+  ["Accounts", accountsText(accounts)],
+  ["Order", "the next one in turn"],
+  ["Skip at", `${DEFAULT_MAX_USAGE}% of the 5-hour or weekly limit`],
+];
+
 /**
  * What a route is and what `n` would make, in one column: an empty list box beside it read as a
  * disabled field. Lines are broken here, not left to wrap, so that none begins with a space.
+ *
+ * `lines` is the most lines it may take, `width` columns wide. Short of them it gives up its blank
+ * lines, the one before the command first and the one under the title last, and then the line
+ * that says to press n, which the key hints say too.
  */
-function NoRoutes({ accounts }: { accounts: number }) {
+function NoRoutes({ accounts, lines, width }: { accounts: number; lines: number | undefined; width: number }) {
+  const settings = newRouteSettings(accounts);
+  const press = textLines(PRESS_N, width);
+  const text =
+    textLines(NO_ROUTES, width) +
+    WHAT_A_ROUTE_IS.reduce((sum, line) => sum + textLines(line, width), 0) +
+    textLines(RUN_ON_ONE, width - NO_ROUTES_INDENT) +
+    textLines(NEW_ROUTE, width) +
+    settings.reduce((sum, [, value]) => sum + settingLines(value, width - NO_ROUTES_INDENT), 0) +
+    press;
+  // The blank lines it keeps, of four, and whether it says to press n.
+  const blanks = lines === undefined ? 4 : Math.max(0, Math.min(4, lines - text));
+  const pressN = lines === undefined || lines - text >= 0;
   return (
     <Box flexDirection="column">
       <Text color={color.text} bold>
-        No routes yet
+        {NO_ROUTES}
       </Text>
-      <Box flexDirection="column" marginTop={1}>
-        <Text color={color.text}>A route picks an account for each run, so</Text>
-        <Text color={color.text}>you don't have to. Run on one with:</Text>
+      <Box flexDirection="column" marginTop={blanks >= 1 ? 1 : 0}>
+        {WHAT_A_ROUTE_IS.map((line) => (
+          <Text key={line} color={color.text}>
+            {line}
+          </Text>
+        ))}
       </Box>
-      <Box marginTop={1} paddingLeft={2}>
-        <Text color={color.brandLight}>clausona run --route {"<name>"}</Text>
+      <Box marginTop={blanks >= 4 ? 1 : 0} paddingLeft={NO_ROUTES_INDENT}>
+        <Text color={color.brandLight}>{RUN_ON_ONE}</Text>
       </Box>
-      <Box flexDirection="column" marginTop={1}>
-        <Text color={color.secondary}>A new route, unless you change it:</Text>
-        <Box flexDirection="column" paddingLeft={2}>
-          <Setting label="Accounts" value={accountsText(accounts)} />
-          <Setting label="Order" value="the next one in turn" />
-          <Setting label="Skip at" value={`${DEFAULT_MAX_USAGE}% of the 5-hour or weekly limit`} />
+      <Box flexDirection="column" marginTop={blanks >= 2 ? 1 : 0}>
+        <Text color={color.secondary}>{NEW_ROUTE}</Text>
+        <Box flexDirection="column" paddingLeft={NO_ROUTES_INDENT}>
+          {settings.map(([label, value]) => (
+            <Setting key={label} label={label} value={value} />
+          ))}
         </Box>
       </Box>
-      <Box marginTop={1}>
-        <Text color={color.text}>
-          Press{" "}
-          <Text color={color.active} bold>
-            n
-          </Text>{" "}
-          to create one.
-        </Text>
-      </Box>
+      {pressN ? (
+        <Box marginTop={blanks >= 3 ? 1 : 0}>
+          <Text color={color.text}>
+            Press{" "}
+            <Text color={color.active} bold>
+              n
+            </Text>{" "}
+            to create one.
+          </Text>
+        </Box>
+      ) : null}
     </Box>
   );
 }

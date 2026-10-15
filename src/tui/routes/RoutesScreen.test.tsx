@@ -1410,9 +1410,9 @@ describe("inside the terminal's height", () => {
 
   /** Every frame drawn, shorter than the terminal by two lines and no wider than it, with the title. */
   function expectInside(instance: Instance, columns: number, rows: number) {
-    expect(lines(text(instance)).find((line) => line.includes("CLAUSONA"))).toContain("Routes");
     for (const frame of instance.frames) {
       expect(height(frame)).toBeLessThanOrEqual(rows - 2);
+      expect(lines(stripAnsi(frame)).find((line) => line.includes("CLAUSONA"))).toContain("Routes");
       for (const line of lines(stripAnsi(frame))) expect(line.length, line).toBeLessThanOrEqual(columns);
     }
   }
@@ -1528,6 +1528,48 @@ describe("inside the terminal's height", () => {
       PROFILES.map((name) => `claude:${name}`),
       (frame) => panes(frame).list,
     );
+    expectInside(instance, columns, rows);
+  });
+
+  // It was 23 lines at any height: one more than 24 rows leave a frame two lines short of them.
+  it.each([
+    [80, 24],
+    [100, 30],
+  ])("says what a route is inside %i by %i while there are none", async (columns, rows) => {
+    const { instance } = setup({ file: { version: 1, routes: {} }, columns, rows });
+    const frame = await until(instance, (f) => f.includes("No routes yet"));
+
+    for (const said of [
+      "A route picks an account",
+      "clausona run --route <name>",
+      "Skip at",
+      "Press n to create one.",
+    ]) {
+      expect(frame).toContain(said);
+    }
+    expectInside(instance, columns, rows);
+  });
+
+  // A hand-edited routes.json can have more problems than the terminal has lines.
+  it.each([
+    [80, 24],
+    [100, 30],
+  ])("scrolls the problems of a routes.json that cannot be used inside %i by %i", async (columns, rows) => {
+    const problems = ROUTES.map((name) => `routes.${name}.maxUsage: must be a number from 1 to 100`);
+    const readError = new RoutesFileError("/home/u/.clausona/routes.json", problems);
+    const { instance } = setup({ readError, columns, rows });
+    const listed = () => lines(text(instance)).map((line) => line.trim());
+    const shown = () => listed().filter((line) => line.startsWith("routes."));
+    await until(instance, (f) => f.includes("Fix it with"));
+
+    expect(shown()[0]).toBe(problems[0]);
+    expect(more(listed(), "↑")).toBe(0);
+    expect(more(listed(), "↓")).toBe(problems.length - shown().length);
+    expect(text(instance)).toContain("↑↓ scroll");
+    await press(instance, DOWN);
+    expect(shown()[0]).toBe(problems[1]);
+    expect(more(listed(), "↑") + shown().length + more(listed(), "↓")).toBe(problems.length);
+    expect(more(listed(), "↑")).toBe(1);
     expectInside(instance, columns, rows);
   });
 });

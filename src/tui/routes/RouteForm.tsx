@@ -17,9 +17,9 @@ import { type Ranking, rankRoute } from "../../core/routing.js";
 import { toolLabel } from "../../lib/route-render.js";
 import { checkRouteMembersNow, membersOf } from "../../lib/route-service.js";
 import type { QuotaSnapshot, Registry } from "../../types.js";
-import { Chrome } from "../components/Chrome.js";
+import { Chrome, chromeRows } from "../components/Chrome.js";
 import { FieldInput } from "../components/FieldInput.js";
-import { keyHintLines } from "../components/KeyHint.js";
+import { SPARE_ROWS } from "../fit.js";
 import { color } from "../theme.js";
 import { textLines, useTerminalSize } from "../use-width.js";
 import {
@@ -94,16 +94,15 @@ export function formAccounts(registry: Registry, offer: (id: string) => boolean 
 }
 
 /**
- * The form's lines besides its accounts, when nothing wraps: the chrome's header (5 with its
- * padding) and footer (5, the key hints one of them), the frame's borders and its other fields'
- * lines (11, the strategy's and the limits' descriptions among them, cut short rather than
- * wrapped), the every-account row, the Now line, and one more, since ink redraws the whole screen
- * once its output is as tall as the terminal. A question, the saving note, the picker and each
- * error take one or more besides, and so does each line past its first that a row which wraps
- * takes: the key hints, the radios, the fallback and the Now line in a narrow terminal, and a text
- * field whose text is longer than its line.
+ * The frame's lines besides its accounts and the descriptions under the strategy and the limit,
+ * when nothing wraps: its borders, the name, the tool, the every-account row, the two pattern
+ * fields, the strategy, the limit and the fallback. The Now line, the picker and each error take
+ * one or more besides, and so does each line past its first that a row which wraps takes: the
+ * radios and the fallback in a narrow terminal, and a text field whose text is longer than its
+ * line. Chrome's lines are counted as Chrome lays them out, the key hints wrapped (#114), a
+ * question and the saving note among them.
  */
-const FORM_LINES = 24;
+const FRAME_LINES = 10;
 
 /** The columns the chrome's padding takes from the terminal's width. */
 const CHROME_PADDING = 4;
@@ -119,8 +118,21 @@ const BESIDE: Record<TextField, number> = {
   max: SUB_LABEL + "[".length + "]%".length,
 };
 
-/** The fewest account lines the form shows, however short the terminal. */
+/** The fewest account lines the form shows while the frame can afford them. */
 const MIN_ACCOUNT_LINES = 3;
+
+/**
+ * What the form keeps of the descriptions under the strategy and the limit, and the fewest
+ * account lines, in turn as a terminal too short for it gives them up: the accounts down to
+ * MIN_ACCOUNT_LINES first, then the limit's description, the strategy's, and the accounts down
+ * to one line, the cursor's row while it is on them.
+ */
+const LAYOUTS = [
+  { descriptions: 2, floor: MIN_ACCOUNT_LINES },
+  { descriptions: 1, floor: MIN_ACCOUNT_LINES },
+  { descriptions: 0, floor: MIN_ACCOUNT_LINES },
+  { descriptions: 0, floor: 1 },
+];
 
 const NO_BUDGETS: Budgets = {};
 
@@ -206,6 +218,38 @@ const CONFIRM_HINTS = [
   { keys: "y", action: "discard" },
   { keys: "n/esc", action: "keep editing" },
 ];
+
+/**
+ * What the form shows in a terminal `rows` tall: the key hints, the descriptions it keeps, and
+ * the lines its accounts may take, their counts above and below included. `hintSets` are the key
+ * hints from all of them to none, which go after everything in LAYOUTS: the focused field's own
+ * first, then the rest. Once they go, what they leave goes back to LAYOUTS from the start.
+ * `linesFor` is the lines the accounts and the descriptions have beside the given hints. With no
+ * height, from a terminal that gives none, it is everything.
+ *
+ * Short of even that, the accounts go too when that makes the frame fit and no cursor on them can
+ * move (`accounts.cursor`), as when a long pattern wraps while the form saves at 80 by 24. When
+ * nothing makes it fit, one account's row is drawn all the same, the cursor's when it has one.
+ */
+function fitForm(
+  rows: number | undefined,
+  hintSets: Hint[][],
+  linesFor: (hints: Hint[]) => number,
+  accounts: { count: number; cursor: boolean },
+) {
+  if (rows === undefined) return { hints: hintSets[0], descriptions: 2, accountLines: undefined };
+  for (const hints of hintSets) {
+    const room = linesFor(hints);
+    for (const { descriptions, floor } of LAYOUTS) {
+      if (room - descriptions >= Math.min(accounts.count, floor)) {
+        return { hints, descriptions, accountLines: room - descriptions };
+      }
+    }
+  }
+  const hints = hintSets[hintSets.length - 1];
+  const fits = linesFor(hints) === 0 && !accounts.cursor;
+  return { hints, descriptions: 0, accountLines: fits ? 0 : 1 };
+}
 
 /**
  * Whether a field's value is drawn as the mask: what the save would refuse as a key, asked as the
@@ -473,11 +517,15 @@ export function RouteForm(props: RouteFormProps) {
   /** Keys go to the form's question or picker, or nowhere while it saves, rather than to a field. */
   const typing = !asking && picking === null && !saving;
 
-  const hints = asking
-    ? CONFIRM_HINTS
+  const tail = recreate ? RECREATE_HINTS : EVERY_FIELD_HINTS;
+  /** The key hints, from all of them to none, as a terminal too short for the form gives them up. */
+  const hintSets = asking
+    ? [CONFIRM_HINTS, []]
     : picking !== null
-      ? PICKER_HINTS
-      : [...(FIELD_HINTS[state.focus] ?? []), ...(recreate ? RECREATE_HINTS : EVERY_FIELD_HINTS)];
+      ? [PICKER_HINTS, []]
+      : [[...(FIELD_HINTS[state.focus] ?? []), ...tail], tail, []];
+  const question = asking ? "Discard changes? (y/N)" : undefined;
+  const footer = saving ? "Saving…" : undefined;
   const toolOptions = ROUTE_TOOLS.map((tool): [RouteTool, string] => [tool, toolLabel(tool)]);
   const strategyOptions = STRATEGIES.map((strategy): [Strategy, string] => [strategy, strategy]);
 
@@ -499,19 +547,26 @@ export function RouteForm(props: RouteFormProps) {
     const cell = focusOn(field) && typing && cursorIn(field) >= value.length ? " " : "";
     return textLines(value + cell, room - BESIDE[field]);
   };
-  /** The lines the rows that wrap take past their first, at this width. */
+  /** The lines the rows in the frame that wrap take past their first, at this width. */
   const wrapped = [
-    keyHintLines(hints, inside),
     radioLines(toolOptions, room),
     radioLines(strategyOptions, room),
     fallbackLines(state.fallback, pool, room),
-    textLines(nowText(preview), inside),
     ...(Object.keys(TEXT_KEYS) as TextField[]).map(textFieldLines),
   ].reduce((sum, lines) => sum + lines - 1, 0);
-  /** Lines in the frame and under it that come and go; the errors as they wrap inside the chrome. */
+  /**
+   * Lines in the frame and under it besides FRAME_LINES and the accounts: the wrapped ones, the
+   * picker's, and the Now line and the errors as they wrap inside the chrome.
+   */
   const extra =
-    (asking || saving ? 1 : 0) + (picking !== null ? 1 : 0) + errorLineCount(state.errors, inside) + wrapped;
-  const accountLines = rows === undefined ? undefined : Math.max(MIN_ACCOUNT_LINES, rows - FORM_LINES - extra);
+    wrapped + textLines(nowText(preview), inside) + (picking !== null ? 1 : 0) + errorLineCount(state.errors, inside);
+  const { hints, descriptions, accountLines } = fitForm(
+    rows,
+    hintSets,
+    (shown) => (rows ?? 0) - SPARE_ROWS - chromeRows({ question, footer, hints: shown }, columns) - FRAME_LINES - extra,
+    // The cursor's row stays while it can move: not while a question or the save has the keys.
+    { count: listed.length, cursor: typing && focusOn("accounts") && state.cursor > 0 },
+  );
 
   function textField(field: TextField, placeholder?: string) {
     const value = state[TEXT_KEYS[field]];
@@ -584,8 +639,8 @@ export function RouteForm(props: RouteFormProps) {
     <Chrome
       title="Routes"
       subtitle={original === undefined ? "New route" : `Edit ${original}`}
-      question={asking ? "Discard changes? (y/N)" : undefined}
-      footer={saving ? "Saving…" : undefined}
+      question={question}
+      footer={footer}
       hints={hints}
     >
       <Box flexDirection="column" borderStyle="round" borderColor={color.dim} paddingX={1}>
@@ -615,11 +670,13 @@ export function RouteForm(props: RouteFormProps) {
         <Line {...line("strategy", "Strategy")}>
           <Radio options={strategyOptions} selected={state.strategy} focused={focusOn("strategy")} />
         </Line>
-        <Line label="">
-          <Text color={color.muted} wrap="truncate-end">
-            {STRATEGY_TEXT[state.strategy]}
-          </Text>
-        </Line>
+        {descriptions > 0 ? (
+          <Line label="">
+            <Text color={color.muted} wrap="truncate-end">
+              {STRATEGY_TEXT[state.strategy]}
+            </Text>
+          </Line>
+        ) : null}
         <Line {...line("max", "Limits")}>
           {subLabel("max", "skip at", SUB_LABEL)}
           {/* The brackets keep their columns: a text longer than its line wraps between them. */}
@@ -631,11 +688,13 @@ export function RouteForm(props: RouteFormProps) {
             <Text color={color.muted}>]%</Text>
           </Box>
         </Line>
-        <Line label="">
-          <Text color={color.muted} wrap="truncate-end">
-            {limitsText(limits.maxUsage, state.strategy)}
-          </Text>
-        </Line>
+        {descriptions > 1 ? (
+          <Line label="">
+            <Text color={color.muted} wrap="truncate-end">
+              {limitsText(limits.maxUsage, state.strategy)}
+            </Text>
+          </Line>
+        ) : null}
         <Line
           {...line("fallback", "Fallback")}
           rowMark={focusOn("fallback") && state.fallback.length > 0 && state.cursor === 0}

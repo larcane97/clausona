@@ -67,6 +67,9 @@ export function Setting({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** The lines a Setting of `value` takes `width` columns wide: its value wraps beside the label. */
+export const settingLines = (value: string, width: number) => textLines(value, width - LABEL);
+
 /** `↑ 3 more` or `↓ 12 more`, where a list leaves rows out: past the rows' marks, under their names. */
 export function MoreRows({ arrow, count }: { arrow: "↑" | "↓"; count: number }) {
   return (
@@ -103,7 +106,7 @@ export function detailLines(entry: Entry, models: string[], width: number, brief
   const { route, ranking } = entry;
   const header = tableOf(ranking, false).lines.length > 0 ? 1 : 0;
   if (brief) return 1 + 1 + header;
-  const settings = settingsOf(entry).reduce((sum, [, value]) => sum + textLines(value, width - LABEL), 0);
+  const settings = settingsOf(entry).reduce((sum, [, value]) => sum + settingLines(value, width), 0);
   const limits = ranking.model || models.length === 0 ? 0 : 2;
   return 1 + textLines(summaryOf(route), width) + settings + 1 + header + limits;
 }
