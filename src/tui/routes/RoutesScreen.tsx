@@ -1,4 +1,4 @@
-import { Box, type Key, Text, useInput, useStdout } from "ink";
+import { Box, type Key, Text, useInput } from "ink";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { QuotaTarget } from "../../core/quota-store.js";
@@ -29,12 +29,13 @@ import { type BudgetRow, budgetNote, budgetRowOf, freeNow, nothingRead } from ".
 import { apiMembers, limitProblem, membersOf, namesOf, quotaTargets, spendTarget } from "../../lib/route-service.js";
 import { parseModel } from "../../lib/run-args.js";
 import type { QuotaSnapshot, Registry, ToolName } from "../../types.js";
-import { Chrome } from "../components/Chrome.js";
+import { bodyRows, Chrome } from "../components/Chrome.js";
 import { QuotaCell } from "../components/QuotaCell.js";
+import { listWindow } from "../fit.js";
 import { color, symbol } from "../theme.js";
-import { useWidth } from "../use-width.js";
+import { textLines, useTerminalSize, useWidth } from "../use-width.js";
 import { BudgetForm } from "./BudgetForm.js";
-import { type Entry, GAP, MARK, RouteDetail, Setting } from "./RouteDetail.js";
+import { detailLines, type Entry, GAP, MARK, MoreRows, memberRows, RouteDetail, Setting } from "./RouteDetail.js";
 import { formAccounts, RouteForm } from "./RouteForm.js";
 import { RuleForm, type RuleTarget } from "./RuleForm.js";
 import { defaultRoutesScreenDeps, errorText, type RoutesListDeps } from "./routes-deps.js";
@@ -50,6 +51,29 @@ import { defaultRoutesScreenDeps, errorText, type RoutesListDeps } from "./route
 /** From this many terminal columns the detail sits beside the list; below, under it. */
 const WIDE_AT = 100;
 const LIST_WIDTH = 30;
+/** The columns between the panes side by side. One above the other, a blank line is between them. */
+const PANE_GAP = 2;
+/** The columns Chrome's padding takes, two a side. */
+const CHROME_PADDING = 4;
+/** A list box's top and bottom borders. */
+const BORDERS = 2;
+/**
+ * The fewest lines a list keeps when it shares the body with what is under it: the cursor's row,
+ * and a line either side counting the rows left out.
+ */
+const LIST_FLOOR = 3;
+
+/**
+ * Under the dir rules. Short enough for one line in a narrow pane: wrapped, ink starts the next
+ * line with a space.
+ */
+const RULE_ORDER = "The deepest dir rule wins; then the default.";
+/** Under the budgets, a line each. */
+const BUDGET_NOTES = [
+  "An API profile joins a route only with a spend limit:",
+  "a budget set here, which replaces its key's own, or that one.",
+];
+const NO_API_PROFILES = "No API profiles. Add one with clausona add <name> --api ….";
 
 const HINTS = [
   { keys: "↑↓", action: "move" },
@@ -279,18 +303,82 @@ const settle = <T,>(read: () => Promise<T>, fallback: T) =>
     .then(read)
     .catch(() => fallback);
 
-/** The terminal's width, read again when it is resized. */
-function useColumns(): number {
-  const { stdout } = useStdout();
-  const [columns, setColumns] = useState(stdout.columns ?? 80);
-  useEffect(() => {
-    const onResize = () => setColumns(stdout.columns ?? 80);
-    stdout.on("resize", onResize);
-    return () => {
-      stdout.off("resize", onResize);
-    };
-  }, [stdout]);
-  return columns;
+/**
+ * The lines the first of two lists, one above the other, takes of the `room` they share, the
+ * lists needing `first` and `second` lines: all it needs when both fit or it needs no more than
+ * half, what the second leaves when that needs less than half, and half when both need more.
+ */
+const share = (room: number, first: number, second: number) =>
+  Math.min(first, Math.max(Math.ceil(room / 2), room - second));
+
+/**
+ * How the panes fit a body `room` lines tall: undefined when the terminal gives no height, and
+ * then everything is drawn. `list` and `table` are the lines the route list's rows and the
+ * selected route's member table may take, each with the lines counting rows left out; `head` is
+ * the detail's lines besides its table's rows, with its settings or, `brief`, without them.
+ *
+ * Side by side, each pane has the body's height; one above the other, the two share what the
+ * list's borders, the line between the panes and the detail's head leave, the list keeping its
+ * cursor's row and a line either side. A detail whose settings leave its table no room for a row
+ * and the line counting the rest goes without them, as under the list in 80 by 24. Short of room
+ * even so, it is cut at the body's foot, `height` lines tall.
+ */
+function fitPanes(
+  room: number | undefined,
+  wide: boolean,
+  routes: number,
+  members: number,
+  head: (brief: boolean) => number,
+): { list: number; table: number; brief: boolean; height?: number } {
+  const split = (brief: boolean) => {
+    if (room === undefined) return { list: Number.POSITIVE_INFINITY, table: Number.POSITIVE_INFINITY, brief };
+    if (wide) return { list: room - BORDERS, table: room - head(brief), brief };
+    const left = room - BORDERS - 1 - head(brief);
+    const list = Math.max(Math.min(routes, LIST_FLOOR), share(left, routes, members));
+    return { list, table: left - list, brief };
+  };
+  /** Room for a row and the line counting the rest, or for every row. */
+  const fits = ({ table }: { table: number }) => table >= Math.min(members, 2);
+  const full = split(false);
+  if (fits(full)) return full;
+  const brief = split(true);
+  return fits(brief) ? brief : { ...brief, height: Math.max(0, head(true) + brief.table) };
+}
+
+const warningText = (note: string) => `⚠ ${note}`;
+
+/**
+ * The lines a list's rows may take in a body `room` lines tall, `taken` of which go to the list's
+ * box and the lines under it, and how many of the warnings under those are shown. Rows and
+ * warnings share what is left as `share` splits it; the warnings that do not fit, each as it wraps
+ * `width` wide, are counted on a line of their own. Everything when the terminal gives no height.
+ */
+function underList(room: number | undefined, taken: number, rows: number, notes: string[], width: number) {
+  if (room === undefined) return { list: Number.POSITIVE_INFINITY, notes: notes.length };
+  const sizes = notes.map((note) => textLines(warningText(note), width));
+  const all = sizes.reduce((sum, size) => sum + size, 0);
+  const left = room - taken;
+  const list = Math.max(Math.min(rows, LIST_FLOOR), share(left, rows, all));
+  if (all <= left - list) return { list, notes: notes.length };
+  // As many as fit beside the line that counts the rest.
+  let shown = 0;
+  let used = 1;
+  while (shown < notes.length && used + sizes[shown] <= left - list) used += sizes[shown++];
+  return { list, notes: shown };
+}
+
+/** The first `shown` of the warnings under a list, then a line counting the others. */
+function Warnings({ notes, shown }: { notes: string[]; shown: number }) {
+  return (
+    <>
+      {notes.slice(0, shown).map((note) => (
+        <Text key={note} color={color.warning}>
+          {warningText(note)}
+        </Text>
+      ))}
+      {shown < notes.length ? <MoreRows arrow="↓" count={notes.length - shown} /> : null}
+    </>
+  );
 }
 
 export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: () => void }) {
@@ -318,7 +406,7 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   const [asked, setAsked] = useState<ReadonlySet<string>>(new Set());
   /** The model the selected route is ranked as (`m`): none again once another route is selected. */
   const [chosen, setChosen] = useState<({ route: string } & Pick<ModelChoice, "model" | "tool">) | null>(null);
-  const columns = useColumns();
+  const { columns = 80, rows: terminalRows } = useTerminalSize();
   const alive = useRef(true);
   /** Only the latest read is shown: an `r` pressed twice must not end on the older answer. */
   const readSeq = useRef(0);
@@ -706,6 +794,11 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
               : models.length > 0
                 ? MODEL_HINTS
                 : HINTS;
+  // What the lists may take of the terminal's height: none of it is known when the terminal
+  // gives none, and everything is drawn then.
+  const room = bodyRows({ columns, rows: terminalRows }, { footer, question, hints });
+  /** Chrome's width inside its padding. */
+  const inside = columns - CHROME_PADDING;
 
   if (loaded.kind !== "ready") {
     return (
@@ -750,42 +843,43 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   }
 
   if (view === "budgets") {
+    // The box's borders and header, or the line said in its place; then a blank line and the
+    // lines under it.
+    const above = budgetRows.length === 0 ? textLines(NO_API_PROFILES, inside) : BORDERS + 1;
+    const under = BUDGET_NOTES.reduce((sum, note) => sum + textLines(note, inside), 1);
+    const fit = underList(room, above + under, budgetRows.length, budgetNotes, inside);
     return (
       <Chrome title="Routes" subtitle="Budgets" footer={footer} question={question} hints={hints}>
         {budgetRows.length === 0 ? (
-          <Text color={color.muted}>No API profiles. Add one with clausona add {"<name>"} --api ….</Text>
+          <Text color={color.muted}>{NO_API_PROFILES}</Text>
         ) : (
           <Box flexDirection="column" borderStyle="round" borderColor={color.dim} paddingX={1}>
-            <BudgetList rows={budgetRows} index={budgetIndex} loading={budgetsLoading} />
+            <BudgetList rows={budgetRows} index={budgetIndex} loading={budgetsLoading} lines={fit.list} />
           </Box>
         )}
         <Box flexDirection="column" marginTop={1}>
-          <Text color={color.muted}>An API profile joins a route only with a spend limit:</Text>
-          <Text color={color.muted}>a budget set here, which replaces its key's own, or that one.</Text>
-          {budgetNotes.map((note) => (
-            <Text key={note} color={color.warning}>
-              {`⚠ ${note}`}
+          {BUDGET_NOTES.map((note) => (
+            <Text key={note} color={color.muted}>
+              {note}
             </Text>
           ))}
+          <Warnings notes={budgetNotes} shown={fit.notes} />
         </Box>
       </Chrome>
     );
   }
 
   if (view === "rules") {
+    // The box's borders and header; then a blank line and the line under it.
+    const fit = underList(room, BORDERS + 1 + 1 + textLines(RULE_ORDER, inside), rows.length, ruleNotes, inside);
     return (
       <Chrome title="Routes" subtitle="Dir rules" footer={footer} question={question} hints={hints}>
         <Box flexDirection="column" borderStyle="round" borderColor={color.dim} paddingX={1}>
-          <RuleList entries={rows} index={ruleIndex} file={loaded.file} broken={loaded.broken} />
+          <RuleList entries={rows} index={ruleIndex} file={loaded.file} broken={loaded.broken} lines={fit.list} />
         </Box>
         <Box flexDirection="column" marginTop={1}>
-          {/* Short enough for one line in a narrow pane: wrapped, ink starts the next line with a space. */}
-          <Text color={color.muted}>The deepest dir rule wins; then the default.</Text>
-          {ruleNotes.map((note) => (
-            <Text key={note} color={color.warning}>
-              {`⚠ ${note}`}
-            </Text>
-          ))}
+          <Text color={color.muted}>{RULE_ORDER}</Text>
+          <Warnings notes={ruleNotes} shown={fit.notes} />
         </Box>
       </Chrome>
     );
@@ -823,9 +917,15 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
   }
 
   const wide = columns >= WIDE_AT;
+  // A limit both tools report is one name, however many choices it is.
+  const limits = [...new Set(models.map((each) => each.label))];
+  const detailWidth = wide ? inside - LIST_WIDTH - PANE_GAP : inside;
+  const fit = fitPanes(room, wide, entries.length, memberRows(selected.ranking), (brief) =>
+    detailLines(selected, limits, detailWidth, brief),
+  );
   return (
     <Chrome title="Routes" footer={footer} question={question} hints={hints}>
-      <Box flexDirection={wide ? "row" : "column"} gap={wide ? 2 : 1} width="100%">
+      <Box flexDirection={wide ? "row" : "column"} gap={wide ? PANE_GAP : 1} width="100%">
         <Box
           flexDirection="column"
           width={wide ? LIST_WIDTH : "100%"}
@@ -834,16 +934,23 @@ export function RoutesScreen({ deps, onExit }: { deps?: RoutesListDeps; onExit: 
           borderColor={color.dim}
           paddingX={1}
         >
-          <RouteList entries={entries} index={index} pending={reading === null} />
+          <RouteList entries={entries} index={index} pending={reading === null} lines={fit.list} />
         </Box>
-        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={1}>
+        <Box
+          flexDirection="column"
+          flexGrow={1}
+          flexShrink={1}
+          minWidth={1}
+          {...(fit.height === undefined ? {} : { height: fit.height, overflow: "hidden" as const })}
+        >
           {selected ? (
             <RouteDetail
               entry={selected}
               pending={reading === null}
-              // A limit both tools report is one name, however many choices it is.
-              models={[...new Set(models.map((each) => each.label))]}
+              models={limits}
               views={views}
+              tableLines={fit.table}
+              brief={fit.brief}
             />
           ) : null}
         </Box>
@@ -938,8 +1045,27 @@ function countText(ranking: Ranking, pending: boolean): string {
   return `${pending ? "…" : nothingRead(ranking.rows) ? "—" : free}/${members}`;
 }
 
-function RouteList({ entries, index, pending }: { entries: Entry[]; index: number; pending: boolean }) {
+/**
+ * Every route, a row each, or as many as `lines` lines show with the lines counting the others:
+ * the window keeps the cursor's row in it. The columns are as wide as every row needs, shown or
+ * not, so that they stay put as the window moves.
+ */
+function RouteList({
+  entries,
+  index,
+  pending,
+  lines,
+}: {
+  entries: Entry[];
+  index: number;
+  pending: boolean;
+  lines: number;
+}) {
   const [list, width] = useWidth();
+  // Where the window began last time: it moves only as far as the cursor takes it.
+  const began = useRef(0);
+  const view = listWindow(entries.length, lines, index, began.current);
+  began.current = view.start;
   const counts = entries.map((entry) => countText(entry.ranking, pending));
   const toolWidth = Math.max(...entries.map((entry) => entry.route.tool.length));
   const countWidth = Math.max(...counts.map((count) => count.length));
@@ -947,7 +1073,9 @@ function RouteList({ entries, index, pending }: { entries: Entry[]; index: numbe
   const nameWidth = Math.max(1, Math.min(longest, width - MARK - GAP - toolWidth - GAP - countWidth));
   return (
     <Box ref={list} flexDirection="column">
-      {entries.map((entry, i) => {
+      {view.above > 0 ? <MoreRows arrow="↑" count={view.above} /> : null}
+      {entries.slice(view.start, view.end).map((entry, at) => {
+        const i = view.start + at;
         const focused = i === index;
         // Muted, not a warning, when nothing was read: that is not nobody free.
         const unread = pending || nothingRead(entry.ranking.rows);
@@ -973,6 +1101,7 @@ function RouteList({ entries, index, pending }: { entries: Entry[]; index: numbe
           </Box>
         );
       })}
+      {view.below > 0 ? <MoreRows arrow="↓" count={view.below} /> : null}
     </Box>
   );
 }
@@ -983,10 +1112,25 @@ const USAGE = 4;
 /**
  * Every API profile, a row each: its usage, then its spend against its limit and whose limit it
  * is, or why it has none - as `clausona route budget` lists them. One whose spend is still being
- * read (`loading`) says so.
+ * read (`loading`) says so. Under the header, `lines` lines show the rows that fit, the cursor's
+ * among them, as the route list does.
  */
-function BudgetList({ rows, index, loading }: { rows: BudgetRow[]; index: number; loading: ReadonlySet<string> }) {
+function BudgetList({
+  rows,
+  index,
+  loading,
+  lines,
+}: {
+  rows: BudgetRow[];
+  index: number;
+  loading: ReadonlySet<string>;
+  lines: number;
+}) {
   const [list, width] = useWidth();
+  // Where the window began last time: it moves only as far as the cursor takes it.
+  const began = useRef(0);
+  const view = listWindow(rows.length, lines, index, began.current);
+  began.current = view.start;
   const longest = Math.max("PROFILE".length, ...rows.map((row) => row.id.length));
   const idWidth = Math.max(1, Math.min(longest, width - MARK - GAP - USAGE - GAP - 8));
   return (
@@ -1001,8 +1145,9 @@ function BudgetList({ rows, index, loading }: { rows: BudgetRow[]; index: number
           <Text color={color.muted}>USAGE</Text>
         </Box>
       </Box>
-      {rows.map((row, i) => {
-        const focused = i === index;
+      {view.above > 0 ? <MoreRows arrow="↑" count={view.above} /> : null}
+      {rows.slice(view.start, view.end).map((row, at) => {
+        const focused = view.start + at === index;
         return (
           <Box key={row.id} flexDirection="row">
             <Box width={MARK} flexShrink={0}>
@@ -1032,6 +1177,7 @@ function BudgetList({ rows, index, loading }: { rows: BudgetRow[]; index: number
           </Box>
         );
       })}
+      {view.below > 0 ? <MoreRows arrow="↓" count={view.below} /> : null}
     </Box>
   );
 }
@@ -1042,20 +1188,27 @@ const DIRECTORY = "DIRECTORY";
 /**
  * The dir rules and the defaults, a row each: the directory, and the route each tool's slot
  * names. A slot whose route cannot be used there is in the warning colour, `?` when it cannot be
- * read; `—` is none.
+ * read; `—` is none. Under the header, `lines` lines show the rows that fit, the cursor's among
+ * them, as the route list does.
  */
 function RuleList({
   entries,
   index,
   file,
   broken,
+  lines,
 }: {
   entries: RuleEntry[];
   index: number;
   file: RoutesFile;
   broken: BrokenRoute[];
+  lines: number;
 }) {
   const [list, width] = useWidth();
+  // Where the window began last time: it moves only as far as the cursor takes it.
+  const began = useRef(0);
+  const view = listWindow(entries.length, lines, index, began.current);
+  began.current = view.start;
   const cell = (slots: Slots, tool: ToolName): { text: string; usable: boolean } => {
     const slot = slots[tool];
     if (!slot) return { text: "—", usable: true };
@@ -1086,7 +1239,9 @@ function RuleList({
           </Box>
         ))}
       </Box>
-      {entries.map((entry, i) => {
+      {view.above > 0 ? <MoreRows arrow="↑" count={view.above} /> : null}
+      {entries.slice(view.start, view.end).map((entry, at) => {
+        const i = view.start + at;
         const focused = i === index;
         return (
           <Box key={entry.label} flexDirection="row">
@@ -1115,6 +1270,7 @@ function RuleList({
           </Box>
         );
       })}
+      {view.below > 0 ? <MoreRows arrow="↓" count={view.below} /> : null}
     </Box>
   );
 }

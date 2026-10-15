@@ -14,8 +14,9 @@ import {
 } from "../../lib/route-render.js";
 import type { QuotaWindow, ToolName } from "../../types.js";
 import { QuotaCell } from "../components/QuotaCell.js";
+import { listWindow } from "../fit.js";
 import { color } from "../theme.js";
-import { useWidth } from "../use-width.js";
+import { textLines, useWidth } from "../use-width.js";
 
 /**
  * The Routes screen's detail pane: the selected route's settings, and its members ranked as
@@ -49,11 +50,14 @@ const LAYOUTS = [
   ]),
 ];
 
+/** A Setting's label column. */
+const LABEL = 10;
+
 /** A muted label and its value, the label column 10 wide. */
 export function Setting({ label, value }: { label: string; value: string }) {
   return (
     <Box flexDirection="row">
-      <Box width={10} flexShrink={0}>
+      <Box width={LABEL} flexShrink={0}>
         <Text color={color.muted}>{label}</Text>
       </Box>
       <Box flexGrow={1} flexShrink={1} minWidth={0}>
@@ -63,45 +67,97 @@ export function Setting({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** `↑ 3 more` or `↓ 12 more`, where a list leaves rows out: past the rows' marks, under their names. */
+export function MoreRows({ arrow, count }: { arrow: "↑" | "↓"; count: number }) {
+  return (
+    <Box paddingLeft={MARK}>
+      <Text color={color.muted}>{`${arrow} ${count} more`}</Text>
+    </Box>
+  );
+}
+
+/** The line under the route's name. */
+const summaryOf = (route: Route) => `${toolLabel(route.tool)} · ${route.strategy} · skip at ${route.maxUsage}%`;
+
+/** The route's settings, each a label and its value. */
+function settingsOf({ route, ranking, onlyTool }: Entry): Array<[string, string]> {
+  const settings: Array<[string, string]> = [
+    ["Accounts", `${route.from.join(", ")}${route.exclude.length ? ` except ${route.exclude.join(", ")}` : ""}`],
+    ["Fallback", route.fallback.length ? route.fallback.join(", ") : "none"],
+  ];
+  // The options that rank the same on the command line.
+  if (ranking.model) {
+    settings.push(["Model", `ranked as ${onlyTool ? `--tool ${onlyTool} ` : ""}--model ${modelWord(ranking.model)}`]);
+  }
+  return settings;
+}
+
+/**
+ * The lines RouteDetail takes `width` columns wide besides its member table's rows: the name, the
+ * line under it and the settings as they wrap, the table's header after a blank line, and the
+ * line naming the models' limits after another. `brief`, the name and, after the blank line, the
+ * table's header. Worked out rather than measured, for the screen to fit the detail to the
+ * terminal's height before ink draws it (see fit.ts).
+ */
+export function detailLines(entry: Entry, models: string[], width: number, brief: boolean): number {
+  const { route, ranking } = entry;
+  const header = tableOf(ranking, false).lines.length > 0 ? 1 : 0;
+  if (brief) return 1 + 1 + header;
+  const settings = settingsOf(entry).reduce((sum, [, value]) => sum + textLines(value, width - LABEL), 0);
+  const limits = ranking.model || models.length === 0 ? 0 : 2;
+  return 1 + textLines(summaryOf(route), width) + settings + 1 + header + limits;
+}
+
+/** The member table's rows: the members, the patterns that name nobody, and the accounts excluded. */
+export function memberRows(ranking: Ranking): number {
+  return tableOf(ranking, false).lines.length + ranking.excluded.length;
+}
+
 /**
  * `models` are the names of the limits the route's accounts report on one model (`Opus`), which `m`
  * ranks by in turn. Until one is chosen, a line under the table names them. Once one is, `views`
  * are the route ranked as each of them: the cells take the most detailed form every one of those
  * fits, so moving from one model to another never trades gauges for percentages.
+ *
+ * `tableLines` is the most lines the member table's rows may take, a line counting those left
+ * out included: the table shows the rows that fit, in the ranking's order. `brief` leaves out
+ * the line under the name, the settings and the line naming the models' limits, for a pane too
+ * short for those and the ranking both: the ranking is what the detail is there for. In a pane
+ * shorter even than that, the detail keeps its height and is cut at the foot: let shrink, ink
+ * drew its lines over one another.
  */
 export function RouteDetail({
   entry,
   pending,
   models,
   views = [],
+  tableLines = Number.POSITIVE_INFINITY,
+  brief = false,
 }: {
   entry: Entry;
   pending: boolean;
   models: string[];
   views?: Ranking[];
+  tableLines?: number;
+  brief?: boolean;
 }) {
-  const { name, route, ranking, onlyTool } = entry;
+  const { name, route, ranking } = entry;
   const [detail, width] = useWidth();
   return (
-    <Box ref={detail} flexDirection="column">
+    <Box ref={detail} flexDirection="column" flexShrink={0}>
       <Text color={color.text} bold wrap="truncate-end">
         {name}
       </Text>
-      <Text color={color.muted}>{`${toolLabel(route.tool)} · ${route.strategy} · skip at ${route.maxUsage}%`}</Text>
-      <Setting
-        label="Accounts"
-        value={`${route.from.join(", ")}${route.exclude.length ? ` except ${route.exclude.join(", ")}` : ""}`}
-      />
-      <Setting label="Fallback" value={route.fallback.length ? route.fallback.join(", ") : "none"} />
-      {/* The options that rank the same on the command line. */}
-      {ranking.model ? (
-        <Setting
-          label="Model"
-          value={`ranked as ${onlyTool ? `--tool ${onlyTool} ` : ""}--model ${modelWord(ranking.model)}`}
-        />
-      ) : null}
-      <MemberTable ranking={ranking} views={views} pending={pending} width={width} />
-      {ranking.model || models.length === 0 ? null : <ModelLimits models={models} />}
+      {brief ? null : (
+        <>
+          <Text color={color.muted}>{summaryOf(route)}</Text>
+          {settingsOf(entry).map(([label, value]) => (
+            <Setting key={label} label={label} value={value} />
+          ))}
+        </>
+      )}
+      <MemberTable ranking={ranking} views={views} pending={pending} width={width} room={tableLines} />
+      {brief || ranking.model || models.length === 0 ? null : <ModelLimits models={models} />}
     </Box>
   );
 }
@@ -343,20 +399,27 @@ function firstFit(table: Table, width: number, layouts: typeof LAYOUTS) {
  * never trades gauges for percentages from one model to the next; the model's name is then kept
  * whole where it fits. Failing that, percentages only and the ids cut. With no `views`, as for a
  * route ranked as a run that names no model, the table is fitted on its own.
+ *
+ * `room` is the most lines the rows may take. The table has no cursor to scroll them by, so it
+ * shows the rows that fit from the top, the next pick first, and a line counting the rest. The
+ * columns are fitted to every row, shown or not.
  */
 function MemberTable({
   ranking,
   views,
   pending,
   width,
+  room,
 }: {
   ranking: Ranking;
   views: Ranking[];
   pending: boolean;
   width: number;
+  room: number;
 }) {
   const table = tableOf(ranking, pending);
   const { lines, header, kinds, hasBudget, cut } = table;
+  const shown = listWindow(lines.length + ranking.excluded.length, room, null, 0);
   const at = Math.min(
     ...[table, ...views.map((view) => tableOf(view, pending))].map(
       (each) => firstFit(each, width, LAYOUTS)?.at ?? NARROWEST,
@@ -399,7 +462,7 @@ function MemberTable({
           ) : null}
         </Box>
       ) : null}
-      {lines.map((line) => (
+      {lines.slice(0, shown.end).map((line) => (
         <MemberLine
           key={line.key}
           line={line}
@@ -410,11 +473,12 @@ function MemberTable({
           {...(hasBudget ? { budget: budgetWidth(quota) } : {})}
         />
       ))}
-      {ranking.excluded.map((entry) => (
+      {ranking.excluded.slice(0, Math.max(0, shown.end - lines.length)).map((entry) => (
         <Box key={`excluded:${entry.id}`} paddingLeft={MARK}>
           <Text color={color.muted} wrap="truncate-end">{`excluded  ${entry.id} (${entry.pattern})`}</Text>
         </Box>
       ))}
+      {shown.below > 0 ? <MoreRows arrow="↓" count={shown.below} /> : null}
     </Box>
   );
 }

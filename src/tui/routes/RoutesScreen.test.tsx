@@ -22,6 +22,13 @@ const profile = (tool: "claude" | "codex", name: string, extra: object = {}) => 
   ...extra,
 });
 
+const api = (name: string) =>
+  profile("claude", name, {
+    kind: "api",
+    email: "",
+    api: { baseUrl: `https://${name}.example.com`, authScheme: "bearer", secret: { source: "env", name: "GW_KEY" } },
+  });
+
 const REGISTRY: Registry = {
   version: 2,
   primarySources: { claude: "/home/u/.claude" },
@@ -861,12 +868,6 @@ describe("dir rules and defaults", () => {
 describe("API profiles and their budgets", () => {
   const TAB = "\t";
   const SPACE = " ";
-  const api = (name: string) =>
-    profile("claude", name, {
-      kind: "api",
-      email: "",
-      api: { baseUrl: `https://${name}.example.com`, authScheme: "bearer", secret: { source: "env", name: "GW_KEY" } },
-    });
   const WITH_API: Registry = {
     ...REGISTRY,
     profiles: {
@@ -1302,5 +1303,231 @@ describe("ranked as a run of one model", () => {
     const header = all.find((line) => line.includes("ACCOUNT")) ?? "";
     expect(all.find((line) => line.includes("codex:x"))).toMatch(/\s7D\s+5%/);
     expect((all.find((line) => line.includes("codex:personal-max")) ?? "").indexOf("—")).toBe(header.indexOf("GPT-5"));
+  });
+});
+
+describe("inside the terminal's height", () => {
+  const TAB = "\t";
+  const UP = "\u001B[A";
+  const two = (n: number) => String(n + 1).padStart(2, "0");
+  /**
+   * More of everything than a list has room for: 30 accounts, 30 API profiles, and 40 routes
+   * with a dir rule each.
+   */
+  const ACCOUNTS = Array.from({ length: 30 }, (_, n) => `acct-${two(n)}`);
+  const PROFILES = Array.from({ length: 30 }, (_, n) => `api-${two(n)}`);
+  const ROUTES = Array.from({ length: 40 }, (_, n) => `route-${two(n)}`);
+  const LARGE: Registry = {
+    version: 2,
+    primarySources: {},
+    activeProfiles: {},
+    profiles: Object.fromEntries([
+      ...ACCOUNTS.map((name) => [`claude:${name}`, profile("claude", name)]),
+      ...PROFILES.map((name) => [`claude:${name}`, api(name)]),
+    ]),
+  };
+  const LARGE_FILE: RoutesFile = {
+    version: 1,
+    routes: Object.fromEntries(ROUTES.map((name) => [name, { tool: "claude" as const, from: ["acct-*"] }])),
+    dirs: Object.fromEntries(ROUTES.map((name) => [`~/${name}`, { claude: name }])),
+  };
+  /**
+   * Each account a little more used than the one before, so that the ranking has an order, and
+   * with a limit on Opus for `m` to rank by. No API profile has a spend limit.
+   */
+  const collect: Collect = async (targets) =>
+    Object.fromEntries(
+      targets.map((target): [string, QuotaSnapshot] => {
+        const at = ACCOUNTS.indexOf(target.id.slice("claude:".length));
+        if (at === -1) return [target.id, { state: "ok", fetchedAt: NOW }];
+        const opus: ScopedQuotaWindow = { label: "Opus", usedPercent: at, resetsAt: null };
+        return [target.id, { ...snap(at, 2 * at), scopedLimits: [opus] }];
+      }),
+    );
+  const large = (columns: number, rows: number) =>
+    setup({ file: LARGE_FILE, registry: { loads: LARGE, problem: null }, collect, columns, rows });
+  /** Waits until the routes are counted, which a terminal too short for the ranking still shows. */
+  const counted = (instance: Instance) => until(instance, (f) => f.includes("30/30"));
+
+  /** How many terminal lines a frame takes, as ink counts them: its last is Chrome's bottom padding. */
+  const height = (frame: string) => frame.split("\n").length;
+
+  /** The count a `↑ 3 more` or `↓ 12 more` line in `pane` says; none without one. */
+  const more = (pane: string[], arrow: "↑" | "↓") =>
+    Number(pane.find((line) => line.startsWith(`${arrow} `))?.match(/^. (\d+) more$/)?.[1] ?? 0);
+
+  /** The detail's lines: beside the list from 100 columns, under it below that. */
+  function detailOf(frame: string, columns: number): string[] {
+    if (columns >= 100) return panes(frame).detail;
+    const all = lines(frame);
+    const bottom = all.findIndex((line) => line.includes("╰"));
+    const footer = all.findIndex((line, i) => i > bottom && /^\s*─{10,}/.test(line));
+    return all.slice(bottom + 1, footer).map((line) => line.trim());
+  }
+
+  /**
+   * A list's window in its box: the rows it shows run on from those the line above counts, and
+   * with those the line below counts make every one of `labels`; the cursor is on `cursor`'s.
+   */
+  function windowOf(pane: string[], labels: string[], cursor: number) {
+    const shown = pane.flatMap((line) => {
+      const at = labels.findIndex((label) => line.replace(/^▸ /, "").startsWith(`${label} `));
+      return at === -1 ? [] : [at];
+    });
+    const above = more(pane, "↑");
+    const below = more(pane, "↓");
+    expect(shown).toEqual(shown.map((_, n) => above + n));
+    expect(above + shown.length + below).toBe(labels.length);
+    expect(pane.filter((line) => line.startsWith("▸ "))).toEqual([expect.stringContaining(`▸ ${labels[cursor]} `)]);
+    return { above, below, shown: shown.length };
+  }
+
+  /**
+   * Walks a list's cursor down from its first row to its last, up one, and down past the last to
+   * the first again. Going down, the window moves only as far as the cursor takes it, so the
+   * cursor's row ends it once it has moved, until it reaches the last row; one row up from the
+   * last, it does not move at all.
+   */
+  async function walk(instance: Instance, labels: string[], pane: (frame: string) => string[]) {
+    const at = (cursor: number) => windowOf(pane(text(instance)), labels, cursor);
+    const top = at(0);
+    expect(top.above).toBe(0);
+    expect(top.below).toBeGreaterThan(0);
+    for (let cursor = 1; cursor < labels.length; cursor++) {
+      await press(instance, DOWN);
+      const view = at(cursor);
+      if (view.above > 0 && view.below > 0) expect(view.above + view.shown - 1).toBe(cursor);
+    }
+    const last = at(labels.length - 1);
+    expect(last.below).toBe(0);
+    expect(last.above).toBeGreaterThan(0);
+    await press(instance, UP);
+    expect(at(labels.length - 2).above).toBe(last.above);
+    await press(instance, DOWN);
+    await press(instance, DOWN);
+    expect(at(0)).toEqual(top);
+  }
+
+  /** Every frame drawn, shorter than the terminal by two lines and no wider than it, with the title. */
+  function expectInside(instance: Instance, columns: number, rows: number) {
+    expect(lines(text(instance)).find((line) => line.includes("CLAUSONA"))).toContain("Routes");
+    for (const frame of instance.frames) {
+      expect(height(frame)).toBeLessThanOrEqual(rows - 2);
+      for (const line of lines(stripAnsi(frame))) expect(line.length, line).toBeLessThanOrEqual(columns);
+    }
+  }
+
+  /** The ranking shows the accounts that fit, the next pick first, and a line counts the rest. */
+  function expectRanking(frame: string, columns: number) {
+    const detail = detailOf(frame, columns);
+    const members = detail.filter((line) => /^(▸ )?claude:acct-\d\d /.test(line));
+    expect(members[0]).toMatch(/^▸ claude:acct-\d\d .*next/);
+    expect(more(detail, "↓")).toBeGreaterThan(0);
+    expect(more(detail, "↓")).toBe(ACCOUNTS.length - members.length);
+  }
+
+  it.each([
+    [120, 24],
+    [120, 40],
+    [80, 24],
+    [80, 40],
+  ])("keeps the routes and the selected one's ranking inside %i by %i, wherever the cursor is", async (columns, rows) => {
+    const { instance } = large(columns, rows);
+    expectRanking(await ranked(instance), columns);
+
+    await walk(instance, ROUTES, (frame) => panes(frame).list);
+    expectRanking(text(instance), columns);
+    // Ranked as a run of Opus, with a column for its limit.
+    await press(instance, "m");
+    expect(text(instance)).toMatch(/ACCOUNT\s+5H\s+7D\s+OPUS/);
+    expectRanking(text(instance), columns);
+    expectInside(instance, columns, rows);
+  });
+
+  // Under the list, an 80 by 24 terminal has room for the detail's ranking or for its settings.
+  it("leaves the selected route's settings out under the list in 80 by 24, for its ranking", async () => {
+    const { instance } = large(80, 24);
+    const detail = detailOf(await ranked(instance), 80).filter(Boolean);
+
+    expect(detail.slice(0, 3)).toEqual([
+      "route-01",
+      expect.stringMatching(/^ACCOUNT\s+5H\s+7D$/),
+      expect.stringMatching(/^▸ claude:acct-01 .*next$/),
+    ]);
+    expect(detail.join("\n")).not.toMatch(/Accounts|Fallback|skip at|Model limits/);
+    expectInside(instance, 80, 24);
+  });
+
+  // Shorter, the brief detail has no room for the line counting the rest, or for its rows: it is
+  // cut at the foot, each line it keeps drawn whole. Squeezed instead, ink drew the next pick over
+  // the blank line and the header at 21 rows.
+  it.each([
+    [
+      23,
+      ["route-01", expect.stringMatching(/^ACCOUNT\s+5H\s+7D$/), expect.stringMatching(/^▸ claude:acct-01 .*next$/)],
+    ],
+    [21, ["route-01"]],
+  ])("cuts the selected route's detail at the foot in 80 by %i", async (rows, detail) => {
+    const { instance } = large(80, rows);
+    const frame = await counted(instance);
+
+    expect(detailOf(frame, 80).filter(Boolean)).toEqual(detail);
+    windowOf(panes(frame).list, ROUTES, 0);
+    expectInside(instance, 80, rows);
+  });
+
+  it.each([
+    [120, 24],
+    [120, 40],
+    [80, 24],
+  ])("keeps the dir rules inside %i by %i, wherever the cursor is", async (columns, rows) => {
+    const { instance } = large(columns, rows);
+    await counted(instance);
+    await press(instance, TAB);
+    await until(instance, (f) => f.includes("Dir rules"));
+
+    await walk(instance, [...ROUTES.map((name) => `~/${name}`), "default"], (frame) => panes(frame).list);
+    expectInside(instance, columns, rows);
+  });
+
+  it("shows the warnings under the dir rules that fit, and counts the rest", async () => {
+    const dirs = Object.fromEntries(ROUTES.map((name) => [`~/${name}`, { claude: `gone-${name}` }]));
+    const { instance } = setup({
+      file: { ...LARGE_FILE, dirs },
+      registry: { loads: LARGE, problem: null },
+      collect,
+      columns: 120,
+      rows: 24,
+    });
+    await counted(instance);
+    await press(instance, TAB);
+    const frame = await until(instance, (f) => f.includes("Dir rules"));
+    const all = lines(frame);
+    const under = all.slice(all.findIndex((line) => line.includes("╰")) + 1).map((line) => line.trim());
+    const warnings = under.filter((line) => line.startsWith("⚠ "));
+
+    expect(warnings[0]).toBe("⚠ ~/route-01 names route 'gone-route-01' for claude, which does not exist.");
+    expect(more(under, "↓")).toBeGreaterThan(0);
+    expect(warnings.length + more(under, "↓")).toBe(ROUTES.length);
+    windowOf(panes(frame).list, [...ROUTES.map((name) => `~/${name}`), "default"], 0);
+    expectInside(instance, 120, 24);
+  });
+
+  it.each([
+    [120, 24],
+    [120, 40],
+    [80, 24],
+  ])("keeps the budgets inside %i by %i, wherever the cursor is", async (columns, rows) => {
+    const { instance } = large(columns, rows);
+    await counted(instance);
+    await press(instance, "b");
+    await until(instance, (f) => f.includes("Budgets") && f.includes("no spend limit") && !f.includes("loading…"));
+
+    await walk(
+      instance,
+      PROFILES.map((name) => `claude:${name}`),
+      (frame) => panes(frame).list,
+    );
+    expectInside(instance, columns, rows);
   });
 });
