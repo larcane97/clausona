@@ -90,10 +90,12 @@ import { ScrollList, scrolls } from "./components/ScrollList.js";
 import { SelectList, type SelectListItem } from "./components/SelectList.js";
 import {
   STAR_POPUP_GRACE_MS,
+  STAR_POPUP_TOP,
   StarPopup,
   type StarPopupState,
   starMessage,
   starPopupHints,
+  starPopupRows,
 } from "./components/StarPopup.js";
 import { StepIndicator } from "./components/StepIndicator.js";
 import { UpdatePanel, type UpdatePhase, updatePanelRows } from "./components/UpdatePanel.js";
@@ -2508,7 +2510,17 @@ export function App({
           </Box>
         </Box>
         {updateOffer ? <UpdatePanel phase={updatePhase} offer={updateOffer} /> : null}
-        {starPopup ? <StarPopup state={starPopup} /> : null}
+        {starPopup ? (
+          <StarPopup
+            state={starPopup}
+            // Up from where it sits when the body is too short for it there: it stays clear of the hints.
+            top={
+              body === undefined
+                ? undefined
+                : Math.max(0, Math.min(STAR_POPUP_TOP, body - starPopupRows(starPopup, size.columns ?? 80)))
+            }
+          />
+        ) : null}
       </Chrome>
     );
   }

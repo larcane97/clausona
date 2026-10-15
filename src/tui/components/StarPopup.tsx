@@ -3,6 +3,7 @@ import { Box, Text } from "ink";
 
 import { STAR_REPO, type StarOutcome } from "../../core/star.js";
 import { color, symbol } from "../theme.js";
+import { textLines } from "../use-width.js";
 
 /**
  * The dashboard's one-time question about a star: asked, under way, or answered. A question is
@@ -38,6 +39,48 @@ export function starMessage(outcome: StarOutcome): string {
   }
 }
 
+/** How far down the dashboard's body the popup sits when there is room: about the middle of its list. */
+export const STAR_POPUP_TOP = 4;
+
+/** The popup's widest, and what its border and padding take of that. */
+const POPUP_WIDTH = 52;
+const POPUP_INSET = 8;
+
+const ASK = "A star on GitHub helps other people find it.";
+const STARRING = "Starring clausona on GitHub…";
+
+/** What an answer says: the first line, which has a ✔ before it unless it is a link to follow, and the second. */
+function outcomeTexts(outcome: StarOutcome): { first: string; second: string; checked: boolean } {
+  if (outcome.kind === "manual") return { first: "Star clausona at", second: outcome.url, checked: false };
+  return {
+    first: outcome.kind === "starred" ? `Starred ${STAR_REPO}` : "Opened the page in your browser",
+    second:
+      outcome.kind === "opened"
+        ? "Press Star at the top of the page. Thank you!"
+        : outcome.login
+          ? `as @${outcome.login}. Thank you!`
+          : "Thank you!",
+    checked: true,
+  };
+}
+
+/**
+ * The lines the popup takes `columns` wide - the terminal's - for the dashboard to keep it clear of
+ * the key hints: its border and padding, the title and the blank line under it, and what is under
+ * that as it wraps, never fewer than three lines.
+ */
+export function starPopupRows(state: StarPopupState, columns: number): number {
+  const inner = Math.min(POPUP_WIDTH, columns - 4) - POPUP_INSET;
+  let content: number;
+  if (state.phase === "ask") content = textLines(ASK, inner) + 2;
+  else if (state.phase === "starring") content = textLines(STARRING, inner - 2);
+  else {
+    const { first, second, checked } = outcomeTexts(state.outcome);
+    content = textLines(first, checked ? inner - 2 : inner) + textLines(second, inner);
+  }
+  return 2 + 2 + 2 + Math.max(3, content);
+}
+
 /** Bracketed when focused as well as filled, so a terminal without colour still shows which. */
 function Button({ label, focused }: { label: string; focused: boolean }) {
   return (
@@ -50,11 +93,12 @@ function Button({ label, focused }: { label: string; focused: boolean }) {
 }
 
 function Outcome({ outcome }: { outcome: StarOutcome }) {
-  if (outcome.kind === "manual") {
+  const { first, second, checked } = outcomeTexts(outcome);
+  if (!checked) {
     return (
       <>
-        <Text color={color.text}>Star clausona at</Text>
-        <Text color={color.brandLight}>{outcome.url}</Text>
+        <Text color={color.text}>{first}</Text>
+        <Text color={color.brandLight}>{second}</Text>
       </>
     );
   }
@@ -65,33 +109,28 @@ function Outcome({ outcome }: { outcome: StarOutcome }) {
           <Text color={color.healthy}>{symbol.check}</Text>
         </Box>
         <Text color={color.healthy} bold>
-          {outcome.kind === "starred" ? `Starred ${STAR_REPO}` : "Opened the page in your browser"}
+          {first}
         </Text>
       </Box>
-      <Text color={color.secondary}>
-        {outcome.kind === "opened"
-          ? "Press Star at the top of the page. Thank you!"
-          : outcome.login
-            ? `as @${outcome.login}. Thank you!`
-            : "Thank you!"}
-      </Text>
+      <Text color={color.secondary}>{second}</Text>
     </>
   );
 }
 
 /**
  * Drawn over the dashboard: it is positioned absolutely, and its background covers what is
- * under it. The width is a ceiling - in a narrow terminal it shrinks and its text wraps. Four
- * rows down sits it about the middle of the dashboard's list, which is never shorter than
- * eighteen rows. Under the title, the question, the spinner and the answer get the same
- * three rows at least, so the popup does not jump between them.
+ * under it. The width is a ceiling - in a narrow terminal it shrinks and its text wraps. `top`
+ * rows down the body: `STAR_POPUP_TOP` sits it about the middle of the dashboard's list, and in
+ * a terminal too short for that the dashboard gives less (see `starPopupRows`), so that the popup
+ * stays above the key hints. Under the title, the question, the spinner and the answer get the
+ * same three rows at least, so the popup does not jump between them.
  */
-export function StarPopup({ state }: { state: StarPopupState }) {
+export function StarPopup({ state, top = STAR_POPUP_TOP }: { state: StarPopupState; top?: number }) {
   return (
-    <Box position="absolute" width="100%" marginTop={4} justifyContent="center">
+    <Box position="absolute" width="100%" marginTop={top} justifyContent="center">
       <Box
         flexDirection="column"
-        width={52}
+        width={POPUP_WIDTH}
         flexShrink={1}
         borderStyle="round"
         borderColor={color.brand}
@@ -110,14 +149,14 @@ export function StarPopup({ state }: { state: StarPopupState }) {
         <Box flexDirection="column" marginTop={1} minHeight={3}>
           {state.phase === "ask" && (
             <>
-              <Text color={color.secondary}>A star on GitHub helps other people find it.</Text>
+              <Text color={color.secondary}>{ASK}</Text>
               <Box marginTop={1} gap={2} justifyContent="center">
                 <Button label="★ Star" focused={state.choice === "star"} />
                 <Button label="Not now" focused={state.choice === "later"} />
               </Box>
             </>
           )}
-          {state.phase === "starring" && <Spinner label="Starring clausona on GitHub…" />}
+          {state.phase === "starring" && <Spinner label={STARRING} />}
           {state.phase === "done" && <Outcome outcome={state.outcome} />}
         </Box>
       </Box>

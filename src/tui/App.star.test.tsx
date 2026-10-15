@@ -49,7 +49,7 @@ vi.setConfig({ testTimeout: 15_000 });
 
 import { listProfiles } from "../lib/service.js";
 import { App } from "./App.js";
-import { DOWN, ENTER, ESC, focusedOn, moveTo, press, waitForFrame } from "./test-drive.js";
+import { DOWN, ENTER, ESC, focusedOn, moveTo, press, renderAt, waitForFrame } from "./test-drive.js";
 
 const RIGHT = "\u001B[C";
 
@@ -144,6 +144,32 @@ describe("the dashboard's star popup", () => {
     expect(instance.lastFrame()).not.toContain("Enjoying clausona?");
     expect(claimPrompt).toHaveBeenCalledTimes(1);
   });
+
+  // The dashboard's list is shorter in a short terminal (#182): four rows down, the popup covered
+  // the rule above the key hints and the hints that say how to answer it.
+  for (const [columns, rows] of [
+    [80, 24],
+    [44, 22],
+  ] as const) {
+    it(`stays clear of the key hints in ${columns}×${rows}`, async () => {
+      const { star } = fakeStar({ ask: true });
+      const instance = renderAt(<App initialScreen="dashboard" star={star} />, columns, { rows });
+
+      // Quit is below the menu's window here: the title says it is the dashboard.
+      const frame = await waitForFrame(instance.lastFrame, (f) => f.includes("│ Dashboard") && answerable(f));
+      instance.unmount();
+
+      const lines = frame.split("\n");
+      const hints = lines.findIndex((line) => line.includes("←→ choose"));
+      // The popup's bottom edge, as wide as the popup: above the rule over the hints, not under it.
+      const edge = lines.findIndex((line) => line.includes(`╰${"─".repeat(Math.min(52, columns - 4) - 2)}╯`));
+      expect(lines.length).toBeLessThanOrEqual(rows - 2);
+      expect(lines[hints]?.trimEnd()).toMatch(/←→ choose │ enter select │ esc not now$/);
+      expect(lines[hints - 2]).toMatch(/^\s*─+\s*$/);
+      expect(edge).toBeGreaterThan(0);
+      expect(edge).toBeLessThan(hints - 2);
+    });
+  }
 
   it("opens over the dashboard on Star, takes the keys, and stars on Enter", async () => {
     const { star, give, claimPrompt } = fakeStar({ ask: true });
