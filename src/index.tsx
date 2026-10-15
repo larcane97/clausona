@@ -69,7 +69,7 @@ async function renderTui(screen: TuiScreen): Promise<void> {
       updater={screen === "dashboard" ? createUpdater() : undefined}
       // Every way to the dashboard lists Star on GitHub; only opening on it may bring the popup.
       star={{
-        give: () => giveStar(),
+        give: (signal) => giveStar(undefined, signal),
         record: () => recordStarAsked(),
         claimPrompt: screen === "dashboard" ? () => claimStarPrompt() : undefined,
       }}

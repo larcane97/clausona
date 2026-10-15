@@ -107,12 +107,22 @@ export async function recordStarAsked(deps: NoticesDeps = defaultNoticesDeps()):
 
 // ─── The star ────────────────────────────────────────────────────────
 
-/** How a command ended: its exit code, null when it ran out of time; null for one that could not be started. */
+export type RunOptions = {
+  env: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  /** Whether its output is read. A browser opener's is not: see `runCommand`. */
+  output: boolean;
+  signal?: AbortSignal;
+};
+
+/**
+ * How a command ended: its exit code and output, with code null when it ran out of time; null
+ * when it could not be started or was called off.
+ */
 export type RunCommand = (
   command: string,
   args: string[],
-  env: NodeJS.ProcessEnv,
-  timeoutMs: number,
+  options: RunOptions,
 ) => Promise<{ code: number | null; stdout: string } | null>;
 
 export type StarDeps = { run: RunCommand; platform: NodeJS.Platform; env: NodeJS.ProcessEnv };
@@ -122,32 +132,52 @@ export type StarOutcome =
   | { kind: "opened"; url: string }
   | { kind: "manual"; url: string };
 
-const runCommand: RunCommand = (command, args, env, timeoutMs) =>
+/**
+ * Runs a command with nothing reaching the terminal, which the TUI is drawn on. A command whose
+ * output is not read gets none to hold: xdg-open can hand its stdout to the browser it starts, and
+ * a pipe held open by the browser kept clausona from exiting until the browser closed. One still
+ * running when its time is up is killed when its output is read (gh); an opener is left to run,
+ * since it can be waiting on the browser, and unreferenced so clausona can exit without it.
+ */
+export const runCommand: RunCommand = (command, args, { env, timeoutMs, output, signal }) =>
   new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve(null);
+      return;
+    }
     let stdout = "";
     let child: ReturnType<typeof spawnCommand>;
     try {
-      // Nothing reaches the terminal: the TUI is drawn on it.
-      child = spawnCommand(command, args, { env, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+      child = spawnCommand(command, args, {
+        env,
+        stdio: ["ignore", output ? "pipe" : "ignore", "ignore"],
+        windowsHide: true,
+      });
     } catch {
       resolve(null);
       return;
     }
-    const timer = setTimeout(() => {
+    const settle = (result: { code: number | null; stdout: string } | null) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(result);
+    };
+    const onAbort = () => {
       child.kill();
-      resolve({ code: null, stdout });
+      settle(null);
+    };
+    const timer = setTimeout(() => {
+      if (output) child.kill();
+      child.stdout?.destroy();
+      child.unref();
+      settle({ code: null, stdout });
     }, timeoutMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout?.on("data", (chunk) => {
       stdout += String(chunk);
     });
-    child.on("error", () => {
-      clearTimeout(timer);
-      resolve(null);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout });
-    });
+    child.on("error", () => settle(null));
+    child.on("close", (code) => settle({ code, stdout }));
   });
 
 function defaultStarDeps(): StarDeps {
@@ -171,25 +201,31 @@ function browserCommand(url: string, platform: NodeJS.Platform, env: NodeJS.Proc
 /**
  * Stars clausona as the account gh is signed in to on github.com. Without gh, or signed out, it
  * opens the repository's page instead, and where no browser can be opened it gives the address.
+ * Called off through `signal` - the TUI quit while it ran - it stops, and never opens a browser.
  */
-export async function giveStar(deps: StarDeps = defaultStarDeps()): Promise<StarOutcome> {
-  const ghEnv = { ...deps.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" };
+export async function giveStar(deps: StarDeps = defaultStarDeps(), signal?: AbortSignal): Promise<StarOutcome> {
+  const ghOptions = {
+    env: { ...deps.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" },
+    timeoutMs: GH_TIMEOUT_MS,
+    output: true,
+    signal,
+  };
   const gh = ["api", "--hostname", "github.com"];
-  const put = await deps.run(
-    "gh",
-    [...gh, "--method", "PUT", `/user/starred/${STAR_REPO}`, "--silent"],
-    ghEnv,
-    GH_TIMEOUT_MS,
-  );
+  const put = await deps.run("gh", [...gh, "--method", "PUT", `/user/starred/${STAR_REPO}`, "--silent"], ghOptions);
   if (put?.code === 0) {
-    const user = await deps.run("gh", [...gh, "user", "--jq", ".login"], ghEnv, GH_TIMEOUT_MS);
+    const user = await deps.run("gh", [...gh, "user", "--jq", ".login"], ghOptions);
     const login = user?.code === 0 ? user.stdout.trim() : "";
     return { kind: "starred", login: login === "" ? null : login };
   }
 
-  const browser = browserCommand(STAR_URL, deps.platform, deps.env);
+  const browser = signal?.aborted ? null : browserCommand(STAR_URL, deps.platform, deps.env);
   if (browser) {
-    const opened = await deps.run(browser.command, browser.args, deps.env, OPEN_TIMEOUT_MS);
+    const opened = await deps.run(browser.command, browser.args, {
+      env: deps.env,
+      timeoutMs: OPEN_TIMEOUT_MS,
+      output: false,
+      signal,
+    });
     // Still running when its time is up: xdg-open can wait on the browser it started.
     if (opened && (opened.code === 0 || opened.code === null)) return { kind: "opened", url: STAR_URL };
   }

@@ -47,12 +47,15 @@ vi.mock("../lib/service", async (importOriginal) => ({
 
 vi.setConfig({ testTimeout: 15_000 });
 
+import { listProfiles } from "../lib/service.js";
 import { App } from "./App.js";
 import { DOWN, ENTER, ESC, focusedOn, moveTo, press, waitForFrame } from "./test-drive.js";
 
 const RIGHT = "\u001B[C";
 
-function fakeStar(options: { ask?: boolean; outcome?: StarOutcome; give?: () => Promise<StarOutcome> } = {}) {
+function fakeStar(
+  options: { ask?: boolean; outcome?: StarOutcome; give?: (signal?: AbortSignal) => Promise<StarOutcome> } = {},
+) {
   const give = vi.fn(
     options.give ?? (async (): Promise<StarOutcome> => options.outcome ?? { kind: "starred", login: "octocat" }),
   );
@@ -63,6 +66,9 @@ function fakeStar(options: { ask?: boolean; outcome?: StarOutcome; give?: () => 
 
 const dashboard = (frame: string) => frame.includes("Dashboard") && frame.includes("Quit");
 const asking = (frame: string) => frame.includes("Enjoying clausona?");
+/** The popup once it takes an answer: its key hints show then. */
+const answerable = (frame: string) => asking(frame) && frame.includes("enter select");
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("the dashboard's Star on GitHub", () => {
   it("is listed above Quit, and stars from there", async () => {
@@ -143,7 +149,7 @@ describe("the dashboard's star popup", () => {
     const { star, give, claimPrompt } = fakeStar({ ask: true });
     const instance = render(<App initialScreen="dashboard" star={star} />);
 
-    const frame = await waitForFrame(instance.lastFrame, (f) => dashboard(f) && asking(f));
+    const frame = await waitForFrame(instance.lastFrame, (f) => dashboard(f) && answerable(f));
     expect(frame).toContain("A star on GitHub helps other people find it.");
     expect(frame).toContain("Not now");
     expect(frame).toContain("←→ choose");
@@ -173,7 +179,7 @@ describe("the dashboard's star popup", () => {
   ])("closes on %s without starring or quitting", async (_name, keys) => {
     const { star, give } = fakeStar({ ask: true });
     const instance = render(<App initialScreen="dashboard" star={star} />);
-    await waitForFrame(instance.lastFrame, asking);
+    await waitForFrame(instance.lastFrame, answerable);
 
     for (const key of keys) await press(instance, key);
 
@@ -189,11 +195,88 @@ describe("the dashboard's star popup", () => {
     ] as const) {
       const { star } = fakeStar({ ask: true, outcome });
       const instance = render(<App initialScreen="dashboard" star={star} />);
-      await waitForFrame(instance.lastFrame, asking);
+      await waitForFrame(instance.lastFrame, answerable);
       await press(instance, ENTER);
 
       await waitForFrame(instance.lastFrame, (f) => f.includes(said));
       instance.unmount();
     }
+  });
+
+  it("does not open under the Loading screen, where an Enter meant for the dashboard would star", async () => {
+    const listed = vi.mocked(listProfiles).getMockImplementation();
+    vi.mocked(listProfiles).mockImplementationOnce(async (...args) => {
+      await sleep(300);
+      return listed ? listed(...args) : [];
+    });
+    const { star, give } = fakeStar({ ask: true });
+    const instance = render(<App initialScreen="dashboard" star={star} />);
+    await waitForFrame(instance.lastFrame, (f) => f.includes("Reading clausona state"));
+
+    instance.stdin.write(ENTER);
+    let frame = await waitForFrame(instance.lastFrame, (f) => !f.includes("Reading clausona state"));
+    expect(give).not.toHaveBeenCalled();
+
+    // The Enter went to the dashboard; the popup waits for it to be back on screen.
+    if (!dashboard(frame)) await press(instance, ESC);
+    frame = await waitForFrame(instance.lastFrame, (f) => dashboard(f) && answerable(f));
+    expect(give).not.toHaveBeenCalled();
+  });
+
+  it("takes no answer in the moment after it appears", async () => {
+    const { star, give } = fakeStar({ ask: true });
+    const instance = render(<App initialScreen="dashboard" star={star} />);
+    await waitForFrame(instance.lastFrame, (f) => asking(f) && !f.includes("enter select"));
+
+    instance.stdin.write(ENTER);
+    await sleep(50);
+    expect(give).not.toHaveBeenCalled();
+
+    const frame = await waitForFrame(instance.lastFrame, answerable);
+    expect(frame).toContain("[ ★ Star ]");
+    expect(give).not.toHaveBeenCalled();
+  });
+
+  it("keeps starring when another key comes in the same read as the Enter", async () => {
+    let finish: (outcome: StarOutcome) => void = () => {};
+    const { star, give } = fakeStar({
+      ask: true,
+      give: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    });
+    const instance = render(<App initialScreen="dashboard" star={star} />);
+    await waitForFrame(instance.lastFrame, answerable);
+
+    await sleep(0);
+    instance.stdin.write(ENTER);
+    instance.stdin.write(ESC);
+    await waitForFrame(instance.lastFrame, (f) => f.includes("Starring clausona on GitHub"));
+    await sleep(50);
+    expect(instance.lastFrame()).toContain("Starring clausona on GitHub");
+
+    finish({ kind: "starred", login: "octocat" });
+    await waitForFrame(instance.lastFrame, (f) => f.includes("as @octocat. Thank you!"));
+    expect(give).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls off a star under way when the App goes, and records nothing", async () => {
+    let seen: AbortSignal | undefined;
+    const { star, record } = fakeStar({
+      ask: true,
+      give: (signal?: AbortSignal) => {
+        seen = signal;
+        return new Promise(() => {});
+      },
+    });
+    const instance = render(<App initialScreen="dashboard" star={star} />);
+    await waitForFrame(instance.lastFrame, answerable);
+    await press(instance, ENTER);
+    await waitForFrame(instance.lastFrame, (f) => f.includes("Starring clausona on GitHub"));
+
+    instance.unmount();
+    expect(seen?.aborted).toBe(true);
+    expect(record).not.toHaveBeenCalled();
   });
 });

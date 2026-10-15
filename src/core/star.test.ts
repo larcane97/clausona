@@ -8,7 +8,9 @@ import {
   giveStar,
   type NoticesDeps,
   type RunCommand,
+  type RunOptions,
   recordStarAsked,
+  runCommand,
   STAR_URL,
   type StarDeps,
 } from "./star.js";
@@ -130,13 +132,13 @@ describe("recordStarAsked", () => {
   });
 });
 
-type Call = { command: string; args: string[]; env: NodeJS.ProcessEnv };
+type Call = { command: string; args: string[]; env: NodeJS.ProcessEnv; output: boolean; signal?: AbortSignal };
 
 /** A stand-in for running commands: each answer is taken in turn, and every call is kept. */
 function runner(answers: Array<{ code: number | null; stdout?: string } | null>) {
   const calls: Call[] = [];
-  const run: RunCommand = vi.fn(async (command, args, env) => {
-    calls.push({ command, args, env });
+  const run: RunCommand = vi.fn(async (command, args, { env, output, signal }: RunOptions) => {
+    calls.push({ command, args, env, output, signal });
     const answer = answers[calls.length - 1];
     return answer === undefined || answer === null ? null : { code: answer.code, stdout: answer.stdout ?? "" };
   });
@@ -165,6 +167,7 @@ describe("giveStar", () => {
     ]);
     // gh never stops to ask a question the TUI would hide.
     expect(calls[0]?.env).toMatchObject({ PATH: "/bin", GH_PROMPT_DISABLED: "1" });
+    expect(calls[0]?.output).toBe(true);
     expect(calls[1]?.args).toEqual(["api", "--hostname", "github.com", "user", "--jq", ".login"]);
   });
 
@@ -178,7 +181,8 @@ describe("giveStar", () => {
     const { run, calls } = runner([null, { code: 0 }]);
 
     expect(await giveStar(deps(run, "darwin"))).toEqual({ kind: "opened", url: STAR_URL });
-    expect(calls[1]).toMatchObject({ command: "open", args: [STAR_URL] });
+    // No output to hold: a browser the opener starts could keep a pipe open past clausona's exit.
+    expect(calls[1]).toMatchObject({ command: "open", args: [STAR_URL], output: false });
   });
 
   it("opens the page on Windows when gh is not signed in", async () => {
@@ -214,9 +218,69 @@ describe("giveStar", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("hands its signal to every command, and opens no browser once called off", async () => {
+    const controller = new AbortController();
+    const calls: Call[] = [];
+    const run: RunCommand = async (command, args, { env, output, signal }) => {
+      calls.push({ command, args, env, output, signal });
+      // The TUI quits while gh runs.
+      controller.abort();
+      return null;
+    };
+
+    expect(await giveStar(deps(run, "darwin"), controller.signal)).toEqual({ kind: "manual", url: STAR_URL });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.signal).toBe(controller.signal);
+  });
+
   it("gives the address when the browser cannot be opened", async () => {
     const { run } = runner([null, { code: 1 }]);
 
     expect(await giveStar(deps(run, "darwin"))).toEqual({ kind: "manual", url: STAR_URL });
+  });
+});
+
+describe("runCommand", () => {
+  const node = process.execPath;
+  const options = (overrides: Partial<RunOptions> = {}): RunOptions => ({
+    env: process.env,
+    timeoutMs: 5_000,
+    output: true,
+    ...overrides,
+  });
+
+  it("gives the exit code and what was printed", async () => {
+    expect(await runCommand(node, ["-e", "console.log('octocat'); process.exit(3)"], options())).toEqual({
+      code: 3,
+      stdout: "octocat\n",
+    });
+  });
+
+  it("reads nothing from a command whose output is not wanted", async () => {
+    expect(await runCommand(node, ["-e", "console.log('x')"], options({ output: false }))).toEqual({
+      code: 0,
+      stdout: "",
+    });
+  });
+
+  it("answers null for a command that is not there", async () => {
+    expect(await runCommand(path.join(dir, "no-such-command"), [], options())).toBeNull();
+  });
+
+  it("answers code null for one still running when its time is up", async () => {
+    const started = Date.now();
+    expect(await runCommand(node, ["-e", "setTimeout(() => {}, 10000)"], options({ timeoutMs: 200 }))).toEqual({
+      code: null,
+      stdout: "",
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("stops the command when called off", async () => {
+    const controller = new AbortController();
+    const running = runCommand(node, ["-e", "setTimeout(() => {}, 10000)"], options({ signal: controller.signal }));
+    setTimeout(() => controller.abort(), 100);
+
+    expect(await running).toBeNull();
   });
 });

@@ -86,7 +86,13 @@ import { Chrome } from "./components/Chrome.js";
 import { Divider } from "./components/Divider.js";
 import { ProfilePreview } from "./components/ProfilePreview.js";
 import { SelectList, type SelectListItem } from "./components/SelectList.js";
-import { StarPopup, type StarPopupState, starMessage, starPopupHints } from "./components/StarPopup.js";
+import {
+  STAR_POPUP_GRACE_MS,
+  StarPopup,
+  type StarPopupState,
+  starMessage,
+  starPopupHints,
+} from "./components/StarPopup.js";
 import { StepIndicator } from "./components/StepIndicator.js";
 import { UpdatePanel, type UpdatePhase } from "./components/UpdatePanel.js";
 import { UsageTable } from "./components/UsageTable.js";
@@ -120,7 +126,7 @@ type AppProps = {
    * every test that is not about it off gh and the browser.
    */
   star?: {
-    give: () => Promise<StarOutcome>;
+    give: (signal?: AbortSignal) => Promise<StarOutcome>;
     record: () => Promise<void>;
     claimPrompt?: () => Promise<boolean>;
   };
@@ -526,8 +532,16 @@ export function App({
   }, [updater]);
 
   const [starPopup, setStarPopup] = useState<StarPopupState | null>(null);
-  /** Set from the Enter that starts a star, so a second one in the same read does not start another. */
+  /** The claim said to ask, and the popup waits for the dashboard to be on screen. */
+  const [starAskDue, setStarAskDue] = useState(false);
+  /**
+   * Set from the Enter that starts a star, so a second one in the same read does not start
+   * another, and a key read with it does not close or reset the popup while it runs.
+   */
   const starringRef = useRef(false);
+  /** Calls off the star in flight when the App unmounts, so a browser never opens after the TUI is gone. */
+  const starAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => starAbortRef.current?.abort(), []);
 
   // Once per process: whether this is the one time to ask is the claim's to say.
   const claimStarPrompt = star?.claimPrompt;
@@ -536,7 +550,7 @@ export function App({
     let live = true;
     claimStarPrompt().then(
       (ask) => {
-        if (live && ask) setStarPopup({ phase: "ask", choice: "star" });
+        if (live && ask) setStarAskDue(true);
       },
       () => {},
     );
@@ -545,19 +559,43 @@ export function App({
     };
   }, [claimStarPrompt]);
 
+  // The claim answers long before the dashboard has loaded. Opened then, the popup took keys from
+  // under the Loading screen, and an Enter meant for Profiles starred clausona unseen. So it opens
+  // with the dashboard drawn, or when the user comes back to it.
+  useEffect(() => {
+    if (!starAskDue || loading || screen !== "dashboard" || unreadableRegistry) return;
+    setStarAskDue(false);
+    setStarPopup({ phase: "ask", choice: "star", ready: false });
+  }, [starAskDue, loading, screen, unreadableRegistry]);
+
+  // Keys typed a moment after the popup appears were meant for the dashboard, not read as an
+  // answer; it takes them once it has been on screen this long, and its key hints say so.
+  const starPopupWaiting = starPopup?.phase === "ask" && !starPopup.ready;
+  useEffect(() => {
+    if (!starPopupWaiting) return;
+    const timer = setTimeout(
+      () => setStarPopup((popup) => (popup?.phase === "ask" ? { ...popup, ready: true } : popup)),
+      STAR_POPUP_GRACE_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [starPopupWaiting]);
+
   /** Stars clausona, from the popup - which then shows how it went - or from the list, which says so in the footer. */
   async function giveStarNow(from: "popup" | "list") {
     if (!star || starringRef.current) return;
     starringRef.current = true;
+    const controller = new AbortController();
+    starAbortRef.current = controller;
     if (from === "popup") setStarPopup({ phase: "starring" });
     else setMessage("★ Starring clausona on GitHub…");
     let outcome: StarOutcome;
     try {
-      outcome = await star.give();
+      outcome = await star.give(controller.signal);
     } catch {
       outcome = { kind: "manual", url: STAR_URL };
     }
     starringRef.current = false;
+    if (controller.signal.aborted) return;
     void star.record();
     if (from === "popup") setStarPopup({ phase: "done", outcome });
     else setMessage(starMessage(outcome));
@@ -1358,9 +1396,11 @@ export function App({
       if (installingRef.current) return;
       // The star popup, while it is open, takes every key; once it has answered, any key closes it.
       if (starPopup) {
+        if (starringRef.current) return;
         if (starPopup.phase === "ask") {
+          if (!starPopup.ready) return;
           if (key.leftArrow || key.rightArrow || key.tab) {
-            setStarPopup({ phase: "ask", choice: starPopup.choice === "star" ? "later" : "star" });
+            setStarPopup({ ...starPopup, choice: starPopup.choice === "star" ? "later" : "star" });
           } else if (key.return) {
             if (starPopup.choice === "star") void giveStarNow("popup");
             else setStarPopup(null);
@@ -2311,7 +2351,7 @@ export function App({
         footer={message || undefined}
         hints={
           starPopup
-            ? starPopupHints[starPopup.phase]
+            ? starPopupHints(starPopup)
             : updatePhase.kind === "idle"
               ? dashboardHints
               : updatePanelHints[updatePhase.kind]

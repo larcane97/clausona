@@ -4,22 +4,27 @@ import { Box, Text } from "ink";
 import { STAR_REPO, type StarOutcome } from "../../core/star.js";
 import { color, symbol } from "../theme.js";
 
-/** The dashboard's one-time question about a star: asked, under way, or answered. */
+/**
+ * The dashboard's one-time question about a star: asked, under way, or answered. A question is
+ * `ready` once it has been on screen for `STAR_POPUP_GRACE_MS`; until then it takes no answer.
+ */
 export type StarPopupState =
-  | { phase: "ask"; choice: "star" | "later" }
+  | { phase: "ask"; choice: "star" | "later"; ready: boolean }
   | { phase: "starring" }
   | { phase: "done"; outcome: StarOutcome };
 
-/** The popup's keys, by what it shows. */
-export const starPopupHints: Record<StarPopupState["phase"], { keys: string; action: string }[]> = {
-  ask: [
+export const STAR_POPUP_GRACE_MS = 700;
+
+/** The popup's keys, by what it shows: none while it starts, or while it waits to be answered. */
+export function starPopupHints(state: StarPopupState): { keys: string; action: string }[] {
+  if (state.phase === "starring" || (state.phase === "ask" && !state.ready)) return [];
+  if (state.phase === "done") return [{ keys: "any key", action: "close" }];
+  return [
     { keys: "←→", action: "choose" },
     { keys: "enter", action: "select" },
     { keys: "esc", action: "not now" },
-  ],
-  starring: [],
-  done: [{ keys: "any key", action: "close" }],
-};
+  ];
+}
 
 /** The footer's one line for a star given from the dashboard's list. */
 export function starMessage(outcome: StarOutcome): string {
