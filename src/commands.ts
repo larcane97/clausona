@@ -18,6 +18,7 @@ import {
   writeLaunchCache,
 } from "./core/launch-cache.js";
 import { isPosixEnvName, LAUNCH_MARKER, renderJsonEnv, renderLaunchJson, renderPosixExports } from "./core/shell.js";
+import { giveStar, recordStarAsked, type StarOutcome } from "./core/star.js";
 import { trackUsage } from "./core/track-usage.js";
 import {
   checkLatestTag,
@@ -193,6 +194,7 @@ const commandFlags: Record<string, { flags: string[]; prefixes?: string[]; badUs
   remove: { flags: [] },
   run: { flags: [] },
   "shell-init": { flags: [] },
+  star: { flags: [] },
   uninstall: { flags: [] },
   update: { flags: ["--yes", "-y"] },
   version: { flags: [] },
@@ -1033,6 +1035,20 @@ function subcommandHelpText(command: string, args: string[] = []): string | unde
         "",
       ].join("\n");
 
+    case "star":
+      return [
+        "",
+        `  ${accent("clausona star")} ${dim("— Star clausona on GitHub")}`,
+        "",
+        `  ${bold("USAGE")}`,
+        helpUsage("clausona star"),
+        "",
+        `  ${bold("DESCRIPTION")}`,
+        `    ${dim("Stars larcane97/clausona as the account gh is signed in to. Without gh, or signed")}`,
+        `    ${dim("out, it opens the repository's page in your browser, where you press Star.")}`,
+        "",
+      ].join("\n");
+
     case "uninstall":
       return [
         "",
@@ -1098,6 +1114,7 @@ function usageText() {
       ["login <profile>", "Re-authenticate a profile"],
       ["remove <profile>", "Remove a profile"],
       ["update", "Update clausona to the latest release"],
+      ["star", "Star clausona on GitHub"],
       ["uninstall", "Uninstall clausona completely"],
       ["shell-init", "Print shell integration"],
       ["version", "Show version"],
@@ -1759,6 +1776,9 @@ export async function runCommand(command: string, args: string[]) {
     case "update":
       return runUpdateCommand(args, defaultUpdateDeps());
 
+    case "star":
+      return runStarCommand(args, { give: () => giveStar(), record: () => recordStarAsked() });
+
     case "uninstall": {
       process.stdout.write(
         `${[
@@ -1927,6 +1947,33 @@ export async function runUpdateCommand(args: string[], deps: UpdateCommandDeps):
   return [success(`Updated v${deps.current} → v${latest}`), dim("    Open a new shell to load its shell hook.")].join(
     "\n",
   );
+}
+
+export type StarCommandDeps = {
+  give: () => Promise<StarOutcome>;
+  /** Notes the star, so the dashboard does not ask for one. */
+  record: () => Promise<void>;
+};
+
+/** `clausona star`: the dashboard's Star on GitHub, from the shell. */
+export async function runStarCommand(args: string[], deps: StarCommandDeps): Promise<string> {
+  if (args.some((arg) => !arg.startsWith("-"))) throw new Error("clausona star takes no arguments.");
+  const outcome = await deps.give();
+  await deps.record();
+  switch (outcome.kind) {
+    case "starred":
+      return success(`Starred larcane97/clausona${outcome.login ? ` as @${outcome.login}` : ""}. Thank you!`);
+    case "opened":
+      return [
+        success(`Opened ${outcome.url} in your browser`),
+        dim("    Press Star at the top of the page. Thank you!"),
+      ].join("\n");
+    case "manual":
+      return [
+        `  ${accent("★")} Star clausona at ${accent(outcome.url)}`,
+        dim("    With gh signed in ('gh auth login'), clausona star stars it from here."),
+      ].join("\n");
+  }
 }
 
 export async function bootstrapInitFromCurrentState() {

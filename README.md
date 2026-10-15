@@ -318,6 +318,7 @@ Scopes, tags, every option, what each change writes, the JSON fields and recipes
 | `clausona repair <profile>`                                         | Fix broken shared links                              |
 | `clausona login <profile>`                                          | Re-authenticate a profile                            |
 | `clausona update [--yes]`                                           | Update to the latest release (asks first; `--yes` skips) |
+| `clausona star`                                                     | Star clausona on GitHub (through `gh`, or in your browser) |
 | `clausona uninstall`                                                | Uninstall clausona completely                        |
 
 ## How it works

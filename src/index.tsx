@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 
 import { runCommand } from "./commands.js";
 import { spawnCommandSync } from "./core/process.js";
+import { claimStarPrompt, giveStar, recordStarAsked } from "./core/star.js";
 import { trackUsage } from "./core/track-usage.js";
 import { createUpdater, type UpdateOffer } from "./core/update.js";
 import { dropLauncherCompileCache } from "./installer.js";
@@ -66,6 +67,12 @@ async function renderTui(screen: TuiScreen): Promise<void> {
     <App
       initialScreen={screen}
       updater={screen === "dashboard" ? createUpdater() : undefined}
+      // Every way to the dashboard lists Star on GitHub; only opening on it may bring the popup.
+      star={{
+        give: () => giveStar(),
+        record: () => recordStarAsked(),
+        claimPrompt: screen === "dashboard" ? () => claimStarPrompt() : undefined,
+      }}
       onRestart={(offer) => {
         handoff.offer = offer;
       }}

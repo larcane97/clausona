@@ -6,6 +6,7 @@ import TextInput from "ink-text-input";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { bootstrapInitFromCurrentState } from "../commands.js";
+import { STAR_URL, type StarOutcome } from "../core/star.js";
 import { reinstallCommand, type UpdateOffer, type Updater } from "../core/update.js";
 import { loadInventoryHere, type ScreenWrites, writesHere } from "../extensions/load.js";
 import type { Inventory } from "../extensions/model.js";
@@ -85,6 +86,7 @@ import { Chrome } from "./components/Chrome.js";
 import { Divider } from "./components/Divider.js";
 import { ProfilePreview } from "./components/ProfilePreview.js";
 import { SelectList, type SelectListItem } from "./components/SelectList.js";
+import { StarPopup, type StarPopupState, starMessage, starPopupHints } from "./components/StarPopup.js";
 import { StepIndicator } from "./components/StepIndicator.js";
 import { UpdatePanel, type UpdatePhase } from "./components/UpdatePanel.js";
 import { UsageTable } from "./components/UsageTable.js";
@@ -111,6 +113,17 @@ type AppProps = {
   extensionWrites?: ScreenWrites;
   /** Called once an update is installed, just before the App exits: index.tsx then starts the new version. */
   onRestart?: (offer: UpdateOffer) => void;
+  /**
+   * The dashboard's Star on GitHub. `give` stars clausona (see `giveStar`) and `record` notes it
+   * so the popup never asks; `claimPrompt` answers true the one time the popup should open, and
+   * is left out where it never opens. Left out, the dashboard lists no Star item, which keeps
+   * every test that is not about it off gh and the browser.
+   */
+  star?: {
+    give: () => Promise<StarOutcome>;
+    record: () => Promise<void>;
+    claimPrompt?: () => Promise<boolean>;
+  };
 };
 
 type InitState = {
@@ -356,6 +369,7 @@ export function App({
   initialScreen = "dashboard",
   updater,
   onRestart,
+  star,
   loadExtensions = loadInventoryHere,
   extensionWrites = writesHere(),
 }: AppProps) {
@@ -510,6 +524,44 @@ export function App({
       controller.abort();
     };
   }, [updater]);
+
+  const [starPopup, setStarPopup] = useState<StarPopupState | null>(null);
+  /** Set from the Enter that starts a star, so a second one in the same read does not start another. */
+  const starringRef = useRef(false);
+
+  // Once per process: whether this is the one time to ask is the claim's to say.
+  const claimStarPrompt = star?.claimPrompt;
+  useEffect(() => {
+    if (!claimStarPrompt) return;
+    let live = true;
+    claimStarPrompt().then(
+      (ask) => {
+        if (live && ask) setStarPopup({ phase: "ask", choice: "star" });
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [claimStarPrompt]);
+
+  /** Stars clausona, from the popup - which then shows how it went - or from the list, which says so in the footer. */
+  async function giveStarNow(from: "popup" | "list") {
+    if (!star || starringRef.current) return;
+    starringRef.current = true;
+    if (from === "popup") setStarPopup({ phase: "starring" });
+    else setMessage("★ Starring clausona on GitHub…");
+    let outcome: StarOutcome;
+    try {
+      outcome = await star.give();
+    } catch {
+      outcome = { kind: "manual", url: STAR_URL };
+    }
+    starringRef.current = false;
+    void star.record();
+    if (from === "popup") setStarPopup({ phase: "done", outcome });
+    else setMessage(starMessage(outcome));
+  }
 
   async function installUpdate(offer: UpdateOffer) {
     if (!updater || installingRef.current) return;
@@ -1274,6 +1326,7 @@ export function App({
     { id: "extensions", label: "Extensions", detail: "Skills, MCP servers and hooks across accounts" },
     { id: "init", label: "Initialize", detail: "Register discovered Claude accounts" },
     { id: "doctor", label: "Health check", detail: "Inspect profile integrity" },
+    ...(star ? [{ id: "star", label: "★ Star on GitHub", detail: "Help others find clausona" }] : []),
     { id: "quit", label: "Quit", detail: "Exit clausona" },
   ];
 
@@ -1303,6 +1356,22 @@ export function App({
       // read is answered from the question's frame, and an n there closed the panel while the
       // install ran on, and its exit later pulled the user out of whatever screen they were on.
       if (installingRef.current) return;
+      // The star popup, while it is open, takes every key; once it has answered, any key closes it.
+      if (starPopup) {
+        if (starPopup.phase === "ask") {
+          if (key.leftArrow || key.rightArrow || key.tab) {
+            setStarPopup({ phase: "ask", choice: starPopup.choice === "star" ? "later" : "star" });
+          } else if (key.return) {
+            if (starPopup.choice === "star") void giveStarNow("popup");
+            else setStarPopup(null);
+          } else if (key.escape) {
+            setStarPopup(null);
+          }
+        } else if (starPopup.phase === "done") {
+          setStarPopup(null);
+        }
+        return;
+      }
       // An open update panel takes every key.
       if (updatePhase.kind === "confirm") {
         if (updateOffer && (key.return || input === "y" || input === "Y")) void installUpdate(updateOffer);
@@ -1339,6 +1408,8 @@ export function App({
         const selectedAction = actions[cursor]?.id;
         if (selectedAction === "quit") {
           exit();
+        } else if (selectedAction === "star") {
+          void giveStarNow("list");
         } else if (
           selectedAction === "use" ||
           selectedAction === "routes" ||
@@ -2238,7 +2309,13 @@ export function App({
         title="Dashboard"
         notice={updateOffer ? `⬆ v${updateOffer.latest} available` : undefined}
         footer={message || undefined}
-        hints={updatePhase.kind === "idle" ? dashboardHints : updatePanelHints[updatePhase.kind]}
+        hints={
+          starPopup
+            ? starPopupHints[starPopup.phase]
+            : updatePhase.kind === "idle"
+              ? dashboardHints
+              : updatePanelHints[updatePhase.kind]
+        }
       >
         <Box gap={2} flexDirection="row" width="100%">
           <Box
@@ -2261,6 +2338,7 @@ export function App({
           </Box>
         </Box>
         {updateOffer ? <UpdatePanel phase={updatePhase} offer={updateOffer} /> : null}
+        {starPopup ? <StarPopup state={starPopup} /> : null}
       </Chrome>
     );
   }

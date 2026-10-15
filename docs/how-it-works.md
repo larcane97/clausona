@@ -419,6 +419,8 @@ that profile's key to Claude Code, which then talks to the endpoint you configur
 │                    #   Keychain)
 ├── usage.json       # per-profile usage history
 ├── quota.json       # cached plan-quota readings (5-minute freshness)
+├── notices.json     # the day the dashboard first opened, and whether it has asked
+│                    #   for a GitHub star (it asks once)
 ├── cache/           # launch scripts the shell hook reads (owner-only; never an API
 │                    #   profile's, so never a key)
 ├── locks/           # short-lived locks: registry and usage.json writes, per-profile
