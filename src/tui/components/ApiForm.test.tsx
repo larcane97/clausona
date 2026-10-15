@@ -317,3 +317,64 @@ describe("the hints under a field", () => {
     expect(hint).toBe(value);
   });
 });
+
+/**
+ * The form in the lines the terminal leaves it. Taller than the terminal, ink redraws the whole
+ * terminal on every key typed into it, and its top is lost (#183).
+ */
+describe("the form in the lines it has", () => {
+  const linesAt = (state: ApiFormState, rows?: number, columns = 80) =>
+    (
+      renderAt(
+        <ApiForm
+          form={state}
+          fields={apiFormFields(state)}
+          keySet={false}
+          mergeSessions={false}
+          onChange={() => {}}
+          rows={rows}
+          width={columns - 10}
+        />,
+        columns - 4,
+      ).lastFrame() ?? ""
+    ).split("\n");
+
+  const label = (state: ApiFormState, index: number) => {
+    const field = apiFormFields(state)[index];
+    return field?.entry?.label ?? (field?.id === "submit" ? "Create profile" : undefined);
+  };
+
+  it("draws everything as it always has when the lines are there", () => {
+    const state = form({ advancedOpen: true });
+    expect(linesAt(state, 60)).toEqual(linesAt(state));
+  });
+
+  it("keeps to its lines, the cursor's field in view, folded or open", () => {
+    for (const open of [false, true]) {
+      const state = form({ advancedOpen: open });
+      const fields = apiFormFields(state);
+      for (const rows of [12, 16, 20, 26]) {
+        for (let cursor = 0; cursor < fields.length; cursor++) {
+          const lines = linesAt({ ...state, cursor }, rows);
+          const what = `${open ? "open" : "folded"}, ${rows} lines, cursor on ${fields[cursor]?.id}`;
+
+          const focused = lines.find((line) => line.includes("✦"));
+          const name = label(state, cursor);
+
+          expect(lines.length, what).toBeLessThanOrEqual(rows);
+          expect(focused, what).toBeDefined();
+          // As much of the label as its column holds: a long one is cut there, as it always was.
+          if (name) expect(focused, what).toContain(name.slice(0, 12));
+        }
+      }
+    }
+  });
+
+  it("keeps a warning whole when it gives up the hints", () => {
+    const state = form({ baseUrl: "http://gpu-box.example.com", cursor: 0 });
+    const lines = linesAt(state, 12).join("\n");
+
+    expect(lines).toMatch(/unencrypted/);
+    expect(lines).not.toContain("Stored in the credential store");
+  });
+});

@@ -234,9 +234,6 @@ const CHROME_INSET = 4;
  */
 const HEALTH_PANE_ROWS = 7;
 
-/** The columns a line inside the Usage screen's box loses: Chrome's padding, the border and its own. */
-const USAGE_INSET = 10;
-
 /** The heading over the accounts Init and Add found. */
 const SELECT_ACCOUNTS = "Select accounts to register:";
 
@@ -248,8 +245,11 @@ function halfBox(columns: number | undefined): number {
   return Math.floor(((columns ?? 80) - CHROME_INSET) / 2) - 4;
 }
 
-/** The columns inside Init's full-width boxes: Chrome's padding, the border and the box's own. */
-const INIT_BOX_INSET = 10;
+/**
+ * The columns a line inside a full-width box loses of the terminal's - a form's, a question's, the
+ * Usage screen's: Chrome's padding, the box's border and its own padding, two a side.
+ */
+const BOX_INSET = 10;
 
 /** Init's texts around its lists, drawn and counted. */
 const CHOOSE_DEFAULT = "Choose the default profile:";
@@ -257,8 +257,42 @@ const DEFAULT_IS_FINAL = "The default profile cannot be changed later.";
 const REVIEW_HEADING = "Review before applying:";
 const INIT_DONE = "Profiles initialized successfully.";
 
+/** Add's texts in its forms, drawn and counted. */
+const LOGIN_NAME_INTRO = "Enter a name for the new profile. OAuth login will open in your browser.";
+const IMPORT_PATH_NOTE = "Expects a directory containing .claude.json with valid oauthAccount credentials.";
+
 /** An account in Init's review: its name, its email, and the blank line after it. */
 const REVIEW_ROW_LINES = 3;
+
+/**
+ * Whether a form's box gives up its padding and the blank lines between its rows: when, spaced,
+ * it is taller than the `room` lines the terminal leaves it. `rows` are the lines each of its rows
+ * takes. Dense, it is its border and its rows.
+ */
+function denseForm(room: number | undefined, rows: number[]): boolean {
+  return room !== undefined && BOX_ROWS + 2 + rows.reduce((sum, each) => sum + each, 0) + rows.length - 1 > room;
+}
+
+/** A form row's value after its label - `Account`, `Name:` and the like - and the gap. */
+const LABELLED = 9;
+
+/** The lines a form's labelled value takes as it wraps, `inner` being the box's width inside. */
+function labelledLines(value: string | undefined, inner: number): number {
+  return textLines(value ?? "", inner - LABELLED);
+}
+
+/**
+ * The lines a value being typed takes - a name, a path - its cursor's cell after it, as it wraps
+ * beside its label.
+ */
+function typedLines(draft: string, inner: number): number {
+  return textLines(`${draft} `, inner - LABELLED);
+}
+
+/** The lines a message beside its icon takes, `inner` being the box's width inside. */
+function iconedLines(message: string | undefined, inner: number): number {
+  return message ? textLines(message, inner - 2) : 0;
+}
 
 /** The texts of a question under the Profiles list, each on a line of its own: drawn, and counted. */
 function overlayTexts(overlay: NonNullable<OverlayState>): string[] {
@@ -283,9 +317,6 @@ function overlayTexts(overlay: NonNullable<OverlayState>): string[] {
   }
 }
 
-/** The columns a question's text loses of the terminal's: Chrome's padding, the border and its own. */
-const OVERLAY_INSET = 10;
-
 /**
  * The lines a question under the Profiles list takes `columns` wide, for the list and the panel
  * above it to leave room for: the blank line above it, its border and padding, its texts as they
@@ -293,7 +324,7 @@ const OVERLAY_INSET = 10;
  */
 function overlayRows(overlay: OverlayState, columns: number): number {
   if (!overlay) return 0;
-  const width = columns - OVERLAY_INSET;
+  const width = columns - BOX_INSET;
   const primary = overlay.kind === "remove" && overlay.isPrimary;
   const [first = "", ...rest] = overlayTexts(overlay);
   // The primary's refusal has its ✘ and a space before it, and no keys: esc is in its text.
@@ -2586,6 +2617,8 @@ export function App({
               keySet={apiKey !== "" || keyPartial}
               mergeSessions={addState.mergeSessions}
               onChange={editApiField}
+              rows={bodyRows(size, { hints: apiFormHints })}
+              width={(size.columns ?? 80) - BOX_INSET}
             />
           </Chrome>
         );
@@ -2664,9 +2697,24 @@ export function App({
         const currentDir = addState.selectedAccounts[addState.nameIndex];
         const account = addState.discoveredAccounts.find((a) => a.configDir === currentDir);
         const isMerged = addState.mergeSessionsMap[currentDir ?? ""];
+        const inner = (size.columns ?? 80) - BOX_INSET;
+        const dense = denseForm(bodyRows(size, { hints: initNameHints }), [
+          1,
+          labelledLines(account?.email, inner) + labelledLines(currentDir?.replace(homedir(), "~"), inner),
+          ...(addState.message ? [iconedLines(addState.message, inner)] : []),
+          typedLines(addState.nameDraft, inner),
+          1,
+        ]);
         return (
           <Chrome title="Add Profile" subtitle="Name" hints={initNameHints}>
-            <Box flexDirection="column" gap={1} borderStyle="round" borderColor={color.dim} paddingX={2} paddingY={1}>
+            <Box
+              flexDirection="column"
+              gap={dense ? 0 : 1}
+              borderStyle="round"
+              borderColor={color.dim}
+              paddingX={2}
+              paddingY={dense ? 0 : 1}
+            >
               <Text color={color.secondary}>
                 Profile {addState.nameIndex + 1} of {addState.selectedAccounts.length}
               </Text>
@@ -2742,12 +2790,24 @@ export function App({
       }
 
       if (addState.step === "login-name") {
+        const inner = (size.columns ?? 80) - BOX_INSET;
+        const dense = denseForm(bodyRows(size, { hints: initNameHints }), [
+          textLines(LOGIN_NAME_INTRO, inner),
+          ...(addState.message ? [iconedLines(addState.message, inner)] : []),
+          typedLines(addState.nameDraft, inner),
+          1,
+        ]);
         return (
           <Chrome title="Add Profile" subtitle="Login as new account" hints={initNameHints}>
-            <Box flexDirection="column" gap={1} borderStyle="round" borderColor={color.dim} paddingX={2} paddingY={1}>
-              <Text color={color.secondary}>
-                Enter a name for the new profile. OAuth login will open in your browser.
-              </Text>
+            <Box
+              flexDirection="column"
+              gap={dense ? 0 : 1}
+              borderStyle="round"
+              borderColor={color.dim}
+              paddingX={2}
+              paddingY={dense ? 0 : 1}
+            >
+              <Text color={color.secondary}>{LOGIN_NAME_INTRO}</Text>
               {addState.message && (
                 <Box gap={1}>
                   <Box flexShrink={0}>
@@ -2789,9 +2849,22 @@ export function App({
       }
 
       if (addState.step === "import-path") {
+        const inner = (size.columns ?? 80) - BOX_INSET;
+        const dense = denseForm(bodyRows(size, { hints: addInputHints }), [
+          1,
+          typedLines(addState.importPath, inner),
+          addState.importError ? iconedLines(addState.importError, inner) : textLines(IMPORT_PATH_NOTE, inner),
+        ]);
         return (
           <Chrome title="Add Profile" subtitle="Import from path" hints={addInputHints}>
-            <Box flexDirection="column" gap={1} borderStyle="round" borderColor={color.dim} paddingX={2} paddingY={1}>
+            <Box
+              flexDirection="column"
+              gap={dense ? 0 : 1}
+              borderStyle="round"
+              borderColor={color.dim}
+              paddingX={2}
+              paddingY={dense ? 0 : 1}
+            >
               <Text color={color.secondary}>Enter the config directory path:</Text>
               <Box gap={1}>
                 <Box flexShrink={0}>
@@ -2815,9 +2888,7 @@ export function App({
                   <Text color={color.error}>{addState.importError}</Text>
                 </Box>
               ) : (
-                <Text color={color.muted}>
-                  Expects a directory containing .claude.json with valid oauthAccount credentials.
-                </Text>
+                <Text color={color.muted}>{IMPORT_PATH_NOTE}</Text>
               )}
             </Box>
           </Chrome>
@@ -2825,9 +2896,24 @@ export function App({
       }
 
       if (addState.step === "import-name") {
+        const inner = (size.columns ?? 80) - BOX_INSET;
+        const dense = denseForm(bodyRows(size, { hints: initNameHints }), [
+          labelledLines(addState.importAccount?.email, inner) +
+            labelledLines(addState.importAccount?.configDir.replace(homedir(), "~"), inner),
+          ...(addState.message ? [iconedLines(addState.message, inner)] : []),
+          typedLines(addState.nameDraft, inner),
+          1,
+        ]);
         return (
           <Chrome title="Add Profile" subtitle="Name the imported profile" hints={initNameHints}>
-            <Box flexDirection="column" gap={1} borderStyle="round" borderColor={color.dim} paddingX={2} paddingY={1}>
+            <Box
+              flexDirection="column"
+              gap={dense ? 0 : 1}
+              borderStyle="round"
+              borderColor={color.dim}
+              paddingX={2}
+              paddingY={dense ? 0 : 1}
+            >
               <Box flexDirection="column">
                 <Box gap={1}>
                   <Box width={8} flexShrink={0}>
@@ -3178,7 +3264,7 @@ export function App({
     // The lines around the table, spaced - the box's border and padding, the tabs with a blank line
     // between two of their lines when they wrap, the dates, and the blank lines between them - and
     // dense, with only the border.
-    const inner = (size.columns ?? 80) - USAGE_INSET;
+    const inner = (size.columns ?? 80) - BOX_INSET;
     const tabLines = wrappedLines(
       periodKeys.map((pk) => periodLabels[pk].length + 2),
       1,
@@ -3315,11 +3401,27 @@ export function App({
   if (initState.step === "name") {
     const currentConfig = initState.selected[initState.nameIndex];
     const account = initState.accounts.find((item) => item.configDir === currentConfig);
+    const hints = account?.isPrimary ? addInputHints : initNameHints;
+    const inner = (size.columns ?? 80) - BOX_INSET;
+    // Under the steps and the blank line after them.
+    const dense = denseForm(inside(bodyRows(size, { hints }), 2), [
+      1,
+      labelledLines(account?.email, inner) + labelledLines(currentConfig?.replace(homedir(), "~"), inner),
+      typedLines(initState.nameDraft, inner),
+      ...(account?.isPrimary ? [] : [1]),
+    ]);
     return (
-      <Chrome title="Initialize" hints={account?.isPrimary ? addInputHints : initNameHints}>
+      <Chrome title="Initialize" hints={hints}>
         <Box flexDirection="column" gap={1}>
           <StepIndicator steps={INIT_STEPS} current={1} />
-          <Box flexDirection="column" gap={1} borderStyle="round" borderColor={color.dim} paddingX={2} paddingY={1}>
+          <Box
+            flexDirection="column"
+            gap={dense ? 0 : 1}
+            borderStyle="round"
+            borderColor={color.dim}
+            paddingX={2}
+            paddingY={dense ? 0 : 1}
+          >
             <Text color={color.secondary}>
               Profile {initState.nameIndex + 1} of {initState.selected.length}
             </Text>
@@ -3377,7 +3479,7 @@ export function App({
       label: initState.profileNames[configDir] ?? configDir,
       detail: initState.accounts.find((account) => account.configDir === configDir)?.email,
     }));
-    const inner = (size.columns ?? 80) - INIT_BOX_INSET;
+    const inner = (size.columns ?? 80) - BOX_INSET;
     // Under the steps and the blank line after them: the box's border and padding, and its two
     // lines of text as they wrap, a blank line after each.
     const listRows = inside(
@@ -3401,7 +3503,7 @@ export function App({
   }
 
   // ── Init: Review / Done ──
-  const inner = (size.columns ?? 80) - INIT_BOX_INSET;
+  const inner = (size.columns ?? 80) - BOX_INSET;
   const done = initState.step === "done";
   // Under the steps and the blank line after them: the box's border and padding, its heading, the
   // blank line under it, and once applied the result and any warning, each after a blank line and

@@ -14,6 +14,7 @@ import {
   plaintextSecretNote,
 } from "../api-form.js";
 import { color, symbol } from "../theme.js";
+import { textLines } from "../use-width.js";
 import { Divider } from "./Divider.js";
 import { FieldInput } from "./FieldInput.js";
 
@@ -71,7 +72,44 @@ type ApiFormProps = {
   mergeSessions: boolean;
   /** An edit in a text field: its new value, and where the text cursor is in it. */
   onChange: (field: ApiField, value: string, caret: number) => void;
+  /**
+   * The most lines the form may take, its border included, when the screen knows the terminal's
+   * height: see `fitForm`. Without it, the form as it always was.
+   */
+  rows?: number;
+  /** The form's width inside its border and padding, which a warning wraps in. */
+  width?: number;
 };
+
+/** How the form is laid out in the lines it has. */
+type FormFit = {
+  /** Padding inside the border, and the blank line above Create profile. */
+  spaced: boolean;
+  /** The advanced fields shown at once. */
+  window: number;
+  /** Every field's hint; else only the cursor's field's. Warnings and errors are always shown. */
+  hints: boolean;
+  /** The group headings and the lines that say how many advanced fields are off the window. */
+  marks: boolean;
+};
+
+/**
+ * The ways the form can be laid out, roomiest first: as it always was; then without its padding
+ * and the blank line above Create profile; then with fewer advanced fields at once, down to one;
+ * then with only the cursor's field's hint; and last without the group headings and the lines
+ * counting the fields off the window. Warnings and errors stay: what they say last is what to do.
+ */
+const FITS: FormFit[] = [
+  { spaced: true, window: ADVANCED_WINDOW, hints: true, marks: true },
+  ...Array.from({ length: ADVANCED_WINDOW }, (_, i) => ({
+    spaced: false,
+    window: ADVANCED_WINDOW - i,
+    hints: true,
+    marks: true,
+  })),
+  { spaced: false, window: 1, hints: false, marks: true },
+  { spaced: false, window: 1, hints: false, marks: false },
+];
 
 function Cursor({ focused }: { focused: boolean }) {
   return (
@@ -123,7 +161,7 @@ function Hint({ text, tone }: { text?: string; tone?: "warning" }) {
   );
 }
 
-export function ApiForm({ form, fields, keySet, mergeSessions, onChange }: ApiFormProps) {
+export function ApiForm({ form, fields, keySet, mergeSessions, onChange, rows, width }: ApiFormProps) {
   const cursor = Math.min(form.cursor, fields.length - 1);
   const advanced = advancedFieldIndexes(fields);
   // The window follows the cursor, and sits at the top of the list while the cursor is
@@ -132,10 +170,76 @@ export function ApiForm({ form, fields, keySet, mergeSessions, onChange }: ApiFo
   // stays at the end the cursor left by: stepping down onto Create profile should not
   // throw the list back to the top.
   const active = advanced.indexOf(cursor);
-  const anchor = active >= 0 ? active - 2 : cursor > (advanced.at(-1) ?? -1) ? advanced.length : 0;
-  const start = Math.max(0, Math.min(anchor, advanced.length - ADVANCED_WINDOW));
-  const visible = new Set(advanced.slice(start, start + ADVANCED_WINDOW));
+  const windowOf = (size: number) => {
+    const anchor =
+      active >= 0 ? active - Math.floor((size - 1) / 2) : cursor > (advanced.at(-1) ?? -1) ? advanced.length : 0;
+    const start = Math.max(0, Math.min(anchor, advanced.length - size));
+    return { start, visible: new Set(advanced.slice(start, start + size)) };
+  };
   const setCount = Object.entries(form.env).filter(([key, value]) => key !== MODEL_KEY && value.trim() !== "").length;
+
+  /** The lines a warning under a field takes as it wraps, past the column the values start in. */
+  const warningLines = (text?: string) =>
+    text ? textLines(text, (width ?? Number.POSITIVE_INFINITY) - VALUE_COLUMN) : 0;
+
+  /** The lines `field` takes laid out as `fit` says: its row, its hint, its warnings, its error. */
+  function fieldLines(field: ApiField, index: number, fit: FormFit): number {
+    const hint = fit.hints || index === cursor ? 1 : 0;
+    const error = form.errors[field.id] ? 1 : 0;
+    switch (field.kind) {
+      case "auth":
+        return 1 + hint + error;
+      case "secret":
+        return 1 + hint + error;
+      case "sessions":
+      case "advanced":
+        return 1;
+      case "submit":
+        return (fit.spaced ? 1 : 0) + 1;
+      default: {
+        const value = fieldValue(field, form);
+        return (
+          1 +
+          (field.entry?.hint ? hint : 0) +
+          (field.id === "baseUrl" ? warningLines(cleartextNote(value)) : 0) +
+          (field.kind === "env" && field.envKey ? warningLines(plaintextSecretNote(field.envKey, value)) : 0) +
+          error
+        );
+      }
+    }
+  }
+
+  /** The lines the form takes laid out as `fit` says, its border included. */
+  function formLines(fit: FormFit): number {
+    const { start, visible } = windowOf(fit.window);
+    let lines = 2 + (fit.spaced ? 2 : 0);
+    let group: string | undefined;
+    fields.forEach((field, index) => {
+      const isAdvanced = advanced.includes(index);
+      if (isAdvanced && !visible.has(index)) return;
+      if (isAdvanced && fit.marks) {
+        const heading = fieldGroup(field) ?? "custom";
+        if (heading !== group) lines += 1;
+        group = heading;
+        if (index === advanced[start] && start > 0) lines += 1;
+        if (
+          index === advanced[Math.min(start + fit.window, advanced.length) - 1] &&
+          start + fit.window < advanced.length
+        )
+          lines += 1;
+      }
+      lines += fieldLines(field, index, fit);
+    });
+    return lines;
+  }
+
+  // The roomiest layout that fits, or the tightest when none does.
+  const fit =
+    rows === undefined
+      ? (FITS[0] as FormFit)
+      : (FITS.find((each) => formLines(each) <= rows) ?? (FITS.at(-1) as FormFit));
+  const { start, visible } = windowOf(fit.window);
+  const showHint = (index: number) => fit.hints || index === cursor;
 
   function renderField(field: ApiField, index: number) {
     const focused = index === cursor;
@@ -150,13 +254,15 @@ export function ApiForm({ form, fields, keySet, mergeSessions, onChange }: ApiFo
             <Text color={color.text}>{form.authScheme}</Text>
             {focused && <Text color={color.muted}>(space to change)</Text>}
           </Box>
-          <Hint
-            text={
-              form.authScheme === "bearer"
-                ? "Authorization: Bearer - gateways and self-hosted servers"
-                : "x-api-key - Anthropic's own API"
-            }
-          />
+          {showHint(index) && (
+            <Hint
+              text={
+                form.authScheme === "bearer"
+                  ? "Authorization: Bearer - gateways and self-hosted servers"
+                  : "x-api-key - Anthropic's own API"
+              }
+            />
+          )}
           <FieldError message={error} />
         </Box>
       );
@@ -202,7 +308,9 @@ export function ApiForm({ form, fields, keySet, mergeSessions, onChange }: ApiFo
               {keySet ? KEY_MASK : focused ? KEY_EMPTY_FOCUSED : KEY_EMPTY}
             </Text>
           </Box>
-          <Hint text="Stored in the credential store. profiles.json only records where to read it." />
+          {showHint(index) && (
+            <Hint text="Stored in the credential store. profiles.json only records where to read it." />
+          )}
           <FieldError message={form.errors[field.id]} />
         </Box>
       );
@@ -210,7 +318,7 @@ export function ApiForm({ form, fields, keySet, mergeSessions, onChange }: ApiFo
 
     if (field.kind === "submit") {
       return (
-        <Box key={field.id} gap={1} marginTop={1}>
+        <Box key={field.id} gap={1} marginTop={fit.spaced ? 1 : 0}>
           <Cursor focused={focused} />
           <Text color={focused ? color.brandLight : color.secondary} bold={focused}>
             {symbol.arrow} Create profile
@@ -276,7 +384,7 @@ export function ApiForm({ form, fields, keySet, mergeSessions, onChange }: ApiFo
             )}
           </Box>
         </Box>
-        <Hint text={field.entry?.hint} />
+        {showHint(index) && <Hint text={field.entry?.hint} />}
         {field.id === "baseUrl" && <Hint text={cleartextNote(value)} tone="warning" />}
         {field.kind === "env" && field.envKey && (
           <Hint text={plaintextSecretNote(field.envKey, value)} tone="warning" />
@@ -289,19 +397,19 @@ export function ApiForm({ form, fields, keySet, mergeSessions, onChange }: ApiFo
   let lastGroup: string | undefined;
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={color.dim} paddingX={2} paddingY={1}>
+    <Box flexDirection="column" borderStyle="round" borderColor={color.dim} paddingX={2} paddingY={fit.spaced ? 1 : 0}>
       {fields.map((field, index) => {
         const isAdvanced = advanced.includes(index);
         if (isAdvanced && !visible.has(index)) return null;
 
-        const group = isAdvanced ? (fieldGroup(field) ?? "custom") : undefined;
+        const group = isAdvanced && fit.marks ? (fieldGroup(field) ?? "custom") : undefined;
         const heading = group && group !== lastGroup ? group : undefined;
         if (group) lastGroup = group;
 
-        const above = isAdvanced && index === advanced[start] && start > 0 ? start : 0;
+        const above = isAdvanced && fit.marks && index === advanced[start] && start > 0 ? start : 0;
         const below =
-          isAdvanced && index === advanced[Math.min(start + ADVANCED_WINDOW, advanced.length) - 1]
-            ? advanced.length - (start + ADVANCED_WINDOW)
+          isAdvanced && fit.marks && index === advanced[Math.min(start + fit.window, advanced.length) - 1]
+            ? advanced.length - (start + fit.window)
             : 0;
 
         return (

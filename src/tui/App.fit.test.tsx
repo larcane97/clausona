@@ -285,8 +285,7 @@ describe("lists of every profile or account, in the terminal's height (#180)", (
 });
 
 describe("Init's accounts, in the terminal's height (#180)", () => {
-  // From 100×30: below that its name form, which has no list, is taller than the terminal.
-  for (const [columns, rows] of SIZES.filter(([, height]) => height >= 30)) {
+  for (const [columns, rows] of SIZES) {
     it(`Init keeps 30 accounts inside ${columns}×${rows}, choosing and reviewing them`, async () => {
       given(30, 0);
       const app = renderAt(<App initialScreen="init" />, columns, { rows });
@@ -342,4 +341,87 @@ describe("the fixed layout in a short terminal (#182)", () => {
       }
     });
   }
+});
+
+describe("the forms in a short terminal (#183)", () => {
+  /** Opens the Profiles screen, presses `keys` to reach a form, then types into it. */
+  async function form(columns: number, rows: number, keys: string[], ready: string, typed: string) {
+    given(3, 0);
+    const app = renderAt(<App initialScreen="use" />, columns, { rows });
+    await waitForFrame(app.lastFrame, (f) => f.includes("Select a profile"));
+    for (const key of keys) await press(app, key);
+    await waitForFrame(app.lastFrame, (f) => f.includes(ready));
+    for (const key of typed) await type(app, key);
+    return app;
+  }
+
+  for (const [columns, rows] of [
+    [80, 24],
+    [100, 30],
+  ] as const) {
+    it(`keeps Add's name, path and login forms inside ${columns}×${rows} while typing`, async () => {
+      for (const [keys, ready] of [
+        // Discover, register every account found - each preselected - and name the first.
+        [["a", ENTER, ENTER], "Sessions:"],
+        [["a", DOWN, ENTER, ENTER], "Enter a name for the new profile"],
+        [["a", DOWN, DOWN, ENTER], "Enter the config directory path"],
+      ] as const) {
+        const app = await form(columns, rows, [...keys], ready, "a-long-name-typed-in");
+        const from = app.frames.findIndex((frame) => frame.includes(ready));
+        app.unmount();
+
+        expectInside(app.frames, from, rows, "Add Profile");
+      }
+    });
+
+    it(`keeps the API endpoint form inside ${columns}×${rows}, folded and open`, async () => {
+      const app = await form(columns, rows, ["a", DOWN, DOWN, DOWN, ENTER], "Create profile", "gateway");
+      const from = app.frames.findIndex((frame) => frame.includes("Create profile"));
+      // Down to Advanced, open it, and through its fields.
+      for (let i = 0; i < 6; i++) await press(app, DOWN);
+      await press(app, "a");
+      for (let i = 0; i < 8; i++) await press(app, DOWN);
+      const frame = app.lastFrame();
+      app.unmount();
+
+      expectInside(app.frames, from, rows, "Add Profile");
+      expect(lines(frame).some((line) => line.includes(CURSOR))).toBe(true);
+    });
+
+    it(`keeps Init's name form inside ${columns}×${rows} for an account that is not the primary`, async () => {
+      given(3, 0);
+      const app = renderAt(<App initialScreen="init" />, columns, { rows });
+      await waitForFrame(app.lastFrame, (f) => f.includes("Select accounts"));
+      await press(app, ENTER);
+      await press(app, ENTER);
+      await waitForFrame(app.lastFrame, (f) => f.includes("Profile 2 of 3") && f.includes("Sessions"));
+      const from = app.frames.length - 1;
+      for (const key of "-renamed") await type(app, key);
+      app.unmount();
+
+      expectInside(app.frames, from, rows, "Initialize");
+    });
+  }
+
+  // Narrow, the login form's text and the error under the name each take two lines.
+  it("keeps Add's login form inside 60×24 with the error a taken name gets", async () => {
+    const app = await form(60, 24, ["a", DOWN, ENTER, ENTER], "Enter a name for the new", "work");
+    const from = app.frames.findIndex((frame) => frame.includes("Enter a name for the new"));
+    await press(app, ENTER);
+    await waitForFrame(app.lastFrame, (f) => f.includes("already"));
+    app.unmount();
+
+    expectInside(app.frames, from, 24, "Add Profile");
+  });
+
+  it("keeps the API endpoint form with Advanced open inside 120×40", async () => {
+    const app = await form(120, 40, ["a", DOWN, DOWN, DOWN, ENTER], "Create profile", "");
+    const from = app.frames.length - 1;
+    for (let i = 0; i < 6; i++) await press(app, DOWN);
+    await press(app, "a");
+    await press(app, DOWN);
+    app.unmount();
+
+    expectInside(app.frames, from, 40, "Add Profile");
+  });
 });
