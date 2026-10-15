@@ -84,7 +84,9 @@ import {
 import { ApiForm } from "./components/ApiForm.js";
 import { bodyRows, Chrome } from "./components/Chrome.js";
 import { Divider } from "./components/Divider.js";
+import { HealthFindings } from "./components/HealthFindings.js";
 import { ProfilePreview } from "./components/ProfilePreview.js";
+import { ScrollList, scrolls } from "./components/ScrollList.js";
 import { SelectList, type SelectListItem } from "./components/SelectList.js";
 import {
   STAR_POPUP_GRACE_MS,
@@ -95,11 +97,11 @@ import {
 } from "./components/StarPopup.js";
 import { StepIndicator } from "./components/StepIndicator.js";
 import { UpdatePanel, type UpdatePhase, updatePanelRows } from "./components/UpdatePanel.js";
-import { UsageTable } from "./components/UsageTable.js";
+import { fitUsage, type UsageFit, UsageTable } from "./components/UsageTable.js";
 import { ExtensionsScreen } from "./extensions/ExtensionsScreen.js";
 import { RoutesScreen } from "./routes/RoutesScreen.js";
 import { color, symbol } from "./theme.js";
-import { textLines, useTerminalSize } from "./use-width.js";
+import { textLines, useTerminalSize, wrappedLines } from "./use-width.js";
 
 type Screen = "dashboard" | "use" | "routes" | "doctor" | "init" | "usage" | "extensions";
 type InitStep = "loading" | "select" | "name" | "default" | "review" | "applying" | "done" | "error";
@@ -211,6 +213,52 @@ type OverlayState =
   | { kind: "remove"; profileName: string; email: string; isPrimary: boolean }
   | { kind: "login"; profileName: string; email: string }
   | { kind: "sessions"; profileName: string; currentMerge: boolean };
+
+/** The lines a bordered box takes around what is in it. */
+const BOX_ROWS = 2;
+
+/**
+ * What is left of `rows` - lines a screen fits to the terminal - once `taken` of them are drawn
+ * around or beside a list: undefined, as `rows` is, when the terminal gives no height.
+ */
+function inside(rows: number | undefined, taken: number): number | undefined {
+  return rows === undefined ? undefined : rows - taken;
+}
+
+/** The columns Chrome's padding takes, two a side: what a line of the body loses of the terminal's. */
+const CHROME_INSET = 4;
+
+/**
+ * The lines Health check's pane takes besides the findings: its border, the profile's name, its
+ * account and its directory, and the blank line and the rule above the findings.
+ */
+const HEALTH_PANE_ROWS = 7;
+
+/** The columns a line inside the Usage screen's box loses: Chrome's padding, the border and its own. */
+const USAGE_INSET = 10;
+
+/** The heading over the accounts Init and Add found. */
+const SELECT_ACCOUNTS = "Select accounts to register:";
+
+/**
+ * The columns inside a box half the body wide, as the lists beside a pane and Init's are, less its
+ * border and padding. Rounded down, so a count of the lines a text wraps into there is never short.
+ */
+function halfBox(columns: number | undefined): number {
+  return Math.floor(((columns ?? 80) - CHROME_INSET) / 2) - 4;
+}
+
+/** The columns inside Init's full-width boxes: Chrome's padding, the border and the box's own. */
+const INIT_BOX_INSET = 10;
+
+/** Init's texts around its lists, drawn and counted. */
+const CHOOSE_DEFAULT = "Choose the default profile:";
+const DEFAULT_IS_FINAL = "The default profile cannot be changed later.";
+const REVIEW_HEADING = "Review before applying:";
+const INIT_DONE = "Profiles initialized successfully.";
+
+/** An account in Init's review: its name, its email, and the blank line after it. */
+const REVIEW_ROW_LINES = 3;
 
 /** The texts of a question under the Profiles list, each on a line of its own: drawn, and counted. */
 function overlayTexts(overlay: NonNullable<OverlayState>): string[] {
@@ -2145,9 +2193,10 @@ export function App({
     if (screen === "usage") {
       const periods = ["today", "week", "month", "all"] as const;
       const idx = periods.indexOf(usagePeriod);
-      if (key.leftArrow || key.upArrow) {
+      // ←→ only: ↑↓ scroll the table when its rows do not fit (UsageTable).
+      if (key.leftArrow) {
         setUsagePeriod(periods[(idx - 1 + periods.length) % periods.length]);
-      } else if (key.rightArrow || key.downArrow) {
+      } else if (key.rightArrow) {
         setUsagePeriod(periods[(idx + 1) % periods.length]);
       }
       return;
@@ -2417,7 +2466,7 @@ export function App({
             paddingX={1}
             paddingY={0}
           >
-            <SelectList items={dashboardItems} index={cursor + dashboardOffset} />
+            <SelectList items={dashboardItems} index={cursor + dashboardOffset} rows={inside(sideBySide, BOX_ROWS)} />
           </Box>
           <Box flexGrow={1} flexShrink={1} minWidth={1} overflow="hidden">
             <ProfilePreview
@@ -2544,6 +2593,11 @@ export function App({
 
       if (addState.step === "discover-select") {
         const currentAccount = addState.discoveredAccounts[addState.cursor];
+        // Inside the list's box: its border, and its heading as it wraps in half the width.
+        const listRows = inside(
+          bodyRows(size, { hints: addDiscoverHints }),
+          BOX_ROWS + textLines(SELECT_ACCOUNTS, halfBox(size.columns)),
+        );
         return (
           <Chrome title="Add Profile" subtitle="Discover" hints={addDiscoverHints}>
             <Box gap={2} flexDirection="row" width="100%">
@@ -2557,7 +2611,7 @@ export function App({
                 paddingX={1}
                 paddingY={0}
               >
-                <Text color={color.secondary}>Select accounts to register:</Text>
+                <Text color={color.secondary}>{SELECT_ACCOUNTS}</Text>
                 <SelectList
                   multi
                   items={addState.discoveredAccounts.map((a) => ({
@@ -2567,6 +2621,7 @@ export function App({
                     selected: addState.selectedAccounts.includes(a.configDir),
                   }))}
                   index={addState.cursor}
+                  rows={listRows}
                 />
               </Box>
               <Box
@@ -2871,6 +2926,7 @@ export function App({
                 metaVariant: quotaSeverity(p),
               }))}
               index={cursor}
+              rows={inside(sideBySide, BOX_ROWS)}
             />
           </Box>
           {/* As on the dashboard: the preview draws its own border, and a second one around it
@@ -2983,6 +3039,11 @@ export function App({
         : []),
     ];
     const currentSeverity = currentDoctor ? doctorSeverity(currentDoctor.issues) : "healthy";
+    // The list and the profile's pane side by side, in what Chrome and the message under them
+    // leave. The pane's own lines - its border, the name, the account, the directory, and the
+    // blank line and the rule above the findings - are not the findings'.
+    const body = bodyRows(size, { hints: doctorHints });
+    const sideBySide = inside(body, message ? 1 + textLines(message, (size.columns ?? 80) - CHROME_INSET) : 0);
     return (
       <Chrome title="Health Check" subtitle="Inspect profile integrity and symlink status" hints={doctorHints}>
         <Box gap={2} flexDirection="row" width="100%">
@@ -3008,6 +3069,7 @@ export function App({
                 badgeVariant: doctorSeverity(r.issues),
               }))}
               index={cursor}
+              rows={inside(sideBySide, BOX_ROWS)}
             />
           </Box>
           <Box
@@ -3047,17 +3109,11 @@ export function App({
                 {currentDoctor.issues.length > 0 && (
                   <Box flexDirection="column" marginTop={1}>
                     <Divider title="Issues" />
-                    {currentDoctor.issues.map((issue) => (
-                      <Box key={issue.message} gap={1}>
-                        {/* Fixed, as every icon beside a message here is: shrinkable, it took
-                            its share of a long message's overflow, rounded to no width, and the
-                            message ran into it. */}
-                        <Box flexShrink={0}>
-                          <Text color={color.warning}>{symbol.arrow}</Text>
-                        </Box>
-                        <Text color={color.secondary}>{issue.message}</Text>
-                      </Box>
-                    ))}
+                    <HealthFindings
+                      issues={currentDoctor.issues}
+                      profile={currentDoctor.name}
+                      rows={inside(sideBySide, HEALTH_PANE_ROWS)}
+                    />
                   </Box>
                 )}
                 {currentDoctor.issues.length === 0 && (
@@ -3119,29 +3175,67 @@ export function App({
       }
     };
 
+    // The lines around the table, spaced - the box's border and padding, the tabs with a blank line
+    // between two of their lines when they wrap, the dates, and the blank lines between them - and
+    // dense, with only the border.
+    const inner = (size.columns ?? 80) - USAGE_INSET;
+    const tabLines = wrappedLines(
+      periodKeys.map((pk) => periodLabels[pk].length + 2),
+      1,
+      inner,
+    );
+    const dates = [periodRange || " ", ...(usagePeriod !== "all" ? [localTimezoneLabel()] : [])];
+    const dateLines = wrappedLines(
+      dates.map((text) => text.length),
+      2,
+      inner,
+    );
+    const around = { spaced: 4 + (2 * tabLines - 1) + 1 + dateLines + 2, dense: BOX_ROWS + tabLines + dateLines };
+    const fitIn = (shown: { keys: string; action: string }[]) =>
+      fitUsage(profiles.length, bodyRows(size, { hints: shown }), around);
+    const periodHints = [
+      { keys: "←→", action: "period" },
+      { keys: "esc", action: "back" },
+    ];
+    // ↑↓ only when they do something: the table's rows do not fit, and scroll.
+    const scrolling = (layout: UsageFit) => layout.window !== undefined && profiles.length > layout.window;
+    const hints = scrolling(fitIn(periodHints))
+      ? [periodHints[0], { keys: "↑↓", action: "scroll" }, periodHints[1]]
+      : periodHints;
+    const layout = fitIn(hints);
+    const dense = layout.spacing === "dense";
+
     return (
-      <Chrome
-        title="Usage"
-        hints={[
-          { keys: "←→", action: "period" },
-          { keys: "esc", action: "back" },
-        ]}
-      >
-        <Box flexDirection="column" gap={1} borderStyle="round" borderColor={color.dim} paddingX={2} paddingY={1}>
+      <Chrome title="Usage" hints={hints}>
+        <Box
+          flexDirection="column"
+          gap={dense ? 0 : 1}
+          borderStyle="round"
+          borderColor={color.dim}
+          paddingX={2}
+          paddingY={dense ? 0 : 1}
+        >
           {/* Period tabs */}
-          <Box gap={1} flexWrap="wrap">
+          <Box columnGap={1} rowGap={dense ? 0 : 1} flexWrap="wrap">
             {periodKeys.map((pk) => (
               <Text key={pk} color={pk === usagePeriod ? color.brand : color.muted} bold={pk === usagePeriod}>
                 {pk === usagePeriod ? `[${periodLabels[pk]}]` : ` ${periodLabels[pk]} `}
               </Text>
             ))}
           </Box>
-          <Box marginBottom={1} gap={2}>
-            <Text color={color.muted}>{periodRange || " "}</Text>
-            {usagePeriod !== "all" && <Text color={color.dim}>{localTimezoneLabel()}</Text>}
+          {/* Wrapped, not cut: the time zone goes under the dates in a narrow terminal. */}
+          <Box marginBottom={dense ? 0 : 1} columnGap={2} flexWrap="wrap">
+            {dates.map((text, at) => (
+              <Text key={text} color={at === 0 ? color.muted : color.dim}>
+                {text}
+              </Text>
+            ))}
           </Box>
 
-          <UsageTable rows={profiles.map((p) => ({ name: p.name, isActive: p.isActive, usage: getData(p) }))} />
+          <UsageTable
+            rows={profiles.map((p) => ({ name: p.name, isActive: p.isActive, usage: getData(p) }))}
+            layout={layout}
+          />
         </Box>
       </Chrome>
     );
@@ -3178,6 +3272,12 @@ export function App({
 
   // ── Init: Select accounts ──
   if (initState.step === "select") {
+    // Under the steps and the blank line after them: the box's border, its heading as it wraps in
+    // half the width, and the blank line under that.
+    const listRows = inside(
+      bodyRows(size, { hints: initSelectHints }),
+      2 + BOX_ROWS + textLines(SELECT_ACCOUNTS, halfBox(size.columns)) + 1,
+    );
     return (
       <Chrome title="Initialize" hints={initSelectHints}>
         <Box flexDirection="column" gap={1}>
@@ -3193,7 +3293,7 @@ export function App({
             paddingX={1}
             paddingY={0}
           >
-            <Text color={color.secondary}>Select accounts to register:</Text>
+            <Text color={color.secondary}>{SELECT_ACCOUNTS}</Text>
             <SelectList
               multi
               items={initState.accounts.map((account) => ({
@@ -3203,6 +3303,7 @@ export function App({
                 selected: initState.selected.includes(account.configDir),
               }))}
               index={initState.cursor}
+              rows={listRows}
             />
           </Box>
         </Box>
@@ -3276,16 +3377,23 @@ export function App({
       label: initState.profileNames[configDir] ?? configDir,
       detail: initState.accounts.find((account) => account.configDir === configDir)?.email,
     }));
+    const inner = (size.columns ?? 80) - INIT_BOX_INSET;
+    // Under the steps and the blank line after them: the box's border and padding, and its two
+    // lines of text as they wrap, a blank line after each.
+    const listRows = inside(
+      bodyRows(size, { hints: selectHints }),
+      2 + BOX_ROWS + 2 + textLines(CHOOSE_DEFAULT, inner) + 1 + textLines(DEFAULT_IS_FINAL, inner) + 1,
+    );
     return (
       <Chrome title="Initialize" hints={selectHints}>
         <Box flexDirection="column" gap={1}>
           <StepIndicator steps={INIT_STEPS} current={2} />
           <Box flexDirection="column" gap={1} borderStyle="round" borderColor={color.dim} paddingX={2} paddingY={1}>
-            <Text color={color.secondary}>Choose the default profile:</Text>
+            <Text color={color.secondary}>{CHOOSE_DEFAULT}</Text>
             <Text color={color.muted} dimColor>
-              The default profile cannot be changed later.
+              {DEFAULT_IS_FINAL}
             </Text>
-            <SelectList items={selectedItems} index={initState.cursor} />
+            <SelectList items={selectedItems} index={initState.cursor} rows={listRows} />
           </Box>
         </Box>
       </Chrome>
@@ -3293,11 +3401,27 @@ export function App({
   }
 
   // ── Init: Review / Done ──
+  const inner = (size.columns ?? 80) - INIT_BOX_INSET;
+  const done = initState.step === "done";
+  // Under the steps and the blank line after them: the box's border and padding, its heading, the
+  // blank line under it, and once applied the result and any warning, each after a blank line and
+  // beside its icon.
+  const around =
+    2 +
+    BOX_ROWS +
+    2 +
+    textLines(REVIEW_HEADING, inner) +
+    1 +
+    (done ? 1 + textLines(INIT_DONE, inner - 2) : 0) +
+    (done && initState.warning ? 1 + textLines(initState.warning, inner - 2) : 0);
+  const reviewRows = (shown: { keys: string; action: string }[]) => inside(bodyRows(size, { hints: shown }), around);
+  const finalHints = done ? [{ keys: "enter", action: "finish" }] : initReviewHints;
+  // ↑↓ only when they do something: the accounts do not fit, and scroll.
+  const reviewHints = scrolls(initState.selected.length, REVIEW_ROW_LINES, reviewRows(finalHints))
+    ? [{ keys: "↑↓", action: "scroll" }, ...finalHints]
+    : finalHints;
   return (
-    <Chrome
-      title="Initialize"
-      hints={initState.step === "done" ? [{ keys: "enter", action: "finish" }] : initReviewHints}
-    >
+    <Chrome title="Initialize" hints={reviewHints}>
       <Box flexDirection="column" gap={1}>
         <StepIndicator steps={INIT_STEPS} current={3} />
         <Box
@@ -3307,41 +3431,45 @@ export function App({
           paddingX={2}
           paddingY={1}
         >
-          <Text color={color.secondary}>Review before applying:</Text>
+          <Text color={color.secondary}>{REVIEW_HEADING}</Text>
           <Box flexDirection="column" marginTop={1}>
-            {initState.selected.map((configDir) => {
-              const account = initState.accounts.find((item) => item.configDir === configDir);
-              const profileName = initState.profileNames[configDir];
-              const isDefault = profileName === initState.defaultProfile;
-              // Two lines, as a list row has: on one, the name had sixteen columns, a longer one
-              // wrapped inside them, and each row's account started in a different column.
-              return (
-                <Box key={configDir} flexDirection="column" marginBottom={1}>
-                  <Box gap={1}>
-                    <Box flexShrink={1} minWidth={0} overflow="hidden">
-                      <Text color={isDefault ? color.brandLight : color.text} bold={isDefault} wrap="truncate-end">
-                        {profileName}
-                      </Text>
-                    </Box>
-                    {isDefault && (
-                      <Box flexShrink={0}>
-                        <Text color={color.brandLight}>{symbol.dot} default</Text>
-                      </Box>
-                    )}
-                    {!account?.isPrimary && (
-                      <Box flexShrink={0}>
-                        <Text color={color.muted}>
-                          {symbol.dot} {initState.mergeSessionsMap[configDir] ? "merged" : "separated"}
+            <ScrollList
+              rows={reviewRows(reviewHints)}
+              size={REVIEW_ROW_LINES}
+              items={initState.selected.map((configDir) => {
+                const account = initState.accounts.find((item) => item.configDir === configDir);
+                const profileName = initState.profileNames[configDir];
+                const isDefault = profileName === initState.defaultProfile;
+                // Two lines, as a list row has: on one, the name had sixteen columns, a longer one
+                // wrapped inside them, and each row's account started in a different column.
+                return (
+                  <Box key={configDir} flexDirection="column" marginBottom={1}>
+                    <Box gap={1}>
+                      <Box flexShrink={1} minWidth={0} overflow="hidden">
+                        <Text color={isDefault ? color.brandLight : color.text} bold={isDefault} wrap="truncate-end">
+                          {profileName}
                         </Text>
                       </Box>
-                    )}
+                      {isDefault && (
+                        <Box flexShrink={0}>
+                          <Text color={color.brandLight}>{symbol.dot} default</Text>
+                        </Box>
+                      )}
+                      {!account?.isPrimary && (
+                        <Box flexShrink={0}>
+                          <Text color={color.muted}>
+                            {symbol.dot} {initState.mergeSessionsMap[configDir] ? "merged" : "separated"}
+                          </Text>
+                        </Box>
+                      )}
+                    </Box>
+                    <Text color={color.secondary} wrap="truncate-middle">
+                      {account?.email}
+                    </Text>
                   </Box>
-                  <Text color={color.secondary} wrap="truncate-middle">
-                    {account?.email}
-                  </Text>
-                </Box>
-              );
-            })}
+                );
+              })}
+            />
           </Box>
           {initState.step === "done" && (
             <Box gap={1} marginTop={1}>
@@ -3349,7 +3477,7 @@ export function App({
                 <Text color={color.healthy}>{symbol.check}</Text>
               </Box>
               <Text color={color.healthy} bold>
-                Profiles initialized successfully.
+                {INIT_DONE}
               </Text>
             </Box>
           )}

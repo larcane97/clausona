@@ -15,9 +15,9 @@ export type ListWindow = {
   start: number;
   /** The item after the last one shown. */
   end: number;
-  /** The items left out above, which a line says when there are any. */
+  /** The items left out above, which a line says: 0 when none are, or the line does not fit. */
   above: number;
-  /** The items left out below, which a line says when there are any. */
+  /** The items left out below, which a line says: 0 when none are, or the line does not fit. */
   below: number;
 };
 
@@ -26,8 +26,9 @@ export type ListWindow = {
  * fit, else a window, after a line saying how many are above it when any are and before one
  * saying how many are below. The window keeps `cursor` in it and moves from `start`, where it
  * began last time, only as far as the cursor takes it, and never ends short of the last item
- * while there are items above it. It shows one item however little room there is: the cursor's
- * row is what the list is for.
+ * while there are items above it. It shows one item however little room there is - the cursor's
+ * row is what the list is for - and in less room than that item and the two lines take, it gives
+ * up the line below, then the one above.
  */
 export function listWindow(total: number, room: number, cursor: number | null, start: number, size = 1): ListWindow {
   if (total * size <= room) return { start: 0, end: total, above: 0, below: 0 };
@@ -46,5 +47,9 @@ export function listWindow(total: number, room: number, cursor: number | null, s
   }
   while (from > 0 && from - 1 + shown(from - 1) >= total) from -= 1;
   const end = Math.min(total, from + shown(from));
-  return { start: from, end, above: from, below: total - end };
+  // What the items leave: a line for the count above, then one for the count below, as they fit.
+  const spare = room - (end - from) * size;
+  const above = from > 0 && spare >= 1 ? from : 0;
+  const below = end < total && spare >= (above > 0 ? 2 : 1) ? total - end : 0;
+  return { start: from, end, above, below };
 }

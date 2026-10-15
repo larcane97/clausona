@@ -40,6 +40,11 @@ describe("listWindow", () => {
     expect(listWindow(10, 5, null, 9)).toEqual({ start: 6, end: 10, above: 6, below: 0 });
   });
 
+  it("gives up the line below, then the one above, in less room than they and the cursor's item take", () => {
+    expect(listWindow(10, 3, 5, 0, 2)).toEqual({ start: 5, end: 6, above: 5, below: 0 });
+    expect(listWindow(10, 2, 5, 0, 2)).toEqual({ start: 5, end: 6, above: 0, below: 0 });
+  });
+
   it("shows the cursor's item even in less room than it takes", () => {
     const view = listWindow(10, 1, 5, 0, 2);
     expect(view.start).toBeLessThanOrEqual(5);

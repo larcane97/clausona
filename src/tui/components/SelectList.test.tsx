@@ -60,3 +60,71 @@ describe("SelectList", () => {
     expect(line).toMatch(/claude:jaewon-\S*… ● active\s*$/);
   });
 });
+
+/**
+ * A list in the lines a screen gives it: what the terminal leaves, so that the frame stays shorter
+ * than the terminal. A taller frame is redrawn whole by ink and loses its top, the cursor with it
+ * once the cursor moves below the screen (#180).
+ */
+describe("SelectList in the lines it has", () => {
+  const items = (count: number, detail = true): SelectListItem[] =>
+    Array.from({ length: count }, (_, i) => ({
+      id: `p${i}`,
+      label: `claude:p${String(i).padStart(2, "0")}`,
+      ...(detail ? { detail: `p${i}@example.com` } : {}),
+    }));
+
+  const listAt = (list: SelectListItem[], index: number, rows?: number) =>
+    stripAnsi(
+      render(
+        <Box width={40}>
+          <SelectList items={list} index={index} rows={rows} />
+        </Box>,
+      ).lastFrame() ?? "",
+    ).split("\n");
+
+  it("draws every row when they fit", () => {
+    expect(listAt(items(5), 0, 10)).toEqual(listAt(items(5), 0));
+  });
+
+  it("keeps to its lines and the cursor's row, and counts the rows above and below", () => {
+    for (const detail of [true, false]) {
+      for (let rows = 4; rows <= 12; rows++) {
+        for (const index of [0, 6, 13]) {
+          const lines = listAt(items(14, detail), index, rows);
+          const named = lines.filter((line) => /claude:p\d\d/.test(line));
+          const above = Number(lines.find((line) => line.includes("↑"))?.match(/↑ (\d+) more/)?.[1] ?? 0);
+          const below = Number(lines.find((line) => line.includes("↓"))?.match(/↓ (\d+) more/)?.[1] ?? 0);
+          const what = `${detail ? "two" : "one"}-line rows, ${rows} lines, cursor on ${index}`;
+
+          expect(lines.length, what).toBeLessThanOrEqual(rows);
+          expect(
+            lines.find((line) => line.includes("✦")),
+            what,
+          ).toContain(`claude:p${String(index).padStart(2, "0")}`);
+          expect(above + named.length + below, what).toBe(14);
+        }
+      }
+    }
+  });
+
+  it("moves only as far as the cursor takes it", () => {
+    const list = items(14);
+    const instance = render(
+      <Box width={40}>
+        <SelectList items={list} index={9} rows={8} />
+      </Box>,
+    );
+    const before = stripAnsi(instance.lastFrame() ?? "");
+    instance.rerender(
+      <Box width={40}>
+        <SelectList items={list} index={8} rows={8} />
+      </Box>,
+    );
+    const after = stripAnsi(instance.lastFrame() ?? "");
+    instance.unmount();
+
+    // Up one row, still in view: the same rows, the cursor one higher.
+    expect(after.replace("✦", " ")).toBe(before.replace("✦", " "));
+  });
+});

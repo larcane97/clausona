@@ -1,4 +1,6 @@
 import { Box, Text } from "ink";
+import { useRef } from "react";
+import { listWindow } from "../fit.js";
 import { color, symbol } from "../theme.js";
 import { useWidth } from "../use-width.js";
 
@@ -66,21 +68,52 @@ function fitRow(label: number, badge: number, meta: number, space: number): RowF
   return { label: Math.min(label, floor + Math.max(0, left)), badge: badgeFit, meta: metaFit };
 }
 
+/** `↑ 3 more` or `↓ 12 more`, where the list leaves rows out: under the labels, muted. */
+function MoreRows({ arrow, count, indent }: { arrow: "↑" | "↓"; count: number; indent: number }) {
+  return (
+    <Box paddingLeft={indent}>
+      <Text color={color.muted} wrap="truncate-end">
+        {`${arrow} ${count} more`}
+      </Text>
+    </Box>
+  );
+}
+
 export function SelectList({
   items,
   index,
   multi = false,
+  rows,
 }: {
   items: SelectListItem[];
   index: number;
   multi?: boolean;
+  /**
+   * The most lines the list may take, when the screen knows the terminal's height: the rows
+   * around the cursor are drawn, and a line above and below says how many are left out. Without
+   * it, every row.
+   */
+  rows?: number;
 }) {
   const [list, width] = useWidth();
-  const space = width - MARK_COLUMN - (multi ? MARK_COLUMN : 0);
+  const indent = MARK_COLUMN + (multi ? MARK_COLUMN : 0);
+  const space = width - indent;
+  // Two lines a row when any has a detail line: a row without one is counted as two, which only
+  // ever leaves a line spare.
+  const size = items.some((item) => item.detail) ? 2 : 1;
+  // Where the window began last time: it moves only as far as the cursor takes it.
+  const began = useRef(0);
+  const view =
+    rows === undefined
+      ? { start: 0, end: items.length, above: 0, below: 0 }
+      : listWindow(items.length, rows, index >= 0 && index < items.length ? index : null, began.current, size);
+  began.current = view.start;
 
   return (
     <Box ref={list} flexDirection="column" gap={0}>
-      {items.map((item, i) => {
+      {view.above > 0 && <MoreRows arrow="↑" count={view.above} indent={indent} />}
+      {items.slice(view.start, view.end).map((item, at) => {
+        const i = view.start + at;
         const focused = i === index;
         const badge = item.badge ? `${symbol.dot} ${item.badge}` : "";
         const meta = item.meta ?? "";
@@ -144,6 +177,7 @@ export function SelectList({
           </Box>
         );
       })}
+      {view.below > 0 && <MoreRows arrow="↓" count={view.below} indent={indent} />}
     </Box>
   );
 }

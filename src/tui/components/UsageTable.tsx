@@ -6,6 +6,7 @@ import type { UsageSummary } from "../../types.js";
 import { color } from "../theme.js";
 import { useWidth } from "../use-width.js";
 import { Divider } from "./Divider.js";
+import { ScrollList } from "./ScrollList.js";
 
 export type UsageRow = { name: string; isActive: boolean; usage: UsageSummary };
 
@@ -54,7 +55,48 @@ function fitUsageColumns(space: number, names: string[], usages: UsageSummary[])
   return fit as Fit;
 }
 
-export function UsageTable({ rows }: { rows: UsageRow[] }) {
+/** The table's header, its two rules and its total. */
+const FRAME_LINES = 4;
+
+/**
+ * How the table spaces its lines. `spaced`: a blank line between every two, as it always was.
+ * `packed`: none between the profile rows. `dense`: none anywhere.
+ */
+export type UsageSpacing = "spaced" | "packed" | "dense";
+
+export type UsageFit = {
+  spacing: UsageSpacing;
+  /** The lines the profile rows may take, when they scroll in them: see `ScrollList`. */
+  window?: number;
+};
+
+/** The fewest lines of profile rows the screen scrolls before it gives up its blank lines. */
+const MIN_WINDOW = 3;
+
+/** The lines the table takes besides its profile rows, spaced as `spacing` says. */
+function frameLines(spacing: UsageSpacing): number {
+  return spacing === "dense" ? FRAME_LINES : 2 * FRAME_LINES;
+}
+
+/**
+ * How the Usage screen fits `count` profile rows in `body` lines - what Chrome leaves, when the
+ * terminal gives a height - where `around` is what the screen draws around the table, spaced
+ * and dense. Spaced as it always was when that fits. Short of that the rows give up the blank lines
+ * between them, and scroll in what is left while that is a few lines; then the screen gives up
+ * every blank line and its padding, and the rows scroll in what that leaves.
+ */
+export function fitUsage(count: number, body: number | undefined, around: { spaced: number; dense: number }): UsageFit {
+  if (body === undefined || around.spaced + 2 * count + 2 * FRAME_LINES - 1 <= body) return { spacing: "spaced" };
+  const packed = body - around.spaced - frameLines("packed");
+  if (packed >= Math.min(count, MIN_WINDOW)) return { spacing: "packed", window: packed };
+  return { spacing: "dense", window: body - around.dense - frameLines("dense") };
+}
+
+/**
+ * The usage of each profile and the total. `layout`, from `fitUsage`, says how it is spaced and the
+ * lines its profile rows scroll in (`ScrollList`, ↑↓), the header and the total staying put.
+ */
+export function UsageTable({ rows, layout = { spacing: "spaced" } }: { rows: UsageRow[]; layout?: UsageFit }) {
   const [table, width] = useWidth();
   const total: UsageSummary = {
     cost: rows.reduce((sum, row) => sum + row.usage.cost, 0),
@@ -81,8 +123,23 @@ export function UsageTable({ rows }: { rows: UsageRow[] }) {
     </Box>
   );
 
+  const profileRows = rows.map((row, r) => {
+    const values = [row.usage.cost, row.usage.inputTokens, row.usage.outputTokens];
+    return line(
+      row.name,
+      <Text color={row.isActive ? color.brand : color.text} bold={row.isActive} wrap="truncate-end">
+        {row.name}
+      </Text>,
+      (fit.cells[r] as Cells).map((cell, i) => (
+        <Text key={HEADERS[i]} color={(values[i] ?? 0) > 0 ? color.text : color.muted}>
+          {cell}
+        </Text>
+      )),
+    );
+  });
+
   return (
-    <Box ref={table} flexDirection="column" gap={1}>
+    <Box ref={table} flexDirection="column" gap={layout.spacing === "dense" ? 0 : 1}>
       {line(
         "header",
         <Text color={color.muted} wrap="truncate-end">
@@ -95,20 +152,7 @@ export function UsageTable({ rows }: { rows: UsageRow[] }) {
         )),
       )}
       <Divider />
-      {rows.map((row, r) => {
-        const values = [row.usage.cost, row.usage.inputTokens, row.usage.outputTokens];
-        return line(
-          row.name,
-          <Text color={row.isActive ? color.brand : color.text} bold={row.isActive} wrap="truncate-end">
-            {row.name}
-          </Text>,
-          (fit.cells[r] as Cells).map((cell, i) => (
-            <Text key={HEADERS[i]} color={(values[i] ?? 0) > 0 ? color.text : color.muted}>
-              {cell}
-            </Text>
-          )),
-        );
-      })}
+      {layout.spacing === "spaced" ? profileRows : <ScrollList items={profileRows} rows={layout.window} />}
       <Divider />
       {line(
         "total",
