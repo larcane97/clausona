@@ -1,6 +1,6 @@
 # Run a tmux fleet across your accounts
 
-![A main Claude Code session in tmux, on Opus, opens a window per task, one worker on DeepSeek through an API and one on Codex with another account, then checks each branch and closes the windows](../../assets/tmux-fleet.gif)
+![A main Claude Code session in tmux, on Opus, opens a window per task, one worker on DeepSeek through an API and one on Codex with another account; the tmux window list previews both, and the main session checks each branch before it closes the windows](../../assets/tmux-fleet.gif)
 
 [tmux](https://github.com/tmux/tmux) keeps terminal sessions running and splits them into
 windows. clausona gives each Claude Code or Codex session in those windows its own account. With
