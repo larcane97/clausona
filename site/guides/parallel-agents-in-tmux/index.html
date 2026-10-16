@@ -13,7 +13,7 @@
   <meta property="og:title" content="Run parallel Claude Code and Codex agents in tmux, each on its own account">
   <meta property="og:description" content="Let one Claude Code or Codex session split a job across tmux windows, with each worker on a different account or an API model such as DeepSeek. No GUI needed, so it works over SSH too. Install the tmux-fleet plugin and ask.">
   <meta property="og:url" content="https://larcane97.github.io/clausona/guides/parallel-agents-in-tmux/">
-  <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
+  <meta property="og:image" content="https://larcane97.github.io/clausona/assets/tmux-fleet.png">
   <meta property="article:published_time" content="2026-10-16">
   <meta property="article:modified_time" content="2026-10-16">
   <meta name="twitter:card" content="summary_large_image">
@@ -31,7 +31,7 @@
     "datePublished": "2026-10-16",
     "dateModified": "2026-10-16",
     "inLanguage": "en",
-    "image": "https://larcane97.github.io/clausona/assets/social-preview.png",
+    "image": "https://larcane97.github.io/clausona/assets/tmux-fleet.png",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
     "mainEntityOfPage": "https://larcane97.github.io/clausona/guides/parallel-agents-in-tmux/",
     "about": [
@@ -143,12 +143,17 @@
         <p>Install the <code>tmux-fleet</code> plugin. It brings <code>fleet-core</code>, the rules all the fleet plugins share, with it:</p>
 <pre data-copy><code>claude plugin marketplace add larcane97/clausona
 claude plugin install tmux-fleet@clausona</code></pre>
-        <p>Then start Claude Code in a tmux pane and ask something like "Split these across my accounts in tmux: add a <code>--json</code> flag to <code>notes list</code>, and write tests for <code>src/parse.ts</code>."</p>
+        <p>Then start Claude Code in a tmux pane and ask something like "Split these across my accounts in tmux: write a CONTRIBUTING.md on DeepSeek (claude:ds-flash), and add an .editorconfig with Codex (codex:personal)."</p>
         <p>It plans the work and opens a tmux window per task, on the account each one should use. It checks what comes back before it cleans up.</p>
       </div>
 
+      <figure class="figure">
+        <img class="demo" src="../../assets/tmux-fleet.gif" width="1200" height="820" loading="lazy" alt="A main Claude Code session in tmux, on Opus with its own account, opens a window per task, one worker on DeepSeek through an API and one on Codex with another account, then checks each branch and closes the windows. The Codex worker asks before it commits and pushes, and tmux marks its window when it rings the bell.">
+        <figcaption>A real run, sped up. The main session runs Opus on its own account. One worker runs DeepSeek through an API and the other runs Codex on another account. The Codex worker asks before it commits and again before it pushes, and you approve both in its window. The main session checks each branch before it closes the window.</figcaption>
+      </figure>
+
       <h2 id="see">What you see in tmux</h2>
-      <p>Each worker gets its own git worktree and its own window in your current tmux session. The window is named after the task and the clausona profile, like <code>tests · ds-flash</code>, so the status bar tells you which account is doing what.</p>
+      <p>Each worker gets its own git worktree and its own window in your current tmux session. The window is named after the task and the clausona profile, like <code>docs · ds-flash</code>, so the status bar tells you which account is doing what.</p>
       <p>Press your prefix key and a window's number to jump to that worker. You can read along or type into it. If one heads the wrong way, you stop that one and leave the rest alone.</p>
       <p>What tmux can't tell you on its own is whether an agent is still working. So the workers report it themselves.</p>
       <p>A Claude Code worker starts with hooks that only it uses. They live in <code>.fleet-claude.json</code> in its worktree and reach it through <code>--settings</code>, so your shared settings.json stays as it is.</p>
