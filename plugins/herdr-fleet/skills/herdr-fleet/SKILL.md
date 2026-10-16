@@ -31,8 +31,8 @@ Stop and tell the user what is missing if any of these fails.
    environment (`fleet-core`, Shells). If it does, do not tell the user they are outside herdr:
    tell them to start Codex again in this pane with `-c shell_environment_policy.inherit=all`.
 2. `herdr status` shows a running server. Before a command group's first use, run the group alone
-   (`herdr worktree`, `herdr agent`, `herdr pane`) to see its current syntax. Never run bare
-   `herdr`: it starts the interface.
+   (`herdr worktree`, `herdr workspace`, `herdr agent`, `herdr pane`) to see its current syntax.
+   Never run bare `herdr`: it starts the interface.
 3. The repo has a remote: workers push their branches.
 
 herdr commands print JSON. Read ids and paths from it; never guess them. herdr runs on macOS, Linux
@@ -111,6 +111,9 @@ sending again.
 2. Start the new profile there, as in section 2, steps 2 to 6, with `fleet-core` section 9's brief.
    Name the new agent with a new suffix, such as `w1-docs-2`: the old one still holds its name.
 3. `herdr pane close <old pane>`.
+4. `herdr workspace rename <workspace> "<task> · <new profile>"`, with the workspace id from
+   section 2, so the sidebar names the new account. Keep the label to 20 characters or fewer, as in
+   section 2.
 
 ## 5. Retiring
 

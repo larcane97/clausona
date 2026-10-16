@@ -225,7 +225,10 @@ When a wait returns, read that worker's screen (the runner skill says how):
    paragraph: "A previous worker on another account stopped at its limit before finishing. Check
    `git status` and `git log` in this worktree, then continue the task." For herdr, Orca and tmux,
    write that to `.fleet-brief.md` again and send the one line.
-3. Close the old worker. Record the new handle in the table, and wait on it from now on.
+3. Close the old worker. Relabel the task for the new profile, in the same `<task> · <profile>`
+   form, so the sidebar or status bar names the account that now runs it. The runner skill says
+   how.
+4. Record the new handle in the table, and wait on it from now on.
 
 ## 10. Judging a worker done
 

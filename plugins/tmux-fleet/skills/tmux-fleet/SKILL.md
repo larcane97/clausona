@@ -136,7 +136,8 @@ Do not loop over `H read` yourself, looking for a phrase.
 
 1. `H start --name <name> --handover --label "<task> · <new profile>" --tool <claude|codex> -- <new profile> <args>`.
    It opens a new pane in the worker's window, in the same worktree, and starts the new profile
-   there. Record `.pane`; `.replaces` is the old pane.
+   there. It also renames the window to the new label, so the status bar names the new account.
+   Record `.pane`; `.replaces` is the old pane.
 2. Check that it started, answer the trust question, and give it `fleet-core` section 9's brief, as
    in section 2, steps 3 to 5.
 3. `tmux kill-pane -t <the .replaces id>`. The worker keeps its name: wait on it as before.

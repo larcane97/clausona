@@ -110,6 +110,8 @@ section 7.
 1. Create a new terminal in the same worktree and start the new profile there, as in section 2,
    steps 2 to 7, with `fleet-core` section 9's brief.
 2. `orca terminal close --terminal <old handle>`.
+3. `orca worktree set --worktree path:<worktree> --display-name "<task> · <new profile>"`, so the
+   sidebar names the new account. Keep it under 26 characters, as in section 2.
 
 ## 5. Retiring
 

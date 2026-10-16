@@ -80,6 +80,9 @@ Things it handles on the way:
 - **MCP servers.** Orca's worktrees live under `~/orca/workspaces`, so a `~/.mcp.json` in your
   home directory would make Claude Code ask about "new MCP servers". Workers start with
   `--strict-mcp-config`, which keeps that question away.
+- **Account limits.** If a worker stops at a usage limit, the orchestrator opens a new terminal in
+  its worktree on another profile and hands the task over. It then renames the worktree, so the
+  sidebar shows the account that now runs it.
 - **Retiring.** `orca worktree rm` refuses a worktree with uncommitted changes, and the
   orchestrator never forces it. Orca also deletes the worktree's local branch, so the orchestrator
   retires a worker only after its branch is pushed.

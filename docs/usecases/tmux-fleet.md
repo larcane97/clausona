@@ -85,7 +85,8 @@ Things it handles on the way:
   too) whether to trust it. The orchestrator reads the worker's screen and answers with keys, for
   the repo you asked it to work on and nothing else.
 - **Account limits.** If a worker stops at a usage limit, the orchestrator opens a new pane in
-  that worker's window on another profile, hands the task over, and closes the old pane.
+  that worker's window on another profile, hands the task over, and closes the old pane. It also
+  renames the window, so the status bar shows the account that now runs it.
 - **A missed signal.** If a worker that is working prints nothing for three minutes and no event
   arrives, the wait wakes up anyway. One lost signal does not hang the run.
 - **Worker files.** Briefs and follow-ups go in `.fleet-*.md` files in the worktree. Every
