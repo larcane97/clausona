@@ -10,10 +10,11 @@ const ARROW_COLUMNS = 2;
 /**
  * A profile's findings in Health check's pane, each message wrapped under its arrow. `rows`, when
  * the screen knows the terminal's height, is the most lines they may take: the findings that fit,
- * from the first, then a line that says how many more there are and that `csn doctor` lists them
- * all - the pane has no cursor to scroll them with, and its ↑↓ move between profiles.
+ * from the first, then a line that says how many more there are and that `clausona doctor` lists
+ * them all - the pane has no cursor to scroll them with, and its ↑↓ move between profiles. The
+ * command takes no profile, so the line names none.
  */
-export function HealthFindings({ issues, profile, rows }: { issues: DoctorIssue[]; profile: string; rows?: number }) {
+export function HealthFindings({ issues, rows }: { issues: DoctorIssue[]; rows?: number }) {
   const [pane, width] = useWidth();
   // Until ink has laid the pane out, a message's lines are unknown: none is counted as fitting,
   // rather than one counted short pushing the frame past the terminal. The width is measured a
@@ -43,7 +44,7 @@ export function HealthFindings({ issues, profile, rows }: { issues: DoctorIssue[
       ))}
       {left > 0 && (
         <Text color={color.muted} wrap="truncate-end">
-          {`… ${left} more · csn doctor ${profile}`}
+          {`… ${left} more · clausona doctor`}
         </Text>
       )}
     </Box>

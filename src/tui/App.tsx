@@ -3207,11 +3207,7 @@ export function App({
                 {currentDoctor.issues.length > 0 && (
                   <Box flexDirection="column" marginTop={1}>
                     <Divider title="Issues" />
-                    <HealthFindings
-                      issues={currentDoctor.issues}
-                      profile={currentDoctor.name}
-                      rows={inside(sideBySide, HEALTH_PANE_ROWS)}
-                    />
+                    <HealthFindings issues={currentDoctor.issues} rows={inside(sideBySide, HEALTH_PANE_ROWS)} />
                   </Box>
                 )}
                 {currentDoctor.issues.length === 0 && (

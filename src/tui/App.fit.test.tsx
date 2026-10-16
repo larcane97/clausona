@@ -254,7 +254,7 @@ describe("lists of every profile or account, in the terminal's height (#180)", (
       expectInside(app.frames, 0, rows, "Health Check");
       // The findings that fit, and the count of the rest - cut at the pane's edge when it is narrow.
       const shown = lines(findings).filter((line) => line.includes("➔")).length;
-      if (shown < 15) expect(lines(findings).join("\n")).toContain(`… ${15 - shown} more · csn`);
+      if (shown < 15) expect(lines(findings).join("\n")).toContain(`… ${15 - shown} more · clausona doctor`);
       expect(more(last, "↓")).toBe(0);
     });
 

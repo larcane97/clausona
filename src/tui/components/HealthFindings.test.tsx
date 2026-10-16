@@ -15,7 +15,7 @@ const linesAt = (columns: number, list: DoctorIssue[], rows?: number) =>
   (
     render(
       <Box width={columns} flexDirection="column">
-        <HealthFindings issues={list} profile="claude:work" rows={rows} />
+        <HealthFindings issues={list} rows={rows} />
       </Box>,
     ).lastFrame() ?? ""
   ).split("\n");
@@ -39,6 +39,6 @@ describe("HealthFindings", () => {
         expect(lines.at(-1), what).toContain(`… ${15 - shown} more`);
       }
     }
-    expect(linesAt(60, issues(15), 6).at(-1)).toContain("… 10 more · csn doctor claude:work");
+    expect(linesAt(60, issues(15), 6).at(-1)).toContain("… 10 more · clausona doctor");
   });
 });
