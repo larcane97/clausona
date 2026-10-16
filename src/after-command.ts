@@ -232,19 +232,16 @@ function gap(deps: AfterCommandDeps): string {
 async function offerUpdate(tag: string, deps: AfterCommandDeps): Promise<void> {
   const latest = `v${versionOfTag(tag)}`;
   const { output } = deps;
-  // A copy the installer did not put in place cannot replace itself: what to run instead, held as a no is.
+  const available = `${gap(deps)}  ${accent("⬆")} ${dim("clausona")} ${accent(latest)} ${dim("is available (you have")} ${accent(`v${deps.current}`)}${dim(")")}\n`;
+  // A copy the installer did not put in place cannot replace itself: what to run instead, held as a no
+  // is. The command has a line of its own, to copy whole.
   if (!deps.target) {
-    output.write(
-      `${gap(deps)}  ${dim(`⬆ clausona ${latest} is available. To update, run: ${reinstallCommand(deps.platform)}`)}\n`,
-    );
+    output.write(`${available}    ${dim("To update, run:")}\n    ${accent(reinstallCommand(deps.platform))}\n`);
     await skipUpdate(deps.notices);
     return;
   }
 
-  output.write(
-    `${gap(deps)}  ${accent("⬆")} ${dim("clausona")} ${accent(latest)} ${dim("is available (you have")} ${accent(`v${deps.current}`)}${dim(")")}\n` +
-      `  ${dim("Update now? (Y/n)")} `,
-  );
+  output.write(`${available}  ${dim("Update now? (Y/n)")} `);
   const key = await readKey(deps.input, {
     graceMs: deps.graceMs,
     now: deps.notices.now,

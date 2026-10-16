@@ -301,7 +301,7 @@ describe("the update question", () => {
     await askAfterCommand(run.deps);
 
     expect(run.output.plain).toBe(
-      `\n  ⬆ clausona v0.12.0-beta is available. To update, run: ${reinstallCommand("darwin")}\n`,
+      `\n  ⬆ clausona v0.12.0-beta is available (you have v0.11.0-beta)\n    To update, run:\n    ${reinstallCommand("darwin")}\n`,
     );
     expect(run.input.modes).toEqual([]);
     expect(stored().updateSkippedAt).toBe(at(START));
