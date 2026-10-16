@@ -38,8 +38,9 @@ Stop and tell the user what is missing if any of these fails.
    tell them to start Codex again in this pane with `-c shell_environment_policy.inherit=all`.
    tmux runs on macOS, Linux and WSL. On Windows without WSL there is no tmux: suggest herdr-fleet
    or orca-fleet.
-2. Pass on any `warnings` it prints. With `bell-action none` in the user's tmux, a Codex worker is
-   noticed only by the quiet check (section 3).
+2. Pass on any `warnings` it prints. With `bell-action` set to `none` or `current` in the user's
+   tmux (or `other`, while the user looks at that window), a Codex worker is noticed only by the
+   quiet check (section 3).
 3. The repo has a remote: workers push their branches.
 
 ## 2. Starting a worker
@@ -92,10 +93,11 @@ window records the bell. The records go to `<worktree>/.fleet-events.jsonl`. The
 
 ## 3. Waiting and reading
 
-- **Wait:** after each brief or follow-up, and after handling each event, run
-  `H wait --name <a> --name <b> …` with every worker whose task is not finished. In Claude Code,
-  run it as a background task; you are woken when it returns. It returns as soon as one worker
-  needs you, with that worker's `name` and an `event`:
+- **Wait:** in Claude Code, run `H wait --name <name>` as a background task for each worker whose
+  task is not finished: right after you send it something, and again after you handle what its
+  wait returned. You are woken when one returns. One wait per worker is enough; a second one does
+  no harm, since each event is reported by one wait only. In Codex, see the last item below. A wait
+  returns as soon as its worker needs you, with the worker's `name` and an `event`:
   - `stopped`: its turn ended. `message` holds a Claude Code worker's last reply. Read the screen
     too (`fleet-core` section 8).
   - `failed`: its turn ended on an API error, such as a usage or rate limit; `message` says which.
@@ -107,7 +109,8 @@ window records the bell. The records go to `<worktree>/.fleet-events.jsonl`. The
   - `ended`: its session ended. Read its screen.
   - `quiet`: it should be working, but has printed nothing for three minutes and reported nothing.
     Read its screen: it is often a prompt or a question that nothing reported.
-  - `gone`: its window or pane is gone.
+  - `gone`: its window or pane is gone; someone closed it. `H retire` needs the window, so keep
+    the worker: report it with its worktree and branch, and let the user decide.
   - `timeout`: nothing happened for 30 minutes. Read the screens, then wait again.
 
   Each event is reported once, so a wait never returns at once on an event you already handled.

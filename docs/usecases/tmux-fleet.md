@@ -120,4 +120,5 @@ The same `~/.clausona/fleet.json` as the other fleet plugins: `workers`, `routin
 - tmux 3.2 or newer, on macOS, Linux or WSL. tmux does not run natively on Windows.
 - tmux cannot tell an agent's state by itself, so the plugin relies on what each worker reports,
   with the three-minute quiet check as a fallback.
-- If your tmux has `bell-action none`, Codex workers are noticed only by that quiet check.
+- If your tmux has `bell-action none` or `current`, Codex workers are noticed only by that quiet
+  check.

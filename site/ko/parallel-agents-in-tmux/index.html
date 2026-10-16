@@ -177,7 +177,7 @@ codex plugin add tmux-fleet@clausona</code></pre>
       <p>Codex 기본 샌드박스에서는 Codex 워커가 <code>.git</code>에 쓸 수 없고 네트워크에도 나가지 못합니다. 그래서 커밋 전에 한 번, push 전에 또 한 번 승인을 묻습니다. 그 워커의 창에서 승인하면 됩니다.</p>
       <p>알아서 하게 하려면 아래 설정 파일의 <code>permissions</code>에 <code>"codexSandbox": "danger-full-access"</code>를 넣으세요. 이러면 워커의 Codex 샌드박스가 꺼집니다.</p>
       <p>Codex 설정에서 하나 더 볼 게 있습니다. <code>[shell_environment_policy]</code>에 <code>inherit = "core"</code>가 있으면, Codex가 실행하는 명령에서 <code>TMUX</code>가 보이지 않습니다. 그러면 메인 세션이 tmux 세션을 찾지 못합니다. 메인 세션을 <code>-c shell_environment_policy.inherit=all</code>로 띄우세요.</p>
-      <p>tmux에 <code>bell-action none</code>이 설정돼 있으면 Codex 워커의 벨이 hook까지 닿지 않습니다. 이때 메인 세션은 3분 동안 조용한지 보는 확인으로만 그 워커를 알아챕니다.</p>
+      <p>tmux에 <code>bell-action none</code>이나 <code>current</code>가 설정돼 있으면, 뒤에 있는 창의 Codex 워커 벨이 hook까지 닿지 않습니다. 이때 메인 세션은 3분 동안 조용한지 보는 확인으로만 그 워커를 알아챕니다.</p>
 
       <h2 id="settings">설정</h2>
       <p>조율 플러그인들은 <code>~/.clausona/fleet.json</code> 파일 하나를 함께 씁니다. 워커로 쓸 프로필 목록, 자연어로 적은 배정 규칙, 사용량 한도, 끝난 워커를 자동으로 정리할지를 여기에 적습니다. 각 키의 설명은 <a href="../parallel-agents/#routing">에이전트 병렬 실행 가이드</a>에 있습니다.</p>

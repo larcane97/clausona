@@ -14,6 +14,9 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  rmdirSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -35,6 +38,7 @@ class CliError extends Error {}
 const HELPER = fileURLToPath(import.meta.url);
 const EVENTS = ".fleet-events.jsonl";
 const WAITED = ".fleet-wait.json";
+const LOCK = ".fleet-wait.lock";
 const SETTINGS = ".fleet-claude.json";
 const NAME = /^[a-z][a-z0-9_-]{0,31}$/;
 const CLAUDE_HOOKS = ["UserPromptSubmit", "Stop", "StopFailure", "Notification", "SessionEnd"];
@@ -56,10 +60,12 @@ function sleep(ms) {
 }
 
 function tmux(args) {
+  // tmux reads an argument that ends in ";" as the end of a command, and "\;" as a literal ";".
+  const escaped = args.map((arg) => (arg.endsWith(";") ? `${arg.slice(0, -1)}\\;` : arg));
   try {
     // -u: without a UTF-8 locale, tmux prints every non-ASCII character as "_", which would
     // garble labels and worktree paths read back from it.
-    return execFileSync("tmux", ["-u", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).replace(
+    return execFileSync("tmux", ["-u", ...escaped], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).replace(
       /\n$/,
       "",
     );
@@ -69,10 +75,19 @@ function tmux(args) {
 }
 
 function git(cwd, args) {
-  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  try {
+    return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  } catch (err) {
+    throw new CliError(`git ${args.join(" ")} in ${cwd} failed: ${String(err.stderr || err.message).trim()}`);
+  }
 }
 
-/** One word for the shell the worker's pane runs: sh, bash, zsh or fish. */
+/** tmux expands #{...} formats in window names and start directories; ## stands for a literal #. */
+function literal(text) {
+  return text.replaceAll("#", "##");
+}
+
+/** One word for the worker's shell: sh, bash or zsh (fish reads it the same unless it holds a backslash). */
 function shellWord(arg) {
   return /^[\w@%+:,./-][\w@%+=:,./-]*$/.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`;
 }
@@ -157,33 +172,43 @@ function readEvents(worktree) {
   });
 }
 
-function appendEvent(worktree, event, message) {
+function appendEvent(worktree, event, message, pane) {
   const line = { at: Date.now(), event };
+  if (pane) line.pane = pane;
   if (message !== undefined && message !== null && message !== "") {
     line.message = (typeof message === "string" ? message : JSON.stringify(message)).slice(0, 4000);
   }
   appendFileSync(path.join(worktree, EVENTS), `${JSON.stringify(line)}\n`);
 }
 
-/** What the worker is doing after `events`: the last event, skipping an idle notice that adds nothing. */
-function stateOf(events) {
+// After a hand-over the old pane's session can still report, for example its SessionEnd when the
+// pane is closed. Only the worker's current pane counts. A bell carries no pane.
+function mine(entry, pane) {
+  return entry.event !== "unreadable" && (!entry.pane || entry.pane === pane);
+}
+
+/** What the worker in `pane` is doing after `events`: the last event, skipping an idle notice that adds nothing. */
+function stateOf(events, pane) {
   let state;
-  for (const { event } of events) {
-    if (event === "unreadable") continue;
-    if (event === "idle" && !(state === "blocked" || WORKING.has(state))) continue;
-    state = event;
+  for (const entry of events) {
+    if (!mine(entry, pane)) continue;
+    if (entry.event === "idle" && !(state === "blocked" || WORKING.has(state))) continue;
+    state = entry.event;
   }
   return state;
 }
 
-// Claude Code sends its idle notice a minute after every turn. It matters only when the turn did
-// not end with an event of its own: a permission prompt the user turned down with Esc, or a line
-// the worker never took up.
-function isWake(events, i) {
-  const { event } = events[i];
-  if (WAKE.has(event)) return true;
-  if (event !== "idle") return false;
-  const before = stateOf(events.slice(0, i));
+// Claude Code sends its idle notice a minute after every turn, and never while a permission prompt
+// is open. It matters only when the turn did not end with an event of its own: a permission
+// prompt the user turned down with Esc, or a line the worker never took up. A notice that lands
+// between a line and the turn it starts says nothing either.
+function isWake(events, i, pane) {
+  const entry = events[i];
+  if (!mine(entry, pane)) return false;
+  if (WAKE.has(entry.event)) return true;
+  if (entry.event !== "idle") return false;
+  if (events.slice(i + 1).some((later) => later.event === "working" && mine(later, pane))) return false;
+  const before = stateOf(events.slice(0, i), pane);
   return before === "blocked" || WORKING.has(before);
 }
 
@@ -196,14 +221,48 @@ function readWaited(worktree) {
   }
 }
 
+// Written whole and renamed into place, so a wait reading it never sees it half written.
 function writeWaited(worktree, waited) {
-  writeFileSync(path.join(worktree, WAITED), `${JSON.stringify(waited)}\n`);
+  const file = path.join(worktree, WAITED);
+  writeFileSync(`${file}.${process.pid}.tmp`, `${JSON.stringify(waited)}\n`);
+  renameSync(`${file}.${process.pid}.tmp`, file);
 }
 
-function hasWake(worktree) {
+// Two waits can watch one worker, for example one started before another returned. The lock lets
+// one of them report each event; the other then finds it delivered and waits on.
+async function withLock(worktree, fn) {
+  const lock = path.join(worktree, LOCK);
+  for (let tries = 0; ; tries++) {
+    try {
+      mkdirSync(lock);
+      break;
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+      try {
+        // A wait killed while it held the lock leaves it behind.
+        if (Date.now() - statSync(lock).mtimeMs > 10_000) rmdirSync(lock);
+      } catch {
+        // gone already
+      }
+      if (tries > 200) throw new CliError(`could not take the lock ${lock}`);
+      await sleep(50);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try {
+      rmdirSync(lock);
+    } catch {
+      // gone already
+    }
+  }
+}
+
+function hasWake(worktree, pane) {
   const events = readEvents(worktree);
   const { delivered } = readWaited(worktree);
-  for (let i = delivered; i < events.length; i++) if (isWake(events, i)) return true;
+  for (let i = delivered; i < events.length; i++) if (isWake(events, i, pane)) return true;
   return false;
 }
 
@@ -219,9 +278,13 @@ function status() {
   const clausona = findOnPath("clausona");
   if (!clausona) throw new CliError("clausona is not on PATH: install it first");
   const warnings = [];
-  if (bellAction === "none") {
+  if (bellAction === "none" || bellAction === "current") {
     warnings.push(
-      "bell-action is none, so tmux runs no bell hook and a Codex worker is noticed only when it has been quiet for --quiet seconds",
+      `bell-action is ${bellAction}, so tmux runs no bell hook for a worker's window in the background, and a Codex worker is noticed only when it has been quiet for --quiet seconds`,
+    );
+  } else if (bellAction === "other") {
+    warnings.push(
+      "bell-action is other, so while the user looks at a Codex worker's window tmux runs no bell hook for it, and that worker is noticed only when it has been quiet for --quiet seconds",
     );
   }
   return { ok: true, tmux: version.replace(/^tmux /, ""), session, bellAction, clausona, warnings };
@@ -289,10 +352,15 @@ function start(v, rest) {
   } else {
     if (existing) throw new CliError(`a worker named ${v.name} already exists, in window ${existing.window}`);
     if (v.worktree === undefined || v.label === undefined) throw new CliError("start needs --worktree and --label");
-    worktree = realpathSync(v.worktree);
+    try {
+      worktree = realpathSync(v.worktree);
+    } catch {
+      throw new CliError(`no such folder: ${v.worktree}`);
+    }
   }
-  if (git(worktree, ["rev-parse", "--is-inside-work-tree"]) !== "true")
-    throw new CliError(`${worktree} is not a git worktree`);
+  // The .fleet-* files go in the worktree's top folder, where info/exclude's /.fleet-* matches them.
+  const top = realpathSync(git(worktree, ["rev-parse", "--show-toplevel"]));
+  if (top !== worktree) throw new CliError(`${worktree} is inside the worktree ${top}: give the top folder`);
   excludeFleetFiles(worktree);
 
   const args = ["run", profile, "--", ...toolArgs];
@@ -303,8 +371,8 @@ function start(v, rest) {
   let pane;
   if (existing) {
     window = existing.window;
-    pane = tmux(["split-window", "-d", "-v", "-t", existing.pane, "-c", worktree, "-P", "-F", "#{pane_id}"]);
-    if (v.label !== undefined) tmux(["rename-window", "-t", window, v.label]);
+    pane = tmux(["split-window", "-d", "-v", "-t", existing.pane, "-c", literal(worktree), "-P", "-F", "#{pane_id}"]);
+    if (v.label !== undefined) tmux(["rename-window", "-t", window, literal(v.label)]);
   } else {
     const session = tmux(["display-message", "-p", ...here(), "#{session_id}"]);
     // -n also turns automatic-rename off, so the label stays while the agent sets its titles.
@@ -314,13 +382,25 @@ function start(v, rest) {
       "-t",
       `${session}:`,
       "-n",
-      v.label,
+      literal(v.label),
       "-c",
-      worktree,
+      literal(worktree),
       "-P",
       "-F",
       "#{window_id} #{pane_id}",
     ]).split(" ");
+  }
+  // The launch line is typed into this shell, so it must stand in the worktree.
+  const cwd = tmux(["display-message", "-p", "-t", pane, "#{pane_current_path}"]);
+  let real = cwd;
+  try {
+    real = realpathSync(cwd);
+  } catch {
+    // not a folder this process can see
+  }
+  if (cwd && real !== worktree) {
+    tmux(existing ? ["kill-pane", "-t", pane] : ["kill-window", "-t", window]);
+    throw new CliError(`tmux opened the pane in ${cwd}, not in ${worktree}; nothing was started`);
   }
   setWindow(window, { "@fleet-name": v.name, "@fleet-worktree": worktree, "@fleet-pane": pane, "@fleet-tool": v.tool });
   if (v.tool === "codex") {
@@ -359,13 +439,17 @@ async function send(v, keys) {
   if (v.text.startsWith("-")) throw new CliError('the line starts with "-": start it with a word');
   if (/[\r\n]/.test(v.text))
     throw new CliError("the line holds a line break: send one line, and put the rest in a file");
+  const state = stateOf(readEvents(w.worktree), w.pane);
   // Typed into a permission prompt, a line's letters and digits would answer it.
-  if (stateOf(readEvents(w.worktree)) === "blocked") {
+  if (state === "blocked") {
     throw new CliError(
       `${w.name} waits at a permission prompt or a question: read its screen first. Leave a permission prompt to the user, and answer a question with --keys`,
     );
   }
-  appendEvent(w.worktree, "sent");
+  if (state === "ended") {
+    throw new CliError(`${w.name}'s session has ended, so the line would run in its shell: read its screen`);
+  }
+  appendEvent(w.worktree, "sent", undefined, w.pane);
   tmux(["send-keys", "-t", w.pane, "-l", v.text]);
   // Codex takes text followed at once by Enter as a paste and keeps the Enter in its composer.
   await sleep(1000);
@@ -388,31 +472,40 @@ async function wait(names, { timeout, quiet }) {
     for (const name of names) {
       const w = all.find((x) => x.name === name);
       if (!w || !live.has(w.pane)) return { event: "gone", name };
-      if (hasWake(w.worktree)) {
+      if (hasWake(w.worktree, w.pane)) {
         // A turn often ends with a few events at once (Codex's bell and its final redraw, a
         // prompt answered just before the stop): let them land, and report them as one.
         await sleep(1500);
-        const events = readEvents(w.worktree);
-        const waited = readWaited(w.worktree);
-        let last;
-        for (let i = waited.delivered; i < events.length; i++) if (isWake(events, i)) last = events[i];
-        writeWaited(w.worktree, { ...waited, delivered: events.length });
-        return {
-          event: last.event,
-          name,
-          at: new Date(last.at).toISOString(),
-          ...(last.message ? { message: last.message } : {}),
-        };
+        const last = await withLock(w.worktree, () => {
+          const events = readEvents(w.worktree);
+          const waited = readWaited(w.worktree);
+          let found;
+          for (let i = waited.delivered; i < events.length; i++) if (isWake(events, i, w.pane)) found = events[i];
+          if (found) writeWaited(w.worktree, { ...waited, delivered: events.length });
+          return found;
+        });
+        // Undefined when another wait reported it first.
+        if (last) {
+          return {
+            event: last.event,
+            name,
+            at: new Date(last.at).toISOString(),
+            ...(last.message ? { message: last.message } : {}),
+          };
+        }
+        continue;
       }
       // A worker that should be working but has printed nothing for `quiet` seconds may sit at a
       // prompt no event reported. Its spinner and timer redraw every second while it works.
-      if (WORKING.has(stateOf(readEvents(w.worktree)))) {
-        const silent = Date.now() / 1000 - w.activity;
-        const waited = readWaited(w.worktree);
-        if (w.activity > 0 && silent >= quiet && waited.quietAt !== w.activity) {
+      const silent = Date.now() / 1000 - w.activity;
+      if (w.activity > 0 && silent >= quiet && WORKING.has(stateOf(readEvents(w.worktree), w.pane))) {
+        const first = await withLock(w.worktree, () => {
+          const waited = readWaited(w.worktree);
+          if (waited.quietAt === w.activity) return false;
           writeWaited(w.worktree, { ...waited, quietAt: w.activity });
-          return { event: "quiet", name, silentSeconds: Math.floor(silent) };
-        }
+          return true;
+        });
+        if (first) return { event: "quiet", name, silentSeconds: Math.floor(silent) };
       }
     }
     if (Date.now() - started >= timeout * 1000) return { event: "timeout", names };
@@ -480,7 +573,8 @@ function record(v) {
       appendEvent(v.worktree, "bell");
     } else if (v.source === "claude") {
       const found = claudeEvent(JSON.parse(readFileSync(0, "utf8")));
-      if (found) appendEvent(v.worktree, ...found);
+      // The hook runs in the worker's pane, which tmux names in TMUX_PANE.
+      if (found) appendEvent(v.worktree, found[0], found[1], process.env.TMUX_PANE);
     }
   } catch {
     // nothing to record

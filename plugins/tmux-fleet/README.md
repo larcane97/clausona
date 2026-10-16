@@ -75,8 +75,8 @@ is retired until you say yes.
 
 It closes only the windows and panes it created, and leaves a worker's permission prompt to you.
 
-If your tmux sets `bell-action none`, tmux runs no bell hook. A Codex worker is then noticed only
-after it has been quiet for three minutes.
+If your tmux sets `bell-action none` or `current`, tmux runs no bell hook for a worker's window in
+the background. A Codex worker is then noticed only after it has been quiet for three minutes.
 
 ## More
 

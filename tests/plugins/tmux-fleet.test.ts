@@ -107,15 +107,16 @@ async function startClaude(name: string): Promise<{ wt: string; settings: string
   return { wt, settings: path.join(wt, ".fleet-claude.json"), window: started.window, pane: started.pane };
 }
 
-/** Runs the hook command Claude Code would run for `event`, with `payload` on stdin. */
-function hook(settings: string, payload: Record<string, unknown>): void {
+/** Runs the hook command Claude Code in `pane` would run for the payload's event, with the payload on stdin. */
+function hook({ settings, pane }: { settings: string; pane: string }, payload: Record<string, unknown>): void {
   const hooks = JSON.parse(readFileSync(settings, "utf8")).hooks;
   const event = String(payload.hook_event_name);
   for (const entry of hooks[event]) {
     for (const { command } of entry.hooks) {
       const r = spawnSync("/bin/sh", ["-c", command], {
         input: JSON.stringify(payload),
-        env,
+        // A hook inherits the worker's environment, where tmux names its pane.
+        env: { ...env, TMUX_PANE: pane },
         encoding: "utf8",
         timeout: SPAWN_TIMEOUT_MS,
       });
@@ -221,11 +222,14 @@ describe.skipIf(!hasTmux)("tmux-fleet helper", () => {
       expect(s.clausona).toBe(path.join(dir, "bin", "clausona"));
     });
 
-    it("warns that Codex workers go unnoticed by the bell when bell-action is none", async () => {
-      tmx("set-option", "-g", "bell-action", "none");
-      const s = await json(["status"]);
-      expect(s.bellAction).toBe("none");
-      expect(s.warnings.join(" ")).toMatch(/bell-action/);
+    it("warns when bell-action keeps a Codex worker's bell from the hook", async () => {
+      // tmux runs the hook only for windows bell-action covers; a worker's window is in the background.
+      for (const action of ["none", "current", "other"]) {
+        tmx("set-option", "-g", "bell-action", action);
+        const s = await json(["status"]);
+        expect(s.bellAction).toBe(action);
+        expect(s.warnings.join(" ")).toMatch(new RegExp(`bell-action is ${action}`));
+      }
     });
 
     it("refuses to run outside tmux", async () => {
@@ -287,7 +291,7 @@ describe.skipIf(!hasTmux)("tmux-fleet helper", () => {
       ]);
       expect(readFileSync(path.join(repo, ".git", "info", "exclude"), "utf8").split("\n")).toContain("/.fleet-*");
       // The settings file and the event log never show up as changes.
-      hook(settings, { hook_event_name: "UserPromptSubmit", prompt: "go" });
+      hook({ settings, pane: started.pane }, { hook_event_name: "UserPromptSubmit", prompt: "go" });
       expect(git(wt, "status", "--porcelain")).toBe("");
     });
 
@@ -310,6 +314,57 @@ describe.skipIf(!hasTmux)("tmux-fleet helper", () => {
       expect(r.code).toBe(1);
       expect(r.stderr).toMatch(/already/);
       expect(fleetWindows()).toEqual(["w1"]);
+    });
+
+    it("starts in a worktree whose path and label hold tmux formats", async () => {
+      writeFileSync(path.join(fake, "bell"), "");
+      const wt = path.join(trees, "fix #S #{pane_id}");
+      git(repo, "worktree", "add", "-q", "-b", "fleet/fmt", wt);
+      const started = await json([
+        "start",
+        "--name",
+        "w1",
+        "--label",
+        "fix #S",
+        "--worktree",
+        wt,
+        "--tool",
+        "codex",
+        "--",
+        "codex:work",
+      ]);
+      expect(tmx("display", "-p", "-t", started.pane, "#{pane_current_path}")).toBe(wt);
+      expect(tmx("display", "-p", "-t", started.window, "#{window_name}")).toBe("fix #S");
+      await argvOf("fix #S #{pane_id}");
+      // The bell hook carries the path through tmux's run-shell, which expands formats too.
+      expect(await json(["wait", "--name", "w1", "--timeout", "20"])).toMatchObject({ event: "bell" });
+    });
+
+    it("refuses a folder inside a worktree, and a missing one, with a one-line error", async () => {
+      const wt = addWorktree("w1");
+      mkdirSync(path.join(wt, "sub"));
+      for (const [folder, why] of [
+        [path.join(wt, "sub"), /top folder/],
+        [path.join(dir, "missing"), /no such folder/],
+      ] as const) {
+        const r = await run([
+          "start",
+          "--name",
+          "w1",
+          "--label",
+          "x",
+          "--worktree",
+          folder,
+          "--tool",
+          "claude",
+          "--",
+          "claude:work",
+        ]);
+        expect(r.code).toBe(1);
+        expect(r.stderr).toMatch(why);
+        expect(r.stderr.trim().split("\n")).toHaveLength(1);
+      }
+      expect(fleetWindows()).toEqual([]);
     });
 
     it("starts a Codex worker whose bell wakes a wait", async () => {
@@ -380,9 +435,9 @@ describe.skipIf(!hasTmux)("tmux-fleet helper", () => {
 
   describe("wait", () => {
     it("wakes on a Stop hook with the last message, and not again for the same event", async () => {
-      const { settings } = await startClaude("w1");
-      hook(settings, { hook_event_name: "UserPromptSubmit", prompt: "go" });
-      hook(settings, stop());
+      const w1 = await startClaude("w1");
+      hook(w1, { hook_event_name: "UserPromptSubmit", prompt: "go" });
+      hook(w1, stop());
       const woke = await json(["wait", "--name", "w1", "--timeout", "10"]);
       expect(woke).toMatchObject({ event: "stopped", name: "w1" });
       expect(woke.message).toContain("FLEET_WORKER_DONE: ok");
@@ -390,36 +445,36 @@ describe.skipIf(!hasTmux)("tmux-fleet helper", () => {
     });
 
     it("ignores the idle notice after a stop, but reports it after a prompt the user turned down", async () => {
-      const { settings } = await startClaude("w1");
-      hook(settings, { hook_event_name: "UserPromptSubmit", prompt: "go" });
-      hook(settings, stop());
+      const w1 = await startClaude("w1");
+      hook(w1, { hook_event_name: "UserPromptSubmit", prompt: "go" });
+      hook(w1, stop());
       expect((await json(["wait", "--name", "w1", "--timeout", "10"])).event).toBe("stopped");
-      hook(settings, notice("idle_prompt"));
+      hook(w1, notice("idle_prompt"));
       expect((await json(["wait", "--name", "w1", "--timeout", "2"])).event).toBe("timeout");
-      hook(settings, { hook_event_name: "UserPromptSubmit", prompt: "more" });
-      hook(settings, notice("permission_prompt"));
+      hook(w1, { hook_event_name: "UserPromptSubmit", prompt: "more" });
+      hook(w1, notice("permission_prompt"));
       expect(await json(["wait", "--name", "w1", "--timeout", "10"])).toMatchObject({
         event: "blocked",
         message: "permission_prompt text",
       });
       // Turned down with Esc: no Stop comes, only the idle notice a minute later.
-      hook(settings, notice("idle_prompt"));
+      hook(w1, notice("idle_prompt"));
       expect((await json(["wait", "--name", "w1", "--timeout", "10"])).event).toBe("idle");
     });
 
     it("turns a burst of events into one wake, reporting the latest", async () => {
-      const { settings } = await startClaude("w1");
-      hook(settings, { hook_event_name: "UserPromptSubmit", prompt: "go" });
-      hook(settings, notice("permission_prompt"));
-      hook(settings, stop());
+      const w1 = await startClaude("w1");
+      hook(w1, { hook_event_name: "UserPromptSubmit", prompt: "go" });
+      hook(w1, notice("permission_prompt"));
+      hook(w1, stop());
       expect((await json(["wait", "--name", "w1", "--timeout", "10"])).event).toBe("stopped");
       expect((await json(["wait", "--name", "w1", "--timeout", "2"])).event).toBe("timeout");
     });
 
     it("reports a turn that failed", async () => {
-      const { settings } = await startClaude("w1");
-      hook(settings, { hook_event_name: "UserPromptSubmit", prompt: "go" });
-      hook(settings, { hook_event_name: "StopFailure", error: "rate_limit" });
+      const w1 = await startClaude("w1");
+      hook(w1, { hook_event_name: "UserPromptSubmit", prompt: "go" });
+      hook(w1, { hook_event_name: "StopFailure", error: "rate_limit" });
       expect(await json(["wait", "--name", "w1", "--timeout", "10"])).toMatchObject({
         event: "failed",
         message: "rate_limit",
@@ -433,6 +488,40 @@ describe.skipIf(!hasTmux)("tmux-fleet helper", () => {
       expect((await json(["wait", "--name", "w1", "--quiet", "2", "--timeout", "3"])).event).toBe("timeout");
     });
 
+    it("lets one of two waits on a worker report an event, while the other waits on", async () => {
+      const w1 = await startClaude("w1");
+      const first = run(["wait", "--name", "w1", "--timeout", "8"]);
+      const second = run(["wait", "--name", "w1", "--timeout", "8"]);
+      await new Promise((r) => setTimeout(r, 500));
+      hook(w1, { hook_event_name: "UserPromptSubmit", prompt: "go" });
+      hook(w1, stop());
+      const results = await Promise.all([first, second]);
+      for (const r of results) {
+        expect(r.stderr).toBe("");
+        expect(r.code).toBe(0);
+      }
+      expect(results.map((r) => JSON.parse(r.stdout).event).sort()).toEqual(["stopped", "timeout"]);
+    });
+
+    it("ignores what the old pane reports after a hand-over", async () => {
+      const w1 = await startClaude("w1");
+      const next = await json(["start", "--name", "w1", "--handover", "--tool", "claude", "--", "claude:work"]);
+      await json(["send", "--name", "w1", "--text", "Read .fleet-brief.md in this folder and do what it says."]);
+      // Closing the old pane makes its Claude Code run SessionEnd.
+      hook(w1, { hook_event_name: "SessionEnd", reason: "other" });
+      expect((await json(["wait", "--name", "w1", "--timeout", "3"])).event).toBe("timeout");
+      hook({ settings: w1.settings, pane: next.pane }, stop());
+      expect((await json(["wait", "--name", "w1", "--timeout", "10"])).event).toBe("stopped");
+    });
+
+    it("ignores an idle notice that lands between a line and the turn it starts", async () => {
+      const w1 = await startClaude("w1");
+      await json(["send", "--name", "w1", "--text", "Read .fleet-brief.md in this folder and do what it says."]);
+      hook(w1, notice("idle_prompt"));
+      hook(w1, { hook_event_name: "UserPromptSubmit", prompt: "go" });
+      expect((await json(["wait", "--name", "w1", "--timeout", "3"])).event).toBe("timeout");
+    });
+
     it("reports a worker whose window is gone", async () => {
       const { window } = await startClaude("w1");
       tmx("kill-window", "-t", window);
@@ -442,8 +531,8 @@ describe.skipIf(!hasTmux)("tmux-fleet helper", () => {
     it("returns for whichever of several workers needs attention", async () => {
       await startClaude("w1");
       const second = await startClaude("w2");
-      hook(second.settings, { hook_event_name: "UserPromptSubmit", prompt: "go" });
-      hook(second.settings, stop());
+      hook(second, { hook_event_name: "UserPromptSubmit", prompt: "go" });
+      hook(second, stop());
       expect(await json(["wait", "--name", "w1", "--name", "w2", "--timeout", "10"])).toMatchObject({
         event: "stopped",
         name: "w2",
@@ -463,6 +552,38 @@ describe.skipIf(!hasTmux)("tmux-fleet helper", () => {
       }, "the echoed line");
     });
 
+    it("keeps a semicolon at the end of a line and of a label", async () => {
+      const wt = addWorktree("w1");
+      const started = await json([
+        "start",
+        "--name",
+        "w1",
+        "--label",
+        "semi;",
+        "--worktree",
+        wt,
+        "--tool",
+        "claude",
+        "--",
+        "claude:work",
+      ]);
+      expect(tmx("display", "-p", "-t", started.window, "#{window_name}")).toBe("semi;");
+      const line = "run tests; fix it;";
+      await json(["send", "--name", "w1", "--text", line]);
+      await until(() => {
+        const screen = execFileSync(process.execPath, [SCRIPT, "read", "--name", "w1"], { env, encoding: "utf8" });
+        return screen.split(line).length - 1 >= 2 ? true : undefined;
+      }, "the echoed line");
+    });
+
+    it("refuses text once the worker's session has ended", async () => {
+      const w1 = await startClaude("w1");
+      hook(w1, { hook_event_name: "SessionEnd", reason: "prompt_input_exit" });
+      const r = await run(["send", "--name", "w1", "--text", "hello"]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/ended/);
+    });
+
     it("refuses a line that starts with a dash", async () => {
       await startClaude("w1");
       // parseArgs turns down `--text -p…` and points to this form.
@@ -472,9 +593,9 @@ describe.skipIf(!hasTmux)("tmux-fleet helper", () => {
     });
 
     it("refuses text while the worker waits at a permission prompt, but sends keys", async () => {
-      const { settings } = await startClaude("w1");
-      hook(settings, { hook_event_name: "UserPromptSubmit", prompt: "go" });
-      hook(settings, notice("permission_prompt"));
+      const w1 = await startClaude("w1");
+      hook(w1, { hook_event_name: "UserPromptSubmit", prompt: "go" });
+      hook(w1, notice("permission_prompt"));
       const r = await run(["send", "--name", "w1", "--text", "yes do it"]);
       expect(r.code).toBe(1);
       expect(r.stderr).toMatch(/permission prompt/);
@@ -517,8 +638,9 @@ describe.skipIf(!hasTmux)("tmux-fleet helper", () => {
     });
 
     it("removes a clean, pushed worker's worktree and window, and keeps its branch", async () => {
-      const { wt, settings } = await startClaude("w1");
-      hook(settings, stop());
+      const w1 = await startClaude("w1");
+      const { wt } = w1;
+      hook(w1, stop());
       commit(wt, "a.txt");
       git(wt, "push", "-q", "-u", "origin", "HEAD");
       expect(await json(["retire", "--name", "w1"])).toMatchObject({

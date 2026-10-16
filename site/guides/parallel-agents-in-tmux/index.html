@@ -175,7 +175,7 @@ codex plugin add tmux-fleet@clausona</code></pre>
       <p>Codex workers start with <code>--disable hooks</code>, so they don't stop at Codex's "Hooks need review" screen. Whether to trust hooks stays your decision.</p>
       <p>In Codex's default sandbox, a Codex worker can't write to <code>.git</code> or reach the network. So it asks before it commits and again before it pushes, and you approve those in its window. If you'd rather it did that on its own, add <code>"codexSandbox": "danger-full-access"</code> to <code>permissions</code> in the settings file below. That turns Codex's sandbox off for workers.</p>
       <p>One more Codex setting matters here. If your Codex config has <code>inherit = "core"</code> under <code>[shell_environment_policy]</code>, Codex hides <code>TMUX</code> from the commands it runs, and the main session can't find your tmux session. Start it with <code>-c shell_environment_policy.inherit=all</code> instead.</p>
-      <p>If your tmux has <code>bell-action none</code>, the bell from a Codex worker never reaches the hook. The main session then notices that worker only through the three-minute quiet check.</p>
+      <p>If your tmux has <code>bell-action none</code> or <code>current</code>, the bell from a Codex worker in a background window never reaches the hook. The main session then notices that worker only through the three-minute quiet check.</p>
 
       <h2 id="settings">Settings</h2>
       <p>The fleet plugins share one file, <code>~/.clausona/fleet.json</code>. It can list the profiles that may be workers, your routing rules in plain words, a usage limit, and whether finished workers are removed automatically. The <a href="../parallel-claude-code-agents/#routing">agent fleets guide</a> explains each key.</p>
