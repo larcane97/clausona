@@ -76,7 +76,8 @@ Things it handles on the way:
   that as `blocked`; the orchestrator reads the screen and answers it for the repo you asked it to
   work on, and nothing else.
 - **Account limits.** If a worker stops at a usage limit, the orchestrator opens a pane next to it
-  on another profile and hands the task over.
+  on another profile and hands the task over. It then renames the workspace, so the sidebar shows
+  the account that now runs it.
 - **Retiring.** `herdr worktree remove` refuses a worktree with uncommitted changes, and the
   orchestrator never forces it. It also checks that the branch is pushed first.
 
