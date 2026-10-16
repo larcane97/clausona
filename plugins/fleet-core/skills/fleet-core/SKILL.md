@@ -210,9 +210,9 @@ in another language, or missing.
 
 ## 8. Reading an event
 
-When a wait returns, find the worker's last reply. Look first in the runner's record of it, which
-the runner skill names, and then on the worker's screen (the runner skill says how). The screen
-alone misses finished workers:
+When a wait returns, find the worker's last reply, in this order: the runner's record of it, which
+the runner skill names; then, for a Claude Code worker, the script below; then the worker's screen
+(the runner skill says how). The screen alone misses finished workers:
 
 - Claude Code in full-screen mode keeps no scrollback, so a read returns only what the screen
   shows. A reply taller than that never shows whole.
@@ -225,9 +225,11 @@ BLOCKED line, run
 `node <base>/scripts/last-reply.mjs --worktree <worktree> --config-dir <profile configDir>`.
 `<base>` is this skill's base directory, the folder that holds this file. The configDir is the
 worker's profile's, from `clausona list --json`. The script prints the worker's last reply from
-Claude Code's own record of the session, which outlives the screen. `"reply": null` means the worker
-has said nothing since its last prompt. It reads Claude Code sessions only: for a Codex worker, read
-the screen.
+Claude Code's own record of the session, which outlives the screen, and `at`, when the worker wrote
+it. A reply from before you last sent the worker something does not answer that. With
+`"reply": null`, `why` says what the script found instead: nothing since the last prompt, a turn
+still going, or only an earlier task's session in a worktree of the same path. It reads Claude Code
+sessions only: for a Codex worker, read the screen.
 
 Then, from the reply or the screen:
 

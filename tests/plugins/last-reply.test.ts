@@ -189,9 +189,41 @@ describe("last-reply", () => {
 
   it("says why there is no reply: a turn still at work, or a session with none yet", async () => {
     session("s1", [prompt("go"), toolCall("m1"), toolResult("m1")]);
-    expect(await lastReply()).toMatchObject({ reply: null, why: "nothing since its last prompt" });
+    expect(await lastReply()).toMatchObject({ reply: null, why: "its turn is still going" });
     session("s1", [system("informational")]);
     expect(await lastReply()).toMatchObject({ reply: null, why: "no reply yet" });
+  });
+
+  it("does not take what a worker said before a tool call for its reply", async () => {
+    session("s1", [prompt("go"), said("m1", "Let me run the tests."), toolCall("m1")]);
+    expect(await lastReply()).toMatchObject({ reply: null, why: "its turn is still going" });
+    session("s1", [prompt("go"), said("m1", "Let me run the tests."), toolCall("m1"), toolResult("m1")]);
+    expect(await lastReply()).toMatchObject({ reply: null, why: "its turn is still going" });
+  });
+
+  it("does not count a ! shell command the user ran in the worker as a prompt", async () => {
+    session("s1", [
+      prompt("go"),
+      said("m1", "FLEET_WORKER_DONE: done"),
+      prompt("<bash-input>git status</bash-input>"),
+      prompt("<bash-stdout>nothing to commit</bash-stdout><bash-stderr></bash-stderr>"),
+    ]);
+    expect((await lastReply()).reply).toBe("FLEET_WORKER_DONE: done");
+  });
+
+  it("ignores the sessions of an earlier task that ran in a worktree of the same path", async () => {
+    const earlier = session("earlier", [prompt("go"), said("m1", "FLEET_WORKER_DONE: last week's docs task")]);
+    const lastWeek = new Date(Date.now() - 7 * 24 * 3600_000);
+    utimesSync(earlier, lastWeek, lastWeek);
+    // `git worktree add` writes the worktree's .git file when it makes the worktree.
+    writeFileSync(path.join(worktree, ".git"), "gitdir: /repo/.git/worktrees/docs\n");
+    expect(await lastReply()).toEqual({
+      session: null,
+      reply: null,
+      why: "no session since the worktree was made: only an earlier task's",
+    });
+    const current = session("current", [prompt("go"), said("m2", "FLEET_WORKER_DONE: this week's docs task")]);
+    expect(await lastReply()).toMatchObject({ session: current, reply: "FLEET_WORKER_DONE: this week's docs task" });
   });
 
   it("names a long folder as Claude Code does: cut, with a hash of the path", async () => {

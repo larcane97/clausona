@@ -245,7 +245,12 @@ async function lastReply(host, workspaceId, terminalId) {
     return undefined;
   }
   if (transcript?.source !== "harness" || typeof transcript.text !== "string") return undefined;
-  const turns = transcript.text.split(/\n\n(?=(?:User|Assistant): )/);
+  // A hand-over's first prompt quotes the old terminal's transcript, turns and all. They are not
+  // this agent's, and the quote may have lost its start to the host's cut.
+  let text = transcript.text.replace(/<previous-terminal-output>[\s\S]*?<\/previous-terminal-output>/g, "");
+  const quoteEnd = text.lastIndexOf("</previous-terminal-output>");
+  if (quoteEnd >= 0) text = text.slice(quoteEnd + "</previous-terminal-output>".length);
+  const turns = text.split(/\n\n(?=(?:User|Assistant): )/);
   for (let i = turns.length - 1; i >= 0; i--) {
     const turn = turns[i];
     if (turn.startsWith("Assistant: ")) return keepEnd(turn.slice("Assistant: ".length).trim(), REPLY_MAX_CHARS);

@@ -28,7 +28,31 @@ function projectDirName(folder) {
   return `${name.slice(0, PROJECT_DIR_MAX_LENGTH)}-${Math.abs(hash).toString(36)}`;
 }
 
-/** The session file Claude Code wrote last for `worktree`: a hand-over starts a new one. */
+function mtimeOf(file) {
+  try {
+    return statSync(file).mtimeMs;
+  } catch {
+    // Claude Code moves some session files away; one may go between the listing and this.
+    return undefined;
+  }
+}
+
+// When `git worktree add` made the worktree: it writes the worktree's .git file then, and never
+// again. A fleet reuses a path such as ~/.clausona/worktrees/<repo>/<task> for a later task of the
+// same name, and Claude Code keeps the sessions of the earlier one for weeks.
+function madeAt(worktree) {
+  try {
+    const gitFile = statSync(path.join(worktree, ".git"));
+    return gitFile.isFile() ? gitFile.mtimeMs : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The session file Claude Code wrote last for `worktree` (a hand-over starts a new one), or null
+ * when every session there is older than the worktree.
+ */
 function newestSession(configDir, worktree) {
   const given = path.resolve(worktree);
   let real = given;
@@ -37,6 +61,7 @@ function newestSession(configDir, worktree) {
   } catch {
     // a worktree that is gone can still have its sessions
   }
+  const since = madeAt(real);
   for (const folder of new Set([real, given])) {
     const dir = path.join(configDir, "projects", projectDirName(folder));
     let names;
@@ -45,10 +70,12 @@ function newestSession(configDir, worktree) {
     } catch {
       continue;
     }
-    const newest = names
-      .map((name) => ({ file: path.join(dir, name), mtime: statSync(path.join(dir, name)).mtimeMs }))
-      .sort((a, b) => b.mtime - a.mtime)[0];
-    if (newest) return newest.file;
+    const sessions = names
+      .map((name) => ({ file: path.join(dir, name), mtime: mtimeOf(path.join(dir, name)) }))
+      .filter((s) => s.mtime !== undefined)
+      .sort((a, b) => b.mtime - a.mtime);
+    if (sessions.length === 0) continue;
+    return since === undefined || sessions[0].mtime >= since ? sessions[0].file : null;
   }
   throw new CliError(
     `no Claude Code session for ${given} under ${path.join(configDir, "projects")}. ` +
@@ -66,8 +93,12 @@ function textOf(content) {
     .join("\n");
 }
 
+function hasBlock(content, type) {
+  return Array.isArray(content) && content.some((block) => block?.type === type);
+}
+
 // What someone sent the worker. Tool results, a compaction's summary, notes Claude Code adds for
-// itself and the record of a slash command are not.
+// itself, and the record of a slash command or a ! shell command are not.
 function isPrompt(entry) {
   if (entry.type === "attachment") {
     const a = entry.attachment;
@@ -80,12 +111,13 @@ function isPrompt(entry) {
   }
   if (entry.type !== "user" || entry.isMeta || entry.isCompactSummary) return false;
   const text = textOf(entry.message?.content);
-  return text !== "" && !/^<(?:command-|local-command-)/.test(text);
+  return text !== "" && !/^<(?:command-|local-command-|bash-)/.test(text);
 }
 
 /**
- * The last reply in `lines` (oldest first), or a prompt that came after it. Undefined when the
- * lines hold neither, and an earlier part of the file must be read too.
+ * The last reply in `lines` (oldest first); or a prompt that came after it; or a tool call after
+ * it, when the worker's turn is still going. Undefined when the lines hold none of these, and an
+ * earlier part of the file must be read too.
  */
 function judge(lines) {
   let reply;
@@ -102,6 +134,7 @@ function judge(lines) {
       const id = entry.message?.id;
       if (!reply) {
         if (text) reply = { text, at: entry.timestamp, id };
+        else if (hasBlock(entry.message?.content, "tool_use")) return { busy: true };
         continue;
       }
       // Claude Code writes each block of one message as an entry of its own.
@@ -115,6 +148,7 @@ function judge(lines) {
       if (entry.type === "user") return { reply };
       continue;
     }
+    if (entry.type === "user" && hasBlock(entry.message?.content, "tool_result")) return { busy: true };
     if (isPrompt(entry)) return { prompt: true };
   }
   return reply ? { reply, partial: true } : undefined;
@@ -167,9 +201,17 @@ function main(argv) {
   const maxText = values["max-chars"] ?? "8000";
   if (!/^\d+$/.test(maxText) || Number(maxText) === 0) throw new CliError("--max-chars must be a positive integer");
   const session = newestSession(values["config-dir"], values.worktree);
+  if (session === null) {
+    return { session: null, reply: null, why: "no session since the worktree was made: only an earlier task's" };
+  }
   const found = lastReply(session);
   if (!found?.reply) {
-    return { session, reply: null, why: found?.prompt ? "nothing since its last prompt" : "no reply yet" };
+    const why = found?.prompt
+      ? "nothing since its last prompt"
+      : found?.busy
+        ? "its turn is still going"
+        : "no reply yet";
+    return { session, reply: null, why };
   }
   return { session, at: found.reply.at ?? null, reply: keepEnd(found.reply.text, Number(maxText)) };
 }

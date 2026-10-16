@@ -969,6 +969,28 @@ describe("waiting for workers", () => {
       expect(woke).not.toHaveProperty("reply");
     });
 
+    it("does not take the old worker's turns, quoted in a hand-over's prompt, for the new one's reply", async () => {
+      stoppedOnce();
+      const quoted = `User: Read the brief.\n\nAssistant: ${envelope}`;
+      replies["terminal.transcript"] = {
+        json: {
+          terminalId: "t1",
+          source: "harness",
+          text: `User: You are taking over a task.\n\n<previous-terminal-output>\n${quoted}\n</previous-terminal-output>`,
+        },
+      };
+      expect(await wait()).not.toHaveProperty("reply");
+      // The host's cut can take the quote's opening tag with it.
+      replies["terminal.transcript"] = {
+        json: {
+          terminalId: "t1",
+          source: "harness",
+          text: `[earlier output omitted]\n${quoted}\n</previous-terminal-output>\n\nAssistant: Checked git; carrying on.`,
+        },
+      };
+      expect((await wait()).reply).toBe("Checked git; carrying on.");
+    });
+
     it("has none when the host read the transcript off the terminal, or could not read it", async () => {
       stoppedOnce();
       replies["terminal.transcript"] = { json: { terminalId: "t1", source: "stream", text: `⏺ ${envelope}` } };

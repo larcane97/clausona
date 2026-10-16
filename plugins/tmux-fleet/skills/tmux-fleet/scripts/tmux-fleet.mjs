@@ -225,6 +225,21 @@ function isWake(events, i, pane) {
   return before === "blocked" || WORKING.has(before);
 }
 
+// A Claude Code worker that compacts while idle ends that with a Stop of its own, and Claude Code
+// gives it no last message: the conversation it would come from was just compacted away. Such a
+// stop reports the reply of the turn before it, when nothing was sent to the worker in between.
+function withReply(events, i, pane) {
+  const entry = events[i];
+  if (entry.event !== "stopped" || entry.message) return entry;
+  for (let j = i - 1; j >= 0; j--) {
+    const earlier = events[j];
+    if (!mine(earlier, pane)) continue;
+    if (WORKING.has(earlier.event)) break;
+    if (earlier.event === "stopped" && earlier.message) return { ...entry, message: earlier.message };
+  }
+  return entry;
+}
+
 function readWaited(worktree) {
   try {
     const saved = JSON.parse(readFileSync(path.join(worktree, WAITED), "utf8"));
@@ -493,9 +508,10 @@ async function wait(names, { timeout, quiet }) {
           const events = readEvents(w.worktree);
           const waited = readWaited(w.worktree);
           let found;
-          for (let i = waited.delivered; i < events.length; i++) if (isWake(events, i, w.pane)) found = events[i];
-          if (found) writeWaited(w.worktree, { ...waited, delivered: events.length });
-          return found;
+          for (let i = waited.delivered; i < events.length; i++) if (isWake(events, i, w.pane)) found = i;
+          if (found === undefined) return undefined;
+          writeWaited(w.worktree, { ...waited, delivered: events.length });
+          return withReply(events, found, w.pane);
         });
         // Undefined when another wait reported it first.
         if (last) {

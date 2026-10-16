@@ -64,10 +64,13 @@ Write every brief and follow-up to a file and pass the file, as the table does. 
 a word, not `-` or `---`: Claude Code reads a brief that starts with `-` as an option, and the
 helper refuses one.
 
-Reading the screen returns only the rows the terminal shows, however many `--max-lines` asks for. A worker's envelope starts with its marker line, so once its summary, files, checks and
-handoff run taller than the screen, the marker has scrolled off. The transcript is Superset's
-record of the agent's session: it keeps the whole reply, and keeps it after the worker compacts.
-It gives the last 36000 characters; `--max-chars <n>` asks for fewer.
+Reading the screen returns only the rows the terminal shows, however many `--max-lines` asks
+for. A worker's envelope starts with its marker line, so once its summary, files, checks and
+handoff run taller than the screen, the marker has scrolled off. The transcript gives the last
+36000 characters (`--max-chars <n>` asks for fewer). With `"source": "harness"` it is Superset's
+record of the agent's session, as `User:` and `Assistant:` turns: it keeps the whole reply, and
+keeps it after the worker compacts. With another `source`, Superset read it off the terminal,
+which may hold no more than the screen.
 
 ## 2. Profiles as Superset agents
 
@@ -133,7 +136,8 @@ last hook event, not from the screen, for Claude Code and Codex workers alike:
 
 - `stopped`: its turn ended. `reply` holds the worker's last message, or its last 8000
   characters when it is longer, from the transcript. Look for the envelope there first. When there
-  is no `reply`, or no envelope in it, read the transcript, then the screen (`fleet-core`
+  is no `reply`, or no envelope in it, read the transcript. If its `source` is not `harness`, use
+  `fleet-core`'s `last-reply.mjs` for a Claude Code worker. Then read the screen (`fleet-core`
   section 8). A worker that compacts while idle reports `stopped` once more; its `reply` is still
   the message it ended its turn with.
 - `quiet`: no event for 5 minutes. Read its screen. It is often a permission prompt or a startup
