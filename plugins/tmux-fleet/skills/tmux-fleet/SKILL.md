@@ -25,8 +25,10 @@ in Claude Code, or `codex plugin add fleet-core@clausona` in Codex.
 
 ## 1. Before anything
 
-Below, `H` means `node <base>/scripts/tmux-fleet.mjs`. Every `H` command prints JSON, except
-`H read`, which prints the screen. Read window and pane ids from the JSON; never guess them.
+Below, `H` means `node <base>/scripts/tmux-fleet.mjs`. Write it out in full, or start the command
+with the function `H() { node <base>/scripts/tmux-fleet.mjs "$@"; }`. Never put it in a variable:
+zsh does not split a variable into words. Every `H` command prints JSON, except `H read`, which
+prints the screen. Read window and pane ids from the JSON; never guess them.
 
 Stop and tell the user what is missing if any of these fails.
 
