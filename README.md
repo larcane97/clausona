@@ -493,6 +493,10 @@ shared files can be symbolic links: without it, files the tools save whole (`set
 `CLAUDE.md`, `keybindings.json`, and Codex's `config.toml` and `hooks.json`) stay a copy per
 account, and `clausona doctor` says so. Other files fall back to hard links.
 
+## Listed in
+
+[Awesome Claude Code](https://github.com/hesreallyhim/awesome-claude-code), [Awesome Codex CLI](https://github.com/milisp/awesome-codex-cli), [Awesome AI Plugins](https://github.com/hashgraph-online/awesome-ai-plugins)
+
 ## Contributing
 
 Issues and pull requests are welcome at [github.com/larcane97/clausona](https://github.com/larcane97/clausona).
