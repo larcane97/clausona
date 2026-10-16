@@ -35,7 +35,7 @@ const USAGE = `usage: superset-host.mjs <command>
   agents remove-config <id>
   agents run --workspace <id> --agent <config id> [--prompt <text> | --prompt-file <path>] [--from-terminal <id>]
   terminals list --workspace <id>
-  terminals read --workspace <id> --terminal <id> [--max-lines <n>]
+  terminals read --workspace <id> --terminal <id> [--max-lines <n> | --source transcript [--max-chars <n>]]
   terminals send --workspace <id> --terminal <id> (--text <text> | --text-file <path>)
   terminals close --workspace <id> --terminal <id>
   terminals wait --workspace <id> [--workspace <id>...] [--terminal <id>...] [--seen <terminal>@<time>...] [--timeout <s>] [--quiet <s>] [--interval <s>]
@@ -198,7 +198,10 @@ async function waitForWorkers(host, workspaces, { timeout, quiet, interval, seen
         if (seen.has(mark)) continue;
         const { terminalId, lastEventType, lastEventAt } = agent;
         const found = { workspaceId, terminalId, lastEventType, lastEventAt, seen: mark, waited };
-        if (ENDED_EVENTS.has(lastEventType)) return { event: "stopped", ...found };
+        if (ENDED_EVENTS.has(lastEventType)) {
+          const reply = await lastReply(host, workspaceId, terminalId);
+          return { event: "stopped", ...found, ...(reply ? { reply } : {}) };
+        }
         if (Date.now() - lastEventAt > quiet * 1000) return { event: "quiet", ...found };
       }
     }
@@ -220,8 +223,51 @@ function hideEnv({ env, ...rest }) {
   return { ...rest, envKeys: Object.keys(env ?? {}) };
 }
 
-// The CLI's own cap on the context it hands from one terminal to a new agent.
+// The CLI's own cap on the context it hands from one terminal to a new agent, and the most the
+// host's transcript gives.
 const HANDOFF_MAX_CHARS = 36_000;
+// Characters of a worker's last message a stopped event carries. A long final report runs to
+// about 8000.
+const REPLY_MAX_CHARS = 8000;
+// What Claude Code puts in place of a conversation it compacted, as a user turn.
+const COMPACT_SUMMARY = /^This session is being continued from a previous conversation/;
+
+// A worker's last message, read from the host's transcript of its session. Unlike the screen,
+// the transcript keeps a reply taller than the terminal, and one an idle compaction cleared from
+// it. Its turns read `User: …` and `Assistant: …`, oldest first. Nothing when the transcript has
+// no turns (the host read it off the terminal stream), when the worker has not answered its last
+// prompt, or when the host cannot give it: the screen is still there to read.
+async function lastReply(host, workspaceId, terminalId) {
+  let transcript;
+  try {
+    transcript = await call(host, "terminal.transcript", { terminalId, workspaceId, maxChars: HANDOFF_MAX_CHARS });
+  } catch {
+    return undefined;
+  }
+  if (transcript?.source !== "harness" || typeof transcript.text !== "string") return undefined;
+  // A hand-over's first prompt quotes the old terminal's transcript, turns and all. They are not
+  // this agent's, and the quote may have lost its start to the host's cut.
+  let text = transcript.text.replace(/<previous-terminal-output>[\s\S]*?<\/previous-terminal-output>/g, "");
+  const quoteEnd = text.lastIndexOf("</previous-terminal-output>");
+  if (quoteEnd >= 0) text = text.slice(quoteEnd + "</previous-terminal-output>".length);
+  const turns = text.split(/\n\n(?=(?:User|Assistant): )/);
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i];
+    if (turn.startsWith("Assistant: ")) return keepEnd(turn.slice("Assistant: ".length).trim(), REPLY_MAX_CHARS);
+    if (turn.startsWith("User: ") && !COMPACT_SUMMARY.test(turn.slice("User: ".length))) return undefined;
+  }
+  return undefined;
+}
+
+// A worker's report ends in its envelope, so a message too long to keep whole keeps its end.
+function keepEnd(text, max) {
+  if (text.length <= max) return text;
+  let tail = text.slice(-max);
+  // Never start on the second half of a surrogate pair.
+  const first = tail.charCodeAt(0);
+  if (first >= 0xdc00 && first <= 0xdfff) tail = tail.slice(1);
+  return `[${text.length - tail.length} characters cut]\n${tail}`;
+}
 
 function readTextFile(file) {
   try {
@@ -420,15 +466,29 @@ const COMMANDS = {
       return { sessions, agents };
     },
   },
+  // The screen is only what the terminal shows: --max-lines cuts it, but never adds rows above
+  // it. The transcript is the host's record of the agent's session (or, without one, of the
+  // terminal's output), from the end.
   "terminals read": {
-    options: { workspace: str, terminal: str, "max-lines": str },
+    options: { workspace: str, terminal: str, "max-lines": str, source: str, "max-chars": str },
     required: ["workspace", "terminal"],
-    run: (host, v) =>
-      call(host, "terminal.snapshot", {
+    run: (host, v) => {
+      const source = v.source ?? "screen";
+      if (source === "transcript") {
+        if (v["max-lines"] !== undefined)
+          throw new CliError("--max-lines reads the screen; for the transcript, use --max-chars");
+        const maxChars = positiveInt(v["max-chars"] ?? String(HANDOFF_MAX_CHARS), "--max-chars");
+        if (maxChars > HANDOFF_MAX_CHARS) throw new CliError(`--max-chars can be ${HANDOFF_MAX_CHARS} at most`);
+        return call(host, "terminal.transcript", { terminalId: v.terminal, workspaceId: v.workspace, maxChars });
+      }
+      if (source !== "screen") throw new CliError("--source must be screen or transcript");
+      if (v["max-chars"] !== undefined) throw new CliError("--max-chars reads the transcript: add --source transcript");
+      return call(host, "terminal.snapshot", {
         terminalId: v.terminal,
         workspaceId: v.workspace,
         maxLines: positiveInt(v["max-lines"] ?? "240", "--max-lines"),
-      }),
+      });
+    },
   },
   "terminals send": {
     options: { workspace: str, terminal: str, text: str, "text-file": str },

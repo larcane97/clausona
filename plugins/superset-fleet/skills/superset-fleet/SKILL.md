@@ -40,8 +40,8 @@ Stop and tell the user what is missing if any of these fails.
      - Every helper command prints JSON.
      - If it says the host API has changed, stop and pass that message on.
 
-Below, `H` means `node <base>/scripts/superset-host.mjs`. `H trust`, `H terminals wait` and
-`H workspaces delete` are used on both paths.
+Below, `H` means `node <base>/scripts/superset-host.mjs`. `H trust`, `H terminals wait`,
+`H terminals read --source transcript` and `H workspaces delete` are used on both paths.
 
 | Step | CLI path | Helper path |
 |---|---|---|
@@ -53,7 +53,8 @@ Below, `H` means `node <base>/scripts/superset-host.mjs`. `H trust`, `H terminal
 | Start a worker | `superset agents create --local --workspace <id> --agent <config> --prompt "$(cat <brief file>)" --json` | `H agents run --workspace <id> --agent <config> --prompt-file <brief file>` |
 | Hand a task over | `superset agents create --local --workspace <id> --agent <config> --from-terminal <terminal> --json` | `H agents run --workspace <id> --agent <config> --from-terminal <terminal>` |
 | Terminals | `superset terminals list --local --workspace <id> --json` | `H terminals list --workspace <id>` |
-| Read | `superset terminals read --local --workspace <id> --terminal <terminal> --max-lines 240 --json` | `H terminals read --workspace <id> --terminal <terminal>` |
+| Read the screen | `superset terminals read --local --workspace <id> --terminal <terminal> --json` | `H terminals read --workspace <id> --terminal <terminal>` |
+| Read the transcript | `H terminals read --workspace <id> --terminal <terminal> --source transcript` | same |
 | Send | `superset terminals send --local --workspace <id> --terminal <terminal> --text "$(cat <text file>)" --json` | `H terminals send --workspace <id> --terminal <terminal> --text-file <text file>` |
 | Close | `superset terminals close --local --workspace <id> --terminal <terminal> --json` | `H terminals close --workspace <id> --terminal <terminal>` |
 | Wait for workers | `H terminals wait --workspace <id> --terminal <terminal> … --seen <mark> …` | same |
@@ -62,6 +63,14 @@ Below, `H` means `node <base>/scripts/superset-host.mjs`. `H trust`, `H terminal
 Write every brief and follow-up to a file and pass the file, as the table does. Start each one with
 a word, not `-` or `---`: Claude Code reads a brief that starts with `-` as an option, and the
 helper refuses one.
+
+Reading the screen returns only the rows the terminal shows, however many `--max-lines` asks
+for. A worker's envelope starts with its marker line, so once its summary, files, checks and
+handoff run taller than the screen, the marker has scrolled off. The transcript gives the last
+36000 characters (`--max-chars <n>` asks for fewer). With `"source": "harness"` it is Superset's
+record of the agent's session, as `User:` and `Assistant:` turns: it keeps the whole reply, and
+keeps it after the worker compacts. With another `source`, Superset read it off the terminal,
+which may hold no more than the screen.
 
 ## 2. Profiles as Superset agents
 
@@ -125,7 +134,12 @@ not count. In Claude Code, run it as a background task. In Codex, run it in the 
 It returns as soon as one worker needs you. It judges this from Superset's record of each agent's
 last hook event, not from the screen, for Claude Code and Codex workers alike:
 
-- `stopped`: its turn ended. Read its screen (`fleet-core` section 8).
+- `stopped`: its turn ended. `reply` holds the worker's last message, or its last 8000
+  characters when it is longer, from the transcript. Look for the envelope there first. When there
+  is no `reply`, or no envelope in it, read the transcript. If its `source` is not `harness`, use
+  `fleet-core`'s `last-reply.mjs` for a Claude Code worker. Then read the screen (`fleet-core`
+  section 8). A worker that compacts while idle reports `stopped` once more; its `reply` is still
+  the message it ended its turn with.
 - `quiet`: no event for 5 minutes. Read its screen. It is often a permission prompt or a startup
   question: never answer a permission prompt yourself.
 - `gone`: its terminal exited.

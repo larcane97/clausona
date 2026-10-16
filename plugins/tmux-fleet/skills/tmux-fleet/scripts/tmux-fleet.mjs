@@ -54,6 +54,8 @@ const CODEX_ARGS = [
 const WAKE = new Set(["stopped", "failed", "blocked", "ended", "bell"]);
 // Events after which a worker should be working, so a long silence means something is wrong.
 const WORKING = new Set(["sent", "working"]);
+// Characters of a message an event keeps. A long final report runs to about 8000.
+const MESSAGE_MAX = 8000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -172,11 +174,22 @@ function readEvents(worktree) {
   });
 }
 
+// A worker's report ends in its DONE or BLOCKED line, so a message too long to keep whole keeps
+// its end.
+function keepEnd(text, max) {
+  if (text.length <= max) return text;
+  let tail = text.slice(-max);
+  // Never start on the second half of a surrogate pair.
+  const first = tail.charCodeAt(0);
+  if (first >= 0xdc00 && first <= 0xdfff) tail = tail.slice(1);
+  return `[${text.length - tail.length} characters cut]\n${tail}`;
+}
+
 function appendEvent(worktree, event, message, pane) {
   const line = { at: Date.now(), event };
   if (pane) line.pane = pane;
   if (message !== undefined && message !== null && message !== "") {
-    line.message = (typeof message === "string" ? message : JSON.stringify(message)).slice(0, 4000);
+    line.message = keepEnd(typeof message === "string" ? message : JSON.stringify(message), MESSAGE_MAX);
   }
   appendFileSync(path.join(worktree, EVENTS), `${JSON.stringify(line)}\n`);
 }
@@ -210,6 +223,21 @@ function isWake(events, i, pane) {
   if (events.slice(i + 1).some((later) => later.event === "working" && mine(later, pane))) return false;
   const before = stateOf(events.slice(0, i), pane);
   return before === "blocked" || WORKING.has(before);
+}
+
+// A Claude Code worker that compacts while idle ends that with a Stop of its own, and Claude Code
+// gives it no last message: the conversation it would come from was just compacted away. Such a
+// stop reports the reply of the turn before it, when nothing was sent to the worker in between.
+function withReply(events, i, pane) {
+  const entry = events[i];
+  if (entry.event !== "stopped" || entry.message) return entry;
+  for (let j = i - 1; j >= 0; j--) {
+    const earlier = events[j];
+    if (!mine(earlier, pane)) continue;
+    if (WORKING.has(earlier.event)) break;
+    if (earlier.event === "stopped" && earlier.message) return { ...entry, message: earlier.message };
+  }
+  return entry;
 }
 
 function readWaited(worktree) {
@@ -480,9 +508,10 @@ async function wait(names, { timeout, quiet }) {
           const events = readEvents(w.worktree);
           const waited = readWaited(w.worktree);
           let found;
-          for (let i = waited.delivered; i < events.length; i++) if (isWake(events, i, w.pane)) found = events[i];
-          if (found) writeWaited(w.worktree, { ...waited, delivered: events.length });
-          return found;
+          for (let i = waited.delivered; i < events.length; i++) if (isWake(events, i, w.pane)) found = i;
+          if (found === undefined) return undefined;
+          writeWaited(w.worktree, { ...waited, delivered: events.length });
+          return withReply(events, found, w.pane);
         });
         // Undefined when another wait reported it first.
         if (last) {

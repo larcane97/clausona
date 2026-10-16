@@ -98,8 +98,10 @@ window records the bell. The records go to `<worktree>/.fleet-events.jsonl`. The
   wait returned. You are woken when one returns. One wait per worker is enough; a second one does
   no harm, since each event is reported by one wait only. In Codex, see the last item below. A wait
   returns as soon as its worker needs you, with the worker's `name` and an `event`:
-  - `stopped`: its turn ended. `message` holds a Claude Code worker's last reply. Read the screen
-    too (`fleet-core` section 8).
+  - `stopped`: its turn ended. `message` holds a Claude Code worker's last reply, or its last 8000
+    characters when it is longer. Look for the DONE or BLOCKED line there first. When `message` is
+    missing or has none, use `fleet-core`'s `last-reply.mjs`, then the screen (`fleet-core`
+    section 8).
   - `failed`: its turn ended on an API error, such as a usage or rate limit; `message` says which.
     For a limit that will not clear soon, see section 4.
   - `blocked`: it waits at a permission prompt or a question in a dialog. Read its screen.

@@ -90,6 +90,10 @@ The user can open any worker's tab in Orca, read along and type into it at any t
   under its worktree with `state` and `lastAssistantMessage`, from Orca's hooks (clausona shares
   them across profiles). If `state` is still `working`, wait again without the pause. Codex workers
   do not appear there; read their screen.
+- **The reply:** `lastAssistantMessage` is a Claude Code worker's last reply, up to its first 8000
+  characters. Look for the DONE or BLOCKED line there first. When the reply is longer, its last
+  line is cut off: then, or when the field is missing, use `fleet-core`'s `last-reply.mjs`
+  (`fleet-core` section 8).
 - **Read:** `orca terminal show --terminal <handle> --json`, field `.result.terminal.preview`. It
   shows the current screen, including Claude Code's and Codex's full-screen views, once they are up;
   `orca terminal read` returns only scrollback.

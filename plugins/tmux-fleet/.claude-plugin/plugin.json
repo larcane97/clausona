@@ -1,6 +1,6 @@
 {
   "name": "tmux-fleet",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Run parallel agents in tmux windows, each on its own clausona account or API model (Claude Code or Codex), then check and retire them.",
   "author": { "name": "larcane97", "url": "https://github.com/larcane97" },
   "homepage": "https://github.com/larcane97/clausona/blob/main/docs/usecases/tmux-fleet.md",

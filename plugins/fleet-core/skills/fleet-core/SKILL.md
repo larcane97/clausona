@@ -210,7 +210,28 @@ in another language, or missing.
 
 ## 8. Reading an event
 
-When a wait returns, read that worker's screen (the runner skill says how):
+When a wait returns, find the worker's last reply, in this order: the runner's record of it, which
+the runner skill names; then, for a Claude Code worker, the script below; then the worker's screen
+(the runner skill says how). The screen alone misses finished workers:
+
+- Claude Code in full-screen mode keeps no scrollback, so a read returns only what the screen
+  shows. A reply taller than that never shows whole.
+- A Claude Code worker that sits idle compacts its conversation ("Compacted while idle"), and its
+  reply is gone from the screen. A worker you come back to late may show no DONE line although it
+  finished long ago.
+
+When the runner keeps no record of a Claude Code worker's reply, or the record has no DONE or
+BLOCKED line, run
+`node <base>/scripts/last-reply.mjs --worktree <worktree> --config-dir <profile configDir>`.
+`<base>` is this skill's base directory, the folder that holds this file. The configDir is the
+worker's profile's, from `clausona list --json`. The script prints the worker's last reply from
+Claude Code's own record of the session, which outlives the screen, and `at`, when the worker wrote
+it. A reply from before you last sent the worker something does not answer that. With
+`"reply": null`, `why` says what the script found instead: nothing since the last prompt, a turn
+still going, or only an earlier task's session in a worktree of the same path. It reads Claude Code
+sessions only: for a Codex worker, read the screen.
+
+Then, from the reply or the screen:
 
 - A DONE or BLOCKED line: update the table. For DONE, go to section 10.
 - A question: answer it from what you know, or ask the user.

@@ -444,6 +444,32 @@ describe.skipIf(!hasTmux)("tmux-fleet helper", () => {
       expect(await json(["wait", "--name", "w1", "--timeout", "2"])).toMatchObject({ event: "timeout" });
     });
 
+    it("keeps the end of a long last message, where the DONE line is", async () => {
+      const w1 = await startClaude("w1");
+      hook(w1, { hook_event_name: "UserPromptSubmit", prompt: "go" });
+      hook(w1, stop(`${"Report line.\n".repeat(1000)}FLEET_WORKER_DONE: long report`));
+      const { message } = await json(["wait", "--name", "w1", "--timeout", "10"]);
+      expect(message).toMatch(/^\[5030 characters cut\]\n/);
+      expect(message.endsWith("\nFLEET_WORKER_DONE: long report")).toBe(true);
+      expect(message.length).toBeLessThan(8100);
+    });
+
+    it("reports the turn's reply for the stop that comes when an idle worker compacts", async () => {
+      const w1 = await startClaude("w1");
+      hook(w1, { hook_event_name: "UserPromptSubmit", prompt: "go" });
+      hook(w1, stop());
+      // Compacting while idle ends with a Stop, and Claude Code has no last message to give it.
+      hook(w1, { hook_event_name: "Stop" });
+      const late = await json(["wait", "--name", "w1", "--timeout", "10"]);
+      expect(late).toMatchObject({ event: "stopped", message: "Done.\nFLEET_WORKER_DONE: ok" });
+      // Not across a new turn: its reply is its own.
+      hook(w1, { hook_event_name: "UserPromptSubmit", prompt: "more" });
+      hook(w1, { hook_event_name: "Stop" });
+      const next = await json(["wait", "--name", "w1", "--timeout", "10"]);
+      expect(next.event).toBe("stopped");
+      expect(next).not.toHaveProperty("message");
+    });
+
     it("ignores the idle notice after a stop, but reports it after a prompt the user turned down", async () => {
       const w1 = await startClaude("w1");
       hook(w1, { hook_event_name: "UserPromptSubmit", prompt: "go" });
