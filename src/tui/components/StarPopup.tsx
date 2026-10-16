@@ -47,7 +47,7 @@ export const STAR_POPUP_TOP = 4;
 const POPUP_WIDTH = 52;
 const POPUP_INSET = 8;
 
-const ASK = "A star on GitHub helps other people find it.";
+const ASK = "A star on GitHub helps others find it.";
 const STARRING = "Starring clausona on GitHub…";
 
 /** What an answer says: the first line, which has a ✔ before it unless it is a link to follow, and the second. */
@@ -144,7 +144,7 @@ export function StarPopup({ state, top = STAR_POPUP_TOP }: { state: StarPopupSta
             <Text color={color.warning}>★</Text>
           </Box>
           <Text color={color.text} bold>
-            Enjoying clausona?
+            Was clausona helpful?
           </Text>
         </Box>
         <Box flexDirection="column" marginTop={1} minHeight={3}>

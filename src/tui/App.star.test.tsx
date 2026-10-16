@@ -65,7 +65,7 @@ function fakeStar(
 }
 
 const dashboard = (frame: string) => frame.includes("Dashboard") && frame.includes("Quit");
-const asking = (frame: string) => frame.includes("Enjoying clausona?");
+const asking = (frame: string) => frame.includes("Was clausona helpful?");
 /** The popup once it takes an answer: its key hints show then. */
 const answerable = (frame: string) => asking(frame) && frame.includes("enter select");
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -141,7 +141,7 @@ describe("the dashboard's star popup", () => {
 
     await waitForFrame(instance.lastFrame, dashboard);
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(instance.lastFrame()).not.toContain("Enjoying clausona?");
+    expect(instance.lastFrame()).not.toContain("Was clausona helpful?");
     expect(claimPrompt).toHaveBeenCalledTimes(1);
   });
 
@@ -176,7 +176,7 @@ describe("the dashboard's star popup", () => {
     const instance = render(<App initialScreen="dashboard" star={star} />);
 
     const frame = await waitForFrame(instance.lastFrame, (f) => dashboard(f) && answerable(f));
-    expect(frame).toContain("A star on GitHub helps other people find it.");
+    expect(frame).toContain("A star on GitHub helps others find it.");
     expect(frame).toContain("Not now");
     expect(frame).toContain("←→ choose");
 
@@ -194,7 +194,7 @@ describe("the dashboard's star popup", () => {
     // Any key closes it.
     await press(instance, "x");
     const closed = await waitForFrame(instance.lastFrame, (f) => dashboard(f) && !f.includes("as @octocat"));
-    expect(closed).not.toContain("Enjoying clausona?");
+    expect(closed).not.toContain("Was clausona helpful?");
     expect(focusedOn(closed, "Profiles")).toBe(true);
     expect(claimPrompt).toHaveBeenCalledTimes(1);
   });
