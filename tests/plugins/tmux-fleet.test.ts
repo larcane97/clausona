@@ -444,6 +444,16 @@ describe.skipIf(!hasTmux)("tmux-fleet helper", () => {
       expect(await json(["wait", "--name", "w1", "--timeout", "2"])).toMatchObject({ event: "timeout" });
     });
 
+    it("keeps the end of a long last message, where the DONE line is", async () => {
+      const w1 = await startClaude("w1");
+      hook(w1, { hook_event_name: "UserPromptSubmit", prompt: "go" });
+      hook(w1, stop(`${"Report line.\n".repeat(1000)}FLEET_WORKER_DONE: long report`));
+      const { message } = await json(["wait", "--name", "w1", "--timeout", "10"]);
+      expect(message).toMatch(/^\[5030 characters cut\]\n/);
+      expect(message.endsWith("\nFLEET_WORKER_DONE: long report")).toBe(true);
+      expect(message.length).toBeLessThan(8100);
+    });
+
     it("ignores the idle notice after a stop, but reports it after a prompt the user turned down", async () => {
       const w1 = await startClaude("w1");
       hook(w1, { hook_event_name: "UserPromptSubmit", prompt: "go" });

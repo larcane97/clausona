@@ -488,6 +488,45 @@ describe("workspaces and terminals", () => {
     ]);
   });
 
+  it("reads the host's transcript with --source transcript, as much as the host gives unless told otherwise", async () => {
+    replies["terminal.transcript"] = {
+      json: { terminalId: "t1", text: "User: go\n\nAssistant: done", source: "harness" },
+    };
+    const whole = await run(["terminals", "read", "--workspace", "w1", "--terminal", "t1", "--source", "transcript"]);
+    await run([
+      "terminals",
+      "read",
+      "--workspace",
+      "w1",
+      "--terminal",
+      "t1",
+      "--source",
+      "transcript",
+      "--max-chars",
+      "500",
+    ]);
+    expect(JSON.parse(whole.stdout)).toMatchObject({ text: "User: go\n\nAssistant: done", source: "harness" });
+    expect(seen.map((s) => [s.procedure, s.input])).toEqual([
+      ["terminal.transcript", { terminalId: "t1", workspaceId: "w1", maxChars: 36_000 }],
+      ["terminal.transcript", { terminalId: "t1", workspaceId: "w1", maxChars: 500 }],
+    ]);
+  });
+
+  it("refuses a read that mixes the screen's and the transcript's options", async () => {
+    const cases: [string[], RegExp][] = [
+      [["--source", "transcript", "--max-lines", "50"], /--max-lines reads the screen/],
+      [["--max-chars", "500"], /--max-chars reads the transcript/],
+      [["--source", "transcript", "--max-chars", "40000"], /--max-chars can be 36000 at most/],
+      [["--source", "scrollback"], /--source must be screen or transcript/],
+    ];
+    for (const [extra, message] of cases) {
+      const r = await run(["terminals", "read", "--workspace", "w1", "--terminal", "t1", ...extra]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(message);
+    }
+    expect(seen).toEqual([]);
+  });
+
   it("rejects a max-lines that is not a positive integer", async () => {
     for (const bad of ["0", "ten", "-3"]) {
       const r = await run(["terminals", "read", "--workspace", "w1", "--terminal", "t1", `--max-lines=${bad}`]);
@@ -873,6 +912,82 @@ describe("waiting for workers", () => {
       lastEventType: "Stop",
     });
     expect(seen.filter((s) => s.procedure === "terminalAgents.list").length).toBe(3);
+  });
+
+  describe("a stopped worker's reply", () => {
+    const envelope = "SUPERSET_WORKER_DONE\ntask: docs\nsummary: wrote the guide\nfiles: docs/guide.md";
+    const stoppedOnce = () => {
+      replies["terminalAgents.list"] = { json: [{ ...busy("w1", "t1"), lastEventType: "Stop" }] };
+    };
+    const wait = async () => {
+      const r = await run(["terminals", "wait", "--workspace", "w1", "--interval", "0.05"]);
+      expect(r.stderr).toBe("");
+      return JSON.parse(r.stdout);
+    };
+
+    it("carries the worker's last message, read from the host's transcript", async () => {
+      stoppedOnce();
+      replies["terminal.transcript"] = {
+        json: {
+          terminalId: "t1",
+          source: "harness",
+          text: `User: Read the brief.\n\nAssistant: Starting.\n\nAssistant: Wrote it.\n\n${envelope}`,
+        },
+      };
+      const woke = await wait();
+      expect(woke).toMatchObject({ event: "stopped", terminalId: "t1", reply: `Wrote it.\n\n${envelope}` });
+      expect(seen.find((s) => s.procedure === "terminal.transcript")?.input).toEqual({
+        terminalId: "t1",
+        workspaceId: "w1",
+        maxChars: 36_000,
+      });
+    });
+
+    it("still has it after the worker compacted while idle", async () => {
+      stoppedOnce();
+      replies["terminal.transcript"] = {
+        json: {
+          terminalId: "t1",
+          source: "harness",
+          text: `User: Read the brief.\n\nAssistant: Wrote it.\n\n${envelope}\n\nUser: This session is being continued from a previous conversation that ran out of context.\n\nSummary:\n1. ${envelope}`,
+        },
+      };
+      expect((await wait()).reply).toBe(`Wrote it.\n\n${envelope}`);
+    });
+
+    it("has none when the worker has not answered its last prompt", async () => {
+      stoppedOnce();
+      replies["terminal.transcript"] = {
+        json: {
+          terminalId: "t1",
+          source: "harness",
+          text: `User: Read the brief.\n\nAssistant: Wrote it.\n\n${envelope}\n\nUser: [Request interrupted by user]`,
+        },
+      };
+      const woke = await wait();
+      expect(woke.event).toBe("stopped");
+      expect(woke).not.toHaveProperty("reply");
+    });
+
+    it("has none when the host read the transcript off the terminal, or could not read it", async () => {
+      stoppedOnce();
+      replies["terminal.transcript"] = { json: { terminalId: "t1", source: "stream", text: `⏺ ${envelope}` } };
+      expect(await wait()).not.toHaveProperty("reply");
+      replies["terminal.transcript"] = { status: 500, error: "session not found" };
+      const woke = await wait();
+      expect(woke.event).toBe("stopped");
+      expect(woke).not.toHaveProperty("reply");
+    });
+
+    it("keeps the end of a long message, where the envelope is", async () => {
+      stoppedOnce();
+      const long = `${"Report line.\n".repeat(1000)}${envelope}`;
+      replies["terminal.transcript"] = {
+        json: { terminalId: "t1", source: "harness", text: `User: go\n\nAssistant: ${long}` },
+      };
+      const { reply } = await wait();
+      expect(reply).toBe(`[${long.length - 8000} characters cut]\n${long.slice(-8000)}`);
+    });
   });
 
   it("reports a worker that has been quiet too long, as at a permission prompt", async () => {

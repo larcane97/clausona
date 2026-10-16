@@ -54,6 +54,8 @@ const CODEX_ARGS = [
 const WAKE = new Set(["stopped", "failed", "blocked", "ended", "bell"]);
 // Events after which a worker should be working, so a long silence means something is wrong.
 const WORKING = new Set(["sent", "working"]);
+// Characters of a message an event keeps. A long final report runs to about 8000.
+const MESSAGE_MAX = 8000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -172,11 +174,22 @@ function readEvents(worktree) {
   });
 }
 
+// A worker's report ends in its DONE or BLOCKED line, so a message too long to keep whole keeps
+// its end.
+function keepEnd(text, max) {
+  if (text.length <= max) return text;
+  let tail = text.slice(-max);
+  // Never start on the second half of a surrogate pair.
+  const first = tail.charCodeAt(0);
+  if (first >= 0xdc00 && first <= 0xdfff) tail = tail.slice(1);
+  return `[${text.length - tail.length} characters cut]\n${tail}`;
+}
+
 function appendEvent(worktree, event, message, pane) {
   const line = { at: Date.now(), event };
   if (pane) line.pane = pane;
   if (message !== undefined && message !== null && message !== "") {
-    line.message = (typeof message === "string" ? message : JSON.stringify(message)).slice(0, 4000);
+    line.message = keepEnd(typeof message === "string" ? message : JSON.stringify(message), MESSAGE_MAX);
   }
   appendFileSync(path.join(worktree, EVENTS), `${JSON.stringify(line)}\n`);
 }

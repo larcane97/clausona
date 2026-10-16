@@ -87,6 +87,10 @@ The user can switch to any worker's pane in herdr, read along and type into it a
 - **Until it works again** (a worker the user is answering):
   `herdr agent wait <name> --until working --timeout 1800000`, then
   `herdr agent wait <name> --until idle --until done --until blocked --timeout 1800000`.
+- **The reply:** herdr keeps no record of what a worker said, and Claude Code in full-screen mode
+  leaves nothing above the screen to read. So for a Claude Code worker, read its last reply with
+  `fleet-core`'s `last-reply.mjs` and the worktree path from section 2 (`fleet-core` section 8),
+  before its screen.
 - **Read:** `herdr agent read <name> --source recent-unwrapped --lines 120`. If the reply scrolled
   away, use `--source visible`.
 - **Follow-up:** write the file, then

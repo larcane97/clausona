@@ -9,8 +9,9 @@ those lets one Claude Code or Codex session run parallel workers, every one on i
 account or API model. The runner plugin says how to drive its tool. This one decides which account
 gets each task, and when a worker's work counts as done.
 
-You don't call it yourself. A fleet skill loads it when it starts. It's one skill, with no hooks or
-scripts.
+You don't call it yourself. A fleet skill loads it when it starts. It's one skill and no hooks, plus
+one small script that reads a Claude Code worker's last reply from Claude Code's own session file,
+for when the screen no longer shows it.
 
 It reads your profiles with `clausona list` and its settings from `~/.clausona/fleet.json` (or the
 older `superset-fleet.json`). Workers start in the permission mode set there, or else the one a
