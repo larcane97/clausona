@@ -29,8 +29,10 @@ import {
 } from "./core/star.js";
 import {
   cachedUpdateTag,
+  checkLatestTag,
   currentInstallTarget,
   performUpdate,
+  recordLatestTag,
   reinstallCommand,
   skipUpdate,
   updateCheckDue,
@@ -78,15 +80,24 @@ type Writer = { write(chunk: string): unknown };
 
 const ESC = "\u001b";
 
+/** A question nobody answers in this long is a no: a shell function or script run from a terminal waits on it. */
+const ANSWER_MS = 10_000;
+/** The check made on a yes, which someone is waiting on: as long as `clausona update` gives it. */
+const YES_CHECK_TIMEOUT_MS = 15_000;
+
+/** Ctrl+C and Ctrl+D: raw mode hands them over as input, where they would otherwise stop the program. */
+const INTERRUPTS = ["\u0003", "\u0004"];
+
 /**
- * The first key `accept` takes, pressed once `graceMs` has passed since the question appeared, or
- * null when the input ends first. One key answers: the terminal is in raw mode while it waits, and
- * back as it was on every way out. Keys typed before the question, waiting in stdin, arrive at once
- * and are dropped with whatever else comes in the grace: they were meant for what was there before.
+ * The first key pressed once `graceMs` has passed since the question appeared, or null when the
+ * input ends or `timeoutMs` passes first. One key answers: the terminal is in raw mode while it
+ * waits, and back as it was on every way out. Keys typed before the question, waiting in stdin,
+ * arrive at once and are dropped with whatever else comes in the grace: they were meant for what
+ * was there before. Ctrl+C and Ctrl+D are not dropped: they answer at once, whenever they come.
  */
 export function readKey(
   input: KeyInput,
-  options: { graceMs: number; now: () => number; accept: (key: string) => boolean },
+  options: { graceMs: number; timeoutMs: number; now: () => number },
 ): Promise<string | null> {
   return new Promise((resolve) => {
     const shownAt = options.now();
@@ -95,6 +106,7 @@ export function readKey(
     const finish = (key: string | null) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       input.off("data", onData);
       input.off("end", onEnd);
       input.off("error", onEnd);
@@ -107,13 +119,18 @@ export function readKey(
       resolve(key);
     };
     const onData = (chunk: Buffer | string) => {
-      if (options.now() - shownAt < options.graceMs) return;
       const text = String(chunk);
+      const interrupt = INTERRUPTS.find((key) => text.includes(key));
+      if (interrupt) {
+        finish(interrupt);
+        return;
+      }
+      if (options.now() - shownAt < options.graceMs) return;
       // An escape sequence - an arrow, say - is one key; anything else, its first character.
-      const key = text.startsWith(ESC) ? text : text.slice(0, 1);
-      if (options.accept(key)) finish(key);
+      finish(text.startsWith(ESC) ? text : text.slice(0, 1));
     };
     const onEnd = () => finish(null);
+    const timer = setTimeout(() => finish(null), options.timeoutMs);
     try {
       input.setRawMode?.(true);
     } catch {
@@ -126,18 +143,26 @@ export function readKey(
   });
 }
 
+/**
+ * What the questions need from outside. `target` and `input` are looked up only when a question is
+ * shown: most runs show none, and need neither the installed copy found nor stdin opened.
+ */
 export type AfterCommandDeps = {
   notices: NoticesDeps;
   current: string;
   /** The installed bundle to replace, or `null` when the installer did not put this one there. */
-  target: string | null;
+  target: () => string | null;
   platform: NodeJS.Platform;
-  input: KeyInput;
+  input: () => KeyInput;
   output: Writer;
   errors: Writer;
   graceMs: number;
+  /** How long a question waits for an answer before it counts as a no. */
+  answerMs: number;
   /** Starts the day's check in the background, without waiting for it. */
   startCheck: () => void;
+  /** The latest release's tag, asked again on a yes; null when GitHub cannot be reached. */
+  checkLatest: () => Promise<string | null>;
   install: (tag: string, target: string) => Promise<void>;
   give: () => Promise<StarOutcome>;
   /** Whether the command's output ends with a blank line of its own, as `csn list`'s does. */
@@ -148,13 +173,15 @@ export function defaultAfterCommandDeps(): AfterCommandDeps {
   return {
     notices: defaultNoticesDeps(),
     current: __CLAUSONA_VERSION__,
-    target: currentInstallTarget(),
+    target: currentInstallTarget,
     platform: process.platform,
-    input: process.stdin,
+    input: () => process.stdin,
     output: process.stdout,
     errors: process.stderr,
     graceMs: STAR_POPUP_GRACE_MS,
+    answerMs: ANSWER_MS,
     startCheck: () => startUpdateCheck(),
+    checkLatest: () => checkLatestTag({ timeoutMs: YES_CHECK_TIMEOUT_MS }),
     install: (tag, target) => performUpdate({ tag, target }),
     give: () => giveStar(),
   };
@@ -193,9 +220,9 @@ export function startUpdateCheck(
  */
 export async function askAfterCommand(deps: AfterCommandDeps = defaultAfterCommandDeps()): Promise<void> {
   try {
-    const notices = await readNotices(deps.notices.path);
-    if (!notices) return;
     const now = deps.notices.now();
+    const notices = (await readNotices(deps.notices.path)) ?? (await startOver(deps.notices, now));
+    if (!notices) return;
     const note = (current: Notices) => {
       const due = updateCheckDue(current, now);
       return withFirstUse(due ? { ...current, updateCheckedAt: new Date(now).toISOString() } : current, now);
@@ -222,7 +249,21 @@ export async function askAfterCommand(deps: AfterCommandDeps = defaultAfterComma
   }
 }
 
-const UPDATE_KEYS = new Set(["y", "Y", "\r", "\n", "n", "N", "\u0003", "\u0004", ESC]);
+/**
+ * A record that cannot be read, replaced by a new one, or null when it cannot be. What it held is
+ * lost, whether the star was asked among it, so the new one says it was: asked twice is worse than
+ * never. Left as it was, it kept every command from asking anything again.
+ */
+async function startOver(deps: NoticesDeps, now: number): Promise<Notices | null> {
+  const fresh: Notices = { starAsked: true, firstUsedAt: new Date(now).toISOString() };
+  // `fresh` itself reaches the change only while the file still cannot be read; a record another
+  // process wrote meanwhile is kept.
+  await changeNotices(deps.path, (current) => (current === fresh ? fresh : null), { unreadable: fresh });
+  return readNotices(deps.path);
+}
+
+/** Yes to the update; every other key is a no, so a command typed into the question never installs. */
+const YES = new Set(["y", "Y", "\r", "\n"]);
 
 /** One blank line between the command's output and what follows it. */
 function gap(deps: AfterCommandDeps): string {
@@ -235,19 +276,16 @@ async function offerUpdate(tag: string, deps: AfterCommandDeps): Promise<void> {
   const available = `${gap(deps)}  ${accent("⬆")} ${dim("clausona")} ${accent(latest)} ${dim("is available (you have")} ${accent(`v${deps.current}`)}${dim(")")}\n`;
   // A copy the installer did not put in place cannot replace itself: what to run instead, held as a no
   // is. The command has a line of its own, to copy whole.
-  if (!deps.target) {
+  const target = deps.target();
+  if (!target) {
     output.write(`${available}    ${dim("To update, run:")}\n    ${accent(reinstallCommand(deps.platform))}\n`);
     await skipUpdate(deps.notices);
     return;
   }
 
   output.write(`${available}  ${dim("Update now? (Y/n)")} `);
-  const key = await readKey(deps.input, {
-    graceMs: deps.graceMs,
-    now: deps.notices.now,
-    accept: (k) => UPDATE_KEYS.has(k),
-  });
-  const yes = key !== null && "yY\r\n".includes(key);
+  const key = await readKey(deps.input(), { graceMs: deps.graceMs, timeoutMs: deps.answerMs, now: deps.notices.now });
+  const yes = key !== null && YES.has(key);
   output.write(`${yes ? "y" : "n"}\n`);
   if (!yes) {
     await skipUpdate(deps.notices);
@@ -255,20 +293,32 @@ async function offerUpdate(tag: string, deps: AfterCommandDeps): Promise<void> {
     return;
   }
 
-  // `clausona update --yes`, for the release offered: the check it would make is the one just read.
+  // `clausona update --yes`. It asks GitHub again, since what the last check learned can be a day
+  // old, and installs the offered release only when GitHub cannot be reached.
   try {
     const result = await runUpdateCommand(["--yes"], {
       current: deps.current,
-      target: deps.target,
+      target,
       platform: deps.platform,
       interactive: true,
-      checkLatest: async () => tag,
+      checkLatest: async () => {
+        const latestTag = await deps.checkLatest();
+        if (latestTag) await recordLatestTag(deps.notices, latestTag);
+        return latestTag ?? tag;
+      },
       confirm: async () => true,
       install: deps.install,
+      skip: async () => {},
     });
     output.write(`${result}\n`);
   } catch (error) {
-    deps.errors.write(`  ${fail} ${error instanceof Error ? error.message : String(error)}\n`);
+    // Asked again on every command, a failure that lasts - an install directory clausona cannot
+    // write - would fail on every command. It is held as a no is.
+    await skipUpdate(deps.notices);
+    deps.errors.write(
+      `  ${fail} ${error instanceof Error ? error.message : String(error)}\n` +
+        `${dim(`    Run ${accent("clausona update")} to try again.`)}\n`,
+    );
   }
 }
 
@@ -279,7 +329,7 @@ async function askForStar(deps: AfterCommandDeps): Promise<void> {
     `${gap(deps)}  ${accent("★")} ${dim("Was clausona helpful? A star on GitHub helps others find it.")}\n` +
       `  ${dim("Star it now? (y/N)")} `,
   );
-  const key = await readKey(deps.input, { graceMs: deps.graceMs, now: deps.notices.now, accept: () => true });
+  const key = await readKey(deps.input(), { graceMs: deps.graceMs, timeoutMs: deps.answerMs, now: deps.notices.now });
   const yes = key === "y" || key === "Y";
   output.write(`${yes ? "y" : "n"}\n`);
   if (!yes) return;

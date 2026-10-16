@@ -83,7 +83,7 @@ export async function claimStarPrompt(deps: NoticesDeps = defaultNoticesDeps()):
  */
 export async function recordStarAsked(deps: NoticesDeps = defaultNoticesDeps()): Promise<void> {
   await changeNotices(deps.path, (notices) => (notices.starAsked === true ? null : { ...notices, starAsked: true }), {
-    replaceUnreadable: true,
+    unreadable: {},
   });
 }
 

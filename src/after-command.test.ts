@@ -61,24 +61,32 @@ function setup(overrides: Partial<AfterCommandDeps> = {}, startAt = START) {
   const output = new Sink();
   const errors = new Sink();
   const startCheck = vi.fn(() => {});
+  // The check made on a yes: by default it cannot reach GitHub, and the offered tag is installed.
+  const checkLatest = vi.fn(async (): Promise<string | null> => null);
   const install = vi.fn(async (_tag: string, _target: string) => {});
   const give = vi.fn(async (): Promise<StarOutcome> => ({ kind: "starred", login: "octocat" }));
+  const target = vi.fn((): string | null => "/home/u/.local/share/clausona/index.js");
+  const stdin = vi.fn(() => input);
   const deps: AfterCommandDeps = {
     notices: { path: file, now: () => clock.now, env: {} },
     current: "0.11.0-beta",
-    target: "/home/u/.local/share/clausona/index.js",
+    target,
     platform: "linux",
-    input,
+    input: stdin,
     output,
     errors,
     graceMs: GRACE,
+    answerMs: 60_000,
     startCheck,
+    checkLatest,
     install,
     give,
     ...overrides,
   };
-  return { deps, clock, input, output, errors, startCheck, install, give };
+  return { deps, clock, input, output, errors, startCheck, checkLatest, install, give, target, stdin };
 }
+
+const notInstalled = () => null;
 
 async function until(check: () => boolean) {
   for (let i = 0; i < 400 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
@@ -208,6 +216,14 @@ describe("the update question", () => {
     ["n", "n"],
     ["N", "N"],
     ["Ctrl+C", "\u0003"],
+    ["Ctrl+D", "\u0004"],
+    ["Ctrl+Z", "\u001a"],
+    ["Ctrl+\\", "\u001c"],
+    ["Esc", "\u001b"],
+    ["an arrow", "\u001b[A"],
+    ["a letter", "x"],
+    ["the first letter of a command typed into it", "c"],
+    ["a space", " "],
   ])("skips on %s, and does not ask again for seven days, whatever is released meanwhile", async (_name, key) => {
     seed(updateDue);
     const run = setup();
@@ -261,22 +277,97 @@ describe("the update question", () => {
     expect(run.install).not.toHaveBeenCalled();
   });
 
-  it("waits through keys that are not an answer", async () => {
+  // `claude⏎` typed without seeing the question: the c answers it, and the Enter after it does not
+  // update.
+  it("never updates on an Enter that follows another key", async () => {
     seed(updateDue);
     const run = setup();
 
     const done = askAfterCommand(run.deps);
-    await answer(run, "(Y/n)", "x");
-    run.input.write("\u001b[A");
-    await tick();
-    expect(run.output.plain).not.toMatch(/\(Y\/n\) ./);
-    run.input.write("n");
+    await answer(run, "(Y/n)", "c");
+    run.input.write("laude\r");
     await done;
+    await tick();
 
+    expect(run.install).not.toHaveBeenCalled();
     expect(run.output.plain).toContain("(Y/n) n");
   });
 
-  it("says why an update failed, and leaves the command's exit code alone", async () => {
+  // A shell function or a script run from a terminal (`work() { csn use work && claude; }`) would
+  // otherwise wait on it forever.
+  it("counts no answer in time as a no", async () => {
+    seed(updateDue);
+    const run = setup({ answerMs: 30 });
+
+    await askAfterCommand(run.deps);
+
+    expect(run.output.plain.split("\n").slice(2)).toEqual([
+      "  Update now? (Y/n) n",
+      "    Skipped. Run clausona update when you're ready.",
+      "",
+    ]);
+    expect(run.install).not.toHaveBeenCalled();
+    expect(run.input.modes).toEqual([true, false]);
+    expect(stored().updateSkippedAt).toBe(at(START));
+  });
+
+  // Raw mode turns the terminal's interrupt keys into input; dropped with the rest of the grace,
+  // they did nothing.
+  it.each([
+    ["Ctrl+C", "\u0003"],
+    ["Ctrl+D", "\u0004"],
+  ])("takes %s at once as a no, even in its first 700 ms", async (_name, key) => {
+    seed(updateDue);
+    const run = setup();
+
+    const done = askAfterCommand(run.deps);
+    await until(() => run.output.plain.includes("(Y/n)"));
+    run.input.write(key);
+    await done;
+
+    expect(run.output.plain).toContain("(Y/n) n\n    Skipped.");
+    expect(run.install).not.toHaveBeenCalled();
+  });
+
+  it("checks for the latest release again on a yes, and installs that one", async () => {
+    seed(updateDue);
+    const run = setup({ checkLatest: async () => "v0.13.0-beta" });
+
+    const done = askAfterCommand(run.deps);
+    await answer(run, "(Y/n)", "y");
+    await done;
+
+    expect(run.install).toHaveBeenCalledWith("v0.13.0-beta", "/home/u/.local/share/clausona/index.js");
+    expect(run.output.plain).toContain("✔ Updated v0.11.0-beta → v0.13.0-beta");
+    expect(stored().latestTag).toBe("v0.13.0-beta");
+  });
+
+  it("installs nothing when the check made on a yes finds this version is the latest", async () => {
+    seed(updateDue);
+    const run = setup({ checkLatest: async () => "v0.11.0-beta" });
+
+    const done = askAfterCommand(run.deps);
+    await answer(run, "(Y/n)", "y");
+    await done;
+
+    expect(run.install).not.toHaveBeenCalled();
+    expect(run.output.plain).toContain("✔ Already up to date (v0.11.0-beta)");
+    // So the next command does not offer it again.
+    expect(stored().latestTag).toBe("v0.11.0-beta");
+  });
+
+  it("installs the offered release when the check made on a yes cannot reach GitHub", async () => {
+    seed(updateDue);
+    const run = setup({ checkLatest: async () => null });
+
+    const done = askAfterCommand(run.deps);
+    await answer(run, "(Y/n)", "y");
+    await done;
+
+    expect(run.install).toHaveBeenCalledWith(TAG, "/home/u/.local/share/clausona/index.js");
+  });
+
+  it("says why an update failed, holds the question seven days, and leaves the command's exit code alone", async () => {
     seed(updateDue);
     const run = setup({
       install: async () => {
@@ -289,14 +380,17 @@ describe("the update question", () => {
     await answer(run, "(Y/n)", "y");
     await done;
 
-    expect(run.errors.plain).toBe("  ✘ Could not download clausona v0.12.0-beta: HTTP 404\n");
+    expect(run.errors.plain).toBe(
+      "  ✘ Could not download clausona v0.12.0-beta: HTTP 404\n    Run clausona update to try again.\n",
+    );
     expect(run.output.plain).not.toContain("Updated");
     expect(process.exitCode).toBe(before);
+    expect(stored().updateSkippedAt).toBe(at(START + GRACE));
   });
 
   it("gives the installer's command instead of asking when this copy cannot replace itself, and holds it seven days", async () => {
     seed(updateDue);
-    const run = setup({ target: null, platform: "darwin" });
+    const run = setup({ target: notInstalled, platform: "darwin" });
 
     await askAfterCommand(run.deps);
 
@@ -307,7 +401,7 @@ describe("the update question", () => {
     expect(stored().updateSkippedAt).toBe(at(START));
 
     seed({ ...stored(), starAsked: true });
-    const later = setup({ target: null }, START + 6 * DAY);
+    const later = setup({ target: notInstalled }, START + 6 * DAY);
     await askAfterCommand(later.deps);
     expect(later.output.text).toBe("");
   });
@@ -458,6 +552,34 @@ describe("the star question", () => {
     expect(run.output.plain).toContain("(y/N) n");
   });
 
+  it("counts no answer in time as a no, and is not asked again", async () => {
+    seed({ updateCheckedAt: at(START), firstUsedAt: at(START - 3 * DAY) });
+    const run = setup({ answerMs: 30 });
+
+    await askAfterCommand(run.deps);
+
+    expect(run.output.plain.endsWith("Star it now? (y/N) n\n")).toBe(true);
+    expect(run.give).not.toHaveBeenCalled();
+    expect(run.input.modes).toEqual([true, false]);
+    expect(stored().starAsked).toBe(true);
+  });
+
+  it.each([
+    ["Ctrl+C", "\u0003"],
+    ["Ctrl+D", "\u0004"],
+  ])("takes %s at once as a no, even in its first 700 ms", async (_name, key) => {
+    seed({ updateCheckedAt: at(START), firstUsedAt: at(START - 3 * DAY) });
+    const run = setup();
+
+    const done = askAfterCommand(run.deps);
+    await until(() => run.output.plain.includes("(y/N)"));
+    run.input.write(key);
+    await done;
+
+    expect(run.output.plain.endsWith("Star it now? (y/N) n\n")).toBe(true);
+    expect(run.give).not.toHaveBeenCalled();
+  });
+
   it("counts a terminal that closes as a no, and restores it", async () => {
     seed({ updateCheckedAt: at(START), firstUsedAt: at(START - 3 * DAY) });
     const run = setup();
@@ -495,7 +617,7 @@ describe("one question a run", () => {
 
   it("counts the installer line as the run's notice too", async () => {
     seed({ ...updateDue, firstUsedAt: at(START - 4 * DAY) });
-    const run = setup({ target: null });
+    const run = setup({ target: notInstalled });
 
     await askAfterCommand(run.deps);
     expect(run.output.plain).not.toContain("Star it now");
@@ -504,14 +626,41 @@ describe("one question a run", () => {
 });
 
 describe("askAfterCommand", () => {
-  it("does nothing, and never throws, with a record it cannot read", async () => {
+  // Left as it was, it silenced every command for good. Whether the star was asked is lost with
+  // it, so the new record says it was: never asked twice outweighs asked once.
+  it("starts a record it cannot read again, as asked for a star, and goes on", async () => {
     writeFileSync(file, "{ not json");
     const run = setup();
 
     await expect(askAfterCommand(run.deps)).resolves.toBeUndefined();
+
+    expect(stored()).toEqual({ starAsked: true, firstUsedAt: at(START), updateCheckedAt: at(START) });
+    expect(run.startCheck).toHaveBeenCalledTimes(1);
     expect(run.output.text).toBe("");
-    expect(run.startCheck).not.toHaveBeenCalled();
-    expect(readFileSync(file, "utf8")).toBe("{ not json");
+  });
+
+  // Most runs ask nothing, and pay for nothing they would only need to ask.
+  it("looks up neither the installed copy nor stdin for a run that asks nothing", async () => {
+    seed({ ...updateDue, latestTag: "v0.11.0-beta", starAsked: true });
+    const run = setup();
+
+    await askAfterCommand(run.deps);
+
+    expect(run.output.text).toBe("");
+    expect(run.target).not.toHaveBeenCalled();
+    expect(run.stdin).not.toHaveBeenCalled();
+  });
+
+  it("looks up stdin, and not the installed copy, for the star", async () => {
+    seed({ updateCheckedAt: at(START), firstUsedAt: at(START - 3 * DAY) });
+    const run = setup();
+
+    const done = askAfterCommand(run.deps);
+    await answer(run, "(y/N)", "n");
+    await done;
+
+    expect(run.stdin).toHaveBeenCalled();
+    expect(run.target).not.toHaveBeenCalled();
   });
 });
 

@@ -495,6 +495,8 @@ export async function refreshLatestTag(
 export type Updater = {
   find: (signal?: AbortSignal) => Promise<UpdateOffer | null>;
   install: (offer: UpdateOffer, signal?: AbortSignal) => Promise<void>;
+  /** A no to the update, which holds the question commands ask after their output for seven days. */
+  skip?: () => void;
 };
 
 /** `remember` is handed each tag the dashboard learns, so the commands after it offer it without checking again. */
@@ -519,5 +521,6 @@ export function createUpdater(
       offer.target
         ? performUpdate({ tag: offer.tag, target: offer.target, signal })
         : Promise.reject(new Error("This clausona was not installed by the installer, so it cannot replace itself.")),
+    skip: () => void skipUpdate(defaultNoticesDeps()),
   };
 }

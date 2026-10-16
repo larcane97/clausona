@@ -267,6 +267,14 @@ describe("the daily check's record", () => {
     expect(stored()).toEqual({ updateCheckedAt: at(NOW + 1000), latestTag: "v0.3.1-beta" });
   });
 
+  // clausona uninstalled while the background check waited on GitHub.
+  it("is not written by the background check once clausona's directory is gone", async () => {
+    rmSync(dir, { recursive: true, force: true });
+
+    await refreshLatestTag(deps(NOW), async () => "v0.3.1-beta");
+    expect(existsSync(dir)).toBe(false);
+  });
+
   it("is written by the dashboard's check too", async () => {
     const remembered: string[] = [];
     const updater = createUpdater({

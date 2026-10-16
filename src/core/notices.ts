@@ -3,7 +3,7 @@
  * star's question (star.ts) and the update's daily check (update.ts) both keep their record here.
  */
 
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -39,7 +39,6 @@ export async function readNotices(filePath: string): Promise<Notices | null> {
 
 /** Written aside and renamed into place, so a reader never sees half a file. */
 async function writeNotices(filePath: string, notices: Notices): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.tmp.${process.pid}`;
   try {
     await writeFile(tmp, `${JSON.stringify(notices, null, 2)}\n`, "utf8");
@@ -59,19 +58,28 @@ const LOCK_WAIT_MS = 2_000;
  * the same time all land: the dashboard claims the star while its update check records a tag, and
  * a command's question waits for its answer while the background check writes. `change` returns
  * null to leave the file as it is. A record that cannot be read as one is left alone, or with
- * `replaceUnreadable` written over from `{}`. True when something was written; never throws.
+ * `unreadable` given, `change` is applied to that instead. True when something was written; never
+ * throws.
+ *
+ * The directory has to be there already. clausona's own is made by init and removed by uninstall,
+ * and the background check can still be running after an uninstall: it must not make it again.
  */
 export async function changeNotices(
   filePath: string,
   change: (notices: Notices) => Notices | null,
-  options: { replaceUnreadable?: boolean } = {},
+  options: { unreadable?: Notices; waitMs?: number } = {},
 ): Promise<boolean> {
   try {
-    const lockPath = path.join(path.dirname(filePath), "locks", "notices.lock");
-    const release = await acquireFileLock(lockPath, { staleMs: LOCK_STALE_MS, waitMs: LOCK_WAIT_MS });
+    const directory = path.dirname(filePath);
+    if (!(await stat(directory)).isDirectory()) return false;
+    const lockPath = path.join(directory, "locks", "notices.lock");
+    const release = await acquireFileLock(lockPath, {
+      staleMs: LOCK_STALE_MS,
+      waitMs: options.waitMs ?? LOCK_WAIT_MS,
+    });
     if (!release) return false;
     try {
-      const notices = (await readNotices(filePath)) ?? (options.replaceUnreadable ? {} : null);
+      const notices = (await readNotices(filePath)) ?? options.unreadable ?? null;
       const changed = notices && change(notices);
       if (!changed) return false;
       await writeNotices(filePath, changed);

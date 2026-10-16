@@ -63,7 +63,8 @@ const OFFER: UpdateOffer = {
 function fakeUpdater(options: { offer?: UpdateOffer | null; install?: Updater["install"] } = {}) {
   const find = vi.fn(async () => (options.offer === undefined ? OFFER : options.offer));
   const install = vi.fn(options.install ?? (async () => {}));
-  return { updater: { find, install } satisfies Updater, find, install };
+  const skip = vi.fn(() => {});
+  return { updater: { find, install, skip } satisfies Updater, find, install, skip };
 }
 
 const offered = (frame: string) => frame.includes("v0.3.1-beta available") && frame.includes("Update");
@@ -130,6 +131,21 @@ describe("the dashboard's update", () => {
     expect(frame).toContain("Dashboard");
     expect(frame).not.toContain("Press ESC again");
     expect(install).not.toHaveBeenCalled();
+  });
+
+  // The commands run after it ask the same question; a no here holds theirs for seven days.
+  it.each([
+    ["n", "n"],
+    ["esc", ESC],
+  ])("notes a no on %s, so commands do not ask again for a while", async (_name, key) => {
+    const { updater, skip } = fakeUpdater();
+    const instance = render(<App initialScreen="dashboard" updater={updater} />);
+    await openConfirm(instance);
+
+    await press(instance, key);
+
+    await waitForFrame(instance.lastFrame, (f) => !f.includes("(Y/n)"));
+    expect(skip).toHaveBeenCalledTimes(1);
   });
 
   it.each([
